@@ -4,9 +4,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -86,13 +88,30 @@ func loadCA(certPEM, keyPEM []byte) (*CA, error) {
 	return &CA{cert: cert, key: key, pem: certPEM}, nil
 }
 
+// Fingerprint returns the hex-encoded sha256 of the CA certificate's DER
+// bytes (ADR-W003 W3). This is the value operators pin agents to via
+// --ca-fingerprint at join, closing the join-time MITM window that TOFU
+// leaves open. Printed at Keystone startup and surfaced for the installer
+// (E10).
+func (ca *CA) Fingerprint() string {
+	sum := sha256.Sum256(ca.cert.Raw)
+	return hex.EncodeToString(sum[:])
+}
+
 func (ca *CA) Pool() *x509.CertPool {
 	pool := x509.NewCertPool()
 	pool.AddCert(ca.cert)
 	return pool
 }
 
-// ServerTLSCert issues a serving certificate for the gateway itself.
+// ServerTLSCert issues a serving certificate for the gateway itself. The
+// returned chain includes the CA certificate after the leaf (ADR-W003 W3):
+// servers are permitted to send intermediates/roots along with the leaf,
+// and clients performing CA-fingerprint pinning need to see the CA in the
+// handshake (crypto/tls's rawCerts / ConnectionState.PeerCertificates)
+// without first having a trusted pool to verify against. This does not
+// change trust for existing verifying clients — RootCAs-based verification
+// tolerates the extra self-signed cert in the presented chain.
 func (ca *CA) ServerTLSCert(hosts []string) (tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -117,7 +136,7 @@ func (ca *CA) ServerTLSCert(hosts []string) (tls.Certificate, error) {
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
+	return tls.Certificate{Certificate: [][]byte{der, ca.cert.Raw}, PrivateKey: key}, nil
 }
 
 // IssueFromCSR signs a node client certificate. The certificate CN is

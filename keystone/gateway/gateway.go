@@ -125,6 +125,9 @@ func New(cfg Config) (*Gateway, error) {
 			return nil, err
 		}
 	}
+	// ADR-W003 W3: print the CA fingerprint at startup so an operator can
+	// hand it to `wardstoned --ca-fingerprint` and pin the join.
+	cfg.Logger.Info("keystone CA fingerprint", "sha256", ca.Fingerprint())
 
 	tokens := make(map[string]bool, len(cfg.JoinTokens))
 	for _, t := range cfg.JoinTokens {

@@ -23,16 +23,18 @@ func main() {
 	keystone := flag.String("keystone", "", "Keystone gateway address host:port (required)")
 	dataDir := flag.String("data-dir", "/etc/wildstone/wardstone", "directory for node identity")
 	joinToken := flag.String("join-token", "", "one-time join token (first run only)")
+	caFingerprint := flag.String("ca-fingerprint", "", "hex sha256 of Keystone's CA certificate DER; pins the join against MITM (recommended in production; see `keystone` startup log). Empty falls back to trust-on-first-use.")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	a, err := agent.New(agent.Config{
-		NodeID:       *nodeID,
-		KeystoneAddr: *keystone,
-		DataDir:      *dataDir,
-		JoinToken:    *joinToken,
-		Version:      version,
-		Logger:       log,
+		NodeID:        *nodeID,
+		KeystoneAddr:  *keystone,
+		DataDir:       *dataDir,
+		JoinToken:     *joinToken,
+		CAFingerprint: *caFingerprint,
+		Version:       version,
+		Logger:        log,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "wardstoned:", err)
