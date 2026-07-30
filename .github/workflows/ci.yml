@@ -32,16 +32,16 @@ jobs:
         with:
           go-version: "1.25"
       - name: gofmt
-        run: test -z "$(gofmt -l ./wardstone ./keystone ./cli)"
+        run: test -z "$(gofmt -l ./wardstone ./keystone ./cli ./testing/e2e)"
       - name: vet
         run: |
-          for m in wardstone keystone cli; do (cd "$m" && go vet ./...); done
+          for m in wardstone keystone cli testing/e2e; do (cd "$m" && go vet ./...); done
       - name: build
         env:
           GOARCH: ${{ matrix.goarch }}
         run: |
-          for m in wardstone keystone cli; do (cd "$m" && go build ./...); done
+          for m in wardstone keystone cli testing/e2e; do (cd "$m" && go build ./...); done
       - name: test
         if: matrix.goarch == 'amd64'
         run: |
-          for m in wardstone keystone cli; do (cd "$m" && go test ./...); done
+          for m in wardstone keystone cli testing/e2e; do (cd "$m" && go test ./...); done

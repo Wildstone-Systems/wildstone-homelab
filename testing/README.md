@@ -3,6 +3,12 @@
 e2e harness (disposable Ubuntu 24.04 VMs via Proxmox API, cloud-image
 fallback for CI), the scrubbed fixture library, and the restore-drill runner.
 
+## e2e/
+
+The harness lives in `e2e/` (its own Go module). Network boundary per
+ADR-W002: hosted CI uses the local QEMU provider; the Proxmox provider is
+only usable from inside the tailnet. See `e2e/README.md` for how to run.
+
 ## fixtures/
 
 Golden configs transcribed from the reference deployment
