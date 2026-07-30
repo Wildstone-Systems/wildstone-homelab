@@ -139,10 +139,24 @@ func (ca *CA) ServerTLSCert(hosts []string) (tls.Certificate, error) {
 	return tls.Certificate{Certificate: [][]byte{der, ca.cert.Raw}, PrivateKey: key}, nil
 }
 
-// IssueFromCSR signs a node client certificate. The certificate CN is
-// forced to the node ID — the CN is the identity the Session handler
-// trusts, so it comes from the join exchange, never from the CSR subject.
+// defaultClientCertLifetime is the standard node client-cert lifetime,
+// deliberately short to force rotation work (ADR-W003 A5, W4) before it
+// becomes an outage.
+const defaultClientCertLifetime = 3 * 30 * 24 * time.Hour // ~3 months
+
+// IssueFromCSR signs a node client certificate with the default ~3-month
+// lifetime. The certificate CN is forced to the node ID — the CN is the
+// identity the Session handler trusts, so it comes from the join exchange
+// (or, for renewal, the mTLS peer cert), never from the CSR subject.
 func (ca *CA) IssueFromCSR(csrPEM []byte, nodeID string) ([]byte, error) {
+	return ca.IssueFromCSRWithLifetime(csrPEM, nodeID, defaultClientCertLifetime)
+}
+
+// IssueFromCSRWithLifetime is IssueFromCSR with an explicit lifetime. Test
+// hook (ADR-W003 W4): integration tests use it to mint short-lived certs so
+// rotation can be exercised without waiting three months. Production code
+// paths always go through IssueFromCSR's default.
+func (ca *CA) IssueFromCSRWithLifetime(csrPEM []byte, nodeID string, lifetime time.Duration) ([]byte, error) {
 	block, _ := pem.Decode(csrPEM)
 	if block == nil || block.Type != "CERTIFICATE REQUEST" {
 		return nil, fmt.Errorf("not a CSR")
@@ -158,7 +172,7 @@ func (ca *CA) IssueFromCSR(csrPEM []byte, nodeID string) ([]byte, error) {
 		SerialNumber: newSerial(),
 		Subject:      pkix.Name{CommonName: nodeID},
 		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().AddDate(0, 3, 0), // rotation well before expiry (E1)
+		NotAfter:     time.Now().Add(lifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}

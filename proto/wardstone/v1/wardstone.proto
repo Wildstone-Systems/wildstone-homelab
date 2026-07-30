@@ -28,6 +28,14 @@ service KeystoneGateway {
   // The first agent message is Hello; afterwards Keystone sends Operation
   // messages and the agent answers with OpResult, correlated by op_id.
   rpc Session(stream AgentMessage) returns (stream KeystoneMessage);
+
+  // Renew exchanges a fresh CSR for a new client certificate ahead of the
+  // ~3-month expiry (ADR-W003 W4). mTLS required — the same per-RPC
+  // verified-client-cert check as Session. The issued certificate's CN is
+  // always the caller's existing mTLS client-cert CN (peer identity), NEVER
+  // taken from RenewRequest or the CSR subject, so a node cannot renew its
+  // way into a different identity.
+  rpc Renew(RenewRequest) returns (RenewResponse);
 }
 
 // ---------------------------------------------------------------- bootstrap
@@ -45,6 +53,16 @@ message JoinResponse {
   // op signing lands (E1). Delivered at join so it is pinned before any
   // operation is ever accepted.
   bytes op_signing_public_key = 3;
+}
+
+// ---------------------------------------------------------------- rotation
+
+message RenewRequest {
+  bytes csr_pem = 1; // Subject.CommonName is ignored; CN comes from the mTLS peer cert
+}
+
+message RenewResponse {
+  bytes cert_pem = 1;
 }
 
 // ---------------------------------------------------------------- session

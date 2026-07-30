@@ -269,6 +269,26 @@ func (g *Gateway) Join(_ context.Context, req *wsv1.JoinRequest) (*wsv1.JoinResp
 	}, nil
 }
 
+// ---------------------------------------------------------------- Renew
+
+// Renew issues a fresh client certificate for an already-authenticated node
+// ahead of its current certificate's expiry (ADR-W003 W4). The verified
+// mTLS peer cert's CN is the ONLY source of node identity — never the CSR
+// subject and never anything in the request — so a node cannot use renewal
+// to change its identity.
+func (g *Gateway) Renew(ctx context.Context, req *wsv1.RenewRequest) (*wsv1.RenewResponse, error) {
+	nodeID, err := peerNodeID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	certPEM, err := g.ca.IssueFromCSR(req.GetCsrPem(), nodeID)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "csr: %v", err)
+	}
+	g.log.Info("node renewed certificate", "node", nodeID)
+	return &wsv1.RenewResponse{CertPem: certPEM}, nil
+}
+
 // ---------------------------------------------------------------- Session
 
 func (g *Gateway) Session(stream grpc.BidiStreamingServer[wsv1.AgentMessage, wsv1.KeystoneMessage]) error {

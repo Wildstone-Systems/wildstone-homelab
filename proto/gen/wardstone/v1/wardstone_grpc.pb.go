@@ -34,6 +34,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	KeystoneGateway_Join_FullMethodName    = "/wardstone.v1.KeystoneGateway/Join"
 	KeystoneGateway_Session_FullMethodName = "/wardstone.v1.KeystoneGateway/Session"
+	KeystoneGateway_Renew_FullMethodName   = "/wardstone.v1.KeystoneGateway/Renew"
 )
 
 // KeystoneGatewayClient is the client API for KeystoneGateway service.
@@ -50,6 +51,13 @@ type KeystoneGatewayClient interface {
 	// The first agent message is Hello; afterwards Keystone sends Operation
 	// messages and the agent answers with OpResult, correlated by op_id.
 	Session(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[AgentMessage, KeystoneMessage], error)
+	// Renew exchanges a fresh CSR for a new client certificate ahead of the
+	// ~3-month expiry (ADR-W003 W4). mTLS required — the same per-RPC
+	// verified-client-cert check as Session. The issued certificate's CN is
+	// always the caller's existing mTLS client-cert CN (peer identity), NEVER
+	// taken from RenewRequest or the CSR subject, so a node cannot renew its
+	// way into a different identity.
+	Renew(ctx context.Context, in *RenewRequest, opts ...grpc.CallOption) (*RenewResponse, error)
 }
 
 type keystoneGatewayClient struct {
@@ -83,6 +91,16 @@ func (c *keystoneGatewayClient) Session(ctx context.Context, opts ...grpc.CallOp
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type KeystoneGateway_SessionClient = grpc.BidiStreamingClient[AgentMessage, KeystoneMessage]
 
+func (c *keystoneGatewayClient) Renew(ctx context.Context, in *RenewRequest, opts ...grpc.CallOption) (*RenewResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenewResponse)
+	err := c.cc.Invoke(ctx, KeystoneGateway_Renew_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // KeystoneGatewayServer is the server API for KeystoneGateway service.
 // All implementations must embed UnimplementedKeystoneGatewayServer
 // for forward compatibility.
@@ -97,6 +115,13 @@ type KeystoneGatewayServer interface {
 	// The first agent message is Hello; afterwards Keystone sends Operation
 	// messages and the agent answers with OpResult, correlated by op_id.
 	Session(grpc.BidiStreamingServer[AgentMessage, KeystoneMessage]) error
+	// Renew exchanges a fresh CSR for a new client certificate ahead of the
+	// ~3-month expiry (ADR-W003 W4). mTLS required — the same per-RPC
+	// verified-client-cert check as Session. The issued certificate's CN is
+	// always the caller's existing mTLS client-cert CN (peer identity), NEVER
+	// taken from RenewRequest or the CSR subject, so a node cannot renew its
+	// way into a different identity.
+	Renew(context.Context, *RenewRequest) (*RenewResponse, error)
 	mustEmbedUnimplementedKeystoneGatewayServer()
 }
 
@@ -112,6 +137,9 @@ func (UnimplementedKeystoneGatewayServer) Join(context.Context, *JoinRequest) (*
 }
 func (UnimplementedKeystoneGatewayServer) Session(grpc.BidiStreamingServer[AgentMessage, KeystoneMessage]) error {
 	return status.Error(codes.Unimplemented, "method Session not implemented")
+}
+func (UnimplementedKeystoneGatewayServer) Renew(context.Context, *RenewRequest) (*RenewResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Renew not implemented")
 }
 func (UnimplementedKeystoneGatewayServer) mustEmbedUnimplementedKeystoneGatewayServer() {}
 func (UnimplementedKeystoneGatewayServer) testEmbeddedByValue()                         {}
@@ -159,6 +187,24 @@ func _KeystoneGateway_Session_Handler(srv interface{}, stream grpc.ServerStream)
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type KeystoneGateway_SessionServer = grpc.BidiStreamingServer[AgentMessage, KeystoneMessage]
 
+func _KeystoneGateway_Renew_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenewRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeystoneGatewayServer).Renew(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeystoneGateway_Renew_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeystoneGatewayServer).Renew(ctx, req.(*RenewRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // KeystoneGateway_ServiceDesc is the grpc.ServiceDesc for KeystoneGateway service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -169,6 +215,10 @@ var KeystoneGateway_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Join",
 			Handler:    _KeystoneGateway_Join_Handler,
+		},
+		{
+			MethodName: "Renew",
+			Handler:    _KeystoneGateway_Renew_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

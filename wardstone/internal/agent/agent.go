@@ -346,8 +346,16 @@ func (a *Agent) session(ctx context.Context) error {
 	}
 	defer conn.Close()
 
-	stream, err := wsv1.NewKeystoneGatewayClient(conn).Session(ctx)
+	// sessionCtx (not the outer ctx) drives the Session stream, so that
+	// renewal (ADR-W003 W4) can force a reconnect — by cancelling
+	// sessionCtx — without tearing down Run's outer loop or racing the
+	// caller's cancellation. cancelSession must run before we wait for the
+	// renewal goroutine to notice and exit, hence the defer ordering below
+	// (defers run LIFO: the later `defer cancelSession()` fires first).
+	sessionCtx, cancelSession := context.WithCancel(ctx)
+	stream, err := wsv1.NewKeystoneGatewayClient(conn).Session(sessionCtx)
 	if err != nil {
+		cancelSession()
 		return err
 	}
 	if err := stream.Send(&wsv1.AgentMessage{Msg: &wsv1.AgentMessage_Hello{Hello: &wsv1.Hello{
@@ -355,6 +363,7 @@ func (a *Agent) session(ctx context.Context) error {
 		AgentVersion:  a.cfg.Version,
 		ProtocolMinor: ProtocolMinor,
 	}}}); err != nil {
+		cancelSession()
 		return err
 	}
 	a.log.Info("session established", "keystone", a.cfg.KeystoneAddr)
@@ -364,6 +373,20 @@ func (a *Agent) session(ctx context.Context) error {
 		a.log.Warn("no pinned op-signing key — accepting unsigned operations this session " +
 			"(pre-W1 identity; re-join against a Keystone that serves op_signing_public_key to pin one)")
 	}
+
+	// Certificate rotation (ADR-W003 W4): check on establish and then every
+	// 24h for the remainder of the session's life; force a reconnect via
+	// cancelSession after a successful renewal so the next dial in Run's
+	// loop picks up the new cert. Runs on conn, the same connection the
+	// session stream uses — gRPC connections are safe for concurrent RPCs,
+	// so this does not race the Recv/dispatch loop below.
+	renewalDone := make(chan struct{})
+	go func() {
+		defer close(renewalDone)
+		a.renewalLoop(sessionCtx, conn, cancelSession)
+	}()
+	defer func() { <-renewalDone }()
+	defer cancelSession()
 
 	var sendMu sync.Mutex
 	for {
@@ -380,4 +403,122 @@ func (a *Agent) session(ctx context.Context) error {
 			}
 		}(msg)
 	}
+}
+
+// ---------------------------------------------------------------- rotation
+
+// renewCheckInterval is how often a live session re-checks its certificate's
+// remaining lifetime (ADR-W003 W4), beyond the check done on session
+// establishment.
+var renewCheckInterval = 24 * time.Hour
+
+// renewalLoop checks the on-disk client certificate's remaining lifetime
+// immediately, then on renewCheckInterval, until ctx is cancelled (i.e. the
+// session ends). A renewal failure is logged at Warn and retried on the
+// next tick or the next session establishment — it never tears down the
+// live session.
+func (a *Agent) renewalLoop(ctx context.Context, conn *grpc.ClientConn, forceReconnect context.CancelFunc) {
+	a.checkAndRenew(ctx, conn, forceReconnect)
+	ticker := time.NewTicker(renewCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.checkAndRenew(ctx, conn, forceReconnect)
+		}
+	}
+}
+
+// checkAndRenew loads the current client certificate and, if less than 1/3
+// of its total lifetime remains, renews it and forces a reconnect so the
+// new cert takes effect. Errors (loading the cert, the Renew RPC, or
+// persisting the result) are logged at Warn and otherwise swallowed — the
+// live session must not be affected by a renewal failure.
+func (a *Agent) checkAndRenew(ctx context.Context, conn *grpc.ClientConn, forceReconnect context.CancelFunc) {
+	leaf, err := a.loadLeafCert()
+	if err != nil {
+		a.log.Warn("renewal: could not load current certificate", "error", err)
+		return
+	}
+	total := leaf.NotAfter.Sub(leaf.NotBefore)
+	remaining := time.Until(leaf.NotAfter)
+	if total <= 0 || remaining >= total/3 {
+		return
+	}
+	a.log.Info("certificate nearing expiry, renewing", "remaining", remaining, "total", total)
+	if err := a.renew(ctx, conn); err != nil {
+		a.log.Warn("certificate renewal failed, will retry", "error", err)
+		return
+	}
+	a.log.Info("certificate renewed, forcing reconnect to pick it up")
+	forceReconnect()
+}
+
+// renew generates a new key + CSR, exchanges it for a new certificate over
+// the Renew RPC on the given (already-authenticated) connection, and
+// persists the new key+cert atomically — tmp+rename, key first then cert,
+// matching the writeManagedFile pattern in ops.go. The node identity is not
+// sent by the agent at all beyond the CSR's (ignored) subject: the gateway
+// derives it solely from this connection's mTLS client-cert CN.
+func (a *Agent) renew(ctx context.Context, conn *grpc.ClientConn) error {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return err
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: a.cfg.NodeID}, // ignored server-side; CN comes from the peer cert
+	}, key)
+	if err != nil {
+		return err
+	}
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+
+	resp, err := wsv1.NewKeystoneGatewayClient(conn).Renew(ctx, &wsv1.RenewRequest{CsrPem: csrPEM})
+	if err != nil {
+		return fmt.Errorf("Renew RPC: %w", err)
+	}
+
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return err
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	if err := writeFileAtomic(a.keyPath(), keyPEM, 0o600); err != nil {
+		return fmt.Errorf("persist renewed key: %w", err)
+	}
+	if err := writeFileAtomic(a.certPath(), resp.GetCertPem(), 0o600); err != nil {
+		return fmt.Errorf("persist renewed cert: %w", err)
+	}
+	return nil
+}
+
+// loadLeafCert parses the currently-persisted client certificate (node.crt)
+// so its NotBefore/NotAfter can be inspected for rotation.
+func (a *Agent) loadLeafCert() (*x509.Certificate, error) {
+	b, err := os.ReadFile(a.certPath())
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(b)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("node.crt: not a PEM certificate")
+	}
+	return x509.ParseCertificate(block.Bytes)
+}
+
+// writeFileAtomic writes data to path via tmp+rename, matching the
+// writeManagedFile pattern in ops.go, so a crash mid-write never leaves a
+// torn identity file on disk.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".wildstone-tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
