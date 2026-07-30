@@ -142,6 +142,16 @@ func (a *Agent) dispatch(ctx context.Context, opID string, op *wsv1.Operation) *
 		if r, oerr = a.ensureDockerNetwork(ctx, o.EnsureDockerNetwork); oerr == nil {
 			res.Result = r
 		}
+	case *wsv1.Operation_SystemdUnitStatus:
+		var r *wsv1.OpResult_SystemdUnitStatus
+		if r, oerr = a.systemdUnitStatus(ctx, o.SystemdUnitStatus); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_TimeSyncStatus:
+		var r *wsv1.OpResult_TimeSyncStatus
+		if r, oerr = a.timeSyncStatus(o.TimeSyncStatus); oerr == nil {
+			res.Result = r
+		}
 	default:
 		oerr = opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "unknown operation — agent too old for this Keystone? (protocol skew)")
 	}

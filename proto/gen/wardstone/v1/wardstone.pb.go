@@ -549,6 +549,8 @@ type Operation struct {
 	//	*Operation_ProbeTcp
 	//	*Operation_ProbeHttp
 	//	*Operation_EnsureDockerNetwork
+	//	*Operation_SystemdUnitStatus
+	//	*Operation_TimeSyncStatus
 	Op            isOperation_Op `protobuf_oneof:"op"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -798,6 +800,24 @@ func (x *Operation) GetEnsureDockerNetwork() *EnsureDockerNetwork {
 	return nil
 }
 
+func (x *Operation) GetSystemdUnitStatus() *SystemdUnitStatus {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_SystemdUnitStatus); ok {
+			return x.SystemdUnitStatus
+		}
+	}
+	return nil
+}
+
+func (x *Operation) GetTimeSyncStatus() *TimeSyncStatus {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_TimeSyncStatus); ok {
+			return x.TimeSyncStatus
+		}
+	}
+	return nil
+}
+
 type isOperation_Op interface {
 	isOperation_Op()
 }
@@ -894,6 +914,14 @@ type Operation_EnsureDockerNetwork struct {
 	EnsureDockerNetwork *EnsureDockerNetwork `protobuf:"bytes,23,opt,name=ensure_docker_network,json=ensureDockerNetwork,proto3,oneof"`
 }
 
+type Operation_SystemdUnitStatus struct {
+	SystemdUnitStatus *SystemdUnitStatus `protobuf:"bytes,24,opt,name=systemd_unit_status,json=systemdUnitStatus,proto3,oneof"`
+}
+
+type Operation_TimeSyncStatus struct {
+	TimeSyncStatus *TimeSyncStatus `protobuf:"bytes,25,opt,name=time_sync_status,json=timeSyncStatus,proto3,oneof"`
+}
+
 func (*Operation_EnsureContainer) isOperation_Op() {}
 
 func (*Operation_StopContainer) isOperation_Op() {}
@@ -940,6 +968,10 @@ func (*Operation_ProbeHttp) isOperation_Op() {}
 
 func (*Operation_EnsureDockerNetwork) isOperation_Op() {}
 
+func (*Operation_SystemdUnitStatus) isOperation_Op() {}
+
+func (*Operation_TimeSyncStatus) isOperation_Op() {}
+
 type OpResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	OpId  string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
@@ -969,6 +1001,8 @@ type OpResult struct {
 	//	*OpResult_ProbeTcp
 	//	*OpResult_ProbeHttp
 	//	*OpResult_EnsureDockerNetwork
+	//	*OpResult_SystemdUnitStatus
+	//	*OpResult_TimeSyncStatus
 	Result        isOpResult_Result `protobuf_oneof:"result"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1234,6 +1268,24 @@ func (x *OpResult) GetEnsureDockerNetwork() *EnsureDockerNetworkResult {
 	return nil
 }
 
+func (x *OpResult) GetSystemdUnitStatus() *SystemdUnitStatusResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_SystemdUnitStatus); ok {
+			return x.SystemdUnitStatus
+		}
+	}
+	return nil
+}
+
+func (x *OpResult) GetTimeSyncStatus() *TimeSyncStatusResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_TimeSyncStatus); ok {
+			return x.TimeSyncStatus
+		}
+	}
+	return nil
+}
+
 type isOpResult_Result interface {
 	isOpResult_Result()
 }
@@ -1334,6 +1386,14 @@ type OpResult_EnsureDockerNetwork struct {
 	EnsureDockerNetwork *EnsureDockerNetworkResult `protobuf:"bytes,25,opt,name=ensure_docker_network,json=ensureDockerNetwork,proto3,oneof"`
 }
 
+type OpResult_SystemdUnitStatus struct {
+	SystemdUnitStatus *SystemdUnitStatusResult `protobuf:"bytes,26,opt,name=systemd_unit_status,json=systemdUnitStatus,proto3,oneof"`
+}
+
+type OpResult_TimeSyncStatus struct {
+	TimeSyncStatus *TimeSyncStatusResult `protobuf:"bytes,27,opt,name=time_sync_status,json=timeSyncStatus,proto3,oneof"`
+}
+
 func (*OpResult_Error) isOpResult_Result() {}
 
 func (*OpResult_EnsureContainer) isOpResult_Result() {}
@@ -1381,6 +1441,10 @@ func (*OpResult_ProbeTcp) isOpResult_Result() {}
 func (*OpResult_ProbeHttp) isOpResult_Result() {}
 
 func (*OpResult_EnsureDockerNetwork) isOpResult_Result() {}
+
+func (*OpResult_SystemdUnitStatus) isOpResult_Result() {}
+
+func (*OpResult_TimeSyncStatus) isOpResult_Result() {}
 
 type OpError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -4135,6 +4199,217 @@ func (x *EnsureDockerNetworkResult) GetCreated() bool {
 	return false
 }
 
+// SystemdUnitStatus queries a single systemd unit's state over D-Bus
+// (github.com/coreos/go-systemd/v22 — pre-approved exception to ADR-W003
+// §A4.5's dependency floor, pure Go, no shell-out). The requested unit
+// MUST be present in the agent's Config.SystemdUnitAllowlist (prod default:
+// wardstoned.service, docker.service) or the agent refuses with FORBIDDEN
+// — this is agent-side defense in depth: even a compromised Keystone can
+// only observe the allowlisted units, never arbitrary ones. An empty unit
+// name is INVALID.
+type SystemdUnitStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Unit          string                 `protobuf:"bytes,1,opt,name=unit,proto3" json:"unit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SystemdUnitStatus) Reset() {
+	*x = SystemdUnitStatus{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[60]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SystemdUnitStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SystemdUnitStatus) ProtoMessage() {}
+
+func (x *SystemdUnitStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[60]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SystemdUnitStatus.ProtoReflect.Descriptor instead.
+func (*SystemdUnitStatus) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{60}
+}
+
+func (x *SystemdUnitStatus) GetUnit() string {
+	if x != nil {
+		return x.Unit
+	}
+	return ""
+}
+
+type SystemdUnitStatusResult struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	ActiveState        string                 `protobuf:"bytes,1,opt,name=active_state,json=activeState,proto3" json:"active_state,omitempty"`
+	SubState           string                 `protobuf:"bytes,2,opt,name=sub_state,json=subState,proto3" json:"sub_state,omitempty"`
+	LoadState          string                 `protobuf:"bytes,3,opt,name=load_state,json=loadState,proto3" json:"load_state,omitempty"`
+	ActiveSinceUnixSec uint64                 `protobuf:"varint,4,opt,name=active_since_unix_sec,json=activeSinceUnixSec,proto3" json:"active_since_unix_sec,omitempty"` // 0 if never activated
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *SystemdUnitStatusResult) Reset() {
+	*x = SystemdUnitStatusResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[61]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SystemdUnitStatusResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SystemdUnitStatusResult) ProtoMessage() {}
+
+func (x *SystemdUnitStatusResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[61]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SystemdUnitStatusResult.ProtoReflect.Descriptor instead.
+func (*SystemdUnitStatusResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{61}
+}
+
+func (x *SystemdUnitStatusResult) GetActiveState() string {
+	if x != nil {
+		return x.ActiveState
+	}
+	return ""
+}
+
+func (x *SystemdUnitStatusResult) GetSubState() string {
+	if x != nil {
+		return x.SubState
+	}
+	return ""
+}
+
+func (x *SystemdUnitStatusResult) GetLoadState() string {
+	if x != nil {
+		return x.LoadState
+	}
+	return ""
+}
+
+func (x *SystemdUnitStatusResult) GetActiveSinceUnixSec() uint64 {
+	if x != nil {
+		return x.ActiveSinceUnixSec
+	}
+	return 0
+}
+
+// TimeSyncStatus reports whether the kernel clock is synchronized, via
+// golang.org/x/sys/unix.Adjtimex (pre-approved dependency, ADR-W003 §A4.5)
+// — no shell-out to timedatectl/chronyc.
+type TimeSyncStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TimeSyncStatus) Reset() {
+	*x = TimeSyncStatus{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[62]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TimeSyncStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TimeSyncStatus) ProtoMessage() {}
+
+func (x *TimeSyncStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[62]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TimeSyncStatus.ProtoReflect.Descriptor instead.
+func (*TimeSyncStatus) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{62}
+}
+
+type TimeSyncStatusResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Synchronized  bool                   `protobuf:"varint,1,opt,name=synchronized,proto3" json:"synchronized,omitempty"`
+	Detail        string                 `protobuf:"bytes,2,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TimeSyncStatusResult) Reset() {
+	*x = TimeSyncStatusResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[63]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TimeSyncStatusResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TimeSyncStatusResult) ProtoMessage() {}
+
+func (x *TimeSyncStatusResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[63]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TimeSyncStatusResult.ProtoReflect.Descriptor instead.
+func (*TimeSyncStatusResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{63}
+}
+
+func (x *TimeSyncStatusResult) GetSynchronized() bool {
+	if x != nil {
+		return x.Synchronized
+	}
+	return false
+}
+
+func (x *TimeSyncStatusResult) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
 var File_wardstone_v1_wardstone_proto protoreflect.FileDescriptor
 
 const file_wardstone_v1_wardstone_proto_rawDesc = "" +
@@ -4164,7 +4439,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0fKeystoneMessage\x12\x13\n" +
 	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12'\n" +
 	"\x02op\x18\x02 \x01(\v2\x17.wardstone.v1.OperationR\x02op\x12!\n" +
-	"\fop_signature\x18\x03 \x01(\fR\vopSignature\"\xfe\v\n" +
+	"\fop_signature\x18\x03 \x01(\fR\vopSignature\"\x9b\r\n" +
 	"\tOperation\x12J\n" +
 	"\x10ensure_container\x18\x01 \x01(\v2\x1d.wardstone.v1.EnsureContainerH\x00R\x0fensureContainer\x12D\n" +
 	"\x0estop_container\x18\x02 \x01(\v2\x1b.wardstone.v1.StopContainerH\x00R\rstopContainer\x12D\n" +
@@ -4194,8 +4469,10 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\tprobe_tcp\x18\x15 \x01(\v2\x16.wardstone.v1.ProbeTcpH\x00R\bprobeTcp\x128\n" +
 	"\n" +
 	"probe_http\x18\x16 \x01(\v2\x17.wardstone.v1.ProbeHttpH\x00R\tprobeHttp\x12W\n" +
-	"\x15ensure_docker_network\x18\x17 \x01(\v2!.wardstone.v1.EnsureDockerNetworkH\x00R\x13ensureDockerNetworkB\x04\n" +
-	"\x02op\"\xcf\r\n" +
+	"\x15ensure_docker_network\x18\x17 \x01(\v2!.wardstone.v1.EnsureDockerNetworkH\x00R\x13ensureDockerNetwork\x12Q\n" +
+	"\x13systemd_unit_status\x18\x18 \x01(\v2\x1f.wardstone.v1.SystemdUnitStatusH\x00R\x11systemdUnitStatus\x12H\n" +
+	"\x10time_sync_status\x18\x19 \x01(\v2\x1c.wardstone.v1.TimeSyncStatusH\x00R\x0etimeSyncStatusB\x04\n" +
+	"\x02op\"\xf8\x0e\n" +
 	"\bOpResult\x12\x13\n" +
 	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12-\n" +
 	"\x05error\x18\x02 \x01(\v2\x15.wardstone.v1.OpErrorH\x00R\x05error\x12P\n" +
@@ -4227,7 +4504,9 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\tprobe_tcp\x18\x17 \x01(\v2\x1c.wardstone.v1.ProbeTcpResultH\x00R\bprobeTcp\x12>\n" +
 	"\n" +
 	"probe_http\x18\x18 \x01(\v2\x1d.wardstone.v1.ProbeHttpResultH\x00R\tprobeHttp\x12]\n" +
-	"\x15ensure_docker_network\x18\x19 \x01(\v2'.wardstone.v1.EnsureDockerNetworkResultH\x00R\x13ensureDockerNetworkB\b\n" +
+	"\x15ensure_docker_network\x18\x19 \x01(\v2'.wardstone.v1.EnsureDockerNetworkResultH\x00R\x13ensureDockerNetwork\x12W\n" +
+	"\x13systemd_unit_status\x18\x1a \x01(\v2%.wardstone.v1.SystemdUnitStatusResultH\x00R\x11systemdUnitStatus\x12N\n" +
+	"\x10time_sync_status\x18\x1b \x01(\v2\".wardstone.v1.TimeSyncStatusResultH\x00R\x0etimeSyncStatusB\b\n" +
 	"\x06result\"P\n" +
 	"\aOpError\x12+\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x17.wardstone.v1.ErrorCodeR\x04code\x12\x18\n" +
@@ -4406,7 +4685,19 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x13EnsureDockerNetwork\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"5\n" +
 	"\x19EnsureDockerNetworkResult\x12\x18\n" +
-	"\acreated\x18\x01 \x01(\bR\acreated*\xa8\x01\n" +
+	"\acreated\x18\x01 \x01(\bR\acreated\"'\n" +
+	"\x11SystemdUnitStatus\x12\x12\n" +
+	"\x04unit\x18\x01 \x01(\tR\x04unit\"\xab\x01\n" +
+	"\x17SystemdUnitStatusResult\x12!\n" +
+	"\factive_state\x18\x01 \x01(\tR\vactiveState\x12\x1b\n" +
+	"\tsub_state\x18\x02 \x01(\tR\bsubState\x12\x1d\n" +
+	"\n" +
+	"load_state\x18\x03 \x01(\tR\tloadState\x121\n" +
+	"\x15active_since_unix_sec\x18\x04 \x01(\x04R\x12activeSinceUnixSec\"\x10\n" +
+	"\x0eTimeSyncStatus\"R\n" +
+	"\x14TimeSyncStatusResult\x12\"\n" +
+	"\fsynchronized\x18\x01 \x01(\bR\fsynchronized\x12\x16\n" +
+	"\x06detail\x18\x02 \x01(\tR\x06detail*\xa8\x01\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12ERROR_CODE_INVALID\x10\x01\x12\x18\n" +
@@ -4432,7 +4723,7 @@ func file_wardstone_v1_wardstone_proto_rawDescGZIP() []byte {
 }
 
 var file_wardstone_v1_wardstone_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 62)
+var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 66)
 var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(ErrorCode)(0),                    // 0: wardstone.v1.ErrorCode
 	(*JoinRequest)(nil),               // 1: wardstone.v1.JoinRequest
@@ -4495,8 +4786,12 @@ var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(*ProbeHttpResult)(nil),           // 58: wardstone.v1.ProbeHttpResult
 	(*EnsureDockerNetwork)(nil),       // 59: wardstone.v1.EnsureDockerNetwork
 	(*EnsureDockerNetworkResult)(nil), // 60: wardstone.v1.EnsureDockerNetworkResult
-	nil,                               // 61: wardstone.v1.EnsureContainer.EnvEntry
-	nil,                               // 62: wardstone.v1.EnsureContainer.LabelsEntry
+	(*SystemdUnitStatus)(nil),         // 61: wardstone.v1.SystemdUnitStatus
+	(*SystemdUnitStatusResult)(nil),   // 62: wardstone.v1.SystemdUnitStatusResult
+	(*TimeSyncStatus)(nil),            // 63: wardstone.v1.TimeSyncStatus
+	(*TimeSyncStatusResult)(nil),      // 64: wardstone.v1.TimeSyncStatusResult
+	nil,                               // 65: wardstone.v1.EnsureContainer.EnvEntry
+	nil,                               // 66: wardstone.v1.EnsureContainer.LabelsEntry
 }
 var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	6,  // 0: wardstone.v1.AgentMessage.hello:type_name -> wardstone.v1.Hello
@@ -4525,48 +4820,52 @@ var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	55, // 23: wardstone.v1.Operation.probe_tcp:type_name -> wardstone.v1.ProbeTcp
 	57, // 24: wardstone.v1.Operation.probe_http:type_name -> wardstone.v1.ProbeHttp
 	59, // 25: wardstone.v1.Operation.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetwork
-	10, // 26: wardstone.v1.OpResult.error:type_name -> wardstone.v1.OpError
-	14, // 27: wardstone.v1.OpResult.ensure_container:type_name -> wardstone.v1.EnsureContainerResult
-	16, // 28: wardstone.v1.OpResult.stop_container:type_name -> wardstone.v1.StopContainerResult
-	18, // 29: wardstone.v1.OpResult.container_logs:type_name -> wardstone.v1.ContainerLogsResult
-	20, // 30: wardstone.v1.OpResult.pull_image:type_name -> wardstone.v1.PullImageResult
-	34, // 31: wardstone.v1.OpResult.write_managed_file:type_name -> wardstone.v1.WriteManagedFileResult
-	36, // 32: wardstone.v1.OpResult.read_managed_file:type_name -> wardstone.v1.ReadManagedFileResult
-	38, // 33: wardstone.v1.OpResult.host_facts:type_name -> wardstone.v1.HostFactsResult
-	40, // 34: wardstone.v1.OpResult.health:type_name -> wardstone.v1.HealthResult
-	42, // 35: wardstone.v1.OpResult.self_update:type_name -> wardstone.v1.SelfUpdateResult
-	22, // 36: wardstone.v1.OpResult.remove_container:type_name -> wardstone.v1.RemoveContainerResult
-	24, // 37: wardstone.v1.OpResult.container_stats:type_name -> wardstone.v1.ContainerStatsResult
-	26, // 38: wardstone.v1.OpResult.prune_images:type_name -> wardstone.v1.PruneImagesResult
-	28, // 39: wardstone.v1.OpResult.ensure_volume:type_name -> wardstone.v1.EnsureVolumeResult
-	30, // 40: wardstone.v1.OpResult.snapshot_dir:type_name -> wardstone.v1.SnapshotDirResult
-	32, // 41: wardstone.v1.OpResult.measure_usage:type_name -> wardstone.v1.MeasureUsageResult
-	45, // 42: wardstone.v1.OpResult.list_block_devices:type_name -> wardstone.v1.ListBlockDevicesResult
-	47, // 43: wardstone.v1.OpResult.ensure_mount:type_name -> wardstone.v1.EnsureMountResult
-	49, // 44: wardstone.v1.OpResult.test_nfs:type_name -> wardstone.v1.TestNfsResult
-	51, // 45: wardstone.v1.OpResult.test_smb:type_name -> wardstone.v1.TestSmbResult
-	54, // 46: wardstone.v1.OpResult.list_ports:type_name -> wardstone.v1.ListPortsResult
-	56, // 47: wardstone.v1.OpResult.probe_tcp:type_name -> wardstone.v1.ProbeTcpResult
-	58, // 48: wardstone.v1.OpResult.probe_http:type_name -> wardstone.v1.ProbeHttpResult
-	60, // 49: wardstone.v1.OpResult.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetworkResult
-	0,  // 50: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
-	61, // 51: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
-	12, // 52: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
-	13, // 53: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
-	62, // 54: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
-	44, // 55: wardstone.v1.ListBlockDevicesResult.devices:type_name -> wardstone.v1.BlockDevice
-	53, // 56: wardstone.v1.ListPortsResult.ports:type_name -> wardstone.v1.ListeningPort
-	1,  // 57: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
-	5,  // 58: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
-	3,  // 59: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
-	2,  // 60: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
-	7,  // 61: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
-	4,  // 62: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
-	60, // [60:63] is the sub-list for method output_type
-	57, // [57:60] is the sub-list for method input_type
-	57, // [57:57] is the sub-list for extension type_name
-	57, // [57:57] is the sub-list for extension extendee
-	0,  // [0:57] is the sub-list for field type_name
+	61, // 26: wardstone.v1.Operation.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatus
+	63, // 27: wardstone.v1.Operation.time_sync_status:type_name -> wardstone.v1.TimeSyncStatus
+	10, // 28: wardstone.v1.OpResult.error:type_name -> wardstone.v1.OpError
+	14, // 29: wardstone.v1.OpResult.ensure_container:type_name -> wardstone.v1.EnsureContainerResult
+	16, // 30: wardstone.v1.OpResult.stop_container:type_name -> wardstone.v1.StopContainerResult
+	18, // 31: wardstone.v1.OpResult.container_logs:type_name -> wardstone.v1.ContainerLogsResult
+	20, // 32: wardstone.v1.OpResult.pull_image:type_name -> wardstone.v1.PullImageResult
+	34, // 33: wardstone.v1.OpResult.write_managed_file:type_name -> wardstone.v1.WriteManagedFileResult
+	36, // 34: wardstone.v1.OpResult.read_managed_file:type_name -> wardstone.v1.ReadManagedFileResult
+	38, // 35: wardstone.v1.OpResult.host_facts:type_name -> wardstone.v1.HostFactsResult
+	40, // 36: wardstone.v1.OpResult.health:type_name -> wardstone.v1.HealthResult
+	42, // 37: wardstone.v1.OpResult.self_update:type_name -> wardstone.v1.SelfUpdateResult
+	22, // 38: wardstone.v1.OpResult.remove_container:type_name -> wardstone.v1.RemoveContainerResult
+	24, // 39: wardstone.v1.OpResult.container_stats:type_name -> wardstone.v1.ContainerStatsResult
+	26, // 40: wardstone.v1.OpResult.prune_images:type_name -> wardstone.v1.PruneImagesResult
+	28, // 41: wardstone.v1.OpResult.ensure_volume:type_name -> wardstone.v1.EnsureVolumeResult
+	30, // 42: wardstone.v1.OpResult.snapshot_dir:type_name -> wardstone.v1.SnapshotDirResult
+	32, // 43: wardstone.v1.OpResult.measure_usage:type_name -> wardstone.v1.MeasureUsageResult
+	45, // 44: wardstone.v1.OpResult.list_block_devices:type_name -> wardstone.v1.ListBlockDevicesResult
+	47, // 45: wardstone.v1.OpResult.ensure_mount:type_name -> wardstone.v1.EnsureMountResult
+	49, // 46: wardstone.v1.OpResult.test_nfs:type_name -> wardstone.v1.TestNfsResult
+	51, // 47: wardstone.v1.OpResult.test_smb:type_name -> wardstone.v1.TestSmbResult
+	54, // 48: wardstone.v1.OpResult.list_ports:type_name -> wardstone.v1.ListPortsResult
+	56, // 49: wardstone.v1.OpResult.probe_tcp:type_name -> wardstone.v1.ProbeTcpResult
+	58, // 50: wardstone.v1.OpResult.probe_http:type_name -> wardstone.v1.ProbeHttpResult
+	60, // 51: wardstone.v1.OpResult.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetworkResult
+	62, // 52: wardstone.v1.OpResult.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatusResult
+	64, // 53: wardstone.v1.OpResult.time_sync_status:type_name -> wardstone.v1.TimeSyncStatusResult
+	0,  // 54: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
+	65, // 55: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
+	12, // 56: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
+	13, // 57: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
+	66, // 58: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
+	44, // 59: wardstone.v1.ListBlockDevicesResult.devices:type_name -> wardstone.v1.BlockDevice
+	53, // 60: wardstone.v1.ListPortsResult.ports:type_name -> wardstone.v1.ListeningPort
+	1,  // 61: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
+	5,  // 62: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
+	3,  // 63: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
+	2,  // 64: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
+	7,  // 65: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
+	4,  // 66: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
+	64, // [64:67] is the sub-list for method output_type
+	61, // [61:64] is the sub-list for method input_type
+	61, // [61:61] is the sub-list for extension type_name
+	61, // [61:61] is the sub-list for extension extendee
+	0,  // [0:61] is the sub-list for field type_name
 }
 
 func init() { file_wardstone_v1_wardstone_proto_init() }
@@ -4602,6 +4901,8 @@ func file_wardstone_v1_wardstone_proto_init() {
 		(*Operation_ProbeTcp)(nil),
 		(*Operation_ProbeHttp)(nil),
 		(*Operation_EnsureDockerNetwork)(nil),
+		(*Operation_SystemdUnitStatus)(nil),
+		(*Operation_TimeSyncStatus)(nil),
 	}
 	file_wardstone_v1_wardstone_proto_msgTypes[8].OneofWrappers = []any{
 		(*OpResult_Error)(nil),
@@ -4628,6 +4929,8 @@ func file_wardstone_v1_wardstone_proto_init() {
 		(*OpResult_ProbeTcp)(nil),
 		(*OpResult_ProbeHttp)(nil),
 		(*OpResult_EnsureDockerNetwork)(nil),
+		(*OpResult_SystemdUnitStatus)(nil),
+		(*OpResult_TimeSyncStatus)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -4635,7 +4938,7 @@ func file_wardstone_v1_wardstone_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wardstone_v1_wardstone_proto_rawDesc), len(file_wardstone_v1_wardstone_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   62,
+			NumMessages:   66,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

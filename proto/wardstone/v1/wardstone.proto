@@ -126,6 +126,8 @@ message Operation {
     ProbeTcp probe_tcp = 21;
     ProbeHttp probe_http = 22;
     EnsureDockerNetwork ensure_docker_network = 23;
+    SystemdUnitStatus systemd_unit_status = 24;
+    TimeSyncStatus time_sync_status = 25;
   }
 }
 
@@ -156,6 +158,8 @@ message OpResult {
     ProbeTcpResult probe_tcp = 23;
     ProbeHttpResult probe_http = 24;
     EnsureDockerNetworkResult ensure_docker_network = 25;
+    SystemdUnitStatusResult systemd_unit_status = 26;
+    TimeSyncStatusResult time_sync_status = 27;
   }
 }
 
@@ -509,4 +513,35 @@ message EnsureDockerNetwork {
 
 message EnsureDockerNetworkResult {
   bool created = 1;
+}
+
+// ---------------------------------------------------------------- system (W6d)
+
+// SystemdUnitStatus queries a single systemd unit's state over D-Bus
+// (github.com/coreos/go-systemd/v22 — pre-approved exception to ADR-W003
+// §A4.5's dependency floor, pure Go, no shell-out). The requested unit
+// MUST be present in the agent's Config.SystemdUnitAllowlist (prod default:
+// wardstoned.service, docker.service) or the agent refuses with FORBIDDEN
+// — this is agent-side defense in depth: even a compromised Keystone can
+// only observe the allowlisted units, never arbitrary ones. An empty unit
+// name is INVALID.
+message SystemdUnitStatus {
+  string unit = 1;
+}
+
+message SystemdUnitStatusResult {
+  string active_state = 1;
+  string sub_state = 2;
+  string load_state = 3;
+  uint64 active_since_unix_sec = 4; // 0 if never activated
+}
+
+// TimeSyncStatus reports whether the kernel clock is synchronized, via
+// golang.org/x/sys/unix.Adjtimex (pre-approved dependency, ADR-W003 §A4.5)
+// — no shell-out to timedatectl/chronyc.
+message TimeSyncStatus {}
+
+message TimeSyncStatusResult {
+  bool synchronized = 1;
+  string detail = 2;
 }

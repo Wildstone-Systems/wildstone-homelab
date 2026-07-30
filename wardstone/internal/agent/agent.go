@@ -38,7 +38,9 @@ import (
 // 3: adds ListBlockDevices, EnsureMount, TestNfs, TestSmb, ListPorts,
 //
 //	ProbeTcp, ProbeHttp, EnsureDockerNetwork (ADR-W003 W6c).
-const ProtocolMinor = 3
+//
+// 4: adds SystemdUnitStatus, TimeSyncStatus (ADR-W003 W6d).
+const ProtocolMinor = 4
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
@@ -75,6 +77,13 @@ type Config struct {
 	// FstabPath is where EnsureMount reads/writes its marker-delimited
 	// block. Prod default /etc/fstab; tests use a temp file.
 	FstabPath string
+
+	// SystemdUnitAllowlist bounds SystemdUnitStatus (ADR-W003 W6d): the
+	// requested unit must exactly match an entry here or the agent refuses
+	// with FORBIDDEN, regardless of what Keystone asks — defense in depth
+	// so even a compromised Keystone can only observe these units. Default:
+	// wardstoned.service, docker.service.
+	SystemdUnitAllowlist []string
 
 	// Reconnect backoff (full jitter). Defaults: 500ms base, 15s cap.
 	BackoffBase time.Duration
@@ -125,6 +134,9 @@ func New(cfg Config) (*Agent, error) {
 	cfg.MountRoot = filepath.Clean(cfg.MountRoot)
 	if cfg.FstabPath == "" {
 		cfg.FstabPath = "/etc/fstab"
+	}
+	if len(cfg.SystemdUnitAllowlist) == 0 {
+		cfg.SystemdUnitAllowlist = []string{"wardstoned.service", "docker.service"}
 	}
 	if cfg.BinaryPath == "" {
 		exe, err := os.Executable()
