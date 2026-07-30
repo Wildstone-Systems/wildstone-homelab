@@ -115,6 +115,9 @@ message Operation {
     RemoveContainer remove_container = 10;
     ContainerStats container_stats = 11;
     PruneImages prune_images = 12;
+    EnsureVolume ensure_volume = 13;
+    SnapshotDir snapshot_dir = 14;
+    MeasureUsage measure_usage = 15;
   }
 }
 
@@ -134,6 +137,9 @@ message OpResult {
     RemoveContainerResult remove_container = 12;
     ContainerStatsResult container_stats = 13;
     PruneImagesResult prune_images = 14;
+    EnsureVolumeResult ensure_volume = 15;
+    SnapshotDirResult snapshot_dir = 16;
+    MeasureUsageResult measure_usage = 17;
   }
 }
 
@@ -241,6 +247,58 @@ message PruneImages {}
 message PruneImagesResult {
   uint64 reclaimed_bytes = 1;
   uint32 deleted_count = 2;
+}
+
+// ---------------------------------------------------------------- volumes
+
+// EnsureVolume creates a named, owner-labeled Docker volume if it does not
+// exist. Docker's own /volumes/create is idempotent but silently returns
+// the pre-existing volume without changing its labels — so the agent
+// inspects first: absent -> create (created=true); present and
+// wildstone-owned -> created=false; present and NOT wildstone-owned ->
+// FORBIDDEN (never adopt a volume Wardstone did not create).
+message EnsureVolume {
+  string name = 1;
+}
+
+message EnsureVolumeResult {
+  bool created = 1;
+}
+
+// ---------------------------------------------------------------- fs ops
+
+// SnapshotDir archives source_dir into a gzip'd tar at dest_path. Both
+// paths must resolve under a managed prefix. Symlinks inside source_dir
+// are recorded as link entries (target string only) and NEVER followed —
+// following them could let a symlink planted inside the managed tree
+// exfiltrate arbitrary host files into the snapshot, escaping the managed
+// prefix invariant through the back door. Regular files and directories
+// are archived; sockets/devices/FIFOs are skipped silently. Cumulative
+// regular-file bytes are capped at 4 GiB (ADR-W003 §A4.4 bounded
+// responses) — the walk aborts, the partial temp file is removed, and the
+// op returns INVALID; dest_path is never partially written (tmp+rename).
+message SnapshotDir {
+  string source_dir = 1;
+  string dest_path = 2; // must end in .tar.gz
+}
+
+message SnapshotDirResult {
+  string sha256_hex = 1; // sha256 of the final .tar.gz bytes
+  uint64 size_bytes = 2;
+  uint32 file_count = 3; // regular files archived (symlinks/dirs not counted)
+}
+
+// MeasureUsage recursively sums regular-file sizes under path (managed
+// prefix required). Symlinks are not followed. The walk is capped at
+// 1,000,000 entries — beyond that the op returns a RUNTIME error rather
+// than an unbounded scan of an attacker-grown tree.
+message MeasureUsage {
+  string path = 1;
+}
+
+message MeasureUsageResult {
+  uint64 total_bytes = 1;
+  uint64 file_count = 2;
 }
 
 // ---------------------------------------------------------------- files

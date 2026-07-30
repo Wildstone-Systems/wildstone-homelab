@@ -22,20 +22,27 @@ type fakeContainer struct {
 	running bool
 }
 
+type fakeVolume struct {
+	name   string
+	labels map[string]string
+}
+
 type fakeDocker struct {
 	t   *testing.T
 	srv *httptest.Server
 
 	mu           sync.Mutex
 	containers   map[string]*fakeContainer
+	volumes      map[string]*fakeVolume
 	seq          int
 	pruneFilters string // last filters query param /images/prune received
 }
 
 var containerPath = regexp.MustCompile(`^/containers/([^/]+)(/(json|start|stop|logs|stats))?$`)
+var volumePath = regexp.MustCompile(`^/volumes/([^/]+)$`)
 
 func newFakeDocker(t *testing.T) *fakeDocker {
-	f := &fakeDocker{t: t, containers: map[string]*fakeContainer{}}
+	f := &fakeDocker{t: t, containers: map[string]*fakeContainer{}, volumes: map[string]*fakeVolume{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -51,6 +58,14 @@ func (f *fakeDocker) addForeign(name string) {
 		id: fmt.Sprintf("foreign-%d", f.seq), image: "someone-elses:latest",
 		labels: map[string]string{}, running: true,
 	}
+}
+
+// addForeignVolume seeds a pre-existing volume without the wildstone owner
+// label, simulating one created outside Wardstone's control.
+func (f *fakeDocker) addForeignVolume(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumes[name] = &fakeVolume{name: name, labels: map[string]string{"someone-else": "true"}}
 }
 
 func (f *fakeDocker) lookup(key string) (*fakeContainer, string) {
@@ -99,6 +114,38 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.URL.Path == "/volumes/create" && r.Method == http.MethodPost {
+		var body struct {
+			Name   string            `json:"Name"`
+			Labels map[string]string `json:"Labels"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// Real Docker semantics: idempotent, does NOT overwrite labels of an
+		// existing volume with the same name.
+		v, exists := f.volumes[body.Name]
+		if !exists {
+			v = &fakeVolume{name: body.Name, labels: body.Labels}
+			f.volumes[body.Name] = v
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"Name": v.name, "Labels": v.labels})
+		return
+	}
+
+	if vm := volumePath.FindStringSubmatch(r.URL.Path); vm != nil && r.Method == http.MethodGet {
+		v, ok := f.volumes[vm[1]]
+		if !ok {
+			http.Error(w, `{"message":"no such volume"}`, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"Name": v.name, "Labels": v.labels})
 		return
 	}
 

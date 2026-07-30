@@ -87,6 +87,21 @@ func (a *Agent) dispatch(ctx context.Context, opID string, op *wsv1.Operation) *
 		if r, oerr = a.pruneImages(ctx, o.PruneImages); oerr == nil {
 			res.Result = r
 		}
+	case *wsv1.Operation_EnsureVolume:
+		var r *wsv1.OpResult_EnsureVolume
+		if r, oerr = a.ensureVolume(ctx, o.EnsureVolume); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_SnapshotDir:
+		var r *wsv1.OpResult_SnapshotDir
+		if r, oerr = a.snapshotDir(o.SnapshotDir); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_MeasureUsage:
+		var r *wsv1.OpResult_MeasureUsage
+		if r, oerr = a.measureUsage(o.MeasureUsage); oerr == nil {
+			res.Result = r
+		}
 	default:
 		oerr = opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "unknown operation — agent too old for this Keystone? (protocol skew)")
 	}
@@ -384,4 +399,29 @@ func (a *Agent) pruneImages(ctx context.Context, _ *wsv1.PruneImages) (*wsv1.OpR
 		ReclaimedBytes: res.SpaceReclaimed,
 		DeletedCount:   uint32(len(res.ImagesDeleted)),
 	}}, nil
+}
+
+// ---------------------------------------------------------------- volumes
+
+// ensureVolume creates an owner-labeled named volume if absent. Docker's
+// own /volumes/create is idempotent but does NOT update labels on an
+// existing volume, so the agent inspects first and treats a pre-existing,
+// non-wildstone-owned volume as FORBIDDEN rather than silently adopting
+// it (ADR-W003 §A4.3 applied to volumes, not just containers).
+func (a *Agent) ensureVolume(ctx context.Context, op *wsv1.EnsureVolume) (*wsv1.OpResult_EnsureVolume, *wsv1.OpError) {
+	existing, err := a.docker.volumeInspect(ctx, op.GetName())
+	if derr, ok := err.(*dockerError); err != nil && (!ok || !derr.notFound()) {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "volume inspect: %v", err)
+	}
+	if existing != nil {
+		if existing.Labels[OwnerLabel] != ownerValue {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
+				"volume %q exists but is not wildstone-owned", op.GetName())
+		}
+		return &wsv1.OpResult_EnsureVolume{EnsureVolume: &wsv1.EnsureVolumeResult{Created: false}}, nil
+	}
+	if err := a.docker.volumeCreate(ctx, op.GetName(), map[string]string{OwnerLabel: ownerValue}); err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "volume create: %v", err)
+	}
+	return &wsv1.OpResult_EnsureVolume{EnsureVolume: &wsv1.EnsureVolumeResult{Created: true}}, nil
 }

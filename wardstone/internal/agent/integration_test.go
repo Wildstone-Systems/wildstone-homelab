@@ -5,12 +5,16 @@ package agent
 // the protocol path; only the Docker daemon is faked (httptest server).
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -383,6 +387,217 @@ func TestRemoveContainerContainerStatsPruneImages(t *testing.T) {
 	}
 	if !strings.Contains(fake.pruneFilters, "dev.wildstone.owner=wildstone") {
 		t.Fatalf("prune images: fake did not receive ownership label filter, got %q", fake.pruneFilters)
+	}
+}
+
+func TestEnsureVolume(t *testing.T) {
+	fake := newFakeDocker(t)
+	h := startGateway(t, []string{"tok"}, "")
+	newTestAgent(t, h, "node-a", "tok", func(c *Config) { c.DockerEndpoint = fake.URL() })
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+
+	// First ensure: creates, owner-labeled.
+	res := dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureVolume{
+		EnsureVolume: &wsv1.EnsureVolume{Name: "wildstone-data"},
+	}})
+	ev := res.GetEnsureVolume()
+	if ev == nil || !ev.GetCreated() {
+		t.Fatalf("ensure volume: %+v", res)
+	}
+	if fake.volumes["wildstone-data"].labels[OwnerLabel] != "wildstone" {
+		t.Fatal("owner label not stamped on created volume")
+	}
+
+	// Repeat: idempotent, created=false.
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureVolume{
+		EnsureVolume: &wsv1.EnsureVolume{Name: "wildstone-data"},
+	}})
+	if res.GetEnsureVolume().GetCreated() {
+		t.Fatalf("second ensure recreated the volume: %+v", res)
+	}
+
+	// Pre-existing foreign volume: FORBIDDEN, not adopted.
+	fake.addForeignVolume("someone-elses-volume")
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureVolume{
+		EnsureVolume: &wsv1.EnsureVolume{Name: "someone-elses-volume"},
+	}})
+	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Fatalf("ensure foreign volume: want FORBIDDEN, got %+v", res)
+	}
+}
+
+// ---------------------------------------------------------------- fs ops
+
+func TestSnapshotDir(t *testing.T) {
+	h := startGateway(t, []string{"tok"}, "")
+	managed := t.TempDir()
+	outsideDir := t.TempDir()
+	newTestAgent(t, h, "node-a", "tok", func(c *Config) { c.ManagedPrefixes = []string{managed} })
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+
+	// Build a source tree: nested dirs, a couple files, a symlink pointing
+	// OUTSIDE the managed prefix at a file with sensitive-looking content.
+	src := filepath.Join(managed, "srcdir")
+	if err := os.MkdirAll(filepath.Join(src, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("file a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "nested", "b.txt"), []byte("file b, longer content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	secretOutside := filepath.Join(outsideDir, "secret.txt")
+	if err := os.WriteFile(secretOutside, []byte("TOP SECRET, should never appear in the archive contents"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(src, "link-to-outside")
+	if err := os.Symlink(secretOutside, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := filepath.Join(managed, "out", "snap.tar.gz")
+	res := dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_SnapshotDir{
+		SnapshotDir: &wsv1.SnapshotDir{SourceDir: src, DestPath: dest},
+	}})
+	sr := res.GetSnapshotDir()
+	if sr == nil {
+		t.Fatalf("snapshot: %+v", res)
+	}
+	if sr.GetFileCount() != 2 {
+		t.Fatalf("file_count: want 2 (symlink must not count), got %d", sr.GetFileCount())
+	}
+
+	raw, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	if hex.EncodeToString(sum[:]) != sr.GetSha256Hex() {
+		t.Fatalf("sha256 mismatch: result=%s independent=%x", sr.GetSha256Hex(), sum)
+	}
+	if uint64(len(raw)) != sr.GetSizeBytes() {
+		t.Fatalf("size_bytes: want %d, got %d", len(raw), sr.GetSizeBytes())
+	}
+
+	// Critical invariant: un-tar and assert the symlink entry is a LINK
+	// entry (target string), never the outside file's content.
+	gz, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(gz)
+	found := false
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hdr.Name == "link-to-outside" {
+			found = true
+			if hdr.Typeflag != tar.TypeSymlink {
+				t.Fatalf("link-to-outside: want TypeSymlink, got %v", hdr.Typeflag)
+			}
+			if hdr.Linkname != secretOutside {
+				t.Fatalf("link-to-outside: linkname = %q, want %q", hdr.Linkname, secretOutside)
+			}
+			body, _ := io.ReadAll(tr)
+			if len(body) != 0 {
+				t.Fatalf("symlink entry carried body content: %q", body)
+			}
+		}
+		if strings.Contains(hdr.Name, "secret") {
+			t.Fatalf("secret file leaked into archive under name %q", hdr.Name)
+		}
+	}
+	if !found {
+		t.Fatal("symlink entry not found in archive")
+	}
+
+	// source outside managed: FORBIDDEN.
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_SnapshotDir{
+		SnapshotDir: &wsv1.SnapshotDir{SourceDir: outsideDir, DestPath: dest},
+	}})
+	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Fatalf("snapshot source outside managed: want FORBIDDEN, got %+v", res)
+	}
+
+	// dest outside managed: FORBIDDEN.
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_SnapshotDir{
+		SnapshotDir: &wsv1.SnapshotDir{SourceDir: src, DestPath: filepath.Join(outsideDir, "escape.tar.gz")},
+	}})
+	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Fatalf("snapshot dest outside managed: want FORBIDDEN, got %+v", res)
+	}
+
+	// dest not .tar.gz: INVALID.
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_SnapshotDir{
+		SnapshotDir: &wsv1.SnapshotDir{SourceDir: src, DestPath: filepath.Join(managed, "out", "snap.zip")},
+	}})
+	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_INVALID {
+		t.Fatalf("snapshot dest not .tar.gz: want INVALID, got %+v", res)
+	}
+
+	// absent source: NOT_FOUND.
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_SnapshotDir{
+		SnapshotDir: &wsv1.SnapshotDir{SourceDir: filepath.Join(managed, "no-such-dir"), DestPath: dest},
+	}})
+	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_NOT_FOUND {
+		t.Fatalf("snapshot absent source: want NOT_FOUND, got %+v", res)
+	}
+}
+
+func TestMeasureUsage(t *testing.T) {
+	h := startGateway(t, []string{"tok"}, "")
+	managed := t.TempDir()
+	outside := t.TempDir()
+	newTestAgent(t, h, "node-a", "tok", func(c *Config) { c.ManagedPrefixes = []string{managed} })
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+
+	tree := filepath.Join(managed, "usage-tree")
+	if err := os.MkdirAll(filepath.Join(tree, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	contentA := []byte("12345")      // 5 bytes
+	contentB := []byte("1234567890") // 10 bytes
+	if err := os.WriteFile(filepath.Join(tree, "a.txt"), contentA, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "nested", "b.txt"), contentB, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_MeasureUsage{
+		MeasureUsage: &wsv1.MeasureUsage{Path: tree},
+	}})
+	mr := res.GetMeasureUsage()
+	if mr == nil || mr.GetTotalBytes() != 15 || mr.GetFileCount() != 2 {
+		t.Fatalf("measure usage: %+v", res)
+	}
+
+	// outside managed: FORBIDDEN.
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_MeasureUsage{
+		MeasureUsage: &wsv1.MeasureUsage{Path: outside},
+	}})
+	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Fatalf("measure usage outside managed: want FORBIDDEN, got %+v", res)
+	}
+
+	// absent path: NOT_FOUND.
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_MeasureUsage{
+		MeasureUsage: &wsv1.MeasureUsage{Path: filepath.Join(managed, "no-such-tree")},
+	}})
+	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_NOT_FOUND {
+		t.Fatalf("measure usage absent path: want NOT_FOUND, got %+v", res)
 	}
 }
 

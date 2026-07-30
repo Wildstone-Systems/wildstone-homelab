@@ -221,6 +221,32 @@ func (d *dockerClient) stats(ctx context.Context, id string) (statsResult, error
 	return out, nil
 }
 
+type volumeInspectResult struct {
+	Name   string            `json:"Name"`
+	Labels map[string]string `json:"Labels"`
+}
+
+// volumeInspect returns nil, notFound-error when the volume does not
+// exist (matches containerInspect's error-passthrough convention — the
+// caller distinguishes via dockerError.notFound()).
+func (d *dockerClient) volumeInspect(ctx context.Context, name string) (*volumeInspectResult, error) {
+	raw, err := d.call(ctx, "GET", "/volumes/"+url.PathEscape(name), nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out volumeInspectResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (d *dockerClient) volumeCreate(ctx context.Context, name string, labels map[string]string) error {
+	body := map[string]any{"Name": name, "Labels": labels}
+	_, err := d.call(ctx, "POST", "/volumes/create", nil, body)
+	return err
+}
+
 type pruneResult struct {
 	ImagesDeleted  []struct{} `json:"ImagesDeleted"`
 	SpaceReclaimed uint64     `json:"SpaceReclaimed"`
