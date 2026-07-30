@@ -17,14 +17,16 @@ import (
 
 func main() {
 	listen := flag.String("listen", ":9440", "gateway listen address")
-	joinTokens := flag.String("join-tokens", "", "comma-separated one-time join tokens")
+	joinTokens := flag.String("join-tokens", "", "comma-separated one-time join tokens (dev/test; MintJoinToken is the production path)")
 	hosts := flag.String("hosts", "localhost,127.0.0.1", "comma-separated SANs for the gateway certificate")
+	dataDir := flag.String("data-dir", "/var/lib/wildstone/keystone", "directory persisting the CA, op-signing key, and join tokens across restarts")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	gw, err := gateway.New(gateway.Config{
 		JoinTokens: splitNonEmpty(*joinTokens),
 		Hosts:      splitNonEmpty(*hosts),
+		DataDir:    *dataDir,
 		Logger:     log,
 	})
 	if err != nil {

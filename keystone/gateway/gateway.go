@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -30,19 +31,28 @@ import (
 const opSignDomainPrefix = "wardstone-op-v1"
 
 type Config struct {
-	// JoinTokens maps token -> allowed (spike: static single-use set;
-	// E2: minted per node with expiry, persisted).
+	// JoinTokens maps token -> allowed. Static, non-expiring, single-use
+	// per process, and never written to tokens.json — the dev/test path.
+	// MintJoinToken is the documented production path (ADR-W003 W2):
+	// minted tokens have a TTL and are persisted to DataDir/tokens.json.
 	JoinTokens []string
 	// Hosts are SANs for the gateway's serving certificate.
 	Hosts  []string
 	Logger *slog.Logger
 
-	// opSigningKey lets a caller in this package (W2's persistence layer)
-	// supply a previously-persisted ed25519 signing key instead of having
-	// New generate a fresh one each process start. Unexported: external
-	// callers (main.go, tests) always get a freshly generated in-memory
-	// key, which is correct until W2 lands. W2 loads/saves this alongside
-	// the CA in DataDir and sets it before calling New.
+	// DataDir, if set, persists the CA (ca.crt/ca.key), the op-signing
+	// keypair (op-signing.key/op-signing.pub), and minted join tokens
+	// (tokens.json) across restarts (ADR-W003 W2). Empty DataDir keeps the
+	// pre-W2 in-memory-only behavior: fresh CA and signing key every
+	// process start, minted tokens not persisted.
+	DataDir string
+
+	// opSigningKey lets a caller in this package supply a previously-
+	// persisted ed25519 signing key instead of having New generate a
+	// fresh one. Unexported: external callers always go through DataDir
+	// (or get a freshly generated in-memory key when DataDir is empty).
+	// Used by New's own DataDir-loading path; not settable from outside
+	// the package.
 	opSigningKey ed25519.PrivateKey
 }
 
@@ -57,9 +67,11 @@ type Gateway struct {
 	signPriv ed25519.PrivateKey
 
 	mu       sync.Mutex
-	tokens   map[string]bool // token -> still valid
+	tokens   map[string]bool // static Config.JoinTokens -> still valid (in-memory only)
 	sessions map[string]*session
 	opSeq    uint64
+
+	tokenStore *tokenStore // minted tokens (ADR-W003 W2); own mutex
 
 	server *grpc.Server
 }
@@ -72,17 +84,57 @@ type session struct {
 }
 
 func New(cfg Config) (*Gateway, error) {
-	ca, err := NewCA()
-	if err != nil {
-		return nil, err
-	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+
+	var ca *CA
+	if cfg.DataDir != "" {
+		if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+			return nil, fmt.Errorf("create data dir: %w", err)
+		}
+		if err := os.Chmod(cfg.DataDir, 0o700); err != nil { // MkdirAll's mode is subject to umask
+			return nil, fmt.Errorf("chmod data dir: %w", err)
+		}
+		var err error
+		var loaded bool
+		ca, loaded, err = loadOrCreateCA(cfg.DataDir)
+		if err != nil {
+			return nil, fmt.Errorf("CA: %w", err)
+		}
+		if loaded {
+			cfg.Logger.Info("keystone CA loaded from data dir", "data_dir", cfg.DataDir)
+		} else {
+			cfg.Logger.Info("keystone CA created", "data_dir", cfg.DataDir)
+		}
+		if cfg.opSigningKey == nil {
+			cfg.opSigningKey, loaded, err = loadOrCreateSigningKey(cfg.DataDir)
+			if err != nil {
+				return nil, fmt.Errorf("op-signing key: %w", err)
+			}
+			if loaded {
+				cfg.Logger.Info("op-signing key loaded from data dir", "data_dir", cfg.DataDir)
+			} else {
+				cfg.Logger.Info("op-signing key created", "data_dir", cfg.DataDir)
+			}
+		}
+	} else {
+		var err error
+		ca, err = NewCA()
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	tokens := make(map[string]bool, len(cfg.JoinTokens))
 	for _, t := range cfg.JoinTokens {
 		tokens[t] = true
 	}
+	tokStore, err := loadTokenStore(cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("join tokens: %w", err)
+	}
+
 	signPriv := cfg.opSigningKey
 	if signPriv == nil {
 		var err error
@@ -94,8 +146,18 @@ func New(cfg Config) (*Gateway, error) {
 	signPub := signPriv.Public().(ed25519.PublicKey)
 	return &Gateway{
 		ca: ca, cfg: cfg, log: cfg.Logger, tokens: tokens, sessions: map[string]*session{},
-		signPub: signPub, signPriv: signPriv,
+		tokenStore: tokStore,
+		signPub:    signPub, signPriv: signPriv,
 	}, nil
+}
+
+// MintJoinToken creates a new single-use join token with the given TTL —
+// the documented production path for admitting a node (ADR-W003 W2). The
+// token is 32 random bytes, hex-encoded, and (when Config.DataDir is set)
+// persisted to tokens.json before this returns, surviving a Keystone
+// restart until it is used or expires.
+func (g *Gateway) MintJoinToken(ttl time.Duration) (string, error) {
+	return g.tokenStore.mint(ttl)
 }
 
 func (g *Gateway) CA() *CA { return g.ca }
@@ -182,7 +244,15 @@ func (g *Gateway) Join(_ context.Context, req *wsv1.JoinRequest) (*wsv1.JoinResp
 	}
 	g.mu.Unlock()
 	if !ok {
-		return nil, status.Error(codes.PermissionDenied, "invalid or used join token")
+		// Not a static dev token (or already spent); try the minted,
+		// persisted token store (ADR-W003 W2). consume() marks the token
+		// used and persists that mark to disk before returning true, so a
+		// crash right after this point still leaves the token correctly
+		// spent on restart.
+		ok = g.tokenStore.consume(req.GetJoinToken())
+	}
+	if !ok {
+		return nil, status.Error(codes.PermissionDenied, "invalid, used, or expired join token")
 	}
 	certPEM, err := g.ca.IssueFromCSR(req.GetCsrPem(), req.GetNodeId())
 	if err != nil {

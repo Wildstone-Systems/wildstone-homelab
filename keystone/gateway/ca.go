@@ -53,6 +53,39 @@ func NewCA() (*CA, error) {
 
 func (ca *CA) PEM() []byte { return ca.pem }
 
+// KeyPEM PEM-encodes the CA's ECDSA private key ("EC PRIVATE KEY"), for W2
+// persistence (ca.key in Keystone's data dir). Callers must write it 0600.
+func (ca *CA) KeyPEM() []byte {
+	der, err := x509.MarshalECPrivateKey(ca.key)
+	if err != nil {
+		panic(err) // an ecdsa.PrivateKey we generated/parsed ourselves can't fail to marshal
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+}
+
+// loadCA reconstructs a CA from previously-persisted PEM (ca.crt, ca.key —
+// ADR-W003 W2). Used on Keystone restart so agents that pinned the old CA
+// keep validating it.
+func loadCA(certPEM, keyPEM []byte) (*CA, error) {
+	certBlock, _ := pem.Decode(certPEM)
+	if certBlock == nil || certBlock.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("ca.crt: not a PEM certificate")
+	}
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("ca.crt: %w", err)
+	}
+	keyBlock, _ := pem.Decode(keyPEM)
+	if keyBlock == nil || keyBlock.Type != "EC PRIVATE KEY" {
+		return nil, fmt.Errorf("ca.key: not a PEM EC private key")
+	}
+	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("ca.key: %w", err)
+	}
+	return &CA{cert: cert, key: key, pem: certPEM}, nil
+}
+
 func (ca *CA) Pool() *x509.CertPool {
 	pool := x509.NewCertPool()
 	pool.AddCert(ca.cert)
