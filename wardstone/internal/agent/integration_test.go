@@ -320,6 +320,10 @@ func TestSelfUpdateHappyPathAndBadSignature(t *testing.T) {
 	newTestAgent(t, h, "node-a", "tok", func(c *Config) {
 		c.BinaryPath = binPath
 		c.UpdatePublicKey = pub
+		// ADR-W003 W5: a promoted result triggers a real re-exec after this
+		// op's result is sent; override it so the test process is not
+		// replaced. See selfupdate_w5_test.go for tests of that wiring.
+		c.ExecSelf = func() {}
 	})
 	if !h.gw.WaitConnected("node-a", 10*time.Second) {
 		t.Fatal("agent never connected")

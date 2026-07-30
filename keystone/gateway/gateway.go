@@ -217,7 +217,16 @@ func (g *Gateway) Serve(lis net.Listener) error {
 		ClientAuth: tls.VerifyClientCertIfGiven,
 		MinVersion: tls.VersionTLS13,
 	}
-	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsCfg)))
+	// Message size headroom (ADR-W003 W5): SelfUpdate ships the new binary
+	// inline on the unary-op stream. Wardstone binaries are ~10-20 MiB
+	// static; 64 MiB leaves comfortable headroom without needing chunked
+	// delivery yet (see the .proto comment on SelfUpdate).
+	const maxUpdateMsgBytes = 64 << 20
+	srv := grpc.NewServer(
+		grpc.Creds(credentials.NewTLS(tlsCfg)),
+		grpc.MaxRecvMsgSize(maxUpdateMsgBytes),
+		grpc.MaxSendMsgSize(maxUpdateMsgBytes),
+	)
 	wsv1.RegisterKeystoneGatewayServer(srv, g)
 	g.mu.Lock()
 	g.server = srv
@@ -366,6 +375,17 @@ func (g *Gateway) Dispatch(ctx context.Context, nodeID string, op *wsv1.Operatio
 	return g.DispatchRaw(ctx, nodeID, &wsv1.KeystoneMessage{OpId: opID, Op: op, OpSignature: sig})
 }
 
+// maxDispatchMsgBytes mirrors the grpc.MaxSendMsgSize/MaxRecvMsgSize server
+// option and the agent's matching MaxCallRecvMsgSize (ADR-W003 W5, see
+// gateway.Serve and the agent's session/join dial options). DispatchRaw
+// checks against it BEFORE calling stream.Send: gRPC's SendMsg aborts the
+// whole stream on error (see grpc-go's ClientStream/ServerStream docs), so
+// letting an oversized message reach Send would tear down the agent's live
+// session as a side effect of one rejected op. Checking first keeps an
+// oversized-op rejection to "this Dispatch call failed" instead of
+// "the agent disconnected".
+const maxDispatchMsgBytes = 64 << 20
+
 // DispatchRaw sends an already-built KeystoneMessage (op_id, op, and
 // whatever signature the caller supplies) to a connected agent and waits
 // for the correlated result. Dispatch is the normal entry point and
@@ -374,6 +394,9 @@ func (g *Gateway) Dispatch(ctx context.Context, nodeID string, op *wsv1.Operatio
 // tampered op bytes, missing signature) without standing up a second gRPC
 // client — see ADR-W003 W1's tamper tests in the agent package.
 func (g *Gateway) DispatchRaw(ctx context.Context, nodeID string, msg *wsv1.KeystoneMessage) (*wsv1.OpResult, error) {
+	if sz := proto.Size(msg); sz > maxDispatchMsgBytes {
+		return nil, fmt.Errorf("op message too large: %d bytes exceeds the %d byte gRPC message cap", sz, maxDispatchMsgBytes)
+	}
 	g.mu.Lock()
 	s := g.sessions[nodeID]
 	g.mu.Unlock()

@@ -248,6 +248,13 @@ message HealthResult {
 // ---------------------------------------------------------------- self-update
 
 message SelfUpdate {
+  // Inline delivery (ADR-W003 W5): the binary travels as one message on the
+  // existing unary-op stream, bounded by the gRPC transport's max message
+  // size — raised to 64 MiB on both the Keystone server and the Wardstone
+  // client to give Wardstone's ~10-20 MiB static binaries comfortable
+  // headroom. True chunked delivery (a streaming SelfUpdateChunk{bytes
+  // data; uint32 seq; bool last} arm) is deferred until a real binary
+  // approaches that cap.
   bytes binary = 1;      // the new wardstoned (spike: inline; E1: chunked/fetched)
   bytes signature = 2;   // ed25519 over sha256(binary), verified against baked-in key
   string version = 3;

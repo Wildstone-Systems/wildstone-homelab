@@ -34,6 +34,13 @@ import (
 // ProtocolMinor is the v1 minor revision this agent speaks.
 const ProtocolMinor = 0
 
+// maxUpdateMsgBytes is the gRPC message size cap on both ends of the
+// session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
+// inline; 64 MiB gives Wardstone's ~10-20 MiB static binaries headroom
+// without needing chunked delivery yet (see the .proto comment on
+// SelfUpdate, and keystone/gateway's matching server-side option).
+const maxUpdateMsgBytes = 64 << 20
+
 type Config struct {
 	NodeID       string
 	KeystoneAddr string // host:port
@@ -58,6 +65,14 @@ type Config struct {
 	BackoffBase time.Duration
 	BackoffCap  time.Duration
 
+	// ExecSelf, if set, replaces the real re-exec performed after a
+	// promoted self-update (ADR-W003 W5) and after CheckUpdateState reverts
+	// a promotion that never confirmed. Production code leaves this nil,
+	// which uses syscall.Exec(BinaryPath, os.Args, os.Environ()) on linux
+	// (a no-op log on other platforms). Tests set it to observe/avoid the
+	// real re-exec.
+	ExecSelf func()
+
 	Logger *slog.Logger
 }
 
@@ -65,6 +80,11 @@ type Agent struct {
 	cfg    Config
 	log    *slog.Logger
 	docker *dockerClient
+
+	// execSelf performs (or, in tests, stands in for) the re-exec that
+	// takes effect after a promoted self-update — see selfUpdate and the
+	// session send-path comment below for the ordering guarantee.
+	execSelf func()
 }
 
 func New(cfg Config) (*Agent, error) {
@@ -103,7 +123,13 @@ func New(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Agent{cfg: cfg, log: cfg.Logger.With("node", cfg.NodeID), docker: docker}, nil
+	a := &Agent{cfg: cfg, log: cfg.Logger.With("node", cfg.NodeID), docker: docker}
+	if cfg.ExecSelf != nil {
+		a.execSelf = cfg.ExecSelf
+	} else {
+		a.execSelf = a.defaultExecSelf
+	}
+	return a, nil
 }
 
 // Run keeps a session with Keystone alive until ctx is cancelled,
@@ -211,7 +237,11 @@ func (a *Agent) join(ctx context.Context) error {
 	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 
 	conn, err := grpc.NewClient(a.cfg.KeystoneAddr,
-		grpc.WithTransportCredentials(credentials.NewTLS(joinTLS)))
+		grpc.WithTransportCredentials(credentials.NewTLS(joinTLS)),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(maxUpdateMsgBytes),
+			grpc.MaxCallSendMsgSize(maxUpdateMsgBytes),
+		))
 	if err != nil {
 		return err
 	}
@@ -340,7 +370,11 @@ func (a *Agent) session(ctx context.Context) error {
 			Certificates: []tls.Certificate{cert},
 			RootCAs:      pool,
 			MinVersion:   tls.VersionTLS13,
-		})))
+		})),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(maxUpdateMsgBytes),
+			grpc.MaxCallSendMsgSize(maxUpdateMsgBytes),
+		))
 	if err != nil {
 		return err
 	}
@@ -367,6 +401,13 @@ func (a *Agent) session(ctx context.Context) error {
 		return err
 	}
 	a.log.Info("session established", "keystone", a.cfg.KeystoneAddr)
+
+	// Self-update health gate (ADR-W003 W5): the first successful session
+	// establishment after a promotion is proof the promoted binary works
+	// well enough to talk to Keystone. Clear the pending state so a later
+	// startup (e.g. after a routine restart) does not mistake this healthy
+	// binary for one that never confirmed and revert it.
+	a.confirmUpdateIfPending()
 
 	pinnedPub, pinned := a.loadOpSigningPub()
 	if !pinned {
@@ -397,9 +438,26 @@ func (a *Agent) session(ctx context.Context) error {
 		go func(m *wsv1.KeystoneMessage) {
 			res := a.verifyAndDispatch(ctx, m.GetOpId(), m.GetOp(), m.GetOpSignature(), pinnedPub)
 			sendMu.Lock()
-			defer sendMu.Unlock()
-			if err := stream.Send(&wsv1.AgentMessage{Msg: &wsv1.AgentMessage_Result{Result: res}}); err != nil {
-				a.log.Warn("result send failed", "op_id", m.GetOpId(), "error", err)
+			sendErr := stream.Send(&wsv1.AgentMessage{Msg: &wsv1.AgentMessage_Result{Result: res}})
+			sendMu.Unlock()
+			if sendErr != nil {
+				a.log.Warn("result send failed", "op_id", m.GetOpId(), "error", sendErr)
+				return
+			}
+			// Re-exec ordering guarantee (ADR-W003 W5): selfUpdate must not
+			// re-exec itself before Keystone has the OpResult — Keystone's
+			// Dispatch is waiting on it, and re-exec replaces this process
+			// image immediately with no chance to flush anything after. So
+			// selfUpdate only stages+promotes+writes the state file; it
+			// never calls execSelf directly. Instead, THIS goroutine — the
+			// one handling the SelfUpdate op — checks its own just-sent
+			// result after the send succeeds (outside sendMu, so it never
+			// blocks other in-flight result sends) and re-execs only then.
+			// Checking res (not a shared flag) ties the re-exec to exactly
+			// the op that requested it, so a concurrent unrelated op never
+			// triggers a spurious re-exec.
+			if su := res.GetSelfUpdate(); su.GetPromoted() {
+				a.execSelf()
 			}
 		}(msg)
 	}

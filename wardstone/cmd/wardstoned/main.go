@@ -27,7 +27,7 @@ func main() {
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	a, err := agent.New(agent.Config{
+	cfg := agent.Config{
 		NodeID:        *nodeID,
 		KeystoneAddr:  *keystone,
 		DataDir:       *dataDir,
@@ -35,7 +35,19 @@ func main() {
 		CAFingerprint: *caFingerprint,
 		Version:       version,
 		Logger:        log,
-	})
+	}
+
+	// Self-update health gate (ADR-W003 W5): must run BEFORE agent.New/Run.
+	// If a previous promotion never confirmed by dialing Keystone within its
+	// deadline, this reverts to the previous binary and re-execs into it —
+	// this process must not proceed to run the broken promoted image any
+	// further.
+	if err := agent.CheckUpdateState(cfg, log); err != nil {
+		log.Error("self-update state check failed", "error", err)
+		os.Exit(1)
+	}
+
+	a, err := agent.New(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "wardstoned:", err)
 		flag.Usage()

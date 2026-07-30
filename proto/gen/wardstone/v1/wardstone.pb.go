@@ -1964,11 +1964,18 @@ func (x *HealthResult) GetDetail() string {
 }
 
 type SelfUpdate struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Binary        []byte                 `protobuf:"bytes,1,opt,name=binary,proto3" json:"binary,omitempty"`       // the new wardstoned (spike: inline; E1: chunked/fetched)
-	Signature     []byte                 `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"` // ed25519 over sha256(binary), verified against baked-in key
-	Version       string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
-	Sha256Hex     string                 `protobuf:"bytes,4,opt,name=sha256_hex,json=sha256Hex,proto3" json:"sha256_hex,omitempty"` // integrity check before signature check
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Inline delivery (ADR-W003 W5): the binary travels as one message on the
+	// existing unary-op stream, bounded by the gRPC transport's max message
+	// size — raised to 64 MiB on both the Keystone server and the Wardstone
+	// client to give Wardstone's ~10-20 MiB static binaries comfortable
+	// headroom. True chunked delivery (a streaming SelfUpdateChunk{bytes
+	// data; uint32 seq; bool last} arm) is deferred until a real binary
+	// approaches that cap.
+	Binary        []byte `protobuf:"bytes,1,opt,name=binary,proto3" json:"binary,omitempty"`       // the new wardstoned (spike: inline; E1: chunked/fetched)
+	Signature     []byte `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"` // ed25519 over sha256(binary), verified against baked-in key
+	Version       string `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	Sha256Hex     string `protobuf:"bytes,4,opt,name=sha256_hex,json=sha256Hex,proto3" json:"sha256_hex,omitempty"` // integrity check before signature check
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
