@@ -1,0 +1,346 @@
+// Package plan implements the Plan artifact (ADR-W004 A3): the typed
+// object that serves UX, safety, and AI-governance for every intentional
+// change to the Statefile. Diff produces an ordered, risk-graded Plan from
+// desired vs. observed resources. No apply behavior lives here (S2b/S2c).
+package plan
+
+import (
+	"fmt"
+	"sort"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+)
+
+// RiskGrade is the pinned risk heuristic from ADR-W004 A3.
+type RiskGrade int
+
+const (
+	RiskLow RiskGrade = iota
+	RiskMedium
+	RiskHigh
+)
+
+func (g RiskGrade) String() string {
+	switch g {
+	case RiskLow:
+		return "Low"
+	case RiskMedium:
+		return "Medium"
+	case RiskHigh:
+		return "High"
+	default:
+		return "Unknown"
+	}
+}
+
+// Action is the kind of change a PlanStep makes.
+type Action int
+
+const (
+	ActionNoOp Action = iota
+	ActionCreate
+	ActionUpdate
+	ActionDelete
+)
+
+func (a Action) String() string {
+	switch a {
+	case ActionNoOp:
+		return "NoOp"
+	case ActionCreate:
+		return "Create"
+	case ActionUpdate:
+		return "Update"
+	case ActionDelete:
+		return "Delete"
+	default:
+		return "Unknown"
+	}
+}
+
+// ResourceOp is a placeholder for the typed operation(s) that apply a
+// PlanStep. It captures just enough (kind, name, action) to be useful for
+// S2a's diff output and tests; the real Wardstone/provider op payloads are
+// wired in by the S2b (Applier over gateway.Dispatch) and S2c (Provider)
+// work packages, which will populate richer fields here or replace this
+// type with one that embeds the concrete op.
+type ResourceOp struct {
+	Kind   resource.Kind
+	Name   string
+	Action Action
+}
+
+// PlanStep is one resource-level change within a Plan (ADR-W004 A3).
+type PlanStep struct {
+	// Description is a human one-liner, e.g. "restart Jellyfin (~2 min, no
+	// data affected)".
+	Description string
+	Kind        resource.Kind
+	Name        string
+	Action      Action
+	// Op is the typed operation(s) to apply this step. nil in S2a; S2b/S2c
+	// populate it when wiring the reconcile engine.
+	Op *ResourceOp
+	// Reverse is the reverse op for rollback, where defined. nil means no
+	// auto-reverse. nil in S2a for the same reason as Op.
+	Reverse     *ResourceOp
+	Risk        RiskGrade
+	BlastRadius string
+}
+
+// Plan is the artifact produced by Diff: an ordered list of steps plus an
+// overall risk grade, the max over all step risks.
+type Plan struct {
+	ID          string
+	Summary     string
+	Steps       []PlanStep
+	OverallRisk RiskGrade
+}
+
+// kindOrder is the dependency order for creates/updates (Volume before
+// Container before Route before DnsRecord), per ADR-W004 A3. Deletes use
+// the reverse order.
+var kindOrder = map[resource.Kind]int{
+	resource.KindVolume:    0,
+	resource.KindContainer: 1,
+	resource.KindRoute:     2,
+	resource.KindDnsRecord: 3,
+}
+
+// key identifies a resource for matching desired against observed:
+// matching is by (kind, name) per ADR-W004 A3.
+type key struct {
+	kind resource.Kind
+	name string
+}
+
+// Diff produces an ordered, risk-graded Plan from desired vs. observed
+// resources (ADR-W004 A3, level-triggered: diff(desired, observed) ->
+// []PlanStep).
+//
+// Matching is by (kind, name). A resource present in both with an
+// unchanged spec produces no step (see NoOp handling below). Creates and
+// updates are ordered Volume -> Container -> Route -> DnsRecord; deletes
+// are ordered in reverse (DnsRecord -> Route -> Container -> Volume) so
+// dependents are torn down before their dependencies.
+//
+// NoOp handling: this implementation OMITS unchanged resources from
+// Plan.Steps entirely rather than emitting explicit ActionNoOp steps —
+// there is nothing actionable or risk-bearing about them, and omission
+// keeps Plan.Steps == the literal list of changes to review/approve.
+// ActionNoOp remains part of the Action enum for callers that want to
+// represent a step, e.g. the reconcile engine's health-gate bookkeeping in
+// S2b, as explicitly-inert.
+func Diff(desired, observed []resource.Resource) *Plan {
+	desiredByKey := make(map[key]resource.Resource, len(desired))
+	for _, r := range desired {
+		desiredByKey[key{r.Kind, r.Metadata.Name}] = r
+	}
+	observedByKey := make(map[key]resource.Resource, len(observed))
+	for _, r := range observed {
+		observedByKey[key{r.Kind, r.Metadata.Name}] = r
+	}
+
+	var creates, updates, deletes []PlanStep
+
+	for k, want := range desiredByKey {
+		have, exists := observedByKey[k]
+		if !exists {
+			creates = append(creates, newStep(ActionCreate, want, resource.Resource{}))
+			continue
+		}
+		if !specEqual(want, have) {
+			updates = append(updates, newStep(ActionUpdate, want, have))
+		}
+	}
+	for k, have := range observedByKey {
+		if _, exists := desiredByKey[k]; !exists {
+			deletes = append(deletes, newStep(ActionDelete, resource.Resource{}, have))
+		}
+	}
+
+	sortByKindOrder(creates, false)
+	sortByKindOrder(updates, false)
+	sortByKindOrder(deletes, true)
+
+	steps := make([]PlanStep, 0, len(creates)+len(updates)+len(deletes))
+	steps = append(steps, creates...)
+	steps = append(steps, updates...)
+	steps = append(steps, deletes...)
+
+	p := &Plan{
+		Summary: fmt.Sprintf("%d create, %d update, %d delete", len(creates), len(updates), len(deletes)),
+		Steps:   steps,
+	}
+	p.OverallRisk = overallRisk(steps)
+	return p
+}
+
+func sortByKindOrder(steps []PlanStep, reverse bool) {
+	sort.SliceStable(steps, func(i, j int) bool {
+		oi, oj := kindOrder[steps[i].Kind], kindOrder[steps[j].Kind]
+		if reverse {
+			if oi != oj {
+				return oi > oj
+			}
+		} else if oi != oj {
+			return oi < oj
+		}
+		return steps[i].Name < steps[j].Name
+	})
+}
+
+func overallRisk(steps []PlanStep) RiskGrade {
+	max := RiskLow
+	for _, s := range steps {
+		if s.Risk > max {
+			max = s.Risk
+		}
+	}
+	return max
+}
+
+func newStep(action Action, want, have resource.Resource) PlanStep {
+	r := want
+	if action == ActionDelete {
+		r = have
+	}
+	risk, blast := grade(action, want, have)
+	return PlanStep{
+		Description: describe(action, r),
+		Kind:        r.Kind,
+		Name:        r.Metadata.Name,
+		Action:      action,
+		Risk:        risk,
+		BlastRadius: blast,
+	}
+}
+
+func describe(action Action, r resource.Resource) string {
+	return fmt.Sprintf("%s %s/%s", action, r.Kind, r.Metadata.Name)
+}
+
+// specEqual reports whether two resources sharing a (kind, name) have an
+// identical spec (ignoring status, which never exists on resource.Resource
+// anyway).
+func specEqual(a, b resource.Resource) bool {
+	if a.Kind != b.Kind {
+		return false
+	}
+	switch a.Kind {
+	case resource.KindContainer:
+		return containerEqual(a.Container, b.Container)
+	case resource.KindVolume:
+		return a.Volume != nil && b.Volume != nil && *a.Volume == *b.Volume
+	case resource.KindRoute:
+		return a.Route != nil && b.Route != nil && *a.Route == *b.Route
+	case resource.KindDnsRecord:
+		return a.DnsRecord != nil && b.DnsRecord != nil && *a.DnsRecord == *b.DnsRecord
+	default:
+		return false
+	}
+}
+
+func containerEqual(a, b *resource.ContainerSpec) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.Image != b.Image || a.Restart != b.Restart {
+		return false
+	}
+	if len(a.Env) != len(b.Env) {
+		return false
+	}
+	for k, v := range a.Env {
+		if b.Env[k] != v {
+			return false
+		}
+	}
+	if len(a.Ports) != len(b.Ports) {
+		return false
+	}
+	for i := range a.Ports {
+		if a.Ports[i] != b.Ports[i] {
+			return false
+		}
+	}
+	if len(a.Mounts) != len(b.Mounts) {
+		return false
+	}
+	for i := range a.Mounts {
+		if a.Mounts[i] != b.Mounts[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// mountsChanged reports whether the mount list differs between two
+// container specs (used by the risk heuristic: a mount change on update is
+// data-affecting => High).
+func mountsChanged(a, b *resource.ContainerSpec) bool {
+	if a == nil || b == nil {
+		return a != b
+	}
+	if len(a.Mounts) != len(b.Mounts) {
+		return true
+	}
+	for i := range a.Mounts {
+		if a.Mounts[i] != b.Mounts[i] {
+			return true
+		}
+	}
+	return false
+}
+
+// grade applies the ADR-W004 A3 risk heuristic: data-affecting ops (Volume
+// delete, mount change on update, Container delete with a bound volume) =
+// High; service interruption without data risk (Container image
+// change/restart, Route change) = Medium; additive/no-interruption (new
+// Container, new Volume, new DnsRecord, new Route) = Low.
+func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
+	r := want
+	if action == ActionDelete {
+		r = have
+	}
+	switch r.Kind {
+	case resource.KindVolume:
+		switch action {
+		case ActionDelete:
+			return RiskHigh, "data loss: volume and its contents are removed"
+		default:
+			return RiskLow, "new volume, no existing service affected"
+		}
+	case resource.KindContainer:
+		switch action {
+		case ActionDelete:
+			if r.Container != nil && len(r.Container.Mounts) > 0 {
+				return RiskHigh, "container removed; bound mount(s)/volume(s) may hold data"
+			}
+			return RiskMedium, "container removed, no bound mounts"
+		case ActionUpdate:
+			if mountsChanged(want.Container, have.Container) {
+				return RiskHigh, "mount configuration changed: data-affecting"
+			}
+			return RiskMedium, "container updated (image/env/restart): brief service interruption, no data affected"
+		default:
+			return RiskLow, "new container, no existing service affected"
+		}
+	case resource.KindRoute:
+		switch action {
+		case ActionCreate:
+			return RiskLow, "new route, no existing service affected"
+		default:
+			return RiskMedium, "route change/removal: service interruption for its host"
+		}
+	case resource.KindDnsRecord:
+		switch action {
+		case ActionCreate:
+			return RiskLow, "new DNS record, no existing service affected"
+		default:
+			return RiskMedium, "DNS record change/removal: may affect resolution for its name"
+		}
+	default:
+		return RiskMedium, "unrecognized kind"
+	}
+}
