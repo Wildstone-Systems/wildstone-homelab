@@ -1,0 +1,67 @@
+session:
+  name: authelia_session
+  secret: REPLACED-SESSION-SECRET
+  expiration: 3600
+  inactivity: 300
+  cookies:
+    - domain: tailnet
+      authelia_url: https://auth.tailnet
+    - domain: example.com
+      authelia_url: https://auth.example.com
+
+access_control:
+  default_policy: deny
+  rules:
+    - domain:
+        - auth.tailnet
+        - auth.example.com
+      policy: bypass
+
+    - domain:
+        - lldap.tailnet
+      policy: two_factor
+      subject:
+        - "group:identity_admins"
+
+    - domain:
+        - sonarr.tailnet
+        - radarr.tailnet
+        - lidarr.tailnet
+        - prowlarr.tailnet
+        - sabnzbd.tailnet
+      policy: two_factor
+      subject:
+        - "group:download_admins"
+
+    - domain:
+        - dash.tailnet
+        - code.tailnet
+        - uptime.tailnet
+        - pihole.tailnet
+        - notify.tailnet
+        - proxmox.tailnet
+        - portainer-infra.tailnet
+        - portainer-media.tailnet
+        - aio-stage.tailnet
+      policy: two_factor
+      subject:
+        - "group:platform_operators"
+
+    - domain:
+        - home.example.com
+        - ha.example.com
+      policy: two_factor
+      subject:
+        - "group:home_users"
+
+    - domain:
+        - fb.example.com
+      policy: two_factor
+      subject:
+        - "group:docs_users"
+
+    - domain:
+        - games.example.com
+      policy: two_factor
+      subject:
+        - "group:media_users"

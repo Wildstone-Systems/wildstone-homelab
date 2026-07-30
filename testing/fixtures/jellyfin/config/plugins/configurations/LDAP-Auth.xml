@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PluginConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <LdapUsers />
+  <LdapServer>100.64.0.4</LdapServer>
+  <LdapPort>3890</LdapPort>
+  <UseSsl>false</UseSsl>
+  <UseStartTls>false</UseStartTls>
+  <SkipSslVerify>false</SkipSslVerify>
+  <LdapBindUser>uid=admin,ou=people,dc=example,dc=com</LdapBindUser>
+  <LdapBindPassword>REPLACED-BIND-PASSWORD</LdapBindPassword>
+  <LdapBaseDn>ou=people,dc=example,dc=com</LdapBaseDn>
+  <LdapSearchFilter>(uid={username})</LdapSearchFilter>
+  <LdapAdminBaseDn />
+  <LdapAdminFilter />
+  <EnableLdapAdminFilterMemberUid>false</EnableLdapAdminFilterMemberUid>
+  <LdapSearchAttributes>uid,cn,mail,displayName</LdapSearchAttributes>
+  <LdapClientCertPath />
+  <LdapClientKeyPath />
+  <LdapRootCaPath />
+  <CreateUsersFromLdap>true</CreateUsersFromLdap>
+  <AllowPassChange>false</AllowPassChange>
+  <LdapUidAttribute>uid</LdapUidAttribute>
+  <LdapUsernameAttribute>uid</LdapUsernameAttribute>
+  <LdapPasswordAttribute>userPassword</LdapPasswordAttribute>
+  <EnableLdapProfileImageSync>false</EnableLdapProfileImageSync>
+  <RemoveImagesNotInLdap>false</RemoveImagesNotInLdap>
+  <LdapProfileImageAttribute>jpegphoto</LdapProfileImageAttribute>
+  <LdapProfileImageFormat>Default</LdapProfileImageFormat>
+  <EnableAllFolders>true</EnableAllFolders>
+  <EnabledFolders />
+</PluginConfiguration>

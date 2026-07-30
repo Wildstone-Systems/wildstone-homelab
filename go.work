@@ -1,0 +1,9 @@
+go 1.25
+
+use (
+	./proto
+	./wardstone
+	./keystone
+	./cli
+	./testing/e2e
+)

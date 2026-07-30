@@ -1,0 +1,547 @@
+// Wardstone <-> Keystone protocol, v1.
+//
+// Design invariants (ADR-W003):
+//   - Wardstone DIALS OUT. Keystone is the gRPC server; the agent holds a
+//     long-lived bidirectional Session stream over which Keystone sends
+//     typed operations and the agent returns typed results.
+//   - The operation surface is a CLOSED ONEOF. There is no Exec(string)
+//     and never will be: "no arbitrary shell" is a property of the wire
+//     format, not a policy hope.
+//   - v1 evolves additively only (new fields, new oneof arms). Breaking
+//     changes mean wardstone.v2, and one minor version of skew between
+//     Keystone and Wardstone is always supported.
+
+syntax = "proto3";
+
+package wardstone.v1;
+
+option go_package = "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1;wardstonev1";
+
+// KeystoneGateway is implemented by Keystone (the control plane).
+service KeystoneGateway {
+  // Join exchanges a one-time join token + CSR for a client certificate
+  // issued by Keystone's embedded CA. Called on a server-auth-only TLS
+  // channel exactly once per node; every later connection is mTLS.
+  rpc Join(JoinRequest) returns (JoinResponse);
+
+  // Session is the agent's persistent operation stream (mTLS required).
+  // The first agent message is Hello; afterwards Keystone sends Operation
+  // messages and the agent answers with OpResult, correlated by op_id.
+  rpc Session(stream AgentMessage) returns (stream KeystoneMessage);
+
+  // Renew exchanges a fresh CSR for a new client certificate ahead of the
+  // ~3-month expiry (ADR-W003 W4). mTLS required — the same per-RPC
+  // verified-client-cert check as Session. The issued certificate's CN is
+  // always the caller's existing mTLS client-cert CN (peer identity), NEVER
+  // taken from RenewRequest or the CSR subject, so a node cannot renew its
+  // way into a different identity.
+  rpc Renew(RenewRequest) returns (RenewResponse);
+}
+
+// ---------------------------------------------------------------- bootstrap
+
+message JoinRequest {
+  string join_token = 1; // one-time, minted by installer/Keystone
+  string node_id = 2;
+  bytes csr_pem = 3;
+}
+
+message JoinResponse {
+  bytes cert_pem = 1;
+  bytes ca_pem = 2;
+  // Public key the agent must use to verify per-operation signatures once
+  // op signing lands (E1). Delivered at join so it is pinned before any
+  // operation is ever accepted.
+  bytes op_signing_public_key = 3;
+}
+
+// ---------------------------------------------------------------- rotation
+
+message RenewRequest {
+  bytes csr_pem = 1; // Subject.CommonName is ignored; CN comes from the mTLS peer cert
+}
+
+message RenewResponse {
+  bytes cert_pem = 1;
+}
+
+// ---------------------------------------------------------------- session
+
+message AgentMessage {
+  oneof msg {
+    Hello hello = 1;
+    OpResult result = 2;
+  }
+}
+
+message Hello {
+  string node_id = 1;
+  string agent_version = 2;
+  // Highest v1 minor protocol revision the agent speaks. Keystone must
+  // tolerate agents one minor revision behind its own.
+  uint32 protocol_minor = 3;
+}
+
+message KeystoneMessage {
+  string op_id = 1;
+  Operation op = 2;
+  // Per-operation ed25519 signature — defense against a transport MITM
+  // (or a compromised load balancer) injecting operations inside an
+  // otherwise-valid mTLS tunnel (ADR-W003 W1). Verified against the key
+  // pinned from JoinResponse.op_signing_public_key.
+  //
+  // Signed payload:
+  //   sha256("wardstone-op-v1" || op_id || deterministic-marshal(op))
+  // where deterministic-marshal uses
+  // proto.MarshalOptions{Deterministic: true} over the Operation message,
+  // op_id is the raw (unterminated) string bytes, and "wardstone-op-v1"
+  // is a fixed domain-separation prefix — part of the wire contract, do
+  // not change it without a new prefix (and thus a v2 signing scheme).
+  bytes op_signature = 3;
+}
+
+// The ENTIRE privileged surface. Closed set; no free-form escape hatch.
+message Operation {
+  oneof op {
+    EnsureContainer ensure_container = 1;
+    StopContainer stop_container = 2;
+    ContainerLogs container_logs = 3;
+    PullImage pull_image = 4;
+    WriteManagedFile write_managed_file = 5;
+    ReadManagedFile read_managed_file = 6;
+    HostFacts host_facts = 7;
+    Health health = 8;
+    SelfUpdate self_update = 9;
+    RemoveContainer remove_container = 10;
+    ContainerStats container_stats = 11;
+    PruneImages prune_images = 12;
+    EnsureVolume ensure_volume = 13;
+    SnapshotDir snapshot_dir = 14;
+    MeasureUsage measure_usage = 15;
+    ListBlockDevices list_block_devices = 16;
+    EnsureMount ensure_mount = 17;
+    TestNfs test_nfs = 18;
+    TestSmb test_smb = 19;
+    ListPorts list_ports = 20;
+    ProbeTcp probe_tcp = 21;
+    ProbeHttp probe_http = 22;
+    EnsureDockerNetwork ensure_docker_network = 23;
+    SystemdUnitStatus systemd_unit_status = 24;
+    TimeSyncStatus time_sync_status = 25;
+  }
+}
+
+message OpResult {
+  string op_id = 1;
+  oneof result {
+    OpError error = 2;
+    EnsureContainerResult ensure_container = 3;
+    StopContainerResult stop_container = 4;
+    ContainerLogsResult container_logs = 5;
+    PullImageResult pull_image = 6;
+    WriteManagedFileResult write_managed_file = 7;
+    ReadManagedFileResult read_managed_file = 8;
+    HostFactsResult host_facts = 9;
+    HealthResult health = 10;
+    SelfUpdateResult self_update = 11;
+    RemoveContainerResult remove_container = 12;
+    ContainerStatsResult container_stats = 13;
+    PruneImagesResult prune_images = 14;
+    EnsureVolumeResult ensure_volume = 15;
+    SnapshotDirResult snapshot_dir = 16;
+    MeasureUsageResult measure_usage = 17;
+    ListBlockDevicesResult list_block_devices = 18;
+    EnsureMountResult ensure_mount = 19;
+    TestNfsResult test_nfs = 20;
+    TestSmbResult test_smb = 21;
+    ListPortsResult list_ports = 22;
+    ProbeTcpResult probe_tcp = 23;
+    ProbeHttpResult probe_http = 24;
+    EnsureDockerNetworkResult ensure_docker_network = 25;
+    SystemdUnitStatusResult systemd_unit_status = 26;
+    TimeSyncStatusResult time_sync_status = 27;
+  }
+}
+
+message OpError {
+  ErrorCode code = 1;
+  string message = 2;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_INVALID = 1;          // malformed operation
+  ERROR_CODE_FORBIDDEN = 2;        // agent-side invariant refused it (prefix, ownership, digest)
+  ERROR_CODE_NOT_FOUND = 3;
+  ERROR_CODE_RUNTIME = 4;          // docker/filesystem failure
+  ERROR_CODE_VERIFICATION = 5;     // signature/digest verification failed
+}
+
+// ---------------------------------------------------------------- containers
+
+message EnsureContainer {
+  string name = 1;
+  // Image MUST be digest-pinned (repo@sha256:...). The agent refuses tags.
+  string image = 2;
+  map<string, string> env = 3;
+  repeated PortBinding ports = 4;
+  repeated Mount mounts = 5;
+  map<string, string> labels = 6; // agent adds/asserts dev.wildstone.owner
+  string restart_policy = 7;      // "no" | "unless-stopped" | "always"
+}
+
+message PortBinding {
+  uint32 host_port = 1;
+  uint32 container_port = 2;
+  string host_ip = 3; // default 0.0.0.0
+}
+
+message Mount {
+  string source = 1; // host path (managed-prefix-restricted) or volume name
+  string target = 2;
+  bool read_only = 3;
+}
+
+message EnsureContainerResult {
+  string container_id = 1;
+  bool created = 2; // false if it already existed in the desired state
+  bool started = 3;
+}
+
+message StopContainer {
+  string name = 1;
+  uint32 timeout_seconds = 2;
+}
+
+message StopContainerResult {
+  bool was_running = 1;
+}
+
+message ContainerLogs {
+  string name = 1;
+  uint32 tail = 2;          // 0 = default (100)
+  int64 since_unix_sec = 3; // 0 = no bound
+}
+
+message ContainerLogsResult {
+  bytes logs = 1; // raw multiplexed docker log stream, size-capped by agent
+}
+
+message PullImage {
+  string image = 1; // digest-pinned, repo@sha256:... — tags are refused
+}
+
+message PullImageResult {
+  string digest = 1;
+}
+
+message RemoveContainer {
+  string name = 1;
+  bool force = 2;
+}
+
+// Idempotent remove: a container that does not exist is NOT an error —
+// existed=false is returned as a success result. A container that exists
+// but is not wildstone-owned is still refused with FORBIDDEN (ownership
+// is checked before existence is even considered "not found").
+message RemoveContainerResult {
+  bool existed = 1;
+}
+
+message ContainerStats {
+  string name = 1;
+}
+
+message ContainerStatsResult {
+  uint64 cpu_usage_ns = 1;
+  uint64 mem_usage_bytes = 2;
+  uint64 mem_limit_bytes = 3;
+}
+
+message PruneImages {}
+
+// PruneImages ALWAYS scopes to wildstone-owned images: the agent issues
+// the Engine API call with filters={"label":["dev.wildstone.owner=wildstone"]}.
+// An implementation that prunes without this filter violates the
+// ownership invariant (ADR-W003 §A4.3) even if it otherwise behaves.
+message PruneImagesResult {
+  uint64 reclaimed_bytes = 1;
+  uint32 deleted_count = 2;
+}
+
+// ---------------------------------------------------------------- volumes
+
+// EnsureVolume creates a named, owner-labeled Docker volume if it does not
+// exist. Docker's own /volumes/create is idempotent but silently returns
+// the pre-existing volume without changing its labels — so the agent
+// inspects first: absent -> create (created=true); present and
+// wildstone-owned -> created=false; present and NOT wildstone-owned ->
+// FORBIDDEN (never adopt a volume Wardstone did not create).
+message EnsureVolume {
+  string name = 1;
+}
+
+message EnsureVolumeResult {
+  bool created = 1;
+}
+
+// ---------------------------------------------------------------- fs ops
+
+// SnapshotDir archives source_dir into a gzip'd tar at dest_path. Both
+// paths must resolve under a managed prefix. Symlinks inside source_dir
+// are recorded as link entries (target string only) and NEVER followed —
+// following them could let a symlink planted inside the managed tree
+// exfiltrate arbitrary host files into the snapshot, escaping the managed
+// prefix invariant through the back door. Regular files and directories
+// are archived; sockets/devices/FIFOs are skipped silently. Cumulative
+// regular-file bytes are capped at 4 GiB (ADR-W003 §A4.4 bounded
+// responses) — the walk aborts, the partial temp file is removed, and the
+// op returns INVALID; dest_path is never partially written (tmp+rename).
+message SnapshotDir {
+  string source_dir = 1;
+  string dest_path = 2; // must end in .tar.gz
+}
+
+message SnapshotDirResult {
+  string sha256_hex = 1; // sha256 of the final .tar.gz bytes
+  uint64 size_bytes = 2;
+  uint32 file_count = 3; // regular files archived (symlinks/dirs not counted)
+}
+
+// MeasureUsage recursively sums regular-file sizes under path (managed
+// prefix required). Symlinks are not followed. The walk is capped at
+// 1,000,000 entries — beyond that the op returns a RUNTIME error rather
+// than an unbounded scan of an attacker-grown tree.
+message MeasureUsage {
+  string path = 1;
+}
+
+message MeasureUsageResult {
+  uint64 total_bytes = 1;
+  uint64 file_count = 2;
+}
+
+// ---------------------------------------------------------------- files
+
+message WriteManagedFile {
+  string path = 1; // must resolve under a managed prefix
+  bytes content = 2;
+  uint32 mode = 3; // e.g. 0644; 0 = 0644
+}
+
+message WriteManagedFileResult {
+  string sha256_hex = 1;
+}
+
+message ReadManagedFile {
+  string path = 1; // must resolve under a managed prefix
+}
+
+message ReadManagedFileResult {
+  bytes content = 1;
+}
+
+// ---------------------------------------------------------------- system
+
+message HostFacts {}
+
+message HostFactsResult {
+  string hostname = 1;
+  string os = 2;
+  string kernel = 3;
+  uint32 num_cpu = 4;
+  uint64 mem_total_bytes = 5;
+  uint64 root_disk_total_bytes = 6;
+  uint64 root_disk_free_bytes = 7;
+  string agent_version = 8;
+}
+
+message Health {}
+
+message HealthResult {
+  bool ok = 1;
+  string detail = 2;
+}
+
+// ---------------------------------------------------------------- self-update
+
+message SelfUpdate {
+  // Inline delivery (ADR-W003 W5): the binary travels as one message on the
+  // existing unary-op stream, bounded by the gRPC transport's max message
+  // size — raised to 64 MiB on both the Keystone server and the Wardstone
+  // client to give Wardstone's ~10-20 MiB static binaries comfortable
+  // headroom. True chunked delivery (a streaming SelfUpdateChunk{bytes
+  // data; uint32 seq; bool last} arm) is deferred until a real binary
+  // approaches that cap.
+  bytes binary = 1;      // the new wardstoned (spike: inline; E1: chunked/fetched)
+  bytes signature = 2;   // ed25519 over sha256(binary), verified against baked-in key
+  string version = 3;
+  string sha256_hex = 4; // integrity check before signature check
+}
+
+message SelfUpdateResult {
+  string staged_path = 1;
+  string previous_path = 2; // rollback artifact
+  bool promoted = 3;
+}
+
+// ---------------------------------------------------------------- storage/network (W6c)
+
+// ListBlockDevices enumerates block devices by reading /sys/block directly
+// (no lsblk, no shell-out). loop* and ram* devices are skipped. Linux-only;
+// on other platforms the agent returns an empty list.
+message ListBlockDevices {}
+
+message BlockDevice {
+  string name = 1;
+  uint64 size_bytes = 2;
+  bool removable = 3;
+}
+
+message ListBlockDevicesResult {
+  repeated BlockDevice devices = 1;
+}
+
+// EnsureMount is, per ADR-W003, the most dangerous op in the product: it
+// performs a real syscall.Mount and edits /etc/fstab. Agent-side hard
+// invariants (checked regardless of what Keystone asks, ADR-W003 §A4):
+//   - target must resolve under a configured managed prefix (resolveManaged)
+//     AND under Config.MountRoot (prod default /srv/wildstone).
+//   - fstype must be one of: nfs, nfs4, cifs, ext4, xfs. Anything else is
+//     FORBIDDEN.
+//   - every option must match ^[a-zA-Z0-9._=/-]+$ (no commas/whitespace —
+//     fstab field injection); nosuid and nodev are mandatory and appended
+//     if the caller omitted them.
+// The agent owns a marker-delimited block in /etc/fstab ("# BEGIN
+// wildstone-managed" / "# END wildstone-managed") — lines outside that
+// block are never touched. Ordering: the actual mount is attempted FIRST;
+// fstab is only updated after a successful mount, so a mount that fails
+// never leaves a boot-time landmine entry behind.
+message EnsureMount {
+  string source = 1;
+  string target = 2;
+  string fstype = 3;
+  repeated string options = 4;
+}
+
+message EnsureMountResult {
+  bool mounted = 1;       // false if already mounted (idempotent, no-op)
+  bool fstab_updated = 2; // false if an identical entry already existed
+}
+
+// TestNfs dials host:port over TCP only (default port 2049) — no mount is
+// performed. An unreachable host is a valid answer (reachable=false), not
+// an OpError.
+message TestNfs {
+  string host = 1;
+  uint32 port = 2;
+}
+
+message TestNfsResult {
+  bool reachable = 1;
+  string detail = 2;
+}
+
+// TestSmb dials host:port over TCP only (default port 445) — no mount is
+// performed.
+message TestSmb {
+  string host = 1;
+  uint32 port = 2;
+}
+
+message TestSmbResult {
+  bool reachable = 1;
+  string detail = 2;
+}
+
+// ListPorts parses /proc/net/tcp and /proc/net/tcp6 for sockets in LISTEN
+// state (st == 0A).
+message ListPorts {}
+
+message ListeningPort {
+  string proto = 1; // "tcp" or "tcp6"
+  uint32 port = 2;
+  string local_ip = 3;
+}
+
+message ListPortsResult {
+  repeated ListeningPort ports = 1;
+}
+
+// ProbeTcp dials host:port with a bounded timeout (default 10s, max 30s —
+// larger is INVALID). port must be 1-65535 and host non-empty, or INVALID.
+// Target allowlisting is Keystone-side policy (ADR-W003): the agent only
+// enforces shape and timeout sanity, not which hosts may be probed.
+message ProbeTcp {
+  string host = 1;
+  uint32 port = 2;
+  uint32 timeout_seconds = 3; // 0 = default 10s
+}
+
+message ProbeTcpResult {
+  bool reachable = 1;
+  uint32 latency_ms = 2;
+  string detail = 3;
+}
+
+// ProbeHttp issues a single GET with no redirects followed (the response's
+// status code is reported as-is; Location is never fetched) and drains at
+// most 64 KiB of the body before closing it. url's scheme must be http or
+// https — anything else (e.g. file://) is FORBIDDEN. Same timeout rules as
+// ProbeTcp. Target allowlisting is Keystone-side policy; the agent only
+// enforces scheme + timeout sanity.
+message ProbeHttp {
+  string url = 1;
+  uint32 timeout_seconds = 2; // 0 = default 10s, max 30s
+}
+
+message ProbeHttpResult {
+  bool reachable = 1;
+  uint32 status_code = 2;
+  uint32 latency_ms = 3;
+  string detail = 4;
+}
+
+// EnsureDockerNetwork creates an owner-labeled Docker network if it does
+// not exist, mirroring EnsureVolume's idempotent/ownership pattern: absent
+// -> create (created=true); present and wildstone-owned -> created=false;
+// present and NOT wildstone-owned -> FORBIDDEN (never adopt a network
+// Wardstone did not create).
+message EnsureDockerNetwork {
+  string name = 1;
+}
+
+message EnsureDockerNetworkResult {
+  bool created = 1;
+}
+
+// ---------------------------------------------------------------- system (W6d)
+
+// SystemdUnitStatus queries a single systemd unit's state over D-Bus
+// (github.com/coreos/go-systemd/v22 — pre-approved exception to ADR-W003
+// §A4.5's dependency floor, pure Go, no shell-out). The requested unit
+// MUST be present in the agent's Config.SystemdUnitAllowlist (prod default:
+// wardstoned.service, docker.service) or the agent refuses with FORBIDDEN
+// — this is agent-side defense in depth: even a compromised Keystone can
+// only observe the allowlisted units, never arbitrary ones. An empty unit
+// name is INVALID.
+message SystemdUnitStatus {
+  string unit = 1;
+}
+
+message SystemdUnitStatusResult {
+  string active_state = 1;
+  string sub_state = 2;
+  string load_state = 3;
+  uint64 active_since_unix_sec = 4; // 0 if never activated
+}
+
+// TimeSyncStatus reports whether the kernel clock is synchronized, via
+// golang.org/x/sys/unix.Adjtimex (pre-approved dependency, ADR-W003 §A4.5)
+// — no shell-out to timedatectl/chronyc.
+message TimeSyncStatus {}
+
+message TimeSyncStatusResult {
+  bool synchronized = 1;
+  string detail = 2;
+}

@@ -1,0 +1,30 @@
+# Secrets and local env — never tracked
+.env
+.env.*
+*.pem
+*.key
+*.age
+secrets/
+
+# Build artifacts
+bin/
+dist/
+*.test
+coverage.out
+
+# Node / Console
+node_modules/
+console/dist/
+
+# Editor / OS noise
+.idea/
+.vscode/
+.DS_Store
+
+# Local scratch
+tmp/
+
+# Stub binaries built in-module by go build
+/cli/wild
+/keystone/keystone
+/wardstone/wardstoned

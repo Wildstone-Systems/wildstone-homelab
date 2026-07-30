@@ -1,0 +1,137 @@
+# Photos capability, profile "immich": Immich server + machine-learning
+# workers, a dedicated postgres + redis (proposal §5.1's "dedicated-per-
+# capability infra" posture — Immich's DB/cache are not shared with any
+# other capability, so they fail/back up/upgrade independently), an upload
+# Volume, a public Route, and the OidcClient registration that wires Immich
+# into whatever package provides identity:oidc (packages/identity in this
+# repo).
+#
+# Image digests are REAL, resolved at authoring time (2026-07-30) — not
+# placeholders. See packages/README.md for how these were resolved.
+#
+# public_domain/photos_subdomain are example.com-class placeholders (no
+# real domains). No secret literal appears anywhere: DB/redis credentials
+# and the OIDC client secret are all secret/<name> references, resolved
+# only by Wardstone at materialization (ADR-W005 A2).
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: photos-immich
+  version: 1.0.0
+  capability: photos
+  profile: immich
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: public }
+  - { trait: storage, class: bulk }
+params:
+  - { name: public_domain, required: true }
+  - { name: photos_subdomain, default: photos }
+  - { name: node, required: true }
+policies:
+  classifications: [family_public]
+  dataSensitivity: high
+templates:
+  # ---- Storage: the upload volume plus dedicated postgres/redis data
+  # volumes (dedicated infra keeps Immich's data on its own backup/upgrade
+  # domain — proposal §5.1).
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: immich-upload, node: "{{ .Params.node }}" }
+    spec: { name: immich-upload }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: immich-pgdata, node: "{{ .Params.node }}" }
+    spec: { name: immich-pgdata }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: immich-redis-data, node: "{{ .Params.node }}" }
+    spec: { name: immich-redis-data }
+  # ---- Dedicated postgres + redis.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: immich-postgres, node: "{{ .Params.node }}" }
+    spec:
+      image: "tensorchord/pgvecto-rs@sha256:739cdd626151ff1f796dc95a6591b55a714f341c737e27f045019ceabf8e8c52"
+      env:
+        POSTGRES_USER: immich
+        POSTGRES_PASSWORD: "secret/immich-postgres-password"
+        POSTGRES_DB: immich
+      mounts:
+        - { source: immich-pgdata, target: /var/lib/postgresql/data }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: immich-redis, node: "{{ .Params.node }}" }
+    spec:
+      image: "redis@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2"
+      mounts:
+        - { source: immich-redis-data, target: /data }
+      restart: unless-stopped
+  # ---- Immich server + machine-learning workers.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: immich-server, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/immich-app/immich-server@sha256:b434cb9287eea1471c9974845914d4dd328c9c2d652e446ed4930f99944f0ceb"
+      env:
+        DB_HOSTNAME: "container/immich-postgres"
+        DB_USERNAME: immich
+        DB_PASSWORD: "secret/immich-postgres-password"
+        DB_DATABASE_NAME: immich
+        REDIS_HOSTNAME: "container/immich-redis"
+        PUBLIC_IMMICH_SERVER_URL: "https://{{ .Params.photos_subdomain }}.{{ .Params.public_domain }}"
+        OAUTH_ENABLED: "true"
+        OAUTH_ISSUER_URL: "{{ .Resolved.IssuerURL }}"
+        OAUTH_CLIENT_ID: immich
+        OAUTH_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
+        OAUTH_BUTTON_TEXT: "Login with Authelia"
+        OAUTH_AUTO_LAUNCH: "false"
+        OAUTH_SYNC_GROUPS: "true"
+        OAUTH_SIGNUP_ENABLED: "true"
+      mounts:
+        - { source: immich-upload, target: /usr/src/app/upload }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: immich-machine-learning, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/immich-app/immich-machine-learning@sha256:5a0839dc5303cd7215bcd2180a26aed3af41675aefb3e75e5157e9f10ad16e6e"
+      restart: unless-stopped
+  # ---- Public route: Immich runs its own OIDC login flow (see
+  # OAUTH_* env above), so the reverse-proxy Route itself needs no forward
+  # auth — auth: none.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: photos, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.photos_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/immich-server:2283"
+      auth: none
+      classification: family_public
+  # ---- OidcClient registration (ADR-W005 A3): the identity capability's
+  # controller renders this into the Authelia identity_providers.oidc.
+  # clients fragment and batches the reload. Metadata.name == clientId
+  # (S3a convention: the fragment path/observe identity is keyed off
+  # Metadata.Name, and by convention packages set it equal to ClientId).
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: immich }
+    spec:
+      clientId: immich
+      clientName: Immich
+      redirectUris:
+        - "https://{{ .Params.photos_subdomain }}.{{ .Params.public_domain }}/auth/login"
+        - "app.immich:///oauth-callback"
+      scopes: [openid, profile, email, groups]
+      authPolicy: two_factor
+      secretRef: "{{ .Resolved.OidcSecretRef }}"

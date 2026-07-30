@@ -1,0 +1,48 @@
+# packages/
+
+Capability packages (data, not code) and the package build/lint/sign
+toolchain. A package defines a profile of a capability: templates that expand
+into typed resources, dependency traits, policies, lifecycle hooks (run as
+containers with declared mounts — never host scripts), and the `agentTools`
+declaration (ADR-W001). See `docs/decisions/ADR-W005-package-format-capability-engine.md`
+for the binding format spec.
+
+Launch packages are transcriptions of proven configs from the reference
+deployment — see `testing/fixtures/`.
+
+## The two packages (Spike S3)
+
+- **`identity/`** — LLDAP (directory) + Authelia (SSO/OIDC provider),
+  profile `authelia-lldap`. Provides trait `identity:oidc`; any other
+  package can `require: [{trait: identity, mode: oidc}]` and receive
+  `.Resolved.IssuerURL` / `.Resolved.OidcSecretRef` in its own templates.
+- **`photos-immich/`** — Immich server + machine-learning workers, a
+  dedicated postgres + redis (proposal §5.1's "dedicated-per-capability
+  infra" posture), an upload volume, a public Route, and an `OidcClient`
+  resource that registers Immich with whatever package provides
+  `identity:oidc`.
+
+Image digests in both packages are **real**, resolved from the public
+registries (ghcr.io / Docker Hub) at authoring time via the registry's
+anonymous-pull token + manifest-digest endpoints — not placeholders. They
+will need periodic refreshing as upstream images are rebuilt; there is no
+automated digest-refresh tooling yet (a later work package's job).
+
+## The go/no-go gate (ADR-W005 A4)
+
+`keystone/vertical`'s `TestGoNoGoIdentityPhotosVertical` is the CI-runnable
+equivalent of the **live VM demo** (an owner deploying real Immich behind a
+real Authelia and completing a browser OIDC login) — that live run is the
+owner-run `testing/e2e` path; this test is what proves the same wiring in
+CI, with Docker and the managed filesystem faked but a real gateway, real
+mTLS agent session, and the real Capability Engine / Reconciler in the
+loop. It loads both packages, expands them, writes the result to a real
+Statefile, reconciles it, and asserts the result matches
+`testing/fixtures/immich/authelia-oidc-client.yml`'s shape with zero
+hand-editing between package and applied state. Run it with:
+
+```sh
+cd keystone && go test -run TestGoNoGoIdentityPhotosVertical -v ./vertical/
+```
+
+and read the `GATE VERDICT: GO`/`NO-GO` line.
