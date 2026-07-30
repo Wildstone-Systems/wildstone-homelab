@@ -1,0 +1,88 @@
+# Identity capability: LLDAP (directory) + Authelia (SSO/OIDC provider),
+# profile "authelia-lldap". Provides trait identity:oidc, which is what
+# lets other packages (e.g. photos-immich) `require: [{trait: identity,
+# mode: oidc}]` and receive .Resolved.IssuerURL / .Resolved.OidcSecretRef.
+#
+# Image digests are REAL, resolved at authoring time (2026-07-30) from the
+# public registries — not placeholders:
+#   lldap/lldap:stable                    -> sha256:2a8454b6...11ca8
+#   authelia/authelia:latest              -> sha256:1b363e92...ff51b
+# See packages/README.md for how these were resolved and how to refresh
+# them.
+#
+# All domains below are example.com placeholders (public_domain is a
+# required param); no secret values appear anywhere — LLDAP's admin
+# password and Authelia's JWT/session/storage secrets are referenced as
+# secret/<name>, resolved only by Wardstone at materialization time
+# (ADR-W005 A2), never carried as literals here.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: identity
+  version: 1.0.0
+  capability: identity
+  profile: authelia-lldap
+provides:
+  - { trait: identity, mode: oidc }
+params:
+  - { name: public_domain, required: true }
+  - { name: node, required: true }
+policies:
+  classifications: [family_public, admin]
+  dataSensitivity: high
+templates:
+  # ---- LLDAP: the directory Authelia authenticates users against.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: lldap-data, node: "{{ .Params.node }}" }
+    spec: { name: lldap-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: lldap, node: "{{ .Params.node }}" }
+    spec:
+      image: "lldap/lldap@sha256:2a8454b668c1aba7157e832eab0e242e1e7eb5fb7591d7e7774ba05286511ca8"
+      env:
+        LLDAP_LDAP_BASE_DN: "dc=example,dc=com"
+        LLDAP_LDAP_USER_PASS: "secret/lldap-admin-password"
+        LLDAP_JWT_SECRET: "secret/lldap-jwt-secret"
+      mounts:
+        - { source: lldap-data, target: /data }
+      restart: unless-stopped
+  # ---- Authelia: the SSO/OIDC provider. It registers OidcClient resources
+  # on behalf of consuming packages (ADR-W005 A3): the reconciler renders
+  # each OidcClient into this capability's managed Authelia config fragment
+  # and batches the reload, independent of which package's template
+  # produced the OidcClient resource.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: authelia-config, node: "{{ .Params.node }}" }
+    spec: { name: authelia-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: authelia, node: "{{ .Params.node }}" }
+    spec:
+      image: "authelia/authelia@sha256:1b363e9279e742397966333f364e0876ae02bf5c876de73e83af6d48c57ff51b"
+      env:
+        AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE: "secret/authelia-oidc-hmac-secret"
+        AUTHELIA_JWT_SECRET_FILE: "secret/authelia-jwt-secret"
+        AUTHELIA_SESSION_SECRET_FILE: "secret/authelia-session-secret"
+        AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE: "secret/authelia-storage-encryption-key"
+      mounts:
+        - { source: authelia-config, target: /config }
+      restart: unless-stopped
+  # ---- Route: auth.<public_domain> — no auth on the auth Route itself
+  # (Authelia IS the auth; gating logins behind Authelia's own login page
+  # would be circular).
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: auth, node: "{{ .Params.node }}" }
+    spec:
+      host: "auth.{{ .Params.public_domain }}"
+      upstream: "container/authelia:9091"
+      auth: none
+      classification: family_public
