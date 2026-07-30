@@ -12,10 +12,14 @@ func testDigest() string {
 	return "ghcr.io/example/app@sha256:" + strings.Repeat("b", 64)
 }
 
-// planted64HexSecret is a 64-char hex string shaped like a real secret
-// value (sha256-digest length) planted directly into a resource field, to
-// verify redaction catches it regardless of field name.
-const planted64HexSecret = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9"
+// planted64HexSecret is a 64-char hex string (sha256-digest length) planted
+// into a resource field to verify redaction strips it regardless of field
+// name. It is DELIBERATELY a low-entropy repeating pattern, not a random
+// value: redaction keys on the 32+-hex-char shape (which this still is), so
+// the test stays meaningful, while the low entropy keeps the gitleaks CI
+// scanner from flagging this test fixture as a real leaked secret. Do not
+// "randomize" it — that reintroduces a false-positive gitleaks failure.
+const planted64HexSecret = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
 func newTestStore(t *testing.T) *statefile.Store {
 	t.Helper()
