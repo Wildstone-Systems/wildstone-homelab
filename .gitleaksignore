@@ -1,0 +1,7 @@
+# gitleaks false-positive suppressions (fingerprint = commit:file:rule:line).
+# Each entry is a KNOWN-FAKE, secret-shaped test fixture — never a real secret.
+# Scoped to one finding in one historical commit so the scanner stays strict
+# everywhere else. See keystone/butler/fixtures_test.go: the planted value is a
+# redaction test fixture; it was later made low-entropy so no NEW finding is
+# generated, but the original high-entropy value remains in this commit's history.
+3d6bbaec2c289ce47b8fe4bc12a7a33854b20aae:keystone/butler/fixtures_test.go:generic-api-key:18
