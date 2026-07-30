@@ -53,15 +53,14 @@ func loadCertFile(t *testing.T, path string) *x509.Certificate {
 // reconnected node, the on-disk cert's NotAfter moved later, and a Health op
 // still works afterwards.
 func TestCertificateRotation(t *testing.T) {
-	// Speed up the periodic rotation check so the test doesn't wait 24h for
-	// the tick that notices the short-lived cert we're about to plant.
-	orig := renewCheckInterval
-	renewCheckInterval = 200 * time.Millisecond
-	t.Cleanup(func() { renewCheckInterval = orig })
-
 	h := startGateway(t, []string{"tok"}, "")
 	dataDir := filepath.Join(t.TempDir(), "data")
-	newTestAgent(t, h, "node-a", "tok", func(c *Config) { c.DataDir = dataDir })
+	newTestAgent(t, h, "node-a", "tok", func(c *Config) {
+		c.DataDir = dataDir
+		// Speed up the periodic rotation check so the test doesn't wait 24h
+		// for the tick that notices the planted short-lived cert.
+		c.RenewCheckInterval = 200 * time.Millisecond
+	})
 	if !h.gw.WaitConnected("node-a", 10*time.Second) {
 		t.Fatal("agent never connected")
 	}

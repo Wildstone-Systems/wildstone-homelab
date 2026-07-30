@@ -65,6 +65,10 @@ type Config struct {
 	BackoffBase time.Duration
 	BackoffCap  time.Duration
 
+	// RenewCheckInterval is how often a live session re-checks certificate
+	// lifetime (W4). Default 24h; tests shorten it.
+	RenewCheckInterval time.Duration
+
 	// ExecSelf, if set, replaces the real re-exec performed after a
 	// promoted self-update (ADR-W003 W5) and after CheckUpdateState reverts
 	// a promotion that never confirmed. Production code leaves this nil,
@@ -112,6 +116,9 @@ func New(cfg Config) (*Agent, error) {
 	}
 	if cfg.BackoffCap == 0 {
 		cfg.BackoffCap = 15 * time.Second
+	}
+	if cfg.RenewCheckInterval == 0 {
+		cfg.RenewCheckInterval = defaultRenewCheckInterval
 	}
 	if cfg.Version == "" {
 		cfg.Version = "dev"
@@ -465,10 +472,10 @@ func (a *Agent) session(ctx context.Context) error {
 
 // ---------------------------------------------------------------- rotation
 
-// renewCheckInterval is how often a live session re-checks its certificate's
+// defaultRenewCheckInterval is how often a live session re-checks its certificate's
 // remaining lifetime (ADR-W003 W4), beyond the check done on session
 // establishment.
-var renewCheckInterval = 24 * time.Hour
+const defaultRenewCheckInterval = 24 * time.Hour
 
 // renewalLoop checks the on-disk client certificate's remaining lifetime
 // immediately, then on renewCheckInterval, until ctx is cancelled (i.e. the
@@ -477,7 +484,7 @@ var renewCheckInterval = 24 * time.Hour
 // live session.
 func (a *Agent) renewalLoop(ctx context.Context, conn *grpc.ClientConn, forceReconnect context.CancelFunc) {
 	a.checkAndRenew(ctx, conn, forceReconnect)
-	ticker := time.NewTicker(renewCheckInterval)
+	ticker := time.NewTicker(a.cfg.RenewCheckInterval)
 	defer ticker.Stop()
 	for {
 		select {
