@@ -1,0 +1,45 @@
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      # Mullvad OpenVPN Configuration
+      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_TYPE=openvpn
+      - OPENVPN_USER=REPLACED-MULLVAD-ACCOUNT
+      - SERVER_COUNTRIES=USA
+      - SERVER_CITIES=Amsterdam,Frankfurt
+      - TZ=Etc/UTC
+      # ports to expose through VPN
+      - FIREWALL_INPUT_PORTS=7878,8989,8686,9696,8080,8082
+      - FIREWALL_OUTBOUND_SUBNETS=192.0.2.0/24
+      - DOT=on
+      - HEALTH_TARGET_ADDRESS=cloudflare.com:443
+      - HEALTH_VPN_DURATION_INITIAL=20s
+      - UPDATER_PERIOD=24h
+    ports:
+      # Radarr
+      - 7878:7878
+      # Sonarr
+      - 8989:8989
+      # Lidarr
+      - 8686:8686
+      # Prowlarr
+      - 9696:9696
+      # SABnzbd
+      - 8080:8080
+      # qBittorrent
+      - 8082:8082
+    volumes:
+      - /srv/data/docker/gluetun:/gluetun
+    networks:
+      - gluetun-net
+    restart: unless-stopped
+
+networks:
+  gluetun-net:
+    driver: bridge

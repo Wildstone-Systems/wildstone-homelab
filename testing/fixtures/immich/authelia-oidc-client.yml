@@ -1,0 +1,26 @@
+# Authelia OIDC client stanza for Immich (identity_providers.oidc.clients entry).
+#
+# RECONSTRUCTED, not transcribed: the reference deployment's checked-in
+# Authelia configuration.yml carries only session + access_control; the
+# OIDC provider block lives outside the config repo. This stanza is derived
+# from the Immich side of the wiring (see docker-compose.yml in this
+# directory) plus Immich's documented redirect URI. Verify against the live
+# Authelia config before treating it as golden.
+identity_providers:
+  oidc:
+    clients:
+      - client_id: immich
+        client_name: Immich
+        client_secret: REPLACED-CLIENT-SECRET-DIGEST # $pbkdf2-... digest of the plaintext secret Immich holds
+        public: false
+        authorization_policy: two_factor
+        redirect_uris:
+          - https://photos.example.com/auth/login
+          - https://photos.example.com/user-settings
+          - app.immich:///oauth-callback
+        scopes:
+          - openid
+          - profile
+          - email
+          - groups
+        userinfo_signed_response_alg: none

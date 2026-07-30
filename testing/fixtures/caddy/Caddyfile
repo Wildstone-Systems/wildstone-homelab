@@ -1,0 +1,303 @@
+{
+	auto_https off
+}
+
+# Public domain via Cloudflare Tunnel - FIXED
+http://home.example.com {
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+
+	# === HOMEPAGE API (specific paths first) ===
+	handle /api/services {
+		reverse_proxy family-homepage:3000
+	}
+	handle /api/bookmarks {
+		reverse_proxy family-homepage:3000
+	}
+	handle /api/widgets {
+		reverse_proxy family-homepage:3000
+	}
+	handle /api/hash {
+		reverse_proxy family-homepage:3000
+	}
+	handle /api/config/custom.css {
+		reverse_proxy family-homepage:3000
+	}
+	handle /api/config/custom.js {
+		reverse_proxy family-homepage:3000
+	}
+	handle /api/validate {
+		reverse_proxy family-homepage:3000
+	}
+	handle /_next/* {
+		reverse_proxy family-homepage:3000
+	}
+
+	# === NAVIDROME ===
+	redir /music /music/app 301
+	handle_path /music/* {
+		reverse_proxy 192.0.2.56:4533
+	}
+
+	# === JELLYFIN ===
+	redir /jellyfin /jellyfin/web/ 301
+	handle_path /jellyfin/* {
+		reverse_proxy 192.0.2.56:8096
+	}
+
+	# === IMMICH (absolute path assets) ===
+	handle /_app/* {
+		reverse_proxy 192.0.2.56:2283
+	}
+	handle /api/* {
+		reverse_proxy 192.0.2.56:2283
+	}
+	handle /favicon.ico {
+		reverse_proxy 192.0.2.56:2283
+	}
+	handle /favicon-*.png {
+		reverse_proxy 192.0.2.56:2283
+	}
+	handle /apple-touch-icon.png {
+		reverse_proxy 192.0.2.56:2283
+	}
+	handle /manifest.json {
+		reverse_proxy 192.0.2.56:2283
+	}
+
+	# Immich root entry
+	redir /photos /photos/ 301
+	handle_path /photos/* {
+		reverse_proxy 192.0.2.56:2283
+	}
+
+	# Catch-all for homepage
+	handle {
+		reverse_proxy family-homepage:3000
+		header Cache-Control "no-cache, no-store, must-revalidate"
+		header Pragma "no-cache"
+		header Expires "0"
+	}
+}
+
+# Preferred Tailscale private routes
+auth.tailnet {
+	tls internal
+	reverse_proxy 192.0.2.71:9091
+}
+
+code.tailnet {
+	tls internal
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy code-server:8080
+}
+
+dash.tailnet {
+	tls internal
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy homepage:3000
+}
+
+aio-stage.tailnet {
+	tls internal
+	@aio_public_api path /api/v1/auth/* /api/v1/health
+	handle @aio_public_api {
+		reverse_proxy 192.0.2.53:8000
+	}
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	@api path /api/v1/*
+	handle @api {
+		reverse_proxy 192.0.2.53:8000
+	}
+	handle {
+		reverse_proxy 192.0.2.53:5173
+	}
+}
+
+proxmox.tailnet {
+	tls internal
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.65:8006
+}
+
+uptime.tailnet {
+	tls internal
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.71:3001
+}
+
+pihole.tailnet {
+	tls internal
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.71:8081
+}
+
+notify.tailnet {
+	tls internal
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.71:8082
+}
+
+lldap.tailnet {
+	tls internal
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.71:17170
+}
+
+sonarr.tailnet {
+	tls internal
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.56:8989
+}
+
+radarr.tailnet {
+	tls internal
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.56:7878
+}
+
+lidarr.tailnet {
+	tls internal
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.56:8686
+}
+
+prowlarr.tailnet {
+	tls internal
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.56:9696
+}
+
+sabnzbd.tailnet {
+	tls internal
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.56:9080
+}
+
+portainer-infra.tailnet {
+	tls internal
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.71:9000
+}
+
+portainer-media.tailnet {
+	tls internal
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.56:9000
+}
+
+# example.com public subdomains
+http://jellyfin.example.com {
+	reverse_proxy 192.0.2.56:8096
+}
+
+http://navidrome.example.com {
+	reverse_proxy 192.0.2.56:4533
+}
+
+http://photos.example.com {
+	reverse_proxy 192.0.2.56:2283
+}
+
+http://seerr.example.com {
+	reverse_proxy 192.0.2.56:5055
+}
+
+http://fb.example.com {
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.56:8081
+}
+
+http://games.example.com {
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.56:6060
+}
+
+http://romm.example.com {
+	reverse_proxy 192.0.2.56:3005
+}
+
+http://ha.example.com {
+	forward_auth 192.0.2.71:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy 192.0.2.71:8123
+}
+
+http://auth.example.com {
+	reverse_proxy 192.0.2.71:9091 {
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Host {host}
+	}
+}
+
+http://books.example.com {
+	reverse_proxy 192.0.2.56:8083
+}
+
+http://paperless.example.com {
+	reverse_proxy 192.0.2.71:8000
+}
+
+# HTTPS endpoint for auth.example.com
+https://auth.example.com {
+	tls internal
+	reverse_proxy 192.0.2.71:9091 {
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Host {host}
+	}
+}
