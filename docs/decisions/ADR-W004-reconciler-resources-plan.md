@@ -127,7 +127,15 @@ observe (Wardstone + providers) → diff(spec, observed) → Plan
   an approved plan, never auto-apply, regardless of policy.
 - **Health gate**: each step has a post-condition. Container → Wardstone
   Health/ContainerStats shows running; Route → ProbeHttp/ProbeTcp;
-  DnsRecord → provider read-back. Failure triggers `Reverse`.
+  DnsRecord → provider read-back. On failure, the reconciler runs **only the
+  failing step's `Reverse`** and then halts the plan; earlier steps that
+  already passed their own gate stay applied. This is the level-triggered
+  posture (proposal §3.4): a healthy, already-gated resource is not torn
+  down for a later step's failure — the next reconcile converges the
+  remainder. (Whole-plan atomic rollback is reserved for upgrade plans with
+  explicit `onFailure: rollback`, §8 — not the general reconcile path.)
+  Resolved during S2b, which surfaced the ambiguity against an earlier draft
+  of this line.
 
 ### A5. External-resource controller pattern
 

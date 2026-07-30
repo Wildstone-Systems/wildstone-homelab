@@ -1,0 +1,824 @@
+// Package reconcile is Keystone's reconcile engine over Wardstone
+// (ADR-W004 A4): observe -> diff -> plan -> approve -> apply -> health-gate
+// -> rollback, for the three Wardstone-applied kinds (Container, Volume,
+// Route). DnsRecord is provider-backed (ADR-W004 A5) and is out of scope
+// here — S2c wires it through keystone/provider; Reconcile silently skips
+// any DnsRecord resources it is handed.
+//
+// # Observe: pragmatic, per-kind, documented
+//
+// The Wardstone op surface (proto/wardstone/v1) has no generic "inspect"
+// arm, so each kind's observe step uses whatever signal its existing ops
+// give it, per ADR-W004 A4/B1:
+//
+//   - Container: presence+health is ContainerStats succeeding. This
+//     conflates "exists and is running" with "matches the desired spec" —
+//     a container that is running but drifted (e.g. wrong image) reads as
+//     a NoOp, not an Update, because there is no op to read back the
+//     running image. EnsureContainer itself IS spec-aware (ops.go replaces
+//     the container on an image mismatch), so an explicit reconcile of a
+//     changed desired image still converges correctly the moment a new
+//     desired spec triggers a Create/Update step through some other path
+//     (e.g. the resource wasn't previously "managed" for this Reconciler
+//     instance) — it just isn't detected as drift by presence-only observe
+//     on an already-managed container. Flagged as a known S2b limitation.
+//   - Volume: there is no volume-inspect op at all (only EnsureVolume).
+//     Observe is therefore "observe-by-apply": the Reconciler treats a
+//     volume as existing iff a Reconciler-tracked, in-memory "managed" set
+//     says a prior Reconcile call successfully created it. This is process-
+//     lifetime state, not persisted — a fresh Reconciler (e.g. after a
+//     Keystone restart) rediscovers volumes the first time they appear in
+//     a plan again, safely, because EnsureVolume is idempotent.
+//   - Route: ReadManagedFile of the rendered fragment path, byte-compared
+//     against a fresh render of the desired spec. This is a true live
+//     check (present + equal = exists, present + different = Update,
+//     NOT_FOUND = absent) — no caching needed.
+//
+// # Drift classes (ADR-W004 A4)
+//
+// Reconcilable drift (e.g. a container stopped/removed out-of-band) is
+// repaired by the normal diff -> plan -> apply path. Foreign drift — a
+// name occupied by an object the agent's ownership guard reports as not
+// wildstone-owned (FORBIDDEN on ContainerStats) — is never planned as a
+// delete: observe excludes foreign objects from the observed set
+// entirely (so diff never even considers them) and instead reports them
+// in Outcome.ForeignDrift for a human to see and adopt/rename around.
+//
+// # Health gate and rollback
+//
+// Every apply is followed by a post-condition probe (ADR-W004 A4 step 5):
+// Container -> ContainerStats reports success (retried with backoff);
+// Route -> ProbeHttp against the upstream (ip:port upstreams only — see
+// probeRoute); Volume -> a second, idempotent EnsureVolume call succeeding.
+// A gate failure runs the step's reverse (where one exists) and halts —
+// later steps in the plan are never applied.
+package reconcile
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+)
+
+// resKey identifies a resource for the Reconciler's internal bookkeeping
+// (the "managed" cache, desired-by-key lookups): matching is by (kind,
+// name), same as plan.Diff.
+type resKey struct {
+	Kind resource.Kind
+	Name string
+}
+
+// StepResult records what happened when the Reconciler tried to apply one
+// plan.PlanStep.
+type StepResult struct {
+	Step plan.PlanStep
+	// Applied is true once the op(s) for this step were dispatched and
+	// returned success (before any health gate runs). False means the op
+	// itself failed (transport error, OpError, or — for a Volume Delete —
+	// the apply-time safety refusal); Outcome.Incident carries the reason.
+	Applied bool
+	// HealthOK is true once the step's post-condition probe passed.
+	// Meaningless (false) if Applied is false.
+	HealthOK bool
+	// Reversed is true if a health-gate failure triggered this step's
+	// reverse action.
+	Reversed bool
+	// Error is the human-readable failure reason when Applied is false.
+	Error string
+}
+
+// Outcome is what one Reconcile call produced.
+type Outcome struct {
+	// Plan is the diff-produced plan this Reconcile call evaluated —
+	// always populated, even when nothing was applied.
+	Plan *plan.Plan
+	// Applied is true iff every step in Plan.Steps was applied and passed
+	// its health gate (or the plan was empty to begin with).
+	Applied bool
+	// Rolledback is true iff a step's health gate failed, its reverse (if
+	// any) ran, and later steps were never attempted.
+	Rolledback bool
+	// PendingApproval is true iff Plan.OverallRisk was Medium/High and no
+	// Approve callback (or one that returned false) authorized it — in
+	// that case nothing in Plan was applied at all.
+	PendingApproval bool
+	// Incident is set when a step's op failed outright (not a health-gate
+	// failure — see Rolledback for that) after exhausting retries, or hit
+	// the Volume-Delete apply-time refusal. Later steps were not attempted.
+	Incident string
+	// ForeignDrift lists Container names observe found occupied by a
+	// non-wildstone-owned object. Never planned as a delete (ADR-W004 A4).
+	ForeignDrift []string
+	// Steps records one StepResult per plan step actually attempted (a
+	// halt on Incident/Rolledback means later steps have no entry here).
+	Steps []StepResult
+}
+
+// Reconciler drives the ADR-W004 A4 reconcile loop for the three
+// Wardstone-applied kinds (Container, Volume, Route) against one node at a
+// time. The zero value is usable with built-in defaults (see the const
+// block below) except for Applier and ManagedPrefix, which callers must
+// set.
+type Reconciler struct {
+	// Applier dispatches operations to the target node. Production callers
+	// set this to &GatewayApplier{Gateway: gw}.
+	Applier Applier
+
+	// ManagedPrefix is the managed-file prefix Route fragments are
+	// rendered under: <ManagedPrefix>/routes/<name>.caddy. Must be one of
+	// the target agent's configured ManagedPrefixes.
+	ManagedPrefix string
+
+	// Approve decides whether a Medium/High risk plan.Plan may apply. nil
+	// (the zero value) means default-deny (ADR-W004 A3: "Medium/High
+	// require explicit approval") — every Medium/High plan comes back as
+	// Outcome.PendingApproval with nothing applied.
+	Approve func(*plan.Plan) bool
+
+	// ReloadFn is the Route-apply reload seam (ADR-W004 A1: "a reload op
+	// seam"). nil (the default) is a documented no-op: S2b's job is the
+	// reconcile loop and the WriteManagedFile plumbing, not a live Caddy
+	// reload, which lands in a later E-series work package.
+	ReloadFn func(ctx context.Context) error
+
+	// MaxApplyRetries bounds retries of a single op dispatch on a
+	// transient failure (transport error, or an OpError with code
+	// RUNTIME) before the step is given up on (ADR-W004 A4: "bounded
+	// remediation... spike N=3"). <= 0 uses the default of 3.
+	MaxApplyRetries int
+	// RetryBackoff is the delay between retryDispatch attempts. <= 0 uses
+	// a 50ms default.
+	RetryBackoff time.Duration
+
+	// HealthGateAttempts bounds how many times a health-gate probe
+	// (ContainerStats / ProbeHttp / EnsureVolume) is retried before the
+	// gate is declared failed. <= 0 uses a default of 5.
+	HealthGateAttempts int
+	// HealthGateBackoff is the delay between health-gate probe attempts.
+	// <= 0 uses a 100ms default.
+	HealthGateBackoff time.Duration
+
+	mu      sync.Mutex
+	managed map[string]map[resKey]bool // nodeID -> (kind,name) -> Reconciler believes it exists
+}
+
+// Reconcile drives one observe -> diff -> plan -> approve -> apply ->
+// health-gate pass for nodeID against desired. DnsRecord resources in
+// desired are silently skipped (provider-backed, S2c's job — see the
+// package doc).
+func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []resource.Resource) (*Outcome, error) {
+	wsDesired := make([]resource.Resource, 0, len(desired))
+	for _, res := range desired {
+		switch res.Kind {
+		case resource.KindContainer, resource.KindVolume, resource.KindRoute:
+			wsDesired = append(wsDesired, res)
+		case resource.KindDnsRecord:
+			continue
+		default:
+			return nil, fmt.Errorf("reconcile: unknown kind %q", res.Kind)
+		}
+	}
+
+	observed, foreign, err := r.observe(ctx, nodeID, wsDesired)
+	if err != nil {
+		return nil, fmt.Errorf("reconcile: observe: %w", err)
+	}
+
+	p := plan.Diff(wsDesired, observed)
+	outcome := &Outcome{Plan: p, ForeignDrift: foreign}
+	if len(p.Steps) == 0 {
+		outcome.Applied = true
+		return outcome, nil
+	}
+
+	// ADR-W004 A3: Low auto-applies; Medium/High require explicit
+	// approval, default deny. This gate is evaluated once for the whole
+	// plan (OverallRisk = max over steps), not per step — a plan that
+	// mixes a Low container create with a High volume delete is either
+	// approved and applied in full or not applied at all.
+	if p.OverallRisk > plan.RiskLow {
+		if r.Approve == nil || !r.Approve(p) {
+			outcome.PendingApproval = true
+			return outcome, nil
+		}
+	}
+
+	desiredByKey := make(map[resKey]resource.Resource, len(wsDesired))
+	for _, res := range wsDesired {
+		desiredByKey[resKey{res.Kind, res.Metadata.Name}] = res
+	}
+
+	for _, step := range p.Steps {
+		var sr StepResult
+		switch step.Kind {
+		case resource.KindContainer:
+			sr = r.applyContainerStep(ctx, nodeID, step, desiredByKey)
+		case resource.KindVolume:
+			sr = r.applyVolumeStep(ctx, nodeID, step)
+		case resource.KindRoute:
+			sr = r.applyRouteStep(ctx, nodeID, step, desiredByKey)
+		default:
+			sr = StepResult{Step: step, Error: fmt.Sprintf("reconcile: kind %s not handled by S2b's Applier path", step.Kind)}
+		}
+		outcome.Steps = append(outcome.Steps, sr)
+
+		if !sr.Applied {
+			outcome.Incident = fmt.Sprintf("%s %s/%s: %s", step.Action, step.Kind, step.Name, sr.Error)
+			return outcome, nil
+		}
+		if !sr.HealthOK {
+			outcome.Rolledback = true
+			return outcome, nil
+		}
+	}
+
+	outcome.Applied = true
+	return outcome, nil
+}
+
+// ---------------------------------------------------------------- observe
+
+func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resource.Resource) (observed []resource.Resource, foreign []string, err error) {
+	desiredByKey := make(map[resKey]resource.Resource, len(desired))
+	for _, res := range desired {
+		desiredByKey[resKey{res.Kind, res.Metadata.Name}] = res
+	}
+
+	// Candidates = every desired (kind,name) (to detect Create/Update/
+	// NoOp) union every key the Reconciler currently believes it manages
+	// (to detect a legitimate Delete: something we made that's no longer
+	// desired). A key present in neither set was never ours and is never
+	// considered.
+	candidates := make(map[resKey]bool, len(desiredByKey))
+	for k := range desiredByKey {
+		candidates[k] = true
+	}
+	for k := range r.managedKeys(nodeID) {
+		candidates[k] = true
+	}
+
+	for k := range candidates {
+		want, isDesired := desiredByKey[k]
+		switch k.Kind {
+		case resource.KindContainer:
+			res, obs, oerr := r.observeContainer(ctx, nodeID, k, want, isDesired)
+			if oerr != nil {
+				return nil, nil, oerr
+			}
+			if res == nil {
+				continue
+			}
+			if res.foreign {
+				foreign = append(foreign, k.Name)
+				continue
+			}
+			observed = append(observed, obs)
+		case resource.KindVolume:
+			if !r.isManaged(nodeID, k) {
+				continue // never observed/applied; absent
+			}
+			if isDesired {
+				observed = append(observed, want)
+			} else {
+				observed = append(observed, placeholderResource(resource.KindVolume, k.Name))
+			}
+		case resource.KindRoute:
+			obs, present, oerr := r.observeRoute(ctx, nodeID, k, want, isDesired)
+			if oerr != nil {
+				return nil, nil, oerr
+			}
+			if present {
+				observed = append(observed, obs)
+			}
+		default:
+			return nil, nil, fmt.Errorf("observe: kind %s not handled by S2b (DnsRecord is S2c's Provider path)", k.Kind)
+		}
+	}
+	return observed, foreign, nil
+}
+
+type containerObserveResult struct {
+	foreign bool
+}
+
+// observeContainer implements the Container observe rule documented in
+// the package doc: ContainerStats success = present+running (returns the
+// desired/placeholder resource so diff sees a match/candidate-for-delete);
+// NOT_FOUND = absent; FORBIDDEN = foreign (never planned as a delete, and
+// never matched against a desired create either — a name collision with a
+// foreign object is left for a human, not silently worked around).
+func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resKey, want resource.Resource, isDesired bool) (*containerObserveResult, resource.Resource, error) {
+	res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ContainerStats{
+		ContainerStats: &wsv1.ContainerStats{Name: k.Name},
+	}})
+	if err != nil {
+		return nil, resource.Resource{}, fmt.Errorf("observe container %s: %w", k.Name, err)
+	}
+	if oe := res.GetError(); oe != nil {
+		switch oe.GetCode() {
+		case wsv1.ErrorCode_ERROR_CODE_FORBIDDEN:
+			return &containerObserveResult{foreign: true}, resource.Resource{}, nil
+		case wsv1.ErrorCode_ERROR_CODE_NOT_FOUND:
+			return nil, resource.Resource{}, nil // absent
+		default:
+			return nil, resource.Resource{}, fmt.Errorf("observe container %s: %s: %s", k.Name, oe.GetCode(), oe.GetMessage())
+		}
+	}
+	if isDesired {
+		return &containerObserveResult{}, want, nil
+	}
+	return &containerObserveResult{}, placeholderResource(resource.KindContainer, k.Name), nil
+}
+
+// observeRoute implements the Route observe rule: ReadManagedFile the
+// rendered fragment path; NOT_FOUND = absent; present+byte-equal to a
+// fresh render of the desired spec = NoOp; present+different = Update
+// (signaled by returning a deliberately-unequal placeholder spec, since
+// the actual live RouteSpec fields can't be recovered from rendered
+// Caddy text — only the fact that it's stale can be, which is all
+// plan.Diff needs to emit an Update step).
+func (r *Reconciler) observeRoute(ctx context.Context, nodeID string, k resKey, want resource.Resource, isDesired bool) (resource.Resource, bool, error) {
+	path := routeFragmentPath(r.ManagedPrefix, k.Name)
+	res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ReadManagedFile{
+		ReadManagedFile: &wsv1.ReadManagedFile{Path: path},
+	}})
+	if err != nil {
+		return resource.Resource{}, false, fmt.Errorf("observe route %s: %w", k.Name, err)
+	}
+	if oe := res.GetError(); oe != nil {
+		if oe.GetCode() == wsv1.ErrorCode_ERROR_CODE_NOT_FOUND {
+			return resource.Resource{}, false, nil
+		}
+		return resource.Resource{}, false, fmt.Errorf("observe route %s: %s: %s", k.Name, oe.GetCode(), oe.GetMessage())
+	}
+	if !isDesired {
+		return placeholderResource(resource.KindRoute, k.Name), true, nil
+	}
+	content := res.GetReadManagedFile().GetContent()
+	if routeFragmentEqual(content, renderRouteFragment(want.Route)) {
+		return want, true, nil
+	}
+	return placeholderResource(resource.KindRoute, k.Name), true, nil
+}
+
+func routeFragmentEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// placeholderResource builds a minimal, validly-typed resource used purely
+// as an observed-side stand-in when the real live spec can't be recovered
+// (Container/Route "something exists here" signals) or isn't needed
+// (Volume, whose spec is just its name). Its zero-value inner spec is
+// guaranteed to compare unequal to any validly-populated desired spec of
+// the same kind (see resource.Validate: Container.Image and Route.Host/
+// Classification can never be empty), so plan.Diff's specEqual always
+// treats a placeholder as "changed" when compared against a desired
+// resource — exactly the "force an Update, or allow a Delete" behavior
+// observe needs from it.
+func placeholderResource(kind resource.Kind, name string) resource.Resource {
+	r := resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       kind,
+		Metadata:   resource.Metadata{Name: name, Owner: "system"},
+	}
+	switch kind {
+	case resource.KindContainer:
+		r.Container = &resource.ContainerSpec{}
+	case resource.KindVolume:
+		r.Volume = &resource.VolumeSpec{Name: name}
+	case resource.KindRoute:
+		r.Route = &resource.RouteSpec{}
+	}
+	return r
+}
+
+// ---------------------------------------------------------------- managed cache
+
+func (r *Reconciler) markManaged(nodeID string, k resKey, present bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.managed == nil {
+		r.managed = map[string]map[resKey]bool{}
+	}
+	m := r.managed[nodeID]
+	if m == nil {
+		m = map[resKey]bool{}
+		r.managed[nodeID] = m
+	}
+	if present {
+		m[k] = true
+	} else {
+		delete(m, k)
+	}
+}
+
+func (r *Reconciler) isManaged(nodeID string, k resKey) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.managed[nodeID][k]
+}
+
+func (r *Reconciler) managedKeys(nodeID string) map[resKey]bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[resKey]bool, len(r.managed[nodeID]))
+	for k := range r.managed[nodeID] {
+		out[k] = true
+	}
+	return out
+}
+
+// ---------------------------------------------------------------- apply: Container
+
+func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step plan.PlanStep, desiredByKey map[resKey]resource.Resource) StepResult {
+	sr := StepResult{Step: step}
+	key := resKey{step.Kind, step.Name}
+
+	switch step.Action {
+	case plan.ActionCreate, plan.ActionUpdate:
+		want, ok := desiredByKey[key]
+		if !ok || want.Container == nil {
+			sr.Error = "internal: no desired Container spec for " + step.Name
+			return sr
+		}
+		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, want.Container))
+		if err != nil {
+			sr.Error = err.Error()
+			return sr
+		}
+		if oe := res.GetError(); oe != nil {
+			sr.Error = fmt.Sprintf("%s: %s", oe.GetCode(), oe.GetMessage())
+			return sr
+		}
+		sr.Applied = true
+
+		if r.waitContainerRunning(ctx, nodeID, step.Name) {
+			sr.HealthOK = true
+			r.markManaged(nodeID, key, true)
+			return sr
+		}
+		r.reverseContainer(ctx, nodeID, step)
+		sr.Reversed = true
+		return sr
+
+	case plan.ActionDelete:
+		// StopContainer then RemoveContainer (ADR-W004 A4 step 4). Best
+		// effort on the stop: a container that's already stopped or
+		// foreign-refused on stop still gets a RemoveContainer attempt,
+		// whose own ownership check is authoritative.
+		r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_StopContainer{ //nolint:errcheck
+			StopContainer: &wsv1.StopContainer{Name: step.Name},
+		}})
+		res, err := r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_RemoveContainer{
+			RemoveContainer: &wsv1.RemoveContainer{Name: step.Name, Force: true},
+		}})
+		if err != nil {
+			sr.Error = err.Error()
+			return sr
+		}
+		if oe := res.GetError(); oe != nil {
+			sr.Error = fmt.Sprintf("%s: %s", oe.GetCode(), oe.GetMessage())
+			return sr
+		}
+		sr.Applied = true
+		sr.HealthOK = !r.containerRunning(ctx, nodeID, step.Name) // gate: confirms it's actually gone
+		r.markManaged(nodeID, key, false)
+		return sr
+
+	default:
+		sr.Error = "unexpected action " + step.Action.String()
+		return sr
+	}
+}
+
+// reverseContainer implements the Container reverse rules from ADR-W004
+// A4 step 5. Create's reverse is unambiguous (Stop+Remove what was just
+// made). Update's documented reverse is "re-Ensure prior image if known
+// else Stop" — this Reconciler's Container observe is presence-only (see
+// the package doc), so the prior image is never known here, and Update
+// always takes the "else Stop" branch. Flagged as a limitation in the S2b
+// report: true image-aware rollback needs an inspect-style op the current
+// Wardstone surface doesn't expose.
+func (r *Reconciler) reverseContainer(ctx context.Context, nodeID string, step plan.PlanStep) {
+	if step.Action == plan.ActionCreate {
+		r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_StopContainer{ //nolint:errcheck
+			StopContainer: &wsv1.StopContainer{Name: step.Name},
+		}})
+		r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_RemoveContainer{ //nolint:errcheck
+			RemoveContainer: &wsv1.RemoveContainer{Name: step.Name, Force: true},
+		}})
+		return
+	}
+	r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_StopContainer{ //nolint:errcheck
+		StopContainer: &wsv1.StopContainer{Name: step.Name},
+	}})
+}
+
+func (r *Reconciler) containerRunning(ctx context.Context, nodeID, name string) bool {
+	res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ContainerStats{
+		ContainerStats: &wsv1.ContainerStats{Name: name},
+	}})
+	return err == nil && res.GetError() == nil
+}
+
+func (r *Reconciler) waitContainerRunning(ctx context.Context, nodeID, name string) bool {
+	attempts, backoff := r.healthGateParams()
+	for i := 0; i < attempts; i++ {
+		if r.containerRunning(ctx, nodeID, name) {
+			return true
+		}
+		if i < attempts-1 {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return false
+}
+
+func containerEnsureOp(name string, spec *resource.ContainerSpec) *wsv1.Operation {
+	var ports []*wsv1.PortBinding
+	for _, p := range spec.Ports {
+		hostPort, containerPort, ok := splitHostContainerPort(p)
+		if !ok {
+			continue // malformed "host:container" pair; not this package's job to re-validate
+		}
+		ports = append(ports, &wsv1.PortBinding{HostPort: hostPort, ContainerPort: containerPort})
+	}
+	var mounts []*wsv1.Mount
+	for _, m := range spec.Mounts {
+		mounts = append(mounts, &wsv1.Mount{Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
+	}
+	return &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: &wsv1.EnsureContainer{
+		Name: name, Image: spec.Image, Env: spec.Env, Ports: ports, Mounts: mounts, RestartPolicy: spec.Restart,
+	}}}
+}
+
+func splitHostContainerPort(s string) (host, container uint32, ok bool) {
+	h, c, found := strings.Cut(s, ":")
+	if !found {
+		return 0, 0, false
+	}
+	hp, err1 := strconv.ParseUint(h, 10, 32)
+	cp, err2 := strconv.ParseUint(c, 10, 32)
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return uint32(hp), uint32(cp), true
+}
+
+// ---------------------------------------------------------------- apply: Volume
+
+func (r *Reconciler) applyVolumeStep(ctx context.Context, nodeID string, step plan.PlanStep) StepResult {
+	sr := StepResult{Step: step}
+	key := resKey{step.Kind, step.Name}
+
+	switch step.Action {
+	case plan.ActionCreate, plan.ActionUpdate:
+		res, err := r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_EnsureVolume{
+			EnsureVolume: &wsv1.EnsureVolume{Name: step.Name},
+		}})
+		if err != nil {
+			sr.Error = err.Error()
+			return sr
+		}
+		if oe := res.GetError(); oe != nil {
+			sr.Error = fmt.Sprintf("%s: %s", oe.GetCode(), oe.GetMessage())
+			return sr
+		}
+		sr.Applied = true
+
+		// Health gate (ADR-W004 A4 step 5): "Volume: EnsureVolume
+		// idempotent success" — EnsureVolume is idempotent by
+		// construction, so the gate is simply calling it again and
+		// confirming it still succeeds.
+		gateRes, gateErr := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_EnsureVolume{
+			EnsureVolume: &wsv1.EnsureVolume{Name: step.Name},
+		}})
+		if gateErr == nil && gateRes.GetError() == nil {
+			sr.HealthOK = true
+			r.markManaged(nodeID, key, true)
+			return sr
+		}
+		// Gate failure: there is no volume-delete op on the Wardstone
+		// surface to reverse a Create with (only EnsureVolume exists),
+		// and a delete would be exactly the data-affecting auto-action
+		// this whole path exists to avoid. Surface the failure (HealthOK
+		// stays false -> Outcome.Rolledback) without attempting a reverse.
+		return sr
+
+	case plan.ActionDelete:
+		// NEVER auto-applied (ADR-W004 A4): the Wardstone op surface has
+		// no volume-delete arm at all. A Volume-Delete step reaching
+		// apply is refused unconditionally — either the plan/approval gate
+		// has a bug (this should have stopped at PendingApproval), or,
+		// even once approved, there is genuinely no operation to apply it
+		// with. This is the "guard so a volume-delete reaching apply...
+		// is refused as a bug" S2b calls for.
+		sr.Error = "refusing to apply a Volume Delete: no Wardstone op exists to delete a volume, and Keystone never auto-deletes data (ADR-W004 A4)"
+		return sr
+
+	default:
+		sr.Error = "unexpected action " + step.Action.String()
+		return sr
+	}
+}
+
+// ---------------------------------------------------------------- apply: Route
+
+func (r *Reconciler) applyRouteStep(ctx context.Context, nodeID string, step plan.PlanStep, desiredByKey map[resKey]resource.Resource) StepResult {
+	sr := StepResult{Step: step}
+	key := resKey{step.Kind, step.Name}
+	path := routeFragmentPath(r.ManagedPrefix, step.Name)
+
+	// Capture the fragment's current bytes before writing, so a
+	// health-gate (or reload) failure can restore them (ADR-W004 A4 step
+	// 5: "Route -> restore prior fragment bytes"). NOT_FOUND is a
+	// legitimate "prior state" too — restoring it means writing back
+	// empty, the same approach the Delete action itself uses below.
+	var priorContent []byte
+	if priorRes, priorErr := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ReadManagedFile{
+		ReadManagedFile: &wsv1.ReadManagedFile{Path: path},
+	}}); priorErr == nil && priorRes.GetError() == nil {
+		priorContent = priorRes.GetReadManagedFile().GetContent()
+	}
+
+	var content []byte
+	var wantSpec *resource.RouteSpec
+	switch step.Action {
+	case plan.ActionCreate, plan.ActionUpdate:
+		want, ok := desiredByKey[key]
+		if !ok || want.Route == nil {
+			sr.Error = "internal: no desired Route spec for " + step.Name
+			return sr
+		}
+		wantSpec = want.Route
+		content = renderRouteFragment(wantSpec)
+	case plan.ActionDelete:
+		// No delete-file op exists (only WriteManagedFile/ReadManagedFile)
+		// — a Route delete overwrites the fragment with empty content
+		// instead (ADR-W004 A4 step 4 documents this).
+		content = []byte{}
+	default:
+		sr.Error = "unexpected action " + step.Action.String()
+		return sr
+	}
+
+	res, err := r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_WriteManagedFile{
+		WriteManagedFile: &wsv1.WriteManagedFile{Path: path, Content: content},
+	}})
+	if err != nil {
+		sr.Error = err.Error()
+		return sr
+	}
+	if oe := res.GetError(); oe != nil {
+		sr.Error = fmt.Sprintf("%s: %s", oe.GetCode(), oe.GetMessage())
+		return sr
+	}
+	sr.Applied = true
+
+	if err := r.runReload(ctx); err != nil {
+		// The write itself succeeded (Applied stays true); only the reload
+		// gate failed, so this is a rollback, not an Incident.
+		r.restoreRouteFragment(ctx, nodeID, path, priorContent)
+		sr.Reversed = true
+		return sr
+	}
+
+	if step.Action == plan.ActionDelete {
+		checkRes, checkErr := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ReadManagedFile{
+			ReadManagedFile: &wsv1.ReadManagedFile{Path: path},
+		}})
+		sr.HealthOK = checkErr == nil && checkRes.GetError() == nil && len(checkRes.GetReadManagedFile().GetContent()) == 0
+		if sr.HealthOK {
+			r.markManaged(nodeID, key, false)
+		}
+		return sr
+	}
+
+	if r.probeRoute(ctx, nodeID, wantSpec) {
+		sr.HealthOK = true
+		r.markManaged(nodeID, key, true)
+		return sr
+	}
+
+	r.restoreRouteFragment(ctx, nodeID, path, priorContent)
+	sr.Reversed = true
+	return sr
+}
+
+func (r *Reconciler) restoreRouteFragment(ctx context.Context, nodeID, path string, content []byte) {
+	r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_WriteManagedFile{ //nolint:errcheck
+		WriteManagedFile: &wsv1.WriteManagedFile{Path: path, Content: content},
+	}})
+}
+
+// runReload invokes the ReloadFn seam (ADR-W004 A1). nil is a documented
+// no-op — the real Caddy reload lands in a later E-series work package.
+func (r *Reconciler) runReload(ctx context.Context) error {
+	if r.ReloadFn == nil {
+		return nil
+	}
+	return r.ReloadFn(ctx)
+}
+
+// probeRoute health-gates a Route Create/Update (ADR-W004 A4 step 5:
+// "Route -> ProbeHttp/ProbeTcp"). Only "ip:port"-shaped upstreams are
+// actually dialed — a "container/<name>:<port>" upstream needs the
+// container's Docker-network address, which Keystone has no way to
+// resolve from the op surface available to S2b, so such routes are
+// gate-pass-by-construction (the WriteManagedFile success is the whole
+// gate for them). Flagged as a known limitation in the S2b report.
+func (r *Reconciler) probeRoute(ctx context.Context, nodeID string, spec *resource.RouteSpec) bool {
+	if strings.HasPrefix(spec.Upstream, "container/") {
+		return true
+	}
+	url := "http://" + spec.Upstream
+	attempts, backoff := r.healthGateParams()
+	for i := 0; i < attempts; i++ {
+		res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ProbeHttp{
+			ProbeHttp: &wsv1.ProbeHttp{Url: url},
+		}})
+		if err == nil && res.GetError() == nil && res.GetProbeHttp().GetReachable() {
+			return true
+		}
+		if i < attempts-1 {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return false
+}
+
+// ---------------------------------------------------------------- retry/backoff
+
+func (r *Reconciler) healthGateParams() (attempts int, backoff time.Duration) {
+	attempts = r.HealthGateAttempts
+	if attempts <= 0 {
+		attempts = 5
+	}
+	backoff = r.HealthGateBackoff
+	if backoff <= 0 {
+		backoff = 100 * time.Millisecond
+	}
+	return attempts, backoff
+}
+
+// retryDispatch dispatches op, retrying up to MaxApplyRetries times
+// (default 3, ADR-W004 A4) on a transient failure: a transport-level
+// error from Applier.Apply, or an OpError with code RUNTIME (the agent's
+// docker/filesystem-failure code — plausibly transient). Any other
+// OpError (FORBIDDEN, INVALID, NOT_FOUND, VERIFICATION) is not transient
+// and is returned immediately without retry.
+func (r *Reconciler) retryDispatch(ctx context.Context, nodeID string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+	maxRetries := r.MaxApplyRetries
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+	backoff := r.RetryBackoff
+	if backoff <= 0 {
+		backoff = 50 * time.Millisecond
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		res, err := r.Applier.Apply(ctx, nodeID, op)
+		if err == nil {
+			if oe := res.GetError(); oe != nil && oe.GetCode() == wsv1.ErrorCode_ERROR_CODE_RUNTIME {
+				lastErr = fmt.Errorf("%s: %s", oe.GetCode(), oe.GetMessage())
+			} else {
+				return res, nil
+			}
+		} else {
+			lastErr = err
+		}
+		if attempt < maxRetries-1 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return nil, fmt.Errorf("op failed after %d attempts: %w", maxRetries, lastErr)
+}
