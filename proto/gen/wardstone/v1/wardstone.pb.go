@@ -363,9 +363,20 @@ type KeystoneMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	OpId  string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
 	Op    *Operation             `protobuf:"bytes,2,opt,name=op,proto3" json:"op,omitempty"`
-	// Reserved for the Keystone signing key's signature over (op_id, op)
-	// — defense against transport MITM. Unused in the S1 spike; verified
-	// from E1 on. Additive, so enabling it is not a wire break.
+	// Per-operation ed25519 signature — defense against a transport MITM
+	// (or a compromised load balancer) injecting operations inside an
+	// otherwise-valid mTLS tunnel (ADR-W003 W1). Verified against the key
+	// pinned from JoinResponse.op_signing_public_key.
+	//
+	// Signed payload:
+	//
+	//	sha256("wardstone-op-v1" || op_id || deterministic-marshal(op))
+	//
+	// where deterministic-marshal uses
+	// proto.MarshalOptions{Deterministic: true} over the Operation message,
+	// op_id is the raw (unterminated) string bytes, and "wardstone-op-v1"
+	// is a fixed domain-separation prefix — part of the wire contract, do
+	// not change it without a new prefix (and thus a v2 signing scheme).
 	OpSignature   []byte `protobuf:"bytes,3,opt,name=op_signature,json=opSignature,proto3" json:"op_signature,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

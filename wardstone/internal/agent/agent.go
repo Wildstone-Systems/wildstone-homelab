@@ -7,6 +7,7 @@ package agent
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
@@ -133,9 +134,10 @@ func (a *Agent) backoff(attempt int) time.Duration {
 
 // ---------------------------------------------------------------- identity
 
-func (a *Agent) certPath() string { return filepath.Join(a.cfg.DataDir, "node.crt") }
-func (a *Agent) keyPath() string  { return filepath.Join(a.cfg.DataDir, "node.key") }
-func (a *Agent) caPath() string   { return filepath.Join(a.cfg.DataDir, "keystone-ca.crt") }
+func (a *Agent) certPath() string         { return filepath.Join(a.cfg.DataDir, "node.crt") }
+func (a *Agent) keyPath() string          { return filepath.Join(a.cfg.DataDir, "node.key") }
+func (a *Agent) caPath() string           { return filepath.Join(a.cfg.DataDir, "keystone-ca.crt") }
+func (a *Agent) opSigningPubPath() string { return filepath.Join(a.cfg.DataDir, "op-signing.pub") }
 
 func (a *Agent) hasIdentity() bool {
 	for _, p := range []string{a.certPath(), a.keyPath(), a.caPath()} {
@@ -198,8 +200,31 @@ func (a *Agent) join(ctx context.Context) error {
 	if err := os.WriteFile(a.caPath(), resp.GetCaPem(), 0o600); err != nil {
 		return err
 	}
+	// Pin the op-signing public key (ADR-W003 W1). From this point on every
+	// operation must verify against it — see verifyAndDispatch. A key that
+	// isn't a valid ed25519 public key (protocol skew with a pre-W1
+	// Keystone) is not pinned; the agent then falls back to the pre-W1
+	// unsigned-accept path and logs a warning each session until it
+	// re-joins against a Keystone that supplies one.
+	if pub := resp.GetOpSigningPublicKey(); len(pub) == ed25519.PublicKeySize {
+		if err := os.WriteFile(a.opSigningPubPath(), pub, 0o600); err != nil {
+			return err
+		}
+	}
 	a.log.Info("joined keystone, identity persisted", "data_dir", a.cfg.DataDir)
 	return nil
+}
+
+// loadOpSigningPub reads the pinned op-signing public key from DataDir, if
+// any (ADR-W003 W1). A missing/invalid file means this identity was joined
+// before per-op signing existed (or against a pre-W1 Keystone); the agent
+// accepts unsigned operations until it re-joins and pins a key.
+func (a *Agent) loadOpSigningPub() (ed25519.PublicKey, bool) {
+	b, err := os.ReadFile(a.opSigningPubPath())
+	if err != nil || len(b) != ed25519.PublicKeySize {
+		return nil, false
+	}
+	return ed25519.PublicKey(b), true
 }
 
 // ---------------------------------------------------------------- session
@@ -241,6 +266,12 @@ func (a *Agent) session(ctx context.Context) error {
 	}
 	a.log.Info("session established", "keystone", a.cfg.KeystoneAddr)
 
+	pinnedPub, pinned := a.loadOpSigningPub()
+	if !pinned {
+		a.log.Warn("no pinned op-signing key — accepting unsigned operations this session " +
+			"(pre-W1 identity; re-join against a Keystone that serves op_signing_public_key to pin one)")
+	}
+
 	var sendMu sync.Mutex
 	for {
 		msg, err := stream.Recv()
@@ -248,7 +279,7 @@ func (a *Agent) session(ctx context.Context) error {
 			return err
 		}
 		go func(m *wsv1.KeystoneMessage) {
-			res := a.dispatch(ctx, m.GetOpId(), m.GetOp())
+			res := a.verifyAndDispatch(ctx, m.GetOpId(), m.GetOp(), m.GetOpSignature(), pinnedPub)
 			sendMu.Lock()
 			defer sendMu.Unlock()
 			if err := stream.Send(&wsv1.AgentMessage{Msg: &wsv1.AgentMessage_Result{Result: res}}); err != nil {

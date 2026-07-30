@@ -5,6 +5,9 @@ package gateway
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
 	"log/slog"
@@ -17,19 +20,30 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 )
+
+// opSignDomainPrefix domain-separates the per-operation signature (ADR-W003
+// W1). Keep in sync with the .proto comment on KeystoneMessage.op_signature.
+const opSignDomainPrefix = "wardstone-op-v1"
 
 type Config struct {
 	// JoinTokens maps token -> allowed (spike: static single-use set;
 	// E2: minted per node with expiry, persisted).
 	JoinTokens []string
 	// Hosts are SANs for the gateway's serving certificate.
-	Hosts []string
-	// OpSigningPublicKey is handed to agents at join (unused until E1).
-	OpSigningPublicKey []byte
-	Logger             *slog.Logger
+	Hosts  []string
+	Logger *slog.Logger
+
+	// opSigningKey lets a caller in this package (W2's persistence layer)
+	// supply a previously-persisted ed25519 signing key instead of having
+	// New generate a fresh one each process start. Unexported: external
+	// callers (main.go, tests) always get a freshly generated in-memory
+	// key, which is correct until W2 lands. W2 loads/saves this alongside
+	// the CA in DataDir and sets it before calling New.
+	opSigningKey ed25519.PrivateKey
 }
 
 type Gateway struct {
@@ -38,6 +52,9 @@ type Gateway struct {
 	ca  *CA
 	cfg Config
 	log *slog.Logger
+
+	signPub  ed25519.PublicKey
+	signPriv ed25519.PrivateKey
 
 	mu       sync.Mutex
 	tokens   map[string]bool // token -> still valid
@@ -66,10 +83,60 @@ func New(cfg Config) (*Gateway, error) {
 	for _, t := range cfg.JoinTokens {
 		tokens[t] = true
 	}
-	return &Gateway{ca: ca, cfg: cfg, log: cfg.Logger, tokens: tokens, sessions: map[string]*session{}}, nil
+	signPriv := cfg.opSigningKey
+	if signPriv == nil {
+		var err error
+		_, signPriv, err = ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("generate op-signing key: %w", err)
+		}
+	}
+	signPub := signPriv.Public().(ed25519.PublicKey)
+	return &Gateway{
+		ca: ca, cfg: cfg, log: cfg.Logger, tokens: tokens, sessions: map[string]*session{},
+		signPub: signPub, signPriv: signPriv,
+	}, nil
 }
 
 func (g *Gateway) CA() *CA { return g.ca }
+
+// OpSigningPublicKey returns the ed25519 public key agents pin at join to
+// verify per-operation signatures (ADR-W003 W1).
+func (g *Gateway) OpSigningPublicKey() ed25519.PublicKey { return g.signPub }
+
+// signOp computes the ADR-W003 W1 per-operation signature:
+// ed25519(sha256("wardstone-op-v1" || op_id || deterministic-marshal(op))).
+func (g *Gateway) signOp(opID string, op *wsv1.Operation) ([]byte, error) {
+	payload, err := opSignPayload(opID, op)
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.Sign(g.signPriv, payload), nil
+}
+
+// SignOp exposes signOp for tests that need a validly-signed payload to
+// then tamper with (e.g. reusing a valid signature against a different
+// op_id or a different Operation) — see ADR-W003 W1's tamper tests. Not
+// used by any non-test code path; Dispatch signs internally.
+func (g *Gateway) SignOp(opID string, op *wsv1.Operation) ([]byte, error) {
+	return g.signOp(opID, op)
+}
+
+// opSignPayload builds the digest signed/verified for one operation. Shared
+// shape between Keystone (signs) and Wardstone (verifies) — kept as a small
+// duplicated helper on each side rather than a shared module dependency
+// (ADR-W003 §A4.5 keeps wardstone's dependency surface minimal).
+func opSignPayload(opID string, op *wsv1.Operation) ([]byte, error) {
+	opBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(op)
+	if err != nil {
+		return nil, err
+	}
+	h := sha256.New()
+	h.Write([]byte(opSignDomainPrefix))
+	h.Write([]byte(opID))
+	h.Write(opBytes)
+	return h.Sum(nil), nil
+}
 
 // Serve blocks, serving gRPC on lis until Stop is called.
 func (g *Gateway) Serve(lis net.Listener) error {
@@ -125,7 +192,7 @@ func (g *Gateway) Join(_ context.Context, req *wsv1.JoinRequest) (*wsv1.JoinResp
 	return &wsv1.JoinResponse{
 		CertPem:            certPEM,
 		CaPem:              g.ca.PEM(),
-		OpSigningPublicKey: g.cfg.OpSigningPublicKey,
+		OpSigningPublicKey: g.signPub,
 	}, nil
 }
 
@@ -191,23 +258,42 @@ func (g *Gateway) Session(stream grpc.BidiStreamingServer[wsv1.AgentMessage, wsv
 	}
 }
 
-// Dispatch sends one operation to a connected agent and waits for its result.
+// Dispatch sends one operation to a connected agent and waits for its
+// result. The operation is signed per ADR-W003 W1 before it goes on the
+// wire.
 func (g *Gateway) Dispatch(ctx context.Context, nodeID string, op *wsv1.Operation) (*wsv1.OpResult, error) {
 	g.mu.Lock()
-	s := g.sessions[nodeID]
 	g.opSeq++
 	opID := fmt.Sprintf("op-%d", g.opSeq)
+	g.mu.Unlock()
+	sig, err := g.signOp(opID, op)
+	if err != nil {
+		return nil, fmt.Errorf("sign op: %w", err)
+	}
+	return g.DispatchRaw(ctx, nodeID, &wsv1.KeystoneMessage{OpId: opID, Op: op, OpSignature: sig})
+}
+
+// DispatchRaw sends an already-built KeystoneMessage (op_id, op, and
+// whatever signature the caller supplies) to a connected agent and waits
+// for the correlated result. Dispatch is the normal entry point and
+// delegates here after computing a valid signature; DispatchRaw itself is
+// exported so tests can exercise a hand-corrupted message (wrong op_id,
+// tampered op bytes, missing signature) without standing up a second gRPC
+// client — see ADR-W003 W1's tamper tests in the agent package.
+func (g *Gateway) DispatchRaw(ctx context.Context, nodeID string, msg *wsv1.KeystoneMessage) (*wsv1.OpResult, error) {
+	g.mu.Lock()
+	s := g.sessions[nodeID]
 	g.mu.Unlock()
 	if s == nil {
 		return nil, fmt.Errorf("node %q is not connected", nodeID)
 	}
 	ch := make(chan *wsv1.OpResult, 1)
 	s.mu.Lock()
-	s.pending[opID] = ch
+	s.pending[msg.GetOpId()] = ch
 	s.mu.Unlock()
-	if err := s.send(&wsv1.KeystoneMessage{OpId: opID, Op: op}); err != nil {
+	if err := s.send(msg); err != nil {
 		s.mu.Lock()
-		delete(s.pending, opID)
+		delete(s.pending, msg.GetOpId())
 		s.mu.Unlock()
 		return nil, err
 	}
@@ -216,7 +302,7 @@ func (g *Gateway) Dispatch(ctx context.Context, nodeID string, op *wsv1.Operatio
 		return res, nil
 	case <-ctx.Done():
 		s.mu.Lock()
-		delete(s.pending, opID)
+		delete(s.pending, msg.GetOpId())
 		s.mu.Unlock()
 		return nil, ctx.Err()
 	}

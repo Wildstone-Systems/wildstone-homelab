@@ -67,9 +67,18 @@ message Hello {
 message KeystoneMessage {
   string op_id = 1;
   Operation op = 2;
-  // Reserved for the Keystone signing key's signature over (op_id, op)
-  // — defense against transport MITM. Unused in the S1 spike; verified
-  // from E1 on. Additive, so enabling it is not a wire break.
+  // Per-operation ed25519 signature — defense against a transport MITM
+  // (or a compromised load balancer) injecting operations inside an
+  // otherwise-valid mTLS tunnel (ADR-W003 W1). Verified against the key
+  // pinned from JoinResponse.op_signing_public_key.
+  //
+  // Signed payload:
+  //   sha256("wardstone-op-v1" || op_id || deterministic-marshal(op))
+  // where deterministic-marshal uses
+  // proto.MarshalOptions{Deterministic: true} over the Operation message,
+  // op_id is the raw (unterminated) string bytes, and "wardstone-op-v1"
+  // is a fixed domain-separation prefix — part of the wire contract, do
+  // not change it without a new prefix (and thus a v2 signing scheme).
   bytes op_signature = 3;
 }
 
