@@ -102,6 +102,46 @@ func (a *Agent) dispatch(ctx context.Context, opID string, op *wsv1.Operation) *
 		if r, oerr = a.measureUsage(o.MeasureUsage); oerr == nil {
 			res.Result = r
 		}
+	case *wsv1.Operation_ListBlockDevices:
+		var r *wsv1.OpResult_ListBlockDevices
+		if r, oerr = a.listBlockDevices(); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_EnsureMount:
+		var r *wsv1.OpResult_EnsureMount
+		if r, oerr = a.ensureMount(o.EnsureMount); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_TestNfs:
+		var r *wsv1.OpResult_TestNfs
+		if r, oerr = a.testNfs(ctx, o.TestNfs); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_TestSmb:
+		var r *wsv1.OpResult_TestSmb
+		if r, oerr = a.testSmb(ctx, o.TestSmb); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_ListPorts:
+		var r *wsv1.OpResult_ListPorts
+		if r, oerr = a.listPorts(); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_ProbeTcp:
+		var r *wsv1.OpResult_ProbeTcp
+		if r, oerr = a.probeTcp(ctx, o.ProbeTcp); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_ProbeHttp:
+		var r *wsv1.OpResult_ProbeHttp
+		if r, oerr = a.probeHttp(ctx, o.ProbeHttp); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_EnsureDockerNetwork:
+		var r *wsv1.OpResult_EnsureDockerNetwork
+		if r, oerr = a.ensureDockerNetwork(ctx, o.EnsureDockerNetwork); oerr == nil {
+			res.Result = r
+		}
 	default:
 		oerr = opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "unknown operation — agent too old for this Keystone? (protocol skew)")
 	}
@@ -424,4 +464,29 @@ func (a *Agent) ensureVolume(ctx context.Context, op *wsv1.EnsureVolume) (*wsv1.
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "volume create: %v", err)
 	}
 	return &wsv1.OpResult_EnsureVolume{EnsureVolume: &wsv1.EnsureVolumeResult{Created: true}}, nil
+}
+
+// ---------------------------------------------------------------- networks
+
+// ensureDockerNetwork mirrors ensureVolume's idempotent/ownership pattern
+// (ADR-W003 §A4.3 applied to networks): absent -> create (created=true);
+// present and wildstone-owned -> created=false; present and NOT
+// wildstone-owned -> FORBIDDEN (never adopt a network Wardstone did not
+// create).
+func (a *Agent) ensureDockerNetwork(ctx context.Context, op *wsv1.EnsureDockerNetwork) (*wsv1.OpResult_EnsureDockerNetwork, *wsv1.OpError) {
+	existing, err := a.docker.networkInspect(ctx, op.GetName())
+	if derr, ok := err.(*dockerError); err != nil && (!ok || !derr.notFound()) {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "network inspect: %v", err)
+	}
+	if existing != nil {
+		if existing.Labels[OwnerLabel] != ownerValue {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
+				"network %q exists but is not wildstone-owned", op.GetName())
+		}
+		return &wsv1.OpResult_EnsureDockerNetwork{EnsureDockerNetwork: &wsv1.EnsureDockerNetworkResult{Created: false}}, nil
+	}
+	if err := a.docker.networkCreate(ctx, op.GetName(), map[string]string{OwnerLabel: ownerValue}); err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "network create: %v", err)
+	}
+	return &wsv1.OpResult_EnsureDockerNetwork{EnsureDockerNetwork: &wsv1.EnsureDockerNetworkResult{Created: true}}, nil
 }

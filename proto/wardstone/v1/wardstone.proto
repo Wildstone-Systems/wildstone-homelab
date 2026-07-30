@@ -118,6 +118,14 @@ message Operation {
     EnsureVolume ensure_volume = 13;
     SnapshotDir snapshot_dir = 14;
     MeasureUsage measure_usage = 15;
+    ListBlockDevices list_block_devices = 16;
+    EnsureMount ensure_mount = 17;
+    TestNfs test_nfs = 18;
+    TestSmb test_smb = 19;
+    ListPorts list_ports = 20;
+    ProbeTcp probe_tcp = 21;
+    ProbeHttp probe_http = 22;
+    EnsureDockerNetwork ensure_docker_network = 23;
   }
 }
 
@@ -140,6 +148,14 @@ message OpResult {
     EnsureVolumeResult ensure_volume = 15;
     SnapshotDirResult snapshot_dir = 16;
     MeasureUsageResult measure_usage = 17;
+    ListBlockDevicesResult list_block_devices = 18;
+    EnsureMountResult ensure_mount = 19;
+    TestNfsResult test_nfs = 20;
+    TestSmbResult test_smb = 21;
+    ListPortsResult list_ports = 22;
+    ProbeTcpResult probe_tcp = 23;
+    ProbeHttpResult probe_http = 24;
+    EnsureDockerNetworkResult ensure_docker_network = 25;
   }
 }
 
@@ -363,4 +379,134 @@ message SelfUpdateResult {
   string staged_path = 1;
   string previous_path = 2; // rollback artifact
   bool promoted = 3;
+}
+
+// ---------------------------------------------------------------- storage/network (W6c)
+
+// ListBlockDevices enumerates block devices by reading /sys/block directly
+// (no lsblk, no shell-out). loop* and ram* devices are skipped. Linux-only;
+// on other platforms the agent returns an empty list.
+message ListBlockDevices {}
+
+message BlockDevice {
+  string name = 1;
+  uint64 size_bytes = 2;
+  bool removable = 3;
+}
+
+message ListBlockDevicesResult {
+  repeated BlockDevice devices = 1;
+}
+
+// EnsureMount is, per ADR-W003, the most dangerous op in the product: it
+// performs a real syscall.Mount and edits /etc/fstab. Agent-side hard
+// invariants (checked regardless of what Keystone asks, ADR-W003 §A4):
+//   - target must resolve under a configured managed prefix (resolveManaged)
+//     AND under Config.MountRoot (prod default /srv/wildstone).
+//   - fstype must be one of: nfs, nfs4, cifs, ext4, xfs. Anything else is
+//     FORBIDDEN.
+//   - every option must match ^[a-zA-Z0-9._=/-]+$ (no commas/whitespace —
+//     fstab field injection); nosuid and nodev are mandatory and appended
+//     if the caller omitted them.
+// The agent owns a marker-delimited block in /etc/fstab ("# BEGIN
+// wildstone-managed" / "# END wildstone-managed") — lines outside that
+// block are never touched. Ordering: the actual mount is attempted FIRST;
+// fstab is only updated after a successful mount, so a mount that fails
+// never leaves a boot-time landmine entry behind.
+message EnsureMount {
+  string source = 1;
+  string target = 2;
+  string fstype = 3;
+  repeated string options = 4;
+}
+
+message EnsureMountResult {
+  bool mounted = 1;       // false if already mounted (idempotent, no-op)
+  bool fstab_updated = 2; // false if an identical entry already existed
+}
+
+// TestNfs dials host:port over TCP only (default port 2049) — no mount is
+// performed. An unreachable host is a valid answer (reachable=false), not
+// an OpError.
+message TestNfs {
+  string host = 1;
+  uint32 port = 2;
+}
+
+message TestNfsResult {
+  bool reachable = 1;
+  string detail = 2;
+}
+
+// TestSmb dials host:port over TCP only (default port 445) — no mount is
+// performed.
+message TestSmb {
+  string host = 1;
+  uint32 port = 2;
+}
+
+message TestSmbResult {
+  bool reachable = 1;
+  string detail = 2;
+}
+
+// ListPorts parses /proc/net/tcp and /proc/net/tcp6 for sockets in LISTEN
+// state (st == 0A).
+message ListPorts {}
+
+message ListeningPort {
+  string proto = 1; // "tcp" or "tcp6"
+  uint32 port = 2;
+  string local_ip = 3;
+}
+
+message ListPortsResult {
+  repeated ListeningPort ports = 1;
+}
+
+// ProbeTcp dials host:port with a bounded timeout (default 10s, max 30s —
+// larger is INVALID). port must be 1-65535 and host non-empty, or INVALID.
+// Target allowlisting is Keystone-side policy (ADR-W003): the agent only
+// enforces shape and timeout sanity, not which hosts may be probed.
+message ProbeTcp {
+  string host = 1;
+  uint32 port = 2;
+  uint32 timeout_seconds = 3; // 0 = default 10s
+}
+
+message ProbeTcpResult {
+  bool reachable = 1;
+  uint32 latency_ms = 2;
+  string detail = 3;
+}
+
+// ProbeHttp issues a single GET with no redirects followed (the response's
+// status code is reported as-is; Location is never fetched) and drains at
+// most 64 KiB of the body before closing it. url's scheme must be http or
+// https — anything else (e.g. file://) is FORBIDDEN. Same timeout rules as
+// ProbeTcp. Target allowlisting is Keystone-side policy; the agent only
+// enforces scheme + timeout sanity.
+message ProbeHttp {
+  string url = 1;
+  uint32 timeout_seconds = 2; // 0 = default 10s, max 30s
+}
+
+message ProbeHttpResult {
+  bool reachable = 1;
+  uint32 status_code = 2;
+  uint32 latency_ms = 3;
+  string detail = 4;
+}
+
+// EnsureDockerNetwork creates an owner-labeled Docker network if it does
+// not exist, mirroring EnsureVolume's idempotent/ownership pattern: absent
+// -> create (created=true); present and wildstone-owned -> created=false;
+// present and NOT wildstone-owned -> FORBIDDEN (never adopt a network
+// Wardstone did not create).
+message EnsureDockerNetwork {
+  string name = 1;
+}
+
+message EnsureDockerNetworkResult {
+  bool created = 1;
 }

@@ -27,6 +27,11 @@ type fakeVolume struct {
 	labels map[string]string
 }
 
+type fakeNetwork struct {
+	name   string
+	labels map[string]string
+}
+
 type fakeDocker struct {
 	t   *testing.T
 	srv *httptest.Server
@@ -34,15 +39,17 @@ type fakeDocker struct {
 	mu           sync.Mutex
 	containers   map[string]*fakeContainer
 	volumes      map[string]*fakeVolume
+	networks     map[string]*fakeNetwork
 	seq          int
 	pruneFilters string // last filters query param /images/prune received
 }
 
 var containerPath = regexp.MustCompile(`^/containers/([^/]+)(/(json|start|stop|logs|stats))?$`)
 var volumePath = regexp.MustCompile(`^/volumes/([^/]+)$`)
+var networkPath = regexp.MustCompile(`^/networks/([^/]+)$`)
 
 func newFakeDocker(t *testing.T) *fakeDocker {
-	f := &fakeDocker{t: t, containers: map[string]*fakeContainer{}, volumes: map[string]*fakeVolume{}}
+	f := &fakeDocker{t: t, containers: map[string]*fakeContainer{}, volumes: map[string]*fakeVolume{}, networks: map[string]*fakeNetwork{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -66,6 +73,14 @@ func (f *fakeDocker) addForeignVolume(name string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumes[name] = &fakeVolume{name: name, labels: map[string]string{"someone-else": "true"}}
+}
+
+// addForeignNetwork seeds a pre-existing network without the wildstone
+// owner label, simulating one created outside Wardstone's control.
+func (f *fakeDocker) addForeignNetwork(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.networks[name] = &fakeNetwork{name: name, labels: map[string]string{"someone-else": "true"}}
 }
 
 func (f *fakeDocker) lookup(key string) (*fakeContainer, string) {
@@ -146,6 +161,36 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"Name": v.name, "Labels": v.labels})
+		return
+	}
+
+	if r.URL.Path == "/networks/create" && r.Method == http.MethodPost {
+		var body struct {
+			Name   string            `json:"Name"`
+			Labels map[string]string `json:"Labels"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		n, exists := f.networks[body.Name]
+		if !exists {
+			n = &fakeNetwork{name: body.Name, labels: body.Labels}
+			f.networks[body.Name] = n
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"Id": "net-" + n.name, "Name": n.name})
+		return
+	}
+
+	if nm := networkPath.FindStringSubmatch(r.URL.Path); nm != nil && r.Method == http.MethodGet {
+		n, ok := f.networks[nm[1]]
+		if !ok {
+			http.Error(w, `{"message":"network not found"}`, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"Name": n.name, "Labels": n.labels})
 		return
 	}
 

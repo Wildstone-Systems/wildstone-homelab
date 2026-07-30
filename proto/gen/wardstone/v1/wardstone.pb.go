@@ -541,6 +541,14 @@ type Operation struct {
 	//	*Operation_EnsureVolume
 	//	*Operation_SnapshotDir
 	//	*Operation_MeasureUsage
+	//	*Operation_ListBlockDevices
+	//	*Operation_EnsureMount
+	//	*Operation_TestNfs
+	//	*Operation_TestSmb
+	//	*Operation_ListPorts
+	//	*Operation_ProbeTcp
+	//	*Operation_ProbeHttp
+	//	*Operation_EnsureDockerNetwork
 	Op            isOperation_Op `protobuf_oneof:"op"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -718,6 +726,78 @@ func (x *Operation) GetMeasureUsage() *MeasureUsage {
 	return nil
 }
 
+func (x *Operation) GetListBlockDevices() *ListBlockDevices {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_ListBlockDevices); ok {
+			return x.ListBlockDevices
+		}
+	}
+	return nil
+}
+
+func (x *Operation) GetEnsureMount() *EnsureMount {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_EnsureMount); ok {
+			return x.EnsureMount
+		}
+	}
+	return nil
+}
+
+func (x *Operation) GetTestNfs() *TestNfs {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_TestNfs); ok {
+			return x.TestNfs
+		}
+	}
+	return nil
+}
+
+func (x *Operation) GetTestSmb() *TestSmb {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_TestSmb); ok {
+			return x.TestSmb
+		}
+	}
+	return nil
+}
+
+func (x *Operation) GetListPorts() *ListPorts {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_ListPorts); ok {
+			return x.ListPorts
+		}
+	}
+	return nil
+}
+
+func (x *Operation) GetProbeTcp() *ProbeTcp {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_ProbeTcp); ok {
+			return x.ProbeTcp
+		}
+	}
+	return nil
+}
+
+func (x *Operation) GetProbeHttp() *ProbeHttp {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_ProbeHttp); ok {
+			return x.ProbeHttp
+		}
+	}
+	return nil
+}
+
+func (x *Operation) GetEnsureDockerNetwork() *EnsureDockerNetwork {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_EnsureDockerNetwork); ok {
+			return x.EnsureDockerNetwork
+		}
+	}
+	return nil
+}
+
 type isOperation_Op interface {
 	isOperation_Op()
 }
@@ -782,6 +862,38 @@ type Operation_MeasureUsage struct {
 	MeasureUsage *MeasureUsage `protobuf:"bytes,15,opt,name=measure_usage,json=measureUsage,proto3,oneof"`
 }
 
+type Operation_ListBlockDevices struct {
+	ListBlockDevices *ListBlockDevices `protobuf:"bytes,16,opt,name=list_block_devices,json=listBlockDevices,proto3,oneof"`
+}
+
+type Operation_EnsureMount struct {
+	EnsureMount *EnsureMount `protobuf:"bytes,17,opt,name=ensure_mount,json=ensureMount,proto3,oneof"`
+}
+
+type Operation_TestNfs struct {
+	TestNfs *TestNfs `protobuf:"bytes,18,opt,name=test_nfs,json=testNfs,proto3,oneof"`
+}
+
+type Operation_TestSmb struct {
+	TestSmb *TestSmb `protobuf:"bytes,19,opt,name=test_smb,json=testSmb,proto3,oneof"`
+}
+
+type Operation_ListPorts struct {
+	ListPorts *ListPorts `protobuf:"bytes,20,opt,name=list_ports,json=listPorts,proto3,oneof"`
+}
+
+type Operation_ProbeTcp struct {
+	ProbeTcp *ProbeTcp `protobuf:"bytes,21,opt,name=probe_tcp,json=probeTcp,proto3,oneof"`
+}
+
+type Operation_ProbeHttp struct {
+	ProbeHttp *ProbeHttp `protobuf:"bytes,22,opt,name=probe_http,json=probeHttp,proto3,oneof"`
+}
+
+type Operation_EnsureDockerNetwork struct {
+	EnsureDockerNetwork *EnsureDockerNetwork `protobuf:"bytes,23,opt,name=ensure_docker_network,json=ensureDockerNetwork,proto3,oneof"`
+}
+
 func (*Operation_EnsureContainer) isOperation_Op() {}
 
 func (*Operation_StopContainer) isOperation_Op() {}
@@ -812,6 +924,22 @@ func (*Operation_SnapshotDir) isOperation_Op() {}
 
 func (*Operation_MeasureUsage) isOperation_Op() {}
 
+func (*Operation_ListBlockDevices) isOperation_Op() {}
+
+func (*Operation_EnsureMount) isOperation_Op() {}
+
+func (*Operation_TestNfs) isOperation_Op() {}
+
+func (*Operation_TestSmb) isOperation_Op() {}
+
+func (*Operation_ListPorts) isOperation_Op() {}
+
+func (*Operation_ProbeTcp) isOperation_Op() {}
+
+func (*Operation_ProbeHttp) isOperation_Op() {}
+
+func (*Operation_EnsureDockerNetwork) isOperation_Op() {}
+
 type OpResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	OpId  string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
@@ -833,6 +961,14 @@ type OpResult struct {
 	//	*OpResult_EnsureVolume
 	//	*OpResult_SnapshotDir
 	//	*OpResult_MeasureUsage
+	//	*OpResult_ListBlockDevices
+	//	*OpResult_EnsureMount
+	//	*OpResult_TestNfs
+	//	*OpResult_TestSmb
+	//	*OpResult_ListPorts
+	//	*OpResult_ProbeTcp
+	//	*OpResult_ProbeHttp
+	//	*OpResult_EnsureDockerNetwork
 	Result        isOpResult_Result `protobuf_oneof:"result"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1026,6 +1162,78 @@ func (x *OpResult) GetMeasureUsage() *MeasureUsageResult {
 	return nil
 }
 
+func (x *OpResult) GetListBlockDevices() *ListBlockDevicesResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_ListBlockDevices); ok {
+			return x.ListBlockDevices
+		}
+	}
+	return nil
+}
+
+func (x *OpResult) GetEnsureMount() *EnsureMountResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_EnsureMount); ok {
+			return x.EnsureMount
+		}
+	}
+	return nil
+}
+
+func (x *OpResult) GetTestNfs() *TestNfsResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_TestNfs); ok {
+			return x.TestNfs
+		}
+	}
+	return nil
+}
+
+func (x *OpResult) GetTestSmb() *TestSmbResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_TestSmb); ok {
+			return x.TestSmb
+		}
+	}
+	return nil
+}
+
+func (x *OpResult) GetListPorts() *ListPortsResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_ListPorts); ok {
+			return x.ListPorts
+		}
+	}
+	return nil
+}
+
+func (x *OpResult) GetProbeTcp() *ProbeTcpResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_ProbeTcp); ok {
+			return x.ProbeTcp
+		}
+	}
+	return nil
+}
+
+func (x *OpResult) GetProbeHttp() *ProbeHttpResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_ProbeHttp); ok {
+			return x.ProbeHttp
+		}
+	}
+	return nil
+}
+
+func (x *OpResult) GetEnsureDockerNetwork() *EnsureDockerNetworkResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_EnsureDockerNetwork); ok {
+			return x.EnsureDockerNetwork
+		}
+	}
+	return nil
+}
+
 type isOpResult_Result interface {
 	isOpResult_Result()
 }
@@ -1094,6 +1302,38 @@ type OpResult_MeasureUsage struct {
 	MeasureUsage *MeasureUsageResult `protobuf:"bytes,17,opt,name=measure_usage,json=measureUsage,proto3,oneof"`
 }
 
+type OpResult_ListBlockDevices struct {
+	ListBlockDevices *ListBlockDevicesResult `protobuf:"bytes,18,opt,name=list_block_devices,json=listBlockDevices,proto3,oneof"`
+}
+
+type OpResult_EnsureMount struct {
+	EnsureMount *EnsureMountResult `protobuf:"bytes,19,opt,name=ensure_mount,json=ensureMount,proto3,oneof"`
+}
+
+type OpResult_TestNfs struct {
+	TestNfs *TestNfsResult `protobuf:"bytes,20,opt,name=test_nfs,json=testNfs,proto3,oneof"`
+}
+
+type OpResult_TestSmb struct {
+	TestSmb *TestSmbResult `protobuf:"bytes,21,opt,name=test_smb,json=testSmb,proto3,oneof"`
+}
+
+type OpResult_ListPorts struct {
+	ListPorts *ListPortsResult `protobuf:"bytes,22,opt,name=list_ports,json=listPorts,proto3,oneof"`
+}
+
+type OpResult_ProbeTcp struct {
+	ProbeTcp *ProbeTcpResult `protobuf:"bytes,23,opt,name=probe_tcp,json=probeTcp,proto3,oneof"`
+}
+
+type OpResult_ProbeHttp struct {
+	ProbeHttp *ProbeHttpResult `protobuf:"bytes,24,opt,name=probe_http,json=probeHttp,proto3,oneof"`
+}
+
+type OpResult_EnsureDockerNetwork struct {
+	EnsureDockerNetwork *EnsureDockerNetworkResult `protobuf:"bytes,25,opt,name=ensure_docker_network,json=ensureDockerNetwork,proto3,oneof"`
+}
+
 func (*OpResult_Error) isOpResult_Result() {}
 
 func (*OpResult_EnsureContainer) isOpResult_Result() {}
@@ -1125,6 +1365,22 @@ func (*OpResult_EnsureVolume) isOpResult_Result() {}
 func (*OpResult_SnapshotDir) isOpResult_Result() {}
 
 func (*OpResult_MeasureUsage) isOpResult_Result() {}
+
+func (*OpResult_ListBlockDevices) isOpResult_Result() {}
+
+func (*OpResult_EnsureMount) isOpResult_Result() {}
+
+func (*OpResult_TestNfs) isOpResult_Result() {}
+
+func (*OpResult_TestSmb) isOpResult_Result() {}
+
+func (*OpResult_ListPorts) isOpResult_Result() {}
+
+func (*OpResult_ProbeTcp) isOpResult_Result() {}
+
+func (*OpResult_ProbeHttp) isOpResult_Result() {}
+
+func (*OpResult_EnsureDockerNetwork) isOpResult_Result() {}
 
 type OpError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -2902,6 +3158,983 @@ func (x *SelfUpdateResult) GetPromoted() bool {
 	return false
 }
 
+// ListBlockDevices enumerates block devices by reading /sys/block directly
+// (no lsblk, no shell-out). loop* and ram* devices are skipped. Linux-only;
+// on other platforms the agent returns an empty list.
+type ListBlockDevices struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListBlockDevices) Reset() {
+	*x = ListBlockDevices{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListBlockDevices) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListBlockDevices) ProtoMessage() {}
+
+func (x *ListBlockDevices) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListBlockDevices.ProtoReflect.Descriptor instead.
+func (*ListBlockDevices) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{42}
+}
+
+type BlockDevice struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	SizeBytes     uint64                 `protobuf:"varint,2,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	Removable     bool                   `protobuf:"varint,3,opt,name=removable,proto3" json:"removable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BlockDevice) Reset() {
+	*x = BlockDevice{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BlockDevice) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BlockDevice) ProtoMessage() {}
+
+func (x *BlockDevice) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BlockDevice.ProtoReflect.Descriptor instead.
+func (*BlockDevice) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *BlockDevice) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *BlockDevice) GetSizeBytes() uint64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *BlockDevice) GetRemovable() bool {
+	if x != nil {
+		return x.Removable
+	}
+	return false
+}
+
+type ListBlockDevicesResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Devices       []*BlockDevice         `protobuf:"bytes,1,rep,name=devices,proto3" json:"devices,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListBlockDevicesResult) Reset() {
+	*x = ListBlockDevicesResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListBlockDevicesResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListBlockDevicesResult) ProtoMessage() {}
+
+func (x *ListBlockDevicesResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListBlockDevicesResult.ProtoReflect.Descriptor instead.
+func (*ListBlockDevicesResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *ListBlockDevicesResult) GetDevices() []*BlockDevice {
+	if x != nil {
+		return x.Devices
+	}
+	return nil
+}
+
+// EnsureMount is, per ADR-W003, the most dangerous op in the product: it
+// performs a real syscall.Mount and edits /etc/fstab. Agent-side hard
+// invariants (checked regardless of what Keystone asks, ADR-W003 §A4):
+//   - target must resolve under a configured managed prefix (resolveManaged)
+//     AND under Config.MountRoot (prod default /srv/wildstone).
+//   - fstype must be one of: nfs, nfs4, cifs, ext4, xfs. Anything else is
+//     FORBIDDEN.
+//   - every option must match ^[a-zA-Z0-9._=/-]+$ (no commas/whitespace —
+//     fstab field injection); nosuid and nodev are mandatory and appended
+//     if the caller omitted them.
+//
+// The agent owns a marker-delimited block in /etc/fstab ("# BEGIN
+// wildstone-managed" / "# END wildstone-managed") — lines outside that
+// block are never touched. Ordering: the actual mount is attempted FIRST;
+// fstab is only updated after a successful mount, so a mount that fails
+// never leaves a boot-time landmine entry behind.
+type EnsureMount struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Source        string                 `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
+	Target        string                 `protobuf:"bytes,2,opt,name=target,proto3" json:"target,omitempty"`
+	Fstype        string                 `protobuf:"bytes,3,opt,name=fstype,proto3" json:"fstype,omitempty"`
+	Options       []string               `protobuf:"bytes,4,rep,name=options,proto3" json:"options,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnsureMount) Reset() {
+	*x = EnsureMount{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnsureMount) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnsureMount) ProtoMessage() {}
+
+func (x *EnsureMount) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnsureMount.ProtoReflect.Descriptor instead.
+func (*EnsureMount) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *EnsureMount) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *EnsureMount) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+func (x *EnsureMount) GetFstype() string {
+	if x != nil {
+		return x.Fstype
+	}
+	return ""
+}
+
+func (x *EnsureMount) GetOptions() []string {
+	if x != nil {
+		return x.Options
+	}
+	return nil
+}
+
+type EnsureMountResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Mounted       bool                   `protobuf:"varint,1,opt,name=mounted,proto3" json:"mounted,omitempty"`                               // false if already mounted (idempotent, no-op)
+	FstabUpdated  bool                   `protobuf:"varint,2,opt,name=fstab_updated,json=fstabUpdated,proto3" json:"fstab_updated,omitempty"` // false if an identical entry already existed
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnsureMountResult) Reset() {
+	*x = EnsureMountResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnsureMountResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnsureMountResult) ProtoMessage() {}
+
+func (x *EnsureMountResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnsureMountResult.ProtoReflect.Descriptor instead.
+func (*EnsureMountResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *EnsureMountResult) GetMounted() bool {
+	if x != nil {
+		return x.Mounted
+	}
+	return false
+}
+
+func (x *EnsureMountResult) GetFstabUpdated() bool {
+	if x != nil {
+		return x.FstabUpdated
+	}
+	return false
+}
+
+// TestNfs dials host:port over TCP only (default port 2049) — no mount is
+// performed. An unreachable host is a valid answer (reachable=false), not
+// an OpError.
+type TestNfs struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
+	Port          uint32                 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TestNfs) Reset() {
+	*x = TestNfs{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TestNfs) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TestNfs) ProtoMessage() {}
+
+func (x *TestNfs) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TestNfs.ProtoReflect.Descriptor instead.
+func (*TestNfs) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *TestNfs) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *TestNfs) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+type TestNfsResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reachable     bool                   `protobuf:"varint,1,opt,name=reachable,proto3" json:"reachable,omitempty"`
+	Detail        string                 `protobuf:"bytes,2,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TestNfsResult) Reset() {
+	*x = TestNfsResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TestNfsResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TestNfsResult) ProtoMessage() {}
+
+func (x *TestNfsResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TestNfsResult.ProtoReflect.Descriptor instead.
+func (*TestNfsResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *TestNfsResult) GetReachable() bool {
+	if x != nil {
+		return x.Reachable
+	}
+	return false
+}
+
+func (x *TestNfsResult) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+// TestSmb dials host:port over TCP only (default port 445) — no mount is
+// performed.
+type TestSmb struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
+	Port          uint32                 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TestSmb) Reset() {
+	*x = TestSmb{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TestSmb) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TestSmb) ProtoMessage() {}
+
+func (x *TestSmb) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TestSmb.ProtoReflect.Descriptor instead.
+func (*TestSmb) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *TestSmb) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *TestSmb) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+type TestSmbResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reachable     bool                   `protobuf:"varint,1,opt,name=reachable,proto3" json:"reachable,omitempty"`
+	Detail        string                 `protobuf:"bytes,2,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TestSmbResult) Reset() {
+	*x = TestSmbResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TestSmbResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TestSmbResult) ProtoMessage() {}
+
+func (x *TestSmbResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TestSmbResult.ProtoReflect.Descriptor instead.
+func (*TestSmbResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *TestSmbResult) GetReachable() bool {
+	if x != nil {
+		return x.Reachable
+	}
+	return false
+}
+
+func (x *TestSmbResult) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+// ListPorts parses /proc/net/tcp and /proc/net/tcp6 for sockets in LISTEN
+// state (st == 0A).
+type ListPorts struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPorts) Reset() {
+	*x = ListPorts{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPorts) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPorts) ProtoMessage() {}
+
+func (x *ListPorts) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPorts.ProtoReflect.Descriptor instead.
+func (*ListPorts) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{51}
+}
+
+type ListeningPort struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Proto         string                 `protobuf:"bytes,1,opt,name=proto,proto3" json:"proto,omitempty"` // "tcp" or "tcp6"
+	Port          uint32                 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	LocalIp       string                 `protobuf:"bytes,3,opt,name=local_ip,json=localIp,proto3" json:"local_ip,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListeningPort) Reset() {
+	*x = ListeningPort{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListeningPort) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListeningPort) ProtoMessage() {}
+
+func (x *ListeningPort) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListeningPort.ProtoReflect.Descriptor instead.
+func (*ListeningPort) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *ListeningPort) GetProto() string {
+	if x != nil {
+		return x.Proto
+	}
+	return ""
+}
+
+func (x *ListeningPort) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *ListeningPort) GetLocalIp() string {
+	if x != nil {
+		return x.LocalIp
+	}
+	return ""
+}
+
+type ListPortsResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ports         []*ListeningPort       `protobuf:"bytes,1,rep,name=ports,proto3" json:"ports,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPortsResult) Reset() {
+	*x = ListPortsResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPortsResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPortsResult) ProtoMessage() {}
+
+func (x *ListPortsResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPortsResult.ProtoReflect.Descriptor instead.
+func (*ListPortsResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{53}
+}
+
+func (x *ListPortsResult) GetPorts() []*ListeningPort {
+	if x != nil {
+		return x.Ports
+	}
+	return nil
+}
+
+// ProbeTcp dials host:port with a bounded timeout (default 10s, max 30s —
+// larger is INVALID). port must be 1-65535 and host non-empty, or INVALID.
+// Target allowlisting is Keystone-side policy (ADR-W003): the agent only
+// enforces shape and timeout sanity, not which hosts may be probed.
+type ProbeTcp struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Host           string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
+	Port           uint32                 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	TimeoutSeconds uint32                 `protobuf:"varint,3,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"` // 0 = default 10s
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ProbeTcp) Reset() {
+	*x = ProbeTcp{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeTcp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeTcp) ProtoMessage() {}
+
+func (x *ProbeTcp) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeTcp.ProtoReflect.Descriptor instead.
+func (*ProbeTcp) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *ProbeTcp) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *ProbeTcp) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *ProbeTcp) GetTimeoutSeconds() uint32 {
+	if x != nil {
+		return x.TimeoutSeconds
+	}
+	return 0
+}
+
+type ProbeTcpResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reachable     bool                   `protobuf:"varint,1,opt,name=reachable,proto3" json:"reachable,omitempty"`
+	LatencyMs     uint32                 `protobuf:"varint,2,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
+	Detail        string                 `protobuf:"bytes,3,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProbeTcpResult) Reset() {
+	*x = ProbeTcpResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeTcpResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeTcpResult) ProtoMessage() {}
+
+func (x *ProbeTcpResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeTcpResult.ProtoReflect.Descriptor instead.
+func (*ProbeTcpResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *ProbeTcpResult) GetReachable() bool {
+	if x != nil {
+		return x.Reachable
+	}
+	return false
+}
+
+func (x *ProbeTcpResult) GetLatencyMs() uint32 {
+	if x != nil {
+		return x.LatencyMs
+	}
+	return 0
+}
+
+func (x *ProbeTcpResult) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+// ProbeHttp issues a single GET with no redirects followed (the response's
+// status code is reported as-is; Location is never fetched) and drains at
+// most 64 KiB of the body before closing it. url's scheme must be http or
+// https — anything else (e.g. file://) is FORBIDDEN. Same timeout rules as
+// ProbeTcp. Target allowlisting is Keystone-side policy; the agent only
+// enforces scheme + timeout sanity.
+type ProbeHttp struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Url            string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
+	TimeoutSeconds uint32                 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"` // 0 = default 10s, max 30s
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ProbeHttp) Reset() {
+	*x = ProbeHttp{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeHttp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeHttp) ProtoMessage() {}
+
+func (x *ProbeHttp) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeHttp.ProtoReflect.Descriptor instead.
+func (*ProbeHttp) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *ProbeHttp) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *ProbeHttp) GetTimeoutSeconds() uint32 {
+	if x != nil {
+		return x.TimeoutSeconds
+	}
+	return 0
+}
+
+type ProbeHttpResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reachable     bool                   `protobuf:"varint,1,opt,name=reachable,proto3" json:"reachable,omitempty"`
+	StatusCode    uint32                 `protobuf:"varint,2,opt,name=status_code,json=statusCode,proto3" json:"status_code,omitempty"`
+	LatencyMs     uint32                 `protobuf:"varint,3,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
+	Detail        string                 `protobuf:"bytes,4,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProbeHttpResult) Reset() {
+	*x = ProbeHttpResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeHttpResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeHttpResult) ProtoMessage() {}
+
+func (x *ProbeHttpResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeHttpResult.ProtoReflect.Descriptor instead.
+func (*ProbeHttpResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *ProbeHttpResult) GetReachable() bool {
+	if x != nil {
+		return x.Reachable
+	}
+	return false
+}
+
+func (x *ProbeHttpResult) GetStatusCode() uint32 {
+	if x != nil {
+		return x.StatusCode
+	}
+	return 0
+}
+
+func (x *ProbeHttpResult) GetLatencyMs() uint32 {
+	if x != nil {
+		return x.LatencyMs
+	}
+	return 0
+}
+
+func (x *ProbeHttpResult) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+// EnsureDockerNetwork creates an owner-labeled Docker network if it does
+// not exist, mirroring EnsureVolume's idempotent/ownership pattern: absent
+// -> create (created=true); present and wildstone-owned -> created=false;
+// present and NOT wildstone-owned -> FORBIDDEN (never adopt a network
+// Wardstone did not create).
+type EnsureDockerNetwork struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnsureDockerNetwork) Reset() {
+	*x = EnsureDockerNetwork{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[58]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnsureDockerNetwork) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnsureDockerNetwork) ProtoMessage() {}
+
+func (x *EnsureDockerNetwork) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[58]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnsureDockerNetwork.ProtoReflect.Descriptor instead.
+func (*EnsureDockerNetwork) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{58}
+}
+
+func (x *EnsureDockerNetwork) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type EnsureDockerNetworkResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Created       bool                   `protobuf:"varint,1,opt,name=created,proto3" json:"created,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnsureDockerNetworkResult) Reset() {
+	*x = EnsureDockerNetworkResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnsureDockerNetworkResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnsureDockerNetworkResult) ProtoMessage() {}
+
+func (x *EnsureDockerNetworkResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnsureDockerNetworkResult.ProtoReflect.Descriptor instead.
+func (*EnsureDockerNetworkResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *EnsureDockerNetworkResult) GetCreated() bool {
+	if x != nil {
+		return x.Created
+	}
+	return false
+}
+
 var File_wardstone_v1_wardstone_proto protoreflect.FileDescriptor
 
 const file_wardstone_v1_wardstone_proto_rawDesc = "" +
@@ -2931,7 +4164,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0fKeystoneMessage\x12\x13\n" +
 	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12'\n" +
 	"\x02op\x18\x02 \x01(\v2\x17.wardstone.v1.OperationR\x02op\x12!\n" +
-	"\fop_signature\x18\x03 \x01(\fR\vopSignature\"\x82\b\n" +
+	"\fop_signature\x18\x03 \x01(\fR\vopSignature\"\xfe\v\n" +
 	"\tOperation\x12J\n" +
 	"\x10ensure_container\x18\x01 \x01(\v2\x1d.wardstone.v1.EnsureContainerH\x00R\x0fensureContainer\x12D\n" +
 	"\x0estop_container\x18\x02 \x01(\v2\x1b.wardstone.v1.StopContainerH\x00R\rstopContainer\x12D\n" +
@@ -2951,8 +4184,18 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\fprune_images\x18\f \x01(\v2\x19.wardstone.v1.PruneImagesH\x00R\vpruneImages\x12A\n" +
 	"\rensure_volume\x18\r \x01(\v2\x1a.wardstone.v1.EnsureVolumeH\x00R\fensureVolume\x12>\n" +
 	"\fsnapshot_dir\x18\x0e \x01(\v2\x19.wardstone.v1.SnapshotDirH\x00R\vsnapshotDir\x12A\n" +
-	"\rmeasure_usage\x18\x0f \x01(\v2\x1a.wardstone.v1.MeasureUsageH\x00R\fmeasureUsageB\x04\n" +
-	"\x02op\"\xa3\t\n" +
+	"\rmeasure_usage\x18\x0f \x01(\v2\x1a.wardstone.v1.MeasureUsageH\x00R\fmeasureUsage\x12N\n" +
+	"\x12list_block_devices\x18\x10 \x01(\v2\x1e.wardstone.v1.ListBlockDevicesH\x00R\x10listBlockDevices\x12>\n" +
+	"\fensure_mount\x18\x11 \x01(\v2\x19.wardstone.v1.EnsureMountH\x00R\vensureMount\x122\n" +
+	"\btest_nfs\x18\x12 \x01(\v2\x15.wardstone.v1.TestNfsH\x00R\atestNfs\x122\n" +
+	"\btest_smb\x18\x13 \x01(\v2\x15.wardstone.v1.TestSmbH\x00R\atestSmb\x128\n" +
+	"\n" +
+	"list_ports\x18\x14 \x01(\v2\x17.wardstone.v1.ListPortsH\x00R\tlistPorts\x125\n" +
+	"\tprobe_tcp\x18\x15 \x01(\v2\x16.wardstone.v1.ProbeTcpH\x00R\bprobeTcp\x128\n" +
+	"\n" +
+	"probe_http\x18\x16 \x01(\v2\x17.wardstone.v1.ProbeHttpH\x00R\tprobeHttp\x12W\n" +
+	"\x15ensure_docker_network\x18\x17 \x01(\v2!.wardstone.v1.EnsureDockerNetworkH\x00R\x13ensureDockerNetworkB\x04\n" +
+	"\x02op\"\xcf\r\n" +
 	"\bOpResult\x12\x13\n" +
 	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12-\n" +
 	"\x05error\x18\x02 \x01(\v2\x15.wardstone.v1.OpErrorH\x00R\x05error\x12P\n" +
@@ -2974,7 +4217,17 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\fprune_images\x18\x0e \x01(\v2\x1f.wardstone.v1.PruneImagesResultH\x00R\vpruneImages\x12G\n" +
 	"\rensure_volume\x18\x0f \x01(\v2 .wardstone.v1.EnsureVolumeResultH\x00R\fensureVolume\x12D\n" +
 	"\fsnapshot_dir\x18\x10 \x01(\v2\x1f.wardstone.v1.SnapshotDirResultH\x00R\vsnapshotDir\x12G\n" +
-	"\rmeasure_usage\x18\x11 \x01(\v2 .wardstone.v1.MeasureUsageResultH\x00R\fmeasureUsageB\b\n" +
+	"\rmeasure_usage\x18\x11 \x01(\v2 .wardstone.v1.MeasureUsageResultH\x00R\fmeasureUsage\x12T\n" +
+	"\x12list_block_devices\x18\x12 \x01(\v2$.wardstone.v1.ListBlockDevicesResultH\x00R\x10listBlockDevices\x12D\n" +
+	"\fensure_mount\x18\x13 \x01(\v2\x1f.wardstone.v1.EnsureMountResultH\x00R\vensureMount\x128\n" +
+	"\btest_nfs\x18\x14 \x01(\v2\x1b.wardstone.v1.TestNfsResultH\x00R\atestNfs\x128\n" +
+	"\btest_smb\x18\x15 \x01(\v2\x1b.wardstone.v1.TestSmbResultH\x00R\atestSmb\x12>\n" +
+	"\n" +
+	"list_ports\x18\x16 \x01(\v2\x1d.wardstone.v1.ListPortsResultH\x00R\tlistPorts\x12;\n" +
+	"\tprobe_tcp\x18\x17 \x01(\v2\x1c.wardstone.v1.ProbeTcpResultH\x00R\bprobeTcp\x12>\n" +
+	"\n" +
+	"probe_http\x18\x18 \x01(\v2\x1d.wardstone.v1.ProbeHttpResultH\x00R\tprobeHttp\x12]\n" +
+	"\x15ensure_docker_network\x18\x19 \x01(\v2'.wardstone.v1.EnsureDockerNetworkResultH\x00R\x13ensureDockerNetworkB\b\n" +
 	"\x06result\"P\n" +
 	"\aOpError\x12+\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x17.wardstone.v1.ErrorCodeR\x04code\x12\x18\n" +
@@ -3095,7 +4348,65 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\vstaged_path\x18\x01 \x01(\tR\n" +
 	"stagedPath\x12#\n" +
 	"\rprevious_path\x18\x02 \x01(\tR\fpreviousPath\x12\x1a\n" +
-	"\bpromoted\x18\x03 \x01(\bR\bpromoted*\xa8\x01\n" +
+	"\bpromoted\x18\x03 \x01(\bR\bpromoted\"\x12\n" +
+	"\x10ListBlockDevices\"^\n" +
+	"\vBlockDevice\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x02 \x01(\x04R\tsizeBytes\x12\x1c\n" +
+	"\tremovable\x18\x03 \x01(\bR\tremovable\"M\n" +
+	"\x16ListBlockDevicesResult\x123\n" +
+	"\adevices\x18\x01 \x03(\v2\x19.wardstone.v1.BlockDeviceR\adevices\"o\n" +
+	"\vEnsureMount\x12\x16\n" +
+	"\x06source\x18\x01 \x01(\tR\x06source\x12\x16\n" +
+	"\x06target\x18\x02 \x01(\tR\x06target\x12\x16\n" +
+	"\x06fstype\x18\x03 \x01(\tR\x06fstype\x12\x18\n" +
+	"\aoptions\x18\x04 \x03(\tR\aoptions\"R\n" +
+	"\x11EnsureMountResult\x12\x18\n" +
+	"\amounted\x18\x01 \x01(\bR\amounted\x12#\n" +
+	"\rfstab_updated\x18\x02 \x01(\bR\ffstabUpdated\"1\n" +
+	"\aTestNfs\x12\x12\n" +
+	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\"E\n" +
+	"\rTestNfsResult\x12\x1c\n" +
+	"\treachable\x18\x01 \x01(\bR\treachable\x12\x16\n" +
+	"\x06detail\x18\x02 \x01(\tR\x06detail\"1\n" +
+	"\aTestSmb\x12\x12\n" +
+	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\"E\n" +
+	"\rTestSmbResult\x12\x1c\n" +
+	"\treachable\x18\x01 \x01(\bR\treachable\x12\x16\n" +
+	"\x06detail\x18\x02 \x01(\tR\x06detail\"\v\n" +
+	"\tListPorts\"T\n" +
+	"\rListeningPort\x12\x14\n" +
+	"\x05proto\x18\x01 \x01(\tR\x05proto\x12\x12\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\x12\x19\n" +
+	"\blocal_ip\x18\x03 \x01(\tR\alocalIp\"D\n" +
+	"\x0fListPortsResult\x121\n" +
+	"\x05ports\x18\x01 \x03(\v2\x1b.wardstone.v1.ListeningPortR\x05ports\"[\n" +
+	"\bProbeTcp\x12\x12\n" +
+	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\x12'\n" +
+	"\x0ftimeout_seconds\x18\x03 \x01(\rR\x0etimeoutSeconds\"e\n" +
+	"\x0eProbeTcpResult\x12\x1c\n" +
+	"\treachable\x18\x01 \x01(\bR\treachable\x12\x1d\n" +
+	"\n" +
+	"latency_ms\x18\x02 \x01(\rR\tlatencyMs\x12\x16\n" +
+	"\x06detail\x18\x03 \x01(\tR\x06detail\"F\n" +
+	"\tProbeHttp\x12\x10\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\x12'\n" +
+	"\x0ftimeout_seconds\x18\x02 \x01(\rR\x0etimeoutSeconds\"\x87\x01\n" +
+	"\x0fProbeHttpResult\x12\x1c\n" +
+	"\treachable\x18\x01 \x01(\bR\treachable\x12\x1f\n" +
+	"\vstatus_code\x18\x02 \x01(\rR\n" +
+	"statusCode\x12\x1d\n" +
+	"\n" +
+	"latency_ms\x18\x03 \x01(\rR\tlatencyMs\x12\x16\n" +
+	"\x06detail\x18\x04 \x01(\tR\x06detail\")\n" +
+	"\x13EnsureDockerNetwork\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"5\n" +
+	"\x19EnsureDockerNetworkResult\x12\x18\n" +
+	"\acreated\x18\x01 \x01(\bR\acreated*\xa8\x01\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12ERROR_CODE_INVALID\x10\x01\x12\x18\n" +
@@ -3121,53 +4432,71 @@ func file_wardstone_v1_wardstone_proto_rawDescGZIP() []byte {
 }
 
 var file_wardstone_v1_wardstone_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
+var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 62)
 var file_wardstone_v1_wardstone_proto_goTypes = []any{
-	(ErrorCode)(0),                 // 0: wardstone.v1.ErrorCode
-	(*JoinRequest)(nil),            // 1: wardstone.v1.JoinRequest
-	(*JoinResponse)(nil),           // 2: wardstone.v1.JoinResponse
-	(*RenewRequest)(nil),           // 3: wardstone.v1.RenewRequest
-	(*RenewResponse)(nil),          // 4: wardstone.v1.RenewResponse
-	(*AgentMessage)(nil),           // 5: wardstone.v1.AgentMessage
-	(*Hello)(nil),                  // 6: wardstone.v1.Hello
-	(*KeystoneMessage)(nil),        // 7: wardstone.v1.KeystoneMessage
-	(*Operation)(nil),              // 8: wardstone.v1.Operation
-	(*OpResult)(nil),               // 9: wardstone.v1.OpResult
-	(*OpError)(nil),                // 10: wardstone.v1.OpError
-	(*EnsureContainer)(nil),        // 11: wardstone.v1.EnsureContainer
-	(*PortBinding)(nil),            // 12: wardstone.v1.PortBinding
-	(*Mount)(nil),                  // 13: wardstone.v1.Mount
-	(*EnsureContainerResult)(nil),  // 14: wardstone.v1.EnsureContainerResult
-	(*StopContainer)(nil),          // 15: wardstone.v1.StopContainer
-	(*StopContainerResult)(nil),    // 16: wardstone.v1.StopContainerResult
-	(*ContainerLogs)(nil),          // 17: wardstone.v1.ContainerLogs
-	(*ContainerLogsResult)(nil),    // 18: wardstone.v1.ContainerLogsResult
-	(*PullImage)(nil),              // 19: wardstone.v1.PullImage
-	(*PullImageResult)(nil),        // 20: wardstone.v1.PullImageResult
-	(*RemoveContainer)(nil),        // 21: wardstone.v1.RemoveContainer
-	(*RemoveContainerResult)(nil),  // 22: wardstone.v1.RemoveContainerResult
-	(*ContainerStats)(nil),         // 23: wardstone.v1.ContainerStats
-	(*ContainerStatsResult)(nil),   // 24: wardstone.v1.ContainerStatsResult
-	(*PruneImages)(nil),            // 25: wardstone.v1.PruneImages
-	(*PruneImagesResult)(nil),      // 26: wardstone.v1.PruneImagesResult
-	(*EnsureVolume)(nil),           // 27: wardstone.v1.EnsureVolume
-	(*EnsureVolumeResult)(nil),     // 28: wardstone.v1.EnsureVolumeResult
-	(*SnapshotDir)(nil),            // 29: wardstone.v1.SnapshotDir
-	(*SnapshotDirResult)(nil),      // 30: wardstone.v1.SnapshotDirResult
-	(*MeasureUsage)(nil),           // 31: wardstone.v1.MeasureUsage
-	(*MeasureUsageResult)(nil),     // 32: wardstone.v1.MeasureUsageResult
-	(*WriteManagedFile)(nil),       // 33: wardstone.v1.WriteManagedFile
-	(*WriteManagedFileResult)(nil), // 34: wardstone.v1.WriteManagedFileResult
-	(*ReadManagedFile)(nil),        // 35: wardstone.v1.ReadManagedFile
-	(*ReadManagedFileResult)(nil),  // 36: wardstone.v1.ReadManagedFileResult
-	(*HostFacts)(nil),              // 37: wardstone.v1.HostFacts
-	(*HostFactsResult)(nil),        // 38: wardstone.v1.HostFactsResult
-	(*Health)(nil),                 // 39: wardstone.v1.Health
-	(*HealthResult)(nil),           // 40: wardstone.v1.HealthResult
-	(*SelfUpdate)(nil),             // 41: wardstone.v1.SelfUpdate
-	(*SelfUpdateResult)(nil),       // 42: wardstone.v1.SelfUpdateResult
-	nil,                            // 43: wardstone.v1.EnsureContainer.EnvEntry
-	nil,                            // 44: wardstone.v1.EnsureContainer.LabelsEntry
+	(ErrorCode)(0),                    // 0: wardstone.v1.ErrorCode
+	(*JoinRequest)(nil),               // 1: wardstone.v1.JoinRequest
+	(*JoinResponse)(nil),              // 2: wardstone.v1.JoinResponse
+	(*RenewRequest)(nil),              // 3: wardstone.v1.RenewRequest
+	(*RenewResponse)(nil),             // 4: wardstone.v1.RenewResponse
+	(*AgentMessage)(nil),              // 5: wardstone.v1.AgentMessage
+	(*Hello)(nil),                     // 6: wardstone.v1.Hello
+	(*KeystoneMessage)(nil),           // 7: wardstone.v1.KeystoneMessage
+	(*Operation)(nil),                 // 8: wardstone.v1.Operation
+	(*OpResult)(nil),                  // 9: wardstone.v1.OpResult
+	(*OpError)(nil),                   // 10: wardstone.v1.OpError
+	(*EnsureContainer)(nil),           // 11: wardstone.v1.EnsureContainer
+	(*PortBinding)(nil),               // 12: wardstone.v1.PortBinding
+	(*Mount)(nil),                     // 13: wardstone.v1.Mount
+	(*EnsureContainerResult)(nil),     // 14: wardstone.v1.EnsureContainerResult
+	(*StopContainer)(nil),             // 15: wardstone.v1.StopContainer
+	(*StopContainerResult)(nil),       // 16: wardstone.v1.StopContainerResult
+	(*ContainerLogs)(nil),             // 17: wardstone.v1.ContainerLogs
+	(*ContainerLogsResult)(nil),       // 18: wardstone.v1.ContainerLogsResult
+	(*PullImage)(nil),                 // 19: wardstone.v1.PullImage
+	(*PullImageResult)(nil),           // 20: wardstone.v1.PullImageResult
+	(*RemoveContainer)(nil),           // 21: wardstone.v1.RemoveContainer
+	(*RemoveContainerResult)(nil),     // 22: wardstone.v1.RemoveContainerResult
+	(*ContainerStats)(nil),            // 23: wardstone.v1.ContainerStats
+	(*ContainerStatsResult)(nil),      // 24: wardstone.v1.ContainerStatsResult
+	(*PruneImages)(nil),               // 25: wardstone.v1.PruneImages
+	(*PruneImagesResult)(nil),         // 26: wardstone.v1.PruneImagesResult
+	(*EnsureVolume)(nil),              // 27: wardstone.v1.EnsureVolume
+	(*EnsureVolumeResult)(nil),        // 28: wardstone.v1.EnsureVolumeResult
+	(*SnapshotDir)(nil),               // 29: wardstone.v1.SnapshotDir
+	(*SnapshotDirResult)(nil),         // 30: wardstone.v1.SnapshotDirResult
+	(*MeasureUsage)(nil),              // 31: wardstone.v1.MeasureUsage
+	(*MeasureUsageResult)(nil),        // 32: wardstone.v1.MeasureUsageResult
+	(*WriteManagedFile)(nil),          // 33: wardstone.v1.WriteManagedFile
+	(*WriteManagedFileResult)(nil),    // 34: wardstone.v1.WriteManagedFileResult
+	(*ReadManagedFile)(nil),           // 35: wardstone.v1.ReadManagedFile
+	(*ReadManagedFileResult)(nil),     // 36: wardstone.v1.ReadManagedFileResult
+	(*HostFacts)(nil),                 // 37: wardstone.v1.HostFacts
+	(*HostFactsResult)(nil),           // 38: wardstone.v1.HostFactsResult
+	(*Health)(nil),                    // 39: wardstone.v1.Health
+	(*HealthResult)(nil),              // 40: wardstone.v1.HealthResult
+	(*SelfUpdate)(nil),                // 41: wardstone.v1.SelfUpdate
+	(*SelfUpdateResult)(nil),          // 42: wardstone.v1.SelfUpdateResult
+	(*ListBlockDevices)(nil),          // 43: wardstone.v1.ListBlockDevices
+	(*BlockDevice)(nil),               // 44: wardstone.v1.BlockDevice
+	(*ListBlockDevicesResult)(nil),    // 45: wardstone.v1.ListBlockDevicesResult
+	(*EnsureMount)(nil),               // 46: wardstone.v1.EnsureMount
+	(*EnsureMountResult)(nil),         // 47: wardstone.v1.EnsureMountResult
+	(*TestNfs)(nil),                   // 48: wardstone.v1.TestNfs
+	(*TestNfsResult)(nil),             // 49: wardstone.v1.TestNfsResult
+	(*TestSmb)(nil),                   // 50: wardstone.v1.TestSmb
+	(*TestSmbResult)(nil),             // 51: wardstone.v1.TestSmbResult
+	(*ListPorts)(nil),                 // 52: wardstone.v1.ListPorts
+	(*ListeningPort)(nil),             // 53: wardstone.v1.ListeningPort
+	(*ListPortsResult)(nil),           // 54: wardstone.v1.ListPortsResult
+	(*ProbeTcp)(nil),                  // 55: wardstone.v1.ProbeTcp
+	(*ProbeTcpResult)(nil),            // 56: wardstone.v1.ProbeTcpResult
+	(*ProbeHttp)(nil),                 // 57: wardstone.v1.ProbeHttp
+	(*ProbeHttpResult)(nil),           // 58: wardstone.v1.ProbeHttpResult
+	(*EnsureDockerNetwork)(nil),       // 59: wardstone.v1.EnsureDockerNetwork
+	(*EnsureDockerNetworkResult)(nil), // 60: wardstone.v1.EnsureDockerNetworkResult
+	nil,                               // 61: wardstone.v1.EnsureContainer.EnvEntry
+	nil,                               // 62: wardstone.v1.EnsureContainer.LabelsEntry
 }
 var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	6,  // 0: wardstone.v1.AgentMessage.hello:type_name -> wardstone.v1.Hello
@@ -3188,38 +4517,56 @@ var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	27, // 15: wardstone.v1.Operation.ensure_volume:type_name -> wardstone.v1.EnsureVolume
 	29, // 16: wardstone.v1.Operation.snapshot_dir:type_name -> wardstone.v1.SnapshotDir
 	31, // 17: wardstone.v1.Operation.measure_usage:type_name -> wardstone.v1.MeasureUsage
-	10, // 18: wardstone.v1.OpResult.error:type_name -> wardstone.v1.OpError
-	14, // 19: wardstone.v1.OpResult.ensure_container:type_name -> wardstone.v1.EnsureContainerResult
-	16, // 20: wardstone.v1.OpResult.stop_container:type_name -> wardstone.v1.StopContainerResult
-	18, // 21: wardstone.v1.OpResult.container_logs:type_name -> wardstone.v1.ContainerLogsResult
-	20, // 22: wardstone.v1.OpResult.pull_image:type_name -> wardstone.v1.PullImageResult
-	34, // 23: wardstone.v1.OpResult.write_managed_file:type_name -> wardstone.v1.WriteManagedFileResult
-	36, // 24: wardstone.v1.OpResult.read_managed_file:type_name -> wardstone.v1.ReadManagedFileResult
-	38, // 25: wardstone.v1.OpResult.host_facts:type_name -> wardstone.v1.HostFactsResult
-	40, // 26: wardstone.v1.OpResult.health:type_name -> wardstone.v1.HealthResult
-	42, // 27: wardstone.v1.OpResult.self_update:type_name -> wardstone.v1.SelfUpdateResult
-	22, // 28: wardstone.v1.OpResult.remove_container:type_name -> wardstone.v1.RemoveContainerResult
-	24, // 29: wardstone.v1.OpResult.container_stats:type_name -> wardstone.v1.ContainerStatsResult
-	26, // 30: wardstone.v1.OpResult.prune_images:type_name -> wardstone.v1.PruneImagesResult
-	28, // 31: wardstone.v1.OpResult.ensure_volume:type_name -> wardstone.v1.EnsureVolumeResult
-	30, // 32: wardstone.v1.OpResult.snapshot_dir:type_name -> wardstone.v1.SnapshotDirResult
-	32, // 33: wardstone.v1.OpResult.measure_usage:type_name -> wardstone.v1.MeasureUsageResult
-	0,  // 34: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
-	43, // 35: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
-	12, // 36: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
-	13, // 37: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
-	44, // 38: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
-	1,  // 39: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
-	5,  // 40: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
-	3,  // 41: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
-	2,  // 42: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
-	7,  // 43: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
-	4,  // 44: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
-	42, // [42:45] is the sub-list for method output_type
-	39, // [39:42] is the sub-list for method input_type
-	39, // [39:39] is the sub-list for extension type_name
-	39, // [39:39] is the sub-list for extension extendee
-	0,  // [0:39] is the sub-list for field type_name
+	43, // 18: wardstone.v1.Operation.list_block_devices:type_name -> wardstone.v1.ListBlockDevices
+	46, // 19: wardstone.v1.Operation.ensure_mount:type_name -> wardstone.v1.EnsureMount
+	48, // 20: wardstone.v1.Operation.test_nfs:type_name -> wardstone.v1.TestNfs
+	50, // 21: wardstone.v1.Operation.test_smb:type_name -> wardstone.v1.TestSmb
+	52, // 22: wardstone.v1.Operation.list_ports:type_name -> wardstone.v1.ListPorts
+	55, // 23: wardstone.v1.Operation.probe_tcp:type_name -> wardstone.v1.ProbeTcp
+	57, // 24: wardstone.v1.Operation.probe_http:type_name -> wardstone.v1.ProbeHttp
+	59, // 25: wardstone.v1.Operation.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetwork
+	10, // 26: wardstone.v1.OpResult.error:type_name -> wardstone.v1.OpError
+	14, // 27: wardstone.v1.OpResult.ensure_container:type_name -> wardstone.v1.EnsureContainerResult
+	16, // 28: wardstone.v1.OpResult.stop_container:type_name -> wardstone.v1.StopContainerResult
+	18, // 29: wardstone.v1.OpResult.container_logs:type_name -> wardstone.v1.ContainerLogsResult
+	20, // 30: wardstone.v1.OpResult.pull_image:type_name -> wardstone.v1.PullImageResult
+	34, // 31: wardstone.v1.OpResult.write_managed_file:type_name -> wardstone.v1.WriteManagedFileResult
+	36, // 32: wardstone.v1.OpResult.read_managed_file:type_name -> wardstone.v1.ReadManagedFileResult
+	38, // 33: wardstone.v1.OpResult.host_facts:type_name -> wardstone.v1.HostFactsResult
+	40, // 34: wardstone.v1.OpResult.health:type_name -> wardstone.v1.HealthResult
+	42, // 35: wardstone.v1.OpResult.self_update:type_name -> wardstone.v1.SelfUpdateResult
+	22, // 36: wardstone.v1.OpResult.remove_container:type_name -> wardstone.v1.RemoveContainerResult
+	24, // 37: wardstone.v1.OpResult.container_stats:type_name -> wardstone.v1.ContainerStatsResult
+	26, // 38: wardstone.v1.OpResult.prune_images:type_name -> wardstone.v1.PruneImagesResult
+	28, // 39: wardstone.v1.OpResult.ensure_volume:type_name -> wardstone.v1.EnsureVolumeResult
+	30, // 40: wardstone.v1.OpResult.snapshot_dir:type_name -> wardstone.v1.SnapshotDirResult
+	32, // 41: wardstone.v1.OpResult.measure_usage:type_name -> wardstone.v1.MeasureUsageResult
+	45, // 42: wardstone.v1.OpResult.list_block_devices:type_name -> wardstone.v1.ListBlockDevicesResult
+	47, // 43: wardstone.v1.OpResult.ensure_mount:type_name -> wardstone.v1.EnsureMountResult
+	49, // 44: wardstone.v1.OpResult.test_nfs:type_name -> wardstone.v1.TestNfsResult
+	51, // 45: wardstone.v1.OpResult.test_smb:type_name -> wardstone.v1.TestSmbResult
+	54, // 46: wardstone.v1.OpResult.list_ports:type_name -> wardstone.v1.ListPortsResult
+	56, // 47: wardstone.v1.OpResult.probe_tcp:type_name -> wardstone.v1.ProbeTcpResult
+	58, // 48: wardstone.v1.OpResult.probe_http:type_name -> wardstone.v1.ProbeHttpResult
+	60, // 49: wardstone.v1.OpResult.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetworkResult
+	0,  // 50: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
+	61, // 51: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
+	12, // 52: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
+	13, // 53: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
+	62, // 54: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
+	44, // 55: wardstone.v1.ListBlockDevicesResult.devices:type_name -> wardstone.v1.BlockDevice
+	53, // 56: wardstone.v1.ListPortsResult.ports:type_name -> wardstone.v1.ListeningPort
+	1,  // 57: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
+	5,  // 58: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
+	3,  // 59: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
+	2,  // 60: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
+	7,  // 61: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
+	4,  // 62: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
+	60, // [60:63] is the sub-list for method output_type
+	57, // [57:60] is the sub-list for method input_type
+	57, // [57:57] is the sub-list for extension type_name
+	57, // [57:57] is the sub-list for extension extendee
+	0,  // [0:57] is the sub-list for field type_name
 }
 
 func init() { file_wardstone_v1_wardstone_proto_init() }
@@ -3247,6 +4594,14 @@ func file_wardstone_v1_wardstone_proto_init() {
 		(*Operation_EnsureVolume)(nil),
 		(*Operation_SnapshotDir)(nil),
 		(*Operation_MeasureUsage)(nil),
+		(*Operation_ListBlockDevices)(nil),
+		(*Operation_EnsureMount)(nil),
+		(*Operation_TestNfs)(nil),
+		(*Operation_TestSmb)(nil),
+		(*Operation_ListPorts)(nil),
+		(*Operation_ProbeTcp)(nil),
+		(*Operation_ProbeHttp)(nil),
+		(*Operation_EnsureDockerNetwork)(nil),
 	}
 	file_wardstone_v1_wardstone_proto_msgTypes[8].OneofWrappers = []any{
 		(*OpResult_Error)(nil),
@@ -3265,6 +4620,14 @@ func file_wardstone_v1_wardstone_proto_init() {
 		(*OpResult_EnsureVolume)(nil),
 		(*OpResult_SnapshotDir)(nil),
 		(*OpResult_MeasureUsage)(nil),
+		(*OpResult_ListBlockDevices)(nil),
+		(*OpResult_EnsureMount)(nil),
+		(*OpResult_TestNfs)(nil),
+		(*OpResult_TestSmb)(nil),
+		(*OpResult_ListPorts)(nil),
+		(*OpResult_ProbeTcp)(nil),
+		(*OpResult_ProbeHttp)(nil),
+		(*OpResult_EnsureDockerNetwork)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -3272,7 +4635,7 @@ func file_wardstone_v1_wardstone_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wardstone_v1_wardstone_proto_rawDesc), len(file_wardstone_v1_wardstone_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   44,
+			NumMessages:   62,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

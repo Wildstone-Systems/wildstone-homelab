@@ -35,7 +35,10 @@ import (
 //
 // 1: adds RemoveContainer, ContainerStats, PruneImages (ADR-W003 W6a).
 // 2: adds EnsureVolume, SnapshotDir, MeasureUsage (ADR-W003 W6b).
-const ProtocolMinor = 2
+// 3: adds ListBlockDevices, EnsureMount, TestNfs, TestSmb, ListPorts,
+//
+//	ProbeTcp, ProbeHttp, EnsureDockerNetwork (ADR-W003 W6c).
+const ProtocolMinor = 3
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
@@ -63,6 +66,15 @@ type Config struct {
 	BinaryPath      string   // self-update target; default: os.Executable()
 	UpdatePublicKey []byte   // ed25519, baked in at build in production
 	Version         string
+
+	// MountRoot is the second hard boundary EnsureMount enforces on top of
+	// ManagedPrefixes (ADR-W003 W6c): the target must resolve under BOTH a
+	// managed prefix and MountRoot. Prod default /srv/wildstone; tests set
+	// it to a temp dir that is also listed in ManagedPrefixes.
+	MountRoot string
+	// FstabPath is where EnsureMount reads/writes its marker-delimited
+	// block. Prod default /etc/fstab; tests use a temp file.
+	FstabPath string
 
 	// Reconnect backoff (full jitter). Defaults: 500ms base, 15s cap.
 	BackoffBase time.Duration
@@ -106,6 +118,13 @@ func New(cfg Config) (*Agent, error) {
 	}
 	if cfg.DockerEndpoint == "" {
 		cfg.DockerEndpoint = "unix:///var/run/docker.sock"
+	}
+	if cfg.MountRoot == "" {
+		cfg.MountRoot = "/srv/wildstone"
+	}
+	cfg.MountRoot = filepath.Clean(cfg.MountRoot)
+	if cfg.FstabPath == "" {
+		cfg.FstabPath = "/etc/fstab"
 	}
 	if cfg.BinaryPath == "" {
 		exe, err := os.Executable()

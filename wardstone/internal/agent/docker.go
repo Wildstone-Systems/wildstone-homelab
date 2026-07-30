@@ -247,6 +247,31 @@ func (d *dockerClient) volumeCreate(ctx context.Context, name string, labels map
 	return err
 }
 
+type networkInspectResult struct {
+	Name   string            `json:"Name"`
+	Labels map[string]string `json:"Labels"`
+}
+
+// networkInspect returns nil, notFound-error when the network does not
+// exist (same convention as containerInspect/volumeInspect).
+func (d *dockerClient) networkInspect(ctx context.Context, name string) (*networkInspectResult, error) {
+	raw, err := d.call(ctx, "GET", "/networks/"+url.PathEscape(name), nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out networkInspectResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (d *dockerClient) networkCreate(ctx context.Context, name string, labels map[string]string) error {
+	body := map[string]any{"Name": name, "Labels": labels}
+	_, err := d.call(ctx, "POST", "/networks/create", nil, body)
+	return err
+}
+
 type pruneResult struct {
 	ImagesDeleted  []struct{} `json:"ImagesDeleted"`
 	SpaceReclaimed uint64     `json:"SpaceReclaimed"`
