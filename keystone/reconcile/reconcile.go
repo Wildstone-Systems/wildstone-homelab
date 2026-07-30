@@ -1,9 +1,14 @@
-// Package reconcile is Keystone's reconcile engine over Wardstone
-// (ADR-W004 A4): observe -> diff -> plan -> approve -> apply -> health-gate
-// -> rollback, for the three Wardstone-applied kinds (Container, Volume,
-// Route). DnsRecord is provider-backed (ADR-W004 A5) and is out of scope
-// here — S2c wires it through keystone/provider; Reconcile silently skips
-// any DnsRecord resources it is handed.
+// Package reconcile is Keystone's reconcile engine (ADR-W004 A4):
+// observe -> diff -> plan -> approve -> apply -> health-gate -> rollback,
+// for the three Wardstone-applied kinds (Container, Volume, Route) plus
+// the provider-backed DnsRecord kind (ADR-W004 A5, S2c). DnsRecord never
+// touches Applier/Wardstone at all — the Reconciler routes it through a
+// keystone/provider.Provider looked up from Providers[resource.KindDnsRecord]
+// for Observe/Create/Update/Delete, using the same diff -> plan -> apply ->
+// health-gate loop as the Wardstone-applied kinds. A *provider.RateLimited
+// error is retried by the Reconciler's existing bounded-retry (like a
+// transient Wardstone op failure) and only becomes an Outcome.Incident once
+// those retries are exhausted.
 //
 // # Observe: pragmatic, per-kind, documented
 //
@@ -63,6 +68,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
+	"github.com/chickenrat17/wildstone-homelab/keystone/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 )
@@ -131,6 +137,13 @@ type Reconciler struct {
 	// set this to &GatewayApplier{Gateway: gw}.
 	Applier Applier
 
+	// Providers routes provider-backed kinds (currently only
+	// resource.KindDnsRecord, ADR-W004 A5) to their external-resource
+	// controller. A DnsRecord in desired with no entry here is an
+	// Outcome.Incident ("no provider configured"), not a silent skip —
+	// S2b's silent-skip behavior for DnsRecord ended with S2c.
+	Providers map[resource.Kind]provider.Provider
+
 	// ManagedPrefix is the managed-file prefix Route fragments are
 	// rendered under: <ManagedPrefix>/routes/<name>.caddy. Must be one of
 	// the target agent's configured ManagedPrefixes.
@@ -170,17 +183,19 @@ type Reconciler struct {
 }
 
 // Reconcile drives one observe -> diff -> plan -> approve -> apply ->
-// health-gate pass for nodeID against desired. DnsRecord resources in
-// desired are silently skipped (provider-backed, S2c's job — see the
-// package doc).
+// health-gate pass for nodeID against desired. Wardstone-applied kinds
+// (Container, Volume, Route) go through Applier; DnsRecord goes through
+// Providers[resource.KindDnsRecord] (ADR-W004 A5, S2c) — nodeID is unused
+// for provider-backed kinds, which are not node-scoped.
 func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []resource.Resource) (*Outcome, error) {
 	wsDesired := make([]resource.Resource, 0, len(desired))
+	providerDesired := make([]resource.Resource, 0, len(desired))
 	for _, res := range desired {
 		switch res.Kind {
 		case resource.KindContainer, resource.KindVolume, resource.KindRoute:
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
-			continue
+			providerDesired = append(providerDesired, res)
 		default:
 			return nil, fmt.Errorf("reconcile: unknown kind %q", res.Kind)
 		}
@@ -190,8 +205,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	if err != nil {
 		return nil, fmt.Errorf("reconcile: observe: %w", err)
 	}
+	provObserved, err := r.observeProviders(ctx, providerDesired)
+	if err != nil {
+		return nil, fmt.Errorf("reconcile: observe (provider): %w", err)
+	}
 
-	p := plan.Diff(wsDesired, observed)
+	allDesired := append(append([]resource.Resource{}, wsDesired...), providerDesired...)
+	allObserved := append(append([]resource.Resource{}, observed...), provObserved...)
+
+	p := plan.Diff(allDesired, allObserved)
 	outcome := &Outcome{Plan: p, ForeignDrift: foreign}
 	if len(p.Steps) == 0 {
 		outcome.Applied = true
@@ -210,9 +232,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 		}
 	}
 
-	desiredByKey := make(map[resKey]resource.Resource, len(wsDesired))
-	for _, res := range wsDesired {
+	desiredByKey := make(map[resKey]resource.Resource, len(allDesired))
+	for _, res := range allDesired {
 		desiredByKey[resKey{res.Kind, res.Metadata.Name}] = res
+	}
+	observedByKey := make(map[resKey]resource.Resource, len(allObserved))
+	for _, res := range allObserved {
+		observedByKey[resKey{res.Kind, res.Metadata.Name}] = res
 	}
 
 	for _, step := range p.Steps {
@@ -224,8 +250,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			sr = r.applyVolumeStep(ctx, nodeID, step)
 		case resource.KindRoute:
 			sr = r.applyRouteStep(ctx, nodeID, step, desiredByKey)
+		case resource.KindDnsRecord:
+			sr = r.applyDnsRecordStep(ctx, step, desiredByKey, observedByKey)
 		default:
-			sr = StepResult{Step: step, Error: fmt.Sprintf("reconcile: kind %s not handled by S2b's Applier path", step.Kind)}
+			sr = StepResult{Step: step, Error: fmt.Sprintf("reconcile: kind %s not handled by the Applier/Provider path", step.Kind)}
 		}
 		outcome.Steps = append(outcome.Steps, sr)
 
@@ -405,6 +433,189 @@ func placeholderResource(kind resource.Kind, name string) resource.Resource {
 		r.Route = &resource.RouteSpec{}
 	}
 	return r
+}
+
+// ---------------------------------------------------------------- observe: providers
+
+// observeProviders observes every provider-backed desired resource
+// (currently just DnsRecord, ADR-W004 A5) via Providers[kind].Observe,
+// returning only those confirmed to exist (diff treats an absent one as a
+// Create candidate the normal way). A *provider.RateLimited error is
+// retried by retryProvider like any other transient failure; if retries
+// are exhausted the error is returned to the caller, which surfaces it as
+// an Outcome via the normal error path (Reconcile itself errors out here,
+// same as a Wardstone observe transport failure would).
+func (r *Reconciler) observeProviders(ctx context.Context, desired []resource.Resource) ([]resource.Resource, error) {
+	var observed []resource.Resource
+	for _, want := range desired {
+		p, ok := r.Providers[want.Kind]
+		if !ok || p == nil {
+			return nil, fmt.Errorf("observe: no provider configured for kind %s", want.Kind)
+		}
+		var obs *resource.Resource
+		var exists bool
+		err := r.retryProvider(ctx, func() error {
+			var innerErr error
+			obs, exists, innerErr = p.Observe(ctx, want)
+			return innerErr
+		})
+		if err != nil {
+			return nil, fmt.Errorf("observe %s/%s: %w", want.Kind, want.Metadata.Name, err)
+		}
+		if exists && obs != nil {
+			observed = append(observed, *obs)
+		}
+	}
+	return observed, nil
+}
+
+// ---------------------------------------------------------------- apply: DnsRecord
+
+// applyDnsRecordStep routes a DnsRecord PlanStep through
+// Providers[resource.KindDnsRecord] (ADR-W004 A5). Create/Update use the
+// desired spec; Delete uses the observed spec (the resource is no longer
+// in desired by construction, so its identity — zone+name+type — must come
+// from what was last observed).
+func (r *Reconciler) applyDnsRecordStep(ctx context.Context, step plan.PlanStep, desiredByKey, observedByKey map[resKey]resource.Resource) StepResult {
+	sr := StepResult{Step: step}
+	key := resKey{step.Kind, step.Name}
+
+	p, ok := r.Providers[resource.KindDnsRecord]
+	if !ok || p == nil {
+		sr.Error = "no provider configured for DnsRecord"
+		return sr
+	}
+
+	switch step.Action {
+	case plan.ActionCreate, plan.ActionUpdate:
+		want, ok := desiredByKey[key]
+		if !ok || want.DnsRecord == nil {
+			sr.Error = "internal: no desired DnsRecord spec for " + step.Name
+			return sr
+		}
+		var callErr error
+		if step.Action == plan.ActionCreate {
+			callErr = r.retryProvider(ctx, func() error { return p.Create(ctx, want) })
+		} else {
+			callErr = r.retryProvider(ctx, func() error { return p.Update(ctx, want) })
+		}
+		if callErr != nil {
+			sr.Error = callErr.Error()
+			return sr
+		}
+		sr.Applied = true
+
+		// Health gate (ADR-W004 A4 step 5 / A5): a provider read-back
+		// confirming the live record now matches the desired spec.
+		if r.waitDnsRecordConverged(ctx, p, want) {
+			sr.HealthOK = true
+			return sr
+		}
+		// No reverse is defined for DnsRecord (ADR-W004 doesn't specify
+		// one, and unlike Route there's no "prior fragment bytes" to
+		// restore — the provider's own external state IS the prior
+		// state). Surface the gate failure via Outcome.Rolledback without
+		// attempting a reverse, same posture as Volume's Create gate
+		// failure.
+		return sr
+
+	case plan.ActionDelete:
+		have, ok := observedByKey[key]
+		if !ok || have.DnsRecord == nil {
+			sr.Error = "internal: no observed DnsRecord spec for " + step.Name
+			return sr
+		}
+		callErr := r.retryProvider(ctx, func() error { return p.Delete(ctx, have) })
+		if callErr != nil {
+			sr.Error = callErr.Error()
+			return sr
+		}
+		sr.Applied = true
+		sr.HealthOK = r.waitDnsRecordAbsent(ctx, p, have)
+		return sr
+
+	default:
+		sr.Error = "unexpected action " + step.Action.String()
+		return sr
+	}
+}
+
+// waitDnsRecordConverged health-gates a DnsRecord Create/Update: polls
+// Observe until the live record matches want's spec, bounded by the same
+// health-gate attempts/backoff as the other kinds' gates.
+func (r *Reconciler) waitDnsRecordConverged(ctx context.Context, p provider.Provider, want resource.Resource) bool {
+	attempts, backoff := r.healthGateParams()
+	for i := 0; i < attempts; i++ {
+		obs, exists, err := p.Observe(ctx, want)
+		if err == nil && exists && obs.DnsRecord != nil && *obs.DnsRecord == *want.DnsRecord {
+			return true
+		}
+		if i < attempts-1 {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return false
+}
+
+// waitDnsRecordAbsent health-gates a DnsRecord Delete: polls Observe until
+// the record is confirmed gone.
+func (r *Reconciler) waitDnsRecordAbsent(ctx context.Context, p provider.Provider, have resource.Resource) bool {
+	attempts, backoff := r.healthGateParams()
+	for i := 0; i < attempts; i++ {
+		_, exists, err := p.Observe(ctx, have)
+		if err == nil && !exists {
+			return true
+		}
+		if i < attempts-1 {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return false
+}
+
+// retryProvider retries fn up to MaxApplyRetries times (same bound/backoff
+// as retryDispatch) as long as fn's error is a *provider.RateLimited
+// (ADR-W004 A5: "the reconciler treats [it] as retryable-later, not
+// fatal"). Any other error returns immediately without retry — a
+// provider's non-rate-limit failure (e.g. a genuinely invalid record) is
+// not assumed transient.
+func (r *Reconciler) retryProvider(ctx context.Context, fn func() error) error {
+	maxRetries := r.MaxApplyRetries
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+	backoff := r.RetryBackoff
+	if backoff <= 0 {
+		backoff = 50 * time.Millisecond
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		if !provider.IsRateLimited(err) {
+			return err
+		}
+		lastErr = err
+		if attempt < maxRetries-1 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return lastErr
 }
 
 // ---------------------------------------------------------------- managed cache
