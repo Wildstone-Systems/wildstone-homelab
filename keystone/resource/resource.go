@@ -19,10 +19,12 @@ import (
 type Kind string
 
 const (
-	KindContainer Kind = "Container"
-	KindVolume    Kind = "Volume"
-	KindRoute     Kind = "Route"
-	KindDnsRecord Kind = "DnsRecord"
+	KindContainer  Kind = "Container"
+	KindVolume     Kind = "Volume"
+	KindRoute      Kind = "Route"
+	KindDnsRecord  Kind = "DnsRecord"
+	KindOidcClient Kind = "OidcClient"
+	KindLdapGroup  Kind = "LdapGroup"
 )
 
 // ApiVersion is the only supported apiVersion for S2 resources.
@@ -32,6 +34,13 @@ const ApiVersion = "wildstone.dev/v1"
 // verbatim from ADR-W003 A4.2 / the Wardstone agent's invariant enforcement
 // so Keystone rejects tag-pinned images before they ever reach the wire.
 var digestPinRegexp = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9./_:-]*@sha256:[a-f0-9]{64}$`)
+
+// secretRefRegexp matches a secret *reference* of the form "secret/<name>"
+// (ADR-W005 A2: "a package never contains a secret value; it references
+// secret/<name>"). OidcClientSpec.SecretRef must match this — a literal
+// secret value here is rejected at validation, before it ever reaches the
+// Statefile or a rendered Authelia fragment.
+var secretRefRegexp = regexp.MustCompile(`^secret/[A-Za-z0-9._-]+$`)
 
 // Metadata is the ownership/placement envelope shared by every resource.
 type Metadata struct {
@@ -100,6 +109,39 @@ var dnsRecordTypes = map[string]bool{
 	"TXT":   true,
 }
 
+// OidcClientSpec is the spec for kind OidcClient (ADR-W005 A3), applied by
+// the identity capability's controller: render the client into an Authelia
+// identity_providers.oidc.clients fragment and WriteManagedFile it, then a
+// batched Authelia reload (keystone/reconcile).
+type OidcClientSpec struct {
+	// ClientId is the Authelia OIDC client_id. By convention (mirroring
+	// VolumeSpec.Name/Metadata.Name) packages set Metadata.Name == ClientId,
+	// since the reconciler's fragment path and observe/diff identity are
+	// keyed off Metadata.Name, not this field.
+	ClientId     string   `yaml:"clientId"`
+	ClientName   string   `yaml:"clientName"`
+	RedirectUris []string `yaml:"redirectUris"`
+	Scopes       []string `yaml:"scopes,omitempty"`
+	// AuthPolicy is the Authelia authorization_policy, e.g. "two_factor" or
+	// "one_factor".
+	AuthPolicy string `yaml:"authPolicy"`
+	// SecretRef is a *reference* to the client secret, e.g.
+	// "secret/immich-oidc" — never a literal secret value (ADR-W005 A2).
+	// Only Wardstone resolves it to a real value at materialization, out of
+	// scope here; the rendered fragment carries a placeholder derived from
+	// this reference, never the secret itself.
+	SecretRef string `yaml:"secretRef"`
+}
+
+// LdapGroupSpec is the spec for kind LdapGroup (ADR-W005 A3). Modeled as
+// declared + best-effort: it expands and validates, and its reconcile
+// apply is a documented log-and-record no-op against real LLDAP — real
+// LLDAP provisioning is a later provider (keystone/reconcile).
+type LdapGroupSpec struct {
+	Name    string   `yaml:"name"`
+	Members []string `yaml:"members,omitempty"`
+}
+
 // Resource is the typed machine-layer record the Reconciler drives
 // (ADR-W004 A1). Exactly one of the Spec fields is populated, matching
 // Metadata's Kind (enforced by Validate and by the (de)serialization
@@ -112,10 +154,12 @@ type Resource struct {
 	Kind       Kind     `yaml:"kind"`
 	Metadata   Metadata `yaml:"metadata"`
 
-	Container *ContainerSpec `yaml:"-"`
-	Volume    *VolumeSpec    `yaml:"-"`
-	Route     *RouteSpec     `yaml:"-"`
-	DnsRecord *DnsRecordSpec `yaml:"-"`
+	Container  *ContainerSpec  `yaml:"-"`
+	Volume     *VolumeSpec     `yaml:"-"`
+	Route      *RouteSpec      `yaml:"-"`
+	DnsRecord  *DnsRecordSpec  `yaml:"-"`
+	OidcClient *OidcClientSpec `yaml:"-"`
+	LdapGroup  *LdapGroupSpec  `yaml:"-"`
 }
 
 // ValidationError is a typed validation failure, identifying the resource
@@ -161,6 +205,14 @@ var registry = map[Kind]kindEntry{
 	KindDnsRecord: {
 		newSpec:  func() any { return &DnsRecordSpec{} },
 		validate: validateDnsRecord,
+	},
+	KindOidcClient: {
+		newSpec:  func() any { return &OidcClientSpec{} },
+		validate: validateOidcClient,
+	},
+	KindLdapGroup: {
+		newSpec:  func() any { return &LdapGroupSpec{} },
+		validate: validateLdapGroup,
 	},
 }
 
@@ -229,6 +281,32 @@ func validateDnsRecord(r *Resource) error {
 	}
 	if !dnsRecordTypes[r.DnsRecord.Type] {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.type", Msg: "must be one of A, CNAME, TXT"}
+	}
+	return nil
+}
+
+func validateOidcClient(r *Resource) error {
+	if r.OidcClient == nil {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "oidc client spec missing"}
+	}
+	if r.OidcClient.ClientId == "" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.clientId", Msg: "must not be empty"}
+	}
+	if len(r.OidcClient.RedirectUris) == 0 {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.redirectUris", Msg: "must have at least one redirect URI"}
+	}
+	if !secretRefRegexp.MatchString(r.OidcClient.SecretRef) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.secretRef", Msg: "must be a reference of the form secret/<name> (ADR-W005 A2), never a literal secret value"}
+	}
+	return nil
+}
+
+func validateLdapGroup(r *Resource) error {
+	if r.LdapGroup == nil {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "ldap group spec missing"}
+	}
+	if r.LdapGroup.Name == "" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.name", Msg: "must not be empty"}
 	}
 	return nil
 }

@@ -52,6 +52,28 @@ func TestYAMLRoundTrip(t *testing.T) {
 				Proxied: true,
 			},
 		},
+		{
+			ApiVersion: ApiVersion,
+			Kind:       KindOidcClient,
+			Metadata:   Metadata{Name: "immich", Owner: "capability/identity"},
+			OidcClient: &OidcClientSpec{
+				ClientId:     "immich",
+				ClientName:   "Immich",
+				RedirectUris: []string{"https://photos.example.com/auth/login", "app.immich:///oauth-callback"},
+				Scopes:       []string{"openid", "profile", "email", "groups"},
+				AuthPolicy:   "two_factor",
+				SecretRef:    "secret/immich-oidc",
+			},
+		},
+		{
+			ApiVersion: ApiVersion,
+			Kind:       KindLdapGroup,
+			Metadata:   Metadata{Name: "photos-users", Owner: "capability/identity"},
+			LdapGroup: &LdapGroupSpec{
+				Name:    "photos-users",
+				Members: []string{"alice", "bob"},
+			},
+		},
 	}
 
 	for _, want := range cases {
@@ -218,6 +240,83 @@ func TestValidateMissingOwner(t *testing.T) {
 	ve, ok := err.(*ValidationError)
 	if !ok || ve.Field != "metadata.owner" {
 		t.Fatalf("expected metadata.owner validation error, got %v", err)
+	}
+}
+
+func TestValidateOidcClientMissingRedirectUri(t *testing.T) {
+	r := Resource{
+		Kind:     KindOidcClient,
+		Metadata: Metadata{Name: "immich", Owner: "capability/identity"},
+		OidcClient: &OidcClientSpec{
+			ClientId:   "immich",
+			AuthPolicy: "two_factor",
+			SecretRef:  "secret/immich-oidc",
+		},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for missing redirectUris")
+	}
+	ve, ok := err.(*ValidationError)
+	if !ok || ve.Field != "spec.redirectUris" {
+		t.Fatalf("expected spec.redirectUris validation error, got %v", err)
+	}
+}
+
+func TestValidateOidcClientRejectsLiteralSecret(t *testing.T) {
+	r := Resource{
+		Kind:     KindOidcClient,
+		Metadata: Metadata{Name: "immich", Owner: "capability/identity"},
+		OidcClient: &OidcClientSpec{
+			ClientId:     "immich",
+			RedirectUris: []string{"https://photos.example.com/auth/login"},
+			AuthPolicy:   "two_factor",
+			SecretRef:    "hunter2plaintextsecret", // literal, not a "secret/<name>" reference
+		},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for literal secretRef")
+	}
+	ve, ok := err.(*ValidationError)
+	if !ok || ve.Field != "spec.secretRef" {
+		t.Fatalf("expected spec.secretRef validation error, got %v", err)
+	}
+}
+
+func TestValidateOidcClientMissingClientId(t *testing.T) {
+	r := Resource{
+		Kind:     KindOidcClient,
+		Metadata: Metadata{Name: "immich", Owner: "capability/identity"},
+		OidcClient: &OidcClientSpec{
+			RedirectUris: []string{"https://photos.example.com/auth/login"},
+			AuthPolicy:   "two_factor",
+			SecretRef:    "secret/immich-oidc",
+		},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for missing clientId")
+	}
+	ve, ok := err.(*ValidationError)
+	if !ok || ve.Field != "spec.clientId" {
+		t.Fatalf("expected spec.clientId validation error, got %v", err)
+	}
+}
+
+func TestValidateLdapGroupMissingName(t *testing.T) {
+	r := Resource{
+		Kind:      KindLdapGroup,
+		Metadata:  Metadata{Name: "photos-users", Owner: "capability/identity"},
+		LdapGroup: &LdapGroupSpec{Members: []string{"alice"}},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for missing ldap group name")
+	}
+	ve, ok := err.(*ValidationError)
+	if !ok || ve.Field != "spec.name" {
+		t.Fatalf("expected spec.name validation error, got %v", err)
 	}
 }
 

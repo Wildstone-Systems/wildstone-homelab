@@ -176,6 +176,23 @@ func (a *testAgent) readFragmentForTest(t *testing.T, name string) []byte {
 	return content
 }
 
+// readOidcFragmentForTest reads an OidcClient fragment's on-disk bytes
+// directly (bypassing the op surface) for test assertions. Returns nil if
+// the fragment was never written. Mirrors oidcClientFragmentPath/
+// testManagedPrefix used by the Reconciler under test.
+func (a *testAgent) readOidcFragmentForTest(t *testing.T, name string) []byte {
+	t.Helper()
+	path := filepath.Join(a.managed, filepath.FromSlash(oidcClientFragmentPath(testManagedPrefix, name)))
+	content, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("readOidcFragmentForTest %q: %v", name, err)
+	}
+	return content
+}
+
 // unreachableAddr returns a "host:port" that is guaranteed nothing is
 // listening on: bind, learn the address, then close before returning it.
 func unreachableAddr() (string, error) {

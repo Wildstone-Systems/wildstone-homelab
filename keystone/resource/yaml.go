@@ -28,6 +28,10 @@ func (r *Resource) specOf() any {
 		return r.Route
 	case KindDnsRecord:
 		return r.DnsRecord
+	case KindOidcClient:
+		return r.OidcClient
+	case KindLdapGroup:
+		return r.LdapGroup
 	default:
 		return nil
 	}
@@ -82,6 +86,10 @@ func (r *Resource) UnmarshalYAML(value *yaml.Node) error {
 		r.Route = spec.(*RouteSpec)
 	case KindDnsRecord:
 		r.DnsRecord = spec.(*DnsRecordSpec)
+	case KindOidcClient:
+		r.OidcClient = spec.(*OidcClientSpec)
+	case KindLdapGroup:
+		r.LdapGroup = spec.(*LdapGroupSpec)
 	}
 	return nil
 }

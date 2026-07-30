@@ -161,6 +161,17 @@ type Reconciler struct {
 	// reload, which lands in a later E-series work package.
 	ReloadFn func(ctx context.Context) error
 
+	// ReloadAutheliaFn is the OidcClient-apply batched reload seam
+	// (ADR-W005 A3/B3): called at most ONCE per Reconcile call, after every
+	// step in the plan (of any kind) has been attempted, iff at least one
+	// OidcClient step in the plan Applied. This is deliberately a distinct
+	// seam from ReloadFn/Route's per-step reload — the whole point of the
+	// batching requirement is that N OidcClient changes in one plan must
+	// not restart Authelia N times. nil (the default) is a documented
+	// no-op, same posture as ReloadFn: the real Authelia reload/restart
+	// call lands in a later E-series work package.
+	ReloadAutheliaFn func(ctx context.Context) error
+
 	// MaxApplyRetries bounds retries of a single op dispatch on a
 	// transient failure (transport error, or an OpError with code
 	// RUNTIME) before the step is given up on (ADR-W004 A4: "bounded
@@ -186,13 +197,20 @@ type Reconciler struct {
 // health-gate pass for nodeID against desired. Wardstone-applied kinds
 // (Container, Volume, Route) go through Applier; DnsRecord goes through
 // Providers[resource.KindDnsRecord] (ADR-W004 A5, S2c) — nodeID is unused
-// for provider-backed kinds, which are not node-scoped.
+// for provider-backed kinds, which are not node-scoped. OidcClient
+// (ADR-W005 A3) also goes through Applier (a WriteManagedFile-rendered
+// Authelia fragment, like Route); LdapGroup (ADR-W005 A3) is declared/
+// best-effort and never dispatches an op at all — see ldapgroup.go. Both
+// are grouped with the Applier-routed kinds below since neither uses the
+// Provider path; nodeID is likewise not meaningfully load-bearing for
+// LdapGroup, which is not truly node-scoped, but is threaded through for
+// symmetry with the managed-cache bookkeeping the other kinds already use.
 func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []resource.Resource) (*Outcome, error) {
 	wsDesired := make([]resource.Resource, 0, len(desired))
 	providerDesired := make([]resource.Resource, 0, len(desired))
 	for _, res := range desired {
 		switch res.Kind {
-		case resource.KindContainer, resource.KindVolume, resource.KindRoute:
+		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient, resource.KindLdapGroup:
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
 			providerDesired = append(providerDesired, res)
@@ -241,6 +259,32 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 		observedByKey[resKey{res.Kind, res.Metadata.Name}] = res
 	}
 
+	// ADR-W005 A3/B3 batching: track whether ANY OidcClient step in this
+	// plan Applied, and — regardless of which return path below is taken
+	// (full completion, an Incident halt, or a Rolledback halt) — invoke
+	// the batched Authelia reload seam at most once, after every step this
+	// call attempted. Using defer means every return in the loop below is
+	// covered without duplicating the call at each return site; a plan
+	// with zero OidcClient steps never invokes the seam at all (the flag
+	// stays false), and a plan with N OidcClient Create/Update steps that
+	// all applied invokes it exactly once, not N times — the exact trap
+	// ADR-W005 flags.
+	var anyOidcApplied bool
+	defer func() {
+		if !anyOidcApplied {
+			return
+		}
+		if err := r.runAutheliaReload(ctx); err != nil && outcome.Incident == "" && !outcome.Rolledback {
+			// The fragment writes themselves already succeeded and passed
+			// their own health gates (fragment present+equal) — only the
+			// batched reload failed. Surface it as an Incident rather than
+			// silently dropping it, but don't clobber a more specific
+			// Incident/Rolledback reason an earlier step already set.
+			outcome.Incident = fmt.Sprintf("authelia batched reload: %s", err)
+			outcome.Applied = false
+		}
+	}()
+
 	for _, step := range p.Steps {
 		var sr StepResult
 		switch step.Kind {
@@ -252,6 +296,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			sr = r.applyRouteStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindDnsRecord:
 			sr = r.applyDnsRecordStep(ctx, step, desiredByKey, observedByKey)
+		case resource.KindOidcClient:
+			sr = r.applyOidcClientStep(ctx, nodeID, step, desiredByKey)
+			if sr.Applied {
+				anyOidcApplied = true
+			}
+		case resource.KindLdapGroup:
+			sr = r.applyLdapGroupStep(ctx, nodeID, step, desiredByKey)
 		default:
 			sr = StepResult{Step: step, Error: fmt.Sprintf("reconcile: kind %s not handled by the Applier/Provider path", step.Kind)}
 		}
@@ -325,8 +376,29 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 			if present {
 				observed = append(observed, obs)
 			}
+		case resource.KindOidcClient:
+			obs, present, oerr := r.observeOidcClient(ctx, nodeID, k, want, isDesired)
+			if oerr != nil {
+				return nil, nil, oerr
+			}
+			if present {
+				observed = append(observed, obs)
+			}
+		case resource.KindLdapGroup:
+			// Declared/best-effort (ADR-W005 A3): "observe-by-apply", same
+			// mechanism as Volume — present iff a prior successful apply
+			// recorded it in the Reconciler's managed cache. No external
+			// LLDAP call is ever made.
+			if !r.isManaged(nodeID, k) {
+				continue // never applied; absent
+			}
+			if isDesired {
+				observed = append(observed, want)
+			} else {
+				observed = append(observed, placeholderResource(resource.KindLdapGroup, k.Name))
+			}
 		default:
-			return nil, nil, fmt.Errorf("observe: kind %s not handled by S2b (DnsRecord is S2c's Provider path)", k.Kind)
+			return nil, nil, fmt.Errorf("observe: kind %s not handled by S2b/S3a (DnsRecord is S2c's Provider path)", k.Kind)
 		}
 	}
 	return observed, foreign, nil
@@ -396,6 +468,37 @@ func (r *Reconciler) observeRoute(ctx context.Context, nodeID string, k resKey, 
 	return placeholderResource(resource.KindRoute, k.Name), true, nil
 }
 
+// observeOidcClient implements the OidcClient observe rule (ADR-W005 A3):
+// ReadManagedFile the rendered Authelia fragment; NOT_FOUND = absent;
+// present+byte-equal to a fresh render of the desired spec = NoOp;
+// present+different = Update (signaled the same way observeRoute signals
+// it: a deliberately-unequal placeholder spec, since the real fragment
+// text can't be reversed back into an OidcClientSpec — only "stale" can
+// be, which is all plan.Diff needs).
+func (r *Reconciler) observeOidcClient(ctx context.Context, nodeID string, k resKey, want resource.Resource, isDesired bool) (resource.Resource, bool, error) {
+	fragPath := oidcClientFragmentPath(r.ManagedPrefix, k.Name)
+	res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ReadManagedFile{
+		ReadManagedFile: &wsv1.ReadManagedFile{Path: fragPath},
+	}})
+	if err != nil {
+		return resource.Resource{}, false, fmt.Errorf("observe oidc client %s: %w", k.Name, err)
+	}
+	if oe := res.GetError(); oe != nil {
+		if oe.GetCode() == wsv1.ErrorCode_ERROR_CODE_NOT_FOUND {
+			return resource.Resource{}, false, nil
+		}
+		return resource.Resource{}, false, fmt.Errorf("observe oidc client %s: %s: %s", k.Name, oe.GetCode(), oe.GetMessage())
+	}
+	if !isDesired {
+		return placeholderResource(resource.KindOidcClient, k.Name), true, nil
+	}
+	content := res.GetReadManagedFile().GetContent()
+	if routeFragmentEqual(content, renderOidcClientFragment(want.OidcClient)) {
+		return want, true, nil
+	}
+	return placeholderResource(resource.KindOidcClient, k.Name), true, nil
+}
+
 func routeFragmentEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
@@ -431,6 +534,10 @@ func placeholderResource(kind resource.Kind, name string) resource.Resource {
 		r.Volume = &resource.VolumeSpec{Name: name}
 	case resource.KindRoute:
 		r.Route = &resource.RouteSpec{}
+	case resource.KindOidcClient:
+		r.OidcClient = &resource.OidcClientSpec{}
+	case resource.KindLdapGroup:
+		r.LdapGroup = &resource.LdapGroupSpec{Name: name}
 	}
 	return r
 }

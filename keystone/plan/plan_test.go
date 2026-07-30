@@ -196,3 +196,86 @@ func TestDiffMixedCreatesUpdatesDeletesOverallRiskIsMax(t *testing.T) {
 		t.Fatalf("expected 3 steps, got %d: %+v", len(p.Steps), p.Steps)
 	}
 }
+
+func oidcClient(name string) resource.Resource {
+	return resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindOidcClient,
+		Metadata:   resource.Metadata{Name: name, Owner: "capability/identity"},
+		OidcClient: &resource.OidcClientSpec{
+			ClientId:     name,
+			ClientName:   name,
+			RedirectUris: []string{"https://" + name + ".wildstone.dev/auth/login"},
+			Scopes:       []string{"openid", "profile", "email", "groups"},
+			AuthPolicy:   "two_factor",
+			SecretRef:    "secret/" + name + "-oidc",
+		},
+	}
+}
+
+func ldapGroup(name string) resource.Resource {
+	return resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindLdapGroup,
+		Metadata:   resource.Metadata{Name: name, Owner: "capability/identity"},
+		LdapGroup:  &resource.LdapGroupSpec{Name: name},
+	}
+}
+
+// TestDiffOidcClientAndLdapGroupOrderBeforeContainer locks in the ADR-W005
+// S3a ordering choice (see kindOrder's doc comment): LdapGroup and
+// OidcClient — identity wiring an app container may assume already exists
+// — are ordered right after Volume and before Container, ahead of where
+// Route/DnsRecord already sat. This is a planner-review-flagged choice, not
+// a proven dependency; this test exists to make an accidental reordering
+// visible, not to re-litigate it.
+func TestDiffOidcClientAndLdapGroupOrderBeforeContainer(t *testing.T) {
+	desired := []resource.Resource{
+		dns("d1"),
+		route("r1"),
+		cont("c1", imgA(), nil),
+		oidcClient("immich"),
+		ldapGroup("photos-users"),
+		vol("v1"),
+	}
+	p := Diff(desired, nil)
+	wantOrder := []resource.Kind{
+		resource.KindVolume,
+		resource.KindLdapGroup,
+		resource.KindOidcClient,
+		resource.KindContainer,
+		resource.KindRoute,
+		resource.KindDnsRecord,
+	}
+	if len(p.Steps) != len(wantOrder) {
+		t.Fatalf("expected %d steps, got %d: %+v", len(wantOrder), len(p.Steps), p.Steps)
+	}
+	for i, step := range p.Steps {
+		if step.Kind != wantOrder[i] {
+			t.Errorf("step %d: got kind %s, want %s (full order: %+v)", i, step.Kind, wantOrder[i], p.Steps)
+		}
+	}
+}
+
+func TestDiffOidcClientCreateIsLowUpdateIsMedium(t *testing.T) {
+	desired := []resource.Resource{oidcClient("immich")}
+	p := Diff(desired, nil)
+	if len(p.Steps) != 1 || p.Steps[0].Risk != RiskLow {
+		t.Fatalf("expected a single Low-risk create, got: %+v", p.Steps)
+	}
+
+	changed := oidcClient("immich")
+	changed.OidcClient.AuthPolicy = "one_factor"
+	p2 := Diff([]resource.Resource{changed}, desired)
+	if len(p2.Steps) != 1 || p2.Steps[0].Action != ActionUpdate || p2.Steps[0].Risk != RiskMedium {
+		t.Fatalf("expected a single Medium-risk update, got: %+v", p2.Steps)
+	}
+}
+
+func TestDiffLdapGroupIsAlwaysLow(t *testing.T) {
+	desired := []resource.Resource{ldapGroup("photos-users")}
+	p := Diff(desired, nil)
+	if len(p.Steps) != 1 || p.Steps[0].Risk != RiskLow {
+		t.Fatalf("expected a single Low-risk create, got: %+v", p.Steps)
+	}
+}

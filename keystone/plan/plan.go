@@ -97,14 +97,32 @@ type Plan struct {
 	OverallRisk RiskGrade
 }
 
-// kindOrder is the dependency order for creates/updates (Volume before
-// Container before Route before DnsRecord), per ADR-W004 A3. Deletes use
-// the reverse order.
+// kindOrder is the dependency order for creates/updates, per ADR-W004 A3
+// plus the ADR-W005 S3a identity-wiring addendum. Deletes use the reverse
+// order.
+//
+// ADR-W005 S3a ordering choice (flagged for planner review): LdapGroup and
+// OidcClient are placed immediately after Volume and BEFORE Container —
+// ahead of Route/DnsRecord as before, but also ahead of Container, which
+// S2/S3's Volume->Container->Route->DnsRecord order did not need to
+// consider. Rationale: an app Container's entrypoint/env may assume its
+// identity wiring (its LDAP group, its registered OIDC client secret ref)
+// already exists — e.g. Immich reading its OIDC client id/secret at
+// startup — so identity resources should land before the container that
+// depends on them, the same "dependency before dependent" logic that
+// already puts Volume before Container. LdapGroup is ordered before
+// OidcClient (declared group membership conceptually precedes registering
+// an OIDC client that may reference group-based authorization), though the
+// two rarely interact directly in S3's scope; this sub-ordering is a
+// pragmatic default, not a proven dependency, and should be revisited if a
+// package ever needs the reverse.
 var kindOrder = map[resource.Kind]int{
-	resource.KindVolume:    0,
-	resource.KindContainer: 1,
-	resource.KindRoute:     2,
-	resource.KindDnsRecord: 3,
+	resource.KindVolume:     0,
+	resource.KindLdapGroup:  1,
+	resource.KindOidcClient: 2,
+	resource.KindContainer:  3,
+	resource.KindRoute:      4,
+	resource.KindDnsRecord:  5,
 }
 
 // key identifies a resource for matching desired against observed:
@@ -236,9 +254,44 @@ func specEqual(a, b resource.Resource) bool {
 		return a.Route != nil && b.Route != nil && *a.Route == *b.Route
 	case resource.KindDnsRecord:
 		return a.DnsRecord != nil && b.DnsRecord != nil && *a.DnsRecord == *b.DnsRecord
+	case resource.KindOidcClient:
+		return oidcClientEqual(a.OidcClient, b.OidcClient)
+	case resource.KindLdapGroup:
+		return ldapGroupEqual(a.LdapGroup, b.LdapGroup)
 	default:
 		return false
 	}
+}
+
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func oidcClientEqual(a, b *resource.OidcClientSpec) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.ClientId == b.ClientId &&
+		a.ClientName == b.ClientName &&
+		a.AuthPolicy == b.AuthPolicy &&
+		a.SecretRef == b.SecretRef &&
+		stringSliceEqual(a.RedirectUris, b.RedirectUris) &&
+		stringSliceEqual(a.Scopes, b.Scopes)
+}
+
+func ldapGroupEqual(a, b *resource.LdapGroupSpec) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Name == b.Name && stringSliceEqual(a.Members, b.Members)
 }
 
 func containerEqual(a, b *resource.ContainerSpec) bool {
@@ -340,6 +393,18 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 		default:
 			return RiskMedium, "DNS record change/removal: may affect resolution for its name"
 		}
+	case resource.KindOidcClient:
+		switch action {
+		case ActionCreate:
+			return RiskLow, "new OIDC client, no existing service affected"
+		default:
+			return RiskMedium, "OIDC client change/removal: batched Authelia reload affects all clients; app login may break"
+		}
+	case resource.KindLdapGroup:
+		// Declared/best-effort (ADR-W005 A3): apply never touches an
+		// external LLDAP system, so no action here carries real-world
+		// blast radius yet.
+		return RiskLow, "declared LDAP group membership only; no external system changed (ADR-W005 A3)"
 	default:
 		return RiskMedium, "unrecognized kind"
 	}
