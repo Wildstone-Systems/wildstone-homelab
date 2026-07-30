@@ -24,9 +24,17 @@ var digestRef = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9./_:-]*@sha256:[a-f0-9
 
 const maxLogBytes = 1 << 20 // 1 MiB cap on returned logs
 
-// dispatch executes one typed operation. Every arm returns a result or a
-// typed OpError; nothing here ever shells out.
+// dispatch executes one typed operation, wrapped with the ADR-W003 W7 audit
+// log (arm + safe params before, outcome + error code after — see audit.go).
 func (a *Agent) dispatch(ctx context.Context, opID string, op *wsv1.Operation) *wsv1.OpResult {
+	return a.auditDispatch(ctx, opID, op, func() *wsv1.OpResult {
+		return a.dispatchOp(ctx, opID, op)
+	})
+}
+
+// dispatchOp is the actual per-arm handler switch. Every arm returns a
+// result or a typed OpError; nothing here ever shells out.
+func (a *Agent) dispatchOp(ctx context.Context, opID string, op *wsv1.Operation) *wsv1.OpResult {
 	res := &wsv1.OpResult{OpId: opID}
 	var oerr *wsv1.OpError
 	switch o := op.GetOp().(type) {

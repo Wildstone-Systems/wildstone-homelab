@@ -73,6 +73,11 @@ type Gateway struct {
 
 	tokenStore *tokenStore // minted tokens (ADR-W003 W2); own mutex
 
+	// auditMu guards <DataDir>/audit.log (ADR-W003 W7): Dispatch can run
+	// concurrently for different nodes, and appendAudit's rotate-then-append
+	// sequence must be atomic with respect to other appenders.
+	auditMu sync.Mutex
+
 	server *grpc.Server
 }
 
@@ -372,7 +377,9 @@ func (g *Gateway) Dispatch(ctx context.Context, nodeID string, op *wsv1.Operatio
 	if err != nil {
 		return nil, fmt.Errorf("sign op: %w", err)
 	}
-	return g.DispatchRaw(ctx, nodeID, &wsv1.KeystoneMessage{OpId: opID, Op: op, OpSignature: sig})
+	res, err := g.DispatchRaw(ctx, nodeID, &wsv1.KeystoneMessage{OpId: opID, Op: op, OpSignature: sig})
+	g.auditDispatch(nodeID, opID, op, res, err)
+	return res, err
 }
 
 // maxDispatchMsgBytes mirrors the grpc.MaxSendMsgSize/MaxRecvMsgSize server
