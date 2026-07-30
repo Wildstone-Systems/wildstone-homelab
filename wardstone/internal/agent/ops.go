@@ -72,6 +72,21 @@ func (a *Agent) dispatch(ctx context.Context, opID string, op *wsv1.Operation) *
 		if r, oerr = a.selfUpdate(o.SelfUpdate); oerr == nil {
 			res.Result = r
 		}
+	case *wsv1.Operation_RemoveContainer:
+		var r *wsv1.OpResult_RemoveContainer
+		if r, oerr = a.removeContainer(ctx, o.RemoveContainer); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_ContainerStats:
+		var r *wsv1.OpResult_ContainerStats
+		if r, oerr = a.containerStats(ctx, o.ContainerStats); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_PruneImages:
+		var r *wsv1.OpResult_PruneImages
+		if r, oerr = a.pruneImages(ctx, o.PruneImages); oerr == nil {
+			res.Result = r
+		}
 	default:
 		oerr = opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "unknown operation — agent too old for this Keystone? (protocol skew)")
 	}
@@ -319,4 +334,54 @@ func (a *Agent) pullImage(ctx context.Context, op *wsv1.PullImage) (*wsv1.OpResu
 	}
 	digest := op.GetImage()[strings.Index(op.GetImage(), "@")+1:]
 	return &wsv1.OpResult_PullImage{PullImage: &wsv1.PullImageResult{Digest: digest}}, nil
+}
+
+// removeContainer is idempotent: a container that does not exist is a
+// success (existed=false), not NOT_FOUND. Ownership is still enforced
+// before that idempotence kicks in — a foreign container is FORBIDDEN,
+// never silently reported as "didn't exist".
+func (a *Agent) removeContainer(ctx context.Context, op *wsv1.RemoveContainer) (*wsv1.OpResult_RemoveContainer, *wsv1.OpError) {
+	ci, err := a.docker.inspect(ctx, op.GetName())
+	if derr, ok := err.(*dockerError); ok && derr.notFound() {
+		return &wsv1.OpResult_RemoveContainer{RemoveContainer: &wsv1.RemoveContainerResult{Existed: false}}, nil
+	}
+	if err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "inspect: %v", err)
+	}
+	if ci.Config.Labels[OwnerLabel] != ownerValue {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN, "container %q is not wildstone-owned", op.GetName())
+	}
+	if err := a.docker.remove(ctx, ci.ID, op.GetForce()); err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "remove: %v", err)
+	}
+	return &wsv1.OpResult_RemoveContainer{RemoveContainer: &wsv1.RemoveContainerResult{Existed: true}}, nil
+}
+
+func (a *Agent) containerStats(ctx context.Context, op *wsv1.ContainerStats) (*wsv1.OpResult_ContainerStats, *wsv1.OpError) {
+	ci, oerr := a.requireOwned(ctx, op.GetName())
+	if oerr != nil {
+		return nil, oerr
+	}
+	st, err := a.docker.stats(ctx, ci.ID)
+	if err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "stats: %v", err)
+	}
+	return &wsv1.OpResult_ContainerStats{ContainerStats: &wsv1.ContainerStatsResult{
+		CpuUsageNs:    st.CPUStats.CPUUsage.TotalUsage,
+		MemUsageBytes: st.MemoryStats.Usage,
+		MemLimitBytes: st.MemoryStats.Limit,
+	}}, nil
+}
+
+// pruneImages MUST scope to wildstone-owned images only (ADR-W003 §A4.3);
+// the label filter lives in dockerClient.pruneImages — never bypass it.
+func (a *Agent) pruneImages(ctx context.Context, _ *wsv1.PruneImages) (*wsv1.OpResult_PruneImages, *wsv1.OpError) {
+	res, err := a.docker.pruneImages(ctx)
+	if err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "prune images: %v", err)
+	}
+	return &wsv1.OpResult_PruneImages{PruneImages: &wsv1.PruneImagesResult{
+		ReclaimedBytes: res.SpaceReclaimed,
+		DeletedCount:   uint32(len(res.ImagesDeleted)),
+	}}, nil
 }

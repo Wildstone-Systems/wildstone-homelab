@@ -303,6 +303,89 @@ func TestContainerOpsAgainstFakeDocker(t *testing.T) {
 	}
 }
 
+func TestRemoveContainerContainerStatsPruneImages(t *testing.T) {
+	fake := newFakeDocker(t)
+	h := startGateway(t, []string{"tok"}, "")
+	newTestAgent(t, h, "node-a", "tok", func(c *Config) { c.DockerEndpoint = fake.URL() })
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+
+	// Create an owned container to operate on.
+	res := dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{
+		EnsureContainer: &wsv1.EnsureContainer{Name: "app", Image: testDigestImage},
+	}})
+	if ec := res.GetEnsureContainer(); ec == nil || !ec.GetCreated() {
+		t.Fatalf("ensure: %+v", res)
+	}
+
+	// ContainerStats: returns the fake's fixed numbers for an owned container.
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_ContainerStats{
+		ContainerStats: &wsv1.ContainerStats{Name: "app"},
+	}})
+	sr := res.GetContainerStats()
+	if sr == nil || sr.GetCpuUsageNs() != 424242 || sr.GetMemUsageBytes() != 111111 || sr.GetMemLimitBytes() != 999999 {
+		t.Fatalf("container stats: %+v", res)
+	}
+
+	// ContainerStats on a foreign container: FORBIDDEN.
+	fake.addForeign("victim-stats")
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_ContainerStats{
+		ContainerStats: &wsv1.ContainerStats{Name: "victim-stats"},
+	}})
+	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Fatalf("stats on foreign container: want FORBIDDEN, got %+v", res)
+	}
+
+	// RemoveContainer on a foreign container: FORBIDDEN, fake still has it.
+	fake.addForeign("victim-remove")
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_RemoveContainer{
+		RemoveContainer: &wsv1.RemoveContainer{Name: "victim-remove"},
+	}})
+	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Fatalf("remove foreign container: want FORBIDDEN, got %+v", res)
+	}
+	if _, ok := fake.containers["victim-remove"]; !ok {
+		t.Fatal("foreign container was actually removed")
+	}
+
+	// RemoveContainer on the owned container: existed=true, fake no longer has it.
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_RemoveContainer{
+		RemoveContainer: &wsv1.RemoveContainer{Name: "app", Force: true},
+	}})
+	if rc := res.GetRemoveContainer(); rc == nil || !rc.GetExisted() {
+		t.Fatalf("remove owned container: %+v", res)
+	}
+	if _, ok := fake.containers["app"]; ok {
+		t.Fatal("owned container still present after remove")
+	}
+
+	// RemoveContainer again: idempotent success, existed=false.
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_RemoveContainer{
+		RemoveContainer: &wsv1.RemoveContainer{Name: "app"},
+	}})
+	if res.GetError() != nil {
+		t.Fatalf("second remove returned an error: %+v", res)
+	}
+	if rc := res.GetRemoveContainer(); rc == nil || rc.GetExisted() {
+		t.Fatalf("second remove: want existed=false success, got %+v", res)
+	}
+
+	// PruneImages: result carries the fake's fixed numbers, and the fake
+	// recorded the ownership label filter — pruning without it would be
+	// an ADR-W003 §A4.3 violation even if the numbers matched.
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_PruneImages{
+		PruneImages: &wsv1.PruneImages{},
+	}})
+	pr := res.GetPruneImages()
+	if pr == nil || pr.GetReclaimedBytes() != 12345 || pr.GetDeletedCount() != 2 {
+		t.Fatalf("prune images: %+v", res)
+	}
+	if !strings.Contains(fake.pruneFilters, "dev.wildstone.owner=wildstone") {
+		t.Fatalf("prune images: fake did not receive ownership label filter, got %q", fake.pruneFilters)
+	}
+}
+
 // ---------------------------------------------------------------- self-update
 
 func TestSelfUpdateHappyPathAndBadSignature(t *testing.T) {

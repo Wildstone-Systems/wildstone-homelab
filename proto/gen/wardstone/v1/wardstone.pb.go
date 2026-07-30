@@ -535,6 +535,9 @@ type Operation struct {
 	//	*Operation_HostFacts
 	//	*Operation_Health
 	//	*Operation_SelfUpdate
+	//	*Operation_RemoveContainer
+	//	*Operation_ContainerStats
+	//	*Operation_PruneImages
 	Op            isOperation_Op `protobuf_oneof:"op"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -658,6 +661,33 @@ func (x *Operation) GetSelfUpdate() *SelfUpdate {
 	return nil
 }
 
+func (x *Operation) GetRemoveContainer() *RemoveContainer {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_RemoveContainer); ok {
+			return x.RemoveContainer
+		}
+	}
+	return nil
+}
+
+func (x *Operation) GetContainerStats() *ContainerStats {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_ContainerStats); ok {
+			return x.ContainerStats
+		}
+	}
+	return nil
+}
+
+func (x *Operation) GetPruneImages() *PruneImages {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_PruneImages); ok {
+			return x.PruneImages
+		}
+	}
+	return nil
+}
+
 type isOperation_Op interface {
 	isOperation_Op()
 }
@@ -698,6 +728,18 @@ type Operation_SelfUpdate struct {
 	SelfUpdate *SelfUpdate `protobuf:"bytes,9,opt,name=self_update,json=selfUpdate,proto3,oneof"`
 }
 
+type Operation_RemoveContainer struct {
+	RemoveContainer *RemoveContainer `protobuf:"bytes,10,opt,name=remove_container,json=removeContainer,proto3,oneof"`
+}
+
+type Operation_ContainerStats struct {
+	ContainerStats *ContainerStats `protobuf:"bytes,11,opt,name=container_stats,json=containerStats,proto3,oneof"`
+}
+
+type Operation_PruneImages struct {
+	PruneImages *PruneImages `protobuf:"bytes,12,opt,name=prune_images,json=pruneImages,proto3,oneof"`
+}
+
 func (*Operation_EnsureContainer) isOperation_Op() {}
 
 func (*Operation_StopContainer) isOperation_Op() {}
@@ -716,6 +758,12 @@ func (*Operation_Health) isOperation_Op() {}
 
 func (*Operation_SelfUpdate) isOperation_Op() {}
 
+func (*Operation_RemoveContainer) isOperation_Op() {}
+
+func (*Operation_ContainerStats) isOperation_Op() {}
+
+func (*Operation_PruneImages) isOperation_Op() {}
+
 type OpResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	OpId  string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
@@ -731,6 +779,9 @@ type OpResult struct {
 	//	*OpResult_HostFacts
 	//	*OpResult_Health
 	//	*OpResult_SelfUpdate
+	//	*OpResult_RemoveContainer
+	//	*OpResult_ContainerStats
+	//	*OpResult_PruneImages
 	Result        isOpResult_Result `protobuf_oneof:"result"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -870,6 +921,33 @@ func (x *OpResult) GetSelfUpdate() *SelfUpdateResult {
 	return nil
 }
 
+func (x *OpResult) GetRemoveContainer() *RemoveContainerResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_RemoveContainer); ok {
+			return x.RemoveContainer
+		}
+	}
+	return nil
+}
+
+func (x *OpResult) GetContainerStats() *ContainerStatsResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_ContainerStats); ok {
+			return x.ContainerStats
+		}
+	}
+	return nil
+}
+
+func (x *OpResult) GetPruneImages() *PruneImagesResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_PruneImages); ok {
+			return x.PruneImages
+		}
+	}
+	return nil
+}
+
 type isOpResult_Result interface {
 	isOpResult_Result()
 }
@@ -914,6 +992,18 @@ type OpResult_SelfUpdate struct {
 	SelfUpdate *SelfUpdateResult `protobuf:"bytes,11,opt,name=self_update,json=selfUpdate,proto3,oneof"`
 }
 
+type OpResult_RemoveContainer struct {
+	RemoveContainer *RemoveContainerResult `protobuf:"bytes,12,opt,name=remove_container,json=removeContainer,proto3,oneof"`
+}
+
+type OpResult_ContainerStats struct {
+	ContainerStats *ContainerStatsResult `protobuf:"bytes,13,opt,name=container_stats,json=containerStats,proto3,oneof"`
+}
+
+type OpResult_PruneImages struct {
+	PruneImages *PruneImagesResult `protobuf:"bytes,14,opt,name=prune_images,json=pruneImages,proto3,oneof"`
+}
+
 func (*OpResult_Error) isOpResult_Result() {}
 
 func (*OpResult_EnsureContainer) isOpResult_Result() {}
@@ -933,6 +1023,12 @@ func (*OpResult_HostFacts) isOpResult_Result() {}
 func (*OpResult_Health) isOpResult_Result() {}
 
 func (*OpResult_SelfUpdate) isOpResult_Result() {}
+
+func (*OpResult_RemoveContainer) isOpResult_Result() {}
+
+func (*OpResult_ContainerStats) isOpResult_Result() {}
+
+func (*OpResult_PruneImages) isOpResult_Result() {}
 
 type OpError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1547,6 +1643,302 @@ func (x *PullImageResult) GetDigest() string {
 	return ""
 }
 
+type RemoveContainer struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Force         bool                   `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveContainer) Reset() {
+	*x = RemoveContainer{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveContainer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveContainer) ProtoMessage() {}
+
+func (x *RemoveContainer) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveContainer.ProtoReflect.Descriptor instead.
+func (*RemoveContainer) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *RemoveContainer) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *RemoveContainer) GetForce() bool {
+	if x != nil {
+		return x.Force
+	}
+	return false
+}
+
+// Idempotent remove: a container that does not exist is NOT an error —
+// existed=false is returned as a success result. A container that exists
+// but is not wildstone-owned is still refused with FORBIDDEN (ownership
+// is checked before existence is even considered "not found").
+type RemoveContainerResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Existed       bool                   `protobuf:"varint,1,opt,name=existed,proto3" json:"existed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveContainerResult) Reset() {
+	*x = RemoveContainerResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveContainerResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveContainerResult) ProtoMessage() {}
+
+func (x *RemoveContainerResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveContainerResult.ProtoReflect.Descriptor instead.
+func (*RemoveContainerResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *RemoveContainerResult) GetExisted() bool {
+	if x != nil {
+		return x.Existed
+	}
+	return false
+}
+
+type ContainerStats struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ContainerStats) Reset() {
+	*x = ContainerStats{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContainerStats) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContainerStats) ProtoMessage() {}
+
+func (x *ContainerStats) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContainerStats.ProtoReflect.Descriptor instead.
+func (*ContainerStats) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *ContainerStats) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type ContainerStatsResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CpuUsageNs    uint64                 `protobuf:"varint,1,opt,name=cpu_usage_ns,json=cpuUsageNs,proto3" json:"cpu_usage_ns,omitempty"`
+	MemUsageBytes uint64                 `protobuf:"varint,2,opt,name=mem_usage_bytes,json=memUsageBytes,proto3" json:"mem_usage_bytes,omitempty"`
+	MemLimitBytes uint64                 `protobuf:"varint,3,opt,name=mem_limit_bytes,json=memLimitBytes,proto3" json:"mem_limit_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ContainerStatsResult) Reset() {
+	*x = ContainerStatsResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContainerStatsResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContainerStatsResult) ProtoMessage() {}
+
+func (x *ContainerStatsResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContainerStatsResult.ProtoReflect.Descriptor instead.
+func (*ContainerStatsResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *ContainerStatsResult) GetCpuUsageNs() uint64 {
+	if x != nil {
+		return x.CpuUsageNs
+	}
+	return 0
+}
+
+func (x *ContainerStatsResult) GetMemUsageBytes() uint64 {
+	if x != nil {
+		return x.MemUsageBytes
+	}
+	return 0
+}
+
+func (x *ContainerStatsResult) GetMemLimitBytes() uint64 {
+	if x != nil {
+		return x.MemLimitBytes
+	}
+	return 0
+}
+
+type PruneImages struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PruneImages) Reset() {
+	*x = PruneImages{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PruneImages) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PruneImages) ProtoMessage() {}
+
+func (x *PruneImages) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PruneImages.ProtoReflect.Descriptor instead.
+func (*PruneImages) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{24}
+}
+
+// PruneImages ALWAYS scopes to wildstone-owned images: the agent issues
+// the Engine API call with filters={"label":["dev.wildstone.owner=wildstone"]}.
+// An implementation that prunes without this filter violates the
+// ownership invariant (ADR-W003 §A4.3) even if it otherwise behaves.
+type PruneImagesResult struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ReclaimedBytes uint64                 `protobuf:"varint,1,opt,name=reclaimed_bytes,json=reclaimedBytes,proto3" json:"reclaimed_bytes,omitempty"`
+	DeletedCount   uint32                 `protobuf:"varint,2,opt,name=deleted_count,json=deletedCount,proto3" json:"deleted_count,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *PruneImagesResult) Reset() {
+	*x = PruneImagesResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PruneImagesResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PruneImagesResult) ProtoMessage() {}
+
+func (x *PruneImagesResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PruneImagesResult.ProtoReflect.Descriptor instead.
+func (*PruneImagesResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *PruneImagesResult) GetReclaimedBytes() uint64 {
+	if x != nil {
+		return x.ReclaimedBytes
+	}
+	return 0
+}
+
+func (x *PruneImagesResult) GetDeletedCount() uint32 {
+	if x != nil {
+		return x.DeletedCount
+	}
+	return 0
+}
+
 type WriteManagedFile struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"` // must resolve under a managed prefix
@@ -1558,7 +1950,7 @@ type WriteManagedFile struct {
 
 func (x *WriteManagedFile) Reset() {
 	*x = WriteManagedFile{}
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[20]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1570,7 +1962,7 @@ func (x *WriteManagedFile) String() string {
 func (*WriteManagedFile) ProtoMessage() {}
 
 func (x *WriteManagedFile) ProtoReflect() protoreflect.Message {
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[20]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1583,7 +1975,7 @@ func (x *WriteManagedFile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteManagedFile.ProtoReflect.Descriptor instead.
 func (*WriteManagedFile) Descriptor() ([]byte, []int) {
-	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{20}
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *WriteManagedFile) GetPath() string {
@@ -1616,7 +2008,7 @@ type WriteManagedFileResult struct {
 
 func (x *WriteManagedFileResult) Reset() {
 	*x = WriteManagedFileResult{}
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[21]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1628,7 +2020,7 @@ func (x *WriteManagedFileResult) String() string {
 func (*WriteManagedFileResult) ProtoMessage() {}
 
 func (x *WriteManagedFileResult) ProtoReflect() protoreflect.Message {
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[21]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1641,7 +2033,7 @@ func (x *WriteManagedFileResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteManagedFileResult.ProtoReflect.Descriptor instead.
 func (*WriteManagedFileResult) Descriptor() ([]byte, []int) {
-	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{21}
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *WriteManagedFileResult) GetSha256Hex() string {
@@ -1660,7 +2052,7 @@ type ReadManagedFile struct {
 
 func (x *ReadManagedFile) Reset() {
 	*x = ReadManagedFile{}
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[22]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1672,7 +2064,7 @@ func (x *ReadManagedFile) String() string {
 func (*ReadManagedFile) ProtoMessage() {}
 
 func (x *ReadManagedFile) ProtoReflect() protoreflect.Message {
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[22]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1685,7 +2077,7 @@ func (x *ReadManagedFile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadManagedFile.ProtoReflect.Descriptor instead.
 func (*ReadManagedFile) Descriptor() ([]byte, []int) {
-	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{22}
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ReadManagedFile) GetPath() string {
@@ -1704,7 +2096,7 @@ type ReadManagedFileResult struct {
 
 func (x *ReadManagedFileResult) Reset() {
 	*x = ReadManagedFileResult{}
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[23]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1716,7 +2108,7 @@ func (x *ReadManagedFileResult) String() string {
 func (*ReadManagedFileResult) ProtoMessage() {}
 
 func (x *ReadManagedFileResult) ProtoReflect() protoreflect.Message {
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[23]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1729,7 +2121,7 @@ func (x *ReadManagedFileResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadManagedFileResult.ProtoReflect.Descriptor instead.
 func (*ReadManagedFileResult) Descriptor() ([]byte, []int) {
-	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{23}
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ReadManagedFileResult) GetContent() []byte {
@@ -1747,7 +2139,7 @@ type HostFacts struct {
 
 func (x *HostFacts) Reset() {
 	*x = HostFacts{}
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[24]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1759,7 +2151,7 @@ func (x *HostFacts) String() string {
 func (*HostFacts) ProtoMessage() {}
 
 func (x *HostFacts) ProtoReflect() protoreflect.Message {
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[24]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1772,7 +2164,7 @@ func (x *HostFacts) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostFacts.ProtoReflect.Descriptor instead.
 func (*HostFacts) Descriptor() ([]byte, []int) {
-	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{24}
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{30}
 }
 
 type HostFactsResult struct {
@@ -1791,7 +2183,7 @@ type HostFactsResult struct {
 
 func (x *HostFactsResult) Reset() {
 	*x = HostFactsResult{}
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[25]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1803,7 +2195,7 @@ func (x *HostFactsResult) String() string {
 func (*HostFactsResult) ProtoMessage() {}
 
 func (x *HostFactsResult) ProtoReflect() protoreflect.Message {
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[25]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1816,7 +2208,7 @@ func (x *HostFactsResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostFactsResult.ProtoReflect.Descriptor instead.
 func (*HostFactsResult) Descriptor() ([]byte, []int) {
-	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{25}
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *HostFactsResult) GetHostname() string {
@@ -1883,7 +2275,7 @@ type Health struct {
 
 func (x *Health) Reset() {
 	*x = Health{}
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[26]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1895,7 +2287,7 @@ func (x *Health) String() string {
 func (*Health) ProtoMessage() {}
 
 func (x *Health) ProtoReflect() protoreflect.Message {
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[26]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1908,7 +2300,7 @@ func (x *Health) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Health.ProtoReflect.Descriptor instead.
 func (*Health) Descriptor() ([]byte, []int) {
-	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{26}
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{32}
 }
 
 type HealthResult struct {
@@ -1921,7 +2313,7 @@ type HealthResult struct {
 
 func (x *HealthResult) Reset() {
 	*x = HealthResult{}
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[27]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1933,7 +2325,7 @@ func (x *HealthResult) String() string {
 func (*HealthResult) ProtoMessage() {}
 
 func (x *HealthResult) ProtoReflect() protoreflect.Message {
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[27]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1946,7 +2338,7 @@ func (x *HealthResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResult.ProtoReflect.Descriptor instead.
 func (*HealthResult) Descriptor() ([]byte, []int) {
-	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{27}
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *HealthResult) GetOk() bool {
@@ -1982,7 +2374,7 @@ type SelfUpdate struct {
 
 func (x *SelfUpdate) Reset() {
 	*x = SelfUpdate{}
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[28]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1994,7 +2386,7 @@ func (x *SelfUpdate) String() string {
 func (*SelfUpdate) ProtoMessage() {}
 
 func (x *SelfUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[28]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2007,7 +2399,7 @@ func (x *SelfUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SelfUpdate.ProtoReflect.Descriptor instead.
 func (*SelfUpdate) Descriptor() ([]byte, []int) {
-	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{28}
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *SelfUpdate) GetBinary() []byte {
@@ -2049,7 +2441,7 @@ type SelfUpdateResult struct {
 
 func (x *SelfUpdateResult) Reset() {
 	*x = SelfUpdateResult{}
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[29]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2061,7 +2453,7 @@ func (x *SelfUpdateResult) String() string {
 func (*SelfUpdateResult) ProtoMessage() {}
 
 func (x *SelfUpdateResult) ProtoReflect() protoreflect.Message {
-	mi := &file_wardstone_v1_wardstone_proto_msgTypes[29]
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2074,7 +2466,7 @@ func (x *SelfUpdateResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SelfUpdateResult.ProtoReflect.Descriptor instead.
 func (*SelfUpdateResult) Descriptor() ([]byte, []int) {
-	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{29}
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *SelfUpdateResult) GetStagedPath() string {
@@ -2127,7 +2519,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0fKeystoneMessage\x12\x13\n" +
 	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12'\n" +
 	"\x02op\x18\x02 \x01(\v2\x17.wardstone.v1.OperationR\x02op\x12!\n" +
-	"\fop_signature\x18\x03 \x01(\fR\vopSignature\"\xe7\x04\n" +
+	"\fop_signature\x18\x03 \x01(\fR\vopSignature\"\xbc\x06\n" +
 	"\tOperation\x12J\n" +
 	"\x10ensure_container\x18\x01 \x01(\v2\x1d.wardstone.v1.EnsureContainerH\x00R\x0fensureContainer\x12D\n" +
 	"\x0estop_container\x18\x02 \x01(\v2\x1b.wardstone.v1.StopContainerH\x00R\rstopContainer\x12D\n" +
@@ -2140,8 +2532,12 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"host_facts\x18\a \x01(\v2\x17.wardstone.v1.HostFactsH\x00R\thostFacts\x12.\n" +
 	"\x06health\x18\b \x01(\v2\x14.wardstone.v1.HealthH\x00R\x06health\x12;\n" +
 	"\vself_update\x18\t \x01(\v2\x18.wardstone.v1.SelfUpdateH\x00R\n" +
-	"selfUpdateB\x04\n" +
-	"\x02op\"\xe4\x05\n" +
+	"selfUpdate\x12J\n" +
+	"\x10remove_container\x18\n" +
+	" \x01(\v2\x1d.wardstone.v1.RemoveContainerH\x00R\x0fremoveContainer\x12G\n" +
+	"\x0fcontainer_stats\x18\v \x01(\v2\x1c.wardstone.v1.ContainerStatsH\x00R\x0econtainerStats\x12>\n" +
+	"\fprune_images\x18\f \x01(\v2\x19.wardstone.v1.PruneImagesH\x00R\vpruneImagesB\x04\n" +
+	"\x02op\"\xcb\a\n" +
 	"\bOpResult\x12\x13\n" +
 	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12-\n" +
 	"\x05error\x18\x02 \x01(\v2\x15.wardstone.v1.OpErrorH\x00R\x05error\x12P\n" +
@@ -2157,7 +2553,10 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x06health\x18\n" +
 	" \x01(\v2\x1a.wardstone.v1.HealthResultH\x00R\x06health\x12A\n" +
 	"\vself_update\x18\v \x01(\v2\x1e.wardstone.v1.SelfUpdateResultH\x00R\n" +
-	"selfUpdateB\b\n" +
+	"selfUpdate\x12P\n" +
+	"\x10remove_container\x18\f \x01(\v2#.wardstone.v1.RemoveContainerResultH\x00R\x0fremoveContainer\x12M\n" +
+	"\x0fcontainer_stats\x18\r \x01(\v2\".wardstone.v1.ContainerStatsResultH\x00R\x0econtainerStats\x12D\n" +
+	"\fprune_images\x18\x0e \x01(\v2\x1f.wardstone.v1.PruneImagesResultH\x00R\vpruneImagesB\b\n" +
 	"\x06result\"P\n" +
 	"\aOpError\x12+\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x17.wardstone.v1.ErrorCodeR\x04code\x12\x18\n" +
@@ -2203,7 +2602,23 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\tPullImage\x12\x14\n" +
 	"\x05image\x18\x01 \x01(\tR\x05image\")\n" +
 	"\x0fPullImageResult\x12\x16\n" +
-	"\x06digest\x18\x01 \x01(\tR\x06digest\"T\n" +
+	"\x06digest\x18\x01 \x01(\tR\x06digest\";\n" +
+	"\x0fRemoveContainer\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05force\x18\x02 \x01(\bR\x05force\"1\n" +
+	"\x15RemoveContainerResult\x12\x18\n" +
+	"\aexisted\x18\x01 \x01(\bR\aexisted\"$\n" +
+	"\x0eContainerStats\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"\x88\x01\n" +
+	"\x14ContainerStatsResult\x12 \n" +
+	"\fcpu_usage_ns\x18\x01 \x01(\x04R\n" +
+	"cpuUsageNs\x12&\n" +
+	"\x0fmem_usage_bytes\x18\x02 \x01(\x04R\rmemUsageBytes\x12&\n" +
+	"\x0fmem_limit_bytes\x18\x03 \x01(\x04R\rmemLimitBytes\"\r\n" +
+	"\vPruneImages\"a\n" +
+	"\x11PruneImagesResult\x12'\n" +
+	"\x0freclaimed_bytes\x18\x01 \x01(\x04R\x0ereclaimedBytes\x12#\n" +
+	"\rdeleted_count\x18\x02 \x01(\rR\fdeletedCount\"T\n" +
 	"\x10WriteManagedFile\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\fR\acontent\x12\x12\n" +
@@ -2266,7 +2681,7 @@ func file_wardstone_v1_wardstone_proto_rawDescGZIP() []byte {
 }
 
 var file_wardstone_v1_wardstone_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
 var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(ErrorCode)(0),                 // 0: wardstone.v1.ErrorCode
 	(*JoinRequest)(nil),            // 1: wardstone.v1.JoinRequest
@@ -2289,18 +2704,24 @@ var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(*ContainerLogsResult)(nil),    // 18: wardstone.v1.ContainerLogsResult
 	(*PullImage)(nil),              // 19: wardstone.v1.PullImage
 	(*PullImageResult)(nil),        // 20: wardstone.v1.PullImageResult
-	(*WriteManagedFile)(nil),       // 21: wardstone.v1.WriteManagedFile
-	(*WriteManagedFileResult)(nil), // 22: wardstone.v1.WriteManagedFileResult
-	(*ReadManagedFile)(nil),        // 23: wardstone.v1.ReadManagedFile
-	(*ReadManagedFileResult)(nil),  // 24: wardstone.v1.ReadManagedFileResult
-	(*HostFacts)(nil),              // 25: wardstone.v1.HostFacts
-	(*HostFactsResult)(nil),        // 26: wardstone.v1.HostFactsResult
-	(*Health)(nil),                 // 27: wardstone.v1.Health
-	(*HealthResult)(nil),           // 28: wardstone.v1.HealthResult
-	(*SelfUpdate)(nil),             // 29: wardstone.v1.SelfUpdate
-	(*SelfUpdateResult)(nil),       // 30: wardstone.v1.SelfUpdateResult
-	nil,                            // 31: wardstone.v1.EnsureContainer.EnvEntry
-	nil,                            // 32: wardstone.v1.EnsureContainer.LabelsEntry
+	(*RemoveContainer)(nil),        // 21: wardstone.v1.RemoveContainer
+	(*RemoveContainerResult)(nil),  // 22: wardstone.v1.RemoveContainerResult
+	(*ContainerStats)(nil),         // 23: wardstone.v1.ContainerStats
+	(*ContainerStatsResult)(nil),   // 24: wardstone.v1.ContainerStatsResult
+	(*PruneImages)(nil),            // 25: wardstone.v1.PruneImages
+	(*PruneImagesResult)(nil),      // 26: wardstone.v1.PruneImagesResult
+	(*WriteManagedFile)(nil),       // 27: wardstone.v1.WriteManagedFile
+	(*WriteManagedFileResult)(nil), // 28: wardstone.v1.WriteManagedFileResult
+	(*ReadManagedFile)(nil),        // 29: wardstone.v1.ReadManagedFile
+	(*ReadManagedFileResult)(nil),  // 30: wardstone.v1.ReadManagedFileResult
+	(*HostFacts)(nil),              // 31: wardstone.v1.HostFacts
+	(*HostFactsResult)(nil),        // 32: wardstone.v1.HostFactsResult
+	(*Health)(nil),                 // 33: wardstone.v1.Health
+	(*HealthResult)(nil),           // 34: wardstone.v1.HealthResult
+	(*SelfUpdate)(nil),             // 35: wardstone.v1.SelfUpdate
+	(*SelfUpdateResult)(nil),       // 36: wardstone.v1.SelfUpdateResult
+	nil,                            // 37: wardstone.v1.EnsureContainer.EnvEntry
+	nil,                            // 38: wardstone.v1.EnsureContainer.LabelsEntry
 }
 var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	6,  // 0: wardstone.v1.AgentMessage.hello:type_name -> wardstone.v1.Hello
@@ -2310,37 +2731,43 @@ var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	15, // 4: wardstone.v1.Operation.stop_container:type_name -> wardstone.v1.StopContainer
 	17, // 5: wardstone.v1.Operation.container_logs:type_name -> wardstone.v1.ContainerLogs
 	19, // 6: wardstone.v1.Operation.pull_image:type_name -> wardstone.v1.PullImage
-	21, // 7: wardstone.v1.Operation.write_managed_file:type_name -> wardstone.v1.WriteManagedFile
-	23, // 8: wardstone.v1.Operation.read_managed_file:type_name -> wardstone.v1.ReadManagedFile
-	25, // 9: wardstone.v1.Operation.host_facts:type_name -> wardstone.v1.HostFacts
-	27, // 10: wardstone.v1.Operation.health:type_name -> wardstone.v1.Health
-	29, // 11: wardstone.v1.Operation.self_update:type_name -> wardstone.v1.SelfUpdate
-	10, // 12: wardstone.v1.OpResult.error:type_name -> wardstone.v1.OpError
-	14, // 13: wardstone.v1.OpResult.ensure_container:type_name -> wardstone.v1.EnsureContainerResult
-	16, // 14: wardstone.v1.OpResult.stop_container:type_name -> wardstone.v1.StopContainerResult
-	18, // 15: wardstone.v1.OpResult.container_logs:type_name -> wardstone.v1.ContainerLogsResult
-	20, // 16: wardstone.v1.OpResult.pull_image:type_name -> wardstone.v1.PullImageResult
-	22, // 17: wardstone.v1.OpResult.write_managed_file:type_name -> wardstone.v1.WriteManagedFileResult
-	24, // 18: wardstone.v1.OpResult.read_managed_file:type_name -> wardstone.v1.ReadManagedFileResult
-	26, // 19: wardstone.v1.OpResult.host_facts:type_name -> wardstone.v1.HostFactsResult
-	28, // 20: wardstone.v1.OpResult.health:type_name -> wardstone.v1.HealthResult
-	30, // 21: wardstone.v1.OpResult.self_update:type_name -> wardstone.v1.SelfUpdateResult
-	0,  // 22: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
-	31, // 23: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
-	12, // 24: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
-	13, // 25: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
-	32, // 26: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
-	1,  // 27: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
-	5,  // 28: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
-	3,  // 29: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
-	2,  // 30: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
-	7,  // 31: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
-	4,  // 32: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
-	30, // [30:33] is the sub-list for method output_type
-	27, // [27:30] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	27, // 7: wardstone.v1.Operation.write_managed_file:type_name -> wardstone.v1.WriteManagedFile
+	29, // 8: wardstone.v1.Operation.read_managed_file:type_name -> wardstone.v1.ReadManagedFile
+	31, // 9: wardstone.v1.Operation.host_facts:type_name -> wardstone.v1.HostFacts
+	33, // 10: wardstone.v1.Operation.health:type_name -> wardstone.v1.Health
+	35, // 11: wardstone.v1.Operation.self_update:type_name -> wardstone.v1.SelfUpdate
+	21, // 12: wardstone.v1.Operation.remove_container:type_name -> wardstone.v1.RemoveContainer
+	23, // 13: wardstone.v1.Operation.container_stats:type_name -> wardstone.v1.ContainerStats
+	25, // 14: wardstone.v1.Operation.prune_images:type_name -> wardstone.v1.PruneImages
+	10, // 15: wardstone.v1.OpResult.error:type_name -> wardstone.v1.OpError
+	14, // 16: wardstone.v1.OpResult.ensure_container:type_name -> wardstone.v1.EnsureContainerResult
+	16, // 17: wardstone.v1.OpResult.stop_container:type_name -> wardstone.v1.StopContainerResult
+	18, // 18: wardstone.v1.OpResult.container_logs:type_name -> wardstone.v1.ContainerLogsResult
+	20, // 19: wardstone.v1.OpResult.pull_image:type_name -> wardstone.v1.PullImageResult
+	28, // 20: wardstone.v1.OpResult.write_managed_file:type_name -> wardstone.v1.WriteManagedFileResult
+	30, // 21: wardstone.v1.OpResult.read_managed_file:type_name -> wardstone.v1.ReadManagedFileResult
+	32, // 22: wardstone.v1.OpResult.host_facts:type_name -> wardstone.v1.HostFactsResult
+	34, // 23: wardstone.v1.OpResult.health:type_name -> wardstone.v1.HealthResult
+	36, // 24: wardstone.v1.OpResult.self_update:type_name -> wardstone.v1.SelfUpdateResult
+	22, // 25: wardstone.v1.OpResult.remove_container:type_name -> wardstone.v1.RemoveContainerResult
+	24, // 26: wardstone.v1.OpResult.container_stats:type_name -> wardstone.v1.ContainerStatsResult
+	26, // 27: wardstone.v1.OpResult.prune_images:type_name -> wardstone.v1.PruneImagesResult
+	0,  // 28: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
+	37, // 29: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
+	12, // 30: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
+	13, // 31: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
+	38, // 32: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
+	1,  // 33: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
+	5,  // 34: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
+	3,  // 35: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
+	2,  // 36: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
+	7,  // 37: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
+	4,  // 38: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
+	36, // [36:39] is the sub-list for method output_type
+	33, // [33:36] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_wardstone_v1_wardstone_proto_init() }
@@ -2362,6 +2789,9 @@ func file_wardstone_v1_wardstone_proto_init() {
 		(*Operation_HostFacts)(nil),
 		(*Operation_Health)(nil),
 		(*Operation_SelfUpdate)(nil),
+		(*Operation_RemoveContainer)(nil),
+		(*Operation_ContainerStats)(nil),
+		(*Operation_PruneImages)(nil),
 	}
 	file_wardstone_v1_wardstone_proto_msgTypes[8].OneofWrappers = []any{
 		(*OpResult_Error)(nil),
@@ -2374,6 +2804,9 @@ func file_wardstone_v1_wardstone_proto_init() {
 		(*OpResult_HostFacts)(nil),
 		(*OpResult_Health)(nil),
 		(*OpResult_SelfUpdate)(nil),
+		(*OpResult_RemoveContainer)(nil),
+		(*OpResult_ContainerStats)(nil),
+		(*OpResult_PruneImages)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2381,7 +2814,7 @@ func file_wardstone_v1_wardstone_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wardstone_v1_wardstone_proto_rawDesc), len(file_wardstone_v1_wardstone_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   32,
+			NumMessages:   38,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

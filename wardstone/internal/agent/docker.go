@@ -187,3 +187,61 @@ func (d *dockerClient) pull(ctx context.Context, ref string) error {
 	_, err := d.call(ctx, "POST", "/images/create", url.Values{"fromImage": {ref}}, nil)
 	return err
 }
+
+func (d *dockerClient) remove(ctx context.Context, id string, force bool) error {
+	q := url.Values{}
+	if force {
+		q.Set("force", "1")
+	}
+	_, err := d.call(ctx, "DELETE", "/containers/"+url.PathEscape(id), q, nil)
+	return err
+}
+
+type statsResult struct {
+	CPUStats struct {
+		CPUUsage struct {
+			TotalUsage uint64 `json:"total_usage"`
+		} `json:"cpu_usage"`
+	} `json:"cpu_stats"`
+	MemoryStats struct {
+		Usage uint64 `json:"usage"`
+		Limit uint64 `json:"limit"`
+	} `json:"memory_stats"`
+}
+
+func (d *dockerClient) stats(ctx context.Context, id string) (statsResult, error) {
+	raw, err := d.call(ctx, "GET", "/containers/"+url.PathEscape(id)+"/stats", url.Values{"stream": {"false"}}, nil)
+	if err != nil {
+		return statsResult{}, err
+	}
+	var out statsResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return statsResult{}, err
+	}
+	return out, nil
+}
+
+type pruneResult struct {
+	ImagesDeleted  []struct{} `json:"ImagesDeleted"`
+	SpaceReclaimed uint64     `json:"SpaceReclaimed"`
+}
+
+// pruneImages prunes ONLY wildstone-owned images. The label filter is a
+// hard invariant (ADR-W003 §A4.3) — never call /images/prune without it.
+func (d *dockerClient) pruneImages(ctx context.Context) (pruneResult, error) {
+	filters, err := json.Marshal(map[string][]string{
+		"label": {OwnerLabel + "=" + ownerValue},
+	})
+	if err != nil {
+		return pruneResult{}, err
+	}
+	raw, err := d.call(ctx, "POST", "/images/prune", url.Values{"filters": {string(filters)}}, nil)
+	if err != nil {
+		return pruneResult{}, err
+	}
+	var out pruneResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return pruneResult{}, err
+	}
+	return out, nil
+}

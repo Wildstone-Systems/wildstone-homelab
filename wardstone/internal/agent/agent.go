@@ -32,7 +32,9 @@ import (
 )
 
 // ProtocolMinor is the v1 minor revision this agent speaks.
-const ProtocolMinor = 0
+//
+// 1: adds RemoveContainer, ContainerStats, PruneImages (ADR-W003 W6a).
+const ProtocolMinor = 1
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

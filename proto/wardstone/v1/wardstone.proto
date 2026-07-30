@@ -112,6 +112,9 @@ message Operation {
     HostFacts host_facts = 7;
     Health health = 8;
     SelfUpdate self_update = 9;
+    RemoveContainer remove_container = 10;
+    ContainerStats container_stats = 11;
+    PruneImages prune_images = 12;
   }
 }
 
@@ -128,6 +131,9 @@ message OpResult {
     HostFactsResult host_facts = 9;
     HealthResult health = 10;
     SelfUpdateResult self_update = 11;
+    RemoveContainerResult remove_container = 12;
+    ContainerStatsResult container_stats = 13;
+    PruneImagesResult prune_images = 14;
   }
 }
 
@@ -201,6 +207,40 @@ message PullImage {
 
 message PullImageResult {
   string digest = 1;
+}
+
+message RemoveContainer {
+  string name = 1;
+  bool force = 2;
+}
+
+// Idempotent remove: a container that does not exist is NOT an error —
+// existed=false is returned as a success result. A container that exists
+// but is not wildstone-owned is still refused with FORBIDDEN (ownership
+// is checked before existence is even considered "not found").
+message RemoveContainerResult {
+  bool existed = 1;
+}
+
+message ContainerStats {
+  string name = 1;
+}
+
+message ContainerStatsResult {
+  uint64 cpu_usage_ns = 1;
+  uint64 mem_usage_bytes = 2;
+  uint64 mem_limit_bytes = 3;
+}
+
+message PruneImages {}
+
+// PruneImages ALWAYS scopes to wildstone-owned images: the agent issues
+// the Engine API call with filters={"label":["dev.wildstone.owner=wildstone"]}.
+// An implementation that prunes without this filter violates the
+// ownership invariant (ADR-W003 §A4.3) even if it otherwise behaves.
+message PruneImagesResult {
+  uint64 reclaimed_bytes = 1;
+  uint32 deleted_count = 2;
 }
 
 // ---------------------------------------------------------------- files

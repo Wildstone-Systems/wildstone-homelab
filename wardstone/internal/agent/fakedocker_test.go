@@ -26,12 +26,13 @@ type fakeDocker struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	mu         sync.Mutex
-	containers map[string]*fakeContainer
-	seq        int
+	mu           sync.Mutex
+	containers   map[string]*fakeContainer
+	seq          int
+	pruneFilters string // last filters query param /images/prune received
 }
 
-var containerPath = regexp.MustCompile(`^/containers/([^/]+)(/(json|start|stop|logs))?$`)
+var containerPath = regexp.MustCompile(`^/containers/([^/]+)(/(json|start|stop|logs|stats))?$`)
 
 func newFakeDocker(t *testing.T) *fakeDocker {
 	f := &fakeDocker{t: t, containers: map[string]*fakeContainer{}}
@@ -101,6 +102,19 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Path == "/images/prune" && r.Method == http.MethodPost {
+		f.pruneFilters = r.URL.Query().Get("filters")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ImagesDeleted": []map[string]string{
+				{"Deleted": "sha256:x"},
+				{"Deleted": "sha256:y"},
+			},
+			"SpaceReclaimed": 12345,
+		})
+		return
+	}
+
 	m := containerPath.FindStringSubmatch(r.URL.Path)
 	if m == nil {
 		http.Error(w, `{"message":"not found"}`, http.StatusNotFound)
@@ -137,6 +151,12 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case m[3] == "logs":
 		w.Write([]byte("fake log line 1\nfake log line 2\n"))
+	case m[3] == "stats":
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"cpu_stats":    map[string]any{"cpu_usage": map[string]any{"total_usage": 424242}},
+			"memory_stats": map[string]any{"usage": 111111, "limit": 999999},
+		})
 	case m[3] == "" && r.Method == http.MethodDelete:
 		if name == "" {
 			http.Error(w, `{"message":"no such container"}`, http.StatusNotFound)
