@@ -1,0 +1,234 @@
+// Wardstone <-> Keystone protocol, v1.
+//
+// Design invariants (ADR-W003):
+//   - Wardstone DIALS OUT. Keystone is the gRPC server; the agent holds a
+//     long-lived bidirectional Session stream over which Keystone sends
+//     typed operations and the agent returns typed results.
+//   - The operation surface is a CLOSED ONEOF. There is no Exec(string)
+//     and never will be: "no arbitrary shell" is a property of the wire
+//     format, not a policy hope.
+//   - v1 evolves additively only (new fields, new oneof arms). Breaking
+//     changes mean wardstone.v2, and one minor version of skew between
+//     Keystone and Wardstone is always supported.
+
+syntax = "proto3";
+
+package wardstone.v1;
+
+option go_package = "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1;wardstonev1";
+
+// KeystoneGateway is implemented by Keystone (the control plane).
+service KeystoneGateway {
+  // Join exchanges a one-time join token + CSR for a client certificate
+  // issued by Keystone's embedded CA. Called on a server-auth-only TLS
+  // channel exactly once per node; every later connection is mTLS.
+  rpc Join(JoinRequest) returns (JoinResponse);
+
+  // Session is the agent's persistent operation stream (mTLS required).
+  // The first agent message is Hello; afterwards Keystone sends Operation
+  // messages and the agent answers with OpResult, correlated by op_id.
+  rpc Session(stream AgentMessage) returns (stream KeystoneMessage);
+}
+
+// ---------------------------------------------------------------- bootstrap
+
+message JoinRequest {
+  string join_token = 1; // one-time, minted by installer/Keystone
+  string node_id = 2;
+  bytes csr_pem = 3;
+}
+
+message JoinResponse {
+  bytes cert_pem = 1;
+  bytes ca_pem = 2;
+  // Public key the agent must use to verify per-operation signatures once
+  // op signing lands (E1). Delivered at join so it is pinned before any
+  // operation is ever accepted.
+  bytes op_signing_public_key = 3;
+}
+
+// ---------------------------------------------------------------- session
+
+message AgentMessage {
+  oneof msg {
+    Hello hello = 1;
+    OpResult result = 2;
+  }
+}
+
+message Hello {
+  string node_id = 1;
+  string agent_version = 2;
+  // Highest v1 minor protocol revision the agent speaks. Keystone must
+  // tolerate agents one minor revision behind its own.
+  uint32 protocol_minor = 3;
+}
+
+message KeystoneMessage {
+  string op_id = 1;
+  Operation op = 2;
+  // Reserved for the Keystone signing key's signature over (op_id, op)
+  // — defense against transport MITM. Unused in the S1 spike; verified
+  // from E1 on. Additive, so enabling it is not a wire break.
+  bytes op_signature = 3;
+}
+
+// The ENTIRE privileged surface. Closed set; no free-form escape hatch.
+message Operation {
+  oneof op {
+    EnsureContainer ensure_container = 1;
+    StopContainer stop_container = 2;
+    ContainerLogs container_logs = 3;
+    PullImage pull_image = 4;
+    WriteManagedFile write_managed_file = 5;
+    ReadManagedFile read_managed_file = 6;
+    HostFacts host_facts = 7;
+    Health health = 8;
+    SelfUpdate self_update = 9;
+  }
+}
+
+message OpResult {
+  string op_id = 1;
+  oneof result {
+    OpError error = 2;
+    EnsureContainerResult ensure_container = 3;
+    StopContainerResult stop_container = 4;
+    ContainerLogsResult container_logs = 5;
+    PullImageResult pull_image = 6;
+    WriteManagedFileResult write_managed_file = 7;
+    ReadManagedFileResult read_managed_file = 8;
+    HostFactsResult host_facts = 9;
+    HealthResult health = 10;
+    SelfUpdateResult self_update = 11;
+  }
+}
+
+message OpError {
+  ErrorCode code = 1;
+  string message = 2;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_INVALID = 1;          // malformed operation
+  ERROR_CODE_FORBIDDEN = 2;        // agent-side invariant refused it (prefix, ownership, digest)
+  ERROR_CODE_NOT_FOUND = 3;
+  ERROR_CODE_RUNTIME = 4;          // docker/filesystem failure
+  ERROR_CODE_VERIFICATION = 5;     // signature/digest verification failed
+}
+
+// ---------------------------------------------------------------- containers
+
+message EnsureContainer {
+  string name = 1;
+  // Image MUST be digest-pinned (repo@sha256:...). The agent refuses tags.
+  string image = 2;
+  map<string, string> env = 3;
+  repeated PortBinding ports = 4;
+  repeated Mount mounts = 5;
+  map<string, string> labels = 6; // agent adds/asserts dev.wildstone.owner
+  string restart_policy = 7;      // "no" | "unless-stopped" | "always"
+}
+
+message PortBinding {
+  uint32 host_port = 1;
+  uint32 container_port = 2;
+  string host_ip = 3; // default 0.0.0.0
+}
+
+message Mount {
+  string source = 1; // host path (managed-prefix-restricted) or volume name
+  string target = 2;
+  bool read_only = 3;
+}
+
+message EnsureContainerResult {
+  string container_id = 1;
+  bool created = 2; // false if it already existed in the desired state
+  bool started = 3;
+}
+
+message StopContainer {
+  string name = 1;
+  uint32 timeout_seconds = 2;
+}
+
+message StopContainerResult {
+  bool was_running = 1;
+}
+
+message ContainerLogs {
+  string name = 1;
+  uint32 tail = 2;          // 0 = default (100)
+  int64 since_unix_sec = 3; // 0 = no bound
+}
+
+message ContainerLogsResult {
+  bytes logs = 1; // raw multiplexed docker log stream, size-capped by agent
+}
+
+message PullImage {
+  string image = 1; // digest-pinned, repo@sha256:... — tags are refused
+}
+
+message PullImageResult {
+  string digest = 1;
+}
+
+// ---------------------------------------------------------------- files
+
+message WriteManagedFile {
+  string path = 1; // must resolve under a managed prefix
+  bytes content = 2;
+  uint32 mode = 3; // e.g. 0644; 0 = 0644
+}
+
+message WriteManagedFileResult {
+  string sha256_hex = 1;
+}
+
+message ReadManagedFile {
+  string path = 1; // must resolve under a managed prefix
+}
+
+message ReadManagedFileResult {
+  bytes content = 1;
+}
+
+// ---------------------------------------------------------------- system
+
+message HostFacts {}
+
+message HostFactsResult {
+  string hostname = 1;
+  string os = 2;
+  string kernel = 3;
+  uint32 num_cpu = 4;
+  uint64 mem_total_bytes = 5;
+  uint64 root_disk_total_bytes = 6;
+  uint64 root_disk_free_bytes = 7;
+  string agent_version = 8;
+}
+
+message Health {}
+
+message HealthResult {
+  bool ok = 1;
+  string detail = 2;
+}
+
+// ---------------------------------------------------------------- self-update
+
+message SelfUpdate {
+  bytes binary = 1;      // the new wardstoned (spike: inline; E1: chunked/fetched)
+  bytes signature = 2;   // ed25519 over sha256(binary), verified against baked-in key
+  string version = 3;
+  string sha256_hex = 4; // integrity check before signature check
+}
+
+message SelfUpdateResult {
+  string staged_path = 1;
+  string previous_path = 2; // rollback artifact
+  bool promoted = 3;
+}
