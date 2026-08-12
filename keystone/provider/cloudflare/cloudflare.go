@@ -15,6 +15,11 @@
 // *provider.RateLimited the caller (keystone/reconcile) treats as
 // retryable-later, not fatal.
 //
+// Transient server errors: an HTTP 5xx from Cloudflare is returned as a
+// *provider.Transient — the same "retryable-later, not fatal" treatment
+// as RateLimited, but for the ordinary "the control plane had a blip"
+// case rather than exhausted rate-limit budget.
+//
 // The API token is never logged: no code path in this package writes it to
 // an error string, and errors here only ever include response bodies
 // (which never contain the token — CF doesn't echo it back).
@@ -314,10 +319,13 @@ func (p *Provider) findRecord(ctx context.Context, zoneID, name, rtype string) (
 
 // do sends one logical request, retrying on HTTP 429 (honoring
 // Retry-After, in seconds) up to maxAttempts() tries. If still
-// rate-limited after that, it returns *provider.RateLimited. Any other
-// non-2xx status is returned as a plain error (not retried — those are not
-// documented as transient by the CF API and ADR-W004 A5 only calls out
-// 429).
+// rate-limited after that, it returns *provider.RateLimited. A 5xx status
+// is returned as a *provider.Transient error — not retried here (that
+// bounded retry lives in keystone/reconcile's retryProvider, same as it
+// does for RateLimited) but distinguished from a genuine 4xx rejection so
+// the caller knows it's safe to retry. Any other non-2xx (4xx other than
+// 429) status is returned as a plain error (not retried — those are not
+// transient, e.g. a genuinely invalid request).
 func (p *Provider) do(ctx context.Context, method, url string, body any, op string) (*cfEnvelope, error) {
 	var reqBody []byte
 	if body != nil {
@@ -357,6 +365,10 @@ func (p *Provider) do(ctx context.Context, method, url string, body any, op stri
 				continue
 			}
 			return nil, &provider.RateLimited{RetryAfter: lastRetryAfter, Op: op, Err: lastErr}
+		}
+
+		if resp.StatusCode >= 500 {
+			return nil, &provider.Transient{Op: op, Err: fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(data))}
 		}
 
 		if resp.StatusCode >= 300 {

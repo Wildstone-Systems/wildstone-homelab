@@ -6,9 +6,9 @@
 // keystone/provider.Provider looked up from Providers[resource.KindDnsRecord]
 // for Observe/Create/Update/Delete, using the same diff -> plan -> apply ->
 // health-gate loop as the Wardstone-applied kinds. A *provider.RateLimited
-// error is retried by the Reconciler's existing bounded-retry (like a
-// transient Wardstone op failure) and only becomes an Outcome.Incident once
-// those retries are exhausted.
+// or *provider.Transient error is retried by the Reconciler's existing
+// bounded-retry (like a transient Wardstone op failure) and only becomes
+// an Outcome.Incident once those retries are exhausted.
 //
 // # Observe: pragmatic, per-kind, documented
 //
@@ -547,11 +547,12 @@ func placeholderResource(kind resource.Kind, name string) resource.Resource {
 // observeProviders observes every provider-backed desired resource
 // (currently just DnsRecord, ADR-W004 A5) via Providers[kind].Observe,
 // returning only those confirmed to exist (diff treats an absent one as a
-// Create candidate the normal way). A *provider.RateLimited error is
-// retried by retryProvider like any other transient failure; if retries
-// are exhausted the error is returned to the caller, which surfaces it as
-// an Outcome via the normal error path (Reconcile itself errors out here,
-// same as a Wardstone observe transport failure would).
+// Create candidate the normal way). A *provider.RateLimited or
+// *provider.Transient error is retried by retryProvider like any other
+// transient failure; if retries are exhausted the error is returned to
+// the caller, which surfaces it as an Outcome via the normal error path
+// (Reconcile itself errors out here, same as a Wardstone observe
+// transport failure would).
 func (r *Reconciler) observeProviders(ctx context.Context, desired []resource.Resource) ([]resource.Resource, error) {
 	var observed []resource.Resource
 	for _, want := range desired {
@@ -691,9 +692,10 @@ func (r *Reconciler) waitDnsRecordAbsent(ctx context.Context, p provider.Provide
 // retryProvider retries fn up to MaxApplyRetries times (same bound/backoff
 // as retryDispatch) as long as fn's error is a *provider.RateLimited
 // (ADR-W004 A5: "the reconciler treats [it] as retryable-later, not
-// fatal"). Any other error returns immediately without retry — a
-// provider's non-rate-limit failure (e.g. a genuinely invalid record) is
-// not assumed transient.
+// fatal") or a *provider.Transient (a retryable server-side blip, same
+// treatment). Any other error returns immediately without retry — a
+// provider's non-rate-limit, non-transient failure (e.g. a genuinely
+// invalid record) is not assumed retryable.
 func (r *Reconciler) retryProvider(ctx context.Context, fn func() error) error {
 	maxRetries := r.MaxApplyRetries
 	if maxRetries <= 0 {
@@ -710,7 +712,7 @@ func (r *Reconciler) retryProvider(ctx context.Context, fn func() error) error {
 		if err == nil {
 			return nil
 		}
-		if !provider.IsRateLimited(err) {
+		if !provider.IsRateLimited(err) && !provider.IsTransient(err) {
 			return err
 		}
 		lastErr = err

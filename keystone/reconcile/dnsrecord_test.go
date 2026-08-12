@@ -126,16 +126,16 @@ func TestReconcileDnsRecordPartialFailureRetryIsIdempotent(t *testing.T) {
 	p := &cloudflare.Provider{APIToken: "tok", BaseURL: f.URL(), MaxAttempts: 4}
 	r := newDnsReconciler(p)
 
-	// The read-back GET right after Create's POST fails once — Create()
-	// itself surfaces this as an error (not rate-limited), so retryProvider
-	// won't retry it (that's only for RateLimited); the Reconciler's own
-	// step therefore fails on the first attempt inside applyDnsRecordStep,
-	// which does not itself loop Create calls beyond retryProvider's
-	// rate-limit-only retry. Model the retry the way the reconcile loop
-	// actually gets one: re-invoke Reconcile (a fresh pass), simulating a
-	// caller (Keystone's scheduler) retrying on the next tick after a
-	// transient failure — the important assertion is that this produces
-	// exactly one record, never a duplicate.
+	// The read-back GET right after Create's POST fails once with a 5xx —
+	// cloudflare.go surfaces that as a *provider.Transient (ADR-W004 A5
+	// B8), which retryProvider now retries in-place (same bounded budget
+	// as RateLimited) instead of failing the step outright. The retried
+	// Create() call's own pre-create lookup then finds the record the
+	// first POST already made (matching spec) and converges without a
+	// second POST — so this now resolves within a single Reconcile call,
+	// where it used to require the caller to re-invoke Reconcile on a
+	// later tick. The important assertion is unchanged: exactly one
+	// record, never a duplicate.
 	f.armFailGetCall(3) // see armFailGetCall doc: call 3 is the post-POST read-back through the full Reconcile path
 
 	desired := []resource.Resource{dnsRecordResource("app.example.com", "example.com", "A", "1.2.3.4", false)}
@@ -143,26 +143,14 @@ func TestReconcileDnsRecordPartialFailureRetryIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if outcome.Incident == "" {
-		t.Fatalf("expected the injected read-back failure to surface as an Incident: %+v", outcome)
+	if !outcome.Applied || outcome.Incident != "" {
+		t.Fatalf("expected the injected transient read-back failure to be absorbed by retryProvider, got: %+v", outcome)
 	}
 	if got := f.recordCount(zoneID, "A", "app.example.com"); got != 1 {
-		t.Fatalf("expected exactly 1 record after the failed read-back, got %d", got)
-	}
-
-	// Retry via a fresh Reconcile call: must be idempotent.
-	outcome, err = r.Reconcile(context.Background(), "", desired)
-	if err != nil {
-		t.Fatalf("retried reconcile: %v", err)
-	}
-	if !outcome.Applied {
-		t.Fatalf("retried reconcile should have converged: %+v", outcome)
-	}
-	if got := f.recordCount(zoneID, "A", "app.example.com"); got != 1 {
-		t.Fatalf("expected exactly 1 record after retry, got %d (duplicate!)", got)
+		t.Fatalf("expected exactly 1 record, got %d (duplicate!)", got)
 	}
 	if got := f.requestCount("POST", "/zones/{id}/dns_records"); got != 1 {
-		t.Fatalf("expected exactly 1 POST across both reconcile attempts, got %d", got)
+		t.Fatalf("expected exactly 1 POST despite the retry, got %d", got)
 	}
 }
 
@@ -181,5 +169,61 @@ func TestReconcileDnsRecordRateLimitBacksOffThenSucceeds(t *testing.T) {
 	}
 	if !outcome.Applied || outcome.Incident != "" {
 		t.Fatalf("expected the rate limit to be absorbed by backoff+retry, got: %+v", outcome)
+	}
+}
+
+// TestReconcileDnsRecordTransientBacksOffThenSucceeds mirrors the
+// RateLimited case above for a transient 5xx (ADR-W004 A5 B8):
+// retryProvider's bounded retry (MaxApplyRetries=3 here, via
+// newDnsReconciler) must absorb a couple of 503s and still converge.
+func TestReconcileDnsRecordTransientBacksOffThenSucceeds(t *testing.T) {
+	f := newFakeCFForReconcileTest(t)
+	f.addZone("example.com")
+	p := &cloudflare.Provider{APIToken: "tok", BaseURL: f.URL(), MaxAttempts: 4}
+	r := newDnsReconciler(p)
+
+	f.setServerError(2) // fewer 503s than MaxApplyRetries=3 -> absorbed
+
+	desired := []resource.Resource{dnsRecordResource("app.example.com", "example.com", "A", "1.2.3.4", false)}
+	outcome, err := r.Reconcile(context.Background(), "", desired)
+	if err != nil {
+		t.Fatalf("reconcile should not fail fatally on a bounded transient failure: %v", err)
+	}
+	if !outcome.Applied || outcome.Incident != "" {
+		t.Fatalf("expected the transient failure to be absorbed by backoff+retry, got: %+v", outcome)
+	}
+}
+
+// TestReconcileDnsRecordTransientExhaustsToIncident confirms the other
+// half of the contract: once transient 503s outlast retryProvider's
+// bounded budget (MaxApplyRetries=3), the failure is no longer silently
+// absorbed — it surfaces as an Outcome.Incident, same as a permanent
+// provider failure would.
+//
+// The outage is armed to start only after the Reconciler's observe
+// pre-pass (2 requests: resolve zone + find-by-key) has already
+// succeeded, so the persistent failure hits during apply — where a
+// provider error is reported through sr.Error/Outcome.Incident. (An
+// observe-phase exhaustion instead makes Reconcile return the error
+// directly, per observeProviders' doc comment — a different, and already
+// covered, error path.)
+func TestReconcileDnsRecordTransientExhaustsToIncident(t *testing.T) {
+	f := newFakeCFForReconcileTest(t)
+	f.addZone("example.com")
+	p := &cloudflare.Provider{APIToken: "tok", BaseURL: f.URL(), MaxAttempts: 4}
+	r := newDnsReconciler(p)
+
+	f.setServerErrorAfter(2, 1000) // let observe succeed, then outage never lets up
+
+	desired := []resource.Resource{dnsRecordResource("app.example.com", "example.com", "A", "1.2.3.4", false)}
+	outcome, err := r.Reconcile(context.Background(), "", desired)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if outcome.Incident == "" {
+		t.Fatalf("expected exhausted transient retries to surface as an Incident: %+v", outcome)
+	}
+	if outcome.Applied {
+		t.Fatalf("must not report Applied when apply never succeeded: %+v", outcome)
 	}
 }

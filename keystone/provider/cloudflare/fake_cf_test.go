@@ -40,6 +40,11 @@ type fakeCF struct {
 	rateLimitRemaining int
 	retryAfterSeconds  int
 
+	// serverErrorRemaining: while > 0, every request is answered with a 503
+	// (and serverErrorRemaining is decremented) instead of being served —
+	// models a transient Cloudflare-side outage (ADR-W004 A5 B8).
+	serverErrorRemaining int
+
 	// failGetCallN: when > 0, the Nth GET to the dns_records list endpoint
 	// (1-indexed, counting from when armed) fails with a 500 instead of
 	// being served. Used to model "Create's POST succeeds but the
@@ -133,6 +138,15 @@ func (f *fakeCF) setRateLimit(n, retryAfterSeconds int) {
 	f.retryAfterSeconds = retryAfterSeconds
 }
 
+// setServerError makes the next n requests (across all endpoints) respond
+// with 503 (Service Unavailable) — a transient control-plane failure,
+// distinct from setRateLimit's 429.
+func (f *fakeCF) setServerError(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.serverErrorRemaining = n
+}
+
 // failNextReadBack arms a one-shot failure of the read-back GET that
 // follows a Create's POST — the SECOND dns_records list GET issued after
 // this call (the first is Create's own pre-create lookup). See the
@@ -168,6 +182,15 @@ func (f *fakeCF) handle(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Write([]byte(`{"success":false,"errors":[{"code":10000,"message":"rate limited"}]}`)) //nolint:errcheck
+		return
+	}
+	f.mu.Unlock()
+
+	f.mu.Lock()
+	if f.serverErrorRemaining > 0 {
+		f.serverErrorRemaining--
+		f.mu.Unlock()
+		http.Error(w, `{"success":false,"errors":[{"code":1101,"message":"fake: injected transient server error"}]}`, http.StatusServiceUnavailable)
 		return
 	}
 	f.mu.Unlock()
