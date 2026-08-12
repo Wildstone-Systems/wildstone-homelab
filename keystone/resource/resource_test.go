@@ -243,6 +243,45 @@ func TestValidateMissingOwner(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsPathTraversalNames(t *testing.T) {
+	// A resource name is used verbatim as a filesystem path segment by the
+	// Statefile and fragment writers; a hostile name must be refused at
+	// validation, before it can escape the intended directory.
+	for _, name := range []string{
+		"../../../etc/cron.d/x", // dot-dot traversal
+		"/etc/passwd",           // absolute
+		"foo/bar",               // embedded slash
+		"UPPER",                 // not a DNS label (uppercase)
+		"has space",             // whitespace
+		"bad\x00name",           // NUL
+		"-leading-dash",         // must start alphanumeric
+	} {
+		r := Resource{
+			Kind:     KindVolume,
+			Metadata: Metadata{Name: name, Owner: "capability/x"},
+			Volume:   &VolumeSpec{Name: "v1"},
+		}
+		err := r.Validate()
+		if err == nil {
+			t.Fatalf("name %q: expected validation error, got nil", name)
+		}
+		ve, ok := err.(*ValidationError)
+		if !ok || ve.Field != "metadata.name" {
+			t.Fatalf("name %q: expected metadata.name validation error, got %v", name, err)
+		}
+	}
+
+	// A well-formed name still validates.
+	ok := Resource{
+		Kind:     KindVolume,
+		Metadata: Metadata{Name: "immich-library.v2", Owner: "capability/x"},
+		Volume:   &VolumeSpec{Name: "v1"},
+	}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("valid name rejected: %v", err)
+	}
+}
+
 func TestValidateOidcClientMissingRedirectUri(t *testing.T) {
 	r := Resource{
 		Kind:     KindOidcClient,

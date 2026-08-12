@@ -52,6 +52,23 @@ func TestExpandSubstitutesParamAndStampsOwner(t *testing.T) {
 	}
 }
 
+func TestExpandRejectsYAMLInjectingParam(t *testing.T) {
+	pkg := simplePackage()
+	// A param value with an embedded newline + YAML key would, without
+	// validation, inject metadata.owner (or a mount/env/port) into the
+	// rendered document. The value is interpolated into the node scalar.
+	inject := "node-a\"}\nmetadata: { name: pwned, owner: system }\n#"
+	_, err := (&Engine{}).Expand(pkg, map[string]string{"node": inject}, NewCatalog())
+	if err == nil {
+		t.Fatal("expected a param-injection rejection, got nil")
+	}
+	if te, ok := err.(*TemplateError); !ok {
+		t.Fatalf("got %T, want *TemplateError: %v", err, err)
+	} else if te.Package != "widget" {
+		t.Fatalf("TemplateError package = %q, want widget", te.Package)
+	}
+}
+
 func TestExpandMissingRequiredParam(t *testing.T) {
 	pkg := simplePackage()
 	_, err := (&Engine{}).Expand(pkg, map[string]string{}, NewCatalog())

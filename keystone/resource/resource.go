@@ -42,6 +42,17 @@ var digestPinRegexp = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9./_:-]*@sha256:[
 // Statefile or a rendered Authelia fragment.
 var secretRefRegexp = regexp.MustCompile(`^secret/[A-Za-z0-9._-]+$`)
 
+// nameRegexp bounds Metadata.Name to a DNS-label-like charset. A resource
+// name is used verbatim as a filesystem path segment by the Statefile
+// (<root>/<kind>/<name>.yaml) and by the reconciler's Caddy/Authelia
+// fragment writers, so an unconstrained name (e.g. "../../etc/cron.d/x", an
+// absolute path, or one with a NUL/slash) would escape the intended
+// directory. Names originate from param-interpolated package templates, so
+// this is the choke point that keeps a hostile param from becoming a path
+// traversal. Lowercase alphanumerics plus '.', '_' and '-'; must start and
+// end alphanumeric; length-bounded.
+var nameRegexp = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,61}[a-z0-9])?$`)
+
 // Metadata is the ownership/placement envelope shared by every resource.
 type Metadata struct {
 	// Name is unique per kind.
@@ -232,6 +243,10 @@ func (r *Resource) Validate() error {
 	}
 	if r.Metadata.Name == "" {
 		return &ValidationError{Kind: r.Kind, Field: "metadata.name", Msg: "must not be empty"}
+	}
+	if !nameRegexp.MatchString(r.Metadata.Name) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "metadata.name",
+			Msg: "must be a DNS-label-like name (lowercase alphanumerics, '.', '_', '-'; start/end alphanumeric; ≤ 63 chars) — it is used as a filesystem path segment"}
 	}
 	if r.Metadata.Owner == "" {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "metadata.owner", Msg: "must not be empty"}
