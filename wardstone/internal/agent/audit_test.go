@@ -94,9 +94,23 @@ func TestKeystoneAuditLogRecordsEachDispatchedOp(t *testing.T) {
 	}
 
 	auditPath := filepath.Join(keystoneDataDir, "audit.log")
-	lines := readAuditLines(t, auditPath)
+	all := readAuditLines(t, auditPath)
+	// The identity-issuing RPCs (Join/Renew) are audited too; this test is
+	// about dispatched ops, so separate the join record from the op records.
+	var joins int
+	var lines []auditLine
+	for _, r := range all {
+		if r.Arm == "Join" || r.Arm == "Renew" {
+			joins++
+			continue
+		}
+		lines = append(lines, r)
+	}
+	if joins != 1 {
+		t.Fatalf("want exactly 1 Join audit record, got %d: %+v", joins, all)
+	}
 	if len(lines) != 2 {
-		t.Fatalf("want 2 audit lines, got %d: %+v", len(lines), lines)
+		t.Fatalf("want 2 dispatched-op audit lines, got %d: %+v", len(lines), lines)
 	}
 
 	if lines[0].Node != "node-a" || lines[0].OpID != okRes.GetOpId() ||
