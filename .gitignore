@@ -24,6 +24,9 @@ console/dist/
 # Local scratch
 tmp/
 
+# Claude Code harness scratch (agent worktrees, session state)
+.claude/
+
 # Stub binaries built in-module by go build
 /cli/wild
 /keystone/keystone
