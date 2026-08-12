@@ -1,10 +1,27 @@
 package resource
 
 import (
+	"bytes"
 	"fmt"
 
 	"gopkg.in/yaml.v3"
 )
+
+// decodeNodeStrict decodes node into out using strict (KnownFields)
+// decoding. yaml.v3's Node.Decode does not accept decoder options and
+// always decodes non-strictly, even when the outer Decoder that produced
+// the node had KnownFields(true) set — so a node-scoped decode has to
+// re-serialize the node and run it back through a fresh strict Decoder to
+// get unknown-key rejection.
+func decodeNodeStrict(node *yaml.Node, out any) error {
+	b, err := yaml.Marshal(node)
+	if err != nil {
+		return err
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	return dec.Decode(out)
+}
 
 // resourceDoc is the on-disk shape: apiVersion/kind/metadata plus a single
 // generic "spec" node that gets decoded into the kind-specific spec type.
@@ -60,7 +77,7 @@ func (r Resource) MarshalYAML() (any, error) {
 // the closed registry.
 func (r *Resource) UnmarshalYAML(value *yaml.Node) error {
 	var doc resourceDoc
-	if err := value.Decode(&doc); err != nil {
+	if err := decodeNodeStrict(value, &doc); err != nil {
 		return err
 	}
 	r.ApiVersion = doc.ApiVersion
@@ -73,7 +90,7 @@ func (r *Resource) UnmarshalYAML(value *yaml.Node) error {
 	}
 	spec := entry.newSpec()
 	if doc.Spec.Kind != 0 {
-		if err := doc.Spec.Decode(spec); err != nil {
+		if err := decodeNodeStrict(&doc.Spec, spec); err != nil {
 			return fmt.Errorf("resource: decoding spec for kind %q: %w", doc.Kind, err)
 		}
 	}
@@ -102,7 +119,9 @@ func Marshal(r Resource) ([]byte, error) {
 // Unmarshal decodes a single YAML document into a Resource.
 func Unmarshal(data []byte) (Resource, error) {
 	var r Resource
-	if err := yaml.Unmarshal(data, &r); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&r); err != nil {
 		return Resource{}, err
 	}
 	return r, nil
