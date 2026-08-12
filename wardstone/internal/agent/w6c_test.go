@@ -193,6 +193,28 @@ func TestEnsureMountForbiddenBoundaries(t *testing.T) {
 		t.Fatalf("comma-injection option: want FORBIDDEN, got %+v", res)
 	}
 
+	// Newline-injection in the source: a raw newline would inject a whole
+	// attacker-chosen /etc/fstab entry (a boot-time landmine).
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureMount{
+		EnsureMount: &wsv1.EnsureMount{
+			Source: "10.0.0.5:/export\n/dev/sda1 /mnt/evil ext4 defaults 0 0",
+			Target: filepath.Join(mountRoot, "inject-src"), Fstype: "nfs",
+		},
+	}})
+	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Fatalf("newline-injection source: want FORBIDDEN, got %+v", res)
+	}
+
+	// Whitespace in the source breaks fstab field parsing too.
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureMount{
+		EnsureMount: &wsv1.EnsureMount{
+			Source: "10.0.0.5:/ex port", Target: filepath.Join(mountRoot, "inject-space"), Fstype: "nfs",
+		},
+	}})
+	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Fatalf("whitespace source: want FORBIDDEN, got %+v", res)
+	}
+
 	if len(*calls) != 0 {
 		t.Fatalf("mountFn must never be called for a FORBIDDEN request, got %d calls: %+v", len(*calls), *calls)
 	}

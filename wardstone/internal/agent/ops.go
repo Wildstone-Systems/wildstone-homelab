@@ -189,13 +189,40 @@ func (a *Agent) resolveManaged(p string) (string, *wsv1.OpError) {
 		return "", opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "resolve %q: %v", p, err)
 	}
 	resolved := filepath.Join(resolvedDir, filepath.Base(clean))
-	for _, prefix := range a.cfg.ManagedPrefixes {
-		if resolved == prefix || strings.HasPrefix(resolved, prefix+string(filepath.Separator)) {
+	if !a.underManagedPrefix(resolved) {
+		return "", opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
+			"path %q resolves outside managed prefixes %v", p, a.cfg.ManagedPrefixes)
+	}
+	// The parent chain is now symlink-resolved, but the FINAL component may
+	// itself be a symlink pointing outside the managed tree — the prefix
+	// check above only inspected the unresolved link path. If it exists,
+	// resolve it fully and require the real target to stay within a managed
+	// prefix; otherwise a read (ReadManagedFile), a mount, or a bind-mount
+	// through the link would escape the boundary. A non-existent final
+	// component (the ordinary create case) has nothing to follow.
+	final, ferr := filepath.EvalSymlinks(resolved)
+	if ferr != nil {
+		if os.IsNotExist(ferr) {
 			return resolved, nil
 		}
+		return "", opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "resolve %q: %v", p, ferr)
 	}
-	return "", opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
-		"path %q resolves outside managed prefixes %v", p, a.cfg.ManagedPrefixes)
+	if !a.underManagedPrefix(final) {
+		return "", opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
+			"path %q resolves via a symlink to %q, outside managed prefixes %v", p, final, a.cfg.ManagedPrefixes)
+	}
+	return final, nil
+}
+
+// underManagedPrefix reports whether an absolute, cleaned path lies at or
+// under one of the configured managed prefixes.
+func (a *Agent) underManagedPrefix(path string) bool {
+	for _, prefix := range a.cfg.ManagedPrefixes {
+		if path == prefix || strings.HasPrefix(path, prefix+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveExisting(dir string) (string, error) {
@@ -222,7 +249,10 @@ func (a *Agent) writeManagedFile(op *wsv1.WriteManagedFile) (*wsv1.OpResult_Writ
 	if oerr != nil {
 		return nil, oerr
 	}
-	mode := os.FileMode(op.GetMode())
+	// Mask to permission bits only: a caller-supplied mode must never set
+	// setuid/setgid/sticky, which would let a managed file become a
+	// setuid-root binary that is then bind-mountable into a container.
+	mode := os.FileMode(op.GetMode()) & 0o777
 	if mode == 0 {
 		mode = 0o644
 	}
