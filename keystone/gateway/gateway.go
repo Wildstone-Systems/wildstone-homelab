@@ -299,12 +299,16 @@ func (g *Gateway) Join(_ context.Context, req *wsv1.JoinRequest) (*wsv1.JoinResp
 		ok = g.tokenStore.consume(req.GetJoinToken())
 	}
 	if !ok {
+		g.log.Warn("join rejected: invalid join token", "node", req.GetNodeId())
+		g.auditIdentity(req.GetNodeId(), "Join", "BAD_TOKEN")
 		return nil, status.Error(codes.PermissionDenied, "invalid, used, or expired join token")
 	}
 	certPEM, err := g.ca.IssueFromCSR(req.GetCsrPem(), req.GetNodeId())
 	if err != nil {
+		g.auditIdentity(req.GetNodeId(), "Join", "BAD_CSR")
 		return nil, status.Errorf(codes.InvalidArgument, "csr: %v", err)
 	}
+	g.auditIdentity(req.GetNodeId(), "Join", "")
 	g.log.Info("node joined", "node", req.GetNodeId())
 	return &wsv1.JoinResponse{
 		CertPem:            certPEM,
@@ -327,8 +331,10 @@ func (g *Gateway) Renew(ctx context.Context, req *wsv1.RenewRequest) (*wsv1.Rene
 	}
 	certPEM, err := g.ca.IssueFromCSR(req.GetCsrPem(), nodeID)
 	if err != nil {
+		g.auditIdentity(nodeID, "Renew", "BAD_CSR")
 		return nil, status.Errorf(codes.InvalidArgument, "csr: %v", err)
 	}
+	g.auditIdentity(nodeID, "Renew", "")
 	g.log.Info("node renewed certificate", "node", nodeID)
 	return &wsv1.RenewResponse{CertPem: certPEM}, nil
 }

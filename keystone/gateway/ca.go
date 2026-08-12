@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -16,8 +17,9 @@ import (
 	"time"
 )
 
-// CA is Keystone's embedded certificate authority. Spike scope: in-memory,
-// regenerated per process; E2 persists it in the Keystone data dir.
+// CA is Keystone's embedded certificate authority. The CA cert/key are
+// persisted in the Keystone data dir (loadCA/KeyPEM, ADR-W003 W2) so agents
+// that pinned the CA keep validating it across restarts.
 type CA struct {
 	cert *x509.Certificate
 	key  *ecdsa.PrivateKey
@@ -30,7 +32,10 @@ func NewCA() (*CA, error) {
 		return nil, err
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		// Random serial, like the leaf certs — a fixed serial made two CA
+		// generations (two data dirs) collide on serial 1, which confuses
+		// some cert tooling.
+		SerialNumber:          newSerial(),
 		Subject:               pkix.Name{CommonName: "wildstone-keystone-ca"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().AddDate(10, 0, 0),
@@ -168,6 +173,9 @@ func (ca *CA) IssueFromCSRWithLifetime(csrPEM []byte, nodeID string, lifetime ti
 	if err := csr.CheckSignature(); err != nil {
 		return nil, fmt.Errorf("CSR signature: %w", err)
 	}
+	if err := validateCSRPublicKey(csr.PublicKey); err != nil {
+		return nil, err
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber: newSerial(),
 		Subject:      pkix.Name{CommonName: nodeID},
@@ -181,6 +189,30 @@ func (ca *CA) IssueFromCSRWithLifetime(csrPEM []byte, nodeID string, lifetime ti
 		return nil, err
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), nil
+}
+
+// validateCSRPublicKey refuses a node key too weak (or of an unexpected
+// type) to sign a client certificate for. Without this the CA would happily
+// issue a cert for, e.g., a 512-bit RSA key. The node agent uses ECDSA
+// P-256 (see wardstone signing/join); RSA is accepted at >= 2048 bits for
+// interop, everything else is rejected.
+func validateCSRPublicKey(pub any) error {
+	switch k := pub.(type) {
+	case *ecdsa.PublicKey:
+		switch k.Curve {
+		case elliptic.P256(), elliptic.P384(), elliptic.P521():
+			return nil
+		default:
+			return fmt.Errorf("CSR public key: unsupported elliptic curve")
+		}
+	case *rsa.PublicKey:
+		if k.N.BitLen() < 2048 {
+			return fmt.Errorf("CSR public key: RSA key too small (%d bits, need >= 2048)", k.N.BitLen())
+		}
+		return nil
+	default:
+		return fmt.Errorf("CSR public key: unsupported type %T (want ECDSA or RSA)", pub)
+	}
 }
 
 func newSerial() *big.Int {
