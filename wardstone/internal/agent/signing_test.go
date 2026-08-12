@@ -245,3 +245,69 @@ func TestUnpinnedIdentityAcceptsUnsignedAndWarns(t *testing.T) {
 		t.Fatalf("want exactly 1 warn about unpinned key for the session, got %d", n)
 	}
 }
+
+// ---------------------------------------------------------------- (d) in-session replay rejected, executed once
+
+// TestReplayedOpRejectedAndExecutedOnce sends the SAME validly-signed
+// KeystoneMessage twice (as a transport MITM re-injecting a captured op
+// would): the first dispatch executes; the identical second is refused with
+// FORBIDDEN and never re-executes. Signature verification alone cannot stop
+// this — the replayed bytes carry a genuine signature — so it exercises the
+// per-session replay guard (ADR-W003 W1).
+func TestReplayedOpRejectedAndExecutedOnce(t *testing.T) {
+	h := startGateway(t, []string{"tok"}, "")
+	managed := t.TempDir()
+	dataDir := filepath.Join(t.TempDir(), "data")
+	newTestAgent(t, h, "node-a", "tok", func(c *Config) {
+		c.ManagedPrefixes = []string{managed}
+		c.DataDir = dataDir
+	})
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+
+	target := filepath.Join(managed, "replay.txt")
+	op := &wsv1.Operation{Op: &wsv1.Operation_WriteManagedFile{
+		WriteManagedFile: &wsv1.WriteManagedFile{Path: target, Content: []byte("once")},
+	}}
+	// A fixed op_id + its valid signature: exactly the bytes a MITM captures.
+	opID := "op-fixed-replay"
+	sig, err := h.gw.SignOp(opID, op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := &wsv1.KeystoneMessage{OpId: opID, Op: op, OpSignature: sig}
+
+	send := func() *wsv1.OpResult {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		res, err := h.gw.DispatchRaw(ctx, "node-a", msg)
+		if err != nil {
+			t.Fatalf("dispatch raw: %v", err)
+		}
+		return res
+	}
+
+	// First delivery: legitimate, executes.
+	if res := send(); res.GetError() != nil {
+		t.Fatalf("first (legitimate) op rejected: %+v", res)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "once" {
+		t.Fatalf("first op did not execute: content=%q err=%v", got, err)
+	}
+
+	// Remove the file so any re-execution of the replay is observable.
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second, identical delivery: a replay. Must be refused, not re-executed.
+	res := send()
+	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Fatalf("want FORBIDDEN for replayed op, got %+v", res)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("replayed op re-executed despite rejection: %s exists again (%v)", target, err)
+	}
+}

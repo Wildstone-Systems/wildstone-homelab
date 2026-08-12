@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
@@ -70,6 +71,18 @@ type Gateway struct {
 	tokens   map[string]bool // static Config.JoinTokens -> still valid (in-memory only)
 	sessions map[string]*session
 	opSeq    uint64
+
+	// opGen is a per-process random generation token (ADR-W003 W1 replay
+	// hardening). op_id is formatted "op-<opGen>-<opSeq>": opSeq alone
+	// resets to zero on every process start, but the op-signing key
+	// persists across restarts (persist.go). Without opGen a restarted
+	// gateway would re-issue op-1, op-2, … and a signature captured off
+	// the wire before the restart would verify again against a
+	// freshly-issued op_id — a replay a transport MITM could mount. A
+	// random opGen per process namespaces op_ids so two gateway
+	// generations never share one, and a pre-restart signature can never
+	// match a post-restart op_id. Set once in New; read-only thereafter.
+	opGen string
 
 	tokenStore *tokenStore // minted tokens (ADR-W003 W2); own mutex
 
@@ -152,11 +165,28 @@ func New(cfg Config) (*Gateway, error) {
 		}
 	}
 	signPub := signPriv.Public().(ed25519.PublicKey)
+	opGen, err := newOpGen()
+	if err != nil {
+		return nil, fmt.Errorf("generate op-id generation token: %w", err)
+	}
 	return &Gateway{
 		ca: ca, cfg: cfg, log: cfg.Logger, tokens: tokens, sessions: map[string]*session{},
 		tokenStore: tokStore,
 		signPub:    signPub, signPriv: signPriv,
+		opGen: opGen,
 	}, nil
+}
+
+// newOpGen returns a short random hex generation token that namespaces this
+// process's op_ids (see the Gateway.opGen field). Six random bytes → 12 hex
+// chars: enough that two gateway generations sharing the same op-signing key
+// across a restart never collide on an op_id.
+func newOpGen() (string, error) {
+	var b [6]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 // MintJoinToken creates a new single-use join token with the given TTL —
@@ -371,7 +401,7 @@ func (g *Gateway) Session(stream grpc.BidiStreamingServer[wsv1.AgentMessage, wsv
 func (g *Gateway) Dispatch(ctx context.Context, nodeID string, op *wsv1.Operation) (*wsv1.OpResult, error) {
 	g.mu.Lock()
 	g.opSeq++
-	opID := fmt.Sprintf("op-%d", g.opSeq)
+	opID := fmt.Sprintf("op-%s-%d", g.opGen, g.opSeq)
 	g.mu.Unlock()
 	sig, err := g.signOp(opID, op)
 	if err != nil {

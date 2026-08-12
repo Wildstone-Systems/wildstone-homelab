@@ -456,6 +456,13 @@ func (a *Agent) session(ctx context.Context) error {
 			"(pre-W1 identity; re-join against a Keystone that serves op_signing_public_key to pin one)")
 	}
 
+	// Per-session replay guard (ADR-W003 W1): rejects a validly-signed op
+	// whose op_id was already processed on this connection. Scoped to this
+	// session — a fresh guard each time session() runs — so it is discarded
+	// on reconnect and never falsely rejects op_ids from a new gateway
+	// generation. See replayGuard for the memory-bounding rationale.
+	guard := newReplayGuard()
+
 	// Certificate rotation (ADR-W003 W4): check on establish and then every
 	// 24h for the remainder of the session's life; force a reconnect via
 	// cancelSession after a successful renewal so the next dial in Run's
@@ -477,7 +484,7 @@ func (a *Agent) session(ctx context.Context) error {
 			return err
 		}
 		go func(m *wsv1.KeystoneMessage) {
-			res := a.verifyAndDispatch(ctx, m.GetOpId(), m.GetOp(), m.GetOpSignature(), pinnedPub)
+			res := a.verifyAndDispatch(ctx, m.GetOpId(), m.GetOp(), m.GetOpSignature(), pinnedPub, guard)
 			sendMu.Lock()
 			sendErr := stream.Send(&wsv1.AgentMessage{Msg: &wsv1.AgentMessage_Result{Result: res}})
 			sendMu.Unlock()
