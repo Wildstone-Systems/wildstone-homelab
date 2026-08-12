@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 )
 
@@ -125,38 +124,30 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.BaseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("openai: build request: %w", err)
-	}
-	httpReq.Header.Set("content-type", "application/json")
-	if p.APIKey != "" {
-		httpReq.Header.Set("authorization", "Bearer "+p.APIKey)
-	}
-
-	client := p.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(httpReq)
+	client := httpClientOrDefault(p.HTTPClient)
+	status, respBody, err := doWithRetry(ctx, client, func() (*http.Request, error) {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.BaseURL+"/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("openai: build request: %w", err)
+		}
+		httpReq.Header.Set("content-type", "application/json")
+		if p.APIKey != "" {
+			httpReq.Header.Set("authorization", "Bearer "+p.APIKey)
+		}
+		return httpReq, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("openai: request failed: %w", err)
 	}
-	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("openai: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
+	if status != http.StatusOK {
 		var eb openAIErrorBody
 		_ = json.Unmarshal(respBody, &eb)
 		msg := eb.Error.Message
 		if msg == "" {
 			msg = "request failed"
 		}
-		return nil, fmt.Errorf("openai: status %d: %s", resp.StatusCode, msg)
+		return nil, fmt.Errorf("openai: status %d: %s", status, msg)
 	}
 
 	var oresp openAIResponse
@@ -171,6 +162,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 	out := &ChatResponse{
 		Text:       choice.Message.Content,
 		StopReason: choice.FinishReason,
+		Truncated:  choice.FinishReason == "length",
 	}
 	for _, tc := range choice.Message.ToolCalls {
 		var input map[string]any

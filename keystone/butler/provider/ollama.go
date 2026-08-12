@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 )
 
@@ -112,35 +111,27 @@ func (p *OllamaProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 		return nil, fmt.Errorf("ollama: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.Host+"/api/chat", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("ollama: build request: %w", err)
-	}
-	httpReq.Header.Set("content-type", "application/json")
-
-	client := p.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(httpReq)
+	client := httpClientOrDefault(p.HTTPClient)
+	status, respBody, err := doWithRetry(ctx, client, func() (*http.Request, error) {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.Host+"/api/chat", bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("ollama: build request: %w", err)
+		}
+		httpReq.Header.Set("content-type", "application/json")
+		return httpReq, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("ollama: request failed: %w", err)
 	}
-	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("ollama: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
+	if status != http.StatusOK {
 		var eb ollamaErrorBody
 		_ = json.Unmarshal(respBody, &eb)
 		msg := eb.Error
 		if msg == "" {
 			msg = "request failed"
 		}
-		return nil, fmt.Errorf("ollama: status %d: %s", resp.StatusCode, msg)
+		return nil, fmt.Errorf("ollama: status %d: %s", status, msg)
 	}
 
 	var oresp ollamaResponse
@@ -151,6 +142,7 @@ func (p *OllamaProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 	out := &ChatResponse{
 		Text:       oresp.Message.Content,
 		StopReason: oresp.DoneReason,
+		Truncated:  oresp.DoneReason == "length",
 	}
 	for _, tc := range oresp.Message.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, ToolCall{

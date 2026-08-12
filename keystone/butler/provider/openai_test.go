@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func newOpenAITestProvider(t *testing.T, handler http.HandlerFunc) *OpenAIProvider {
@@ -190,6 +192,140 @@ func TestOpenAIProvider_MultiTurn_ToolResultShape(t *testing.T) {
 	}
 	if toolMsg["content"] != "unhealthy: connection refused" {
 		t.Errorf("content = %v", toolMsg["content"])
+	}
+}
+
+func TestOpenAIProvider_LengthFinishReasonSetsTruncated(t *testing.T) {
+	p := newOpenAITestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"choices": [{"message": {"role": "assistant", "content": "cut off"}, "finish_reason": "length"}]}`))
+	})
+
+	resp, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "status?"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.StopReason != "length" {
+		t.Errorf("StopReason = %q, want length", resp.StopReason)
+	}
+	if !resp.Truncated {
+		t.Error("Truncated = false, want true for finish_reason length")
+	}
+}
+
+func TestOpenAIProvider_StopFinishReasonNotTruncated(t *testing.T) {
+	p := newOpenAITestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"choices": [{"message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}]}`))
+	})
+
+	resp, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "status?"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.Truncated {
+		t.Error("Truncated = true, want false for finish_reason stop")
+	}
+}
+
+func TestOpenAIProvider_Retries429ThenSucceeds(t *testing.T) {
+	var attempts int32
+	p := newOpenAITestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 3 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error": {"type": "rate_limit", "message": "slow down"}}`))
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]}`))
+	})
+
+	resp, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.Text != "ok" {
+		t.Errorf("Text = %q, want ok", resp.Text)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 3 {
+		t.Errorf("attempts = %d, want 3 (2 failures + 1 success)", got)
+	}
+}
+
+func TestOpenAIProvider_Retries5xxExhaustsAttempts(t *testing.T) {
+	var attempts int32
+	p := newOpenAITestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(`{"error": {"type": "server_error", "message": "boom"}}`))
+	})
+
+	_, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error after exhausting retries on persistent 502")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error = %v, want it to surface the server message", err)
+	}
+	if got := atomic.LoadInt32(&attempts); got != maxChatAttempts {
+		t.Errorf("attempts = %d, want %d (bounded retry)", got, maxChatAttempts)
+	}
+}
+
+func TestOpenAIProvider_NoRetryOn404(t *testing.T) {
+	var attempts int32
+	p := newOpenAITestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error": {"type": "not_found", "message": "no such model"}}`))
+	})
+
+	_, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error on 404 response")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Errorf("attempts = %d, want 1 (a non-429 4xx must not be retried)", got)
+	}
+}
+
+func TestOpenAIProvider_RetryAfterHonored(t *testing.T) {
+	withInstantRetrySleep(t, func(ctx context.Context, d time.Duration) error {
+		if d != 4*time.Second {
+			t.Errorf("backoff duration = %v, want 4s (from Retry-After header)", d)
+		}
+		return nil
+	})
+
+	var attempts int32
+	p := newOpenAITestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "4")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error": {"type": "rate_limit", "message": "slow down"}}`))
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]}`))
+	})
+
+	if _, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "hi"}},
+	}); err != nil {
+		t.Fatalf("Chat() error = %v", err)
 	}
 }
 
