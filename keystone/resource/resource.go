@@ -11,6 +11,8 @@ package resource
 import (
 	"fmt"
 	"regexp"
+	"strconv"
+	"strings"
 )
 
 // Kind is the closed set of resource kinds Keystone understands. Adding a
@@ -118,6 +120,19 @@ var dnsRecordTypes = map[string]bool{
 	"A":     true,
 	"CNAME": true,
 	"TXT":   true,
+}
+
+// routeAuthValues is the closed set of supported RouteSpec.Auth values.
+var routeAuthValues = map[string]bool{
+	"none":          true,
+	"authelia_oidc": true,
+}
+
+// oidcAuthPolicies is the closed set of supported OidcClientSpec.AuthPolicy
+// values (Authelia authorization_policy).
+var oidcAuthPolicies = map[string]bool{
+	"one_factor": true,
+	"two_factor": true,
 }
 
 // OidcClientSpec is the spec for kind OidcClient (ADR-W005 A3), applied by
@@ -233,13 +248,20 @@ func KnownKind(k Kind) bool {
 	return ok
 }
 
-// Validate checks common fields (kind known, name, owner) plus the
-// kind-specific rules from ADR-W004 A1, returning a *ValidationError (or a
-// wrapped list) on failure.
+// Validate checks common fields (apiVersion, kind known, name, owner, spec
+// exclusivity) plus the kind-specific rules from ADR-W004 A1, returning a
+// *ValidationError (or a wrapped list) on failure.
 func (r *Resource) Validate() error {
 	entry, ok := registry[r.Kind]
 	if !ok {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "kind", Msg: "unknown kind"}
+	}
+	// ApiVersion is optional (in-code construction commonly omits it), but a
+	// non-empty value that doesn't match the supported ApiVersion is rejected
+	// outright — it signals a resource authored against a different schema
+	// generation than this binary understands.
+	if r.ApiVersion != "" && r.ApiVersion != ApiVersion {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "apiVersion", Msg: fmt.Sprintf("must be %q if set", ApiVersion)}
 	}
 	if r.Metadata.Name == "" {
 		return &ValidationError{Kind: r.Kind, Field: "metadata.name", Msg: "must not be empty"}
@@ -251,8 +273,35 @@ func (r *Resource) Validate() error {
 	if r.Metadata.Owner == "" {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "metadata.owner", Msg: "must not be empty"}
 	}
+	if err := r.validateSpecExclusivity(); err != nil {
+		return err
+	}
 	if err := entry.validate(r); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateSpecExclusivity enforces the doc-commented invariant that exactly
+// one Spec field is populated: no spec pointer other than the one matching
+// r.Kind may be non-nil. The matching pointer's own nil-ness is left to the
+// per-kind validator, which reports it with a more specific message.
+func (r *Resource) validateSpecExclusivity() error {
+	populated := map[Kind]bool{
+		KindContainer:  r.Container != nil,
+		KindVolume:     r.Volume != nil,
+		KindRoute:      r.Route != nil,
+		KindDnsRecord:  r.DnsRecord != nil,
+		KindOidcClient: r.OidcClient != nil,
+		KindLdapGroup:  r.LdapGroup != nil,
+	}
+	for k, isSet := range populated {
+		if k == r.Kind {
+			continue
+		}
+		if isSet {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: fmt.Sprintf("kind is %s but %s spec is also populated", r.Kind, k)}
+		}
 	}
 	return nil
 }
@@ -263,6 +312,35 @@ func validateContainer(r *Resource) error {
 	}
 	if !digestPinRegexp.MatchString(r.Container.Image) {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.image", Msg: "must be digest-pinned (repo@sha256:<64 hex>), tags are refused"}
+	}
+	for _, p := range r.Container.Ports {
+		if err := validatePortMapping(r, p); err != nil {
+			return err
+		}
+	}
+	for i, m := range r.Container.Mounts {
+		if m.Source == "" {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.mounts[%d].source", i), Msg: "must not be empty"}
+		}
+		if m.Target == "" {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.mounts[%d].target", i), Msg: "must not be empty"}
+		}
+	}
+	return nil
+}
+
+// validatePortMapping checks a single ContainerSpec.Ports entry against the
+// "host:container" numeric-port format the reconciler expects.
+func validatePortMapping(r *Resource, p string) error {
+	parts := strings.Split(p, ":")
+	if len(parts) != 2 {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.ports", Msg: fmt.Sprintf("%q must be \"host:container\"", p)}
+	}
+	for _, part := range parts {
+		port, err := strconv.Atoi(part)
+		if err != nil || port < 1 || port > 65535 {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.ports", Msg: fmt.Sprintf("%q must be \"host:container\" with numeric ports in 1-65535", p)}
+		}
 	}
 	return nil
 }
@@ -287,6 +365,9 @@ func validateRoute(r *Resource) error {
 	if r.Route.Host == "" {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.host", Msg: "must not be empty"}
 	}
+	if !routeAuthValues[r.Route.Auth] {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.auth", Msg: "must be one of none, authelia_oidc"}
+	}
 	return nil
 }
 
@@ -294,8 +375,17 @@ func validateDnsRecord(r *Resource) error {
 	if r.DnsRecord == nil {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "dns record spec missing"}
 	}
+	if r.DnsRecord.Zone == "" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.zone", Msg: "must not be empty"}
+	}
+	if r.DnsRecord.Name == "" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.name", Msg: "must not be empty"}
+	}
 	if !dnsRecordTypes[r.DnsRecord.Type] {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.type", Msg: "must be one of A, CNAME, TXT"}
+	}
+	if r.DnsRecord.Content == "" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.content", Msg: "must not be empty"}
 	}
 	return nil
 }
@@ -309,6 +399,9 @@ func validateOidcClient(r *Resource) error {
 	}
 	if len(r.OidcClient.RedirectUris) == 0 {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.redirectUris", Msg: "must have at least one redirect URI"}
+	}
+	if !oidcAuthPolicies[r.OidcClient.AuthPolicy] {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.authPolicy", Msg: "must be one of one_factor, two_factor"}
 	}
 	if !secretRefRegexp.MatchString(r.OidcClient.SecretRef) {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.secretRef", Msg: "must be a reference of the form secret/<name> (ADR-W005 A2), never a literal secret value"}
