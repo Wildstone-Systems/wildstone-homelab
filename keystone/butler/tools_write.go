@@ -130,7 +130,7 @@ func handleProposeChange(_ context.Context, gw *ToolGateway, input map[string]an
 
 	p := diffPlan(proposed, current)
 
-	if perr := policyValidate(res); perr != nil {
+	if perr := policyValidate(res, current); perr != nil {
 		return ToolOutcome{
 			Content: fmt.Sprintf(
 				"REJECTED by policy — %v\n\nThe following plan was produced for audit purposes ONLY; it is rejected and cannot be approved or applied as-is:\n%s",
