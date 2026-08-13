@@ -25,6 +25,10 @@ import (
 //   - Rate limits: retries on HTTP 429 with backoff honoring Retry-After;
 //     after a bounded number of attempts it returns a *RateLimited error
 //     the reconciler treats as retryable-later, not fatal.
+//   - Transient server errors: an HTTP 5xx from the control plane is
+//     returned as a *Transient error; the reconciler retries these too
+//     (same bounded attempts/backoff as RateLimited) before treating it as
+//     fatal.
 type Provider interface {
 	// Observe returns the live state of r's identity (kind-specific
 	// idempotency key, e.g. zone+name+type for DnsRecord), whether it
@@ -74,4 +78,31 @@ func (e *RateLimited) Unwrap() error { return e.Err }
 func IsRateLimited(err error) bool {
 	var rl *RateLimited
 	return errors.As(err, &rl)
+}
+
+// Transient is the typed error a Provider returns for a retryable
+// server-side failure — e.g. an HTTP 5xx from the control plane — that is
+// not a rate limit but is still safe to retry: a blip in the remote
+// service, not a permanent rejection of the request. The reconciler
+// retries these with the same bounded attempts/backoff it uses for
+// RateLimited before surfacing an Incident.
+type Transient struct {
+	// Op is a short human label for what was being attempted, e.g.
+	// "create dns_record" — for logging/incident text only.
+	Op string
+	// Err is the underlying error that triggered this classification, e.g.
+	// the HTTP 5xx response's body.
+	Err error
+}
+
+func (e *Transient) Error() string {
+	return fmt.Sprintf("provider: %s: transient failure: %v", e.Op, e.Err)
+}
+
+func (e *Transient) Unwrap() error { return e.Err }
+
+// IsTransient reports whether err is (or wraps) a *Transient error.
+func IsTransient(err error) bool {
+	var t *Transient
+	return errors.As(err, &t)
 }

@@ -69,6 +69,28 @@ func (g *Gateway) auditDispatch(nodeID, opID string, op *wsv1.Operation, res *ws
 	})
 }
 
+// auditIdentity records an identity-issuing RPC (Join/Renew) — the two
+// paths that mint a node's cryptographic identity and therefore belong in
+// the audit trail as much as any dispatched operation. reason is empty on
+// success and a short failure cause otherwise. No-op when DataDir is unset,
+// like every other persistence path.
+func (g *Gateway) auditIdentity(nodeID, arm, reason string) {
+	if g.cfg.DataDir == "" {
+		return
+	}
+	outcome, errCode := "ok", ""
+	if reason != "" {
+		outcome, errCode = "error", reason
+	}
+	g.appendAudit(auditRecord{
+		Ts:        time.Now().UTC().Format(time.RFC3339),
+		Node:      nodeID,
+		Arm:       arm,
+		Outcome:   outcome,
+		ErrorCode: errCode,
+	})
+}
+
 // appendAudit rotates (if needed) and appends one record to
 // <DataDir>/audit.log. Guarded by auditMu since Dispatch can run
 // concurrently for different nodes.

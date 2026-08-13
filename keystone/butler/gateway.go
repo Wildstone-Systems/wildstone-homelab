@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
@@ -37,7 +38,13 @@ type toolEntry struct {
 	// influenceable text (e.g. an agent-reported health detail) and must be
 	// wrapped in the untrusted-content envelope (ADR-W006 A5.2).
 	Untrusted bool
-	Handler   toolHandler
+	// Mutating marks a tool that produces a Plan (propose_change). Such
+	// tools are withheld from a ReadOnly/QAOnly session's offered set and,
+	// as a structural backstop, refused at dispatch when the session did not
+	// permit mutating tools — so a confused or injected model that names one
+	// anyway cannot reach the handler (ADR-W006 A4).
+	Mutating bool
+	Handler  toolHandler
 }
 
 // ToolGateway is the Butler's tool gateway (ADR-W006 A3, B1): the read
@@ -69,9 +76,25 @@ func NewToolGateway(store *statefile.Store, reader *AgentReader) *ToolGateway {
 		"get_health":            {Spec: healthSpec, Untrusted: true, Handler: handleGetHealth},
 		"get_plan":              {Spec: getPlanSpec, Handler: handleGetPlan},
 		"explain_resource":      {Spec: explainResourceSpec, Handler: handleExplainResource},
-		"propose_change":        {Spec: proposeChangeSpec, Handler: handleProposeChange},
+		"propose_change":        {Spec: proposeChangeSpec, Mutating: true, Handler: handleProposeChange},
 	}
 	return gw
+}
+
+// DispatchReadOnly executes the named tool but refuses any tool marked
+// Mutating, returning a rejection outcome instead of running the handler.
+// It is the enforcement half of ReadOnly/QAOnly mode: withholding a tool's
+// spec (ReadOnlyToolSpecs) stops a well-behaved model from calling it, but a
+// confused or injected model can still name it, so the dispatch path itself
+// must refuse (ADR-W006 A4). Unknown tools error exactly as Dispatch does.
+func (gw *ToolGateway) DispatchReadOnly(ctx context.Context, name string, input map[string]any) (ToolOutcome, error) {
+	if entry, ok := gw.tools[name]; ok && entry.Mutating {
+		return ToolOutcome{
+			Content:  fmt.Sprintf("tool %q is not available in this read-only session", name),
+			Rejected: true,
+		}, nil
+	}
+	return gw.Dispatch(ctx, name, input)
 }
 
 // ToolSpecs returns the provider-neutral Tool declarations for every
@@ -132,20 +155,31 @@ func (gw *ToolGateway) Dispatch(ctx context.Context, name string, input map[stri
 	}
 	outcome.Content = redact(outcome.Content)
 	if entry.Untrusted {
-		outcome.Content = envelope(outcome.Content)
+		// Bound the inner content BEFORE enveloping so truncation can never
+		// cut the closing tag and leave the envelope unterminated for this
+		// and every subsequent turn (the envelope tags themselves are small
+		// and fixed, so the total stays close to the budget).
+		inner := truncate(outcome.Content, gw.maxContentBytes())
+		outcome.Content = envelope(inner)
+	} else {
+		outcome.Content = truncate(outcome.Content, gw.maxContentBytes())
 	}
-	outcome.Content = truncate(outcome.Content, gw.maxContentBytes())
 	return outcome, nil
 }
 
 // truncate bounds s to at most n bytes, appending a marker if it cut
 // content off (ADR-W006 A5.3/B3: bound content sizes fed back to the
-// model).
+// model). The cut is made on a UTF-8 rune boundary so it never splits a
+// multi-byte rune into invalid bytes.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + fmt.Sprintf("\n...[truncated, %d bytes omitted]", len(s)-n)
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + fmt.Sprintf("\n...[truncated, %d bytes omitted]", len(s)-cut)
 }
 
 // stringInput reads a string field from a tool-call input map, defaulting

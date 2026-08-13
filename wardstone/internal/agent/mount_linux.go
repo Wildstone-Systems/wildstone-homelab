@@ -71,6 +71,20 @@ func (a *Agent) ensureMount(op *wsv1.EnsureMount) (*wsv1.OpResult_EnsureMount, *
 	if op.GetSource() == "" {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "source is required")
 	}
+	// The source and resolved target are written verbatim into an /etc/fstab
+	// line whose fields are whitespace-separated. Any whitespace (a newline
+	// especially) would inject an attacker-chosen fstab entry — a boot-time
+	// landmine, exactly what the mount-before-fstab ordering guarantee exists
+	// to prevent. Options are already charset-bounded below; hold the source
+	// and target to the same standard.
+	if hasFstabHostileRune(op.GetSource()) {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
+			"mount source %q contains whitespace or control characters (fstab injection risk)", op.GetSource())
+	}
+	if hasFstabHostileRune(target) {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
+			"mount target %q contains whitespace or control characters (fstab injection risk)", op.GetTarget())
+	}
 	for _, o := range op.GetOptions() {
 		if !mountOptionRe.MatchString(o) {
 			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,

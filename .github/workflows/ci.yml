@@ -46,5 +46,11 @@ jobs:
           for m in proto wardstone keystone cli testing/e2e; do (cd "$m" && go build ./...); done
       - name: test
         if: matrix.goarch == 'amd64'
+        # -race: the product is concurrent (gateway, agent sessions,
+        # reconciler, butler loop); the detector is the cheapest guard
+        # against the data races those paths could grow. Requires cgo,
+        # available on the amd64 runner.
+        env:
+          CGO_ENABLED: "1"
         run: |
-          for m in proto wardstone keystone cli testing/e2e; do (cd "$m" && go test ./...); done
+          for m in proto wardstone keystone cli testing/e2e; do (cd "$m" && go test -race ./...); done

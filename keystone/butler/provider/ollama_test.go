@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func newOllamaTestProvider(t *testing.T, handler http.HandlerFunc) *OllamaProvider {
@@ -180,6 +182,140 @@ func TestOllamaProvider_MultiTurn_ToolResultShape(t *testing.T) {
 	}
 	if toolMsg["content"] != "unhealthy: connection refused" {
 		t.Errorf("content = %v", toolMsg["content"])
+	}
+}
+
+func TestOllamaProvider_LengthDoneReasonSetsTruncated(t *testing.T) {
+	p := newOllamaTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"message": {"role": "assistant", "content": "cut off"}, "done": true, "done_reason": "length"}`))
+	})
+
+	resp, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "status?"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.StopReason != "length" {
+		t.Errorf("StopReason = %q, want length", resp.StopReason)
+	}
+	if !resp.Truncated {
+		t.Error("Truncated = false, want true for done_reason length")
+	}
+}
+
+func TestOllamaProvider_StopDoneReasonNotTruncated(t *testing.T) {
+	p := newOllamaTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"message": {"role": "assistant", "content": "done"}, "done": true, "done_reason": "stop"}`))
+	})
+
+	resp, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "status?"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.Truncated {
+		t.Error("Truncated = true, want false for done_reason stop")
+	}
+}
+
+func TestOllamaProvider_Retries429ThenSucceeds(t *testing.T) {
+	var attempts int32
+	p := newOllamaTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 3 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error": "slow down"}`))
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"message": {"role": "assistant", "content": "ok"}, "done": true, "done_reason": "stop"}`))
+	})
+
+	resp, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.Text != "ok" {
+		t.Errorf("Text = %q, want ok", resp.Text)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 3 {
+		t.Errorf("attempts = %d, want 3 (2 failures + 1 success)", got)
+	}
+}
+
+func TestOllamaProvider_Retries5xxExhaustsAttempts(t *testing.T) {
+	var attempts int32
+	p := newOllamaTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error": "boom"}`))
+	})
+
+	_, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error after exhausting retries on persistent 503")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error = %v, want it to surface the server message", err)
+	}
+	if got := atomic.LoadInt32(&attempts); got != maxChatAttempts {
+		t.Errorf("attempts = %d, want %d (bounded retry)", got, maxChatAttempts)
+	}
+}
+
+func TestOllamaProvider_NoRetryOn400(t *testing.T) {
+	var attempts int32
+	p := newOllamaTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error": "bad request"}`))
+	})
+
+	_, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error on 400 response")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Errorf("attempts = %d, want 1 (a non-429 4xx must not be retried)", got)
+	}
+}
+
+func TestOllamaProvider_RetryAfterHonored(t *testing.T) {
+	withInstantRetrySleep(t, func(ctx context.Context, d time.Duration) error {
+		if d != 2*time.Second {
+			t.Errorf("backoff duration = %v, want 2s (from Retry-After header)", d)
+		}
+		return nil
+	})
+
+	var attempts int32
+	p := newOllamaTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "2")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error": "slow down"}`))
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"message": {"role": "assistant", "content": "ok"}, "done": true, "done_reason": "stop"}`))
+	})
+
+	if _, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "hi"}},
+	}); err != nil {
+		t.Fatalf("Chat() error = %v", err)
 	}
 }
 

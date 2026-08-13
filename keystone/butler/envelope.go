@@ -1,6 +1,9 @@
 package butler
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // untrustedOpenTag / untrustedCloseTag delimit the untrusted-content
 // envelope (ADR-W006 A5.2): attacker-influenceable tool output — currently
@@ -11,9 +14,33 @@ const (
 	untrustedCloseTag = "</untrusted_data>"
 )
 
-// envelope wraps s in the untrusted-content delimiters.
+// envelope wraps s in the untrusted-content delimiters. The inner content is
+// first stripped of any literal envelope tag so an attacker-influenced
+// string cannot forge the boundary — a raw "</untrusted_data>" inside the
+// data would otherwise close the envelope early and let the remainder appear
+// to the model as trusted, post-envelope text (delimiter breakout).
+//
+// Callers must bound the content BEFORE enveloping (Dispatch does), so that
+// size-truncation can never cut the closing tag and leave the envelope
+// unterminated for this and every subsequent turn.
 func envelope(s string) string {
-	return fmt.Sprintf("%s\n%s\n%s", untrustedOpenTag, s, untrustedCloseTag)
+	return fmt.Sprintf("%s\n%s\n%s", untrustedOpenTag, neutralizeEnvelopeTags(s), untrustedCloseTag)
+}
+
+// neutralizeEnvelopeTags defangs any literal envelope delimiter found inside
+// untrusted content by rewriting the tag name to a visibly-inert form. It
+// matches the tag name loosely (any "<untrusted_data" / "</untrusted_data"
+// prefix, with or without a trailing ">" or attributes) so attribute-padded
+// variants like "</untrusted_data foo>" cannot slip a real close tag
+// through. The replacement is human-auditable rather than an invisible
+// zero-width break, so the defanging is obvious in logs and audits.
+func neutralizeEnvelopeTags(s string) string {
+	if !strings.Contains(s, "untrusted_data") {
+		return s
+	}
+	s = strings.ReplaceAll(s, "</untrusted_data", "</untrusted_data_stripped_")
+	s = strings.ReplaceAll(s, "<untrusted_data", "<untrusted_data_stripped_")
+	return s
 }
 
 // SystemPrompt is the constant system prompt establishing the Butler's

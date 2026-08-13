@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 )
 
@@ -116,37 +115,29 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.BaseURL+"/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("anthropic: build request: %w", err)
-	}
-	httpReq.Header.Set("content-type", "application/json")
-	httpReq.Header.Set("x-api-key", p.APIKey)
-	httpReq.Header.Set("anthropic-version", anthropicAPIVersion)
-
-	client := p.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(httpReq)
+	client := httpClientOrDefault(p.HTTPClient)
+	status, respBody, err := doWithRetry(ctx, client, func() (*http.Request, error) {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.BaseURL+"/v1/messages", bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("anthropic: build request: %w", err)
+		}
+		httpReq.Header.Set("content-type", "application/json")
+		httpReq.Header.Set("x-api-key", p.APIKey)
+		httpReq.Header.Set("anthropic-version", anthropicAPIVersion)
+		return httpReq, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: request failed: %w", err)
 	}
-	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
+	if status != http.StatusOK {
 		var eb anthropicErrorBody
 		_ = json.Unmarshal(respBody, &eb)
 		msg := eb.Error.Message
 		if msg == "" {
 			msg = "request failed"
 		}
-		return nil, fmt.Errorf("anthropic: status %d: %s", resp.StatusCode, msg)
+		return nil, fmt.Errorf("anthropic: status %d: %s", status, msg)
 	}
 
 	var aresp anthropicResponse
@@ -154,7 +145,10 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 		return nil, fmt.Errorf("anthropic: decode response: %w", err)
 	}
 
-	out := &ChatResponse{StopReason: aresp.StopReason}
+	out := &ChatResponse{
+		StopReason: aresp.StopReason,
+		Truncated:  aresp.StopReason == "max_tokens",
+	}
 	for _, b := range aresp.Content {
 		switch b.Type {
 		case "text":

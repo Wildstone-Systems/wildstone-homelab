@@ -5,3 +5,8 @@
 # redaction test fixture; it was later made low-entropy so no NEW finding is
 # generated, but the original high-entropy value remains in this commit's history.
 3d6bbaec2c289ce47b8fe4bc12a7a33854b20aae:keystone/butler/fixtures_test.go:generic-api-key:18
+# keystone/butler/hardening_test.go: a redaction-test fixture — the fake
+# "IMMICH_API_KEY=abc123" the test asserts gets stripped. The key name itself
+# carries the entropy generic-api-key keys on, so this is a KNOWN-FAKE, never a
+# real secret. Pinned to the commit that introduced the line.
+b385889651ca0138d027c0a18e4321bd70ad03ec:keystone/butler/hardening_test.go:generic-api-key:25

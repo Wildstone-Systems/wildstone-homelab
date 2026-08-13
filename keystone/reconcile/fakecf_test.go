@@ -40,6 +40,18 @@ type reconcileFakeCF struct {
 	rateLimitRemaining int
 	retryAfterSeconds  int
 
+	// serverErrorSkip requests are let through unmodified before
+	// serverErrorRemaining starts counting down (0 means "start
+	// immediately") — lets a test allow an initial phase (e.g. observe) to
+	// succeed before a persistent outage begins during apply.
+	serverErrorSkip int
+	// serverErrorRemaining: once serverErrorSkip is exhausted, every
+	// request is answered with a 503 (and serverErrorRemaining is
+	// decremented) instead of being served — models a transient
+	// Cloudflare-side outage (ADR-W004 A5 B8), distinct from
+	// rateLimitRemaining's 429.
+	serverErrorRemaining int
+
 	failGetCallN  int
 	getListCalled int
 
@@ -113,6 +125,26 @@ func (f *reconcileFakeCF) setRateLimit(n, retryAfterSeconds int) {
 	f.retryAfterSeconds = retryAfterSeconds
 }
 
+// setServerError makes the next n requests (across all endpoints) respond
+// with 503 (Service Unavailable) — a transient control-plane failure,
+// distinct from setRateLimit's 429.
+func (f *reconcileFakeCF) setServerError(n int) {
+	f.setServerErrorAfter(0, n)
+}
+
+// setServerErrorAfter lets the first skip requests through unmodified,
+// then answers the next n requests with 503. Used to let an initial phase
+// (e.g. the Reconciler's observe pre-pass) succeed before a persistent
+// outage begins during apply, so a test can exhaust retryProvider's
+// budget deterministically rather than racing which call sees the outage
+// first.
+func (f *reconcileFakeCF) setServerErrorAfter(skip, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.serverErrorSkip = skip
+	f.serverErrorRemaining = n
+}
+
 // armFailGetCall fails the Nth GET (1-indexed) to the dns_records list
 // endpoint from here on. Through the full Reconciler.Reconcile path a
 // Create goes through three such calls in order: (1) the Reconciler's own
@@ -163,6 +195,17 @@ func (f *reconcileFakeCF) handle(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Write([]byte(`{"success":false,"errors":[{"code":10000,"message":"rate limited"}]}`)) //nolint:errcheck
+		return
+	}
+	f.mu.Unlock()
+
+	f.mu.Lock()
+	if f.serverErrorSkip > 0 {
+		f.serverErrorSkip--
+	} else if f.serverErrorRemaining > 0 {
+		f.serverErrorRemaining--
+		f.mu.Unlock()
+		http.Error(w, `{"success":false,"errors":[{"code":1101,"message":"fake: injected transient server error"}]}`, http.StatusServiceUnavailable)
 		return
 	}
 	f.mu.Unlock()

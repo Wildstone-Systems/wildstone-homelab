@@ -154,11 +154,25 @@ var getPlanSpec = provider.Tool{
 }
 
 func handleGetPlan(_ context.Context, gw *ToolGateway, input map[string]any) (ToolOutcome, error) {
-	_, current, proposed, err := diffFromInput(gw, input)
+	res, current, proposed, err := diffFromInput(gw, input)
 	if err != nil {
 		return ToolOutcome{Content: fmt.Sprintf("invalid spec diff: %v", err)}, nil
 	}
 	p := diffPlan(proposed, current)
+	// Run the same policy check propose_change applies, so a policy-invalid
+	// change is not rendered to the model as an ordinary, approvable-looking
+	// plan (a preview that silently omits the reject would mislead both the
+	// model and the audit — ADR-W006 A3).
+	if perr := policyValidate(res, current); perr != nil {
+		return ToolOutcome{
+			Content: fmt.Sprintf(
+				"POLICY-INVALID — %v\n\nThis change would be rejected by policy; the plan below is a preview only and could not be approved or applied as-is:\n%s",
+				perr, formatPlan(p),
+			),
+			Plan:     p,
+			Rejected: true,
+		}, nil
+	}
 	return ToolOutcome{Content: formatPlan(p), Plan: p}, nil
 }
 

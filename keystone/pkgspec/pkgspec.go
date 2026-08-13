@@ -11,6 +11,7 @@
 package pkgspec
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 
@@ -138,7 +139,9 @@ func (e *ValidationError) Error() string {
 // Validate — callers should call Validate explicitly (Load does both).
 func Parse(data []byte) (*Package, error) {
 	var pkg Package
-	if err := yaml.Unmarshal(data, &pkg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&pkg); err != nil {
 		return nil, fmt.Errorf("pkgspec: parsing package: %w", err)
 	}
 	return &pkg, nil

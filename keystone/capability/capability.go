@@ -209,7 +209,32 @@ func mergeParams(pkg *pkgspec.Package, params map[string]string) (map[string]str
 		merged[decl.Name] = decl.Default
 	}
 
+	// Param values are interpolated straight into resource YAML by
+	// renderTemplate. A value carrying a newline or control character could
+	// rewrite the document's structure — inject an extra mount, env var, or
+	// port, or override metadata.owner — regardless of how the template
+	// quotes the scalar. The owner check downstream catches only an owner
+	// override that wins the YAML merge, not these. Reject the structural
+	// injection vector at the source; legitimate homelab param values
+	// (domains, subdomains, ids) never contain control characters.
+	for name, v := range merged {
+		if i := strings.IndexFunc(v, isYAMLHostileRune); i >= 0 {
+			return nil, &TemplateError{
+				Package: pkg.Metadata.Name,
+				Err: fmt.Errorf("param %q value contains a disallowed control character at offset %d "+
+					"(newlines/control chars are refused to prevent YAML structure injection)", name, i),
+			}
+		}
+	}
+
 	return merged, nil
+}
+
+// isYAMLHostileRune reports whether r would let a param value break out of
+// its scalar position when interpolated into resource YAML: any newline,
+// carriage return, or other C0/C1 control character.
+func isYAMLHostileRune(r rune) bool {
+	return r == '\n' || r == '\r' || r == '\t' || r < 0x20 || r == 0x7f
 }
 
 // buildResolved constructs the .Resolved map exposed to templates. This is

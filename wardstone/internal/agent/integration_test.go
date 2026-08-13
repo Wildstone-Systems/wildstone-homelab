@@ -135,6 +135,23 @@ func TestJoinSessionAndCoreOps(t *testing.T) {
 		t.Fatalf("read back: %+v", res)
 	}
 
+	// A caller-supplied setuid/setgid bit must be masked off — a managed
+	// file must never become a setuid-root binary.
+	suidTarget := filepath.Join(managed, "sub", "suid.bin")
+	dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_WriteManagedFile{
+		WriteManagedFile: &wsv1.WriteManagedFile{Path: suidTarget, Content: []byte("x"), Mode: 0o4755},
+	}})
+	info, err := os.Stat(suidTarget)
+	if err != nil {
+		t.Fatalf("stat suid target: %v", err)
+	}
+	if info.Mode()&os.ModeSetuid != 0 || info.Mode()&os.ModeSetgid != 0 {
+		t.Fatalf("setuid/setgid bit was not masked: mode=%v", info.Mode())
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("permission bits: want 0755, got %v", info.Mode().Perm())
+	}
+
 	// HostFacts
 	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_HostFacts{HostFacts: &wsv1.HostFacts{}}})
 	if hf := res.GetHostFacts(); hf == nil || hf.GetNumCpu() == 0 || hf.GetOs() == "" {
@@ -207,7 +224,8 @@ func TestManagedPrefixEnforced(t *testing.T) {
 		t.Fatal("file outside managed prefix was created")
 	}
 
-	// Symlink escape: managed/link -> /  then write via managed/link/...
+	// Symlink escape via an INTERMEDIATE component: managed/link -> /  then
+	// write via managed/link/...
 	link := filepath.Join(managed, "link")
 	if err := os.Symlink("/", link); err != nil {
 		t.Fatal(err)
@@ -216,7 +234,43 @@ func TestManagedPrefixEnforced(t *testing.T) {
 		WriteManagedFile: &wsv1.WriteManagedFile{Path: filepath.Join(link, "tmp", "wildstone-escape.txt"), Content: []byte("x")},
 	}})
 	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
-		t.Errorf("symlink escape: want FORBIDDEN, got %+v", res)
+		t.Errorf("symlink escape (intermediate): want FORBIDDEN, got %+v", res)
+	}
+
+	// Symlink escape via the FINAL component: managed/secretlink is itself a
+	// symlink to a file outside the managed tree. A read through it would be
+	// an arbitrary host-file read — the parent chain is managed, only the
+	// leaf points out. This is the case a parent-only symlink resolver
+	// misses.
+	const secretContent = "TOP-SECRET-HOST-FILE"
+	secret := filepath.Join(t.TempDir(), "shadow")
+	if err := os.WriteFile(secret, []byte(secretContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secretLink := filepath.Join(managed, "secretlink")
+	if err := os.Symlink(secret, secretLink); err != nil {
+		t.Fatal(err)
+	}
+	rres := dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_ReadManagedFile{
+		ReadManagedFile: &wsv1.ReadManagedFile{Path: secretLink},
+	}})
+	if rres.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Errorf("final-component symlink read: want FORBIDDEN, got %+v", rres)
+	}
+	if got := string(rres.GetReadManagedFile().GetContent()); strings.Contains(got, secretContent) {
+		t.Fatalf("arbitrary host file was read through a final-component symlink: %q", got)
+	}
+
+	// A write through the same final-component symlink must also be refused,
+	// so it can never be used to clobber an outside file.
+	wres := dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_WriteManagedFile{
+		WriteManagedFile: &wsv1.WriteManagedFile{Path: secretLink, Content: []byte("overwrite")},
+	}})
+	if wres.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Errorf("final-component symlink write: want FORBIDDEN, got %+v", wres)
+	}
+	if got, _ := os.ReadFile(secret); string(got) != secretContent {
+		t.Fatalf("outside file was modified through a final-component symlink: %q", got)
 	}
 }
 

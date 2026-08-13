@@ -243,6 +243,45 @@ func TestValidateMissingOwner(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsPathTraversalNames(t *testing.T) {
+	// A resource name is used verbatim as a filesystem path segment by the
+	// Statefile and fragment writers; a hostile name must be refused at
+	// validation, before it can escape the intended directory.
+	for _, name := range []string{
+		"../../../etc/cron.d/x", // dot-dot traversal
+		"/etc/passwd",           // absolute
+		"foo/bar",               // embedded slash
+		"UPPER",                 // not a DNS label (uppercase)
+		"has space",             // whitespace
+		"bad\x00name",           // NUL
+		"-leading-dash",         // must start alphanumeric
+	} {
+		r := Resource{
+			Kind:     KindVolume,
+			Metadata: Metadata{Name: name, Owner: "capability/x"},
+			Volume:   &VolumeSpec{Name: "v1"},
+		}
+		err := r.Validate()
+		if err == nil {
+			t.Fatalf("name %q: expected validation error, got nil", name)
+		}
+		ve, ok := err.(*ValidationError)
+		if !ok || ve.Field != "metadata.name" {
+			t.Fatalf("name %q: expected metadata.name validation error, got %v", name, err)
+		}
+	}
+
+	// A well-formed name still validates.
+	ok := Resource{
+		Kind:     KindVolume,
+		Metadata: Metadata{Name: "immich-library.v2", Owner: "capability/x"},
+		Volume:   &VolumeSpec{Name: "v1"},
+	}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("valid name rejected: %v", err)
+	}
+}
+
 func TestValidateOidcClientMissingRedirectUri(t *testing.T) {
 	r := Resource{
 		Kind:     KindOidcClient,
@@ -317,6 +356,151 @@ func TestValidateLdapGroupMissingName(t *testing.T) {
 	ve, ok := err.(*ValidationError)
 	if !ok || ve.Field != "spec.name" {
 		t.Fatalf("expected spec.name validation error, got %v", err)
+	}
+}
+
+func TestValidateApiVersionMismatch(t *testing.T) {
+	r := Resource{
+		ApiVersion: "wildstone.dev/v2",
+		Kind:       KindVolume,
+		Metadata:   Metadata{Name: "v1", Owner: "system"},
+		Volume:     &VolumeSpec{Name: "v1"},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for mismatched apiVersion")
+	}
+	ve, ok := err.(*ValidationError)
+	if !ok || ve.Field != "apiVersion" {
+		t.Fatalf("expected apiVersion validation error, got %v", err)
+	}
+}
+
+func TestValidateApiVersionEmptyAllowed(t *testing.T) {
+	r := Resource{
+		Kind:     KindVolume,
+		Metadata: Metadata{Name: "v1", Owner: "system"},
+		Volume:   &VolumeSpec{Name: "v1"},
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("unexpected error for empty apiVersion: %v", err)
+	}
+}
+
+func TestValidateSpecExclusivity(t *testing.T) {
+	r := Resource{
+		Kind:      KindContainer,
+		Metadata:  Metadata{Name: "c1", Owner: "system"},
+		Container: &ContainerSpec{Image: validDigest()},
+		Volume:    &VolumeSpec{Name: "c1"},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for extra populated spec")
+	}
+	ve, ok := err.(*ValidationError)
+	if !ok || ve.Field != "spec" {
+		t.Fatalf("expected spec validation error, got %v", err)
+	}
+}
+
+func TestValidateContainerBadPort(t *testing.T) {
+	r := Resource{
+		Kind:     KindContainer,
+		Metadata: Metadata{Name: "c1", Owner: "system"},
+		Container: &ContainerSpec{
+			Image: validDigest(),
+			Ports: []string{"not-a-port"},
+		},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for malformed port mapping")
+	}
+	ve, ok := err.(*ValidationError)
+	if !ok || ve.Field != "spec.ports" {
+		t.Fatalf("expected spec.ports validation error, got %v", err)
+	}
+}
+
+func TestValidateContainerMountRequiresSourceAndTarget(t *testing.T) {
+	r := Resource{
+		Kind:     KindContainer,
+		Metadata: Metadata{Name: "c1", Owner: "system"},
+		Container: &ContainerSpec{
+			Image:  validDigest(),
+			Mounts: []Mount{{Source: "", Target: "/data"}},
+		},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for empty mount source")
+	}
+	ve, ok := err.(*ValidationError)
+	if !ok || ve.Field != "spec.mounts[0].source" {
+		t.Fatalf("expected spec.mounts[0].source validation error, got %v", err)
+	}
+}
+
+func TestValidateRouteBadAuth(t *testing.T) {
+	r := Resource{
+		Kind:     KindRoute,
+		Metadata: Metadata{Name: "r1", Owner: "system"},
+		Route: &RouteSpec{
+			Host:           "example.wildstone.dev",
+			Upstream:       "container/x:80",
+			Auth:           "basic",
+			Classification: "family_public",
+		},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for bad auth value")
+	}
+	ve, ok := err.(*ValidationError)
+	if !ok || ve.Field != "spec.auth" {
+		t.Fatalf("expected spec.auth validation error, got %v", err)
+	}
+}
+
+func TestValidateOidcClientBadAuthPolicy(t *testing.T) {
+	r := Resource{
+		Kind:     KindOidcClient,
+		Metadata: Metadata{Name: "immich", Owner: "capability/identity"},
+		OidcClient: &OidcClientSpec{
+			ClientId:     "immich",
+			RedirectUris: []string{"https://photos.example.com/auth/login"},
+			AuthPolicy:   "no_factor",
+			SecretRef:    "secret/immich-oidc",
+		},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for bad authPolicy")
+	}
+	ve, ok := err.(*ValidationError)
+	if !ok || ve.Field != "spec.authPolicy" {
+		t.Fatalf("expected spec.authPolicy validation error, got %v", err)
+	}
+}
+
+func TestValidateDnsRecordEmptyContent(t *testing.T) {
+	r := Resource{
+		Kind:     KindDnsRecord,
+		Metadata: Metadata{Name: "d1", Owner: "system"},
+		DnsRecord: &DnsRecordSpec{
+			Zone: "wildstone.dev",
+			Name: "x",
+			Type: "CNAME",
+		},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for empty dns record content")
+	}
+	ve, ok := err.(*ValidationError)
+	if !ok || ve.Field != "spec.content" {
+		t.Fatalf("expected spec.content validation error, got %v", err)
 	}
 }
 

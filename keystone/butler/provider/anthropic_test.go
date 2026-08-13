@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func newAnthropicTestProvider(t *testing.T, handler http.HandlerFunc) (*AnthropicProvider, *httptest.Server) {
@@ -195,6 +197,163 @@ func TestAnthropicProvider_MultiTurn_ToolResultShape(t *testing.T) {
 	}
 	if resultBlock["content"] != "unhealthy: connection refused" {
 		t.Errorf("result block content = %v", resultBlock["content"])
+	}
+}
+
+func TestAnthropicProvider_MaxTokensSetsTruncated(t *testing.T) {
+	p, _ := newAnthropicTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"content": [{"type": "text", "text": "cut off mid-"}], "stop_reason": "max_tokens"}`))
+	})
+
+	resp, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "status?"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.StopReason != "max_tokens" {
+		t.Errorf("StopReason = %q, want max_tokens", resp.StopReason)
+	}
+	if !resp.Truncated {
+		t.Error("Truncated = false, want true for stop_reason max_tokens")
+	}
+}
+
+func TestAnthropicProvider_EndTurnNotTruncated(t *testing.T) {
+	p, _ := newAnthropicTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}`))
+	})
+
+	resp, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "status?"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.Truncated {
+		t.Error("Truncated = true, want false for stop_reason end_turn")
+	}
+}
+
+func TestAnthropicProvider_Retries429ThenSucceeds(t *testing.T) {
+	var attempts int32
+	p, _ := newAnthropicTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 3 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error": {"type": "rate_limit_error", "message": "slow down"}}`))
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}`))
+	})
+
+	resp, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.Text != "ok" {
+		t.Errorf("Text = %q, want ok", resp.Text)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 3 {
+		t.Errorf("attempts = %d, want 3 (2 failures + 1 success)", got)
+	}
+}
+
+func TestAnthropicProvider_Retries5xxExhaustsAttempts(t *testing.T) {
+	var attempts int32
+	p, _ := newAnthropicTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error": {"type": "api_error", "message": "boom"}}`))
+	})
+
+	_, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error after exhausting retries on persistent 500")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error = %v, want it to surface the server message", err)
+	}
+	if got := atomic.LoadInt32(&attempts); got != maxChatAttempts {
+		t.Errorf("attempts = %d, want %d (bounded retry)", got, maxChatAttempts)
+	}
+}
+
+func TestAnthropicProvider_NoRetryOn400(t *testing.T) {
+	var attempts int32
+	p, _ := newAnthropicTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error": {"type": "invalid_request_error", "message": "bad shape"}}`))
+	})
+
+	_, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error on 400 response")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Errorf("attempts = %d, want 1 (a non-429 4xx must not be retried)", got)
+	}
+}
+
+func TestAnthropicProvider_RetryAfterHonored(t *testing.T) {
+	withInstantRetrySleep(t, func(ctx context.Context, d time.Duration) error {
+		if d != 7*time.Second {
+			t.Errorf("backoff duration = %v, want 7s (from Retry-After header)", d)
+		}
+		return nil
+	})
+
+	var attempts int32
+	p, _ := newAnthropicTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "7")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error": {"type": "rate_limit_error", "message": "slow down"}}`))
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		w.Write([]byte(`{"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}`))
+	})
+
+	if _, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "hi"}},
+	}); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+}
+
+func TestAnthropicProvider_ContextCanceledAbortsRetryBeforeNextAttempt(t *testing.T) {
+	withInstantRetrySleep(t, func(ctx context.Context, d time.Duration) error {
+		return context.Canceled
+	})
+
+	var attempts int32
+	p, _ := newAnthropicTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error": {"type": "overloaded_error", "message": "busy"}}`))
+	})
+
+	_, err := p.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Text: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error when the backoff sleep reports context cancellation")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Errorf("attempts = %d, want 1 (must not retry once the sleep hook reports cancellation)", got)
 	}
 }
 

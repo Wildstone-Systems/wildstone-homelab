@@ -197,6 +197,26 @@ func TestRateLimitExhaustsToTypedError(t *testing.T) {
 	}
 }
 
+func TestServerErrorSurfacesAsTransient(t *testing.T) {
+	f := newFakeCF(t)
+	f.addZone("example.com")
+	p := newTestProvider(f)
+
+	f.setServerError(1) // one 503, not repeated — do() does not retry 5xx itself
+
+	r := dnsResource("example.com", "app.example.com", "A", "1.2.3.4", false)
+	err := p.Create(context.Background(), r)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !provider.IsTransient(err) {
+		t.Fatalf("expected a *provider.Transient error, got: %v (%T)", err, err)
+	}
+	if provider.IsRateLimited(err) {
+		t.Fatalf("a 5xx must not be classified as RateLimited: %v", err)
+	}
+}
+
 func TestIdempotencyKeyCreateTwiceIsOneRecord(t *testing.T) {
 	f := newFakeCF(t)
 	zoneID := f.addZone("example.com")

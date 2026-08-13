@@ -84,6 +84,18 @@ func (s *Session) toolSpecs() []provider.Tool {
 	return s.Gateway.ToolSpecs()
 }
 
+// dispatch routes a model-requested tool call through the gateway, applying
+// the session's read-only constraint at the execution boundary. A ReadOnly
+// session refuses mutating tools even if the model names one that was not in
+// its offered set — the enforcement the spec set (offered tools) only
+// advertises.
+func (s *Session) dispatch(ctx context.Context, name string, input map[string]any) (ToolOutcome, error) {
+	if s.ReadOnly {
+		return s.Gateway.DispatchReadOnly(ctx, name, input)
+	}
+	return s.Gateway.Dispatch(ctx, name, input)
+}
+
 // Run drives p through the agent loop for one userMessage: send the
 // system prompt + tool set + conversation, execute any tool calls the
 // model requests through the gateway (which redacts, envelopes, and
@@ -118,7 +130,7 @@ func (s *Session) Run(ctx context.Context, p provider.Provider, userMessage stri
 		results := make([]provider.ToolResult, 0, len(resp.ToolCalls))
 		for _, tc := range resp.ToolCalls {
 			rec := ToolCallRecord{Name: tc.Name, Input: tc.Input}
-			outcome, err := s.Gateway.Dispatch(ctx, tc.Name, tc.Input)
+			outcome, err := s.dispatch(ctx, tc.Name, tc.Input)
 			content := outcome.Content
 			if err != nil {
 				rec.Error = err.Error()

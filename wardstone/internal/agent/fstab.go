@@ -17,6 +17,20 @@ const (
 	fstabEndMarker   = "# END wildstone-managed"
 )
 
+// hasFstabHostileRune reports whether s contains any whitespace or control
+// character that would corrupt or inject into a tab-separated /etc/fstab
+// line. A newline is the dangerous case (a whole injected entry), but any
+// space/tab breaks field parsing too. Kept here, unbuilt-tagged and beside
+// fstabLine, so it is unit-testable on any host.
+func hasFstabHostileRune(s string) bool {
+	for _, r := range s {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' || r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // fstabLine renders one fstab entry. dump/pass are always "0 0" — Wardstone
 // does not manage fsck ordering.
 func fstabLine(source, target, fstype string, options []string) string {
