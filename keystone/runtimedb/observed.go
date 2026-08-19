@@ -37,6 +37,16 @@ func (db *DB) UpsertObserved(o Observed) error {
 	return nil
 }
 
+// DeleteObserved removes the observation for (kind, name) — a resource
+// that has been successfully deleted has no status. Absent rows are a
+// no-op.
+func (db *DB) DeleteObserved(kind, name string) error {
+	if _, err := db.sql.Exec(`DELETE FROM observed WHERE kind = ? AND name = ?`, kind, name); err != nil {
+		return fmt.Errorf("runtimedb: deleting observed %s/%s: %w", kind, name, err)
+	}
+	return nil
+}
+
 // ListObserved returns every observation, (kind, name)-ordered.
 func (db *DB) ListObserved() ([]Observed, error) {
 	rows, err := db.sql.Query(

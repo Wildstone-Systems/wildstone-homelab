@@ -114,6 +114,27 @@ func (db *DB) ListPlans(limit int) ([]PlanRecord, error) {
 	return out, rows.Err()
 }
 
+// PlansInState returns every plan currently in state, oldest first,
+// including full JSON — the reconcile service's work queue (ADR-W008 A2).
+func (db *DB) PlansInState(state PlanState) ([]PlanRecord, error) {
+	rows, err := db.sql.Query(
+		`SELECT seq, created_at, principal, acting_for, summary, risk, state, plan_json, resolved_by, resolved_at
+		 FROM plans WHERE state = ? ORDER BY seq`, string(state))
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing plans in %s: %w", state, err)
+	}
+	defer rows.Close()
+	var out []PlanRecord
+	for rows.Next() {
+		p, err := scanPlan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scanPlan(row rowScanner) (PlanRecord, error) {

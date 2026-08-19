@@ -763,6 +763,23 @@ func (r *Reconciler) managedKeys(nodeID string) map[resKey]bool {
 	return out
 }
 
+// ManagedNodes returns every node ID the Reconciler currently tracks at
+// least one managed resource on. The E3 service loop (ADR-W008 A3) uses
+// it so a node whose desired set became EMPTY still gets a reconcile
+// pass — otherwise pending deletions on that node would never be planned,
+// because the loop groups passes by the nodes present in desired.
+func (r *Reconciler) ManagedNodes() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, 0, len(r.managed))
+	for node, keys := range r.managed {
+		if len(keys) > 0 {
+			out = append(out, node)
+		}
+	}
+	return out
+}
+
 // ---------------------------------------------------------------- apply: Container
 
 func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step plan.PlanStep, desiredByKey map[resKey]resource.Resource) StepResult {
