@@ -1,0 +1,201 @@
+// Package api is Keystone's public plane (ADR-W007 A1/A5): the ONE HTTP+
+// JSON API consumed by Console, `wild`, and the Butler — ground rule 3, no
+// private UI-only or AI-only endpoints. Every request runs the fixed
+// middleware chain authn → RBAC → rate limit → handler → audit, and every
+// response body passes through the redacting encoder; handlers cannot opt
+// out of either.
+package api
+
+import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"strings"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
+)
+
+// Server serves the public plane. All fields are required except Log.
+type Server struct {
+	Principals *principal.Store
+	DB         *runtimedb.DB
+	State      *statefile.Store
+	Log        *slog.Logger
+
+	limiter *limiter
+}
+
+// New wires a Server. The rate limits are per ADR-W007 A5: a generous
+// per-principal bucket, one strict shared bucket for everything that
+// fails authn.
+func New(p *principal.Store, db *runtimedb.DB, state *statefile.Store, log *slog.Logger) *Server {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Server{
+		Principals: p,
+		DB:         db,
+		State:      state,
+		Log:        log,
+		limiter:    newLimiter(),
+	}
+}
+
+// Handler returns the routed public-plane handler.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+
+	// healthz is the single unauthenticated route: static, no state read,
+	// nothing to redact, still rate-limited via the anonymous bucket.
+	mux.HandleFunc("GET /api/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
+		if !s.limiter.allow(anonBucket) {
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"ok":true}`)
+	})
+
+	mux.Handle("GET /api/v1/whoami", s.handle(principal.VerbRead, s.whoami))
+	mux.Handle("GET /api/v1/resources", s.handle(principal.VerbRead, s.listResources))
+	mux.Handle("GET /api/v1/resources/{kind}/{name}", s.handle(principal.VerbRead, s.getResource))
+	mux.Handle("GET /api/v1/observed", s.handle(principal.VerbRead, s.listObserved))
+	mux.Handle("GET /api/v1/events", s.handle(principal.VerbRead, s.listEvents))
+
+	mux.Handle("GET /api/v1/plans", s.handle(principal.VerbRead, s.listPlans))
+	mux.Handle("GET /api/v1/plans/{id}", s.handle(principal.VerbRead, s.getPlan))
+	mux.Handle("POST /api/v1/plans", s.handle(principal.VerbPropose, s.proposePlan))
+	mux.Handle("POST /api/v1/plans/{id}/approve", s.handle(principal.VerbApprove, s.approvePlan))
+	mux.Handle("POST /api/v1/plans/{id}/reject", s.handle(principal.VerbApprove, s.rejectPlan))
+
+	mux.Handle("GET /api/v1/audit", s.handle(principal.VerbManage, s.listAudit))
+	mux.Handle("GET /api/v1/principals", s.handle(principal.VerbManage, s.listPrincipals))
+	mux.Handle("POST /api/v1/principals", s.handle(principal.VerbManage, s.createPrincipal))
+	mux.Handle("POST /api/v1/principals/{name}/disable", s.handle(principal.VerbManage, s.setPrincipalDisabled(true)))
+	mux.Handle("POST /api/v1/principals/{name}/enable", s.handle(principal.VerbManage, s.setPrincipalDisabled(false)))
+	mux.Handle("POST /api/v1/principals/{name}/tokens", s.handle(principal.VerbManage, s.mintToken))
+
+	return mux
+}
+
+// handlerFunc is an authenticated handler: it receives the caller identity
+// and returns (body, HTTP status). A nil body with a 2xx status writes
+// `{"ok":true}`; an error return becomes a JSON error body with the
+// returned status.
+type handlerFunc func(r *http.Request, id principal.Identity) (any, int, error)
+
+// handle builds the fixed middleware chain for one route (ADR-W007 A5).
+func (s *Server) handle(verb principal.Verb, h handlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// --- authn
+		id, ok := s.authenticate(r)
+		if !ok {
+			// Everything unauthenticated shares one strict bucket so token
+			// guessing is throttled globally, not per-source.
+			if !s.limiter.allow(anonBucket) {
+				s.writeError(w, http.StatusTooManyRequests, "rate limited")
+				return
+			}
+			w.Header().Set("WWW-Authenticate", `Bearer realm="wildstone"`)
+			s.writeError(w, http.StatusUnauthorized, "unauthenticated")
+			return
+		}
+
+		// --- RBAC. Denials are audited too (ADR-W007 B5).
+		status := 0
+		defer func() {
+			if err := s.DB.AppendAudit(runtimedb.AuditRecord{
+				Principal: id.Name,
+				ActingFor: id.ActingFor,
+				Method:    r.Method,
+				Path:      r.URL.Path,
+				Status:    status,
+				Remote:    remoteHost(r),
+			}); err != nil {
+				s.Log.Error("audit append failed", "err", err)
+			}
+		}()
+		if !principal.Allowed(id.Role, verb) {
+			status = http.StatusForbidden
+			s.writeError(w, status, fmt.Sprintf("role %s may not %s", id.Role, verb))
+			return
+		}
+
+		// --- rate limit (per principal).
+		if !s.limiter.allow(id.Name) {
+			status = http.StatusTooManyRequests
+			s.writeError(w, status, "rate limited")
+			return
+		}
+
+		// --- handler.
+		body, st, err := h(r, id)
+		status = st
+		if err != nil {
+			s.writeError(w, st, err.Error())
+			return
+		}
+		if body == nil {
+			body = map[string]bool{"ok": true}
+		}
+		s.writeJSON(w, st, body)
+	})
+}
+
+func (s *Server) authenticate(r *http.Request) (principal.Identity, bool) {
+	auth := r.Header.Get("Authorization")
+	const scheme = "Bearer "
+	if !strings.HasPrefix(auth, scheme) {
+		return principal.Identity{}, false
+	}
+	id, err := s.Principals.Authenticate(strings.TrimSpace(strings.TrimPrefix(auth, scheme)))
+	if err != nil {
+		return principal.Identity{}, false
+	}
+	return id, true
+}
+
+// writeJSON is the ONLY response encoder on the public plane: it redacts
+// the serialized bytes, so no handler can leak a secret-shaped value even
+// by mistake (ADR-W007 A5 — redaction is a serialization property). The
+// one deliberate hole is token minting, which marks its response with
+// mintResponse to skip redaction for the single legitimate
+// secret-bearing reply.
+func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		s.Log.Error("response marshal failed", "err", err)
+		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
+		return
+	}
+	if _, isMint := body.(mintResponse); !isMint {
+		raw = []byte(redact.String(string(raw)))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	w.Write(raw)
+}
+
+// mintResponse is the one body shape allowed to carry a secret: the newly
+// minted token, in the only moment it ever exists in a response (ADR-W007
+// A3/B3).
+type mintResponse struct {
+	Token string `json:"token"`
+}
+
+func (s *Server) writeError(w http.ResponseWriter, status int, msg string) {
+	s.writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func remoteHost(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}

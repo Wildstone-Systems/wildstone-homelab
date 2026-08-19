@@ -146,6 +146,89 @@ func (s *Store) Load() ([]resource.Resource, error) {
 	return out, nil
 }
 
+// Head returns the current HEAD commit hash, or "" for a repository with
+// no commits yet (fresh install). Consumers: the plan-approval flow and
+// the out-of-band ingestion loop (ADR-W007 A6) compare it against the
+// runtime DB's statefile_head marker.
+func (s *Store) Head() (string, error) {
+	out, err := s.git(context.Background(), s.Root, "rev-parse", "--verify", "HEAD")
+	if err != nil {
+		// An unborn branch (no commits yet) is not an error condition for
+		// callers; anything else is.
+		if strings.Contains(err.Error(), "Needed a single revision") ||
+			strings.Contains(err.Error(), "unknown revision") ||
+			strings.Contains(err.Error(), "ambiguous argument") {
+			return "", nil
+		}
+		return "", fmt.Errorf("statefile: rev-parse HEAD: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// LoadAt reads and parses every resource YAML file in the tree at commit,
+// sorted by (kind, name) — the historical sibling of Load, used by the
+// out-of-band ingestion loop (ADR-W007 A6) to diff a foreign edit against
+// the last accepted tree without touching the working copy.
+func (s *Store) LoadAt(commit string) ([]resource.Resource, error) {
+	ctx := context.Background()
+	listing, err := s.git(ctx, s.Root, "ls-tree", "-r", "--name-only", commit)
+	if err != nil {
+		return nil, fmt.Errorf("statefile: ls-tree %s: %w", commit, err)
+	}
+	var out []resource.Resource
+	for _, path := range strings.Split(listing, "\n") {
+		path = strings.TrimSpace(path)
+		if path == "" || filepath.Ext(path) != ".yaml" {
+			continue
+		}
+		data, err := s.git(ctx, s.Root, "show", commit+":"+path)
+		if err != nil {
+			return nil, fmt.Errorf("statefile: show %s:%s: %w", commit, path, err)
+		}
+		r, err := resource.Unmarshal([]byte(data))
+		if err != nil {
+			return nil, fmt.Errorf("statefile: parsing %s at %s: %w", path, commit, err)
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Metadata.Name < out[j].Metadata.Name
+	})
+	return out, nil
+}
+
+// Subject returns a commit's subject line, for naming foreign edits in
+// plan records and events.
+func (s *Store) Subject(commit string) (string, error) {
+	out, err := s.git(context.Background(), s.Root, "log", "-1", "--format=%s", commit)
+	if err != nil {
+		return "", fmt.Errorf("statefile: log %s: %w", commit, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// RevertTo records a new commit whose tree equals the tree at commit —
+// the ADR-W007 A6 response to an invalid out-of-band edit. It never
+// rewrites history: the foreign commits stay reachable in the log and the
+// human's work stays recoverable. Implemented as restore-tree-and-commit
+// rather than `git revert` so a run of foreign commits can never produce
+// revert conflicts.
+func (s *Store) RevertTo(commit, who, why string) error {
+	ctx := context.Background()
+	// Drop every tracked file, then restore the target tree over it: the
+	// combination handles both modified and newly-added files.
+	if _, err := s.git(ctx, s.Root, "rm", "-rq", "--ignore-unmatch", "."); err != nil {
+		return fmt.Errorf("statefile: revert rm: %w", err)
+	}
+	if _, err := s.git(ctx, s.Root, "checkout", commit, "--", "."); err != nil {
+		return fmt.Errorf("statefile: revert checkout %s: %w", commit, err)
+	}
+	return s.Commit(who, "", why)
+}
+
 // Commit stages all changes under Root and records a structured commit:
 // a subject line followed by trailing "Who:"/"Plan:"/"Why:" metadata
 // lines, using a per-invocation git identity so no global git config is

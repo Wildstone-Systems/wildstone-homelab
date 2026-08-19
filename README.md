@@ -8,13 +8,16 @@ AI operator (the Butler).
 
 ## Status
 
-Pre-alpha — Phase 0 (architecture spikes). Nothing here is usable yet.
+Pre-alpha — Phase 0 (spikes S1–S4, Wardstone E1) complete; Phase 1 (MVP)
+in progress, starting with E2 (Keystone core). Nothing here is usable yet.
 
-Architecture, scope, and decision documents currently live in the reference
-deployment repository:
+The design brief and architecture proposal live in the reference deployment
+repository:
 [`chickenrat17/homelab-config`](https://github.com/chickenrat17/homelab-config)
-under `docs/architecture/wildstone/` — start with `01-architecture-proposal.md`
-and `02-implementation-scope.md`.
+under `docs/architecture/wildstone/`. The implementation scope (epic and
+milestone definitions E0–E13, M0–M5) lives here at
+`docs/02-implementation-scope.md`; Wildstone ADRs (W-series) live in
+`docs/decisions/`.
 
 ## Layout
 

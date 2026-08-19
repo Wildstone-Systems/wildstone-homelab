@@ -148,13 +148,24 @@ func TestReadOnlyToolSpecs_OmitsProposeChange(t *testing.T) {
 
 func TestDispatch_TruncatesLargeContent(t *testing.T) {
 	store := newTestStore(t)
+	// Put all 200 fixtures, then commit ONCE: the test is about output
+	// truncation, not commit history, and per-resource commits made this
+	// 200 rapid add/commit cycles — slow locally (~30s) and the exact
+	// pattern that hit a "invalid object ... Error building trees" race
+	// in git 2.54 on the CI runner.
 	for i := 0; i < 200; i++ {
-		seedResource(t, store, resource.Resource{
+		r := resource.Resource{
 			ApiVersion: resource.ApiVersion,
 			Kind:       resource.KindVolume,
 			Metadata:   resource.Metadata{Name: "vol-with-a-very-long-name-padding-padding-padding" + strconv.Itoa(i), Owner: "system"},
 			Volume:     &resource.VolumeSpec{Name: "v"},
-		})
+		}
+		if err := store.Put(r); err != nil {
+			t.Fatalf("seed Put %d: %v", i, err)
+		}
+	}
+	if err := store.Commit("test", "seed", "seed fixture"); err != nil {
+		t.Fatalf("seed Commit: %v", err)
 	}
 	gw := NewToolGateway(store, nil)
 	gw.MaxContentBytes = 500

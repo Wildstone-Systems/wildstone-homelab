@@ -54,3 +54,11 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           for m in proto wardstone keystone cli testing/e2e; do (cd "$m" && go test -race ./...); done
+      - name: ts codegen drift (ADR-W007 A7)
+        if: matrix.goarch == 'amd64'
+        # The committed console/src/generated/resources.ts must match what
+        # the generator emits from keystone/resource — the Console cannot
+        # drift from the schema silently.
+        run: |
+          (cd keystone && go run ./resource/gen -out ../console/src/generated/resources.ts)
+          git diff --exit-code console/src/generated/
