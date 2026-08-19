@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -22,6 +23,8 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/gateway"
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingest"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
+	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile/loop"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 )
@@ -33,16 +36,18 @@ func main() {
 	hosts := flag.String("hosts", "localhost,127.0.0.1", "comma-separated SANs for the gateway certificate")
 	dataDir := flag.String("data-dir", "/var/lib/wildstone/keystone", "directory persisting the CA, op-signing key, join tokens, Statefile, and runtime DB across restarts")
 	ingestEvery := flag.Duration("ingest-interval", 15*time.Second, "how often to check the Statefile for out-of-band edits")
+	reconcileEvery := flag.Duration("reconcile-interval", 30*time.Second, "how often the reconcile service ticks (ADR-W008)")
+	managedPrefix := flag.String("managed-prefix", "/etc/wildstone", "managed-file prefix Route/OidcClient fragments render under (must be a Wardstone ManagedPrefix)")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, log); err != nil {
+	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
 		os.Exit(1)
 	}
 }
 
-func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery time.Duration, log *slog.Logger) error {
+func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, log *slog.Logger) error {
 	lis, err := net.Listen("tcp", listen)
 	if err != nil {
 		return err
@@ -51,13 +56,13 @@ func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery time.
 	if err != nil {
 		return err
 	}
-	return serve(lis, apiLis, joinTokens, hosts, dataDir, ingestEvery, log, os.Stdout)
+	return serve(lis, apiLis, joinTokens, hosts, dataDir, ingestEvery, reconcileEvery, managedPrefix, log, os.Stdout)
 }
 
 // serve wires and runs both planes over already-bound listeners —
 // separated from run so the boot integration test can use :0 listeners.
 // bootstrapOut receives the one-time admin token on first start.
-func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery time.Duration, log *slog.Logger, bootstrapOut io.Writer) error {
+func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, log *slog.Logger, bootstrapOut io.Writer) error {
 	gw, err := gateway.New(gateway.Config{
 		JoinTokens: splitNonEmpty(joinTokens),
 		Hosts:      splitNonEmpty(hosts),
@@ -104,6 +109,29 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			time.Sleep(ingestEvery)
 		}
 	}()
+
+	// Reconcile service (ADR-W008): converges approved plans and drift.
+	// Providers (Cloudflare DnsRecord) are wired when the owner supplies
+	// a token — an E6 configuration step; until then a DnsRecord in
+	// desired surfaces as an incident, never a silent skip (ADR-W004 A5).
+	svc := &loop.Loop{
+		State: state,
+		DB:    db,
+		Rec: &reconcile.Reconciler{
+			Applier:       &reconcile.GatewayApplier{Gateway: gw},
+			ManagedPrefix: managedPrefix,
+		},
+		Connected: gw.Connected,
+		Log:       log,
+	}
+	go svc.Run(context.Background(), func(ctx context.Context) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(reconcileEvery):
+			return true
+		}
+	})
 
 	// Public plane.
 	apiSrv := api.New(principals, db, state, log)
