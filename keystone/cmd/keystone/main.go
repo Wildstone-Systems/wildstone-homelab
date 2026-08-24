@@ -96,20 +96,6 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		fmt.Fprintf(bootstrapOut, "first start: admin principal created; API token (shown once):\n%s\n", bootstrap)
 	}
 
-	// Out-of-band ingestion loop (ADR-W007 A6).
-	ing := &ingest.Ingestor{State: state, DB: db, Log: log}
-	go func() {
-		for {
-			res, err := ing.Tick()
-			if err != nil {
-				log.Error("statefile ingest", "err", err)
-			} else if res.Outcome != ingest.OutcomeNoChange {
-				log.Info("statefile ingest", "outcome", string(res.Outcome), "head", res.Head, "plan", res.PlanID)
-			}
-			time.Sleep(ingestEvery)
-		}
-	}()
-
 	// Reconcile service (ADR-W008): converges approved plans and drift.
 	// Providers (Cloudflare DnsRecord) are wired when the owner supplies
 	// a token — an E6 configuration step; until then a DnsRecord in
@@ -124,17 +110,28 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		Connected: gw.Connected,
 		Log:       log,
 	}
-	go svc.Run(context.Background(), func(ctx context.Context) bool {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-time.After(reconcileEvery):
-			return true
-		}
-	})
+	go svc.Run(context.Background(), reconcileEvery)
 
-	// Public plane.
+	// Out-of-band ingestion loop (ADR-W007 A6). An accepted or adopted
+	// edit pokes the reconcile service (ADR-W008 R2a) — a hand-committed
+	// change converges as promptly as an API-approved one.
+	ing := &ingest.Ingestor{State: state, DB: db, Log: log}
+	go func() {
+		for {
+			res, err := ing.Tick()
+			if err != nil {
+				log.Error("statefile ingest", "err", err)
+			} else if res.Outcome != ingest.OutcomeNoChange {
+				log.Info("statefile ingest", "outcome", string(res.Outcome), "head", res.Head, "plan", res.PlanID)
+				svc.Poke()
+			}
+			time.Sleep(ingestEvery)
+		}
+	}()
+
+	// Public plane. Plan approval pokes the reconcile service (R2a).
 	apiSrv := api.New(principals, db, state, log)
+	apiSrv.OnApproved = svc.Poke
 	go func() {
 		log.Info("public API listening", "addr", apiLis.Addr().String())
 		if err := http.Serve(apiLis, apiSrv.Handler()); err != nil {

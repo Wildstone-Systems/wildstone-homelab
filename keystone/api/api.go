@@ -20,12 +20,19 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 )
 
-// Server serves the public plane. All fields are required except Log.
+// Server serves the public plane. All fields are required except Log and
+// OnApproved.
 type Server struct {
 	Principals *principal.Store
 	DB         *runtimedb.DB
 	State      *statefile.Store
 	Log        *slog.Logger
+
+	// OnApproved, when set, is called (non-blocking contract: keep it
+	// cheap) after a plan approval commits — cmd/keystone wires it to the
+	// reconcile service's Poke so convergence starts immediately instead
+	// of at the next interval (ADR-W008 R2a).
+	OnApproved func()
 
 	limiter *limiter
 }

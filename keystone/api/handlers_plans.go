@@ -210,6 +210,9 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 		return nil, http.StatusInternalServerError, err
 	}
 	s.event("plan.approved", planID, id, stored.Summary)
+	if s.OnApproved != nil {
+		s.OnApproved()
+	}
 	rec, err = s.DB.GetPlan(planID)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
