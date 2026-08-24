@@ -128,6 +128,7 @@ message Operation {
     EnsureDockerNetwork ensure_docker_network = 23;
     SystemdUnitStatus systemd_unit_status = 24;
     TimeSyncStatus time_sync_status = 25;
+    InspectContainer inspect_container = 26;
   }
 }
 
@@ -160,6 +161,7 @@ message OpResult {
     EnsureDockerNetworkResult ensure_docker_network = 25;
     SystemdUnitStatusResult systemd_unit_status = 26;
     TimeSyncStatusResult time_sync_status = 27;
+    InspectContainerResult inspect_container = 28;
   }
 }
 
@@ -256,6 +258,25 @@ message ContainerStatsResult {
   uint64 cpu_usage_ns = 1;
   uint64 mem_usage_bytes = 2;
   uint64 mem_limit_bytes = 3;
+}
+
+// InspectContainer (protocol minor 5, ADR-W008 R2c) reads back a
+// wildstone-owned container's identity so the reconciler's observe step
+// can detect SPEC drift, not just presence: image, labels (including the
+// dev.wildstone.spec-hash label Keystone stamps at EnsureContainer), and
+// run state. Ownership semantics match ContainerStats exactly: a foreign
+// container is FORBIDDEN (checked before existence), an absent one is
+// NOT_FOUND. Env values are deliberately NOT returned — they may carry
+// secrets, and the spec-hash label answers "does the running container
+// match the desired spec" without them.
+message InspectContainer {
+  string name = 1;
+}
+
+message InspectContainerResult {
+  bool running = 1;
+  string image = 2;
+  map<string, string> labels = 3;
 }
 
 message PruneImages {}

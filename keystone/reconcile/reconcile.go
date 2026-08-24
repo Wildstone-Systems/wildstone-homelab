@@ -16,17 +16,16 @@
 // arm, so each kind's observe step uses whatever signal its existing ops
 // give it, per ADR-W004 A4/B1:
 //
-//   - Container: presence+health is ContainerStats succeeding. This
-//     conflates "exists and is running" with "matches the desired spec" —
-//     a container that is running but drifted (e.g. wrong image) reads as
-//     a NoOp, not an Update, because there is no op to read back the
-//     running image. EnsureContainer itself IS spec-aware (ops.go replaces
-//     the container on an image mismatch), so an explicit reconcile of a
-//     changed desired image still converges correctly the moment a new
-//     desired spec triggers a Create/Update step through some other path
-//     (e.g. the resource wasn't previously "managed" for this Reconciler
-//     instance) — it just isn't detected as drift by presence-only observe
-//     on an already-managed container. Flagged as a known S2b limitation.
+//   - Container: InspectContainer (protocol minor 5, ADR-W008 R2c) reads
+//     back the running container's labels; the dev.wildstone.spec-hash
+//     label stamped at EnsureContainer is compared against a fresh hash
+//     of the desired spec. Equal + running = NoOp; different or stopped =
+//     spec drift, planned as an Update (the agent's ensureContainer
+//     replaces on spec-hash mismatch, so the Update converges env/port/
+//     mount changes, not just image changes). This closes the S2b
+//     presence-vs-spec gap. An agent that answers INVALID (pre-minor-5)
+//     gets the old presence-only ContainerStats observe — see
+//     observeContainerPresence.
 //   - Volume: there is no volume-inspect op at all (only EnsureVolume).
 //     Observe is therefore "observe-by-apply": the Reconciler treats a
 //     volume as existing iff a Reconciler-tracked, in-memory "managed" set
@@ -61,6 +60,9 @@ package reconcile
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -408,13 +410,54 @@ type containerObserveResult struct {
 	foreign bool
 }
 
-// observeContainer implements the Container observe rule documented in
-// the package doc: ContainerStats success = present+running (returns the
-// desired/placeholder resource so diff sees a match/candidate-for-delete);
-// NOT_FOUND = absent; FORBIDDEN = foreign (never planned as a delete, and
-// never matched against a desired create either — a name collision with a
-// foreign object is left for a human, not silently worked around).
+// observeContainer implements the Container observe rule (ADR-W008 R2c
+// closes the S2b presence-vs-spec gap): InspectContainer returns the
+// container's labels, and the spec-hash label stamped at EnsureContainer
+// is compared against a fresh hash of the desired spec — equal means the
+// running container matches desired (NoOp), different means SPEC drift
+// (an Update is planned by returning a deliberately-unequal placeholder,
+// the observeRoute pattern). NOT_FOUND = absent; FORBIDDEN = foreign
+// (never planned as a delete, and never matched against a desired create
+// either — a name collision with a foreign object is left for a human).
+// An INVALID reply means the agent predates the op (protocol minor 5):
+// fall back to the pre-R2c presence-only ContainerStats observe so an
+// N−1 agent keeps its exact previous behavior.
 func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resKey, want resource.Resource, isDesired bool) (*containerObserveResult, resource.Resource, error) {
+	res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_InspectContainer{
+		InspectContainer: &wsv1.InspectContainer{Name: k.Name},
+	}})
+	if err != nil {
+		return nil, resource.Resource{}, fmt.Errorf("observe container %s: %w", k.Name, err)
+	}
+	if oe := res.GetError(); oe != nil {
+		switch oe.GetCode() {
+		case wsv1.ErrorCode_ERROR_CODE_FORBIDDEN:
+			return &containerObserveResult{foreign: true}, resource.Resource{}, nil
+		case wsv1.ErrorCode_ERROR_CODE_NOT_FOUND:
+			return nil, resource.Resource{}, nil // absent
+		case wsv1.ErrorCode_ERROR_CODE_INVALID:
+			return r.observeContainerPresence(ctx, nodeID, k, want, isDesired)
+		default:
+			return nil, resource.Resource{}, fmt.Errorf("observe container %s: %s: %s", k.Name, oe.GetCode(), oe.GetMessage())
+		}
+	}
+	if !isDesired {
+		return &containerObserveResult{}, placeholderResource(resource.KindContainer, k.Name), nil
+	}
+	inspect := res.GetInspectContainer()
+	if inspect.GetLabels()[specHashLabel] == specHash(want.Container) && inspect.GetRunning() {
+		return &containerObserveResult{}, want, nil
+	}
+	// Present but stale (spec drifted, or a pre-spec-hash container) or
+	// stopped: plan an Update.
+	return &containerObserveResult{}, placeholderResource(resource.KindContainer, k.Name), nil
+}
+
+// observeContainerPresence is the pre-R2c presence-only observe, kept as
+// the N−1 fallback: ContainerStats success = present (conflating running
+// with spec-matching — the documented S2b limitation this path preserves
+// for agents that don't speak InspectContainer yet).
+func (r *Reconciler) observeContainerPresence(ctx context.Context, nodeID string, k resKey, want resource.Resource, isDesired bool) (*containerObserveResult, resource.Resource, error) {
 	res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ContainerStats{
 		ContainerStats: &wsv1.ContainerStats{Name: k.Name},
 	}})
@@ -890,6 +933,34 @@ func (r *Reconciler) waitContainerRunning(ctx context.Context, nodeID, name stri
 	return false
 }
 
+// specHashLabel mirrors the agent's SpecHashLabel constant (a small
+// duplicated constant on each side rather than a shared module dep, the
+// opSignDomainPrefix pattern — ADR-W003 §A4.5 keeps wardstone's
+// dependency surface minimal, and keystone cannot import
+// wardstone/internal anyway). Keep in sync with
+// wardstone/internal/agent/ops.go.
+const specHashLabel = "dev.wildstone.spec-hash"
+
+// specHash computes the deterministic hash of a full container spec that
+// rides the specHashLabel (ADR-W008 R2c): the agent compares it to decide
+// replacement, and observe compares it to detect spec drift. JSON of the
+// spec struct is deterministic here because ContainerSpec's only map
+// (Env) is marshaled with sorted keys by encoding/json. Truncated to 16
+// hex chars: enough to make collision odds irrelevant for one homelab's
+// container count, and deliberately short of the 32-hex shape the
+// redaction layer treats as secret-like.
+func specHash(spec *resource.ContainerSpec) string {
+	data, err := json.Marshal(spec)
+	if err != nil {
+		// A ContainerSpec is plain data; Marshal cannot fail on it. Guard
+		// anyway: an empty hash never matches, which degrades to "always
+		// replace" — converging, never wedging.
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:8])
+}
+
 func containerEnsureOp(name string, spec *resource.ContainerSpec) *wsv1.Operation {
 	var ports []*wsv1.PortBinding
 	for _, p := range spec.Ports {
@@ -905,6 +976,7 @@ func containerEnsureOp(name string, spec *resource.ContainerSpec) *wsv1.Operatio
 	}
 	return &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: &wsv1.EnsureContainer{
 		Name: name, Image: spec.Image, Env: spec.Env, Ports: ports, Mounts: mounts, RestartPolicy: spec.Restart,
+		Labels: map[string]string{specHashLabel: specHash(spec)},
 	}}}
 }
 

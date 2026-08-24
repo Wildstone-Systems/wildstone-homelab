@@ -58,6 +58,8 @@ func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 		return "RemoveContainer", []slog.Attr{slog.String("name", o.RemoveContainer.GetName())}
 	case *wsv1.Operation_ContainerStats:
 		return "ContainerStats", []slog.Attr{slog.String("name", o.ContainerStats.GetName())}
+	case *wsv1.Operation_InspectContainer:
+		return "InspectContainer", []slog.Attr{slog.String("name", o.InspectContainer.GetName())}
 	case *wsv1.Operation_PruneImages:
 		return "PruneImages", nil
 	case *wsv1.Operation_EnsureVolume:

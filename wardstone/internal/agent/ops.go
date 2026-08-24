@@ -20,6 +20,13 @@ const OwnerLabel = "dev.wildstone.owner"
 
 const ownerValue = "wildstone"
 
+// SpecHashLabel carries Keystone's hash of the full desired container
+// spec (ADR-W008 R2c, protocol minor 5). Keystone stamps it at
+// EnsureContainer; ensureContainer compares it to decide replacement, and
+// InspectContainer returns it so observe can detect spec drift. The agent
+// never computes it — it only compares and echoes.
+const SpecHashLabel = "dev.wildstone.spec-hash"
+
 var digestRef = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9./_:-]*@sha256:[a-f0-9]{64}$`)
 
 const maxLogBytes = 1 << 20 // 1 MiB cap on returned logs
@@ -88,6 +95,11 @@ func (a *Agent) dispatchOp(ctx context.Context, opID string, op *wsv1.Operation)
 	case *wsv1.Operation_ContainerStats:
 		var r *wsv1.OpResult_ContainerStats
 		if r, oerr = a.containerStats(ctx, o.ContainerStats); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_InspectContainer:
+		var r *wsv1.OpResult_InspectContainer
+		if r, oerr = a.inspectContainer(ctx, o.InspectContainer); oerr == nil {
 			res.Result = r
 		}
 	case *wsv1.Operation_PruneImages:
@@ -312,7 +324,19 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
 				"container %q exists but is not wildstone-owned", op.GetName())
 		}
-		if existing.Config.Image == op.GetImage() {
+		// Replace when the spec changed. The spec-hash label (stamped by
+		// Keystone on every EnsureContainer since protocol minor 5,
+		// ADR-W008 R2c) covers the WHOLE spec — env, ports, mounts,
+		// restart policy — which the pre-R2c image-only comparison
+		// missed. When the incoming op carries no spec-hash label (an
+		// older Keystone), fall back to the image comparison so N−1
+		// keeps its exact previous behavior.
+		wantHash, hasHash := op.GetLabels()[SpecHashLabel]
+		specMatches := existing.Config.Image == op.GetImage()
+		if hasHash {
+			specMatches = existing.Config.Labels[SpecHashLabel] == wantHash
+		}
+		if specMatches {
 			started := false
 			if !existing.State.Running {
 				if err := a.docker.start(ctx, existing.ID); err != nil {
@@ -324,8 +348,8 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 				ContainerId: existing.ID, Created: false, Started: started,
 			}}, nil
 		}
-		// Image changed: replace. (Spike keeps this simple; E1 adds
-		// health-gated replacement.)
+		// Spec changed: replace. (Spike kept this simple; health-gated
+		// replacement is the reconciler's job, per step.)
 		if err := a.docker.stop(ctx, existing.ID, 10); err != nil {
 			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "stop for replace: %v", err)
 		}
@@ -473,6 +497,25 @@ func (a *Agent) containerStats(ctx context.Context, op *wsv1.ContainerStats) (*w
 		CpuUsageNs:    st.CPUStats.CPUUsage.TotalUsage,
 		MemUsageBytes: st.MemoryStats.Usage,
 		MemLimitBytes: st.MemoryStats.Limit,
+	}}, nil
+}
+
+// inspectContainer (protocol minor 5, ADR-W008 R2c) reads back a
+// wildstone-owned container's identity — image, labels, run state — so
+// Keystone's observe step can detect spec drift via the
+// dev.wildstone.spec-hash label, not just presence. Ownership semantics
+// are requireOwned's, identical to containerStats: FORBIDDEN for a
+// foreign container (checked before existence), NOT_FOUND when absent.
+// Env values are deliberately not returned (they may carry secrets).
+func (a *Agent) inspectContainer(ctx context.Context, op *wsv1.InspectContainer) (*wsv1.OpResult_InspectContainer, *wsv1.OpError) {
+	ci, oerr := a.requireOwned(ctx, op.GetName())
+	if oerr != nil {
+		return nil, oerr
+	}
+	return &wsv1.OpResult_InspectContainer{InspectContainer: &wsv1.InspectContainerResult{
+		Running: ci.State.Running,
+		Image:   ci.Config.Image,
+		Labels:  ci.Config.Labels,
 	}}, nil
 }
 

@@ -73,6 +73,7 @@ func startGateway(t *testing.T, tokens []string) *harness {
 
 type fakeContainer struct {
 	image   string
+	labels  map[string]string
 	running bool
 	owned   bool
 }
@@ -331,6 +332,9 @@ func (a *testAgent) handleOp(opID string, op *wsv1.Operation) *wsv1.OpResult {
 	case *wsv1.Operation_ContainerStats:
 		a.countOp("ContainerStats")
 		return a.containerStats(opID, o.ContainerStats)
+	case *wsv1.Operation_InspectContainer:
+		a.countOp("InspectContainer")
+		return a.inspectContainer(opID, o.InspectContainer)
 	case *wsv1.Operation_EnsureVolume:
 		a.countOp("EnsureVolume")
 		return a.ensureVolume(opID, o.EnsureVolume)
@@ -358,17 +362,25 @@ func (a *testAgent) ensureContainer(opID string, op *wsv1.EnsureContainer) *wsv1
 		if !existing.owned {
 			return opErrResult(opID, wsv1.ErrorCode_ERROR_CODE_FORBIDDEN, "container %q exists but is not wildstone-owned", op.GetName())
 		}
-		if existing.image == op.GetImage() {
+		// Spec-hash-aware replace, same as the real agent (ops.go,
+		// ADR-W008 R2c): the spec-hash label decides when present; image
+		// comparison is the pre-minor-5 fallback.
+		wantHash, hasHash := op.GetLabels()[specHashLabel]
+		specMatches := existing.image == op.GetImage()
+		if hasHash {
+			specMatches = existing.labels[specHashLabel] == wantHash
+		}
+		if specMatches {
 			started := !existing.running
 			existing.running = true
 			return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
 				ContainerId: "cid-" + op.GetName(), Created: false, Started: started,
 			}}}
 		}
-		// image changed: replace, same as the real agent (ops.go).
+		// spec changed: replace, same as the real agent (ops.go).
 		delete(a.containers, op.GetName())
 	}
-	a.containers[op.GetName()] = &fakeContainer{image: op.GetImage(), running: true, owned: true}
+	a.containers[op.GetName()] = &fakeContainer{image: op.GetImage(), labels: op.GetLabels(), running: true, owned: true}
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
 		ContainerId: "cid-" + op.GetName(), Created: true, Started: true,
 	}}}
@@ -410,6 +422,20 @@ func (a *testAgent) removeContainer(opID string, op *wsv1.RemoveContainer) *wsv1
 	}
 	delete(a.containers, op.GetName())
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_RemoveContainer{RemoveContainer: &wsv1.RemoveContainerResult{Existed: true}}}
+}
+
+// inspectContainer mirrors the real agent's arm (ops.go, ADR-W008 R2c):
+// requireOwned semantics, then image/labels/running readback.
+func (a *testAgent) inspectContainer(opID string, op *wsv1.InspectContainer) *wsv1.OpResult {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c, errRes := a.requireOwnedLocked(opID, op.GetName())
+	if errRes != nil {
+		return errRes
+	}
+	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_InspectContainer{InspectContainer: &wsv1.InspectContainerResult{
+		Running: c.running, Image: c.image, Labels: c.labels,
+	}}}
 }
 
 // containerStats doubles as the Reconciler's presence+running observe/
