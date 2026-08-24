@@ -70,11 +70,23 @@ emit nothing — the event stream is for changes, not heartbeats.
 
 # Part B — Work packages
 
-- **R1** — the loop package (this ADR's A1–A5), `PlansInState` accessor,
-  cmd/keystone wiring (`-reconcile-interval`, default 30s), tests over a
-  fake Applier.
-- **R2+** (later): richer per-resource observe (close the S2b
-  presence-vs-spec gap), event-driven ticks (plan approval pokes the
-  loop instead of waiting for the interval), per-step reverse coverage
-  audit, backoff/circuit breaker on repeated failures (ADR-W004 A4's
-  bounded remediation at loop scope).
+- **R1** (implemented) — the loop package (this ADR's A1–A5),
+  `PlansInState` accessor, cmd/keystone wiring (`-reconcile-interval`,
+  default 30s), tests over a fake Applier.
+- **R2** (implemented):
+  - **R2a** — event-driven ticks: `Loop.Poke` on plan approval
+    (`api.Server.OnApproved`) and on accepted out-of-band edits; a poke
+    bypasses backoff (fresh human intent).
+  - **R2b** — failure backoff: consecutive failed ticks stretch the
+    interval `base<<streak` capped at 32×, reset by any clean tick.
+  - **R2c** — spec-aware container observe (protocol minor 5): the
+    `dev.wildstone.spec-hash` label stamped at EnsureContainer, read
+    back by the new `InspectContainer` op; the agent replaces on hash
+    mismatch; a pre-minor-5 agent falls back to presence-only observe.
+  - **R2d** — the reverse-coverage matrix pinned by test
+    (`reconcile/reversecoverage_test.go`): Container Create reverses
+    with Stop+Remove, Volume gate failure dispatches nothing beyond
+    EnsureVolume, ever.
+- **R3+** (later): reverse coverage for the remaining kinds where one is
+  definable, spec-aware observe for Volume (needs an inspect surface),
+  per-node backoff instead of loop-global.
