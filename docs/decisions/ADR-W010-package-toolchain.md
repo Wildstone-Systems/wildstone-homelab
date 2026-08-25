@@ -61,14 +61,28 @@ rendered, digest-pin enforcement on every image, and the E4 policy engine
 over the rendered tree (a package that ships a policy violation fails
 lint, not the user's install). Lint failures name the template index.
 
-# Part B — Work packages
+# Part B — Work packages (all implemented)
 
-- **C1** — structural traits in the engine; delete the gate test's
-  synthetic catalog package.
+- **C1** — structural traits in the engine; the gate test's synthetic
+  catalog package deleted.
 - **C2** — `keystone/pkgtool`: Lint (A5), deterministic archive build,
   sign/verify (A2), registry index read/write + resolve (A3, A4);
-  `wild pkg lint|build|publish` as the first real `wild` subcommands.
-- **C3** — registry serving + verified fetch on the Keystone side;
-  digest-refresh tooling for package images (the packages/README gap).
-- **C4** — upgrade-plan generation test: resolve vN+1 → Expand → diff
-  against a Statefile holding vN (proves A4 end-to-end).
+  `wild pkg lint|keygen|publish|resolve` as the first real `wild`
+  subcommands.
+- **C3** — verified fetch over HTTP (any static server; digest +
+  signature checked before extraction) and digest-refresh tooling
+  (textual in-place rewrite preserving comments; OCI-registry resolver);
+  `wild pkg fetch|refresh-digests`.
+- **C4** — the upgrade test: resolve `^1` → verify → extract → Expand →
+  diff against a Statefile holding vN — the plan IS the upgrade plan.
+
+## Addendum: route auth vocabulary (found by C2's lint contract test)
+
+Linting the shipped packages against the E4 policy engine surfaced a
+modeling gap: both used `auth: none` on `family_public` routes for
+surfaces that ARE authenticated (the Authelia portal itself; Immich's
+own OIDC flow). The Route auth vocabulary gained `portal` (the IdP's own
+login surface — public by necessity) and `app_oidc` (the app runs its
+own OIDC flow against our IdP), both packages adopted them, and `none`
+regained its honest meaning: truly unauthenticated, still forbidden on
+public routes without an exemption (ADR-W009).

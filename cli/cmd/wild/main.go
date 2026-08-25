@@ -33,7 +33,9 @@ func usage() {
   wild pkg lint <pkg-dir> [-set k=v ...] [-catalog dir ...]
   wild pkg keygen <key-path>
   wild pkg publish <pkg-dir> -registry <dir> -key <key-path>
-  wild pkg resolve <name> [-constraint v] -registry <dir>`)
+  wild pkg resolve <name> [-constraint v] -registry <dir>
+  wild pkg fetch <name> [-constraint v] -url <registry-url> -pub <key.pub> -dest <dir>
+  wild pkg refresh-digests <pkg-dir>`)
 }
 
 func runPkg(args []string) int {
@@ -59,6 +61,10 @@ func runPkg(args []string) int {
 		return runPublish(args[1:])
 	case "resolve":
 		return runResolve(args[1:])
+	case "fetch":
+		return runFetch(args[1:])
+	case "refresh-digests":
+		return runRefreshDigests(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "wild pkg: unknown subcommand %q\n", args[0])
 		usage()
@@ -177,5 +183,72 @@ func runResolve(args []string) int {
 		return 1
 	}
 	fmt.Printf("%s@%s %s sha256:%s\n", entry.Name, entry.Version, entry.Path, entry.Sha256)
+	return 0
+}
+
+func runFetch(args []string) int {
+	pos, args := splitLeadingArg(args)
+	fs := flag.NewFlagSet("wild pkg fetch", flag.ContinueOnError)
+	rawURL := fs.String("url", "", "registry base URL")
+	pubPath := fs.String("pub", "", "publisher public key (.pub from wild pkg keygen)")
+	dest := fs.String("dest", ".", "directory to extract into")
+	constraint := fs.String("constraint", "", "version constraint")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if pos == "" && fs.NArg() == 1 {
+		pos = fs.Arg(0)
+	}
+	if pos == "" || *rawURL == "" || *pubPath == "" {
+		usage()
+		return 2
+	}
+	pub, err := pkgtool.LoadPublicKey(*pubPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "wild pkg fetch:", err)
+		return 1
+	}
+	dir, err := pkgtool.FetchPackage(*rawURL, pos, *constraint, pub, *dest)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "wild pkg fetch:", err)
+		return 1
+	}
+	fmt.Println("fetched, verified, and extracted to", dir)
+	return 0
+}
+
+func runRefreshDigests(args []string) int {
+	pos, args := splitLeadingArg(args)
+	fs := flag.NewFlagSet("wild pkg refresh-digests", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if pos == "" && fs.NArg() == 1 {
+		pos = fs.Arg(0)
+	}
+	if pos == "" {
+		usage()
+		return 2
+	}
+	results, err := pkgtool.RefreshDigests(pos, pkgtool.RegistryDigestResolver(nil))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "wild pkg refresh-digests:", err)
+		return 1
+	}
+	failed := false
+	for _, r := range results {
+		switch {
+		case r.Err != nil:
+			failed = true
+			fmt.Fprintf(os.Stderr, "%s: %v\n", r.Image, r.Err)
+		case r.NewDigest != r.OldDigest:
+			fmt.Printf("%s: %.19s… -> %.19s…\n", r.Image, r.OldDigest, r.NewDigest)
+		default:
+			fmt.Printf("%s: current\n", r.Image)
+		}
+	}
+	if failed {
+		return 1
+	}
 	return 0
 }
