@@ -22,6 +22,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/api"
 	"github.com/chickenrat17/wildstone-homelab/keystone/gateway"
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingest"
+	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile/loop"
@@ -84,6 +85,20 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	}
 	principals := &principal.Store{DB: db}
 
+	// Policy engine (ADR-W009): exemptions load from a root-owned file in
+	// DataDir; a malformed file fails startup loudly rather than lurking.
+	exemptions, err := policy.LoadExemptions(filepath.Join(dataDir, "policy-exemptions.yaml"))
+	if err != nil {
+		return err
+	}
+	if len(exemptions) > 0 {
+		for _, ex := range exemptions {
+			log.Info("policy exemption active", "rule", ex.Rule, "target", ex.Kind+"/"+ex.Name,
+				"reason", ex.Reason, "approvedBy", ex.ApprovedBy)
+		}
+	}
+	pol := policy.NewEngine(exemptions)
+
 	// First start mints the admin principal and prints its token exactly
 	// once — the ADR-W003 join-token pattern (ADR-W007 A3).
 	bootstrap, err := principals.Bootstrap()
@@ -115,7 +130,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Out-of-band ingestion loop (ADR-W007 A6). An accepted or adopted
 	// edit pokes the reconcile service (ADR-W008 R2a) — a hand-committed
 	// change converges as promptly as an API-approved one.
-	ing := &ingest.Ingestor{State: state, DB: db, Log: log}
+	ing := &ingest.Ingestor{State: state, DB: db, Log: log, Policy: pol}
 	go func() {
 		for {
 			res, err := ing.Tick()
@@ -132,6 +147,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Public plane. Plan approval pokes the reconcile service (R2a).
 	apiSrv := api.New(principals, db, state, log)
 	apiSrv.OnApproved = svc.Poke
+	apiSrv.Policy = pol
 	go func() {
 		log.Info("public API listening", "addr", apiLis.Addr().String())
 		if err := http.Serve(apiLis, apiSrv.Handler()); err != nil {

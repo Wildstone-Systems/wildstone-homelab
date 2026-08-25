@@ -344,8 +344,26 @@ func TestRedactionProperty(t *testing.T) {
 		"API_KEY":     secrets[1],
 		"OIDC_REF":    "secret/immich-oidc",
 	}
-	doc := containerYAML(t, "immich", "ghcr.io/immich@"+testDigest, env)
+	// Since E4, a proposal carrying literal secrets is 422'd by the
+	// policy engine before it ever becomes state — so a secret-bearing
+	// resource can only be planted by writing the Statefile directly
+	// (simulating a pre-E4 tree or a hand edit). The redaction property
+	// must hold for what's IN state regardless of how it got there.
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindContainer,
+		Metadata:   resource.Metadata{Name: "immich", Owner: "capability/test", Node: "n1"},
+		Container:  &resource.ContainerSpec{Image: "ghcr.io/immich@" + testDigest, Env: env},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.State.Commit("test", "", "seed secret-bearing resource"); err != nil {
+		t.Fatal(err)
+	}
 
+	// The plan record's secret surface: a planted secret in the summary
+	// (free text is not policy-checked; redaction must still catch it).
+	doc := containerYAML(t, "clean-app", "ghcr.io/clean@"+testDigest, nil)
 	var rec runtimedb.PlanRecord
 	if resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/plans",
 		proposalRequest{Summary: "deploy with planted secrets " + secrets[0], Put: []string{doc}}, &rec); resp.StatusCode != 201 {
@@ -466,5 +484,46 @@ func TestNoUnmediatedWritePath(t *testing.T) {
 		if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
 			t.Errorf("%s %s = %d, want 404/405 (no unmediated write path)", c.method, c.path, resp.StatusCode)
 		}
+	}
+}
+
+// TestPolicyRejectsProposal pins ADR-W009 A1 on the API path: a proposal
+// violating a standing invariant is 422'd before any plan record exists,
+// and the rejection is evented.
+func TestPolicyRejectsProposal(t *testing.T) {
+	h := newHarness(t)
+	doc, err := resource.Marshal(resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindRoute,
+		Metadata:   resource.Metadata{Name: "cam", Owner: "capability/test", Node: "n1"},
+		Route: &resource.RouteSpec{
+			Host: "cam.example.com", Upstream: "10.0.0.9:80",
+			Auth: "none", Classification: "family_public",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/plans",
+		proposalRequest{Summary: "expose camera", Put: []string{string(doc)}}, nil)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("policy-violating propose = %d, want 422", resp.StatusCode)
+	}
+	plans, err := h.s.DB.ListPlans(10)
+	if err != nil || len(plans) != 0 {
+		t.Fatalf("plan records after rejection = %+v, %v; want none", plans, err)
+	}
+	events, err := h.s.DB.EventsAfter(0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range events {
+		if e.Type == "policy.rejected" && strings.Contains(e.Message, "public-requires-auth") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no policy.rejected event: %+v", events)
 	}
 }

@@ -71,6 +71,21 @@ const Placeholder = "[REDACTED]"
 // sheltered reference and avoid redacting it.
 const secretRefSentinelMarker = "\x00SECROUND\x00"
 
+// SecretShaped reports whether s contains a secret-VALUE shape (long hex
+// or base64 runs), ignoring sheltered forms — secret/<name> references
+// and sha256 digest pins are not secrets. The policy engine's
+// secret-values-forbidden rule (ADR-W009 A2) uses it to keep literal
+// secrets out of the Statefile with the same shape heuristics this
+// package redacts by, so the two can never disagree about what counts.
+func SecretShaped(s string) bool {
+	if s == "" {
+		return false
+	}
+	sheltered := secretRefScanRegexp.ReplaceAllString(s, "")
+	sheltered = digestPinScanRegexp.ReplaceAllString(sheltered, "")
+	return hexTokenRegexp.MatchString(sheltered) || base64TokenRegexp.MatchString(sheltered)
+}
+
 // String strips secret-looking values from s, while preserving
 // secret/<name> references verbatim (ADR-W005 A2: a reference is not a
 // secret value). Two centralized call sites, each covering a whole plane
