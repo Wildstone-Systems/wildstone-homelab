@@ -168,6 +168,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv := api.New(principals, db, state, log)
 	apiSrv.OnApproved = svc.Poke
 	apiSrv.Policy = pol
+	apiSrv.Agents = &reconcile.GatewayApplier{Gateway: gw} // secrets endpoints (ADR-W012 W2)
 	go func() {
 		log.Info("public API listening", "addr", apiLis.Addr().String())
 		if err := http.Serve(apiLis, apiSrv.Handler()); err != nil {

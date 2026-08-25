@@ -273,11 +273,11 @@ func TestOfflineNode(t *testing.T) {
 // one up, or the two would double-drive its state machine (ADR-W011 A4).
 func TestBackupPlansAreNotLoopWork(t *testing.T) {
 	l, _, db, _ := harness(t)
-	id, err := db.InsertPlan(backupPrincipal, "", "backup run: photos", "low", `{"backupPlan":"photos"}`)
+	id, err := db.InsertPlan("system/backup", "", "backup run: photos", "low", `{"backupPlan":"photos"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.TransitionPlan(id, runtimedb.PlanApproved, backupPrincipal); err != nil {
+	if err := db.TransitionPlan(id, runtimedb.PlanApproved, "system/backup"); err != nil {
 		t.Fatal(err)
 	}
 
