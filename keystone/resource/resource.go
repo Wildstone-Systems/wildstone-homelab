@@ -98,7 +98,7 @@ type RouteSpec struct {
 	Host string `yaml:"host"`
 	// Upstream is "container/<name>:<port>" or "ip:port".
 	Upstream string `yaml:"upstream"`
-	// Auth is "none" or "authelia_oidc".
+	// Auth is one of routeAuthValues: none, authelia_oidc, app_oidc, portal.
 	Auth string `yaml:"auth"`
 	// Classification is a mandatory policy input, e.g. "family_public".
 	Classification string `yaml:"classification"`
@@ -123,9 +123,21 @@ var dnsRecordTypes = map[string]bool{
 }
 
 // routeAuthValues is the closed set of supported RouteSpec.Auth values.
+// The distinctions are policy-load-bearing (ADR-W009 public-requires-auth
+// flags only "none"):
+//   - "none":          truly unauthenticated — forbidden on family_public
+//     routes without an explicit exemption (§9.2-2).
+//   - "authelia_oidc": the reverse proxy enforces Authelia forward-auth.
+//   - "app_oidc":      the app runs its own OIDC login flow against the
+//     identity provider (it registers an OidcClient); the proxy passes
+//     through, but the surface is still authenticated.
+//   - "portal":        the identity provider's OWN login surface — public
+//     by necessity (a login page cannot sit behind itself).
 var routeAuthValues = map[string]bool{
 	"none":          true,
 	"authelia_oidc": true,
+	"app_oidc":      true,
+	"portal":        true,
 }
 
 // oidcAuthPolicies is the closed set of supported OidcClientSpec.AuthPolicy
@@ -366,7 +378,7 @@ func validateRoute(r *Resource) error {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.host", Msg: "must not be empty"}
 	}
 	if !routeAuthValues[r.Route.Auth] {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.auth", Msg: "must be one of none, authelia_oidc"}
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.auth", Msg: "must be one of none, authelia_oidc, app_oidc, portal"}
 	}
 	return nil
 }

@@ -172,30 +172,11 @@ func TestGoNoGoIdentityPhotosVertical(t *testing.T) {
 	//
 	// photos-immich's `requires` list (ADR-W005 A1's own package example)
 	// includes ingress:public and storage:bulk alongside identity:oidc.
-	// ADR-W005 A2's prose describes ingress:public as satisfied "by the
-	// reverse-proxy/Route mechanism" and storage as "a declared Volume" —
-	// i.e. structural, system-level capabilities, not something a catalog
-	// package need advertise. keystone/capability's shipped Engine (S3b)
-	// does not special-case this: Expand checks catalog.Provides for every
-	// declared requirement uniformly. Rather than change the Engine (out of
-	// S3c's scope) or drop the two requires from the package (which would
-	// contradict the ADR's own package example in A1), this test's catalog
-	// includes a minimal synthetic "system-capabilities" package that
-	// Provides ingress:public and storage — representing exactly the
-	// always-available system mechanisms the ADR names, not a shipped
-	// package. This is scaffolding for a known Engine gap (flagged in the
-	// report), not template hand-tuning: it changes nothing about how
-	// identity/photos-immich render.
-	systemCaps := &pkgspec.Package{
-		ApiVersion: pkgspec.ApiVersion,
-		Kind:       pkgspec.Kind,
-		Metadata:   pkgspec.Metadata{Name: "system-capabilities", Version: "1.0.0", Capability: "system"},
-		Provides: []pkgspec.Provide{
-			{Trait: "ingress", Mode: "public"},
-			{Trait: "storage", Mode: ""},
-		},
-	}
-	catalog := capability.NewCatalog(identityPkg, photosPkg, systemCaps)
+	// ingress:public and storage are structural traits the Engine
+	// satisfies natively since E5 (ADR-W010 A1) — the S3c synthetic
+	// "system-capabilities" scaffold package this test previously carried
+	// is gone.
+	catalog := capability.NewCatalog(identityPkg, photosPkg)
 	engine := capability.NewEngine()
 
 	identityResources, err := engine.Expand(identityPkg, map[string]string{
