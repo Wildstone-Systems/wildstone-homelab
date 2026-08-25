@@ -14,18 +14,32 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 )
 
-// Server serves the public plane. All fields are required except Log.
+// Server serves the public plane. All fields are required except Log and
+// OnApproved.
 type Server struct {
 	Principals *principal.Store
 	DB         *runtimedb.DB
 	State      *statefile.Store
 	Log        *slog.Logger
+
+	// OnApproved, when set, is called (non-blocking contract: keep it
+	// cheap) after a plan approval commits — cmd/keystone wires it to the
+	// reconcile service's Poke so convergence starts immediately instead
+	// of at the next interval (ADR-W008 R2a).
+	OnApproved func()
+
+	// Policy validates every proposed target tree (ADR-W009 A1). New
+	// installs a no-exemptions engine; there is deliberately no way to
+	// run the API without one — the standing invariants cannot be turned
+	// off, only exempted per-resource via the engine's exemption list.
+	Policy *policy.Engine
 
 	limiter *limiter
 }
@@ -42,6 +56,7 @@ func New(p *principal.Store, db *runtimedb.DB, state *statefile.Store, log *slog
 		DB:         db,
 		State:      state,
 		Log:        log,
+		Policy:     policy.NewEngine(nil),
 		limiter:    newLimiter(),
 	}
 }

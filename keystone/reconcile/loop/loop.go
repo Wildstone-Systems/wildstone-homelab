@@ -14,7 +14,9 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
@@ -47,6 +49,46 @@ type Loop struct {
 	// if a caller ever runs Tick concurrently by mistake.
 	allowMediumHigh atomic.Bool
 	installed       bool
+
+	// failStreak counts consecutive Ticks that failed (a non-empty
+	// TickOutcome.Failed or a Tick error) — the input to Run's backoff
+	// (ADR-W008 R2b). Reset to zero by any non-failing tick.
+	failStreak atomic.Int32
+
+	pokeOnce sync.Once
+	poke     chan struct{}
+}
+
+// Poke wakes Run for an immediate tick — plan approval and out-of-band
+// ingestion call it so convergence starts now instead of at the next
+// interval (ADR-W008 R2a). A poke deliberately bypasses failure backoff:
+// it signals fresh human intent, which is exactly when a retry is
+// warranted. Non-blocking; pokes coalesce.
+func (l *Loop) Poke() {
+	select {
+	case l.pokeCh() <- struct{}{}:
+	default:
+	}
+}
+
+func (l *Loop) pokeCh() chan struct{} {
+	l.pokeOnce.Do(func() { l.poke = make(chan struct{}, 1) })
+	return l.poke
+}
+
+// maxBackoffShift caps the R2b backoff at base<<5 (32× the interval).
+const maxBackoffShift = 5
+
+// delay returns how long Run waits before the next tick: the base
+// interval, doubled per consecutive failed tick up to the cap — repeated
+// failures (a wedged provider, a node that keeps failing its gate) stop
+// hammering the same error while the level-triggered loop still retries.
+func (l *Loop) delay(base time.Duration) time.Duration {
+	shift := l.failStreak.Load()
+	if shift > maxBackoffShift {
+		shift = maxBackoffShift
+	}
+	return base << shift
 }
 
 // TickOutcome summarizes one Tick for callers and tests.
@@ -180,7 +222,11 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 		out.DriftProposed = id
 	}
 	if out.Failed != "" {
-		log.Warn("reconcile tick failed", "detail", out.Failed, "plans", out.PlanIDs)
+		l.failStreak.Add(1)
+		log.Warn("reconcile tick failed", "detail", out.Failed, "plans", out.PlanIDs,
+			"backoff_streak", l.failStreak.Load())
+	} else {
+		l.failStreak.Store(0)
 	}
 	return out, nil
 }
@@ -301,11 +347,19 @@ func hasAgentKinds(rs []resource.Resource) bool {
 	return false
 }
 
-// Run ticks until ctx is done, at the cadence chosen by wait — a seam so
-// cmd/keystone owns the timer and tests own determinism.
-func (l *Loop) Run(ctx context.Context, wait func(ctx context.Context) bool) {
-	for wait(ctx) {
+// Run ticks until ctx is done: every base interval (stretched by the R2b
+// failure backoff), or immediately on Poke (R2a). A Tick error counts
+// toward the backoff streak like a failed pass.
+func (l *Loop) Run(ctx context.Context, base time.Duration) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(l.delay(base)):
+		case <-l.pokeCh():
+		}
 		if _, err := l.Tick(ctx); err != nil {
+			l.failStreak.Add(1)
 			log := l.Log
 			if log == nil {
 				log = slog.Default()

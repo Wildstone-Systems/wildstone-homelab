@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
@@ -224,5 +225,55 @@ func TestInvalidForeignEditReverted(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no statefile.oob-reverted event in %+v", events)
+	}
+}
+
+// TestPolicyInvalidForeignEditReverted pins ADR-W009 A1 on the ingestion
+// path: repo access does not outrank policy — a hand-committed,
+// schema-valid tree that violates a standing invariant is reverted.
+func TestPolicyInvalidForeignEditReverted(t *testing.T) {
+	in, state := harness(t)
+	in.Policy = policy.NewEngine(nil)
+	seed(t, in, state)
+
+	// A human commits a schema-VALID but policy-invalid route: public,
+	// auth disabled.
+	doc, err := resource.Marshal(resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindRoute,
+		Metadata:   resource.Metadata{Name: "cam", Owner: "capability/test", Node: "n1"},
+		Route: &resource.RouteSpec{
+			Host: "cam.example.com", Upstream: "10.0.0.9:80",
+			Auth: "none", Classification: "family_public",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(state.Root, "route", "cam.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, doc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	humanGit(t, state.Root, "add", "-A")
+	humanGit(t, state.Root, "commit", "-m", "expose camera by hand")
+
+	res, err := in.Tick()
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if res.Outcome != OutcomeReverted || !strings.Contains(res.Detail, "public-requires-auth") {
+		t.Fatalf("result = %+v, want policy revert", res)
+	}
+	after, err := state.Load()
+	if err != nil {
+		t.Fatalf("post-revert tree: %v", err)
+	}
+	for _, r := range after {
+		if r.Kind == resource.KindRoute && r.Metadata.Name == "cam" {
+			t.Fatalf("policy-invalid route survived the revert: %+v", after)
+		}
 	}
 }

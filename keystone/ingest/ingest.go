@@ -12,8 +12,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
+	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 )
@@ -57,6 +59,12 @@ type Ingestor struct {
 	State *statefile.Store
 	DB    *runtimedb.DB
 	Log   *slog.Logger
+	// Policy, when set, validates the foreign tree against the standing
+	// invariants (ADR-W009 A1): repo access does not outrank policy, so a
+	// policy-invalid hand edit is reverted exactly like a schema-invalid
+	// one. nil skips policy (unit-test posture; cmd/keystone always sets
+	// it).
+	Policy *policy.Engine
 }
 
 // Tick runs one detect → validate → decide pass (ADR-W007 A6).
@@ -99,37 +107,44 @@ func (in *Ingestor) Tick() (Result, error) {
 	}
 
 	// Validate the foreign tree. Load parses AND validates via
-	// resource.Unmarshal (strict YAML + Validate), so any schema or
-	// policy-shape failure lands here.
+	// resource.Unmarshal (strict YAML + Validate), so any schema failure
+	// lands here.
 	newTree, err := in.State.Load()
 	if err != nil {
-		// Invalid: restore the last accepted tree with a structured
-		// commit naming the failure (ADR-W007 A6). The foreign commits
-		// stay in history.
-		why := fmt.Sprintf("revert out-of-band edit %.12s (%s): %v", head, subject, err)
-		if rerr := in.State.RevertTo(marker, oobPrincipal, why); rerr != nil {
-			return Result{}, fmt.Errorf("ingest: reverting invalid edit: %w", rerr)
-		}
-		newHead, herr := in.State.Head()
-		if herr != nil {
-			return Result{}, herr
-		}
-		if err := in.DB.SetStatefileHead(newHead); err != nil {
-			return Result{}, err
-		}
-		in.event(log, "statefile.oob-reverted", head, err.Error())
-		return Result{Outcome: OutcomeReverted, Head: newHead, Detail: err.Error()}, nil
+		return in.revert(log, marker, head, subject, err)
 	}
 
-	// Valid: record the delta as an auto-approved plan — approved because
-	// the edit is already the committed desired state (whoever made it
-	// holds repo access, an authority senior to any API token); the plan
-	// record gives the change the same audit/review/reconcile surface as
-	// an API-proposed one, and E3's reconciler converges from it.
 	oldTree, err := in.State.LoadAt(marker)
 	if err != nil {
 		return Result{}, fmt.Errorf("ingest: loading accepted tree %s: %w", marker, err)
 	}
+
+	// Standing invariants (ADR-W009 A1): repo access does not outrank
+	// policy — a policy-invalid hand edit is reverted like a
+	// schema-invalid one. Exemption uses are surfaced as events.
+	if in.Policy != nil {
+		violations, exempted := in.Policy.Validate(policy.Change{
+			Proposed: newTree, Current: oldTree, Principal: oobPrincipal,
+		})
+		for _, v := range exempted {
+			in.event(log, "policy.exempted", head, v.String())
+		}
+		if len(violations) > 0 {
+			msgs := make([]string, 0, len(violations))
+			for _, v := range violations {
+				msgs = append(msgs, v.String())
+			}
+			perr := fmt.Errorf("violates standing policy: %s", strings.Join(msgs, "; "))
+			return in.revert(log, marker, head, subject, perr)
+		}
+	}
+
+	// Valid: record the delta as an auto-approved plan — approved because
+	// the edit is already the committed desired state (whoever made it
+	// holds repo access, an authority senior to any API token — though
+	// not senior to policy, above); the plan record gives the change the
+	// same audit/review/reconcile surface as an API-proposed one, and
+	// E3's reconciler converges from it.
 	p := plan.Diff(newTree, oldTree)
 	summary := fmt.Sprintf("out-of-band edit %.12s: %s", head, subject)
 	p.Summary = summary
@@ -159,6 +174,24 @@ func (in *Ingestor) Tick() (Result, error) {
 	}
 	in.event(log, "statefile.oob-accepted", head, subject)
 	return Result{Outcome: OutcomeAccepted, Head: head, PlanID: planID}, nil
+}
+
+// revert restores the last accepted tree with a structured commit naming
+// the failure (ADR-W007 A6). The foreign commits stay in history.
+func (in *Ingestor) revert(log *slog.Logger, marker, head, subject string, cause error) (Result, error) {
+	why := fmt.Sprintf("revert out-of-band edit %.12s (%s): %v", head, subject, cause)
+	if rerr := in.State.RevertTo(marker, oobPrincipal, why); rerr != nil {
+		return Result{}, fmt.Errorf("ingest: reverting invalid edit: %w", rerr)
+	}
+	newHead, herr := in.State.Head()
+	if herr != nil {
+		return Result{}, herr
+	}
+	if err := in.DB.SetStatefileHead(newHead); err != nil {
+		return Result{}, err
+	}
+	in.event(log, "statefile.oob-reverted", head, cause.Error())
+	return Result{Outcome: OutcomeReverted, Head: newHead, Detail: cause.Error()}, nil
 }
 
 func (in *Ingestor) event(log *slog.Logger, typ, head, msg string) {

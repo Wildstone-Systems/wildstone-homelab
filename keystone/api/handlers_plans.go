@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
+	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -114,6 +116,29 @@ func (s *Server) proposePlan(r *http.Request, id principal.Identity) (any, int, 
 		return nil, http.StatusInternalServerError, err
 	}
 	desired := applyChanges(current, puts, req.Delete)
+
+	// Standing invariants (ADR-W009 A1): a policy-invalid change never
+	// becomes a plan record, whoever proposed it. Exemption uses are
+	// surfaced as events — never silent.
+	violations, exempted := s.Policy.Validate(policy.Change{
+		Proposed:  desired,
+		Current:   current,
+		Principal: id.Name,
+		Role:      string(id.Role),
+	})
+	for _, v := range exempted {
+		s.event("policy.exempted", "", id, v.String())
+	}
+	if len(violations) > 0 {
+		msgs := make([]string, 0, len(violations))
+		for _, v := range violations {
+			msgs = append(msgs, v.String())
+		}
+		s.event("policy.rejected", "", id, strings.Join(msgs, "; "))
+		return nil, http.StatusUnprocessableEntity,
+			fmt.Errorf("proposal violates standing policy: %s", strings.Join(msgs, "; "))
+	}
+
 	p := plan.Diff(desired, current)
 	if len(p.Steps) == 0 {
 		return nil, http.StatusBadRequest, fmt.Errorf("proposal is a no-op against current desired state")
@@ -210,6 +235,9 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 		return nil, http.StatusInternalServerError, err
 	}
 	s.event("plan.approved", planID, id, stored.Summary)
+	if s.OnApproved != nil {
+		s.OnApproved()
+	}
 	rec, err = s.DB.GetPlan(planID)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err

@@ -22,6 +22,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/api"
 	"github.com/chickenrat17/wildstone-homelab/keystone/gateway"
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingest"
+	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile/loop"
@@ -84,6 +85,20 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	}
 	principals := &principal.Store{DB: db}
 
+	// Policy engine (ADR-W009): exemptions load from a root-owned file in
+	// DataDir; a malformed file fails startup loudly rather than lurking.
+	exemptions, err := policy.LoadExemptions(filepath.Join(dataDir, "policy-exemptions.yaml"))
+	if err != nil {
+		return err
+	}
+	if len(exemptions) > 0 {
+		for _, ex := range exemptions {
+			log.Info("policy exemption active", "rule", ex.Rule, "target", ex.Kind+"/"+ex.Name,
+				"reason", ex.Reason, "approvedBy", ex.ApprovedBy)
+		}
+	}
+	pol := policy.NewEngine(exemptions)
+
 	// First start mints the admin principal and prints its token exactly
 	// once — the ADR-W003 join-token pattern (ADR-W007 A3).
 	bootstrap, err := principals.Bootstrap()
@@ -95,20 +110,6 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		// first-start, and must not end up in shipped log files.
 		fmt.Fprintf(bootstrapOut, "first start: admin principal created; API token (shown once):\n%s\n", bootstrap)
 	}
-
-	// Out-of-band ingestion loop (ADR-W007 A6).
-	ing := &ingest.Ingestor{State: state, DB: db, Log: log}
-	go func() {
-		for {
-			res, err := ing.Tick()
-			if err != nil {
-				log.Error("statefile ingest", "err", err)
-			} else if res.Outcome != ingest.OutcomeNoChange {
-				log.Info("statefile ingest", "outcome", string(res.Outcome), "head", res.Head, "plan", res.PlanID)
-			}
-			time.Sleep(ingestEvery)
-		}
-	}()
 
 	// Reconcile service (ADR-W008): converges approved plans and drift.
 	// Providers (Cloudflare DnsRecord) are wired when the owner supplies
@@ -124,17 +125,29 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		Connected: gw.Connected,
 		Log:       log,
 	}
-	go svc.Run(context.Background(), func(ctx context.Context) bool {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-time.After(reconcileEvery):
-			return true
-		}
-	})
+	go svc.Run(context.Background(), reconcileEvery)
 
-	// Public plane.
+	// Out-of-band ingestion loop (ADR-W007 A6). An accepted or adopted
+	// edit pokes the reconcile service (ADR-W008 R2a) — a hand-committed
+	// change converges as promptly as an API-approved one.
+	ing := &ingest.Ingestor{State: state, DB: db, Log: log, Policy: pol}
+	go func() {
+		for {
+			res, err := ing.Tick()
+			if err != nil {
+				log.Error("statefile ingest", "err", err)
+			} else if res.Outcome != ingest.OutcomeNoChange {
+				log.Info("statefile ingest", "outcome", string(res.Outcome), "head", res.Head, "plan", res.PlanID)
+				svc.Poke()
+			}
+			time.Sleep(ingestEvery)
+		}
+	}()
+
+	// Public plane. Plan approval pokes the reconcile service (R2a).
 	apiSrv := api.New(principals, db, state, log)
+	apiSrv.OnApproved = svc.Poke
+	apiSrv.Policy = pol
 	go func() {
 		log.Info("public API listening", "addr", apiLis.Addr().String())
 		if err := http.Serve(apiLis, apiSrv.Handler()); err != nil {

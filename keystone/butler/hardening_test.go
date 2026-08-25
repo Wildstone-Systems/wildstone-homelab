@@ -137,7 +137,7 @@ func TestDispatchReadOnly_RefusesMutatingTool(t *testing.T) {
 
 // TestPolicy_ClassificationDowngradeBlocked proves the downgrade-and-disable
 // bypass is closed: relabelling a currently-family_public route as
-// family_internal while setting auth=none, in one change, is still rejected
+// internal_only while setting auth=none, in one change, is still rejected
 // because the rule is evaluated against current state as well as the
 // proposed classification.
 func TestPolicy_ClassificationDowngradeBlocked(t *testing.T) {
@@ -145,14 +145,14 @@ func TestPolicy_ClassificationDowngradeBlocked(t *testing.T) {
 		routeResource("photos", "photos.example.com", "container/immich:2283", "authelia_oidc", "family_public"),
 	}
 	// Same route, relabelled internal AND auth disabled.
-	downgraded := routeResource("photos", "photos.example.com", "container/immich:2283", "none", "family_internal")
+	downgraded := routeResource("photos", "photos.example.com", "container/immich:2283", "none", "internal_only")
 
 	if err := policyValidate(downgraded, current); err == nil {
 		t.Fatal("classification downgrade + auth disable on a currently-public route was NOT rejected")
 	}
 
 	// A genuinely-internal route with no prior public state may disable auth.
-	internal := routeResource("intranet", "wiki.internal", "container/wiki:80", "none", "family_internal")
+	internal := routeResource("intranet", "wiki.internal", "container/wiki:80", "none", "internal_only")
 	if err := policyValidate(internal, nil); err != nil {
 		t.Fatalf("an internal route with no public history should be allowed: %v", err)
 	}

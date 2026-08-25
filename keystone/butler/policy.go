@@ -1,8 +1,9 @@
 package butler
 
 import (
-	"fmt"
+	"strings"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
@@ -16,61 +17,45 @@ type PolicyError struct {
 
 func (e *PolicyError) Error() string { return "policy: " + e.Msg }
 
-// publicClassification is the Route classification that marks a route as
-// exposed to the public internet (ADR-W004 A3's mandatory classification
-// policy input).
-const publicClassification = "family_public"
-
-// noAuth is the RouteSpec.Auth value meaning "no authentication."
-const noAuth = "none"
-
 // policyValidate rejects proposed changes no principal — human or model —
 // may make, regardless of how the request was phrased or what a plan's
-// risk grade says (this is a hard reject, not a "needs approval"). The
-// spike's one rule, per ADR-W006 A3/S4b: a Route that is public-facing may
-// not have auth disabled.
-//
-// "Public-facing" is evaluated against BOTH the proposed classification and
-// the current one for a route of the same name. Evaluating only the proposed
-// resource let a model launder the rule in a single call — relabel a
-// currently-family_public route as family_internal AND set auth=none, so the
-// standalone proposed resource looks compliant while the live route keeps
-// serving with auth off. Comparing against current state closes that
-// downgrade path: you cannot drop auth on a route that is public now, no
-// matter what classification the same call assigns it.
+// risk grade says (a hard reject, not a "needs approval"). Since E4
+// (ADR-W009) it delegates to the shared keystone/policy engine — the same
+// rules every write path enforces — evaluated as role "butler", which
+// additionally arms the butler-admin-scope rule. The S4 spike's single
+// rule (family_public routes keep auth, including the downgrade-laundering
+// guard) lives on as the engine's public-requires-auth rule; the S4
+// red-team property is unchanged: a fully-obeyed injection still cannot
+// produce a policy-valid proposal for a forbidden change.
 //
 // current is the resource set the proposal is diffed against (the present
-// Statefile); pass nil when there is no prior state to compare.
+// Statefile); res is the single resource the change proposes.
 func policyValidate(res resource.Resource, current []resource.Resource) error {
-	if res.Kind != resource.KindRoute || res.Route == nil {
-		return nil
-	}
-	if res.Route.Auth != noAuth {
-		return nil
-	}
-	proposedPublic := res.Route.Classification == publicClassification
-	currentPublic := currentRouteIsPublic(current, res.Metadata.Name)
-	if proposedPublic || currentPublic {
-		reason := "is classified " + publicClassification
-		if !proposedPublic && currentPublic {
-			reason = "is currently classified " + publicClassification +
-				" (a classification downgrade in the same change does not lift the rule)"
+	// Build the target tree the change would produce: current with res
+	// replaced (by kind+name) or appended.
+	proposed := make([]resource.Resource, 0, len(current)+1)
+	for _, c := range current {
+		if c.Kind == res.Kind && c.Metadata.Name == res.Metadata.Name {
+			continue
 		}
-		return &PolicyError{Msg: fmt.Sprintf(
-			"route %q %s and may not have auth disabled (auth=%q)",
-			res.Metadata.Name, reason, noAuth,
-		)}
+		proposed = append(proposed, c)
 	}
-	return nil
-}
+	proposed = append(proposed, res)
 
-// currentRouteIsPublic reports whether a Route named name already exists in
-// current and is classified family_public.
-func currentRouteIsPublic(current []resource.Resource, name string) bool {
-	for _, r := range current {
-		if r.Kind == resource.KindRoute && r.Metadata.Name == name && r.Route != nil {
-			return r.Route.Classification == publicClassification
-		}
+	// Exemptions are a Keystone-host configuration (ADR-W009 A3); the
+	// in-process spike Butler runs with none — the strictest posture.
+	violations, _ := policy.NewEngine(nil).Validate(policy.Change{
+		Proposed:  proposed,
+		Current:   current,
+		Principal: "butler",
+		Role:      "butler",
+	})
+	if len(violations) == 0 {
+		return nil
 	}
-	return false
+	msgs := make([]string, 0, len(violations))
+	for _, v := range violations {
+		msgs = append(msgs, v.String())
+	}
+	return &PolicyError{Msg: strings.Join(msgs, "; ")}
 }
