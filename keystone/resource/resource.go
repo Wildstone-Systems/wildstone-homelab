@@ -102,7 +102,7 @@ type RouteSpec struct {
 	Host string `yaml:"host"`
 	// Upstream is "container/<name>:<port>" or "ip:port".
 	Upstream string `yaml:"upstream"`
-	// Auth is one of routeAuthValues: none, authelia_oidc, app_oidc, portal.
+	// Auth is one of routeAuthValues: none, authelia_oidc, app_oidc, app_ldap, portal.
 	Auth string `yaml:"auth"`
 	// Classification is a mandatory policy input, e.g. "family_public".
 	Classification string `yaml:"classification"`
@@ -135,12 +135,16 @@ var dnsRecordTypes = map[string]bool{
 //   - "app_oidc":      the app runs its own OIDC login flow against the
 //     identity provider (it registers an OidcClient); the proxy passes
 //     through, but the surface is still authenticated.
+//   - "app_ldap":      the app runs its own LDAP-backed login against the
+//     identity directory (e.g. Jellyfin's LDAP-Auth plugin, ADR-W013 A2);
+//     the proxy passes through, but the surface is still authenticated.
 //   - "portal":        the identity provider's OWN login surface — public
 //     by necessity (a login page cannot sit behind itself).
 var routeAuthValues = map[string]bool{
 	"none":          true,
 	"authelia_oidc": true,
 	"app_oidc":      true,
+	"app_ldap":      true,
 	"portal":        true,
 }
 
@@ -428,7 +432,7 @@ func validateRoute(r *Resource) error {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.host", Msg: "must not be empty"}
 	}
 	if !routeAuthValues[r.Route.Auth] {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.auth", Msg: "must be one of none, authelia_oidc, app_oidc, portal"}
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.auth", Msg: "must be one of none, authelia_oidc, app_oidc, app_ldap, portal"}
 	}
 	return nil
 }

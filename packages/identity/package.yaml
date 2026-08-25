@@ -24,6 +24,10 @@ metadata:
   profile: authelia-lldap
 provides:
   - { trait: identity, mode: oidc }
+  # The package deploys LLDAP itself, so the directory is equally its
+  # provision — media-jellyfin's LDAP-Auth posture requires it
+  # (ADR-W013 A2).
+  - { trait: identity, mode: ldap }
 params:
   - { name: public_domain, required: true }
   - { name: node, required: true }

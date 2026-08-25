@@ -1,0 +1,182 @@
+# Documents capability, profile "paperless" (ADR-W013 A3): the reference
+# deployment's full Paperless-ngx pipeline — webserver, dedicated redis
+# broker and postgres 16 (§5.1 dedicated infra), gotenberg with the
+# reference's hardening flags, and tika. OIDC via Authelia exactly as
+# the reference does it (django-allauth), so the route is app_oidc with
+# an OidcClient registration.
+#
+# Secrets (ADR-W012): Wardstone materializes WHOLE env values, and
+# allauth's provider config is one JSON blob with the client secret
+# inside — so the ENTIRE PAPERLESS_SOCIALACCOUNT_PROVIDERS value is the
+# secret paperless-oauth-providers (seed it with `wild secret set`,
+# shaped like the reference compose's value). SECRET_KEY and the DB
+# password are ordinary references.
+#
+# Image digests are REAL, resolved 2026-08-25 via the OCI registry API:
+#   ghcr.io/paperless-ngx/paperless-ngx:latest -> sha256:65a4cabf...b456b
+#   postgres:16                                -> sha256:c1b37833...b109
+#   gotenberg/gotenberg:8                      -> sha256:87c16b9f...9466
+#   apache/tika:latest                         -> sha256:a8b44250...555b
+#   redis:latest                               -> sha256:e7723ff7...19a2 (shared pin with photos-immich)
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: documents-paperless
+  version: 1.0.0
+  capability: documents
+  profile: paperless
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: public }
+  - { trait: storage, class: bulk }
+params:
+  - { name: public_domain, required: true }
+  - { name: docs_subdomain, default: paperless }
+  - { name: node, required: true }
+  - { name: timezone, default: UTC }
+policies:
+  classifications: [family_public]
+  dataSensitivity: high
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: paperless-data, node: "{{ .Params.node }}" }
+    spec: { name: paperless-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: paperless-media, node: "{{ .Params.node }}" }
+    spec: { name: paperless-media }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: paperless-consume, node: "{{ .Params.node }}" }
+    spec: { name: paperless-consume }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: paperless-export, node: "{{ .Params.node }}" }
+    spec: { name: paperless-export }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: paperless-pgdata, node: "{{ .Params.node }}" }
+    spec: { name: paperless-pgdata }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: paperless-redis-data, node: "{{ .Params.node }}" }
+    spec: { name: paperless-redis-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: documents-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: documents-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: paperless-redis, node: "{{ .Params.node }}" }
+    spec:
+      image: "redis@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2"
+      mounts:
+        - { source: paperless-redis-data, target: /data }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: paperless-postgres, node: "{{ .Params.node }}" }
+    spec:
+      image: "postgres@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109"
+      env:
+        POSTGRES_DB: paperless
+        POSTGRES_USER: paperless
+        POSTGRES_PASSWORD: "secret/paperless-postgres-password"
+      mounts:
+        - { source: paperless-pgdata, target: /var/lib/postgresql/data }
+      restart: unless-stopped
+  # The reference's gotenberg hardening flags ride ContainerSpec.command
+  # (ADR-W011 A3).
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: paperless-gotenberg, node: "{{ .Params.node }}" }
+    spec:
+      image: "gotenberg/gotenberg@sha256:87c16b9f364279d321bc9772d31fa58aa6abe036423c270698bd636c3a8e9466"
+      command:
+        - gotenberg
+        - "--chromium-disable-javascript=true"
+        - "--chromium-allow-list=file:///tmp/.*"
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: paperless-tika, node: "{{ .Params.node }}" }
+    spec:
+      image: "apache/tika@sha256:a8b442501f601fb15015de974f9afe13dd242b0f14e49a2b144fadcb214a555b"
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: paperless, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/paperless-ngx/paperless-ngx@sha256:65a4cabf0169ea7fbd90ab7bb28ba3f8b5909613635acda1a03ad606f34b456b"
+      env:
+        PAPERLESS_REDIS: "redis://container/paperless-redis:6379"
+        PAPERLESS_DBHOST: "container/paperless-postgres"
+        PAPERLESS_TIKA_ENABLED: "1"
+        PAPERLESS_TIKA_GOTENBERG_ENDPOINT: "http://container/paperless-gotenberg:3000"
+        PAPERLESS_TIKA_ENDPOINT: "http://container/paperless-tika:9998"
+        PAPERLESS_URL: "https://{{ .Params.docs_subdomain }}.{{ .Params.public_domain }}"
+        PAPERLESS_SECRET_KEY: "secret/paperless-secret-key"
+        PAPERLESS_TIME_ZONE: "{{ .Params.timezone }}"
+        PAPERLESS_ENABLE_OAUTH_USER_LOGIN: "true"
+        PAPERLESS_SOCIALACCOUNT_PROVIDERS: "secret/paperless-oauth-providers"
+      mounts:
+        - { source: paperless-data, target: /usr/src/paperless/data }
+        - { source: paperless-media, target: /usr/src/paperless/media }
+        - { source: paperless-consume, target: /usr/src/paperless/consume }
+        - { source: paperless-export, target: /usr/src/paperless/export }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: paperless, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.docs_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/paperless:8000"
+      auth: app_oidc
+      classification: family_public
+  # OidcClient registration (ADR-W005 A3). The redirect is allauth's
+  # custom-provider callback for the "authelia" provider id the
+  # reference uses.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: paperless }
+    spec:
+      clientId: paperless
+      clientName: Paperless
+      redirectUris:
+        - "https://{{ .Params.docs_subdomain }}.{{ .Params.public_domain }}/accounts/authelia/login/callback/"
+      scopes: [openid, profile, email]
+      authPolicy: two_factor
+      secretRef: secret/paperless-oidc
+  # The reference registry's required group for document access.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: LdapGroup
+    metadata: { name: docs-users }
+    spec:
+      name: docs_users
+  # Backup hook (ADR-W013 A4): data + media + DB, daily.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: documents, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [paperless-data, paperless-media, paperless-pgdata]
+      repository: documents-backup-repo
+      passwordSecret: secret/restic-documents
+      schedule: daily
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }
