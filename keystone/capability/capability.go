@@ -116,6 +116,15 @@ func (c *Catalog) providerParams(trait, mode string) map[string]string {
 	return nil
 }
 
+// structuralTraits are requirements the engine satisfies itself rather
+// than through the catalog (ADR-W010 A1): a CLOSED list, mirroring the
+// closed-registry philosophy — adding one is a reviewed code change, and
+// each entry must name the system mechanism that satisfies it.
+var structuralTraits = map[string]bool{
+	"ingress": true, // reverse-proxy/Route machinery (ADR-W004 A1)
+	"storage": true, // declared Volumes (ADR-W004 A1)
+}
+
 // Engine expands packages into resources.
 type Engine struct{}
 
@@ -134,6 +143,13 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 	}
 
 	for _, req := range pkg.Requires {
+		if structuralTraits[req.Trait] {
+			// ingress/storage are system mechanisms, always satisfiable
+			// (ADR-W010 A1 making ADR-W005 A2's prose real): ingress by the
+			// reverse-proxy/Route machinery, storage by declared Volumes.
+			// They contribute nothing to .Resolved.
+			continue
+		}
 		if !catalog.Provides(req.Trait, req.Mode) {
 			return nil, &UnsatisfiedRequirementError{Package: pkg.Metadata.Name, Trait: req.Trait, Mode: req.Mode}
 		}
