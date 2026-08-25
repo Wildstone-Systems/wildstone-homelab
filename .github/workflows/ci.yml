@@ -23,6 +23,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  installer:
+    name: installer script (ADR-W014)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: syntax
+        run: bash -n scripts/install.sh
+      - name: shellcheck
+        run: shellcheck scripts/install.sh
+
   go:
     name: go (${{ matrix.goarch }})
     runs-on: ubuntu-latest

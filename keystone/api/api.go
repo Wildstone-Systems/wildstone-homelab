@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
@@ -46,6 +47,14 @@ type Server struct {
 	// (ADR-W012 W2) — cmd/keystone wires the gateway applier. nil leaves
 	// those endpoints answering 503; every other route is unaffected.
 	Agents reconcile.Applier
+
+	// MintJoin mints a single-use node join token (ADR-W014 A3) —
+	// cmd/keystone wires gateway.MintJoinToken. nil leaves the pairing
+	// endpoint answering 503.
+	MintJoin func(ttl time.Duration) (string, error)
+	// CAFingerprint is the gateway CA's hex sha256, returned alongside
+	// every minted join token so installs pin the join (ADR-W003 W3).
+	CAFingerprint string
 
 	limiter *limiter
 }
@@ -100,6 +109,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/principals/{name}/disable", s.handle(principal.VerbManage, s.setPrincipalDisabled(true)))
 	mux.Handle("POST /api/v1/principals/{name}/enable", s.handle(principal.VerbManage, s.setPrincipalDisabled(false)))
 	mux.Handle("POST /api/v1/principals/{name}/tokens", s.handle(principal.VerbManage, s.mintToken))
+
+	// Pairing (ADR-W014 A3): admin mints a single-use join token + CA
+	// fingerprint for a node install.
+	mux.Handle("POST /api/v1/join-tokens", s.handle(principal.VerbManage, s.mintJoinToken))
 
 	// Secrets (ADR-W012 W2): admin-only, name-level only — values transit
 	// the set endpoint once and are never persisted, logged, or readable
@@ -201,7 +214,12 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
 		return
 	}
-	if _, isMint := body.(mintResponse); !isMint {
+	switch body.(type) {
+	case mintResponse, joinTokenResponse:
+		// The two deliberate carve-outs (ADR-W007 A3, ADR-W014 A3): a
+		// newly minted API token and a newly minted join token, each in
+		// the only moment it ever exists in a response.
+	default:
 		raw = []byte(redact.String(string(raw)))
 	}
 	w.Header().Set("Content-Type", "application/json")

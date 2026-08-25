@@ -169,6 +169,8 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv.OnApproved = svc.Poke
 	apiSrv.Policy = pol
 	apiSrv.Agents = &reconcile.GatewayApplier{Gateway: gw} // secrets endpoints (ADR-W012 W2)
+	apiSrv.MintJoin = gw.MintJoinToken                     // pairing endpoint (ADR-W014 A3)
+	apiSrv.CAFingerprint = gw.CA().Fingerprint()
 	go func() {
 		log.Info("public API listening", "addr", apiLis.Addr().String())
 		if err := http.Serve(apiLis, apiSrv.Handler()); err != nil {

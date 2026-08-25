@@ -23,6 +23,8 @@ func main() {
 		os.Exit(runPkg(os.Args[2:]))
 	case "secret":
 		os.Exit(runSecret(os.Args[2:]))
+	case "node":
+		os.Exit(runNode(os.Args[2:]))
 	default:
 		fmt.Fprintf(os.Stderr, "wild: unknown command %q\n", os.Args[1])
 		usage()
@@ -38,7 +40,8 @@ func usage() {
   wild pkg resolve <name> [-constraint v] -registry <dir>
   wild pkg fetch <name> [-constraint v] -url <registry-url> -pub <key.pub> -dest <dir>
   wild pkg refresh-digests <pkg-dir>
-  wild secret list|generate|set|rotate ...   (see wild secret)`)
+  wild secret list|generate|set|rotate ...   (see wild secret)
+  wild node mint-join ...                    (see wild node)`)
 }
 
 func runPkg(args []string) int {
