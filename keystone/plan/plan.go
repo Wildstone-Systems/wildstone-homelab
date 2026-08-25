@@ -309,6 +309,9 @@ func containerEqual(a, b *resource.ContainerSpec) bool {
 			return false
 		}
 	}
+	if !stringSliceEqual(a.Command, b.Command) {
+		return false
+	}
 	if len(a.Ports) != len(b.Ports) {
 		return false
 	}

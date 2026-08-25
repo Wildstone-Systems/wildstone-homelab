@@ -1540,6 +1540,10 @@ type EnsureContainer struct {
 	Mounts        []*Mount          `protobuf:"bytes,5,rep,name=mounts,proto3" json:"mounts,omitempty"`
 	Labels        map[string]string `protobuf:"bytes,6,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // agent adds/asserts dev.wildstone.owner
 	RestartPolicy string            `protobuf:"bytes,7,opt,name=restart_policy,json=restartPolicy,proto3" json:"restart_policy,omitempty"`                                        // "no" | "unless-stopped" | "always"
+	// Container argument vector, appended after the image's entrypoint
+	// (docker Cmd; ADR-W011 A3, protocol minor 6). A pre-minor-6 agent
+	// ignores this field.
+	Command       []string `protobuf:"bytes,8,rep,name=command,proto3" json:"command,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1621,6 +1625,13 @@ func (x *EnsureContainer) GetRestartPolicy() string {
 		return x.RestartPolicy
 	}
 	return ""
+}
+
+func (x *EnsureContainer) GetCommand() []string {
+	if x != nil {
+		return x.Command
+	}
+	return nil
 }
 
 type PortBinding struct {
@@ -4657,7 +4668,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x06result\"P\n" +
 	"\aOpError\x12+\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x17.wardstone.v1.ErrorCodeR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xb0\x03\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xca\x03\n" +
 	"\x0fEnsureContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x128\n" +
@@ -4665,7 +4676,8 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x05ports\x18\x04 \x03(\v2\x19.wardstone.v1.PortBindingR\x05ports\x12+\n" +
 	"\x06mounts\x18\x05 \x03(\v2\x13.wardstone.v1.MountR\x06mounts\x12A\n" +
 	"\x06labels\x18\x06 \x03(\v2).wardstone.v1.EnsureContainer.LabelsEntryR\x06labels\x12%\n" +
-	"\x0erestart_policy\x18\a \x01(\tR\rrestartPolicy\x1a6\n" +
+	"\x0erestart_policy\x18\a \x01(\tR\rrestartPolicy\x12\x18\n" +
+	"\acommand\x18\b \x03(\tR\acommand\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +

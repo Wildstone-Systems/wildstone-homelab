@@ -23,24 +23,52 @@ func repoPackages(t *testing.T) (identity, photos string) {
 	return filepath.Join(root, "identity"), filepath.Join(root, "photos-immich")
 }
 
+// TestLintShippedPackages walks ALL of packages/ (ADR-W011 B/I1): a new
+// package cannot ship unlinted, because merely adding its directory puts
+// it under this test. Each package lints with every other shipped package
+// on the catalog, and shared real-shaped fillers cover the params whose
+// value shape matters (domains); everything else auto-fills.
 func TestLintShippedPackages(t *testing.T) {
-	identity, photos := repoPackages(t)
-	fillers := map[string]string{"public_domain": "example.internal", "node": "n1"}
-
-	issues, err := Lint(identity, LintOptions{Fillers: fillers})
+	root, err := filepath.Abs("../../packages")
 	if err != nil {
-		t.Fatalf("Lint(identity): %v", err)
+		t.Fatal(err)
 	}
-	if len(issues) != 0 {
-		t.Fatalf("identity package has lint issues: %v", issues)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, filepath.Join(root, e.Name()))
+		}
+	}
+	if len(dirs) < 6 {
+		t.Fatalf("found only %d package dirs under %s — packages/ walk is broken", len(dirs), root)
 	}
 
-	issues, err = Lint(photos, LintOptions{Fillers: fillers, CatalogDirs: []string{identity}})
-	if err != nil {
-		t.Fatalf("Lint(photos-immich): %v", err)
+	fillers := map[string]string{
+		"public_domain": "example.internal",
+		"admin_domain":  "admin.example.internal",
+		"node":          "n1",
 	}
-	if len(issues) != 0 {
-		t.Fatalf("photos-immich package has lint issues: %v", issues)
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(filepath.Base(dir), func(t *testing.T) {
+			var catalog []string
+			for _, other := range dirs {
+				if other != dir {
+					catalog = append(catalog, other)
+				}
+			}
+			issues, err := Lint(dir, LintOptions{Fillers: fillers, CatalogDirs: catalog})
+			if err != nil {
+				t.Fatalf("Lint(%s): %v", filepath.Base(dir), err)
+			}
+			if len(issues) != 0 {
+				t.Fatalf("shipped package %s has lint issues: %v", filepath.Base(dir), issues)
+			}
+		})
 	}
 }
 

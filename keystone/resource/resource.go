@@ -82,8 +82,11 @@ type ContainerSpec struct {
 	Image string            `yaml:"image"`
 	Env   map[string]string `yaml:"env,omitempty"`
 	// Ports are "host:container" pairs.
-	Ports   []string `yaml:"ports,omitempty"`
-	Mounts  []Mount  `yaml:"mounts,omitempty"`
+	Ports  []string `yaml:"ports,omitempty"`
+	Mounts []Mount  `yaml:"mounts,omitempty"`
+	// Command is the container argument vector, appended after the
+	// image's entrypoint (docker Cmd; ADR-W011 A3, protocol minor 6).
+	Command []string `yaml:"command,omitempty"`
 	Restart string   `yaml:"restart,omitempty"`
 }
 

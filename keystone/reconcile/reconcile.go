@@ -976,7 +976,8 @@ func containerEnsureOp(name string, spec *resource.ContainerSpec) *wsv1.Operatio
 	}
 	return &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: &wsv1.EnsureContainer{
 		Name: name, Image: spec.Image, Env: spec.Env, Ports: ports, Mounts: mounts, RestartPolicy: spec.Restart,
-		Labels: map[string]string{specHashLabel: specHash(spec)},
+		Command: spec.Command,
+		Labels:  map[string]string{specHashLabel: specHash(spec)},
 	}}}
 }
 

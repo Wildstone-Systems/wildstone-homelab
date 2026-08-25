@@ -190,6 +190,10 @@ message EnsureContainer {
   repeated Mount mounts = 5;
   map<string, string> labels = 6; // agent adds/asserts dev.wildstone.owner
   string restart_policy = 7;      // "no" | "unless-stopped" | "always"
+  // Container argument vector, appended after the image's entrypoint
+  // (docker Cmd; ADR-W011 A3, protocol minor 6). A pre-minor-6 agent
+  // ignores this field.
+  repeated string command = 8;
 }
 
 message PortBinding {

@@ -40,7 +40,7 @@ import (
 //	ProbeTcp, ProbeHttp, EnsureDockerNetwork (ADR-W003 W6c).
 //
 // 4: adds SystemdUnitStatus, TimeSyncStatus (ADR-W003 W6d).
-const ProtocolMinor = 5
+const ProtocolMinor = 6
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

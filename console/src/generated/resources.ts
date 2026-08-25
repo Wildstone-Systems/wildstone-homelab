@@ -29,6 +29,7 @@ export interface ContainerSpec {
   env?: Record<string, string>;
   ports?: string[];
   mounts?: Mount[];
+  command?: string[];
   restart?: string;
 }
 

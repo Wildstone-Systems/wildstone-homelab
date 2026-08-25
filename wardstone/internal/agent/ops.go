@@ -388,6 +388,7 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 
 	id, err := a.docker.create(ctx, op.GetName(), createBody{
 		Image:  op.GetImage(),
+		Cmd:    op.GetCommand(),
 		Env:    env,
 		Labels: labels,
 		HostConfig: hostConfig{
