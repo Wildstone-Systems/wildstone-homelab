@@ -105,9 +105,10 @@ templates:
     spec:
       image: "ghcr.io/immich-app/immich-machine-learning@sha256:5a0839dc5303cd7215bcd2180a26aed3af41675aefb3e75e5157e9f10ad16e6e"
       restart: unless-stopped
-  # ---- Public route: Immich runs its own OIDC login flow (see
-  # OAUTH_* env above), so the reverse-proxy Route itself needs no forward
-  # auth — auth: none.
+  # ---- Public route: Immich runs its own OIDC login flow against the
+  # identity provider (see the OidcClient below), so the proxy passes
+  # through — auth: app_oidc, the policy-distinct "app authenticates
+  # itself" value (ADR-W009/E5), not auth: none.
   - |
     apiVersion: wildstone.dev/v1
     kind: Route
@@ -115,7 +116,7 @@ templates:
     spec:
       host: "{{ .Params.photos_subdomain }}.{{ .Params.public_domain }}"
       upstream: "container/immich-server:2283"
-      auth: none
+      auth: app_oidc
       classification: family_public
   # ---- OidcClient registration (ADR-W005 A3): the identity capability's
   # controller renders this into the Authelia identity_providers.oidc.

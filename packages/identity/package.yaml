@@ -84,5 +84,8 @@ templates:
     spec:
       host: "auth.{{ .Params.public_domain }}"
       upstream: "container/authelia:9091"
-      auth: none
+      # portal: this route IS the identity provider's own login surface —
+      # public by necessity (a login page cannot sit behind itself), and
+      # policy-distinct from auth: none (ADR-W009/E5).
+      auth: portal
       classification: family_public

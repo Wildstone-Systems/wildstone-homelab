@@ -83,7 +83,22 @@ func SecretShaped(s string) bool {
 	}
 	sheltered := secretRefScanRegexp.ReplaceAllString(s, "")
 	sheltered = digestPinScanRegexp.ReplaceAllString(sheltered, "")
-	return hexTokenRegexp.MatchString(sheltered) || base64TokenRegexp.MatchString(sheltered)
+	if hexTokenRegexp.MatchString(sheltered) {
+		return true
+	}
+	// The base64 shape alone over-matches reference-like values with zero
+	// entropy ("container/immich-postgres" is 25 chars of [a-z/-]) —
+	// tolerable for redaction (String stays aggressive; over-redaction is
+	// the safe direction) but not for a policy REJECTION. Require at
+	// least one digit in the candidate: real base64/token material
+	// virtually always carries digits, hostname-and-reference prose
+	// virtually never does.
+	for _, m := range base64TokenRegexp.FindAllString(sheltered, -1) {
+		if strings.ContainsAny(m, "0123456789") {
+			return true
+		}
+	}
+	return false
 }
 
 // String strips secret-looking values from s, while preserving
