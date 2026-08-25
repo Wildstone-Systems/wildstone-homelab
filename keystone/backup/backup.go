@@ -196,6 +196,19 @@ func (e *Engine) runDrill(ctx context.Context, r resource.Resource) error {
 		})
 }
 
+// RunNow executes planName's backup immediately, schedule
+// notwithstanding, with the same provenance as a scheduled run — the
+// on-demand path behind POST /api/v1/backups/{plan}/run (ADR-W015 A2).
+// A successful RunNow also resets the schedule clock: the ledger row it
+// writes is the "last success" the next due() check reads.
+func (e *Engine) RunNow(ctx context.Context, planName string) error {
+	r, err := e.findPlan(planName)
+	if err != nil {
+		return err
+	}
+	return e.runBackup(ctx, r)
+}
+
 // RestoreAlongside restores planName's latest snapshot into the fresh
 // volume "<plan>-restore" — the implemented recovery path (ADR-W011 A4:
 // restore-alongside first). It runs immediately with full provenance; the

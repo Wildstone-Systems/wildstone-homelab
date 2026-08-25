@@ -171,6 +171,8 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv.Agents = &reconcile.GatewayApplier{Gateway: gw} // secrets endpoints (ADR-W012 W2)
 	apiSrv.MintJoin = gw.MintJoinToken                     // pairing endpoint (ADR-W014 A3)
 	apiSrv.CAFingerprint = gw.CA().Fingerprint()
+	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
+	apiSrv.BackupRestore = bak.RestoreAlongside
 	go func() {
 		log.Info("public API listening", "addr", apiLis.Addr().String())
 		if err := http.Serve(apiLis, apiSrv.Handler()); err != nil {

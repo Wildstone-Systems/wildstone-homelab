@@ -12,10 +12,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // joinTokenResponse is the pairing reply. Like mintResponse it skips the
@@ -81,4 +83,63 @@ func (s *Server) mintJoinToken(r *http.Request, id principal.Identity) (any, int
 		ExpiresInSec:  int64(ttl.Seconds()),
 		Install:       install,
 	}, http.StatusCreated, nil
+}
+
+// containerLogs (ADR-W015 A2): GET /api/v1/nodes/{node}/containers/
+// {name}/logs?tail=N — dispatches ContainerLogs and demuxes docker's
+// framed stream into text. The text rides the ordinary redacting
+// encoder, so a secret echoed into a log comes back redacted.
+func (s *Server) containerLogs(r *http.Request, _ principal.Identity) (any, int, error) {
+	if s.Agents == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("agent plane not wired")
+	}
+	node, name := r.PathValue("node"), r.PathValue("name")
+	if node == "" || name == "" {
+		return nil, http.StatusBadRequest, fmt.Errorf("node and container name required")
+	}
+	var tail uint64
+	if t := r.URL.Query().Get("tail"); t != "" {
+		var err error
+		if tail, err = strconv.ParseUint(t, 10, 32); err != nil {
+			return nil, http.StatusBadRequest, fmt.Errorf("tail must be a number")
+		}
+	}
+	res, err := s.Agents.Apply(r.Context(), node, &wsv1.Operation{Op: &wsv1.Operation_ContainerLogs{
+		ContainerLogs: &wsv1.ContainerLogs{Name: name, Tail: uint32(tail)},
+	}})
+	if err != nil {
+		return nil, http.StatusBadGateway, fmt.Errorf("node %s: %w", node, err)
+	}
+	if oe := res.GetError(); oe != nil {
+		return nil, opStatus(oe), fmt.Errorf("node %s: %s", node, oe.GetMessage())
+	}
+	return map[string]string{
+		"node": node, "name": name,
+		"logs": demuxDockerStream(res.GetContainerLogs().GetLogs()),
+	}, http.StatusOK, nil
+}
+
+// demuxDockerStream strips docker's multiplexed-stream framing (8-byte
+// headers: stream type, 3 zero bytes, big-endian length) and returns the
+// concatenated payload text. Input without valid framing (a TTY
+// container's raw stream) is returned as-is.
+func demuxDockerStream(raw []byte) string {
+	var out []byte
+	rest := raw
+	for len(rest) >= 8 {
+		typ := rest[0]
+		if typ > 2 || rest[1] != 0 || rest[2] != 0 || rest[3] != 0 {
+			return string(raw) // not framed
+		}
+		n := int(rest[4])<<24 | int(rest[5])<<16 | int(rest[6])<<8 | int(rest[7])
+		if n < 0 || n > len(rest)-8 {
+			return string(raw)
+		}
+		out = append(out, rest[8:8+n]...)
+		rest = rest[8+n:]
+	}
+	if len(rest) != 0 {
+		return string(raw)
+	}
+	return string(out)
 }

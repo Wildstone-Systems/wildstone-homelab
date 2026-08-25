@@ -7,6 +7,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -55,6 +56,12 @@ type Server struct {
 	// CAFingerprint is the gateway CA's hex sha256, returned alongside
 	// every minted join token so installs pin the join (ADR-W003 W3).
 	CAFingerprint string
+
+	// BackupRun / BackupRestore reach the backup engine (ADR-W015 A3) —
+	// cmd/keystone wires Engine.RunNow and Engine.RestoreAlongside. nil
+	// leaves the backup endpoints answering 503.
+	BackupRun     func(ctx context.Context, plan string) error
+	BackupRestore func(ctx context.Context, plan string) error
 
 	limiter *limiter
 }
@@ -120,6 +127,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/nodes/{node}/secrets", s.handle(principal.VerbManage, s.listNodeSecrets))
 	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}", s.handle(principal.VerbManage, s.setSecret))
 	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}/rotate", s.handle(principal.VerbManage, s.rotateSecret))
+
+	// Container logs (ADR-W015 A2): read verb; the response passes the
+	// redacting encoder like everything else.
+	mux.Handle("GET /api/v1/nodes/{node}/containers/{name}/logs", s.handle(principal.VerbRead, s.containerLogs))
+
+	// Backups (ADR-W015 A2): ledger reads for everyone with read; run and
+	// restore are human-initiated executions — approve verb, so the
+	// Butler's propose-only role cannot trigger them.
+	mux.Handle("GET /api/v1/backups", s.handle(principal.VerbRead, s.listBackups))
+	mux.Handle("POST /api/v1/backups/{plan}/run", s.handle(principal.VerbApprove, s.runBackup))
+	mux.Handle("POST /api/v1/backups/{plan}/restore", s.handle(principal.VerbApprove, s.restoreBackup))
 
 	return mux
 }

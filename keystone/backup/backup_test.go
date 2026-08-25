@@ -408,3 +408,34 @@ func TestTickIsolatesPlans(t *testing.T) {
 		t.Fatalf("reports = %+v, want alpha failed and beta clean", reports)
 	}
 }
+
+// TestRunNow: an on-demand run executes immediately, resets the schedule
+// clock, and an unknown plan errors.
+func TestRunNow(t *testing.T) {
+	run := &fakeRunner{}
+	e, _, state := newEngine(t, run)
+	seedPlan(t, state, backupPlanResource("photos"))
+
+	if err := e.RunNow(context.Background(), "photos"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(run.names(), ","), "backup-photos") {
+		t.Fatalf("runs = %v, want an immediate backup", run.names())
+	}
+
+	// The on-demand success gates the schedule: the next tick runs only
+	// the (still-unrun) drill, not another backup.
+	reports, err := e.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rep := range reports {
+		if rep.Kind == runtimedb.BackupRunBackup {
+			t.Fatalf("tick re-ran the backup right after RunNow: %+v", reports)
+		}
+	}
+
+	if err := e.RunNow(context.Background(), "ghost"); err == nil {
+		t.Fatal("RunNow of an undeclared plan must fail")
+	}
+}
