@@ -519,3 +519,53 @@ func TestValidateMissingName(t *testing.T) {
 		t.Fatalf("expected metadata.name validation error, got %v", err)
 	}
 }
+
+func TestBackupPlanValidateAndRoundTrip(t *testing.T) {
+	good := Resource{
+		ApiVersion: ApiVersion,
+		Kind:       KindBackupPlan,
+		Metadata:   Metadata{Name: "photos", Owner: "capability/photos", Node: "n1"},
+		BackupPlan: &BackupPlanSpec{
+			Volumes:        []string{"immich-library"},
+			Repository:     "backup-repo",
+			PasswordSecret: "secret/restic-photos",
+			Schedule:       "daily",
+			Retention:      BackupRetention{KeepDaily: 7},
+		},
+	}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("valid BackupPlan rejected: %v", err)
+	}
+	data, err := Marshal(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := Unmarshal(data)
+	if err != nil {
+		t.Fatalf("round trip decode: %v", err)
+	}
+	if back.BackupPlan == nil || back.BackupPlan.Retention.KeepDaily != 7 ||
+		back.BackupPlan.PasswordSecret != "secret/restic-photos" {
+		t.Fatalf("round trip lost fields: %+v", back.BackupPlan)
+	}
+
+	bad := good
+	spec := *good.BackupPlan
+	bad.BackupPlan = &spec
+	// A literal secret value where the reference belongs is refused at
+	// validation, before it can ever reach the Statefile.
+	spec.PasswordSecret = "hunter2-literal-value"
+	if err := bad.Validate(); err == nil {
+		t.Fatal("literal password accepted; must require a secret/<name> reference")
+	}
+	spec.PasswordSecret = "secret/restic-photos"
+	spec.Schedule = "hourly"
+	if err := bad.Validate(); err == nil {
+		t.Fatal("unknown schedule accepted; the set is closed")
+	}
+	spec.Schedule = "daily"
+	spec.Volumes = nil
+	if err := bad.Validate(); err == nil {
+		t.Fatal("empty volume list accepted")
+	}
+}

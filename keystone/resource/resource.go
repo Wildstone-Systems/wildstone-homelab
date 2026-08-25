@@ -27,6 +27,7 @@ const (
 	KindDnsRecord  Kind = "DnsRecord"
 	KindOidcClient Kind = "OidcClient"
 	KindLdapGroup  Kind = "LdapGroup"
+	KindBackupPlan Kind = "BackupPlan"
 )
 
 // ApiVersion is the only supported apiVersion for S2 resources.
@@ -183,6 +184,46 @@ type LdapGroupSpec struct {
 	Members []string `yaml:"members,omitempty"`
 }
 
+// backupSchedules is the closed set of BackupPlanSpec.Schedule values.
+// Deliberately coarse (no cron expressions): the owner picks a cadence,
+// Keystone picks the moment (ADR-W011 A4 — schedules live in Keystone,
+// not cron on the host).
+var backupSchedules = map[string]bool{
+	"daily":   true,
+	"weekly":  true,
+	"monthly": true,
+}
+
+// BackupRetention is the restic keep-policy for a BackupPlan. Zero values
+// mean "no keep flag of that class"; all-zero means no forget/prune pass
+// runs at all.
+type BackupRetention struct {
+	KeepDaily   int `yaml:"keepDaily,omitempty"`
+	KeepWeekly  int `yaml:"keepWeekly,omitempty"`
+	KeepMonthly int `yaml:"keepMonthly,omitempty"`
+}
+
+// BackupPlanSpec is the spec for kind BackupPlan (ADR-W011 A4): a standing
+// declaration that the named volumes are backed up into a restic
+// repository on the given cadence. Committing one via an approved plan IS
+// the owner's standing approval for its runs — the backup engine
+// (keystone/backup) executes them as system plans with provenance; the
+// reconciler itself treats the kind as declared-only (like LdapGroup).
+type BackupPlanSpec struct {
+	// Volumes are the source volume names, mounted read-only into the
+	// restic run container.
+	Volumes []string `yaml:"volumes"`
+	// Repository is the volume name holding the restic repository.
+	Repository string `yaml:"repository"`
+	// PasswordSecret is a reference of the form secret/<name> to the
+	// repository password (ADR-W005 A2) — never a literal value. Only
+	// Wardstone materializes it (E8).
+	PasswordSecret string `yaml:"passwordSecret"`
+	// Schedule is one of backupSchedules: daily, weekly, monthly.
+	Schedule  string          `yaml:"schedule"`
+	Retention BackupRetention `yaml:"retention,omitempty"`
+}
+
 // Resource is the typed machine-layer record the Reconciler drives
 // (ADR-W004 A1). Exactly one of the Spec fields is populated, matching
 // Metadata's Kind (enforced by Validate and by the (de)serialization
@@ -201,6 +242,7 @@ type Resource struct {
 	DnsRecord  *DnsRecordSpec  `yaml:"-"`
 	OidcClient *OidcClientSpec `yaml:"-"`
 	LdapGroup  *LdapGroupSpec  `yaml:"-"`
+	BackupPlan *BackupPlanSpec `yaml:"-"`
 }
 
 // ValidationError is a typed validation failure, identifying the resource
@@ -254,6 +296,10 @@ var registry = map[Kind]kindEntry{
 	KindLdapGroup: {
 		newSpec:  func() any { return &LdapGroupSpec{} },
 		validate: validateLdapGroup,
+	},
+	KindBackupPlan: {
+		newSpec:  func() any { return &BackupPlanSpec{} },
+		validate: validateBackupPlan,
 	},
 }
 
@@ -309,6 +355,7 @@ func (r *Resource) validateSpecExclusivity() error {
 		KindDnsRecord:  r.DnsRecord != nil,
 		KindOidcClient: r.OidcClient != nil,
 		KindLdapGroup:  r.LdapGroup != nil,
+		KindBackupPlan: r.BackupPlan != nil,
 	}
 	for k, isSet := range populated {
 		if k == r.Kind {
@@ -420,6 +467,34 @@ func validateOidcClient(r *Resource) error {
 	}
 	if !secretRefRegexp.MatchString(r.OidcClient.SecretRef) {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.secretRef", Msg: "must be a reference of the form secret/<name> (ADR-W005 A2), never a literal secret value"}
+	}
+	return nil
+}
+
+func validateBackupPlan(r *Resource) error {
+	if r.BackupPlan == nil {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "backup plan spec missing"}
+	}
+	if len(r.BackupPlan.Volumes) == 0 {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.volumes", Msg: "must name at least one source volume"}
+	}
+	for i, v := range r.BackupPlan.Volumes {
+		if v == "" {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.volumes[%d]", i), Msg: "must not be empty"}
+		}
+	}
+	if r.BackupPlan.Repository == "" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.repository", Msg: "must name the repository volume"}
+	}
+	if !secretRefRegexp.MatchString(r.BackupPlan.PasswordSecret) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.passwordSecret", Msg: "must be a reference of the form secret/<name> (ADR-W005 A2), never a literal secret value"}
+	}
+	if !backupSchedules[r.BackupPlan.Schedule] {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.schedule", Msg: "must be one of daily, weekly, monthly"}
+	}
+	ret := r.BackupPlan.Retention
+	if ret.KeepDaily < 0 || ret.KeepWeekly < 0 || ret.KeepMonthly < 0 {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.retention", Msg: "keep counts must not be negative"}
 	}
 	return nil
 }

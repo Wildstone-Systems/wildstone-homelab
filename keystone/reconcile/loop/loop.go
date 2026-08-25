@@ -29,6 +29,14 @@ import (
 // A2): surfaced drift awaiting a human decision through the normal API.
 const driftPrincipal = "system/drift"
 
+// backupPrincipal marks plan records the backup engine (keystone/backup)
+// drives through the state machine itself: they are container RUNS with
+// provenance, not Statefile intents, so the reconcile loop must never
+// pick them up as approved work. Kept as a small duplicated constant
+// (the specHashLabel pattern) rather than an import — the loop needs the
+// string, not the engine.
+const backupPrincipal = "system/backup"
+
 // Loop wires the service's dependencies. Rec must have Applier (and any
 // Providers) configured; Loop owns Rec.Approve — callers must leave it
 // nil (see Tick).
@@ -119,6 +127,16 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	if err != nil {
 		return TickOutcome{}, err
 	}
+	// Backup-engine records pass through 'approved' microseconds before
+	// the engine itself moves them to 'applying'; grabbing one here would
+	// double-drive its state machine (ADR-W011 A4).
+	filtered := approved[:0]
+	for _, p := range approved {
+		if p.Principal != backupPrincipal {
+			filtered = append(filtered, p)
+		}
+	}
+	approved = filtered
 	desired, err := l.State.Load()
 	if err != nil {
 		return TickOutcome{}, fmt.Errorf("loop: loading statefile: %w", err)

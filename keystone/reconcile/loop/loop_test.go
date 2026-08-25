@@ -266,3 +266,33 @@ func TestOfflineNode(t *testing.T) {
 		t.Fatalf("plan = %+v, want failed", rec)
 	}
 }
+
+// TestBackupPlansAreNotLoopWork: plan records driven by the backup engine
+// (principal system/backup) pass through 'approved' on their way to
+// 'applying' under the engine's own control — the loop must never pick
+// one up, or the two would double-drive its state machine (ADR-W011 A4).
+func TestBackupPlansAreNotLoopWork(t *testing.T) {
+	l, _, db, _ := harness(t)
+	id, err := db.InsertPlan(backupPrincipal, "", "backup run: photos", "low", `{"backupPlan":"photos"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TransitionPlan(id, runtimedb.PlanApproved, backupPrincipal); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := l.Tick(t.Context())
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if len(out.PlanIDs) != 0 {
+		t.Fatalf("loop picked up backup-engine plans: %v", out.PlanIDs)
+	}
+	rec, err := db.GetPlan(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.State != runtimedb.PlanApproved {
+		t.Fatalf("backup plan record state = %s, loop must leave it alone", rec.State)
+	}
+}

@@ -123,6 +123,9 @@ var kindOrder = map[resource.Kind]int{
 	resource.KindContainer:  3,
 	resource.KindRoute:      4,
 	resource.KindDnsRecord:  5,
+	// BackupPlan last: a backup declaration depends on the volumes it
+	// names, and nothing depends on it (ADR-W011 A4).
+	resource.KindBackupPlan: 6,
 }
 
 // key identifies a resource for matching desired against observed:
@@ -258,6 +261,8 @@ func specEqual(a, b resource.Resource) bool {
 		return oidcClientEqual(a.OidcClient, b.OidcClient)
 	case resource.KindLdapGroup:
 		return ldapGroupEqual(a.LdapGroup, b.LdapGroup)
+	case resource.KindBackupPlan:
+		return backupPlanEqual(a.BackupPlan, b.BackupPlan)
 	default:
 		return false
 	}
@@ -292,6 +297,17 @@ func ldapGroupEqual(a, b *resource.LdapGroupSpec) bool {
 		return a == b
 	}
 	return a.Name == b.Name && stringSliceEqual(a.Members, b.Members)
+}
+
+func backupPlanEqual(a, b *resource.BackupPlanSpec) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Repository == b.Repository &&
+		a.PasswordSecret == b.PasswordSecret &&
+		a.Schedule == b.Schedule &&
+		a.Retention == b.Retention &&
+		stringSliceEqual(a.Volumes, b.Volumes)
 }
 
 func containerEqual(a, b *resource.ContainerSpec) bool {
@@ -408,6 +424,15 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 		// external LLDAP system, so no action here carries real-world
 		// blast radius yet.
 		return RiskLow, "declared LDAP group membership only; no external system changed (ADR-W005 A3)"
+	case resource.KindBackupPlan:
+		// The declaration itself moves no data — the backup engine's runs
+		// do, and those carry their own provenance (ADR-W011 A4). Removing
+		// one is Medium: nothing is deleted, but protection for its
+		// volumes stops, which the owner should consciously confirm.
+		if action == ActionDelete {
+			return RiskMedium, "backup coverage removed: no data deleted, but the named volumes stop being backed up"
+		}
+		return RiskLow, "backup schedule declaration only; runs execute with their own provenance (ADR-W011 A4)"
 	default:
 		return RiskMedium, "unrecognized kind"
 	}
