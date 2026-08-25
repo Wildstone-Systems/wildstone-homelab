@@ -8,7 +8,8 @@ export type Kind =
   "Route" |
   "DnsRecord" |
   "OidcClient" |
-  "LdapGroup";
+  "LdapGroup" |
+  "BackupPlan";
 
 export const API_VERSION = "wildstone.dev/v1";
 
@@ -29,6 +30,7 @@ export interface ContainerSpec {
   env?: Record<string, string>;
   ports?: string[];
   mounts?: Mount[];
+  command?: string[];
   restart?: string;
 }
 
@@ -65,13 +67,28 @@ export interface LdapGroupSpec {
   members?: string[];
 }
 
+export interface BackupRetention {
+  keepDaily?: number;
+  keepWeekly?: number;
+  keepMonthly?: number;
+}
+
+export interface BackupPlanSpec {
+  volumes: string[];
+  repository: string;
+  passwordSecret: string;
+  schedule: string;
+  retention?: BackupRetention;
+}
+
 export type Spec =
   ContainerSpec |
   VolumeSpec |
   RouteSpec |
   DnsRecordSpec |
   OidcClientSpec |
-  LdapGroupSpec;
+  LdapGroupSpec |
+  BackupPlanSpec;
 
 export interface Resource {
   apiVersion: string;
@@ -87,4 +104,5 @@ export interface SpecByKind {
   DnsRecord: DnsRecordSpec;
   OidcClient: OidcClientSpec;
   LdapGroup: LdapGroupSpec;
+  BackupPlan: BackupPlanSpec;
 }

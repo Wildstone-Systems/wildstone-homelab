@@ -552,6 +552,9 @@ type Operation struct {
 	//	*Operation_SystemdUnitStatus
 	//	*Operation_TimeSyncStatus
 	//	*Operation_InspectContainer
+	//	*Operation_EnsureSecret
+	//	*Operation_PutSecret
+	//	*Operation_ListSecrets
 	Op            isOperation_Op `protobuf_oneof:"op"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -828,6 +831,33 @@ func (x *Operation) GetInspectContainer() *InspectContainer {
 	return nil
 }
 
+func (x *Operation) GetEnsureSecret() *EnsureSecret {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_EnsureSecret); ok {
+			return x.EnsureSecret
+		}
+	}
+	return nil
+}
+
+func (x *Operation) GetPutSecret() *PutSecret {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_PutSecret); ok {
+			return x.PutSecret
+		}
+	}
+	return nil
+}
+
+func (x *Operation) GetListSecrets() *ListSecrets {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_ListSecrets); ok {
+			return x.ListSecrets
+		}
+	}
+	return nil
+}
+
 type isOperation_Op interface {
 	isOperation_Op()
 }
@@ -936,6 +966,18 @@ type Operation_InspectContainer struct {
 	InspectContainer *InspectContainer `protobuf:"bytes,26,opt,name=inspect_container,json=inspectContainer,proto3,oneof"`
 }
 
+type Operation_EnsureSecret struct {
+	EnsureSecret *EnsureSecret `protobuf:"bytes,27,opt,name=ensure_secret,json=ensureSecret,proto3,oneof"`
+}
+
+type Operation_PutSecret struct {
+	PutSecret *PutSecret `protobuf:"bytes,28,opt,name=put_secret,json=putSecret,proto3,oneof"`
+}
+
+type Operation_ListSecrets struct {
+	ListSecrets *ListSecrets `protobuf:"bytes,29,opt,name=list_secrets,json=listSecrets,proto3,oneof"`
+}
+
 func (*Operation_EnsureContainer) isOperation_Op() {}
 
 func (*Operation_StopContainer) isOperation_Op() {}
@@ -988,6 +1030,12 @@ func (*Operation_TimeSyncStatus) isOperation_Op() {}
 
 func (*Operation_InspectContainer) isOperation_Op() {}
 
+func (*Operation_EnsureSecret) isOperation_Op() {}
+
+func (*Operation_PutSecret) isOperation_Op() {}
+
+func (*Operation_ListSecrets) isOperation_Op() {}
+
 type OpResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	OpId  string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
@@ -1020,6 +1068,9 @@ type OpResult struct {
 	//	*OpResult_SystemdUnitStatus
 	//	*OpResult_TimeSyncStatus
 	//	*OpResult_InspectContainer
+	//	*OpResult_EnsureSecret
+	//	*OpResult_PutSecret
+	//	*OpResult_ListSecrets
 	Result        isOpResult_Result `protobuf_oneof:"result"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1312,6 +1363,33 @@ func (x *OpResult) GetInspectContainer() *InspectContainerResult {
 	return nil
 }
 
+func (x *OpResult) GetEnsureSecret() *EnsureSecretResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_EnsureSecret); ok {
+			return x.EnsureSecret
+		}
+	}
+	return nil
+}
+
+func (x *OpResult) GetPutSecret() *PutSecretResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_PutSecret); ok {
+			return x.PutSecret
+		}
+	}
+	return nil
+}
+
+func (x *OpResult) GetListSecrets() *ListSecretsResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_ListSecrets); ok {
+			return x.ListSecrets
+		}
+	}
+	return nil
+}
+
 type isOpResult_Result interface {
 	isOpResult_Result()
 }
@@ -1424,6 +1502,18 @@ type OpResult_InspectContainer struct {
 	InspectContainer *InspectContainerResult `protobuf:"bytes,28,opt,name=inspect_container,json=inspectContainer,proto3,oneof"`
 }
 
+type OpResult_EnsureSecret struct {
+	EnsureSecret *EnsureSecretResult `protobuf:"bytes,29,opt,name=ensure_secret,json=ensureSecret,proto3,oneof"`
+}
+
+type OpResult_PutSecret struct {
+	PutSecret *PutSecretResult `protobuf:"bytes,30,opt,name=put_secret,json=putSecret,proto3,oneof"`
+}
+
+type OpResult_ListSecrets struct {
+	ListSecrets *ListSecretsResult `protobuf:"bytes,31,opt,name=list_secrets,json=listSecrets,proto3,oneof"`
+}
+
 func (*OpResult_Error) isOpResult_Result() {}
 
 func (*OpResult_EnsureContainer) isOpResult_Result() {}
@@ -1477,6 +1567,12 @@ func (*OpResult_SystemdUnitStatus) isOpResult_Result() {}
 func (*OpResult_TimeSyncStatus) isOpResult_Result() {}
 
 func (*OpResult_InspectContainer) isOpResult_Result() {}
+
+func (*OpResult_EnsureSecret) isOpResult_Result() {}
+
+func (*OpResult_PutSecret) isOpResult_Result() {}
+
+func (*OpResult_ListSecrets) isOpResult_Result() {}
 
 type OpError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1540,6 +1636,10 @@ type EnsureContainer struct {
 	Mounts        []*Mount          `protobuf:"bytes,5,rep,name=mounts,proto3" json:"mounts,omitempty"`
 	Labels        map[string]string `protobuf:"bytes,6,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // agent adds/asserts dev.wildstone.owner
 	RestartPolicy string            `protobuf:"bytes,7,opt,name=restart_policy,json=restartPolicy,proto3" json:"restart_policy,omitempty"`                                        // "no" | "unless-stopped" | "always"
+	// Container argument vector, appended after the image's entrypoint
+	// (docker Cmd; ADR-W011 A3, protocol minor 6). A pre-minor-6 agent
+	// ignores this field.
+	Command       []string `protobuf:"bytes,8,rep,name=command,proto3" json:"command,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1621,6 +1721,13 @@ func (x *EnsureContainer) GetRestartPolicy() string {
 		return x.RestartPolicy
 	}
 	return ""
+}
+
+func (x *EnsureContainer) GetCommand() []string {
+	if x != nil {
+		return x.Command
+	}
+	return nil
 }
 
 type PortBinding struct {
@@ -4555,6 +4662,370 @@ func (x *TimeSyncStatusResult) GetDetail() string {
 	return ""
 }
 
+// EnsureSecret creates <name> with a locally generated random value if
+// absent (generation-at-install: the value never crosses the wire).
+// rotate=true regenerates even when the secret exists.
+type EnsureSecret struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Random bytes to generate before base64url encoding. 0 = default (32).
+	LengthBytes   uint32 `protobuf:"varint,2,opt,name=length_bytes,json=lengthBytes,proto3" json:"length_bytes,omitempty"`
+	Rotate        bool   `protobuf:"varint,3,opt,name=rotate,proto3" json:"rotate,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnsureSecret) Reset() {
+	*x = EnsureSecret{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[66]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnsureSecret) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnsureSecret) ProtoMessage() {}
+
+func (x *EnsureSecret) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[66]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnsureSecret.ProtoReflect.Descriptor instead.
+func (*EnsureSecret) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *EnsureSecret) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *EnsureSecret) GetLengthBytes() uint32 {
+	if x != nil {
+		return x.LengthBytes
+	}
+	return 0
+}
+
+func (x *EnsureSecret) GetRotate() bool {
+	if x != nil {
+		return x.Rotate
+	}
+	return false
+}
+
+type EnsureSecretResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Existed       bool                   `protobuf:"varint,1,opt,name=existed,proto3" json:"existed,omitempty"` // true if the secret was already present (pre-rotate)
+	Version       uint32                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"` // increments on every (re)generation or put
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnsureSecretResult) Reset() {
+	*x = EnsureSecretResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[67]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnsureSecretResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnsureSecretResult) ProtoMessage() {}
+
+func (x *EnsureSecretResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[67]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnsureSecretResult.ProtoReflect.Descriptor instead.
+func (*EnsureSecretResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{67}
+}
+
+func (x *EnsureSecretResult) GetExisted() bool {
+	if x != nil {
+		return x.Existed
+	}
+	return false
+}
+
+func (x *EnsureSecretResult) GetVersion() uint32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+// PutSecret stores an operator-supplied value (e.g. a Cloudflare tunnel
+// token). The value transits this one op over the mTLS agent plane and
+// is never persisted or logged by Keystone.
+type PutSecret struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutSecret) Reset() {
+	*x = PutSecret{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[68]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutSecret) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutSecret) ProtoMessage() {}
+
+func (x *PutSecret) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[68]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutSecret.ProtoReflect.Descriptor instead.
+func (*PutSecret) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{68}
+}
+
+func (x *PutSecret) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *PutSecret) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+type PutSecretResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Version       uint32                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutSecretResult) Reset() {
+	*x = PutSecretResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[69]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutSecretResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutSecretResult) ProtoMessage() {}
+
+func (x *PutSecretResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[69]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutSecretResult.ProtoReflect.Descriptor instead.
+func (*PutSecretResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{69}
+}
+
+func (x *PutSecretResult) GetVersion() uint32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+// ListSecrets returns name-level metadata only — never values.
+type ListSecrets struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSecrets) Reset() {
+	*x = ListSecrets{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[70]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSecrets) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSecrets) ProtoMessage() {}
+
+func (x *ListSecrets) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[70]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSecrets.ProtoReflect.Descriptor instead.
+func (*ListSecrets) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{70}
+}
+
+type SecretInfo struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Name           string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Version        uint32                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	CreatedUnixSec int64                  `protobuf:"varint,3,opt,name=created_unix_sec,json=createdUnixSec,proto3" json:"created_unix_sec,omitempty"`
+	UpdatedUnixSec int64                  `protobuf:"varint,4,opt,name=updated_unix_sec,json=updatedUnixSec,proto3" json:"updated_unix_sec,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *SecretInfo) Reset() {
+	*x = SecretInfo{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[71]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SecretInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SecretInfo) ProtoMessage() {}
+
+func (x *SecretInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[71]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SecretInfo.ProtoReflect.Descriptor instead.
+func (*SecretInfo) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{71}
+}
+
+func (x *SecretInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SecretInfo) GetVersion() uint32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *SecretInfo) GetCreatedUnixSec() int64 {
+	if x != nil {
+		return x.CreatedUnixSec
+	}
+	return 0
+}
+
+func (x *SecretInfo) GetUpdatedUnixSec() int64 {
+	if x != nil {
+		return x.UpdatedUnixSec
+	}
+	return 0
+}
+
+type ListSecretsResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Secrets       []*SecretInfo          `protobuf:"bytes,1,rep,name=secrets,proto3" json:"secrets,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSecretsResult) Reset() {
+	*x = ListSecretsResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[72]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSecretsResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSecretsResult) ProtoMessage() {}
+
+func (x *ListSecretsResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[72]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSecretsResult.ProtoReflect.Descriptor instead.
+func (*ListSecretsResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{72}
+}
+
+func (x *ListSecretsResult) GetSecrets() []*SecretInfo {
+	if x != nil {
+		return x.Secrets
+	}
+	return nil
+}
+
 var File_wardstone_v1_wardstone_proto protoreflect.FileDescriptor
 
 const file_wardstone_v1_wardstone_proto_rawDesc = "" +
@@ -4584,7 +5055,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0fKeystoneMessage\x12\x13\n" +
 	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12'\n" +
 	"\x02op\x18\x02 \x01(\v2\x17.wardstone.v1.OperationR\x02op\x12!\n" +
-	"\fop_signature\x18\x03 \x01(\fR\vopSignature\"\xea\r\n" +
+	"\fop_signature\x18\x03 \x01(\fR\vopSignature\"\xa7\x0f\n" +
 	"\tOperation\x12J\n" +
 	"\x10ensure_container\x18\x01 \x01(\v2\x1d.wardstone.v1.EnsureContainerH\x00R\x0fensureContainer\x12D\n" +
 	"\x0estop_container\x18\x02 \x01(\v2\x1b.wardstone.v1.StopContainerH\x00R\rstopContainer\x12D\n" +
@@ -4617,8 +5088,12 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x15ensure_docker_network\x18\x17 \x01(\v2!.wardstone.v1.EnsureDockerNetworkH\x00R\x13ensureDockerNetwork\x12Q\n" +
 	"\x13systemd_unit_status\x18\x18 \x01(\v2\x1f.wardstone.v1.SystemdUnitStatusH\x00R\x11systemdUnitStatus\x12H\n" +
 	"\x10time_sync_status\x18\x19 \x01(\v2\x1c.wardstone.v1.TimeSyncStatusH\x00R\x0etimeSyncStatus\x12M\n" +
-	"\x11inspect_container\x18\x1a \x01(\v2\x1e.wardstone.v1.InspectContainerH\x00R\x10inspectContainerB\x04\n" +
-	"\x02op\"\xcd\x0f\n" +
+	"\x11inspect_container\x18\x1a \x01(\v2\x1e.wardstone.v1.InspectContainerH\x00R\x10inspectContainer\x12A\n" +
+	"\rensure_secret\x18\x1b \x01(\v2\x1a.wardstone.v1.EnsureSecretH\x00R\fensureSecret\x128\n" +
+	"\n" +
+	"put_secret\x18\x1c \x01(\v2\x17.wardstone.v1.PutSecretH\x00R\tputSecret\x12>\n" +
+	"\flist_secrets\x18\x1d \x01(\v2\x19.wardstone.v1.ListSecretsH\x00R\vlistSecretsB\x04\n" +
+	"\x02op\"\x9c\x11\n" +
 	"\bOpResult\x12\x13\n" +
 	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12-\n" +
 	"\x05error\x18\x02 \x01(\v2\x15.wardstone.v1.OpErrorH\x00R\x05error\x12P\n" +
@@ -4653,11 +5128,15 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x15ensure_docker_network\x18\x19 \x01(\v2'.wardstone.v1.EnsureDockerNetworkResultH\x00R\x13ensureDockerNetwork\x12W\n" +
 	"\x13systemd_unit_status\x18\x1a \x01(\v2%.wardstone.v1.SystemdUnitStatusResultH\x00R\x11systemdUnitStatus\x12N\n" +
 	"\x10time_sync_status\x18\x1b \x01(\v2\".wardstone.v1.TimeSyncStatusResultH\x00R\x0etimeSyncStatus\x12S\n" +
-	"\x11inspect_container\x18\x1c \x01(\v2$.wardstone.v1.InspectContainerResultH\x00R\x10inspectContainerB\b\n" +
+	"\x11inspect_container\x18\x1c \x01(\v2$.wardstone.v1.InspectContainerResultH\x00R\x10inspectContainer\x12G\n" +
+	"\rensure_secret\x18\x1d \x01(\v2 .wardstone.v1.EnsureSecretResultH\x00R\fensureSecret\x12>\n" +
+	"\n" +
+	"put_secret\x18\x1e \x01(\v2\x1d.wardstone.v1.PutSecretResultH\x00R\tputSecret\x12D\n" +
+	"\flist_secrets\x18\x1f \x01(\v2\x1f.wardstone.v1.ListSecretsResultH\x00R\vlistSecretsB\b\n" +
 	"\x06result\"P\n" +
 	"\aOpError\x12+\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x17.wardstone.v1.ErrorCodeR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xb0\x03\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xca\x03\n" +
 	"\x0fEnsureContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x128\n" +
@@ -4665,7 +5144,8 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x05ports\x18\x04 \x03(\v2\x19.wardstone.v1.PortBindingR\x05ports\x12+\n" +
 	"\x06mounts\x18\x05 \x03(\v2\x13.wardstone.v1.MountR\x06mounts\x12A\n" +
 	"\x06labels\x18\x06 \x03(\v2).wardstone.v1.EnsureContainer.LabelsEntryR\x06labels\x12%\n" +
-	"\x0erestart_policy\x18\a \x01(\tR\rrestartPolicy\x1a6\n" +
+	"\x0erestart_policy\x18\a \x01(\tR\rrestartPolicy\x12\x18\n" +
+	"\acommand\x18\b \x03(\tR\acommand\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +
@@ -4853,7 +5333,28 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0eTimeSyncStatus\"R\n" +
 	"\x14TimeSyncStatusResult\x12\"\n" +
 	"\fsynchronized\x18\x01 \x01(\bR\fsynchronized\x12\x16\n" +
-	"\x06detail\x18\x02 \x01(\tR\x06detail*\xa8\x01\n" +
+	"\x06detail\x18\x02 \x01(\tR\x06detail\"]\n" +
+	"\fEnsureSecret\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
+	"\flength_bytes\x18\x02 \x01(\rR\vlengthBytes\x12\x16\n" +
+	"\x06rotate\x18\x03 \x01(\bR\x06rotate\"H\n" +
+	"\x12EnsureSecretResult\x12\x18\n" +
+	"\aexisted\x18\x01 \x01(\bR\aexisted\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\rR\aversion\"5\n" +
+	"\tPutSecret\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"+\n" +
+	"\x0fPutSecretResult\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\rR\aversion\"\r\n" +
+	"\vListSecrets\"\x8e\x01\n" +
+	"\n" +
+	"SecretInfo\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\rR\aversion\x12(\n" +
+	"\x10created_unix_sec\x18\x03 \x01(\x03R\x0ecreatedUnixSec\x12(\n" +
+	"\x10updated_unix_sec\x18\x04 \x01(\x03R\x0eupdatedUnixSec\"G\n" +
+	"\x11ListSecretsResult\x122\n" +
+	"\asecrets\x18\x01 \x03(\v2\x18.wardstone.v1.SecretInfoR\asecrets*\xa8\x01\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12ERROR_CODE_INVALID\x10\x01\x12\x18\n" +
@@ -4879,7 +5380,7 @@ func file_wardstone_v1_wardstone_proto_rawDescGZIP() []byte {
 }
 
 var file_wardstone_v1_wardstone_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 69)
+var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 76)
 var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(ErrorCode)(0),                    // 0: wardstone.v1.ErrorCode
 	(*JoinRequest)(nil),               // 1: wardstone.v1.JoinRequest
@@ -4948,9 +5449,16 @@ var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(*SystemdUnitStatusResult)(nil),   // 64: wardstone.v1.SystemdUnitStatusResult
 	(*TimeSyncStatus)(nil),            // 65: wardstone.v1.TimeSyncStatus
 	(*TimeSyncStatusResult)(nil),      // 66: wardstone.v1.TimeSyncStatusResult
-	nil,                               // 67: wardstone.v1.EnsureContainer.EnvEntry
-	nil,                               // 68: wardstone.v1.EnsureContainer.LabelsEntry
-	nil,                               // 69: wardstone.v1.InspectContainerResult.LabelsEntry
+	(*EnsureSecret)(nil),              // 67: wardstone.v1.EnsureSecret
+	(*EnsureSecretResult)(nil),        // 68: wardstone.v1.EnsureSecretResult
+	(*PutSecret)(nil),                 // 69: wardstone.v1.PutSecret
+	(*PutSecretResult)(nil),           // 70: wardstone.v1.PutSecretResult
+	(*ListSecrets)(nil),               // 71: wardstone.v1.ListSecrets
+	(*SecretInfo)(nil),                // 72: wardstone.v1.SecretInfo
+	(*ListSecretsResult)(nil),         // 73: wardstone.v1.ListSecretsResult
+	nil,                               // 74: wardstone.v1.EnsureContainer.EnvEntry
+	nil,                               // 75: wardstone.v1.EnsureContainer.LabelsEntry
+	nil,                               // 76: wardstone.v1.InspectContainerResult.LabelsEntry
 }
 var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	6,  // 0: wardstone.v1.AgentMessage.hello:type_name -> wardstone.v1.Hello
@@ -4982,52 +5490,59 @@ var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	63, // 26: wardstone.v1.Operation.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatus
 	65, // 27: wardstone.v1.Operation.time_sync_status:type_name -> wardstone.v1.TimeSyncStatus
 	25, // 28: wardstone.v1.Operation.inspect_container:type_name -> wardstone.v1.InspectContainer
-	10, // 29: wardstone.v1.OpResult.error:type_name -> wardstone.v1.OpError
-	14, // 30: wardstone.v1.OpResult.ensure_container:type_name -> wardstone.v1.EnsureContainerResult
-	16, // 31: wardstone.v1.OpResult.stop_container:type_name -> wardstone.v1.StopContainerResult
-	18, // 32: wardstone.v1.OpResult.container_logs:type_name -> wardstone.v1.ContainerLogsResult
-	20, // 33: wardstone.v1.OpResult.pull_image:type_name -> wardstone.v1.PullImageResult
-	36, // 34: wardstone.v1.OpResult.write_managed_file:type_name -> wardstone.v1.WriteManagedFileResult
-	38, // 35: wardstone.v1.OpResult.read_managed_file:type_name -> wardstone.v1.ReadManagedFileResult
-	40, // 36: wardstone.v1.OpResult.host_facts:type_name -> wardstone.v1.HostFactsResult
-	42, // 37: wardstone.v1.OpResult.health:type_name -> wardstone.v1.HealthResult
-	44, // 38: wardstone.v1.OpResult.self_update:type_name -> wardstone.v1.SelfUpdateResult
-	22, // 39: wardstone.v1.OpResult.remove_container:type_name -> wardstone.v1.RemoveContainerResult
-	24, // 40: wardstone.v1.OpResult.container_stats:type_name -> wardstone.v1.ContainerStatsResult
-	28, // 41: wardstone.v1.OpResult.prune_images:type_name -> wardstone.v1.PruneImagesResult
-	30, // 42: wardstone.v1.OpResult.ensure_volume:type_name -> wardstone.v1.EnsureVolumeResult
-	32, // 43: wardstone.v1.OpResult.snapshot_dir:type_name -> wardstone.v1.SnapshotDirResult
-	34, // 44: wardstone.v1.OpResult.measure_usage:type_name -> wardstone.v1.MeasureUsageResult
-	47, // 45: wardstone.v1.OpResult.list_block_devices:type_name -> wardstone.v1.ListBlockDevicesResult
-	49, // 46: wardstone.v1.OpResult.ensure_mount:type_name -> wardstone.v1.EnsureMountResult
-	51, // 47: wardstone.v1.OpResult.test_nfs:type_name -> wardstone.v1.TestNfsResult
-	53, // 48: wardstone.v1.OpResult.test_smb:type_name -> wardstone.v1.TestSmbResult
-	56, // 49: wardstone.v1.OpResult.list_ports:type_name -> wardstone.v1.ListPortsResult
-	58, // 50: wardstone.v1.OpResult.probe_tcp:type_name -> wardstone.v1.ProbeTcpResult
-	60, // 51: wardstone.v1.OpResult.probe_http:type_name -> wardstone.v1.ProbeHttpResult
-	62, // 52: wardstone.v1.OpResult.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetworkResult
-	64, // 53: wardstone.v1.OpResult.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatusResult
-	66, // 54: wardstone.v1.OpResult.time_sync_status:type_name -> wardstone.v1.TimeSyncStatusResult
-	26, // 55: wardstone.v1.OpResult.inspect_container:type_name -> wardstone.v1.InspectContainerResult
-	0,  // 56: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
-	67, // 57: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
-	12, // 58: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
-	13, // 59: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
-	68, // 60: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
-	69, // 61: wardstone.v1.InspectContainerResult.labels:type_name -> wardstone.v1.InspectContainerResult.LabelsEntry
-	46, // 62: wardstone.v1.ListBlockDevicesResult.devices:type_name -> wardstone.v1.BlockDevice
-	55, // 63: wardstone.v1.ListPortsResult.ports:type_name -> wardstone.v1.ListeningPort
-	1,  // 64: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
-	5,  // 65: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
-	3,  // 66: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
-	2,  // 67: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
-	7,  // 68: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
-	4,  // 69: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
-	67, // [67:70] is the sub-list for method output_type
-	64, // [64:67] is the sub-list for method input_type
-	64, // [64:64] is the sub-list for extension type_name
-	64, // [64:64] is the sub-list for extension extendee
-	0,  // [0:64] is the sub-list for field type_name
+	67, // 29: wardstone.v1.Operation.ensure_secret:type_name -> wardstone.v1.EnsureSecret
+	69, // 30: wardstone.v1.Operation.put_secret:type_name -> wardstone.v1.PutSecret
+	71, // 31: wardstone.v1.Operation.list_secrets:type_name -> wardstone.v1.ListSecrets
+	10, // 32: wardstone.v1.OpResult.error:type_name -> wardstone.v1.OpError
+	14, // 33: wardstone.v1.OpResult.ensure_container:type_name -> wardstone.v1.EnsureContainerResult
+	16, // 34: wardstone.v1.OpResult.stop_container:type_name -> wardstone.v1.StopContainerResult
+	18, // 35: wardstone.v1.OpResult.container_logs:type_name -> wardstone.v1.ContainerLogsResult
+	20, // 36: wardstone.v1.OpResult.pull_image:type_name -> wardstone.v1.PullImageResult
+	36, // 37: wardstone.v1.OpResult.write_managed_file:type_name -> wardstone.v1.WriteManagedFileResult
+	38, // 38: wardstone.v1.OpResult.read_managed_file:type_name -> wardstone.v1.ReadManagedFileResult
+	40, // 39: wardstone.v1.OpResult.host_facts:type_name -> wardstone.v1.HostFactsResult
+	42, // 40: wardstone.v1.OpResult.health:type_name -> wardstone.v1.HealthResult
+	44, // 41: wardstone.v1.OpResult.self_update:type_name -> wardstone.v1.SelfUpdateResult
+	22, // 42: wardstone.v1.OpResult.remove_container:type_name -> wardstone.v1.RemoveContainerResult
+	24, // 43: wardstone.v1.OpResult.container_stats:type_name -> wardstone.v1.ContainerStatsResult
+	28, // 44: wardstone.v1.OpResult.prune_images:type_name -> wardstone.v1.PruneImagesResult
+	30, // 45: wardstone.v1.OpResult.ensure_volume:type_name -> wardstone.v1.EnsureVolumeResult
+	32, // 46: wardstone.v1.OpResult.snapshot_dir:type_name -> wardstone.v1.SnapshotDirResult
+	34, // 47: wardstone.v1.OpResult.measure_usage:type_name -> wardstone.v1.MeasureUsageResult
+	47, // 48: wardstone.v1.OpResult.list_block_devices:type_name -> wardstone.v1.ListBlockDevicesResult
+	49, // 49: wardstone.v1.OpResult.ensure_mount:type_name -> wardstone.v1.EnsureMountResult
+	51, // 50: wardstone.v1.OpResult.test_nfs:type_name -> wardstone.v1.TestNfsResult
+	53, // 51: wardstone.v1.OpResult.test_smb:type_name -> wardstone.v1.TestSmbResult
+	56, // 52: wardstone.v1.OpResult.list_ports:type_name -> wardstone.v1.ListPortsResult
+	58, // 53: wardstone.v1.OpResult.probe_tcp:type_name -> wardstone.v1.ProbeTcpResult
+	60, // 54: wardstone.v1.OpResult.probe_http:type_name -> wardstone.v1.ProbeHttpResult
+	62, // 55: wardstone.v1.OpResult.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetworkResult
+	64, // 56: wardstone.v1.OpResult.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatusResult
+	66, // 57: wardstone.v1.OpResult.time_sync_status:type_name -> wardstone.v1.TimeSyncStatusResult
+	26, // 58: wardstone.v1.OpResult.inspect_container:type_name -> wardstone.v1.InspectContainerResult
+	68, // 59: wardstone.v1.OpResult.ensure_secret:type_name -> wardstone.v1.EnsureSecretResult
+	70, // 60: wardstone.v1.OpResult.put_secret:type_name -> wardstone.v1.PutSecretResult
+	73, // 61: wardstone.v1.OpResult.list_secrets:type_name -> wardstone.v1.ListSecretsResult
+	0,  // 62: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
+	74, // 63: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
+	12, // 64: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
+	13, // 65: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
+	75, // 66: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
+	76, // 67: wardstone.v1.InspectContainerResult.labels:type_name -> wardstone.v1.InspectContainerResult.LabelsEntry
+	46, // 68: wardstone.v1.ListBlockDevicesResult.devices:type_name -> wardstone.v1.BlockDevice
+	55, // 69: wardstone.v1.ListPortsResult.ports:type_name -> wardstone.v1.ListeningPort
+	72, // 70: wardstone.v1.ListSecretsResult.secrets:type_name -> wardstone.v1.SecretInfo
+	1,  // 71: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
+	5,  // 72: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
+	3,  // 73: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
+	2,  // 74: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
+	7,  // 75: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
+	4,  // 76: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
+	74, // [74:77] is the sub-list for method output_type
+	71, // [71:74] is the sub-list for method input_type
+	71, // [71:71] is the sub-list for extension type_name
+	71, // [71:71] is the sub-list for extension extendee
+	0,  // [0:71] is the sub-list for field type_name
 }
 
 func init() { file_wardstone_v1_wardstone_proto_init() }
@@ -5066,6 +5581,9 @@ func file_wardstone_v1_wardstone_proto_init() {
 		(*Operation_SystemdUnitStatus)(nil),
 		(*Operation_TimeSyncStatus)(nil),
 		(*Operation_InspectContainer)(nil),
+		(*Operation_EnsureSecret)(nil),
+		(*Operation_PutSecret)(nil),
+		(*Operation_ListSecrets)(nil),
 	}
 	file_wardstone_v1_wardstone_proto_msgTypes[8].OneofWrappers = []any{
 		(*OpResult_Error)(nil),
@@ -5095,6 +5613,9 @@ func file_wardstone_v1_wardstone_proto_init() {
 		(*OpResult_SystemdUnitStatus)(nil),
 		(*OpResult_TimeSyncStatus)(nil),
 		(*OpResult_InspectContainer)(nil),
+		(*OpResult_EnsureSecret)(nil),
+		(*OpResult_PutSecret)(nil),
+		(*OpResult_ListSecrets)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -5102,7 +5623,7 @@ func file_wardstone_v1_wardstone_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wardstone_v1_wardstone_proto_rawDesc), len(file_wardstone_v1_wardstone_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   69,
+			NumMessages:   76,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

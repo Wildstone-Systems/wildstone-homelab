@@ -1,0 +1,46 @@
+# Notifications capability: ntfy, the push channel for reconcile events,
+# backup outcomes, and the Butler's reports (ADR-W011 A2). family_private:
+# reachable by household devices on the private ingress, with ntfy's own
+# access control at the app layer — auth: none is the honest proxy-level
+# posture and is policy-clean off the public class (ADR-W009).
+#
+# Image digest is REAL, resolved 2026-08-25 via the OCI registry API:
+#   binwiederhier/ntfy:latest -> sha256:f2419f40...92e7
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: notifications
+  version: 1.0.0
+  capability: notifications
+  profile: ntfy
+params:
+  - { name: public_domain, required: true }
+  - { name: node, required: true }
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: ntfy-cache, node: "{{ .Params.node }}" }
+    spec: { name: ntfy-cache }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: ntfy, node: "{{ .Params.node }}" }
+    spec:
+      image: "binwiederhier/ntfy@sha256:f2419f405127afa868f10985c1a41449e673477cee1eb19994339a5ae8b592e7"
+      command: ["serve"]
+      env:
+        NTFY_BASE_URL: "https://ntfy.{{ .Params.public_domain }}"
+        NTFY_CACHE_FILE: /var/cache/ntfy/cache.db
+      mounts:
+        - { source: ntfy-cache, target: /var/cache/ntfy }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: ntfy, node: "{{ .Params.node }}" }
+    spec:
+      host: "ntfy.{{ .Params.public_domain }}"
+      upstream: "container/ntfy:80"
+      auth: none
+      classification: family_private

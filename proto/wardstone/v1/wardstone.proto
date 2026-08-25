@@ -129,6 +129,9 @@ message Operation {
     SystemdUnitStatus systemd_unit_status = 24;
     TimeSyncStatus time_sync_status = 25;
     InspectContainer inspect_container = 26;
+    EnsureSecret ensure_secret = 27;
+    PutSecret put_secret = 28;
+    ListSecrets list_secrets = 29;
   }
 }
 
@@ -162,6 +165,9 @@ message OpResult {
     SystemdUnitStatusResult systemd_unit_status = 26;
     TimeSyncStatusResult time_sync_status = 27;
     InspectContainerResult inspect_container = 28;
+    EnsureSecretResult ensure_secret = 29;
+    PutSecretResult put_secret = 30;
+    ListSecretsResult list_secrets = 31;
   }
 }
 
@@ -190,6 +196,10 @@ message EnsureContainer {
   repeated Mount mounts = 5;
   map<string, string> labels = 6; // agent adds/asserts dev.wildstone.owner
   string restart_policy = 7;      // "no" | "unless-stopped" | "always"
+  // Container argument vector, appended after the image's entrypoint
+  // (docker Cmd; ADR-W011 A3, protocol minor 6). A pre-minor-6 agent
+  // ignores this field.
+  repeated string command = 8;
 }
 
 message PortBinding {
@@ -565,4 +575,51 @@ message TimeSyncStatus {}
 message TimeSyncStatusResult {
   bool synchronized = 1;
   string detail = 2;
+}
+
+// ---------------------------------------------------------------- secrets
+// The E8 secrets path (ADR-W012, protocol minor 7). Deliberately
+// WRITE-ONLY: there is no GetSecret arm at all, so the protocol cannot
+// read a value back out of the node's store. Values are materialized
+// only into container env at docker-create time, agent-side.
+
+// EnsureSecret creates <name> with a locally generated random value if
+// absent (generation-at-install: the value never crosses the wire).
+// rotate=true regenerates even when the secret exists.
+message EnsureSecret {
+  string name = 1;
+  // Random bytes to generate before base64url encoding. 0 = default (32).
+  uint32 length_bytes = 2;
+  bool rotate = 3;
+}
+
+message EnsureSecretResult {
+  bool existed = 1;   // true if the secret was already present (pre-rotate)
+  uint32 version = 2; // increments on every (re)generation or put
+}
+
+// PutSecret stores an operator-supplied value (e.g. a Cloudflare tunnel
+// token). The value transits this one op over the mTLS agent plane and
+// is never persisted or logged by Keystone.
+message PutSecret {
+  string name = 1;
+  string value = 2;
+}
+
+message PutSecretResult {
+  uint32 version = 1;
+}
+
+// ListSecrets returns name-level metadata only — never values.
+message ListSecrets {}
+
+message SecretInfo {
+  string name = 1;
+  uint32 version = 2;
+  int64 created_unix_sec = 3;
+  int64 updated_unix_sec = 4;
+}
+
+message ListSecretsResult {
+  repeated SecretInfo secrets = 1;
 }

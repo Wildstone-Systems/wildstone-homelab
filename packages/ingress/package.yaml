@@ -1,0 +1,97 @@
+# Ingress capability: the dual-Caddy split from the reference deployment
+# (ADR-001 there; ADR-W011 A2 here) plus the Cloudflare Tunnel egress-only
+# public path — no open ports to the internet — and the proxied wildcard
+# DNS record that points the public domain at the tunnel.
+#
+# Both Caddy containers mount the managed prefix read-only: the
+# reconciler's Route fragments (<prefix>/routes/*.caddy) ARE their
+# configuration, and the Wardstone agent's managed-prefix guard is what
+# makes that bind safe. Tailscale join is host-level and belongs to the
+# E9 installer, not a container here.
+#
+# Image digests are REAL, resolved 2026-08-25 via the OCI registry API
+# (`wild pkg refresh-digests` uses the same resolver):
+#   caddy:latest                 -> sha256:df7f1c2f...a78d
+#   cloudflare/cloudflared:latest-> sha256:0aa26e28...eb38
+#
+# The tunnel token is a secret REFERENCE (secret/cloudflared-tunnel-token);
+# only Wardstone materializes it (E8). No secret values appear here.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: ingress
+  version: 1.0.0
+  capability: ingress
+  profile: caddy-cloudflared
+provides:
+  - { trait: ingress, mode: public }
+  - { trait: ingress, mode: private }
+params:
+  - { name: public_domain, required: true }
+  - { name: node, required: true }
+  # The Cloudflare tunnel UUID (from `cloudflared tunnel create`), used
+  # for the wildcard CNAME target <tunnel_id>.cfargotunnel.com.
+  - { name: tunnel_id, required: true }
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: caddy-public-data, node: "{{ .Params.node }}" }
+    spec: { name: caddy-public-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: caddy-private-data, node: "{{ .Params.node }}" }
+    spec: { name: caddy-private-data }
+  # caddy-public terminates the tunnel's traffic: cloudflared connects to
+  # it locally; nothing binds public interfaces directly.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: caddy-public, node: "{{ .Params.node }}" }
+    spec:
+      image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
+      ports:
+        - "80:80"
+        - "443:443"
+      mounts:
+        - { source: caddy-public-data, target: /data }
+        - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }
+      restart: unless-stopped
+  # caddy-private serves the tailnet-only admin surfaces on a distinct
+  # port; the E9 installer binds it to the tailnet interface.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: caddy-private, node: "{{ .Params.node }}" }
+    spec:
+      image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
+      ports:
+        - "8443:443"
+      mounts:
+        - { source: caddy-private-data, target: /data }
+        - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: cloudflared, node: "{{ .Params.node }}" }
+    spec:
+      image: "cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38"
+      command: ["tunnel", "run"]
+      env:
+        TUNNEL_TOKEN: "secret/cloudflared-tunnel-token"
+      restart: unless-stopped
+  # Wildcard CNAME to the tunnel, proxied: every public host under the
+  # domain resolves through Cloudflare to the tunnel with zero per-app
+  # DNS work.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: DnsRecord
+    metadata: { name: public-wildcard }
+    spec:
+      zone: "{{ .Params.public_domain }}"
+      name: "*"
+      type: CNAME
+      content: "{{ .Params.tunnel_id }}.cfargotunnel.com"
+      proxied: true

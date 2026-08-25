@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/api"
+	"github.com/chickenrat17/wildstone-homelab/keystone/backup"
 	"github.com/chickenrat17/wildstone-homelab/keystone/gateway"
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingest"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
@@ -39,16 +40,23 @@ func main() {
 	ingestEvery := flag.Duration("ingest-interval", 15*time.Second, "how often to check the Statefile for out-of-band edits")
 	reconcileEvery := flag.Duration("reconcile-interval", 30*time.Second, "how often the reconcile service ticks (ADR-W008)")
 	managedPrefix := flag.String("managed-prefix", "/etc/wildstone", "managed-file prefix Route/OidcClient fragments render under (must be a Wardstone ManagedPrefix)")
+	backupEvery := flag.Duration("backup-interval", 5*time.Minute, "how often the backup engine evaluates BackupPlan schedules (ADR-W011 A4)")
+	resticImage := flag.String("restic-image", defaultResticImage, "digest-pinned restic image every backup run uses")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, log); err != nil {
+	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
 		os.Exit(1)
 	}
 }
 
-func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, log *slog.Logger) error {
+// defaultResticImage is the pinned restic image backup runs use, resolved
+// 2026-08-25 via the OCI registry API (`wild pkg refresh-digests`'s
+// resolver): restic/restic:latest.
+const defaultResticImage = "restic/restic@sha256:9940e6c7421ab3a21ee9fdc4e91596d04c792b600d31b102696c75cbf3ac4481"
+
+func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage string, log *slog.Logger) error {
 	lis, err := net.Listen("tcp", listen)
 	if err != nil {
 		return err
@@ -57,13 +65,13 @@ func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reco
 	if err != nil {
 		return err
 	}
-	return serve(lis, apiLis, joinTokens, hosts, dataDir, ingestEvery, reconcileEvery, managedPrefix, log, os.Stdout)
+	return serve(lis, apiLis, joinTokens, hosts, dataDir, ingestEvery, reconcileEvery, managedPrefix, backupEvery, resticImage, log, os.Stdout)
 }
 
 // serve wires and runs both planes over already-bound listeners —
 // separated from run so the boot integration test can use :0 listeners.
 // bootstrapOut receives the one-time admin token on first start.
-func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, log *slog.Logger, bootstrapOut io.Writer) error {
+func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage string, log *slog.Logger, bootstrapOut io.Writer) error {
 	gw, err := gateway.New(gateway.Config{
 		JoinTokens: splitNonEmpty(joinTokens),
 		Hosts:      splitNonEmpty(hosts),
@@ -127,6 +135,18 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	}
 	go svc.Run(context.Background(), reconcileEvery)
 
+	// Backup engine (ADR-W011 A4): the timer duty that turns BackupPlan
+	// declarations into restic container runs with provenance. Shares the
+	// gateway applier — a run is an ordinary owner-labeled container.
+	bak := &backup.Engine{
+		State:       state,
+		DB:          db,
+		Run:         &backup.ApplierRunner{Applier: &reconcile.GatewayApplier{Gateway: gw}},
+		ResticImage: resticImage,
+		Log:         log,
+	}
+	go bak.RunLoop(context.Background(), backupEvery)
+
 	// Out-of-band ingestion loop (ADR-W007 A6). An accepted or adopted
 	// edit pokes the reconcile service (ADR-W008 R2a) — a hand-committed
 	// change converges as promptly as an API-approved one.
@@ -148,6 +168,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv := api.New(principals, db, state, log)
 	apiSrv.OnApproved = svc.Poke
 	apiSrv.Policy = pol
+	apiSrv.Agents = &reconcile.GatewayApplier{Gateway: gw} // secrets endpoints (ADR-W012 W2)
 	go func() {
 		log.Info("public API listening", "addr", apiLis.Addr().String())
 		if err := http.Serve(apiLis, apiSrv.Handler()); err != nil {

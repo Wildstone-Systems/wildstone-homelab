@@ -102,6 +102,21 @@ func (a *Agent) dispatchOp(ctx context.Context, opID string, op *wsv1.Operation)
 		if r, oerr = a.inspectContainer(ctx, o.InspectContainer); oerr == nil {
 			res.Result = r
 		}
+	case *wsv1.Operation_EnsureSecret:
+		var r *wsv1.OpResult_EnsureSecret
+		if r, oerr = a.ensureSecret(o.EnsureSecret); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_PutSecret:
+		var r *wsv1.OpResult_PutSecret
+		if r, oerr = a.putSecret(o.PutSecret); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_ListSecrets:
+		var r *wsv1.OpResult_ListSecrets
+		if r, oerr = a.listSecrets(); oerr == nil {
+			res.Result = r
+		}
 	case *wsv1.Operation_PruneImages:
 		var r *wsv1.OpResult_PruneImages
 		if r, oerr = a.pruneImages(ctx, o.PruneImages); oerr == nil {
@@ -314,6 +329,15 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 			}
 		}
 	}
+	// Materialize secret/<name> env references from the node store
+	// (ADR-W012 A4) — the plaintext goes into the docker create body and
+	// nowhere else. Resolved up front, BEFORE the replace path below can
+	// stop/remove an existing container: a dangling reference must fail
+	// the op with the old container still running, not after it is gone.
+	materialized, oerr := a.materializeEnv(op.GetEnv())
+	if oerr != nil {
+		return nil, oerr
+	}
 
 	existing, err := a.docker.inspect(ctx, op.GetName())
 	if derr, ok := err.(*dockerError); err != nil && (!ok || !derr.notFound()) {
@@ -365,7 +389,7 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	labels[OwnerLabel] = ownerValue
 
 	var env []string
-	for k, v := range op.GetEnv() {
+	for k, v := range materialized {
 		env = append(env, k+"="+v)
 	}
 	var binds []string
@@ -388,6 +412,7 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 
 	id, err := a.docker.create(ctx, op.GetName(), createBody{
 		Image:  op.GetImage(),
+		Cmd:    op.GetCommand(),
 		Env:    env,
 		Labels: labels,
 		HostConfig: hostConfig{

@@ -279,3 +279,38 @@ func TestDiffLdapGroupIsAlwaysLow(t *testing.T) {
 		t.Fatalf("expected a single Low-risk create, got: %+v", p.Steps)
 	}
 }
+
+func TestDiffBackupPlan(t *testing.T) {
+	bp := func(schedule string) resource.Resource {
+		return resource.Resource{
+			Kind:     resource.KindBackupPlan,
+			Metadata: resource.Metadata{Name: "photos", Owner: "capability/photos", Node: "n1"},
+			BackupPlan: &resource.BackupPlanSpec{
+				Volumes:        []string{"immich-library"},
+				Repository:     "backup-repo",
+				PasswordSecret: "secret/restic-photos",
+				Schedule:       schedule,
+			},
+		}
+	}
+	// Create is Low: the declaration moves no data (ADR-W011 A4).
+	p := Diff([]resource.Resource{bp("daily")}, nil)
+	if len(p.Steps) != 1 || p.Steps[0].Action != ActionCreate || p.OverallRisk != RiskLow {
+		t.Fatalf("create plan = %+v", p)
+	}
+	// Unchanged spec: no step.
+	p = Diff([]resource.Resource{bp("daily")}, []resource.Resource{bp("daily")})
+	if len(p.Steps) != 0 {
+		t.Fatalf("unchanged BackupPlan produced steps: %+v", p.Steps)
+	}
+	// Schedule change: an Update, still Low.
+	p = Diff([]resource.Resource{bp("weekly")}, []resource.Resource{bp("daily")})
+	if len(p.Steps) != 1 || p.Steps[0].Action != ActionUpdate || p.OverallRisk != RiskLow {
+		t.Fatalf("update plan = %+v", p)
+	}
+	// Removal: Medium — protection stops, a conscious confirmation.
+	p = Diff(nil, []resource.Resource{bp("daily")})
+	if len(p.Steps) != 1 || p.Steps[0].Action != ActionDelete || p.OverallRisk != RiskMedium {
+		t.Fatalf("delete plan = %+v", p)
+	}
+}

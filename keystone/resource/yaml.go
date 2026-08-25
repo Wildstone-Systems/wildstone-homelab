@@ -49,6 +49,8 @@ func (r *Resource) specOf() any {
 		return r.OidcClient
 	case KindLdapGroup:
 		return r.LdapGroup
+	case KindBackupPlan:
+		return r.BackupPlan
 	default:
 		return nil
 	}
@@ -107,6 +109,8 @@ func (r *Resource) UnmarshalYAML(value *yaml.Node) error {
 		r.OidcClient = spec.(*OidcClientSpec)
 	case KindLdapGroup:
 		r.LdapGroup = spec.(*LdapGroupSpec)
+	case KindBackupPlan:
+		r.BackupPlan = spec.(*BackupPlanSpec)
 	}
 	return nil
 }

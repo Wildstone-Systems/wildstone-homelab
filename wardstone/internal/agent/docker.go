@@ -117,6 +117,7 @@ func (d *dockerClient) inspect(ctx context.Context, name string) (*containerInsp
 
 type createBody struct {
 	Image      string            `json:"Image"`
+	Cmd        []string          `json:"Cmd,omitempty"`
 	Env        []string          `json:"Env,omitempty"`
 	Labels     map[string]string `json:"Labels,omitempty"`
 	HostConfig hostConfig        `json:"HostConfig"`

@@ -212,7 +212,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	providerDesired := make([]resource.Resource, 0, len(desired))
 	for _, res := range desired {
 		switch res.Kind {
-		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient, resource.KindLdapGroup:
+		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient, resource.KindLdapGroup, resource.KindBackupPlan:
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
 			providerDesired = append(providerDesired, res)
@@ -305,6 +305,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			}
 		case resource.KindLdapGroup:
 			sr = r.applyLdapGroupStep(ctx, nodeID, step, desiredByKey)
+		case resource.KindBackupPlan:
+			sr = r.applyBackupPlanStep(ctx, nodeID, step, desiredByKey)
 		default:
 			sr = StepResult{Step: step, Error: fmt.Sprintf("reconcile: kind %s not handled by the Applier/Provider path", step.Kind)}
 		}
@@ -386,18 +388,20 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 			if present {
 				observed = append(observed, obs)
 			}
-		case resource.KindLdapGroup:
-			// Declared/best-effort (ADR-W005 A3): "observe-by-apply", same
-			// mechanism as Volume — present iff a prior successful apply
-			// recorded it in the Reconciler's managed cache. No external
-			// LLDAP call is ever made.
+		case resource.KindLdapGroup, resource.KindBackupPlan:
+			// Declared-only kinds (ADR-W005 A3 / ADR-W011 A4):
+			// "observe-by-apply", same mechanism as Volume — present iff a
+			// prior successful apply recorded it in the Reconciler's
+			// managed cache. No external call is ever made; for BackupPlan
+			// the backup engine (keystone/backup) is what acts on the
+			// declaration, not the reconciler.
 			if !r.isManaged(nodeID, k) {
 				continue // never applied; absent
 			}
 			if isDesired {
 				observed = append(observed, want)
 			} else {
-				observed = append(observed, placeholderResource(resource.KindLdapGroup, k.Name))
+				observed = append(observed, placeholderResource(k.Kind, k.Name))
 			}
 		default:
 			return nil, nil, fmt.Errorf("observe: kind %s not handled by S2b/S3a (DnsRecord is S2c's Provider path)", k.Kind)
@@ -581,6 +585,8 @@ func placeholderResource(kind resource.Kind, name string) resource.Resource {
 		r.OidcClient = &resource.OidcClientSpec{}
 	case resource.KindLdapGroup:
 		r.LdapGroup = &resource.LdapGroupSpec{Name: name}
+	case resource.KindBackupPlan:
+		r.BackupPlan = &resource.BackupPlanSpec{}
 	}
 	return r
 }
@@ -976,7 +982,8 @@ func containerEnsureOp(name string, spec *resource.ContainerSpec) *wsv1.Operatio
 	}
 	return &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: &wsv1.EnsureContainer{
 		Name: name, Image: spec.Image, Env: spec.Env, Ports: ports, Mounts: mounts, RestartPolicy: spec.Restart,
-		Labels: map[string]string{specHashLabel: specHash(spec)},
+		Command: spec.Command,
+		Labels:  map[string]string{specHashLabel: specHash(spec)},
 	}}}
 }
 

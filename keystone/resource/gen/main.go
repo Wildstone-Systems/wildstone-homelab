@@ -35,6 +35,7 @@ var kindSpecs = []struct {
 	{resource.KindDnsRecord, reflect.TypeOf(resource.DnsRecordSpec{})},
 	{resource.KindOidcClient, reflect.TypeOf(resource.OidcClientSpec{})},
 	{resource.KindLdapGroup, reflect.TypeOf(resource.LdapGroupSpec{})},
+	{resource.KindBackupPlan, reflect.TypeOf(resource.BackupPlanSpec{})},
 }
 
 func main() {

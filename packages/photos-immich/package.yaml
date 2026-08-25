@@ -50,6 +50,11 @@ templates:
     kind: Volume
     metadata: { name: immich-redis-data, node: "{{ .Params.node }}" }
     spec: { name: immich-redis-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: photos-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: photos-backup-repo }
   # ---- Dedicated postgres + redis.
   - |
     apiVersion: wildstone.dev/v1
@@ -136,3 +141,15 @@ templates:
       scopes: [openid, profile, email, groups]
       authPolicy: two_factor
       secretRef: "{{ .Resolved.OidcSecretRef }}"
+  # ---- Backup hook (ADR-W013 A4): uploads + DB, daily. redis is a
+  # rebuildable cache and deliberately not covered.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: photos, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [immich-upload, immich-pgdata]
+      repository: photos-backup-repo
+      passwordSecret: secret/restic-photos
+      schedule: daily
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

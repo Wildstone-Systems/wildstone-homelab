@@ -19,6 +19,7 @@ type fakeContainer struct {
 	id      string
 	image   string
 	labels  map[string]string
+	env     []string
 	running bool
 }
 
@@ -108,13 +109,14 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Image  string            `json:"Image"`
 			Labels map[string]string `json:"Labels"`
+			Env    []string          `json:"Env"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		f.seq++
-		c := &fakeContainer{id: fmt.Sprintf("cid-%d", f.seq), image: body.Image, labels: body.Labels}
+		c := &fakeContainer{id: fmt.Sprintf("cid-%d", f.seq), image: body.Image, labels: body.Labels, env: body.Env}
 		f.containers[name] = c
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]string{"Id": c.id})

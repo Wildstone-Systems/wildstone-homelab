@@ -16,6 +16,7 @@ import (
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
@@ -40,6 +41,11 @@ type Server struct {
 	// run the API without one — the standing invariants cannot be turned
 	// off, only exempted per-resource via the engine's exemption list.
 	Policy *policy.Engine
+
+	// Agents dispatches Wardstone ops for the secrets endpoints
+	// (ADR-W012 W2) — cmd/keystone wires the gateway applier. nil leaves
+	// those endpoints answering 503; every other route is unaffected.
+	Agents reconcile.Applier
 
 	limiter *limiter
 }
@@ -94,6 +100,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/principals/{name}/disable", s.handle(principal.VerbManage, s.setPrincipalDisabled(true)))
 	mux.Handle("POST /api/v1/principals/{name}/enable", s.handle(principal.VerbManage, s.setPrincipalDisabled(false)))
 	mux.Handle("POST /api/v1/principals/{name}/tokens", s.handle(principal.VerbManage, s.mintToken))
+
+	// Secrets (ADR-W012 W2): admin-only, name-level only — values transit
+	// the set endpoint once and are never persisted, logged, or readable
+	// back (the protocol has no GetSecret arm).
+	mux.Handle("GET /api/v1/nodes/{node}/secrets", s.handle(principal.VerbManage, s.listNodeSecrets))
+	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}", s.handle(principal.VerbManage, s.setSecret))
+	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}/rotate", s.handle(principal.VerbManage, s.rotateSecret))
 
 	return mux
 }

@@ -29,6 +29,19 @@ import (
 // A2): surfaced drift awaiting a human decision through the normal API.
 const driftPrincipal = "system/drift"
 
+// selfDrivenPrincipals mark plan records another Keystone component
+// drives through the state machine itself — backup-engine runs
+// (keystone/backup) and secret rotations (keystone/api) — with
+// provenance but no Statefile intent, so the reconcile loop must never
+// pick them up as approved work. Kept as small duplicated constants
+// (the specHashLabel pattern) rather than imports — the loop needs the
+// strings, not the engines. system/oob and system/drift plans, by
+// contrast, ARE the loop's to converge.
+var selfDrivenPrincipals = map[string]bool{
+	"system/backup":  true,
+	"system/secrets": true,
+}
+
 // Loop wires the service's dependencies. Rec must have Applier (and any
 // Providers) configured; Loop owns Rec.Approve — callers must leave it
 // nil (see Tick).
@@ -119,6 +132,16 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	if err != nil {
 		return TickOutcome{}, err
 	}
+	// Self-driven records pass through 'approved' microseconds before
+	// their owning component moves them to 'applying'; grabbing one here
+	// would double-drive its state machine (ADR-W011 A4, ADR-W012 A5).
+	filtered := approved[:0]
+	for _, p := range approved {
+		if !selfDrivenPrincipals[p.Principal] {
+			filtered = append(filtered, p)
+		}
+	}
+	approved = filtered
 	desired, err := l.State.Load()
 	if err != nil {
 		return TickOutcome{}, fmt.Errorf("loop: loading statefile: %w", err)

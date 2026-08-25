@@ -1,0 +1,44 @@
+# Dashboard capability: Homepage, family-facing behind Authelia
+# forward-auth — the reference deployment's family-homepage posture
+# (classification family_public, authelia_forward_auth). Replaces the
+# hand-maintained homepage instances the scope doc lists as an MVP pain
+# point (ADR-W011 A2).
+#
+# Image digest is REAL, resolved 2026-08-25 via the OCI registry API:
+#   ghcr.io/gethomepage/homepage:latest -> sha256:da9dca9e...363d60
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: dashboard
+  version: 1.0.0
+  capability: dashboard
+  profile: homepage
+params:
+  - { name: public_domain, required: true }
+  - { name: node, required: true }
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: homepage-config, node: "{{ .Params.node }}" }
+    spec: { name: homepage-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: homepage, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/gethomepage/homepage@sha256:da9dca9ec258c628146bed1445da0853f2b88f0b10bafd97c091de807c363d60"
+      env:
+        HOMEPAGE_ALLOWED_HOSTS: "home.{{ .Params.public_domain }}"
+      mounts:
+        - { source: homepage-config, target: /app/config }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: home, node: "{{ .Params.node }}" }
+    spec:
+      host: "home.{{ .Params.public_domain }}"
+      upstream: "container/homepage:3000"
+      auth: authelia_oidc
+      classification: family_public
