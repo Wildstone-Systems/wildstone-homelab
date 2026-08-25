@@ -58,6 +58,17 @@ func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 		return "RemoveContainer", []slog.Attr{slog.String("name", o.RemoveContainer.GetName())}
 	case *wsv1.Operation_ContainerStats:
 		return "ContainerStats", []slog.Attr{slog.String("name", o.ContainerStats.GetName())}
+	case *wsv1.Operation_EnsureSecret:
+		return "EnsureSecret", []slog.Attr{
+			slog.String("name", o.EnsureSecret.GetName()),
+			slog.Bool("rotate", o.EnsureSecret.GetRotate()),
+		}
+	case *wsv1.Operation_PutSecret:
+		// Name only. The value is the one payload in the whole protocol
+		// that is ALWAYS a secret and MUST NOT be logged.
+		return "PutSecret", []slog.Attr{slog.String("name", o.PutSecret.GetName())}
+	case *wsv1.Operation_ListSecrets:
+		return "ListSecrets", nil
 	case *wsv1.Operation_InspectContainer:
 		return "InspectContainer", []slog.Attr{slog.String("name", o.InspectContainer.GetName())}
 	case *wsv1.Operation_PruneImages:
