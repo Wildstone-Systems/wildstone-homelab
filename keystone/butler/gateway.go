@@ -25,6 +25,14 @@ type ToolOutcome struct {
 	// Plan is non-nil for get_plan and propose_change: the plan.Plan that
 	// was produced (for audit purposes), never applied.
 	Plan *plan.Plan
+	// ResourceYAML is the canonical YAML of the validated resource an
+	// ACCEPTED propose_change described (ADR-W017 A3): what the host
+	// submits through the shared proposal pipeline as principal "butler"
+	// acting-for the caller. Empty for every other tool and for rejected
+	// proposals. Carrying the document changes nothing about this
+	// package's structural ceiling — the YAML only ever becomes a
+	// PROPOSED plan record a human must approve.
+	ResourceYAML string
 	// Rejected is true when propose_change's policy check blocked the
 	// proposal outright.
 	Rejected bool

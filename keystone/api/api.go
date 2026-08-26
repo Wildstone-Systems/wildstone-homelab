@@ -57,6 +57,11 @@ type Server struct {
 	// every minted join token so installs pin the join (ADR-W003 W3).
 	CAFingerprint string
 
+	// ButlerHost hosts the Butler ask endpoint (ADR-W017 A2/A4) —
+	// cmd/keystone wires it from -butler-provider. nil leaves ask
+	// answering 503; session history stays readable.
+	ButlerHost *ButlerHost
+
 	// BackupRun / BackupRestore reach the backup engine (ADR-W015 A3) —
 	// cmd/keystone wires Engine.RunNow and Engine.RestoreAlongside. nil
 	// leaves the backup endpoints answering 503.
@@ -146,6 +151,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/backups", s.handle(principal.VerbRead, s.listBackups))
 	mux.Handle("POST /api/v1/backups/{plan}/run", s.handle(principal.VerbApprove, s.runBackup))
 	mux.Handle("POST /api/v1/backups/{plan}/restore", s.handle(principal.VerbApprove, s.restoreBackup))
+
+	// Butler (ADR-W017 A2): ask carries the read verb — conversing is not
+	// a write; a session's proposals enter through the same submitProposal
+	// pipeline as POST /plans, as principal "butler" acting-for the
+	// caller, and only a human approve verb moves them further.
+	mux.Handle("POST /api/v1/butler/ask", s.handle(principal.VerbRead, s.askButler))
+	mux.Handle("GET /api/v1/butler/sessions", s.handle(principal.VerbRead, s.listButlerSessions))
+	mux.Handle("GET /api/v1/butler/sessions/{id}", s.handle(principal.VerbRead, s.getButlerSession))
 
 	return mux
 }

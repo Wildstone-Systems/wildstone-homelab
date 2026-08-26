@@ -22,6 +22,8 @@ import (
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/api"
 	"github.com/chickenrat17/wildstone-homelab/keystone/backup"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/gateway"
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingest"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
@@ -44,10 +46,14 @@ func main() {
 	backupEvery := flag.Duration("backup-interval", 5*time.Minute, "how often the backup engine evaluates BackupPlan schedules (ADR-W011 A4)")
 	resticImage := flag.String("restic-image", defaultResticImage, "digest-pinned restic image every backup run uses")
 	consoleDir := flag.String("console-dir", "", "directory of built Console static files to serve beside /api (ADR-W016 A5); empty serves the API only")
+	butlerProvider := flag.String("butler-provider", "off", "Butler LLM provider: off|anthropic|openai|ollama (ADR-W017 A4); API keys come ONLY from ANTHROPIC_API_KEY/OPENAI_API_KEY env vars, never a flag")
+	butlerModel := flag.String("butler-model", "", "Butler model name; empty uses the provider's default")
+	butlerEndpoint := flag.String("butler-endpoint", "", "Butler provider base URL (openai-compatible gateways, ollama host); empty uses the provider's default")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, log); err != nil {
+	butlerCfg := butlerConfig{Provider: *butlerProvider, Model: *butlerModel, Endpoint: *butlerEndpoint}
+	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, butlerCfg, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
 		os.Exit(1)
 	}
@@ -58,7 +64,7 @@ func main() {
 // resolver): restic/restic:latest.
 const defaultResticImage = "restic/restic@sha256:9940e6c7421ab3a21ee9fdc4e91596d04c792b600d31b102696c75cbf3ac4481"
 
-func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir string, log *slog.Logger) error {
+func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir string, butlerCfg butlerConfig, log *slog.Logger) error {
 	lis, err := net.Listen("tcp", listen)
 	if err != nil {
 		return err
@@ -67,7 +73,63 @@ func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reco
 	if err != nil {
 		return err
 	}
-	return serve(lis, apiLis, joinTokens, hosts, dataDir, ingestEvery, reconcileEvery, managedPrefix, backupEvery, resticImage, consoleDir, log, os.Stdout)
+	return serve(lis, apiLis, joinTokens, hosts, dataDir, ingestEvery, reconcileEvery, managedPrefix, backupEvery, resticImage, consoleDir, butlerCfg, log, os.Stdout)
+}
+
+// butlerConfig carries the -butler-* flags into serve (ADR-W017 A4).
+type butlerConfig struct {
+	Provider string // off | anthropic | openai | ollama
+	Model    string
+	Endpoint string
+}
+
+// newButlerProvider builds the configured Butler provider, or (nil, nil)
+// when the Butler is off. API keys come ONLY from the provider's
+// environment variable (ADR-W017 A4) — there is deliberately no key flag.
+func newButlerProvider(cfg butlerConfig) (provider.Provider, error) {
+	switch cfg.Provider {
+	case "", "off":
+		return nil, nil
+	case "anthropic":
+		key := os.Getenv("ANTHROPIC_API_KEY")
+		if key == "" {
+			return nil, fmt.Errorf("-butler-provider anthropic requires ANTHROPIC_API_KEY in the environment")
+		}
+		p := provider.NewAnthropicProvider(key)
+		if cfg.Model != "" {
+			p.Model = cfg.Model
+		}
+		if cfg.Endpoint != "" {
+			p.BaseURL = cfg.Endpoint
+		}
+		return p, nil
+	case "openai":
+		key := os.Getenv("OPENAI_API_KEY")
+		if key == "" {
+			return nil, fmt.Errorf("-butler-provider openai requires OPENAI_API_KEY in the environment")
+		}
+		base := cfg.Endpoint
+		if base == "" {
+			base = "https://api.openai.com/v1"
+		}
+		p := provider.NewOpenAIProvider(base, key)
+		if cfg.Model != "" {
+			p.Model = cfg.Model
+		}
+		return p, nil
+	case "ollama":
+		host := cfg.Endpoint
+		if host == "" {
+			host = "http://localhost:11434"
+		}
+		p := provider.NewOllamaProvider(host)
+		if cfg.Model != "" {
+			p.Model = cfg.Model
+		}
+		return p, nil
+	default:
+		return nil, fmt.Errorf("unknown -butler-provider %q (want off|anthropic|openai|ollama)", cfg.Provider)
+	}
 }
 
 // withConsole mounts the built Console's static files beside the API
@@ -94,7 +156,7 @@ func withConsole(apiHandler http.Handler, dir string) http.Handler {
 // serve wires and runs both planes over already-bound listeners —
 // separated from run so the boot integration test can use :0 listeners.
 // bootstrapOut receives the one-time admin token on first start.
-func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir string, log *slog.Logger, bootstrapOut io.Writer) error {
+func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir string, butlerCfg butlerConfig, log *slog.Logger, bootstrapOut io.Writer) error {
 	gw, err := gateway.New(gateway.Config{
 		JoinTokens: splitNonEmpty(joinTokens),
 		Hosts:      splitNonEmpty(hosts),
@@ -196,6 +258,31 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv.CAFingerprint = gw.CA().Fingerprint()
 	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
 	apiSrv.BackupRestore = bak.RestoreAlongside
+
+	// Butler host (ADR-W017 A4): build the configured provider, run the
+	// tool-reliability probe once at startup, and wire the ask endpoint in
+	// the mode the verdict earns. Provider off leaves ButlerHost nil — the
+	// ask endpoint answers 503 with a clear reason.
+	if bp, err := newButlerProvider(butlerCfg); err != nil {
+		return err
+	} else if bp != nil {
+		mode := runtimedb.ButlerModeFull
+		probeCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		verdict, perr := provider.Probe(probeCtx, bp)
+		cancel()
+		if perr != nil || verdict != provider.Full {
+			mode = runtimedb.ButlerModeQAOnly
+			log.Warn("butler probe did not pass; sessions run QA-only (read tools, no propose_change)",
+				"provider", bp.Name(), "verdict", verdict.String(), "err", perr)
+		}
+		apiSrv.ButlerHost = &api.ButlerHost{
+			Provider: bp,
+			Gateway:  butler.NewToolGateway(state, &butler.AgentReader{Gateway: gw}),
+			Mode:     mode,
+		}
+		log.Info("butler enabled", "provider", bp.Name(), "mode", string(mode))
+	}
+
 	var publicHandler http.Handler = apiSrv.Handler()
 	if consoleDir != "" {
 		publicHandler = withConsole(publicHandler, consoleDir)
