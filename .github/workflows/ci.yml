@@ -33,6 +33,21 @@ jobs:
       - name: shellcheck
         run: shellcheck scripts/install.sh
 
+  console:
+    name: console (typecheck + build, ADR-W016)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - name: install
+        run: cd console && npm ci
+      - name: typecheck + build
+        run: cd console && npm run build
+
   go:
     name: go (${{ matrix.goarch }})
     runs-on: ubuntu-latest
