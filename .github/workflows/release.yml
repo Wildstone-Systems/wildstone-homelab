@@ -1,0 +1,51 @@
+# Release pipeline (ADR-W014 A1): a v* tag builds keystone, wardstoned,
+# and wild for linux amd64/arm64 — CGO_ENABLED=0 throughout (the pure-Go
+# SQLite choice exists exactly so this cross-compile is boring) — and
+# publishes one tar.gz per binary/arch, install.sh, and a single
+# checksums.txt the installer verifies against.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: build matrix
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          build() { # build <name> <module-dir> <package>
+            local name="$1" dir="$2" pkg="$3"
+            for arch in amd64 arm64; do
+              ( cd "$dir" && GOARCH="$arch" go build -trimpath -ldflags "-s -w" \
+                  -o "../dist/$name" "$pkg" )
+              tar -czf "dist/${name}_linux_${arch}.tar.gz" -C dist "$name"
+              rm "dist/$name"
+            done
+          }
+          build keystone   keystone  ./cmd/keystone
+          build wardstoned wardstone ./cmd/wardstoned
+          build wild       cli       ./cmd/wild
+          cp scripts/install.sh dist/install.sh
+          # Bare names, no ./ prefix: the installer greps checksums.txt
+          # for " <artifact>$" and verifies in its own workdir.
+          ( cd dist && sha256sum -- *.tar.gz install.sh > checksums.txt )
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes

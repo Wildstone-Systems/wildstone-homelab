@@ -1,0 +1,19 @@
+# Wildstone node agent (ADR-W014 A2). The installer writes
+# /etc/wildstone/wardstoned.env with NODE_ID/KEYSTONE_ADDR/JOIN_TOKEN/
+# CA_FINGERPRINT; the join token is single-use and only read on first
+# start.
+[Unit]
+Description=Wildstone Wardstone node agent
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+EnvironmentFile=/etc/wildstone/wardstoned.env
+ExecStart=/usr/local/bin/wardstoned -node-id ${NODE_ID} -keystone ${KEYSTONE_ADDR} -join-token ${JOIN_TOKEN} -ca-fingerprint ${CA_FINGERPRINT}
+Restart=on-failure
+RestartSec=3
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

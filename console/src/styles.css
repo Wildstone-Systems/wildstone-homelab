@@ -1,0 +1,57 @@
+/* Deliberately boring (ADR-W016 A1): legible, dense, no branding pass. */
+:root {
+  --bg: #f7f7f5;
+  --panel: #ffffff;
+  --ink: #1c1c1a;
+  --muted: #6b6b66;
+  --line: #e2e2dd;
+  --accent: #2f6f4f;
+  --danger: #a33a2e;
+  --warn: #a1721f;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); }
+code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+pre { background: #f1f1ec; border: 1px solid var(--line); border-radius: 4px; padding: 8px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+
+.shell { display: flex; min-height: 100vh; }
+.nav { width: 180px; border-right: 1px solid var(--line); background: var(--panel); padding: 12px 0; }
+.nav h1 { font-size: 15px; margin: 4px 16px 16px; }
+.nav button { display: block; width: 100%; text-align: left; padding: 8px 16px; border: 0; background: none; font-size: 13px; cursor: pointer; color: var(--ink); }
+.nav button.active { background: var(--bg); font-weight: 600; }
+.nav .who { margin: 16px; font-size: 11px; color: var(--muted); }
+.main { flex: 1; padding: 20px 24px; max-width: 980px; }
+.main h2 { font-size: 16px; margin: 0 0 4px; }
+.main .sub { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--panel); border: 1px solid var(--line); }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover { background: var(--bg); }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 12px 14px; margin-bottom: 12px; }
+.card h3 { margin: 0 0 8px; font-size: 13px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px; font-size: 12px; background: var(--bg); }
+.chip.bad { border-color: var(--danger); color: var(--danger); }
+
+.badge { display: inline-block; border-radius: 3px; padding: 1px 6px; font-size: 11px; font-weight: 600; }
+.badge.low, .badge.applied, .badge.succeeded, .badge.ok { background: #e4efe8; color: var(--accent); }
+.badge.medium, .badge.proposed, .badge.running { background: #f4ead6; color: var(--warn); }
+.badge.high, .badge.failed, .badge.rejected, .badge.bad { background: #f3e0dd; color: var(--danger); }
+.badge.neutral { background: var(--bg); color: var(--muted); }
+
+button.action { border: 1px solid var(--line); background: var(--panel); border-radius: 4px; padding: 5px 12px; font-size: 13px; cursor: pointer; }
+button.action.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.action.danger { color: var(--danger); border-color: var(--danger); }
+button.action:disabled { opacity: 0.5; cursor: default; }
+.row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+input[type="text"], input[type="password"] { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font-size: 13px; min-width: 220px; }
+.error { color: var(--danger); font-size: 13px; margin: 8px 0; }
+.muted { color: var(--muted); font-size: 12px; }
+
+.gate { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+.gate .card { width: 360px; }

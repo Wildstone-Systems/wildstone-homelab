@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -42,10 +43,11 @@ func main() {
 	managedPrefix := flag.String("managed-prefix", "/etc/wildstone", "managed-file prefix Route/OidcClient fragments render under (must be a Wardstone ManagedPrefix)")
 	backupEvery := flag.Duration("backup-interval", 5*time.Minute, "how often the backup engine evaluates BackupPlan schedules (ADR-W011 A4)")
 	resticImage := flag.String("restic-image", defaultResticImage, "digest-pinned restic image every backup run uses")
+	consoleDir := flag.String("console-dir", "", "directory of built Console static files to serve beside /api (ADR-W016 A5); empty serves the API only")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, log); err != nil {
+	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
 		os.Exit(1)
 	}
@@ -56,7 +58,7 @@ func main() {
 // resolver): restic/restic:latest.
 const defaultResticImage = "restic/restic@sha256:9940e6c7421ab3a21ee9fdc4e91596d04c792b600d31b102696c75cbf3ac4481"
 
-func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage string, log *slog.Logger) error {
+func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir string, log *slog.Logger) error {
 	lis, err := net.Listen("tcp", listen)
 	if err != nil {
 		return err
@@ -65,13 +67,34 @@ func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reco
 	if err != nil {
 		return err
 	}
-	return serve(lis, apiLis, joinTokens, hosts, dataDir, ingestEvery, reconcileEvery, managedPrefix, backupEvery, resticImage, log, os.Stdout)
+	return serve(lis, apiLis, joinTokens, hosts, dataDir, ingestEvery, reconcileEvery, managedPrefix, backupEvery, resticImage, consoleDir, log, os.Stdout)
+}
+
+// withConsole mounts the built Console's static files beside the API
+// (ADR-W016 A5): /api/* stays the API handler untouched; everything else
+// serves a file from dir, falling back to index.html for client-side
+// routes (the SPA convention). Path traversal is handled by
+// http.ServeFile/FileServer's own cleaning.
+func withConsole(apiHandler http.Handler, dir string) http.Handler {
+	fileServer := http.FileServer(http.Dir(dir))
+	mux := http.NewServeMux()
+	mux.Handle("/api/", apiHandler)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(path.Clean(r.URL.Path), "/")))); err == nil {
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+		}
+		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
+	})
+	return mux
 }
 
 // serve wires and runs both planes over already-bound listeners —
 // separated from run so the boot integration test can use :0 listeners.
 // bootstrapOut receives the one-time admin token on first start.
-func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage string, log *slog.Logger, bootstrapOut io.Writer) error {
+func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir string, log *slog.Logger, bootstrapOut io.Writer) error {
 	gw, err := gateway.New(gateway.Config{
 		JoinTokens: splitNonEmpty(joinTokens),
 		Hosts:      splitNonEmpty(hosts),
@@ -169,9 +192,18 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv.OnApproved = svc.Poke
 	apiSrv.Policy = pol
 	apiSrv.Agents = &reconcile.GatewayApplier{Gateway: gw} // secrets endpoints (ADR-W012 W2)
+	apiSrv.MintJoin = gw.MintJoinToken                     // pairing endpoint (ADR-W014 A3)
+	apiSrv.CAFingerprint = gw.CA().Fingerprint()
+	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
+	apiSrv.BackupRestore = bak.RestoreAlongside
+	var publicHandler http.Handler = apiSrv.Handler()
+	if consoleDir != "" {
+		publicHandler = withConsole(publicHandler, consoleDir)
+		log.Info("serving console", "dir", consoleDir)
+	}
 	go func() {
 		log.Info("public API listening", "addr", apiLis.Addr().String())
-		if err := http.Serve(apiLis, apiSrv.Handler()); err != nil {
+		if err := http.Serve(apiLis, publicHandler); err != nil {
 			log.Error("public API exited", "error", err)
 		}
 	}()
