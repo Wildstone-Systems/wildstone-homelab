@@ -2,6 +2,7 @@ package butler
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -34,13 +35,18 @@ func envelope(s string) string {
 // variants like "</untrusted_data foo>" cannot slip a real close tag
 // through. The replacement is human-auditable rather than an invisible
 // zero-width break, so the defanging is obvious in logs and audits.
+// The match is case-insensitive and tolerates whitespace between the "<",
+// the "/", and the tag name (ADR-W017 A6): a model is not an HTML parser,
+// so "</UNTRUSTED_DATA>" or "< / untrusted_data >" could read as a real
+// boundary to it even though an exact-string replace would let them
+// through. Any such variant is rewritten to the inert form.
+var envelopeTagRegexp = regexp.MustCompile(`(?i)<\s*(/?)\s*untrusted_data`)
+
 func neutralizeEnvelopeTags(s string) string {
-	if !strings.Contains(s, "untrusted_data") {
+	if !strings.Contains(strings.ToLower(s), "untrusted_data") {
 		return s
 	}
-	s = strings.ReplaceAll(s, "</untrusted_data", "</untrusted_data_stripped_")
-	s = strings.ReplaceAll(s, "<untrusted_data", "<untrusted_data_stripped_")
-	return s
+	return envelopeTagRegexp.ReplaceAllString(s, "<${1}untrusted_data_stripped_")
 }
 
 // SystemPrompt is the constant system prompt establishing the Butler's
