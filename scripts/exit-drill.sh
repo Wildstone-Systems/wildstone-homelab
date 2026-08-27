@@ -47,9 +47,11 @@ trap cleanup EXIT
 
 fail() {
     echo "DRILL FAILED: $*" >&2
-    echo "--- keystone log (first life) ---" >&2; tail -50 "$WORK/keystone1.log" 2>/dev/null >&2 || true
-    echo "--- keystone log (rebirth) ---" >&2;    tail -50 "$WORK/keystone2.log" 2>/dev/null >&2 || true
-    echo "--- wardstone logs ---" >&2;            tail -30 "$WORK"/wardstone*.log 2>/dev/null >&2 || true
+    # >&2 BEFORE 2>/dev/null: the reverse order pointed stdout at the
+    # already-nulled stderr and swallowed every log tail (run 3).
+    echo "--- keystone log (first life) ---" >&2; tail -50 "$WORK/keystone1.log" >&2 2>/dev/null || true
+    echo "--- keystone log (rebirth) ---" >&2;    tail -50 "$WORK/keystone2.log" >&2 2>/dev/null || true
+    echo "--- wardstone logs ---" >&2;            tail -30 "$WORK"/wardstone*.log >&2 2>/dev/null || true
     exit 1
 }
 
@@ -92,7 +94,9 @@ start_wardstone() { # start_wardstone <data-dir> <join-token> <log>
 }
 
 latest_run_status() { # latest_run_status <token>: newest ledger row's status
-    curl_api "$1" GET /api/v1/backups | jq -r '.[0].status // empty'
+    # GET /api/v1/backups wraps the ledger as {"runs": [...]} — run 3
+    # timed out because the poll read the array at the top level.
+    curl_api "$1" GET /api/v1/backups | jq -r '.runs[0].status // empty'
 }
 
 log "building keystone, wardstoned, wild"
@@ -170,7 +174,7 @@ docker run --rm -v drill-data:/data --entrypoint /bin/sh "$RESTIC_IMAGE" \
 log "running the backup"
 WILD_TOKEN="$ADMIN1" "$BIN/wild" backup run drill
 wait_for "backup ledger success" 120 sh -c \
-    "[ \"\$(curl -sS -H 'Authorization: Bearer $ADMIN1' $API/api/v1/backups | jq -r '.[0].status')\" = succeeded ]"
+    "[ \"\$(curl -sS -H 'Authorization: Bearer $ADMIN1' $API/api/v1/backups | jq -r '.runs[0].status')\" = succeeded ]"
 
 # ---------------------------------------------------------------- phase 2
 log "phase 2: total host loss"
@@ -203,7 +207,7 @@ wait_for "reconcile to recreate drill-data from the statefile" 60 docker volume 
 log "restoring alongside from the surviving repository"
 WILD_TOKEN="$ADMIN2" "$BIN/wild" backup restore drill
 wait_for "restore ledger success" 120 sh -c \
-    "[ \"\$(curl -sS -H 'Authorization: Bearer $ADMIN2' $API/api/v1/backups | jq -r '.[0].status')\" = succeeded ]"
+    "[ \"\$(curl -sS -H 'Authorization: Bearer $ADMIN2' $API/api/v1/backups | jq -r '.runs[0].status')\" = succeeded ]"
 
 log "verifying the canary came back byte-identical"
 RESTORED="$(docker run --rm -v drill-restore:/r --entrypoint /bin/sh "$RESTIC_IMAGE" \
