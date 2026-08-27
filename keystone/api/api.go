@@ -152,6 +152,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/backups/{plan}/run", s.handle(principal.VerbApprove, s.runBackup))
 	mux.Handle("POST /api/v1/backups/{plan}/restore", s.handle(principal.VerbApprove, s.restoreBackup))
 
+	// Morning report (ADR-W017 A5): deterministic digest, read verb.
+	mux.Handle("GET /api/v1/reports/morning", s.handle(principal.VerbRead, s.morningReport))
+
 	// Butler (ADR-W017 A2): ask carries the read verb — conversing is not
 	// a write; a session's proposals enter through the same submitProposal
 	// pipeline as POST /plans, as principal "butler" acting-for the

@@ -124,7 +124,7 @@ func TestToolSpecs_IncludesAllToolsSorted(t *testing.T) {
 	gw := NewToolGateway(newTestStore(t), nil)
 	specs := gw.ToolSpecs()
 	want := []string{
-		"explain_resource", "get_capability_status", "get_health",
+		"diagnose", "explain_resource", "get_capability_status", "get_health",
 		"get_plan", "get_system_overview", "propose_change",
 	}
 	if len(specs) != len(want) {

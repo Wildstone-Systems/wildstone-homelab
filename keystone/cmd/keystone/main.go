@@ -30,6 +30,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile/loop"
+	"github.com/chickenrat17/wildstone-homelab/keystone/report"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 )
@@ -275,13 +276,45 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			log.Warn("butler probe did not pass; sessions run QA-only (read tools, no propose_change)",
 				"provider", bp.Name(), "verdict", verdict.String(), "err", perr)
 		}
-		apiSrv.ButlerHost = &api.ButlerHost{
-			Provider: bp,
-			Gateway:  butler.NewToolGateway(state, &butler.AgentReader{Gateway: gw}),
-			Mode:     mode,
+		bgw := butler.NewToolGateway(state, &butler.AgentReader{Gateway: gw})
+		// The diagnose tool's injected observed seam (ADR-W017 A5): the
+		// butler package reads observed health through this closure and
+		// never imports runtimedb/reconcile itself.
+		bgw.Observed = func() ([]butler.ObservedResource, error) {
+			rows, err := db.ListObserved()
+			if err != nil {
+				return nil, err
+			}
+			out := make([]butler.ObservedResource, 0, len(rows))
+			for _, o := range rows {
+				out = append(out, butler.ObservedResource{
+					Kind: o.Kind, Name: o.Name, Node: o.Node, Healthy: o.Healthy, Detail: o.Detail,
+				})
+			}
+			return out, nil
 		}
+		apiSrv.ButlerHost = &api.ButlerHost{Provider: bp, Gateway: bgw, Mode: mode}
 		log.Info("butler enabled", "provider", bp.Name(), "mode", string(mode))
 	}
+
+	// Morning report timer (ADR-W017 A5): once a day at 07:00 local, build
+	// the deterministic report and append its summary to the event stream
+	// (Console/ntfy consumers pick it up from there; GET
+	// /api/v1/reports/morning serves the full report on demand).
+	go func() {
+		for {
+			time.Sleep(time.Until(nextMorning(time.Now())))
+			rep, err := report.Morning(db, time.Now())
+			if err != nil {
+				log.Error("morning report", "err", err)
+				continue
+			}
+			if _, err := db.AppendEvent(runtimedb.Event{Type: "report.morning", Message: rep.Summary}); err != nil {
+				log.Error("morning report event append", "err", err)
+			}
+			log.Info("morning report", "summary", rep.Summary)
+		}
+	}()
 
 	var publicHandler http.Handler = apiSrv.Handler()
 	if consoleDir != "" {
@@ -298,6 +331,16 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Agent plane (blocks).
 	log.Info("gateway listening", "addr", lis.Addr().String())
 	return gw.Serve(lis)
+}
+
+// nextMorning returns the next 07:00 in now's location — the daily
+// morning-report fire time.
+func nextMorning(now time.Time) time.Time {
+	next := time.Date(now.Year(), now.Month(), now.Day(), 7, 0, 0, 0, now.Location())
+	if !next.After(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	return next
 }
 
 func splitNonEmpty(s string) []string {

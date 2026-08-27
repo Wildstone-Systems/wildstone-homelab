@@ -67,6 +67,11 @@ type ToolGateway struct {
 	// DefaultNode is used by get_health when the model's tool call omits a
 	// node.
 	DefaultNode string
+	// Observed is the injected read-only observed-state seam the diagnose
+	// tool walks (ADR-W017 A5) — cmd/keystone wires it over the runtime
+	// DB's observed rows; this package imports neither reconcile nor
+	// runtimedb. nil makes diagnose answer that no source is configured.
+	Observed func() ([]ObservedResource, error)
 	// MaxContentBytes bounds a single tool result's size before it's
 	// handed back to the model. <= 0 uses defaultMaxContentBytes.
 	MaxContentBytes int
@@ -82,6 +87,7 @@ func NewToolGateway(store *statefile.Store, reader *AgentReader) *ToolGateway {
 		"get_system_overview":   {Spec: systemOverviewSpec, Handler: handleGetSystemOverview},
 		"get_capability_status": {Spec: capabilityStatusSpec, Handler: handleGetCapabilityStatus},
 		"get_health":            {Spec: healthSpec, Untrusted: true, Handler: handleGetHealth},
+		"diagnose":              {Spec: diagnoseSpec, Untrusted: true, Handler: handleDiagnose},
 		"get_plan":              {Spec: getPlanSpec, Handler: handleGetPlan},
 		"explain_resource":      {Spec: explainResourceSpec, Handler: handleExplainResource},
 		"propose_change":        {Spec: proposeChangeSpec, Mutating: true, Handler: handleProposeChange},

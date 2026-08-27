@@ -75,3 +75,38 @@ func (db *DB) EventsAfter(after int64, limit int) ([]Event, error) {
 	}
 	return out, rows.Err()
 }
+
+// EventsSince returns up to limit events with time >= since, oldest
+// first — the morning report's 24h window (ADR-W017 A5). The time column
+// stores RFC3339Nano UTC, so the comparison is a plain lexicographic one.
+func (db *DB) EventsSince(since time.Time, limit int) ([]Event, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	rows, err := db.sql.Query(
+		`SELECT seq, time, type, node, kind, name, message, attrs
+		 FROM events WHERE time >= ? ORDER BY seq ASC LIMIT ?`,
+		since.UTC().Format(time.RFC3339Nano), limit)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing events since %s: %w", since, err)
+	}
+	defer rows.Close()
+	var out []Event
+	for rows.Next() {
+		var e Event
+		var ts, attrs string
+		if err := rows.Scan(&e.Seq, &ts, &e.Type, &e.Node, &e.Kind, &e.Name, &e.Message, &attrs); err != nil {
+			return nil, err
+		}
+		if e.Time, err = time.Parse(time.RFC3339Nano, ts); err != nil {
+			return nil, fmt.Errorf("runtimedb: bad event timestamp %q: %w", ts, err)
+		}
+		if attrs != "{}" && attrs != "" {
+			if err := json.Unmarshal([]byte(attrs), &e.Attrs); err != nil {
+				return nil, fmt.Errorf("runtimedb: bad event attrs: %w", err)
+			}
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
