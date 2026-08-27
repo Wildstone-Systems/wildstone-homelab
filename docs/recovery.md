@@ -28,7 +28,7 @@ Mirrors the drill phase-for-phase.
 ### 1. Fresh Keystone over the restored Statefile
 
 ```sh
-sudo ./install.sh --role keystone          # fresh install on the new host
+sudo bash ./install.sh --role keystone          # fresh install on the new host
 sudo systemctl stop keystone
 sudo git clone <statefile-replica> /var/lib/wildstone/keystone/statefile
 sudo systemctl start keystone
@@ -45,7 +45,7 @@ For each node (also freshly installed, or wiped):
 
 ```sh
 wild node mint-join                        # on/against the new keystone
-sudo ./install.sh --role node --keystone <host>:9440 \
+sudo bash ./install.sh --role node --keystone <host>:9440 \
   --node-id <same-node-id> --join-token <t> --ca-fingerprint <hex>
 ```
 
