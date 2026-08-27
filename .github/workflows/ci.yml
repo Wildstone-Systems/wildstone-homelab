@@ -24,14 +24,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   installer:
-    name: installer script (ADR-W014)
+    name: shell scripts (ADR-W014/W018)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: syntax
-        run: bash -n scripts/install.sh
+        run: for f in scripts/*.sh; do bash -n "$f"; done
       - name: shellcheck
-        run: shellcheck scripts/install.sh
+        run: shellcheck scripts/*.sh
 
   console:
     name: console (typecheck + build, ADR-W016)
