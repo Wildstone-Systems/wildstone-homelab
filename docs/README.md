@@ -6,6 +6,20 @@ Wildstone product documentation and ADRs.
   milestones M0–M5, sizing, cut line). Authoritative here.
 - `decisions/` — Wildstone ADRs (W-series).
 
+User and operator docs (E13, ADR-W018):
+
+- `install.md` — installing Keystone, joining nodes, `wild`, Console,
+  Butler.
+- `concepts.md` — the mental model: Statefile, plans, reconcile,
+  principals, capabilities, secrets, backups, the Butler's ceiling.
+- `recovery.md` — the recovery contract and total-host-loss runbook
+  (executed weekly by `scripts/exit-drill.sh`).
+- `threat-model.md` — the threat model refreshed against as-built.
+- `migration.md` — the dogfood migration runbook and the two-masters
+  cutover rule.
+- `friction-log.md` — friction found while dogfooding, filed and
+  burned down before alpha exit.
+
 The design brief (`00-design-brief-v0.1.md`) and architecture proposal
 (`01-architecture-proposal.md`) remain in the reference deployment repo:
 `chickenrat17/homelab-config` → `docs/architecture/wildstone/`.
