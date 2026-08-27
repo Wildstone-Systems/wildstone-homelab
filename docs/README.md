@@ -15,6 +15,9 @@ User and operator docs (E13, ADR-W018):
 - `recovery.md` — the recovery contract and total-host-loss runbook
   (executed weekly by `scripts/exit-drill.sh`).
 - `threat-model.md` — the threat model refreshed against as-built.
+- `vision.md` — why Wildstone exists: the home lab as household
+  infrastructure, the Butler as the counter-image of Alexa, the
+  two-butler arc, and the standing principles.
 - `migration.md` — the dogfood migration runbook and the two-masters
   cutover rule.
 - `friction-log.md` — friction found while dogfooding, filed and
