@@ -15,12 +15,16 @@ const defaultMaxIterations = 8
 // ToolCallRecord is one audited tool call: what the model asked for, and
 // the (already redacted/enveloped/truncated) result it got back.
 type ToolCallRecord struct {
-	Name     string
-	Input    map[string]any
-	Result   string
-	Error    string
-	Plan     *plan.Plan
-	Rejected bool
+	Name   string
+	Input  map[string]any
+	Result string
+	Error  string
+	Plan   *plan.Plan
+	// ResourceYAML carries an accepted propose_change's canonical
+	// resource document (ADR-W017 A3) for the host to submit as a real
+	// proposed plan record after the session.
+	ResourceYAML string
+	Rejected     bool
 }
 
 // Audit is the session audit record ADR-W006 A5.4 requires: provider/
@@ -138,6 +142,7 @@ func (s *Session) Run(ctx context.Context, p provider.Provider, userMessage stri
 			} else {
 				rec.Result = outcome.Content
 				rec.Plan = outcome.Plan
+				rec.ResourceYAML = outcome.ResourceYAML
 				rec.Rejected = outcome.Rejected
 				if outcome.Plan != nil {
 					tr.Audit.Plans = append(tr.Audit.Plans, outcome.Plan)

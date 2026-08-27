@@ -437,3 +437,13 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 		return RiskMedium, "unrecognized kind"
 	}
 }
+
+// KindOrder exposes kindOrder for read-only consumers (the Butler's
+// diagnose walker, ADR-W017 A5) so dependency depth has ONE definition.
+// Lower is more foundational; unknown kinds sort last.
+func KindOrder(k resource.Kind) int {
+	if o, ok := kindOrder[k]; ok {
+		return o
+	}
+	return len(kindOrder)
+}

@@ -57,6 +57,11 @@ type Server struct {
 	// every minted join token so installs pin the join (ADR-W003 W3).
 	CAFingerprint string
 
+	// ButlerHost hosts the Butler ask endpoint (ADR-W017 A2/A4) —
+	// cmd/keystone wires it from -butler-provider. nil leaves ask
+	// answering 503; session history stays readable.
+	ButlerHost *ButlerHost
+
 	// BackupRun / BackupRestore reach the backup engine (ADR-W015 A3) —
 	// cmd/keystone wires Engine.RunNow and Engine.RestoreAlongside. nil
 	// leaves the backup endpoints answering 503.
@@ -128,6 +133,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}", s.handle(principal.VerbManage, s.setSecret))
 	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}/rotate", s.handle(principal.VerbManage, s.rotateSecret))
 
+	// Onboarding validation probes (ADR-W016 A2, E10-U2): dial-or-read
+	// only on the agent side, so the whole family carries read.
+	mux.Handle("GET /api/v1/nodes/{node}/probes/blockdevices", s.handle(principal.VerbRead, s.probeBlockDevices))
+	mux.Handle("GET /api/v1/nodes/{node}/probes/ports", s.handle(principal.VerbRead, s.probePorts))
+	mux.Handle("GET /api/v1/nodes/{node}/probes/http", s.handle(principal.VerbRead, s.probeHttp))
+	mux.Handle("GET /api/v1/nodes/{node}/probes/nfs", s.handle(principal.VerbRead, s.probeDial("nfs")))
+	mux.Handle("GET /api/v1/nodes/{node}/probes/smb", s.handle(principal.VerbRead, s.probeDial("smb")))
+
 	// Container logs (ADR-W015 A2): read verb; the response passes the
 	// redacting encoder like everything else.
 	mux.Handle("GET /api/v1/nodes/{node}/containers/{name}/logs", s.handle(principal.VerbRead, s.containerLogs))
@@ -138,6 +151,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/backups", s.handle(principal.VerbRead, s.listBackups))
 	mux.Handle("POST /api/v1/backups/{plan}/run", s.handle(principal.VerbApprove, s.runBackup))
 	mux.Handle("POST /api/v1/backups/{plan}/restore", s.handle(principal.VerbApprove, s.restoreBackup))
+
+	// Morning report (ADR-W017 A5): deterministic digest, read verb.
+	mux.Handle("GET /api/v1/reports/morning", s.handle(principal.VerbRead, s.morningReport))
+
+	// Butler (ADR-W017 A2): ask carries the read verb — conversing is not
+	// a write; a session's proposals enter through the same submitProposal
+	// pipeline as POST /plans, as principal "butler" acting-for the
+	// caller, and only a human approve verb moves them further.
+	mux.Handle("POST /api/v1/butler/ask", s.handle(principal.VerbRead, s.askButler))
+	mux.Handle("GET /api/v1/butler/sessions", s.handle(principal.VerbRead, s.listButlerSessions))
+	mux.Handle("GET /api/v1/butler/sessions/{id}", s.handle(principal.VerbRead, s.getButlerSession))
 
 	return mux
 }

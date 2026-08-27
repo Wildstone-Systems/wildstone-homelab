@@ -141,12 +141,17 @@ func handleProposeChange(_ context.Context, gw *ToolGateway, input map[string]an
 		}, nil
 	}
 
+	doc, err := resource.Marshal(res)
+	if err != nil {
+		return ToolOutcome{Content: fmt.Sprintf("propose_change: encoding proposal: %v", err)}, nil
+	}
 	return ToolOutcome{
 		Content: fmt.Sprintf(
 			"Proposed. This plan has NOT been applied — it requires human approval (via wild/Console) before anything changes:\n%s",
 			formatPlan(p),
 		),
-		Plan: p,
+		Plan:         p,
+		ResourceYAML: string(doc),
 	}, nil
 }
 

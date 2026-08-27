@@ -71,6 +71,23 @@ export interface SecretInfo {
   updatedUnixSec?: number;
 }
 
+export interface BlockDevice {
+  name: string;
+  sizeBytes: number;
+  removable: boolean;
+}
+
+export interface ListeningPort {
+  proto: string;
+  port: number;
+  localIp: string;
+}
+
+export interface ProbeResult {
+  reachable: boolean;
+  detail?: string;
+}
+
 export interface JoinTokenResponse {
   joinToken: string;
   caFingerprint?: string;
@@ -146,6 +163,26 @@ export const api = {
     call<unknown>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/run`),
   restoreBackup: (plan: string) =>
     call<unknown>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/restore`),
+  probeBlockDevices: (node: string) =>
+    call<{ devices: BlockDevice[] }>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/blockdevices`,
+    ),
+  probePorts: (node: string) =>
+    call<{ ports: ListeningPort[] }>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/ports`,
+    ),
+  probeHttp: (node: string, url: string) =>
+    call<ProbeResult>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/http?url=${encodeURIComponent(url)}`,
+    ),
+  probeDial: (node: string, kind: "nfs" | "smb", host: string) =>
+    call<ProbeResult>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/${kind}?host=${encodeURIComponent(host)}`,
+    ),
   mintJoinToken: (ttlSeconds?: number) =>
     call<JoinTokenResponse>("POST", "/api/v1/join-tokens", ttlSeconds ? { ttlSeconds } : {}),
   nodeSecrets: (node: string) =>

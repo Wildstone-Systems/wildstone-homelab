@@ -25,6 +25,14 @@ type ToolOutcome struct {
 	// Plan is non-nil for get_plan and propose_change: the plan.Plan that
 	// was produced (for audit purposes), never applied.
 	Plan *plan.Plan
+	// ResourceYAML is the canonical YAML of the validated resource an
+	// ACCEPTED propose_change described (ADR-W017 A3): what the host
+	// submits through the shared proposal pipeline as principal "butler"
+	// acting-for the caller. Empty for every other tool and for rejected
+	// proposals. Carrying the document changes nothing about this
+	// package's structural ceiling — the YAML only ever becomes a
+	// PROPOSED plan record a human must approve.
+	ResourceYAML string
 	// Rejected is true when propose_change's policy check blocked the
 	// proposal outright.
 	Rejected bool
@@ -59,6 +67,11 @@ type ToolGateway struct {
 	// DefaultNode is used by get_health when the model's tool call omits a
 	// node.
 	DefaultNode string
+	// Observed is the injected read-only observed-state seam the diagnose
+	// tool walks (ADR-W017 A5) — cmd/keystone wires it over the runtime
+	// DB's observed rows; this package imports neither reconcile nor
+	// runtimedb. nil makes diagnose answer that no source is configured.
+	Observed func() ([]ObservedResource, error)
 	// MaxContentBytes bounds a single tool result's size before it's
 	// handed back to the model. <= 0 uses defaultMaxContentBytes.
 	MaxContentBytes int
@@ -74,6 +87,7 @@ func NewToolGateway(store *statefile.Store, reader *AgentReader) *ToolGateway {
 		"get_system_overview":   {Spec: systemOverviewSpec, Handler: handleGetSystemOverview},
 		"get_capability_status": {Spec: capabilityStatusSpec, Handler: handleGetCapabilityStatus},
 		"get_health":            {Spec: healthSpec, Untrusted: true, Handler: handleGetHealth},
+		"diagnose":              {Spec: diagnoseSpec, Untrusted: true, Handler: handleDiagnose},
 		"get_plan":              {Spec: getPlanSpec, Handler: handleGetPlan},
 		"explain_resource":      {Spec: explainResourceSpec, Handler: handleExplainResource},
 		"propose_change":        {Spec: proposeChangeSpec, Mutating: true, Handler: handleProposeChange},

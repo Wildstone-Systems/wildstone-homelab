@@ -76,6 +76,16 @@ func (s *Server) proposePlan(r *http.Request, id principal.Identity) (any, int, 
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, http.StatusBadRequest, fmt.Errorf("parsing proposal: %w", err)
 	}
+	return s.submitProposal(id, req)
+}
+
+// submitProposal is the ONE proposal pipeline (ADR-W017 A3): validate every
+// document, check standing policy, compute the plan, and insert the
+// `proposed` record. The HTTP propose endpoint and the Butler host both
+// funnel through here, so a Butler-originated proposal is held to exactly
+// the checks a human's is — same validation, same policy engine, same
+// 422-on-violation, same audit events.
+func (s *Server) submitProposal(id principal.Identity, req proposalRequest) (any, int, error) {
 	if req.Summary == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("summary required")
 	}
