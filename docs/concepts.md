@@ -1,0 +1,87 @@
+# Wildstone concepts
+
+The mental model, in the order the pieces depend on each other. Each
+section cites the ADR that decided it.
+
+## Desired state lives in the Statefile
+
+The **Statefile** is a git-backed store of typed resources
+(ADR-W004): `Volume`, `LdapGroup`, `OidcClient`, `Container`, `Route`,
+`DnsRecord`, `BackupPlan`. Specs only — observed status never touches
+it. Container images must be digest-pinned (`repo@sha256:...`); the
+agent refuses anything else.
+
+## Plans are the only write path
+
+Every change to the Statefile is a **plan**: proposed (by a human, a
+package install, or the Butler), reviewed, and **approved by a human**
+before anything happens (ADR-W004 A3, ADR-W007). A plan lists its
+steps with a risk grade (`Low`/`Medium`/`High`) and blast radius.
+Approval commits the change; the reconciler then converges nodes to
+it. There is no unmediated write anywhere — not for the UI, not for
+the CLI, not for the AI.
+
+## The reconciler converges, and repairs drift
+
+The reconcile service (ADR-W008) diffs desired against observed on
+every tick (and immediately on approval/ingest — event-driven pokes).
+Approved plans authorize their Medium/High steps; unattended drift
+repair applies **Low-risk steps only**. Resources it did not create are
+foreign: the drift classifier never deletes them (this is what makes
+side-by-side migration safe — see [migration.md](migration.md)).
+
+## Wardstone is a closed op surface
+
+Nodes run **wardstoned**, which accepts a fixed set of signed
+operations over mTLS (ADR-W003): ensure/stop/remove container, ensure
+volume, write managed file (under a managed prefix only), health,
+stats, logs, probes, and the write-only secret ops. There is no Exec.
+A compromised Keystone still cannot run arbitrary commands on a node.
+
+## Principals, roles, one API
+
+Everything — Console, `wild`, Butler — consumes the ONE public
+HTTP+JSON API (ADR-W007). Callers are **principals** with closed
+roles: `admin` (everything), `operator` (read/propose/approve),
+`butler` (read/propose — structurally cannot approve). Tokens are
+opaque `wst_` bearers, stored hashed. Every request runs
+authn → RBAC → rate limit → handler → audit, and every response body
+passes a redacting encoder that strips secret-shaped values.
+
+## Capabilities and packages
+
+A **capability** ("photos", "media") is a set of resources owned by
+`capability/<name>`, delivered as a signed package (ADR-W005,
+ADR-W010, ADR-W011/W013). Installing or upgrading a package produces —
+a plan, like everything else.
+
+## Secrets are write-only
+
+Secret values transit `wild secret set` once, travel to the node over
+mTLS, and are stored encrypted in the node's local store (ADR-W012).
+The protocol has no read-back operation; Keystone never persists a
+value; specs reference `secret/<name>` and the agent materializes the
+value only into a container's environment at create time. Rotation is
+re-set + container re-create. Consequence: **your password manager is
+the secret backup** — see [recovery.md](recovery.md).
+
+## Backups run themselves, restores restore alongside
+
+A `BackupPlan` (ADR-W011) names source volumes, a repository volume, a
+`secret/...` repository password, and a schedule. The backup engine
+runs pinned restic containers through the same closed op surface as
+everything else, records every run in a ledger, and runs a periodic
+restore **drill**. Restores go to a fresh `<plan>-restore` volume —
+never over live data; moving data in place is a deliberate human act.
+
+## The Butler proposes; humans approve
+
+The Butler (ADR-W006, ADR-W017) is an LLM operator with read tools
+(overview, status, health, diagnose, explain, plan preview) and
+exactly one write tool: `propose_change`, which produces a plan in
+state `proposed`. Its ceiling is structural, not conventional: the
+butler role holds no approve verb, tool results are redacted,
+bounded, and enveloped as untrusted data, and every conversation is a
+persisted, principal-bound session (`butler` acting-for you). The
+morning report is deterministic — no LLM involved — and keeps working
+with the Butler off.

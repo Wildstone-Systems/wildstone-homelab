@@ -1,0 +1,98 @@
+# Threat model (as built)
+
+Refreshed for E13 (ADR-W018 A3) against the code as it exists today.
+Each mitigation names the ADR that decided it and, where it matters,
+the test that pins it.
+
+## Assets
+
+1. Family data in volumes (photos, documents, media).
+2. Secret values (DB passwords, OIDC client secrets, restic repo
+   passwords, API tokens).
+3. Control of the nodes (Docker) — the ability to run code.
+4. Desired state integrity (the Statefile).
+5. Identity/ingress (who can reach what, who can log in).
+
+## Trust boundaries and mitigations
+
+### Internet → public API
+
+- One API, every caller (ADR-W007). Fixed middleware chain
+  authn → RBAC → rate limit → handler → audit; no route opts out.
+- Opaque `wst_` bearer tokens, stored as sha256 only; authn failures
+  are indistinguishable and share one strict anonymous rate bucket
+  (token guessing is globally throttled).
+- Closed role set; the butler role structurally lacks approve/manage.
+- **Redaction is a serialization property**: every response body passes
+  the redacting encoder; the only carve-outs are the two mint
+  responses, each carrying a secret in the single moment it exists
+  (`TestRedactionProperty`).
+
+### Keystone → nodes
+
+- mTLS with a Keystone-local CA; nodes join with single-use tokens,
+  pinned by CA fingerprint (ADR-W003, ADR-W014). Compromising the
+  network gets you neither a join nor a replay.
+- **Closed op surface, no Exec** (ADR-W003): a fully compromised
+  Keystone can manage containers/volumes/managed files on nodes but
+  cannot run arbitrary commands, read arbitrary paths, or write
+  outside managed prefixes (agent-side path resolution refuses
+  traversal and symlink escapes).
+- Images must be digest-pinned; the agent refuses un-pinned refs.
+- Ownership labels: the agent refuses to touch containers it does not
+  own — hand-managed workloads are out of reach by construction.
+
+### Operator input → state
+
+- Plans are the only write path; a human approve verb gates every
+  change (ADR-W004/W007). Policy (ADR-W009) validates every proposed
+  tree — public routes require auth, secret-shaped literals are
+  rejected from specs (`SecretShaped` shares its definition with the
+  redactor, so they cannot disagree).
+- The Statefile is git-backed: out-of-band edits are ingested as
+  proposals, not silently applied.
+
+### Secrets
+
+- Write-only path (ADR-W012): values transit once, are stored
+  encrypted per-node, and the protocol has **no read-back arm** — the
+  exfiltration path does not exist to be exploited. Keystone logs,
+  API responses, and Butler transcripts are all behind the shared
+  redactor.
+
+### LLM (the Butler) — treated as a confused deputy, not a trusted user
+
+ADR-W006/W017; the red-team suite (`keystone/butler/redteam_test.go`,
+`injection_test.go`) is pinned and release-blocking:
+
+- Structural ceiling: read tools + `propose_change` only; the package
+  imports no apply capability (`structural_test.go`); proposals land
+  in state `proposed` under principal `butler` acting-for the caller.
+- Every tool result is centrally redacted, size-bounded, and — where
+  attacker-influenceable (health, diagnose) — wrapped in an
+  untrusted-data envelope with case/spacing-tolerant breakout
+  neutralization.
+- QA-only mode refuses mutating tools at dispatch, not just by
+  omission from the offered set.
+- Ask input is bounded; transcripts are persisted redacted; provider
+  keys come only from environment variables.
+
+### Supply chain
+
+- Packages are signed and verified (ADR-W010); registry fetches verify
+  digests; images are digest-pinned everywhere (including the restic
+  image); CI runs gitleaks with a custom rule for the `wst_` prefix.
+
+## Residual risks (known, accepted for alpha)
+
+- The public API binds loopback/tailnet by default and offers no TLS
+  of its own — exposure beyond that perimeter needs a TLS reverse
+  proxy in front; public app ingress is Route-managed Caddy, but the
+  API itself is not meant to be internet-facing at MVP.
+- A malicious human admin is out of scope: admin approves plans, and
+  approved plans run.
+- Docker itself is trusted on nodes; container escape is out of scope.
+- DoS beyond token-bucket rate limiting is out of scope.
+- The drift classifier protects foreign resources but cannot protect
+  Wildstone-owned resources from hand edits on the node; drift repair
+  reverts what it observes, Low-risk only.
