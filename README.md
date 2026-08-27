@@ -6,18 +6,40 @@ AI operator (the Butler).
 
 > Less like Portainer. More like hiring an experienced systems administrator.
 
+## Why
+
+The modern home is full of other people's computers. Wildstone is the
+counter-move: the home lab as household infrastructure, coordinated by a
+Butler whose loyalty is enforced by construction — it can read and
+propose, and structurally cannot act without human approval. Data stays
+home; power stays with the household. Read [docs/vision.md](docs/vision.md).
+
 ## Status
 
-Pre-alpha — Phase 0 (spikes S1–S4, Wardstone E1) complete; Phase 1 (MVP)
-in progress, starting with E2 (Keystone core). Nothing here is usable yet.
+**Pre-alpha.** The MVP epics (E1–E13) are implemented: privileged agent,
+control plane, plan-mediated reconciliation, policy engine, signed
+capability packages, backups with a weekly total-host-loss exit drill in
+CI, secrets, installer, CLI, web console, and the Butler (sessions,
+diagnostics, injection-hardening red-team suite). What remains before an
+alpha tag: the dogfood migration of a real household and the first
+release-pipeline exercise — tracked in the
+[road-to-alpha issue](https://github.com/chickenrat17/wildstone-homelab/issues/11).
 
-The design brief and architecture proposal live in the reference deployment
-repository:
-[`chickenrat17/homelab-config`](https://github.com/chickenrat17/homelab-config)
-under `docs/architecture/wildstone/`. The implementation scope (epic and
-milestone definitions E0–E13, M0–M5) lives here at
-`docs/02-implementation-scope.md`; Wildstone ADRs (W-series) live in
-`docs/decisions/`.
+Not ready to run your home yet. Watch the repo if you want to be there
+when it is.
+
+## Documentation
+
+- [docs/vision.md](docs/vision.md) — why this exists.
+- [docs/concepts.md](docs/concepts.md) — the mental model.
+- [docs/install.md](docs/install.md) — installing (from a release).
+- [docs/recovery.md](docs/recovery.md) — the recovery contract and
+  total-host-loss runbook, proven weekly by `scripts/exit-drill.sh`.
+- [docs/threat-model.md](docs/threat-model.md) — the threat model
+  against as-built.
+- [docs/02-implementation-scope.md](docs/02-implementation-scope.md) —
+  the epic/milestone scope; [docs/decisions/](docs/decisions/) — the
+  W-series ADRs.
 
 ## Layout
 
@@ -53,4 +75,20 @@ milestone definitions E0–E13, M0–M5) lives here at
 ## Building
 
 Go 1.25+. `go build ./...` from `wardstone/`, `keystone/`, or `cli/`
-(workspace via `go.work` at the root). Real functionality lands with spike S1.
+(workspace via `go.work` at the root); `npm ci && npm run build` in
+`console/`. The full verification loop is what CI runs: `gofmt -l`,
+`go vet ./...`, `go test -race ./...` per module.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) (short version: issues and small
+PRs welcome; large PRs — talk first) and [SECURITY.md](SECURITY.md)
+(private disclosure, please).
+
+## License
+
+[AGPL-3.0](LICENSE). If you run a modified Wildstone as a service for
+others, you owe them your source — that's the point.
+
+The Wildstone name is not covered by the code license; don't ship a
+fork under the same name.
