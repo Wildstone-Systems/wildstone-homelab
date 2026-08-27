@@ -21,7 +21,7 @@ Wildstone is two binaries plus a CLI:
 
 ```sh
 curl -fsSLO https://github.com/chickenrat17/wildstone-homelab/releases/latest/download/install.sh
-sudo ./install.sh --role keystone
+sudo bash ./install.sh --role keystone
 ```
 
 This installs `/usr/local/bin/keystone`, the `keystone.service` unit,
@@ -58,7 +58,7 @@ wild node mint-join
 On the node:
 
 ```sh
-sudo ./install.sh --role node \
+sudo bash ./install.sh --role node \
   --keystone <keystone-host>:9440 \
   --node-id <name> \
   --join-token <token> \
