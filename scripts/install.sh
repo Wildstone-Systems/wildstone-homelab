@@ -15,17 +15,21 @@
 # Re-running upgrades the binaries in place and restarts the unit —
 # idempotence is the upgrade path at MVP.
 #
-# Private repo / air-gapped installs: the release download is an
-# unauthenticated curl, so it cannot reach a private repo. Place the
-# release artifacts (*.tar.gz + checksums.txt) next to this script, or
-# point --artifact-dir at them, and the installer uses those instead —
-# still checksum-verified.
+# Private repos: an anonymous download cannot reach a private repo's
+# release assets. Two supported paths, both still checksum-verified:
+#   - a GitHub token (--token, or GH_TOKEN/GITHUB_TOKEN/WILDSTONE_TOKEN
+#     in the environment), which switches the fetch to the authenticated
+#     release-asset API; the token needs only contents:read.
+#   - local artifacts: place the release files (*.tar.gz +
+#     checksums.txt) next to this script, or point --artifact-dir at
+#     them, for air-gapped hosts.
 set -euo pipefail
 
 REPO="chickenrat17/wildstone-homelab"
 VERSION="${WILDSTONE_VERSION:-latest}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARTIFACT_DIR=""
+TOKEN="${WILDSTONE_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
 ROLE=""
 KEYSTONE_ADDR=""
 JOIN_TOKEN=""
@@ -39,7 +43,7 @@ log()  { echo "[wildstone-install] $*"; }
 fail() { echo "[wildstone-install] ERROR: $*" >&2; exit 1; }
 
 usage() {
-  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -52,6 +56,7 @@ while [ $# -gt 0 ]; do
     --node-id)        NODE_ID="$2"; shift 2 ;;
     --version)        VERSION="$2"; shift 2 ;;
     --artifact-dir)   ARTIFACT_DIR="$2"; shift 2 ;;
+    --token)          TOKEN="$2"; shift 2 ;;
     --skip-docker)    SKIP_DOCKER=1; shift ;;
     -h|--help)        usage ;;
     *) fail "unknown flag: $1 (try --help)" ;;
@@ -97,6 +102,40 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# Release metadata, fetched once, for the authenticated asset path.
+# Private-repo assets are only reachable through the API's per-asset URL
+# with an Authorization header — the browser-download URL 404s.
+release_json() {
+  # Not `[ -f … ] && return 0`: that list's failure is the function's
+  # exit status under `set -e`.
+  if [ -f "$WORK/release.json" ]; then
+    return 0
+  fi
+  local path="releases/latest"
+  [ "$VERSION" = latest ] || path="releases/tags/$VERSION"
+  curl -fsSL -H "Authorization: Bearer $TOKEN" \
+       -H "Accept: application/vnd.github+json" \
+       -o "$WORK/release.json" "https://api.github.com/repos/$REPO/$path" \
+    || fail "could not read release $VERSION (token needs contents:read on $REPO)"
+}
+
+# api_fetch <asset-name> <dest>: resolve the asset's API URL out of the
+# release metadata and download it. Whitespace is stripped and objects
+# split on '}' so the name and its own asset URL land on one line — no
+# jq dependency (the installer runs before anything is installed).
+api_fetch() {
+  local want="$1" dest="$2" url
+  release_json
+  url="$(tr -d ' \n\t' < "$WORK/release.json" | tr '}' '\n' \
+        | grep -F "\"name\":\"$want\"" \
+        | grep -o "https://api\.github\.com/repos/[^\"]*/releases/assets/[0-9][0-9]*" \
+        | head -1)"
+  [ -n "$url" ] || fail "release $VERSION has no asset named $want"
+  curl -fsSL -H "Authorization: Bearer $TOKEN" \
+       -H "Accept: application/octet-stream" -o "$dest" "$url" \
+    || fail "authenticated download failed for $want"
+}
+
 fetch_binary() {
   # fetch_binary <name>: obtain <name>_linux_<arch>.tar.gz (local
   # ARTIFACT_DIR if set, GitHub release download otherwise), verify its
@@ -110,9 +149,16 @@ fetch_binary() {
       [ -f "$ARTIFACT_DIR/checksums.txt" ] || fail "checksums.txt not found in $ARTIFACT_DIR (required to verify local artifacts)"
       cp "$ARTIFACT_DIR/checksums.txt" "$WORK/checksums.txt"
     fi
+  elif [ -n "$TOKEN" ]; then
+    log "downloading $artifact ($VERSION, authenticated)"
+    api_fetch "$artifact" "$WORK/$artifact"
+    if [ ! -f "$WORK/checksums.txt" ]; then
+      api_fetch checksums.txt "$WORK/checksums.txt"
+    fi
   else
     log "downloading $artifact ($VERSION)"
-    curl -fsSL -o "$WORK/$artifact" "$BASE/$artifact"
+    curl -fsSL -o "$WORK/$artifact" "$BASE/$artifact" \
+      || fail "download failed for $artifact — if this repo is private, pass --token or set GH_TOKEN (see --help)"
     if [ ! -f "$WORK/checksums.txt" ]; then
       curl -fsSL -o "$WORK/checksums.txt" "$BASE/checksums.txt"
     fi

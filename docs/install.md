@@ -24,25 +24,48 @@ curl -fsSLO https://github.com/chickenrat17/wildstone-homelab/releases/latest/do
 sudo bash ./install.sh --role keystone
 ```
 
-This installs `/usr/local/bin/keystone`, the `keystone.service` unit,
-and starts it. First start prints two things you must record:
+**Private repo?** An anonymous download cannot reach a private
+repository's release assets. Pass a GitHub token and the installer
+switches to the authenticated release-asset API:
 
 ```sh
-journalctl -u keystone | grep -A1 'first start'   # one-time admin API token (wst_...)
-journalctl -u keystone | grep 'CA fingerprint'    # pin for node joins
+sudo GH_TOKEN=github_pat_... bash ./install.sh --role keystone
+# or: sudo bash ./install.sh --role keystone --token github_pat_...
 ```
 
-The admin token is shown exactly once — the database stores only its
-hash (ADR-W007 A3). Put it in your password manager.
+The token needs only **contents: read** on this repository (a
+fine-grained PAT scoped to it is enough). `WILDSTONE_TOKEN` and
+`GITHUB_TOKEN` are also read. The `curl` above that fetches
+`install.sh` is itself anonymous, so while the repo is private get the
+script with an authenticated client instead:
+`gh release download <tag> -R chickenrat17/wildstone-homelab -p install.sh`.
 
-**Private repo or air-gapped host?** The download is an unauthenticated
-`curl`, so it cannot reach a private repository's releases. Instead,
-download the release assets (`*_linux_*.tar.gz` + `checksums.txt` +
-`install.sh`) with an authenticated client (`gh release download`),
+**Air-gapped host?** Download the release assets (`*_linux_*.tar.gz` +
+`checksums.txt` + `install.sh`) elsewhere with `gh release download`,
 copy them into one directory on the host, and run `install.sh` from
 that directory — it detects the local `checksums.txt`, skips the
 download, and still verifies every sha256. `--artifact-dir <dir>`
 points at the assets explicitly if they live elsewhere.
+
+This installs `/usr/local/bin/keystone`, the `keystone.service` unit,
+and starts it. First start prints two things you must record:
+
+```sh
+journalctl -u keystone -o cat | grep -A1 'first start'   # one-time admin API token (wst_...)
+journalctl -u keystone -o cat | grep 'CA fingerprint'    # pin for node joins
+```
+
+(`-o cat` drops the journald prefix so the values paste cleanly.)
+
+The database stores only the token's hash (ADR-W007 A3), so Keystone
+can never show it again — put it in your password manager now. It is
+*printed once* but **not stored once**: it stays in the journal in
+plaintext, readable by root and the `adm` group. Once it is safely in
+your password manager, scrub it:
+
+```sh
+journalctl --rotate && journalctl --vacuum-time=1s   # drops the whole keystone journal
+```
 
 ## 2. Set up `wild`
 
