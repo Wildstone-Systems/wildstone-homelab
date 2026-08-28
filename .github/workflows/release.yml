@@ -29,7 +29,8 @@ jobs:
           build() { # build <name> <module-dir> <package>
             local name="$1" dir="$2" pkg="$3"
             for arch in amd64 arm64; do
-              ( cd "$dir" && GOARCH="$arch" go build -trimpath -ldflags "-s -w" \
+              ( cd "$dir" && GOARCH="$arch" go build -trimpath \
+                  -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
                   -o "../dist/$name" "$pkg" )
               tar -czf "dist/${name}_linux_${arch}.tar.gz" -C dist "$name"
               rm "dist/$name"
@@ -45,7 +46,15 @@ jobs:
       - name: publish release
         env:
           GH_TOKEN: ${{ github.token }}
+        # Idempotent: publishing a release from the GitHub UI creates the
+        # tag AND the release together, so this workflow's create then
+        # collides ("a release with the same tag name already exists") and
+        # the release ships with zero assets. Fall back to uploading onto
+        # the existing release instead.
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/* \
+          if ! gh release create "${GITHUB_REF_NAME}" dist/* \
             --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+            --generate-notes; then
+            echo "release exists; uploading assets onto it"
+            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+          fi

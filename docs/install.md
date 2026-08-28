@@ -35,6 +35,15 @@ journalctl -u keystone | grep 'CA fingerprint'    # pin for node joins
 The admin token is shown exactly once — the database stores only its
 hash (ADR-W007 A3). Put it in your password manager.
 
+**Private repo or air-gapped host?** The download is an unauthenticated
+`curl`, so it cannot reach a private repository's releases. Instead,
+download the release assets (`*_linux_*.tar.gz` + `checksums.txt` +
+`install.sh`) with an authenticated client (`gh release download`),
+copy them into one directory on the host, and run `install.sh` from
+that directory — it detects the local `checksums.txt`, skips the
+download, and still verifies every sha256. `--artifact-dir <dir>`
+points at the assets explicitly if they live elsewhere.
+
 ## 2. Set up `wild`
 
 ```sh
@@ -90,6 +99,58 @@ Everything changes through a plan: propose (via a package, the Console,
 the Butler, or `POST /api/v1/plans`), review, approve
 (`wild plan approve <id>`), and the reconciler converges the node.
 Nothing you propose is applied until a human approves it.
+
+A worked hand-written proposal — a volume plus a container on node
+`node1`. Two validation rules bite everyone the first time:
+
+- Every resource **must** carry `metadata.owner` (convention:
+  `capability/<name>`, or `system`). Packages get it injected by the
+  capability engine; hand-written proposals have to set it themselves
+  or validation rejects them.
+- Container images **must** be digest-pinned (`repo@sha256:<64 hex>`);
+  tags are refused (ADR-W003). Resolve a tag once with:
+  `docker pull nginx:1.27 && docker image inspect --format '{{index .RepoDigests 0}}' nginx:1.27`
+
+```sh
+cat > /tmp/hello-volume.yaml <<'EOF'
+apiVersion: wildstone.dev/v1
+kind: Volume
+metadata:
+  name: hello-data
+  owner: capability/hello
+  node: node1
+spec:
+  name: hello-data
+EOF
+
+cat > /tmp/hello-container.yaml <<'EOF'
+apiVersion: wildstone.dev/v1
+kind: Container
+metadata:
+  name: hello
+  owner: capability/hello
+  node: node1
+spec:
+  image: nginx@sha256:<64-hex-digest-from-the-resolve-step>
+  mounts:
+    - source: hello-data
+      target: /usr/share/nginx/html
+  restart: unless-stopped
+EOF
+
+curl -sS -X POST http://127.0.0.1:9441/api/v1/plans \
+  -H "Authorization: Bearer $WILD_TOKEN" \
+  -d "$(jq -n --arg v "$(cat /tmp/hello-volume.yaml)" \
+             --arg c "$(cat /tmp/hello-container.yaml)" \
+        '{summary: "first workload: hello", put: [$v, $c]}')"
+
+wild plan list                # find the proposed plan's id
+wild plan approve <id>        # human approval is the only write gate
+wild status                   # watch the reconciler converge it
+```
+
+The reconciler pulls the image itself (`PullImage` before
+`EnsureContainer`) — nodes never need a manual `docker pull`.
 
 Set up backups before you rely on any of it — see
 [recovery.md](recovery.md) for what must exist before a host dies.

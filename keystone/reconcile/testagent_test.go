@@ -347,6 +347,13 @@ func (a *testAgent) handleOp(opID string, op *wsv1.Operation) *wsv1.OpResult {
 	case *wsv1.Operation_ProbeHttp:
 		a.countOp("ProbeHttp")
 		return a.probeHttp(opID, o.ProbeHttp)
+	case *wsv1.Operation_PullImage:
+		// The reconciler pulls before every container ensure; the test
+		// agent's "registry" always has the image.
+		a.countOp("PullImage")
+		return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_PullImage{
+			PullImage: &wsv1.PullImageResult{Digest: o.PullImage.GetImage()},
+		}}
 	case *wsv1.Operation_Health:
 		return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_Health{Health: &wsv1.HealthResult{Ok: true, Detail: "test agent"}}}
 	default:

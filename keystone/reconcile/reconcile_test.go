@@ -88,6 +88,13 @@ func TestConvergeEmptyNodeToVolumeContainerRoute(t *testing.T) {
 	if outcome.Plan.OverallRisk != plan.RiskLow {
 		t.Fatalf("expected Low risk for an all-additive plan, got %v", outcome.Plan.OverallRisk)
 	}
+	// The reconciler must pull before ensuring: a digest-pinned image is
+	// never resolved implicitly by Docker, so on a fresh node a container
+	// create without a preceding PullImage can never succeed (found by
+	// the first real VM install).
+	if agent.opCount("PullImage") < 1 {
+		t.Fatal("container was ensured without a preceding PullImage")
+	}
 	if len(outcome.Plan.Steps) != 3 {
 		t.Fatalf("expected 3 create steps, got %d: %+v", len(outcome.Plan.Steps), outcome.Plan.Steps)
 	}
