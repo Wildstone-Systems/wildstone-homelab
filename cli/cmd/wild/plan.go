@@ -43,6 +43,7 @@ func runStatus(args []string) int {
 	// Composed client-side (ADR-W015 A2): three reads, no new endpoint.
 	for _, section := range []struct{ title, path string }{
 		{"whoami", "/api/v1/whoami"},
+		{"nodes", "/api/v1/nodes"},
 		{"observed", "/api/v1/observed"},
 		{"recent events", "/api/v1/events?limit=15"},
 	} {

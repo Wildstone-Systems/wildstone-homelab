@@ -32,7 +32,21 @@ func Open(path string) (*DB, error) {
 	// _pragma busy_timeout: a second writer waits instead of failing with
 	// SQLITE_BUSY; foreign_keys is off by default in SQLite and our tokens
 	// table relies on it.
-	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", path)
+	//
+	// _txlock=immediate takes the write lock when a transaction BEGINs
+	// rather than when it first writes. Our transactions are all read-
+	// modify-write (TransitionPlan reads the current state to check the
+	// transition table, then updates), and under the default DEFERRED
+	// mode the read only takes a snapshot — so the write has to upgrade,
+	// and any writer that committed in between makes that upgrade fail
+	// with SQLITE_BUSY/BUSY_SNAPSHOT *immediately*. busy_timeout cannot
+	// help there: retrying an upgrade in place can never succeed, so
+	// SQLite deliberately skips the busy handler. Taking the lock up
+	// front puts the contention back under busy_timeout, where it waits.
+	// Read-only transactions can still opt out with
+	// BeginTx(ctx, &sql.TxOptions{ReadOnly: true}) — the driver leaves
+	// those DEFERRED.
+	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", path)
 	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: open %s: %w", path, err)

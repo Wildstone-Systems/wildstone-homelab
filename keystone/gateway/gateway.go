@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -47,6 +48,14 @@ type Config struct {
 	// pre-W2 in-memory-only behavior: fresh CA and signing key every
 	// process start, minted tokens not persisted.
 	DataDir string
+
+	// OnNodeEvent, if set, is called when a node completes a join and when
+	// an agent session opens or closes (#30). Keystone wires it to the
+	// runtime DB so the node inventory survives restarts and
+	// disconnections, while the gateway itself keeps no database
+	// dependency — same seam shape as the Butler's Observed hook. Keep
+	// implementations cheap: it is called on the session's own goroutine.
+	OnNodeEvent func(NodeEvent)
 
 	// opSigningKey lets a caller in this package supply a previously-
 	// persisted ed25519 signing key instead of having New generate a
@@ -99,6 +108,69 @@ type session struct {
 	send    func(*wsv1.KeystoneMessage) error
 	pending map[string]chan *wsv1.OpResult
 	mu      sync.Mutex
+
+	// From the agent's Hello, kept so the inventory can report what each
+	// connected node is actually running rather than only logging it.
+	agentVersion  string
+	protocolMinor uint32
+	since         time.Time
+}
+
+// NodeEventKind distinguishes the three moments worth recording about a
+// node's existence.
+type NodeEventKind string
+
+const (
+	NodeJoined       NodeEventKind = "joined"
+	NodeConnected    NodeEventKind = "connected"
+	NodeDisconnected NodeEventKind = "disconnected"
+)
+
+// NodeEvent is delivered to Config.OnNodeEvent. AgentVersion and
+// ProtocolMinor are only populated for connect/disconnect: a join happens
+// before any Hello, so the agent has not said what it runs yet.
+type NodeEvent struct {
+	NodeID        string
+	Kind          NodeEventKind
+	AgentVersion  string
+	ProtocolMinor uint32
+	At            time.Time
+}
+
+// LiveNode describes one currently-connected agent session.
+type LiveNode struct {
+	NodeID        string
+	AgentVersion  string
+	ProtocolMinor uint32
+	Since         time.Time
+}
+
+// LiveNodes returns the agent sessions connected right now, id-ordered.
+// This is the authoritative answer to "is it up?" — it is derived from the
+// session registry, never from stored state.
+func (g *Gateway) LiveNodes() []LiveNode {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	out := make([]LiveNode, 0, len(g.sessions))
+	for id, s := range g.sessions {
+		out = append(out, LiveNode{
+			NodeID:        id,
+			AgentVersion:  s.agentVersion,
+			ProtocolMinor: s.protocolMinor,
+			Since:         s.since,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
+	return out
+}
+
+// emitNodeEvent delivers to the hook if one is configured.
+func (g *Gateway) emitNodeEvent(e NodeEvent) {
+	if g.cfg.OnNodeEvent == nil {
+		return
+	}
+	e.At = time.Now().UTC()
+	g.cfg.OnNodeEvent(e)
 }
 
 func New(cfg Config) (*Gateway, error) {
@@ -310,6 +382,7 @@ func (g *Gateway) Join(_ context.Context, req *wsv1.JoinRequest) (*wsv1.JoinResp
 	}
 	g.auditIdentity(req.GetNodeId(), "Join", "")
 	g.log.Info("node joined", "node", req.GetNodeId())
+	g.emitNodeEvent(NodeEvent{NodeID: req.GetNodeId(), Kind: NodeJoined})
 	return &wsv1.JoinResponse{
 		CertPem:            certPEM,
 		CaPem:              g.ca.PEM(),
@@ -361,8 +434,11 @@ func (g *Gateway) Session(stream grpc.BidiStreamingServer[wsv1.AgentMessage, wsv
 
 	var sendMu sync.Mutex
 	s := &session{
-		nodeID:  nodeID,
-		pending: map[string]chan *wsv1.OpResult{},
+		nodeID:        nodeID,
+		agentVersion:  hello.GetAgentVersion(),
+		protocolMinor: hello.GetProtocolMinor(),
+		since:         time.Now().UTC(),
+		pending:       map[string]chan *wsv1.OpResult{},
 		send: func(m *wsv1.KeystoneMessage) error {
 			sendMu.Lock()
 			defer sendMu.Unlock()
@@ -373,6 +449,10 @@ func (g *Gateway) Session(stream grpc.BidiStreamingServer[wsv1.AgentMessage, wsv
 	g.sessions[nodeID] = s
 	g.mu.Unlock()
 	g.log.Info("agent connected", "node", nodeID, "version", hello.GetAgentVersion(), "protocol_minor", hello.GetProtocolMinor())
+	g.emitNodeEvent(NodeEvent{
+		NodeID: nodeID, Kind: NodeConnected,
+		AgentVersion: hello.GetAgentVersion(), ProtocolMinor: hello.GetProtocolMinor(),
+	})
 	defer func() {
 		g.mu.Lock()
 		if g.sessions[nodeID] == s {
@@ -380,6 +460,10 @@ func (g *Gateway) Session(stream grpc.BidiStreamingServer[wsv1.AgentMessage, wsv
 		}
 		g.mu.Unlock()
 		g.log.Info("agent disconnected", "node", nodeID)
+		g.emitNodeEvent(NodeEvent{
+			NodeID: nodeID, Kind: NodeDisconnected,
+			AgentVersion: hello.GetAgentVersion(), ProtocolMinor: hello.GetProtocolMinor(),
+		})
 	}()
 
 	for {

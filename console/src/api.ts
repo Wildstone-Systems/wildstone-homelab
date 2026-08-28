@@ -71,6 +71,18 @@ export interface SecretInfo {
   updatedUnixSec?: number;
 }
 
+// NodeInfo is one row of the fleet inventory (#30). connected comes from
+// the gateway's live session registry, never from stored state.
+export interface NodeInfo {
+  id: string;
+  connected: boolean;
+  agentVersion?: string;
+  protocolMinor?: number;
+  firstJoinedAt: string;
+  lastSeenAt: string;
+  connectedSince?: string;
+}
+
 export interface BlockDevice {
   name: string;
   sizeBytes: number;
@@ -183,6 +195,7 @@ export const api = {
       "GET",
       `/api/v1/nodes/${encodeURIComponent(node)}/probes/${kind}?host=${encodeURIComponent(host)}`,
     ),
+  nodes: () => call<{ nodes: NodeInfo[] }>("GET", "/api/v1/nodes"),
   mintJoinToken: (ttlSeconds?: number) =>
     call<JoinTokenResponse>("POST", "/api/v1/join-tokens", ttlSeconds ? { ttlSeconds } : {}),
   nodeSecrets: (node: string) =>
