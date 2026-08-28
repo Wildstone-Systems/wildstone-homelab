@@ -275,3 +275,113 @@ func TestConcurrentWriters(t *testing.T) {
 		t.Fatalf("got %d events, want %d", len(got), n)
 	}
 }
+
+// TestTransitionPlanUnderConcurrentWrites reproduces the SQLITE_BUSY seen on
+// the first reconcile after every approval (friction F7, #29).
+//
+// TransitionPlan is read-modify-write: it SELECTs the current state to check
+// the transition table, then UPDATEs. Under a DEFERRED transaction the SELECT
+// only takes a read snapshot, so the UPDATE has to upgrade to the write lock —
+// and if another writer committed in between, SQLite fails that upgrade with
+// SQLITE_BUSY *immediately*. busy_timeout does not help: retrying an upgrade
+// in place can never succeed, so SQLite does not invoke the busy handler at
+// all. In production the competing writer is the periodic reconcile tick
+// racing the approval poke.
+func TestTransitionPlanUnderConcurrentWrites(t *testing.T) {
+	db := open(t)
+
+	const plans = 12
+	ids := make([]string, 0, plans)
+	for i := 0; i < plans; i++ {
+		id, err := db.InsertPlan("admin", "", "concurrent transition", "low", `{}`)
+		if err != nil {
+			t.Fatalf("InsertPlan: %v", err)
+		}
+		ids = append(ids, id)
+	}
+
+	// A competing writer, standing in for the reconcile tick.
+	stop := make(chan struct{})
+	var writer sync.WaitGroup
+	writer.Add(1)
+	go func() {
+		defer writer.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				db.AppendEvent(Event{Type: "tick"}) //nolint:errcheck
+				time.Sleep(200 * time.Microsecond)
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, plans)
+	for _, id := range ids {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			if err := db.TransitionPlan(id, PlanApproved, "admin"); err != nil {
+				errs <- err
+			}
+		}(id)
+	}
+	wg.Wait()
+	close(stop)
+	writer.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("TransitionPlan raced a concurrent writer: %v", err)
+	}
+}
+
+func TestNodeInventory(t *testing.T) {
+	db := open(t)
+
+	if nodes, err := db.ListNodes(); err != nil || len(nodes) != 0 {
+		t.Fatalf("fresh ListNodes = %v, %v; want empty", nodes, err)
+	}
+	if err := db.RecordNodeJoin("vm-1"); err != nil {
+		t.Fatalf("RecordNodeJoin: %v", err)
+	}
+	nodes, err := db.ListNodes()
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("ListNodes = %v, %v", nodes, err)
+	}
+	joined := nodes[0].FirstJoinedAt
+	if joined.IsZero() || nodes[0].NodeID != "vm-1" {
+		t.Fatalf("unexpected node record %+v", nodes[0])
+	}
+
+	// A session opening fills in the agent's self-reported build.
+	if err := db.RecordNodeSeen("vm-1", "v0.1.0-alpha", 7); err != nil {
+		t.Fatalf("RecordNodeSeen: %v", err)
+	}
+	nodes, err = db.ListNodes()
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("ListNodes after seen = %v, %v", nodes, err)
+	}
+	if nodes[0].AgentVersion != "v0.1.0-alpha" || nodes[0].ProtocolMinor != 7 {
+		t.Fatalf("hello fields not recorded: %+v", nodes[0])
+	}
+	// Re-joining a rebuilt node must not reset when it entered the fleet.
+	if err := db.RecordNodeJoin("vm-1"); err != nil {
+		t.Fatalf("re-join: %v", err)
+	}
+	nodes, _ = db.ListNodes()
+	if !nodes[0].FirstJoinedAt.Equal(joined) {
+		t.Errorf("re-join reset first_joined_at: %v → %v", joined, nodes[0].FirstJoinedAt)
+	}
+
+	// A session for a node with no join row still produces one.
+	if err := db.RecordNodeSeen("vm-2", "v0.1.0-alpha", 7); err != nil {
+		t.Fatalf("RecordNodeSeen unknown node: %v", err)
+	}
+	nodes, _ = db.ListNodes()
+	if len(nodes) != 2 || nodes[0].NodeID != "vm-1" || nodes[1].NodeID != "vm-2" {
+		t.Fatalf("want id-ordered vm-1, vm-2; got %+v", nodes)
+	}
+}
