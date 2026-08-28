@@ -26,6 +26,21 @@ type ApplierRunner struct {
 }
 
 func (a *ApplierRunner) RunContainer(ctx context.Context, node, name string, spec resource.ContainerSpec) error {
+	// Pull before ensure: the agent's ensureContainer never pulls, and a
+	// digest-pinned restic image is never resolved implicitly, so a
+	// fresh node's first backup run would fail at create otherwise
+	// (found by the first real VM install; the exit drill previously
+	// masked this with a manual pre-pull).
+	pres, err := a.Applier.Apply(ctx, node, &wsv1.Operation{Op: &wsv1.Operation_PullImage{
+		PullImage: &wsv1.PullImage{Image: spec.Image},
+	}})
+	if err != nil {
+		return fmt.Errorf("pull %s: %w", spec.Image, err)
+	}
+	if oe := pres.GetError(); oe != nil {
+		return fmt.Errorf("pull %s: %s: %s", spec.Image, oe.GetCode(), oe.GetMessage())
+	}
+
 	res, err := a.Applier.Apply(ctx, node, ensureOp(name, spec))
 	if err != nil {
 		return fmt.Errorf("ensure %s: %w", name, err)

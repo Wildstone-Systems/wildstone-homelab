@@ -35,7 +35,10 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 )
 
+var version = "dev" // set via -ldflags at release
+
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
 	listen := flag.String("listen", ":9440", "agent gateway listen address")
 	apiListen := flag.String("api-listen", "127.0.0.1:9441", "public API listen address (loopback/tailnet at MVP)")
 	joinTokens := flag.String("join-tokens", "", "comma-separated one-time join tokens (dev/test; MintJoinToken is the production path)")
@@ -51,6 +54,11 @@ func main() {
 	butlerModel := flag.String("butler-model", "", "Butler model name; empty uses the provider's default")
 	butlerEndpoint := flag.String("butler-endpoint", "", "Butler provider base URL (openai-compatible gateways, ollama host); empty uses the provider's default")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("keystone", version)
+		return
+	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	butlerCfg := butlerConfig{Provider: *butlerProvider, Model: *butlerModel, Endpoint: *butlerEndpoint}

@@ -105,13 +105,21 @@ mkdir -p "$BIN"
 (cd "$REPO_ROOT/wardstone" && go build -o "$BIN/wardstoned" ./cmd/wardstoned)
 (cd "$REPO_ROOT/cli" && go build -o "$BIN/wild" ./cmd/wild)
 
-# The agent's ensureContainer deliberately never pulls (closed op surface;
-# reconcile issues PullImage separately) — pre-pull the exact pinned image
-# keystone defaults to, extracted from source so the drill can't drift.
+# The backup runner pulls the restic image itself before EnsureContainer
+# (the agent's ensureContainer deliberately never pulls). The drill must
+# exercise that path, so: NO pre-pull, and best-effort remove any cached
+# copy of the pinned image (extracted from source so the drill can't
+# drift) so the run starts from a genuinely image-less node — the exact
+# state the first real VM install failed in.
 RESTIC_IMAGE="$(grep -o 'restic/restic@sha256:[0-9a-f]\{64\}' "$REPO_ROOT/keystone/cmd/keystone/main.go" | head -1)"
 [ -n "$RESTIC_IMAGE" ] || fail "could not extract the pinned restic image from keystone/cmd/keystone/main.go"
-log "pulling $RESTIC_IMAGE"
-docker pull -q "$RESTIC_IMAGE" >/dev/null
+docker image rm -f "$RESTIC_IMAGE" >/dev/null 2>&1 || true
+
+# Helper containers (canary write, restore verification) use a separate
+# image so they don't implicitly cache restic for the backup runner.
+HELPER_IMAGE="busybox:stable"
+log "pulling helper image $HELPER_IMAGE"
+docker pull -q "$HELPER_IMAGE" >/dev/null
 
 # ---------------------------------------------------------------- phase 1
 log "phase 1: first life"
@@ -168,7 +176,7 @@ wait_for "reconcile to create drill-data" 60 docker volume inspect drill-data
 wait_for "reconcile to create drill-repo" 60 docker volume inspect drill-repo
 
 log "writing the canary"
-docker run --rm -v drill-data:/data --entrypoint /bin/sh "$RESTIC_IMAGE" \
+docker run --rm -v drill-data:/data --entrypoint /bin/sh "$HELPER_IMAGE" \
     -c "printf '%s' '$CANARY' > /data/canary.txt"
 
 log "running the backup"
@@ -210,7 +218,7 @@ wait_for "restore ledger success" 120 sh -c \
     "[ \"\$(curl -sS -H 'Authorization: Bearer $ADMIN2' $API/api/v1/backups | jq -r '.runs[0].status')\" = succeeded ]"
 
 log "verifying the canary came back byte-identical"
-RESTORED="$(docker run --rm -v drill-restore:/r --entrypoint /bin/sh "$RESTIC_IMAGE" \
+RESTORED="$(docker run --rm -v drill-restore:/r --entrypoint /bin/sh "$HELPER_IMAGE" \
     -c 'cat "$(find /r -name canary.txt | head -1)"')"
 [ "$RESTORED" = "$CANARY" ] || fail "canary mismatch: wrote '$CANARY', restored '$RESTORED'"
 

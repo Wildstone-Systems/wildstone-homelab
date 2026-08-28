@@ -842,6 +842,16 @@ func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step
 			sr.Error = "internal: no desired Container spec for " + step.Name
 			return sr
 		}
+		// Pull before ensure: the agent's ensureContainer deliberately
+		// never pulls (closed op surface — creation and image fetching are
+		// separate audited operations), and digest-pinned refs are never
+		// resolved implicitly by Docker, so without this a container can
+		// only ever start on a node that already has the exact digest
+		// cached. Found by the first real VM install (friction F-pull).
+		if pr := r.pullImage(ctx, nodeID, want.Container.Image); pr != "" {
+			sr.Error = pr
+			return sr
+		}
 		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, want.Container))
 		if err != nil {
 			sr.Error = err.Error()
@@ -965,6 +975,23 @@ func specHash(spec *resource.ContainerSpec) string {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:8])
+}
+
+// pullImage dispatches a PullImage for image on nodeID, returning "" on
+// success or the error text. Pulling an already-present digest is a cheap
+// no-op on the Docker side, so this runs unconditionally before every
+// container ensure rather than trying to guess cache state.
+func (r *Reconciler) pullImage(ctx context.Context, nodeID, image string) string {
+	res, err := r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_PullImage{
+		PullImage: &wsv1.PullImage{Image: image},
+	}})
+	if err != nil {
+		return "pull " + image + ": " + err.Error()
+	}
+	if oe := res.GetError(); oe != nil {
+		return fmt.Sprintf("pull %s: %s: %s", image, oe.GetCode(), oe.GetMessage())
+	}
+	return ""
 }
 
 func containerEnsureOp(name string, spec *resource.ContainerSpec) *wsv1.Operation {

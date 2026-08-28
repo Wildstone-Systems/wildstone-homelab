@@ -13,12 +13,17 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgtool"
 )
 
+var version = "dev" // set via -ldflags at release
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "version", "-version", "--version":
+		fmt.Println("wild", version)
+		os.Exit(0)
 	case "pkg":
 		os.Exit(runPkg(os.Args[2:]))
 	case "secret":
@@ -54,7 +59,8 @@ func usage() {
   wild pkg refresh-digests <pkg-dir>
   wild secret list|generate|set|rotate ...   (see wild secret)
   wild node mint-join ...                    (see wild node)
-  wild status | plan | capability | logs | audit | backup ...  (API client, ADR-W015)`)
+  wild status | plan | capability | logs | audit | backup ...  (API client, ADR-W015)
+  wild version`)
 }
 
 func runPkg(args []string) int {

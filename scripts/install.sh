@@ -7,15 +7,29 @@
 #     sudo ./install.sh --role node --keystone <host:9440> \
 #          --join-token <tok> [--ca-fingerprint <hex>] \
 #          [--node-id <id>] [--skip-docker] [--version vX.Y.Z]
+#   Either role also takes [--artifact-dir <dir>] to install from local
+#   release artifacts instead of downloading (private repos, air-gap).
 #
 # Binaries come from GitHub releases and are sha256-verified against the
 # release's checksums.txt before anything is installed (ADR-W014 A1).
 # Re-running upgrades the binaries in place and restarts the unit —
 # idempotence is the upgrade path at MVP.
+#
+# Private repos: an anonymous download cannot reach a private repo's
+# release assets. Two supported paths, both still checksum-verified:
+#   - a GitHub token (--token, or GH_TOKEN/GITHUB_TOKEN/WILDSTONE_TOKEN
+#     in the environment), which switches the fetch to the authenticated
+#     release-asset API; the token needs only contents:read.
+#   - local artifacts: place the release files (*.tar.gz +
+#     checksums.txt) next to this script, or point --artifact-dir at
+#     them, for air-gapped hosts.
 set -euo pipefail
 
 REPO="chickenrat17/wildstone-homelab"
 VERSION="${WILDSTONE_VERSION:-latest}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ARTIFACT_DIR=""
+TOKEN="${WILDSTONE_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
 ROLE=""
 KEYSTONE_ADDR=""
 JOIN_TOKEN=""
@@ -29,7 +43,7 @@ log()  { echo "[wildstone-install] $*"; }
 fail() { echo "[wildstone-install] ERROR: $*" >&2; exit 1; }
 
 usage() {
-  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -41,6 +55,8 @@ while [ $# -gt 0 ]; do
     --ca-fingerprint) CA_FINGERPRINT="$2"; shift 2 ;;
     --node-id)        NODE_ID="$2"; shift 2 ;;
     --version)        VERSION="$2"; shift 2 ;;
+    --artifact-dir)   ARTIFACT_DIR="$2"; shift 2 ;;
+    --token)          TOKEN="$2"; shift 2 ;;
     --skip-docker)    SKIP_DOCKER=1; shift ;;
     -h|--help)        usage ;;
     *) fail "unknown flag: $1 (try --help)" ;;
@@ -55,8 +71,14 @@ case "$(uname -m)" in
   aarch64|arm64)  ARCH=arm64 ;;
   *) fail "unsupported architecture $(uname -m) (amd64/arm64 only)" ;;
 esac
+# Auto-detect local artifacts next to the script (private-repo path):
+# checksums.txt beside install.sh means a release bundle was copied here.
+if [ -z "$ARTIFACT_DIR" ] && [ -f "$SCRIPT_DIR/checksums.txt" ]; then
+  ARTIFACT_DIR="$SCRIPT_DIR"
+fi
+
 command -v systemctl >/dev/null || fail "systemd is required"
-command -v curl >/dev/null      || fail "curl is required"
+[ -n "$ARTIFACT_DIR" ] || command -v curl >/dev/null || fail "curl is required"
 command -v tar >/dev/null       || fail "tar is required"
 command -v sha256sum >/dev/null || fail "sha256sum is required"
 
@@ -80,14 +102,66 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# Release metadata, fetched once, for the authenticated asset path.
+# Private-repo assets are only reachable through the API's per-asset URL
+# with an Authorization header — the browser-download URL 404s.
+release_json() {
+  # Not `[ -f … ] && return 0`: that list's failure is the function's
+  # exit status under `set -e`.
+  if [ -f "$WORK/release.json" ]; then
+    return 0
+  fi
+  local path="releases/latest"
+  [ "$VERSION" = latest ] || path="releases/tags/$VERSION"
+  curl -fsSL -H "Authorization: Bearer $TOKEN" \
+       -H "Accept: application/vnd.github+json" \
+       -o "$WORK/release.json" "https://api.github.com/repos/$REPO/$path" \
+    || fail "could not read release $VERSION (token needs contents:read on $REPO)"
+}
+
+# api_fetch <asset-name> <dest>: resolve the asset's API URL out of the
+# release metadata and download it. Whitespace is stripped and objects
+# split on '}' so the name and its own asset URL land on one line — no
+# jq dependency (the installer runs before anything is installed).
+api_fetch() {
+  local want="$1" dest="$2" url
+  release_json
+  url="$(tr -d ' \n\t' < "$WORK/release.json" | tr '}' '\n' \
+        | grep -F "\"name\":\"$want\"" \
+        | grep -o "https://api\.github\.com/repos/[^\"]*/releases/assets/[0-9][0-9]*" \
+        | head -1)"
+  [ -n "$url" ] || fail "release $VERSION has no asset named $want"
+  curl -fsSL -H "Authorization: Bearer $TOKEN" \
+       -H "Accept: application/octet-stream" -o "$dest" "$url" \
+    || fail "authenticated download failed for $want"
+}
+
 fetch_binary() {
-  # fetch_binary <name>: download <name>_linux_<arch>.tar.gz, verify its
+  # fetch_binary <name>: obtain <name>_linux_<arch>.tar.gz (local
+  # ARTIFACT_DIR if set, GitHub release download otherwise), verify its
   # checksums.txt entry, extract, install to BIN_DIR.
   local name="$1" artifact="$1_linux_${ARCH}.tar.gz"
-  log "downloading $artifact ($VERSION)"
-  curl -fsSL -o "$WORK/$artifact" "$BASE/$artifact"
-  if [ ! -f "$WORK/checksums.txt" ]; then
-    curl -fsSL -o "$WORK/checksums.txt" "$BASE/checksums.txt"
+  if [ -n "$ARTIFACT_DIR" ]; then
+    log "using local artifact $ARTIFACT_DIR/$artifact"
+    [ -f "$ARTIFACT_DIR/$artifact" ] || fail "local artifact not found: $ARTIFACT_DIR/$artifact"
+    cp "$ARTIFACT_DIR/$artifact" "$WORK/$artifact"
+    if [ ! -f "$WORK/checksums.txt" ]; then
+      [ -f "$ARTIFACT_DIR/checksums.txt" ] || fail "checksums.txt not found in $ARTIFACT_DIR (required to verify local artifacts)"
+      cp "$ARTIFACT_DIR/checksums.txt" "$WORK/checksums.txt"
+    fi
+  elif [ -n "$TOKEN" ]; then
+    log "downloading $artifact ($VERSION, authenticated)"
+    api_fetch "$artifact" "$WORK/$artifact"
+    if [ ! -f "$WORK/checksums.txt" ]; then
+      api_fetch checksums.txt "$WORK/checksums.txt"
+    fi
+  else
+    log "downloading $artifact ($VERSION)"
+    curl -fsSL -o "$WORK/$artifact" "$BASE/$artifact" \
+      || fail "download failed for $artifact — if this repo is private, pass --token or set GH_TOKEN (see --help)"
+    if [ ! -f "$WORK/checksums.txt" ]; then
+      curl -fsSL -o "$WORK/checksums.txt" "$BASE/checksums.txt"
+    fi
   fi
   ( cd "$WORK" && grep " $artifact\$" checksums.txt | sha256sum -c - >/dev/null ) \
     || fail "checksum verification failed for $artifact"
@@ -97,13 +171,25 @@ fetch_binary() {
 }
 
 install_unit() {
-  # install_unit <name>: write the unit from stdin, reload, enable+restart.
-  local name="$1"
+  # install_unit <name>: write the unit from stdin, reload, enable+restart,
+  # then gate on the service actually staying up. Restart=on-failure means
+  # "systemctl restart succeeded" can still be a crash loop — the first
+  # real install printed success over a dead keystone. Watch is-active for
+  # a few seconds and fail with the journal tail instead.
+  local name="$1" i
   cat > "$UNIT_DIR/$name.service"
   systemctl daemon-reload
   systemctl enable "$name" >/dev/null 2>&1 || true
   systemctl restart "$name"
-  log "$name.service enabled and (re)started"
+  for i in 1 2 3 4 5; do
+    sleep 1
+    if ! systemctl is-active --quiet "$name"; then
+      echo "[wildstone-install] ERROR: $name.service is not running (check $i/5) — last 20 journal lines:" >&2
+      journalctl -u "$name" -n 20 --no-pager >&2 || true
+      exit 1
+    fi
+  done
+  log "$name.service enabled, (re)started, and healthy after 5s"
 }
 
 # ---------------------------------------------------------------- roles
