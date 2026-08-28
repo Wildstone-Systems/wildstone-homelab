@@ -126,11 +126,18 @@ release_json() {
 api_fetch() {
   local want="$1" dest="$2" url
   release_json
+  # `|| true` is load-bearing: with `set -euo pipefail`, a grep that
+  # matches nothing fails the pipeline, the assignment inherits that
+  # status, and set -e kills the script BEFORE the guard below can say
+  # anything — an exit 1 with no output at all, which is what the second
+  # real VM install hit against a release missing its asset. Let the
+  # guard do the reporting, since reporting is the whole reason it is
+  # there.
   url="$(tr -d ' \n\t' < "$WORK/release.json" | tr '}' '\n' \
         | grep -F "\"name\":\"$want\"" \
         | grep -o "https://api\.github\.com/repos/[^\"]*/releases/assets/[0-9][0-9]*" \
-        | head -1)"
-  [ -n "$url" ] || fail "release $VERSION has no asset named $want"
+        | head -1)" || true
+  [ -n "$url" ] || fail "release $VERSION has no asset named $want (wrong --version, wrong architecture, or the release is missing assets)"
   curl -fsSL -H "Authorization: Bearer $TOKEN" \
        -H "Accept: application/octet-stream" -o "$dest" "$url" \
     || fail "authenticated download failed for $want"

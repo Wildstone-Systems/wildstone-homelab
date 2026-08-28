@@ -111,7 +111,9 @@ mkdir -p "$BIN"
 # copy of the pinned image (extracted from source so the drill can't
 # drift) so the run starts from a genuinely image-less node — the exact
 # state the first real VM install failed in.
-RESTIC_IMAGE="$(grep -o 'restic/restic@sha256:[0-9a-f]\{64\}' "$REPO_ROOT/keystone/cmd/keystone/main.go" | head -1)"
+# `|| true` so the guard below is reachable: under `set -euo pipefail` a
+# grep that matches nothing would otherwise kill the script silently.
+RESTIC_IMAGE="$(grep -o 'restic/restic@sha256:[0-9a-f]\{64\}' "$REPO_ROOT/keystone/cmd/keystone/main.go" | head -1)" || true
 [ -n "$RESTIC_IMAGE" ] || fail "could not extract the pinned restic image from keystone/cmd/keystone/main.go"
 docker image rm -f "$RESTIC_IMAGE" >/dev/null 2>&1 || true
 
@@ -169,7 +171,7 @@ spec:
   schedule: daily
 EOF
 )" '{summary: "exit drill: volumes + backup plan", put: [$v, $r, $b]}')"
-PLAN_ID="$(curl_api "$ADMIN1" POST /api/v1/plans "$PROPOSAL" | jq -r .id)"
+PLAN_ID="$(curl_api "$ADMIN1" POST /api/v1/plans "$PROPOSAL" | jq -r .id)" || true
 if [ -z "$PLAN_ID" ] || [ "$PLAN_ID" = null ]; then fail "proposal did not return a plan id"; fi
 WILD_TOKEN="$ADMIN1" "$BIN/wild" plan approve "$PLAN_ID"
 wait_for "reconcile to create drill-data" 60 docker volume inspect drill-data
