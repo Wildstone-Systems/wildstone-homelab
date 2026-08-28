@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -39,6 +40,85 @@ const (
 	defaultJoinTTL = 15 * time.Minute
 	maxJoinTTL     = 24 * time.Hour
 )
+
+// LiveNode is one currently-connected agent session, as reported by the
+// gateway. Declared here rather than imported so the public plane keeps no
+// compile-time dependency on the agent plane; cmd/keystone adapts.
+type LiveNode struct {
+	NodeID        string
+	AgentVersion  string
+	ProtocolMinor uint32
+	Since         time.Time
+}
+
+// nodeView is one row of the inventory: the durable record of a node that
+// joined, joined with whether it is connected right now.
+type nodeView struct {
+	ID             string     `json:"id"`
+	Connected      bool       `json:"connected"`
+	AgentVersion   string     `json:"agentVersion,omitempty"`
+	ProtocolMinor  uint32     `json:"protocolMinor,omitempty"`
+	FirstJoinedAt  time.Time  `json:"firstJoinedAt"`
+	LastSeenAt     time.Time  `json:"lastSeenAt"`
+	ConnectedSince *time.Time `json:"connectedSince,omitempty"`
+}
+
+// listNodes answers "what nodes do I have, and are they connected?" (#30)
+// — the question no surface in the product could answer before, which made
+// every other node route require a name the caller already knew.
+//
+// The durable rows come from the runtime DB; liveness comes from the
+// gateway's session registry at read time, never from stored state. With
+// no gateway wired every node reports disconnected rather than the request
+// failing: the inventory is still the useful half of the answer.
+func (s *Server) listNodes(r *http.Request, id principal.Identity) (any, int, error) {
+	recorded, err := s.DB.ListNodes()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	live := map[string]LiveNode{}
+	if s.LiveNodes != nil {
+		for _, n := range s.LiveNodes() {
+			live[n.NodeID] = n
+		}
+	}
+	out := make([]nodeView, 0, len(recorded))
+	seen := map[string]bool{}
+	for _, n := range recorded {
+		seen[n.NodeID] = true
+		v := nodeView{
+			ID:            n.NodeID,
+			AgentVersion:  n.AgentVersion,
+			ProtocolMinor: n.ProtocolMinor,
+			FirstJoinedAt: n.FirstJoinedAt,
+			LastSeenAt:    n.LastSeenAt,
+		}
+		if l, ok := live[n.NodeID]; ok {
+			v.Connected = true
+			v.AgentVersion = l.AgentVersion
+			v.ProtocolMinor = l.ProtocolMinor
+			since := l.Since
+			v.ConnectedSince = &since
+		}
+		out = append(out, v)
+	}
+	// A session with no row (the hook was unwired, or the DB was restored
+	// from an older backup) is still a node you have — showing it beats
+	// pretending the fleet is smaller than it is.
+	for _, l := range live {
+		if seen[l.NodeID] {
+			continue
+		}
+		since := l.Since
+		out = append(out, nodeView{
+			ID: l.NodeID, Connected: true, AgentVersion: l.AgentVersion,
+			ProtocolMinor: l.ProtocolMinor, ConnectedSince: &since,
+			FirstJoinedAt: l.Since, LastSeenAt: l.Since,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return map[string]any{"nodes": out}, http.StatusOK, nil
+}
 
 func (s *Server) mintJoinToken(r *http.Request, id principal.Identity) (any, int, error) {
 	if s.MintJoin == nil {

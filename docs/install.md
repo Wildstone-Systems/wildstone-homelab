@@ -102,6 +102,18 @@ the node authenticates with its own mTLS identity from
 `/etc/wildstone/wardstone`. The CA fingerprint pins the join against
 MITM — omit it only on a network you fully trust (trust-on-first-use).
 
+Confirm it arrived:
+
+```sh
+wild node list
+# NODE   STATE      AGENT         PROTOCOL  SINCE
+# vm-1   connected  v0.1.0-alpha  minor 7   just now
+```
+
+`connected` is read from the live agent session, not from stored state,
+so it is always the current answer. The Console's Nodes view shows the
+same fleet.
+
 ## 4. Optional: Console and Butler
 
 - **Console**: build `console/` (`npm ci && npm run build`) and start

@@ -82,3 +82,94 @@ func TestMintJoinToken(t *testing.T) {
 		t.Fatalf("mint events = %d, want 2", minted)
 	}
 }
+
+// TestListNodes covers the inventory route (#30): durable rows joined with
+// live sessions, with liveness never coming from stored state.
+func TestListNodes(t *testing.T) {
+	h := newHarness(t)
+
+	type nodesResp struct {
+		Nodes []struct {
+			ID             string     `json:"id"`
+			Connected      bool       `json:"connected"`
+			AgentVersion   string     `json:"agentVersion"`
+			ProtocolMinor  uint32     `json:"protocolMinor"`
+			ConnectedSince *time.Time `json:"connectedSince"`
+		} `json:"nodes"`
+	}
+
+	// Empty fleet: an empty list, not a 404.
+	var out nodesResp
+	if resp := h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/nodes", nil, &out); resp.StatusCode != http.StatusOK {
+		t.Fatalf("empty inventory = %d, want 200", resp.StatusCode)
+	}
+	if len(out.Nodes) != 0 {
+		t.Fatalf("fresh install listed %d nodes", len(out.Nodes))
+	}
+
+	if err := h.s.DB.RecordNodeJoin("vm-1"); err != nil {
+		t.Fatalf("RecordNodeJoin: %v", err)
+	}
+	if err := h.s.DB.RecordNodeSeen("vm-1", "v0.1.0-alpha", 7); err != nil {
+		t.Fatalf("RecordNodeSeen: %v", err)
+	}
+	if err := h.s.DB.RecordNodeJoin("vm-2"); err != nil {
+		t.Fatalf("RecordNodeJoin: %v", err)
+	}
+
+	// No gateway wired: both nodes are listed, both disconnected. The
+	// inventory is still the useful half of the answer.
+	out = nodesResp{}
+	h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/nodes", nil, &out)
+	if len(out.Nodes) != 2 {
+		t.Fatalf("got %d nodes, want 2", len(out.Nodes))
+	}
+	for _, n := range out.Nodes {
+		if n.Connected {
+			t.Errorf("node %s reported connected with no gateway wired", n.ID)
+		}
+	}
+
+	// With a session for vm-1 only, liveness follows the gateway — and the
+	// connected node's version comes from the live Hello, not the row.
+	since := time.Now().UTC().Add(-90 * time.Second)
+	h.s.LiveNodes = func() []LiveNode {
+		return []LiveNode{{NodeID: "vm-1", AgentVersion: "v0.2.0", ProtocolMinor: 8, Since: since}}
+	}
+	out = nodesResp{}
+	h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/nodes", nil, &out)
+	if len(out.Nodes) != 2 || out.Nodes[0].ID != "vm-1" || out.Nodes[1].ID != "vm-2" {
+		t.Fatalf("want id-ordered vm-1, vm-2; got %+v", out.Nodes)
+	}
+	if !out.Nodes[0].Connected || out.Nodes[1].Connected {
+		t.Errorf("liveness wrong: vm-1=%v vm-2=%v", out.Nodes[0].Connected, out.Nodes[1].Connected)
+	}
+	if out.Nodes[0].AgentVersion != "v0.2.0" || out.Nodes[0].ProtocolMinor != 8 {
+		t.Errorf("connected node should report the live Hello, got %+v", out.Nodes[0])
+	}
+	if out.Nodes[0].ConnectedSince == nil || !out.Nodes[0].ConnectedSince.Equal(since) {
+		t.Errorf("connectedSince = %v, want %v", out.Nodes[0].ConnectedSince, since)
+	}
+	if out.Nodes[1].ConnectedSince != nil {
+		t.Errorf("disconnected node carries connectedSince %v", out.Nodes[1].ConnectedSince)
+	}
+
+	// A session with no durable row still shows up: better than pretending
+	// the fleet is smaller than it is.
+	h.s.LiveNodes = func() []LiveNode {
+		return []LiveNode{{NodeID: "vm-3", AgentVersion: "v0.2.0", ProtocolMinor: 8, Since: since}}
+	}
+	out = nodesResp{}
+	h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/nodes", nil, &out)
+	if len(out.Nodes) != 3 || out.Nodes[2].ID != "vm-3" || !out.Nodes[2].Connected {
+		t.Fatalf("unrecorded live session missing from inventory: %+v", out.Nodes)
+	}
+
+	// read verb: the Butler can see the fleet, and authn is still required.
+	if resp := h.do(runtimedb.RoleButler, http.MethodGet, "/api/v1/nodes", nil, nil); resp.StatusCode != http.StatusOK {
+		t.Errorf("butler read = %d, want 200", resp.StatusCode)
+	}
+	if resp := h.do("", http.MethodGet, "/api/v1/nodes", nil, nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("unauthenticated = %d, want 401", resp.StatusCode)
+	}
+}

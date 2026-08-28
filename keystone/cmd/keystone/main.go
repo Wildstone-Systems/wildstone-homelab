@@ -166,11 +166,21 @@ func withConsole(apiHandler http.Handler, dir string) http.Handler {
 // separated from run so the boot integration test can use :0 listeners.
 // bootstrapOut receives the one-time admin token on first start.
 func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir string, butlerCfg butlerConfig, log *slog.Logger, bootstrapOut io.Writer) error {
+	// recordNode is bound once the runtime DB is open, a few lines below.
+	// The indirection is safe without synchronisation: the gateway cannot
+	// deliver a node event before gw.Serve, which is the last statement in
+	// this function, long after the assignment.
+	var recordNode func(gateway.NodeEvent)
 	gw, err := gateway.New(gateway.Config{
 		JoinTokens: splitNonEmpty(joinTokens),
 		Hosts:      splitNonEmpty(hosts),
 		DataDir:    dataDir,
 		Logger:     log,
+		OnNodeEvent: func(e gateway.NodeEvent) {
+			if recordNode != nil {
+				recordNode(e)
+			}
+		},
 	})
 	if err != nil {
 		return err
@@ -181,6 +191,24 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		return err
 	}
 	defer db.Close()
+
+	// Node inventory (#30): the gateway keeps no database dependency, so
+	// it reports node lifecycle through this hook and Keystone persists
+	// it. A failure here must never break a join or drop a session — the
+	// inventory is bookkeeping, not part of the trust path.
+	recordNode = func(e gateway.NodeEvent) {
+		var err error
+		switch e.Kind {
+		case gateway.NodeJoined:
+			err = db.RecordNodeJoin(e.NodeID)
+		default:
+			err = db.RecordNodeSeen(e.NodeID, e.AgentVersion, e.ProtocolMinor)
+		}
+		if err != nil {
+			log.Warn("recording node event", "node", e.NodeID, "kind", e.Kind, "err", err)
+		}
+	}
+
 	state, err := statefile.New(filepath.Join(dataDir, "statefile"))
 	if err != nil {
 		return err
@@ -264,6 +292,17 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv.Policy = pol
 	apiSrv.Agents = &reconcile.GatewayApplier{Gateway: gw} // secrets endpoints (ADR-W012 W2)
 	apiSrv.MintJoin = gw.MintJoinToken                     // pairing endpoint (ADR-W014 A3)
+	apiSrv.LiveNodes = func() []api.LiveNode {             // node inventory liveness (#30)
+		live := gw.LiveNodes()
+		out := make([]api.LiveNode, 0, len(live))
+		for _, n := range live {
+			out = append(out, api.LiveNode{
+				NodeID: n.NodeID, AgentVersion: n.AgentVersion,
+				ProtocolMinor: n.ProtocolMinor, Since: n.Since,
+			})
+		}
+		return out
+	}
 	apiSrv.CAFingerprint = gw.CA().Fingerprint()
 	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
 	apiSrv.BackupRestore = bak.RestoreAlongside

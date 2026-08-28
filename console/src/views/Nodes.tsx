@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { api, BlockDevice, JoinTokenResponse, ListeningPort } from "../api";
-import { ErrorLine } from "../lib";
+import { api, BlockDevice, JoinTokenResponse, ListeningPort, NodeInfo } from "../api";
+import { Badge, ErrorLine, useLoad, when } from "../lib";
 
 // Nodes (ADR-W016 A2 / ADR-W014 A3 / E10-U2): pairing plus the
 // onboarding validation probes of scope §7.2 — mint the join token,
@@ -11,6 +11,8 @@ export function Nodes() {
   const [minted, setMinted] = useState<JoinTokenResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const fleet = useLoad(() => api.nodes());
+  const nodes = fleet.data?.nodes ?? [];
 
   const mint = () => {
     setBusy(true);
@@ -25,6 +27,7 @@ export function Nodes() {
   return (
     <>
       <h2>Nodes</h2>
+      <Inventory nodes={nodes} error={fleet.error} loading={fleet.loading} reload={fleet.reload} />
       <div className="sub">
         Pair a new machine: mint a single-use join token, run the install command on it as root,
         then validate it below. The token is shown exactly once.
@@ -44,7 +47,7 @@ export function Nodes() {
           )}
         </div>
       )}
-      <Probes />
+      <Probes nodes={nodes} />
       <div className="card">
         <h3>Restoring an existing home?</h3>
         <div className="muted">
@@ -60,9 +63,72 @@ export function Nodes() {
   );
 }
 
+// Inventory (#30): the fleet at a glance. Until this existed no screen in
+// the product could answer "what nodes do I have, and are they connected?"
+// — this view offered a join-token button and a probe panel driven by a
+// node name you had to already know and type in by hand.
+function Inventory({
+  nodes,
+  error,
+  loading,
+  reload,
+}: {
+  nodes: NodeInfo[];
+  error: string | null;
+  loading: boolean;
+  reload: () => void;
+}) {
+  return (
+    <div className="card">
+      <div className="row">
+        <h3>Fleet</h3>
+        <button className="action" disabled={loading} onClick={reload}>
+          Refresh
+        </button>
+      </div>
+      <ErrorLine error={error} />
+      {!error && nodes.length === 0 && !loading && (
+        <div className="muted">
+          No nodes have joined yet. Mint a join token below and run the install command on the
+          machine you want to add.
+        </div>
+      )}
+      {nodes.length > 0 && (
+        <table>
+          <thead>
+            <tr>
+              <th>Node</th>
+              <th>State</th>
+              <th>Agent</th>
+              <th>Protocol</th>
+              <th>Since</th>
+              <th>First joined</th>
+            </tr>
+          </thead>
+          <tbody>
+            {nodes.map((n) => (
+              <tr key={n.id}>
+                <td>{n.id}</td>
+                <td>
+                  <Badge value={n.connected ? "ok" : "bad"} />{" "}
+                  {n.connected ? "connected" : "disconnected"}
+                </td>
+                <td>{n.agentVersion || "—"}</td>
+                <td>{n.protocolMinor ? `minor ${n.protocolMinor}` : "—"}</td>
+                <td>{when(n.connected ? n.connectedSince : n.lastSeenAt)}</td>
+                <td>{when(n.firstJoinedAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 // Probes: the live validation checks — every underlying agent op is
 // dial-or-read only.
-function Probes() {
+function Probes({ nodes }: { nodes: NodeInfo[] }) {
   const [node, setNode] = useState("");
   const [target, setTarget] = useState("");
   const [busy, setBusy] = useState(false);
@@ -94,12 +160,24 @@ function Probes() {
     <div className="card">
       <h3>Validation probes</h3>
       <div className="row">
-        <input
-          type="text"
-          placeholder="node id (e.g. n1)"
-          value={node}
-          onChange={(e) => setNode(e.target.value)}
-        />
+        {nodes.length > 0 ? (
+          <select value={node} onChange={(e) => setNode(e.target.value)}>
+            <option value="">select a node…</option>
+            {nodes.map((n) => (
+              <option key={n.id} value={n.id}>
+                {n.id}
+                {n.connected ? "" : " (disconnected)"}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            placeholder="node id (e.g. n1)"
+            value={node}
+            onChange={(e) => setNode(e.target.value)}
+          />
+        )}
         <button
           className="action"
           disabled={busy || !node}

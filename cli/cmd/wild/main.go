@@ -58,7 +58,7 @@ func usage() {
   wild pkg fetch <name> [-constraint v] -url <registry-url> -pub <key.pub> -dest <dir>
   wild pkg refresh-digests <pkg-dir>
   wild secret list|generate|set|rotate ...   (see wild secret)
-  wild node mint-join ...                    (see wild node)
+  wild node list | mint-join ...             (see wild node)
   wild status | plan | capability | logs | audit | backup ...  (API client, ADR-W015)
   wild version`)
 }

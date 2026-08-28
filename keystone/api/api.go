@@ -49,6 +49,12 @@ type Server struct {
 	// those endpoints answering 503; every other route is unaffected.
 	Agents reconcile.Applier
 
+	// LiveNodes reports the agent sessions connected right now (#30) —
+	// cmd/keystone adapts gateway.LiveNodes. nil renders every node as
+	// disconnected rather than failing: the durable inventory still
+	// answers what nodes exist.
+	LiveNodes func() []LiveNode
+
 	// MintJoin mints a single-use node join token (ADR-W014 A3) —
 	// cmd/keystone wires gateway.MintJoinToken. nil leaves the pairing
 	// endpoint answering 503.
@@ -121,6 +127,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/principals/{name}/disable", s.handle(principal.VerbManage, s.setPrincipalDisabled(true)))
 	mux.Handle("POST /api/v1/principals/{name}/enable", s.handle(principal.VerbManage, s.setPrincipalDisabled(false)))
 	mux.Handle("POST /api/v1/principals/{name}/tokens", s.handle(principal.VerbManage, s.mintToken))
+
+	// Node inventory (#30): the one route that does not need a node name
+	// up front — everything else under /nodes/{node} does.
+	mux.Handle("GET /api/v1/nodes", s.handle(principal.VerbRead, s.listNodes))
 
 	// Pairing (ADR-W014 A3): admin mints a single-use join token + CA
 	// fingerprint for a node install.
