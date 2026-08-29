@@ -7,13 +7,18 @@ import (
 	"time"
 )
 
-// BackupRunKind distinguishes ordinary backup runs from restore drills in
-// the backup_runs ledger (ADR-W011 A4).
+// BackupRunKind distinguishes the three things that can write a row to
+// the backup_runs ledger (ADR-W011 A4): an ordinary backup, the scheduled
+// restore drill, and an operator-initiated restore-alongside. The last
+// two share one mechanism — RestoreAlongside IS the drill — but the
+// ledger is the record of what happened, and "drill" is the wrong word
+// for a restore a human asked for during an incident.
 type BackupRunKind string
 
 const (
-	BackupRunBackup BackupRunKind = "backup"
-	BackupRunDrill  BackupRunKind = "drill"
+	BackupRunBackup  BackupRunKind = "backup"
+	BackupRunDrill   BackupRunKind = "drill"
+	BackupRunRestore BackupRunKind = "restore"
 )
 
 // BackupRunStatus is the lifecycle of one ledger row.

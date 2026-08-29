@@ -304,6 +304,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		return out
 	}
 	apiSrv.CAFingerprint = gw.CA().Fingerprint()
+	apiSrv.GatewayAddr = advertisedGatewayAddr(hosts, lis.Addr().String())
 	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
 	apiSrv.BackupRestore = bak.RestoreAlongside
 
@@ -398,4 +399,30 @@ func splitNonEmpty(s string) []string {
 		}
 	}
 	return out
+}
+
+// advertisedGatewayAddr derives the host:port a node should dial from the
+// gateway's own configuration: the first -hosts SAN that isn't loopback,
+// plus the port the gateway actually bound. The SANs are already the names the gateway
+// certificate is valid for, so a name that isn't in there could not be
+// used to join anyway. No routable SAN means no address to advertise —
+// the pairing endpoint says so rather than emitting a loopback address a
+// second machine cannot reach.
+func advertisedGatewayAddr(hosts, listen string) string {
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil || port == "" {
+		return ""
+	}
+	for _, h := range strings.Split(hosts, ",") {
+		h = strings.TrimSpace(h)
+		switch h {
+		case "", "localhost", "127.0.0.1", "::1":
+			continue
+		}
+		if ip := net.ParseIP(h); ip != nil && ip.IsLoopback() {
+			continue
+		}
+		return net.JoinHostPort(h, port)
+	}
+	return ""
 }

@@ -87,15 +87,28 @@ CA fingerprint):
 wild node mint-join
 ```
 
-On the node:
+`mint-join` prints the install command to run on the node with the
+address, token and CA fingerprint already filled in — paste it as
+given. While this repository is private it prints a second form as
+well, and that is the one to use: the anonymous `curl` in the public
+one-liner 404s on a private repo's release assets before the installer
+ever runs.
 
 ```sh
-sudo bash ./install.sh --role node \
+# what mint-join prints, while the repo is private
+gh release download --repo chickenrat17/wildstone-homelab --pattern install.sh
+sudo GH_TOKEN=<pat> bash ./install.sh --role node \
   --keystone <keystone-host>:9440 \
-  --node-id <name> \
   --join-token <token> \
   --ca-fingerprint <hex>
 ```
+
+`--node-id` is optional and defaults to the node's short hostname; pass
+`--node-id <name>` to choose it. If the command comes back with
+`<host:9440>` in it, Keystone has no routable address to advertise
+(`-hosts` is at its loopback default) — substitute the address the node
+can reach it on, and consider setting `-hosts` so the next one is
+filled in.
 
 The join token is single-use and only read on first start; afterwards
 the node authenticates with its own mTLS identity from
@@ -116,9 +129,36 @@ same fleet.
 
 ## 4. Optional: Console and Butler
 
-- **Console**: build `console/` (`npm ci && npm run build`) and start
-  keystone with `-console-dir <path-to-dist>`. It is served beside
-  `/api` on the same listener — same API, same tokens.
+- **Console**: the Console is a static bundle. **Build it on your
+  workstation, not on the Keystone host** — the host needs no Node at
+  all to serve it, and `apt-get install -y nodejs npm` on a clean
+  Ubuntu Server pulls ~570 packages, including a full C/C++ toolchain
+  (`build-essential`, `gcc`, `g++`) and an X11/Vulkan graphics stack
+  (`alacritty`, `mesa-vulkan-drivers`). That is a large attack surface
+  to add to a control-plane host for a file server. The Console's own
+  dependencies are not the problem: `npm ci` installs 72 packages in
+  about two seconds.
+
+  ```sh
+  # on your workstation, in a checkout of this repo
+  cd console && npm ci && npm run build
+  scp -r dist/ <keystone-host>:/srv/wildstone/console
+  ```
+
+  Then point Keystone at it. The installer sets the flag for you and
+  keeps it across upgrades:
+
+  ```sh
+  sudo bash ./install.sh --role keystone --console-dir /srv/wildstone/console
+  ```
+
+  The flag lands in `KEYSTONE_ARGS` in `/etc/wildstone/keystone.env`,
+  which the unit's `ExecStart` expands. Re-running the installer to
+  upgrade rewrites the unit but leaves that file alone, so the flag
+  survives; edit the file (and `systemctl restart keystone`) to change
+  it, or pass `--keystone-arg <flag>` for any other keystone flag. The
+  Console is served beside `/api` on the same listener — same API, same
+  tokens.
 - **Butler** (ADR-W017): `-butler-provider anthropic|openai|ollama`,
   with `-butler-model`/`-butler-endpoint` as needed. API keys come ONLY
   from `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` environment variables —

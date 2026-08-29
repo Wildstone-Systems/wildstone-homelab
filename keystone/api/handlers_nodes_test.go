@@ -52,6 +52,34 @@ func TestMintJoinToken(t *testing.T) {
 		!strings.Contains(out.Install, "--ca-fingerprint "+h.s.CAFingerprint) {
 		t.Fatalf("install command = %q, want token and fingerprint baked in", out.Install)
 	}
+	// With no advertised address the command must show a placeholder AND
+	// say so — a silent loopback address is a node that never connects.
+	if !strings.Contains(out.Install, addrPlaceholder) {
+		t.Fatalf("install command = %q, want the address placeholder", out.Install)
+	}
+	if !strings.Contains(strings.Join(out.InstallNotes, "\n"), addrPlaceholder) {
+		t.Fatalf("notes = %q, want the placeholder explained", out.InstallNotes)
+	}
+	// The private-repo form is what actually works while this repo is
+	// private: install.sh fetched with an authenticated client, not piped
+	// from an anonymous curl that 404s.
+	if strings.Contains(out.InstallPrivateRepo, "curl") ||
+		!strings.Contains(out.InstallPrivateRepo, "gh release download") ||
+		!strings.Contains(out.InstallPrivateRepo, "--join-token "+fakeToken) {
+		t.Fatalf("private install = %q", out.InstallPrivateRepo)
+	}
+
+	// An advertised gateway address is filled in, leaving nothing to edit.
+	h.s.GatewayAddr = "keystone.example:9440"
+	var addressed joinTokenResponse
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/join-tokens", nil, &addressed); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("mint with address = %d, want 201", resp.StatusCode)
+	}
+	if !strings.Contains(addressed.Install, "--keystone keystone.example:9440") ||
+		strings.Contains(addressed.Install, addrPlaceholder) {
+		t.Fatalf("install command = %q, want the advertised address", addressed.Install)
+	}
+	h.s.GatewayAddr = ""
 
 	// Custom TTL honored; over the cap refused.
 	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/join-tokens", map[string]int64{"ttlSeconds": 3600}, nil); resp.StatusCode != http.StatusCreated {
@@ -78,8 +106,11 @@ func TestMintJoinToken(t *testing.T) {
 			}
 		}
 	}
-	if minted != 2 {
-		t.Fatalf("mint events = %d, want 2", minted)
+	// One event per successful mint: the default-TTL mint, the
+	// advertised-address mint, and the custom-TTL mint. The over-cap
+	// attempt is refused before it mints, so it leaves no event.
+	if minted != 3 {
+		t.Fatalf("mint events = %d, want 3", minted)
 	}
 }
 

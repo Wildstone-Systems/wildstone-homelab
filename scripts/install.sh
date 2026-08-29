@@ -2,13 +2,21 @@
 # Wildstone bootstrap installer (ADR-W014 A2).
 #
 #   Control plane:
-#     sudo ./install.sh --role keystone [--version vX.Y.Z]
+#     sudo ./install.sh --role keystone [--console-dir <dir>]
+#          [--keystone-arg <flag> ...] [--version vX.Y.Z]
 #   Node:
 #     sudo ./install.sh --role node --keystone <host:9440> \
 #          --join-token <tok> [--ca-fingerprint <hex>] \
 #          [--node-id <id>] [--skip-docker] [--version vX.Y.Z]
 #   Either role also takes [--artifact-dir <dir>] to install from local
 #   release artifacts instead of downloading (private repos, air-gap).
+#
+# Keystone flags: --console-dir and --keystone-arg become KEYSTONE_ARGS in
+# /etc/wildstone/keystone.env, which the unit's ExecStart expands. The unit
+# file is rewritten on every run, but the env file is NOT: re-running the
+# installer to upgrade keeps the flags the last run set, so the documented
+# Console setup survives an upgrade. Pass --keystone-arg again to change
+# them, or edit the env file (no drop-in needed, and nothing to clobber).
 #
 # Binaries come from GitHub releases and are sha256-verified against the
 # release's checksums.txt before anything is installed (ADR-W014 A1).
@@ -29,6 +37,9 @@ REPO="chickenrat17/wildstone-homelab"
 VERSION="${WILDSTONE_VERSION:-latest}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARTIFACT_DIR=""
+CONSOLE_DIR=""
+KEYSTONE_ARGS=""
+KEYSTONE_ARGS_SET=0
 TOKEN="${WILDSTONE_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
 ROLE=""
 KEYSTONE_ADDR=""
@@ -43,7 +54,7 @@ log()  { echo "[wildstone-install] $*"; }
 fail() { echo "[wildstone-install] ERROR: $*" >&2; exit 1; }
 
 usage() {
-  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -56,6 +67,8 @@ while [ $# -gt 0 ]; do
     --node-id)        NODE_ID="$2"; shift 2 ;;
     --version)        VERSION="$2"; shift 2 ;;
     --artifact-dir)   ARTIFACT_DIR="$2"; shift 2 ;;
+    --console-dir)    CONSOLE_DIR="$2"; shift 2 ;;
+    --keystone-arg)   KEYSTONE_ARGS="$KEYSTONE_ARGS $2"; KEYSTONE_ARGS_SET=1; shift 2 ;;
     --token)          TOKEN="$2"; shift 2 ;;
     --skip-docker)    SKIP_DOCKER=1; shift ;;
     -h|--help)        usage ;;
@@ -204,6 +217,25 @@ if [ "$ROLE" = keystone ]; then
   fetch_binary keystone
   fetch_binary wild
   install -d -m 0700 /var/lib/wildstone/keystone
+  install -d -m 0755 /etc/wildstone
+
+  # Keystone's flags live in an env file the unit expands, so the
+  # installer can set them and an upgrade does not silently drop them.
+  # ExecStart used to be hardcoded, which meant the documented
+  # "-console-dir <path>" had to be hand-edited into a unit this script
+  # cat > 's over on the next run.
+  KEYSTONE_ENV=/etc/wildstone/keystone.env
+  if [ -n "$CONSOLE_DIR" ]; then
+    [ -d "$CONSOLE_DIR" ] || fail "--console-dir $CONSOLE_DIR does not exist (build the Console elsewhere and copy dist/ here)"
+    KEYSTONE_ARGS="$KEYSTONE_ARGS -console-dir $CONSOLE_DIR"
+    KEYSTONE_ARGS_SET=1
+  fi
+  if [ "$KEYSTONE_ARGS_SET" = 0 ] && [ -f "$KEYSTONE_ENV" ]; then
+    log "keeping the keystone flags already in $KEYSTONE_ENV"
+  else
+    umask 022
+    printf 'KEYSTONE_ARGS=-data-dir /var/lib/wildstone/keystone%s\n' "$KEYSTONE_ARGS" > "$KEYSTONE_ENV"
+  fi
 
   install_unit keystone <<'UNIT'
 [Unit]
@@ -212,7 +244,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/keystone -data-dir /var/lib/wildstone/keystone
+EnvironmentFile=/etc/wildstone/keystone.env
+ExecStart=/usr/local/bin/keystone $KEYSTONE_ARGS
 Restart=on-failure
 RestartSec=3
 UMask=0077
@@ -227,6 +260,7 @@ UNIT
   log "  2. The CA fingerprint (pin node joins with it):"
   log "       journalctl -u keystone | grep 'CA fingerprint'"
   log "  3. Pair a node: WILD_TOKEN=<token> wild node mint-join"
+  log "  Keystone's flags: $KEYSTONE_ENV (re-running this script keeps them)"
   exit 0
 fi
 

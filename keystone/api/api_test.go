@@ -184,6 +184,20 @@ func TestProposeApproveFlow(t *testing.T) {
 		t.Fatalf("proposed record = %+v", rec)
 	}
 
+	// The plan travels as a structured object, not JSON escaped inside a
+	// JSON string, and the Statefile head it was computed against
+	// survives redaction — it is an audit identifier, not a secret.
+	var view planView
+	if resp := h.do(runtimedb.RoleOperator, "GET", "/api/v1/plans/"+rec.ID, nil, &view); resp.StatusCode != http.StatusOK {
+		t.Fatalf("get plan = %d", resp.StatusCode)
+	}
+	if view.Plan == nil || len(view.Plan.Steps) != 1 {
+		t.Fatalf("plan not served structured: %+v", view.Plan)
+	}
+	if step := view.Plan.Steps[0]; step.BlastRadius == "" || step.Name != "immich" {
+		t.Fatalf("plan step = %+v", step)
+	}
+
 	// Approve as operator: statefile gains the resource with a structured
 	// commit, head marker advances, plan record resolves.
 	var approved runtimedb.PlanRecord
@@ -197,6 +211,21 @@ func TestProposeApproveFlow(t *testing.T) {
 	resources, err := h.s.State.Load()
 	if err != nil || len(resources) != 1 || resources[0].Metadata.Name != "immich" {
 		t.Fatalf("statefile after approve: %+v, %v", resources, err)
+	}
+
+	// Now that the Statefile has a commit, a fresh proposal records the
+	// head it was computed against — and that hash must reach the
+	// reviewer intact. It is a 40-hex git object id, exactly the shape
+	// value-redaction eats, and losing it takes the one field that says
+	// WHICH desired state the plan was diffed from.
+	var second planView
+	if resp := h.do(runtimedb.RoleButler, "POST", "/api/v1/plans",
+		proposalRequest{Summary: "second", Put: []string{containerYAML(t, "jelly", "ghcr.io/example/jelly@"+testDigest, nil)}},
+		&second); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("second propose = %d", resp.StatusCode)
+	}
+	if second.BasedOnHead == "" || strings.Contains(second.BasedOnHead, "REDACTED") {
+		t.Fatalf("basedOnHead = %q", second.BasedOnHead)
 	}
 	head, err := h.s.State.Head()
 	if err != nil || head == "" {

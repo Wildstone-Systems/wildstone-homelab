@@ -213,12 +213,18 @@ func (e *Engine) RunNow(ctx context.Context, planName string) error {
 // volume "<plan>-restore" — the implemented recovery path (ADR-W011 A4:
 // restore-alongside first). It runs immediately with full provenance; the
 // owner moves data from the restore volume deliberately.
+//
+// It records runKind "restore", not "drill": mechanically this is the
+// drill, but the ledger answers "what happened here", and an operator
+// restoring during an incident is not running a rehearsal. Keeping the
+// kinds distinct also means a manual restore no longer resets the
+// scheduled drill's clock — due() reads the last successful *drill*.
 func (e *Engine) RestoreAlongside(ctx context.Context, planName string) error {
 	r, err := e.findPlan(planName)
 	if err != nil {
 		return err
 	}
-	return e.withProvenance(ctx, r, runtimedb.BackupRunDrill,
+	return e.withProvenance(ctx, r, runtimedb.BackupRunRestore,
 		fmt.Sprintf("restore alongside: %s (latest -> volume %s-restore)", planName, planName),
 		func(ctx context.Context) error {
 			return e.restoreInto(ctx, r, planName+"-restore", "restore-"+planName)

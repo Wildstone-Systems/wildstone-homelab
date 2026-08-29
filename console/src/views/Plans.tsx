@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { api } from "../api";
+import { api, type Plan } from "../api";
 import { Badge, ErrorLine, useLoad, when } from "../lib";
 
 // Plans (ADR-W016 A2): the signature interaction. The review pane shows
 // everything approval needs — summary, risk, who proposed for whom, and
-// the stored plan JSON (steps included) — with Approve/Reject.
+// the plan's steps with their blast radius — with Approve/Reject.
 export function Plans() {
   const [selected, setSelected] = useState<string | null>(null);
   const list = useLoad(() => api.plans());
@@ -87,7 +87,7 @@ function PlanReview({ id, onDone }: { id: string; onDone: () => void }) {
           {p.resolvedBy ? `; resolved by ${p.resolvedBy}` : ""}
         </span>
       </div>
-      <PlanSteps planJson={p.planJson} />
+      <PlanSteps plan={p.plan} />
       {p.state === "proposed" && (
         <div className="row">
           <button className="action primary" disabled={busy} onClick={() => act(api.approvePlan)}>
@@ -103,28 +103,15 @@ function PlanReview({ id, onDone }: { id: string; onDone: () => void }) {
   );
 }
 
-interface StoredStep {
-  Description?: string;
-  Kind?: string;
-  Name?: string;
-  Risk?: number;
-  BlastRadius?: string;
-}
-
-// PlanSteps renders the stored plan's step list when it parses, and the
-// raw JSON otherwise — review must never show less than what approval
-// commits to.
-function PlanSteps({ planJson }: { planJson?: string }) {
-  if (!planJson) return null;
-  let steps: StoredStep[] | null = null;
-  try {
-    const parsed = JSON.parse(planJson) as { plan?: { Steps?: StoredStep[] } };
-    steps = parsed.plan?.Steps ?? null;
-  } catch {
-    steps = null;
-  }
-  if (!steps || steps.length === 0) {
-    return <pre>{planJson}</pre>;
+// PlanSteps renders the plan's steps. The API serves the plan as a
+// structured object now, so there is no JSON to parse here and no raw
+// dump to fall back to — a plan with no steps says so rather than
+// showing an escape sequence.
+function PlanSteps({ plan }: { plan?: Plan }) {
+  if (!plan) return null;
+  const steps = plan.steps ?? [];
+  if (steps.length === 0) {
+    return <div className="muted">This plan has no steps.</div>;
   }
   return (
     <table style={{ margin: "8px 0" }}>
@@ -132,17 +119,21 @@ function PlanSteps({ planJson }: { planJson?: string }) {
         <tr>
           <th>step</th>
           <th>target</th>
+          <th>action</th>
+          <th>risk</th>
           <th>blast radius</th>
         </tr>
       </thead>
       <tbody>
         {steps.map((s, i) => (
           <tr key={i}>
-            <td>{s.Description ?? ""}</td>
+            <td>{s.description ?? ""}</td>
             <td>
-              {s.Kind ?? ""}/{s.Name ?? ""}
+              {s.kind ?? ""}/{s.name ?? ""}
             </td>
-            <td>{s.BlastRadius ?? ""}</td>
+            <td>{s.action ?? ""}</td>
+            <td>{s.risk ? <Badge value={s.risk} /> : ""}</td>
+            <td>{s.blastRadius ?? ""}</td>
           </tr>
         ))}
       </tbody>

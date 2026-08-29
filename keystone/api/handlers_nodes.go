@@ -30,11 +30,28 @@ type joinTokenResponse struct {
 	JoinToken     string `json:"joinToken"`
 	CAFingerprint string `json:"caFingerprint,omitempty"`
 	ExpiresInSec  int64  `json:"expiresInSec"`
-	// Install is the ready-to-paste node install command (ADR-W014 A2);
-	// the operator fills in --keystone with the gateway address reachable
-	// from the new node.
+	// Install is the ready-to-paste node install command (ADR-W014 A2),
+	// with the gateway address, token and CA pin already filled in.
 	Install string `json:"install"`
+	// InstallPrivateRepo is the same install for as long as this
+	// repository is private: an anonymous `curl` cannot reach a private
+	// repo's release assets, so the emitted one-liner 404s and the
+	// operator is left debugging GitHub instead of pairing a node. Both
+	// forms are returned rather than one guessed form — Keystone cannot
+	// see whether its own release repo is public.
+	InstallPrivateRepo string `json:"installPrivateRepo"`
+	// InstallNotes are the things the command itself cannot say: what
+	// --node-id defaults to, and what to substitute if Keystone does not
+	// know its own reachable address.
+	InstallNotes []string `json:"installNotes,omitempty"`
 }
+
+// releaseRepo is where install.sh and the release assets live.
+const releaseRepo = "chickenrat17/wildstone-homelab"
+
+// addrPlaceholder stands in when Keystone has no advertised gateway
+// address to offer (-hosts left at its loopback default).
+const addrPlaceholder = "<host:9440>"
 
 const (
 	defaultJoinTTL = 15 * time.Minute
@@ -151,18 +168,50 @@ func (s *Server) mintJoinToken(r *http.Request, id principal.Identity) (any, int
 		s.Log.Error("join-token event append failed", "err", err)
 	}
 
-	install := fmt.Sprintf(
-		"curl -fsSL https://github.com/chickenrat17/wildstone-homelab/releases/latest/download/install.sh | sudo bash -s -- --role node --keystone <host:9440> --join-token %s",
-		token)
-	if s.CAFingerprint != "" {
-		install += " --ca-fingerprint " + s.CAFingerprint
-	}
+	public, private, notes := s.installCommands(token)
 	return joinTokenResponse{
-		JoinToken:     token,
-		CAFingerprint: s.CAFingerprint,
-		ExpiresInSec:  int64(ttl.Seconds()),
-		Install:       install,
+		JoinToken:          token,
+		CAFingerprint:      s.CAFingerprint,
+		ExpiresInSec:       int64(ttl.Seconds()),
+		Install:            public,
+		InstallPrivateRepo: private,
+		InstallNotes:       notes,
 	}, http.StatusCreated, nil
+}
+
+// installCommands composes the pairing instructions this endpoint hands
+// back. The point of minting a token from Keystone is that Keystone knows
+// everything the node install needs — the address, the token, the CA
+// fingerprint — so anything left for the operator to fill in is a step
+// where pairing can fail. Two forms come back because exactly one thing
+// here is unknowable from inside the process: whether the release repo is
+// public.
+func (s *Server) installCommands(token string) (public, private string, notes []string) {
+	addr := s.GatewayAddr
+	if addr == "" {
+		addr = addrPlaceholder
+		notes = append(notes, "Keystone has no advertised gateway address (-hosts is at its loopback default); replace "+
+			addrPlaceholder+" with the address the new node can reach this host on.")
+	}
+	args := fmt.Sprintf("--role node --keystone %s --join-token %s", addr, token)
+	if s.CAFingerprint != "" {
+		args += " --ca-fingerprint " + s.CAFingerprint
+	}
+	public = fmt.Sprintf(
+		"curl -fsSL https://github.com/%s/releases/latest/download/install.sh | sudo bash -s -- %s",
+		releaseRepo, args)
+	// The private form deliberately fetches install.sh with an
+	// authenticated client first: the `curl` in the public one-liner is
+	// anonymous even when GH_TOKEN is set, so piping it straight to bash
+	// 404s on a private repo before the installer ever runs.
+	private = fmt.Sprintf(
+		"gh release download --repo %s --pattern install.sh\n"+
+			"sudo GH_TOKEN=<pat> bash ./install.sh %s",
+		releaseRepo, args)
+	notes = append(notes,
+		"--node-id defaults to the new host's short hostname; pass --node-id <id> to choose it.",
+		"The join token is single-use and expires; mint a fresh one for each node.")
+	return public, private, notes
 }
 
 // containerLogs (ADR-W015 A2): GET /api/v1/nodes/{node}/containers/
