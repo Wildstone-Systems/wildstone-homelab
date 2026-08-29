@@ -51,9 +51,12 @@ templates:
     metadata: { name: caddy-public, node: "{{ .Params.node }}" }
     spec:
       image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
+      command: ["run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile"]
       ports:
+        # :80 only. The reconciler renders sites as http:// with
+        # auto_https off (#40) — TLS arrives already terminated from the
+        # tunnel — so nothing would answer on 443.
         - "80:80"
-        - "443:443"
       mounts:
         - { source: caddy-public-data, target: /data }
         - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }
@@ -66,8 +69,9 @@ templates:
     metadata: { name: caddy-private, node: "{{ .Params.node }}" }
     spec:
       image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
+      command: ["run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile"]
       ports:
-        - "8443:443"
+        - "8443:80"
       mounts:
         - { source: caddy-private-data, target: /data }
         - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }

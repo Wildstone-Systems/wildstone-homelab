@@ -270,6 +270,10 @@ func (a *testAgent) handleOp(opID string, op *wsv1.Operation) *wsv1.OpResult {
 		return a.readManagedFile(opID, o.ReadManagedFile)
 	case *wsv1.Operation_ProbeHttp:
 		return a.probeHttp(opID, o.ProbeHttp)
+	case *wsv1.Operation_EnsureDockerNetwork:
+		return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureDockerNetwork{
+			EnsureDockerNetwork: &wsv1.EnsureDockerNetworkResult{Created: true},
+		}}
 	case *wsv1.Operation_PullImage:
 		return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_PullImage{PullImage: &wsv1.PullImageResult{Digest: o.PullImage.GetImage()}}}
 	case *wsv1.Operation_Health:

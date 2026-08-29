@@ -338,6 +338,25 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	if oerr != nil {
 		return nil, oerr
 	}
+	// A network must exist and be wildstone-owned before anything is
+	// attached to it (protocol minor 8). Attaching to a foreign network
+	// would join the container to whatever else lives there, so the same
+	// rule EnsureDockerNetwork applies to creation applies to use:
+	// never adopt a resource Wardstone did not create.
+	if net := op.GetNetwork(); net != "" {
+		ni, err := a.docker.networkInspect(ctx, net)
+		if derr, ok := err.(*dockerError); err != nil && (!ok || !derr.notFound()) {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "network inspect: %v", err)
+		}
+		if ni == nil {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_NOT_FOUND,
+				"network %q does not exist (EnsureDockerNetwork first)", net)
+		}
+		if ni.Labels[OwnerLabel] != ownerValue {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
+				"network %q exists but is not wildstone-owned", net)
+		}
+	}
 
 	existing, err := a.docker.inspect(ctx, op.GetName())
 	if derr, ok := err.(*dockerError); err != nil && (!ok || !derr.notFound()) {
@@ -410,6 +429,11 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		restart = "unless-stopped"
 	}
 
+	var netCfg *networkingConfig
+	if net := op.GetNetwork(); net != "" {
+		netCfg = &networkingConfig{EndpointsConfig: map[string]endpointConfig{net: {}}}
+	}
+
 	id, err := a.docker.create(ctx, op.GetName(), createBody{
 		Image:  op.GetImage(),
 		Cmd:    op.GetCommand(),
@@ -420,6 +444,7 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 			PortBindings:  ports,
 			RestartPolicy: restartPolicy{Name: restart},
 		},
+		NetworkingConfig: netCfg,
 	})
 	if err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "create: %v", err)

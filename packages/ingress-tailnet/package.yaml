@@ -18,11 +18,6 @@
 #
 # KNOWN LIMITATIONS (both tracked, both shared with packages/ingress —
 # this profile is exactly as functional as that one, no more):
-#   - Route fragments are written to <prefix>/routes/*.caddy but no
-#     Caddyfile imports them, and their upstreams render as
-#     "container/<name>:<port>", which is not a dialable address (#40).
-#     Until that lands, this deploys Caddy but does not actually serve
-#     package Routes.
 #   - ContainerSpec.Ports cannot express a bind address, so the port
 #     below lands on 0.0.0.0 rather than the tailnet interface (#41).
 #     Restrict it with a host firewall until that is fixed.
@@ -68,8 +63,9 @@ templates:
     metadata: { name: caddy-tailnet, node: "{{ .Params.node }}" }
     spec:
       image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
+      command: ["run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile"]
       ports:
-        - "{{ .Params.listen_port }}:443"
+        - "{{ .Params.listen_port }}:80"
       mounts:
         - { source: caddy-tailnet-data, target: /data }
         - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }

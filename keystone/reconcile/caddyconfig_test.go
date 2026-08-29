@@ -1,0 +1,137 @@
+package reconcile
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+)
+
+// routeFixtures covers every value in the closed RouteSpec.Auth set plus
+// both upstream shapes, so the validator sees each rendering branch.
+var routeFixtures = []struct {
+	name string
+	spec resource.RouteSpec
+}{
+	{"forward-auth", resource.RouteSpec{
+		Host: "kuma.example.internal", Upstream: "container/uptime-kuma:3001",
+		Auth: "authelia_oidc", Classification: "admin",
+	}},
+	{"app-oidc", resource.RouteSpec{
+		Host: "photos.example.internal", Upstream: "container/immich-server:2283",
+		Auth: "app_oidc", Classification: "family_public",
+	}},
+	{"app-ldap", resource.RouteSpec{
+		Host: "media.example.internal", Upstream: "container/jellyfin:8096",
+		Auth: "app_ldap", Classification: "family_public",
+	}},
+	{"portal", resource.RouteSpec{
+		Host: "auth.example.internal", Upstream: "container/authelia:9091",
+		Auth: "portal", Classification: "family_public",
+	}},
+	{"none", resource.RouteSpec{
+		Host: "ntfy.example.internal", Upstream: "container/ntfy:80",
+		Auth: "none", Classification: "family_private",
+	}},
+	{"ip-upstream", resource.RouteSpec{
+		Host: "nas.example.internal", Upstream: "10.0.0.4:5000",
+		Auth: "none", Classification: "admin",
+	}},
+}
+
+// writeRenderedConfig lays out a managed prefix exactly as the reconciler
+// does — Caddyfile at the root, fragments under routes/ — and returns the
+// Caddyfile path. The layout matters: `import routes/*.caddy` resolves
+// relative to the importing file.
+func writeRenderedConfig(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "routes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(dir, "Caddyfile")
+	if err := os.WriteFile(base, renderBaseCaddyfile(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range routeFixtures {
+		spec := f.spec
+		frag := renderRouteFragment(&spec, DefaultAutheliaAddr)
+		if err := os.WriteFile(filepath.Join(dir, "routes", f.name+".caddy"), frag, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return base
+}
+
+// TestRenderedConfigIsValidCaddy runs the real Caddyfile adapter over the
+// real rendering, so a syntax error, an unknown directive or a malformed
+// site block cannot ship.
+//
+// Note what it does NOT catch, because it is worth knowing before trusting
+// it: the pre-#40 rendering — "reverse_proxy container/immich-server:2283",
+// an upstream nothing could ever dial — passes `caddy validate` cleanly.
+// Caddy resolves upstream addresses when it dials, not when it parses.
+// That bug is caught by TestRouteFragmentShape's container/ assertion, and
+// the missing import by TestBaseCaddyfileImportsFragments; both run
+// everywhere. This test covers the class of breakage those cannot see.
+//
+// Skips when caddy is absent so a local `go test` still works; CI installs
+// it, so the check is enforced there.
+func TestRenderedConfigIsValidCaddy(t *testing.T) {
+	caddy, err := exec.LookPath("caddy")
+	if err != nil {
+		t.Skip("caddy not on PATH; CI installs it (see .github/workflows/ci.yml)")
+	}
+	base := writeRenderedConfig(t)
+	out, err := exec.Command(caddy, "validate", "--adapter", "caddyfile", "--config", base).CombinedOutput()
+	if err != nil {
+		t.Fatalf("caddy rejected the rendered config: %v\n%s", err, out)
+	}
+}
+
+// TestRouteFragmentShape asserts the properties the validator cannot: that
+// upstreams are translated rather than passed through, and that only
+// authelia_oidc asks the proxy to enforce anything. These run everywhere,
+// with or without a caddy binary.
+func TestRouteFragmentShape(t *testing.T) {
+	for _, f := range routeFixtures {
+		t.Run(f.name, func(t *testing.T) {
+			spec := f.spec
+			got := string(renderRouteFragment(&spec, DefaultAutheliaAddr))
+
+			if strings.Contains(got, "container/") {
+				t.Errorf("upstream prefix survived into the config:\n%s", got)
+			}
+			// The site address must carry an explicit scheme, or Caddy
+			// tries to provision a certificate for a hostname it cannot
+			// validate from inside the tunnel.
+			if !strings.Contains(got, "http://"+spec.Host+" {") {
+				t.Errorf("site address is not an explicit http:// address:\n%s", got)
+			}
+			wantAuth := spec.Auth == "authelia_oidc"
+			if gotAuth := strings.Contains(got, "forward_auth "+DefaultAutheliaAddr); gotAuth != wantAuth {
+				t.Errorf("auth %q: forward_auth present = %v, want %v:\n%s",
+					spec.Auth, gotAuth, wantAuth, got)
+			}
+			// Classification drives policy, not Caddy — it belongs in a
+			// comment, never as a directive.
+			if !strings.Contains(got, "# classification: "+spec.Classification) {
+				t.Errorf("classification comment missing:\n%s", got)
+			}
+		})
+	}
+}
+
+// TestBaseCaddyfileImportsFragments pins the one line whose absence made
+// every fragment dead weight.
+func TestBaseCaddyfileImportsFragments(t *testing.T) {
+	got := string(renderBaseCaddyfile())
+	for _, want := range []string{"import routes/*.caddy", "auto_https off", "admin off"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("base Caddyfile missing %q:\n%s", want, got)
+		}
+	}
+}
