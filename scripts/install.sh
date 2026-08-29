@@ -9,7 +9,21 @@
 #          --join-token <tok> [--ca-fingerprint <hex>] \
 #          [--node-id <id>] [--skip-docker] [--version vX.Y.Z]
 #   Either role also takes [--artifact-dir <dir>] to install from local
-#   release artifacts instead of downloading (private repos, air-gap).
+#   release artifacts instead of downloading (private repos, air-gap),
+#   and [--tailscale-authkey <key>] [--tailscale-hostname <name>] to
+#   join the host to a tailnet.
+#
+# Tailscale is HOST-LEVEL on purpose (#42). It needs /dev/net/tun and
+# NET_ADMIN; the Wardstone op surface carries neither, and that closed
+# surface is the product's central security claim — granting a container
+# host network control to get a VPN would trade the thing being
+# protected for a convenience. So tailscaled is host setup the operator
+# owns, exactly like Docker below.
+#
+# Consequence worth knowing: the tailnet join is NOT Wildstone-managed.
+# It is not in the Statefile, not reconciled, and NOT restored by the
+# recovery drill. After a total host loss you re-run this step
+# (recovery.md says so too).
 #
 # Keystone flags: --console-dir and --keystone-arg become KEYSTONE_ARGS in
 # /etc/wildstone/keystone.env, which the unit's ExecStart expands. The unit
@@ -46,6 +60,8 @@ KEYSTONE_ADDR=""
 JOIN_TOKEN=""
 CA_FINGERPRINT=""
 NODE_ID="$(hostname -s 2>/dev/null || echo node)"
+TAILSCALE_AUTHKEY="${TAILSCALE_AUTHKEY:-}"
+TAILSCALE_HOSTNAME=""
 SKIP_DOCKER=0
 BIN_DIR="/usr/local/bin"
 UNIT_DIR="/etc/systemd/system"
@@ -54,7 +70,7 @@ log()  { echo "[wildstone-install] $*"; }
 fail() { echo "[wildstone-install] ERROR: $*" >&2; exit 1; }
 
 usage() {
-  sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -70,6 +86,8 @@ while [ $# -gt 0 ]; do
     --console-dir)    CONSOLE_DIR="$2"; shift 2 ;;
     --keystone-arg)   KEYSTONE_ARGS="$KEYSTONE_ARGS $2"; KEYSTONE_ARGS_SET=1; shift 2 ;;
     --token)          TOKEN="$2"; shift 2 ;;
+    --tailscale-authkey)  TAILSCALE_AUTHKEY="$2"; shift 2 ;;
+    --tailscale-hostname) TAILSCALE_HOSTNAME="$2"; shift 2 ;;
     --skip-docker)    SKIP_DOCKER=1; shift ;;
     -h|--help)        usage ;;
     *) fail "unknown flag: $1 (try --help)" ;;
@@ -104,6 +122,46 @@ case "$ROLE" in
     ;;
   *) fail "--role must be keystone or node" ;;
 esac
+
+# ---------------------------------------------------------------- tailnet
+# Runs for either role and before anything is downloaded: a node that
+# reaches its Keystone over the tailnet needs the tailnet up before
+# wardstoned starts, and failing here should not leave half an install
+# behind.
+setup_tailscale() {
+  if ! command -v tailscale >/dev/null; then
+    log "tailscale not found; installing via tailscale.com/install.sh"
+    curl -fsSL https://tailscale.com/install.sh | sh \
+      || fail "tailscale install failed"
+  fi
+  systemctl enable --now tailscaled >/dev/null 2>&1 \
+    || fail "could not start tailscaled"
+
+  # Re-running the installer to upgrade must not disturb a working
+  # tailnet, and `tailscale up` with an already-spent key would fail.
+  if tailscale status --json 2>/dev/null | grep -q '"BackendState":[[:space:]]*"Running"'; then
+    log "tailscale is already up; leaving the existing join alone"
+    return 0
+  fi
+
+  log "joining the tailnet as $TAILSCALE_HOSTNAME"
+  # The key is passed as an argument and never written to disk here:
+  # tailscaled keeps its own state, so nothing needs to persist it, and
+  # it is deliberately kept out of every log line below.
+  #
+  # Tailscale SSH is NOT enabled: that would add a remote-access path
+  # the operator did not ask for. Turn it on yourself if you want it.
+  tailscale up --authkey "$TAILSCALE_AUTHKEY" --hostname "$TAILSCALE_HOSTNAME" \
+    || fail "tailscale up failed (expired, spent, or wrong-tailnet auth key?)"
+  log "tailnet address: $(tailscale ip -4 2>/dev/null | head -1 || echo unknown)"
+}
+
+if [ -n "$TAILSCALE_AUTHKEY" ]; then
+  [ -n "$TAILSCALE_HOSTNAME" ] || TAILSCALE_HOSTNAME="$NODE_ID"
+  setup_tailscale
+elif [ -n "$TAILSCALE_HOSTNAME" ]; then
+  fail "--tailscale-hostname needs --tailscale-authkey (or TAILSCALE_AUTHKEY)"
+fi
 
 # ---------------------------------------------------------------- fetch
 if [ "$VERSION" = latest ]; then

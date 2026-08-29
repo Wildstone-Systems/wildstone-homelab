@@ -87,6 +87,20 @@ in type resource.BackupPlanSpec`.
 
 Mirrors the drill phase-for-phase.
 
+**Host-level setup is not restored.** Everything Wildstone manages is
+rebuilt from the Statefile and the restic repository, but anything that
+lives on the host *underneath* Wildstone is yours to redo:
+
+- **Docker** on every node — the installer puts it back for you.
+- **The tailnet join**, if the host was on one. Not in the Statefile,
+  not reconciled, so re-run the installer with
+  `--tailscale-authkey` (see [install.md](install.md)). Do this
+  **before** the node join if the node reaches Keystone over the
+  tailnet, or the join has no route.
+
+Neither is a gap in the recovery contract: both are host network
+control, which the node agent deliberately cannot grant itself.
+
 ### 1. Fresh Keystone over the restored Statefile
 
 ```sh

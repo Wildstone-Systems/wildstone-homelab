@@ -127,6 +127,36 @@ wild node list
 so it is always the current answer. The Console's Nodes view shows the
 same fleet.
 
+### Joining the host to a tailnet (optional)
+
+Either role accepts `--tailscale-authkey`, which installs `tailscaled`
+on the host and joins it to your tailnet:
+
+```sh
+sudo bash ./install.sh --role node ... \
+  --tailscale-authkey tskey-auth-... \
+  --tailscale-hostname media-1        # defaults to --node-id
+```
+
+`TAILSCALE_AUTHKEY` in the environment works too. The key is passed
+straight to `tailscale up` and never written to disk or printed — use a
+pre-authorized, ideally ephemeral key. Tailscale SSH is deliberately
+**not** enabled; turn it on yourself if you want it.
+
+Re-running the installer to upgrade leaves an existing join alone, so
+this is safe on every run.
+
+**Why the host and not a container.** Tailscale needs `/dev/net/tun`
+and `NET_ADMIN`. The Wardstone operation surface carries neither, on
+purpose — a closed surface with no way to grant a container host
+network control is the property the whole design defends. So this is
+host setup you own, exactly like Docker.
+
+The consequence is that the tailnet join is **not Wildstone-managed**:
+it is not in the Statefile, not reconciled, and not restored when you
+rebuild a host from backups. [recovery.md](recovery.md) lists it among
+the steps you redo by hand.
+
 ## 4. Optional: Console and Butler
 
 - **Console**: the Console is a static bundle. **Build it on your
