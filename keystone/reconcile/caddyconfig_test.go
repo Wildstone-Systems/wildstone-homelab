@@ -78,11 +78,19 @@ func writeRenderedConfig(t *testing.T) string {
 // the missing import by TestBaseCaddyfileImportsFragments; both run
 // everywhere. This test covers the class of breakage those cannot see.
 //
-// Skips when caddy is absent so a local `go test` still works; CI installs
-// it, so the check is enforced there.
+// Skips when caddy is absent so a local `go test` still works — but FAILS
+// rather than skips under CI, where the workflow installs it. A guard that
+// can silently stop running is the same shape of problem as the bug it
+// guards against: green, and doing nothing. If this fails in CI, the
+// install step or its PATH broke, not the rendering.
 func TestRenderedConfigIsValidCaddy(t *testing.T) {
 	caddy, err := exec.LookPath("caddy")
 	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal("caddy not on PATH under CI: the install step in " +
+				".github/workflows/ci.yml did not put it there, so this check " +
+				"would have skipped silently")
+		}
 		t.Skip("caddy not on PATH; CI installs it (see .github/workflows/ci.yml)")
 	}
 	base := writeRenderedConfig(t)
