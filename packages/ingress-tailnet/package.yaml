@@ -1,0 +1,76 @@
+# Ingress capability, tailnet-only profile: Caddy with NO Cloudflare.
+#
+# The `ingress` package (profile caddy-cloudflared) is the only way to
+# get ingress today, and it hard-requires a Cloudflare account: a
+# tunnel_id param, a cloudflared container, and a proxied wildcard
+# DnsRecord. For a product whose premise is that the household keeps its
+# own data, "you must sign up with a CDN to route your own traffic" is a
+# coupling worth removing (#39).
+#
+# This profile serves the same Routes over a Caddy that binds a private
+# port only. Reachability is the operator's to arrange — Tailscale,
+# WireGuard, a LAN-only firewall rule — and deliberately not this
+# package's business. Nothing here talks to the internet.
+#
+# Image digest is REAL, resolved 2026-08-25 via the OCI registry API and
+# shared with packages/ingress (same caddy:latest):
+#   caddy:latest -> sha256:df7f1c2f...a78d
+#
+# KNOWN LIMITATIONS (both tracked, both shared with packages/ingress —
+# this profile is exactly as functional as that one, no more):
+#   - Route fragments are written to <prefix>/routes/*.caddy but no
+#     Caddyfile imports them, and their upstreams render as
+#     "container/<name>:<port>", which is not a dialable address (#40).
+#     Until that lands, this deploys Caddy but does not actually serve
+#     package Routes.
+#   - ContainerSpec.Ports cannot express a bind address, so the port
+#     below lands on 0.0.0.0 rather than the tailnet interface (#41).
+#     Restrict it with a host firewall until that is fixed.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: ingress-tailnet
+  version: 1.0.0
+  capability: ingress
+  profile: caddy-tailnet
+provides:
+  # Private only, and that is the point: this profile has no public
+  # path. A package wanting ingress:public expands anyway — ingress is a
+  # structural trait the engine always satisfies (ADR-W010 A1) — so the
+  # operator, not the engine, is what keeps a public app off a private
+  # ingress.
+  - { trait: ingress, mode: private }
+params:
+  # The name the private Caddy answers to, e.g. a MagicDNS name or an
+  # internal zone. No public_domain: this profile never serves one.
+  - { name: admin_domain, required: true }
+  - { name: node, required: true }
+  # Host port for the private listener. Defaults to the same 8443
+  # packages/ingress uses for caddy-private, so the two profiles are
+  # swappable without rewriting Routes.
+  - { name: listen_port, default: "8443" }
+policies:
+  classifications: [admin]
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: caddy-tailnet-data, node: "{{ .Params.node }}" }
+    spec: { name: caddy-tailnet-data }
+  # One Caddy, not two: with no public path there is no second posture to
+  # separate. The managed prefix is mounted read-only exactly as in
+  # packages/ingress — the reconciler's Route fragments are the intended
+  # configuration, and the agent's managed-prefix guard is what makes the
+  # bind safe.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: caddy-tailnet, node: "{{ .Params.node }}" }
+    spec:
+      image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
+      ports:
+        - "{{ .Params.listen_port }}:443"
+      mounts:
+        - { source: caddy-tailnet-data, target: /data }
+        - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }
+      restart: unless-stopped
