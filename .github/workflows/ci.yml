@@ -69,6 +69,13 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           for m in proto wardstone keystone cli testing/e2e; do (cd "$m" && go build ./...); done
+      - name: install caddy (route-config validation, #40)
+        if: matrix.goarch == 'amd64'
+        # keystone/reconcile renders Caddy config; the adapter itself is
+        # the only thing that can say whether the result parses. The test
+        # skips when caddy is absent, so without this step the check would
+        # quietly never run.
+        run: go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.8.4
       - name: test
         if: matrix.goarch == 'amd64'
         # -race: the product is concurrent (gateway, agent sessions,

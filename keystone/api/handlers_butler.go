@@ -134,7 +134,7 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 			proposalErrs = append(proposalErrs, fmt.Sprintf("%d: %v", st, err))
 			continue
 		}
-		if rec, ok := body.(runtimedb.PlanRecord); ok {
+		if rec, ok := body.(planView); ok {
 			planIDs = append(planIDs, rec.ID)
 		}
 	}

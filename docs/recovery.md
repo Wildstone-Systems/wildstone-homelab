@@ -21,9 +21,85 @@ Keep these off the host, always:
 Everything else — the runtime DB, the CA and op-signing keys, node
 identities, containers, the data volumes themselves — is rebuilt.
 
+## Declaring a BackupPlan
+
+None of the below is worth anything without a BackupPlan to restore
+from. Three fields are guessable in exactly the wrong way, so here is a
+complete one:
+
+- `repository` is a **volume name**, not a filesystem path. The
+  repository volume must exist as its own `Volume` resource — put it on
+  storage that outlives the host.
+- `passwordSecret` is a **reference** of the form `secret/<name>`, never
+  a literal password. Set the value separately with `wild secret set`;
+  Keystone never stores a readable copy.
+- `schedule` is one of `daily`, `weekly`, `monthly` — not a cron
+  expression.
+
+```sh
+printf '%s' '<repo-password>' | wild secret set photos-restic -node node1
+
+cat > /tmp/photos-repo.yaml <<'EOF'
+apiVersion: wildstone.dev/v1
+kind: Volume
+metadata:
+  name: photos-repo
+  owner: capability/photos
+  node: node1
+spec:
+  name: photos-repo
+EOF
+
+cat > /tmp/photos-backup.yaml <<'EOF'
+apiVersion: wildstone.dev/v1
+kind: BackupPlan
+metadata:
+  name: photos
+  owner: capability/photos
+  node: node1
+spec:
+  volumes: [photos-data]        # the source volumes, mounted read-only
+  repository: photos-repo       # a volume name, not a path
+  passwordSecret: secret/photos-restic
+  schedule: daily               # daily | weekly | monthly
+  retention:
+    keepDaily: 7
+    keepWeekly: 4
+    keepMonthly: 6
+EOF
+
+curl -sS -X POST http://127.0.0.1:9441/api/v1/plans \
+  -H "Authorization: Bearer $WILD_TOKEN" \
+  -d "$(jq -n --arg r "$(cat /tmp/photos-repo.yaml)" \
+             --arg b "$(cat /tmp/photos-backup.yaml)" \
+        '{summary: "back up photos daily", put: [$r, $b]}')"
+
+wild plan approve <id>
+wild backup run photos        # don't wait for the schedule to find out
+wild backup list              # the run is in the ledger, succeeded
+```
+
+Get a field wrong and the API says which one, indexed to the document
+that carried it — `put[1]: ... line 3: field repositoryVolume not found
+in type resource.BackupPlanSpec`.
+
 ## Losing a host: the restore procedure
 
 Mirrors the drill phase-for-phase.
+
+**Host-level setup is not restored.** Everything Wildstone manages is
+rebuilt from the Statefile and the restic repository, but anything that
+lives on the host *underneath* Wildstone is yours to redo:
+
+- **Docker** on every node — the installer puts it back for you.
+- **The tailnet join**, if the host was on one. Not in the Statefile,
+  not reconciled, so re-run the installer with
+  `--tailscale-authkey` (see [install.md](install.md)). Do this
+  **before** the node join if the node reaches Keystone over the
+  tailnet, or the join has no route.
+
+Neither is a gap in the recovery contract: both are host network
+control, which the node agent deliberately cannot grant itself.
 
 ### 1. Fresh Keystone over the restored Statefile
 
@@ -84,7 +160,9 @@ data into the live volume, start them again. Repeat per plan.
 
 ### 6. Verify
 
-- `wild backup list` — the restore run is in the ledger, `succeeded`.
+- `wild backup list` — the restore run is in the ledger, `succeeded`,
+  with `runKind: restore` (the scheduled rehearsal of the same
+  mechanism records as `drill`).
 - `wild status` — everything healthy.
 - `GET /api/v1/reports/morning` — no unhealthy resources, backups ok.
 

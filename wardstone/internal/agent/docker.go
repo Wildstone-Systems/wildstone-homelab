@@ -121,7 +121,21 @@ type createBody struct {
 	Env        []string          `json:"Env,omitempty"`
 	Labels     map[string]string `json:"Labels,omitempty"`
 	HostConfig hostConfig        `json:"HostConfig"`
+	// NetworkingConfig attaches the container at create time. Docker
+	// registers the container's name as a DNS alias on a user-defined
+	// network automatically, which is what makes "<name>:<port>"
+	// resolvable between containers — the default bridge has no
+	// embedded DNS at all.
+	NetworkingConfig *networkingConfig `json:"NetworkingConfig,omitempty"`
 }
+
+type networkingConfig struct {
+	EndpointsConfig map[string]endpointConfig `json:"EndpointsConfig"`
+}
+
+// endpointConfig is intentionally empty: Docker fills in the address and
+// adds the container name as an alias. Wildstone pins no IPs.
+type endpointConfig struct{}
 
 type hostConfig struct {
 	Binds         []string                 `json:"Binds,omitempty"`

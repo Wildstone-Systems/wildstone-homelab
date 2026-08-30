@@ -1639,7 +1639,17 @@ type EnsureContainer struct {
 	// Container argument vector, appended after the image's entrypoint
 	// (docker Cmd; ADR-W011 A3, protocol minor 6). A pre-minor-6 agent
 	// ignores this field.
-	Command       []string `protobuf:"bytes,8,rep,name=command,proto3" json:"command,omitempty"`
+	Command []string `protobuf:"bytes,8,rep,name=command,proto3" json:"command,omitempty"`
+	// User-defined Docker network to attach the container to (protocol
+	// minor 8). Docker's default bridge has no embedded DNS, so a
+	// container can only be reached by name on a user-defined network —
+	// which is what every package's "container/<name>:<port>" upstream
+	// assumes. The network must already exist and be wildstone-owned: the
+	// agent refuses to attach to one it did not create, the same rule
+	// EnsureDockerNetwork applies (never adopt a foreign resource).
+	// Empty attaches nothing, leaving the pre-minor-8 default bridge
+	// behavior; a pre-minor-8 agent ignores this field.
+	Network       string `protobuf:"bytes,9,opt,name=network,proto3" json:"network,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1728,6 +1738,13 @@ func (x *EnsureContainer) GetCommand() []string {
 		return x.Command
 	}
 	return nil
+}
+
+func (x *EnsureContainer) GetNetwork() string {
+	if x != nil {
+		return x.Network
+	}
+	return ""
 }
 
 type PortBinding struct {
@@ -5136,7 +5153,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x06result\"P\n" +
 	"\aOpError\x12+\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x17.wardstone.v1.ErrorCodeR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xca\x03\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xe4\x03\n" +
 	"\x0fEnsureContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x128\n" +
@@ -5145,7 +5162,8 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x06mounts\x18\x05 \x03(\v2\x13.wardstone.v1.MountR\x06mounts\x12A\n" +
 	"\x06labels\x18\x06 \x03(\v2).wardstone.v1.EnsureContainer.LabelsEntryR\x06labels\x12%\n" +
 	"\x0erestart_policy\x18\a \x01(\tR\rrestartPolicy\x12\x18\n" +
-	"\acommand\x18\b \x03(\tR\acommand\x1a6\n" +
+	"\acommand\x18\b \x03(\tR\acommand\x12\x18\n" +
+	"\anetwork\x18\t \x01(\tR\anetwork\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +

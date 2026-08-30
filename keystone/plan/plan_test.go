@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -312,5 +313,52 @@ func TestDiffBackupPlan(t *testing.T) {
 	p = Diff(nil, []resource.Resource{bp("daily")})
 	if len(p.Steps) != 1 || p.Steps[0].Action != ActionDelete || p.OverallRisk != RiskMedium {
 		t.Fatalf("delete plan = %+v", p)
+	}
+}
+
+// TestPlanJSONShape pins the wire form the approval screen reads: named
+// risk and action, camelCase keys, no JSON nested in a JSON string. The
+// ordinals `"Risk":0` / `"Action":1` were unreadable to the human the
+// plan exists for.
+func TestPlanJSONShape(t *testing.T) {
+	p := Plan{
+		Summary:     "add a volume",
+		OverallRisk: RiskMedium,
+		Steps: []PlanStep{{
+			Description: "Create Volume/relvol2",
+			Kind:        resource.KindVolume,
+			Name:        "relvol2",
+			Action:      ActionCreate,
+			Risk:        RiskLow,
+			BlastRadius: "new volume, no existing service affected",
+		}},
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"overallRisk":"Medium"`, `"risk":"Low"`, `"action":"Create"`,
+		`"blastRadius":"new volume, no existing service affected"`,
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("plan JSON missing %s: %s", want, b)
+		}
+	}
+}
+
+// TestPlanJSONAcceptsStoredOrdinals: plan records written before the
+// named form are still in the runtime DB, and approval re-reads exactly
+// that stored JSON — it must not start failing on them.
+func TestPlanJSONAcceptsStoredOrdinals(t *testing.T) {
+	const stored = `{"Summary":"old","Steps":[{"Description":"d","Kind":"Volume",` +
+		`"Name":"v","Action":1,"Risk":2,"BlastRadius":"b"}],"OverallRisk":2}`
+	var p Plan
+	if err := json.Unmarshal([]byte(stored), &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.OverallRisk != RiskHigh || len(p.Steps) != 1 ||
+		p.Steps[0].Action != ActionCreate || p.Steps[0].Risk != RiskHigh {
+		t.Fatalf("stored ordinals lost: %+v", p)
 	}
 }

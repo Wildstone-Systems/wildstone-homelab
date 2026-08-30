@@ -200,6 +200,16 @@ message EnsureContainer {
   // (docker Cmd; ADR-W011 A3, protocol minor 6). A pre-minor-6 agent
   // ignores this field.
   repeated string command = 8;
+  // User-defined Docker network to attach the container to (protocol
+  // minor 8). Docker's default bridge has no embedded DNS, so a
+  // container can only be reached by name on a user-defined network —
+  // which is what every package's "container/<name>:<port>" upstream
+  // assumes. The network must already exist and be wildstone-owned: the
+  // agent refuses to attach to one it did not create, the same rule
+  // EnsureDockerNetwork applies (never adopt a foreign resource).
+  // Empty attaches nothing, leaving the pre-minor-8 default bridge
+  // behavior; a pre-minor-8 agent ignores this field.
+  string network = 9;
 }
 
 message PortBinding {

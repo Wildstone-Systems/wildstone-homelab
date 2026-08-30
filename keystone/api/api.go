@@ -63,6 +63,12 @@ type Server struct {
 	// every minted join token so installs pin the join (ADR-W003 W3).
 	CAFingerprint string
 
+	// GatewayAddr is the host:port a node should dial to reach the agent
+	// gateway, used to fill in --keystone in the emitted pairing command
+	// (ADR-W014 A3). Empty leaves a placeholder and says so in the
+	// response notes — a wrong address is worse than a visible blank.
+	GatewayAddr string
+
 	// ButlerHost hosts the Butler ask endpoint (ADR-W017 A2/A4) —
 	// cmd/keystone wires it from -butler-provider. nil leaves ask
 	// answering 503; session history stays readable.

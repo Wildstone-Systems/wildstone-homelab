@@ -21,6 +21,30 @@ Approval commits the change; the reconciler then converges nodes to
 it. There is no unmediated write anywhere — not for the UI, not for
 the CLI, not for the AI.
 
+## Routing is generated, never hand-written
+
+A `Route` is desired state like anything else. The reconciler renders it
+to a Caddy config fragment at `/etc/wildstone/routes/<name>.caddy` and
+maintains the `Caddyfile` beside it that imports them all; both ingress
+profiles mount that directory **read-only**, so those generated files
+are Caddy's entire configuration.
+
+Two consequences worth knowing:
+
+- **Editing a Caddyfile by hand does not stick.** The reconciler
+  compares the live bytes against a fresh render every tick and repairs
+  the difference. Change the `Route`, not the file.
+- **Apps are reached by container name.** Every managed container is
+  attached to a user-defined Docker network (`wildstone`), which is what
+  makes `container/<name>:<port>` upstreams resolve — Docker's default
+  bridge has no DNS. The agent refuses to attach a container to a
+  network it did not create.
+
+A route declaring `auth: authelia_oidc` gets a real `forward_auth`
+directive; the other values in the closed set (`app_oidc`, `app_ldap`,
+`portal`, `none`) mean the proxy passes through by definition, because
+the app authenticates itself or the surface is honestly public.
+
 ## The reconciler converges, and repairs drift
 
 The reconcile service (ADR-W008) diffs desired against observed on

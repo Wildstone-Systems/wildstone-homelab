@@ -21,6 +21,9 @@ type fakeContainer struct {
 	labels  map[string]string
 	env     []string
 	running bool
+	// networks records the EndpointsConfig keys the create body carried,
+	// so a test can assert what the container was attached to.
+	networks []string
 }
 
 type fakeVolume struct {
@@ -76,6 +79,14 @@ func (f *fakeDocker) addForeignVolume(name string) {
 	f.volumes[name] = &fakeVolume{name: name, labels: map[string]string{"someone-else": "true"}}
 }
 
+// addOwnedNetwork seeds a pre-existing wildstone-owned network, as
+// EnsureDockerNetwork would have left it.
+func (f *fakeDocker) addOwnedNetwork(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.networks[name] = &fakeNetwork{name: name, labels: map[string]string{OwnerLabel: ownerValue}}
+}
+
 // addForeignNetwork seeds a pre-existing network without the wildstone
 // owner label, simulating one created outside Wardstone's control.
 func (f *fakeDocker) addForeignNetwork(name string) {
@@ -107,16 +118,25 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var body struct {
-			Image  string            `json:"Image"`
-			Labels map[string]string `json:"Labels"`
-			Env    []string          `json:"Env"`
+			Image            string            `json:"Image"`
+			Labels           map[string]string `json:"Labels"`
+			Env              []string          `json:"Env"`
+			NetworkingConfig *struct {
+				EndpointsConfig map[string]struct{} `json:"EndpointsConfig"`
+			} `json:"NetworkingConfig"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		var nets []string
+		if body.NetworkingConfig != nil {
+			for n := range body.NetworkingConfig.EndpointsConfig {
+				nets = append(nets, n)
+			}
+		}
 		f.seq++
-		c := &fakeContainer{id: fmt.Sprintf("cid-%d", f.seq), image: body.Image, labels: body.Labels, env: body.Env}
+		c := &fakeContainer{id: fmt.Sprintf("cid-%d", f.seq), image: body.Image, labels: body.Labels, env: body.Env, networks: nets}
 		f.containers[name] = c
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]string{"Id": c.id})

@@ -48,9 +48,28 @@ export interface PlanRecord {
   summary: string;
   risk: string;
   state: string;
-  planJson?: string;
+  basedOnHead?: string;
+  plan?: Plan;
   resolvedBy?: string;
   resolvedAt?: string;
+}
+
+// Plan mirrors keystone/plan.Plan as the API now serves it: steps with
+// named risk and action, not ordinals, and no JSON-inside-JSON.
+export interface Plan {
+  id?: string;
+  summary?: string;
+  steps?: PlanStep[];
+  overallRisk?: string;
+}
+
+export interface PlanStep {
+  description?: string;
+  kind?: string;
+  name?: string;
+  action?: string;
+  risk?: string;
+  blastRadius?: string;
 }
 
 export interface BackupRun {

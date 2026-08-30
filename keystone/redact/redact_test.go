@@ -52,3 +52,22 @@ func TestDigestNextToSecret(t *testing.T) {
 		t.Fatalf("api key survived: %q", out)
 	}
 }
+
+// TestCommitHeadPreserved pins the second carve-out: a Statefile commit
+// hash under a key that names one survives, because it is the field that
+// tells a reviewer which desired state a plan was computed against — and
+// git prints the same hashes in the clear one directory away. The shelter
+// is keyed on the field name, so the same hash elsewhere still redacts.
+func TestCommitHeadPreserved(t *testing.T) {
+	const head = "9f2c1ab8e4d5f60718293a4b5c6d7e8f90a1b2c3"
+	out := String(`{"basedOnHead":"` + head + `","apiToken":"` + hexSecret + `"}`)
+	if !strings.Contains(out, `"basedOnHead":"`+head+`"`) {
+		t.Fatalf("commit head redacted: %q", out)
+	}
+	if strings.Contains(out, hexSecret) {
+		t.Fatalf("token survived beside the head: %q", out)
+	}
+	if out := String("value: " + head); strings.Contains(out, head) {
+		t.Fatalf("hash under an unrelated key survived: %q", out)
+	}
+}

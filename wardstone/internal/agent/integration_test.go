@@ -777,3 +777,61 @@ func TestReconnectStorm(t *testing.T) {
 		t.Error(f)
 	}
 }
+
+// TestEnsureContainerNetwork covers protocol minor 8's attach path (#40).
+// EnsureDockerNetwork could create a network since minor 3, but nothing
+// could attach a container to one — so every package's
+// "container/<name>:<port>" upstream had no way to resolve, because
+// Docker's default bridge has no embedded DNS.
+func TestEnsureContainerNetwork(t *testing.T) {
+	fake := newFakeDocker(t)
+	h := startGateway(t, []string{"tok"}, "")
+	newTestAgent(t, h, "node-a", "tok", func(c *Config) { c.DockerEndpoint = fake.URL() })
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+	ensure := func(name, network string) *wsv1.OpResult {
+		return dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{
+			EnsureContainer: &wsv1.EnsureContainer{
+				Name: name, Image: testDigestImage, Network: network,
+			},
+		}})
+	}
+
+	// No network named: nothing is attached, the pre-minor-8 behavior.
+	if res := ensure("plain", ""); res.GetError() != nil {
+		t.Fatalf("ensure without a network: %+v", res)
+	}
+	if got := fake.containers["plain"].networks; len(got) != 0 {
+		t.Errorf("container attached to %v with no network requested", got)
+	}
+
+	// A wildstone-owned network: attached, so Docker registers the
+	// container's name as a DNS alias on it.
+	fake.addOwnedNetwork("wildstone")
+	if res := ensure("app", "wildstone"); res.GetError() != nil {
+		t.Fatalf("ensure onto an owned network: %+v", res)
+	}
+	got := fake.containers["app"].networks
+	if len(got) != 1 || got[0] != "wildstone" {
+		t.Errorf("EndpointsConfig = %v, want [wildstone]", got)
+	}
+
+	// A network Wardstone did not create: FORBIDDEN. Attaching would join
+	// the container to whatever else lives there, so the rule that governs
+	// creating a network governs using one too.
+	fake.addForeignNetwork("someone-elses-net")
+	res := ensure("intruder", "someone-elses-net")
+	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Fatalf("foreign network: want FORBIDDEN, got %+v", res)
+	}
+	if _, created := fake.containers["intruder"]; created {
+		t.Error("container was created despite the forbidden network")
+	}
+
+	// A network that does not exist at all: NOT_FOUND, naming the fix.
+	res = ensure("orphan", "never-created")
+	if res.GetError().GetCode() != wsv1.ErrorCode_ERROR_CODE_NOT_FOUND {
+		t.Fatalf("missing network: want NOT_FOUND, got %+v", res)
+	}
+}

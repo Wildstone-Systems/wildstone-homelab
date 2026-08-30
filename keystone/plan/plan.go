@@ -5,6 +5,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -19,6 +20,34 @@ const (
 	RiskMedium
 	RiskHigh
 )
+
+// MarshalJSON emits the grade's name, not its ordinal. The plan is the
+// screen a human approves a change on (ADR-W004 A3), and `"Risk":0` tells
+// that human nothing — the outer plan record has always spelled risk
+// "Low", and the steps inside it now agree.
+func (g RiskGrade) MarshalJSON() ([]byte, error) { return json.Marshal(g.String()) }
+
+// UnmarshalJSON accepts both the name and the ordinal: plan records
+// written before the named form are still in the runtime DB, and approval
+// re-reads exactly that stored JSON.
+func (g *RiskGrade) UnmarshalJSON(b []byte) error {
+	var n int
+	if err := json.Unmarshal(b, &n); err == nil {
+		*g = RiskGrade(n)
+		return nil
+	}
+	var name string
+	if err := json.Unmarshal(b, &name); err != nil {
+		return fmt.Errorf("plan: risk grade must be a name or an ordinal: %w", err)
+	}
+	for _, c := range []RiskGrade{RiskLow, RiskMedium, RiskHigh} {
+		if c.String() == name {
+			*g = c
+			return nil
+		}
+	}
+	return fmt.Errorf("plan: unknown risk grade %q", name)
+}
 
 func (g RiskGrade) String() string {
 	switch g {
@@ -43,6 +72,29 @@ const (
 	ActionDelete
 )
 
+// MarshalJSON / UnmarshalJSON: see RiskGrade — same reasoning, same
+// tolerance for ordinals already on disk.
+func (a Action) MarshalJSON() ([]byte, error) { return json.Marshal(a.String()) }
+
+func (a *Action) UnmarshalJSON(b []byte) error {
+	var n int
+	if err := json.Unmarshal(b, &n); err == nil {
+		*a = Action(n)
+		return nil
+	}
+	var name string
+	if err := json.Unmarshal(b, &name); err != nil {
+		return fmt.Errorf("plan: action must be a name or an ordinal: %w", err)
+	}
+	for _, c := range []Action{ActionNoOp, ActionCreate, ActionUpdate, ActionDelete} {
+		if c.String() == name {
+			*a = c
+			return nil
+		}
+	}
+	return fmt.Errorf("plan: unknown action %q", name)
+}
+
 func (a Action) String() string {
 	switch a {
 	case ActionNoOp:
@@ -65,36 +117,36 @@ func (a Action) String() string {
 // work packages, which will populate richer fields here or replace this
 // type with one that embeds the concrete op.
 type ResourceOp struct {
-	Kind   resource.Kind
-	Name   string
-	Action Action
+	Kind   resource.Kind `json:"kind"`
+	Name   string        `json:"name"`
+	Action Action        `json:"action"`
 }
 
 // PlanStep is one resource-level change within a Plan (ADR-W004 A3).
 type PlanStep struct {
 	// Description is a human one-liner, e.g. "restart Jellyfin (~2 min, no
 	// data affected)".
-	Description string
-	Kind        resource.Kind
-	Name        string
-	Action      Action
+	Description string        `json:"description"`
+	Kind        resource.Kind `json:"kind"`
+	Name        string        `json:"name"`
+	Action      Action        `json:"action"`
 	// Op is the typed operation(s) to apply this step. nil in S2a; S2b/S2c
 	// populate it when wiring the reconcile engine.
-	Op *ResourceOp
+	Op *ResourceOp `json:"op,omitempty"`
 	// Reverse is the reverse op for rollback, where defined. nil means no
 	// auto-reverse. nil in S2a for the same reason as Op.
-	Reverse     *ResourceOp
-	Risk        RiskGrade
-	BlastRadius string
+	Reverse     *ResourceOp `json:"reverse,omitempty"`
+	Risk        RiskGrade   `json:"risk"`
+	BlastRadius string      `json:"blastRadius"`
 }
 
 // Plan is the artifact produced by Diff: an ordered list of steps plus an
 // overall risk grade, the max over all step risks.
 type Plan struct {
-	ID          string
-	Summary     string
-	Steps       []PlanStep
-	OverallRisk RiskGrade
+	ID          string     `json:"id,omitempty"`
+	Summary     string     `json:"summary,omitempty"`
+	Steps       []PlanStep `json:"steps"`
+	OverallRisk RiskGrade  `json:"overallRisk"`
 }
 
 // kindOrder is the dependency order for creates/updates, per ADR-W004 A3

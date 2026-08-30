@@ -44,13 +44,55 @@ type storedProposal struct {
 	Plan        *plan.Plan    `json:"plan"`
 }
 
+// planView is what the API returns for a plan record. The runtime DB
+// stores the proposal as one JSON blob (plan_json); returning that blob
+// verbatim made every consumer parse JSON out of a JSON string — the
+// Console did it inline, with a raw <pre> dump as its fallback. The view
+// parses it once, here, so the approval screen reads the plan the same
+// way it reads every other field. planJson is dropped from the response
+// rather than duplicated: it carried nothing this doesn't.
+type planView struct {
+	runtimedb.PlanRecord
+	PlanJSON    string        `json:"-"` // shadows the embedded blob
+	BasedOnHead string        `json:"basedOnHead,omitempty"`
+	Plan        *plan.Plan    `json:"plan,omitempty"`
+	Put         []string      `json:"put,omitempty"`
+	Delete      []deletionRef `json:"delete,omitempty"`
+}
+
+// viewPlan projects one record. A blob that will not parse is not fatal:
+// the record's own columns (state, risk, summary) are the audit trail and
+// are still worth returning, so the plan field is simply absent — a
+// corrupt blob already fails loudly at approval, which is the moment it
+// matters.
+func viewPlan(rec runtimedb.PlanRecord) planView {
+	v := planView{PlanRecord: rec}
+	if rec.PlanJSON == "" {
+		return v
+	}
+	var stored storedProposal
+	if err := json.Unmarshal([]byte(rec.PlanJSON), &stored); err != nil {
+		return v
+	}
+	v.BasedOnHead, v.Plan, v.Put, v.Delete = stored.BasedOnHead, stored.Plan, stored.Put, stored.Delete
+	return v
+}
+
+func viewPlans(recs []runtimedb.PlanRecord) []planView {
+	out := make([]planView, 0, len(recs))
+	for _, rec := range recs {
+		out = append(out, viewPlan(rec))
+	}
+	return out
+}
+
 func (s *Server) listPlans(r *http.Request, _ principal.Identity) (any, int, error) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	plans, err := s.DB.ListPlans(limit)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return plans, http.StatusOK, nil
+	return viewPlans(plans), http.StatusOK, nil
 }
 
 func (s *Server) getPlan(r *http.Request, _ principal.Identity) (any, int, error) {
@@ -61,7 +103,7 @@ func (s *Server) getPlan(r *http.Request, _ principal.Identity) (any, int, error
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
-	return rec, http.StatusOK, nil
+	return viewPlan(rec), http.StatusOK, nil
 }
 
 func (s *Server) proposePlan(r *http.Request, id principal.Identity) (any, int, error) {
@@ -174,7 +216,7 @@ func (s *Server) submitProposal(id principal.Identity, req proposalRequest) (any
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return rec, http.StatusCreated, nil
+	return viewPlan(rec), http.StatusCreated, nil
 }
 
 // approvePlan is the moment a proposal becomes desired state: the changes
@@ -252,7 +294,7 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return rec, http.StatusOK, nil
+	return viewPlan(rec), http.StatusOK, nil
 }
 
 func (s *Server) rejectPlan(r *http.Request, id principal.Identity) (any, int, error) {
@@ -275,7 +317,7 @@ func (s *Server) rejectPlan(r *http.Request, id principal.Identity) (any, int, e
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return rec, http.StatusOK, nil
+	return viewPlan(rec), http.StatusOK, nil
 }
 
 // applyChanges returns current + puts − deletes, replacing by (kind, name).

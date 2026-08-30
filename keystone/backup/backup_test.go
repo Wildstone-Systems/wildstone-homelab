@@ -350,8 +350,13 @@ func TestRestoreAlongside(t *testing.T) {
 	if !found {
 		t.Fatalf("restore mounts = %+v, want photos-restore at /restore", last.spec.Mounts)
 	}
-	if _, err := db.LastBackupRun("photos", runtimedb.BackupRunDrill, runtimedb.BackupRunSucceeded); err != nil {
+	// An operator restore records as "restore", not "drill" — the ledger
+	// says what happened, and it must not reset the drill schedule.
+	if _, err := db.LastBackupRun("photos", runtimedb.BackupRunRestore, runtimedb.BackupRunSucceeded); err != nil {
 		t.Fatalf("restore left no ledger row: %v", err)
+	}
+	if _, err := db.LastBackupRun("photos", runtimedb.BackupRunDrill, runtimedb.BackupRunSucceeded); err == nil {
+		t.Fatal("an operator restore must not be recorded as a scheduled drill")
 	}
 
 	if err := e.RestoreAlongside(context.Background(), "ghost"); err == nil {

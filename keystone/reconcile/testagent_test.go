@@ -347,6 +347,13 @@ func (a *testAgent) handleOp(opID string, op *wsv1.Operation) *wsv1.OpResult {
 	case *wsv1.Operation_ProbeHttp:
 		a.countOp("ProbeHttp")
 		return a.probeHttp(opID, o.ProbeHttp)
+	case *wsv1.Operation_EnsureDockerNetwork:
+		// The reconciler ensures the container network before every
+		// container ensure (protocol minor 8); idempotent on the agent.
+		a.countOp("EnsureDockerNetwork")
+		return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureDockerNetwork{
+			EnsureDockerNetwork: &wsv1.EnsureDockerNetworkResult{Created: true},
+		}}
 	case *wsv1.Operation_PullImage:
 		// The reconciler pulls before every container ensure; the test
 		// agent's "registry" always has the image.

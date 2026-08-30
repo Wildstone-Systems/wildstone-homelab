@@ -40,7 +40,21 @@ import (
 //	ProbeTcp, ProbeHttp, EnsureDockerNetwork (ADR-W003 W6c).
 //
 // 4: adds SystemdUnitStatus, TimeSyncStatus (ADR-W003 W6d).
-const ProtocolMinor = 7
+// 5: EnsureContainer.labels carries Keystone's spec hash, so a replace
+//
+//	compares the whole spec rather than the image alone (ADR-W008 R2c).
+//
+// 6: adds EnsureContainer.command (ADR-W011 A3).
+// 7: adds EnsureSecret, PutSecret, ListSecrets and env materialization
+//
+//	of secret/<name> references (ADR-W012).
+//
+// 8: adds EnsureContainer.network. EnsureDockerNetwork could create a
+//
+//	network since minor 3, but nothing could attach a container to one,
+//	so the "container/<name>:<port>" upstreams every package declares
+//	had no way to resolve (#40).
+const ProtocolMinor = 8
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

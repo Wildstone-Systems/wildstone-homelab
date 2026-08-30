@@ -151,6 +151,11 @@ type Reconciler struct {
 	// the target agent's configured ManagedPrefixes.
 	ManagedPrefix string
 
+	// AutheliaAddr is the forward-auth endpoint rendered into routes with
+	// auth "authelia_oidc". Empty uses DefaultAutheliaAddr, which matches
+	// the container the identity package deploys.
+	AutheliaAddr string
+
 	// Approve decides whether a Medium/High risk plan.Plan may apply. nil
 	// (the zero value) means default-deny (ADR-W004 A3: "Medium/High
 	// require explicit approval") — every Medium/High plan comes back as
@@ -449,7 +454,7 @@ func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resK
 		return &containerObserveResult{}, placeholderResource(resource.KindContainer, k.Name), nil
 	}
 	inspect := res.GetInspectContainer()
-	if inspect.GetLabels()[specHashLabel] == specHash(want.Container) && inspect.GetRunning() {
+	if inspect.GetLabels()[specHashLabel] == specHash(want.Container, ContainerNetwork) && inspect.GetRunning() {
 		return &containerObserveResult{}, want, nil
 	}
 	// Present but stale (spec drifted, or a pre-spec-hash container) or
@@ -509,7 +514,7 @@ func (r *Reconciler) observeRoute(ctx context.Context, nodeID string, k resKey, 
 		return placeholderResource(resource.KindRoute, k.Name), true, nil
 	}
 	content := res.GetReadManagedFile().GetContent()
-	if routeFragmentEqual(content, renderRouteFragment(want.Route)) {
+	if routeFragmentEqual(content, renderRouteFragment(want.Route, r.autheliaAddr())) {
 		return want, true, nil
 	}
 	return placeholderResource(resource.KindRoute, k.Name), true, nil
@@ -848,11 +853,18 @@ func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step
 		// resolved implicitly by Docker, so without this a container can
 		// only ever start on a node that already has the exact digest
 		// cached. Found by the first real VM install (friction F-pull).
+		// Network before pull before ensure: the agent refuses to attach
+		// to a network that does not exist, and refuses to create a
+		// container whose image is absent.
+		if ne := r.ensureNodePrereqs(ctx, nodeID); ne != "" {
+			sr.Error = ne
+			return sr
+		}
 		if pr := r.pullImage(ctx, nodeID, want.Container.Image); pr != "" {
 			sr.Error = pr
 			return sr
 		}
-		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, want.Container))
+		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, want.Container, ContainerNetwork))
 		if err != nil {
 			sr.Error = err.Error()
 			return sr
@@ -965,7 +977,34 @@ const specHashLabel = "dev.wildstone.spec-hash"
 // hex chars: enough to make collision odds irrelevant for one homelab's
 // container count, and deliberately short of the 32-hex shape the
 // redaction layer treats as secret-like.
-func specHash(spec *resource.ContainerSpec) string {
+// ContainerNetwork is the user-defined Docker network every managed
+// container is attached to (protocol minor 8). It exists so containers
+// can reach each other by name: Docker's default bridge has no embedded
+// DNS, which is why the "container/<name>:<port>" upstreams packages
+// declare had nothing behind them (#40). The agent refuses to attach to
+// a network it did not create, so this is always one EnsureDockerNetwork
+// made.
+const ContainerNetwork = "wildstone"
+
+// DefaultAutheliaAddr is where forward-auth is sent when Reconciler
+// .AutheliaAddr is unset: the identity package's own Authelia container,
+// resolved by name on ContainerNetwork.
+const DefaultAutheliaAddr = "authelia:9091"
+
+func (r *Reconciler) autheliaAddr() string {
+	if r.AutheliaAddr != "" {
+		return r.AutheliaAddr
+	}
+	return DefaultAutheliaAddr
+}
+
+// specHash covers the network as well as the spec so that attaching an
+// existing fleet to ContainerNetwork for the first time actually replaces
+// those containers. The network is not part of ContainerSpec, so hashing
+// the spec alone would leave every pre-minor-8 container running
+// unattached with a matching hash — converged on paper, unreachable by
+// name in fact.
+func specHash(spec *resource.ContainerSpec, network string) string {
 	data, err := json.Marshal(spec)
 	if err != nil {
 		// A ContainerSpec is plain data; Marshal cannot fail on it. Guard
@@ -973,8 +1012,49 @@ func specHash(spec *resource.ContainerSpec) string {
 		// replace" — converging, never wedging.
 		return ""
 	}
-	sum := sha256.Sum256(data)
+	sum := sha256.Sum256(append(data, []byte("\x00net="+network)...))
 	return hex.EncodeToString(sum[:8])
+}
+
+// ensureNodePrereqs asserts the two things every managed container needs
+// to exist before it does, returning "" on success or the error text.
+//
+//   - ContainerNetwork, so the container can be attached and reached by
+//     name. The agent refuses to attach to a network it did not create,
+//     so this must run first.
+//   - The base Caddyfile, so an ingress container has a configuration to
+//     start with. It is written here rather than alongside the route
+//     fragments because Caddy needs it even when zero Routes exist yet —
+//     a fresh install brings up ingress before any app.
+//
+// Both are idempotent, so like pullImage this runs before every container
+// ensure rather than tracking per-node state, and re-asserting the
+// Caddyfile doubles as drift repair on it.
+func (r *Reconciler) ensureNodePrereqs(ctx context.Context, nodeID string) string {
+	res, err := r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_EnsureDockerNetwork{
+		EnsureDockerNetwork: &wsv1.EnsureDockerNetwork{Name: ContainerNetwork},
+	}})
+	if err != nil {
+		return "network " + ContainerNetwork + ": " + err.Error()
+	}
+	if oe := res.GetError(); oe != nil {
+		return fmt.Sprintf("network %s: %s: %s", ContainerNetwork, oe.GetCode(), oe.GetMessage())
+	}
+	if r.ManagedPrefix == "" {
+		return ""
+	}
+	res, err = r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_WriteManagedFile{
+		WriteManagedFile: &wsv1.WriteManagedFile{
+			Path: baseCaddyfilePath(r.ManagedPrefix), Content: renderBaseCaddyfile(),
+		},
+	}})
+	if err != nil {
+		return "base Caddyfile: " + err.Error()
+	}
+	if oe := res.GetError(); oe != nil {
+		return fmt.Sprintf("base Caddyfile: %s: %s", oe.GetCode(), oe.GetMessage())
+	}
+	return ""
 }
 
 // pullImage dispatches a PullImage for image on nodeID, returning "" on
@@ -994,7 +1074,7 @@ func (r *Reconciler) pullImage(ctx context.Context, nodeID, image string) string
 	return ""
 }
 
-func containerEnsureOp(name string, spec *resource.ContainerSpec) *wsv1.Operation {
+func containerEnsureOp(name string, spec *resource.ContainerSpec, network string) *wsv1.Operation {
 	var ports []*wsv1.PortBinding
 	for _, p := range spec.Ports {
 		hostPort, containerPort, ok := splitHostContainerPort(p)
@@ -1010,7 +1090,8 @@ func containerEnsureOp(name string, spec *resource.ContainerSpec) *wsv1.Operatio
 	return &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: &wsv1.EnsureContainer{
 		Name: name, Image: spec.Image, Env: spec.Env, Ports: ports, Mounts: mounts, RestartPolicy: spec.Restart,
 		Command: spec.Command,
-		Labels:  map[string]string{specHashLabel: specHash(spec)},
+		Network: network,
+		Labels:  map[string]string{specHashLabel: specHash(spec, network)},
 	}}}
 }
 
@@ -1113,7 +1194,7 @@ func (r *Reconciler) applyRouteStep(ctx context.Context, nodeID string, step pla
 			return sr
 		}
 		wantSpec = want.Route
-		content = renderRouteFragment(wantSpec)
+		content = renderRouteFragment(wantSpec, r.autheliaAddr())
 	case plan.ActionDelete:
 		// No delete-file op exists (only WriteManagedFile/ReadManagedFile)
 		// — a Route delete overwrites the fragment with empty content

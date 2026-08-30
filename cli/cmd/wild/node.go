@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 )
@@ -33,6 +34,7 @@ func runNode(args []string) int {
 	fs := flag.NewFlagSet("wild node mint-join", flag.ExitOnError)
 	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
 	ttl := fs.Int64("ttl", 0, "token TTL in seconds (default: server default, 15m)")
+	asJSON := fs.Bool("json", false, "print the raw API response instead of the pairing instructions")
 	fs.Parse(args[1:]) //nolint:errcheck // ExitOnError
 
 	token := os.Getenv("WILD_TOKEN")
@@ -49,8 +51,48 @@ func runNode(args []string) int {
 		fmt.Fprintln(os.Stderr, "wild node:", err)
 		return 1
 	}
-	fmt.Println(out)
+	var resp joinTokenResponse
+	if *asJSON || json.Unmarshal([]byte(out), &resp) != nil {
+		fmt.Println(out)
+		return 0
+	}
+	printPairing(resp)
 	return 0
+}
+
+// joinTokenResponse mirrors POST /api/v1/join-tokens.
+type joinTokenResponse struct {
+	JoinToken          string   `json:"joinToken"`
+	CAFingerprint      string   `json:"caFingerprint"`
+	ExpiresInSec       int64    `json:"expiresInSec"`
+	Install            string   `json:"install"`
+	InstallPrivateRepo string   `json:"installPrivateRepo"`
+	InstallNotes       []string `json:"installNotes"`
+}
+
+// printPairing renders the instructions rather than the JSON envelope.
+// The whole value of minting from Keystone is that it hands back a
+// command you can paste; printing it inside a JSON object made the
+// operator extract it by hand first, and hid the private-repo form the
+// paste actually needs while this repo is private.
+func printPairing(r joinTokenResponse) {
+	fmt.Printf("Join token minted; it is single-use and expires in %s.\n", time.Duration(r.ExpiresInSec)*time.Second)
+	fmt.Println()
+	fmt.Println("Run this on the new node:")
+	fmt.Println()
+	fmt.Println("  " + r.Install)
+	if r.InstallPrivateRepo != "" {
+		fmt.Println()
+		fmt.Println("While this repository is private, use instead:")
+		fmt.Println()
+		for _, line := range strings.Split(r.InstallPrivateRepo, "\n") {
+			fmt.Println("  " + line)
+		}
+	}
+	for _, n := range r.InstallNotes {
+		fmt.Println()
+		fmt.Println("Note: " + n)
+	}
 }
 
 // nodeListItem mirrors one row of GET /api/v1/nodes.
@@ -140,6 +182,6 @@ func relative(t time.Time) string {
 func nodeUsage() {
 	fmt.Fprintln(os.Stderr, `usage:
   wild node list [-json] [-api URL]
-  wild node mint-join [-ttl seconds] [-api URL]
+  wild node mint-join [-ttl seconds] [-json] [-api URL]
 Authentication: set WILD_TOKEN to an API token (list needs read; mint-join needs admin).`)
 }

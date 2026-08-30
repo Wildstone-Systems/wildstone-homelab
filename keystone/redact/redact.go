@@ -30,6 +30,17 @@ var secretRefScanRegexp = regexp.MustCompile(`secret/[A-Za-z0-9._-]+`)
 var digestPinScanRegexp = regexp.MustCompile(
 	`\b(?:[a-zA-Z0-9][a-zA-Z0-9./_:-]*@)?sha256:[0-9a-fA-F]{64}\b`)
 
+// commitRefScanRegexp finds a Statefile commit hash carried under a key
+// that names one, in JSON or YAML shape. A Statefile commit is a git
+// object id — the same hashes `git log` prints in the clear one directory
+// away, and precisely what an auditor needs to know WHICH desired state a
+// plan was computed against. The bare 40-hex shape is indistinguishable
+// from a hex-encoded key, so the shelter is keyed on the field name
+// rather than the value: only these keys are sheltered, and a hash
+// appearing anywhere else still redacts.
+var commitRefScanRegexp = regexp.MustCompile(
+	`(?i)"?\b(?:basedOnHead|statefileHead|newHead|head|commit)"?\s*[:=]\s*"?[0-9a-fA-F]{7,64}"?`)
+
 // hexTokenRegexp matches long hex runs — sha256 digests, hex-encoded keys,
 // password hashes — the shape of value redaction must catch regardless of
 // surrounding field name.
@@ -83,6 +94,7 @@ func SecretShaped(s string) bool {
 	}
 	sheltered := secretRefScanRegexp.ReplaceAllString(s, "")
 	sheltered = digestPinScanRegexp.ReplaceAllString(sheltered, "")
+	sheltered = commitRefScanRegexp.ReplaceAllString(sheltered, "")
 	if hexTokenRegexp.MatchString(sheltered) {
 		return true
 	}
@@ -123,6 +135,12 @@ func String(s string) string {
 	})
 	// Digest pins get the same shelter (see digestPinScanRegexp).
 	protected = digestPinScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
+		refs = append(refs, m)
+		return fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, len(refs)-1)
+	})
+	// So do Statefile commit hashes named by their key (see
+	// commitRefScanRegexp).
+	protected = commitRefScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
 		refs = append(refs, m)
 		return fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, len(refs)-1)
 	})

@@ -5,7 +5,7 @@
 CREATE TABLE backup_runs (
     seq         INTEGER PRIMARY KEY AUTOINCREMENT,
     plan_name   TEXT NOT NULL,             -- BackupPlan metadata.name
-    run_kind    TEXT NOT NULL,             -- 'backup' | 'drill'
+    run_kind    TEXT NOT NULL,             -- 'backup' | 'drill' | 'restore'
     plan_id     TEXT NOT NULL DEFAULT '',  -- the plans-table record for this run
     started_at  TEXT NOT NULL,             -- RFC3339Nano UTC
     finished_at TEXT NOT NULL DEFAULT '',
