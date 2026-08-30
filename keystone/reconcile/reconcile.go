@@ -1061,6 +1061,20 @@ func (r *Reconciler) ensureNodePrereqs(ctx context.Context, nodeID string) strin
 	if oe := res.GetError(); oe != nil {
 		return fmt.Sprintf("base Caddyfile: %s: %s", oe.GetCode(), oe.GetMessage())
 	}
+	// A fresh install has no Routes yet, and an import glob matching
+	// nothing warns once a second under --watch (F30). Seed one
+	// non-empty fragment so the glob always matches.
+	res, err = r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_WriteManagedFile{
+		WriteManagedFile: &wsv1.WriteManagedFile{
+			Path: placeholderFragmentPath(r.ManagedPrefix), Content: renderPlaceholderFragment(),
+		},
+	}})
+	if err != nil {
+		return "routes placeholder: " + err.Error()
+	}
+	if oe := res.GetError(); oe != nil {
+		return fmt.Sprintf("base Caddyfile: %s: %s", oe.GetCode(), oe.GetMessage())
+	}
 	return ""
 }
 
@@ -1191,9 +1205,11 @@ func (r *Reconciler) applyRouteStep(ctx context.Context, nodeID string, step pla
 		content = renderRouteFragment(wantSpec, r.autheliaAddr())
 	case plan.ActionDelete:
 		// No delete-file op exists (only WriteManagedFile/ReadManagedFile)
-		// — a Route delete overwrites the fragment with empty content
-		// instead (ADR-W004 A4 step 4 documents this).
-		content = []byte{}
+		// — a Route delete overwrites the fragment instead (ADR-W004 A4
+		// step 4 documents this). The replacement is a comment, not empty
+		// bytes: an empty import makes Caddy warn once a second forever
+		// under --watch (F30).
+		content = renderDeletedFragment(step.Name)
 	default:
 		sr.Error = "unexpected action " + step.Action.String()
 		return sr

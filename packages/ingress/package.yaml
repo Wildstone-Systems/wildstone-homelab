@@ -8,16 +8,21 @@
 # configuration, and the Wardstone agent's managed-prefix guard is what
 # makes that bind safe.
 #
-# --watch is why a Route added later takes effect at all (F24): Caddy
-# re-reads its config when the imported fragments change, so the
-# reconciler writing <prefix>/routes/*.caddy is the whole mechanism —
-# no restart, no reload op, no admin endpoint. Caddy's own docs warn
-# --watch suits development because it makes unintended config changes
-# easier to apply; that threat model is inverted here, since this
-# directory is machine-generated, mounted READ-ONLY, and writable only
-# through the agent's managed-prefix guard. Anyone who can write it can
-# already do worse than reload a proxy. Tailscale join is host-level and belongs to the
-# E9 installer, not a container here.
+# Tailscale join is host-level and belongs to the E9 installer, not a
+# container here.
+#
+# --watch is why a Route added later takes effect at all (F24). The
+# mechanism is not the one the flag's name suggests: it re-adapts the
+# WHOLE Caddyfile on every poll, so `import routes/*.caddy` is
+# re-evaluated each second and a new fragment is picked up without the
+# watched file itself changing. That same re-adaptation is why an
+# adaptation warning repeats once a second forever (F30).
+#
+# Caddy's own docs warn --watch suits development because it makes
+# unintended config changes easier to apply; that threat model is
+# inverted here, since this directory is machine-generated, mounted
+# READ-ONLY, and writable only through the agent's managed-prefix guard.
+# Anyone who can write it can already do worse than reload a proxy.
 #
 # Image digests are REAL, resolved 2026-08-25 via the OCI registry API
 # (`wild pkg refresh-digests` uses the same resolver):

@@ -16,6 +16,41 @@ func routeFragmentPath(managedPrefix, name string) string {
 	return path.Join(managedPrefix, "routes", name+".caddy")
 }
 
+// placeholderFragmentPath is a fragment that exists only so
+// `import routes/*.caddy` always matches at least one non-empty file.
+//
+// Caddy's --watch re-adapts the whole config every second, so any
+// adaptation warning repeats every second for as long as the state lasts
+// (F30). Two states Wildstone creates itself trigger one: a fresh install
+// before its first Route ("No files matching import glob pattern") and a
+// deleted Route ("Import file is empty"). Measured against a real Caddy:
+// one warning per second in both, silent with a comment-only file.
+// Unbounded json-file logging turns that into gigabytes a year.
+func placeholderFragmentPath(managedPrefix string) string {
+	return routeFragmentPath(managedPrefix, "00-wildstone-placeholder")
+}
+
+// renderPlaceholderFragment is comment-only on purpose: non-empty, so
+// Caddy stops warning, and contributing no configuration.
+func renderPlaceholderFragment() []byte {
+	return []byte("# managed by wildstone-keystone — do not edit\n" +
+		"# Placeholder so `import routes/*.caddy` always matches a non-empty\n" +
+		"# file. Caddy warns once a second, forever, otherwise (F30).\n")
+}
+
+// renderDeletedFragment replaces a deleted Route's fragment. The file
+// cannot be removed: the agent has no delete-file op, which is a
+// consequence of the closed operation surface the product's security
+// rests on (ADR-W003), not an oversight. It was previously truncated to
+// zero bytes, which Caddy warns about once a second forever — so it now
+// holds a comment saying what happened instead.
+func renderDeletedFragment(name string) []byte {
+	return []byte("# managed by wildstone-keystone — do not edit\n" +
+		"# Route " + name + " was deleted. This file remains because the agent\n" +
+		"# has no delete-file op; it is a comment rather than empty so Caddy\n" +
+		"# does not warn once a second about an empty import (F30).\n")
+}
+
 // baseCaddyfilePath returns the managed path of the Caddyfile that
 // imports every route fragment: <managedPrefix>/Caddyfile. Both ingress
 // profiles mount the managed prefix read-only, so this file IS Caddy's

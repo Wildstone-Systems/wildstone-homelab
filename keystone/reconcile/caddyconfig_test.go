@@ -148,3 +148,70 @@ func TestBaseCaddyfileImportsFragments(t *testing.T) {
 		}
 	}
 }
+
+// TestFragmentsAreNeverEmpty pins F30. Caddy's --watch re-adapts the whole
+// config every poll, so an adaptation warning is not logged once — it is
+// logged every second for as long as the state lasts, into an unbounded
+// json-file log. Both warning states are ones Wildstone creates itself, so
+// both are Wildstone's to avoid: a fresh install before its first Route,
+// and every Route ever deleted.
+//
+// Measured against a real Caddy at ~1 warning/second for each, and silent
+// once the file holds a comment. The assertion is "non-empty and
+// comment-only", because that is exactly the property that quiets it.
+func TestFragmentsAreNeverEmpty(t *testing.T) {
+	for name, got := range map[string][]byte{
+		"placeholder": renderPlaceholderFragment(),
+		"deleted":     renderDeletedFragment("kuma"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if len(got) == 0 {
+				t.Fatal("fragment is empty: Caddy warns once a second, forever")
+			}
+			for _, line := range strings.Split(strings.TrimSpace(string(got)), "\n") {
+				if line != "" && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+					t.Errorf("fragment contributes configuration, it must only be a comment: %q", line)
+				}
+			}
+		})
+	}
+	if !strings.Contains(string(renderDeletedFragment("kuma")), "kuma") {
+		t.Error("deleted fragment does not name the Route it replaced")
+	}
+}
+
+// TestRenderedConfigWithPlaceholderAndDeletionIsValid runs the real adapter
+// over the layout a node actually reaches after a Route is deleted: base
+// Caddyfile, the placeholder, a live route, and a deleted one.
+func TestRenderedConfigWithPlaceholderAndDeletionIsValid(t *testing.T) {
+	caddy, err := exec.LookPath("caddy")
+	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal("caddy not on PATH under CI: the install step in .github/workflows/ci.yml did not put it there")
+		}
+		t.Skip("caddy not on PATH; CI installs it")
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "routes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Caddyfile"), renderBaseCaddyfile(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spec := routeFixtures[0].spec
+	files := map[string][]byte{
+		"00-wildstone-placeholder.caddy": renderPlaceholderFragment(),
+		"live.caddy":                     renderRouteFragment(&spec, DefaultAutheliaAddr),
+		"gone.caddy":                     renderDeletedFragment("gone"),
+	}
+	for n, b := range files {
+		if err := os.WriteFile(filepath.Join(dir, "routes", n), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := exec.Command(caddy, "validate", "--adapter", "caddyfile",
+		"--config", filepath.Join(dir, "Caddyfile")).CombinedOutput()
+	if err != nil {
+		t.Fatalf("caddy rejected the post-deletion layout: %v\n%s", err, out)
+	}
+}
