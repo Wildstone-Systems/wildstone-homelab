@@ -10,6 +10,7 @@ package resource
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -82,7 +83,9 @@ type ContainerSpec struct {
 	// Image must be digest-pinned (ADR-W003 A4.2 regex).
 	Image string            `yaml:"image"`
 	Env   map[string]string `yaml:"env,omitempty"`
-	// Ports are "host:container" pairs.
+	// Ports are "[HOST_IP:]host:container" mappings, in Docker's own
+	// syntax. Omitting HOST_IP binds every interface — state an address
+	// (an IPv6 one in brackets) to keep a listener off the public ones.
 	Ports  []string `yaml:"ports,omitempty"`
 	Mounts []Mount  `yaml:"mounts,omitempty"`
 	// Command is the container argument vector, appended after the
@@ -395,20 +398,61 @@ func validateContainer(r *Resource) error {
 	return nil
 }
 
-// validatePortMapping checks a single ContainerSpec.Ports entry against the
-// "host:container" numeric-port format the reconciler expects.
+// validatePortMapping checks a single ContainerSpec.Ports entry. The
+// reconciler parses the same string with the same function, so anything
+// that validates here renders there.
 func validatePortMapping(r *Resource, p string) error {
-	parts := strings.Split(p, ":")
-	if len(parts) != 2 {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.ports", Msg: fmt.Sprintf("%q must be \"host:container\"", p)}
-	}
-	for _, part := range parts {
-		port, err := strconv.Atoi(part)
-		if err != nil || port < 1 || port > 65535 {
-			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.ports", Msg: fmt.Sprintf("%q must be \"host:container\" with numeric ports in 1-65535", p)}
-		}
+	if _, _, _, ok := SplitPortMapping(p); !ok {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.ports",
+			Msg: fmt.Sprintf("%q must be \"[HOST_IP:]host:container\" with numeric ports in 1-65535 "+
+				"and, if present, a literal IP address (IPv6 in brackets: \"[::1]:8443:80\")", p)}
 	}
 	return nil
+}
+
+// SplitPortMapping parses one ContainerSpec.Ports entry into the fields of
+// a wardstone PortBinding. hostIP is empty when the mapping names no
+// address, which is Docker's "every interface" default.
+//
+// This is the ONLY parser for the form: validation and rendering share it
+// so the set of strings that pass review is exactly the set that reaches
+// Docker. They were separate functions with separately-drifting rules
+// before, which is how "host:container" came to be enforced at the door
+// while the wire protocol had carried host_ip since minor 1.
+func SplitPortMapping(s string) (hostIP string, hostPort, containerPort uint32, ok bool) {
+	rest := s
+	switch {
+	// Bracketed IPv6, exactly as Docker writes it: "[fd7a::1]:8443:80".
+	// Bare IPv6 is unparseable here and Docker rejects it too — the
+	// colons are ambiguous against the port separators.
+	case strings.HasPrefix(s, "["):
+		end := strings.Index(s, "]:")
+		if end < 0 {
+			return "", 0, 0, false
+		}
+		hostIP, rest = s[1:end], s[end+2:]
+	case strings.Count(s, ":") == 2:
+		i := strings.Index(s, ":")
+		hostIP, rest = s[:i], s[i+1:]
+	case strings.Count(s, ":") != 1:
+		return "", 0, 0, false
+	}
+	if hostIP != "" && net.ParseIP(hostIP) == nil {
+		// A hostname would leave the real bind address to Docker's
+		// resolver at create time — a private listener must not depend
+		// on what /etc/hosts happens to say.
+		return "", 0, 0, false
+	}
+	h, c, found := strings.Cut(rest, ":")
+	if !found {
+		return "", 0, 0, false
+	}
+	hp, err1 := strconv.ParseUint(h, 10, 32)
+	cp, err2 := strconv.ParseUint(c, 10, 32)
+	if err1 != nil || err2 != nil || hp < 1 || hp > 65535 || cp < 1 || cp > 65535 {
+		return "", 0, 0, false
+	}
+	return hostIP, uint32(hp), uint32(cp), true
 }
 
 func validateVolume(r *Resource) error {
