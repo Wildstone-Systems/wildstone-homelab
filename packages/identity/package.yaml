@@ -32,7 +32,7 @@ params:
   - { name: public_domain, required: true }
   - { name: node, required: true }
 policies:
-  classifications: [family_public, admin]
+  classifications: [family_public, admin_tailscale]
   dataSensitivity: high
 templates:
   # ---- LLDAP: the directory Authelia authenticates users against.

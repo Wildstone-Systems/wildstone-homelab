@@ -47,7 +47,13 @@ type (
 // rather than duplicated: it carried nothing this doesn't.
 type planView struct {
 	runtimedb.PlanRecord
-	PlanJSON    string        `json:"-"` // shadows the embedded blob
+	// PlanJSON must compete for the embedded field's NAME to suppress it.
+	// `json:"-"` does not shadow — it removes this field from
+	// consideration entirely, leaving PlanRecord.PlanJSON the only
+	// candidate for "planJson", which is how the blob kept being served
+	// after the commit that meant to drop it (F25). Same name plus
+	// omitempty: this field wins on depth and is omitted for being empty.
+	PlanJSON    string        `json:"planJson,omitempty"`
 	BasedOnHead string        `json:"basedOnHead,omitempty"`
 	Plan        *plan.Plan    `json:"plan,omitempty"`
 	Put         []string      `json:"put,omitempty"`

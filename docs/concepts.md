@@ -93,6 +93,17 @@ opaque `wst_` bearers, stored hashed. Every request runs
 authn → RBAC → rate limit → handler → audit, and every response body
 passes a redacting encoder that strips secret-shaped values.
 
+Redaction is deliberately blunt — over-redacting is the safe direction —
+so a handful of shapes that look secret but are not carry explicit
+shelters: `secret/<name>` references, `sha256:` digest pins, a Statefile
+commit under a key that names one, and `Kind/name` resource references.
+That last one is why the shelter list matters rather than being an
+implementation detail: without it an ordinary `Volume/immich-postgres-data`
+is a 27-character run of base64's alphabet, and a plan step reads
+`Create [REDACTED]`. A plan a human cannot read is a plan they cannot
+review, and review is the only thing standing between a proposal and
+your data.
+
 ## Capabilities and packages
 
 A **capability** ("photos", "media") is a set of resources owned by

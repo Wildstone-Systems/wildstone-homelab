@@ -46,7 +46,7 @@ params:
   # explicitly that you want every interface.
   - { name: listen_addr, required: true }
 policies:
-  classifications: [admin]
+  classifications: [admin_tailscale]
 templates:
   - |
     apiVersion: wildstone.dev/v1

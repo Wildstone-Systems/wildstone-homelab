@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
@@ -83,6 +84,22 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 	}
 
 	var issues []Issue
+	// A package's declared classifications must be in the closed policy
+	// vocabulary. The field was parsed and read nowhere, so
+	// ingress-tailnet shipped `classifications: [admin]` — not a value
+	// that exists; admin_tailscale was meant — and lint said the package
+	// was clean (F31). Inert while nothing consults the field, and a trap
+	// the day something does, which is exactly when a wrong value is
+	// hardest to notice.
+	for _, c := range pkg.Policies.Classifications {
+		if !policy.Classifications[c] {
+			issues = append(issues, Issue{
+				Rule: "classification",
+				Msg: fmt.Sprintf("policies.classifications: %q is not in the closed vocabulary (%s)",
+					c, strings.Join(policy.ClassificationNames(), ", ")),
+			})
+		}
+	}
 	violations, exempted := policy.NewEngine(nil).Validate(policy.Change{
 		Proposed:  rendered,
 		Principal: "pkgtool/lint",

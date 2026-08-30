@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
 // secretRefScanRegexp finds secret *references* of the form "secret/<name>"
@@ -38,8 +40,43 @@ var digestPinScanRegexp = regexp.MustCompile(
 // from a hex-encoded key, so the shelter is keyed on the field name
 // rather than the value: only these keys are sheltered, and a hash
 // appearing anywhere else still redacts.
+//
+// The quotes may be backslash-escaped: String also runs over JSON that has
+// itself been serialized into a JSON string, where the text is
+// \"basedOnHead\":\"…\". Without allowing that backslash the shelter
+// missed, the hash fell through to the hex rule, and one document reported
+// the same field two different ways — the real hash at the top level and
+// [REDACTED] in the escaped copy (F32).
 var commitRefScanRegexp = regexp.MustCompile(
-	`(?i)"?\b(?:basedOnHead|statefileHead|newHead|head|commit)"?\s*[:=]\s*"?[0-9a-fA-F]{7,64}"?`)
+	`(?i)\\?"?\b(?:basedOnHead|statefileHead|newHead|head|commit)\\?"?\s*[:=]\s*\\?"?[0-9a-fA-F]{7,64}\\?"?`)
+
+// kindRefScanRegexp finds a resource reference of the form "Kind/name"
+// over the closed kind vocabulary. These are sheltered for exactly the
+// reason digest pins are: an ordinary "Volume/immich-postgres-data" is a
+// 24+-character run of [A-Za-z0-9/-], so the base64 shape below fired on
+// it and a plan step read "Create [REDACTED]" (F27). Any Volume name of
+// 17 characters was enough, a Container 14, a BackupPlan 13 — and the
+// first-party ingress package tripped it on its own plan.
+//
+// That is not cosmetic. Plan review by a human is the product's whole
+// safety claim, and a plan whose steps cannot be read is a plan that
+// cannot be reviewed. It hit error messages too, where there is no
+// adjacent field to recover the name from.
+//
+// The alternation is built from resource.Kinds() rather than written out,
+// so adding a kind cannot silently leave it unsheltered. Names use the
+// same character class as secret references.
+var kindRefScanRegexp = regexp.MustCompile(
+	`\b(?:` + strings.Join(kindNames(), "|") + `)/[A-Za-z0-9._-]+\b`)
+
+func kindNames() []string {
+	kinds := resource.Kinds()
+	names := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		names = append(names, regexp.QuoteMeta(string(k)))
+	}
+	return names
+}
 
 // hexTokenRegexp matches long hex runs — sha256 digests, hex-encoded keys,
 // password hashes — the shape of value redaction must catch regardless of
@@ -95,6 +132,7 @@ func SecretShaped(s string) bool {
 	sheltered := secretRefScanRegexp.ReplaceAllString(s, "")
 	sheltered = digestPinScanRegexp.ReplaceAllString(sheltered, "")
 	sheltered = commitRefScanRegexp.ReplaceAllString(sheltered, "")
+	sheltered = kindRefScanRegexp.ReplaceAllString(sheltered, "")
 	if hexTokenRegexp.MatchString(sheltered) {
 		return true
 	}
@@ -141,6 +179,11 @@ func String(s string) string {
 	// So do Statefile commit hashes named by their key (see
 	// commitRefScanRegexp).
 	protected = commitRefScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
+		refs = append(refs, m)
+		return fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, len(refs)-1)
+	})
+	// And Kind/name resource references (see kindRefScanRegexp).
+	protected = kindRefScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
 		refs = append(refs, m)
 		return fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, len(refs)-1)
 	})
