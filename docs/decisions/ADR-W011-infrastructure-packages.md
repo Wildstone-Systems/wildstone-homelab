@@ -40,12 +40,30 @@ package with its own decisions (A4). Identity already shipped with S3.
 ### A3. ContainerSpec grows `command`
 
 ntfy's image needs an argument (`serve`); the reference compose uses
-`command:`. ContainerSpec gains `command: []string` (container args,
-appended after the image entrypoint), threaded through the proto
+`command:`. ContainerSpec gains `command: []string`, threaded through the
+proto
 (`EnsureContainer.command`, protocol minor 6), the agent's create call,
 the plan differ, and the spec hash — so a command change is spec drift
 like any other. A pre-minor-6 agent ignores the field (proto3 unknown
 field): acceptable pre-alpha, visible via Hello's protocol_minor.
+
+`command` maps to Docker's `Cmd`, which is **not** "arguments after the
+entrypoint" — it is the whole argv whenever the image's entrypoint does
+not itself supply the binary. Three cases, all shipped:
+
+- `caddy` declares no entrypoint, so the command must start with `caddy`.
+- `cloudflared` and `ntfy` declare one that IS the binary, so the command
+  carries arguments only (`["tunnel","run"]`, `["serve"]`).
+- `gotenberg`'s entrypoint is `tini`, a supervisor that execs its
+  arguments — it exists but supplies no binary, so the command must still
+  name one.
+
+Describing this as "appended after the entrypoint" is what shipped both
+ingress profiles with `["run", ...]` for Caddy: every Caddy container died
+with `exec: "run": executable file not found in $PATH`, the one blocker in
+the v0.1.1-alpha install validation. `TestPackageCommandsNameTheirBinary`
+now requires an explicit entrypoint decision, recorded with its evidence,
+for every image a shipped package gives a command.
 
 ### A4. Backups (the MVP headline — own work package)
 

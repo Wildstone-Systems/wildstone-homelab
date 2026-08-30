@@ -162,9 +162,17 @@ type Reconciler struct {
 	Approve func(*plan.Plan) bool
 
 	// ReloadFn is the Route-apply reload seam (ADR-W004 A1: "a reload op
-	// seam"). nil (the default) is a documented no-op: S2b's job is the
-	// reconcile loop and the WriteManagedFile plumbing, not a live Caddy
-	// reload, which lands in a later E-series work package.
+	// seam"). nil (the default) is a no-op, and for the shipped ingress
+	// profiles that is now correct rather than merely deferred: both run
+	// Caddy with --watch, so writing a fragment under <prefix>/routes/ IS
+	// the reload — verified on a live Caddy, add and remove alike, with
+	// unaffected routes left serving throughout.
+	//
+	// Before --watch, a Route added after the first apply was written,
+	// reconciled green, and inert until someone restarted the container
+	// (F24) — the same "converged on paper, no working front door" shape
+	// the network fix went after. The seam stays for an ingress that
+	// cannot watch its own config.
 	ReloadFn func(ctx context.Context) error
 
 	// ReloadAutheliaFn is the OidcClient-apply batched reload seam

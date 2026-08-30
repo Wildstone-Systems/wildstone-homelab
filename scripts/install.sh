@@ -270,6 +270,49 @@ install_unit() {
   log "$name.service enabled, (re)started, and healthy after 5s"
 }
 
+# ------------------------------------------------- keystone flag merging
+# read_keystone_args prints the flags currently in the env file, minus the
+# -data-dir the writer always prepends (it is re-added on every write, so
+# carrying it through would duplicate it).
+read_keystone_args() {
+  local line
+  line="$(grep -m1 '^KEYSTONE_ARGS=' "$KEYSTONE_ENV" 2>/dev/null || true)"
+  line="${line#KEYSTONE_ARGS=}"
+  line="${line#-data-dir /var/lib/wildstone/keystone}"
+  printf '%s' "$line"
+}
+
+# merge_keystone_args prints $1 (existing flags) with every flag named in
+# $2 (this run's flags) removed, then $2 appended — so a re-run overrides
+# the flags it sets and preserves the ones it does not mention.
+#
+# A flag's value is the following token ONLY when that token is not itself
+# a flag, which keeps a boolean flag from swallowing the next flag's name.
+merge_keystone_args() {
+  local existing="$1" new="$2" names=" " tok out="" drop=0
+  for tok in $new; do
+    case "$tok" in -*) names="$names$tok " ;; esac
+  done
+  for tok in $existing; do
+    case "$tok" in
+      -*)
+        case "$names" in
+          *" $tok "*) drop=1; continue ;;
+          *)          drop=0 ;;
+        esac
+        ;;
+      *)
+        # An `if`, not `[ ... ] && continue`: under `set -e` that list's
+        # failure when drop=0 is the branch's exit status and kills the
+        # script. Same trap as F19.
+        if [ "$drop" = 1 ]; then continue; fi
+        ;;
+    esac
+    out="$out $tok"
+  done
+  printf '%s%s' "$out" "$new"
+}
+
 # ---------------------------------------------------------------- roles
 if [ "$ROLE" = keystone ]; then
   fetch_binary keystone
@@ -291,8 +334,17 @@ if [ "$ROLE" = keystone ]; then
   if [ "$KEYSTONE_ARGS_SET" = 0 ] && [ -f "$KEYSTONE_ENV" ]; then
     log "keeping the keystone flags already in $KEYSTONE_ENV"
   else
+    # Merge, do not replace (F22). Writing this file all-or-nothing meant
+    # one --keystone-arg silently dropped every flag already set: add an
+    # unrelated flag after the documented Console setup and the Console
+    # stopped being served, with the service still reporting healthy and
+    # the script still printing "re-running this script keeps them".
+    if [ -f "$KEYSTONE_ENV" ]; then
+      KEYSTONE_ARGS="$(merge_keystone_args "$(read_keystone_args)" "$KEYSTONE_ARGS")"
+    fi
     umask 022
     printf 'KEYSTONE_ARGS=-data-dir /var/lib/wildstone/keystone%s\n' "$KEYSTONE_ARGS" > "$KEYSTONE_ENV"
+    log "keystone flags: $KEYSTONE_ENV"
   fi
 
   install_unit keystone <<'UNIT'

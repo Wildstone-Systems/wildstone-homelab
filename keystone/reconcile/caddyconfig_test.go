@@ -137,7 +137,12 @@ func TestRouteFragmentShape(t *testing.T) {
 // every fragment dead weight.
 func TestBaseCaddyfileImportsFragments(t *testing.T) {
 	got := string(renderBaseCaddyfile())
-	for _, want := range []string{"import routes/*.caddy", "auto_https off", "admin off"} {
+	// ":80 {\n\tabort" is the default deny (F26): without it Caddy answers
+	// every unrouted Host with an empty 200, so a front door with one
+	// Route still looks alive for any hostname pointed at it. Verified
+	// behaviourally against a real Caddy: routed host 200, unrouted host
+	// connection aborted.
+	for _, want := range []string{"import routes/*.caddy", "auto_https off", "admin off", ":80 {\n\tabort\n}"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("base Caddyfile missing %q:\n%s", want, got)
 		}

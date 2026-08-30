@@ -48,6 +48,10 @@ are Caddy's entire configuration.
 
 Two consequences worth knowing:
 
+Both ingress profiles run Caddy with `--watch`, so a Route added later
+takes effect on its own: the reconciler writes the fragment and Caddy
+re-reads it within about a second. No restart, and nothing for you to do.
+
 - **Editing a Caddyfile by hand does not stick.** The reconciler
   compares the live bytes against a fresh render every tick and repairs
   the difference. Change the `Route`, not the file.
