@@ -32,6 +32,12 @@ params:
   # The Cloudflare tunnel UUID (from `cloudflared tunnel create`), used
   # for the wildcard CNAME target <tunnel_id>.cfargotunnel.com.
   - { name: tunnel_id, required: true }
+  # Host address the private admin listener binds. Required, and
+  # deliberately without a default: a "tailnet-only" surface that quietly
+  # binds every interface is worse than one you had to think about (#41).
+  # Normally the node's tailnet address (`tailscale ip -4`); "0.0.0.0" is
+  # the explicit way to say you mean every interface.
+  - { name: admin_listen_addr, required: true }
 templates:
   - |
     apiVersion: wildstone.dev/v1
@@ -56,13 +62,19 @@ templates:
         # :80 only. The reconciler renders sites as http:// with
         # auto_https off (#40) — TLS arrives already terminated from the
         # tunnel — so nothing would answer on 443.
-        - "80:80"
+        #
+        # Loopback only, which is what "nothing binds public interfaces
+        # directly" above has always claimed and, until #41, was not true
+        # of: cloudflared reaches this container by name over the
+        # `wildstone` network, so the published port is for local
+        # debugging and nothing else.
+        - "127.0.0.1:80:80"
       mounts:
         - { source: caddy-public-data, target: /data }
         - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }
       restart: unless-stopped
   # caddy-private serves the tailnet-only admin surfaces on a distinct
-  # port; the E9 installer binds it to the tailnet interface.
+  # port, bound to the address the operator names.
   - |
     apiVersion: wildstone.dev/v1
     kind: Container
@@ -71,7 +83,7 @@ templates:
       image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
       command: ["run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile"]
       ports:
-        - "8443:80"
+        - "{{ .Params.admin_listen_addr }}:8443:80"
       mounts:
         - { source: caddy-private-data, target: /data }
         - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }

@@ -51,6 +51,11 @@ func TestLintShippedPackages(t *testing.T) {
 		"public_domain": "example.internal",
 		"admin_domain":  "admin.example.internal",
 		"node":          "n1",
+		// Bind addresses must be real IPs or validation rejects the
+		// rendered port mapping (#41) — the same reason domains are
+		// filled with domain-shaped values rather than autofill.
+		"admin_listen_addr": "100.64.0.1",
+		"listen_addr":       "100.64.0.1",
 	}
 	for _, dir := range dirs {
 		dir := dir

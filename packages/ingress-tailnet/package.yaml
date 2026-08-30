@@ -16,11 +16,6 @@
 # shared with packages/ingress (same caddy:latest):
 #   caddy:latest -> sha256:df7f1c2f...a78d
 #
-# KNOWN LIMITATIONS (both tracked, both shared with packages/ingress —
-# this profile is exactly as functional as that one, no more):
-#   - ContainerSpec.Ports cannot express a bind address, so the port
-#     below lands on 0.0.0.0 rather than the tailnet interface (#41).
-#     Restrict it with a host firewall until that is fixed.
 apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
@@ -44,6 +39,12 @@ params:
   # packages/ingress uses for caddy-private, so the two profiles are
   # swappable without rewriting Routes.
   - { name: listen_port, default: "8443" }
+  # Host address to bind. Required and undefaulted on purpose: this
+  # profile's whole claim is that it is private, and a default would let
+  # that claim be true only by accident (#41). Normally the node's
+  # tailnet address (`tailscale ip -4`); pass "0.0.0.0" to say
+  # explicitly that you want every interface.
+  - { name: listen_addr, required: true }
 policies:
   classifications: [admin]
 templates:
@@ -65,7 +66,7 @@ templates:
       image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
       command: ["run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile"]
       ports:
-        - "{{ .Params.listen_port }}:80"
+        - "{{ .Params.listen_addr }}:{{ .Params.listen_port }}:80"
       mounts:
         - { source: caddy-tailnet-data, target: /data }
         - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }

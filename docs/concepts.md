@@ -11,6 +11,23 @@ The **Statefile** is a git-backed store of typed resources
 it. Container images must be digest-pinned (`repo@sha256:...`); the
 agent refuses anything else.
 
+A `Container`'s published ports use Docker's own syntax and may name the
+host address to bind:
+
+```yaml
+ports:
+  - "8443:80"                      # every interface — Docker's default
+  - "100.64.0.1:8443:80"           # this address only, e.g. the tailnet one
+  - "[fd7a:115c:a1e0::1]:8443:80"  # IPv6 goes in brackets
+```
+
+The address must be a literal IP, not a hostname: a listener whose real
+reach depends on what `/etc/hosts` resolves to at container-create time
+is not a listener you can reason about. Both ingress profiles require
+you to name the address for their private surface rather than defaulting
+it, because a surface documented as private that silently binds a public
+interface is the worst of both.
+
 ## Plans are the only write path
 
 Every change to the Statefile is a **plan**: proposed (by a human, a

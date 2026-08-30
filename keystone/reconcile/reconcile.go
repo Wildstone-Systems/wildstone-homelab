@@ -64,7 +64,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1077,11 +1076,11 @@ func (r *Reconciler) pullImage(ctx context.Context, nodeID, image string) string
 func containerEnsureOp(name string, spec *resource.ContainerSpec, network string) *wsv1.Operation {
 	var ports []*wsv1.PortBinding
 	for _, p := range spec.Ports {
-		hostPort, containerPort, ok := splitHostContainerPort(p)
+		hostIP, hostPort, containerPort, ok := resource.SplitPortMapping(p)
 		if !ok {
-			continue // malformed "host:container" pair; not this package's job to re-validate
+			continue // malformed mapping; not this package's job to re-validate
 		}
-		ports = append(ports, &wsv1.PortBinding{HostPort: hostPort, ContainerPort: containerPort})
+		ports = append(ports, &wsv1.PortBinding{HostIp: hostIP, HostPort: hostPort, ContainerPort: containerPort})
 	}
 	var mounts []*wsv1.Mount
 	for _, m := range spec.Mounts {
@@ -1093,19 +1092,6 @@ func containerEnsureOp(name string, spec *resource.ContainerSpec, network string
 		Network: network,
 		Labels:  map[string]string{specHashLabel: specHash(spec, network)},
 	}}}
-}
-
-func splitHostContainerPort(s string) (host, container uint32, ok bool) {
-	h, c, found := strings.Cut(s, ":")
-	if !found {
-		return 0, 0, false
-	}
-	hp, err1 := strconv.ParseUint(h, 10, 32)
-	cp, err2 := strconv.ParseUint(c, 10, 32)
-	if err1 != nil || err2 != nil {
-		return 0, 0, false
-	}
-	return uint32(hp), uint32(cp), true
 }
 
 // ---------------------------------------------------------------- apply: Volume
