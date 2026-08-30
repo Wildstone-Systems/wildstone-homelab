@@ -45,7 +45,17 @@ func renderBaseCaddyfile() []byte {
 		"\tauto_https off\n" +
 		"}\n" +
 		"\n" +
-		"import routes/*.caddy\n")
+		"import routes/*.caddy\n" +
+		"\n" +
+		// Default deny (F26). Caddy answers an unmatched site with an empty
+		// 200, which on an internet-facing front door reads as "something is
+		// here" for every hostname anyone points at it. A Route is the only
+		// thing that makes a host served; everything else gets the connection
+		// closed. This block is last so any real site address, being more
+		// specific, still wins.
+		":80 {\n" +
+		"\tabort\n" +
+		"}\n")
 }
 
 // caddyUpstream translates a RouteSpec upstream into an address Caddy can

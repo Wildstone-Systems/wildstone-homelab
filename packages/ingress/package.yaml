@@ -57,7 +57,13 @@ templates:
     metadata: { name: caddy-public, node: "{{ .Params.node }}" }
     spec:
       image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
-      command: ["run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile"]
+        # argv[0] must be the binary: this image sets no ENTRYPOINT, so
+        # spec.command lands in Docker Cmd as the whole argv. Without
+        # "caddy" here the container dies with
+        # `exec: "run": executable file not found in $PATH` (F23).
+        # cloudflared below is the opposite case — it HAS an entrypoint,
+        # so ["tunnel","run"] is right there. Do not unify them.
+      command: ["caddy", "run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile"]
       ports:
         # :80 only. The reconciler renders sites as http:// with
         # auto_https off (#40) — TLS arrives already terminated from the
@@ -81,7 +87,13 @@ templates:
     metadata: { name: caddy-private, node: "{{ .Params.node }}" }
     spec:
       image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
-      command: ["run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile"]
+        # argv[0] must be the binary: this image sets no ENTRYPOINT, so
+        # spec.command lands in Docker Cmd as the whole argv. Without
+        # "caddy" here the container dies with
+        # `exec: "run": executable file not found in $PATH` (F23).
+        # cloudflared below is the opposite case — it HAS an entrypoint,
+        # so ["tunnel","run"] is right there. Do not unify them.
+      command: ["caddy", "run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile"]
       ports:
         - "{{ .Params.admin_listen_addr }}:8443:80"
       mounts:
