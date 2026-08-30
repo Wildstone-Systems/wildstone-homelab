@@ -70,7 +70,7 @@ templates:
         # `exec: "run": executable file not found in $PATH` (F23).
         # cloudflared below is the opposite case — it HAS an entrypoint,
         # so ["tunnel","run"] is right there. Do not unify them.
-      command: ["caddy", "run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile"]
+      command: ["caddy", "run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile", "--watch"]
       ports:
         - "{{ .Params.listen_addr }}:{{ .Params.listen_port }}:80"
       mounts:
