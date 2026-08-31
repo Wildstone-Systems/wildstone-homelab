@@ -117,13 +117,24 @@ passes a redacting encoder that strips secret-shaped values.
 Redaction is deliberately blunt — over-redacting is the safe direction —
 so a handful of shapes that look secret but are not carry explicit
 shelters: `secret/<name>` references, `sha256:` digest pins, a Statefile
-commit under a key that names one, and `Kind/name` resource references.
-That last one is why the shelter list matters rather than being an
+commit under a key that names one, `Kind/name` resource references, and
+separated identifiers — a kebab-case or `SCREAMING_SNAKE` run such as a
+secret's name (`authelia-storage-encryption-key`) or an env-var key
+(`IMMICH_MACHINE_LEARNING_URL`). The `Kind/name` shelter is why the shelter list matters rather than being an
 implementation detail: without it an ordinary `Volume/immich-postgres-data`
 is a 27-character run of base64's alphabet, and a plan step reads
 `Create [REDACTED]`. A plan a human cannot read is a plan they cannot
 review, and review is the only thing standing between a proposal and
-your data.
+your data. `wild secret list` and an identity plan's env block were the
+same failure without the identifier shelter.
+
+A shelter always declines when the thing under it is not what it claims:
+a `Kind/name` whose name half is high-entropy, and an identifier whose
+letters are all hex digits, are both taken by the value rules instead. A
+passphrase-shaped password is the one thing shape cannot separate from an
+identifier, and it stays covered by the keyword rule that redacts the
+value of any `password`/`secret`/`token`/`api_key` key regardless of what
+it looks like.
 
 ## Capabilities and packages
 
