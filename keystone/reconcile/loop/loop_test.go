@@ -16,10 +16,37 @@ import (
 
 // okApplier answers every op with success — enough for Volume steps,
 // whose apply and health gate are both EnsureVolume calls.
-type okApplier struct{ ops int }
+//
+// Managed files are backed by a map rather than answered blankly. A stub
+// that returns empty content for every ReadManagedFile makes the node
+// prereqs (F34) look drifted on every tick, so the reconciler rewrites
+// them forever and "converged means quiet" stops holding — an artifact of
+// the fixture, not of the product, but one that would hide a real
+// always-rewriting bug behind a test that expects churn.
+type okApplier struct {
+	ops   int
+	files map[string][]byte
+}
 
-func (a *okApplier) Apply(_ context.Context, _ string, _ *wsv1.Operation) (*wsv1.OpResult, error) {
+func (a *okApplier) Apply(_ context.Context, _ string, op *wsv1.Operation) (*wsv1.OpResult, error) {
 	a.ops++
+	if a.files == nil {
+		a.files = map[string][]byte{}
+	}
+	switch o := op.GetOp().(type) {
+	case *wsv1.Operation_WriteManagedFile:
+		a.files[o.WriteManagedFile.GetPath()] = o.WriteManagedFile.GetContent()
+	case *wsv1.Operation_ReadManagedFile:
+		content, ok := a.files[o.ReadManagedFile.GetPath()]
+		if !ok {
+			return &wsv1.OpResult{Result: &wsv1.OpResult_Error{
+				Error: &wsv1.OpError{Code: wsv1.ErrorCode_ERROR_CODE_NOT_FOUND},
+			}}, nil
+		}
+		return &wsv1.OpResult{Result: &wsv1.OpResult_ReadManagedFile{
+			ReadManagedFile: &wsv1.ReadManagedFileResult{Content: content},
+		}}, nil
+	}
 	return &wsv1.OpResult{}, nil
 }
 

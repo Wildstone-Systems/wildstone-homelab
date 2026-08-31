@@ -469,6 +469,10 @@ func validateRoute(r *Resource) error {
 	if r.Route == nil {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "route spec missing"}
 	}
+	if r.Metadata.Name == ReservedRouteName {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "metadata.name",
+			Msg: "reserved: the reconciler renders its own placeholder fragment to this name, and a Route sharing it oscillates between the two writers (F35)"}
+	}
 	if r.Route.Classification == "" {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.classification", Msg: "must not be empty (mandatory policy input)"}
 	}

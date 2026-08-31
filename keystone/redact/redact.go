@@ -69,6 +69,37 @@ var commitRefScanRegexp = regexp.MustCompile(
 var kindRefScanRegexp = regexp.MustCompile(
 	`\b(?:` + strings.Join(kindNames(), "|") + `)/[A-Za-z0-9._-]+\b`)
 
+// kindRefIsSafe reports whether a matched Kind/name reference may be
+// sheltered. The shelter is purely textual, so without this any
+// high-entropy string wearing a kind prefix passed through in the clear
+// (F36):
+//
+//	Volume/deadbeefcafebabe0123456789abcdef0123456789abcdef  → unchanged
+//
+// Not an escalation — writing that requires already holding the secret —
+// but the redactor should not treat "looks like a resource reference" as
+// proof that it is one. Resource names are operator-chosen words; a name
+// that is itself secret-shaped is not a name worth protecting, so the
+// shelter simply declines and the value rules take it.
+func kindRefIsSafe(match string) bool {
+	_, name, ok := strings.Cut(match, "/")
+	if !ok {
+		return false
+	}
+	if hexTokenRegexp.MatchString(name) {
+		return false
+	}
+	// Mirrors SecretShaped's digit requirement rather than the bare
+	// base64 shape: real token material virtually always carries digits,
+	// and ordinary reference names ("caddy-tailnet-data") do not.
+	for _, m := range base64TokenRegexp.FindAllString(name, -1) {
+		if strings.ContainsAny(m, "0123456789") {
+			return false
+		}
+	}
+	return true
+}
+
 func kindNames() []string {
 	kinds := resource.Kinds()
 	names := make([]string, 0, len(kinds))
@@ -132,7 +163,12 @@ func SecretShaped(s string) bool {
 	sheltered := secretRefScanRegexp.ReplaceAllString(s, "")
 	sheltered = digestPinScanRegexp.ReplaceAllString(sheltered, "")
 	sheltered = commitRefScanRegexp.ReplaceAllString(sheltered, "")
-	sheltered = kindRefScanRegexp.ReplaceAllString(sheltered, "")
+	sheltered = kindRefScanRegexp.ReplaceAllStringFunc(sheltered, func(m string) string {
+		if kindRefIsSafe(m) {
+			return ""
+		}
+		return m // a secret-shaped name is not sheltered here either
+	})
 	if hexTokenRegexp.MatchString(sheltered) {
 		return true
 	}
@@ -182,8 +218,12 @@ func String(s string) string {
 		refs = append(refs, m)
 		return fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, len(refs)-1)
 	})
-	// And Kind/name resource references (see kindRefScanRegexp).
+	// And Kind/name resource references (see kindRefScanRegexp), unless
+	// the name half is itself secret-shaped (F36).
 	protected = kindRefScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
+		if !kindRefIsSafe(m) {
+			return m
+		}
 		refs = append(refs, m)
 		return fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, len(refs)-1)
 	})

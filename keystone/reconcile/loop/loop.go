@@ -213,6 +213,14 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 					map[string]string{"steps": fmt.Sprint(len(outcome.Plan.Steps))})
 			}
 		}
+		if len(outcome.PrereqRepaired) > 0 {
+			// Silent repair is right (see repairNodePrereqs) but invisible
+			// repair is not: the operator should be able to see that a
+			// managed file was edited and put back, especially the base
+			// Caddyfile, whose default-deny block is a security posture.
+			out.Repaired = true
+			l.event("prereq.repaired", g.node, strings.Join(outcome.PrereqRepaired, ", "), nil)
+		}
 		if len(outcome.ForeignDrift) > 0 {
 			l.event("drift.foreign", g.node, strings.Join(outcome.ForeignDrift, ", "), nil)
 		}

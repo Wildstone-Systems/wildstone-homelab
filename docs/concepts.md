@@ -52,7 +52,13 @@ Both ingress profiles run Caddy with `--watch`, so a Route added later
 takes effect on its own: the reconciler writes the fragment and Caddy
 re-reads it within about a second. No restart, and nothing for you to do.
 
-- **Editing a Caddyfile by hand does not stick.** The reconciler
+- **Editing a Caddyfile by hand does not stick.** That covers the base
+  `Caddyfile` and the routes placeholder as well as the fragments: they
+  are not resources, so they get no plan and no approval step, but the
+  reconciler re-asserts them on every tick and logs a `prereq.repaired`
+  event when it has to. The base file carries the default-deny block, so
+  "nobody noticed it was removed" is not an acceptable failure mode.
+- **Editing a route fragment by hand does not stick either.** The reconciler
   compares the live bytes against a fresh render every tick and repairs
   the difference. Change the `Route`, not the file.
 - **Apps are reached by container name.** Every managed container is

@@ -158,7 +158,29 @@ func TestReverseAudit_VolumeGateFailureNeverDeletes(t *testing.T) {
 	if len(outcome.Steps) != 1 || outcome.Steps[0].Reversed {
 		t.Fatalf("step = %+v, want gate-failed WITHOUT reverse", outcome.Steps)
 	}
+	// Every Reconcile now re-asserts the two node-level managed files
+	// (F34), so the dispatch list opens with their read/write pair. Those
+	// are node prerequisites, not the volume path, and this assertion is
+	// about the volume path: strip them by name — safe here because this
+	// desired set contains no Route or OidcClient, so no other managed
+	// file exists to write — and keep the negative on what remains.
+	//
+	// Deliberately narrowed rather than relaxed: the load-bearing claim
+	// is that NO destructive op is reachable for a volume, and that is
+	// still asserted exactly.
+	prereqOps := map[string]int{"ReadManagedFile": 0, "WriteManagedFile": 0}
+	var volumePath []string
 	for _, call := range s.calls {
+		if _, ok := prereqOps[call]; ok {
+			prereqOps[call]++
+			continue
+		}
+		volumePath = append(volumePath, call)
+	}
+	if prereqOps["ReadManagedFile"] > 2 || prereqOps["WriteManagedFile"] > 2 {
+		t.Fatalf("more managed-file ops than the two node prereqs account for: %v", s.calls)
+	}
+	for _, call := range volumePath {
 		if call != "EnsureVolume" {
 			t.Fatalf("volume path dispatched %q — only EnsureVolume may ever run for a volume (calls: %v)", call, s.calls)
 		}
