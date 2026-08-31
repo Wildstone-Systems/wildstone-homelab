@@ -70,7 +70,7 @@ func TestYAMLRoundTrip(t *testing.T) {
 			Kind:       KindLdapGroup,
 			Metadata:   Metadata{Name: "photos-users", Owner: "capability/identity", Node: "node-a"},
 			LdapGroup: &LdapGroupSpec{
-				Name:    "photos-users",
+				Name:    "photos_users",
 				Members: []string{"alice", "bob"},
 			},
 		},
