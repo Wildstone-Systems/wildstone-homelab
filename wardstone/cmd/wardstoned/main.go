@@ -21,7 +21,14 @@ var version = "dev" // set via -ldflags at release
 func main() {
 	nodeID := flag.String("node-id", "", "unique node identifier (required)")
 	keystone := flag.String("keystone", "", "Keystone gateway address host:port (required)")
-	dataDir := flag.String("data-dir", "/etc/wildstone/wardstone", "directory for node identity")
+	// Deliberately NOT under a managed prefix. The ingress packages
+	// bind-mount /etc/wildstone into Caddy so it can read its rendered
+	// config; with the node's identity and secret store living inside that
+	// prefix, an internet-facing reverse proxy could read node.key,
+	// secret.key and every secret. The agent refuses such a mount now
+	// (checkBindSource), but a boundary that depends on one check is worse
+	// than one that also depends on the layout.
+	dataDir := flag.String("data-dir", "/var/lib/wildstone/wardstone", "directory for node identity and the secret store (must NOT be under a managed prefix)")
 	joinToken := flag.String("join-token", "", "one-time join token (first run only)")
 	caFingerprint := flag.String("ca-fingerprint", "", "hex sha256 of Keystone's CA certificate DER; pins the join against MITM (recommended in production; see `keystone` startup log). Empty falls back to trust-on-first-use.")
 	flag.Parse()

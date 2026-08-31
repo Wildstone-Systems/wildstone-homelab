@@ -27,7 +27,7 @@ agent's own self-update health gate:
 
 ```sh
 sudo cp wardstoned.service /etc/systemd/system/wardstoned.service
-sudo mkdir -p /etc/wildstone/wardstone
+sudo mkdir -p /var/lib/wildstone/wardstone
 sudo systemctl daemon-reload
 sudo systemctl enable --now wardstoned
 ```

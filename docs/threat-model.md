@@ -68,6 +68,17 @@ ADR-W006/W017; the red-team suite (`keystone/butler/redteam_test.go`,
 - Structural ceiling: read tools + `propose_change` only; the package
   imports no apply capability (`structural_test.go`); proposals land
   in state `proposed` under principal `butler` acting-for the caller.
+- **A container is never handed the node's secrets.** The agent's data
+  directory (node identity, the secret-store key, the encrypted secrets)
+  lives outside every managed prefix, and `EnsureContainer` refuses a bind
+  mount whose host path overlaps it in either direction. Both halves
+  matter: the layout keeps the secrets out of the tree packages mount, and
+  the check stops a package asking for them anyway. This was found by
+  deploying the identity package — `/etc/wildstone` was bind-mounted into
+  the internet-facing Caddy, and the data directory defaulted to a path
+  inside it, so the reverse proxy could read the node's mTLS identity and
+  decrypt its secret store. `readOnly` and 0700 were both irrelevant: the
+  container runs as uid 0, and reading is the compromise.
 - Every tool result is centrally redacted, size-bounded, and — where
   attacker-influenceable (health, diagnose) — wrapped in an
   untrusted-data envelope with case/spacing-tolerant breakout
