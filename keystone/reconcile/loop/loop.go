@@ -266,14 +266,34 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 // for a human to approve through the API — at most one open at a time
 // (ADR-W008 A2).
 func (l *Loop) proposeDrift(desired []resource.Resource) (string, error) {
+	head, err := l.State.Head()
+	if err != nil {
+		return "", fmt.Errorf("loop: reading statefile head for drift proposal: %w", err)
+	}
 	open, err := l.DB.PlansInState(runtimedb.PlanProposed)
 	if err != nil {
 		return "", err
 	}
 	for _, p := range open {
-		if p.Principal == driftPrincipal {
-			return "", nil // already surfaced; don't flood the plan list
+		if p.Principal != driftPrincipal {
+			continue
 		}
+		// The open proposal only speaks for the desired state it was
+		// computed from. Approval refuses one whose base has moved and
+		// supersedes it there (F28) — but until someone clicked approve,
+		// this dedupe kept returning early and no fresh proposal was ever
+		// raised, so the drift stayed unrepairable and the only visible
+		// artifact was a plan that 409s when you finally act on it
+		// (defect B). Supersede it here instead: the operator's one
+		// available action stops being the one that cannot work.
+		var stored plan.StoredProposal
+		if err := json.Unmarshal([]byte(p.PlanJSON), &stored); err == nil && stored.BasedOnHead == head {
+			return "", nil // still speaks for the current desired state
+		}
+		if err := l.DB.TransitionPlan(p.ID, runtimedb.PlanSuperseded, ""); err != nil {
+			return "", err
+		}
+		l.event("drift.superseded", "", "statefile moved since this drift proposal", map[string]string{"plan": p.ID})
 	}
 	summary := "drift repair requires approval (Medium/High risk)"
 	// BasedOnHead must be the live head, not "": approval refuses a
@@ -285,10 +305,6 @@ func (l *Loop) proposeDrift(desired []resource.Resource) (string, error) {
 	// not drift, reality did. Approving this commits no documents; what
 	// it does is make the next tick a plan tick, which authorizes the
 	// Medium/High steps that perform the repair.
-	head, err := l.State.Head()
-	if err != nil {
-		return "", fmt.Errorf("loop: reading statefile head for drift proposal: %w", err)
-	}
 	stored, err := json.Marshal(plan.StoredProposal{
 		BasedOnHead: head,
 		Summary:     summary,
