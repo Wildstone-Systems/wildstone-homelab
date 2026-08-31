@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 )
 
 // imageRefRegexp finds digest-pinned image references inside a
@@ -28,6 +30,11 @@ type RefreshResult struct {
 	OldDigest string
 	NewDigest string // == OldDigest when already current
 	Err       error
+	// HeldBack is set when the pin resolved to a new digest that was NOT
+	// written, because it belongs to an imageSet whose other members did
+	// not also move. Reason names the set and says why.
+	HeldBack bool
+	Reason   string
 }
 
 // RefreshDigests re-resolves every digest-pinned image in
@@ -51,13 +58,86 @@ func RefreshDigests(dir string, resolve DigestResolver) ([]RefreshResult, error)
 	if err != nil {
 		return nil, err
 	}
+	// Which images may not move alone (see pkgspec.ImageSet). A parse
+	// failure here is not fatal: the package's own lint reports it, and
+	// refusing to refresh anything because the document has an unrelated
+	// problem would be its own trap. But an unparseable package cannot be
+	// trusted to have declared its sets either, so nothing is written.
+	sets, setErr := imageSetsFor(path)
+	if setErr != nil {
+		return nil, setErr
+	}
+
+	// Resolve every pin first. Whether a member of a set may be written
+	// depends on what its siblings resolved to, which is not known until
+	// all of them have been.
+	type pin struct {
+		image, oldDigest, newDigest string
+		err                         error
+	}
+	var pins []pin
+	for _, m := range imageRefRegexp.FindAllSubmatch(data, -1) {
+		image, oldDigest := string(m[1]), string(m[2])
+		newDigest, err := resolve(image)
+		pins = append(pins, pin{image: image, oldDigest: oldDigest, newDigest: newDigest, err: err})
+	}
+
+	// A set moves as a unit or not at all. If any member failed to
+	// resolve, or any member is already current while another moved, the
+	// whole set is held back: a partial refresh is the exact mismatch
+	// these sets exist to prevent.
+	heldBack := map[string]string{} // image -> reason
+	for _, set := range sets {
+		member := map[string]bool{}
+		for _, img := range set.Images {
+			member[img] = true
+		}
+		var moving, stuck []string
+		for _, p := range pins {
+			if !member[p.image] {
+				continue
+			}
+			switch {
+			case p.err != nil:
+				stuck = append(stuck, p.image+" (resolve failed)")
+			case p.newDigest == p.oldDigest:
+				stuck = append(stuck, p.image+" (already current)")
+			default:
+				moving = append(moving, p.image)
+			}
+		}
+		if len(moving) == 0 || len(stuck) == 0 {
+			continue // nothing to refresh, or the whole set moves together
+		}
+		reason := fmt.Sprintf("imageSet %q: %s would move while %s did not; these images must be refreshed together",
+			set.Name, strings.Join(moving, ", "), strings.Join(stuck, ", "))
+		if set.Reason != "" {
+			reason += " — " + set.Reason
+		}
+		for _, img := range moving {
+			heldBack[img] = reason
+		}
+	}
+
 	var results []RefreshResult
 	changed := false
 	out := imageRefRegexp.ReplaceAllFunc(data, func(m []byte) []byte {
 		sub := imageRefRegexp.FindSubmatch(m)
 		image, oldDigest := string(sub[1]), string(sub[2])
-		newDigest, err := resolve(image)
+		var newDigest string
+		var err error
+		for _, p := range pins {
+			if p.image == image && p.oldDigest == oldDigest {
+				newDigest, err = p.newDigest, p.err
+				break
+			}
+		}
 		res := RefreshResult{Image: image, OldDigest: oldDigest, NewDigest: newDigest, Err: err}
+		if reason, held := heldBack[image]; held {
+			res.HeldBack, res.Reason = true, reason
+			results = append(results, res)
+			return m
+		}
 		results = append(results, res)
 		if err != nil || newDigest == oldDigest {
 			return m
@@ -71,6 +151,23 @@ func RefreshDigests(dir string, resolve DigestResolver) ([]RefreshResult, error)
 		}
 	}
 	return results, nil
+}
+
+// imageSetsFor loads the package's declared imageSets. It re-parses the
+// document rather than taking it as an argument so RefreshDigests keeps
+// its "point me at a directory" signature, which is what both the CLI and
+// the tests use.
+func imageSetsFor(path string) ([]pkgspec.ImageSet, error) {
+	pkg, err := pkgspec.Load(path)
+	if err != nil {
+		if isIOError(err) {
+			return nil, err
+		}
+		// Content problem: lint's business, not this tool's. Treat the
+		// package as declaring no sets and let every pin refresh.
+		return nil, nil
+	}
+	return pkg.ImageSets, nil
 }
 
 // RegistryDigestResolver is the production DigestResolver: it speaks the

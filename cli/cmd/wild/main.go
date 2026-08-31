@@ -261,11 +261,24 @@ func runRefreshDigests(args []string) int {
 		return 1
 	}
 	failed := false
+	// A held-back set is reported once, not once per member: the reason
+	// is a property of the set, and repeating it reads as several
+	// problems rather than one.
+	reported := map[string]bool{}
 	for _, r := range results {
 		switch {
 		case r.Err != nil:
 			failed = true
 			fmt.Fprintf(os.Stderr, "%s: %v\n", r.Image, r.Err)
+		case r.HeldBack:
+			// Not written, and not a success to pass over quietly: the
+			// operator asked for a refresh and did not get one.
+			failed = true
+			fmt.Fprintf(os.Stderr, "%s: HELD BACK (a newer digest exists but was not written)\n", r.Image)
+			if !reported[r.Reason] {
+				reported[r.Reason] = true
+				fmt.Fprintf(os.Stderr, "  %s\n", r.Reason)
+			}
 		case r.NewDigest != r.OldDigest:
 			fmt.Printf("%s: %.19s… -> %.19s…\n", r.Image, r.OldDigest, r.NewDigest)
 		default:
