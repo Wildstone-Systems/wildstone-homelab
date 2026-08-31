@@ -242,11 +242,19 @@ func (e *Engine) isExempt(v Violation) bool {
 	return false
 }
 
-func vocabList() string {
+// ClassificationNames returns the closed vocabulary, sorted. Exported so
+// callers outside the engine — pkgtool's lint, which checks a package's
+// declared classifications (F31) — name the same set the engine enforces
+// rather than keeping their own copy of it.
+func ClassificationNames() []string {
 	names := make([]string, 0, len(Classifications))
 	for c := range Classifications {
 		names = append(names, c)
 	}
 	sort.Strings(names)
-	return "[" + strings.Join(names, ", ") + "]"
+	return names
+}
+
+func vocabList() string {
+	return "[" + strings.Join(ClassificationNames(), ", ") + "]"
 }

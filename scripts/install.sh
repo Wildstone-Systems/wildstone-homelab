@@ -290,6 +290,13 @@ read_keystone_args() {
 # a flag, which keeps a boolean flag from swallowing the next flag's name.
 merge_keystone_args() {
   local existing="$1" new="$2" names=" " tok out="" drop=0
+  # Unquoted $existing / $new is deliberate — word splitting is the whole
+  # point — but pathname expansion rides along with it, and a stored value
+  # like "-globtest /srv/*" then became three arguments on the next
+  # installer run (F29). `set -f` keeps the splitting and drops the
+  # globbing; it is restored before returning, including on the early
+  # paths, because the rest of the script expects globbing on.
+  set -f
   for tok in $new; do
     case "$tok" in -*) names="$names$tok " ;; esac
   done
@@ -310,6 +317,7 @@ merge_keystone_args() {
     esac
     out="$out $tok"
   done
+  set +f
   printf '%s%s' "$out" "$new"
 }
 

@@ -46,7 +46,7 @@ params:
   # explicitly that you want every interface.
   - { name: listen_addr, required: true }
 policies:
-  classifications: [admin]
+  classifications: [admin_tailscale]
 templates:
   - |
     apiVersion: wildstone.dev/v1
@@ -64,12 +64,12 @@ templates:
     metadata: { name: caddy-tailnet, node: "{{ .Params.node }}" }
     spec:
       image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
-        # argv[0] must be the binary: this image sets no ENTRYPOINT, so
-        # spec.command lands in Docker Cmd as the whole argv. Without
-        # "caddy" here the container dies with
-        # `exec: "run": executable file not found in $PATH` (F23).
-        # cloudflared below is the opposite case — it HAS an entrypoint,
-        # so ["tunnel","run"] is right there. Do not unify them.
+      # argv[0] must be the binary: this image sets no ENTRYPOINT, so
+      # spec.command lands in Docker Cmd as the whole argv. Without
+      # "caddy" here the container dies with
+      # `exec: "run": executable file not found in $PATH` (F23).
+      # Images whose entrypoint IS their binary take the opposite form;
+      # TestPackageCommandsNameTheirBinary records which is which.
       command: ["caddy", "run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile", "--watch"]
       ports:
         - "{{ .Params.listen_addr }}:{{ .Params.listen_port }}:80"

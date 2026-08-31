@@ -268,7 +268,24 @@ func (l *Loop) proposeDrift(desired []resource.Resource) (string, error) {
 		}
 	}
 	summary := "drift repair requires approval (Medium/High risk)"
-	stored, err := json.Marshal(map[string]any{"summary": summary, "drift": true})
+	// BasedOnHead must be the live head, not "": approval refuses a
+	// proposal whose base has moved, and no head ever equals "", so an
+	// unset field made every drift repair permanently unapprovable and
+	// left a drifted resource broken with no supported way back (F28).
+	//
+	// Put and Delete stay empty, and that is correct — desired state did
+	// not drift, reality did. Approving this commits no documents; what
+	// it does is make the next tick a plan tick, which authorizes the
+	// Medium/High steps that perform the repair.
+	head, err := l.State.Head()
+	if err != nil {
+		return "", fmt.Errorf("loop: reading statefile head for drift proposal: %w", err)
+	}
+	stored, err := json.Marshal(plan.StoredProposal{
+		BasedOnHead: head,
+		Summary:     summary,
+		Drift:       true,
+	})
 	if err != nil {
 		return "", err
 	}

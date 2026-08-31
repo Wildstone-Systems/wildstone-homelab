@@ -29,20 +29,14 @@ type proposalRequest struct {
 	Delete  []deletionRef `json:"delete,omitempty"`
 }
 
-type deletionRef struct {
-	Kind string `json:"kind"`
-	Name string `json:"name"`
-}
-
-// storedProposal is what a plan record's plan_json carries: the computed
-// plan for review plus everything approval needs to re-check and apply.
-type storedProposal struct {
-	BasedOnHead string        `json:"basedOnHead"`
-	Summary     string        `json:"summary"`
-	Put         []string      `json:"put,omitempty"`
-	Delete      []deletionRef `json:"delete,omitempty"`
-	Plan        *plan.Plan    `json:"plan"`
-}
+// storedProposal and deletionRef are the shared shapes from keystone/plan.
+// They moved there because the reconcile loop's drift path writes this same
+// document, and building it as an untyped map is how BasedOnHead came to be
+// omitted (F28). Aliases keep this file's call sites unchanged.
+type (
+	storedProposal = plan.StoredProposal
+	deletionRef    = plan.DeletionRef
+)
 
 // planView is what the API returns for a plan record. The runtime DB
 // stores the proposal as one JSON blob (plan_json); returning that blob
@@ -53,7 +47,13 @@ type storedProposal struct {
 // rather than duplicated: it carried nothing this doesn't.
 type planView struct {
 	runtimedb.PlanRecord
-	PlanJSON    string        `json:"-"` // shadows the embedded blob
+	// PlanJSON must compete for the embedded field's NAME to suppress it.
+	// `json:"-"` does not shadow — it removes this field from
+	// consideration entirely, leaving PlanRecord.PlanJSON the only
+	// candidate for "planJson", which is how the blob kept being served
+	// after the commit that meant to drop it (F25). Same name plus
+	// omitempty: this field wins on depth and is omitted for being empty.
+	PlanJSON    string        `json:"planJson,omitempty"`
 	BasedOnHead string        `json:"basedOnHead,omitempty"`
 	Plan        *plan.Plan    `json:"plan,omitempty"`
 	Put         []string      `json:"put,omitempty"`
