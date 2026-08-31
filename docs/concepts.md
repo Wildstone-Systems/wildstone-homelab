@@ -26,6 +26,37 @@ and LLDAP read. App packages expose this as an optional `identity_node`
 param that defaults to the package's own `node`, which is correct for a
 single-node homelab; set it when identity runs on a different machine.
 
+### Identity, and what an `OidcClient` has to say
+
+An `OidcClient` registers one app with the identity provider. It carries
+more than a client id and a redirect URI because real apps disagree about
+almost everything, and the disagreements are not preferences:
+
+- `tokenAuthMethod` — some apps send the client secret in the POST body,
+  some use the OIDC default. There is no value that suits both.
+- `requirePkce`, `consentMode` — a client with no browser cannot complete
+  an explicit-consent flow, which is how a phone app fails.
+- `idTokenClaims` — requesting a scope puts its claims at `/userinfo`, not
+  in the ID token. An app that reads groups from the ID token needs the
+  claim named here.
+- `requireGroups` — restricts the client to members of those LLDAP groups,
+  enforced by the provider refusing to issue a token. **For some apps this
+  is the only gate there is.** An app with no group support admits the
+  user and gives them nothing, which looks like a broken install rather
+  than a refusal.
+
+Wildstone writes every client into **one** merged file. Authelia does not
+merge config files: several files that each define a clients list leave
+only the last one standing, silently, so one file per client would
+register exactly one client. Wildstone still keeps a per-client file of
+its own for bookkeeping — that is what lets a plan say *this* client
+drifted rather than reporting all of them — but it is not what Authelia
+reads.
+
+Each capability's containers mount only that capability's subtree of the
+managed prefix, read-only. The identity provider has no business reading
+the reverse proxy's config, or the reverse.
+
 A `Container`'s published ports use Docker's own syntax and may name the
 host address to bind:
 
