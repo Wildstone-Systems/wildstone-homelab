@@ -1,0 +1,128 @@
+# ADR-W019: The internal trust domain — internal names, an internal CA, and what stays convergent
+
+- **Status:** accepted
+- **Relates to:** ADR-W004 (Route), ADR-W005 (identity capability),
+  ADR-W008 (reconcile), ADR-W011 A2 (ingress packages), ADR-W019 is the
+  first ADR to touch container-to-container addressing.
+- **Audience:** decision record AND implementation spec for the identity
+  work package's networking half.
+
+---
+
+# Part A — Decisions (binding)
+
+### A1. An app reaches another app by its Route host, resolved internally
+
+Today `auth.<public_domain>` resolves only publicly. An app container
+doing OIDC discovery — a **server-to-server** fetch of
+`https://auth.<domain>/.well-known/openid-configuration` — therefore
+egresses to Cloudflare and comes back through the tunnel to reach the
+Authelia sitting beside it on the same bridge.
+
+That works, and it was how the stack was first proven. It is still
+wrong, for two reasons that compound:
+
+1. **Every app login depends on the tunnel.** Inbound traffic already
+   does, so this looks like no new dependency — but it is: a user
+   already inside the tailnet, or on the LAN, now cannot log in when
+   Cloudflare is having a bad day, for reasons entirely internal to
+   their own house.
+2. **It fails illegibly.** Discovery failure surfaces in the app as
+   "provider not offered" or a silently absent login button. Nothing
+   names the tunnel. The operator debugs the OIDC client.
+
+So: the Route host resolves inside the Docker network, to the reverse
+proxy that already serves it.
+
+### A2. The scheme is https internally, or the whole thing is pointless
+
+Resolving the name is not enough. Authelia refuses a non-secure
+`session.cookies` scheme (4.39+), and more fundamentally an OIDC
+**issuer is a string that must match** between what the app discovered
+and what the browser was redirected to. If apps use `http://auth.…`
+internally while browsers use `https://auth.…`, the issuer differs and
+token validation fails — the internal path has to be the *same URL*, not
+a parallel one.
+
+That is the argument for A3, and it is why "internal names over plain
+HTTP" was considered and rejected: it looks like the cheap version of
+this decision and it does not work.
+
+### A3. Caddy's own internal CA, not a Wildstone CA
+
+Wildstone does **not** become a certificate authority. The reverse proxy
+already has one: Caddy's `local_certs` issues from a built-in internal CA
+and rotates on its own schedule.
+
+Wildstone's job is therefore three small things, not a PKI:
+
+- turn `local_certs` on for the internal listener,
+- get the CA root out of Caddy and into the managed prefix,
+- give each app container the root in the form its runtime reads
+  (`REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, and friends — this is
+  per-runtime and belongs in the package, not the engine).
+
+The rejected alternative — Wildstone issuing certs — costs issuance,
+renewal, revocation and distribution, and adds a failure mode where one
+expired internal cert breaks every app login simultaneously. For a
+homelab that is a large standing burden bought with no gain: the trust
+domain is a single host's bridge network.
+
+**The cost we are accepting**: a CA root that Wildstone distributes but
+does not control the lifetime of. If Caddy's data volume is lost, the CA
+changes and every distributed bundle is stale until redistributed. That
+is a real operational edge and the reason the root is treated as a
+managed file (a pure function of what Caddy currently holds) rather than
+as something copied once at install.
+
+### A4. Public TLS termination does not move
+
+Cloudflare (or the tailnet) still terminates TLS for traffic from
+outside. The internal listener is additional, not a replacement, and the
+base Caddyfile's `auto_https off` posture for the public listener stands
+(ADR-W011 A2). Two listeners, two trust stories, one set of Route
+definitions.
+
+### A5. Cross-capability ordering stays convergent — deliberately
+
+Nothing expresses "identity must be serving before photos' OIDC client
+is usable", and nothing will. The reconciler is level-triggered: an
+OidcClient whose provider is not yet up simply does not work yet, and
+starts working when it does, with no operator action.
+
+A dependency graph across capabilities would buy ordering we do not need
+and cost a new class of stuck state — a plan that cannot proceed because
+something it declares a dependency on is unhealthy for an unrelated
+reason. `kindOrder` continues to order within a plan, which is where
+ordering is actually load-bearing.
+
+**What we owe instead is legibility.** The failure an operator sees must
+name the cause: an app whose identity provider is not yet serving should
+say so, rather than presenting a login that fails. That is a status and
+diagnosis concern (ADR-W012's Butler `diagnose`, and the onboarding
+probes), not a scheduling one.
+
+---
+
+# Part B — Implementation notes (non-binding)
+
+- **B1. Network aliases.** `EnsureContainer` grows an alias list, applied
+  to the container's network attachment. The ingress Caddy container
+  takes one alias per Route host it serves, so Docker's embedded DNS
+  resolves the real hostname to the proxy. This is a protocol change
+  (the alias list is new wire surface) and therefore a minor bump.
+- **B2. Where the root lands.** Caddy's PKI storage is pointed at a
+  writable subtree of the managed prefix so the root certificate is a
+  file the agent can already read, rather than requiring a new
+  "read a file out of a container" op. The subtree is writable by the
+  ingress container specifically — the managed prefix is otherwise
+  mounted read-only (ADR-W011 A2), and this is the documented exception.
+- **B3. Distribution is per-runtime.** There is no single environment
+  variable for "trust this CA". Python wants `REQUESTS_CA_BUNDLE` and
+  `SSL_CERT_FILE`, Node wants `NODE_EXTRA_CA_CERTS`, Java wants a
+  truststore. Packages declare which, because packages already know what
+  the app is written in.
+- **B4. Sequencing.** A1–A3 are worth nothing until an app can be
+  configured to use them, and every app package's config path currently
+  runs through secret materialization in managed files. That lands
+  first; this follows.
