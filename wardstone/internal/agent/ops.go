@@ -202,6 +202,68 @@ func opErr(code wsv1.ErrorCode, format string, args ...any) *wsv1.OpError {
 
 // ---------------------------------------------------------------- files
 
+// checkBindSource refuses a host-path bind mount that overlaps the agent's
+// own data directory, in either direction.
+//
+// The managed-prefix rule governs where the agent may READ and WRITE. It
+// says nothing about what a container may be handed, and those are not the
+// same question: the ingress packages bind-mount the managed prefix so
+// Caddy can read its rendered config, and the agent's data directory
+// defaults to a path INSIDE that prefix — so an internet-facing reverse
+// proxy could read node.key (this node's mTLS identity), secret.key (the
+// key that decrypts the store) and every secret under it. The host
+// directory is 0700, which does not help: the container runs as uid 0.
+// readOnly does not help either, because reading is the compromise.
+//
+// Both directions are refused. A source ABOVE the data dir hands over the
+// store by containing it; a source INSIDE it hands over part of the store
+// directly. The check is on the symlink-resolved path, so a link cannot
+// launder either case.
+//
+// Non-absolute sources are Docker volume names, not host paths, and are
+// none of this function's business.
+func (a *Agent) checkBindSource(src string) *wsv1.OpError {
+	if src == "" || !filepath.IsAbs(src) {
+		return nil
+	}
+	resolved, err := resolveExisting(filepath.Clean(src))
+	if err != nil {
+		return opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "resolve mount source %q: %v", src, err)
+	}
+	data, err := resolveExisting(filepath.Clean(a.cfg.DataDir))
+	if err != nil {
+		return opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "resolve data dir: %v", err)
+	}
+	if !pathOverlaps(resolved, data) {
+		return nil
+	}
+	return opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
+		"mount source %q overlaps the agent data directory %q: a container given this path "+
+			"can read the node's identity and secret store", src, a.cfg.DataDir)
+}
+
+// pathOverlaps reports whether a and b are equal or one contains the other.
+// Compares whole path elements, so /etc/wildstone-other does not count as
+// being under /etc/wildstone.
+func pathOverlaps(a, b string) bool {
+	if a == b {
+		return true
+	}
+	return strings.HasPrefix(a, dirPrefix(b)) || strings.HasPrefix(b, dirPrefix(a))
+}
+
+// dirPrefix returns the string every path strictly under dir starts with.
+// The root needs its own case: naively appending a separator to "/" yields
+// "//", which nothing has as a prefix, so a mount of "/" — the broadest
+// possible escape — would have been allowed. Caught by the test rather
+// than foreseen.
+func dirPrefix(dir string) string {
+	if strings.HasSuffix(dir, string(filepath.Separator)) {
+		return dir
+	}
+	return dir + string(filepath.Separator)
+}
+
 // resolveManaged enforces the managed-prefix invariant: the cleaned,
 // symlink-resolved path must live under one of the configured prefixes.
 func (a *Agent) resolveManaged(p string) (string, *wsv1.OpError) {
@@ -413,6 +475,9 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	}
 	var binds []string
 	for _, m := range op.GetMounts() {
+		if oe := a.checkBindSource(m.GetSource()); oe != nil {
+			return nil, oe
+		}
 		b := m.GetSource() + ":" + m.GetTarget()
 		if m.GetReadOnly() {
 			b += ":ro"
