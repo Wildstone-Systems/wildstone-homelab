@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
 // Issue is one lint finding. Lint returns findings rather than stopping
@@ -100,6 +102,9 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 			})
 		}
 	}
+	for _, r := range rendered {
+		issues = append(issues, containerEnvIssues(r)...)
+	}
 	violations, exempted := policy.NewEngine(nil).Validate(policy.Change{
 		Proposed:  rendered,
 		Principal: "pkgtool/lint",
@@ -110,6 +115,61 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 	}
 	return issues, nil
 }
+
+// containerEnvIssues rejects a "container/<name>" reference in a
+// Container's env.
+//
+// "container/<name>:<port>" is real syntax, but only in Route.upstream,
+// where the reconciler resolves it (see caddyUpstream). Nothing resolves
+// it in env: the agent's materializeEnv substitutes secret/ and passes
+// everything else through byte for byte, so the value reaches the process
+// literally.
+//
+// Two shipped packages did this in six places and neither could have
+// started. immich-server got DB_HOSTNAME=container/immich-postgres, and
+// node-postgres reads a value containing "/" as a UNIX socket path:
+//
+//	Error: connect ENOENT container/immich-postgres/.s.PGSQL.5432
+//
+// paperless-ngx had four, three of them with the prefix inside a URL.
+// Nothing caught it, because a package's images are never pulled by lint
+// and the env is only read by the process that dies.
+//
+// The fix packages want is the plain name: containers on the Wildstone
+// network reach each other by container-name DNS, so "immich-postgres" is
+// already the correct value. Refusing the prefix here rather than
+// stripping it at apply time keeps the privileged agent's substitution
+// rule at exactly one prefix, and puts the error in front of the package
+// author instead of in a container log the operator has to go find.
+func containerEnvIssues(r resource.Resource) []Issue {
+	if r.Kind != resource.KindContainer || r.Container == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(r.Container.Env))
+	for k := range r.Container.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // map order must not make lint output nondeterministic
+	var issues []Issue
+	for _, k := range keys {
+		v := r.Container.Env[k]
+		if !strings.Contains(v, containerRefPrefix) {
+			continue
+		}
+		issues = append(issues, Issue{
+			Rule: "container-env-ref",
+			Msg: fmt.Sprintf("Container/%s env %s = %q: %q is only resolved in Route.upstream, never in env — "+
+				"the agent passes env through literally, so the process receives this string as written. "+
+				"Use the plain container name, which is what container-name DNS resolves.",
+				r.Metadata.Name, k, v, containerRefPrefix),
+		})
+	}
+	return issues
+}
+
+// containerRefPrefix is the Route.upstream reference form, named here so
+// the lint rule and the reconciler cannot disagree about the spelling.
+const containerRefPrefix = "container/"
 
 // sanitizeParam maps a param name into the lowercase [a-z0-9-] alphabet
 // so an auto-filler can never itself trip resource-name validation.

@@ -25,8 +25,34 @@ deployment — see `testing/fixtures/`.
 Image digests in both packages are **real**, resolved from the public
 registries (ghcr.io / Docker Hub) at authoring time via the registry's
 anonymous-pull token + manifest-digest endpoints — not placeholders. They
-will need periodic refreshing as upstream images are rebuilt; there is no
-automated digest-refresh tooling yet (a later work package's job).
+will need periodic refreshing as upstream images are rebuilt, which
+`wild pkg refresh-digests` does.
+
+**Refreshing is not always safe one image at a time.** A package's images
+can be a matched set: `photos-immich` pairs a postgres image against an
+`immich-server` that supports only certain vector extensions, and a skew
+between the two fails at container startup ("No vector extension found"),
+not at refresh. `refresh-digests` resolves each pin independently and lint
+never pulls an image, so nothing catches it — run the package after a
+refresh that touched one image of such a pair.
+
+## Container-to-container addressing
+
+Containers on the Wildstone network reach each other by container-name
+DNS, so an env value naming another container is just its name:
+
+```yaml
+env:
+  DB_HOSTNAME: immich-postgres           # right
+  DB_HOSTNAME: "container/immich-postgres"  # WRONG — lint refuses it
+```
+
+The `container/<name>:<port>` form is real syntax, but only in
+`Route.upstream`, where the reconciler resolves it. Nothing resolves it in
+env: the agent substitutes `secret/` and passes everything else through
+byte for byte, so the process receives the string as written. Two shipped
+packages carried this in six places and neither could have started. Lint
+now refuses it (`container-env-ref`).
 
 ## The go/no-go gate (ADR-W005 A4)
 

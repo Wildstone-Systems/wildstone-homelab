@@ -91,11 +91,11 @@ templates:
     spec:
       image: "ghcr.io/immich-app/immich-server@sha256:b434cb9287eea1471c9974845914d4dd328c9c2d652e446ed4930f99944f0ceb"
       env:
-        DB_HOSTNAME: "container/immich-postgres"
+        DB_HOSTNAME: immich-postgres
         DB_USERNAME: immich
         DB_PASSWORD: "secret/immich-postgres-password"
         DB_DATABASE_NAME: immich
-        REDIS_HOSTNAME: "container/immich-redis"
+        REDIS_HOSTNAME: immich-redis
         PUBLIC_IMMICH_SERVER_URL: "https://{{ .Params.photos_subdomain }}.{{ .Params.public_domain }}"
         OAUTH_ENABLED: "true"
         OAUTH_ISSUER_URL: "{{ .Resolved.IssuerURL }}"

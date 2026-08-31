@@ -127,11 +127,11 @@ templates:
     spec:
       image: "ghcr.io/paperless-ngx/paperless-ngx@sha256:65a4cabf0169ea7fbd90ab7bb28ba3f8b5909613635acda1a03ad606f34b456b"
       env:
-        PAPERLESS_REDIS: "redis://container/paperless-redis:6379"
-        PAPERLESS_DBHOST: "container/paperless-postgres"
+        PAPERLESS_REDIS: "redis://paperless-redis:6379"
+        PAPERLESS_DBHOST: paperless-postgres
         PAPERLESS_TIKA_ENABLED: "1"
-        PAPERLESS_TIKA_GOTENBERG_ENDPOINT: "http://container/paperless-gotenberg:3000"
-        PAPERLESS_TIKA_ENDPOINT: "http://container/paperless-tika:9998"
+        PAPERLESS_TIKA_GOTENBERG_ENDPOINT: "http://paperless-gotenberg:3000"
+        PAPERLESS_TIKA_ENDPOINT: "http://paperless-tika:9998"
         PAPERLESS_URL: "https://{{ .Params.docs_subdomain }}.{{ .Params.public_domain }}"
         PAPERLESS_SECRET_KEY: "secret/paperless-secret-key"
         PAPERLESS_TIME_ZONE: "{{ .Params.timezone }}"
