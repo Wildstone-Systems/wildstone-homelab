@@ -59,6 +59,7 @@
 package reconcile
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -126,6 +127,13 @@ type Outcome struct {
 	// Steps records one StepResult per plan step actually attempted (a
 	// halt on Incident/Rolledback means later steps have no entry here).
 	Steps []StepResult
+	// PrereqRepaired lists managed files that were found altered and
+	// rewritten this tick (see repairNodePrereqs). These are not plan
+	// steps: they are files Wildstone owns outright, whose correct
+	// contents are a pure function of the renderer, so restoring one is
+	// the low-risk self-repair concepts.md promises rather than a change
+	// needing approval.
+	PrereqRepaired []string
 }
 
 // Reconciler drives the ADR-W004 A4 reconcile loop for the three
@@ -219,6 +227,65 @@ type Reconciler struct {
 // Provider path; nodeID is likewise not meaningfully load-bearing for
 // LdapGroup, which is not truly node-scoped, but is threaded through for
 // symmetry with the managed-cache bookkeeping the other kinds already use.
+// repairNodePrereqs re-asserts the managed files that are Wildstone's
+// alone — the base Caddyfile and the routes placeholder — on every tick.
+//
+// They were written only by ensureNodePrereqs, which runs immediately
+// before a Container ensure and nowhere else, and neither file is a
+// resource, so drift detection could not see them either. Deleting the
+// `:80 { abort }` block from the base Caddyfile brought F26 back and
+// nothing repaired it across multiple ticks; emptying the placeholder
+// brought F30's one-warning-per-second back permanently. Both recovered
+// only as a side effect of deploying some container, which is a strange
+// remedy for "my front door stopped denying unknown hosts" (F34).
+//
+// Repaired silently rather than proposed: unlike a resource, these files
+// have no desired-state spec a human could have meant differently — the
+// renderer is the only authority on their contents — so this is exactly
+// the case concepts.md describes, where editing a managed Caddyfile by
+// hand does not stick.
+func (r *Reconciler) repairNodePrereqs(ctx context.Context, nodeID string) ([]string, string) {
+	if nodeID == "" || r.ManagedPrefix == "" {
+		return nil, ""
+	}
+	files := []struct {
+		path string
+		want []byte
+	}{
+		{baseCaddyfilePath(r.ManagedPrefix), renderBaseCaddyfile()},
+		{placeholderFragmentPath(r.ManagedPrefix), renderPlaceholderFragment()},
+	}
+	var repaired []string
+	for _, f := range files {
+		res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ReadManagedFile{
+			ReadManagedFile: &wsv1.ReadManagedFile{Path: f.path},
+		}})
+		if err != nil {
+			return repaired, fmt.Sprintf("prereq read %s: %v", f.path, err)
+		}
+		oe := res.GetError()
+		if oe != nil && oe.GetCode() != wsv1.ErrorCode_ERROR_CODE_NOT_FOUND {
+			return repaired, fmt.Sprintf("prereq read %s: %s: %s", f.path, oe.GetCode(), oe.GetMessage())
+		}
+		// Absent counts as drifted: a missing base Caddyfile is the
+		// fresh-install state, and writing it is what brings ingress up.
+		if oe == nil && bytes.Equal(res.GetReadManagedFile().GetContent(), f.want) {
+			continue
+		}
+		wres, err := r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_WriteManagedFile{
+			WriteManagedFile: &wsv1.WriteManagedFile{Path: f.path, Content: f.want},
+		}})
+		if err != nil {
+			return repaired, fmt.Sprintf("prereq write %s: %v", f.path, err)
+		}
+		if we := wres.GetError(); we != nil {
+			return repaired, fmt.Sprintf("prereq write %s: %s: %s", f.path, we.GetCode(), we.GetMessage())
+		}
+		repaired = append(repaired, f.path)
+	}
+	return repaired, ""
+}
+
 func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []resource.Resource) (*Outcome, error) {
 	wsDesired := make([]resource.Resource, 0, len(desired))
 	providerDesired := make([]resource.Resource, 0, len(desired))
@@ -231,6 +298,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 		default:
 			return nil, fmt.Errorf("reconcile: unknown kind %q", res.Kind)
 		}
+	}
+
+	// Before observing resources, re-assert the managed files that are not
+	// resources and so have no observe rule of their own (F34).
+	prereqRepaired, prereqErr := r.repairNodePrereqs(ctx, nodeID)
+	if prereqErr != "" {
+		return nil, fmt.Errorf("reconcile: %s", prereqErr)
 	}
 
 	observed, foreign, err := r.observe(ctx, nodeID, wsDesired)
@@ -246,7 +320,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	allObserved := append(append([]resource.Resource{}, observed...), provObserved...)
 
 	p := plan.Diff(allDesired, allObserved)
-	outcome := &Outcome{Plan: p, ForeignDrift: foreign}
+	outcome := &Outcome{Plan: p, ForeignDrift: foreign, PrereqRepaired: prereqRepaired}
 	if len(p.Steps) == 0 {
 		outcome.Applied = true
 		return outcome, nil
@@ -1035,8 +1109,11 @@ func specHash(spec *resource.ContainerSpec, network string) string {
 //     a fresh install brings up ingress before any app.
 //
 // Both are idempotent, so like pullImage this runs before every container
-// ensure rather than tracking per-node state, and re-asserting the
-// Caddyfile doubles as drift repair on it.
+// ensure rather than tracking per-node state. It is NOT drift repair —
+// this comment used to claim it was, which was wrong in the way that
+// matters: it runs only on the container-create path, so a hand-edited
+// base Caddyfile stayed edited until someone happened to deploy a
+// container (F34). repairNodePrereqs handles the tick.
 func (r *Reconciler) ensureNodePrereqs(ctx context.Context, nodeID string) string {
 	res, err := r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_EnsureDockerNetwork{
 		EnsureDockerNetwork: &wsv1.EnsureDockerNetwork{Name: ContainerNetwork},

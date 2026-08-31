@@ -85,3 +85,34 @@ func TestCommitShelterSurvivesJSONEscaping(t *testing.T) {
 		t.Errorf("bare hash survived: %q", got)
 	}
 }
+
+// TestShelterDeclinesSecretShapedNames pins F36. The Kind/name shelter is
+// purely textual, so before this a kind prefix laundered a secret: the
+// exact strings from the report passed through in the clear.
+func TestShelterDeclinesSecretShapedNames(t *testing.T) {
+	for _, in := range []string{
+		"Volume/deadbeefcafebabe0123456789abcdef0123456789abcdef",
+		"Container/AKIAIOSFODNN7EXAMPLEabcdefghijkl",
+	} {
+		got := String(in)
+		if strings.Contains(got, strings.SplitN(in, "/", 2)[1]) {
+			t.Errorf("String(%q) = %q, want the secret-shaped name redacted", in, got)
+		}
+		if !SecretShaped(in) {
+			t.Errorf("SecretShaped(%q) = false; the policy engine and the redactor must agree", in)
+		}
+	}
+
+	// The whole point of the shelter still holds: ordinary names survive,
+	// including ones with digits that are plainly not token material.
+	for _, in := range []string{
+		"Create Volume/caddy-tailnet-data",
+		"Create Volume/immich-postgres-data",
+		"Create Route/kuma.example.internal",
+		"Create Container/paperless-tika",
+	} {
+		if got := String(in); got != in {
+			t.Errorf("String(%q) = %q, want it unchanged", in, got)
+		}
+	}
+}

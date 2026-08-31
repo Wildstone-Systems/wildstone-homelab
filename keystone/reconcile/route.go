@@ -27,7 +27,7 @@ func routeFragmentPath(managedPrefix, name string) string {
 // one warning per second in both, silent with a comment-only file.
 // Unbounded json-file logging turns that into gigabytes a year.
 func placeholderFragmentPath(managedPrefix string) string {
-	return routeFragmentPath(managedPrefix, "00-wildstone-placeholder")
+	return routeFragmentPath(managedPrefix, resource.ReservedRouteName)
 }
 
 // renderPlaceholderFragment is comment-only on purpose: non-empty, so
