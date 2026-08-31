@@ -244,17 +244,48 @@ type Reconciler struct {
 // renderer is the only authority on their contents — so this is exactly
 // the case concepts.md describes, where editing a managed Caddyfile by
 // hand does not stick.
-func (r *Reconciler) repairNodePrereqs(ctx context.Context, nodeID string) ([]string, string) {
+// managedFile is one file Wildstone owns outright: its correct contents
+// are a pure function of the renderer and desired state, so nothing but
+// repair asserts them.
+type managedFile struct {
+	path string
+	want []byte
+}
+
+// nodePrereqFiles is the closed list of those files. It is a function
+// rather than a literal inside repairNodePrereqs so a test can count and
+// name them without restating the list — a second copy is exactly how a
+// new prereq gets added and silently left out of the coverage that was
+// supposed to bound it.
+func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []managedFile {
+	return []managedFile{
+		{baseCaddyfilePath(managedPrefix), renderBaseCaddyfile()},
+		{placeholderFragmentPath(managedPrefix), renderPlaceholderFragment()},
+		// The merged Authelia clients file qualifies for the same reason
+		// the other two do. Asserting it before observe also means it is
+		// already correct by the time an OidcClient step's reload fires
+		// later in the same tick.
+		{autheliaClientsPath(managedPrefix), renderAutheliaClients(desired)},
+	}
+}
+
+// prereqRepairedClients reports whether the merged Authelia clients file
+// was among the prereqs rewritten this tick.
+func prereqRepairedClients(repaired []string, managedPrefix string) bool {
+	want := autheliaClientsPath(managedPrefix)
+	for _, p := range repaired {
+		if p == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Reconciler) repairNodePrereqs(ctx context.Context, nodeID string, desired []resource.Resource) ([]string, string) {
 	if nodeID == "" || r.ManagedPrefix == "" {
 		return nil, ""
 	}
-	files := []struct {
-		path string
-		want []byte
-	}{
-		{baseCaddyfilePath(r.ManagedPrefix), renderBaseCaddyfile()},
-		{placeholderFragmentPath(r.ManagedPrefix), renderPlaceholderFragment()},
-	}
+	files := nodePrereqFiles(r.ManagedPrefix, desired)
 	var repaired []string
 	for _, f := range files {
 		res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ReadManagedFile{
@@ -314,7 +345,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 
 	// Before observing resources, re-assert the managed files that are not
 	// resources and so have no observe rule of their own (F34).
-	prereqRepaired, prereqErr := r.repairNodePrereqs(ctx, nodeID)
+	prereqRepaired, prereqErr := r.repairNodePrereqs(ctx, nodeID, wsDesired)
 	if prereqErr != "" {
 		return nil, fmt.Errorf("reconcile: %s", prereqErr)
 	}
@@ -369,7 +400,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	// stays false), and a plan with N OidcClient Create/Update steps that
 	// all applied invokes it exactly once, not N times — the exact trap
 	// ADR-W005 flags.
-	var anyOidcApplied bool
+	// A repair of the merged clients file counts as an OIDC change for
+	// reload purposes: the file Authelia reads was wrong and is now
+	// right, and Authelia will not notice until it reloads. Without this,
+	// a hand-edited clients file is silently restored on disk while the
+	// running provider keeps serving the edit.
+	anyOidcApplied := prereqRepairedClients(prereqRepaired, r.ManagedPrefix)
 	defer func() {
 		if !anyOidcApplied {
 			return

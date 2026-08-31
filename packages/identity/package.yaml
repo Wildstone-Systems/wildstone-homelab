@@ -77,6 +77,14 @@ templates:
         AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE: "secret/authelia-storage-encryption-key"
       mounts:
         - { source: authelia-config, target: /config }
+        # The capability's own subtree of the managed prefix, read-only.
+        # Wildstone renders clients.yml here from every OidcClient in the
+        # deployment; Authelia is pointed at it alongside its own config.
+        # A subtree rather than the whole prefix: this container has no
+        # business reading the ingress capability's files, and the
+        # narrowest mount that works is the one to ship (ADR-W018, and
+        # the lesson of the agent data directory).
+        - { source: /etc/wildstone/authelia, target: /etc/wildstone/authelia, readOnly: true }
       restart: unless-stopped
   # ---- Route: auth.<public_domain> — no auth on the auth Route itself
   # (Authelia IS the auth; gating logins behind Authelia's own login page
