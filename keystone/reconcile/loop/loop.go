@@ -307,10 +307,23 @@ func (l *Loop) proposeDrift(desired []resource.Resource) (string, error) {
 }
 
 // recordObserved upserts observed status per desired resource (ADR-W008
-// A4): healthy unless implicated in a failed/reversed step; coarse at R1.
-// Delete steps concern resources that have LEFT desired, so they are
+// A4). Delete steps concern resources that have LEFT desired, so they are
 // handled from the step results directly: a successful delete removes the
 // observed row, a failed one keeps the row and marks it unhealthy.
+//
+// Health is read off the plan, not off the step results alone. A resource
+// with no step is converged — observe found it present and matching, and
+// that is the only evidence "healthy" ever had. A resource WITH a step is
+// by definition not in its desired state, so it is healthy only once that
+// step has been applied and passed its health gate this tick.
+//
+// Consulting only the step results was defect A: on a drift tick that
+// stopped at PendingApproval, or any tick whose plan was never applied,
+// Steps is empty, no resource is implicated in a failure, and every
+// desired resource was stamped Healthy — so a container that observe had
+// just found missing was reported green by `wild status`. The status
+// surface said the opposite of what the reconciler had seen, in exactly
+// the situation an operator opens it.
 func (l *Loop) recordObserved(g nodeGroup, outcome *reconcile.Outcome) {
 	unhealthy := map[string]string{}
 	for _, sr := range outcome.Steps {
@@ -336,11 +349,37 @@ func (l *Loop) recordObserved(g nodeGroup, outcome *reconcile.Outcome) {
 		}
 		unhealthy[string(sr.Step.Kind)+"/"+sr.Step.Name] = detail
 	}
+	// Planned (non-delete) steps, and whether each one landed this tick.
+	planned := map[string]plan.Action{}
+	for _, st := range outcome.Plan.Steps {
+		if st.Action == plan.ActionDelete {
+			continue
+		}
+		planned[string(st.Kind)+"/"+st.Name] = st.Action
+	}
+	converged := map[string]bool{}
+	for _, sr := range outcome.Steps {
+		if sr.Applied && sr.HealthOK && sr.Step.Action != plan.ActionDelete {
+			converged[string(sr.Step.Kind)+"/"+sr.Step.Name] = true
+		}
+	}
+
 	for _, r := range g.resources {
 		key := string(r.Kind) + "/" + r.Metadata.Name
 		o := runtimedb.Observed{
 			Kind: string(r.Kind), Name: r.Metadata.Name, Node: g.node,
 			Healthy: true,
+		}
+		if action, needsWork := planned[key]; needsWork && !converged[key] {
+			o.Healthy = false
+			// The plan action is the whole diagnosis, and it is the
+			// useful one: Create means observe found nothing there.
+			switch action {
+			case plan.ActionCreate:
+				o.Detail = "absent: create planned, not applied"
+			default:
+				o.Detail = "drifted: " + action.String() + " planned, not applied"
+			}
 		}
 		if detail, bad := unhealthy[key]; bad {
 			o.Healthy = false
