@@ -392,8 +392,24 @@ command -v docker >/dev/null || fail "docker is required for --role node (or pas
 
 fetch_binary wardstoned
 install -d -m 0755 /etc/wildstone
-install -d -m 0700 /etc/wildstone/wardstone
+install -d -m 0700 /var/lib/wildstone/wardstone
 install -d -m 0755 /srv/wildstone
+
+# The node identity and secret store used to live at
+# /etc/wildstone/wardstone — inside the managed prefix the ingress
+# packages bind-mount into Caddy. Move an existing one rather than
+# leaving it readable there, and rather than silently re-joining the node
+# with a fresh identity.
+if [ -d /etc/wildstone/wardstone ] && [ -n "$(ls -A /etc/wildstone/wardstone 2>/dev/null)" ]; then
+  if [ -n "$(ls -A /var/lib/wildstone/wardstone 2>/dev/null)" ]; then
+    fail "both /etc/wildstone/wardstone and /var/lib/wildstone/wardstone hold node data; move or remove one by hand — refusing to guess which identity is current"
+  fi
+  log "moving node identity out of the managed prefix: /etc/wildstone/wardstone -> /var/lib/wildstone/wardstone"
+  ( cd /etc/wildstone/wardstone && tar cf - . ) | ( cd /var/lib/wildstone/wardstone && tar xf - ) \
+    || fail "could not migrate the node data directory"
+  rm -rf /etc/wildstone/wardstone
+  log "migrated; the old location is removed"
+fi
 
 # The env file carries the single-use join token; 0600 and only
 # meaningful until first join completes (the agent persists its identity

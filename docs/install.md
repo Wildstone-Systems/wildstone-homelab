@@ -112,7 +112,7 @@ filled in.
 
 The join token is single-use and only read on first start; afterwards
 the node authenticates with its own mTLS identity from
-`/etc/wildstone/wardstone`. The CA fingerprint pins the join against
+`/var/lib/wildstone/wardstone`. The CA fingerprint pins the join against
 MITM — omit it only on a network you fully trust (trust-on-first-use).
 
 Confirm it arrived:
