@@ -114,7 +114,7 @@ func TestDispatchReadOnly_RefusesMutatingTool(t *testing.T) {
 	gw := NewToolGateway(store, nil)
 
 	out, err := gw.DispatchReadOnly(context.Background(), "propose_change", map[string]any{
-		"kind": "Route", "name": "photos", "owner": "capability/photos",
+		"kind": "Route", "node": "node-a", "name": "photos", "owner": "capability/photos",
 		"spec": map[string]any{
 			"host": "photos.example.com", "upstream": "container/immich:2283",
 			"auth": "none", "classification": "family_public",

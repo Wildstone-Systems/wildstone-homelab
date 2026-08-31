@@ -364,7 +364,11 @@ type nodeGroup struct {
 }
 
 // groupByNode buckets desired by metadata.node ("" holds the
-// non-node-scoped kinds), node-sorted for deterministic pass order.
+// non-node-scoped kinds — DnsRecord today, which dispatches through a
+// Provider and needs no agent), node-sorted for deterministic pass order.
+// Nothing node-scoped may land in "": resource.Validate requires
+// metadata.node for those kinds precisely so this bucketing stays
+// meaningful, and Reconcile names the offender if one slips through.
 func groupByNode(desired []resource.Resource) []nodeGroup {
 	byNode := map[string][]resource.Resource{}
 	for _, r := range desired {

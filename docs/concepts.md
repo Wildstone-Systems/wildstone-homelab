@@ -11,6 +11,21 @@ The **Statefile** is a git-backed store of typed resources
 it. Container images must be digest-pinned (`repo@sha256:...`); the
 agent refuses anything else.
 
+Every resource but `DnsRecord` names the node it is applied at, in
+`metadata.node`, and that field is required: the reconciler groups
+desired state by node and dispatches each group at one agent, so a
+resource with no node is never dispatched anywhere. `DnsRecord` is the
+exception because it is applied through an external provider rather than
+an agent, and it must *not* carry a node.
+
+For most resources the node is obvious — the machine running the
+container. Two are less so: `OidcClient` and `LdapGroup` are applied at
+the node running the **identity provider**, not the node running the app
+that consumes them, because what they produce is configuration Authelia
+and LLDAP read. App packages expose this as an optional `identity_node`
+param that defaults to the package's own `node`, which is correct for a
+single-node homelab; set it when identity runs on a different machine.
+
 A `Container`'s published ports use Docker's own syntax and may name the
 host address to bind:
 

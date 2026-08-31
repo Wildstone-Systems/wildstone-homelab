@@ -29,3 +29,12 @@ func Kinds() []Kind {
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
+
+// NodeScoped reports whether resources of kind k are applied at a
+// Wardstone node — the same registry flag Validate enforces. Callers that
+// dispatch by node (the reconcile loop) use it to tell "this bucket has
+// no node because the kind has none" from "this bucket has no node
+// because something skipped validation".
+func NodeScoped(k Kind) bool {
+	return registry[k].nodeScoped
+}

@@ -33,6 +33,11 @@ params:
   - { name: public_domain, required: true }
   - { name: docs_subdomain, default: paperless }
   - { name: node, required: true }
+  # Node running the identity provider, whose managed config the
+  # OidcClient/LdapGroup resources are rendered into. Defaults to this
+  # package's own node, which is right for a single-node homelab; set it
+  # explicitly when identity runs elsewhere.
+  - { name: identity_node, default: "" }
   - { name: timezone, default: UTC }
 policies:
   classifications: [family_public]
@@ -153,7 +158,7 @@ templates:
   - |
     apiVersion: wildstone.dev/v1
     kind: OidcClient
-    metadata: { name: paperless }
+    metadata: { name: paperless, node: "{{ or .Params.identity_node .Params.node }}" }
     spec:
       clientId: paperless
       clientName: Paperless
@@ -166,7 +171,7 @@ templates:
   - |
     apiVersion: wildstone.dev/v1
     kind: LdapGroup
-    metadata: { name: docs-users }
+    metadata: { name: docs-users, node: "{{ or .Params.identity_node .Params.node }}" }
     spec:
       name: docs_users
   # Backup hook (ADR-W013 A4): data + media + DB, daily.
