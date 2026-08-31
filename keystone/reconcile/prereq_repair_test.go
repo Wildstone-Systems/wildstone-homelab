@@ -38,13 +38,17 @@ func TestPrereqFilesAreRepairedOnATick(t *testing.T) {
 	}
 	base := managedPathForTest(agent, baseCaddyfilePath(testManagedPrefix))
 	placeholder := managedPathForTest(agent, placeholderFragmentPath(testManagedPrefix))
-	for _, p := range []string{base, placeholder} {
+	// The merged Authelia clients file is a prereq for the same reason
+	// the other two are: its correct contents are a pure function of
+	// desired state, so nothing but this repair asserts them.
+	clients := managedPathForTest(agent, autheliaClientsPath(testManagedPrefix))
+	for _, p := range []string{base, placeholder, clients} {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("prereq %s not written on a resourceless tick: %v", p, err)
 		}
 	}
-	if len(out.PrereqRepaired) != 2 {
-		t.Fatalf("first tick repaired %v, want both files written", out.PrereqRepaired)
+	if len(out.PrereqRepaired) != 3 {
+		t.Fatalf("first tick repaired %v, want all three files written", out.PrereqRepaired)
 	}
 
 	// A second tick with everything intact must be a no-op: repair that

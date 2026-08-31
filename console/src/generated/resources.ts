@@ -59,6 +59,12 @@ export interface OidcClientSpec {
   redirectUris: string[];
   scopes?: string[];
   authPolicy: string;
+  requireGroups?: string[];
+  tokenAuthMethod?: string;
+  requirePkce?: boolean;
+  consentMode?: string;
+  idTokenClaims?: string[];
+  userinfoSigningAlg?: string;
   secretRef: string;
 }
 

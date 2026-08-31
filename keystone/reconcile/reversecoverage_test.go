@@ -169,6 +169,7 @@ func TestReverseAudit_VolumeGateFailureNeverDeletes(t *testing.T) {
 	// is that NO destructive op is reachable for a volume, and that is
 	// still asserted exactly.
 	prereqOps := map[string]int{"ReadManagedFile": 0, "WriteManagedFile": 0}
+	nodePrereqCount := len(nodePrereqFiles(testManagedPrefix, nil))
 	var volumePath []string
 	for _, call := range s.calls {
 		if _, ok := prereqOps[call]; ok {
@@ -177,8 +178,8 @@ func TestReverseAudit_VolumeGateFailureNeverDeletes(t *testing.T) {
 		}
 		volumePath = append(volumePath, call)
 	}
-	if prereqOps["ReadManagedFile"] > 2 || prereqOps["WriteManagedFile"] > 2 {
-		t.Fatalf("more managed-file ops than the two node prereqs account for: %v", s.calls)
+	if prereqOps["ReadManagedFile"] > nodePrereqCount || prereqOps["WriteManagedFile"] > nodePrereqCount {
+		t.Fatalf("more managed-file ops than the %d node prereqs account for: %v", nodePrereqCount, s.calls)
 	}
 	for _, call := range volumePath {
 		if call != "EnsureVolume" {

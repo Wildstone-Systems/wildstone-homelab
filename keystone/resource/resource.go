@@ -57,6 +57,15 @@ var secretRefRegexp = regexp.MustCompile(`^secret/[A-Za-z0-9._-]+$`)
 // end alphanumeric; length-bounded.
 var nameRegexp = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,61}[a-z0-9])?$`)
 
+// ldapGroupNameRegexp bounds an LLDAP group name. Narrower than
+// nameRegexp on purpose: a group name is interpolated into an LDAP filter
+// and a distinguished name (cn=<group>,ou=groups,...), where '.' and '-'
+// are legal but invite quoting questions nobody should have to answer,
+// and where a stray special character produces a filter that silently
+// matches nothing — which, since Jellyfin evaluates that filter on every
+// login, locks out users who were working.
+var ldapGroupNameRegexp = regexp.MustCompile(`^[a-z0-9]([a-z0-9_]{0,61}[a-z0-9])?$`)
+
 // Metadata is the ownership/placement envelope shared by every resource.
 type Metadata struct {
 	// Name is unique per kind.
@@ -157,6 +166,46 @@ var routeAuthValues = map[string]bool{
 var oidcAuthPolicies = map[string]bool{
 	"one_factor": true,
 	"two_factor": true,
+	// A client that exists but must admit nobody. Useful while a client is
+	// being provisioned, and as the base an operator can build on with
+	// RequireGroups.
+	"deny": true,
+}
+
+// oidcTokenAuthMethods is the closed set of TokenAuthMethod values. Both
+// are in use by first-party packages and neither is a sane default for
+// the other, so the field is per-client and this set is deliberately just
+// the two the OIDC core spec defines for a confidential client with a
+// shared secret.
+var oidcTokenAuthMethods = map[string]bool{
+	"client_secret_basic": true,
+	"client_secret_post":  true,
+}
+
+// oidcConsentModes is the closed set of ConsentMode values.
+var oidcConsentModes = map[string]bool{
+	"explicit":       true,
+	"implicit":       true,
+	"pre-configured": true,
+}
+
+// oidcUserinfoSigningAlgs is the closed set of UserinfoSigningAlg values.
+var oidcUserinfoSigningAlgs = map[string]bool{
+	"none":  true,
+	"RS256": true,
+}
+
+// oidcClaims is the closed set of claims that may be pulled into the ID
+// token. Closed for the usual reason (ADR-W004 A1) and one more: a claim
+// named here is one the renderer must know how to emit, and a typo would
+// otherwise produce a config Authelia rejects at startup — taking the
+// whole identity provider down rather than the one client.
+var oidcClaims = map[string]bool{
+	"groups":             true,
+	"email":              true,
+	"email_verified":     true,
+	"name":               true,
+	"preferred_username": true,
 }
 
 // OidcClientSpec is the spec for kind OidcClient (ADR-W005 A3), applied by
@@ -172,9 +221,58 @@ type OidcClientSpec struct {
 	ClientName   string   `yaml:"clientName"`
 	RedirectUris []string `yaml:"redirectUris"`
 	Scopes       []string `yaml:"scopes,omitempty"`
-	// AuthPolicy is the Authelia authorization_policy, e.g. "two_factor" or
-	// "one_factor".
+	// AuthPolicy is the Authelia authorization_policy: "one_factor",
+	// "two_factor", or "deny".
+	//
+	// It is not the whole gate. An app that cannot enforce group
+	// membership itself — Paperless discards the groups claim outright —
+	// has no authorization at all unless the IdP refuses the token, so
+	// RequireGroups turns this into a named policy that also demands
+	// membership.
 	AuthPolicy string `yaml:"authPolicy"`
+	// RequireGroups restricts the client to members of these LLDAP groups.
+	// Empty means any user the AuthPolicy admits.
+	//
+	// This is the OIDC counterpart of Jellyfin's LdapSearchFilter, and for
+	// several apps it is the ONLY enforceable gate: the renderer emits a
+	// per-client authorization policy that denies by default and admits
+	// only these group subjects, so a user outside them is refused a token
+	// rather than being let in with no permissions.
+	RequireGroups []string `yaml:"requireGroups,omitempty"`
+	// TokenAuthMethod is the OIDC token_endpoint_auth_method:
+	// "client_secret_basic" (the OIDC default) or "client_secret_post".
+	// Empty means client_secret_basic.
+	//
+	// There is no value that is right for every app, which is why this is
+	// per-client rather than a renderer constant: Immich sends the secret
+	// in the POST body and fails against the default with invalid_client,
+	// while Paperless uses the default.
+	TokenAuthMethod string `yaml:"tokenAuthMethod,omitempty"`
+	// RequirePkce demands PKCE (S256) from this client. Immich uses PKCE;
+	// Paperless does not.
+	RequirePkce bool `yaml:"requirePkce,omitempty"`
+	// ConsentMode is the Authelia consent_mode: "explicit" (the default —
+	// the user is shown a consent screen), "implicit", or "pre-configured".
+	// Empty means explicit.
+	//
+	// A client that cannot render a consent screen needs this. Immich's
+	// mobile callback is a custom scheme (app.immich:///oauth-callback)
+	// with no browser to consent in, so an explicit-consent client is
+	// simply unusable from the app.
+	ConsentMode string `yaml:"consentMode,omitempty"`
+	// IdTokenClaims are the claims delivered IN the ID token rather than
+	// only at /userinfo. Empty means Authelia's default, which puts
+	// everything at /userinfo.
+	//
+	// Requesting a scope is not enough: an app that reads groups from the
+	// ID token sees nothing unless the claim is named here, which the
+	// renderer turns into a claims_policy.
+	IdTokenClaims []string `yaml:"idTokenClaims,omitempty"`
+	// UserinfoSigningAlg is the userinfo_signed_response_alg: "none" (the
+	// default) or "RS256". It must agree with what the app expects —
+	// Immich's profileSigningAlgorithm is the other half of this pair, and
+	// the two are configured in files the renderer writes separately.
+	UserinfoSigningAlg string `yaml:"userinfoSigningAlg,omitempty"`
 	// SecretRef is a *reference* to the client secret, e.g.
 	// "secret/immich-oidc" — never a literal secret value (ADR-W005 A2).
 	// Only Wardstone resolves it to a real value at materialization, out of
@@ -546,7 +644,31 @@ func validateOidcClient(r *Resource) error {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.redirectUris", Msg: "must have at least one redirect URI"}
 	}
 	if !oidcAuthPolicies[r.OidcClient.AuthPolicy] {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.authPolicy", Msg: "must be one of one_factor, two_factor"}
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.authPolicy", Msg: "must be one of one_factor, two_factor, deny"}
+	}
+	for i, g := range r.OidcClient.RequireGroups {
+		if !ldapGroupNameRegexp.MatchString(g) {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.requireGroups[%d]", i),
+				Msg: "must be an LLDAP group name (lowercase alphanumerics and '_'; start/end alphanumeric; ≤ 63 chars)"}
+		}
+	}
+	if m := r.OidcClient.TokenAuthMethod; m != "" && !oidcTokenAuthMethods[m] {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.tokenAuthMethod",
+			Msg: "must be one of client_secret_basic, client_secret_post (empty means client_secret_basic)"}
+	}
+	if m := r.OidcClient.ConsentMode; m != "" && !oidcConsentModes[m] {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.consentMode",
+			Msg: "must be one of explicit, implicit, pre-configured (empty means explicit)"}
+	}
+	if a := r.OidcClient.UserinfoSigningAlg; a != "" && !oidcUserinfoSigningAlgs[a] {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.userinfoSigningAlg",
+			Msg: "must be one of none, RS256 (empty means none)"}
+	}
+	for i, c := range r.OidcClient.IdTokenClaims {
+		if !oidcClaims[c] {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.idTokenClaims[%d]", i),
+				Msg: "must be one of groups, email, email_verified, name, preferred_username"}
+		}
 	}
 	if !secretRefRegexp.MatchString(r.OidcClient.SecretRef) {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.secretRef", Msg: "must be a reference of the form secret/<name> (ADR-W005 A2), never a literal secret value"}
@@ -588,6 +710,10 @@ func validateLdapGroup(r *Resource) error {
 	}
 	if r.LdapGroup.Name == "" {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.name", Msg: "must not be empty"}
+	}
+	if !ldapGroupNameRegexp.MatchString(r.LdapGroup.Name) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.name",
+			Msg: "must be an LLDAP group name (lowercase alphanumerics and '_'; start/end alphanumeric; ≤ 63 chars) — it is interpolated into an LDAP filter and a distinguished name"}
 	}
 	return nil
 }
