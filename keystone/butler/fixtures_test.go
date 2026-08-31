@@ -45,7 +45,7 @@ func routeResource(name, host, upstream, auth, classification string) resource.R
 	return resource.Resource{
 		ApiVersion: resource.ApiVersion,
 		Kind:       resource.KindRoute,
-		Metadata:   resource.Metadata{Name: name, Owner: "capability/photos"},
+		Metadata:   resource.Metadata{Name: name, Owner: "capability/photos", Node: "node-a"},
 		Route: &resource.RouteSpec{
 			Host:           host,
 			Upstream:       upstream,
@@ -73,7 +73,7 @@ func oidcClientResource(name string) resource.Resource {
 	return resource.Resource{
 		ApiVersion: resource.ApiVersion,
 		Kind:       resource.KindOidcClient,
-		Metadata:   resource.Metadata{Name: name, Owner: "capability/immich"},
+		Metadata:   resource.Metadata{Name: name, Owner: "capability/immich", Node: "node-a"},
 		OidcClient: &resource.OidcClientSpec{
 			ClientId:     name,
 			ClientName:   name,

@@ -300,6 +300,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 		}
 	}
 
+	// A node-scoped resource that reached here with no node was bucketed
+	// under "" by the loop, and there is no agent session at "" to observe
+	// or apply it. resource.Validate refuses this at proposal time, so
+	// reaching it means a resource was constructed in code and never
+	// validated; say which one, rather than failing several frames later
+	// as an opaque dispatch error naming no resource at all.
+	if nodeID == "" {
+		for _, res := range wsDesired {
+			return nil, fmt.Errorf("reconcile: %s/%s is node-scoped but carries no metadata.node", res.Kind, res.Metadata.Name)
+		}
+	}
+
 	// Before observing resources, re-assert the managed files that are not
 	// resources and so have no observe rule of their own (F34).
 	prereqRepaired, prereqErr := r.repairNodePrereqs(ctx, nodeID)

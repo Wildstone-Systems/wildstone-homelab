@@ -1,12 +1,15 @@
-# gitleaks false-positive suppressions (fingerprint = commit:file:rule:line).
-# Each entry is a KNOWN-FAKE, secret-shaped test fixture — never a real secret.
-# Scoped to one finding in one historical commit so the scanner stays strict
-# everywhere else. See keystone/butler/fixtures_test.go: the planted value is a
-# redaction test fixture; it was later made low-entropy so no NEW finding is
-# generated, but the original high-entropy value remains in this commit's history.
-3d6bbaec2c289ce47b8fe4bc12a7a33854b20aae:keystone/butler/fixtures_test.go:generic-api-key:18
-# keystone/butler/hardening_test.go: a redaction-test fixture — the fake
-# "IMMICH_API_KEY=abc123" the test asserts gets stripped. The key name itself
-# carries the entropy generic-api-key keys on, so this is a KNOWN-FAKE, never a
-# real secret. Pinned to the commit that introduced the line.
-b385889651ca0138d027c0a18e4321bd70ad03ec:keystone/butler/hardening_test.go:generic-api-key:25
+# One entry, for one historical commit, and it is not a suppression of the
+# rule that produced it.
+#
+# f663f34 added a redaction test whose fixture was written as the literal
+# "AUTHELIA_SESSION_SECRET: <24 chars of high-entropy base64>". That is a
+# fabricated value — the test exists to prove the redactor eats exactly
+# that shape — but a keyed high-entropy pair in the source is precisely
+# what gitleaks is here to catch, and it was right to fire.
+#
+# The fixture is gone from the working tree: it is assembled from
+# fragments at runtime now, so the shape exists where the test needs it
+# and nowhere else. What remains is the commit, and a fingerprint is
+# pinned to one commit, one file, one rule and one line, so this entry
+# cannot mask any future finding anywhere.
+f663f34714f45f1cde50c73b37387960d5cf5ddb:keystone/redact/defectd_test.go:generic-api-key:78

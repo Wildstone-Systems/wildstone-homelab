@@ -11,6 +11,7 @@ func TestProposeChange_ProducesPlan_NeverApplies(t *testing.T) {
 
 	out, err := gw.Dispatch(context.Background(), "propose_change", map[string]any{
 		"kind":  "Route",
+		"node":  "node-a",
 		"name":  "grafana",
 		"owner": "capability/grafana",
 		"spec": map[string]any{
@@ -56,6 +57,7 @@ func TestProposeChange_InvalidSpec_RejectedNotError(t *testing.T) {
 	// error that aborts the tool gateway.
 	out, err := gw.Dispatch(context.Background(), "propose_change", map[string]any{
 		"kind":  "Route",
+		"node":  "node-a",
 		"name":  "bad",
 		"owner": "capability/x",
 		"spec": map[string]any{

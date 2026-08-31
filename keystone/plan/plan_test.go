@@ -16,7 +16,7 @@ func vol(name string) resource.Resource {
 	return resource.Resource{
 		ApiVersion: resource.ApiVersion,
 		Kind:       resource.KindVolume,
-		Metadata:   resource.Metadata{Name: name, Owner: "system"},
+		Metadata:   resource.Metadata{Name: name, Owner: "system", Node: "node-a"},
 		Volume:     &resource.VolumeSpec{Name: name},
 	}
 }
@@ -34,7 +34,7 @@ func route(name string) resource.Resource {
 	return resource.Resource{
 		ApiVersion: resource.ApiVersion,
 		Kind:       resource.KindRoute,
-		Metadata:   resource.Metadata{Name: name, Owner: "capability/media"},
+		Metadata:   resource.Metadata{Name: name, Owner: "capability/media", Node: "node-a"},
 		Route: &resource.RouteSpec{
 			Host:           name + ".wildstone.dev",
 			Upstream:       "container/" + name + ":80",
@@ -202,7 +202,7 @@ func oidcClient(name string) resource.Resource {
 	return resource.Resource{
 		ApiVersion: resource.ApiVersion,
 		Kind:       resource.KindOidcClient,
-		Metadata:   resource.Metadata{Name: name, Owner: "capability/identity"},
+		Metadata:   resource.Metadata{Name: name, Owner: "capability/identity", Node: "node-a"},
 		OidcClient: &resource.OidcClientSpec{
 			ClientId:     name,
 			ClientName:   name,
@@ -218,7 +218,7 @@ func ldapGroup(name string) resource.Resource {
 	return resource.Resource{
 		ApiVersion: resource.ApiVersion,
 		Kind:       resource.KindLdapGroup,
-		Metadata:   resource.Metadata{Name: name, Owner: "capability/identity"},
+		Metadata:   resource.Metadata{Name: name, Owner: "capability/identity", Node: "node-a"},
 		LdapGroup:  &resource.LdapGroupSpec{Name: name},
 	}
 }

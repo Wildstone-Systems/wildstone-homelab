@@ -11,6 +11,21 @@ The **Statefile** is a git-backed store of typed resources
 it. Container images must be digest-pinned (`repo@sha256:...`); the
 agent refuses anything else.
 
+Every resource but `DnsRecord` names the node it is applied at, in
+`metadata.node`, and that field is required: the reconciler groups
+desired state by node and dispatches each group at one agent, so a
+resource with no node is never dispatched anywhere. `DnsRecord` is the
+exception because it is applied through an external provider rather than
+an agent, and it must *not* carry a node.
+
+For most resources the node is obvious — the machine running the
+container. Two are less so: `OidcClient` and `LdapGroup` are applied at
+the node running the **identity provider**, not the node running the app
+that consumes them, because what they produce is configuration Authelia
+and LLDAP read. App packages expose this as an optional `identity_node`
+param that defaults to the package's own `node`, which is correct for a
+single-node homelab; set it when identity runs on a different machine.
+
 A `Container`'s published ports use Docker's own syntax and may name the
 host address to bind:
 
@@ -102,13 +117,24 @@ passes a redacting encoder that strips secret-shaped values.
 Redaction is deliberately blunt — over-redacting is the safe direction —
 so a handful of shapes that look secret but are not carry explicit
 shelters: `secret/<name>` references, `sha256:` digest pins, a Statefile
-commit under a key that names one, and `Kind/name` resource references.
-That last one is why the shelter list matters rather than being an
+commit under a key that names one, `Kind/name` resource references, and
+separated identifiers — a kebab-case or `SCREAMING_SNAKE` run such as a
+secret's name (`authelia-storage-encryption-key`) or an env-var key
+(`IMMICH_MACHINE_LEARNING_URL`). The `Kind/name` shelter is why the shelter list matters rather than being an
 implementation detail: without it an ordinary `Volume/immich-postgres-data`
 is a 27-character run of base64's alphabet, and a plan step reads
 `Create [REDACTED]`. A plan a human cannot read is a plan they cannot
 review, and review is the only thing standing between a proposal and
-your data.
+your data. `wild secret list` and an identity plan's env block were the
+same failure without the identifier shelter.
+
+A shelter always declines when the thing under it is not what it claims:
+a `Kind/name` whose name half is high-entropy, and an identifier whose
+letters are all hex digits, are both taken by the value rules instead. A
+passphrase-shaped password is the one thing shape cannot separate from an
+identifier, and it stays covered by the keyword rule that redacts the
+value of any `password`/`secret`/`token`/`api_key` key regardless of what
+it looks like.
 
 ## Capabilities and packages
 

@@ -17,7 +17,7 @@ func volume(name string) resource.Resource {
 	return resource.Resource{
 		ApiVersion: resource.ApiVersion,
 		Kind:       resource.KindVolume,
-		Metadata:   resource.Metadata{Name: name, Owner: "system"},
+		Metadata:   resource.Metadata{Name: name, Owner: "system", Node: "node-a"},
 		Volume:     &resource.VolumeSpec{Name: name},
 	}
 }

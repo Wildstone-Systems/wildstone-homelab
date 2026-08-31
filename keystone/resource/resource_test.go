@@ -32,7 +32,7 @@ func TestYAMLRoundTrip(t *testing.T) {
 		{
 			ApiVersion: ApiVersion,
 			Kind:       KindRoute,
-			Metadata:   Metadata{Name: "jellyfin-route", Owner: "capability/media"},
+			Metadata:   Metadata{Name: "jellyfin-route", Owner: "capability/media", Node: "node-a"},
 			Route: &RouteSpec{
 				Host:           "jellyfin.wildstone.dev",
 				Upstream:       "container/jellyfin:8096",
@@ -55,7 +55,7 @@ func TestYAMLRoundTrip(t *testing.T) {
 		{
 			ApiVersion: ApiVersion,
 			Kind:       KindOidcClient,
-			Metadata:   Metadata{Name: "immich", Owner: "capability/identity"},
+			Metadata:   Metadata{Name: "immich", Owner: "capability/identity", Node: "node-a"},
 			OidcClient: &OidcClientSpec{
 				ClientId:     "immich",
 				ClientName:   "Immich",
@@ -68,7 +68,7 @@ func TestYAMLRoundTrip(t *testing.T) {
 		{
 			ApiVersion: ApiVersion,
 			Kind:       KindLdapGroup,
-			Metadata:   Metadata{Name: "photos-users", Owner: "capability/identity"},
+			Metadata:   Metadata{Name: "photos-users", Owner: "capability/identity", Node: "node-a"},
 			LdapGroup: &LdapGroupSpec{
 				Name:    "photos-users",
 				Members: []string{"alice", "bob"},
@@ -141,7 +141,7 @@ func TestStatusNeverSerialized(t *testing.T) {
 	r := Resource{
 		ApiVersion: ApiVersion,
 		Kind:       KindVolume,
-		Metadata:   Metadata{Name: "vol", Owner: "system"},
+		Metadata:   Metadata{Name: "vol", Owner: "system", Node: "node-a"},
 		Volume:     &VolumeSpec{Name: "vol"},
 	}
 	data, err := Marshal(r)
@@ -156,7 +156,7 @@ func TestStatusNeverSerialized(t *testing.T) {
 func TestValidateRouteRequiresClassification(t *testing.T) {
 	r := Resource{
 		Kind:     KindRoute,
-		Metadata: Metadata{Name: "r1", Owner: "system"},
+		Metadata: Metadata{Name: "r1", Owner: "system", Node: "node-a"},
 		Route: &RouteSpec{
 			Host:     "example.wildstone.dev",
 			Upstream: "container/x:80",
@@ -179,7 +179,7 @@ func TestValidateRouteRequiresClassification(t *testing.T) {
 func TestValidateContainerRejectsTag(t *testing.T) {
 	r := Resource{
 		Kind:     KindContainer,
-		Metadata: Metadata{Name: "c1", Owner: "system"},
+		Metadata: Metadata{Name: "c1", Owner: "system", Node: "node-a"},
 		Container: &ContainerSpec{
 			Image: "ghcr.io/example/app:latest",
 		},
@@ -197,7 +197,7 @@ func TestValidateContainerRejectsTag(t *testing.T) {
 func TestValidateContainerAcceptsDigest(t *testing.T) {
 	r := Resource{
 		Kind:     KindContainer,
-		Metadata: Metadata{Name: "c1", Owner: "system"},
+		Metadata: Metadata{Name: "c1", Owner: "system", Node: "node-a"},
 		Container: &ContainerSpec{
 			Image: validDigest(),
 		},
@@ -230,7 +230,7 @@ func TestValidateDnsRecordBadType(t *testing.T) {
 func TestValidateMissingOwner(t *testing.T) {
 	r := Resource{
 		Kind:     KindVolume,
-		Metadata: Metadata{Name: "v1"},
+		Metadata: Metadata{Name: "v1", Node: "node-a"},
 		Volume:   &VolumeSpec{Name: "v1"},
 	}
 	err := r.Validate()
@@ -258,7 +258,7 @@ func TestValidateRejectsPathTraversalNames(t *testing.T) {
 	} {
 		r := Resource{
 			Kind:     KindVolume,
-			Metadata: Metadata{Name: name, Owner: "capability/x"},
+			Metadata: Metadata{Name: name, Owner: "capability/x", Node: "node-a"},
 			Volume:   &VolumeSpec{Name: "v1"},
 		}
 		err := r.Validate()
@@ -274,7 +274,7 @@ func TestValidateRejectsPathTraversalNames(t *testing.T) {
 	// A well-formed name still validates.
 	ok := Resource{
 		Kind:     KindVolume,
-		Metadata: Metadata{Name: "immich-library.v2", Owner: "capability/x"},
+		Metadata: Metadata{Name: "immich-library.v2", Owner: "capability/x", Node: "node-a"},
 		Volume:   &VolumeSpec{Name: "v1"},
 	}
 	if err := ok.Validate(); err != nil {
@@ -285,7 +285,7 @@ func TestValidateRejectsPathTraversalNames(t *testing.T) {
 func TestValidateOidcClientMissingRedirectUri(t *testing.T) {
 	r := Resource{
 		Kind:     KindOidcClient,
-		Metadata: Metadata{Name: "immich", Owner: "capability/identity"},
+		Metadata: Metadata{Name: "immich", Owner: "capability/identity", Node: "node-a"},
 		OidcClient: &OidcClientSpec{
 			ClientId:   "immich",
 			AuthPolicy: "two_factor",
@@ -305,7 +305,7 @@ func TestValidateOidcClientMissingRedirectUri(t *testing.T) {
 func TestValidateOidcClientRejectsLiteralSecret(t *testing.T) {
 	r := Resource{
 		Kind:     KindOidcClient,
-		Metadata: Metadata{Name: "immich", Owner: "capability/identity"},
+		Metadata: Metadata{Name: "immich", Owner: "capability/identity", Node: "node-a"},
 		OidcClient: &OidcClientSpec{
 			ClientId:     "immich",
 			RedirectUris: []string{"https://photos.example.com/auth/login"},
@@ -326,7 +326,7 @@ func TestValidateOidcClientRejectsLiteralSecret(t *testing.T) {
 func TestValidateOidcClientMissingClientId(t *testing.T) {
 	r := Resource{
 		Kind:     KindOidcClient,
-		Metadata: Metadata{Name: "immich", Owner: "capability/identity"},
+		Metadata: Metadata{Name: "immich", Owner: "capability/identity", Node: "node-a"},
 		OidcClient: &OidcClientSpec{
 			RedirectUris: []string{"https://photos.example.com/auth/login"},
 			AuthPolicy:   "two_factor",
@@ -346,7 +346,7 @@ func TestValidateOidcClientMissingClientId(t *testing.T) {
 func TestValidateLdapGroupMissingName(t *testing.T) {
 	r := Resource{
 		Kind:      KindLdapGroup,
-		Metadata:  Metadata{Name: "photos-users", Owner: "capability/identity"},
+		Metadata:  Metadata{Name: "photos-users", Owner: "capability/identity", Node: "node-a"},
 		LdapGroup: &LdapGroupSpec{Members: []string{"alice"}},
 	}
 	err := r.Validate()
@@ -363,7 +363,7 @@ func TestValidateApiVersionMismatch(t *testing.T) {
 	r := Resource{
 		ApiVersion: "wildstone.dev/v2",
 		Kind:       KindVolume,
-		Metadata:   Metadata{Name: "v1", Owner: "system"},
+		Metadata:   Metadata{Name: "v1", Owner: "system", Node: "node-a"},
 		Volume:     &VolumeSpec{Name: "v1"},
 	}
 	err := r.Validate()
@@ -379,7 +379,7 @@ func TestValidateApiVersionMismatch(t *testing.T) {
 func TestValidateApiVersionEmptyAllowed(t *testing.T) {
 	r := Resource{
 		Kind:     KindVolume,
-		Metadata: Metadata{Name: "v1", Owner: "system"},
+		Metadata: Metadata{Name: "v1", Owner: "system", Node: "node-a"},
 		Volume:   &VolumeSpec{Name: "v1"},
 	}
 	if err := r.Validate(); err != nil {
@@ -390,7 +390,7 @@ func TestValidateApiVersionEmptyAllowed(t *testing.T) {
 func TestValidateSpecExclusivity(t *testing.T) {
 	r := Resource{
 		Kind:      KindContainer,
-		Metadata:  Metadata{Name: "c1", Owner: "system"},
+		Metadata:  Metadata{Name: "c1", Owner: "system", Node: "node-a"},
 		Container: &ContainerSpec{Image: validDigest()},
 		Volume:    &VolumeSpec{Name: "c1"},
 	}
@@ -407,7 +407,7 @@ func TestValidateSpecExclusivity(t *testing.T) {
 func TestValidateContainerBadPort(t *testing.T) {
 	r := Resource{
 		Kind:     KindContainer,
-		Metadata: Metadata{Name: "c1", Owner: "system"},
+		Metadata: Metadata{Name: "c1", Owner: "system", Node: "node-a"},
 		Container: &ContainerSpec{
 			Image: validDigest(),
 			Ports: []string{"not-a-port"},
@@ -426,7 +426,7 @@ func TestValidateContainerBadPort(t *testing.T) {
 func TestValidateContainerMountRequiresSourceAndTarget(t *testing.T) {
 	r := Resource{
 		Kind:     KindContainer,
-		Metadata: Metadata{Name: "c1", Owner: "system"},
+		Metadata: Metadata{Name: "c1", Owner: "system", Node: "node-a"},
 		Container: &ContainerSpec{
 			Image:  validDigest(),
 			Mounts: []Mount{{Source: "", Target: "/data"}},
@@ -445,7 +445,7 @@ func TestValidateContainerMountRequiresSourceAndTarget(t *testing.T) {
 func TestValidateRouteBadAuth(t *testing.T) {
 	r := Resource{
 		Kind:     KindRoute,
-		Metadata: Metadata{Name: "r1", Owner: "system"},
+		Metadata: Metadata{Name: "r1", Owner: "system", Node: "node-a"},
 		Route: &RouteSpec{
 			Host:           "example.wildstone.dev",
 			Upstream:       "container/x:80",
@@ -466,7 +466,7 @@ func TestValidateRouteBadAuth(t *testing.T) {
 func TestValidateOidcClientBadAuthPolicy(t *testing.T) {
 	r := Resource{
 		Kind:     KindOidcClient,
-		Metadata: Metadata{Name: "immich", Owner: "capability/identity"},
+		Metadata: Metadata{Name: "immich", Owner: "capability/identity", Node: "node-a"},
 		OidcClient: &OidcClientSpec{
 			ClientId:     "immich",
 			RedirectUris: []string{"https://photos.example.com/auth/login"},
@@ -507,7 +507,7 @@ func TestValidateDnsRecordEmptyContent(t *testing.T) {
 func TestValidateMissingName(t *testing.T) {
 	r := Resource{
 		Kind:     KindVolume,
-		Metadata: Metadata{Owner: "system"},
+		Metadata: Metadata{Owner: "system", Node: "node-a"},
 		Volume:   &VolumeSpec{Name: "v1"},
 	}
 	err := r.Validate()

@@ -79,9 +79,9 @@ func TestRedTeam_SecretExfiltrationAcrossReadTools(t *testing.T) {
 	}{
 		{"get_system_overview", map[string]any{}},
 		{"get_capability_status", map[string]any{}},
-		{"explain_resource", map[string]any{"kind": "Container", "name": "immich-server"}},
+		{"explain_resource", map[string]any{"kind": "Container", "node": "node-a", "name": "immich-server"}},
 		{"get_plan", map[string]any{
-			"kind": "Route", "name": "photos", "owner": "capability/photos",
+			"kind": "Route", "node": "node-a", "name": "photos", "owner": "capability/photos",
 			"spec": map[string]any{
 				"host": "photos.example.com", "upstream": "container/immich-server:2283",
 				"auth": "authelia_oidc", "classification": "family_public",
@@ -116,7 +116,7 @@ func TestRedTeam_DiagnoseEscalationBlockedInQAOnly(t *testing.T) {
 	sp := &scriptedProvider{responses: []*provider.ChatResponse{
 		{ToolCalls: []provider.ToolCall{{ID: "1", Name: "diagnose", Input: map[string]any{"capability": "photos"}}}, StopReason: "tool_use"},
 		{ToolCalls: []provider.ToolCall{{ID: "2", Name: "propose_change", Input: map[string]any{
-			"kind": "Route", "name": "photos", "owner": "capability/photos",
+			"kind": "Route", "node": "node-a", "name": "photos", "owner": "capability/photos",
 			"spec": map[string]any{
 				"host": "photos.example.com", "upstream": "container/immich-server:2283",
 				"auth": "none", "classification": "family_public",

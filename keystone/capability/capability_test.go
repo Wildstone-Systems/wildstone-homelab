@@ -140,7 +140,7 @@ func consumerPackage() *pkgspec.Package {
 		Templates: []string{
 			`apiVersion: wildstone.dev/v1
 kind: OidcClient
-metadata: { name: immich }
+metadata: { name: immich, node: node-a }
 spec:
   clientId: immich
   clientName: Immich
@@ -219,7 +219,7 @@ func TestExpandIssuerURLTemplating(t *testing.T) {
 		Templates: []string{
 			`apiVersion: wildstone.dev/v1
 kind: Route
-metadata: { name: checker }
+metadata: { name: checker, node: node-a }
 spec: { host: "{{ .Resolved.IssuerURL }}", upstream: "container/checker:80", auth: none, classification: family_public }
 `,
 		},

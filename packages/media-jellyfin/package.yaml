@@ -30,6 +30,11 @@ params:
   - { name: public_domain, required: true }
   - { name: media_subdomain, default: jellyfin }
   - { name: node, required: true }
+  # Node running the identity provider, whose managed config the
+  # OidcClient/LdapGroup resources are rendered into. Defaults to this
+  # package's own node, which is right for a single-node homelab; set it
+  # explicitly when identity runs elsewhere.
+  - { name: identity_node, default: "" }
   # Host path of the media library; must resolve under a Wardstone
   # managed prefix (default prefixes: /etc/wildstone, /srv/wildstone).
   - { name: media_path, default: /srv/wildstone/media }
@@ -80,7 +85,7 @@ templates:
   - |
     apiVersion: wildstone.dev/v1
     kind: LdapGroup
-    metadata: { name: media-users }
+    metadata: { name: media-users, node: "{{ or .Params.identity_node .Params.node }}" }
     spec:
       name: media_users
   # Backup hook (ADR-W013 A4): config only, weekly — the library is

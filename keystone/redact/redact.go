@@ -93,6 +93,9 @@ func kindRefIsSafe(match string) bool {
 	// base64 shape: real token material virtually always carries digits,
 	// and ordinary reference names ("caddy-tailnet-data") do not.
 	for _, m := range base64TokenRegexp.FindAllString(name, -1) {
+		if isSeparatedIdentifier(m) {
+			continue
+		}
 		if strings.ContainsAny(m, "0123456789") {
 			return false
 		}
@@ -118,6 +121,50 @@ var hexTokenRegexp = regexp.MustCompile(`\b[0-9a-fA-F]{32,}\b`)
 // bearer tokens) that aren't already caught by hexTokenRegexp.
 var base64TokenRegexp = regexp.MustCompile(`\b[A-Za-z0-9+/_-]{24,}={0,2}\b`)
 
+// separatedIdentifierRegexp matches a separated identifier: kebab-case or
+// SCREAMING_SNAKE_CASE, one case family throughout, starting with a
+// letter, at least one separator, no segment longer than 20 characters.
+//
+// This is the F27 shelter applied to the shapes F27 missed. A secret NAME
+// ("authelia-storage-encryption-key", 31 chars) and an env-var KEY
+// ("IMMICH_MACHINE_LEARNING_URL", 27) are both long runs of the base64
+// character class, so `wild secret list` printed a column of [REDACTED]
+// and an identity plan's env block was unreadable — the same failure as
+// F27 (a plan a human cannot read is a plan a human cannot review),
+// reached through a different door.
+//
+// Sheltering by shape rather than by call site is deliberate: the same
+// names appear in plans, in error messages, in the Butler's tool results
+// and in API bodies, and a per-site exception would have to be added to
+// each and would be missing from the next one.
+var separatedIdentifierRegexp = regexp.MustCompile(
+	`^(?:[a-z][a-z0-9]{0,19}(?:[_-][a-z0-9]{1,20})+|[A-Z][A-Z0-9]{0,19}(?:[_-][A-Z0-9]{1,20})+)$`)
+
+// isSeparatedIdentifier reports whether a base64-shaped run is really an
+// identifier and so should not be redacted as a value.
+//
+// Two things it deliberately does NOT shelter. A run whose letters are all
+// hex digits ("550e8400-e29b-41d4-a716-446655440000", and any hyphenated
+// key material) is encoded bytes wearing separators, not a word — the same
+// judgment kindRefIsSafe makes for F36. And a diceware-style passphrase
+// ("correct-horse-battery-staple") is genuinely indistinguishable from a
+// kebab identifier by shape, so it loses this shelter; it stays covered
+// where it actually appears, as the value of a password/secret/token key,
+// because kvSecretRegexp runs over the unsheltered text and does not care
+// about shape at all.
+func isSeparatedIdentifier(s string) bool {
+	if !separatedIdentifierRegexp.MatchString(s) {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'g' && r <= 'z', r >= 'G' && r <= 'Z':
+			return true
+		}
+	}
+	return false
+}
+
 // kvSecretRegexp matches "password/secret/token/api_key: VALUE"-shaped
 // key/value pairs and redacts VALUE, as defense-in-depth alongside the
 // shape-based regexps above (catches short/low-entropy values a shape match
@@ -138,8 +185,14 @@ var base64TokenRegexp = regexp.MustCompile(`\b[A-Za-z0-9+/_-]{24,}={0,2}\b`)
 // and corrupt the document. A value is therefore redacted up to the first
 // quote/escape; the shape-based rules above still catch high-entropy
 // secrets that contain them.
+// The separator group tolerates the quotes a JSON body puts around the
+// key and the value ("apiKey": "..."), and is echoed back verbatim so the
+// document keeps its shape. Without it the rule never fired on a
+// serialized API body at all — the shape rules were carrying that case,
+// and the identifier shelter above would otherwise have handed a
+// low-entropy quoted value straight through.
 var kvSecretRegexp = regexp.MustCompile(
-	`(?i)([A-Za-z0-9]*[_-]?(?:password|secret|token|api[_-]?key))\s*[:=]\s*([^\s"'\\]+)`)
+	`(?i)([A-Za-z0-9]*[_-]?(?:password|secret|token|api[_-]?key))(["']?\s*[:=]\s*["']?)([^\s"'\\]+)`)
 
 // Placeholder replaces every redacted secret value.
 const Placeholder = "[REDACTED]"
@@ -180,6 +233,9 @@ func SecretShaped(s string) bool {
 	// virtually always carries digits, hostname-and-reference prose
 	// virtually never does.
 	for _, m := range base64TokenRegexp.FindAllString(sheltered, -1) {
+		if isSeparatedIdentifier(m) {
+			continue // a name, not a value (see isSeparatedIdentifier)
+		}
 		if strings.ContainsAny(m, "0123456789") {
 			return true
 		}
@@ -229,17 +285,28 @@ func String(s string) string {
 	})
 
 	protected = hexTokenRegexp.ReplaceAllString(protected, Placeholder)
-	protected = base64TokenRegexp.ReplaceAllString(protected, Placeholder)
+	// An identifier is a name, not a value, and must survive to be read
+	// (see isSeparatedIdentifier). This declines the replacement in place
+	// rather than sheltering behind a sentinel on purpose: kvSecretRegexp
+	// runs after, over this same text, and it has to keep seeing both the
+	// real key ("DB_PASSWORD", itself identifier-shaped) and any value
+	// that only its keyword rule can catch.
+	protected = base64TokenRegexp.ReplaceAllStringFunc(protected, func(m string) string {
+		if isSeparatedIdentifier(m) {
+			return m
+		}
+		return Placeholder
+	})
 	protected = kvSecretRegexp.ReplaceAllStringFunc(protected, func(m string) string {
 		sub := kvSecretRegexp.FindStringSubmatch(m)
 		// A value that is (or contains) a protected secret/<name> sentinel is
 		// a reference, not a secret value — leave the whole match intact so
 		// the reference is restored verbatim below, rather than redacting the
 		// sentinel and silently dropping the reference.
-		if strings.Contains(sub[2], secretRefSentinelMarker) {
+		if strings.Contains(sub[3], secretRefSentinelMarker) {
 			return m
 		}
-		return sub[1] + ": " + Placeholder
+		return sub[1] + sub[2] + Placeholder
 	})
 
 	for i, ref := range refs {

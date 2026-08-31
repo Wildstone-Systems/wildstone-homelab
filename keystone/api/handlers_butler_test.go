@@ -40,6 +40,7 @@ func proposeGrafanaTurns() []*provider.ChatResponse {
 			Name: "propose_change",
 			Input: map[string]any{
 				"kind":  "Route",
+				"node":  "node-a",
 				"name":  "grafana",
 				"owner": "capability/grafana",
 				"spec": map[string]any{

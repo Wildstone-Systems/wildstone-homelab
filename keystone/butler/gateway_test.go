@@ -96,6 +96,7 @@ func TestGetPlan_PreviewOnly(t *testing.T) {
 
 	out, err := gw.Dispatch(context.Background(), "get_plan", map[string]any{
 		"kind":  "Volume",
+		"node":  "node-a",
 		"name":  "photos-data",
 		"owner": "capability/photos",
 		"spec":  map[string]any{"name": "photos-data"},
@@ -157,7 +158,7 @@ func TestDispatch_TruncatesLargeContent(t *testing.T) {
 		r := resource.Resource{
 			ApiVersion: resource.ApiVersion,
 			Kind:       resource.KindVolume,
-			Metadata:   resource.Metadata{Name: "vol-with-a-very-long-name-padding-padding-padding" + strconv.Itoa(i), Owner: "system"},
+			Metadata:   resource.Metadata{Name: "vol-with-a-very-long-name-padding-padding-padding" + strconv.Itoa(i), Owner: "system", Node: "node-a"},
 			Volume:     &resource.VolumeSpec{Name: "v"},
 		}
 		if err := store.Put(r); err != nil {

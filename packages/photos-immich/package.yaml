@@ -28,6 +28,11 @@ params:
   - { name: public_domain, required: true }
   - { name: photos_subdomain, default: photos }
   - { name: node, required: true }
+  # Node running the identity provider, whose managed config the
+  # OidcClient/LdapGroup resources are rendered into. Defaults to this
+  # package's own node, which is right for a single-node homelab; set it
+  # explicitly when identity runs elsewhere.
+  - { name: identity_node, default: "" }
 policies:
   classifications: [family_public]
   dataSensitivity: high
@@ -131,7 +136,7 @@ templates:
   - |
     apiVersion: wildstone.dev/v1
     kind: OidcClient
-    metadata: { name: immich }
+    metadata: { name: immich, node: "{{ or .Params.identity_node .Params.node }}" }
     spec:
       clientId: immich
       clientName: Immich

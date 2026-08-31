@@ -55,7 +55,7 @@ func TestSplitPortMapping(t *testing.T) {
 // between the two is what let host_ip sit unusable in the proto.
 func TestValidatePortMappingUsesSplit(t *testing.T) {
 	for _, in := range []string{"8443:80", "127.0.0.1:8443:80", "[::1]:8443:80", "localhost:80:80", "80"} {
-		r := &Resource{Kind: KindContainer, Metadata: Metadata{Name: "c"}}
+		r := &Resource{Kind: KindContainer, Metadata: Metadata{Name: "c", Node: "node-a"}}
 		_, _, _, ok := SplitPortMapping(in)
 		if err := validatePortMapping(r, in); (err == nil) != ok {
 			t.Errorf("%q: validate err=%v but SplitPortMapping ok=%v", in, err, ok)

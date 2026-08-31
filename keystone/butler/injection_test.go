@@ -51,6 +51,7 @@ func TestInjectionRedTeam_ObedientModelStillBlocked(t *testing.T) {
 			ToolCalls: []provider.ToolCall{
 				{ID: "2", Name: "propose_change", Input: map[string]any{
 					"kind":  "Route",
+					"node":  "node-a",
 					"name":  "photos",
 					"owner": "capability/photos",
 					"spec": map[string]any{

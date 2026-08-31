@@ -64,9 +64,10 @@ type Metadata struct {
 	// Owner is the ownership chain: "capability/<name>" or "system".
 	// Nothing is orphaned (ADR-W004 A1).
 	Owner string `yaml:"owner"`
-	// Node is the Wardstone node id this resource is applied to. Empty for
-	// kinds that are not node-scoped (e.g. DnsRecord, applied via an
-	// external-resource provider rather than Wardstone).
+	// Node is the Wardstone node id this resource is applied to. Required
+	// for node-scoped kinds and rejected for the rest; the registry's
+	// nodeScoped flag is the single source of that split, and Validate
+	// enforces it in both directions.
 	Node string `yaml:"node,omitempty"`
 }
 
@@ -275,38 +276,60 @@ func (e *ValidationError) Error() string {
 type kindEntry struct {
 	newSpec  func() any
 	validate func(r *Resource) error
+	// nodeScoped records whether this kind is applied to a Wardstone node
+	// (and so MUST carry metadata.node) or through a provider (and so must
+	// NOT). The reconcile loop buckets desired state by metadata.node and
+	// dispatches each bucket at one node; a node-scoped resource with no
+	// node lands in the "" bucket, where there is no agent session to
+	// observe or apply it. That used to fail deep inside observe with a
+	// transport error naming neither the resource nor the missing field —
+	// so the invariant the loop relies on is stated here, once, beside the
+	// kind vocabulary, and enforced at validation time instead.
+	nodeScoped bool
 }
 
 // registry is the closed Go map from Kind to its factory/validator.
 // Adding a kind is a code change (ADR-W004 A1).
 var registry = map[Kind]kindEntry{
 	KindContainer: {
-		newSpec:  func() any { return &ContainerSpec{} },
-		validate: validateContainer,
+		newSpec:    func() any { return &ContainerSpec{} },
+		validate:   validateContainer,
+		nodeScoped: true,
 	},
 	KindVolume: {
-		newSpec:  func() any { return &VolumeSpec{} },
-		validate: validateVolume,
+		newSpec:    func() any { return &VolumeSpec{} },
+		validate:   validateVolume,
+		nodeScoped: true,
 	},
 	KindRoute: {
-		newSpec:  func() any { return &RouteSpec{} },
-		validate: validateRoute,
+		newSpec:    func() any { return &RouteSpec{} },
+		validate:   validateRoute,
+		nodeScoped: true,
 	},
 	KindDnsRecord: {
+		// Applied through a Provider (ADR-W004 A5), not an agent.
 		newSpec:  func() any { return &DnsRecordSpec{} },
 		validate: validateDnsRecord,
 	},
 	KindOidcClient: {
-		newSpec:  func() any { return &OidcClientSpec{} },
-		validate: validateOidcClient,
+		// Renders a managed config fragment on the node running the
+		// identity provider, so it is as node-scoped as a Route.
+		newSpec:    func() any { return &OidcClientSpec{} },
+		validate:   validateOidcClient,
+		nodeScoped: true,
 	},
 	KindLdapGroup: {
-		newSpec:  func() any { return &LdapGroupSpec{} },
-		validate: validateLdapGroup,
+		// Declared-only today, but the node it is declared against is
+		// the one running the directory, and it is what a future
+		// applier will provision against.
+		newSpec:    func() any { return &LdapGroupSpec{} },
+		validate:   validateLdapGroup,
+		nodeScoped: true,
 	},
 	KindBackupPlan: {
-		newSpec:  func() any { return &BackupPlanSpec{} },
-		validate: validateBackupPlan,
+		newSpec:    func() any { return &BackupPlanSpec{} },
+		validate:   validateBackupPlan,
+		nodeScoped: true,
 	},
 }
 
@@ -340,6 +363,14 @@ func (r *Resource) Validate() error {
 	}
 	if r.Metadata.Owner == "" {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "metadata.owner", Msg: "must not be empty"}
+	}
+	if entry.nodeScoped && r.Metadata.Node == "" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "metadata.node",
+			Msg: "must not be empty: this kind is applied at a node, and a resource with no node is never dispatched to one"}
+	}
+	if !entry.nodeScoped && r.Metadata.Node != "" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "metadata.node",
+			Msg: fmt.Sprintf("must be empty: %s is applied through a provider, not a node agent", r.Kind)}
 	}
 	if err := r.validateSpecExclusivity(); err != nil {
 		return err

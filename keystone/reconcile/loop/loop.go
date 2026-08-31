@@ -266,14 +266,34 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 // for a human to approve through the API — at most one open at a time
 // (ADR-W008 A2).
 func (l *Loop) proposeDrift(desired []resource.Resource) (string, error) {
+	head, err := l.State.Head()
+	if err != nil {
+		return "", fmt.Errorf("loop: reading statefile head for drift proposal: %w", err)
+	}
 	open, err := l.DB.PlansInState(runtimedb.PlanProposed)
 	if err != nil {
 		return "", err
 	}
 	for _, p := range open {
-		if p.Principal == driftPrincipal {
-			return "", nil // already surfaced; don't flood the plan list
+		if p.Principal != driftPrincipal {
+			continue
 		}
+		// The open proposal only speaks for the desired state it was
+		// computed from. Approval refuses one whose base has moved and
+		// supersedes it there (F28) — but until someone clicked approve,
+		// this dedupe kept returning early and no fresh proposal was ever
+		// raised, so the drift stayed unrepairable and the only visible
+		// artifact was a plan that 409s when you finally act on it
+		// (defect B). Supersede it here instead: the operator's one
+		// available action stops being the one that cannot work.
+		var stored plan.StoredProposal
+		if err := json.Unmarshal([]byte(p.PlanJSON), &stored); err == nil && stored.BasedOnHead == head {
+			return "", nil // still speaks for the current desired state
+		}
+		if err := l.DB.TransitionPlan(p.ID, runtimedb.PlanSuperseded, ""); err != nil {
+			return "", err
+		}
+		l.event("drift.superseded", "", "statefile moved since this drift proposal", map[string]string{"plan": p.ID})
 	}
 	summary := "drift repair requires approval (Medium/High risk)"
 	// BasedOnHead must be the live head, not "": approval refuses a
@@ -285,10 +305,6 @@ func (l *Loop) proposeDrift(desired []resource.Resource) (string, error) {
 	// not drift, reality did. Approving this commits no documents; what
 	// it does is make the next tick a plan tick, which authorizes the
 	// Medium/High steps that perform the repair.
-	head, err := l.State.Head()
-	if err != nil {
-		return "", fmt.Errorf("loop: reading statefile head for drift proposal: %w", err)
-	}
 	stored, err := json.Marshal(plan.StoredProposal{
 		BasedOnHead: head,
 		Summary:     summary,
@@ -307,10 +323,23 @@ func (l *Loop) proposeDrift(desired []resource.Resource) (string, error) {
 }
 
 // recordObserved upserts observed status per desired resource (ADR-W008
-// A4): healthy unless implicated in a failed/reversed step; coarse at R1.
-// Delete steps concern resources that have LEFT desired, so they are
+// A4). Delete steps concern resources that have LEFT desired, so they are
 // handled from the step results directly: a successful delete removes the
 // observed row, a failed one keeps the row and marks it unhealthy.
+//
+// Health is read off the plan, not off the step results alone. A resource
+// with no step is converged — observe found it present and matching, and
+// that is the only evidence "healthy" ever had. A resource WITH a step is
+// by definition not in its desired state, so it is healthy only once that
+// step has been applied and passed its health gate this tick.
+//
+// Consulting only the step results was defect A: on a drift tick that
+// stopped at PendingApproval, or any tick whose plan was never applied,
+// Steps is empty, no resource is implicated in a failure, and every
+// desired resource was stamped Healthy — so a container that observe had
+// just found missing was reported green by `wild status`. The status
+// surface said the opposite of what the reconciler had seen, in exactly
+// the situation an operator opens it.
 func (l *Loop) recordObserved(g nodeGroup, outcome *reconcile.Outcome) {
 	unhealthy := map[string]string{}
 	for _, sr := range outcome.Steps {
@@ -336,11 +365,37 @@ func (l *Loop) recordObserved(g nodeGroup, outcome *reconcile.Outcome) {
 		}
 		unhealthy[string(sr.Step.Kind)+"/"+sr.Step.Name] = detail
 	}
+	// Planned (non-delete) steps, and whether each one landed this tick.
+	planned := map[string]plan.Action{}
+	for _, st := range outcome.Plan.Steps {
+		if st.Action == plan.ActionDelete {
+			continue
+		}
+		planned[string(st.Kind)+"/"+st.Name] = st.Action
+	}
+	converged := map[string]bool{}
+	for _, sr := range outcome.Steps {
+		if sr.Applied && sr.HealthOK && sr.Step.Action != plan.ActionDelete {
+			converged[string(sr.Step.Kind)+"/"+sr.Step.Name] = true
+		}
+	}
+
 	for _, r := range g.resources {
 		key := string(r.Kind) + "/" + r.Metadata.Name
 		o := runtimedb.Observed{
 			Kind: string(r.Kind), Name: r.Metadata.Name, Node: g.node,
 			Healthy: true,
+		}
+		if action, needsWork := planned[key]; needsWork && !converged[key] {
+			o.Healthy = false
+			// The plan action is the whole diagnosis, and it is the
+			// useful one: Create means observe found nothing there.
+			switch action {
+			case plan.ActionCreate:
+				o.Detail = "absent: create planned, not applied"
+			default:
+				o.Detail = "drifted: " + action.String() + " planned, not applied"
+			}
 		}
 		if detail, bad := unhealthy[key]; bad {
 			o.Healthy = false
@@ -364,7 +419,11 @@ type nodeGroup struct {
 }
 
 // groupByNode buckets desired by metadata.node ("" holds the
-// non-node-scoped kinds), node-sorted for deterministic pass order.
+// non-node-scoped kinds — DnsRecord today, which dispatches through a
+// Provider and needs no agent), node-sorted for deterministic pass order.
+// Nothing node-scoped may land in "": resource.Validate requires
+// metadata.node for those kinds precisely so this bucketing stays
+// meaningful, and Reconcile names the offender if one slips through.
 func groupByNode(desired []resource.Resource) []nodeGroup {
 	byNode := map[string][]resource.Resource{}
 	for _, r := range desired {
