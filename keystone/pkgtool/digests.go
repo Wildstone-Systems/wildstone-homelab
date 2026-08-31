@@ -35,6 +35,16 @@ type RefreshResult struct {
 // the packages/README gap ("no automated digest-refresh tooling yet"),
 // closed (ADR-W010 C3). The updated package still goes through lint and
 // the normal publish flow; this tool only edits the text.
+//
+// Each pin is resolved independently, and some are not independent. A
+// package's images can be a matched set — photos-immich pairs a postgres
+// image against an immich-server that supports only certain vector
+// extensions, and a version skew between them fails at startup with "No
+// vector extension found", not at refresh. Lint cannot see this either:
+// it never pulls an image. So refreshing one image of such a pair without
+// the other silently produces a combination that cannot start, and the
+// only thing standing between that and an operator is someone actually
+// running the package after a refresh.
 func RefreshDigests(dir string, resolve DigestResolver) ([]RefreshResult, error) {
 	path := filepath.Join(dir, "package.yaml")
 	data, err := os.ReadFile(path)
