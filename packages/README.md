@@ -32,9 +32,27 @@ will need periodic refreshing as upstream images are rebuilt, which
 can be a matched set: `photos-immich` pairs a postgres image against an
 `immich-server` that supports only certain vector extensions, and a skew
 between the two fails at container startup ("No vector extension found"),
-not at refresh. `refresh-digests` resolves each pin independently and lint
-never pulls an image, so nothing catches it — run the package after a
-refresh that touched one image of such a pair.
+not at refresh.
+
+Declare those pins as an `imageSet` and `refresh-digests` refuses to move
+one without the others:
+
+```yaml
+imageSets:
+  - name: immich
+    images:
+      - ghcr.io/immich-app/immich-server
+      - ghcr.io/immich-app/postgres
+    reason: >-
+      immich-server accepts only the vectorchord and pgvector extensions;
+      the postgres image supplies one.
+```
+
+A set moves as a unit or not at all — if one member is already current, or
+fails to resolve, the others are held back and the command exits non-zero
+naming the set. This cannot make a combination *valid*; nothing here pulls
+an image, so nothing here knows what one contains. It only stops the tool
+from creating a mismatch the author never chose.
 
 ## Container-to-container addressing
 

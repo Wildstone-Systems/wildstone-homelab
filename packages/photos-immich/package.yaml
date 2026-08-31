@@ -36,6 +36,18 @@ params:
 policies:
   classifications: [family_public]
   dataSensitivity: high
+# These two pins are not independent: immich-server supports a fixed set of
+# postgres vector extensions and the postgres image is what provides one.
+# `wild pkg refresh-digests` refuses to move either alone.
+imageSets:
+  - name: immich
+    images:
+      - ghcr.io/immich-app/immich-server
+      - ghcr.io/immich-app/postgres
+    reason: >-
+      immich-server accepts only the vectorchord and pgvector extensions;
+      the postgres image supplies one. A version skew between them fails at
+      startup with "No vector extension found", not at refresh time.
 templates:
   # ---- Storage: the upload volume plus dedicated postgres/redis data
   # volumes (dedicated infra keeps Immich's data on its own backup/upgrade
@@ -61,12 +73,23 @@ templates:
     metadata: { name: photos-backup-repo, node: "{{ .Params.node }}" }
     spec: { name: photos-backup-repo }
   # ---- Dedicated postgres + redis.
+  #
+  # The postgres image and immich-server are a MATCHED PAIR, not two
+  # independent pins. immich-server supports only the "vectorchord" and
+  # "pgvector" extensions; the previous pin (tensorchord/pgvecto-rs)
+  # provides pgvecto.rs, which it dropped support for, so the pair could
+  # not start at all:
+  #
+  #   Error: No vector extension found. Available extensions: vchord, vector
+  #
+  # Refreshing one of these without the other reproduces that. See
+  # imageSet below and packages/README.md.
   - |
     apiVersion: wildstone.dev/v1
     kind: Container
     metadata: { name: immich-postgres, node: "{{ .Params.node }}" }
     spec:
-      image: "tensorchord/pgvecto-rs@sha256:739cdd626151ff1f796dc95a6591b55a714f341c737e27f045019ceabf8e8c52"
+      image: "ghcr.io/immich-app/postgres@sha256:6f3e9d2c2177af16c2988ff71425d79d89ca630ec2f9c8db03209ab716542338"
       env:
         POSTGRES_USER: immich
         POSTGRES_PASSWORD: "secret/immich-postgres-password"
@@ -95,6 +118,10 @@ templates:
         DB_USERNAME: immich
         DB_PASSWORD: "secret/immich-postgres-password"
         DB_DATABASE_NAME: immich
+        # Immich's own name for the extension, NOT the extension's name.
+        # "vchord" is what postgres calls it and what the error above
+        # lists, but it fails env validation before the server starts.
+        DB_VECTOR_EXTENSION: vectorchord
         REDIS_HOSTNAME: immich-redis
         PUBLIC_IMMICH_SERVER_URL: "https://{{ .Params.photos_subdomain }}.{{ .Params.public_domain }}"
         OAUTH_ENABLED: "true"

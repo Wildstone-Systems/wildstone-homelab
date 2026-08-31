@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -123,6 +124,36 @@ type Package struct {
 	Templates  []string        `yaml:"templates,omitempty"`
 	Lifecycle  Lifecycle       `yaml:"lifecycle,omitempty"`
 	AgentTools []AgentToolSpec `yaml:"agentTools,omitempty"`
+	// ImageSets group images that must be upgraded together.
+	ImageSets []ImageSet `yaml:"imageSets,omitempty"`
+}
+
+// ImageSet names images whose versions are not independent — refreshing
+// one without the others produces a combination that cannot run.
+//
+// photos-immich is the case that motivated this: immich-server supports a
+// fixed set of postgres vector extensions, and its postgres image is what
+// provides one. The pinned pair had drifted apart and the package could
+// not start at all:
+//
+//	Error: No vector extension found. Available extensions: vchord, vector
+//
+// Nothing could catch that. Lint never pulls an image, so it cannot know
+// what an image contains, and RefreshDigests resolves each pin
+// independently by regex — so the tool that most easily creates the
+// mismatch was the one least able to see it. A package cannot make the
+// combination valid by declaring it, but it can say which pins move
+// together, which is enough to turn a silent broken deploy into a refusal
+// the author reads before publishing.
+type ImageSet struct {
+	// Name identifies the set in diagnostics, e.g. "immich".
+	Name string `yaml:"name"`
+	// Images are the image references (the repository half, without the
+	// @sha256: digest) that must be refreshed together.
+	Images []string `yaml:"images"`
+	// Reason is shown when a refresh is refused. Write it so the person
+	// reading it knows what to do, not merely that they were stopped.
+	Reason string `yaml:"reason,omitempty"`
 }
 
 // ValidationError is a typed validation failure for a Package document.
@@ -191,6 +222,25 @@ func (p *Package) Validate() error {
 	for i, req := range p.Requires {
 		if req.Trait == "" {
 			return &ValidationError{Field: fmt.Sprintf("requires[%d].trait", i), Msg: "must not be empty"}
+		}
+	}
+
+	for i, set := range p.ImageSets {
+		if set.Name == "" {
+			return &ValidationError{Field: fmt.Sprintf("imageSets[%d].name", i), Msg: "must not be empty"}
+		}
+		if len(set.Images) < 2 {
+			return &ValidationError{Field: fmt.Sprintf("imageSets[%d].images", i),
+				Msg: "must name at least two images — a set of one has nothing to stay in step with"}
+		}
+		for j, img := range set.Images {
+			if img == "" {
+				return &ValidationError{Field: fmt.Sprintf("imageSets[%d].images[%d]", i, j), Msg: "must not be empty"}
+			}
+			if strings.Contains(img, "@") {
+				return &ValidationError{Field: fmt.Sprintf("imageSets[%d].images[%d]", i, j),
+					Msg: "name the image without its digest — the set identifies which pins move together, not which values they hold"}
+			}
 		}
 	}
 
