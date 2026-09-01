@@ -9,7 +9,8 @@ export type Kind =
   "DnsRecord" |
   "OidcClient" |
   "LdapGroup" |
-  "BackupPlan";
+  "BackupPlan" |
+  "ConfigFile";
 
 export const API_VERSION = "wildstone.dev/v1";
 
@@ -87,6 +88,11 @@ export interface BackupPlanSpec {
   retention?: BackupRetention;
 }
 
+export interface ConfigFileSpec {
+  filename: string;
+  content: string;
+}
+
 export type Spec =
   ContainerSpec |
   VolumeSpec |
@@ -94,7 +100,8 @@ export type Spec =
   DnsRecordSpec |
   OidcClientSpec |
   LdapGroupSpec |
-  BackupPlanSpec;
+  BackupPlanSpec |
+  ConfigFileSpec;
 
 export interface Resource {
   apiVersion: string;
@@ -111,4 +118,5 @@ export interface SpecByKind {
   OidcClient: OidcClientSpec;
   LdapGroup: LdapGroupSpec;
   BackupPlan: BackupPlanSpec;
+  ConfigFile: ConfigFileSpec;
 }

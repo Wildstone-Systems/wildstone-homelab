@@ -6,8 +6,8 @@ section cites the ADR that decided it.
 ## Desired state lives in the Statefile
 
 The **Statefile** is a git-backed store of typed resources
-(ADR-W004): `Volume`, `LdapGroup`, `OidcClient`, `Container`, `Route`,
-`DnsRecord`, `BackupPlan`. Specs only — observed status never touches
+(ADR-W004): `Volume`, `ConfigFile`, `LdapGroup`, `OidcClient`,
+`Container`, `Route`, `DnsRecord`, `BackupPlan`. Specs only — observed status never touches
 it. Container images must be digest-pinned (`repo@sha256:...`); the
 agent refuses anything else.
 
@@ -56,6 +56,26 @@ reads.
 Each capability's containers mount only that capability's subtree of the
 managed prefix, read-only. The identity provider has no business reading
 the reverse proxy's config, or the reverse.
+
+### A package writes its own app's config
+
+An app's configuration is the package's business. Authelia needs an LDAP
+base DN and a storage backend; Jellyfin's LDAP plugin needs an XML
+document; Immich reads JSON. None of that belongs in the control plane,
+which is meant to know nothing about any particular profile — so a
+package declares a `ConfigFile` and Wildstone renders it.
+
+**The path is derived, never supplied**: `<prefix>/<capability>/<filename>`,
+with the directory taken from the owning capability. A package therefore
+cannot write into another capability's subtree, and the derived path
+matches the read-only mount that capability's containers already get, so
+a file lands exactly where its own app can read it.
+
+Secret references in the content are resolved on the node like anywhere
+else — and whether to resolve them is decided by looking at the content,
+not by a flag the author might forget. A config shipped with the literal
+text `secret/…` where a secret belongs is an app that starts and rejects
+every login, with nothing in any log to explain it.
 
 ### Secrets reach a config file only on the node
 

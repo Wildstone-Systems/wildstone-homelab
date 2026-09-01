@@ -315,6 +315,8 @@ func specEqual(a, b resource.Resource) bool {
 		return ldapGroupEqual(a.LdapGroup, b.LdapGroup)
 	case resource.KindBackupPlan:
 		return backupPlanEqual(a.BackupPlan, b.BackupPlan)
+	case resource.KindConfigFile:
+		return a.ConfigFile != nil && b.ConfigFile != nil && *a.ConfigFile == *b.ConfigFile
 	default:
 		return false
 	}
@@ -470,6 +472,17 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 			return RiskLow, "new OIDC client, no existing service affected"
 		default:
 			return RiskMedium, "OIDC client change/removal: batched Authelia reload affects all clients; app login may break"
+		}
+	case resource.KindConfigFile:
+		switch action {
+		case ActionCreate:
+			return RiskLow, "new config file; nothing is reading it yet"
+		default:
+			// An app's configuration is how it behaves. Changing one can
+			// stop a service starting, and removing one can stop it
+			// authenticating anybody — neither visible until the app next
+			// reads the file, which may be long after the plan applied.
+			return RiskMedium, "configuration changed: the app may fail to start, or start behaving differently"
 		}
 	case resource.KindLdapGroup:
 		// Declared/best-effort (ADR-W005 A3): apply never touches an

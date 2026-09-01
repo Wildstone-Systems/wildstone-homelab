@@ -36,16 +36,34 @@ var kindSpecs = []struct {
 	{resource.KindOidcClient, reflect.TypeOf(resource.OidcClientSpec{})},
 	{resource.KindLdapGroup, reflect.TypeOf(resource.LdapGroupSpec{})},
 	{resource.KindBackupPlan, reflect.TypeOf(resource.BackupPlanSpec{})},
+	{resource.KindConfigFile, reflect.TypeOf(resource.ConfigFileSpec{})},
 }
 
 func main() {
 	out := flag.String("out", "", "output path (default: stdout)")
 	flag.Parse()
 
-	// The kindSpecs table must cover exactly the closed kind registry.
+	// The kindSpecs table must cover exactly the closed kind registry —
+	// BOTH directions.
+	//
+	// Only the first was checked, which is the harmless half: a table
+	// entry for a kind that does not exist fails to compile anyway. The
+	// half that mattered was missing, and it fails silently — a kind
+	// added to the registry but not here simply never reaches the
+	// Console's types, so the UI cannot render, diff or explain a
+	// resource the control plane fully supports, and the codegen drift
+	// job stays green while it happens.
+	listed := map[resource.Kind]bool{}
 	for _, ks := range kindSpecs {
 		if !resource.KnownKind(ks.kind) {
 			fatal("gen: kind %q not in the resource registry", ks.kind)
+		}
+		listed[ks.kind] = true
+	}
+	for _, k := range resource.Kinds() {
+		if !listed[k] {
+			fatal("gen: kind %q is in the resource registry but not in kindSpecs — "+
+				"the Console would never see it; add it above", k)
 		}
 	}
 

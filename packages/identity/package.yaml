@@ -31,6 +31,10 @@ provides:
 params:
   - { name: public_domain, required: true }
   - { name: node, required: true }
+  # The directory's base DN. It now appears in two places that MUST
+  # agree — LLDAP's own env and Authelia's authentication_backend — so it
+  # is a param rather than a literal repeated twice.
+  - { name: ldap_base_dn, default: "dc=wildstone,dc=internal" }
 policies:
   classifications: [family_public, admin_tailscale]
   dataSensitivity: high
@@ -48,7 +52,7 @@ templates:
     spec:
       image: "lldap/lldap@sha256:2a8454b668c1aba7157e832eab0e242e1e7eb5fb7591d7e7774ba05286511ca8"
       env:
-        LLDAP_LDAP_BASE_DN: "dc=example,dc=com"
+        LLDAP_LDAP_BASE_DN: "{{ .Params.ldap_base_dn }}"
         LLDAP_LDAP_USER_PASS: "secret/lldap-admin-password"
         LLDAP_JWT_SECRET: "secret/lldap-jwt-secret"
       mounts:
@@ -64,12 +68,107 @@ templates:
     kind: Volume
     metadata: { name: authelia-config, node: "{{ .Params.node }}" }
     spec: { name: authelia-config }
+  # ---- Authelia's own configuration. The PACKAGE owns this, not the
+  # control plane: an LDAP base DN, a storage backend and a notifier are
+  # this profile's facts, and putting them in Keystone would be the
+  # layering ADR-W005 exists to prevent (ADR-W019 / the ConfigFile kind).
+  #
+  # identity_providers is deliberately ABSENT here. Authelia REPLACES a
+  # list across config files rather than merging it, so the OIDC block —
+  # clients, jwks, policies — lives entirely in the clients.yml Keystone
+  # renders from every OidcClient in the deployment. One file owns that
+  # key; this one never mentions it.
+  #
+  # secret/<name> references are resolved on the node at write time. This
+  # file never contains a secret value, and Keystone never sees one.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: authelia-configuration, node: "{{ .Params.node }}" }
+    spec:
+      filename: configuration.yml
+      content: |
+        # managed by wildstone — do not edit
+        theme: light
+        log:
+          level: info
+
+        # 4.38 moved this out of the top-level jwt_secret.
+        identity_validation:
+          reset_password:
+            jwt_secret: secret/authelia-jwt-secret
+
+        authentication_backend:
+          password_reset:
+            disable: true
+          ldap:
+            implementation: lldap
+            address: ldap://lldap:3890
+            base_dn: {{ .Params.ldap_base_dn }}
+            # LLDAP puts people under ou=people and calls the login
+            # attribute uid; cn is the DISPLAY name, so binding on it
+            # makes people log in as "Alice Example".
+            users_filter: "(&({username_attribute}={input})(objectClass=person))"
+            groups_filter: "(member={dn})"
+            user: uid=admin,ou=people,{{ .Params.ldap_base_dn }}
+            password: secret/lldap-admin-password
+
+        session:
+          name: authelia_session
+          secret: secret/authelia-session-secret
+          cookies:
+            - domain: {{ .Params.public_domain }}
+              # MUST be https. 4.39 refuses a non-secure scheme here, and
+              # this is the browser-visible URL — never the reverse
+              # proxy's own listener scheme, which is plain http behind
+              # the tunnel.
+              authelia_url: https://auth.{{ .Params.public_domain }}
+              default_redirection_url: https://{{ .Params.public_domain }}
+
+        storage:
+          encryption_key: secret/authelia-storage-encryption-key
+          local:
+            path: /config/db.sqlite3
+
+        # A homelab has no mail relay to depend on, and an identity
+        # provider that will not start because SMTP is unreachable is a
+        # worse failure than one that writes notifications to a file.
+        notifier:
+          disable_startup_check: true
+          filesystem:
+            filename: /config/notification.txt
+
+        access_control:
+          # Everything not named below is denied. Route fragments are
+          # what grant access, per-host, and a default of anything else
+          # would make an unlisted host quietly reachable.
+          default_policy: deny
+          rules:
+            - domain: auth.{{ .Params.public_domain }}
+              policy: bypass
+
+        regulation:
+          max_retries: 4
+          find_time: 2m
+          ban_time: 10m
   - |
     apiVersion: wildstone.dev/v1
     kind: Container
     metadata: { name: authelia, node: "{{ .Params.node }}" }
     spec:
       image: "authelia/authelia@sha256:1b363e9279e742397966333f364e0876ae02bf5c876de73e83af6d48c57ff51b"
+      # NOT YET POINTED AT THE FILES ABOVE. Authelia must be told to read
+      # them — it otherwise reads the config it seeds for itself on first
+      # start, which is why every rendered client has been invisible.
+      #
+      # Doing that needs one fact this repo does not have: whether this
+      # image declares an ENTRYPOINT, which decides whether the command
+      # is ["--config", ...] or ["authelia", "--config", ...]. Wildstone
+      # maps command to Docker's Cmd, and Cmd is the WHOLE argv when
+      # there is no entrypoint — the mistake that killed every Caddy
+      # container in the v0.1.1-alpha validation (F23). Image config
+      # blobs are unreachable from CI and from the dev sandbox, so the
+      # answer is `docker inspect` on a node.
       env:
         AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE: "secret/authelia-oidc-hmac-secret"
         AUTHELIA_JWT_SECRET_FILE: "secret/authelia-jwt-secret"

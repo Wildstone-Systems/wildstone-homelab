@@ -92,6 +92,11 @@ func validResourceOfKind(t *testing.T, k Kind) Resource {
 	case KindBackupPlan:
 		r.BackupPlan = &BackupPlanSpec{Volumes: []string{"r1"}, Repository: "r1-repo",
 			PasswordSecret: "secret/restic-r1", Schedule: "daily"}
+	case KindConfigFile:
+		// A ConfigFile's path is derived from its owning capability, so
+		// unlike every other kind it cannot be owned by "system".
+		r.Metadata.Owner = "capability/r1"
+		r.ConfigFile = &ConfigFileSpec{Filename: "config.yml", Content: "a: b\n"}
 	default:
 		t.Fatalf("kind %s has no fixture here — a kind was added without deciding its node scope", k)
 	}
