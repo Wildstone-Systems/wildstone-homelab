@@ -160,14 +160,36 @@ func indentContinuationLines(value string, column int) string {
 // salt per call is correct and does not disturb drift detection: the
 // bytes on disk are never what the caller compares against — the
 // pre-materialization hash is (see ReadManagedFileResult).
+// crypt64 is the base64 alphabet the crypt/passlib digest format uses,
+// which is NOT Go's standard one. The only difference is index 62: '.'
+// where standard base64 has '+'. Index 63 is '/' in both.
+//
+// This was base64.RawStdEncoding, under a comment claiming it was the
+// adapted alphabet. It was not, and the failure was data-dependent in
+// the worst way: a digest is only rejected when its salt or key happens
+// to encode a '+', which over ~108 characters is roughly four secrets in
+// five. It reads as flake, and a single hand-test can pass.
+//
+//	'identity_providers.oidc.clients[0].client_secret' could not decode
+//	'$pbkdf2-sha512$310000$...$+uvh6...' to a *schema.PasswordDigest:
+//	pbkdf2 decode error: illegal base64 data at input byte 0
+//
+// The alphabet is copied from what Authelia actually decodes with —
+// go-crypt/crypt internal/encoding, Base64RawAdaptedEncoding — rather
+// than from passlib's documentation, because that decoder is the thing
+// that has to accept the output.
+var crypt64 = base64.NewEncoding(
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789./",
+).WithPadding(base64.NoPadding)
+
 func pbkdf2Sha512Digest(value string) (string, error) {
 	salt := make([]byte, pbkdf2SaltBytes)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
 	key := pbkdf2.Key([]byte(value), salt, pbkdf2Iterations, sha512.Size, sha512.New)
-	enc := base64.RawStdEncoding
-	return fmt.Sprintf("$pbkdf2-sha512$%d$%s$%s", pbkdf2Iterations, enc.EncodeToString(salt), enc.EncodeToString(key)), nil
+	return fmt.Sprintf("$pbkdf2-sha512$%d$%s$%s", pbkdf2Iterations,
+		crypt64.EncodeToString(salt), crypt64.EncodeToString(key)), nil
 }
 
 // containsSecretRef reports whether content carries anything this would

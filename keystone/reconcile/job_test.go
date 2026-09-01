@@ -309,3 +309,32 @@ func inspectResultForTest(hash string, running bool, status string, code int32) 
 		Labels: map[string]string{specHashLabel: hash},
 	}
 }
+
+// TestJobIsCreatedWithRestartNo pins the exact string the agent sees.
+//
+// This must assert "no" and not merely "not unless-stopped", because
+// leaving it EMPTY is what shipped: validateJob refuses a restart policy
+// on the spec, so an empty value looked correct from Keystone's side —
+// and the agent maps empty to "unless-stopped", which is right for a
+// service and precisely wrong for a run. A completed job restarted
+// forever:
+//
+//	lldap-provision-groups  RestartPolicy=unless-stopped  ExitCode=0  RestartCount=11
+func TestJobIsCreatedWithRestartNo(t *testing.T) {
+	spec := &resource.JobSpec{Run: resource.ContainerSpec{Image: testDigestImage}}
+	op := containerEnsureOp("bootstrap", jobRunSpec(spec), ContainerNetwork, "").GetEnsureContainer()
+	if got := op.GetRestartPolicy(); got != "no" {
+		t.Errorf("a Job is created with restart policy %q, want \"no\" — empty is not good enough, "+
+			"the agent turns empty into \"unless-stopped\" and a job that exited 0 is restarted forever", got)
+	}
+}
+
+// TestJobRestartIsNotInheritedFromTheSpec: even if a restart policy
+// reached the reconciler (a resource built in code and never validated,
+// say), the run must not carry it.
+func TestJobRestartIsNotInheritedFromTheSpec(t *testing.T) {
+	spec := &resource.JobSpec{Run: resource.ContainerSpec{Image: testDigestImage, Restart: "always"}}
+	if got := jobRunSpec(spec).Restart; got != "no" {
+		t.Errorf("jobRunSpec kept restart=%q from the spec", got)
+	}
+}

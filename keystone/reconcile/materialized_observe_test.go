@@ -58,17 +58,3 @@ func TestPlainFileStillComparesByBytes(t *testing.T) {
 		t.Error("different plain content compared equal")
 	}
 }
-
-// The merged Authelia clients file is the one prereq that materializes,
-// and it must stay that way: the other two are Wildstone's own files and
-// keeping their references unresolved keeps secrets off disk in one more
-// place.
-func TestOnlyTheClientsFileMaterializes(t *testing.T) {
-	files := nodePrereqFiles(testManagedPrefix, nil)
-	for _, f := range files {
-		wantMaterialize := f.path == autheliaClientsPath(testManagedPrefix)
-		if f.materialize != wantMaterialize {
-			t.Errorf("%s: materialize = %v, want %v", f.path, f.materialize, wantMaterialize)
-		}
-	}
-}

@@ -279,6 +279,7 @@ type managedFile struct {
 // new prereq gets added and silently left out of the coverage that was
 // supposed to bound it.
 func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []managedFile {
+	clientsFile := renderAutheliaClients(desired)
 	return []managedFile{
 		{baseCaddyfilePath(managedPrefix), renderBaseCaddyfile(), false},
 		{placeholderFragmentPath(managedPrefix), renderPlaceholderFragment(), false},
@@ -288,8 +289,18 @@ func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []manage
 		// later in the same tick.
 		// Authelia reads this one, so its references are resolved on the
 		// node — including the client secrets, which it stores as pbkdf2
-		// digests.
-		{autheliaClientsPath(managedPrefix), renderAutheliaClients(desired), true},
+		// digests. DERIVED, never a constant: with zero OidcClients the
+		// renderer deliberately emits a comment-only file so Authelia
+		// still boots, and the agent just as deliberately refuses a
+		// materializing write with nothing to materialize. Both are
+		// right; asserting `true` between them made the FIRST install
+		// anyone performs fail, since identity is always installed
+		// before anything that consumes it:
+		//
+		//	prereq write /etc/wildstone/authelia/clients.yml:
+		//	ERROR_CODE_INVALID: materialize_secrets set but the content
+		//	carries no secret reference
+		{autheliaClientsPath(managedPrefix), clientsFile, configFileNeedsMaterialization(string(clientsFile))},
 		// The merged LLDAP group list. A prereq rather than a per-step
 		// render for the same reason: it must be correct on disk before
 		// the provisioning job that reads it is planned, and its content
