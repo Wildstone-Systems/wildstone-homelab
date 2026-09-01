@@ -116,6 +116,16 @@ templates:
         session:
           name: authelia_session
           secret: secret/authelia-session-secret
+          # Sessions live in Redis, not in Authelia's memory. This is not
+          # about scale — one homelab has one Authelia — it is about what
+          # a restart costs. A managed config change now replaces this
+          # container by design (the config digest rides the container
+          # spec hash), so installing an app restarts the provider. With
+          # in-memory sessions that signs every family member out; with
+          # this, they never notice.
+          redis:
+            host: authelia-redis
+            port: 6379
           cookies:
             - domain: {{ .Params.public_domain }}
               # MUST be https. 4.39 refuses a non-secure scheme here, and
@@ -151,6 +161,23 @@ templates:
           max_retries: 4
           find_time: 2m
           ban_time: 10m
+  # ---- The session store. Same image digest the paperless and immich
+  # packages already pin, so the node has one redis layer set rather than
+  # three, and keystone/pkgtool's image-set check keeps them agreeing.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: authelia-redis-data, node: "{{ .Params.node }}" }
+    spec: { name: authelia-redis-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: authelia-redis, node: "{{ .Params.node }}" }
+    spec:
+      image: "redis@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2"
+      mounts:
+        - { source: authelia-redis-data, target: /data }
+      restart: unless-stopped
   - |
     apiVersion: wildstone.dev/v1
     kind: Container

@@ -168,16 +168,28 @@ type Plan struct {
 // two rarely interact directly in S3's scope; this sub-ordering is a
 // pragmatic default, not a proven dependency, and should be revisited if a
 // package ever needs the reverse.
+//
+// ConfigFile sits with Volume, ahead of Container, for the same reason
+// Volume does: a container mounts it, so it has to be on disk before the
+// container that reads it starts. It was missing from this table
+// entirely until the Authelia config landed, and the omission was not
+// visible because the two readers of this map disagreed about what a
+// missing kind means — the sort read the zero value and put ConfigFile
+// FIRST, while KindOrder below returned len(kindOrder) and reported it
+// LAST. Right answer, wrong reason, and a different wrong answer in the
+// Butler's diagnose walker. Both now go through KindOrder, and
+// TestEveryKindHasADeclaredOrder makes the omission impossible to repeat.
 var kindOrder = map[resource.Kind]int{
 	resource.KindVolume:     0,
-	resource.KindLdapGroup:  1,
-	resource.KindOidcClient: 2,
-	resource.KindContainer:  3,
-	resource.KindRoute:      4,
-	resource.KindDnsRecord:  5,
+	resource.KindConfigFile: 1,
+	resource.KindLdapGroup:  2,
+	resource.KindOidcClient: 3,
+	resource.KindContainer:  4,
+	resource.KindRoute:      5,
+	resource.KindDnsRecord:  6,
 	// BackupPlan last: a backup declaration depends on the volumes it
 	// names, and nothing depends on it (ADR-W011 A4).
-	resource.KindBackupPlan: 6,
+	resource.KindBackupPlan: 7,
 }
 
 // key identifies a resource for matching desired against observed:
@@ -251,7 +263,11 @@ func Diff(desired, observed []resource.Resource) *Plan {
 
 func sortByKindOrder(steps []PlanStep, reverse bool) {
 	sort.SliceStable(steps, func(i, j int) bool {
-		oi, oj := kindOrder[steps[i].Kind], kindOrder[steps[j].Kind]
+		// KindOrder, not a raw map read: a kind missing from the table
+		// must sort the SAME way for the planner and for every read-only
+		// consumer of it, and "last" is the safer default of the two —
+		// an undeclared kind has no declared dependents to come before.
+		oi, oj := KindOrder(steps[i].Kind), KindOrder(steps[j].Kind)
 		if reverse {
 			if oi != oj {
 				return oi > oj

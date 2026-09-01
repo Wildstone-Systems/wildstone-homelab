@@ -276,7 +276,7 @@ func TestGoNoGoIdentityPhotosVertical(t *testing.T) {
 	t.Logf("reconcile plan: %s (overall risk %s), %d steps applied", outcome.Plan.Summary, outcome.Plan.OverallRisk, len(outcome.Steps))
 
 	// ---------------------------------------------------------------- e) assert the gate
-	wantContainers := []string{"immich-server", "immich-machine-learning", "immich-postgres", "immich-redis", "lldap", "authelia"}
+	wantContainers := []string{"immich-server", "immich-machine-learning", "immich-postgres", "immich-redis", "lldap", "authelia", "authelia-redis"}
 	for _, name := range wantContainers {
 		running, ok := agent.containerExists(name)
 		if !ok || !running {
@@ -284,7 +284,7 @@ func TestGoNoGoIdentityPhotosVertical(t *testing.T) {
 		}
 	}
 
-	wantVolumes := []string{"immich-upload", "immich-pgdata", "immich-redis-data", "lldap-data", "authelia-config"}
+	wantVolumes := []string{"immich-upload", "immich-pgdata", "immich-redis-data", "lldap-data", "authelia-config", "authelia-redis-data"}
 	for _, name := range wantVolumes {
 		if !agent.volumeExists(name) {
 			t.Errorf("GATE VERDICT: NO-GO — volume %q not created in the fake", name)
