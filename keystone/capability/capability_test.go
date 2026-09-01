@@ -1,6 +1,7 @@
 package capability
 
 import (
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
@@ -190,12 +191,24 @@ func TestExpandSatisfiedRequirementResolvesIssuerURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Expand: %v", err)
 	}
-	if len(res) != 1 {
-		t.Fatalf("got %d resources, want 1", len(res))
+	// Two: the OidcClient the template rendered, and the Secret its
+	// SecretRef names, synthesised from the same fact.
+	if len(res) != 2 {
+		t.Fatalf("got %d resources, want 2 (the OidcClient and its secret): %+v", len(res), res)
 	}
 	r := res[0]
 	if r.OidcClient == nil {
 		t.Fatal("OidcClient spec missing")
+	}
+	sec := res[1]
+	if sec.Kind != resource.KindSecret || sec.Secret == nil || sec.Secret.Name != "photos-oidc" {
+		t.Fatalf("expected a Secret named photos-oidc alongside the client, got %+v", sec)
+	}
+	if sec.Metadata.Owner != "capability/photos" {
+		t.Errorf("the synthesised Secret is owned by %q, want capability/photos", sec.Metadata.Owner)
+	}
+	if sec.Secret.Kind != "" {
+		t.Errorf("a client secret should be random (empty kind), got %q", sec.Secret.Kind)
 	}
 	if r.OidcClient.SecretRef != "secret/photos-oidc" {
 		t.Errorf("SecretRef = %q, want secret/photos-oidc", r.OidcClient.SecretRef)

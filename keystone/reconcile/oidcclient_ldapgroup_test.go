@@ -85,7 +85,13 @@ func TestReconcileTwoOidcClientsInOnePlanReloadsAutheliaExactlyOnce(t *testing.T
 	desired := []resource.Resource{
 		oidcClientResource("immich", "immich", "secret/immich-oidc"),
 		oidcClientResource("jellyfin", "jellyfin", "secret/jellyfin-oidc"),
+		// The secrets those clients reference. The merged clients file is
+		// written with materialization, so they have to exist before it —
+		// declaring them is how a package says so.
+		secretResource("immich-oidc", ""),
+		secretResource("jellyfin-oidc", ""),
 	}
+	desired = append(desired, identityProviderSecrets()...)
 	outcome, err := r.Reconcile(context.Background(), "node-a", desired)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -93,8 +99,11 @@ func TestReconcileTwoOidcClientsInOnePlanReloadsAutheliaExactlyOnce(t *testing.T
 	if !outcome.Applied || outcome.PendingApproval || outcome.Rolledback || outcome.Incident != "" {
 		t.Fatalf("unexpected outcome: %+v", outcome)
 	}
-	if len(outcome.Plan.Steps) != 2 {
-		t.Fatalf("expected 2 create steps, got %d: %+v", len(outcome.Plan.Steps), outcome.Plan.Steps)
+	// Counted by kind rather than in total: the plan also carries the
+	// Secret steps those clients depend on, and a test about OIDC
+	// batching should not break when a prerequisite kind is added.
+	if n := stepsOfKind(outcome.Plan.Steps, resource.KindOidcClient); n != 2 {
+		t.Fatalf("expected 2 OidcClient steps, got %d: %+v", n, outcome.Plan.Steps)
 	}
 
 	immichFrag := agent.readOidcFragmentForTest(t, "immich")
@@ -182,7 +191,10 @@ func TestReconcileOidcClientReconvergeIsNoOpAndDoesNotReload(t *testing.T) {
 	r := newReconciler(&GatewayApplier{Gateway: h.gw})
 	r.ReloadAutheliaFn = rc.fn
 
-	desired := []resource.Resource{oidcClientResource("immich", "immich", "secret/immich-oidc")}
+	desired := append([]resource.Resource{
+		oidcClientResource("immich", "immich", "secret/immich-oidc"),
+		secretResource("immich-oidc", ""),
+	}, identityProviderSecrets()...)
 	first, err := r.Reconcile(context.Background(), "node-a", desired)
 	if err != nil || !first.Applied {
 		t.Fatalf("first reconcile: outcome=%+v err=%v", first, err)
@@ -278,7 +290,9 @@ func TestReconcileOidcClientAndLdapGroupTogetherOneNodeMixedPlan(t *testing.T) {
 		containerResource("immich-server", testDigestImage),
 		ldapGroupResource("photos-users"),
 		oidcClientResource("immich", "immich", "secret/immich-oidc"),
+		secretResource("immich-oidc", ""),
 	}
+	desired = append(desired, identityProviderSecrets()...)
 	outcome, err := r.Reconcile(context.Background(), "node-a", desired)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -286,14 +300,27 @@ func TestReconcileOidcClientAndLdapGroupTogetherOneNodeMixedPlan(t *testing.T) {
 	if !outcome.Applied || outcome.Incident != "" || outcome.Rolledback {
 		t.Fatalf("unexpected outcome: %+v", outcome)
 	}
-	if len(outcome.Plan.Steps) != 3 {
-		t.Fatalf("expected 3 steps, got %d: %+v", len(outcome.Plan.Steps), outcome.Plan.Steps)
+	if n := stepsOfKind(outcome.Plan.Steps, resource.KindOidcClient) +
+		stepsOfKind(outcome.Plan.Steps, resource.KindLdapGroup) +
+		stepsOfKind(outcome.Plan.Steps, resource.KindContainer); n != 3 {
+		t.Fatalf("expected 3 non-Secret steps, got %d: %+v", n, outcome.Plan.Steps)
 	}
-	// ADR-W005 S3a ordering: LdapGroup, then OidcClient, then Container.
-	wantOrder := []resource.Kind{resource.KindLdapGroup, resource.KindOidcClient, resource.KindContainer}
-	for i, step := range outcome.Plan.Steps {
-		if step.Kind != wantOrder[i] {
-			t.Errorf("step %d: got kind %s, want %s", i, step.Kind, wantOrder[i])
+	// ADR-W005 S3a ordering: Secret, LdapGroup, OidcClient, Container.
+	//
+	// Asserted as a RELATIVE order rather than by index, because the
+	// number of steps of a given kind is not what this test is about —
+	// pinning positions meant that adding one prerequisite resource
+	// broke a test about identity wiring, and the next one would too.
+	wantOrder := []resource.Kind{
+		resource.KindSecret, resource.KindLdapGroup, resource.KindOidcClient, resource.KindContainer,
+	}
+	for i := 0; i+1 < len(wantOrder); i++ {
+		before, after := firstStepOfKind(outcome.Plan.Steps, wantOrder[i]), firstStepOfKind(outcome.Plan.Steps, wantOrder[i+1])
+		if before < 0 || after < 0 {
+			t.Fatalf("expected steps of both %s and %s: %+v", wantOrder[i], wantOrder[i+1], outcome.Plan.Steps)
+		}
+		if before > after {
+			t.Errorf("%s (step %d) is planned after %s (step %d)", wantOrder[i], before, wantOrder[i+1], after)
 		}
 	}
 	if running, ok := agent.containerExists("immich-server"); !ok || !running {
@@ -302,4 +329,26 @@ func TestReconcileOidcClientAndLdapGroupTogetherOneNodeMixedPlan(t *testing.T) {
 	if got := rc.count(); got != 1 {
 		t.Fatalf("expected exactly 1 Authelia reload for the single OidcClient step, got %d", got)
 	}
+}
+
+// stepsOfKind counts plan steps of one kind, so a test about one kind's
+// behaviour is not a hostage to what else the plan legitimately needs.
+func stepsOfKind(steps []plan.PlanStep, k resource.Kind) int {
+	n := 0
+	for _, s := range steps {
+		if s.Kind == k {
+			n++
+		}
+	}
+	return n
+}
+
+// firstStepOfKind returns the index of the first step of a kind, or -1.
+func firstStepOfKind(steps []plan.PlanStep, k resource.Kind) int {
+	for i, s := range steps {
+		if s.Kind == k {
+			return i
+		}
+	}
+	return -1
 }

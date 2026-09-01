@@ -189,6 +189,32 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 		out = append(out, res)
 	}
 
+	// A package that renders an OidcClient references a client secret by
+	// the name buildResolved synthesised for it, so the same fact has to
+	// produce the SECRET as well as the reference. Left to the package,
+	// every consumer would repeat the naming convention and one of them
+	// would eventually drift from it; worse, forgetting it is invisible
+	// until the node refuses to write the merged clients file.
+	//
+	// Synthesised rather than declared, therefore, but not hidden: it is
+	// an ordinary Secret resource, owned by the requiring capability,
+	// planned and approved like any other.
+	for _, res := range out {
+		if res.Kind != resource.KindOidcClient || res.OidcClient == nil {
+			continue
+		}
+		name, ok := strings.CutPrefix(res.OidcClient.SecretRef, "secret/")
+		if !ok {
+			continue // validation already refuses anything else
+		}
+		out = append(out, resource.Resource{
+			ApiVersion: resource.ApiVersion,
+			Kind:       resource.KindSecret,
+			Metadata:   resource.Metadata{Name: name, Owner: wantOwner, Node: res.Metadata.Node},
+			Secret:     &resource.SecretSpec{Name: name},
+		})
+	}
+
 	return out, nil
 }
 

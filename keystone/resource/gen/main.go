@@ -38,6 +38,7 @@ var kindSpecs = []struct {
 	{resource.KindBackupPlan, reflect.TypeOf(resource.BackupPlanSpec{})},
 	{resource.KindConfigFile, reflect.TypeOf(resource.ConfigFileSpec{})},
 	{resource.KindJob, reflect.TypeOf(resource.JobSpec{})},
+	{resource.KindSecret, reflect.TypeOf(resource.SecretSpec{})},
 }
 
 func main() {

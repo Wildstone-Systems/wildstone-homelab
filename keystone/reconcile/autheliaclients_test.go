@@ -211,3 +211,47 @@ func clientBlock(t *testing.T, rendered, clientID string) string {
 	}
 	return rendered[start:]
 }
+
+// TestRenderedClientsCarryTheProviderKeys covers the two things an OIDC
+// provider cannot serve without, and which this renderer emitted
+// neither of until now. The identity package's comment claimed
+// clients.yml carried both; it did not, and Authelia would have refused
+// to start on the first app installed.
+func TestRenderedClientsCarryTheProviderKeys(t *testing.T) {
+	got := string(renderAutheliaClients([]resource.Resource{
+		oidcClientResource("photos", "photos", "secret/photos-oidc"),
+	}))
+
+	if !strings.Contains(got, "    hmac_secret: "+autheliaHmacSecretRef+"\n") {
+		t.Errorf("no hmac_secret in the rendered provider block:\n%s", got)
+	}
+	// The jwks key sits inside a YAML block scalar, and the PEM that
+	// replaces the reference is many lines. The agent indents every
+	// continuation line to the column the reference starts at, so that
+	// column is load-bearing: get it wrong and the substituted key
+	// breaks the document.
+	wantJwks := "    jwks:\n      - key: |\n          " + autheliaJwksSecretRef + "\n"
+	if !strings.Contains(got, wantJwks) {
+		t.Errorf("the jwks block is not in the shape the materializer indents against.\ngot:\n%s\nwant to contain:\n%s", got, wantJwks)
+	}
+}
+
+// TestZeroClientsCarriesNoProviderKeys is the other half, and the reason
+// the keys are inside the has-clients branch. With no OidcClient the
+// file must stay comment-only: emitting identity_providers.oidc with an
+// hmac_secret and no clients gives Authelia a provider it refuses to
+// start with, and emitting a secret reference into a file that would
+// otherwise carry none re-creates the first-install failure the
+// materialize flag was just fixed for.
+func TestZeroClientsCarriesNoProviderKeys(t *testing.T) {
+	got := string(renderAutheliaClients(nil))
+	for _, ref := range []string{autheliaHmacSecretRef, autheliaJwksSecretRef, "jwks:"} {
+		if strings.Contains(got, ref) {
+			t.Errorf("a deployment with no OIDC clients rendered %q:\n%s", ref, got)
+		}
+	}
+	if configFileNeedsMaterialization(got) {
+		t.Error("the zero-client clients file carries a secret reference, so the node will be asked " +
+			"to materialize it — which is exactly the first-install failure just fixed")
+	}
+}

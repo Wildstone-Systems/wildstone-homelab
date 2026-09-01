@@ -75,6 +75,7 @@ func renderAutheliaClients(desired []resource.Resource) []byte {
 		return []byte(b.String())
 	}
 
+	renderProviderKeys(&b)
 	renderClaimsPolicies(&b, clients)
 	renderAuthorizationPolicies(&b, clients)
 
@@ -228,4 +229,38 @@ func effectiveUserinfoAlg(c *resource.OidcClientSpec) string {
 		return "none"
 	}
 	return c.UserinfoSigningAlg
+}
+
+// autheliaHmacSecretRef and autheliaJwksSecretRef are the secrets the
+// OIDC provider itself needs, as distinct from any client's. The
+// identity package declares both as Secret resources; these constants
+// are the other half of that contract, and the names must agree.
+const (
+	autheliaHmacSecretRef = "secret/authelia-oidc-hmac-secret"
+	autheliaJwksSecretRef = "secret/authelia-oidc-jwks"
+)
+
+// renderProviderKeys emits the two things an OIDC provider cannot serve
+// without, and which nothing rendered before: the HMAC secret it signs
+// JWTs with, and the key it signs ID tokens with.
+//
+// Both are references the node resolves at write time, so neither value
+// exists in Keystone or in a Statefile.
+//
+// The jwks entry is deliberately minimal. key_id, use and algorithm are
+// all optional and auto-derived by Authelia — its own documentation
+// calls key_id "generally discouraged unless there is a collision" —
+// and a value we set is a value we have to keep correct as the provider
+// changes. The key alone is the whole requirement.
+//
+// The indentation of the reference is load-bearing. It sits inside a
+// YAML block scalar, and the PEM that replaces it is many lines; the
+// agent's materializer indents every continuation line to the column
+// the reference started at, which is what makes a multi-line secret
+// survive substitution into structured config at all.
+func renderProviderKeys(b *strings.Builder) {
+	b.WriteString("    hmac_secret: " + autheliaHmacSecretRef + "\n")
+	b.WriteString("    jwks:\n")
+	b.WriteString("      - key: |\n")
+	b.WriteString("          " + autheliaJwksSecretRef + "\n")
 }

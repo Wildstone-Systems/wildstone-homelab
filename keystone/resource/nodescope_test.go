@@ -97,6 +97,8 @@ func validResourceOfKind(t *testing.T, k Kind) Resource {
 		// unlike every other kind it cannot be owned by "system".
 		r.Metadata.Owner = "capability/r1"
 		r.ConfigFile = &ConfigFileSpec{Filename: "config.yml", Content: "a: b\n"}
+	case KindSecret:
+		r.Secret = &SecretSpec{Name: "r1-oidc", Kind: "rsa_private_key"}
 	case KindJob:
 		// No restart policy and no ports: validateJob refuses both, and
 		// this fixture has to pass validation to reach the scope check.

@@ -364,7 +364,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	for _, res := range desired {
 		switch res.Kind {
 		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
-			resource.KindLdapGroup, resource.KindBackupPlan, resource.KindConfigFile, resource.KindJob:
+			resource.KindLdapGroup, resource.KindBackupPlan, resource.KindConfigFile, resource.KindJob,
+			resource.KindSecret:
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
 			providerDesired = append(providerDesired, res)
@@ -387,6 +388,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 
 	// Before observing resources, re-assert the managed files that are not
 	// resources and so have no observe rule of their own (F34).
+	// Before the prereq files, because they can reference secrets: see
+	// the ordering note in secret.go. A failure here is reported the same
+	// way a failed prereq is, since it has the same cause and the same
+	// consequence — nothing further on this node can be written.
+	if serr := r.ensureNodeSecrets(ctx, nodeID, wsDesired); serr != "" {
+		return nil, fmt.Errorf("reconcile: %s", serr)
+	}
+
 	prereqRepaired, prereqErr := r.repairNodePrereqs(ctx, nodeID, wsDesired)
 	if prereqErr != "" {
 		return nil, fmt.Errorf("reconcile: %s", prereqErr)
@@ -474,6 +483,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			sr = r.applyContainerStep(ctx, nodeID, step, desiredByKey, cfgContents)
 		case resource.KindJob:
 			sr = r.applyJobStep(ctx, nodeID, step, desiredByKey, cfgContents)
+		case resource.KindSecret:
+			sr = r.applySecretStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindVolume:
 			sr = r.applyVolumeStep(ctx, nodeID, step)
 		case resource.KindRoute:
@@ -539,6 +550,10 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 	for k := range candidates {
 		want, isDesired := desiredByKey[k]
 		switch k.Kind {
+		case resource.KindSecret:
+			if obs, present := r.observeSecret(nodeID, k, want, isDesired); present {
+				observed = append(observed, obs)
+			}
 		case resource.KindJob:
 			obs, present, oerr := r.observeJob(ctx, nodeID, k, want, isDesired, cfgContents)
 			if oerr != nil {
@@ -803,6 +818,8 @@ func placeholderResource(kind resource.Kind, name string) resource.Resource {
 	switch kind {
 	case resource.KindContainer:
 		r.Container = &resource.ContainerSpec{}
+	case resource.KindSecret:
+		r.Secret = &resource.SecretSpec{}
 	case resource.KindJob:
 		// Deliberately unequal to any real desired Job: an empty Run has
 		// no image, and containerEqual compares images first.

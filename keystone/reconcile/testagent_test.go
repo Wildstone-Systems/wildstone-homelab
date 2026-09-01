@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"testing"
 	"time"
@@ -117,6 +118,10 @@ type testAgent struct {
 	// jobRuns counts how often that happened.
 	jobExit map[string]int32
 	jobRuns map[string]int
+	// secrets records what was ensured and with which kind, so a test can
+	// assert an RSA key was asked for rather than a random blob — the
+	// distinction the Secret kind exists to carry.
+	secrets map[string]wsv1.SecretKind
 }
 
 func newTestAgent(t *testing.T, h *harness, nodeID, token string) *testAgent {
@@ -356,6 +361,8 @@ func (a *testAgent) handleOp(opID string, op *wsv1.Operation) *wsv1.OpResult {
 	case *wsv1.Operation_InspectContainer:
 		a.countOp("InspectContainer")
 		return a.inspectContainer(opID, o.InspectContainer)
+	case *wsv1.Operation_EnsureSecret:
+		return a.ensureSecret(opID, o.EnsureSecret)
 	case *wsv1.Operation_EnsureVolume:
 		a.countOp("EnsureVolume")
 		return a.ensureVolume(opID, o.EnsureVolume)
@@ -512,7 +519,39 @@ func (a *testAgent) ensureVolume(opID string, op *wsv1.EnsureVolume) *wsv1.OpRes
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureVolume{EnsureVolume: &wsv1.EnsureVolumeResult{Created: true}}}
 }
 
+// fakeSecretRef mirrors the agent's own reference syntax closely enough
+// to enforce the two rules that matter to the reconciler. It is a small
+// duplicated constant rather than an import for the reason every other
+// one in this file is: keystone cannot import wardstone/internal.
+var fakeSecretRef = regexp.MustCompile(`(pbkdf2:)?secret/([A-Za-z0-9][A-Za-z0-9._-]{0,63})`)
+
+// writeManagedFile enforces the agent's materialization rules, because a
+// fake that ignores them makes the tests that depend on them prove
+// nothing. Both of these were real failures on a node:
+//
+//   - materialize_secrets set on content with no reference is INVALID.
+//     Asking for materialization with nothing to materialize is a
+//     renderer bug, and the agent refuses rather than silently writing.
+//   - a reference to a secret that does not exist is NOT_FOUND. This is
+//     what makes the ordering test real: without it, a secret created
+//     too late looks exactly like one created in time.
 func (a *testAgent) writeManagedFile(opID string, op *wsv1.WriteManagedFile) *wsv1.OpResult {
+	if op.GetMaterializeSecrets() {
+		refs := fakeSecretRef.FindAllStringSubmatch(string(op.GetContent()), -1)
+		if len(refs) == 0 {
+			return opErrResult(opID, wsv1.ErrorCode_ERROR_CODE_INVALID,
+				"materialize_secrets set but the content carries no secret reference")
+		}
+		a.mu.Lock()
+		for _, m := range refs {
+			if _, ok := a.secrets[m[2]]; !ok {
+				a.mu.Unlock()
+				return opErrResult(opID, wsv1.ErrorCode_ERROR_CODE_NOT_FOUND,
+					"%s references secret/%s, which does not exist on this node", op.GetPath(), m[2])
+			}
+		}
+		a.mu.Unlock()
+	}
 	path := filepath.Join(a.managed, filepath.FromSlash(op.GetPath()))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return opErrResult(opID, wsv1.ErrorCode_ERROR_CODE_RUNTIME, "mkdir: %v", err)
@@ -606,4 +645,32 @@ func (a *testAgent) runJobLocked(name string, c *fakeContainer) {
 	c.running = false
 	c.status = "exited"
 	c.exitCode = code
+}
+
+// ensureSecret mirrors the real agent's arm closely enough for the
+// reconciler: create-if-absent, and report a version. The VALUE is never
+// modelled, because nothing above the agent may ever see one.
+func (a *testAgent) ensureSecret(opID string, op *wsv1.EnsureSecret) *wsv1.OpResult {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.secrets == nil {
+		a.secrets = map[string]wsv1.SecretKind{}
+	}
+	_, existed := a.secrets[op.GetName()]
+	if !existed || op.GetRotate() {
+		a.secrets[op.GetName()] = op.GetKind()
+	}
+	a.opCounts["EnsureSecret"]++
+	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureSecret{EnsureSecret: &wsv1.EnsureSecretResult{
+		Existed: existed, Version: 1,
+	}}}
+}
+
+// secretKind reports the kind a secret was ensured with, and whether it
+// exists at all.
+func (a *testAgent) secretKind(name string) (wsv1.SecretKind, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	k, ok := a.secrets[name]
+	return k, ok
 }
