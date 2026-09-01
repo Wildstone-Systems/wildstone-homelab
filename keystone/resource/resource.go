@@ -29,6 +29,7 @@ const (
 	KindOidcClient Kind = "OidcClient"
 	KindLdapGroup  Kind = "LdapGroup"
 	KindBackupPlan Kind = "BackupPlan"
+	KindConfigFile Kind = "ConfigFile"
 )
 
 // ApiVersion is the only supported apiVersion for S2 resources.
@@ -281,6 +282,44 @@ type OidcClientSpec struct {
 	SecretRef string `yaml:"secretRef"`
 }
 
+// configFileNameRegexp bounds ConfigFileSpec.Filename: ONE path segment,
+// no separators and no leading dot. The rendered path is derived from the
+// owning capability rather than taken from the package (see
+// ConfigFileSpec), so this is what keeps a filename from walking out of
+// the subtree that derivation put it in.
+var configFileNameRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
+
+// ConfigFileSpec is the spec for kind ConfigFile: a configuration file a
+// package renders for the app it deploys.
+//
+// It exists because an app's config is the package's business, not the
+// control plane's. Authelia needs an LDAP base DN, a storage backend and
+// a notifier; Jellyfin's LDAP plugin needs an XML document; Immich reads
+// a JSON file. Rendering those from Keystone would put one profile's
+// facts — this identity provider, this schema — inside the component
+// that is supposed to be profile-agnostic, which is the layering the
+// package system exists to prevent (ADR-W005). A package already knows
+// what it deploys; this lets it say so.
+//
+// The PATH IS DERIVED, never supplied:
+//
+//	<managedPrefix>/<capability>/<filename>
+//
+// where <capability> comes from Metadata.Owner. A package therefore
+// cannot write into another capability's subtree — not by mistake and
+// not on purpose — and the derivation matches the per-capability mount
+// each container gets, so a file lands exactly where its own app can
+// read it and nowhere else.
+type ConfigFileSpec struct {
+	// Filename is one path segment: "configuration.yml", "immich.json".
+	Filename string `yaml:"filename"`
+	// Content is the rendered file. Secret REFERENCES (secret/<name>,
+	// pbkdf2:secret/<name>) are resolved on the node at write time; a
+	// literal secret value here is refused by the policy engine, the same
+	// as anywhere else (ADR-W005 A2).
+	Content string `yaml:"content"`
+}
+
 // LdapGroupSpec is the spec for kind LdapGroup (ADR-W005 A3). Modeled as
 // declared + best-effort: it expands and validates, and its reconcile
 // apply is a documented log-and-record no-op against real LLDAP — real
@@ -349,6 +388,7 @@ type Resource struct {
 	OidcClient *OidcClientSpec `yaml:"-"`
 	LdapGroup  *LdapGroupSpec  `yaml:"-"`
 	BackupPlan *BackupPlanSpec `yaml:"-"`
+	ConfigFile *ConfigFileSpec `yaml:"-"`
 }
 
 // ValidationError is a typed validation failure, identifying the resource
@@ -429,6 +469,11 @@ var registry = map[Kind]kindEntry{
 		validate:   validateBackupPlan,
 		nodeScoped: true,
 	},
+	KindConfigFile: {
+		newSpec:    func() any { return &ConfigFileSpec{} },
+		validate:   validateConfigFile,
+		nodeScoped: true,
+	},
 }
 
 // KnownKind reports whether k is in the closed registry.
@@ -492,6 +537,7 @@ func (r *Resource) validateSpecExclusivity() error {
 		KindOidcClient: r.OidcClient != nil,
 		KindLdapGroup:  r.LdapGroup != nil,
 		KindBackupPlan: r.BackupPlan != nil,
+		KindConfigFile: r.ConfigFile != nil,
 	}
 	for k, isSet := range populated {
 		if k == r.Kind {
@@ -672,6 +718,28 @@ func validateOidcClient(r *Resource) error {
 	}
 	if !secretRefRegexp.MatchString(r.OidcClient.SecretRef) {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.secretRef", Msg: "must be a reference of the form secret/<name> (ADR-W005 A2), never a literal secret value"}
+	}
+	return nil
+}
+
+func validateConfigFile(r *Resource) error {
+	if r.ConfigFile == nil {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "config file spec missing"}
+	}
+	if !configFileNameRegexp.MatchString(r.ConfigFile.Filename) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.filename",
+			Msg: "must be a single path segment (alphanumeric-led [A-Za-z0-9._-], at most 63 chars) — the directory is derived from the owning capability, not supplied"}
+	}
+	if r.ConfigFile.Content == "" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.content",
+			Msg: "must not be empty: an empty config file is how a delete is expressed, not how one is declared"}
+	}
+	// The owner is what the path is derived from, so a ConfigFile owned by
+	// "system" has no capability subtree to land in. Every other kind
+	// tolerates a system owner; this one cannot.
+	if _, ok := strings.CutPrefix(r.Metadata.Owner, "capability/"); !ok {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "metadata.owner",
+			Msg: "must be capability/<name>: the file's directory is derived from the owning capability, and there is nowhere to put one that has none"}
 	}
 	return nil
 }

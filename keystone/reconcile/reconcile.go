@@ -212,6 +212,15 @@ type Reconciler struct {
 
 	mu      sync.Mutex
 	managed map[string]map[resKey]bool // nodeID -> (kind,name) -> Reconciler believes it exists
+	// configFilePaths remembers where each applied ConfigFile went.
+	//
+	// Every other managed file derives its path from the resource NAME,
+	// so a delete can find it with the spec gone. A ConfigFile's path
+	// comes from the spec's filename and the owner's capability, both of
+	// which vanish with the resource — so without this, a file that left
+	// desired state could never be located, and would sit on disk being
+	// read by an app forever.
+	configFilePaths map[string]map[resKey]string
 }
 
 // Reconcile drives one observe -> diff -> plan -> approve -> apply ->
@@ -330,7 +339,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	providerDesired := make([]resource.Resource, 0, len(desired))
 	for _, res := range desired {
 		switch res.Kind {
-		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient, resource.KindLdapGroup, resource.KindBackupPlan:
+		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
+			resource.KindLdapGroup, resource.KindBackupPlan, resource.KindConfigFile:
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
 			providerDesired = append(providerDesired, res)
@@ -449,6 +459,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			sr = r.applyLdapGroupStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindBackupPlan:
 			sr = r.applyBackupPlanStep(ctx, nodeID, step, desiredByKey)
+		case resource.KindConfigFile:
+			sr = r.applyConfigFileStep(ctx, nodeID, step, desiredByKey)
 		default:
 			sr = StepResult{Step: step, Error: fmt.Sprintf("reconcile: kind %s not handled by the Applier/Provider path", step.Kind)}
 		}
@@ -524,6 +536,14 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 			}
 		case resource.KindOidcClient:
 			obs, present, oerr := r.observeOidcClient(ctx, nodeID, k, want, isDesired)
+			if oerr != nil {
+				return nil, nil, oerr
+			}
+			if present {
+				observed = append(observed, obs)
+			}
+		case resource.KindConfigFile:
+			obs, present, oerr := r.observeConfigFile(ctx, nodeID, k, want, isDesired)
 			if oerr != nil {
 				return nil, nil, oerr
 			}
@@ -750,6 +770,8 @@ func placeholderResource(kind resource.Kind, name string) resource.Resource {
 		r.LdapGroup = &resource.LdapGroupSpec{Name: name}
 	case resource.KindBackupPlan:
 		r.BackupPlan = &resource.BackupPlanSpec{}
+	case resource.KindConfigFile:
+		r.ConfigFile = &resource.ConfigFileSpec{}
 	}
 	return r
 }
@@ -957,6 +979,33 @@ func (r *Reconciler) markManaged(nodeID string, k resKey, present bool) {
 	} else {
 		delete(m, k)
 	}
+}
+
+func (r *Reconciler) rememberConfigFilePath(nodeID string, k resKey, filePath string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.configFilePaths == nil {
+		r.configFilePaths = map[string]map[resKey]string{}
+	}
+	m := r.configFilePaths[nodeID]
+	if m == nil {
+		m = map[resKey]string{}
+		r.configFilePaths[nodeID] = m
+	}
+	m[k] = filePath
+}
+
+func (r *Reconciler) forgetConfigFilePath(nodeID string, k resKey) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.configFilePaths[nodeID], k)
+}
+
+func (r *Reconciler) configFilePathFor(nodeID string, k resKey) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p, ok := r.configFilePaths[nodeID][k]
+	return p, ok
 }
 
 func (r *Reconciler) isManaged(nodeID string, k resKey) bool {

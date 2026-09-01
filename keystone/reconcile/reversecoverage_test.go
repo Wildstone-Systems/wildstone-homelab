@@ -33,6 +33,12 @@ import (
 //	                    last-writer-wins and the level-triggered loop
 //	                    re-converges; failures surface as Incident
 //	LdapGroup any     → declared-only, never dispatches, nothing to reverse
+//	ConfigFile any    → reverse: previous file content restored (the Route
+//	                    machinery), and NO reload — nothing here knows
+//	                    which container reads the file, so an app keeps
+//	                    running its old config until it next restarts.
+//	                    That is the level-triggered contract, not an
+//	                    oversight: the file on disk is correct either way.
 //
 // The tests below pin the rows that were previously only prose: the
 // Container reverses, and — the load-bearing negative — that a Volume
