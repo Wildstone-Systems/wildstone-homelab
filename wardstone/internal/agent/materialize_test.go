@@ -2,10 +2,13 @@ package agent
 
 import (
 	"crypto/hmac"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -257,4 +260,111 @@ func verifyPbkdf2Sha512(t *testing.T, encoded, value string) bool {
 	}
 	got := pbkdf2.Key([]byte(value), salt, iter, sha512.Size, sha512.New)
 	return hmac.Equal(got, want)
+}
+
+// TestMultiLineSecretKeepsItsBlockIndentation is the PEM case, and it is
+// the reason indentation is handled at all. Authelia takes its OIDC
+// signing key INLINE, inside an indented YAML block:
+//
+//	jwks:
+//	  - key: |
+//	      secret/authelia-oidc-jwks
+//
+// Substituting a multi-line value there without re-indenting dedents
+// every line after the first out of the block. The result is invalid
+// YAML and an identity provider that will not start — which is a total
+// outage of every login, from a whitespace bug.
+func TestMultiLineSecretKeepsItsBlockIndentation(t *testing.T) {
+	a := materializeAgent(t)
+	pem := "-----BEGIN PRIVATE KEY-----\nAAAA\nBBBB\n-----END PRIVATE KEY-----\n"
+	putSecret(t, a, "authelia-oidc-jwks", pem)
+
+	path := filepath.Join(a.cfg.ManagedPrefixes[0], "authelia", "configuration.yml")
+	src := "jwks:\n  - key: |\n      secret/authelia-oidc-jwks\n"
+	if _, oerr := a.writeManagedFile(writeFileOp(path, src, true)); oerr != nil {
+		t.Fatalf("write: %v", oerr)
+	}
+	got := readManagedForTest(t, a, path)
+
+	for _, line := range []string{
+		"      -----BEGIN PRIVATE KEY-----",
+		"      AAAA",
+		"      BBBB",
+		"      -----END PRIVATE KEY-----",
+	} {
+		if !strings.Contains(got, line+"\n") {
+			t.Errorf("line %q is not indented into the block:\n%s", strings.TrimSpace(line), got)
+		}
+	}
+	// A trailing newline must not leave a line of pure whitespace.
+	for _, line := range strings.Split(got, "\n") {
+		if line != "" && strings.TrimSpace(line) == "" {
+			t.Errorf("whitespace-only line left in the document:\n%q", got)
+		}
+	}
+}
+
+// A single-line secret at a column is untouched: re-indenting a value
+// with no newlines would be a no-op at best and corruption at worst.
+func TestSingleLineSecretIsNotReindented(t *testing.T) {
+	a := materializeAgent(t)
+	putSecret(t, a, "db-password", "p4ssw0rd")
+	path := filepath.Join(a.cfg.ManagedPrefixes[0], "x.yml")
+	if _, oerr := a.writeManagedFile(writeFileOp(path, "auth:\n    pw: secret/db-password\n", true)); oerr != nil {
+		t.Fatal(oerr)
+	}
+	if got := readManagedForTest(t, a, path); got != "auth:\n    pw: p4ssw0rd\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+// The RSA kind exists because an OIDC provider cannot generate its own
+// signing key on demand, and a random blob is not a key.
+func TestEnsureSecretRsaKindProducesAUsableKey(t *testing.T) {
+	a := materializeAgent(t)
+	if _, oerr := a.ensureSecret(&wsv1.EnsureSecret{
+		Name: "authelia-oidc-jwks", Kind: wsv1.SecretKind_SECRET_KIND_RSA_PRIVATE_KEY,
+	}); oerr != nil {
+		t.Fatalf("ensureSecret: %v", oerr)
+	}
+	value, err := a.openSecret("authelia-oidc-jwks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode([]byte(value))
+	if block == nil {
+		t.Fatalf("stored value is not PEM:\n%s", value)
+	}
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("stored key does not parse: %v", err)
+	}
+	rsaKey, ok := key.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("stored key is %T, want *rsa.PrivateKey", key)
+	}
+	if bits := rsaKey.N.BitLen(); bits < 2048 {
+		t.Errorf("key is %d bits, want at least 2048", bits)
+	}
+	// It is multi-line, which is exactly why the indentation rule above
+	// has to hold — the two facts are one requirement.
+	if !strings.Contains(value, "\n") {
+		t.Error("a PEM key with no newlines would not exercise the indentation path")
+	}
+}
+
+// The default kind stays random, so an older Keystone that never sets the
+// field still gets what it has always asked for.
+func TestUnspecifiedKindIsStillRandom(t *testing.T) {
+	a := materializeAgent(t)
+	if _, oerr := a.ensureSecret(&wsv1.EnsureSecret{Name: "session"}); oerr != nil {
+		t.Fatal(oerr)
+	}
+	value, err := a.openSecret("session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(value, "BEGIN") || strings.Contains(value, "\n") {
+		t.Errorf("unspecified kind produced something other than a random token: %q", value)
+	}
 }

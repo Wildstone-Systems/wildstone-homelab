@@ -63,7 +63,13 @@ import (
 //	reads a file. Reads of such a file return the pre-materialization
 //	hash and no content: the bytes on disk hold live secrets and must not
 //	travel back to Keystone.
-const ProtocolMinor = 9
+//
+// 10: adds EnsureSecret.kind (SecretKind). An OIDC provider signs ID
+//
+//	tokens with an RSA key it cannot generate on demand, and a random
+//	blob is not a key. UNSPECIFIED means RANDOM, so a Keystone that never
+//	sets it still gets what it has always asked for.
+const ProtocolMinor = 10
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
