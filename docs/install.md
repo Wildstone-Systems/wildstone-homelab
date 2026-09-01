@@ -159,26 +159,32 @@ the steps you redo by hand.
 
 ## 4. Optional: Console and Butler
 
-- **Console**: the Console is a static bundle. **Build it on your
-  workstation, not on the Keystone host** — the host needs no Node at
-  all to serve it, and `apt-get install -y nodejs npm` on a clean
-  Ubuntu Server pulls ~570 packages, including a full C/C++ toolchain
-  (`build-essential`, `gcc`, `g++`) and an X11/Vulkan graphics stack
-  (`alacritty`, `mesa-vulkan-drivers`). That is a large attack surface
-  to add to a control-plane host for a file server. The Console's own
-  dependencies are not the problem: `npm ci` installs 72 packages in
-  about two seconds.
+- **Console**: nothing to do. The installer fetches
+  `console_dist.tar.gz` from the release, verifies it against
+  `checksums.txt` like every other artifact, unpacks it to
+  `/usr/share/wildstone/console`, and points Keystone at it.
+
+  It is a release asset rather than something built on the host because
+  **the host needs no Node at all to serve static files**, and
+  `apt-get install -y nodejs npm` on a clean Ubuntu Server pulls ~570
+  packages, including a full C/C++ toolchain (`build-essential`, `gcc`,
+  `g++`) and an X11/Vulkan graphics stack (`alacritty`,
+  `mesa-vulkan-drivers`) — a large attack surface to add to a
+  control-plane host for a file server. The Console's own dependencies
+  were never the problem: `npm ci` installs 72 packages in about two
+  seconds, and the build produces 160 KB.
+
+  Installing a release older than the asset is not an error; the
+  installer says so and serves the API alone.
+
+  To run your own build instead — a branch, or a local change — pass
+  `--console-dir`, which always wins over the release asset:
 
   ```sh
   # on your workstation, in a checkout of this repo
   cd console && npm ci && npm run build
   scp -r dist/ <keystone-host>:/srv/wildstone/console
-  ```
 
-  Then point Keystone at it. The installer sets the flag for you and
-  keeps it across upgrades:
-
-  ```sh
   sudo bash ./install.sh --role keystone --console-dir /srv/wildstone/console
   ```
 

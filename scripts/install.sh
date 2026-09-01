@@ -4,6 +4,10 @@
 #   Control plane:
 #     sudo ./install.sh --role keystone [--console-dir <dir>]
 #          [--keystone-arg <flag> ...] [--version vX.Y.Z]
+#
+#   The Console is installed from the release's own console_dist.tar.gz
+#   and needs no Node on the host; --console-dir overrides it with a
+#   build of your own.
 #   Node:
 #     sudo ./install.sh --role node --keystone <host:9440> \
 #          --join-token <tok> [--ca-fingerprint <hex>] \
@@ -214,38 +218,87 @@ api_fetch() {
     || fail "authenticated download failed for $want"
 }
 
-fetch_binary() {
-  # fetch_binary <name>: obtain <name>_linux_<arch>.tar.gz (local
-  # ARTIFACT_DIR if set, GitHub release download otherwise), verify its
-  # checksums.txt entry, extract, install to BIN_DIR.
-  local name="$1" artifact="$1_linux_${ARCH}.tar.gz"
+fetch_checksums() {
+  # Obtain checksums.txt into $WORK, once. It is also the release's
+  # MANIFEST: an asset that is not listed is not in this release, which
+  # is how the Console stays optional for versions built before it was
+  # shipped.
+  [ -f "$WORK/checksums.txt" ] && return 0
+  if [ -n "$ARTIFACT_DIR" ]; then
+    [ -f "$ARTIFACT_DIR/checksums.txt" ] || fail "checksums.txt not found in $ARTIFACT_DIR (required to verify local artifacts)"
+    cp "$ARTIFACT_DIR/checksums.txt" "$WORK/checksums.txt"
+  elif [ -n "$TOKEN" ]; then
+    api_fetch checksums.txt "$WORK/checksums.txt"
+  else
+    curl -fsSL -o "$WORK/checksums.txt" "$BASE/checksums.txt" \
+      || fail "could not fetch checksums.txt — if this repo is private, pass --token or set GH_TOKEN (see --help)"
+  fi
+}
+
+fetch_asset() {
+  # fetch_asset <artifact>: obtain one release artifact into $WORK (local
+  # ARTIFACT_DIR if set, authenticated API if a token is present, plain
+  # download otherwise) and verify it against checksums.txt. Nothing is
+  # installed — the caller decides what the bytes are for.
+  local artifact="$1"
+  fetch_checksums
   if [ -n "$ARTIFACT_DIR" ]; then
     log "using local artifact $ARTIFACT_DIR/$artifact"
     [ -f "$ARTIFACT_DIR/$artifact" ] || fail "local artifact not found: $ARTIFACT_DIR/$artifact"
     cp "$ARTIFACT_DIR/$artifact" "$WORK/$artifact"
-    if [ ! -f "$WORK/checksums.txt" ]; then
-      [ -f "$ARTIFACT_DIR/checksums.txt" ] || fail "checksums.txt not found in $ARTIFACT_DIR (required to verify local artifacts)"
-      cp "$ARTIFACT_DIR/checksums.txt" "$WORK/checksums.txt"
-    fi
   elif [ -n "$TOKEN" ]; then
     log "downloading $artifact ($VERSION, authenticated)"
     api_fetch "$artifact" "$WORK/$artifact"
-    if [ ! -f "$WORK/checksums.txt" ]; then
-      api_fetch checksums.txt "$WORK/checksums.txt"
-    fi
   else
     log "downloading $artifact ($VERSION)"
     curl -fsSL -o "$WORK/$artifact" "$BASE/$artifact" \
       || fail "download failed for $artifact — if this repo is private, pass --token or set GH_TOKEN (see --help)"
-    if [ ! -f "$WORK/checksums.txt" ]; then
-      curl -fsSL -o "$WORK/checksums.txt" "$BASE/checksums.txt"
-    fi
   fi
   ( cd "$WORK" && grep " $artifact\$" checksums.txt | sha256sum -c - >/dev/null ) \
     || fail "checksum verification failed for $artifact"
+}
+
+release_has() {
+  # release_has <artifact>: is this artifact part of the release?
+  fetch_checksums
+  grep -q " $1\$" "$WORK/checksums.txt"
+}
+
+fetch_binary() {
+  # fetch_binary <name>: obtain and verify <name>_linux_<arch>.tar.gz,
+  # extract, install to BIN_DIR.
+  local name="$1" artifact="$1_linux_${ARCH}.tar.gz"
+  fetch_asset "$artifact"
   tar -xzf "$WORK/$artifact" -C "$WORK" "$name"
   install -m 0755 "$WORK/$name" "$BIN_DIR/$name"
   log "installed $BIN_DIR/$name"
+}
+
+install_console() {
+  # The Console ships as its own release asset so a control-plane host
+  # never needs Node (#34): building it pulled 568 apt packages to
+  # produce 160 KB of static files, on a machine whose job is running
+  # containers.
+  #
+  # Skipped, not failed, when the release predates the asset — an older
+  # --version is a legitimate thing to install, and checksums.txt is the
+  # manifest that says which one this is. An explicit --console-dir
+  # always wins: someone pointing at their own build means it.
+  local dir=/usr/share/wildstone/console
+  release_has console_dist.tar.gz || {
+    log "this release has no console_dist.tar.gz; keystone will serve the API only"
+    return 0
+  }
+  fetch_asset console_dist.tar.gz
+  install -d -m 0755 "$dir"
+  # Emptied rather than overwritten: Vite names its bundles by content
+  # hash, so extracting over an older Console leaves every previous
+  # build's assets behind forever. find -delete on the directory we just
+  # created, never rm -rf on a variable.
+  find "$dir" -mindepth 1 -delete
+  tar -xzf "$WORK/console_dist.tar.gz" -C "$dir"
+  CONSOLE_DIR="$dir"
+  log "installed the Console to $dir"
 }
 
 install_unit() {
@@ -334,6 +387,9 @@ if [ "$ROLE" = keystone ]; then
   # "-console-dir <path>" had to be hand-edited into a unit this script
   # cat > 's over on the next run.
   KEYSTONE_ENV=/etc/wildstone/keystone.env
+  # Only when the operator did not name one: an explicit --console-dir is
+  # a deliberate choice and this must not overwrite it.
+  [ -n "$CONSOLE_DIR" ] || install_console
   if [ -n "$CONSOLE_DIR" ]; then
     [ -d "$CONSOLE_DIR" ] || fail "--console-dir $CONSOLE_DIR does not exist (build the Console elsewhere and copy dist/ here)"
     KEYSTONE_ARGS="$KEYSTONE_ARGS -console-dir $CONSOLE_DIR"
