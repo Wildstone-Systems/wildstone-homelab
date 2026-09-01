@@ -127,6 +127,25 @@ func (r *Reconciler) observeJob(ctx context.Context, nodeID string, k resKey, wa
 			// A foreign container wearing this job's name. Never planned
 			// against, exactly as observeContainer treats one.
 			return resource.Resource{}, false, nil
+		case wsv1.ErrorCode_ERROR_CODE_INVALID:
+			// An agent that predates InspectContainer (protocol minor
+			// 5). It cannot answer whether this job ran, but that is no
+			// reason to abort observation of the WHOLE node: returning
+			// an error here means one unobservable Job stops every
+			// container, route and volume on that node from being
+			// reconciled. observeContainer degrades in this situation
+			// rather than failing, and so does this.
+			//
+			// Degrading means reporting drift, which plans an Update and
+			// re-runs the job. The run itself works on such an agent —
+			// only the confirmation is missing — and applyJobStep's gate
+			// reports jobIndetermin with the actionable message. Loud
+			// and converging beats quiet and stuck; the provisioning
+			// scripts are idempotent, which is what makes it affordable.
+			if !isDesired {
+				return resource.Resource{}, false, nil
+			}
+			return placeholderResource(resource.KindJob, k.Name), true, nil
 		default:
 			return resource.Resource{}, false, fmt.Errorf("observe job %s: %s: %s", k.Name, oe.GetCode(), oe.GetMessage())
 		}
