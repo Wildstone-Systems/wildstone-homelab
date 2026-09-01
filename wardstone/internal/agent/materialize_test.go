@@ -276,8 +276,13 @@ func verifyPbkdf2Sha512(t *testing.T, encoded, value string) bool {
 // outage of every login, from a whitespace bug.
 func TestMultiLineSecretKeepsItsBlockIndentation(t *testing.T) {
 	a := materializeAgent(t)
-	pem := "-----BEGIN PRIVATE KEY-----\nAAAA\nBBBB\n-----END PRIVATE KEY-----\n"
-	putSecret(t, a, "authelia-oidc-jwks", pem)
+	// A plain multi-line value, not a key-shaped literal. The real case
+	// is a PEM private key, but nothing about the indentation rule cares
+	// what the lines say — and a fake key in the source is exactly the
+	// shape the repo's secret scanner exists to catch, which it cannot
+	// tell from a real one.
+	multiline := "FIRST-LINE\nsecond-line\nthird-line\nLAST-LINE\n"
+	putSecret(t, a, "authelia-oidc-jwks", multiline)
 
 	path := filepath.Join(a.cfg.ManagedPrefixes[0], "authelia", "configuration.yml")
 	src := "jwks:\n  - key: |\n      secret/authelia-oidc-jwks\n"
@@ -287,10 +292,10 @@ func TestMultiLineSecretKeepsItsBlockIndentation(t *testing.T) {
 	got := readManagedForTest(t, a, path)
 
 	for _, line := range []string{
-		"      -----BEGIN PRIVATE KEY-----",
-		"      AAAA",
-		"      BBBB",
-		"      -----END PRIVATE KEY-----",
+		"      FIRST-LINE",
+		"      second-line",
+		"      third-line",
+		"      LAST-LINE",
 	} {
 		if !strings.Contains(got, line+"\n") {
 			t.Errorf("line %q is not indented into the block:\n%s", strings.TrimSpace(line), got)

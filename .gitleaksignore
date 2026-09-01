@@ -13,3 +13,18 @@
 # pinned to one commit, one file, one rule and one line, so this entry
 # cannot mask any future finding anywhere.
 f663f34714f45f1cde50c73b37387960d5cf5ddb:keystone/redact/defectd_test.go:generic-api-key:78
+
+# Same class as the entry above, and the second in two days — which is the
+# signal that mattered. f663f34 wrote a fake API key; 9540e44 wrote a fake
+# PEM private key to exercise multi-line materialization. Both were
+# invented, both were exactly the shape the scanner exists to catch, and
+# it cannot tell an invented one from a real one. That is the scanner
+# working.
+#
+# The fix both times was the test, not the rule: the fixture is now
+# assembled at runtime, or (here) uses a plain multi-line value, because
+# the indentation rule under test never cared what the lines said. The
+# practice this records is "do not write key-shaped literals in tests" —
+# if a third entry is ever needed, that practice is not holding and the
+# answer is a shared helper, not another line in this file.
+9540e441bc6e301ccb932d7857f1c1f0415681f7:wardstone/internal/agent/materialize_test.go:private-key:279
