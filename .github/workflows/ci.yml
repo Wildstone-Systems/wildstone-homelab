@@ -32,6 +32,17 @@ jobs:
         run: for f in scripts/*.sh; do bash -n "$f"; done
       - name: shellcheck
         run: shellcheck scripts/*.sh
+      # The Console asset's name lives in two files that never see each
+      # other: release.yml produces it, install.sh fetches it. A rename
+      # in one would not fail anything until a release was cut and an
+      # install came back with no Console, so assert they agree.
+      - name: release and installer agree on the console asset
+        run: |
+          set -euo pipefail
+          grep -q 'console_dist\.tar\.gz' .github/workflows/release.yml \
+            || { echo "release.yml no longer produces console_dist.tar.gz"; exit 1; }
+          grep -q 'console_dist\.tar\.gz' scripts/install.sh \
+            || { echo "install.sh no longer fetches console_dist.tar.gz"; exit 1; }
 
   console:
     name: console (typecheck + build, ADR-W016)

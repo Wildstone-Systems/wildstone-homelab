@@ -20,6 +20,19 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+      # The Console is shipped as its own release asset so a control-plane
+      # host never needs Node. Building it took 568 apt packages and three
+      # seconds to produce 160 KB, on a machine whose job is running
+      # containers (#34).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - name: build console
+        run: |
+          set -euo pipefail
+          cd console && npm ci && npm run build
       - name: build matrix
         env:
           CGO_ENABLED: "0"
@@ -39,6 +52,10 @@ jobs:
           build keystone   keystone  ./cmd/keystone
           build wardstoned wardstone ./cmd/wardstoned
           build wild       cli       ./cmd/wild
+          # The Console's built output. Architecture-independent — it is
+          # static files a browser runs — so it has no _linux_<arch>
+          # suffix, and install.sh fetches it by that plain name.
+          tar -czf dist/console_dist.tar.gz -C console/dist .
           cp scripts/install.sh dist/install.sh
           # Bare names, no ./ prefix: the installer greps checksums.txt
           # for " <artifact>$" and verifies in its own workdir.
