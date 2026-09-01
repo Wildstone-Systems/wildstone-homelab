@@ -168,13 +168,18 @@ func TestIdTokenClaimsBecomeAClaimsPolicy(t *testing.T) {
 	}
 }
 
-// The renderer must never emit a resolved secret (ADR-W005 A2).
+// The renderer must never emit a resolved secret (ADR-W005 A2). What it
+// emits is a reference marked for digest materialization, which the node
+// resolves when it writes the file — Keystone holds no secret values and
+// so could not produce the digest even if it wanted to.
 func TestMergedClientsCarryOnlySecretReferences(t *testing.T) {
 	got := string(renderAutheliaClients([]resource.Resource{oidcClient("immich", nil)}))
-	if !strings.Contains(got, "DIGEST-PLACEHOLDER:secret/immich-oidc") {
-		t.Fatalf("secret reference not carried as a placeholder:\n%s", got)
+	if !strings.Contains(got, "client_secret: 'pbkdf2:secret/immich-oidc'") {
+		t.Fatalf("secret not carried as a digest-materialized reference:\n%s", got)
 	}
-	if strings.Contains(got, "$pbkdf2") {
+	// The rendered form must be nothing a provider could mistake for a
+	// real digest: if this ever contains one, a secret reached Keystone.
+	if strings.Contains(got, "$pbkdf2-sha512$") {
 		t.Fatalf("rendered file contains something shaped like a real hashed secret:\n%s", got)
 	}
 }

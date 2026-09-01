@@ -2941,12 +2941,24 @@ func (x *MeasureUsageResult) GetFileCount() uint64 {
 }
 
 type WriteManagedFile struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"` // must resolve under a managed prefix
-	Content       []byte                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
-	Mode          uint32                 `protobuf:"varint,3,opt,name=mode,proto3" json:"mode,omitempty"` // e.g. 0644; 0 = 0644
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Path    string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"` // must resolve under a managed prefix
+	Content []byte                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
+	Mode    uint32                 `protobuf:"varint,3,opt,name=mode,proto3" json:"mode,omitempty"` // e.g. 0644; 0 = 0644
+	// When true, the agent resolves secret references inside content before
+	// writing (protocol minor 9). Keystone never holds secret values, so a
+	// rendered config carries references and the node substitutes them:
+	//
+	//	secret/<name>        -> the stored value
+	//	pbkdf2:secret/<name> -> $pbkdf2-sha512$... of the stored value
+	//
+	// Off by default and per-write, because a file may legitimately contain
+	// that text without meaning it — an agent that rewrote every managed
+	// file it recognised something in would be editing documents nobody
+	// asked it to edit.
+	MaterializeSecrets bool `protobuf:"varint,4,opt,name=materialize_secrets,json=materializeSecrets,proto3" json:"materialize_secrets,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *WriteManagedFile) Reset() {
@@ -3000,9 +3012,18 @@ func (x *WriteManagedFile) GetMode() uint32 {
 	return 0
 }
 
+func (x *WriteManagedFile) GetMaterializeSecrets() bool {
+	if x != nil {
+		return x.MaterializeSecrets
+	}
+	return false
+}
+
 type WriteManagedFileResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Sha256Hex     string                 `protobuf:"bytes,1,opt,name=sha256_hex,json=sha256Hex,proto3" json:"sha256_hex,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// sha256 of the content AS SUPPLIED, before any materialization — the
+	// caller can only verify what it sent.
+	Sha256Hex     string `protobuf:"bytes,1,opt,name=sha256_hex,json=sha256Hex,proto3" json:"sha256_hex,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3089,10 +3110,22 @@ func (x *ReadManagedFile) GetPath() string {
 }
 
 type ReadManagedFileResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Content       []byte                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Empty for a materialized file: see source_sha256_hex.
+	Content []byte `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	// Set iff the file was last written with materialize_secrets. It is the
+	// sha256 of the pre-materialization content, which is the only thing
+	// the caller can compare against — the bytes on disk hold resolved
+	// secrets and were never what the caller sent.
+	//
+	// The content field is left EMPTY in that case, deliberately. Returning
+	// it would carry live secrets to Keystone, into plans, error strings
+	// and the Butler's tool results; the hash answers "did this drift?"
+	// without any of that, and a secret that never leaves the node cannot
+	// leak from anywhere else.
+	SourceSha256Hex string `protobuf:"bytes,2,opt,name=source_sha256_hex,json=sourceSha256Hex,proto3" json:"source_sha256_hex,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ReadManagedFileResult) Reset() {
@@ -3130,6 +3163,13 @@ func (x *ReadManagedFileResult) GetContent() []byte {
 		return x.Content
 	}
 	return nil
+}
+
+func (x *ReadManagedFileResult) GetSourceSha256Hex() string {
+	if x != nil {
+		return x.SourceSha256Hex
+	}
+	return ""
 }
 
 type HostFacts struct {
@@ -5244,18 +5284,20 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\vtotal_bytes\x18\x01 \x01(\x04R\n" +
 	"totalBytes\x12\x1d\n" +
 	"\n" +
-	"file_count\x18\x02 \x01(\x04R\tfileCount\"T\n" +
+	"file_count\x18\x02 \x01(\x04R\tfileCount\"\x85\x01\n" +
 	"\x10WriteManagedFile\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\fR\acontent\x12\x12\n" +
-	"\x04mode\x18\x03 \x01(\rR\x04mode\"7\n" +
+	"\x04mode\x18\x03 \x01(\rR\x04mode\x12/\n" +
+	"\x13materialize_secrets\x18\x04 \x01(\bR\x12materializeSecrets\"7\n" +
 	"\x16WriteManagedFileResult\x12\x1d\n" +
 	"\n" +
 	"sha256_hex\x18\x01 \x01(\tR\tsha256Hex\"%\n" +
 	"\x0fReadManagedFile\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\"1\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"]\n" +
 	"\x15ReadManagedFileResult\x12\x18\n" +
-	"\acontent\x18\x01 \x01(\fR\acontent\"\v\n" +
+	"\acontent\x18\x01 \x01(\fR\acontent\x12*\n" +
+	"\x11source_sha256_hex\x18\x02 \x01(\tR\x0fsourceSha256Hex\"\v\n" +
 	"\tHostFacts\"\x9f\x02\n" +
 	"\x0fHostFactsResult\x12\x1a\n" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x0e\n" +

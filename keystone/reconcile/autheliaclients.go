@@ -49,8 +49,9 @@ func authPolicyName(clientID string) string   { return clientID + "_groups" }
 // a spec is already an ordered slice.
 //
 // client_secret is NEVER a real secret. Packages carry only a reference
-// (ADR-W005 A2) and this emits a labeled placeholder embedding it; only
-// Wardstone resolves references, at materialization, out of scope here.
+// (ADR-W005 A2) and this emits that reference, marked for digest
+// materialization; only Wardstone resolves references, on the node,
+// out of scope here.
 func renderAutheliaClients(desired []resource.Resource) []byte {
 	clients := make([]*resource.OidcClientSpec, 0, len(desired))
 	for _, r := range desired {
@@ -158,7 +159,16 @@ func effectiveAuthPolicy(c *resource.OidcClientSpec) string {
 func renderClient(b *strings.Builder, c *resource.OidcClientSpec) {
 	fmt.Fprintf(b, "      - client_id: '%s'\n", c.ClientId)
 	fmt.Fprintf(b, "        client_name: '%s'\n", c.ClientName)
-	fmt.Fprintf(b, "        client_secret: 'DIGEST-PLACEHOLDER:%s'\n", c.SecretRef)
+	// pbkdf2: asks the node to substitute the DIGEST of this secret
+	// (protocol minor 9). Keystone holds no secret values, so what is
+	// rendered here is a reference; the agent resolves it when it writes
+	// the file, and the result never comes back.
+	//
+	// Authelia stores the digest and verifies the client's presented
+	// value against it, while the app must send that same value in the
+	// clear — one secret, two representations, derived at the one place
+	// that holds the secret rather than stored twice.
+	fmt.Fprintf(b, "        client_secret: 'pbkdf2:%s'\n", c.SecretRef)
 	b.WriteString("        public: false\n")
 
 	// A group-gated client points at its own named policy; an ungated one

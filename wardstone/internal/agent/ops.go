@@ -345,20 +345,58 @@ func (a *Agent) writeManagedFile(op *wsv1.WriteManagedFile) (*wsv1.OpResult_Writ
 	if mode == 0 {
 		mode = 0o644
 	}
+
+	// The hash is of what the CALLER SENT, always — it is the only thing
+	// the caller can verify, and after materialization the bytes on disk
+	// are something it has never seen.
+	sum := sha256.Sum256(op.GetContent())
+	sourceHex := hex.EncodeToString(sum[:])
+
+	content := op.GetContent()
+	if op.GetMaterializeSecrets() {
+		if !containsSecretRef(content) {
+			// A materializing write with nothing to materialize is a
+			// renderer that stopped emitting references, which would
+			// otherwise ship a config with a secret-shaped hole in it and
+			// no error anywhere.
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID,
+				"%s: materialize_secrets set but the content carries no secret reference", op.GetPath())
+		}
+		var oerr *wsv1.OpError
+		if content, oerr = a.materializeFileContent(op.GetPath(), content); oerr != nil {
+			return nil, oerr
+		}
+		// A materialized file holds live secrets. 0644 would put them in
+		// reach of every user on the host and of any container given the
+		// directory, so the caller's mode is narrowed rather than
+		// honored — the containers that need it are handed the file
+		// explicitly, and nothing else has business reading it.
+		mode &= 0o600
+	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "mkdir: %v", err)
 	}
 	tmp := path + ".wildstone-tmp"
-	if err := os.WriteFile(tmp, op.GetContent(), mode); err != nil {
+	if err := os.WriteFile(tmp, content, mode); err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "write: %v", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "rename: %v", err)
 	}
-	sum := sha256.Sum256(op.GetContent())
+
+	// Record (or clear) the source hash AFTER the rename, so a crash
+	// between the two leaves a file whose recorded source is stale rather
+	// than one that claims a source it does not have. A stale record
+	// reads as drift and is repaired on the next tick; the reverse would
+	// read as converged and never be.
+	if oerr := a.recordManagedSource(op.GetPath(), op.GetMaterializeSecrets(), sourceHex); oerr != nil {
+		return nil, oerr
+	}
+
 	return &wsv1.OpResult_WriteManagedFile{
-		WriteManagedFile: &wsv1.WriteManagedFileResult{Sha256Hex: hex.EncodeToString(sum[:])},
+		WriteManagedFile: &wsv1.WriteManagedFileResult{Sha256Hex: sourceHex},
 	}, nil
 }
 
@@ -373,6 +411,20 @@ func (a *Agent) readManagedFile(op *wsv1.ReadManagedFile) (*wsv1.OpResult_ReadMa
 	}
 	if err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "read: %v", err)
+	}
+	sourceHex, oerr := a.readManagedSource(op.GetPath())
+	if oerr != nil {
+		return nil, oerr
+	}
+	if sourceHex != "" {
+		// Materialized: the bytes on disk hold live secrets and are not
+		// what the caller sent. Return the pre-materialization hash and
+		// NOT the content — that answers "did this drift?" without
+		// carrying a secret to Keystone, into a plan, an error string, or
+		// the Butler's tool results.
+		return &wsv1.OpResult_ReadManagedFile{
+			ReadManagedFile: &wsv1.ReadManagedFileResult{SourceSha256Hex: sourceHex},
+		}, nil
 	}
 	return &wsv1.OpResult_ReadManagedFile{ReadManagedFile: &wsv1.ReadManagedFileResult{Content: content}}, nil
 }

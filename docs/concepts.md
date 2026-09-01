@@ -57,6 +57,33 @@ Each capability's containers mount only that capability's subtree of the
 managed prefix, read-only. The identity provider has no business reading
 the reverse proxy's config, or the reverse.
 
+### Secrets reach a config file only on the node
+
+Wildstone renders every config, and Wildstone never holds a secret value.
+So a rendered file carries a **reference**, and the node substitutes it
+when it writes the file:
+
+```yaml
+client_secret: 'pbkdf2:secret/immich-oidc'   # -> $pbkdf2-sha512$310000$...
+some_password: 'secret/immich-db'            # -> the stored value
+```
+
+Two forms, because one secret genuinely has two representations in a
+working deployment: the identity provider stores an OIDC client secret as
+a digest and checks the client's presented value against it, while the
+app itself must send that value in the clear. The store holds **one**
+plaintext secret and the node derives the other form. Storing both would
+be two things that can disagree about one fact.
+
+A dangling reference fails the write rather than being left in place: a
+config with the literal text `secret/…` where a secret belongs is not a
+partial success, it's a provider that starts and rejects every login.
+
+**Reading such a file back gives you a hash, not its contents.** The
+bytes on disk hold live secrets, so the node returns the checksum of what
+was rendered instead — enough to answer "has this drifted?", and nothing
+that could carry a secret into a plan, an error message, or the Butler.
+
 A `Container`'s published ports use Docker's own syntax and may name the
 host address to bind:
 

@@ -368,9 +368,23 @@ message WriteManagedFile {
   string path = 1; // must resolve under a managed prefix
   bytes content = 2;
   uint32 mode = 3; // e.g. 0644; 0 = 0644
+  // When true, the agent resolves secret references inside content before
+  // writing (protocol minor 9). Keystone never holds secret values, so a
+  // rendered config carries references and the node substitutes them:
+  //
+  //   secret/<name>        -> the stored value
+  //   pbkdf2:secret/<name> -> $pbkdf2-sha512$... of the stored value
+  //
+  // Off by default and per-write, because a file may legitimately contain
+  // that text without meaning it — an agent that rewrote every managed
+  // file it recognised something in would be editing documents nobody
+  // asked it to edit.
+  bool materialize_secrets = 4;
 }
 
 message WriteManagedFileResult {
+  // sha256 of the content AS SUPPLIED, before any materialization — the
+  // caller can only verify what it sent.
   string sha256_hex = 1;
 }
 
@@ -379,7 +393,19 @@ message ReadManagedFile {
 }
 
 message ReadManagedFileResult {
+  // Empty for a materialized file: see source_sha256_hex.
   bytes content = 1;
+  // Set iff the file was last written with materialize_secrets. It is the
+  // sha256 of the pre-materialization content, which is the only thing
+  // the caller can compare against — the bytes on disk hold resolved
+  // secrets and were never what the caller sent.
+  //
+  // The content field is left EMPTY in that case, deliberately. Returning
+  // it would carry live secrets to Keystone, into plans, error strings
+  // and the Butler's tool results; the hash answers "did this drift?"
+  // without any of that, and a secret that never leaves the node cannot
+  // leak from anywhere else.
+  string source_sha256_hex = 2;
 }
 
 // ---------------------------------------------------------------- system
