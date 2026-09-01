@@ -242,6 +242,137 @@ templates:
         - { source: /etc/wildstone/identity, target: /etc/wildstone/identity, readOnly: true }
         - { source: /etc/wildstone/authelia, target: /etc/wildstone/authelia, readOnly: true }
       restart: unless-stopped
+  # ---- Group provisioning.
+  #
+  # LLDAP starts with no groups, so an app whose OIDC client requires
+  # one refuses every login until somebody creates it by hand. This is
+  # the piece that stops that being a manual step.
+  #
+  # It does NOT create people. Wildstone declares the groups an app
+  # needs; members are added in LLDAP's own UI, by whoever knows who
+  # lives here. The script therefore only ever CREATES a missing group
+  # and never deletes or empties one — see LdapGroupSpec.
+  #
+  # Why a script here rather than lldap's own bootstrap.sh, which does
+  # all this and more:
+  #
+  #   1. It cannot be run. The lldap image's ENTRYPOINT is
+  #      docker-entrypoint.sh, which unconditionally ends in
+  #      `exec gosu "$UID:$GID" /app/lldap "$@"` — the `exec "$@"` after
+  #      it is dead code. Wildstone sets Docker's Cmd, not Entrypoint,
+  #      so anything passed becomes an ARGUMENT TO lldap. Upstream's own
+  #      recipes are `docker exec` into the running container, or a
+  #      Kubernetes `command:` — which overrides ENTRYPOINT and does not
+  #      translate.
+  #   2. It apk-adds curl, jq and jo at runtime, as root. A container
+  #      holding the directory's admin password should not be fetching
+  #      binaries from a package mirror to do its job.
+  #
+  # So: a plain alpine image, whose ENTRYPOINT is empty, and busybox
+  # wget, which Alpine builds with FEATURE_WGET_LONG_OPTIONS=y so
+  # --post-data and --header both exist. No package installs, nothing
+  # unpinned, and about thirty lines instead of two thousand.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: provision-groups, node: "{{ .Params.node }}" }
+    spec:
+      filename: provision-groups.sh
+      content: |
+        #!/bin/sh
+        # managed by wildstone — do not edit
+        #
+        # Create every group in the rendered list that the directory does
+        # not already have. Idempotent by construction: it reads what
+        # exists first and only adds. It never deletes a group and never
+        # touches membership.
+        set -eu
+
+        LIST=/etc/wildstone/lldap/groups
+        API="http://lldap:17170"
+
+        # LLDAP_ADMIN_PASSWORD arrives as a secret reference the agent
+        # resolves at container-create time; it is never in this file.
+        [ -n "${LLDAP_ADMIN_PASSWORD:-}" ] || {
+          echo "provision-groups: LLDAP_ADMIN_PASSWORD is empty" >&2; exit 1; }
+
+        post() { # post <path> <extra-header-or-empty> <body>
+          if [ -n "$2" ]; then
+            wget -q -O- --header='Content-Type: application/json' \
+              --header="$2" --post-data="$3" "$API$1"
+          else
+            wget -q -O- --header='Content-Type: application/json' \
+              --post-data="$3" "$API$1"
+          fi
+        }
+
+        # A restart of Authelia or lldap can leave this job racing the
+        # directory's own startup. Retry the login rather than failing
+        # the whole run: the reconciler would re-run us anyway, and a
+        # short wait here is cheaper than a whole tick.
+        i=1
+        while [ "$i" -le 30 ]; do
+          LOGIN=$(post /auth/simple/login "" \
+            "{\"username\":\"admin\",\"password\":\"$LLDAP_ADMIN_PASSWORD\"}") && break
+          echo "provision-groups: directory not answering yet (attempt $i)" >&2
+          i=$((i + 1))
+          sleep 2
+        done
+        [ -n "${LOGIN:-}" ] || { echo "provision-groups: could not log in" >&2; exit 1; }
+
+        # No jq in this image. The token is a JSON string value, so cut
+        # it out with sed rather than parsing: "token":"<value>".
+        TOKEN=$(printf '%s' "$LOGIN" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+        [ -n "$TOKEN" ] || { echo "provision-groups: no token in login response" >&2; exit 1; }
+        AUTH="Authorization: Bearer $TOKEN"
+
+        EXISTING=$(post /api/graphql "$AUTH" \
+          '{"query":"{groups {id displayName}}"}')
+
+        rc=0
+        while IFS= read -r group; do
+          case "$group" in ''|'#'*) continue ;; esac
+
+          # Exact match on the quoted JSON value, so "photos" cannot be
+          # satisfied by an existing "photos_admins".
+          case "$EXISTING" in
+            *"\"displayName\":\"$group\""*)
+              echo "group $group: already present"
+              continue ;;
+          esac
+
+          RESP=$(post /api/graphql "$AUTH" \
+            "{\"query\":\"mutation CreateGroup(\$name: String!) {createGroup(name: \$name) {id}}\",\"operationName\":\"CreateGroup\",\"variables\":{\"name\":\"$group\"}}") || {
+              echo "group $group: request failed" >&2; rc=1; continue; }
+          case "$RESP" in
+            *'"errors"'*)
+              echo "group $group: $RESP" >&2; rc=1 ;;
+            *)
+              echo "group $group: created" ;;
+          esac
+        done < "$LIST"
+
+        # Exit non-zero if ANY group failed. A partially provisioned
+        # directory must not look like a finished job: the reconciler
+        # reads this exit code to decide whether to run us again.
+        exit $rc
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Job
+    metadata: { name: lldap-provision-groups, node: "{{ .Params.node }}" }
+    spec:
+      run:
+        image: "alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"
+        # alpine declares no ENTRYPOINT, so this is the whole argv.
+        command: ["/bin/sh", "/etc/wildstone/identity/provision-groups.sh"]
+        env:
+          LLDAP_ADMIN_PASSWORD: "secret/lldap-admin-password"
+        mounts:
+          # The script, and the group list Keystone renders from every
+          # LdapGroup in the deployment. Read-only: a provisioning job
+          # has no business writing to the managed prefix.
+          - { source: /etc/wildstone/identity, target: /etc/wildstone/identity, readOnly: true }
+          - { source: /etc/wildstone/lldap, target: /etc/wildstone/lldap, readOnly: true }
   # ---- Route: auth.<public_domain> — no auth on the auth Route itself
   # (Authelia IS the auth; gating logins behind Authelia's own login page
   # would be circular).

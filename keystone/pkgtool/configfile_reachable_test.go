@@ -66,11 +66,12 @@ func TestRenderedConfigFilesAreMounted(t *testing.T) {
 // volume (no leading slash) covers nothing on the managed prefix.
 func mountedInto(rendered []resource.Resource, hostPath string) []string {
 	var out []string
-	for _, r := range rendered {
-		if r.Kind != resource.KindContainer || r.Container == nil {
-			continue
-		}
-		for _, m := range r.Container.Mounts {
+	// Jobs count. A ConfigFile whose only reader is a provisioning job —
+	// the group list's provisioning script, say — is mounted by nothing
+	// if this only walks Containers, and the check would pass or fail
+	// for the wrong reason.
+	for _, r := range runnables(rendered) {
+		for _, m := range r.spec.Mounts {
 			if !strings.HasPrefix(m.Source, "/") {
 				continue // named volume
 			}

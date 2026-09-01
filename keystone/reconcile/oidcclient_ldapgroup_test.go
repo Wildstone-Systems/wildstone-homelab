@@ -39,12 +39,12 @@ func titleCase(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
-func ldapGroupResource(name string, members ...string) resource.Resource {
+func ldapGroupResource(name string) resource.Resource {
 	return resource.Resource{
 		ApiVersion: resource.ApiVersion,
 		Kind:       resource.KindLdapGroup,
 		Metadata:   resource.Metadata{Name: name, Owner: "capability/identity", Node: "node-a"},
-		LdapGroup:  &resource.LdapGroupSpec{Name: name, Members: members},
+		LdapGroup:  &resource.LdapGroupSpec{Name: name},
 	}
 }
 
@@ -215,7 +215,7 @@ func TestReconcileLdapGroupDeclaredAppliesWithoutError(t *testing.T) {
 	}
 
 	r := newReconciler(&GatewayApplier{Gateway: h.gw})
-	desired := []resource.Resource{ldapGroupResource("photos-users", "alice", "bob")}
+	desired := []resource.Resource{ldapGroupResource("photos-users")}
 
 	outcome, err := r.Reconcile(context.Background(), "node-a", desired)
 	if err != nil {
@@ -244,7 +244,7 @@ func TestReconcileLdapGroupObservesAsPresentOnReconverge(t *testing.T) {
 	}
 
 	r := newReconciler(&GatewayApplier{Gateway: h.gw})
-	desired := []resource.Resource{ldapGroupResource("photos-users", "alice", "bob")}
+	desired := []resource.Resource{ldapGroupResource("photos-users")}
 
 	if outcome, err := r.Reconcile(context.Background(), "node-a", desired); err != nil || !outcome.Applied {
 		t.Fatalf("initial reconcile: outcome=%+v err=%v", outcome, err)
@@ -276,7 +276,7 @@ func TestReconcileOidcClientAndLdapGroupTogetherOneNodeMixedPlan(t *testing.T) {
 
 	desired := []resource.Resource{
 		containerResource("immich-server", testDigestImage),
-		ldapGroupResource("photos-users", "alice"),
+		ldapGroupResource("photos-users"),
 		oidcClientResource("immich", "immich", "secret/immich-oidc"),
 	}
 	outcome, err := r.Reconcile(context.Background(), "node-a", desired)

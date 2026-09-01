@@ -378,7 +378,7 @@ func ldapGroupEqual(a, b *resource.LdapGroupSpec) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return a.Name == b.Name && stringSliceEqual(a.Members, b.Members)
+	return a.Name == b.Name
 }
 
 func backupPlanEqual(a, b *resource.BackupPlanSpec) bool {
@@ -529,10 +529,16 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 			return RiskMedium, "running a provisioning job: it mutates an external system and nothing reverses it"
 		}
 	case resource.KindLdapGroup:
-		// Declared/best-effort (ADR-W005 A3): apply never touches an
-		// external LLDAP system, so no action here carries real-world
-		// blast radius yet.
-		return RiskLow, "declared LDAP group membership only; no external system changed (ADR-W005 A3)"
+		// The declaration itself still touches nothing: it is the
+		// rendered group list plus the identity capability's
+		// provisioning Job that reach LLDAP, and the Job carries its own
+		// Medium risk for exactly that reason. Creating a group is also
+		// the benign direction — a group nobody is in grants nothing.
+		//
+		// A delete is Low for a narrower reason: it removes the group
+		// from the rendered list, and the provisioning job never deletes
+		// a group. The group, and everyone in it, survives.
+		return RiskLow, "declared group only; the identity capability's provisioning job is what creates it"
 	case resource.KindBackupPlan:
 		// The declaration itself moves no data — the backup engine's runs
 		// do, and those carry their own provenance (ADR-W011 A4). Removing

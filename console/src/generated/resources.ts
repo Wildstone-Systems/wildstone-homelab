@@ -72,7 +72,6 @@ export interface OidcClientSpec {
 
 export interface LdapGroupSpec {
   name: string;
-  members?: string[];
 }
 
 export interface BackupRetention {

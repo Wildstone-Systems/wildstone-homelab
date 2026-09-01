@@ -351,13 +351,28 @@ type ConfigFileSpec struct {
 	Content string `yaml:"content"`
 }
 
-// LdapGroupSpec is the spec for kind LdapGroup (ADR-W005 A3). Modeled as
-// declared + best-effort: it expands and validates, and its reconcile
-// apply is a documented log-and-record no-op against real LLDAP — real
-// LLDAP provisioning is a later provider (keystone/reconcile).
+// LdapGroupSpec is the spec for kind LdapGroup: a group that must EXIST
+// in the directory. Nothing more.
+//
+// It carries no membership, and that is a product decision rather than a
+// gap. Wildstone declares the groups an app needs — media_users,
+// photos_users — and people are added to them by hand in LLDAP's own UI.
+// The household knows who lives in it; the control plane does not, and a
+// system that thinks it does is one that removes your sister from
+// photos_users because a YAML file did not mention her.
+//
+// A Members field existed here and was never provisioned. Keeping it
+// would have been worse than removing it: the tool that would have read
+// it (lldap's bootstrap.sh) treats a declared member list as
+// authoritative when cleanup is on, so the field's only possible future
+// was to start deleting the memberships someone added by hand. Declaring
+// half of a relationship is how you end up owning all of it.
+//
+// If an agent ever adds people, it will do so against the same directory
+// through the same API, and the record of who is in a group will still
+// be the directory's — not a file.
 type LdapGroupSpec struct {
-	Name    string   `yaml:"name"`
-	Members []string `yaml:"members,omitempty"`
+	Name string `yaml:"name"`
 }
 
 // backupSchedules is the closed set of BackupPlanSpec.Schedule values.

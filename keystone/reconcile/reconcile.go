@@ -290,6 +290,12 @@ func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []manage
 		// node — including the client secrets, which it stores as pbkdf2
 		// digests.
 		{autheliaClientsPath(managedPrefix), renderAutheliaClients(desired), true},
+		// The merged LLDAP group list. A prereq rather than a per-step
+		// render for the same reason: it must be correct on disk before
+		// the provisioning job that reads it is planned, and its content
+		// is what that job's spec hash is computed from. No secret
+		// references, so no materialization.
+		{lldapGroupsPath(managedPrefix), renderLdapGroups(desired), false},
 	}
 }
 

@@ -85,6 +85,12 @@ func managedConfigContents(managedPrefix string, desiredByKey map[resKey]resourc
 	// the map iteration order above does not leak into the digest.
 	out[autheliaClientsPath(managedPrefix)] = string(renderAutheliaClients(desired))
 
+	// The LLDAP group list, for the same reason and with more force: the
+	// job that reads it re-runs BECAUSE this digest changed. Declaring a
+	// new group is what has to reach the directory, and this is the
+	// whole mechanism by which it does.
+	out[lldapGroupsPath(managedPrefix)] = string(renderLdapGroups(desired))
+
 	return out
 }
 

@@ -69,10 +69,7 @@ func TestYAMLRoundTrip(t *testing.T) {
 			ApiVersion: ApiVersion,
 			Kind:       KindLdapGroup,
 			Metadata:   Metadata{Name: "photos-users", Owner: "capability/identity", Node: "node-a"},
-			LdapGroup: &LdapGroupSpec{
-				Name:    "photos_users",
-				Members: []string{"alice", "bob"},
-			},
+			LdapGroup:  &LdapGroupSpec{Name: "photos_users"},
 		},
 	}
 
@@ -347,7 +344,7 @@ func TestValidateLdapGroupMissingName(t *testing.T) {
 	r := Resource{
 		Kind:      KindLdapGroup,
 		Metadata:  Metadata{Name: "photos-users", Owner: "capability/identity", Node: "node-a"},
-		LdapGroup: &LdapGroupSpec{Members: []string{"alice"}},
+		LdapGroup: &LdapGroupSpec{},
 	}
 	err := r.Validate()
 	if err == nil {

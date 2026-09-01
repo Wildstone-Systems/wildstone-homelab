@@ -79,3 +79,33 @@ func renderShippedPackages(t *testing.T) map[string][]resource.Resource {
 	}
 	return out
 }
+
+// runnable is one container specification a package renders, with the
+// resource that carried it.
+//
+// It exists because a ContainerSpec now reaches a node from two kinds:
+// Container, and Job (whose Run is one). Every check that reasons about
+// "what will actually run" has to see both, and the way it stops seeing
+// one is by reaching through r.Container directly — which is exactly
+// what happened when Job was added: the argv0 table, the whole point of
+// which is to stop an F23 repeat, silently ignored the first shipped Job.
+type runnable struct {
+	kind resource.Kind
+	name string
+	spec *resource.ContainerSpec
+}
+
+// runnables returns every container specification in rendered, from
+// whichever kind carries it.
+func runnables(rendered []resource.Resource) []runnable {
+	var out []runnable
+	for _, r := range rendered {
+		switch {
+		case r.Kind == resource.KindContainer && r.Container != nil:
+			out = append(out, runnable{r.Kind, r.Metadata.Name, r.Container})
+		case r.Kind == resource.KindJob && r.Job != nil:
+			out = append(out, runnable{r.Kind, r.Metadata.Name, &r.Job.Run})
+		}
+	}
+	return out
+}
