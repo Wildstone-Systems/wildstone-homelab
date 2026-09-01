@@ -185,11 +185,18 @@ var kindOrder = map[resource.Kind]int{
 	resource.KindLdapGroup:  2,
 	resource.KindOidcClient: 3,
 	resource.KindContainer:  4,
-	resource.KindRoute:      5,
-	resource.KindDnsRecord:  6,
+	// Job after Container, because a job provisions a service that has
+	// to be running to be provisioned. It is NOT a dependency edge and
+	// deliberately not modelled as one: a job whose service is not ready
+	// exits non-zero, observe sees that, and the next tick runs it
+	// again. Level-triggered convergence is the ordering mechanism; this
+	// position only saves the first tick from a guaranteed failure.
+	resource.KindJob:       5,
+	resource.KindRoute:     6,
+	resource.KindDnsRecord: 7,
 	// BackupPlan last: a backup declaration depends on the volumes it
 	// names, and nothing depends on it (ADR-W011 A4).
-	resource.KindBackupPlan: 7,
+	resource.KindBackupPlan: 8,
 }
 
 // key identifies a resource for matching desired against observed:
@@ -333,6 +340,11 @@ func specEqual(a, b resource.Resource) bool {
 		return backupPlanEqual(a.BackupPlan, b.BackupPlan)
 	case resource.KindConfigFile:
 		return a.ConfigFile != nil && b.ConfigFile != nil && *a.ConfigFile == *b.ConfigFile
+	case resource.KindJob:
+		if a.Job == nil || b.Job == nil {
+			return a.Job == b.Job
+		}
+		return containerEqual(&a.Job.Run, &b.Job.Run)
 	default:
 		return false
 	}
@@ -499,6 +511,22 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 			// authenticating anybody — neither visible until the app next
 			// reads the file, which may be long after the plan applied.
 			return RiskMedium, "configuration changed: the app may fail to start, or start behaving differently"
+		}
+	case resource.KindJob:
+		// A job is not a declaration: applying one RUNS a program that
+		// changes an external system, and unlike every other kind here
+		// there is no reverse op that undoes what it did. Creating the
+		// job that seeds a directory is as consequential as any change
+		// in this table, and deleting the resource does not un-seed it.
+		//
+		// Medium on create as well as change, therefore — the only kind
+		// whose creation is not Low. A first run and a re-run differ
+		// only in that the second has more to collide with.
+		switch action {
+		case ActionDelete:
+			return RiskLow, "job resource removed; the run it already performed is not undone"
+		default:
+			return RiskMedium, "running a provisioning job: it mutates an external system and nothing reverses it"
 		}
 	case resource.KindLdapGroup:
 		// Declared/best-effort (ADR-W005 A3): apply never touches an

@@ -37,6 +37,7 @@ var kindSpecs = []struct {
 	{resource.KindLdapGroup, reflect.TypeOf(resource.LdapGroupSpec{})},
 	{resource.KindBackupPlan, reflect.TypeOf(resource.BackupPlanSpec{})},
 	{resource.KindConfigFile, reflect.TypeOf(resource.ConfigFileSpec{})},
+	{resource.KindJob, reflect.TypeOf(resource.JobSpec{})},
 }
 
 func main() {

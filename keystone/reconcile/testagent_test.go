@@ -76,6 +76,22 @@ type fakeContainer struct {
 	labels  map[string]string
 	running bool
 	owned   bool
+	// status/exitCode model protocol minor 11. A container the fake has
+	// never stopped reports "running"; one a job run has finished
+	// reports "exited" and a code.
+	status   string
+	exitCode int32
+}
+
+// dockerStatus is what the real agent reads off Docker's State.Status.
+func (c *fakeContainer) dockerStatus() string {
+	if c.status != "" {
+		return c.status
+	}
+	if c.running {
+		return "running"
+	}
+	return "exited"
 }
 
 type fakeVolume struct {
@@ -96,6 +112,11 @@ type testAgent struct {
 	containers map[string]*fakeContainer
 	volumes    map[string]*fakeVolume
 	opCounts   map[string]int
+	// jobExit/jobRuns model one-shot jobs: a name registered in jobExit
+	// exits with that code the moment it is created or started, and
+	// jobRuns counts how often that happened.
+	jobExit map[string]int32
+	jobRuns map[string]int
 }
 
 func newTestAgent(t *testing.T, h *harness, nodeID, token string) *testAgent {
@@ -387,6 +408,8 @@ func (a *testAgent) ensureContainer(opID string, op *wsv1.EnsureContainer) *wsv1
 		if specMatches {
 			started := !existing.running
 			existing.running = true
+			existing.status, existing.exitCode = "", 0
+			a.runJobLocked(op.GetName(), existing)
 			return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
 				ContainerId: "cid-" + op.GetName(), Created: false, Started: started,
 			}}}
@@ -394,7 +417,9 @@ func (a *testAgent) ensureContainer(opID string, op *wsv1.EnsureContainer) *wsv1
 		// spec changed: replace, same as the real agent (ops.go).
 		delete(a.containers, op.GetName())
 	}
-	a.containers[op.GetName()] = &fakeContainer{image: op.GetImage(), labels: op.GetLabels(), running: true, owned: true}
+	created := &fakeContainer{image: op.GetImage(), labels: op.GetLabels(), running: true, owned: true}
+	a.containers[op.GetName()] = created
+	a.runJobLocked(op.GetName(), created)
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
 		ContainerId: "cid-" + op.GetName(), Created: true, Started: true,
 	}}}
@@ -449,6 +474,7 @@ func (a *testAgent) inspectContainer(opID string, op *wsv1.InspectContainer) *ws
 	}
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_InspectContainer{InspectContainer: &wsv1.InspectContainerResult{
 		Running: c.running, Image: c.image, Labels: c.labels,
+		Status: c.dockerStatus(), ExitCode: c.exitCode,
 	}}}
 }
 
@@ -536,4 +562,48 @@ func dispatch(t *testing.T, gw *gateway.Gateway, nodeID string, op *wsv1.Operati
 		t.Fatalf("dispatch: %v", err)
 	}
 	return res
+}
+
+// ---------------------------------------------------------------- fake jobs
+
+// setJobExit registers a container name as a one-shot job: every time it
+// is created or started, it "runs" instantly and exits with code. Call
+// again with a different code to model a job that fails and then, once
+// whatever it needed is in place, succeeds.
+func (a *testAgent) setJobExit(name string, code int32) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.jobExit == nil {
+		a.jobExit = map[string]int32{}
+	}
+	a.jobExit[name] = code
+	if a.jobRuns == nil {
+		a.jobRuns = map[string]int{}
+	}
+}
+
+// jobRunCount reports how many times the named job has run. It is the
+// assertion that matters most for a Job: a completed one must not run
+// again, and a failed one must.
+func (a *testAgent) jobRunCount(name string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.jobRuns[name]
+}
+
+// runJobLocked is called with a.mu held, from the create and start paths
+// of ensureContainer — the two places a real container's process would
+// begin.
+func (a *testAgent) runJobLocked(name string, c *fakeContainer) {
+	code, ok := a.jobExit[name]
+	if !ok {
+		return
+	}
+	if a.jobRuns == nil {
+		a.jobRuns = map[string]int{}
+	}
+	a.jobRuns[name]++
+	c.running = false
+	c.status = "exited"
+	c.exitCode = code
 }

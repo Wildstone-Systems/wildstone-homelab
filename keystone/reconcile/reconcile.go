@@ -193,6 +193,13 @@ type Reconciler struct {
 	// call lands in a later E-series work package.
 	ReloadAutheliaFn func(ctx context.Context) error
 
+	// JobGateAttempts and JobGateBackoff bound the wait for a Job's
+	// container to reach a terminal state. Zero uses the defaults in
+	// job.go, which are far longer than the container health gate on
+	// purpose: a provisioning run legitimately takes seconds.
+	JobGateAttempts int
+	JobGateBackoff  time.Duration
+
 	// MaxApplyRetries bounds retries of a single op dispatch on a
 	// transient failure (transport error, or an OpError with code
 	// RUNTIME) before the step is given up on (ADR-W004 A4: "bounded
@@ -340,7 +347,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	for _, res := range desired {
 		switch res.Kind {
 		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
-			resource.KindLdapGroup, resource.KindBackupPlan, resource.KindConfigFile:
+			resource.KindLdapGroup, resource.KindBackupPlan, resource.KindConfigFile, resource.KindJob:
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
 			providerDesired = append(providerDesired, res)
@@ -448,6 +455,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 		switch step.Kind {
 		case resource.KindContainer:
 			sr = r.applyContainerStep(ctx, nodeID, step, desiredByKey, cfgContents)
+		case resource.KindJob:
+			sr = r.applyJobStep(ctx, nodeID, step, desiredByKey, cfgContents)
 		case resource.KindVolume:
 			sr = r.applyVolumeStep(ctx, nodeID, step)
 		case resource.KindRoute:
@@ -513,6 +522,14 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 	for k := range candidates {
 		want, isDesired := desiredByKey[k]
 		switch k.Kind {
+		case resource.KindJob:
+			obs, present, oerr := r.observeJob(ctx, nodeID, k, want, isDesired, cfgContents)
+			if oerr != nil {
+				return nil, nil, oerr
+			}
+			if present {
+				observed = append(observed, obs)
+			}
 		case resource.KindContainer:
 			res, obs, oerr := r.observeContainer(ctx, nodeID, k, want, isDesired, cfgContents)
 			if oerr != nil {
@@ -769,6 +786,10 @@ func placeholderResource(kind resource.Kind, name string) resource.Resource {
 	switch kind {
 	case resource.KindContainer:
 		r.Container = &resource.ContainerSpec{}
+	case resource.KindJob:
+		// Deliberately unequal to any real desired Job: an empty Run has
+		// no image, and containerEqual compares images first.
+		r.Job = &resource.JobSpec{}
 	case resource.KindVolume:
 		r.Volume = &resource.VolumeSpec{Name: name}
 	case resource.KindRoute:

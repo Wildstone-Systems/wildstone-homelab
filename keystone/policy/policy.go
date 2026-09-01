@@ -123,7 +123,17 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 			if r.Container == nil {
 				continue
 			}
-			all = append(all, containerSecretRules(r)...)
+			all = append(all, envSecretRules(r, r.Container.Env)...)
+		case resource.KindJob:
+			// A Job carries a full ContainerSpec and runs it, so its env
+			// is subject to exactly the rules a Container's is. It is
+			// also the likeliest place for a literal to appear: a
+			// provisioning job needs an admin password to do its work,
+			// which makes "just paste it in" the obvious wrong move.
+			if r.Job == nil {
+				continue
+			}
+			all = append(all, envSecretRules(r, r.Job.Run.Env)...)
 		}
 	}
 	// Deletions of admin routes by the butler (RuleButlerAdminScope
@@ -214,9 +224,15 @@ var secretKeyRegexp = regexp.MustCompile(`(?i)(^|[_-])(password|passwd|secret|to
 // secretRefValueRegexp matches a full secret reference value.
 var secretRefValueRegexp = regexp.MustCompile(`^secret/[A-Za-z0-9._-]+$`)
 
-func containerSecretRules(r resource.Resource) []Violation {
+// envSecretRules checks a container environment for literal secrets. It
+// takes the env map rather than reading it off r.Container, because more
+// than one kind carries a ContainerSpec now: a rule that reached through
+// a single field would silently stop applying the moment a second kind
+// could run a container, which is exactly what happened when Job was
+// added and this function still said r.Container.Env.
+func envSecretRules(r resource.Resource, env map[string]string) []Violation {
 	var out []Violation
-	for key, value := range r.Container.Env {
+	for key, value := range env {
 		switch {
 		case secretKeyRegexp.MatchString(key) && !secretRefValueRegexp.MatchString(value):
 			out = append(out, Violation{
