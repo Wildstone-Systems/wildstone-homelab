@@ -288,8 +288,11 @@ templates:
         # touches membership.
         set -eu
 
-        LIST=/etc/wildstone/lldap/groups
-        API="http://lldap:17170"
+        # Both default to what ships; the overrides exist so the test in
+        # keystone/pkgtool can run this exact script — the one the
+        # package renders, not a copy — against a fake directory.
+        LIST="${GROUPS_FILE:-/etc/wildstone/lldap/groups}"
+        API="${LLDAP_URL:-http://lldap:17170}"
 
         # LLDAP_ADMIN_PASSWORD arrives as a secret reference the agent
         # resolves at container-create time; it is never in this file.
@@ -306,28 +309,49 @@ templates:
           fi
         }
 
-        # A restart of Authelia or lldap can leave this job racing the
-        # directory's own startup. Retry the login rather than failing
-        # the whole run: the reconciler would re-run us anyway, and a
-        # short wait here is cheaper than a whole tick.
+        # A restart can leave this job racing the directory's own
+        # startup, so retry the login briefly rather than failing at
+        # once. Briefly is the operative word, and the bound is not
+        # arbitrary: the reconciler's job gate gives this container 60s
+        # to finish, so a script that spends 60s retrying gets killed at
+        # exactly the moment it was about to say something useful, and
+        # the step reports a timeout instead of a reason.
+        #
+        # 20s also bounds the wrong-password case, which is
+        # indistinguishable from "not up yet" here — wget's exit codes
+        # for a 401 and a refused connection are not portable between
+        # busybox and GNU. So both are retried, and the message names
+        # both. Retrying a permanent failure for a whole minute on every
+        # tick is the thing worth avoiding.
         i=1
-        while [ "$i" -le 30 ]; do
+        while [ "$i" -le "${LOGIN_ATTEMPTS:-10}" ]; do
           LOGIN=$(post /auth/simple/login "" \
             "{\"username\":\"admin\",\"password\":\"$LLDAP_ADMIN_PASSWORD\"}") && break
           echo "provision-groups: directory not answering yet (attempt $i)" >&2
           i=$((i + 1))
           sleep 2
         done
-        [ -n "${LOGIN:-}" ] || { echo "provision-groups: could not log in" >&2; exit 1; }
+        [ -n "${LOGIN:-}" ] || {
+          echo "provision-groups: could not log in to $API as admin — either the directory is not" >&2
+          echo "  running, or secret/lldap-admin-password is not the password it was created with" >&2
+          exit 1; }
 
-        # No jq in this image. The token is a JSON string value, so cut
-        # it out with sed rather than parsing: "token":"<value>".
-        TOKEN=$(printf '%s' "$LOGIN" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+        # No jq in this image, so the two reads below are textual. Both
+        # first strip whitespace: LLDAP serialises compactly today, but
+        # {"token": "x"} with a space is equally valid JSON, and a script
+        # that silently finds no token because a future version or a
+        # proxy reformatted the body is a bad way to learn that. Group
+        # names are validated to [a-z0-9_] before they reach here
+        # (LdapGroupSpec), so squeezing whitespace cannot merge two of
+        # them.
+        squeeze() { tr -d ' \011\012\015'; }
+
+        TOKEN=$(printf '%s' "$LOGIN" | squeeze | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
         [ -n "$TOKEN" ] || { echo "provision-groups: no token in login response" >&2; exit 1; }
         AUTH="Authorization: Bearer $TOKEN"
 
         EXISTING=$(post /api/graphql "$AUTH" \
-          '{"query":"{groups {id displayName}}"}')
+          '{"query":"{groups {id displayName}}"}' | squeeze)
 
         rc=0
         while IFS= read -r group; do
