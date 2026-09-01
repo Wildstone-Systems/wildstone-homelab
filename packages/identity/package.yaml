@@ -157,18 +157,35 @@ templates:
     metadata: { name: authelia, node: "{{ .Params.node }}" }
     spec:
       image: "authelia/authelia@sha256:1b363e9279e742397966333f364e0876ae02bf5c876de73e83af6d48c57ff51b"
-      # NOT YET POINTED AT THE FILES ABOVE. Authelia must be told to read
-      # them — it otherwise reads the config it seeds for itself on first
-      # start, which is why every rendered client has been invisible.
+      # Point Authelia at BOTH managed files. Without this it reads
+      # X_AUTHELIA_CONFIG's default, /config/configuration.yml — the
+      # config it seeds for itself on first start — which is why every
+      # rendered client was invisible no matter how correct clients.yml
+      # was. Passing --config replaces that default outright, so the
+      # self-seeded file stops mattering.
       #
-      # Doing that needs one fact this repo does not have: whether this
-      # image declares an ENTRYPOINT, which decides whether the command
-      # is ["--config", ...] or ["authelia", "--config", ...]. Wildstone
-      # maps command to Docker's Cmd, and Cmd is the WHOLE argv when
-      # there is no entrypoint — the mistake that killed every Caddy
-      # container in the v0.1.1-alpha validation (F23). Image config
-      # blobs are unreachable from CI and from the dev sandbox, so the
-      # answer is `docker inspect` on a node.
+      # Flags only, no binary: the image's ENTRYPOINT is
+      # ["/app/entrypoint.sh"], which execs `authelia "$@"`. Wildstone
+      # maps command to Docker's Cmd, and Cmd is the WHOLE argv only
+      # when an image has no entrypoint — the mistake that killed every
+      # Caddy container in the v0.1.1-alpha validation (F23), which is
+      # why keystone/pkgtool's imageArgv0 table demands evidence per
+      # image before a command may be added. That entrypoint has a
+      # branch for exactly this shape: it execs its arguments directly
+      # UNLESS the first is --config, in which case authelia gets them.
+      #
+      # Order matters, and so does the split. Authelia merges these
+      # last-wins per key and does NOT merge lists — its own docs call
+      # splitting access control rules or OIDC clients across files
+      # "asking for trouble", and the hand-build confirmed it by having
+      # one file's clients silently replace another's. So each list-
+      # valued section lives in exactly one file: access_control here,
+      # identity_providers there.
+      command:
+        - "--config"
+        - "/etc/wildstone/identity/configuration.yml"
+        - "--config"
+        - "/etc/wildstone/authelia/clients.yml"
       env:
         AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE: "secret/authelia-oidc-hmac-secret"
         AUTHELIA_JWT_SECRET_FILE: "secret/authelia-jwt-secret"
@@ -176,13 +193,26 @@ templates:
         AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE: "secret/authelia-storage-encryption-key"
       mounts:
         - { source: authelia-config, target: /config }
-        # The capability's own subtree of the managed prefix, read-only.
-        # Wildstone renders clients.yml here from every OidcClient in the
-        # deployment; Authelia is pointed at it alongside its own config.
-        # A subtree rather than the whole prefix: this container has no
+        # Two read-only subtrees of the managed prefix, because the two
+        # managed files are named by two different rules and both rules
+        # are right:
+        #
+        #   <prefix>/identity/    a ConfigFile's directory comes from its
+        #                         owning capability, uniformly for every
+        #                         package that ships one — this is where
+        #                         configuration.yml above lands.
+        #   <prefix>/authelia/    the reconciler's Authelia-specific
+        #                         renderings, named for the provider that
+        #                         reads them (ADR-W005 A3/B1): clients.yml,
+        #                         merged from every OidcClient in the
+        #                         deployment, and the per-client fragments
+        #                         it is merged from.
+        #
+        # Subtrees rather than the whole prefix: this container has no
         # business reading the ingress capability's files, and the
         # narrowest mount that works is the one to ship (ADR-W018, and
         # the lesson of the agent data directory).
+        - { source: /etc/wildstone/identity, target: /etc/wildstone/identity, readOnly: true }
         - { source: /etc/wildstone/authelia, target: /etc/wildstone/authelia, readOnly: true }
       restart: unless-stopped
   # ---- Route: auth.<public_domain> — no auth on the auth Route itself

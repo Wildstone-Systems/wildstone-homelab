@@ -1,0 +1,81 @@
+package pkgtool
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
+	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+)
+
+// Shared walk for the tests that assert something about every SHIPPED
+// package's rendered output. Extracted when a second such test arrived:
+// two copies of the render loop is how one of them quietly stops seeing
+// a package the other one checks.
+
+// walkFillers supplies values for required params that must look real —
+// a domain that is not a domain renders a Route no test can reason
+// about. Anything else gets its default, or a marker.
+var walkFillers = map[string]string{
+	"public_domain":     "example.internal",
+	"admin_domain":      "admin.example.internal",
+	"node":              "n1",
+	"admin_listen_addr": "100.64.0.1",
+	"listen_addr":       "100.64.0.1",
+}
+
+// renderShippedPackages expands every package under packages/ against a
+// catalog containing all of them, so a package with `requires` expands
+// instead of skipping. A skip would be the same hole as a guard that
+// silently stops running: green, and checking nothing.
+func renderShippedPackages(t *testing.T) map[string][]resource.Resource {
+	t.Helper()
+	root, err := filepath.Abs("../../packages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var names []string
+	var all []*pkgspec.Package
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		p, err := pkgspec.Load(filepath.Join(root, e.Name(), "package.yaml"))
+		if err != nil {
+			t.Fatalf("load %s: %v", e.Name(), err)
+		}
+		names = append(names, e.Name())
+		all = append(all, p)
+	}
+	if len(all) == 0 {
+		t.Fatal("no packages found under packages/ — the walk is broken, not the packages")
+	}
+
+	catalog := capability.NewCatalog(all...)
+	out := make(map[string][]resource.Resource, len(all))
+	for i, pkg := range all {
+		params := map[string]string{}
+		for _, d := range pkg.Params {
+			if v, ok := walkFillers[d.Name]; ok {
+				params[d.Name] = v
+			} else if d.Default != "" {
+				params[d.Name] = d.Default
+			} else {
+				params[d.Name] = "lint-" + sanitizeParam(d.Name)
+			}
+		}
+		rendered, err := capability.NewEngine().Expand(pkg, params, catalog)
+		if err != nil {
+			t.Fatalf("expand %s: %v", names[i], err)
+		}
+		out[names[i]] = rendered
+	}
+	return out
+}
