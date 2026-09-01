@@ -19,6 +19,18 @@ func secretResource(name, kind string) resource.Resource {
 	}
 }
 
+// identityProviderSecrets are the two secrets the OIDC provider itself
+// needs, which renderAutheliaClients references whenever any client
+// exists. In production the identity package declares them; a test that
+// renders clients has to as well, or it is asserting against a file the
+// node would refuse to write.
+func identityProviderSecrets() []resource.Resource {
+	return []resource.Resource{
+		secretResource("authelia-oidc-hmac-secret", ""),
+		secretResource("authelia-oidc-jwks", "rsa_private_key"),
+	}
+}
+
 func secretReconciler(a Applier) *Reconciler {
 	r := newReconciler(a)
 	r.Approve = func(*plan.Plan) bool { return true }
@@ -78,10 +90,10 @@ func TestSecretsExistBeforeTheFilesThatReferenceThem(t *testing.T) {
 
 	// An OidcClient puts a pbkdf2:secret/<ref> into the merged clients
 	// file, which is a prereq — written before the plan runs.
-	desired := []resource.Resource{
+	desired := append([]resource.Resource{
 		oidcClientResource("photos", "photos", "secret/photos-oidc"),
 		secretResource("photos-oidc", ""),
-	}
+	}, identityProviderSecrets()...)
 	out, err := secretReconciler(&GatewayApplier{Gateway: h.gw}).Reconcile(context.Background(), "node-a", desired)
 	if err != nil {
 		t.Fatalf("first tick failed: %v\n\nA secret the clients file references did not exist when that "+

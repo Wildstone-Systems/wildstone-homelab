@@ -20,9 +20,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 
 	"gopkg.in/yaml.v3"
 
@@ -64,6 +67,12 @@ func repoRoot(t *testing.T) string {
 // never anything reimplemented here.
 func oidcClientFragmentPath(name string) string {
 	return filepath.ToSlash(filepath.Join(testManagedPrefix, "authelia", "oidc-clients", name+".yaml"))
+}
+
+// autheliaClientsPathForTest is the merged clients file, reconstructed
+// from the same documented convention.
+func autheliaClientsPathForTest() string {
+	return filepath.ToSlash(filepath.Join(testManagedPrefix, "authelia", "clients.yml"))
 }
 
 func routeFragmentPath(name string) string {
@@ -284,6 +293,25 @@ func TestGoNoGoIdentityPhotosVertical(t *testing.T) {
 	t.Logf("reconcile plan: %s (overall risk %s), %d steps applied", outcome.Plan.Summary, outcome.Plan.OverallRisk, len(outcome.Steps))
 
 	// ---------------------------------------------------------------- e) assert the gate
+	// The provider's signing key must exist AND be an RSA key. This is
+	// the end of the chain the Secret kind was added for: Authelia signs
+	// ID tokens with it, a random blob is not a key, and until now
+	// nothing in the control plane could ask for one.
+	if kind, ok := agent.secretKind("authelia-oidc-jwks"); !ok {
+		t.Error("GATE VERDICT: NO-GO — the OIDC signing key was never generated")
+	} else if kind != wsv1.SecretKind_SECRET_KIND_RSA_PRIVATE_KEY {
+		t.Errorf("GATE VERDICT: NO-GO — the OIDC signing key was generated as %v, want an RSA key", kind)
+	}
+	// And the merged clients file must actually reference it, or the key
+	// exists and the provider still cannot sign.
+	clients, ok := agent.readManagedFileForTest(t, autheliaClientsPathForTest())
+	if !ok || !strings.Contains(string(clients), "secret/authelia-oidc-jwks") {
+		t.Error("GATE VERDICT: NO-GO — the rendered clients file does not reference the signing key")
+	}
+	if !strings.Contains(string(clients), "secret/authelia-oidc-hmac-secret") {
+		t.Error("GATE VERDICT: NO-GO — the rendered clients file carries no hmac_secret")
+	}
+
 	// The group provisioning job must have RUN, exactly once, and
 	// succeeded — the gate is "a family member could log in", and a
 	// login needs the group its OIDC client requires to exist.

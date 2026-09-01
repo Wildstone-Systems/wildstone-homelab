@@ -39,6 +39,57 @@ policies:
   classifications: [family_public, admin_tailscale]
   dataSensitivity: high
 templates:
+  # ---- The secrets this capability needs, declared so the node
+  # generates them before anything references one.
+  #
+  # Declared here rather than created by hand because the merged
+  # clients file Keystone writes carries references to the two OIDC
+  # provider secrets, and that file is written before any plan step
+  # runs: a secret that does not exist yet fails the write, and a
+  # failed prereq aborts the tick before the plan that would create it.
+  # The reconciler ensures declared secrets ahead of that write, which
+  # is what makes this list the mechanism rather than documentation.
+  #
+  # Only the jwks key has a kind. An OIDC provider signs ID tokens with
+  # an RSA key and cannot invent one at startup; everything else here
+  # wants random bytes, which is the default, so it says nothing.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: authelia-oidc-jwks, node: "{{ .Params.node }}" }
+    spec: { name: authelia-oidc-jwks, kind: rsa_private_key }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: authelia-oidc-hmac-secret, node: "{{ .Params.node }}" }
+    # Authelia hashes this to SHA256, and strongly recommends 64+
+    # characters. 48 random bytes is 64 base64url characters.
+    spec: { name: authelia-oidc-hmac-secret, lengthBytes: 48 }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: authelia-jwt-secret, node: "{{ .Params.node }}" }
+    spec: { name: authelia-jwt-secret }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: authelia-session-secret, node: "{{ .Params.node }}" }
+    spec: { name: authelia-session-secret }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: authelia-storage-encryption-key, node: "{{ .Params.node }}" }
+    spec: { name: authelia-storage-encryption-key }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: lldap-admin-password, node: "{{ .Params.node }}" }
+    spec: { name: lldap-admin-password }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: lldap-jwt-secret, node: "{{ .Params.node }}" }
+    spec: { name: lldap-jwt-secret }
   # ---- LLDAP: the directory Authelia authenticates users against.
   - |
     apiVersion: wildstone.dev/v1
@@ -74,10 +125,10 @@ templates:
   # layering ADR-W005 exists to prevent (ADR-W019 / the ConfigFile kind).
   #
   # identity_providers is deliberately ABSENT here. Authelia REPLACES a
-  # list across config files rather than merging it, so the OIDC block —
-  # clients, jwks, policies — lives entirely in the clients.yml Keystone
-  # renders from every OidcClient in the deployment. One file owns that
-  # key; this one never mentions it.
+  # list across config files rather than merging it, so the OIDC block
+  # lives entirely in the clients.yml Keystone renders: the clients
+  # themselves, the hmac_secret, the jwks signing key and the policies.
+  # One file owns that key; this one never mentions it.
   #
   # secret/<name> references are resolved on the node at write time. This
   # file never contains a secret value, and Keystone never sees one.

@@ -113,6 +113,7 @@ type testAgent struct {
 	mu         sync.Mutex
 	jobExit    map[string]int32
 	jobRuns    map[string]int
+	secrets    map[string]wsv1.SecretKind
 	containers map[string]*fakeContainer
 	volumes    map[string]*fakeVolume
 }
@@ -288,6 +289,8 @@ func (a *testAgent) handleOp(opID string, op *wsv1.Operation) *wsv1.OpResult {
 		return a.removeContainer(opID, o.RemoveContainer)
 	case *wsv1.Operation_ContainerStats:
 		return a.containerStats(opID, o.ContainerStats)
+	case *wsv1.Operation_EnsureSecret:
+		return a.ensureSecret(opID, o.EnsureSecret)
 	case *wsv1.Operation_InspectContainer:
 		return a.inspectContainer(opID, o.InspectContainer)
 	case *wsv1.Operation_EnsureVolume:
@@ -502,4 +505,29 @@ func (a *testAgent) runJobLocked(name string, c *fakeContainer) {
 	c.running = false
 	c.status = "exited"
 	c.exitCode = code
+}
+
+// ensureSecret mirrors the real agent: create-if-absent, report a
+// version. The value is never modelled — nothing above the agent may
+// see one.
+func (a *testAgent) ensureSecret(opID string, op *wsv1.EnsureSecret) *wsv1.OpResult {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.secrets == nil {
+		a.secrets = map[string]wsv1.SecretKind{}
+	}
+	_, existed := a.secrets[op.GetName()]
+	if !existed {
+		a.secrets[op.GetName()] = op.GetKind()
+	}
+	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureSecret{EnsureSecret: &wsv1.EnsureSecretResult{
+		Existed: existed, Version: 1,
+	}}}
+}
+
+func (a *testAgent) secretKind(name string) (wsv1.SecretKind, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	k, ok := a.secrets[name]
+	return k, ok
 }
