@@ -92,6 +92,67 @@ func (ErrorCode) EnumDescriptor() ([]byte, []int) {
 	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{0}
 }
 
+// EnsureSecret creates <name> with a locally generated random value if
+// absent (generation-at-install: the value never crosses the wire).
+// rotate=true regenerates even when the secret exists.
+// SecretKind selects what EnsureSecret generates. Closed, like every
+// other vocabulary on this wire: the agent must know how to produce the
+// material, so "some other algorithm" is a code change, not a parameter.
+type SecretKind int32
+
+const (
+	SecretKind_SECRET_KIND_UNSPECIFIED SecretKind = 0 // treated as RANDOM
+	// Random bytes, base64url-encoded. The default, and what an HMAC key,
+	// a session secret or a storage encryption key wants.
+	SecretKind_SECRET_KIND_RANDOM SecretKind = 1
+	// A PEM-encoded RSA private key. An OIDC provider signs ID tokens with
+	// one and cannot generate it on demand, so it must exist before the
+	// provider starts — and it is multi-line, which is why materialization
+	// has to preserve the indentation of the reference it replaces.
+	SecretKind_SECRET_KIND_RSA_PRIVATE_KEY SecretKind = 2
+)
+
+// Enum value maps for SecretKind.
+var (
+	SecretKind_name = map[int32]string{
+		0: "SECRET_KIND_UNSPECIFIED",
+		1: "SECRET_KIND_RANDOM",
+		2: "SECRET_KIND_RSA_PRIVATE_KEY",
+	}
+	SecretKind_value = map[string]int32{
+		"SECRET_KIND_UNSPECIFIED":     0,
+		"SECRET_KIND_RANDOM":          1,
+		"SECRET_KIND_RSA_PRIVATE_KEY": 2,
+	}
+)
+
+func (x SecretKind) Enum() *SecretKind {
+	p := new(SecretKind)
+	*p = x
+	return p
+}
+
+func (x SecretKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SecretKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_wardstone_v1_wardstone_proto_enumTypes[1].Descriptor()
+}
+
+func (SecretKind) Type() protoreflect.EnumType {
+	return &file_wardstone_v1_wardstone_proto_enumTypes[1]
+}
+
+func (x SecretKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SecretKind.Descriptor instead.
+func (SecretKind) EnumDescriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{1}
+}
+
 type JoinRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	JoinToken     string                 `protobuf:"bytes,1,opt,name=join_token,json=joinToken,proto3" json:"join_token,omitempty"` // one-time, minted by installer/Keystone
@@ -4719,15 +4780,16 @@ func (x *TimeSyncStatusResult) GetDetail() string {
 	return ""
 }
 
-// EnsureSecret creates <name> with a locally generated random value if
-// absent (generation-at-install: the value never crosses the wire).
-// rotate=true regenerates even when the secret exists.
 type EnsureSecret struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Random bytes to generate before base64url encoding. 0 = default (32).
-	LengthBytes   uint32 `protobuf:"varint,2,opt,name=length_bytes,json=lengthBytes,proto3" json:"length_bytes,omitempty"`
-	Rotate        bool   `protobuf:"varint,3,opt,name=rotate,proto3" json:"rotate,omitempty"`
+	// Ignored for kinds whose size is not a free parameter.
+	LengthBytes uint32 `protobuf:"varint,2,opt,name=length_bytes,json=lengthBytes,proto3" json:"length_bytes,omitempty"`
+	Rotate      bool   `protobuf:"varint,3,opt,name=rotate,proto3" json:"rotate,omitempty"`
+	// Protocol minor 10. Absent/UNSPECIFIED means RANDOM, so an older
+	// Keystone asking an newer agent for a secret still gets what it meant.
+	Kind          SecretKind `protobuf:"varint,4,opt,name=kind,proto3,enum=wardstone.v1.SecretKind" json:"kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4781,6 +4843,13 @@ func (x *EnsureSecret) GetRotate() bool {
 		return x.Rotate
 	}
 	return false
+}
+
+func (x *EnsureSecret) GetKind() SecretKind {
+	if x != nil {
+		return x.Kind
+	}
+	return SecretKind_SECRET_KIND_UNSPECIFIED
 }
 
 type EnsureSecretResult struct {
@@ -5393,11 +5462,12 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0eTimeSyncStatus\"R\n" +
 	"\x14TimeSyncStatusResult\x12\"\n" +
 	"\fsynchronized\x18\x01 \x01(\bR\fsynchronized\x12\x16\n" +
-	"\x06detail\x18\x02 \x01(\tR\x06detail\"]\n" +
+	"\x06detail\x18\x02 \x01(\tR\x06detail\"\x8b\x01\n" +
 	"\fEnsureSecret\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\flength_bytes\x18\x02 \x01(\rR\vlengthBytes\x12\x16\n" +
-	"\x06rotate\x18\x03 \x01(\bR\x06rotate\"H\n" +
+	"\x06rotate\x18\x03 \x01(\bR\x06rotate\x12,\n" +
+	"\x04kind\x18\x04 \x01(\x0e2\x18.wardstone.v1.SecretKindR\x04kind\"H\n" +
 	"\x12EnsureSecretResult\x12\x18\n" +
 	"\aexisted\x18\x01 \x01(\bR\aexisted\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\rR\aversion\"5\n" +
@@ -5421,7 +5491,12 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x14ERROR_CODE_FORBIDDEN\x10\x02\x12\x18\n" +
 	"\x14ERROR_CODE_NOT_FOUND\x10\x03\x12\x16\n" +
 	"\x12ERROR_CODE_RUNTIME\x10\x04\x12\x1b\n" +
-	"\x17ERROR_CODE_VERIFICATION\x10\x052\xdc\x01\n" +
+	"\x17ERROR_CODE_VERIFICATION\x10\x05*b\n" +
+	"\n" +
+	"SecretKind\x12\x1b\n" +
+	"\x17SECRET_KIND_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12SECRET_KIND_RANDOM\x10\x01\x12\x1f\n" +
+	"\x1bSECRET_KIND_RSA_PRIVATE_KEY\x10\x022\xdc\x01\n" +
 	"\x0fKeystoneGateway\x12=\n" +
 	"\x04Join\x12\x19.wardstone.v1.JoinRequest\x1a\x1a.wardstone.v1.JoinResponse\x12H\n" +
 	"\aSession\x12\x1a.wardstone.v1.AgentMessage\x1a\x1d.wardstone.v1.KeystoneMessage(\x010\x01\x12@\n" +
@@ -5439,170 +5514,172 @@ func file_wardstone_v1_wardstone_proto_rawDescGZIP() []byte {
 	return file_wardstone_v1_wardstone_proto_rawDescData
 }
 
-var file_wardstone_v1_wardstone_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_wardstone_v1_wardstone_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 76)
 var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(ErrorCode)(0),                    // 0: wardstone.v1.ErrorCode
-	(*JoinRequest)(nil),               // 1: wardstone.v1.JoinRequest
-	(*JoinResponse)(nil),              // 2: wardstone.v1.JoinResponse
-	(*RenewRequest)(nil),              // 3: wardstone.v1.RenewRequest
-	(*RenewResponse)(nil),             // 4: wardstone.v1.RenewResponse
-	(*AgentMessage)(nil),              // 5: wardstone.v1.AgentMessage
-	(*Hello)(nil),                     // 6: wardstone.v1.Hello
-	(*KeystoneMessage)(nil),           // 7: wardstone.v1.KeystoneMessage
-	(*Operation)(nil),                 // 8: wardstone.v1.Operation
-	(*OpResult)(nil),                  // 9: wardstone.v1.OpResult
-	(*OpError)(nil),                   // 10: wardstone.v1.OpError
-	(*EnsureContainer)(nil),           // 11: wardstone.v1.EnsureContainer
-	(*PortBinding)(nil),               // 12: wardstone.v1.PortBinding
-	(*Mount)(nil),                     // 13: wardstone.v1.Mount
-	(*EnsureContainerResult)(nil),     // 14: wardstone.v1.EnsureContainerResult
-	(*StopContainer)(nil),             // 15: wardstone.v1.StopContainer
-	(*StopContainerResult)(nil),       // 16: wardstone.v1.StopContainerResult
-	(*ContainerLogs)(nil),             // 17: wardstone.v1.ContainerLogs
-	(*ContainerLogsResult)(nil),       // 18: wardstone.v1.ContainerLogsResult
-	(*PullImage)(nil),                 // 19: wardstone.v1.PullImage
-	(*PullImageResult)(nil),           // 20: wardstone.v1.PullImageResult
-	(*RemoveContainer)(nil),           // 21: wardstone.v1.RemoveContainer
-	(*RemoveContainerResult)(nil),     // 22: wardstone.v1.RemoveContainerResult
-	(*ContainerStats)(nil),            // 23: wardstone.v1.ContainerStats
-	(*ContainerStatsResult)(nil),      // 24: wardstone.v1.ContainerStatsResult
-	(*InspectContainer)(nil),          // 25: wardstone.v1.InspectContainer
-	(*InspectContainerResult)(nil),    // 26: wardstone.v1.InspectContainerResult
-	(*PruneImages)(nil),               // 27: wardstone.v1.PruneImages
-	(*PruneImagesResult)(nil),         // 28: wardstone.v1.PruneImagesResult
-	(*EnsureVolume)(nil),              // 29: wardstone.v1.EnsureVolume
-	(*EnsureVolumeResult)(nil),        // 30: wardstone.v1.EnsureVolumeResult
-	(*SnapshotDir)(nil),               // 31: wardstone.v1.SnapshotDir
-	(*SnapshotDirResult)(nil),         // 32: wardstone.v1.SnapshotDirResult
-	(*MeasureUsage)(nil),              // 33: wardstone.v1.MeasureUsage
-	(*MeasureUsageResult)(nil),        // 34: wardstone.v1.MeasureUsageResult
-	(*WriteManagedFile)(nil),          // 35: wardstone.v1.WriteManagedFile
-	(*WriteManagedFileResult)(nil),    // 36: wardstone.v1.WriteManagedFileResult
-	(*ReadManagedFile)(nil),           // 37: wardstone.v1.ReadManagedFile
-	(*ReadManagedFileResult)(nil),     // 38: wardstone.v1.ReadManagedFileResult
-	(*HostFacts)(nil),                 // 39: wardstone.v1.HostFacts
-	(*HostFactsResult)(nil),           // 40: wardstone.v1.HostFactsResult
-	(*Health)(nil),                    // 41: wardstone.v1.Health
-	(*HealthResult)(nil),              // 42: wardstone.v1.HealthResult
-	(*SelfUpdate)(nil),                // 43: wardstone.v1.SelfUpdate
-	(*SelfUpdateResult)(nil),          // 44: wardstone.v1.SelfUpdateResult
-	(*ListBlockDevices)(nil),          // 45: wardstone.v1.ListBlockDevices
-	(*BlockDevice)(nil),               // 46: wardstone.v1.BlockDevice
-	(*ListBlockDevicesResult)(nil),    // 47: wardstone.v1.ListBlockDevicesResult
-	(*EnsureMount)(nil),               // 48: wardstone.v1.EnsureMount
-	(*EnsureMountResult)(nil),         // 49: wardstone.v1.EnsureMountResult
-	(*TestNfs)(nil),                   // 50: wardstone.v1.TestNfs
-	(*TestNfsResult)(nil),             // 51: wardstone.v1.TestNfsResult
-	(*TestSmb)(nil),                   // 52: wardstone.v1.TestSmb
-	(*TestSmbResult)(nil),             // 53: wardstone.v1.TestSmbResult
-	(*ListPorts)(nil),                 // 54: wardstone.v1.ListPorts
-	(*ListeningPort)(nil),             // 55: wardstone.v1.ListeningPort
-	(*ListPortsResult)(nil),           // 56: wardstone.v1.ListPortsResult
-	(*ProbeTcp)(nil),                  // 57: wardstone.v1.ProbeTcp
-	(*ProbeTcpResult)(nil),            // 58: wardstone.v1.ProbeTcpResult
-	(*ProbeHttp)(nil),                 // 59: wardstone.v1.ProbeHttp
-	(*ProbeHttpResult)(nil),           // 60: wardstone.v1.ProbeHttpResult
-	(*EnsureDockerNetwork)(nil),       // 61: wardstone.v1.EnsureDockerNetwork
-	(*EnsureDockerNetworkResult)(nil), // 62: wardstone.v1.EnsureDockerNetworkResult
-	(*SystemdUnitStatus)(nil),         // 63: wardstone.v1.SystemdUnitStatus
-	(*SystemdUnitStatusResult)(nil),   // 64: wardstone.v1.SystemdUnitStatusResult
-	(*TimeSyncStatus)(nil),            // 65: wardstone.v1.TimeSyncStatus
-	(*TimeSyncStatusResult)(nil),      // 66: wardstone.v1.TimeSyncStatusResult
-	(*EnsureSecret)(nil),              // 67: wardstone.v1.EnsureSecret
-	(*EnsureSecretResult)(nil),        // 68: wardstone.v1.EnsureSecretResult
-	(*PutSecret)(nil),                 // 69: wardstone.v1.PutSecret
-	(*PutSecretResult)(nil),           // 70: wardstone.v1.PutSecretResult
-	(*ListSecrets)(nil),               // 71: wardstone.v1.ListSecrets
-	(*SecretInfo)(nil),                // 72: wardstone.v1.SecretInfo
-	(*ListSecretsResult)(nil),         // 73: wardstone.v1.ListSecretsResult
-	nil,                               // 74: wardstone.v1.EnsureContainer.EnvEntry
-	nil,                               // 75: wardstone.v1.EnsureContainer.LabelsEntry
-	nil,                               // 76: wardstone.v1.InspectContainerResult.LabelsEntry
+	(SecretKind)(0),                   // 1: wardstone.v1.SecretKind
+	(*JoinRequest)(nil),               // 2: wardstone.v1.JoinRequest
+	(*JoinResponse)(nil),              // 3: wardstone.v1.JoinResponse
+	(*RenewRequest)(nil),              // 4: wardstone.v1.RenewRequest
+	(*RenewResponse)(nil),             // 5: wardstone.v1.RenewResponse
+	(*AgentMessage)(nil),              // 6: wardstone.v1.AgentMessage
+	(*Hello)(nil),                     // 7: wardstone.v1.Hello
+	(*KeystoneMessage)(nil),           // 8: wardstone.v1.KeystoneMessage
+	(*Operation)(nil),                 // 9: wardstone.v1.Operation
+	(*OpResult)(nil),                  // 10: wardstone.v1.OpResult
+	(*OpError)(nil),                   // 11: wardstone.v1.OpError
+	(*EnsureContainer)(nil),           // 12: wardstone.v1.EnsureContainer
+	(*PortBinding)(nil),               // 13: wardstone.v1.PortBinding
+	(*Mount)(nil),                     // 14: wardstone.v1.Mount
+	(*EnsureContainerResult)(nil),     // 15: wardstone.v1.EnsureContainerResult
+	(*StopContainer)(nil),             // 16: wardstone.v1.StopContainer
+	(*StopContainerResult)(nil),       // 17: wardstone.v1.StopContainerResult
+	(*ContainerLogs)(nil),             // 18: wardstone.v1.ContainerLogs
+	(*ContainerLogsResult)(nil),       // 19: wardstone.v1.ContainerLogsResult
+	(*PullImage)(nil),                 // 20: wardstone.v1.PullImage
+	(*PullImageResult)(nil),           // 21: wardstone.v1.PullImageResult
+	(*RemoveContainer)(nil),           // 22: wardstone.v1.RemoveContainer
+	(*RemoveContainerResult)(nil),     // 23: wardstone.v1.RemoveContainerResult
+	(*ContainerStats)(nil),            // 24: wardstone.v1.ContainerStats
+	(*ContainerStatsResult)(nil),      // 25: wardstone.v1.ContainerStatsResult
+	(*InspectContainer)(nil),          // 26: wardstone.v1.InspectContainer
+	(*InspectContainerResult)(nil),    // 27: wardstone.v1.InspectContainerResult
+	(*PruneImages)(nil),               // 28: wardstone.v1.PruneImages
+	(*PruneImagesResult)(nil),         // 29: wardstone.v1.PruneImagesResult
+	(*EnsureVolume)(nil),              // 30: wardstone.v1.EnsureVolume
+	(*EnsureVolumeResult)(nil),        // 31: wardstone.v1.EnsureVolumeResult
+	(*SnapshotDir)(nil),               // 32: wardstone.v1.SnapshotDir
+	(*SnapshotDirResult)(nil),         // 33: wardstone.v1.SnapshotDirResult
+	(*MeasureUsage)(nil),              // 34: wardstone.v1.MeasureUsage
+	(*MeasureUsageResult)(nil),        // 35: wardstone.v1.MeasureUsageResult
+	(*WriteManagedFile)(nil),          // 36: wardstone.v1.WriteManagedFile
+	(*WriteManagedFileResult)(nil),    // 37: wardstone.v1.WriteManagedFileResult
+	(*ReadManagedFile)(nil),           // 38: wardstone.v1.ReadManagedFile
+	(*ReadManagedFileResult)(nil),     // 39: wardstone.v1.ReadManagedFileResult
+	(*HostFacts)(nil),                 // 40: wardstone.v1.HostFacts
+	(*HostFactsResult)(nil),           // 41: wardstone.v1.HostFactsResult
+	(*Health)(nil),                    // 42: wardstone.v1.Health
+	(*HealthResult)(nil),              // 43: wardstone.v1.HealthResult
+	(*SelfUpdate)(nil),                // 44: wardstone.v1.SelfUpdate
+	(*SelfUpdateResult)(nil),          // 45: wardstone.v1.SelfUpdateResult
+	(*ListBlockDevices)(nil),          // 46: wardstone.v1.ListBlockDevices
+	(*BlockDevice)(nil),               // 47: wardstone.v1.BlockDevice
+	(*ListBlockDevicesResult)(nil),    // 48: wardstone.v1.ListBlockDevicesResult
+	(*EnsureMount)(nil),               // 49: wardstone.v1.EnsureMount
+	(*EnsureMountResult)(nil),         // 50: wardstone.v1.EnsureMountResult
+	(*TestNfs)(nil),                   // 51: wardstone.v1.TestNfs
+	(*TestNfsResult)(nil),             // 52: wardstone.v1.TestNfsResult
+	(*TestSmb)(nil),                   // 53: wardstone.v1.TestSmb
+	(*TestSmbResult)(nil),             // 54: wardstone.v1.TestSmbResult
+	(*ListPorts)(nil),                 // 55: wardstone.v1.ListPorts
+	(*ListeningPort)(nil),             // 56: wardstone.v1.ListeningPort
+	(*ListPortsResult)(nil),           // 57: wardstone.v1.ListPortsResult
+	(*ProbeTcp)(nil),                  // 58: wardstone.v1.ProbeTcp
+	(*ProbeTcpResult)(nil),            // 59: wardstone.v1.ProbeTcpResult
+	(*ProbeHttp)(nil),                 // 60: wardstone.v1.ProbeHttp
+	(*ProbeHttpResult)(nil),           // 61: wardstone.v1.ProbeHttpResult
+	(*EnsureDockerNetwork)(nil),       // 62: wardstone.v1.EnsureDockerNetwork
+	(*EnsureDockerNetworkResult)(nil), // 63: wardstone.v1.EnsureDockerNetworkResult
+	(*SystemdUnitStatus)(nil),         // 64: wardstone.v1.SystemdUnitStatus
+	(*SystemdUnitStatusResult)(nil),   // 65: wardstone.v1.SystemdUnitStatusResult
+	(*TimeSyncStatus)(nil),            // 66: wardstone.v1.TimeSyncStatus
+	(*TimeSyncStatusResult)(nil),      // 67: wardstone.v1.TimeSyncStatusResult
+	(*EnsureSecret)(nil),              // 68: wardstone.v1.EnsureSecret
+	(*EnsureSecretResult)(nil),        // 69: wardstone.v1.EnsureSecretResult
+	(*PutSecret)(nil),                 // 70: wardstone.v1.PutSecret
+	(*PutSecretResult)(nil),           // 71: wardstone.v1.PutSecretResult
+	(*ListSecrets)(nil),               // 72: wardstone.v1.ListSecrets
+	(*SecretInfo)(nil),                // 73: wardstone.v1.SecretInfo
+	(*ListSecretsResult)(nil),         // 74: wardstone.v1.ListSecretsResult
+	nil,                               // 75: wardstone.v1.EnsureContainer.EnvEntry
+	nil,                               // 76: wardstone.v1.EnsureContainer.LabelsEntry
+	nil,                               // 77: wardstone.v1.InspectContainerResult.LabelsEntry
 }
 var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
-	6,  // 0: wardstone.v1.AgentMessage.hello:type_name -> wardstone.v1.Hello
-	9,  // 1: wardstone.v1.AgentMessage.result:type_name -> wardstone.v1.OpResult
-	8,  // 2: wardstone.v1.KeystoneMessage.op:type_name -> wardstone.v1.Operation
-	11, // 3: wardstone.v1.Operation.ensure_container:type_name -> wardstone.v1.EnsureContainer
-	15, // 4: wardstone.v1.Operation.stop_container:type_name -> wardstone.v1.StopContainer
-	17, // 5: wardstone.v1.Operation.container_logs:type_name -> wardstone.v1.ContainerLogs
-	19, // 6: wardstone.v1.Operation.pull_image:type_name -> wardstone.v1.PullImage
-	35, // 7: wardstone.v1.Operation.write_managed_file:type_name -> wardstone.v1.WriteManagedFile
-	37, // 8: wardstone.v1.Operation.read_managed_file:type_name -> wardstone.v1.ReadManagedFile
-	39, // 9: wardstone.v1.Operation.host_facts:type_name -> wardstone.v1.HostFacts
-	41, // 10: wardstone.v1.Operation.health:type_name -> wardstone.v1.Health
-	43, // 11: wardstone.v1.Operation.self_update:type_name -> wardstone.v1.SelfUpdate
-	21, // 12: wardstone.v1.Operation.remove_container:type_name -> wardstone.v1.RemoveContainer
-	23, // 13: wardstone.v1.Operation.container_stats:type_name -> wardstone.v1.ContainerStats
-	27, // 14: wardstone.v1.Operation.prune_images:type_name -> wardstone.v1.PruneImages
-	29, // 15: wardstone.v1.Operation.ensure_volume:type_name -> wardstone.v1.EnsureVolume
-	31, // 16: wardstone.v1.Operation.snapshot_dir:type_name -> wardstone.v1.SnapshotDir
-	33, // 17: wardstone.v1.Operation.measure_usage:type_name -> wardstone.v1.MeasureUsage
-	45, // 18: wardstone.v1.Operation.list_block_devices:type_name -> wardstone.v1.ListBlockDevices
-	48, // 19: wardstone.v1.Operation.ensure_mount:type_name -> wardstone.v1.EnsureMount
-	50, // 20: wardstone.v1.Operation.test_nfs:type_name -> wardstone.v1.TestNfs
-	52, // 21: wardstone.v1.Operation.test_smb:type_name -> wardstone.v1.TestSmb
-	54, // 22: wardstone.v1.Operation.list_ports:type_name -> wardstone.v1.ListPorts
-	57, // 23: wardstone.v1.Operation.probe_tcp:type_name -> wardstone.v1.ProbeTcp
-	59, // 24: wardstone.v1.Operation.probe_http:type_name -> wardstone.v1.ProbeHttp
-	61, // 25: wardstone.v1.Operation.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetwork
-	63, // 26: wardstone.v1.Operation.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatus
-	65, // 27: wardstone.v1.Operation.time_sync_status:type_name -> wardstone.v1.TimeSyncStatus
-	25, // 28: wardstone.v1.Operation.inspect_container:type_name -> wardstone.v1.InspectContainer
-	67, // 29: wardstone.v1.Operation.ensure_secret:type_name -> wardstone.v1.EnsureSecret
-	69, // 30: wardstone.v1.Operation.put_secret:type_name -> wardstone.v1.PutSecret
-	71, // 31: wardstone.v1.Operation.list_secrets:type_name -> wardstone.v1.ListSecrets
-	10, // 32: wardstone.v1.OpResult.error:type_name -> wardstone.v1.OpError
-	14, // 33: wardstone.v1.OpResult.ensure_container:type_name -> wardstone.v1.EnsureContainerResult
-	16, // 34: wardstone.v1.OpResult.stop_container:type_name -> wardstone.v1.StopContainerResult
-	18, // 35: wardstone.v1.OpResult.container_logs:type_name -> wardstone.v1.ContainerLogsResult
-	20, // 36: wardstone.v1.OpResult.pull_image:type_name -> wardstone.v1.PullImageResult
-	36, // 37: wardstone.v1.OpResult.write_managed_file:type_name -> wardstone.v1.WriteManagedFileResult
-	38, // 38: wardstone.v1.OpResult.read_managed_file:type_name -> wardstone.v1.ReadManagedFileResult
-	40, // 39: wardstone.v1.OpResult.host_facts:type_name -> wardstone.v1.HostFactsResult
-	42, // 40: wardstone.v1.OpResult.health:type_name -> wardstone.v1.HealthResult
-	44, // 41: wardstone.v1.OpResult.self_update:type_name -> wardstone.v1.SelfUpdateResult
-	22, // 42: wardstone.v1.OpResult.remove_container:type_name -> wardstone.v1.RemoveContainerResult
-	24, // 43: wardstone.v1.OpResult.container_stats:type_name -> wardstone.v1.ContainerStatsResult
-	28, // 44: wardstone.v1.OpResult.prune_images:type_name -> wardstone.v1.PruneImagesResult
-	30, // 45: wardstone.v1.OpResult.ensure_volume:type_name -> wardstone.v1.EnsureVolumeResult
-	32, // 46: wardstone.v1.OpResult.snapshot_dir:type_name -> wardstone.v1.SnapshotDirResult
-	34, // 47: wardstone.v1.OpResult.measure_usage:type_name -> wardstone.v1.MeasureUsageResult
-	47, // 48: wardstone.v1.OpResult.list_block_devices:type_name -> wardstone.v1.ListBlockDevicesResult
-	49, // 49: wardstone.v1.OpResult.ensure_mount:type_name -> wardstone.v1.EnsureMountResult
-	51, // 50: wardstone.v1.OpResult.test_nfs:type_name -> wardstone.v1.TestNfsResult
-	53, // 51: wardstone.v1.OpResult.test_smb:type_name -> wardstone.v1.TestSmbResult
-	56, // 52: wardstone.v1.OpResult.list_ports:type_name -> wardstone.v1.ListPortsResult
-	58, // 53: wardstone.v1.OpResult.probe_tcp:type_name -> wardstone.v1.ProbeTcpResult
-	60, // 54: wardstone.v1.OpResult.probe_http:type_name -> wardstone.v1.ProbeHttpResult
-	62, // 55: wardstone.v1.OpResult.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetworkResult
-	64, // 56: wardstone.v1.OpResult.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatusResult
-	66, // 57: wardstone.v1.OpResult.time_sync_status:type_name -> wardstone.v1.TimeSyncStatusResult
-	26, // 58: wardstone.v1.OpResult.inspect_container:type_name -> wardstone.v1.InspectContainerResult
-	68, // 59: wardstone.v1.OpResult.ensure_secret:type_name -> wardstone.v1.EnsureSecretResult
-	70, // 60: wardstone.v1.OpResult.put_secret:type_name -> wardstone.v1.PutSecretResult
-	73, // 61: wardstone.v1.OpResult.list_secrets:type_name -> wardstone.v1.ListSecretsResult
+	7,  // 0: wardstone.v1.AgentMessage.hello:type_name -> wardstone.v1.Hello
+	10, // 1: wardstone.v1.AgentMessage.result:type_name -> wardstone.v1.OpResult
+	9,  // 2: wardstone.v1.KeystoneMessage.op:type_name -> wardstone.v1.Operation
+	12, // 3: wardstone.v1.Operation.ensure_container:type_name -> wardstone.v1.EnsureContainer
+	16, // 4: wardstone.v1.Operation.stop_container:type_name -> wardstone.v1.StopContainer
+	18, // 5: wardstone.v1.Operation.container_logs:type_name -> wardstone.v1.ContainerLogs
+	20, // 6: wardstone.v1.Operation.pull_image:type_name -> wardstone.v1.PullImage
+	36, // 7: wardstone.v1.Operation.write_managed_file:type_name -> wardstone.v1.WriteManagedFile
+	38, // 8: wardstone.v1.Operation.read_managed_file:type_name -> wardstone.v1.ReadManagedFile
+	40, // 9: wardstone.v1.Operation.host_facts:type_name -> wardstone.v1.HostFacts
+	42, // 10: wardstone.v1.Operation.health:type_name -> wardstone.v1.Health
+	44, // 11: wardstone.v1.Operation.self_update:type_name -> wardstone.v1.SelfUpdate
+	22, // 12: wardstone.v1.Operation.remove_container:type_name -> wardstone.v1.RemoveContainer
+	24, // 13: wardstone.v1.Operation.container_stats:type_name -> wardstone.v1.ContainerStats
+	28, // 14: wardstone.v1.Operation.prune_images:type_name -> wardstone.v1.PruneImages
+	30, // 15: wardstone.v1.Operation.ensure_volume:type_name -> wardstone.v1.EnsureVolume
+	32, // 16: wardstone.v1.Operation.snapshot_dir:type_name -> wardstone.v1.SnapshotDir
+	34, // 17: wardstone.v1.Operation.measure_usage:type_name -> wardstone.v1.MeasureUsage
+	46, // 18: wardstone.v1.Operation.list_block_devices:type_name -> wardstone.v1.ListBlockDevices
+	49, // 19: wardstone.v1.Operation.ensure_mount:type_name -> wardstone.v1.EnsureMount
+	51, // 20: wardstone.v1.Operation.test_nfs:type_name -> wardstone.v1.TestNfs
+	53, // 21: wardstone.v1.Operation.test_smb:type_name -> wardstone.v1.TestSmb
+	55, // 22: wardstone.v1.Operation.list_ports:type_name -> wardstone.v1.ListPorts
+	58, // 23: wardstone.v1.Operation.probe_tcp:type_name -> wardstone.v1.ProbeTcp
+	60, // 24: wardstone.v1.Operation.probe_http:type_name -> wardstone.v1.ProbeHttp
+	62, // 25: wardstone.v1.Operation.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetwork
+	64, // 26: wardstone.v1.Operation.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatus
+	66, // 27: wardstone.v1.Operation.time_sync_status:type_name -> wardstone.v1.TimeSyncStatus
+	26, // 28: wardstone.v1.Operation.inspect_container:type_name -> wardstone.v1.InspectContainer
+	68, // 29: wardstone.v1.Operation.ensure_secret:type_name -> wardstone.v1.EnsureSecret
+	70, // 30: wardstone.v1.Operation.put_secret:type_name -> wardstone.v1.PutSecret
+	72, // 31: wardstone.v1.Operation.list_secrets:type_name -> wardstone.v1.ListSecrets
+	11, // 32: wardstone.v1.OpResult.error:type_name -> wardstone.v1.OpError
+	15, // 33: wardstone.v1.OpResult.ensure_container:type_name -> wardstone.v1.EnsureContainerResult
+	17, // 34: wardstone.v1.OpResult.stop_container:type_name -> wardstone.v1.StopContainerResult
+	19, // 35: wardstone.v1.OpResult.container_logs:type_name -> wardstone.v1.ContainerLogsResult
+	21, // 36: wardstone.v1.OpResult.pull_image:type_name -> wardstone.v1.PullImageResult
+	37, // 37: wardstone.v1.OpResult.write_managed_file:type_name -> wardstone.v1.WriteManagedFileResult
+	39, // 38: wardstone.v1.OpResult.read_managed_file:type_name -> wardstone.v1.ReadManagedFileResult
+	41, // 39: wardstone.v1.OpResult.host_facts:type_name -> wardstone.v1.HostFactsResult
+	43, // 40: wardstone.v1.OpResult.health:type_name -> wardstone.v1.HealthResult
+	45, // 41: wardstone.v1.OpResult.self_update:type_name -> wardstone.v1.SelfUpdateResult
+	23, // 42: wardstone.v1.OpResult.remove_container:type_name -> wardstone.v1.RemoveContainerResult
+	25, // 43: wardstone.v1.OpResult.container_stats:type_name -> wardstone.v1.ContainerStatsResult
+	29, // 44: wardstone.v1.OpResult.prune_images:type_name -> wardstone.v1.PruneImagesResult
+	31, // 45: wardstone.v1.OpResult.ensure_volume:type_name -> wardstone.v1.EnsureVolumeResult
+	33, // 46: wardstone.v1.OpResult.snapshot_dir:type_name -> wardstone.v1.SnapshotDirResult
+	35, // 47: wardstone.v1.OpResult.measure_usage:type_name -> wardstone.v1.MeasureUsageResult
+	48, // 48: wardstone.v1.OpResult.list_block_devices:type_name -> wardstone.v1.ListBlockDevicesResult
+	50, // 49: wardstone.v1.OpResult.ensure_mount:type_name -> wardstone.v1.EnsureMountResult
+	52, // 50: wardstone.v1.OpResult.test_nfs:type_name -> wardstone.v1.TestNfsResult
+	54, // 51: wardstone.v1.OpResult.test_smb:type_name -> wardstone.v1.TestSmbResult
+	57, // 52: wardstone.v1.OpResult.list_ports:type_name -> wardstone.v1.ListPortsResult
+	59, // 53: wardstone.v1.OpResult.probe_tcp:type_name -> wardstone.v1.ProbeTcpResult
+	61, // 54: wardstone.v1.OpResult.probe_http:type_name -> wardstone.v1.ProbeHttpResult
+	63, // 55: wardstone.v1.OpResult.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetworkResult
+	65, // 56: wardstone.v1.OpResult.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatusResult
+	67, // 57: wardstone.v1.OpResult.time_sync_status:type_name -> wardstone.v1.TimeSyncStatusResult
+	27, // 58: wardstone.v1.OpResult.inspect_container:type_name -> wardstone.v1.InspectContainerResult
+	69, // 59: wardstone.v1.OpResult.ensure_secret:type_name -> wardstone.v1.EnsureSecretResult
+	71, // 60: wardstone.v1.OpResult.put_secret:type_name -> wardstone.v1.PutSecretResult
+	74, // 61: wardstone.v1.OpResult.list_secrets:type_name -> wardstone.v1.ListSecretsResult
 	0,  // 62: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
-	74, // 63: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
-	12, // 64: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
-	13, // 65: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
-	75, // 66: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
-	76, // 67: wardstone.v1.InspectContainerResult.labels:type_name -> wardstone.v1.InspectContainerResult.LabelsEntry
-	46, // 68: wardstone.v1.ListBlockDevicesResult.devices:type_name -> wardstone.v1.BlockDevice
-	55, // 69: wardstone.v1.ListPortsResult.ports:type_name -> wardstone.v1.ListeningPort
-	72, // 70: wardstone.v1.ListSecretsResult.secrets:type_name -> wardstone.v1.SecretInfo
-	1,  // 71: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
-	5,  // 72: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
-	3,  // 73: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
-	2,  // 74: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
-	7,  // 75: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
-	4,  // 76: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
-	74, // [74:77] is the sub-list for method output_type
-	71, // [71:74] is the sub-list for method input_type
-	71, // [71:71] is the sub-list for extension type_name
-	71, // [71:71] is the sub-list for extension extendee
-	0,  // [0:71] is the sub-list for field type_name
+	75, // 63: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
+	13, // 64: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
+	14, // 65: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
+	76, // 66: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
+	77, // 67: wardstone.v1.InspectContainerResult.labels:type_name -> wardstone.v1.InspectContainerResult.LabelsEntry
+	47, // 68: wardstone.v1.ListBlockDevicesResult.devices:type_name -> wardstone.v1.BlockDevice
+	56, // 69: wardstone.v1.ListPortsResult.ports:type_name -> wardstone.v1.ListeningPort
+	1,  // 70: wardstone.v1.EnsureSecret.kind:type_name -> wardstone.v1.SecretKind
+	73, // 71: wardstone.v1.ListSecretsResult.secrets:type_name -> wardstone.v1.SecretInfo
+	2,  // 72: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
+	6,  // 73: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
+	4,  // 74: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
+	3,  // 75: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
+	8,  // 76: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
+	5,  // 77: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
+	75, // [75:78] is the sub-list for method output_type
+	72, // [72:75] is the sub-list for method input_type
+	72, // [72:72] is the sub-list for extension type_name
+	72, // [72:72] is the sub-list for extension extendee
+	0,  // [0:72] is the sub-list for field type_name
 }
 
 func init() { file_wardstone_v1_wardstone_proto_init() }
@@ -5682,7 +5759,7 @@ func file_wardstone_v1_wardstone_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wardstone_v1_wardstone_proto_rawDesc), len(file_wardstone_v1_wardstone_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   76,
 			NumExtensions: 0,
 			NumServices:   1,

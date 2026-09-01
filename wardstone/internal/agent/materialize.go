@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 	"golang.org/x/crypto/pbkdf2"
@@ -59,10 +60,22 @@ var fileSecretRefRegexp = regexp.MustCompile(`(pbkdf2:)?secret/([A-Za-z0-9][A-Za
 // success, it is a provider that starts and rejects every login.
 func (a *Agent) materializeFileContent(path string, content []byte) ([]byte, *wsv1.OpError) {
 	var oerr *wsv1.OpError
+	var consumed int // bytes of content already scanned, for column lookup
 	out := fileSecretRefRegexp.ReplaceAllFunc(content, func(m []byte) []byte {
 		if oerr != nil {
 			return m
 		}
+		// ReplaceAllFunc gives no offset, so track where this match
+		// starts by searching forward from the last one. References are
+		// unique enough per file that this is exact, and the fallback
+		// (column 0) is the no-indentation case anyway.
+		idx := bytes.Index(content[consumed:], m)
+		start := consumed
+		if idx >= 0 {
+			start = consumed + idx
+			consumed = start + len(m)
+		}
+
 		sub := fileSecretRefRegexp.FindSubmatch(m)
 		hashed, name := len(sub[1]) > 0, string(sub[2])
 		value, err := a.openSecret(name)
@@ -75,20 +88,66 @@ func (a *Agent) materializeFileContent(path string, content []byte) ([]byte, *ws
 			}
 			return m
 		}
-		if !hashed {
-			return []byte(value)
+		if hashed {
+			digest, derr := pbkdf2Sha512Digest(value)
+			if derr != nil {
+				oerr = opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "%s: hashing secret/%s: %v", path, name, derr)
+				return m
+			}
+			value = digest
 		}
-		digest, derr := pbkdf2Sha512Digest(value)
-		if derr != nil {
-			oerr = opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "%s: hashing secret/%s: %v", path, name, derr)
-			return m
-		}
-		return []byte(digest)
+		return []byte(indentContinuationLines(value, columnOf(content, start)))
 	})
 	if oerr != nil {
 		return nil, oerr
 	}
 	return out, nil
+}
+
+// columnOf returns how many bytes into its line the offset sits.
+func columnOf(content []byte, offset int) int {
+	if offset <= 0 || offset > len(content) {
+		return 0
+	}
+	if nl := bytes.LastIndexByte(content[:offset], '\n'); nl >= 0 {
+		return offset - nl - 1
+	}
+	return offset
+}
+
+// indentContinuationLines re-indents every line of a multi-line value
+// after the first, to the column the reference occupied.
+//
+// A single-line value is returned untouched, which is every secret except
+// one shape: a PEM private key. The identity provider signs ID tokens
+// with an RSA key it cannot generate on demand, and Authelia takes that
+// key INLINE in its config, inside an indented YAML block:
+//
+//	jwks:
+//	  - key: |
+//	      secret/authelia-oidc-jwks
+//
+// Substituting a multi-line value there without re-indenting yields a
+// document whose second line has dedented out of the block — invalid
+// YAML, and an identity provider that will not start. Nothing about that
+// is specific to PEM: any multi-line secret in any indented context has
+// the same problem, so the fix belongs here rather than in the renderer
+// that happened to hit it first.
+func indentContinuationLines(value string, column int) string {
+	if column == 0 || !strings.Contains(value, "\n") {
+		return value
+	}
+	pad := strings.Repeat(" ", column)
+	lines := strings.Split(value, "\n")
+	for i := 1; i < len(lines); i++ {
+		// A trailing newline leaves an empty final line; indenting it
+		// would leave trailing whitespace in the document for no reason.
+		if lines[i] == "" {
+			continue
+		}
+		lines[i] = pad + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // pbkdf2Sha512Digest renders a value in the modular-crypt form Authelia

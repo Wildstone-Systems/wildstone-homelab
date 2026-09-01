@@ -20,8 +20,11 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -194,18 +197,11 @@ func (a *Agent) ensureSecret(op *wsv1.EnsureSecret) (*wsv1.OpResult_EnsureSecret
 		}}, nil
 	}
 
-	n := int(op.GetLengthBytes())
-	if n == 0 {
-		n = defaultSecretBytes
+	value, oerr := generateSecretValue(op)
+	if oerr != nil {
+		return nil, oerr
 	}
-	if n > 1024 {
-		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "length_bytes %d exceeds the 1024 cap", n)
-	}
-	raw := make([]byte, n)
-	if _, err := rand.Read(raw); err != nil {
-		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "entropy: %v", err)
-	}
-	version, err := a.sealSecret(op.GetName(), base64.RawURLEncoding.EncodeToString(raw))
+	version, err := a.sealSecret(op.GetName(), value)
 	if err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "sealing secret: %v", err)
 	}
@@ -251,6 +247,46 @@ func (a *Agent) listSecrets() (*wsv1.OpResult_ListSecrets, *wsv1.OpError) {
 		res.Secrets = append(res.Secrets, info)
 	}
 	return &wsv1.OpResult_ListSecrets{ListSecrets: res}, nil
+}
+
+// generateSecretValue produces the material for one EnsureSecret. The
+// kind vocabulary is closed (SecretKind): the agent has to know how to
+// produce each one, so "some other algorithm" is a code change here
+// rather than a parameter a caller can wander into.
+func generateSecretValue(op *wsv1.EnsureSecret) (string, *wsv1.OpError) {
+	switch op.GetKind() {
+	case wsv1.SecretKind_SECRET_KIND_UNSPECIFIED, wsv1.SecretKind_SECRET_KIND_RANDOM:
+		n := int(op.GetLengthBytes())
+		if n == 0 {
+			n = defaultSecretBytes
+		}
+		if n > 1024 {
+			return "", opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "length_bytes %d exceeds the 1024 cap", n)
+		}
+		raw := make([]byte, n)
+		if _, err := rand.Read(raw); err != nil {
+			return "", opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "entropy: %v", err)
+		}
+		return base64.RawURLEncoding.EncodeToString(raw), nil
+
+	case wsv1.SecretKind_SECRET_KIND_RSA_PRIVATE_KEY:
+		// 2048 rather than a caller-chosen size: an OIDC provider signs
+		// ID tokens with this, every relying party has to accept it, and
+		// a size nobody asked for is a compatibility problem rather than
+		// a security win. length_bytes is deliberately ignored.
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			return "", opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "generating rsa key: %v", err)
+		}
+		der, err := x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			return "", opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "encoding rsa key: %v", err)
+		}
+		return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})), nil
+
+	default:
+		return "", opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "unknown secret kind %s", op.GetKind())
+	}
 }
 
 // ---------------------------------------------------------------- materializer
