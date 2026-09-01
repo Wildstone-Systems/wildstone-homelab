@@ -1,0 +1,155 @@
+package reconcile
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+)
+
+func secretResource(name, kind string) resource.Resource {
+	return resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindSecret,
+		Metadata:   resource.Metadata{Name: name, Owner: "capability/identity", Node: "node-a"},
+		Secret:     &resource.SecretSpec{Name: name, Kind: kind},
+	}
+}
+
+func secretReconciler(a Applier) *Reconciler {
+	r := newReconciler(a)
+	r.Approve = func(*plan.Plan) bool { return true }
+	return r
+}
+
+// TestSecretIsEnsuredWithItsDeclaredKind is the whole point of the kind.
+// An OIDC provider signs ID tokens with an RSA key; a random blob is not
+// a key, and before this nothing in Keystone or the CLI ever set
+// EnsureSecret.kind, so protocol minor 10's RSA support was unreachable
+// from the control plane.
+func TestSecretIsEnsuredWithItsDeclaredKind(t *testing.T) {
+	h := startGateway(t, []string{"tok"})
+	agent := newTestAgent(t, h, "node-a", "tok")
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+
+	desired := []resource.Resource{
+		secretResource("authelia-oidc-jwks", "rsa_private_key"),
+		secretResource("authelia-session-secret", ""),
+	}
+	if _, err := secretReconciler(&GatewayApplier{Gateway: h.gw}).Reconcile(context.Background(), "node-a", desired); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got, ok := agent.secretKind("authelia-oidc-jwks")
+	if !ok {
+		t.Fatal("the jwks secret was never ensured")
+	}
+	if got != wsv1.SecretKind_SECRET_KIND_RSA_PRIVATE_KEY {
+		t.Errorf("jwks secret ensured as %v, want RSA — an OIDC provider cannot sign with a random blob", got)
+	}
+	// An empty kind means random, so a package that just needs a
+	// password says nothing.
+	if got, ok := agent.secretKind("authelia-session-secret"); !ok || got != wsv1.SecretKind_SECRET_KIND_RANDOM {
+		t.Errorf("a kindless secret was ensured as %v (present=%v), want RANDOM", got, ok)
+	}
+}
+
+// TestSecretsExistBeforeTheFilesThatReferenceThem is the ordering this
+// kind lives or dies on, and the reason ensureNodeSecrets exists at all
+// rather than relying on kindOrder.
+//
+// Wildstone writes managed files BEFORE any plan step. Those files carry
+// secret references the node resolves at write time, so a secret created
+// by a plan step is created too late: the prereq write fails with
+// NOT_FOUND, a failed prereq aborts the tick, and the plan that would
+// have created the secret never runs. That is a deadlock no retry
+// escapes — which is why this asserts a single tick converges.
+func TestSecretsExistBeforeTheFilesThatReferenceThem(t *testing.T) {
+	h := startGateway(t, []string{"tok"})
+	agent := newTestAgent(t, h, "node-a", "tok")
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+
+	// An OidcClient puts a pbkdf2:secret/<ref> into the merged clients
+	// file, which is a prereq — written before the plan runs.
+	desired := []resource.Resource{
+		oidcClientResource("photos", "photos", "secret/photos-oidc"),
+		secretResource("photos-oidc", ""),
+	}
+	out, err := secretReconciler(&GatewayApplier{Gateway: h.gw}).Reconcile(context.Background(), "node-a", desired)
+	if err != nil {
+		t.Fatalf("first tick failed: %v\n\nA secret the clients file references did not exist when that "+
+			"file was written. Creating it from a plan step is too late: the prereq write aborts the "+
+			"tick before the plan runs, so nothing ever creates it", err)
+	}
+	if !out.Applied {
+		t.Fatalf("first tick did not apply: %+v", out)
+	}
+	if _, ok := agent.secretKind("photos-oidc"); !ok {
+		t.Error("the referenced secret was never ensured")
+	}
+}
+
+// TestSecretDeleteLeavesTheMaterial states the deliberate asymmetry. No
+// op removes a secret, so a Secret leaving desired state records the
+// declaration going away and nothing else. "The plan said delete" must
+// not be read as "the key is gone".
+func TestSecretDeleteLeavesTheMaterial(t *testing.T) {
+	h := startGateway(t, []string{"tok"})
+	agent := newTestAgent(t, h, "node-a", "tok")
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+	r := secretReconciler(&GatewayApplier{Gateway: h.gw})
+
+	desired := []resource.Resource{secretResource("going-away", "")}
+	if _, err := r.Reconcile(context.Background(), "node-a", desired); err != nil {
+		t.Fatalf("create tick: %v", err)
+	}
+	if _, ok := agent.secretKind("going-away"); !ok {
+		t.Fatal("secret was not created")
+	}
+
+	out, err := r.Reconcile(context.Background(), "node-a", nil)
+	if err != nil {
+		t.Fatalf("delete tick: %v", err)
+	}
+	var sawDelete bool
+	for _, s := range out.Steps {
+		if s.Step.Kind == resource.KindSecret && s.Step.Action == plan.ActionDelete {
+			sawDelete = true
+			if !s.Applied || !s.HealthOK {
+				t.Errorf("the delete step did not succeed: %+v", s)
+			}
+		}
+	}
+	if !sawDelete {
+		t.Fatalf("no Secret delete was planned: %+v", out.Plan.Steps)
+	}
+	if _, ok := agent.secretKind("going-away"); !ok {
+		t.Error("the secret's material was removed from the node. Nothing should do that: there is no " +
+			"delete op, and a control plane that destroys key material on a state change is one bad " +
+			"plan away from losing the only copy")
+	}
+}
+
+// TestSecretOrderedBeforeEverythingThatCanReferenceOne pins the plan
+// order. Both a ConfigFile (resolved at write time) and a Container (env
+// references) can name a secret.
+func TestSecretOrderedBeforeEverythingThatCanReferenceOne(t *testing.T) {
+	for _, later := range []resource.Kind{
+		resource.KindConfigFile, resource.KindContainer, resource.KindJob, resource.KindOidcClient,
+	} {
+		if plan.KindOrder(resource.KindSecret) >= plan.KindOrder(later) {
+			t.Errorf("Secret (%d) must sort before %s (%d): %s can carry a secret reference, and the "+
+				"node resolves those at apply time",
+				plan.KindOrder(resource.KindSecret), later, plan.KindOrder(later), later)
+		}
+	}
+}

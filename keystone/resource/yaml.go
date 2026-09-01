@@ -55,6 +55,8 @@ func (r *Resource) specOf() any {
 		return r.ConfigFile
 	case KindJob:
 		return r.Job
+	case KindSecret:
+		return r.Secret
 	default:
 		return nil
 	}
@@ -119,6 +121,8 @@ func (r *Resource) UnmarshalYAML(value *yaml.Node) error {
 		r.ConfigFile = spec.(*ConfigFileSpec)
 	case KindJob:
 		r.Job = spec.(*JobSpec)
+	case KindSecret:
+		r.Secret = spec.(*SecretSpec)
 	}
 	return nil
 }

@@ -85,6 +85,11 @@ func TestReconcileTwoOidcClientsInOnePlanReloadsAutheliaExactlyOnce(t *testing.T
 	desired := []resource.Resource{
 		oidcClientResource("immich", "immich", "secret/immich-oidc"),
 		oidcClientResource("jellyfin", "jellyfin", "secret/jellyfin-oidc"),
+		// The secrets those clients reference. The merged clients file is
+		// written with materialization, so they have to exist before it —
+		// declaring them is how a package says so.
+		secretResource("immich-oidc", ""),
+		secretResource("jellyfin-oidc", ""),
 	}
 	outcome, err := r.Reconcile(context.Background(), "node-a", desired)
 	if err != nil {
@@ -93,8 +98,11 @@ func TestReconcileTwoOidcClientsInOnePlanReloadsAutheliaExactlyOnce(t *testing.T
 	if !outcome.Applied || outcome.PendingApproval || outcome.Rolledback || outcome.Incident != "" {
 		t.Fatalf("unexpected outcome: %+v", outcome)
 	}
-	if len(outcome.Plan.Steps) != 2 {
-		t.Fatalf("expected 2 create steps, got %d: %+v", len(outcome.Plan.Steps), outcome.Plan.Steps)
+	// Counted by kind rather than in total: the plan also carries the
+	// Secret steps those clients depend on, and a test about OIDC
+	// batching should not break when a prerequisite kind is added.
+	if n := stepsOfKind(outcome.Plan.Steps, resource.KindOidcClient); n != 2 {
+		t.Fatalf("expected 2 OidcClient steps, got %d: %+v", n, outcome.Plan.Steps)
 	}
 
 	immichFrag := agent.readOidcFragmentForTest(t, "immich")
@@ -182,7 +190,10 @@ func TestReconcileOidcClientReconvergeIsNoOpAndDoesNotReload(t *testing.T) {
 	r := newReconciler(&GatewayApplier{Gateway: h.gw})
 	r.ReloadAutheliaFn = rc.fn
 
-	desired := []resource.Resource{oidcClientResource("immich", "immich", "secret/immich-oidc")}
+	desired := []resource.Resource{
+		oidcClientResource("immich", "immich", "secret/immich-oidc"),
+		secretResource("immich-oidc", ""),
+	}
 	first, err := r.Reconcile(context.Background(), "node-a", desired)
 	if err != nil || !first.Applied {
 		t.Fatalf("first reconcile: outcome=%+v err=%v", first, err)
@@ -278,6 +289,7 @@ func TestReconcileOidcClientAndLdapGroupTogetherOneNodeMixedPlan(t *testing.T) {
 		containerResource("immich-server", testDigestImage),
 		ldapGroupResource("photos-users"),
 		oidcClientResource("immich", "immich", "secret/immich-oidc"),
+		secretResource("immich-oidc", ""),
 	}
 	outcome, err := r.Reconcile(context.Background(), "node-a", desired)
 	if err != nil {
@@ -286,11 +298,17 @@ func TestReconcileOidcClientAndLdapGroupTogetherOneNodeMixedPlan(t *testing.T) {
 	if !outcome.Applied || outcome.Incident != "" || outcome.Rolledback {
 		t.Fatalf("unexpected outcome: %+v", outcome)
 	}
-	if len(outcome.Plan.Steps) != 3 {
-		t.Fatalf("expected 3 steps, got %d: %+v", len(outcome.Plan.Steps), outcome.Plan.Steps)
+	if n := stepsOfKind(outcome.Plan.Steps, resource.KindOidcClient) +
+		stepsOfKind(outcome.Plan.Steps, resource.KindLdapGroup) +
+		stepsOfKind(outcome.Plan.Steps, resource.KindContainer); n != 3 {
+		t.Fatalf("expected 3 non-Secret steps, got %d: %+v", n, outcome.Plan.Steps)
 	}
-	// ADR-W005 S3a ordering: LdapGroup, then OidcClient, then Container.
-	wantOrder := []resource.Kind{resource.KindLdapGroup, resource.KindOidcClient, resource.KindContainer}
+	// ADR-W005 S3a ordering: LdapGroup, then OidcClient, then Container —
+	// preceded by the Secret the client references, which must exist
+	// before the merged clients file that names it is written.
+	wantOrder := []resource.Kind{
+		resource.KindSecret, resource.KindLdapGroup, resource.KindOidcClient, resource.KindContainer,
+	}
 	for i, step := range outcome.Plan.Steps {
 		if step.Kind != wantOrder[i] {
 			t.Errorf("step %d: got kind %s, want %s", i, step.Kind, wantOrder[i])
@@ -302,4 +320,16 @@ func TestReconcileOidcClientAndLdapGroupTogetherOneNodeMixedPlan(t *testing.T) {
 	if got := rc.count(); got != 1 {
 		t.Fatalf("expected exactly 1 Authelia reload for the single OidcClient step, got %d", got)
 	}
+}
+
+// stepsOfKind counts plan steps of one kind, so a test about one kind's
+// behaviour is not a hostage to what else the plan legitimately needs.
+func stepsOfKind(steps []plan.PlanStep, k resource.Kind) int {
+	n := 0
+	for _, s := range steps {
+		if s.Kind == k {
+			n++
+		}
+	}
+	return n
 }

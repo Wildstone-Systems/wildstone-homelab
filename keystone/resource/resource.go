@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -32,6 +33,7 @@ const (
 	KindBackupPlan Kind = "BackupPlan"
 	KindConfigFile Kind = "ConfigFile"
 	KindJob        Kind = "Job"
+	KindSecret     Kind = "Secret"
 )
 
 // ApiVersion is the only supported apiVersion for S2 resources.
@@ -312,6 +314,50 @@ var configFileNameRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
 // not on purpose — and the derivation matches the per-capability mount
 // each container gets, so a file lands exactly where its own app can
 // read it and nowhere else.
+// secretKinds is the closed set of SecretSpec.Kind values, mapped to the
+// wire enum. Closed for the reason the wire enum is: the AGENT has to
+// know how to produce the material, so a new kind is a code change on
+// both sides, never a parameter a package can invent.
+var secretKinds = map[string]bool{
+	// Random bytes. What an HMAC key, a session secret or a storage
+	// encryption key wants, and the default when a package says nothing.
+	"random": true,
+	// A PEM-encoded RSA private key. An OIDC provider signs ID tokens
+	// with one and cannot make it up at startup.
+	"rsa_private_key": true,
+}
+
+// SecretSpec is the spec for kind Secret: a secret that must EXIST on
+// the node, generated there, of a stated kind.
+//
+// It carries no value and never will. The whole point of the secret
+// store (ADR-W005 A2, ADR-W012) is that material is generated on the
+// node and never crosses the wire, so this kind declares that a secret
+// is NEEDED and what shape it has — nothing more. Keystone cannot read
+// one back, and neither can a Statefile.
+//
+// Why a resource kind rather than a package-level block: everything else
+// a package causes to happen on a node is a resource, and being one
+// means a secret inherits the closed registry, validation, plan
+// ordering, approval and audit for free. It also keeps "Authelia's jwks
+// key is RSA" inside the identity package, where ADR-W005 puts provider
+// knowledge, instead of inside Keystone.
+//
+// Ordering is the subtle part and is NOT handled by kindOrder alone —
+// see ensureNodeSecrets in the reconciler. The managed files Wildstone
+// writes before any plan step can carry secret references, so the
+// secrets they name have to exist before the plan runs at all.
+type SecretSpec struct {
+	Name string `yaml:"name"`
+	// Kind is one of secretKinds. Empty means "random", so a package
+	// that just needs a password says nothing.
+	Kind string `yaml:"kind,omitempty"`
+	// LengthBytes is the random material to generate before encoding.
+	// 0 lets the agent choose (32). Ignored for kinds whose size is not
+	// a free parameter, such as an RSA key.
+	LengthBytes int `yaml:"lengthBytes,omitempty"`
+}
+
 // JobSpec is the spec for kind Job: a container run ONCE to completion,
 // rather than kept running.
 //
@@ -436,6 +482,7 @@ type Resource struct {
 	BackupPlan *BackupPlanSpec `yaml:"-"`
 	ConfigFile *ConfigFileSpec `yaml:"-"`
 	Job        *JobSpec        `yaml:"-"`
+	Secret     *SecretSpec     `yaml:"-"`
 }
 
 // ValidationError is a typed validation failure, identifying the resource
@@ -524,6 +571,13 @@ var registry = map[Kind]kindEntry{
 	KindJob: {
 		newSpec:    func() any { return &JobSpec{} },
 		validate:   validateJob,
+		nodeScoped: true,
+	},
+	KindSecret: {
+		// Generated and stored on one node's secret store, so as
+		// node-scoped as anything gets.
+		newSpec:    func() any { return &SecretSpec{} },
+		validate:   validateSecret,
 		nodeScoped: true,
 	},
 }
@@ -664,6 +718,41 @@ func validateJob(r *Resource) error {
 				"and a published port it never releases outlives the run that bound it"}
 	}
 	return nil
+}
+
+func validateSecret(r *Resource) error {
+	if r.Secret == nil {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "secret spec missing"}
+	}
+	// The name is used as a filename in the node's secret store and as
+	// the target of a secret/<name> reference, so it is bounded by the
+	// same rule metadata.name is.
+	if !nameRegexp.MatchString(r.Secret.Name) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.name",
+			Msg: "must be a DNS-label-like name — it becomes a filename in the node's secret store " +
+				"and the target of a secret/<name> reference"}
+	}
+	if r.Secret.Kind != "" && !secretKinds[r.Secret.Kind] {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.kind",
+			Msg: fmt.Sprintf("%q is not a kind any agent knows how to generate (want one of %s, or empty for random)",
+				r.Secret.Kind, strings.Join(SecretKindNames(), ", "))}
+	}
+	if r.Secret.LengthBytes < 0 {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.lengthBytes", Msg: "must not be negative"}
+	}
+	return nil
+}
+
+// SecretKindNames returns the closed vocabulary, sorted. Exported so a
+// caller naming these in an error or a UI reads the same set the
+// validator enforces rather than keeping its own copy.
+func SecretKindNames() []string {
+	out := make([]string, 0, len(secretKinds))
+	for k := range secretKinds {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // validatePortMapping checks a single ContainerSpec.Ports entry. The

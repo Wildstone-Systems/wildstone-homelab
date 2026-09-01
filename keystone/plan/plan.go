@@ -180,11 +180,19 @@ type Plan struct {
 // Butler's diagnose walker. Both now go through KindOrder, and
 // TestEveryKindHasADeclaredOrder makes the omission impossible to repeat.
 var kindOrder = map[resource.Kind]int{
-	resource.KindVolume:     0,
-	resource.KindConfigFile: 1,
-	resource.KindLdapGroup:  2,
-	resource.KindOidcClient: 3,
-	resource.KindContainer:  4,
+	// Secret first, ahead of everything. A ConfigFile can carry a secret
+	// reference the node resolves at write time, and a Container can
+	// carry one in its env, so a secret has to exist before either. Note
+	// that this position is necessary and NOT sufficient: the managed
+	// files Wildstone writes before any plan step can carry references
+	// too, which is why the reconciler ensures desired secrets before it
+	// repairs those files (ensureNodeSecrets).
+	resource.KindSecret:     0,
+	resource.KindVolume:     1,
+	resource.KindConfigFile: 2,
+	resource.KindLdapGroup:  3,
+	resource.KindOidcClient: 4,
+	resource.KindContainer:  5,
 	// Job after Container, because a job provisions a service that has
 	// to be running to be provisioned. It is NOT a dependency edge and
 	// deliberately not modelled as one: a job whose service is not ready
@@ -196,7 +204,7 @@ var kindOrder = map[resource.Kind]int{
 	resource.KindDnsRecord: 7,
 	// BackupPlan last: a backup declaration depends on the volumes it
 	// names, and nothing depends on it (ADR-W011 A4).
-	resource.KindBackupPlan: 8,
+	resource.KindBackupPlan: 9,
 }
 
 // key identifies a resource for matching desired against observed:
@@ -340,6 +348,8 @@ func specEqual(a, b resource.Resource) bool {
 		return backupPlanEqual(a.BackupPlan, b.BackupPlan)
 	case resource.KindConfigFile:
 		return a.ConfigFile != nil && b.ConfigFile != nil && *a.ConfigFile == *b.ConfigFile
+	case resource.KindSecret:
+		return a.Secret != nil && b.Secret != nil && *a.Secret == *b.Secret
 	case resource.KindJob:
 		if a.Job == nil || b.Job == nil {
 			return a.Job == b.Job
@@ -511,6 +521,22 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 			// authenticating anybody — neither visible until the app next
 			// reads the file, which may be long after the plan applied.
 			return RiskMedium, "configuration changed: the app may fail to start, or start behaving differently"
+		}
+	case resource.KindSecret:
+		// Creating a secret is additive and affects nothing that exists:
+		// material is generated on the node, and until something
+		// references it, it is a file nobody reads.
+		//
+		// A DELETE is Low for a different and less comfortable reason —
+		// there is no delete. No op removes a secret, so the step
+		// records the declaration going away and the material stays on
+		// the node. Said plainly rather than implied, because "the plan
+		// said delete" must not be read as "the key is gone".
+		switch action {
+		case ActionDelete:
+			return RiskLow, "secret no longer declared; the material stays on the node (no delete op exists)"
+		default:
+			return RiskLow, "generates material on the node; nothing reads it until something references it"
 		}
 	case resource.KindJob:
 		// A job is not a declaration: applying one RUNS a program that

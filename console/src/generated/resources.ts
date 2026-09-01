@@ -11,7 +11,8 @@ export type Kind =
   "LdapGroup" |
   "BackupPlan" |
   "ConfigFile" |
-  "Job";
+  "Job" |
+  "Secret";
 
 export const API_VERSION = "wildstone.dev/v1";
 
@@ -97,6 +98,12 @@ export interface JobSpec {
   run: ContainerSpec;
 }
 
+export interface SecretSpec {
+  name: string;
+  kind?: string;
+  lengthBytes?: number;
+}
+
 export type Spec =
   ContainerSpec |
   VolumeSpec |
@@ -106,7 +113,8 @@ export type Spec =
   LdapGroupSpec |
   BackupPlanSpec |
   ConfigFileSpec |
-  JobSpec;
+  JobSpec |
+  SecretSpec;
 
 export interface Resource {
   apiVersion: string;
@@ -125,4 +133,5 @@ export interface SpecByKind {
   BackupPlan: BackupPlanSpec;
   ConfigFile: ConfigFileSpec;
   Job: JobSpec;
+  Secret: SecretSpec;
 }
