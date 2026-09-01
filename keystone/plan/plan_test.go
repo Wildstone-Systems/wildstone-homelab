@@ -362,3 +362,34 @@ func TestPlanJSONAcceptsStoredOrdinals(t *testing.T) {
 		t.Fatalf("stored ordinals lost: %+v", p)
 	}
 }
+
+// TestEveryKindHasADeclaredOrder closes the hole that let ConfigFile
+// ship with no entry in kindOrder. The registry is closed, so this can
+// enumerate it: adding a kind now forces its author to place it in the
+// dependency order deliberately, rather than inheriting whatever a
+// missing map key happens to mean that day.
+//
+// It is worth more than it looks. A kind's position decides whether the
+// file a container mounts is written before the container starts; the
+// bug this replaces was invisible precisely because the accidental
+// answer was the correct one.
+func TestEveryKindHasADeclaredOrder(t *testing.T) {
+	for _, k := range resource.Kinds() {
+		if _, ok := kindOrder[k]; !ok {
+			t.Errorf("kind %s has no entry in kindOrder: place it deliberately in the "+
+				"dependency order (before the kinds that consume it, after the kinds it consumes)", k)
+		}
+	}
+}
+
+// TestConfigFileIsOrderedBeforeContainer states the one ordering this
+// release actually depends on, so a future renumbering that breaks it
+// fails here rather than on a node, as an app reading the config it had
+// before the write landed.
+func TestConfigFileIsOrderedBeforeContainer(t *testing.T) {
+	if KindOrder(resource.KindConfigFile) >= KindOrder(resource.KindContainer) {
+		t.Errorf("ConfigFile (%d) must sort before Container (%d): a container mounts its config, "+
+			"so the file has to be on disk before the container that reads it starts",
+			KindOrder(resource.KindConfigFile), KindOrder(resource.KindContainer))
+	}
+}

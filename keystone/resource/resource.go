@@ -9,6 +9,7 @@
 package resource
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
@@ -30,6 +31,7 @@ const (
 	KindLdapGroup  Kind = "LdapGroup"
 	KindBackupPlan Kind = "BackupPlan"
 	KindConfigFile Kind = "ConfigFile"
+	KindJob        Kind = "Job"
 )
 
 // ApiVersion is the only supported apiVersion for S2 resources.
@@ -310,6 +312,35 @@ var configFileNameRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
 // not on purpose — and the derivation matches the per-capability mount
 // each container gets, so a file lands exactly where its own app can
 // read it and nowhere else.
+// JobSpec is the spec for kind Job: a container run ONCE to completion,
+// rather than kept running.
+//
+// It exists because provisioning is not expressible as desired state.
+// A directory's users and groups, an application's first admin account,
+// a setup wizard that must be answered before an API turns on — these
+// are things a running system did, not things it is. Every one of them
+// is reached by running a short program against an already-running
+// service: lldap ships /app/bootstrap.sh, Immich has
+// POST /api/auth/admin-sign-up, Jellyfin has its startup wizard.
+//
+// The alternative was an Exec op, and that is a rejected change by
+// policy rather than by taste (ADR-W003: the operation surface is a
+// closed enum, and "adding any generic execution primitive is a
+// rejected change"). A Job is not an escape hatch: it names a
+// digest-pinned image and runs it under exactly the same ownership,
+// mount and network rules as any other container. The privileged
+// surface does not grow at all — a Job is applied with the
+// EnsureContainer the agent already has.
+//
+// Run is a full ContainerSpec rather than a flattened copy of its
+// fields, so a Job cannot drift away from what a Container may declare:
+// the digest pin, the mount rules and the port validation are the same
+// code, and specHash covers a Job for free — which is what makes a Job
+// re-run when its inputs change.
+type JobSpec struct {
+	Run ContainerSpec `yaml:"run"`
+}
+
 type ConfigFileSpec struct {
 	// Filename is one path segment: "configuration.yml", "immich.json".
 	Filename string `yaml:"filename"`
@@ -320,13 +351,28 @@ type ConfigFileSpec struct {
 	Content string `yaml:"content"`
 }
 
-// LdapGroupSpec is the spec for kind LdapGroup (ADR-W005 A3). Modeled as
-// declared + best-effort: it expands and validates, and its reconcile
-// apply is a documented log-and-record no-op against real LLDAP — real
-// LLDAP provisioning is a later provider (keystone/reconcile).
+// LdapGroupSpec is the spec for kind LdapGroup: a group that must EXIST
+// in the directory. Nothing more.
+//
+// It carries no membership, and that is a product decision rather than a
+// gap. Wildstone declares the groups an app needs — media_users,
+// photos_users — and people are added to them by hand in LLDAP's own UI.
+// The household knows who lives in it; the control plane does not, and a
+// system that thinks it does is one that removes your sister from
+// photos_users because a YAML file did not mention her.
+//
+// A Members field existed here and was never provisioned. Keeping it
+// would have been worse than removing it: the tool that would have read
+// it (lldap's bootstrap.sh) treats a declared member list as
+// authoritative when cleanup is on, so the field's only possible future
+// was to start deleting the memberships someone added by hand. Declaring
+// half of a relationship is how you end up owning all of it.
+//
+// If an agent ever adds people, it will do so against the same directory
+// through the same API, and the record of who is in a group will still
+// be the directory's — not a file.
 type LdapGroupSpec struct {
-	Name    string   `yaml:"name"`
-	Members []string `yaml:"members,omitempty"`
+	Name string `yaml:"name"`
 }
 
 // backupSchedules is the closed set of BackupPlanSpec.Schedule values.
@@ -389,6 +435,7 @@ type Resource struct {
 	LdapGroup  *LdapGroupSpec  `yaml:"-"`
 	BackupPlan *BackupPlanSpec `yaml:"-"`
 	ConfigFile *ConfigFileSpec `yaml:"-"`
+	Job        *JobSpec        `yaml:"-"`
 }
 
 // ValidationError is a typed validation failure, identifying the resource
@@ -472,6 +519,11 @@ var registry = map[Kind]kindEntry{
 	KindConfigFile: {
 		newSpec:    func() any { return &ConfigFileSpec{} },
 		validate:   validateConfigFile,
+		nodeScoped: true,
+	},
+	KindJob: {
+		newSpec:    func() any { return &JobSpec{} },
+		validate:   validateJob,
 		nodeScoped: true,
 	},
 }
@@ -569,6 +621,47 @@ func validateContainer(r *Resource) error {
 		if m.Target == "" {
 			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.mounts[%d].target", i), Msg: "must not be empty"}
 		}
+	}
+	return nil
+}
+
+// validateJob reuses validateContainer wholesale — a Job's Run is a
+// ContainerSpec and must obey every rule one does — then adds the two
+// things that distinguish a run from a service.
+//
+// Both additions refuse a spec that would still "work": a job with a
+// restart policy really does run, over and over; a job with a published
+// port really does bind it. They are refused because each is what a
+// Container template looks like when it has been copied into a Job
+// without being reread, and the failure they cause is remote from the
+// mistake — a restart:always job re-provisions in a loop, and a job
+// holding port 80 keeps the ingress container from starting long after
+// the job itself has been forgotten.
+func validateJob(r *Resource) error {
+	if r.Job == nil {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "job spec missing"}
+	}
+	// Borrow the container rules by validating the embedded run against
+	// them. The error's Field is rewritten so it points at spec.run.*,
+	// where the author has to look, rather than at spec.* of a Container
+	// this resource is not.
+	if err := validateContainer(&Resource{Kind: r.Kind, Metadata: r.Metadata, Container: &r.Job.Run}); err != nil {
+		var ve *ValidationError
+		if errors.As(err, &ve) {
+			ve.Field = strings.Replace(ve.Field, "spec.", "spec.run.", 1)
+		}
+		return err
+	}
+	if r.Job.Run.Restart != "" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.run.restart",
+			Msg: fmt.Sprintf("must not be set (got %q): a Job runs once to completion, and the reconciler "+
+				"decides when to run it again from its exit status — a restart policy would re-run it "+
+				"on the node's terms instead, forever", r.Job.Run.Restart)}
+	}
+	if len(r.Job.Run.Ports) > 0 {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.run.ports",
+			Msg: "must be empty: a Job talks to services on the container network and is not talked to, " +
+				"and a published port it never releases outlives the run that bound it"}
 	}
 	return nil
 }

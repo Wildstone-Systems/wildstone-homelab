@@ -16,7 +16,7 @@ func TestContainerEnsureOpCarriesHostIP(t *testing.T) {
 		Image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d",
 		Ports: []string{"100.64.0.1:8443:80", "127.0.0.1:9000:9000", "80:80"},
 	}
-	got := containerEnsureOp("caddy-private", spec, ContainerNetwork).GetEnsureContainer().GetPorts()
+	got := containerEnsureOp("caddy-private", spec, ContainerNetwork, "").GetEnsureContainer().GetPorts()
 	want := []struct {
 		ip        string
 		host, ctr uint32
@@ -43,7 +43,7 @@ func TestContainerEnsureOpCarriesHostIP(t *testing.T) {
 func TestSpecHashCoversBindAddress(t *testing.T) {
 	wide := &resource.ContainerSpec{Image: "x", Ports: []string{"8443:80"}}
 	narrow := &resource.ContainerSpec{Image: "x", Ports: []string{"127.0.0.1:8443:80"}}
-	if specHash(wide, ContainerNetwork) == specHash(narrow, ContainerNetwork) {
+	if specHash(wide, ContainerNetwork, "") == specHash(narrow, ContainerNetwork, "") {
 		t.Error("spec hash is blind to the bind address, so narrowing it would never redeploy")
 	}
 }

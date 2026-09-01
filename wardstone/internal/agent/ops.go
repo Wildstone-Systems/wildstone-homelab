@@ -680,9 +680,11 @@ func (a *Agent) inspectContainer(ctx context.Context, op *wsv1.InspectContainer)
 		return nil, oerr
 	}
 	return &wsv1.OpResult_InspectContainer{InspectContainer: &wsv1.InspectContainerResult{
-		Running: ci.State.Running,
-		Image:   ci.Config.Image,
-		Labels:  ci.Config.Labels,
+		Running:  ci.State.Running,
+		Image:    ci.Config.Image,
+		Labels:   ci.Config.Labels,
+		Status:   ci.State.Status,
+		ExitCode: ci.State.ExitCode,
 	}}, nil
 }
 

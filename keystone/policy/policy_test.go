@@ -263,3 +263,54 @@ func TestTiers(t *testing.T) {
 		}
 	}
 }
+
+// job mirrors container(), for the kind that also runs one.
+func job(name string, env map[string]string) resource.Resource {
+	return resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindJob,
+		Metadata:   resource.Metadata{Name: name, Owner: "capability/test", Node: "n1"},
+		Job: &resource.JobSpec{Run: resource.ContainerSpec{
+			Image: "reg.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Env:   env,
+		}},
+	}
+}
+
+// TestJobEnvIsHeldToTheContainerSecretRule closes the hole the Job kind
+// opened. The rule read r.Container.Env, so a Job's env — which is
+// EXACTLY where a literal would appear, since a provisioning job needs
+// an admin password to do its work — was checked by nothing.
+//
+// A container and a job with identical env must produce identical
+// violations; anything else means one of the two kinds is unguarded.
+func TestJobEnvIsHeldToTheContainerSecretRule(t *testing.T) {
+	e := NewEngine(nil)
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want []string
+	}{
+		{"literal in a credential-shaped key", map[string]string{"LLDAP_ADMIN_PASSWORD": "hunter2"}, []string{RuleSecretValuesForbidden}},
+		{"a proper reference", map[string]string{"LLDAP_ADMIN_PASSWORD": "secret/lldap-admin-password"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			asContainer := func() []string {
+				v, _ := e.Validate(Change{Proposed: []resource.Resource{container("x", tc.env)}})
+				return ruleIDs(v)
+			}()
+			asJob := func() []string {
+				v, _ := e.Validate(Change{Proposed: []resource.Resource{job("x", tc.env)}})
+				return ruleIDs(v)
+			}()
+
+			if strings.Join(asJob, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("Job env %v produced %v, want %v", tc.env, asJob, tc.want)
+			}
+			if strings.Join(asJob, ",") != strings.Join(asContainer, ",") {
+				t.Errorf("the same env is judged differently by kind: Container %v, Job %v — one of the "+
+					"two is not being checked", asContainer, asJob)
+			}
+		})
+	}
+}

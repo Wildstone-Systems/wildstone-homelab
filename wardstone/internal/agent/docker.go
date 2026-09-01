@@ -46,6 +46,12 @@ type containerInspect struct {
 	ID    string `json:"Id"`
 	State struct {
 		Running bool `json:"Running"`
+		// Status and ExitCode describe a container that has STOPPED,
+		// which Running alone cannot distinguish from one that never
+		// started. A one-shot job that finished cleanly and one that
+		// died on its first line are both Running=false.
+		Status   string `json:"Status"`
+		ExitCode int32  `json:"ExitCode"`
 	} `json:"State"`
 	Config struct {
 		Image  string            `json:"Image"`

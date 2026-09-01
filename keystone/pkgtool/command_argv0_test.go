@@ -1,14 +1,8 @@
 package pkgtool
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
 // imageArgv0 records, per image repository, what a ContainerSpec.Command
@@ -47,6 +41,24 @@ var imageArgv0 = map[string]string{
 	// execs its arguments. It exists, but supplies no binary, so the
 	// command must still name one (its own CMD is ["gotenberg"]).
 	"gotenberg/gotenberg": "gotenberg",
+
+	// Authelia's ENTRYPOINT is ["/app/entrypoint.sh"], a wrapper that
+	// applies UMASK, chowns /config, drops to PUID:PGID and then execs
+	// `authelia "$@"` — so the command carries flags only. The wrapper
+	// has a branch written for exactly this call shape: it execs its
+	// arguments directly UNLESS the first one is --config, in which case
+	// it hands them to authelia. Evidence: the image's published
+	// Dockerfile and entrypoint.sh at authelia/authelia@master.
+	"authelia/authelia": "",
+
+	// alpine declares no ENTRYPOINT at all, so the command is the whole
+	// argv and must name a real binary — the caddy case exactly. It is
+	// here as a job runner: the identity capability's group provisioning
+	// runs a shell script in it, because the lldap image's own entrypoint
+	// unconditionally execs /app/lldap and so cannot run a script under a
+	// Cmd-only EnsureContainer. Evidence: alpine's published Dockerfile
+	// is FROM scratch with only CMD ["/bin/sh"].
+	"alpine": "/bin/sh",
 }
 
 // TestPackageCommandsNameTheirBinary walks every shipped package's
@@ -57,87 +69,31 @@ var imageArgv0 = map[string]string{
 // does that, which is why F23 shipped past a green CI and was found only
 // by a human deploying the spec on a VM.
 func TestPackageCommandsNameTheirBinary(t *testing.T) {
-	root, err := filepath.Abs("../../packages")
-	if err != nil {
-		t.Fatal(err)
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	fillers := map[string]string{
-		"public_domain":     "example.internal",
-		"admin_domain":      "admin.example.internal",
-		"node":              "n1",
-		"admin_listen_addr": "100.64.0.1",
-		"listen_addr":       "100.64.0.1",
-	}
-
-	var allPkgs []*pkgspec.Package
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		p, err := pkgspec.Load(filepath.Join(root, e.Name(), "package.yaml"))
-		if err != nil {
-			t.Fatalf("load %s: %v", e.Name(), err)
-		}
-		allPkgs = append(allPkgs, p)
-	}
-
 	checked := 0
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		dir := filepath.Join(root, e.Name())
-		t.Run(e.Name(), func(t *testing.T) {
-			pkg, err := pkgspec.Load(filepath.Join(dir, "package.yaml"))
-			if err != nil {
-				t.Fatalf("load: %v", err)
-			}
-			params := map[string]string{}
-			for _, d := range pkg.Params {
-				if v, ok := fillers[d.Name]; ok {
-					params[d.Name] = v
-				} else if d.Default != "" {
-					params[d.Name] = d.Default
-				} else {
-					params[d.Name] = "lint-" + sanitizeParam(d.Name)
-				}
-			}
-			// Every shipped package is on the catalog, so a package with
-			// requires expands instead of skipping. A skip here would be
-			// the same hole as a guard that silently stops running: green,
-			// and checking nothing.
-			catalog := capability.NewCatalog(allPkgs...)
-			rendered, err := capability.NewEngine().Expand(pkg, params, catalog)
-			if err != nil {
-				t.Fatalf("expand: %v", err)
-			}
-			for _, r := range rendered {
-				if r.Kind != resource.KindContainer || r.Container == nil || len(r.Container.Command) == 0 {
+	for name, rendered := range renderShippedPackages(t) {
+		t.Run(name, func(t *testing.T) {
+			for _, r := range runnables(rendered) {
+				if len(r.spec.Command) == 0 {
 					continue
 				}
 				checked++
-				repo := imageRepo(r.Container.Image)
+				repo := imageRepo(r.spec.Image)
 				want, known := imageArgv0[repo]
 				if !known {
-					t.Errorf("container %q runs image %q with a command, but %q is not in imageArgv0: "+
+					t.Errorf("%s %q runs image %q with a command, but %q is not in imageArgv0: "+
 						"check whether the image declares an ENTRYPOINT and add it, so command[0] is a decision "+
-						"rather than a copy of the nearest neighbour", r.Metadata.Name, repo, repo)
+						"rather than a copy of the nearest neighbour", r.kind, r.name, repo, repo)
 					continue
 				}
-				got := r.Container.Command[0]
+				got := r.spec.Command[0]
 				switch {
 				case want == "" && got == repoBinary(repo):
-					t.Errorf("container %q: image %q has an ENTRYPOINT, so command[0] must not repeat %q",
-						r.Metadata.Name, repo, got)
+					t.Errorf("%s %q: image %q has an ENTRYPOINT, so command[0] must not repeat %q",
+						r.kind, r.name, repo, got)
 				case want != "" && got != want:
-					t.Errorf("container %q: image %q has no ENTRYPOINT, so command[0] must be %q, got %q "+
+					t.Errorf("%s %q: image %q has no ENTRYPOINT, so command[0] must be %q, got %q "+
 						"— the container will die with `exec: %q: executable file not found in $PATH`",
-						r.Metadata.Name, repo, want, got, got)
+						r.kind, r.name, repo, want, got, got)
 				}
 			}
 		})

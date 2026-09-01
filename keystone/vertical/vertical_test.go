@@ -238,6 +238,10 @@ func TestGoNoGoIdentityPhotosVertical(t *testing.T) {
 	// ---------------------------------------------------------------- d) reconcile: real gateway + fake docker + managed FS
 	h := startGateway(t, []string{"tok"})
 	agent := newTestAgent(t, h, "node-a", "tok")
+	// The identity capability ships a one-shot job that creates the
+	// directory's groups. The fake has no LLDAP to talk to, so it stands
+	// in for the run: started, finished, exit 0.
+	agent.setJobExit("lldap-provision-groups", 0)
 	if !h.gw.WaitConnected("node-a", 10*time.Second) {
 		t.Fatal("agent never connected")
 	}
@@ -252,6 +256,10 @@ func TestGoNoGoIdentityPhotosVertical(t *testing.T) {
 		RetryBackoff:       5 * time.Millisecond,
 		HealthGateAttempts: 5,
 		HealthGateBackoff:  10 * time.Millisecond,
+		// The fake exits a job the instant it starts, so one poll is
+		// enough; the shipped defaults are seconds-scale on purpose.
+		JobGateAttempts: 3,
+		JobGateBackoff:  5 * time.Millisecond,
 	}
 
 	// The desired set reconciled here is `loaded` — exactly what the
@@ -276,7 +284,14 @@ func TestGoNoGoIdentityPhotosVertical(t *testing.T) {
 	t.Logf("reconcile plan: %s (overall risk %s), %d steps applied", outcome.Plan.Summary, outcome.Plan.OverallRisk, len(outcome.Steps))
 
 	// ---------------------------------------------------------------- e) assert the gate
-	wantContainers := []string{"immich-server", "immich-machine-learning", "immich-postgres", "immich-redis", "lldap", "authelia"}
+	// The group provisioning job must have RUN, exactly once, and
+	// succeeded — the gate is "a family member could log in", and a
+	// login needs the group its OIDC client requires to exist.
+	if got := agent.jobRunCount("lldap-provision-groups"); got != 1 {
+		t.Errorf("GATE VERDICT: NO-GO — the group provisioning job ran %d times, want 1", got)
+	}
+
+	wantContainers := []string{"immich-server", "immich-machine-learning", "immich-postgres", "immich-redis", "lldap", "authelia", "authelia-redis"}
 	for _, name := range wantContainers {
 		running, ok := agent.containerExists(name)
 		if !ok || !running {
@@ -284,7 +299,7 @@ func TestGoNoGoIdentityPhotosVertical(t *testing.T) {
 		}
 	}
 
-	wantVolumes := []string{"immich-upload", "immich-pgdata", "immich-redis-data", "lldap-data", "authelia-config"}
+	wantVolumes := []string{"immich-upload", "immich-pgdata", "immich-redis-data", "lldap-data", "authelia-config", "authelia-redis-data"}
 	for _, name := range wantVolumes {
 		if !agent.volumeExists(name) {
 			t.Errorf("GATE VERDICT: NO-GO — volume %q not created in the fake", name)

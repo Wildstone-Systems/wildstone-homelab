@@ -116,6 +116,16 @@ templates:
         session:
           name: authelia_session
           secret: secret/authelia-session-secret
+          # Sessions live in Redis, not in Authelia's memory. This is not
+          # about scale — one homelab has one Authelia — it is about what
+          # a restart costs. A managed config change now replaces this
+          # container by design (the config digest rides the container
+          # spec hash), so installing an app restarts the provider. With
+          # in-memory sessions that signs every family member out; with
+          # this, they never notice.
+          redis:
+            host: authelia-redis
+            port: 6379
           cookies:
             - domain: {{ .Params.public_domain }}
               # MUST be https. 4.39 refuses a non-secure scheme here, and
@@ -151,24 +161,58 @@ templates:
           max_retries: 4
           find_time: 2m
           ban_time: 10m
+  # ---- The session store. Same image digest the paperless and immich
+  # packages already pin, so the node has one redis layer set rather than
+  # three, and keystone/pkgtool's image-set check keeps them agreeing.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: authelia-redis-data, node: "{{ .Params.node }}" }
+    spec: { name: authelia-redis-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: authelia-redis, node: "{{ .Params.node }}" }
+    spec:
+      image: "redis@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2"
+      mounts:
+        - { source: authelia-redis-data, target: /data }
+      restart: unless-stopped
   - |
     apiVersion: wildstone.dev/v1
     kind: Container
     metadata: { name: authelia, node: "{{ .Params.node }}" }
     spec:
       image: "authelia/authelia@sha256:1b363e9279e742397966333f364e0876ae02bf5c876de73e83af6d48c57ff51b"
-      # NOT YET POINTED AT THE FILES ABOVE. Authelia must be told to read
-      # them — it otherwise reads the config it seeds for itself on first
-      # start, which is why every rendered client has been invisible.
+      # Point Authelia at BOTH managed files. Without this it reads
+      # X_AUTHELIA_CONFIG's default, /config/configuration.yml — the
+      # config it seeds for itself on first start — which is why every
+      # rendered client was invisible no matter how correct clients.yml
+      # was. Passing --config replaces that default outright, so the
+      # self-seeded file stops mattering.
       #
-      # Doing that needs one fact this repo does not have: whether this
-      # image declares an ENTRYPOINT, which decides whether the command
-      # is ["--config", ...] or ["authelia", "--config", ...]. Wildstone
-      # maps command to Docker's Cmd, and Cmd is the WHOLE argv when
-      # there is no entrypoint — the mistake that killed every Caddy
-      # container in the v0.1.1-alpha validation (F23). Image config
-      # blobs are unreachable from CI and from the dev sandbox, so the
-      # answer is `docker inspect` on a node.
+      # Flags only, no binary: the image's ENTRYPOINT is
+      # ["/app/entrypoint.sh"], which execs `authelia "$@"`. Wildstone
+      # maps command to Docker's Cmd, and Cmd is the WHOLE argv only
+      # when an image has no entrypoint — the mistake that killed every
+      # Caddy container in the v0.1.1-alpha validation (F23), which is
+      # why keystone/pkgtool's imageArgv0 table demands evidence per
+      # image before a command may be added. That entrypoint has a
+      # branch for exactly this shape: it execs its arguments directly
+      # UNLESS the first is --config, in which case authelia gets them.
+      #
+      # Order matters, and so does the split. Authelia merges these
+      # last-wins per key and does NOT merge lists — its own docs call
+      # splitting access control rules or OIDC clients across files
+      # "asking for trouble", and the hand-build confirmed it by having
+      # one file's clients silently replace another's. So each list-
+      # valued section lives in exactly one file: access_control here,
+      # identity_providers there.
+      command:
+        - "--config"
+        - "/etc/wildstone/identity/configuration.yml"
+        - "--config"
+        - "/etc/wildstone/authelia/clients.yml"
       env:
         AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE: "secret/authelia-oidc-hmac-secret"
         AUTHELIA_JWT_SECRET_FILE: "secret/authelia-jwt-secret"
@@ -176,15 +220,183 @@ templates:
         AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE: "secret/authelia-storage-encryption-key"
       mounts:
         - { source: authelia-config, target: /config }
-        # The capability's own subtree of the managed prefix, read-only.
-        # Wildstone renders clients.yml here from every OidcClient in the
-        # deployment; Authelia is pointed at it alongside its own config.
-        # A subtree rather than the whole prefix: this container has no
+        # Two read-only subtrees of the managed prefix, because the two
+        # managed files are named by two different rules and both rules
+        # are right:
+        #
+        #   <prefix>/identity/    a ConfigFile's directory comes from its
+        #                         owning capability, uniformly for every
+        #                         package that ships one — this is where
+        #                         configuration.yml above lands.
+        #   <prefix>/authelia/    the reconciler's Authelia-specific
+        #                         renderings, named for the provider that
+        #                         reads them (ADR-W005 A3/B1): clients.yml,
+        #                         merged from every OidcClient in the
+        #                         deployment, and the per-client fragments
+        #                         it is merged from.
+        #
+        # Subtrees rather than the whole prefix: this container has no
         # business reading the ingress capability's files, and the
         # narrowest mount that works is the one to ship (ADR-W018, and
         # the lesson of the agent data directory).
+        - { source: /etc/wildstone/identity, target: /etc/wildstone/identity, readOnly: true }
         - { source: /etc/wildstone/authelia, target: /etc/wildstone/authelia, readOnly: true }
       restart: unless-stopped
+  # ---- Group provisioning.
+  #
+  # LLDAP starts with no groups, so an app whose OIDC client requires
+  # one refuses every login until somebody creates it by hand. This is
+  # the piece that stops that being a manual step.
+  #
+  # It does NOT create people. Wildstone declares the groups an app
+  # needs; members are added in LLDAP's own UI, by whoever knows who
+  # lives here. The script therefore only ever CREATES a missing group
+  # and never deletes or empties one — see LdapGroupSpec.
+  #
+  # Why a script here rather than lldap's own bootstrap.sh, which does
+  # all this and more:
+  #
+  #   1. It cannot be run. The lldap image's ENTRYPOINT is
+  #      docker-entrypoint.sh, which unconditionally ends in
+  #      `exec gosu "$UID:$GID" /app/lldap "$@"` — the `exec "$@"` after
+  #      it is dead code. Wildstone sets Docker's Cmd, not Entrypoint,
+  #      so anything passed becomes an ARGUMENT TO lldap. Upstream's own
+  #      recipes are `docker exec` into the running container, or a
+  #      Kubernetes `command:` — which overrides ENTRYPOINT and does not
+  #      translate.
+  #   2. It apk-adds curl, jq and jo at runtime, as root. A container
+  #      holding the directory's admin password should not be fetching
+  #      binaries from a package mirror to do its job.
+  #
+  # So: a plain alpine image, whose ENTRYPOINT is empty, and busybox
+  # wget, which Alpine builds with FEATURE_WGET_LONG_OPTIONS=y so
+  # --post-data and --header both exist. No package installs, nothing
+  # unpinned, and about thirty lines instead of two thousand.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: provision-groups, node: "{{ .Params.node }}" }
+    spec:
+      filename: provision-groups.sh
+      content: |
+        #!/bin/sh
+        # managed by wildstone — do not edit
+        #
+        # Create every group in the rendered list that the directory does
+        # not already have. Idempotent by construction: it reads what
+        # exists first and only adds. It never deletes a group and never
+        # touches membership.
+        set -eu
+
+        # Both default to what ships; the overrides exist so the test in
+        # keystone/pkgtool can run this exact script — the one the
+        # package renders, not a copy — against a fake directory.
+        LIST="${GROUPS_FILE:-/etc/wildstone/lldap/groups}"
+        API="${LLDAP_URL:-http://lldap:17170}"
+
+        # LLDAP_ADMIN_PASSWORD arrives as a secret reference the agent
+        # resolves at container-create time; it is never in this file.
+        [ -n "${LLDAP_ADMIN_PASSWORD:-}" ] || {
+          echo "provision-groups: LLDAP_ADMIN_PASSWORD is empty" >&2; exit 1; }
+
+        post() { # post <path> <extra-header-or-empty> <body>
+          if [ -n "$2" ]; then
+            wget -q -O- --header='Content-Type: application/json' \
+              --header="$2" --post-data="$3" "$API$1"
+          else
+            wget -q -O- --header='Content-Type: application/json' \
+              --post-data="$3" "$API$1"
+          fi
+        }
+
+        # A restart can leave this job racing the directory's own
+        # startup, so retry the login briefly rather than failing at
+        # once. Briefly is the operative word, and the bound is not
+        # arbitrary: the reconciler's job gate gives this container 60s
+        # to finish, so a script that spends 60s retrying gets killed at
+        # exactly the moment it was about to say something useful, and
+        # the step reports a timeout instead of a reason.
+        #
+        # 20s also bounds the wrong-password case, which is
+        # indistinguishable from "not up yet" here — wget's exit codes
+        # for a 401 and a refused connection are not portable between
+        # busybox and GNU. So both are retried, and the message names
+        # both. Retrying a permanent failure for a whole minute on every
+        # tick is the thing worth avoiding.
+        i=1
+        while [ "$i" -le "${LOGIN_ATTEMPTS:-10}" ]; do
+          LOGIN=$(post /auth/simple/login "" \
+            "{\"username\":\"admin\",\"password\":\"$LLDAP_ADMIN_PASSWORD\"}") && break
+          echo "provision-groups: directory not answering yet (attempt $i)" >&2
+          i=$((i + 1))
+          sleep 2
+        done
+        [ -n "${LOGIN:-}" ] || {
+          echo "provision-groups: could not log in to $API as admin — either the directory is not" >&2
+          echo "  running, or secret/lldap-admin-password is not the password it was created with" >&2
+          exit 1; }
+
+        # No jq in this image, so the two reads below are textual. Both
+        # first strip whitespace: LLDAP serialises compactly today, but
+        # {"token": "x"} with a space is equally valid JSON, and a script
+        # that silently finds no token because a future version or a
+        # proxy reformatted the body is a bad way to learn that. Group
+        # names are validated to [a-z0-9_] before they reach here
+        # (LdapGroupSpec), so squeezing whitespace cannot merge two of
+        # them.
+        squeeze() { tr -d ' \011\012\015'; }
+
+        TOKEN=$(printf '%s' "$LOGIN" | squeeze | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+        [ -n "$TOKEN" ] || { echo "provision-groups: no token in login response" >&2; exit 1; }
+        AUTH="Authorization: Bearer $TOKEN"
+
+        EXISTING=$(post /api/graphql "$AUTH" \
+          '{"query":"{groups {id displayName}}"}' | squeeze)
+
+        rc=0
+        while IFS= read -r group; do
+          case "$group" in ''|'#'*) continue ;; esac
+
+          # Exact match on the quoted JSON value, so "photos" cannot be
+          # satisfied by an existing "photos_admins".
+          case "$EXISTING" in
+            *"\"displayName\":\"$group\""*)
+              echo "group $group: already present"
+              continue ;;
+          esac
+
+          RESP=$(post /api/graphql "$AUTH" \
+            "{\"query\":\"mutation CreateGroup(\$name: String!) {createGroup(name: \$name) {id}}\",\"operationName\":\"CreateGroup\",\"variables\":{\"name\":\"$group\"}}") || {
+              echo "group $group: request failed" >&2; rc=1; continue; }
+          case "$RESP" in
+            *'"errors"'*)
+              echo "group $group: $RESP" >&2; rc=1 ;;
+            *)
+              echo "group $group: created" ;;
+          esac
+        done < "$LIST"
+
+        # Exit non-zero if ANY group failed. A partially provisioned
+        # directory must not look like a finished job: the reconciler
+        # reads this exit code to decide whether to run us again.
+        exit $rc
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Job
+    metadata: { name: lldap-provision-groups, node: "{{ .Params.node }}" }
+    spec:
+      run:
+        image: "alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"
+        # alpine declares no ENTRYPOINT, so this is the whole argv.
+        command: ["/bin/sh", "/etc/wildstone/identity/provision-groups.sh"]
+        env:
+          LLDAP_ADMIN_PASSWORD: "secret/lldap-admin-password"
+        mounts:
+          # The script, and the group list Keystone renders from every
+          # LdapGroup in the deployment. Read-only: a provisioning job
+          # has no business writing to the managed prefix.
+          - { source: /etc/wildstone/identity, target: /etc/wildstone/identity, readOnly: true }
+          - { source: /etc/wildstone/lldap, target: /etc/wildstone/lldap, readOnly: true }
   # ---- Route: auth.<public_domain> — no auth on the auth Route itself
   # (Authelia IS the auth; gating logins behind Authelia's own login page
   # would be circular).

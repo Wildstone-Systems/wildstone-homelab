@@ -42,13 +42,19 @@ func TestPrereqFilesAreRepairedOnATick(t *testing.T) {
 	// the other two are: its correct contents are a pure function of
 	// desired state, so nothing but this repair asserts them.
 	clients := managedPathForTest(agent, autheliaClientsPath(testManagedPrefix))
-	for _, p := range []string{base, placeholder, clients} {
+	// And the merged LLDAP group list, for the same reason again.
+	groups := managedPathForTest(agent, lldapGroupsPath(testManagedPrefix))
+	for _, p := range []string{base, placeholder, clients, groups} {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("prereq %s not written on a resourceless tick: %v", p, err)
 		}
 	}
-	if len(out.PrereqRepaired) != 3 {
-		t.Fatalf("first tick repaired %v, want all three files written", out.PrereqRepaired)
+	// Counted from the list rather than restated. nodePrereqFiles was
+	// extracted so a test could do exactly this; hardcoding the number
+	// here meant adding a prereq broke the test that was supposed to
+	// bound it, instead of covering it.
+	if want := len(nodePrereqFiles(testManagedPrefix, nil)); len(out.PrereqRepaired) != want {
+		t.Fatalf("first tick repaired %v, want all %d prereq files written", out.PrereqRepaired, want)
 	}
 
 	// A second tick with everything intact must be a no-op: repair that

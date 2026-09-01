@@ -21,6 +21,11 @@ type fakeContainer struct {
 	labels  map[string]string
 	env     []string
 	running bool
+	// status/exitCode mirror Docker's State for a container that has
+	// STOPPED. exitContainer sets them; nothing else needs to, because
+	// the fake never runs a process that can end on its own.
+	status   string
+	exitCode int32
 	// networks records the EndpointsConfig keys the create body carried,
 	// so a test can assert what the container was attached to.
 	networks []string
@@ -243,7 +248,7 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 	case m[3] == "json":
 		json.NewEncoder(w).Encode(map[string]any{
 			"Id":    c.id,
-			"State": map[string]any{"Running": c.running},
+			"State": map[string]any{"Running": c.running, "Status": c.dockerStatus(), "ExitCode": c.exitCode},
 			"Config": map[string]any{
 				"Image":  c.image,
 				"Labels": c.labels,
@@ -281,4 +286,31 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, `{"message":"unhandled by fake"}`, http.StatusNotImplemented)
 	}
+}
+
+// dockerStatus reports what Docker's State.Status would say. A fake
+// container is "running" until a test exits it; an explicitly-set status
+// wins, so a test can stage "created" or "dead" too.
+func (c *fakeContainer) dockerStatus() string {
+	if c.status != "" {
+		return c.status
+	}
+	if c.running {
+		return "running"
+	}
+	return "exited"
+}
+
+// exitContainer stages the state a one-shot job leaves behind: stopped,
+// with a status of "exited" and a code the test chooses.
+func (f *fakeDocker) exitContainer(name string, code int32) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.containers[name]
+	if !ok {
+		return
+	}
+	c.running = false
+	c.status = "exited"
+	c.exitCode = code
 }

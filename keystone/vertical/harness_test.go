@@ -64,12 +64,36 @@ func startGateway(t *testing.T, tokens []string) *harness {
 	return h
 }
 
+// specHashLabel mirrors reconcile's unexported constant of the same
+// name, the duplicated-constant pattern this repo already uses between
+// keystone and wardstone. A fake that ignores the label compares by
+// image alone, which is enough for a Container and not enough for a
+// Job: its container would never match its desired hash, so it would
+// re-run on every tick and never converge.
+const specHashLabel = "dev.wildstone.spec-hash"
+
 // ---------------------------------------------------------------- fake docker/fs state
 
 type fakeContainer struct {
 	image   string
+	labels  map[string]string
 	running bool
 	owned   bool
+	// Exit state, protocol minor 11. A Job's container is expected to
+	// stop, and telling a run that succeeded from one that crashed is
+	// the whole reason the fields exist.
+	status   string
+	exitCode int32
+}
+
+func (c *fakeContainer) dockerStatus() string {
+	if c.status != "" {
+		return c.status
+	}
+	if c.running {
+		return "running"
+	}
+	return "exited"
 }
 
 type fakeVolume struct {
@@ -87,6 +111,8 @@ type testAgent struct {
 	managed string // managed-file root (t.TempDir())
 
 	mu         sync.Mutex
+	jobExit    map[string]int32
+	jobRuns    map[string]int
 	containers map[string]*fakeContainer
 	volumes    map[string]*fakeVolume
 }
@@ -262,6 +288,8 @@ func (a *testAgent) handleOp(opID string, op *wsv1.Operation) *wsv1.OpResult {
 		return a.removeContainer(opID, o.RemoveContainer)
 	case *wsv1.Operation_ContainerStats:
 		return a.containerStats(opID, o.ContainerStats)
+	case *wsv1.Operation_InspectContainer:
+		return a.inspectContainer(opID, o.InspectContainer)
 	case *wsv1.Operation_EnsureVolume:
 		return a.ensureVolume(opID, o.EnsureVolume)
 	case *wsv1.Operation_WriteManagedFile:
@@ -291,16 +319,29 @@ func (a *testAgent) ensureContainer(opID string, op *wsv1.EnsureContainer) *wsv1
 		if !existing.owned {
 			return opErrResult(opID, wsv1.ErrorCode_ERROR_CODE_FORBIDDEN, "container %q exists but is not wildstone-owned", op.GetName())
 		}
-		if existing.image == op.GetImage() {
+		// Spec-hash comparison when the op carries one (protocol minor
+		// 5), image comparison otherwise. Without the label arm a Job's
+		// container never matches its desired hash, so the job re-runs
+		// on every tick and never converges.
+		wantHash, hasHash := op.GetLabels()[specHashLabel]
+		matches := existing.image == op.GetImage()
+		if hasHash {
+			matches = existing.labels[specHashLabel] == wantHash
+		}
+		if matches {
 			started := !existing.running
 			existing.running = true
+			existing.status, existing.exitCode = "", 0
+			a.runJobLocked(op.GetName(), existing)
 			return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
 				ContainerId: "cid-" + op.GetName(), Created: false, Started: started,
 			}}}
 		}
 		delete(a.containers, op.GetName())
 	}
-	a.containers[op.GetName()] = &fakeContainer{image: op.GetImage(), running: true, owned: true}
+	created := &fakeContainer{image: op.GetImage(), labels: op.GetLabels(), running: true, owned: true}
+	a.containers[op.GetName()] = created
+	a.runJobLocked(op.GetName(), created)
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
 		ContainerId: "cid-" + op.GetName(), Created: true, Started: true,
 	}}}
@@ -407,4 +448,58 @@ func (a *testAgent) probeHttp(opID string, op *wsv1.ProbeHttp) *wsv1.OpResult {
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_ProbeHttp{ProbeHttp: &wsv1.ProbeHttpResult{
 		Reachable: true, StatusCode: uint32(resp.StatusCode),
 	}}}
+}
+
+// inspectContainer mirrors the real agent's arm: ownership first, then
+// identity and run state. This fake predated the op and answered INVALID
+// for it, which made the whole vertical exercise the degraded
+// pre-minor-5 path — including for a Job, which cannot be observed at
+// all without it.
+func (a *testAgent) inspectContainer(opID string, op *wsv1.InspectContainer) *wsv1.OpResult {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c, errRes := a.requireOwnedLocked(opID, op.GetName())
+	if errRes != nil {
+		return errRes
+	}
+	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_InspectContainer{InspectContainer: &wsv1.InspectContainerResult{
+		Running: c.running, Image: c.image, Labels: c.labels,
+		Status: c.dockerStatus(), ExitCode: c.exitCode,
+	}}}
+}
+
+// setJobExit registers a container name as a one-shot job: it "runs" and
+// exits with code every time it is created or started.
+func (a *testAgent) setJobExit(name string, code int32) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.jobExit == nil {
+		a.jobExit = map[string]int32{}
+	}
+	if a.jobRuns == nil {
+		a.jobRuns = map[string]int{}
+	}
+	a.jobExit[name] = code
+}
+
+func (a *testAgent) jobRunCount(name string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.jobRuns[name]
+}
+
+// runJobLocked is called with a.mu held, from the two places a real
+// container's process would begin.
+func (a *testAgent) runJobLocked(name string, c *fakeContainer) {
+	code, ok := a.jobExit[name]
+	if !ok {
+		return
+	}
+	if a.jobRuns == nil {
+		a.jobRuns = map[string]int{}
+	}
+	a.jobRuns[name]++
+	c.running = false
+	c.status = "exited"
+	c.exitCode = code
 }

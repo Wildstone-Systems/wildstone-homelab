@@ -168,16 +168,35 @@ type Plan struct {
 // two rarely interact directly in S3's scope; this sub-ordering is a
 // pragmatic default, not a proven dependency, and should be revisited if a
 // package ever needs the reverse.
+//
+// ConfigFile sits with Volume, ahead of Container, for the same reason
+// Volume does: a container mounts it, so it has to be on disk before the
+// container that reads it starts. It was missing from this table
+// entirely until the Authelia config landed, and the omission was not
+// visible because the two readers of this map disagreed about what a
+// missing kind means — the sort read the zero value and put ConfigFile
+// FIRST, while KindOrder below returned len(kindOrder) and reported it
+// LAST. Right answer, wrong reason, and a different wrong answer in the
+// Butler's diagnose walker. Both now go through KindOrder, and
+// TestEveryKindHasADeclaredOrder makes the omission impossible to repeat.
 var kindOrder = map[resource.Kind]int{
 	resource.KindVolume:     0,
-	resource.KindLdapGroup:  1,
-	resource.KindOidcClient: 2,
-	resource.KindContainer:  3,
-	resource.KindRoute:      4,
-	resource.KindDnsRecord:  5,
+	resource.KindConfigFile: 1,
+	resource.KindLdapGroup:  2,
+	resource.KindOidcClient: 3,
+	resource.KindContainer:  4,
+	// Job after Container, because a job provisions a service that has
+	// to be running to be provisioned. It is NOT a dependency edge and
+	// deliberately not modelled as one: a job whose service is not ready
+	// exits non-zero, observe sees that, and the next tick runs it
+	// again. Level-triggered convergence is the ordering mechanism; this
+	// position only saves the first tick from a guaranteed failure.
+	resource.KindJob:       5,
+	resource.KindRoute:     6,
+	resource.KindDnsRecord: 7,
 	// BackupPlan last: a backup declaration depends on the volumes it
 	// names, and nothing depends on it (ADR-W011 A4).
-	resource.KindBackupPlan: 6,
+	resource.KindBackupPlan: 8,
 }
 
 // key identifies a resource for matching desired against observed:
@@ -251,7 +270,11 @@ func Diff(desired, observed []resource.Resource) *Plan {
 
 func sortByKindOrder(steps []PlanStep, reverse bool) {
 	sort.SliceStable(steps, func(i, j int) bool {
-		oi, oj := kindOrder[steps[i].Kind], kindOrder[steps[j].Kind]
+		// KindOrder, not a raw map read: a kind missing from the table
+		// must sort the SAME way for the planner and for every read-only
+		// consumer of it, and "last" is the safer default of the two —
+		// an undeclared kind has no declared dependents to come before.
+		oi, oj := KindOrder(steps[i].Kind), KindOrder(steps[j].Kind)
 		if reverse {
 			if oi != oj {
 				return oi > oj
@@ -317,6 +340,11 @@ func specEqual(a, b resource.Resource) bool {
 		return backupPlanEqual(a.BackupPlan, b.BackupPlan)
 	case resource.KindConfigFile:
 		return a.ConfigFile != nil && b.ConfigFile != nil && *a.ConfigFile == *b.ConfigFile
+	case resource.KindJob:
+		if a.Job == nil || b.Job == nil {
+			return a.Job == b.Job
+		}
+		return containerEqual(&a.Job.Run, &b.Job.Run)
 	default:
 		return false
 	}
@@ -350,7 +378,7 @@ func ldapGroupEqual(a, b *resource.LdapGroupSpec) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return a.Name == b.Name && stringSliceEqual(a.Members, b.Members)
+	return a.Name == b.Name
 }
 
 func backupPlanEqual(a, b *resource.BackupPlanSpec) bool {
@@ -484,11 +512,33 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 			// reads the file, which may be long after the plan applied.
 			return RiskMedium, "configuration changed: the app may fail to start, or start behaving differently"
 		}
+	case resource.KindJob:
+		// A job is not a declaration: applying one RUNS a program that
+		// changes an external system, and unlike every other kind here
+		// there is no reverse op that undoes what it did. Creating the
+		// job that seeds a directory is as consequential as any change
+		// in this table, and deleting the resource does not un-seed it.
+		//
+		// Medium on create as well as change, therefore — the only kind
+		// whose creation is not Low. A first run and a re-run differ
+		// only in that the second has more to collide with.
+		switch action {
+		case ActionDelete:
+			return RiskLow, "job resource removed; the run it already performed is not undone"
+		default:
+			return RiskMedium, "running a provisioning job: it mutates an external system and nothing reverses it"
+		}
 	case resource.KindLdapGroup:
-		// Declared/best-effort (ADR-W005 A3): apply never touches an
-		// external LLDAP system, so no action here carries real-world
-		// blast radius yet.
-		return RiskLow, "declared LDAP group membership only; no external system changed (ADR-W005 A3)"
+		// The declaration itself still touches nothing: it is the
+		// rendered group list plus the identity capability's
+		// provisioning Job that reach LLDAP, and the Job carries its own
+		// Medium risk for exactly that reason. Creating a group is also
+		// the benign direction — a group nobody is in grants nothing.
+		//
+		// A delete is Low for a narrower reason: it removes the group
+		// from the rendered list, and the provisioning job never deletes
+		// a group. The group, and everyone in it, survives.
+		return RiskLow, "declared group only; the identity capability's provisioning job is what creates it"
 	case resource.KindBackupPlan:
 		// The declaration itself moves no data — the backup engine's runs
 		// do, and those carry their own provenance (ADR-W011 A4). Removing

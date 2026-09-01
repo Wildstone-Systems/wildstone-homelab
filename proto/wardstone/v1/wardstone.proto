@@ -297,6 +297,25 @@ message InspectContainerResult {
   bool running = 1;
   string image = 2;
   map<string, string> labels = 3;
+
+  // Exit state (protocol minor 11). `running` alone cannot describe a
+  // container that is SUPPOSED to stop: a one-shot provisioning job that
+  // finished successfully and one that crashed on its first line are
+  // both "not running", and treating either as the other is the whole
+  // difference between a provisioned directory and an empty one.
+  //
+  // status is Docker's own State.Status verbatim — "created", "running",
+  // "exited", "dead", "restarting", "paused" — rather than an enum this
+  // repo would have to keep in step with the engine. An agent older than
+  // minor 11 leaves it empty, which readers must treat as "unknown",
+  // falling back to `running`.
+  //
+  // exit_code is meaningful only when status is "exited"; it is 0 in
+  // every other state, including the states where nothing has run at
+  // all. Never read it without checking status first — a zero here is
+  // "no information" far more often than it is "succeeded".
+  string status = 4;
+  int32 exit_code = 5;
 }
 
 message PruneImages {}

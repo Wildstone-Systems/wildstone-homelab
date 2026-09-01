@@ -2534,10 +2534,28 @@ func (x *InspectContainer) GetName() string {
 }
 
 type InspectContainerResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Running       bool                   `protobuf:"varint,1,opt,name=running,proto3" json:"running,omitempty"`
-	Image         string                 `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
-	Labels        map[string]string      `protobuf:"bytes,3,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Running bool                   `protobuf:"varint,1,opt,name=running,proto3" json:"running,omitempty"`
+	Image   string                 `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
+	Labels  map[string]string      `protobuf:"bytes,3,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Exit state (protocol minor 11). `running` alone cannot describe a
+	// container that is SUPPOSED to stop: a one-shot provisioning job that
+	// finished successfully and one that crashed on its first line are
+	// both "not running", and treating either as the other is the whole
+	// difference between a provisioned directory and an empty one.
+	//
+	// status is Docker's own State.Status verbatim — "created", "running",
+	// "exited", "dead", "restarting", "paused" — rather than an enum this
+	// repo would have to keep in step with the engine. An agent older than
+	// minor 11 leaves it empty, which readers must treat as "unknown",
+	// falling back to `running`.
+	//
+	// exit_code is meaningful only when status is "exited"; it is 0 in
+	// every other state, including the states where nothing has run at
+	// all. Never read it without checking status first — a zero here is
+	// "no information" far more often than it is "succeeded".
+	Status        string `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	ExitCode      int32  `protobuf:"varint,5,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2591,6 +2609,20 @@ func (x *InspectContainerResult) GetLabels() map[string]string {
 		return x.Labels
 	}
 	return nil
+}
+
+func (x *InspectContainerResult) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *InspectContainerResult) GetExitCode() int32 {
+	if x != nil {
+		return x.ExitCode
+	}
+	return 0
 }
 
 type PruneImages struct {
@@ -5320,11 +5352,13 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0fmem_usage_bytes\x18\x02 \x01(\x04R\rmemUsageBytes\x12&\n" +
 	"\x0fmem_limit_bytes\x18\x03 \x01(\x04R\rmemLimitBytes\"&\n" +
 	"\x10InspectContainer\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"\xcd\x01\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"\x82\x02\n" +
 	"\x16InspectContainerResult\x12\x18\n" +
 	"\arunning\x18\x01 \x01(\bR\arunning\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12H\n" +
-	"\x06labels\x18\x03 \x03(\v20.wardstone.v1.InspectContainerResult.LabelsEntryR\x06labels\x1a9\n" +
+	"\x06labels\x18\x03 \x03(\v20.wardstone.v1.InspectContainerResult.LabelsEntryR\x06labels\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\x12\x1b\n" +
+	"\texit_code\x18\x05 \x01(\x05R\bexitCode\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\r\n" +

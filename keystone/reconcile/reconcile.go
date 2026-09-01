@@ -193,6 +193,13 @@ type Reconciler struct {
 	// call lands in a later E-series work package.
 	ReloadAutheliaFn func(ctx context.Context) error
 
+	// JobGateAttempts and JobGateBackoff bound the wait for a Job's
+	// container to reach a terminal state. Zero uses the defaults in
+	// job.go, which are far longer than the container health gate on
+	// purpose: a provisioning run legitimately takes seconds.
+	JobGateAttempts int
+	JobGateBackoff  time.Duration
+
 	// MaxApplyRetries bounds retries of a single op dispatch on a
 	// transient failure (transport error, or an OpError with code
 	// RUNTIME) before the step is given up on (ADR-W004 A4: "bounded
@@ -283,6 +290,12 @@ func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []manage
 		// node — including the client secrets, which it stores as pbkdf2
 		// digests.
 		{autheliaClientsPath(managedPrefix), renderAutheliaClients(desired), true},
+		// The merged LLDAP group list. A prereq rather than a per-step
+		// render for the same reason: it must be correct on disk before
+		// the provisioning job that reads it is planned, and its content
+		// is what that job's spec hash is computed from. No secret
+		// references, so no materialization.
+		{lldapGroupsPath(managedPrefix), renderLdapGroups(desired), false},
 	}
 }
 
@@ -340,7 +353,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	for _, res := range desired {
 		switch res.Kind {
 		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
-			resource.KindLdapGroup, resource.KindBackupPlan, resource.KindConfigFile:
+			resource.KindLdapGroup, resource.KindBackupPlan, resource.KindConfigFile, resource.KindJob:
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
 			providerDesired = append(providerDesired, res)
@@ -439,11 +452,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 		}
 	}()
 
+	// Hoisted out of the loop: one plan can carry many Container steps,
+	// and the answer is the same for all of them.
+	cfgContents := managedConfigContents(r.ManagedPrefix, desiredByKey)
+
 	for _, step := range p.Steps {
 		var sr StepResult
 		switch step.Kind {
 		case resource.KindContainer:
-			sr = r.applyContainerStep(ctx, nodeID, step, desiredByKey)
+			sr = r.applyContainerStep(ctx, nodeID, step, desiredByKey, cfgContents)
+		case resource.KindJob:
+			sr = r.applyJobStep(ctx, nodeID, step, desiredByKey, cfgContents)
 		case resource.KindVolume:
 			sr = r.applyVolumeStep(ctx, nodeID, step)
 		case resource.KindRoute:
@@ -487,6 +506,11 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 	for _, res := range desired {
 		desiredByKey[resKey{res.Kind, res.Metadata.Name}] = res
 	}
+	// Computed here rather than passed in, from the same pure function
+	// the apply path uses on the same desired set: observe and apply must
+	// agree on what a container's configuration is, or every tick sees
+	// drift it just finished fixing.
+	cfgContents := managedConfigContents(r.ManagedPrefix, desiredByKey)
 
 	// Candidates = every desired (kind,name) (to detect Create/Update/
 	// NoOp) union every key the Reconciler currently believes it manages
@@ -504,8 +528,16 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 	for k := range candidates {
 		want, isDesired := desiredByKey[k]
 		switch k.Kind {
+		case resource.KindJob:
+			obs, present, oerr := r.observeJob(ctx, nodeID, k, want, isDesired, cfgContents)
+			if oerr != nil {
+				return nil, nil, oerr
+			}
+			if present {
+				observed = append(observed, obs)
+			}
 		case resource.KindContainer:
-			res, obs, oerr := r.observeContainer(ctx, nodeID, k, want, isDesired)
+			res, obs, oerr := r.observeContainer(ctx, nodeID, k, want, isDesired, cfgContents)
 			if oerr != nil {
 				return nil, nil, oerr
 			}
@@ -588,7 +620,7 @@ type containerObserveResult struct {
 // An INVALID reply means the agent predates the op (protocol minor 5):
 // fall back to the pre-R2c presence-only ContainerStats observe so an
 // N−1 agent keeps its exact previous behavior.
-func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resKey, want resource.Resource, isDesired bool) (*containerObserveResult, resource.Resource, error) {
+func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resKey, want resource.Resource, isDesired bool, cfgContents map[string]string) (*containerObserveResult, resource.Resource, error) {
 	res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_InspectContainer{
 		InspectContainer: &wsv1.InspectContainer{Name: k.Name},
 	}})
@@ -611,7 +643,7 @@ func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resK
 		return &containerObserveResult{}, placeholderResource(resource.KindContainer, k.Name), nil
 	}
 	inspect := res.GetInspectContainer()
-	if inspect.GetLabels()[specHashLabel] == specHash(want.Container, ContainerNetwork) && inspect.GetRunning() {
+	if inspect.GetLabels()[specHashLabel] == specHash(want.Container, ContainerNetwork, configDigest(want.Container, cfgContents)) && inspect.GetRunning() {
 		return &containerObserveResult{}, want, nil
 	}
 	// Present but stale (spec drifted, or a pre-spec-hash container) or
@@ -760,6 +792,10 @@ func placeholderResource(kind resource.Kind, name string) resource.Resource {
 	switch kind {
 	case resource.KindContainer:
 		r.Container = &resource.ContainerSpec{}
+	case resource.KindJob:
+		// Deliberately unequal to any real desired Job: an empty Run has
+		// no image, and containerEqual compares images first.
+		r.Job = &resource.JobSpec{}
 	case resource.KindVolume:
 		r.Volume = &resource.VolumeSpec{Name: name}
 	case resource.KindRoute:
@@ -1043,7 +1079,7 @@ func (r *Reconciler) ManagedNodes() []string {
 
 // ---------------------------------------------------------------- apply: Container
 
-func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step plan.PlanStep, desiredByKey map[resKey]resource.Resource) StepResult {
+func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step plan.PlanStep, desiredByKey map[resKey]resource.Resource, cfgContents map[string]string) StepResult {
 	sr := StepResult{Step: step}
 	key := resKey{step.Kind, step.Name}
 
@@ -1071,7 +1107,7 @@ func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step
 			sr.Error = pr
 			return sr
 		}
-		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, want.Container, ContainerNetwork))
+		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, want.Container, ContainerNetwork, configDigest(want.Container, cfgContents)))
 		if err != nil {
 			sr.Error = err.Error()
 			return sr
@@ -1211,7 +1247,18 @@ func (r *Reconciler) autheliaAddr() string {
 // the spec alone would leave every pre-minor-8 container running
 // unattached with a matching hash — converged on paper, unreachable by
 // name in fact.
-func specHash(spec *resource.ContainerSpec, network string) string {
+//
+// cfgDigest extends that reasoning to the managed configuration files a
+// container mounts, which are not part of ContainerSpec either: without
+// it, editing an app's config leaves the container running the bytes it
+// read at start, with a matching hash. See configdigest.go for what is
+// included and what is deliberately not.
+//
+// An empty cfgDigest contributes NOTHING to the hash, rather than
+// hashing the empty string: that keeps every container which reads no
+// managed config on the hash it already has, so this dimension replaces
+// only the containers it actually applies to.
+func specHash(spec *resource.ContainerSpec, network, cfgDigest string) string {
 	data, err := json.Marshal(spec)
 	if err != nil {
 		// A ContainerSpec is plain data; Marshal cannot fail on it. Guard
@@ -1219,7 +1266,11 @@ func specHash(spec *resource.ContainerSpec, network string) string {
 		// replace" — converging, never wedging.
 		return ""
 	}
-	sum := sha256.Sum256(append(data, []byte("\x00net="+network)...))
+	data = append(data, []byte("\x00net="+network)...)
+	if cfgDigest != "" {
+		data = append(data, []byte("\x00cfg="+cfgDigest)...)
+	}
+	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:8])
 }
 
@@ -1298,7 +1349,7 @@ func (r *Reconciler) pullImage(ctx context.Context, nodeID, image string) string
 	return ""
 }
 
-func containerEnsureOp(name string, spec *resource.ContainerSpec, network string) *wsv1.Operation {
+func containerEnsureOp(name string, spec *resource.ContainerSpec, network, cfgDigest string) *wsv1.Operation {
 	var ports []*wsv1.PortBinding
 	for _, p := range spec.Ports {
 		hostIP, hostPort, containerPort, ok := resource.SplitPortMapping(p)
@@ -1315,7 +1366,7 @@ func containerEnsureOp(name string, spec *resource.ContainerSpec, network string
 		Name: name, Image: spec.Image, Env: spec.Env, Ports: ports, Mounts: mounts, RestartPolicy: spec.Restart,
 		Command: spec.Command,
 		Network: network,
-		Labels:  map[string]string{specHashLabel: specHash(spec, network)},
+		Labels:  map[string]string{specHashLabel: specHash(spec, network, cfgDigest)},
 	}}}
 }
 

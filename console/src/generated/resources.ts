@@ -10,7 +10,8 @@ export type Kind =
   "OidcClient" |
   "LdapGroup" |
   "BackupPlan" |
-  "ConfigFile";
+  "ConfigFile" |
+  "Job";
 
 export const API_VERSION = "wildstone.dev/v1";
 
@@ -71,7 +72,6 @@ export interface OidcClientSpec {
 
 export interface LdapGroupSpec {
   name: string;
-  members?: string[];
 }
 
 export interface BackupRetention {
@@ -93,6 +93,10 @@ export interface ConfigFileSpec {
   content: string;
 }
 
+export interface JobSpec {
+  run: ContainerSpec;
+}
+
 export type Spec =
   ContainerSpec |
   VolumeSpec |
@@ -101,7 +105,8 @@ export type Spec =
   OidcClientSpec |
   LdapGroupSpec |
   BackupPlanSpec |
-  ConfigFileSpec;
+  ConfigFileSpec |
+  JobSpec;
 
 export interface Resource {
   apiVersion: string;
@@ -119,4 +124,5 @@ export interface SpecByKind {
   LdapGroup: LdapGroupSpec;
   BackupPlan: BackupPlanSpec;
   ConfigFile: ConfigFileSpec;
+  Job: JobSpec;
 }

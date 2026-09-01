@@ -69,7 +69,15 @@ import (
 //	tokens with an RSA key it cannot generate on demand, and a random
 //	blob is not a key. UNSPECIFIED means RANDOM, so a Keystone that never
 //	sets it still gets what it has always asked for.
-const ProtocolMinor = 10
+//
+// 11: adds InspectContainerResult.status and .exit_code. `running`
+//
+//	alone cannot describe a container that is SUPPOSED to stop, so a
+//	one-shot provisioning job that succeeded and one that crashed
+//	immediately were indistinguishable — and a job whose success cannot
+//	be observed cannot be reconciled. An agent below 11 leaves status
+//	empty, which readers treat as unknown and fall back to `running`.
+const ProtocolMinor = 11
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

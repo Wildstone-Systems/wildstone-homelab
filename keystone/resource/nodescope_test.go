@@ -97,6 +97,10 @@ func validResourceOfKind(t *testing.T, k Kind) Resource {
 		// unlike every other kind it cannot be owned by "system".
 		r.Metadata.Owner = "capability/r1"
 		r.ConfigFile = &ConfigFileSpec{Filename: "config.yml", Content: "a: b\n"}
+	case KindJob:
+		// No restart policy and no ports: validateJob refuses both, and
+		// this fixture has to pass validation to reach the scope check.
+		r.Job = &JobSpec{Run: ContainerSpec{Image: "docker.io/library/nginx@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
 	default:
 		t.Fatalf("kind %s has no fixture here — a kind was added without deciding its node scope", k)
 	}
