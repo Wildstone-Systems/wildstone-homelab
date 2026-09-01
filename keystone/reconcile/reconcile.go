@@ -59,7 +59,6 @@
 package reconcile
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -250,6 +249,12 @@ type Reconciler struct {
 type managedFile struct {
 	path string
 	want []byte
+	// materialize asks the agent to resolve secret references in the
+	// content before writing (protocol minor 9). Only files a third party
+	// actually reads need it; Wildstone's own bookkeeping files keep
+	// their references, which keeps their drift comparison a plain byte
+	// compare and keeps secrets off disk in one more place.
+	materialize bool
 }
 
 // nodePrereqFiles is the closed list of those files. It is a function
@@ -259,13 +264,16 @@ type managedFile struct {
 // supposed to bound it.
 func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []managedFile {
 	return []managedFile{
-		{baseCaddyfilePath(managedPrefix), renderBaseCaddyfile()},
-		{placeholderFragmentPath(managedPrefix), renderPlaceholderFragment()},
+		{baseCaddyfilePath(managedPrefix), renderBaseCaddyfile(), false},
+		{placeholderFragmentPath(managedPrefix), renderPlaceholderFragment(), false},
 		// The merged Authelia clients file qualifies for the same reason
 		// the other two do. Asserting it before observe also means it is
 		// already correct by the time an OidcClient step's reload fires
 		// later in the same tick.
-		{autheliaClientsPath(managedPrefix), renderAutheliaClients(desired)},
+		// Authelia reads this one, so its references are resolved on the
+		// node — including the client secrets, which it stores as pbkdf2
+		// digests.
+		{autheliaClientsPath(managedPrefix), renderAutheliaClients(desired), true},
 	}
 }
 
@@ -300,11 +308,11 @@ func (r *Reconciler) repairNodePrereqs(ctx context.Context, nodeID string, desir
 		}
 		// Absent counts as drifted: a missing base Caddyfile is the
 		// fresh-install state, and writing it is what brings ingress up.
-		if oe == nil && bytes.Equal(res.GetReadManagedFile().GetContent(), f.want) {
+		if oe == nil && managedFileMatches(res.GetReadManagedFile(), f.want) {
 			continue
 		}
 		wres, err := r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_WriteManagedFile{
-			WriteManagedFile: &wsv1.WriteManagedFile{Path: f.path, Content: f.want},
+			WriteManagedFile: &wsv1.WriteManagedFile{Path: f.path, Content: f.want, MaterializeSecrets: f.materialize},
 		}})
 		if err != nil {
 			return repaired, fmt.Sprintf("prereq write %s: %v", f.path, err)
@@ -642,8 +650,7 @@ func (r *Reconciler) observeRoute(ctx context.Context, nodeID string, k resKey, 
 	if !isDesired {
 		return placeholderResource(resource.KindRoute, k.Name), true, nil
 	}
-	content := res.GetReadManagedFile().GetContent()
-	if routeFragmentEqual(content, renderRouteFragment(want.Route, r.autheliaAddr())) {
+	if managedFileMatches(res.GetReadManagedFile(), renderRouteFragment(want.Route, r.autheliaAddr())) {
 		return want, true, nil
 	}
 	return placeholderResource(resource.KindRoute, k.Name), true, nil
@@ -673,11 +680,33 @@ func (r *Reconciler) observeOidcClient(ctx context.Context, nodeID string, k res
 	if !isDesired {
 		return placeholderResource(resource.KindOidcClient, k.Name), true, nil
 	}
-	content := res.GetReadManagedFile().GetContent()
-	if routeFragmentEqual(content, renderOidcClientFragment(want.OidcClient)) {
+	if managedFileMatches(res.GetReadManagedFile(), renderOidcClientFragment(want.OidcClient)) {
 		return want, true, nil
 	}
 	return placeholderResource(resource.KindOidcClient, k.Name), true, nil
+}
+
+// managedFileMatches decides whether a ReadManagedFile result represents
+// the content we intended to write.
+//
+// Two cases, and the second is the whole reason this is a function. A
+// plain managed file comes back as bytes and is compared byte for byte.
+// A MATERIALIZED file does not come back at all: its bytes on disk hold
+// resolved secret values, which the agent deliberately withholds, and
+// sends the sha256 of the pre-materialization content instead. That hash
+// is the only thing Keystone can compare against, because Keystone holds
+// no secrets and so cannot compute what the file should look like.
+//
+// Getting this wrong is not subtle in effect but is silent in cause:
+// comparing rendered bytes against a materialized file never matches, so
+// the reconciler would rewrite it on every single tick, forever, and
+// report drift it had just repaired.
+func managedFileMatches(res *wsv1.ReadManagedFileResult, want []byte) bool {
+	if src := res.GetSourceSha256Hex(); src != "" {
+		sum := sha256.Sum256(want)
+		return src == hex.EncodeToString(sum[:])
+	}
+	return routeFragmentEqual(res.GetContent(), want)
 }
 
 func routeFragmentEqual(a, b []byte) bool {

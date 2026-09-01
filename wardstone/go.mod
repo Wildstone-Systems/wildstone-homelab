@@ -1,6 +1,6 @@
 module github.com/chickenrat17/wildstone-homelab/wardstone
 
-go 1.25
+go 1.25.0
 
 require (
 	github.com/chickenrat17/wildstone-homelab/keystone v0.0.0-00010101000000-000000000000
@@ -13,6 +13,7 @@ require (
 
 require (
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
+	golang.org/x/crypto v0.38.0
 	golang.org/x/net v0.40.0 // indirect
 	golang.org/x/text v0.25.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250528174236-200df99c418a // indirect

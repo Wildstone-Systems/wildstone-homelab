@@ -54,7 +54,16 @@ import (
 //	network since minor 3, but nothing could attach a container to one,
 //	so the "container/<name>:<port>" upstreams every package declares
 //	had no way to resolve (#40).
-const ProtocolMinor = 8
+//
+// 9: adds WriteManagedFile.materialize_secrets and
+//
+//	ReadManagedFileResult.source_sha256_hex. Secret references were
+//	resolved in container env only, so a config FILE an app reads could
+//	not carry one — which is every OIDC client secret, since Authelia
+//	reads a file. Reads of such a file return the pre-materialization
+//	hash and no content: the bytes on disk hold live secrets and must not
+//	travel back to Keystone.
+const ProtocolMinor = 9
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
