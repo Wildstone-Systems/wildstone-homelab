@@ -42,13 +42,22 @@ import (
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
-// jobRunSpec is the ContainerSpec a Job is applied as. Restart is forced
-// empty (validateJob refuses one anyway) so that nothing on the node
-// re-runs the job on its own terms: the reconciler owns that decision,
-// from the exit status.
+// jobRunSpec is the ContainerSpec a Job is applied as.
+//
+// Restart is forced to "no" — explicitly, not left empty. Empty is what
+// this used to do, on the reasoning that validateJob refuses a restart
+// policy anyway, and it was wrong for a reason that is invisible from
+// here: the AGENT maps an empty restart policy to "unless-stopped"
+// (ops.go), which is the right default for a service and exactly wrong
+// for a run. A job that exited 0 was restarted forever:
+//
+//	lldap-provision-groups  RestartPolicy=unless-stopped  ExitCode=0  RestartCount=11
+//
+// So the reconciler states it. Wildstone owns when a job runs again, and
+// it decides that from the exit status, not from a policy on the node.
 func jobRunSpec(spec *resource.JobSpec) *resource.ContainerSpec {
 	run := spec.Run
-	run.Restart = ""
+	run.Restart = "no"
 	return &run
 }
 

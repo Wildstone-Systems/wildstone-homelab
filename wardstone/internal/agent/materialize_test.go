@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"os"
@@ -249,14 +248,17 @@ func verifyPbkdf2Sha512(t *testing.T, encoded, value string) bool {
 	if err != nil {
 		t.Fatalf("iteration count %q: %v", parts[2], err)
 	}
-	enc := base64.RawStdEncoding
-	salt, err := enc.DecodeString(parts[3])
+	// crypt64, not RawStdEncoding. This helper used to decode with the
+	// standard alphabet, which is how it verified digests Authelia could
+	// not read: both sides of the round-trip were wrong in the same way,
+	// so the test passed and the provider rejected every login.
+	salt, err := crypt64.DecodeString(parts[3])
 	if err != nil {
-		t.Fatalf("salt is not raw-std base64: %v", err)
+		t.Fatalf("salt is not crypt-alphabet base64: %v", err)
 	}
-	want, err := enc.DecodeString(parts[4])
+	want, err := crypt64.DecodeString(parts[4])
 	if err != nil {
-		t.Fatalf("hash is not raw-std base64: %v", err)
+		t.Fatalf("hash is not crypt-alphabet base64: %v", err)
 	}
 	got := pbkdf2.Key([]byte(value), salt, iter, sha512.Size, sha512.New)
 	return hmac.Equal(got, want)

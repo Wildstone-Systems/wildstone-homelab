@@ -213,11 +213,28 @@ templates:
         - "/etc/wildstone/identity/configuration.yml"
         - "--config"
         - "/etc/wildstone/authelia/clients.yml"
-      env:
-        AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE: "secret/authelia-oidc-hmac-secret"
-        AUTHELIA_JWT_SECRET_FILE: "secret/authelia-jwt-secret"
-        AUTHELIA_SESSION_SECRET_FILE: "secret/authelia-session-secret"
-        AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE: "secret/authelia-storage-encryption-key"
+      # NO env secrets. These four were AUTHELIA_*_SECRET_FILE vars
+      # carrying secret/<name> references, and every one of them broke
+      # Authelia's boot:
+      #
+      #   error loading secret path <the actual secret value>
+      #     into key 'jwt_secret': file does not exist
+      #
+      # A *_FILE variable names a PATH. The agent resolves a secret
+      # reference in env to the secret's VALUE (materializeEnv), which
+      # is correct for every other package and exactly wrong here, so
+      # Authelia took the value as a filename and tried to open it.
+      #
+      # Three of the four were also redundant: session.secret,
+      # jwt_secret and storage.encryption_key are already in
+      # configuration.yml above as secret/<name> references, resolved in
+      # FILE CONTENT on the node — the path that works. The fourth,
+      # the OIDC hmac_secret, belongs in the OIDC block and so belongs
+      # in clients.yml; see the note there.
+      #
+      # Passing values through env at all would be the worse fix: the
+      # process environment of a container is readable by anything that
+      # can inspect it, and materialized file content is not.
       mounts:
         - { source: authelia-config, target: /config }
         # Two read-only subtrees of the managed prefix, because the two
