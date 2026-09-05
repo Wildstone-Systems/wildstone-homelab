@@ -243,10 +243,10 @@ No real Home Assistant, PantryOS, or LLM in CI.
 | **H3** | Automation engine: trigger matching, condition evaluation, `fired`/`suppressed` events, dry-run and replay (`wild automation replay`). No escalation, no actions yet | The deterministic half works end to end and can be tested against history |
 | **H4** | First action, through the domestic gateway: notify via the existing ntfy package, with a per-notification reply token. ntfy's action buttons post the reply back to H1's intake as `household.answered` | A rule can ask a human a question and hear the answer, with no chat surface built |
 | **H5** | First adapter: Home Assistant → intake, declared in the home-automation package per A10 (config-only or sidecar), with the A8 person mapping | A third-party app plugs in through the one contract |
-| **H6** | Escalation: a rule opens a Butler session with its context packet; the Butler's answer routes to H4's action. Red-team case per A4 | The "left home without breakfast" flow, end to end |
+| **H6** | Escalation: a fired rule hands the Butler its context packet and gets back the wording of ONE declared action param, with the rule's own wording as the fallback; the call carries no tools. Red-team case per A4 | The "left home without breakfast" flow, end to end |
 | **H7** | Natural-language authoring: the Butler compiles a request into the H2 schema, dry-runs it against H3, and proposes it through `propose_change` | The AI writes rules the engine already understands; no second execution path |
 
-**Status:** H1 through H5 are implemented. H1: the `household_events`
+**Status:** H1 through H6 are implemented. H1: the `household_events`
 table and envelope, the `publisher` role and `emit` verb, the intake and
 cursor endpoints, the `publishes` block, publisher-secret synthesis in
 the capability engine, the minting endpoint, and `wild household`. H2:
@@ -272,7 +272,13 @@ Assistant publish into the intake itself, declares its two event types
 and the object-id subject mapping, and is pinned by tests that its
 rendered config is loadable YAML, that its declaration and its
 configuration cannot drift apart, and that the intake accepts the exact
-wire shape it sends. See `docs/concepts.md`, "Household events".
+wire shape it sends. H6: escalation — `escalation.into` names the one
+action param the Butler may replace and doubles as the fallback, the
+engine gathers the rule's declared context providers, `keystone/butler`
+gains a tool-free `Phraser` whose facts are redacted and enveloped and
+whose answer is bounded at both ends, and the whole "left home without
+breakfast logged" flow is pinned end to end. See `docs/concepts.md`,
+"Household events".
 
 The first end-to-end target is the breakfast check: Home Assistant
 emits `person.left_home`; a rule checks the timeline for a

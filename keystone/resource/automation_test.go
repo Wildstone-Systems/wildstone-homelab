@@ -115,12 +115,19 @@ func TestAutomationValidation(t *testing.T) {
 		"context limit zero": {func(r *Resource) { r.Automation.Context[0].Limit = 0 }, "spec.context[0].limit"},
 		"context limit big":  {func(r *Resource) { r.Automation.Context[0].Limit = MaxAutomationContextLimit + 1 }, "spec.context[0].limit"},
 		"escalation empty":   {func(r *Resource) { r.Automation.Escalation.Prompt = "" }, "spec.escalation.prompt"},
-		"escalation long":    {func(r *Resource) { r.Automation.Escalation.Prompt = strings.Repeat("x", MaxAutomationPromptBytes+1) }, "spec.escalation.prompt"},
-		"tool no capability": {func(r *Resource) { r.Automation.Action.Tool = "notify" }, "spec.action.tool"},
-		"tool bad chars":     {func(r *Resource) { r.Automation.Action.Tool = "Notifications.Notify" }, "spec.action.tool"},
-		"tier unknown":       {func(r *Resource) { r.Automation.Action.Tier = "critical" }, "spec.action.tier"},
-		"tier empty":         {func(r *Resource) { r.Automation.Action.Tier = "" }, "spec.action.tier"},
-		"param key spaced":   {func(r *Resource) { r.Automation.Action.Params["bad key"] = "x" }, "spec.action.params"},
+		// An escalation must name a param that exists and already
+		// carries serviceable wording: it is both what a reviewer sees
+		// and what the household receives when no model answers.
+		"into unknown param":   {func(r *Resource) { r.Automation.Escalation.Into = "nope" }, "spec.escalation.into"},
+		"into blank param":     {func(r *Resource) { r.Automation.Action.Params["message"] = "  " }, "spec.escalation.into"},
+		"into missing default": {func(r *Resource) { delete(r.Automation.Action.Params, "message") }, "spec.escalation.into"},
+		"into bad identifier":  {func(r *Resource) { r.Automation.Escalation.Into = "a b" }, "spec.escalation.into"},
+		"escalation long":      {func(r *Resource) { r.Automation.Escalation.Prompt = strings.Repeat("x", MaxAutomationPromptBytes+1) }, "spec.escalation.prompt"},
+		"tool no capability":   {func(r *Resource) { r.Automation.Action.Tool = "notify" }, "spec.action.tool"},
+		"tool bad chars":       {func(r *Resource) { r.Automation.Action.Tool = "Notifications.Notify" }, "spec.action.tool"},
+		"tier unknown":         {func(r *Resource) { r.Automation.Action.Tier = "critical" }, "spec.action.tier"},
+		"tier empty":           {func(r *Resource) { r.Automation.Action.Tier = "" }, "spec.action.tier"},
+		"param key spaced":     {func(r *Resource) { r.Automation.Action.Params["bad key"] = "x" }, "spec.action.params"},
 		"param value long": {func(r *Resource) {
 			r.Automation.Action.Params["message"] = strings.Repeat("m", MaxAutomationParamBytes+1)
 		}, "spec.action.params.message"},
@@ -148,6 +155,26 @@ func TestAutomationValidation(t *testing.T) {
 			t.Errorf("tier %s refused by the schema: %v", tier, err)
 		}
 	}
+	// Into defaults to "message", and naming another existing param is
+	// fine — the Butler replaces a param, it never introduces one.
+	named := breakfastRule()
+	named.Automation.Action.Params["headline"] = "Breakfast"
+	named.Automation.Escalation.Into = "headline"
+	if err := named.Validate(); err != nil {
+		t.Fatalf("named into: %v", err)
+	}
+	if named.Automation.EscalationParam() != "headline" {
+		t.Fatalf("EscalationParam = %q", named.Automation.EscalationParam())
+	}
+	if breakfastRule().Automation.EscalationParam() != DefaultEscalationParam {
+		t.Fatal("an escalation with no into does not default to message")
+	}
+	noEscalation := breakfastRule()
+	noEscalation.Automation.Escalation = nil
+	if noEscalation.Automation.EscalationParam() != "" {
+		t.Fatal("a rule with no escalation reported an escalation param")
+	}
+
 	// A rule with no conditions, context, or escalation is the minimum.
 	r := breakfastRule()
 	r.Automation.Conditions, r.Automation.Context, r.Automation.Escalation = nil, nil, nil

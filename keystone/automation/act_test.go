@@ -198,23 +198,29 @@ func TestActionFailuresAreRecorded(t *testing.T) {
 	}
 }
 
-func TestEscalatingRuleWaitsForAButler(t *testing.T) {
-	// The breakfast rule escalates. With no escalator wired the engine
-	// must not invent the message the household asked a model to write.
+// TestEscalationSkippedActsWithTheRulesOwnWording: an escalating rule on
+// a control plane with no Butler is not a broken rule. It acts with the
+// wording its author wrote — the deterministic backbone doing its job —
+// and says on the stream why the model had no part in it.
+func TestEscalationSkippedActsWithTheRulesOwnWording(t *testing.T) {
 	e, db := started(t, rule("breakfast-check"))
 	acts := &fakeActions{}
-	e.Actions = acts
+	e.Actions = acts // no Escalator
 
 	emit(t, db, "left-1", "person.left_home", "mika", t0)
 	if _, err := e.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(acts.calls) != 0 {
-		t.Fatalf("an escalating rule acted without its Butler: %+v", acts.calls)
+	if len(acts.calls) != 1 {
+		t.Fatalf("an escalating rule did not act without its Butler: %+v", acts.calls)
 	}
-	pending, _ := db.QueryHouseholdEvents(runtimedb.HouseholdQuery{Type: TypeEscalationPending})
-	if len(pending) != 1 || pending[0].Entity != "breakfast-check" {
-		t.Fatalf("pending = %+v", pending)
+	if got := acts.calls[0].Params["message"]; got != "Did you have breakfast?" {
+		t.Fatalf("message = %q, want the rule's own wording", got)
+	}
+	skipped, _ := db.QueryHouseholdEvents(runtimedb.HouseholdQuery{Type: TypeEscalationSkipped})
+	if len(skipped) != 1 || skipped[0].Entity != "breakfast-check" ||
+		!strings.Contains(string(skipped[0].Payload), `"into":"message"`) {
+		t.Fatalf("skipped = %+v", skipped)
 	}
 }
 
@@ -225,7 +231,7 @@ func TestNoGatewayLeavesDecisionsUnacted(t *testing.T) {
 	if err != nil || out.Fired != 1 {
 		t.Fatalf("tick = %+v, %v", out, err)
 	}
-	for _, typ := range []string{TypeActed, TypeActionFailed, TypeEscalationPending} {
+	for _, typ := range []string{TypeActed, TypeActionFailed, TypeEscalationSkipped} {
 		if got, _ := db.QueryHouseholdEvents(runtimedb.HouseholdQuery{Type: typ}); len(got) != 0 {
 			t.Fatalf("%s recorded with no gateway wired: %+v", typ, got)
 		}

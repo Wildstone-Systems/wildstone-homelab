@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/household"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
@@ -715,5 +718,148 @@ func TestHomeAssistantWireShapeIsAccepted(t *testing.T) {
 	// household's dedupe key, and a redacted one is useless.
 	if e.EventID != "person.mika:person.arrived_home:1757102400" {
 		t.Fatalf("event id = %q", e.EventID)
+	}
+}
+
+// phrasingProvider is a fake LLM that records what it was asked and
+// returns a scripted line.
+type phrasingProvider struct {
+	requests []provider.ChatRequest
+	reply    string
+}
+
+func (p *phrasingProvider) Name() string { return "fake" }
+func (p *phrasingProvider) Chat(_ context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+	p.requests = append(p.requests, req)
+	return &provider.ChatResponse{Text: p.reply}, nil
+}
+
+// TestBreakfastEscalationEndToEnd is the ADR-W022 §5 flow, whole: Home
+// Assistant's departure event arrives, the rule finds no meal logged,
+// the engine gathers the last few breakfasts, the Butler phrases one
+// informed question from them, and the domestic gateway sends it — with
+// the Butler having had no tools, no say in whether the household was
+// contacted, and no way to change who was asked.
+func TestBreakfastEscalationEndToEnd(t *testing.T) {
+	h := newHarness(t)
+	h.addPublisher("publisher-home")
+
+	var published struct {
+		Topic   string `json:"topic"`
+		Message string `json:"message"`
+	}
+	ntfy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &published) //nolint:errcheck
+		w.Write([]byte(`{"id":"x"}`))    //nolint:errcheck
+	}))
+	defer ntfy.Close()
+
+	gw := &domestic.Gateway{}
+	gw.Register(&domestic.Notifier{BaseURL: ntfy.URL})
+	llm := &phrasingProvider{reply: "You usually have porridge about now — did you eat before heading out?"}
+	phraser := &butler.Phraser{Provider: llm}
+
+	h.s.Automation.Actions = gw
+	h.s.Automation.Escalator = automation.EscalatorFunc(func(ctx context.Context, req automation.EscalationRequest) (string, error) {
+		facts := make([]butler.Fact, 0, len(req.Facts))
+		for _, f := range req.Facts {
+			facts = append(facts, butler.Fact{Label: f.Label, Content: f.Content})
+		}
+		return phraser.Phrase(ctx, butler.PhraseRequest{
+			Rule: req.Rule, Instruction: req.Instruction, Fallback: req.Fallback, Facts: facts,
+		})
+	})
+
+	rule := `apiVersion: wildstone.dev/v1
+kind: Automation
+metadata: { name: breakfast-check, owner: household/mika }
+spec:
+  description: Ask about breakfast when leaving home without a meal logged
+  trigger: { eventType: person.left_home, subject: mika }
+  conditions:
+    - { kind: eventAbsent, eventType: pantry.meal_logged, window: 6h, sameSubject: true }
+  context:
+    - { kind: recentEvents, eventType: pantry.meal_logged, sameSubject: true, limit: 3 }
+  escalation:
+    prompt: "Ask, in one sentence, whether today matched the usual breakfast."
+    into: message
+  action:
+    tool: notifications.notify
+    tier: domestic
+    params:
+      topic: "household-{{ .Subject }}"
+      message: "Did you have breakfast?"
+`
+	var rec runtimedb.PlanRecord
+	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans",
+		proposalRequest{Summary: "breakfast check", Put: []string{rule}}, &rec); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("propose = %d", resp.StatusCode)
+	}
+	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("approve = %d", resp.StatusCode)
+	}
+
+	emit := func(id, typ string, at time.Time) {
+		t.Helper()
+		env := household.Envelope{EventID: id, OccurredAt: at, Type: typ, Subject: "mika",
+			Payload: json.RawMessage(`{"meal":"porridge"}`)}
+		if resp := h.do(runtimedb.RolePublisher, http.MethodPost, "/api/v1/household/events", env, nil); resp.StatusCode != http.StatusCreated {
+			t.Fatalf("emit %s = %d", id, resp.StatusCode)
+		}
+	}
+	now := time.Now()
+	emit("meal-1", "pantry.meal_logged", now.Add(-48*time.Hour))
+	emit("meal-2", "pantry.meal_logged", now.Add(-24*time.Hour))
+	if _, err := h.s.Automation.Tick(t.Context()); err != nil { // adopt
+		t.Fatal(err)
+	}
+	emit("left-1", "person.left_home", now.Add(-time.Minute))
+
+	out, err := h.s.Automation.Tick(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Fired != 1 {
+		t.Fatalf("tick = %+v", out)
+	}
+
+	// The household got the Butler's sentence, at the address the RULE
+	// chose — not one the model had any part in.
+	if published.Topic != "household-mika" || published.Message != llm.reply {
+		t.Fatalf("published = %+v", published)
+	}
+	if len(llm.requests) != 1 {
+		t.Fatalf("asked the model %d times", len(llm.requests))
+	}
+	req := llm.requests[0]
+	// The containment claim, end to end: no tools were on the table.
+	if len(req.Tools) != 0 {
+		t.Fatalf("the escalation offered %d tool(s)", len(req.Tools))
+	}
+	// The packet carried the rule's instruction and the two breakfasts
+	// it asked for, as untrusted data.
+	user := req.Messages[0].Text
+	if !strings.Contains(user, "Ask, in one sentence") || !strings.Contains(user, "Did you have breakfast?") {
+		t.Fatalf("packet lost the instruction or the fallback:\n%s", user)
+	}
+	if !strings.Contains(user, "<untrusted_data") || strings.Count(user, "porridge") < 2 {
+		t.Fatalf("packet did not carry the gathered breakfasts as untrusted data:\n%s", user)
+	}
+
+	// And the whole exchange is one correlated thread on the household
+	// stream: the decision, the escalation, and the action.
+	var events []runtimedb.HouseholdEvent
+	h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/household/events", nil, &events)
+	thread := map[string]bool{}
+	for _, e := range events {
+		if e.CorrelationID == "left-1" {
+			thread[e.Type] = true
+		}
+	}
+	for _, want := range []string{"automation.fired", "automation.escalated", "automation.acted"} {
+		if !thread[want] {
+			t.Fatalf("no %s correlated to the departure; thread = %v", want, thread)
+		}
 	}
 }

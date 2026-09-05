@@ -34,7 +34,8 @@ func rule(name string, conds ...resource.AutomationCondition) resource.Resource 
 			Trigger:     resource.AutomationTrigger{EventType: "person.left_home", Subject: "mika"},
 			Conditions:  conds,
 			Escalation:  &resource.AutomationEscalation{Prompt: "ask"},
-			Action:      resource.AutomationAction{Tool: "notifications.notify", Tier: "domestic"},
+			Action: resource.AutomationAction{Tool: "notifications.notify", Tier: "domestic",
+				Params: map[string]string{"topic": "household", "message": "Did you have breakfast?"}},
 		},
 	}
 }
@@ -248,11 +249,12 @@ func TestTickRecordsDecisionsIdempotently(t *testing.T) {
 	if all, _ := db.QueryHouseholdEvents(runtimedb.HouseholdQuery{Type: TypeFired}); len(all) != 1 {
 		t.Fatalf("re-tick wrote %d decision(s), want the original 1", len(all))
 	}
-	// This rule escalates and no escalator is wired, so the firing is
-	// followed by exactly one escalation_pending — also idempotent.
-	pending, _ := db.QueryHouseholdEvents(runtimedb.HouseholdQuery{Type: TypeEscalationPending})
-	if len(pending) != 1 || pending[0].Entity != "breakfast-check" || pending[0].CorrelationID != "left-mika" {
-		t.Fatalf("escalation_pending = %+v", pending)
+	// No gateway is wired in this harness, so nothing follows the
+	// decision at all: the engine records what it decided and stops.
+	for _, typ := range []string{TypeActed, TypeEscalated, TypeEscalationSkipped} {
+		if got, _ := db.QueryHouseholdEvents(runtimedb.HouseholdQuery{Type: typ}); len(got) != 0 {
+			t.Fatalf("%s recorded with no gateway wired: %+v", typ, got)
+		}
 	}
 
 	// Mika leaves again two hours later: the cooldown suppresses, with

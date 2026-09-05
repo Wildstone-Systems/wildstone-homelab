@@ -76,6 +76,16 @@ the test that pins it.
   it off a phone can claim the household answered a question, and
   nothing else. It expires (`-household-reply-ttl`), and the answers it
   can forge are facts a rule may read, never actions a rule may take.
+- **Household escalation gives a model no new reach.** A phrasing call
+  is made with an empty tool set, after the engine has already decided
+  that the rule fires, what it runs, at which tier, and for whom. The
+  answer replaces the text of one already-approved param and is bounded
+  and stripped at the engine's own boundary. An attacker who fully
+  controls an event payload can therefore influence the wording of a
+  message the household was already going to receive on their own
+  device, and nothing else — not whether it is sent, not what it does,
+  not who it reaches. Facts still pass through the shared redactor, so
+  a secret smuggled into a payload does not reach the model either.
 - A household rule's action is bounded by tier twice over — policy
   refuses an infrastructure-tier action at proposal, the domestic
   gateway refuses it at dispatch — so a rule that reached the engine by

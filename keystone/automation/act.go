@@ -7,10 +7,11 @@ package automation
 // against its trigger, claim the action on the household stream, hand it
 // to the gateway, and record a failure if one comes back.
 //
-// Ordering is the interesting part. The claim is written BEFORE the
-// dispatch, under a deterministic event id, so a tick retried after a
-// crash finds the claim already there and does not run the action a
-// second time. That makes dispatch at-most-once rather than at-least-
+// Ordering is the interesting part. Escalation, when the rule asks for
+// it, runs first — it decides the wording. The claim is then written
+// BEFORE the dispatch, under a deterministic event id, so a tick retried
+// after a crash finds the claim already there and does not run the
+// action a second time. That makes dispatch at-most-once rather than at-least-
 // once: the household may miss an action if Keystone dies at exactly the
 // wrong moment, and will never get it twice. For a question that is the
 // right trade — a duplicate "did you get the mail?" is a nuisance, but
@@ -42,12 +43,6 @@ const (
 	// TypeActionFailed follows TypeActed when the gateway refused the
 	// call or the executor failed.
 	TypeActionFailed = "automation.action_failed"
-	// TypeEscalationPending is recorded when a fired rule asks for the
-	// Butler and no escalator is configured. The rule said its message
-	// needed phrasing; sending an unphrased one instead would be the
-	// engine inventing what the household asked a model to write.
-	TypeEscalationPending = "automation.escalation_pending"
-
 	// maxRenderedParamBytes bounds one rendered param value. Generous
 	// against the schema's own bound, since a template may expand.
 	maxRenderedParamBytes = 4096
@@ -134,15 +129,6 @@ func (e *Engine) act(ctx context.Context, d Decision, ev runtimedb.HouseholdEven
 	if !d.Fired {
 		return nil
 	}
-	// A rule that asks the Butler to phrase its message waits for one.
-	// H6 wires the escalator; until then the decision stands recorded
-	// and the reason it did not act is on the stream beside it.
-	if d.Escalates {
-		return e.recordFollowUp(d, ev, TypeEscalationPending, "esc", map[string]any{
-			"reason": "the rule escalates to the Butler and no escalator is configured",
-			"action": d.Action, "tier": d.Tier,
-		})
-	}
 	if e.Actions == nil {
 		return nil // decisions recorded, nothing wired to act on them
 	}
@@ -152,6 +138,21 @@ func (e *Engine) act(ctx context.Context, d Decision, ev runtimedb.HouseholdEven
 		return e.recordFollowUp(d, ev, TypeActionFailed, "err", map[string]any{
 			"tool": d.Action, "tier": d.Tier, "error": rerr.Error(), "stage": "render",
 		})
+	}
+
+	// Escalation replaces the wording of ONE declared param and nothing
+	// else (ADR-W022 A6). It runs before the claim below because it
+	// decides what will be dispatched; a crash in between costs a second
+	// model call on the retry, never a second action.
+	if d.Escalates {
+		into := rule.Automation.EscalationParam()
+		phrased, eerr := e.escalate(ctx, d, ev, rule, into, params[into])
+		if eerr != nil {
+			return eerr
+		}
+		if phrased != "" {
+			params[into] = phrased
+		}
 	}
 
 	// The claim, before the call: see the ordering note at the top.

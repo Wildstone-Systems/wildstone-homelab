@@ -394,9 +394,48 @@ stream is append-only and a decision record never changes:
   will never get it twice.
 - `automation.action_failed` — it was refused or it failed, with the
   reason and the stage.
-- `automation.escalation_pending` — the rule asked the Butler to phrase
-  its message and no escalator is configured, so nothing was sent. The
-  engine does not invent the wording the household asked a model for.
+- `automation.escalated` / `escalation_failed` / `escalation_skipped` —
+  see below.
+
+### Escalation: the model chooses words, never whether
+
+A rule may ask the Butler to phrase one thing (ADR-W022 A6). That is the
+whole of it, and the shape is deliberately narrow:
+
+```yaml
+  context:
+    - { kind: recentEvents, eventType: pantry.meal_logged, sameSubject: true, limit: 3 }
+  escalation:
+    prompt: "Ask, in one sentence, whether today matched the usual breakfast."
+    into: message
+```
+
+By the time the Butler is asked, the engine has already settled that the
+rule fires, which tool runs, at which tier, and for whom. The one thing
+the Butler affects is the text of the action param named by `into` —
+which must already exist and carry serviceable wording, because that
+wording is both what a reviewer reads before approving and what the
+household receives if no model answers. So an escalating rule still
+works with the Butler switched off; it just says the plainer thing its
+author wrote. The stream records which happened: `automation.escalated`,
+`escalation_failed` (the Butler was asked and did not answer usefully),
+or `escalation_skipped` (none configured).
+
+The packet is the rule's own `context` providers, retrieved fresh: the
+last three meals for this member, not a history dump. The call itself
+carries **no tools at all** — not a read tool, not `propose_change`,
+nothing — so there is nothing for a hostile household event to reach
+for. Every fact passes through the shared redactor and the
+untrusted-content envelope on the way in, and the answer is stripped to
+one bounded line on the way out, at the engine's own boundary rather
+than on the Butler's word.
+
+That is the containment claim, and it is worth stating plainly: **an
+attacker who fully controls a household event payload can, at most,
+influence the wording of a message the household was already going to
+receive on their own device.** They cannot make a rule fire, change what
+it does, change who it reaches, or stop it. A red-team test in
+`keystone/butler` pins it.
 
 ## The Butler proposes; humans approve
 

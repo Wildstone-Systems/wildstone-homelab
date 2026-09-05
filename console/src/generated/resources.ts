@@ -146,6 +146,7 @@ export interface AutomationContext {
 
 export interface AutomationEscalation {
   prompt: string;
+  into?: string;
 }
 
 export interface AutomationAction {

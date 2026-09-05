@@ -95,11 +95,26 @@ type AutomationContext struct {
 	Limit int `yaml:"limit,omitempty"`
 }
 
-// AutomationEscalation asks the Butler to phrase or decide.
+// AutomationEscalation asks the Butler to phrase one of the action's
+// params, and only that.
+//
+// The model chooses words, never whether. A rule with an escalation
+// still fires, still runs the same tool at the same tier with the same
+// recipient; the one thing the Butler affects is the text of the param
+// named by Into. If the Butler is unconfigured, fails, or answers with
+// nothing usable, the action runs with the wording the rule's author
+// wrote — which is why Into must name a param that already carries a
+// serviceable value (ADR-W022 A6, and the deterministic-backbone
+// principle: routine operations work when the model does not).
 type AutomationEscalation struct {
 	// Prompt is the instruction the Butler receives alongside the packet.
 	// Bounded; it is authored text, not a place for a document.
 	Prompt string `yaml:"prompt"`
+	// Into names the action param the Butler's answer replaces. Empty
+	// means "message". The named param must exist and be non-empty: it
+	// is both the reviewer's view of what will be said and the fallback
+	// when no model answers.
+	Into string `yaml:"into,omitempty"`
 }
 
 // AutomationAction is the typed operation the rule performs.
@@ -130,6 +145,22 @@ const (
 	// MaxAutomationParamBytes bounds one action param value.
 	MaxAutomationParamBytes = 1024
 )
+
+// DefaultEscalationParam is the action param an escalation replaces when
+// it does not name one.
+const DefaultEscalationParam = "message"
+
+// EscalationParam is the action param this rule's escalation replaces,
+// or "" when the rule does not escalate.
+func (a *AutomationSpec) EscalationParam() string {
+	if a == nil || a.Escalation == nil {
+		return ""
+	}
+	if a.Escalation.Into != "" {
+		return a.Escalation.Into
+	}
+	return DefaultEscalationParam
+}
 
 // automationEventTypeRegexp is the household event type shape, the same
 // pattern keystone/household and keystone/pkgspec carry; a test in
@@ -278,6 +309,18 @@ func validateAutomation(r *Resource) error {
 		}
 		if err := checkAutomationText(a.Escalation.Prompt, MaxAutomationPromptBytes); err != "" {
 			return fail("spec.escalation.prompt", err)
+		}
+		into := a.Escalation.Into
+		if into == "" {
+			into = DefaultEscalationParam
+		}
+		if err := checkAutomationIdentifier(into); err != "" {
+			return fail("spec.escalation.into", err)
+		}
+		if strings.TrimSpace(a.Action.Params[into]) == "" {
+			return fail("spec.escalation.into", fmt.Sprintf(
+				"names action param %q, which must exist and carry the wording to use when no model answers "+
+					"(the Butler replaces that text; it never introduces a param)", into))
 		}
 	}
 

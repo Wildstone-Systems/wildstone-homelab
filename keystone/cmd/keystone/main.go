@@ -18,6 +18,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile/loop"
+	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/report"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
@@ -179,6 +181,12 @@ type householdConfig struct {
 	// ReplyTTL bounds a reply token's life.
 	ReplyTTL time.Duration
 }
+
+// butlerSessionPrincipal is the acting principal on every Butler session
+// record (ADR-W001 A1). The small-duplicated-constant pattern: the API
+// owns the same string for the sessions it creates, and this file needs
+// the value rather than that package.
+const butlerSessionPrincipal = "butler"
 
 // replyPrincipal publishes a household member's answer to a
 // notification (ADR-W022 H4). It holds the publisher role — one verb,
@@ -502,7 +510,9 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	auto := &automation.Engine{
 		DB: db, State: state, Log: log, Location: householdLoc, Actions: actions,
 	}
-	go auto.Run(context.Background(), automationEvery)
+	// Run starts below, once the Butler wiring has had its chance to
+	// install the escalator: the engine's fields are read by its loop,
+	// so everything it needs is set before that loop exists.
 
 	// Public plane. Plan approval pokes the reconcile service (R2a); a
 	// new household event pokes the automation engine.
@@ -565,7 +575,50 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		}
 		apiSrv.ButlerHost = &api.ButlerHost{Provider: bp, Gateway: bgw, Mode: mode}
 		log.Info("butler enabled", "provider", bp.Name(), "mode", string(mode))
+
+		// Household escalation (ADR-W022 A6): the same provider, asked a
+		// much smaller question. A Phraser is given no tools at all, and
+		// its answer only ever replaces the wording of one already-
+		// approved action param — so this wiring cannot widen what a
+		// household rule may do, whatever the model is told.
+		//
+		// The QA-only verdict is not consulted: it grades tool-calling
+		// reliability, and this call offers no tools. A model too
+		// unreliable to operate the homelab can still write a sentence,
+		// and if it cannot, the rule's own wording is used.
+		phraser := &butler.Phraser{
+			Provider: bp,
+			Model:    butlerCfg.Model,
+			Record: func(_ context.Context, providerName, prompt, reply string) error {
+				_, rerr := db.InsertButlerSession(runtimedb.ButlerSession{
+					Principal: butlerSessionPrincipal,
+					// An escalation has no human caller. Recording the
+					// engine as the acting identity keeps ADR-W001 A1's
+					// "no anonymous path" true rather than exempting the
+					// one session type a person did not start.
+					ActingFor:      automation.Source,
+					Provider:       providerName,
+					Mode:           runtimedb.ButlerModeFull,
+					FinalText:      redact.String(reply),
+					TranscriptJSON: redact.String(`{"kind":"household-escalation","prompt":` + strconv.Quote(prompt) + `}`),
+				})
+				return rerr
+			},
+		}
+		auto.Escalator = automation.EscalatorFunc(func(ctx context.Context, req automation.EscalationRequest) (string, error) {
+			facts := make([]butler.Fact, 0, len(req.Facts))
+			for _, f := range req.Facts {
+				facts = append(facts, butler.Fact{Label: f.Label, Content: f.Content})
+			}
+			return phraser.Phrase(ctx, butler.PhraseRequest{
+				Rule: req.Rule, Instruction: req.Instruction, Fallback: req.Fallback, Facts: facts,
+			})
+		})
+		log.Info("household escalation enabled", "provider", bp.Name())
 	}
+
+	// Everything the engine needs is wired; start its loop.
+	go auto.Run(context.Background(), automationEvery)
 
 	// Morning report timer (ADR-W017 A5): once a day at 07:00 local, build
 	// the deterministic report and append its summary to the event stream

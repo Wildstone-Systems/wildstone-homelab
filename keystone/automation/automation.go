@@ -312,6 +312,11 @@ type Engine struct {
 	// unacted — which is what a control plane with no capabilities
 	// installed should do, and what the engine did before H4.
 	Actions Actions
+	// Escalator, when set, phrases the one action param a rule's
+	// escalation names (ADR-W022 A6). nil means an escalating rule acts
+	// with the wording its author wrote, which is the deterministic
+	// backbone doing its job rather than a degraded mode.
+	Escalator Escalator
 	// MaxTriggerAge: see DefaultMaxTriggerAge. Zero means the default.
 	MaxTriggerAge time.Duration
 	// Batch: see DefaultBatch. Zero means the default.
