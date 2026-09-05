@@ -33,7 +33,7 @@ principals exist, and there is no offline mint. `docs/install.md`
 recommends scrubbing the journal — do that a beat early and admin access
 is unrecoverable short of destroying the runtime DB. This blocked
 automated setup three separate times during v0.1.6-alpha VM testing
-(friction log #8), and it is the first thing a new operator touches.
+(friction log F44), and it is the first thing a new operator touches.
 
 First start therefore writes a **claim secret** to a root-readable file
 in the data dir, and `keystone claim-code --data-dir` regenerates one on
