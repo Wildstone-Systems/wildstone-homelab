@@ -179,6 +179,47 @@ declares how it maps its app's notion of a person (a Home Assistant
 cannot. An unmapped subject is a valid event; it just cannot fire a
 per-member rule.
 
+### A10. The shim belongs to the service's package
+
+Every service that joins the home lab will need something between it
+and the intake. That something is declared by the service's own package
+in a `publishes` block — parsed and validated first, like `agentTools`,
+executed once H1 lands — and never coded into Keystone. The control
+plane learns no app's API.
+
+A package picks one of three shapes:
+
+- **Native.** Wildstone-built apps (PantryOS) post straight to the
+  intake API. No shim.
+- **Sidecar.** Third-party apps get a small adapter container declared
+  in the package's own templates. It listens to the app's webhook or
+  polls its API and posts canonical events. It runs on the `wildstone`
+  network beside the app, owned by the same capability, so it installs,
+  upgrades, and uninstalls with it.
+- **Config only.** Apps that can call a webhook themselves (Home
+  Assistant, through its own automations) get that configuration
+  shipped as a `ConfigFile`. No extra container.
+
+The block names the event types the package emits, each with a payload
+schema, and the A8 subject mapping.
+
+Keystone's only part is the credential. At install, the capability
+engine mints a `publisher/<capability>` principal and token — the same
+way it already generates a package's declared secrets — and injects it
+as a `secret/` reference into the shim's environment. The intake stamps
+an event's `source` from the token, never from the payload, so a shim
+cannot speak for another service, and disabling a capability disables
+its publisher with it.
+
+Consequence for every future package: authoring it answers one more
+question — what does this app publish, and by which shape. A package
+that publishes nothing says so; silence is not an answer.
+
+**Rejected:** built-in adapters inside Keystone (couples the control
+plane to app internals; ADR-W005's reason for packages being data),
+and a separate adapter package per service (two packages with one
+lifecycle, and a shim that can outlive the app it shims).
+
 ### A9. When this is built
 
 Scope §7 says the concierge product waits for M5, the dogfood cutover,
@@ -197,11 +238,11 @@ No real Home Assistant, PantryOS, or LLM in CI.
 
 | # | Package | Proves |
 |---|---|---|
-| **H1** | Household event intake: the A2 table and envelope, validation, uniqueness on `event_id`, the `publisher` role and `emit` verb, `POST`/`GET` on the API | Facts can flow in from a narrowly-trusted source and be read back in order |
+| **H1** | Household event intake: the A2 table and envelope, validation, uniqueness on `event_id`, the `publisher` role and `emit` verb, `POST`/`GET` on the API; the A10 `publishes` block and per-capability publisher token minting | Facts can flow in from a narrowly-trusted source and be read back in order, and a package can declare its shim |
 | **H2** | `Automation` resource kind: schema, validation, plan integration, one policy rule (a `butler` principal may not author a rule whose action outranks `domestic`) | A rule is a plan, approved once, policy-checked like any resource |
 | **H3** | Automation engine: trigger matching, condition evaluation, `fired`/`suppressed` events, dry-run and replay (`wild automation replay`). No escalation, no actions yet | The deterministic half works end to end and can be tested against history |
 | **H4** | First action, through the domestic gateway: notify via the existing ntfy package. ntfy's action buttons post the reply back to H1's intake | A rule can ask a human a question and hear the answer, with no chat surface built |
-| **H5** | First adapter: Home Assistant webhook → intake, as a package, with the A8 person mapping | A third-party app plugs in through the one contract |
+| **H5** | First adapter: Home Assistant → intake, declared in the home-automation package per A10 (config-only or sidecar), with the A8 person mapping | A third-party app plugs in through the one contract |
 | **H6** | Escalation: a rule opens a Butler session with its context packet; the Butler's answer routes to H4's action. Red-team case per A4 | The "left home without breakfast" flow, end to end |
 | **H7** | Natural-language authoring: the Butler compiles a request into the H2 schema, dry-runs it against H3, and proposes it through `propose_change` | The AI writes rules the engine already understands; no second execution path |
 
