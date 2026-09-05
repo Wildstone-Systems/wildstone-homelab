@@ -128,3 +128,63 @@ func TestTailnetPostureAddsNoCertificateConfiguration(t *testing.T) {
 		}
 	}
 }
+
+// containerPublishing is a container in desired state that already holds
+// a host port — the situation F63 records.
+func containerPublishing(name, owner, portMapping string) resource.Resource {
+	return resource.Resource{
+		Kind:     resource.KindContainer,
+		Metadata: resource.Metadata{Name: name, Owner: owner, Node: "node-a"},
+		Container: &resource.ContainerSpec{
+			Image: "ghcr.io/example/app@sha256:" + strings.Repeat("a", 64),
+			Ports: []string{portMapping},
+		},
+	}
+}
+
+// TestAssignmentAvoidsPortsOtherContainersPublish is F63. Assigning a
+// Route a port something else already holds produces a service that is
+// unreachable while every resource reports healthy — the plan applies,
+// the container starts, and only that one binding silently failed.
+func TestAssignmentAvoidsPortsOtherContainersPublish(t *testing.T) {
+	desired := append(fourRoutes(),
+		tailnetIngress("wildstone.tailnet.ts.net"),
+		containerPublishing("some-other-stack", "capability/monitoring", "0.0.0.0:9443:9443"))
+	p := postureOf(desired)
+	// 9443 is photos' pinned port, and it is taken.
+	if got := routeSiteAddress(p, "photos.example.com"); strings.HasSuffix(got, ":9443") {
+		t.Errorf("photos was assigned a port another container publishes: %s", got)
+	}
+	// It must still get a working port rather than none at all.
+	if got := routeSiteAddress(p, "photos.example.com"); got == "photos.example.com" {
+		t.Error("photos was left unserved instead of moved to a free port")
+	}
+}
+
+// The ingress proxy publishes the whole block itself, so counting its own
+// publications as conflicts would rule out every port there is.
+func TestIngressOwnPortsAreNotConflicts(t *testing.T) {
+	desired := append(fourRoutes(),
+		tailnetIngress("wildstone.tailnet.ts.net"),
+		containerPublishing("caddy-tailnet-ts", "capability/ingress", "0.0.0.0:443:443"))
+	p := postureOf(desired)
+	if got := routeSiteAddress(p, "home.example.com"); got != "wildstone.tailnet.ts.net:443" {
+		t.Errorf("the dashboard lost 443 to the ingress container's own publication: %s", got)
+	}
+}
+
+// A pin is a preference, not a guarantee: a stable address nothing can
+// bind is worse than an unfamiliar one that works.
+func TestPinnedPortYieldsWhenTaken(t *testing.T) {
+	desired := append(fourRoutes(),
+		tailnetIngress("wildstone.tailnet.ts.net"),
+		containerPublishing("squatter", "capability/monitoring", "0.0.0.0:443:443"))
+	p := postureOf(desired)
+	got := routeSiteAddress(p, "home.example.com")
+	if got == "wildstone.tailnet.ts.net:443" {
+		t.Error("the dashboard kept a pinned port another container publishes")
+	}
+	if got == "home.example.com" {
+		t.Error("the dashboard was left unserved rather than moved")
+	}
+}

@@ -102,11 +102,15 @@ func assign(desired []resource.Resource) map[string]int {
 	sort.Strings(hosts)
 
 	ports := make(map[string]int, len(hosts))
-	taken := make(map[int]bool, len(hosts))
+	taken := portsPublishedByOthers(desired)
 	// Pinned hosts first, so an unpinned Route can never take a port a
 	// pinned one is entitled to merely by sorting earlier.
 	for _, h := range hosts {
-		if p, ok := wellKnown[ServiceLabel(h)]; ok {
+		// A pin is a preference, not a guarantee. If something else
+		// already publishes that port the Route falls through to the
+		// block below, because a stable address nothing can bind is
+		// worse than an unfamiliar one that works.
+		if p, ok := wellKnown[ServiceLabel(h)]; ok && !taken[p] {
 			ports[h] = p
 			taken[p] = true
 		}
@@ -127,6 +131,43 @@ func assign(desired []resource.Resource) map[string]int {
 		// services to whichever site Caddy matched first.
 	}
 	return ports
+}
+
+// portsPublishedByOthers is every host port some OTHER container in
+// desired state already publishes (F63).
+//
+// Without this, ports are handed out from the block with no idea what is
+// already bound, and a Route can be assigned a port its container will
+// never manage to bind. The failure is remote from the cause and quiet:
+// the plan applies, the resource reports healthy, and exactly one
+// service is unreachable.
+//
+// Containers owned by the ingress capability are excluded, and must be:
+// the ingress proxy is the thing being assigned these ports, so counting
+// its own publications as conflicts would rule out the entire block.
+//
+// This sees only what Wildstone MANAGES. A process outside desired state
+// holding a port — another stack on the same host, something started by
+// hand — is invisible here and still collides, surfacing as the ingress
+// container failing to start. That is a smaller and much louder failure
+// than a silently unreachable service, but it is not nothing, and it is
+// the reason this is a mitigation rather than a fix.
+func portsPublishedByOthers(desired []resource.Resource) map[int]bool {
+	taken := map[int]bool{}
+	for _, r := range desired {
+		if r.Kind != resource.KindContainer || r.Container == nil {
+			continue
+		}
+		if r.Metadata.Owner == "capability/ingress" {
+			continue
+		}
+		for _, p := range r.Container.Ports {
+			if _, hostPort, _, ok := resource.SplitPortMapping(p); ok {
+				taken[int(hostPort)] = true
+			}
+		}
+	}
+	return taken
 }
 
 // ServiceLabel is the leading label of a host: "home" in

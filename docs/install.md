@@ -143,6 +143,26 @@ straight to `tailscale up` and never written to disk or printed — use a
 pre-authorized, ideally ephemeral key. Tailscale SSH is deliberately
 **not** enabled; turn it on yourself if you want it.
 
+It also bind-mounts tailscaled's local API into Wildstone's managed
+prefix, as `/srv/wildstone/tailscale/tailscaled.sock`, via a systemd
+mount unit ordered after `tailscaled`. That is what lets the
+`ingress-tailnet-ts` profile serve under a Tailscale-issued certificate:
+Caddy fetches `*.ts.net` certificates from tailscaled and needs no
+configuration at all to do it, but Wardstone bind-mounts host paths only
+from its managed prefixes (ADR-W003 A1), and `/run/tailscale` is not
+one.
+
+The socket is **not moved**. `tailscale status` and every other command
+keep working exactly as they did, because the CLI still finds it where
+it has always been — the bind mount adds a second path to the same
+socket rather than relocating it.
+
+To use the tailnet ingress profile you also need HTTPS certificates
+enabled for your tailnet (Tailscale admin console → DNS → HTTPS
+Certificates). Without it, tailscaled has no certificate to hand over
+and Caddy serves none, which surfaces as a TLS handshake failure rather
+than as anything naming the setting.
+
 Re-running the installer to upgrade leaves an existing join alone, so
 this is safe on every run.
 
