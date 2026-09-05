@@ -363,6 +363,9 @@ func (a *testAgent) handleOp(opID string, op *wsv1.Operation) *wsv1.OpResult {
 		return a.inspectContainer(opID, o.InspectContainer)
 	case *wsv1.Operation_EnsureSecret:
 		return a.ensureSecret(opID, o.EnsureSecret)
+	case *wsv1.Operation_ListSecrets:
+		a.countOp("ListSecrets")
+		return a.listSecrets(opID)
 	case *wsv1.Operation_EnsureVolume:
 		a.countOp("EnsureVolume")
 		return a.ensureVolume(opID, o.EnsureVolume)
@@ -664,6 +667,29 @@ func (a *testAgent) ensureSecret(opID string, op *wsv1.EnsureSecret) *wsv1.OpRes
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureSecret{EnsureSecret: &wsv1.EnsureSecretResult{
 		Existed: existed, Version: 1,
 	}}}
+}
+
+// listSecrets answers the op the reconciler uses to check secrets it is
+// forbidden to generate.
+func (a *testAgent) listSecrets(opID string) *wsv1.OpResult {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	res := &wsv1.ListSecretsResult{}
+	for name := range a.secrets {
+		res.Secrets = append(res.Secrets, &wsv1.SecretInfo{Name: name, Version: 1})
+	}
+	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_ListSecrets{ListSecrets: res}}
+}
+
+// putSecret seeds a secret as though the operator had supplied it, which
+// is the only way a provided secret ever comes to exist.
+func (a *testAgent) putSecret(name string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.secrets == nil {
+		a.secrets = map[string]wsv1.SecretKind{}
+	}
+	a.secrets[name] = wsv1.SecretKind_SECRET_KIND_RANDOM
 }
 
 // secretKind reports the kind a secret was ensured with, and whether it

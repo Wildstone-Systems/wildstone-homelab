@@ -43,6 +43,14 @@ policies:
   classifications: [family_public]
   dataSensitivity: medium
 templates:
+  # ---- The secrets this capability needs (ADR-W020 / F37). Jellyfin
+  # authenticates against LDAP rather than OIDC, so the only secret it
+  # owns is its backup repository password.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-media, node: "{{ .Params.node }}" }
+    spec: { name: restic-media }
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume

@@ -110,6 +110,7 @@ export interface SecretSpec {
   name: string;
   kind?: string;
   lengthBytes?: number;
+  provided?: boolean;
 }
 
 export type Spec =

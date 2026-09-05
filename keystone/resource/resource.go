@@ -366,6 +366,22 @@ type SecretSpec struct {
 	// 0 lets the agent choose (32). Ignored for kinds whose size is not
 	// a free parameter, such as an RSA key.
 	LengthBytes int `yaml:"lengthBytes,omitempty"`
+	// Provided marks a secret the node must NOT generate, because only a
+	// human or an external system can produce a correct one. The two
+	// shipped examples are a Cloudflare tunnel token and Paperless's
+	// OIDC provider block: random bytes in either place are not a weaker
+	// secret, they are a broken one, and the failure surfaces as the
+	// consuming service misbehaving rather than as anything naming the
+	// secret.
+	//
+	// Declaring it is still the point. Kind and LengthBytes describe a
+	// secret's SHAPE; this describes where it comes from, and the two
+	// are orthogonal. A package that declares what it needs lets the
+	// reconciler name every missing one before convergence starts,
+	// instead of the operator meeting them one ERROR_CODE_NOT_FOUND at
+	// a time, per tick, after approving a plan that could not have
+	// worked (F37).
+	Provided bool `yaml:"provided,omitempty"`
 }
 
 // JobSpec is the spec for kind Job: a container run ONCE to completion,
@@ -779,6 +795,14 @@ func validateSecret(r *Resource) error {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.name",
 			Msg: "must be a DNS-label-like name — it becomes a filename in the node's secret store " +
 				"and the target of a secret/<name> reference"}
+	}
+	// Kind and LengthBytes describe how to GENERATE a secret, and a
+	// provided one is never generated. Accepting both would let a
+	// package state a shape nothing enforces, which reads as a
+	// guarantee and is not one.
+	if r.Secret.Provided && (r.Secret.Kind != "" || r.Secret.LengthBytes != 0) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.provided",
+			Msg: "a provided secret is supplied by the operator and never generated, so kind and lengthBytes cannot apply to it"}
 	}
 	if r.Secret.Kind != "" && !secretKinds[r.Secret.Kind] {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.kind",

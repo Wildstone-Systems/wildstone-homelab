@@ -34,6 +34,8 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
@@ -68,13 +70,73 @@ func ensureSecretOp(spec *resource.SecretSpec) *wsv1.Operation {
 // Idempotent by construction: EnsureSecret without rotate is
 // create-if-absent, so this runs on every tick and does nothing after
 // the first.
+func listSecretsOp() *wsv1.Operation {
+	return &wsv1.Operation{Op: &wsv1.Operation_ListSecrets{ListSecrets: &wsv1.ListSecrets{}}}
+}
+
+// missingProvidedSecrets reports every desired provided-secret absent from
+// the node, in one message.
+//
+// All of them, not the first: the whole complaint behind F37 is that a
+// missing secret surfaces one per tick, after approval, so an operator
+// fixes one and meets the next. Naming them together, with the command
+// that fixes each, turns an indefinite sequence into a single task.
+func (r *Reconciler) missingProvidedSecrets(ctx context.Context, nodeID string, provided []*resource.SecretSpec) string {
+	if len(provided) == 0 {
+		return ""
+	}
+	out, err := r.retryDispatch(ctx, nodeID, listSecretsOp())
+	if err != nil {
+		return fmt.Sprintf("listing secrets to check the ones you must supply: %v", err)
+	}
+	if oe := out.GetError(); oe != nil {
+		return fmt.Sprintf("listing secrets to check the ones you must supply: %s: %s", oe.GetCode(), oe.GetMessage())
+	}
+	have := make(map[string]bool)
+	for _, si := range out.GetListSecrets().GetSecrets() {
+		have[si.GetName()] = true
+	}
+	var missing []string
+	for _, spec := range provided {
+		if !have[spec.Name] {
+			missing = append(missing, spec.Name)
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	sort.Strings(missing)
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d secret(s) must be supplied before this node can converge. They are declared, not generated, because only you can produce a correct value:", len(missing))
+	for _, n := range missing {
+		fmt.Fprintf(&b, "\n    wild secret set %s -node %s", n, nodeID)
+	}
+	return b.String()
+}
+
 func (r *Reconciler) ensureNodeSecrets(ctx context.Context, nodeID string, desired []resource.Resource) string {
 	if nodeID == "" {
 		return ""
 	}
+	// Provided secrets are checked FIRST and reported together, so the
+	// operator learns the whole list before anything else can fail for
+	// want of one.
+	var provided []*resource.SecretSpec
+	for _, res := range desired {
+		if res.Kind == resource.KindSecret && res.Secret != nil && res.Secret.Provided {
+			provided = append(provided, res.Secret)
+		}
+	}
+	if msg := r.missingProvidedSecrets(ctx, nodeID, provided); msg != "" {
+		return msg
+	}
+
 	for _, res := range desired {
 		if res.Kind != resource.KindSecret || res.Secret == nil {
 			continue
+		}
+		if res.Secret.Provided {
+			continue // never generated; presence was checked above
 		}
 		out, err := r.retryDispatch(ctx, nodeID, ensureSecretOp(res.Secret))
 		if err != nil {
