@@ -231,3 +231,62 @@ declared vocabulary is worth a resource kind here.
   with `X-Forwarded-Proto: https` from the trusted terminator reaches
   the backend still saying `https`. The bug is invisible to any test
   that speaks to Authelia directly, which is why it survived to a VM.
+
+# Part E — Amendment (2026-09-05, binding)
+
+### A9. A third posture: a publicly trusted certificate over DNS-01
+
+A3 chose Caddy's internal CA, and the reasoning holds for what it was
+answering: a hostname no public CA would sign still gets real TLS, and
+Wildstone does not become a CA to do it. What A3 did not weigh is the
+cost the internal CA pushes onto every device that will ever open a
+page — installing a root certificate, by hand, per device.
+
+That step does not get done. The browser says "not secure", somebody
+clicks through, and the encryption is still there but the thing it was
+supposed to establish — that this is the site it claims to be — is gone.
+An internal CA is only trustworthy to someone who has been told to trust
+it, and a household has not been. Worse, "click through the warning" is
+a habit, and it is the exact habit that makes the warning useless
+somewhere it matters.
+
+So `IngressSpec.tls` gains a third value, `public`: this proxy holds the
+certificate, and a certificate authority the world already trusts issued
+it. `internal` is unchanged and remains right for a deployment with no
+domain.
+
+**The challenge is answered in DNS, and it has to be.** These names
+resolve to a tailnet address the internet cannot route to, so HTTP-01
+and TLS-ALPN-01 — both of which require the CA to connect to the
+listener — cannot ever succeed. DNS-01 asks the CA to believe the zone
+instead of the socket, which is the only ACME challenge compatible with
+a front door that is deliberately unreachable. `acmeDns` names the
+provider module, and validation refuses `public` without it: a profile
+that asked for a public certificate and named no way to get one would
+not fail to install, it would serve an untrusted certificate — the exact
+state the operator chose this profile to leave.
+
+**What it costs, said plainly.** This posture needs a real domain in a
+zone the operator controls and an API token that can edit it. That is a
+strictly larger ask than `internal`, which needs nothing, and it is why
+this is a third posture rather than a replacement for the second. It
+also puts a zone-editing credential on the node, so the token travels in
+the environment from a Provided Secret and never into a managed file:
+files under the managed prefix are readable by anything that can read
+the node's config, and this credential can obtain a certificate for any
+name in the zone.
+
+**Rejected: Tailscale's own certificates.** `tailscale cert` issues
+publicly trusted certificates for a device's MagicDNS name with no
+domain and no token, which is a genuinely smaller ask. It was rejected
+because it issues for exactly one FQDN per device — no wildcards, no
+subdomains — and the Route model is host-based, with `auth.<domain>`
+load-bearing for Authelia's OIDC issuer and redirect URIs. Adopting it
+would have meant collapsing every service onto one hostname distinguished
+by port or path, i.e. changing the routing model to suit the certificate
+mechanism. The certificate is the smaller thing; it should bend.
+
+**Rejected: shipping the internal root to devices automatically.** There
+is no mechanism to do this that does not amount to writing an MDM, and a
+household has no fleet management. The manual step was not the
+implementation's failure, it was the approach's.

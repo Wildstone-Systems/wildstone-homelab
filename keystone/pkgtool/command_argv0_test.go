@@ -32,6 +32,13 @@ import (
 // the stronger check when one is available.
 var imageArgv0 = map[string]string{
 	"caddy":                  "caddy", // no ENTRYPOINT — command is the whole argv
+	// Caddy with the caddy-dns/cloudflare module compiled in, for the
+	// DNS-01 profile (ADR-W019 A9). Same shape as stock caddy, and
+	// checked rather than assumed: the image config blob at
+	// sha256:62639363…de96 declares Entrypoint null with
+	// Cmd ["caddy","run","--config","/etc/caddy/Caddyfile","--adapter","caddyfile"],
+	// read from the GHCR registry API on 2026-09-05.
+	"ghcr.io/caddybuilds/caddy-cloudflare": "caddy",
 	"cloudflare/cloudflared": "",      // ENTRYPOINT ["cloudflared","--no-autoupdate"]
 	"binwiederhier/ntfy":     "",      // ENTRYPOINT ["ntfy"]
 

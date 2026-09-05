@@ -103,6 +103,9 @@ const defaultTrustedProxies = "private_ranges"
 type ingressPosture struct {
 	tls            string
 	trustedProxies string
+	// acmeDNS is the DNS-01 provider module name when tls is "public";
+	// empty for every other posture.
+	acmeDNS string
 }
 
 // terminatedUpstream is the pre-Ingress posture: TLS handled in front,
@@ -122,6 +125,7 @@ func postureOf(desired []resource.Resource) ingressPosture {
 		if len(r.Ingress.TrustedProxies) > 0 {
 			p.trustedProxies = strings.Join(r.Ingress.TrustedProxies, " ")
 		}
+		p.acmeDNS = r.Ingress.ACMEDNS
 		break
 	}
 	return p
@@ -131,8 +135,15 @@ func postureOf(desired []resource.Resource) ingressPosture {
 // match what the BROWSER uses, because an OIDC issuer is a string that
 // has to be identical on both sides (ADR-W019 A2) — which is why this
 // cannot be a free choice per package.
+// terminatesTLS reports whether this proxy holds the certificate itself,
+// whoever issued it. Both "internal" and "public" do; only the trust
+// story differs, and every rendering decision below turns on the former.
+func (p ingressPosture) terminatesTLS() bool {
+	return p.tls == "internal" || p.tls == "public"
+}
+
 func (p ingressPosture) siteScheme() string {
-	if p.tls == "internal" {
+	if p.terminatesTLS() {
 		return "https"
 	}
 	return "http"
@@ -145,9 +156,20 @@ func renderBaseCaddyfile(p ingressPosture) []byte {
 	// proxy holds the certificate itself (ADR-W019 A3). local_certs is
 	// Caddy's own internal CA, which is what makes a hostname no public
 	// CA would ever sign serve real TLS on a LAN.
-	if p.tls == "internal" {
+	switch p.tls {
+	case "internal":
 		global += "\tlocal_certs\n"
-	} else {
+	case "public":
+		// A real CA over DNS-01 (ADR-W019 A9). auto_https stays ON —
+		// unlike local_certs this is the ordinary ACME path, and the only
+		// thing that has to change is HOW the challenge is answered,
+		// because the listener is on an address no CA can reach. The
+		// token comes from the environment rather than the file: managed
+		// files under the prefix are world-readable to anything that can
+		// read the node's config, and a zone-editing credential is not
+		// something to leave there.
+		global += "\tacme_dns " + p.acmeDNS + " {env.CF_API_TOKEN}\n"
+	default:
 		global += "\tauto_https off\n"
 	}
 	if p.trustedProxies != "" {
@@ -224,7 +246,7 @@ func renderRouteFragment(spec *resource.RouteSpec, autheliaAddr string, p ingres
 // one, and a default-deny block on the wrong port is not a default deny
 // at all — it is an unrouted host answering an empty 200 (F26).
 func defaultDenyPort(p ingressPosture) string {
-	if p.tls == "internal" {
+	if p.terminatesTLS() {
 		return "443"
 	}
 	return "80"

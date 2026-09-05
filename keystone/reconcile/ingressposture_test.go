@@ -81,3 +81,62 @@ func TestOffPostureKeepsHttp(t *testing.T) {
 		t.Errorf("terminated-upstream profile must stay http:\n%s", frag)
 	}
 }
+
+// publicIngressRes is the DNS-01 posture: a public certificate needs a
+// provider to answer the challenge with, so the two travel together.
+func publicIngressRes(provider string, trusted ...string) resource.Resource {
+	r := ingressRes("public", trusted...)
+	r.Ingress.ACMEDNS = provider
+	return r
+}
+
+// TestPublicPostureAsksACMEForTheCertificate is ADR-W019 A9. The tailnet
+// profile's internal CA is real TLS that every device must be told to
+// trust by hand — a step a household does not complete, which turns the
+// padlock into a warning people click through. This posture gets a
+// certificate from a CA the world already trusts.
+func TestPublicPostureAsksACMEForTheCertificate(t *testing.T) {
+	p := postureOf([]resource.Resource{publicIngressRes("cloudflare", "private_ranges")})
+	base := string(renderBaseCaddyfile(p))
+	if !strings.Contains(base, "acme_dns cloudflare {env.CF_API_TOKEN}") {
+		t.Errorf("public posture must answer the challenge over DNS-01:\n%s", base)
+	}
+	// auto_https off would disable the very thing this posture exists to
+	// do, and local_certs would quietly issue from the internal CA again
+	// — the exact outcome an operator chose this profile to avoid.
+	if strings.Contains(base, "auto_https off") || strings.Contains(base, "local_certs") {
+		t.Errorf("public posture must not suppress or self-issue certificates:\n%s", base)
+	}
+}
+
+// TestPublicPostureServesHTTPSLikeInternal: "public" and "internal"
+// differ only in who signed the certificate. Every rendering decision
+// downstream — the scheme in Route fragments, the default-deny port —
+// turns on whether THIS proxy terminates, so the two must agree.
+func TestPublicPostureServesHTTPSLikeInternal(t *testing.T) {
+	pub := postureOf([]resource.Resource{publicIngressRes("cloudflare")})
+	internal := postureOf([]resource.Resource{ingressRes("internal")})
+	if pub.siteScheme() != "https" || pub.siteScheme() != internal.siteScheme() {
+		t.Errorf("public must render https like internal, got %q vs %q",
+			pub.siteScheme(), internal.siteScheme())
+	}
+	if defaultDenyPort(pub) != "443" || defaultDenyPort(pub) != defaultDenyPort(internal) {
+		t.Errorf("public must default-deny on 443 like internal, got %q vs %q",
+			defaultDenyPort(pub), defaultDenyPort(internal))
+	}
+}
+
+// TestTokenNeverRendersIntoTheCaddyfile: the credential is an env
+// reference, never a value. A zone-editing token written into a managed
+// file would be readable by anything that can read the node's config,
+// and the file is world-readable by design.
+func TestTokenNeverRendersIntoTheCaddyfile(t *testing.T) {
+	p := postureOf([]resource.Resource{publicIngressRes("cloudflare")})
+	base := string(renderBaseCaddyfile(p))
+	if strings.Contains(base, "secret/") {
+		t.Errorf("a secret reference must not reach the Caddyfile:\n%s", base)
+	}
+	if !strings.Contains(base, "{env.CF_API_TOKEN}") {
+		t.Errorf("the token must be read from the environment:\n%s", base)
+	}
+}
