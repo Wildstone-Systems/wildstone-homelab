@@ -187,7 +187,11 @@ var kindOrder = map[resource.Kind]int{
 	// files Wildstone writes before any plan step can carry references
 	// too, which is why the reconciler ensures desired secrets before it
 	// repairs those files (ensureNodeSecrets).
-	resource.KindSecret:     0,
+	resource.KindSecret: 0,
+	// Ingress before everything: the base Caddyfile and every Route
+	// fragment are rendered from its posture, so a node that gains an
+	// ingress must have it recorded before anything reads it.
+	resource.KindIngress:    0,
 	resource.KindVolume:     1,
 	resource.KindConfigFile: 2,
 	resource.KindLdapGroup:  3,
@@ -350,6 +354,8 @@ func specEqual(a, b resource.Resource) bool {
 		return ldapGroupEqual(a.LdapGroup, b.LdapGroup)
 	case resource.KindLdapUser:
 		return ldapUserEqual(a.LdapUser, b.LdapUser)
+	case resource.KindIngress:
+		return ingressEqual(a.Ingress, b.Ingress)
 	case resource.KindBackupPlan:
 		return backupPlanEqual(a.BackupPlan, b.BackupPlan)
 	case resource.KindConfigFile:
@@ -409,6 +415,28 @@ func ldapUserEqual(a, b *resource.LdapUserSpec) bool {
 	sort.Strings(bg)
 	for i := range ag {
 		if ag[i] != bg[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// ingressEqual compares by value; TrustedProxies is order-insensitive
+// because a Caddyfile list has no order and a reordered param must not
+// read as drift.
+func ingressEqual(a, b *resource.IngressSpec) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.TLS != b.TLS || len(a.TrustedProxies) != len(b.TrustedProxies) {
+		return false
+	}
+	ap := append([]string(nil), a.TrustedProxies...)
+	bp := append([]string(nil), b.TrustedProxies...)
+	sort.Strings(ap)
+	sort.Strings(bp)
+	for i := range ap {
+		if ap[i] != bp[i] {
 			return false
 		}
 	}

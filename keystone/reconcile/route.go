@@ -92,13 +92,67 @@ func baseCaddyfilePath(managedPrefix string) string {
 // which is the header-spoofing hole the list exists to close.
 const defaultTrustedProxies = "private_ranges"
 
-func renderBaseCaddyfile(trustedProxies string) []byte {
+// ingressPosture is how the node's proxy is configured, read from the
+// Ingress resource the installed ingress package declares (ADR-W019 B5).
+//
+// A node with no Ingress declared falls back to the posture that shipped
+// before the kind existed: TLS terminated upstream, private ranges
+// trusted. That keeps an older deployment rendering exactly what it
+// rendered yesterday rather than silently changing how its front door
+// behaves on upgrade.
+type ingressPosture struct {
+	tls            string
+	trustedProxies string
+}
+
+// terminatedUpstream is the pre-Ingress posture: TLS handled in front,
+// private ranges trusted. Named so tests and the fallback path say what
+// they mean rather than repeating two fields.
+var terminatedUpstream = ingressPosture{tls: "off", trustedProxies: defaultTrustedProxies}
+
+func postureOf(desired []resource.Resource) ingressPosture {
+	p := terminatedUpstream
+	for _, r := range desired {
+		if r.Kind != resource.KindIngress || r.Ingress == nil {
+			continue
+		}
+		if r.Ingress.TLS != "" {
+			p.tls = r.Ingress.TLS
+		}
+		if len(r.Ingress.TrustedProxies) > 0 {
+			p.trustedProxies = strings.Join(r.Ingress.TrustedProxies, " ")
+		}
+		break
+	}
+	return p
+}
+
+// siteScheme is the scheme Route fragments are written with. It must
+// match what the BROWSER uses, because an OIDC issuer is a string that
+// has to be identical on both sides (ADR-W019 A2) — which is why this
+// cannot be a free choice per package.
+func (p ingressPosture) siteScheme() string {
+	if p.tls == "internal" {
+		return "https"
+	}
+	return "http"
+}
+
+func renderBaseCaddyfile(p ingressPosture) []byte {
 	global := "{\n" +
-		"\tadmin off\n" +
-		"\tauto_https off\n"
-	if trustedProxies != "" {
+		"\tadmin off\n"
+	// auto_https off when TLS terminates upstream; local_certs when this
+	// proxy holds the certificate itself (ADR-W019 A3). local_certs is
+	// Caddy's own internal CA, which is what makes a hostname no public
+	// CA would ever sign serve real TLS on a LAN.
+	if p.tls == "internal" {
+		global += "\tlocal_certs\n"
+	} else {
+		global += "\tauto_https off\n"
+	}
+	if p.trustedProxies != "" {
 		global += "\tservers {\n" +
-			"\t\ttrusted_proxies static " + trustedProxies + "\n" +
+			"\t\ttrusted_proxies static " + p.trustedProxies + "\n" +
 			"\t}\n"
 	}
 	global += "}\n"
@@ -113,7 +167,7 @@ func renderBaseCaddyfile(trustedProxies string) []byte {
 		// thing that makes a host served; everything else gets the connection
 		// closed. This block is last so any real site address, being more
 		// specific, still wins.
-		":80 {\n" +
+		p.siteScheme() + "://:" + defaultDenyPort(p) + " {\n" +
 		"\tabort\n" +
 		"}\n")
 }
@@ -146,11 +200,11 @@ func caddyUpstream(upstream string) string {
 // none is honestly unauthenticated (which policy already refuses on a
 // public classification, ADR-W009 §9.2-2). The classification is emitted
 // as a comment because it drives policy, not Caddy.
-func renderRouteFragment(spec *resource.RouteSpec, autheliaAddr string) []byte {
+func renderRouteFragment(spec *resource.RouteSpec, autheliaAddr string, p ingressPosture) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# managed by wildstone-keystone — do not edit\n")
 	fmt.Fprintf(&b, "# classification: %s\n", spec.Classification)
-	fmt.Fprintf(&b, "http://%s {\n", spec.Host)
+	fmt.Fprintf(&b, "%s://%s {\n", p.siteScheme(), spec.Host)
 	if spec.Auth == "authelia_oidc" {
 		// Authelia's forward-auth contract: it answers /api/authz/forward-auth
 		// with 2xx to allow and a redirect to its portal otherwise, and the
@@ -163,4 +217,15 @@ func renderRouteFragment(spec *resource.RouteSpec, autheliaAddr string) []byte {
 	fmt.Fprintf(&b, "\treverse_proxy %s\n", caddyUpstream(spec.Upstream))
 	fmt.Fprintf(&b, "}\n")
 	return []byte(b.String())
+}
+
+// defaultDenyPort keeps the catch-all on the port the profile actually
+// listens on. Caddy binds :80 for an http site and :443 for an https
+// one, and a default-deny block on the wrong port is not a default deny
+// at all — it is an unrouted host answering an empty 200 (F26).
+func defaultDenyPort(p ingressPosture) string {
+	if p.tls == "internal" {
+		return "443"
+	}
+	return "80"
 }

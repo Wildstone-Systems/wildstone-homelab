@@ -88,7 +88,7 @@ func TestPrereqFilesAreRepairedOnATick(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != string(renderBaseCaddyfile(defaultTrustedProxies)) {
+	if string(got) != string(renderBaseCaddyfile(terminatedUpstream)) {
 		t.Errorf("base Caddyfile not restored:\n%s", got)
 	}
 	gotPh, err := os.ReadFile(placeholder)

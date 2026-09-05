@@ -31,6 +31,7 @@ const (
 	KindOidcClient Kind = "OidcClient"
 	KindLdapGroup  Kind = "LdapGroup"
 	KindLdapUser   Kind = "LdapUser"
+	KindIngress    Kind = "Ingress"
 	KindBackupPlan Kind = "BackupPlan"
 	KindConfigFile Kind = "ConfigFile"
 	KindJob        Kind = "Job"
@@ -447,6 +448,60 @@ type LdapGroupSpec struct {
 	Name string `yaml:"name"`
 }
 
+// ingressTLSModes is the closed set of IngressSpec.TLS values.
+//
+// Closed because the two are not variations on a theme: they are which
+// side of the connection holds the certificate, and getting it wrong
+// means either a listener nobody can reach or plaintext where a
+// household expected TLS.
+var ingressTLSModes = map[string]bool{
+	// TLS is terminated upstream and arrives as plain http — a
+	// Cloudflare tunnel, or a terminator on the LAN. The listener stays
+	// http and Route fragments render http:// (ADR-W019 A4).
+	"off": true,
+	// The proxy terminates with Caddy's own internal CA (ADR-W019 A3).
+	// Route fragments render https:// and the site issues its own
+	// certificate, which is what makes a hostname no public CA would
+	// sign serve real TLS on a LAN.
+	"internal": true,
+}
+
+// IngressSpec is the spec for kind Ingress: how the node's reverse proxy
+// is postured, declared by whichever ingress package is installed.
+//
+// It exists because Keystone's node-level renderers — the base Caddyfile
+// and the per-Route fragments — need facts only the ingress PROFILE
+// knows, and had no way to learn them. Both were constants: auto_https
+// was always off, fragments were always http://, and trusted_proxies was
+// a package-level default compiled into the renderer. That is fine while
+// one profile ships and wrong the moment two do, which is now:
+// caddy-cloudflared sits behind a tunnel that terminates TLS, and
+// caddy-tailnet has nothing in front of it and must terminate its own.
+//
+// A resource rather than a flag or a heuristic, for the reason ADR-W005
+// gives and the Secret kind followed: everything else a package causes
+// to happen on a node is a resource, and being one means this inherits
+// the closed registry, validation, plan ordering, approval and audit
+// without rebuilding any of them. ADR-W019 B5 already said the value
+// should be "a parameter of the ingress package, not a constant in the
+// renderer" — this is that channel.
+//
+// Deliberately NOT inferred from published ports. "The container
+// publishes 443, so it must terminate TLS" is the kind of heuristic this
+// repo refuses elsewhere, and it would be load-bearing for whether a
+// household's traffic is encrypted.
+type IngressSpec struct {
+	// TLS is one of ingressTLSModes. Empty means "off", so a profile
+	// that terminates nothing says nothing.
+	TLS string `yaml:"tls,omitempty"`
+	// TrustedProxies is what the listener trusts to have set the
+	// X-Forwarded-* headers (ADR-W019 A6). Caddy syntax, e.g.
+	// "private_ranges" or a CIDR. Empty trusts nothing, which is the
+	// safe default and also the wrong one behind a tunnel — a profile
+	// with something in front of it must say so.
+	TrustedProxies []string `yaml:"trustedProxies,omitempty"`
+}
+
 // LdapUserSpec is the spec for kind LdapUser: a person who must EXIST in
 // the directory, and the groups they must be IN.
 //
@@ -536,6 +591,7 @@ type Resource struct {
 	OidcClient *OidcClientSpec `yaml:"-"`
 	LdapGroup  *LdapGroupSpec  `yaml:"-"`
 	LdapUser   *LdapUserSpec   `yaml:"-"`
+	Ingress    *IngressSpec    `yaml:"-"`
 	BackupPlan *BackupPlanSpec `yaml:"-"`
 	ConfigFile *ConfigFileSpec `yaml:"-"`
 	Job        *JobSpec        `yaml:"-"`
@@ -620,6 +676,13 @@ var registry = map[Kind]kindEntry{
 		// it is declared against is the one running the directory.
 		newSpec:    func() any { return &LdapUserSpec{} },
 		validate:   validateLdapUser,
+		nodeScoped: true,
+	},
+	KindIngress: {
+		// Node-scoped: it describes the proxy running on one node, and
+		// the renderers that read it are node-level.
+		newSpec:    func() any { return &IngressSpec{} },
+		validate:   validateIngress,
 		nodeScoped: true,
 	},
 	KindBackupPlan: {
@@ -1030,6 +1093,23 @@ func validateBackupPlan(r *Resource) error {
 // reason: every field here is interpolated into a GraphQL document and an
 // LDAP distinguished name by a POSIX shell script with no JSON encoder.
 // A closed charset is what makes that safe.
+func validateIngress(r *Resource) error {
+	if r.Ingress == nil {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "ingress spec missing"}
+	}
+	if r.Ingress.TLS != "" && !ingressTLSModes[r.Ingress.TLS] {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.tls",
+			Msg: fmt.Sprintf("%q is not a TLS posture (want \"off\" or \"internal\", or empty for off)", r.Ingress.TLS)}
+	}
+	for _, p := range r.Ingress.TrustedProxies {
+		if strings.ContainsAny(p, " \t\n{}") {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.trustedProxies",
+				Msg: "entries are written verbatim into a Caddyfile, so whitespace and braces are refused"}
+		}
+	}
+	return nil
+}
+
 func validateLdapUser(r *Resource) error {
 	if r.LdapUser == nil {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "ldap user spec missing"}

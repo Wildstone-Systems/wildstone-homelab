@@ -219,6 +219,15 @@ type Reconciler struct {
 
 	mu      sync.Mutex
 	managed map[string]map[resKey]bool // nodeID -> (kind,name) -> Reconciler believes it exists
+	// posture is the node's ingress posture for the tick in flight,
+	// derived from desired state at the top of Reconcile.
+	//
+	// Cached rather than threaded because three renderer call sites sit
+	// deep in the apply and observe paths where `desired` is long out of
+	// scope, and widening three signatures to carry a value that is
+	// constant for the whole tick is the worse trade. Written once per
+	// tick under mu, read through currentPosture().
+	posture ingressPosture
 	// configFilePaths remembers where each applied ConfigFile went.
 	//
 	// Every other managed file derives its path from the resource NAME,
@@ -281,7 +290,7 @@ type managedFile struct {
 func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []managedFile {
 	clientsFile := renderAutheliaClients(desired)
 	return []managedFile{
-		{baseCaddyfilePath(managedPrefix), renderBaseCaddyfile(defaultTrustedProxies), false},
+		{baseCaddyfilePath(managedPrefix), renderBaseCaddyfile(postureOf(desired)), false},
 		{placeholderFragmentPath(managedPrefix), renderPlaceholderFragment(), false},
 		// The merged Authelia clients file qualifies for the same reason
 		// the other two do. Asserting it before observe also means it is
@@ -373,12 +382,19 @@ func (r *Reconciler) repairNodePrereqs(ctx context.Context, nodeID string, desir
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []resource.Resource) (*Outcome, error) {
+	// The ingress posture is read once and used by every renderer this
+	// tick, so a Route fragment and the base Caddyfile cannot disagree
+	// about the scheme halfway through.
+	r.mu.Lock()
+	r.posture = postureOf(desired)
+	r.mu.Unlock()
+
 	wsDesired := make([]resource.Resource, 0, len(desired))
 	providerDesired := make([]resource.Resource, 0, len(desired))
 	for _, res := range desired {
 		switch res.Kind {
 		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
-			resource.KindLdapGroup, resource.KindLdapUser, resource.KindBackupPlan, resource.KindConfigFile, resource.KindJob,
+			resource.KindLdapGroup, resource.KindLdapUser, resource.KindIngress, resource.KindBackupPlan, resource.KindConfigFile, resource.KindJob,
 			resource.KindSecret:
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
@@ -514,6 +530,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			sr = r.applyLdapGroupStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindLdapUser:
 			sr = r.applyLdapUserStep(ctx, nodeID, step, desiredByKey)
+		case resource.KindIngress:
+			sr = r.applyIngressStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindBackupPlan:
 			sr = r.applyBackupPlanStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindConfigFile:
@@ -624,7 +642,7 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 			if present {
 				observed = append(observed, obs)
 			}
-		case resource.KindLdapGroup, resource.KindLdapUser, resource.KindBackupPlan:
+		case resource.KindLdapGroup, resource.KindLdapUser, resource.KindIngress, resource.KindBackupPlan:
 			// Declared-only kinds (ADR-W005 A3 / ADR-W011 A4):
 			// "observe-by-apply", same mechanism as Volume — present iff a
 			// prior successful apply recorded it in the Reconciler's
@@ -744,7 +762,7 @@ func (r *Reconciler) observeRoute(ctx context.Context, nodeID string, k resKey, 
 	if !isDesired {
 		return placeholderResource(resource.KindRoute, k.Name), true, nil
 	}
-	if managedFileMatches(res.GetReadManagedFile(), renderRouteFragment(want.Route, r.autheliaAddr())) {
+	if managedFileMatches(res.GetReadManagedFile(), renderRouteFragment(want.Route, r.autheliaAddr(), r.currentPosture())) {
 		return want, true, nil
 	}
 	return placeholderResource(resource.KindRoute, k.Name), true, nil
@@ -850,6 +868,8 @@ func placeholderResource(kind resource.Kind, name string) resource.Resource {
 		r.LdapGroup = &resource.LdapGroupSpec{Name: name}
 	case resource.KindLdapUser:
 		r.LdapUser = &resource.LdapUserSpec{Username: name}
+	case resource.KindIngress:
+		r.Ingress = &resource.IngressSpec{}
 	case resource.KindBackupPlan:
 		r.BackupPlan = &resource.BackupPlanSpec{}
 	case resource.KindConfigFile:
@@ -1352,7 +1372,7 @@ func (r *Reconciler) ensureNodePrereqs(ctx context.Context, nodeID string) strin
 	}
 	res, err = r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_WriteManagedFile{
 		WriteManagedFile: &wsv1.WriteManagedFile{
-			Path: baseCaddyfilePath(r.ManagedPrefix), Content: renderBaseCaddyfile(defaultTrustedProxies),
+			Path: baseCaddyfilePath(r.ManagedPrefix), Content: renderBaseCaddyfile(r.currentPosture()),
 		},
 	}})
 	if err != nil {
@@ -1502,7 +1522,7 @@ func (r *Reconciler) applyRouteStep(ctx context.Context, nodeID string, step pla
 			return sr
 		}
 		wantSpec = want.Route
-		content = renderRouteFragment(wantSpec, r.autheliaAddr())
+		content = renderRouteFragment(wantSpec, r.autheliaAddr(), r.currentPosture())
 	case plan.ActionDelete:
 		// No delete-file op exists (only WriteManagedFile/ReadManagedFile)
 		// — a Route delete overwrites the fragment instead (ADR-W004 A4
@@ -1655,4 +1675,16 @@ func (r *Reconciler) retryDispatch(ctx context.Context, nodeID string, op *wsv1.
 		}
 	}
 	return nil, fmt.Errorf("op failed after %d attempts: %w", maxRetries, lastErr)
+}
+
+// currentPosture is the posture for the tick in flight. A zero value —
+// possible only if a renderer runs outside Reconcile, which today means
+// a test — reads as the pre-Ingress default rather than as "no scheme".
+func (r *Reconciler) currentPosture() ingressPosture {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.posture.tls == "" {
+		return terminatedUpstream
+	}
+	return r.posture
 }

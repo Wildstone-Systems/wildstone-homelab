@@ -38,7 +38,7 @@ params:
   # Host port for the private listener. Defaults to the same 8443
   # packages/ingress uses for caddy-private, so the two profiles are
   # swappable without rewriting Routes.
-  - { name: listen_port, default: "8443" }
+  - { name: listen_port, default: "443" }
   # Host address to bind. Required and undefaulted on purpose: this
   # profile's whole claim is that it is private, and a default would let
   # that claim be true only by accident (#41). Normally the node's
@@ -48,6 +48,26 @@ params:
 policies:
   classifications: [admin_tailscale]
 templates:
+  # ---- How this node's proxy is postured (ADR-W019 B5, F65).
+  #
+  # tls: internal — this profile has NOTHING in front of it. Before this
+  # was declarable, it rendered the same terminated-upstream config as
+  # the Cloudflare profile: plain http, http:// fragments, and no
+  # certificate anywhere. Authelia refuses a non-https authelia_url and
+  # an OIDC issuer must match what the browser saw, so the profile that
+  # exists to avoid Cloudflare could not complete a login at all — it
+  # needed a TLS terminator placed in front of it by hand.
+  #
+  # local_certs is Caddy's own internal CA (ADR-W019 A3). Wildstone does
+  # not become a CA; the proxy already has one, and it will issue for
+  # hostnames no public CA would ever sign.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Ingress
+    metadata: { name: ingress, node: "{{ .Params.node }}" }
+    spec:
+      tls: internal
+      trustedProxies: [private_ranges]
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
@@ -72,7 +92,9 @@ templates:
       # TestPackageCommandsNameTheirBinary records which is which.
       command: ["caddy", "run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile", "--watch"]
       ports:
-        - "{{ .Params.listen_addr }}:{{ .Params.listen_port }}:80"
+        # :443 inside, because this profile terminates TLS itself now.
+        # It was :80 when a terminator sat in front.
+        - "{{ .Params.listen_addr }}:{{ .Params.listen_port }}:443"
       mounts:
         - { source: caddy-tailnet-data, target: /data }
         - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }
