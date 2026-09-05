@@ -177,7 +177,43 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return data as T;
 }
 
+// PackageView is what the catalog serves (ADR-W021 A5). Params travel
+// with required/default because they ARE the install form: a package
+// declares what it needs, and this screen asks for exactly that.
+export interface ParamDecl {
+  name: string;
+  required?: boolean;
+  default?: string;
+}
+
+export interface PackageView {
+  name: string;
+  version: string;
+  capability: string;
+  profile?: string;
+  params?: ParamDecl[];
+  provides?: { trait: string; mode?: string }[];
+  requires?: { trait: string; mode?: string }[];
+  enabled: boolean;
+}
+
+// EnablePreview is a dry run: the plan a proposal WOULD make, and the
+// secrets only the operator can supply. Nothing is recorded.
+export interface EnablePreview {
+  plan: Plan;
+  providedSecrets: string[];
+}
+
 export const api = {
+  packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
+  previewCapability: (pkg: string, params: Record<string, string>) =>
+    call<EnablePreview>("POST", "/api/v1/capabilities", {
+      package: pkg,
+      params,
+      dryRun: true,
+    }),
+  enableCapability: (pkg: string, params: Record<string, string>) =>
+    call<PlanRecord>("POST", "/api/v1/capabilities", { package: pkg, params }),
   whoami: () => call<Identity>("GET", "/api/v1/whoami"),
   resources: () => call<ResourceView[]>("GET", "/api/v1/resources"),
   observed: () => call<Observed[]>("GET", "/api/v1/observed"),

@@ -7,11 +7,13 @@ import { Home } from "./views/Home";
 import { Nodes } from "./views/Nodes";
 import { Plans } from "./views/Plans";
 import { Secrets } from "./views/Secrets";
+import { Services } from "./views/Services";
 
-type View = "home" | "plans" | "events" | "backups" | "nodes" | "secrets";
+type View = "home" | "services" | "plans" | "events" | "backups" | "nodes" | "secrets";
 
 const VIEWS: { id: View; label: string }[] = [
   { id: "home", label: "Home" },
+  { id: "services", label: "Services" },
   { id: "plans", label: "Plans" },
   { id: "events", label: "Events" },
   { id: "backups", label: "Backups" },
@@ -58,6 +60,7 @@ export function App() {
       </nav>
       <main className="main">
         {view === "home" && <Home />}
+        {view === "services" && <Services />}
         {view === "plans" && <Plans />}
         {view === "events" && <Events />}
         {view === "backups" && <Backups />}
