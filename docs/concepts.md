@@ -303,7 +303,42 @@ by `secret/<name>` reference or not at all.
 
 An `Automation` carries no node. Keystone owns it: it is present exactly
 when it is desired, the reconciler has nothing to apply, and the
-automation engine — the next work package — reads it from the Statefile.
+automation engine reads it from the Statefile.
+
+### The engine decides in code, and writes its decisions down
+
+The automation engine follows the household stream — poked by every new
+event, and on a timer otherwise — and for each event evaluates every
+enabled rule whose trigger matches. Conditions run in order, in code,
+against the stream itself: "no `pantry.meal_logged` for this subject
+in the last 6h" is a query, not a judgment. The first condition that
+fails stops the evaluation.
+
+Every decision is recorded back onto the household stream as an
+`automation.fired` or `automation.suppressed` event from the source
+`system/automation`, with the rule as its entity, the trigger's subject,
+and a payload naming the reason and what a firing would do. The record
+has a deterministic id (rule name plus trigger sequence), so a tick
+retried after a crash writes nothing twice. A firing never triggers a
+rule: the engine's own records are not triggers, which is what keeps a
+rule from chaining into itself.
+
+Two guards keep catch-up honest. A first tick over a stream with history
+adopts its end rather than acting on the past; and a trigger older than
+an hour by the time it is read is recorded as suppressed with a stale
+reason, because a "left home" from six hours ago must not ask about
+breakfast now.
+
+**Replay before trust** (ADR-W022 A7). `wild automation replay
+<name>` or `replay -file draft.yaml` runs a rule over the last week of
+real events and reports what it would have done, writing nothing. A
+draft is validated and policy-checked on the way, and its violations
+come back with the verdicts; cooldowns are simulated from the replay's
+own firings. It is the only way to test a rule, and the Butler will use
+the same endpoint to check its own drafts before proposing them.
+
+Nothing acts on a fired decision yet; its payload says `executed:
+false`. Actions through the domestic gateway are the next work package.
 
 ## The Butler proposes; humans approve
 

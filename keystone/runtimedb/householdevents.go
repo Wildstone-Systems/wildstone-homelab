@@ -3,7 +3,9 @@ package runtimedb
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -168,4 +170,95 @@ func (db *DB) RevokeTokensFor(principal string) (int64, error) {
 		return 0, fmt.Errorf("runtimedb: revoking tokens for %s: %w", principal, err)
 	}
 	return res.RowsAffected()
+}
+
+// HouseholdQuery filters the household stream. Zero fields match
+// everything; From/To bound occurred_at (inclusive). Newest reverses the
+// order — a "last three breakfasts" lookup wants the tail, not the head.
+type HouseholdQuery struct {
+	Type    string
+	Subject string
+	// SubjectSet distinguishes "any subject" (false) from "subject is
+	// exactly this, empty included" (true).
+	SubjectSet bool
+	Entity     string
+	Source     string
+	From, To   time.Time
+	Limit      int
+	Newest     bool
+}
+
+// QueryHouseholdEvents returns the events matching q, in seq order
+// (reversed when q.Newest). The automation engine's conditions are
+// built on this one query, so a condition cannot look at anything a
+// replay could not also look at.
+func (db *DB) QueryHouseholdEvents(q HouseholdQuery) ([]HouseholdEvent, error) {
+	where := []string{"1 = 1"}
+	var args []any
+	if q.Type != "" {
+		where = append(where, "type = ?")
+		args = append(args, q.Type)
+	}
+	if q.SubjectSet {
+		where = append(where, "subject = ?")
+		args = append(args, q.Subject)
+	}
+	if q.Entity != "" {
+		where = append(where, "entity = ?")
+		args = append(args, q.Entity)
+	}
+	if q.Source != "" {
+		where = append(where, "source = ?")
+		args = append(args, q.Source)
+	}
+	if !q.From.IsZero() {
+		where = append(where, "occurred_at >= ?")
+		args = append(args, q.From.UTC().Format(time.RFC3339Nano))
+	}
+	if !q.To.IsZero() {
+		where = append(where, "occurred_at <= ?")
+		args = append(args, q.To.UTC().Format(time.RFC3339Nano))
+	}
+	order := "ASC"
+	if q.Newest {
+		order = "DESC"
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 1000
+	}
+	args = append(args, limit)
+	rows, err := db.sql.Query(
+		`SELECT seq, event_id, occurred_at, recorded_at, subject, source, type, entity, payload, correlation_id, schema_version
+		 FROM household_events WHERE `+strings.Join(where, " AND ")+` ORDER BY seq `+order+` LIMIT ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: querying household events: %w", err)
+	}
+	defer rows.Close()
+	return scanHouseholdEvents(rows)
+}
+
+// AutomationCursor returns the last household seq the automation engine
+// evaluated; 0 before the first tick.
+func (db *DB) AutomationCursor() (int64, error) {
+	var seq int64
+	err := db.sql.QueryRow(`SELECT seq FROM automation_cursor WHERE id = 1`).Scan(&seq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: reading automation cursor: %w", err)
+	}
+	return seq, nil
+}
+
+// SetAutomationCursor records the engine's position.
+func (db *DB) SetAutomationCursor(seq int64) error {
+	_, err := db.sql.Exec(
+		`INSERT INTO automation_cursor (id, seq) VALUES (1, ?)
+		 ON CONFLICT (id) DO UPDATE SET seq = excluded.seq`, seq)
+	if err != nil {
+		return fmt.Errorf("runtimedb: setting automation cursor: %w", err)
+	}
+	return nil
 }

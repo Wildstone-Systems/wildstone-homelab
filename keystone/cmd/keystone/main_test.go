@@ -31,7 +31,7 @@ func TestBootServesBothPlanes(t *testing.T) {
 	var bootstrap strings.Builder
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	go func() {
-		if err := serve(gwLis, apiLis, "", "localhost,127.0.0.1", dataDir, 100*time.Millisecond, 200*time.Millisecond, "/etc/wildstone", time.Hour, defaultResticImage, "", "", butlerConfig{}, log, &bootstrap); err != nil {
+		if err := serve(gwLis, apiLis, "", "localhost,127.0.0.1", dataDir, 100*time.Millisecond, 200*time.Millisecond, "/etc/wildstone", time.Hour, defaultResticImage, "", "", butlerConfig{}, householdConfig{}, log, &bootstrap); err != nil {
 			t.Errorf("serve: %v", err)
 		}
 	}()

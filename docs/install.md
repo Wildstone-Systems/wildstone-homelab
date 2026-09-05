@@ -271,6 +271,10 @@ the steps you redo by hand.
   it, or pass `--keystone-arg <flag>` for any other keystone flag. The
   Console is served beside `/api` on the same listener — same API, same
   tokens.
+- **Household automation** (ADR-W022): `-household-timezone` is the
+  IANA zone the household's rules keep for time-of-day and weekday
+  conditions (default `Local`); `-automation-interval` is how often the
+  engine ticks when no event has poked it (default 15s).
 - **Butler** (ADR-W017): `-butler-provider anthropic|openai|ollama`,
   with `-butler-model`/`-butler-endpoint` as needed. API keys come ONLY
   from `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` environment variables —

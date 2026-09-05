@@ -377,3 +377,98 @@ func TestAutomationTravelsThePlanPipeline(t *testing.T) {
 		t.Fatalf("rule view = %+v", view)
 	}
 }
+
+// Replay runs a rule over history with no side effects (ADR-W022 A7): an
+// approved rule by name, or a draft by document, from any read principal
+// — and a new event pokes the engine.
+func TestAutomationReplay(t *testing.T) {
+	h := newHarness(t)
+	h.addPublisher("publisher-home")
+	pokes := 0
+	h.s.OnHouseholdEvent = func() { pokes++ }
+
+	base := time.Now().Add(-3 * time.Hour)
+	send := func(id, typ, subject string, at time.Time) {
+		t.Helper()
+		env := household.Envelope{EventID: id, OccurredAt: at, Type: typ, Subject: subject}
+		if resp := h.do(runtimedb.RolePublisher, http.MethodPost, "/api/v1/household/events", env, nil); resp.StatusCode != http.StatusCreated {
+			t.Fatalf("emit %s = %d", id, resp.StatusCode)
+		}
+	}
+	send("meal-1", "pantry.meal_logged", "mika", base)
+	send("left-1", "person.left_home", "mika", base.Add(30*time.Minute))
+	send("left-2", "person.left_home", "mika", base.Add(2*time.Hour+30*time.Minute))
+	// A retried delivery does not poke: nothing new happened.
+	h.do(runtimedb.RolePublisher, http.MethodPost, "/api/v1/household/events",
+		household.Envelope{EventID: "left-2", OccurredAt: base.Add(2*time.Hour + 30*time.Minute), Type: "person.left_home", Subject: "mika"}, nil)
+	if pokes != 3 {
+		t.Fatalf("pokes = %d, want 3 (one per new event, none for the retry)", pokes)
+	}
+
+	draft := `apiVersion: wildstone.dev/v1
+kind: Automation
+metadata: { name: breakfast-check, owner: household/mika }
+spec:
+  description: Ask about breakfast when leaving without a meal logged
+  trigger: { eventType: person.left_home, subject: mika }
+  conditions:
+    - { kind: eventAbsent, eventType: pantry.meal_logged, window: 1h, sameSubject: true }
+  action: { tool: notifications.notify, tier: domestic, params: { message: "Breakfast?" } }
+`
+	var out replayResponse
+	if resp := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/household/automations/replay",
+		replayRequest{Rule: draft}, &out); resp.StatusCode != http.StatusOK {
+		t.Fatalf("replay draft = %d", resp.StatusCode)
+	}
+	if !out.Draft || out.Total != 2 || out.Fired != 1 || len(out.Violations) != 0 {
+		t.Fatalf("draft replay = %+v", out)
+	}
+	if out.Verdicts[0].Fired || !out.Verdicts[1].Fired || out.Verdicts[1].EventID != "left-2" {
+		t.Fatalf("verdicts = %+v", out.Verdicts)
+	}
+	// Nothing was written and nothing moved.
+	var events []runtimedb.HouseholdEvent
+	h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/household/events", nil, &events)
+	if len(events) != 3 {
+		t.Fatalf("replay wrote to the stream: %d events", len(events))
+	}
+
+	// A draft that policy would refuse still replays, and says so.
+	bad := strings.Replace(draft, "tier: domestic", "tier: high", 1)
+	h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/household/automations/replay", replayRequest{Rule: bad}, &out)
+	if len(out.Violations) != 1 || out.Violations[0].Rule != "automation-action-tier" {
+		t.Fatalf("policy on draft = %+v", out.Violations)
+	}
+	// An invalid draft is a 400; so is asking for both or neither.
+	if resp := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/household/automations/replay",
+		replayRequest{Rule: strings.Replace(draft, "person.left_home", "left_home", 1)}, nil); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid draft = %d", resp.StatusCode)
+	}
+	if resp := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/household/automations/replay", replayRequest{}, nil); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("neither = %d", resp.StatusCode)
+	}
+	if resp := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/household/automations/replay", replayRequest{Name: "nope"}, nil); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown name = %d", resp.StatusCode)
+	}
+	// A publisher cannot replay.
+	if resp := h.do(runtimedb.RolePublisher, http.MethodPost, "/api/v1/household/automations/replay", replayRequest{Rule: draft}, nil); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("publisher replay = %d", resp.StatusCode)
+	}
+
+	// Approve the rule (disabled), then replay it by name: a disabled
+	// rule replays as if enabled, and the response says it is off.
+	disabled := strings.Replace(draft, "  trigger:", "  disabled: true\n  trigger:", 1)
+	var rec runtimedb.PlanRecord
+	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans", proposalRequest{Summary: "rule", Put: []string{disabled}}, &rec); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("propose = %d", resp.StatusCode)
+	}
+	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("approve = %d", resp.StatusCode)
+	}
+	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/household/automations/replay", replayRequest{Name: "breakfast-check"}, &out); resp.StatusCode != http.StatusOK {
+		t.Fatalf("replay by name = %d", resp.StatusCode)
+	}
+	if out.Draft || out.Enabled || out.Total != 2 || out.Fired != 1 {
+		t.Fatalf("named replay = %+v", out)
+	}
+}

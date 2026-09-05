@@ -246,15 +246,20 @@ No real Home Assistant, PantryOS, or LLM in CI.
 | **H6** | Escalation: a rule opens a Butler session with its context packet; the Butler's answer routes to H4's action. Red-team case per A4 | The "left home without breakfast" flow, end to end |
 | **H7** | Natural-language authoring: the Butler compiles a request into the H2 schema, dry-runs it against H3, and proposes it through `propose_change` | The AI writes rules the engine already understands; no second execution path |
 
-**Status:** H1 and H2 are implemented. H1: the `household_events`
+**Status:** H1, H2, and H3 are implemented. H1: the `household_events`
 table and envelope, the `publisher` role and `emit` verb, the intake and
 cursor endpoints, the `publishes` block, publisher-secret synthesis in
 the capability engine, the minting endpoint, and `wild household`. H2:
 the `Automation` kind (trigger, conditions, context, escalation,
 action), Medium on create/change and Low on delete, Keystone-owned in
 the reconciler, and the `automation-action-tier` policy rule with
-params held to the secret-values rule. See `docs/concepts.md`,
-"Household events".
+params held to the secret-values rule. H3: the engine (`keystone/
+automation`) — trigger matching, in-order condition evaluation over the
+stream, `automation.fired`/`automation.suppressed` records with
+deterministic ids, first-run adoption and a stale-trigger bound, the
+side-effect-free replay endpoint with draft validation and policy
+findings, `wild automation list|replay`, and the intake poking the
+engine. See `docs/concepts.md`, "Household events".
 
 The first end-to-end target is the breakfast check: Home Assistant
 emits `person.left_home`; a rule checks the timeline for a

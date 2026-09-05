@@ -44,6 +44,8 @@ func main() {
 		os.Exit(runBackup(os.Args[2:]))
 	case "household":
 		os.Exit(runHousehold(os.Args[2:]))
+	case "automation":
+		os.Exit(runAutomation(os.Args[2:]))
 	default:
 		fmt.Fprintf(os.Stderr, "wild: unknown command %q\n", os.Args[1])
 		usage()
@@ -64,6 +66,7 @@ func usage() {
   wild node list | mint-join ...             (see wild node)
   wild status | plan | capability | logs | audit | backup ...  (API client, ADR-W015)
   wild household events|emit|publisher ...   (see wild household)
+  wild automation list|replay ...            (see wild automation)
   wild version`)
 }
 

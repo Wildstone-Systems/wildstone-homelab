@@ -142,3 +142,58 @@ func TestRevokeTokensFor(t *testing.T) {
 		t.Fatalf("second revoke touched %d rows, want 0", n)
 	}
 }
+
+func TestQueryHouseholdEventsAndCursor(t *testing.T) {
+	db := open(t)
+	base := time.Date(2026, 9, 5, 6, 0, 0, 0, time.UTC)
+	put := func(id, typ, subject, entity string, at time.Time) {
+		t.Helper()
+		if _, _, err := db.AppendHouseholdEvent(HouseholdEvent{EventID: id, Source: "s", Type: typ, Subject: subject, Entity: entity, OccurredAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("1", "pantry.meal_logged", "mika", "", base)
+	put("2", "pantry.meal_logged", "sam", "", base.Add(time.Hour))
+	put("3", "person.left_home", "mika", "", base.Add(2*time.Hour))
+	put("4", "automation.fired", "mika", "breakfast-check", base.Add(2*time.Hour))
+	put("5", "pantry.meal_logged", "", "", base.Add(3*time.Hour))
+
+	got, err := db.QueryHouseholdEvents(HouseholdQuery{Type: "pantry.meal_logged"})
+	if err != nil || len(got) != 3 {
+		t.Fatalf("by type: %d, %v", len(got), err)
+	}
+	got, _ = db.QueryHouseholdEvents(HouseholdQuery{Type: "pantry.meal_logged", Subject: "mika", SubjectSet: true})
+	if len(got) != 1 || got[0].EventID != "1" {
+		t.Fatalf("by subject: %+v", got)
+	}
+	// SubjectSet with "" is "no subject", not "any subject".
+	got, _ = db.QueryHouseholdEvents(HouseholdQuery{Type: "pantry.meal_logged", SubjectSet: true})
+	if len(got) != 1 || got[0].EventID != "5" {
+		t.Fatalf("empty subject: %+v", got)
+	}
+	got, _ = db.QueryHouseholdEvents(HouseholdQuery{From: base.Add(30 * time.Minute), To: base.Add(2 * time.Hour)})
+	if len(got) != 3 || got[0].EventID != "2" || got[2].EventID != "4" {
+		t.Fatalf("window: %+v", got)
+	}
+	got, _ = db.QueryHouseholdEvents(HouseholdQuery{Type: "automation.fired", Entity: "breakfast-check", Newest: true, Limit: 1})
+	if len(got) != 1 || got[0].EventID != "4" {
+		t.Fatalf("by entity newest: %+v", got)
+	}
+	got, _ = db.QueryHouseholdEvents(HouseholdQuery{Newest: true, Limit: 2})
+	if len(got) != 2 || got[0].EventID != "5" || got[1].EventID != "4" {
+		t.Fatalf("newest two: %+v", got)
+	}
+
+	if seq, err := db.AutomationCursor(); err != nil || seq != 0 {
+		t.Fatalf("initial cursor = %d, %v", seq, err)
+	}
+	if err := db.SetAutomationCursor(3); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetAutomationCursor(5); err != nil {
+		t.Fatal(err)
+	}
+	if seq, _ := db.AutomationCursor(); seq != 5 {
+		t.Fatalf("cursor = %d, want 5", seq)
+	}
+}

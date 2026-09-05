@@ -59,6 +59,9 @@ func (s *Server) emitHouseholdEvent(r *http.Request, id principal.Identity) (any
 	if receipt.Duplicate {
 		return receipt, http.StatusOK, nil
 	}
+	if s.OnHouseholdEvent != nil {
+		s.OnHouseholdEvent()
+	}
 	return receipt, http.StatusCreated, nil
 }
 
