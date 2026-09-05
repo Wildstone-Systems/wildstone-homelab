@@ -337,8 +337,48 @@ come back with the verdicts; cooldowns are simulated from the replay's
 own firings. It is the only way to test a rule, and the Butler will use
 the same endpoint to check its own drafts before proposing them.
 
-Nothing acts on a fired decision yet; its payload says `executed:
-false`. Actions through the domestic gateway are the next work package.
+### Acting: one narrow door, and a question that can be answered
+
+A fired rule's action goes through the **domestic gateway**, and there
+is no other way for a rule to touch anything (ADR-W022 A5). The gateway
+resolves `<capability>.<tool>` to a registered executor, refuses any
+tier but `read` or `domestic`, checks the owning package actually
+declares that tool in its `agentTools` block, bounds the call, and
+records it on the operator's event stream. The tier check is a second
+copy of the policy rule on purpose: policy refuses such a rule at
+proposal, and the gateway refuses the call at dispatch, so a rule that
+arrived by some path nobody anticipated still cannot restart a
+container.
+
+The first executor is `notifications.notify`, over the ntfy capability.
+Its params are rendered against the trigger before dispatch, so a rule
+can say `topic: "household-{{ .Subject }}"` and reach a person by name.
+A typo in a template fails the action rather than sending
+`<no value>` to somebody's phone.
+
+**A notification can carry answer buttons**, and that is what closes the
+loop. Given `replies: "Yes,No"`, each button is a plain HTTP POST back
+to the household intake, carrying a short-lived reply token and a
+ready-made envelope. Tapping one records `household.answered` on the
+same stream that triggered the question, correlated to it — so the
+trigger, the decision, the action, and the answer read as one thread. No
+chat surface, no polling, no second channel. A rule that asks for
+replies where no reply URL is configured fails loudly rather than
+quietly sending a question nobody can answer.
+
+Three follow-on events say what happened after a firing, because the
+stream is append-only and a decision record never changes:
+
+- `automation.acted` — the action was **dispatched**. It is written
+  *before* the call, under a deterministic id, so a tick retried after a
+  crash cannot send it twice. Dispatch is at-most-once: the household
+  may miss an action if Keystone dies at exactly the wrong moment, and
+  will never get it twice.
+- `automation.action_failed` — it was refused or it failed, with the
+  reason and the stage.
+- `automation.escalation_pending` — the rule asked the Butler to phrase
+  its message and no escalator is configured, so nothing was sent. The
+  engine does not invent the wording the household asked a model for.
 
 ## The Butler proposes; humans approve
 

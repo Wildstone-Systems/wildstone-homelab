@@ -2,12 +2,16 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/household"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -470,5 +474,172 @@ spec:
 	}
 	if out.Draft || out.Enabled || out.Total != 2 || out.Fired != 1 {
 		t.Fatalf("named replay = %+v", out)
+	}
+}
+
+// TestHouseholdQuestionAndAnswerLoop is the H4 deliverable end to end
+// (ADR-W022): a rule fires, the domestic gateway sends a question with
+// answer buttons, a household device taps one, and the answer lands back
+// on the household stream correlated to the question that asked it — no
+// chat surface, no polling, no second channel.
+func TestHouseholdQuestionAndAnswerLoop(t *testing.T) {
+	h := newHarness(t)
+	h.addPublisher("publisher-home")
+
+	// A fake ntfy that keeps the last publish.
+	var published struct {
+		Topic   string `json:"topic"`
+		Message string `json:"message"`
+		Actions []struct {
+			Label   string            `json:"label"`
+			URL     string            `json:"url"`
+			Method  string            `json:"method"`
+			Headers map[string]string `json:"headers"`
+			Body    string            `json:"body"`
+		} `json:"actions"`
+	}
+	ntfy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &published); err != nil {
+			t.Errorf("ntfy body: %v", err)
+		}
+		w.Write([]byte(`{"id":"x"}`)) //nolint:errcheck
+	}))
+	defer ntfy.Close()
+
+	// The reply token is an ordinary short-lived publisher token.
+	if err := h.s.Principals.Create("publisher-replies", runtimedb.RolePublisher, ""); err != nil {
+		t.Fatal(err)
+	}
+	gw := &domestic.Gateway{}
+	gw.Register(&domestic.Notifier{
+		BaseURL:  ntfy.URL,
+		ReplyURL: h.srv.URL + "/api/v1/household/events",
+		MintReply: func(context.Context) (string, error) {
+			return h.s.Principals.Mint("publisher-replies", "", time.Hour)
+		},
+	})
+	h.s.Automation.Actions = gw
+
+	rule := `apiVersion: wildstone.dev/v1
+kind: Automation
+metadata: { name: mail-check, owner: household/mika }
+spec:
+  description: Ask whether the mail was collected on arriving home
+  trigger: { eventType: person.arrived_home, subject: mika }
+  conditions:
+    - { kind: cooldown, window: 20h }
+  action:
+    tool: notifications.notify
+    tier: domestic
+    params:
+      topic: "household-{{ .Subject }}"
+      message: "Did you get the mail?"
+      replies: "Yes,No"
+`
+	var rec runtimedb.PlanRecord
+	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans",
+		proposalRequest{Summary: "mail check", Put: []string{rule}}, &rec); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("propose = %d", resp.StatusCode)
+	}
+	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("approve = %d", resp.StatusCode)
+	}
+
+	// The engine adopts the stream it starts on, so prime it with a
+	// marker before the trigger the test cares about.
+	emit := func(id, typ string, at time.Time) {
+		t.Helper()
+		env := household.Envelope{EventID: id, OccurredAt: at, Type: typ, Subject: "mika"}
+		if resp := h.do(runtimedb.RolePublisher, http.MethodPost, "/api/v1/household/events", env, nil); resp.StatusCode != http.StatusCreated {
+			t.Fatalf("emit %s = %d", id, resp.StatusCode)
+		}
+	}
+	emit("marker", "household.marker", time.Now().Add(-time.Minute))
+	if _, err := h.s.Automation.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mika gets home. The rule fires and asks.
+	emit("arrived-1", "person.arrived_home", time.Now().Add(-time.Minute))
+	out, err := h.s.Automation.Tick(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Fired != 1 {
+		t.Fatalf("tick = %+v", out)
+	}
+	if published.Topic != "household-mika" || published.Message != "Did you get the mail?" || len(published.Actions) != 2 {
+		t.Fatalf("published = %+v", published)
+	}
+
+	// The household taps "Yes". The button is a plain HTTP request a
+	// phone can make — so the test makes exactly that request, with
+	// nothing but what the button carries.
+	yes := published.Actions[0]
+	req, err := http.NewRequest(yes.Method, yes.URL, strings.NewReader(yes.Body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range yes.Headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("reply button = %d, want 201", resp.StatusCode)
+	}
+
+	// The answer is a fact on the same stream, correlated to the trigger
+	// that asked, published by the reply principal and nobody else.
+	var events []runtimedb.HouseholdEvent
+	h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/household/events", nil, &events)
+	var answered *runtimedb.HouseholdEvent
+	for i := range events {
+		if events[i].Type == domestic.AnsweredEventType {
+			answered = &events[i]
+		}
+	}
+	if answered == nil {
+		t.Fatalf("no %s on the stream: %+v", domestic.AnsweredEventType, events)
+	}
+	if answered.Source != "publisher-replies" || answered.Subject != "mika" || answered.Entity != "mail-check" ||
+		answered.CorrelationID != "arrived-1" || !strings.Contains(string(answered.Payload), `"answer":"Yes"`) {
+		t.Fatalf("answer = %+v", answered)
+	}
+	// Everything the trigger caused carries the trigger's id as its
+	// correlation, so the exchange reads as one thread: the decision,
+	// the action, and the answer. The trigger itself is the origin and
+	// carries no correlation of its own.
+	thread := map[string]bool{}
+	for _, e := range events {
+		if e.CorrelationID == "arrived-1" {
+			thread[e.Type] = true
+		}
+	}
+	for _, want := range []string{"automation.fired", "automation.acted", domestic.AnsweredEventType} {
+		if !thread[want] {
+			t.Fatalf("no %s correlated to the trigger; thread = %v", want, thread)
+		}
+	}
+	if len(thread) != 3 {
+		t.Fatalf("correlated thread = %v, want exactly the decision, the action, and the answer", thread)
+	}
+
+	// Tapping the same button twice is one answer, not two.
+	req2, _ := http.NewRequest(yes.Method, yes.URL, strings.NewReader(yes.Body))
+	for k, v := range yes.Headers {
+		req2.Header.Set(k, v)
+	}
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("second tap = %d, want 200 (a duplicate, not a new answer)", resp2.StatusCode)
 	}
 }

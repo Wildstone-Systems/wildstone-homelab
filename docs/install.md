@@ -275,6 +275,18 @@ the steps you redo by hand.
   IANA zone the household's rules keep for time-of-day and weekday
   conditions (default `Local`); `-automation-interval` is how often the
   engine ticks when no event has poked it (default 15s).
+- **Household actions** (ADR-W022 H4): `-ntfy-url` is the ntfy server
+  the `notifications.notify` action publishes to; leaving it empty
+  registers no executor, and a rule naming one is refused with a reason
+  on the household stream. The ntfy access token comes only from
+  `NTFY_TOKEN`, never a flag. `-household-reply-url` is the household
+  event intake address a notification's reply buttons post to **as a
+  phone can reach it** — not Keystone's loopback address, so this needs
+  a Route or a tailnet address in front of the API. Leaving it empty
+  means notifications carry no buttons, and a rule that asks for replies
+  fails loudly rather than asking a question nobody can answer.
+  `-household-reply-ttl` bounds how long a reply token stays valid
+  (default 12h).
 - **Butler** (ADR-W017): `-butler-provider anthropic|openai|ollama`,
   with `-butler-model`/`-butler-endpoint` as needed. API keys come ONLY
   from `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` environment variables —

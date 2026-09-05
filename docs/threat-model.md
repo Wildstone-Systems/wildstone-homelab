@@ -60,6 +60,27 @@ the test that pins it.
   API responses, and Butler transcripts are all behind the shared
   redactor.
 
+### Household publishers and reply tokens (ADR-W022)
+
+- A publisher holds one verb, `emit`. A compromised integration shim
+  can lie about the house — claim an arrival, a meal, a calendar
+  change — and can do nothing else: not read state, not propose, not
+  approve. The intake stamps an event's `source` from the token, so it
+  cannot speak under another publisher's name.
+- Household event content is attacker-influenceable text and is
+  treated as such the moment it reaches a model: the same redactor and
+  untrusted-content envelope every other external string gets.
+- **A reply token travels to a household device inside a
+  notification.** That is a deliberate exposure and is why the token is
+  nothing more than a short-lived publisher credential: whoever reads
+  it off a phone can claim the household answered a question, and
+  nothing else. It expires (`-household-reply-ttl`), and the answers it
+  can forge are facts a rule may read, never actions a rule may take.
+- A household rule's action is bounded by tier twice over — policy
+  refuses an infrastructure-tier action at proposal, the domestic
+  gateway refuses it at dispatch — so a rule that reached the engine by
+  some path nobody anticipated still cannot restart a container.
+
 ### LLM (the Butler) — treated as a confused deputy, not a trusted user
 
 ADR-W006/W017; the red-team suite (`keystone/butler/redteam_test.go`,
@@ -104,6 +125,10 @@ ADR-W006/W017; the red-team suite (`keystone/butler/redteam_test.go`,
   approved plans run.
 - Docker itself is trusted on nodes; container escape is out of scope.
 - DoS beyond token-bucket rate limiting is out of scope.
+- A reply token is bounded by time, not by use: within its TTL it can
+  post more than the one answer it was minted for. Single-use reply
+  tokens are the obvious tightening and are deliberately not in the
+  first cut, because the blast radius is one forged household fact.
 - The drift classifier protects foreign resources but cannot protect
   Wildstone-owned resources from hand edits on the node; drift repair
   reverts what it observes, Low-risk only.

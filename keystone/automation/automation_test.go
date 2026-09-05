@@ -228,7 +228,7 @@ func TestTickRecordsDecisionsIdempotently(t *testing.T) {
 	}
 	var payload map[string]any
 	json.Unmarshal(fired[0].Payload, &payload) //nolint:errcheck
-	if payload["executed"] != false || payload["action"] != "notifications.notify" || payload["escalates"] != true || payload["trigger"] != float64(3) {
+	if payload["action"] != "notifications.notify" || payload["escalates"] != true || payload["trigger"] != float64(3) {
 		t.Fatalf("payload = %v", payload)
 	}
 
@@ -245,8 +245,14 @@ func TestTickRecordsDecisionsIdempotently(t *testing.T) {
 	if out.Evaluated != 1 {
 		t.Fatalf("re-tick evaluated %d", out.Evaluated)
 	}
-	if all, _ := db.QueryHouseholdEvents(runtimedb.HouseholdQuery{Source: Source}); len(all) != 1 {
+	if all, _ := db.QueryHouseholdEvents(runtimedb.HouseholdQuery{Type: TypeFired}); len(all) != 1 {
 		t.Fatalf("re-tick wrote %d decision(s), want the original 1", len(all))
+	}
+	// This rule escalates and no escalator is wired, so the firing is
+	// followed by exactly one escalation_pending — also idempotent.
+	pending, _ := db.QueryHouseholdEvents(runtimedb.HouseholdQuery{Type: TypeEscalationPending})
+	if len(pending) != 1 || pending[0].Entity != "breakfast-check" || pending[0].CorrelationID != "left-mika" {
+		t.Fatalf("escalation_pending = %+v", pending)
 	}
 
 	// Mika leaves again two hours later: the cooldown suppresses, with

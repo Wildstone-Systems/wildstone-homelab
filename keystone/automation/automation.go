@@ -5,10 +5,11 @@
 // fired or suppressed, and why — back onto the same stream, where it can
 // be read, correlated, and replayed.
 //
-// Nothing here calls a model, and nothing here performs an action. The
-// engine decides; H4 (actions through the domestic gateway) and H6
-// (escalation to the Butler) hang off a fired decision. A rule with no
-// escalation will never involve a model even then.
+// Nothing here calls a model, and nothing here talks to a service. The
+// engine decides; a fired decision's action is handed to the domestic
+// gateway through the Actions seam (act.go), and escalation to the
+// Butler (H6) will hang off the same point. A rule with no escalation
+// never involves a model at all.
 //
 // Every decision is a pure function of (rule, event, what the stream
 // says) — Evaluate — so a rule can be run against history with no side
@@ -306,6 +307,11 @@ type Engine struct {
 	Location *time.Location
 	// Now is the engine clock; nil means time.Now.
 	Now func() time.Time
+	// Actions, when set, performs a fired rule's action through the
+	// domestic gateway (ADR-W022 A5). nil leaves decisions recorded and
+	// unacted — which is what a control plane with no capabilities
+	// installed should do, and what the engine did before H4.
+	Actions Actions
 	// MaxTriggerAge: see DefaultMaxTriggerAge. Zero means the default.
 	MaxTriggerAge time.Duration
 	// Batch: see DefaultBatch. Zero means the default.
@@ -436,6 +442,9 @@ func (e *Engine) Tick(ctx context.Context) (TickOutcome, error) {
 			if err := e.record(d, ev); err != nil {
 				return out, err
 			}
+			if err := e.act(ctx, d, ev, rule); err != nil {
+				return out, err
+			}
 			out.Evaluated++
 			if d.Fired {
 				out.Fired++
@@ -459,17 +468,14 @@ func (e *Engine) record(d Decision, trigger runtimedb.HouseholdEvent) error {
 	if d.Fired {
 		typ = TypeFired
 	}
+	// What happened NEXT is not this record's business: a decision is a
+	// decision. The follow-on automation.acted / action_failed /
+	// escalation_pending events say whether anything ran (see act.go).
 	payload, _ := json.Marshal(map[string]any{
 		"trigger": d.EventSeq, "triggerType": d.EventType, "reason": d.Reason,
 		"action": d.Action, "tier": d.Tier, "escalates": d.Escalates,
-		// H4 flips this when an action actually runs; until then a
-		// fired decision is a decision only.
-		"executed": false,
 	})
-	correlation := trigger.CorrelationID
-	if correlation == "" {
-		correlation = trigger.EventID
-	}
+	correlation := correlationOf(trigger)
 	_, dup, err := e.DB.AppendHouseholdEvent(runtimedb.HouseholdEvent{
 		EventID:       d.Rule + "@" + strconv.FormatInt(d.EventSeq, 10),
 		OccurredAt:    d.At,

@@ -83,6 +83,7 @@ func TestEventIDPreserved(t *testing.T) {
 		"ha-01J6ZK8Q2M7Y4N3R5T9V1W0X2A",                // prefixed ULID
 		"pantry:meal:20260905T073000Z:mika",           // structured
 		"7f3a9c2e1b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c", // content hash
+		"school-pickup-suppression@41207:act",          // an engine decision id
 	} {
 		body := `{"seq":1,"eventId":"` + id + `","correlationId":"` + id + `","type":"person.left_home"}`
 		if out := String(body); out != body {

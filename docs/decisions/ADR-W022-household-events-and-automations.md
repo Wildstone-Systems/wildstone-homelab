@@ -241,12 +241,12 @@ No real Home Assistant, PantryOS, or LLM in CI.
 | **H1** | Household event intake: the A2 table and envelope, validation, uniqueness on `event_id`, the `publisher` role and `emit` verb, `POST`/`GET` on the API; the A10 `publishes` block and per-capability publisher token minting | Facts can flow in from a narrowly-trusted source and be read back in order, and a package can declare its shim |
 | **H2** | `Automation` resource kind: schema, validation, plan integration, one policy rule (an action's tier must be `read` or `domestic`, whoever authored the rule — the Butler included) | A rule is a plan, approved once, policy-checked like any resource |
 | **H3** | Automation engine: trigger matching, condition evaluation, `fired`/`suppressed` events, dry-run and replay (`wild automation replay`). No escalation, no actions yet | The deterministic half works end to end and can be tested against history |
-| **H4** | First action, through the domestic gateway: notify via the existing ntfy package. ntfy's action buttons post the reply back to H1's intake | A rule can ask a human a question and hear the answer, with no chat surface built |
+| **H4** | First action, through the domestic gateway: notify via the existing ntfy package, with a per-notification reply token. ntfy's action buttons post the reply back to H1's intake as `household.answered` | A rule can ask a human a question and hear the answer, with no chat surface built |
 | **H5** | First adapter: Home Assistant → intake, declared in the home-automation package per A10 (config-only or sidecar), with the A8 person mapping | A third-party app plugs in through the one contract |
 | **H6** | Escalation: a rule opens a Butler session with its context packet; the Butler's answer routes to H4's action. Red-team case per A4 | The "left home without breakfast" flow, end to end |
 | **H7** | Natural-language authoring: the Butler compiles a request into the H2 schema, dry-runs it against H3, and proposes it through `propose_change` | The AI writes rules the engine already understands; no second execution path |
 
-**Status:** H1, H2, and H3 are implemented. H1: the `household_events`
+**Status:** H1 through H4 are implemented. H1: the `household_events`
 table and envelope, the `publisher` role and `emit` verb, the intake and
 cursor endpoints, the `publishes` block, publisher-secret synthesis in
 the capability engine, the minting endpoint, and `wild household`. H2:
@@ -259,7 +259,14 @@ stream, `automation.fired`/`automation.suppressed` records with
 deterministic ids, first-run adoption and a stale-trigger bound, the
 side-effect-free replay endpoint with draft validation and policy
 findings, `wild automation list|replay`, and the intake poking the
-engine. See `docs/concepts.md`, "Household events".
+engine. H4: the domestic gateway (`keystone/domestic`) with its tier,
+declaration, timeout and audit checks; the `notifications.notify`
+executor over ntfy with reply buttons that post `household.answered`
+back to the intake under a short-lived reply token; param rendering
+against the trigger; and the `automation.acted` /
+`action_failed` / `escalation_pending` records, with dispatch claimed
+before the call so it is at-most-once. See `docs/concepts.md`,
+"Household events".
 
 The first end-to-end target is the breakfast check: Home Assistant
 emits `person.left_home`; a rule checks the timeline for a

@@ -62,7 +62,9 @@ var commitRefScanRegexp = regexp.MustCompile(
 //
 // Keyed on the field name, like the commit shelter, because the value's
 // shape is exactly what cannot be trusted to distinguish it. The value
-// class is the id character set; the length bound mirrors the intake's
+// class is the id character set — which includes "@" and ":", the
+// separators the automation engine's own decision ids use
+// ("<rule>@<triggerSeq>:act") — and the length bound mirrors the intake's
 // (keystone/household MaxEventIDBytes), so an oversize value is not
 // sheltered. As with commit hashes, the quotes may be backslash-escaped.
 //
@@ -72,7 +74,7 @@ var commitRefScanRegexp = regexp.MustCompile(
 // Butler's own tool-result redaction is a separate layer that still
 // runs over anything an id carries into a model.
 var eventIDRefScanRegexp = regexp.MustCompile(
-	`\\?"(?:eventId|correlationId)\\?"\s*:\s*\\?"[A-Za-z0-9._:+-]{1,128}\\?"`)
+	`\\?"(?:eventId|correlationId)\\?"\s*:\s*\\?"[A-Za-z0-9._:+@-]{1,128}\\?"`)
 
 // kindRefScanRegexp finds a resource reference of the form "Kind/name"
 // over the closed kind vocabulary. These are sheltered for exactly the
