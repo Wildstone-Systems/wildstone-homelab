@@ -147,6 +147,9 @@ setup_tailscale() {
   # tailnet, and `tailscale up` with an already-spent key would fail.
   if tailscale status --json 2>/dev/null | grep -q '"BackendState":[[:space:]]*"Running"'; then
     log "tailscale is already up; leaving the existing join alone"
+    # Still expose the socket: an upgrade of an install that predates
+    # this, or any re-run, reaches here and would otherwise never get it.
+    expose_tailscale_socket
     return 0
   fi
 
@@ -160,6 +163,58 @@ setup_tailscale() {
   tailscale up --authkey "$TAILSCALE_AUTHKEY" --hostname "$TAILSCALE_HOSTNAME" \
     || fail "tailscale up failed (expired, spent, or wrong-tailnet auth key?)"
   log "tailnet address: $(tailscale ip -4 2>/dev/null | head -1 || echo unknown)"
+  expose_tailscale_socket
+}
+
+# expose_tailscale_socket makes tailscaled's local API reachable from a
+# managed container (ADR-W019 A10, F59).
+#
+# The ingress profile that serves under a tailnet certificate needs it:
+# Caddy fetches *.ts.net certificates from tailscaled and needs nothing
+# else, no module and no configuration. But Wardstone bind-mounts host
+# paths ONLY from its managed prefixes (ADR-W003 A1), and tailscaled puts
+# its socket in /run/tailscale, which is not one. A package mounting it
+# there validates, lints, expands, plans — and is refused by the agent at
+# apply time, after the plan is approved.
+#
+# A bind mount rather than tailscaled's own --socket flag, deliberately.
+# Moving the socket would work for the container and break every
+# `tailscale status` the operator types, because the CLI looks in the
+# default place. This leaves the socket exactly where it is and makes it
+# visible in a second location as well.
+#
+# Ordered After/Requires tailscaled: /run/tailscale is created by
+# tailscaled at start, so a mount unit that ran first would fail on a
+# missing source.
+expose_tailscale_socket() {
+  install -d -m 0755 /srv/wildstone/tailscale
+  if [ -S /srv/wildstone/tailscale/tailscaled.sock ]; then
+    log "tailscaled socket already exposed under /srv/wildstone"
+    return 0
+  fi
+  cat > /etc/systemd/system/srv-wildstone-tailscale.mount <<'UNIT'
+# managed by wildstone-install — do not edit
+[Unit]
+Description=Expose tailscaled's local API inside Wildstone's managed prefix
+Documentation=https://github.com/chickenrat17/wildstone-homelab (ADR-W019 A10)
+After=tailscaled.service
+Requires=tailscaled.service
+
+[Mount]
+What=/run/tailscale
+Where=/srv/wildstone/tailscale
+Type=none
+Options=bind
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now srv-wildstone-tailscale.mount >/dev/null 2>&1 \
+    || fail "could not bind-mount tailscaled's socket into /srv/wildstone"
+  [ -S /srv/wildstone/tailscale/tailscaled.sock ] \
+    || fail "bind mount reported success but /srv/wildstone/tailscale/tailscaled.sock is not a socket"
+  log "tailscaled socket exposed at /srv/wildstone/tailscale/tailscaled.sock"
 }
 
 if [ -n "$TAILSCALE_AUTHKEY" ]; then
