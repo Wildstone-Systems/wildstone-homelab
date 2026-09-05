@@ -437,6 +437,40 @@ receive on their own device.** They cannot make a rule fire, change what
 it does, change who it reaches, or stop it. A red-team test in
 `keystone/butler` pins it.
 
+### Writing rules in plain English
+
+The other direction: a household member says *"whenever I get home, ask
+whether I got the mail"*, and the Butler writes the rule (ADR-W022 H7).
+It gains two read tools to do it, and no new way to make anything
+happen:
+
+- **`get_automation_schema`** describes how a rule is written *on this
+  deployment* — the closed grammar read straight out of the validator,
+  plus the event types packages actually publish here and the actions
+  actually wired up. A model that guesses at a closed vocabulary writes
+  rules that get rejected, and a description that drifts from the
+  validator is worse than none.
+- **`dry_run_automation`** replays the draft against real recorded
+  events and reports what it would have done. It is the same call
+  `wild automation replay -file` makes, so the Butler and the operator
+  cannot get different verdicts on one rule.
+
+Then `propose_change`, exactly as for any other resource. The Butler
+never enables a rule: what comes out is a plan in `proposed`, Medium by
+grading, which a human approves. After that the deterministic engine
+runs it through the same path a hand-written rule takes — there is no
+second execution route for a rule an AI happened to write, which is the
+whole point of compiling intent into the schema the runtime already
+understands rather than into a prompt.
+
+The system prompt tells the Butler to dry-run before proposing and to
+report what it found — *"this would have fired eleven times last week"*
+is something the household needs to hear before approving, not after —
+and to ask when a request is ambiguous rather than guessing. A rule is
+approved once and then runs on its own, so a wrong assumption inside one
+is not a wrong answer in a conversation; it is a wrong answer every day
+until someone notices.
+
 ## The Butler proposes; humans approve
 
 The Butler (ADR-W006, ADR-W017) is an LLM operator with read tools

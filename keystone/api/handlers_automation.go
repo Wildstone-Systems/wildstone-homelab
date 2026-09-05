@@ -67,22 +67,12 @@ func (s *Server) replayAutomation(r *http.Request, id principal.Identity) (any, 
 		return nil, http.StatusInternalServerError, err
 	}
 	var rule resource.Resource
-	var violations []policy.Violation
 	draft := req.Rule != ""
 	if draft {
-		parsed, err := resource.Unmarshal([]byte(req.Rule))
-		if err != nil {
-			return nil, http.StatusBadRequest, fmt.Errorf("parsing rule: %w", err)
+		parsed, perr := automation.ParseDraft(req.Rule)
+		if perr != nil {
+			return nil, http.StatusBadRequest, perr
 		}
-		if parsed.Kind != resource.KindAutomation {
-			return nil, http.StatusBadRequest, fmt.Errorf("rule must be kind Automation, got %s", parsed.Kind)
-		}
-		if err := parsed.Validate(); err != nil {
-			return nil, http.StatusBadRequest, fmt.Errorf("invalid rule: %w", err)
-		}
-		violations, _ = s.Policy.Validate(policy.Change{
-			Proposed: []resource.Resource{parsed}, Current: current, Principal: id.Name, Role: string(id.Role),
-		})
 		rule = parsed
 	} else {
 		found := false
@@ -96,13 +86,6 @@ func (s *Server) replayAutomation(r *http.Request, id principal.Identity) (any, 
 			return nil, http.StatusNotFound, fmt.Errorf("no Automation named %q", req.Name)
 		}
 	}
-	// A disabled rule replays as if enabled: the question is what it
-	// WOULD do, which is why one would replay it before turning it on.
-	// Copied, so the Statefile's loaded resource is never mutated.
-	spec := *rule.Automation
-	enabled := !spec.Disabled
-	spec.Disabled = false
-	rule.Automation = &spec
 
 	to := req.To
 	if to.IsZero() {
@@ -110,7 +93,7 @@ func (s *Server) replayAutomation(r *http.Request, id principal.Identity) (any, 
 	}
 	from := req.From
 	if from.IsZero() {
-		from = to.Add(-7 * 24 * time.Hour)
+		from = to.Add(-automation.DefaultDraftWindow)
 	}
 	if !from.Before(to) {
 		return nil, http.StatusBadRequest, fmt.Errorf("from must be before to")
@@ -119,18 +102,17 @@ func (s *Server) replayAutomation(r *http.Request, id principal.Identity) (any, 
 	if limit <= 0 || limit > maxReplayEvents {
 		limit = maxReplayEvents
 	}
-	decisions, err := s.Automation.Replay(r.Context(), []resource.Resource{rule}, from, to, limit)
+
+	// One implementation, shared with the Butler's dry_run_automation
+	// tool (ADR-W022 H7): a rule the Butler tried is a rule the operator
+	// can try identically, and neither gets a different verdict.
+	res, err := s.Automation.ReplayDraft(r.Context(), rule, s.Policy, id.Name, string(id.Role), from, to, limit)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	out := replayResponse{
-		Rule: rule.Metadata.Name, From: from, To: to, Draft: draft, Enabled: enabled,
-		Total: len(decisions), Verdicts: decisions, Violations: violations,
-	}
-	for _, d := range decisions {
-		if d.Fired {
-			out.Fired++
-		}
+		Rule: res.Rule, From: res.From, To: res.To, Draft: draft, Enabled: res.Enabled,
+		Total: res.Evaluated, Fired: res.Fired, Verdicts: res.Decisions, Violations: res.Violations,
 	}
 	return out, http.StatusOK, nil
 }

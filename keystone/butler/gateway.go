@@ -72,6 +72,18 @@ type ToolGateway struct {
 	// DB's observed rows; this package imports neither reconcile nor
 	// runtimedb. nil makes diagnose answer that no source is configured.
 	Observed func() ([]ObservedResource, error)
+	// AutomationVocabulary is the injected description of what a
+	// household rule may say on THIS deployment (ADR-W022 H7): the event
+	// types publishers declare and the actions the domestic gateway can
+	// run. cmd/keystone wires it; this package imports neither the
+	// catalog nor the gateway. nil makes get_automation_schema say the
+	// deployment-specific half is unavailable rather than invent one.
+	AutomationVocabulary func() (HouseholdVocabulary, error)
+	// DryRunAutomation replays a draft rule document over the last n days
+	// and returns a rendered summary — the same call the API's replay
+	// endpoint makes, so the Butler and the operator cannot get different
+	// verdicts on one rule. nil makes dry_run_automation say so.
+	DryRunAutomation func(ctx context.Context, doc string, days int) (string, error)
 	// MaxContentBytes bounds a single tool result's size before it's
 	// handed back to the model. <= 0 uses defaultMaxContentBytes.
 	MaxContentBytes int
@@ -90,7 +102,12 @@ func NewToolGateway(store *statefile.Store, reader *AgentReader) *ToolGateway {
 		"diagnose":              {Spec: diagnoseSpec, Untrusted: true, Handler: handleDiagnose},
 		"get_plan":              {Spec: getPlanSpec, Handler: handleGetPlan},
 		"explain_resource":      {Spec: explainResourceSpec, Handler: handleExplainResource},
-		"propose_change":        {Spec: proposeChangeSpec, Mutating: true, Handler: handleProposeChange},
+		"get_automation_schema": {Spec: automationSchemaSpec, Handler: handleGetAutomationSchema},
+		// The dry run quotes household events back — subjects, payload
+		// fields, whatever a sensor or another person's phone wrote — so
+		// its result is attacker-influenceable like a health detail is.
+		"dry_run_automation": {Spec: dryRunAutomationSpec, Untrusted: true, Handler: handleDryRunAutomation},
+		"propose_change":     {Spec: proposeChangeSpec, Mutating: true, Handler: handleProposeChange},
 	}
 	return gw
 }

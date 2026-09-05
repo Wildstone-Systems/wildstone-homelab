@@ -3,6 +3,7 @@ package resource
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -191,6 +192,30 @@ var automationTiers = map[string]bool{
 
 var automationWeekdays = map[string]bool{
 	"mon": true, "tue": true, "wed": true, "thu": true, "fri": true, "sat": true, "sun": true,
+}
+
+// The closed vocabularies, exported so anything that DESCRIBES a rule to
+// someone — the Butler's authoring tool, a Console form, a doc generator
+// — reads the same sets validation enforces. A description that drifts
+// from the validator teaches whoever reads it to write rules that get
+// rejected, which is worse than no description at all.
+func AutomationConditionKinds() []string { return sortedKeys(automationConditionKinds) }
+func AutomationContextKinds() []string   { return sortedKeys(automationContextKinds) }
+func AutomationTiers() []string          { return sortedKeys(automationTiers) }
+
+// AutomationWeekdays returns the weekday vocabulary in week order, which
+// is the order a person reads it in — not alphabetical.
+func AutomationWeekdays() []string {
+	return []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // AutomationOwnerAllowed reports whether an owner is one an Automation

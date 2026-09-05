@@ -244,9 +244,11 @@ No real Home Assistant, PantryOS, or LLM in CI.
 | **H4** | First action, through the domestic gateway: notify via the existing ntfy package, with a per-notification reply token. ntfy's action buttons post the reply back to H1's intake as `household.answered` | A rule can ask a human a question and hear the answer, with no chat surface built |
 | **H5** | First adapter: Home Assistant → intake, declared in the home-automation package per A10 (config-only or sidecar), with the A8 person mapping | A third-party app plugs in through the one contract |
 | **H6** | Escalation: a fired rule hands the Butler its context packet and gets back the wording of ONE declared action param, with the rule's own wording as the fallback; the call carries no tools. Red-team case per A4 | The "left home without breakfast" flow, end to end |
-| **H7** | Natural-language authoring: the Butler compiles a request into the H2 schema, dry-runs it against H3, and proposes it through `propose_change` | The AI writes rules the engine already understands; no second execution path |
+| **H7** | Natural-language authoring: two READ tools — a schema description read from the validator and this deployment's own vocabularies, and a dry run sharing one implementation with the API's replay — then `propose_change` as for any resource | The AI writes rules the engine already understands; no second execution path |
 
-**Status:** H1 through H6 are implemented. H1: the `household_events`
+**Status:** H1 through H7 are implemented — the work packages below are
+complete. A9 still stands: this is design and build ahead of M5, which
+is a deliberate pull-forward the owner decided on, not drift. H1: the `household_events`
 table and envelope, the `publisher` role and `emit` verb, the intake and
 cursor endpoints, the `publishes` block, publisher-secret synthesis in
 the capability engine, the minting endpoint, and `wild household`. H2:
@@ -277,8 +279,14 @@ action param the Butler may replace and doubles as the fallback, the
 engine gathers the rule's declared context providers, `keystone/butler`
 gains a tool-free `Phraser` whose facts are redacted and enveloped and
 whose answer is bounded at both ends, and the whole "left home without
-breakfast logged" flow is pinned end to end. See `docs/concepts.md`,
-"Household events".
+breakfast logged" flow is pinned end to end. H7: natural-language
+authoring — `get_automation_schema` (the closed grammar read from the
+validator plus this deployment's real event types and actions) and
+`dry_run_automation` (the same replay the API endpoint runs, shared as
+`automation.ReplayDraft`), both read tools; the Butler drafts, dry-runs
+and proposes, a human approves, and the deterministic engine then runs
+what it wrote through the same path a hand-written rule takes. See
+`docs/concepts.md`, "Household events".
 
 The first end-to-end target is the breakfast check: Home Assistant
 emits `person.left_home`; a rule checks the timeline for a

@@ -573,6 +573,58 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			}
 			return out, nil
 		}
+		// Household rule authoring (ADR-W022 H7). Both seams are read
+		// paths: one describes what a rule may say HERE, the other
+		// replays a draft. Neither can enable a rule — proposing it
+		// still produces a plan a human approves.
+		bgw.AutomationVocabulary = func() (butler.HouseholdVocabulary, error) {
+			v := butler.HouseholdVocabulary{}
+			if cat != nil {
+				seen := map[string]bool{}
+				for _, p := range cat.List() {
+					if p.Publishes == nil {
+						continue
+					}
+					for _, ev := range p.Publishes.Events {
+						if !seen[ev.Type] {
+							seen[ev.Type] = true
+							v.EventTypes = append(v.EventTypes, ev.Type)
+						}
+					}
+				}
+			}
+			// What is REGISTERED, not what is declared: a rule naming a
+			// tool no executor backs would be refused at dispatch, and
+			// the household would find out when it did not happen.
+			for _, tool := range actions.Tools() {
+				tier := "domestic"
+				if actions.Declared != nil {
+					capName, name, _ := strings.Cut(tool, ".")
+					if declared, ok := actions.Declared(capName, name); ok {
+						tier = declared
+					}
+				}
+				v.Actions = append(v.Actions, butler.HouseholdAction{Tool: tool, Tier: tier})
+			}
+			return v, nil
+		}
+		bgw.DryRunAutomation = func(ctx context.Context, doc string, days int) (string, error) {
+			rule, perr := automation.ParseDraft(doc)
+			if perr != nil {
+				return "", perr
+			}
+			if days <= 0 {
+				days = int(automation.DefaultDraftWindow / (24 * time.Hour))
+			}
+			to := time.Now()
+			replay, rerr := auto.ReplayDraft(ctx, rule, pol,
+				butlerSessionPrincipal, string(runtimedb.RoleButler), to.AddDate(0, 0, -days), to, 0)
+			if rerr != nil {
+				return "", rerr
+			}
+			return replay.Summary(20), nil
+		}
+
 		apiSrv.ButlerHost = &api.ButlerHost{Provider: bp, Gateway: bgw, Mode: mode}
 		log.Info("butler enabled", "provider", bp.Name(), "mode", string(mode))
 
