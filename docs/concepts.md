@@ -187,7 +187,8 @@ A compromised Keystone still cannot run arbitrary commands on a node.
 Everything — Console, `wild`, Butler — consumes the ONE public
 HTTP+JSON API (ADR-W007). Callers are **principals** with closed
 roles: `admin` (everything), `operator` (read/propose/approve),
-`butler` (read/propose — structurally cannot approve). Tokens are
+`butler` (read/propose — structurally cannot approve), `publisher`
+(emit household events, nothing else — ADR-W022). Tokens are
 opaque `wst_` bearers, stored hashed. Every request runs
 authn → RBAC → rate limit → handler → audit, and every response body
 passes a redacting encoder that strips secret-shaped values.
@@ -239,6 +240,42 @@ runs pinned restic containers through the same closed op surface as
 everything else, records every run in a ledger, and runs a periodic
 restore **drill**. Restores go to a fresh `<plan>-restore` volume —
 never over live data; moving data in place is a deliberate human act.
+
+## Household events: facts flow in, from publishers
+
+Alongside the operational event stream there is a second, separate
+one for the household itself (ADR-W022): "Mika left home", "breakfast
+logged", "school is closed Friday". Each is a small, structured fact —
+a publisher-supplied id, when it happened, whom it is about, a
+namespaced type such as `person.left_home`, and a bounded payload.
+Application databases stay authoritative for application state; the
+stream records that something changed, in order, replayably.
+
+Facts arrive through one intake, `POST /api/v1/household/events`, from
+**publishers**: principals with a fourth role that holds exactly one
+verb, `emit`. A publisher cannot read state, propose, or approve; the
+worst a compromised shim can do is lie about the house under its own
+name, because Keystone stamps the event's source from the token, never
+from the body. A retried delivery (same publisher, same id) is a no-op
+that returns the original sequence number.
+
+A service that publishes says so in its package, in a `publishes`
+block naming the event types and how they reach the intake: `native`
+(the app posts itself), `sidecar` (an adapter container the package
+declares), or `config` (the app calls a webhook itself, configured by
+a `ConfigFile`). Whatever the shape, the credential is the same:
+`wild household publisher <capability> -node <id>` mints the
+principal `publisher-<capability>` and places its token on the node as
+the provided secret `<capability>-publisher` — the name the capability
+engine already synthesised, so the package's shim reads it from
+`.Resolved.PublisherSecretRef` with nothing else to wire. Minting
+again rotates it: the old token stops working the moment the new one
+exists, and containers referencing the secret are re-created.
+
+Consumers follow the stream with the same cursor and long-poll shape
+as the operational one (`GET /api/v1/household/events?after=N`, or
+`wild household events -follow`). Nothing interprets an event yet; the
+deterministic automation engine that will is the next work package.
 
 ## The Butler proposes; humans approve
 

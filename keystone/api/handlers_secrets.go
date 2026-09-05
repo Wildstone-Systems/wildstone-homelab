@@ -201,7 +201,16 @@ func (s *Server) executeRotation(r *http.Request, node, name string, dependents 
 		return 0, fmt.Errorf("node %s: %s", node, oe.GetMessage())
 	}
 	version := res.GetEnsureSecret().GetVersion()
+	if err := s.recreateDependents(r, node, dependents); err != nil {
+		return version, err
+	}
+	return version, nil
+}
 
+// recreateDependents stops and removes each dependent container so the
+// level-triggered loop re-creates it against the secret's new value.
+// Shared by secret rotation and publisher-token minting.
+func (s *Server) recreateDependents(r *http.Request, node string, dependents []string) error {
 	for _, c := range dependents {
 		// Best-effort stop; the remove's own result is authoritative.
 		s.Agents.Apply(r.Context(), node, &wsv1.Operation{Op: &wsv1.Operation_StopContainer{ //nolint:errcheck
@@ -211,13 +220,13 @@ func (s *Server) executeRotation(r *http.Request, node, name string, dependents 
 			RemoveContainer: &wsv1.RemoveContainer{Name: c, Force: true},
 		}})
 		if rerr != nil {
-			return version, fmt.Errorf("removing dependent %s: %w", c, rerr)
+			return fmt.Errorf("removing dependent %s: %w", c, rerr)
 		}
 		if oe := rres.GetError(); oe != nil {
-			return version, fmt.Errorf("removing dependent %s: %s", c, oe.GetMessage())
+			return fmt.Errorf("removing dependent %s: %s", c, oe.GetMessage())
 		}
 	}
-	return version, nil
+	return nil
 }
 
 // secretDependents lists the Statefile containers on node whose env

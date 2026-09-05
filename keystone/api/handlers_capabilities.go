@@ -19,14 +19,15 @@ import (
 // packageView is what the Console browses. Params travel with their
 // required/default, because that is the install form (ADR-W021 A5).
 type packageView struct {
-	Name       string                `json:"name"`
-	Version    string                `json:"version"`
-	Capability string                `json:"capability"`
-	Profile    string                `json:"profile,omitempty"`
-	Params     []paramView           `json:"params,omitempty"`
-	Provides   []pkgspec.Provide     `json:"provides,omitempty"`
-	Requires   []pkgspec.Requirement `json:"requires,omitempty"`
-	Enabled    bool                  `json:"enabled"`
+	Name       string                 `json:"name"`
+	Version    string                 `json:"version"`
+	Capability string                 `json:"capability"`
+	Profile    string                 `json:"profile,omitempty"`
+	Params     []paramView            `json:"params,omitempty"`
+	Provides   []pkgspec.Provide      `json:"provides,omitempty"`
+	Requires   []pkgspec.Requirement  `json:"requires,omitempty"`
+	Publishes  *pkgspec.PublishesSpec `json:"publishes,omitempty"`
+	Enabled    bool                   `json:"enabled"`
 	capabilityDetail
 }
 
@@ -262,6 +263,7 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 			Name: p.Metadata.Name, Version: p.Metadata.Version,
 			Capability: p.Metadata.Capability, Profile: p.Metadata.Profile,
 			Params: resolveParams(p.Params, facts), Provides: p.Provides, Requires: p.Requires,
+			Publishes:        p.Publishes,
 			Enabled:          enabled[p.Metadata.Capability],
 			capabilityDetail: s.describeCapability(p, current, health),
 		})

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
@@ -94,28 +93,13 @@ func (s *Server) listEvents(r *http.Request, _ principal.Identity) (any, int, er
 	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	waitMs, _ := strconv.Atoi(r.URL.Query().Get("waitMs"))
-	const maxWait = 30_000
-	if waitMs > maxWait {
-		waitMs = maxWait
+	events, err := longPoll(r, waitMs, func() ([]runtimedb.Event, error) {
+		return s.DB.EventsAfter(after, limit)
+	})
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
 	}
-	deadline := time.Now().Add(time.Duration(waitMs) * time.Millisecond)
-	for {
-		events, err := s.DB.EventsAfter(after, limit)
-		if err != nil {
-			return nil, http.StatusInternalServerError, err
-		}
-		if len(events) > 0 || time.Now().After(deadline) {
-			if events == nil {
-				events = []runtimedb.Event{}
-			}
-			return events, http.StatusOK, nil
-		}
-		select {
-		case <-r.Context().Done():
-			return []runtimedb.Event{}, http.StatusOK, nil
-		case <-time.After(200 * time.Millisecond):
-		}
-	}
+	return events, http.StatusOK, nil
 }
 
 func (s *Server) listAudit(r *http.Request, _ principal.Identity) (any, int, error) {

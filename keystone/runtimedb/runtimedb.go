@@ -59,12 +59,28 @@ func Open(path string) (*DB, error) {
 	return db, nil
 }
 
+// openUnmigrated opens the handle without applying migrations — test
+// support for exercising a migration against data written by the schema
+// before it (the rebuild in 0005 is the first that had to preserve rows).
+func openUnmigrated(path string) (*DB, error) {
+	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", path)
+	sqlDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: open %s: %w", path, err)
+	}
+	return &DB{sql: sqlDB}, nil
+}
+
 func (db *DB) Close() error { return db.sql.Close() }
 
 // migrate applies embedded migrations in filename order, each inside its
 // own transaction, tracked in schema_migrations. Forward-only (ADR-W007
 // A4): a bad migration is fixed by a new one, never by editing history.
-func (db *DB) migrate() error {
+func (db *DB) migrate() error { return db.migrateThrough("") }
+
+// migrateThrough applies pending migrations up to and including the named
+// one (a "migrations/NNNN_x.sql" path); "" applies them all.
+func (db *DB) migrateThrough(last string) error {
 	if _, err := db.sql.Exec(
 		`CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
 		return fmt.Errorf("runtimedb: creating schema_migrations: %w", err)
@@ -75,6 +91,9 @@ func (db *DB) migrate() error {
 	}
 	sort.Strings(names)
 	for _, name := range names {
+		if last != "" && name > last {
+			break
+		}
 		var done int
 		if err := db.sql.QueryRow(
 			`SELECT COUNT(*) FROM schema_migrations WHERE name = ?`, name).Scan(&done); err != nil {

@@ -246,6 +246,12 @@ No real Home Assistant, PantryOS, or LLM in CI.
 | **H6** | Escalation: a rule opens a Butler session with its context packet; the Butler's answer routes to H4's action. Red-team case per A4 | The "left home without breakfast" flow, end to end |
 | **H7** | Natural-language authoring: the Butler compiles a request into the H2 schema, dry-runs it against H3, and proposes it through `propose_change` | The AI writes rules the engine already understands; no second execution path |
 
+**Status:** H1 is implemented — the `household_events` table and
+envelope, the `publisher` role and `emit` verb, the intake and cursor
+endpoints, the `publishes` block, publisher-secret synthesis in the
+capability engine, the minting endpoint, and `wild household`. See
+`docs/concepts.md`, "Household events".
+
 The first end-to-end target is the breakfast check: Home Assistant
 emits `person.left_home`; a rule checks the timeline for a
 `pantry.meal_logged` that morning; if none, the Butler asks one

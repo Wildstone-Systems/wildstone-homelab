@@ -183,6 +183,13 @@ func (s *Server) Handler() http.Handler {
 	// Morning report (ADR-W017 A5): deterministic digest, read verb.
 	mux.Handle("GET /api/v1/reports/morning", s.handle(principal.VerbRead, s.morningReport))
 
+	// Household events (ADR-W022): the intake (emit — the publisher
+	// role's only verb), the cursor (read), and publisher credentialing
+	// (manage).
+	mux.Handle("POST /api/v1/household/events", s.handle(principal.VerbEmit, s.emitHouseholdEvent))
+	mux.Handle("GET /api/v1/household/events", s.handle(principal.VerbRead, s.listHouseholdEvents))
+	mux.Handle("POST /api/v1/household/publishers/{capability}", s.handle(principal.VerbManage, s.mintPublisher))
+
 	// Butler (ADR-W017 A2): ask carries the read verb — conversing is not
 	// a write; a session's proposals enter through the same submitProposal
 	// pipeline as POST /plans, as principal "butler" acting-for the

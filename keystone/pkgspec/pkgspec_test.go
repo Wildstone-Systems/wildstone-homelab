@@ -231,3 +231,65 @@ func TestParseAndValidateRejectMalformedYAML(t *testing.T) {
 		t.Fatal("expected parse error for malformed YAML")
 	}
 }
+
+func TestValidatePublishes(t *testing.T) {
+	base := func() *Package {
+		pkg, err := Parse([]byte(wellFormed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pkg
+	}
+	good := &PublishesSpec{Shape: "sidecar", Events: []PublishedEvent{
+		{Type: "person.left_home", Subject: "member", Fields: []EventField{{Name: "zone", Type: "string"}}},
+		{Type: "calendar.school.closed"},
+	}}
+	pkg := base()
+	pkg.Publishes = good
+	if err := pkg.Validate(); err != nil {
+		t.Fatalf("well-formed publishes: %v", err)
+	}
+
+	for name, tc := range map[string]struct {
+		spec  *PublishesSpec
+		field string
+	}{
+		"bad shape":      {&PublishesSpec{Shape: "logtail", Events: good.Events}, "publishes.shape"},
+		"no events":      {&PublishesSpec{Shape: "native"}, "publishes.events"},
+		"flat type":      {&PublishesSpec{Shape: "native", Events: []PublishedEvent{{Type: "left_home"}}}, "publishes.events[0].type"},
+		"duplicate type": {&PublishesSpec{Shape: "native", Events: []PublishedEvent{{Type: "a.b"}, {Type: "a.b"}}}, "publishes.events[1].type"},
+		"bad subject":    {&PublishesSpec{Shape: "native", Events: []PublishedEvent{{Type: "a.b", Subject: "pet"}}}, "publishes.events[0].subject"},
+		"bad field type": {&PublishesSpec{Shape: "native", Events: []PublishedEvent{{Type: "a.b", Fields: []EventField{{Name: "x", Type: "blob"}}}}}, "publishes.events[0].fields[0].type"},
+		"dup field":      {&PublishesSpec{Shape: "native", Events: []PublishedEvent{{Type: "a.b", Fields: []EventField{{Name: "x", Type: "string"}, {Name: "x", Type: "bool"}}}}}, "publishes.events[0].fields[1].name"},
+	} {
+		pkg := base()
+		pkg.Publishes = tc.spec
+		err := pkg.Validate()
+		ve, ok := err.(*ValidationError)
+		if !ok {
+			t.Errorf("%s: err = %v, want *ValidationError", name, err)
+			continue
+		}
+		if ve.Field != tc.field {
+			t.Errorf("%s: field = %q, want %q", name, ve.Field, tc.field)
+		}
+	}
+
+	// A YAML round trip: the block parses from a document the way a
+	// package author writes it.
+	doc := strings.Replace(wellFormed, "agentTools:", `publishes:
+  shape: config
+  events:
+    - { type: person.arrived_home, subject: member, description: "HA person entity entered the home zone" }
+agentTools:`, 1)
+	parsed, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := parsed.Validate(); err != nil {
+		t.Fatalf("parsed publishes: %v", err)
+	}
+	if parsed.Publishes == nil || parsed.Publishes.Shape != "config" || parsed.Publishes.Events[0].Subject != "member" {
+		t.Fatalf("publishes = %+v", parsed.Publishes)
+	}
+}
