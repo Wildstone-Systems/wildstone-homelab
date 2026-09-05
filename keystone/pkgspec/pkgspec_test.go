@@ -293,3 +293,61 @@ agentTools:`, 1)
 		t.Fatalf("publishes = %+v", parsed.Publishes)
 	}
 }
+
+func TestValidateExternalConfig(t *testing.T) {
+	base := func() *Package {
+		pkg, err := Parse([]byte(wellFormed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pkg
+	}
+	pkg := base()
+	pkg.ExternalConfig = []ExternalConfigDecl{
+		{Filename: "wildstone.yaml", Consumer: "Home Assistant", Reason: "runs outside Wildstone"},
+	}
+	if err := pkg.Validate(); err != nil {
+		t.Fatalf("well-formed externalConfig: %v", err)
+	}
+
+	for name, tc := range map[string]struct {
+		decls []ExternalConfigDecl
+		field string
+	}{
+		"no filename":  {[]ExternalConfigDecl{{Consumer: "HA", Reason: "r"}}, "externalConfig[0].filename"},
+		"no consumer":  {[]ExternalConfigDecl{{Filename: "f.yaml", Reason: "r"}}, "externalConfig[0].consumer"},
+		"no reason":    {[]ExternalConfigDecl{{Filename: "f.yaml", Consumer: "HA"}}, "externalConfig[0].reason"},
+		"blank reason": {[]ExternalConfigDecl{{Filename: "f.yaml", Consumer: "HA", Reason: "   "}}, "externalConfig[0].reason"},
+		"duplicate": {[]ExternalConfigDecl{
+			{Filename: "f.yaml", Consumer: "HA", Reason: "r"},
+			{Filename: "f.yaml", Consumer: "HA", Reason: "r"},
+		}, "externalConfig[1].filename"},
+	} {
+		pkg := base()
+		pkg.ExternalConfig = tc.decls
+		err := pkg.Validate()
+		ve, ok := err.(*ValidationError)
+		if !ok {
+			t.Errorf("%s: err = %v, want *ValidationError", name, err)
+			continue
+		}
+		if ve.Field != tc.field {
+			t.Errorf("%s: field = %q, want %q", name, ve.Field, tc.field)
+		}
+	}
+
+	// It parses from a document the way an author writes it.
+	doc := strings.Replace(wellFormed, "agentTools:", `externalConfig:
+  - { filename: wildstone.yaml, consumer: Home Assistant, reason: "runs outside Wildstone" }
+agentTools:`, 1)
+	parsed, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := parsed.Validate(); err != nil {
+		t.Fatalf("parsed externalConfig: %v", err)
+	}
+	if len(parsed.ExternalConfig) != 1 || parsed.ExternalConfig[0].Consumer != "Home Assistant" {
+		t.Fatalf("externalConfig = %+v", parsed.ExternalConfig)
+	}
+}

@@ -246,7 +246,7 @@ No real Home Assistant, PantryOS, or LLM in CI.
 | **H6** | Escalation: a rule opens a Butler session with its context packet; the Butler's answer routes to H4's action. Red-team case per A4 | The "left home without breakfast" flow, end to end |
 | **H7** | Natural-language authoring: the Butler compiles a request into the H2 schema, dry-runs it against H3, and proposes it through `propose_change` | The AI writes rules the engine already understands; no second execution path |
 
-**Status:** H1 through H4 are implemented. H1: the `household_events`
+**Status:** H1 through H5 are implemented. H1: the `household_events`
 table and envelope, the `publisher` role and `emit` verb, the intake and
 cursor endpoints, the `publishes` block, publisher-secret synthesis in
 the capability engine, the minting endpoint, and `wild household`. H2:
@@ -265,8 +265,14 @@ executor over ntfy with reply buttons that post `household.answered`
 back to the intake under a short-lived reply token; param rendering
 against the trigger; and the `automation.acted` /
 `action_failed` / `escalation_pending` records, with dispatch claimed
-before the call so it is at-most-once. See `docs/concepts.md`,
-"Household events".
+before the call so it is at-most-once. H5: the Home Assistant adapter
+(`packages/home-automation`) in the config shape — a package that runs
+nothing, templates the `rest_command` and automation that make Home
+Assistant publish into the intake itself, declares its two event types
+and the object-id subject mapping, and is pinned by tests that its
+rendered config is loadable YAML, that its declaration and its
+configuration cannot drift apart, and that the intake accepts the exact
+wire shape it sends. See `docs/concepts.md`, "Household events".
 
 The first end-to-end target is the breakfast check: Home Assistant
 emits `person.left_home`; a rule checks the timeline for a

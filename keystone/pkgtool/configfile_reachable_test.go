@@ -31,10 +31,29 @@ const defaultManagedPrefix = "/etc/wildstone"
 // mount exposes cannot be read by any means at all.
 func TestRenderedConfigFilesAreMounted(t *testing.T) {
 	checked := 0
-	for name, rendered := range renderShippedPackages(t) {
+	for name, sp := range walkShipped(t) {
+		rendered := sp.rendered
 		t.Run(name, func(t *testing.T) {
+			// A package may declare a rendered config as read by
+			// something Wildstone does not run (pkgspec.ExternalConfig,
+			// ADR-W022 A10) — the Home Assistant adapter is the shipped
+			// case. The declaration is honoured here and audited below:
+			// one that names no rendered file is as much a defect as an
+			// unmounted config, for the same reason an unused policy
+			// exemption fails startup (ADR-W009 A3).
+			external := map[string]string{}
+			for _, ec := range sp.pkg.ExternalConfig {
+				external[ec.Filename] = ec.Consumer
+			}
+			claimed := map[string]bool{}
+
 			for _, r := range rendered {
 				if r.Kind != resource.KindConfigFile || r.ConfigFile == nil {
+					continue
+				}
+				if consumer, ok := external[r.ConfigFile.Filename]; ok {
+					claimed[r.ConfigFile.Filename] = true
+					t.Logf("ConfigFile %q is declared external, read by %s", r.Metadata.Name, consumer)
 					continue
 				}
 				capName, ok := strings.CutPrefix(r.Metadata.Owner, "capability/")
@@ -51,6 +70,13 @@ func TestRenderedConfigFilesAreMounted(t *testing.T) {
 						"the file will be written to the node and read by nothing. Add a read-only mount of "+
 						"%s to the container that consumes it.",
 						r.Metadata.Name, hostPath, path.Dir(hostPath))
+				}
+			}
+
+			for filename := range external {
+				if !claimed[filename] {
+					t.Errorf("externalConfig declares %q but this package renders no ConfigFile with that filename: "+
+						"a stale declaration silently exempts nothing and hides the next real one", filename)
 				}
 			}
 		})

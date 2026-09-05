@@ -274,6 +274,24 @@ engine already synthesised, so the package's shim reads it from
 again rotates it: the old token stops working the moment the new one
 exists, and containers referencing the secret are re-created.
 
+**The first adapter is Home Assistant** (`packages/home-automation`),
+in the config shape. It runs nothing: a household with home automation
+already has a Home Assistant, and adopting that is a capability package
+of its own. The package templates one managed file — a `rest_command`
+and an automation — that makes Home Assistant post `person.arrived_home`
+and `person.left_home` into the intake itself, with the publisher token
+resolved on the node and never held by Keystone. Install it in two
+steps, credential first, then include the rendered file from
+`configuration.yaml`; the package header carries the exact sequence.
+
+Its **subject mapping** is the honest kind ADR-W022 A8 asks for: the
+subject is the Home Assistant person's object id, so `person.mika`
+publishes events about `mika`. That is the only stable per-person
+identifier Home Assistant exposes to a template, so the adapter declares
+it rather than pretending to a lookup table. A household that wants
+these to match its Wildstone member names names its Home Assistant
+people accordingly.
+
 Consumers follow the stream with the same cursor and long-poll shape
 as the operational one (`GET /api/v1/household/events?after=N`, or
 `wild household events -follow`).

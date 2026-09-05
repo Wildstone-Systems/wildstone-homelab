@@ -185,6 +185,27 @@ type EventField struct {
 	Required bool   `yaml:"required,omitempty"`
 }
 
+// ExternalConfigDecl declares a ConfigFile this package renders for a
+// consumer Wildstone does NOT run (ADR-W022 A10, the "config" shim
+// shape). It is the counterpart of a Secret's `provided: true`: the
+// thing on the other end of this file is outside Wildstone, so the
+// invariant that every rendered config is mounted into a container of
+// its own package cannot hold, and saying so is the point.
+//
+// Undeclared, such a file is indistinguishable from the Authelia bug
+// that invariant exists to catch — a correct config on disk that the
+// application never reads. Declared, it is a deliberate hand-off with a
+// named consumer and a reason a reviewer can weigh.
+type ExternalConfigDecl struct {
+	// Filename matches the ConfigFile's spec.filename.
+	Filename string `yaml:"filename"`
+	// Consumer names what reads it, e.g. "Home Assistant".
+	Consumer string `yaml:"consumer"`
+	// Reason says why that consumer is outside Wildstone, and how the
+	// file reaches it.
+	Reason string `yaml:"reason"`
+}
+
 // AgentToolSpec declares one concierge-agent tool a package exposes
 // (ADR-W001). Parsed and schema-checked only at the spike, never executed.
 type AgentToolSpec struct {
@@ -211,6 +232,9 @@ type Package struct {
 	// Publishes declares the household events this package emits
 	// (ADR-W022 A10). nil means it emits none.
 	Publishes *PublishesSpec `yaml:"publishes,omitempty"`
+	// ExternalConfig declares rendered ConfigFiles read by something
+	// Wildstone does not run.
+	ExternalConfig []ExternalConfigDecl `yaml:"externalConfig,omitempty"`
 	// ImageSets group images that must be upgraded together.
 	ImageSets []ImageSet `yaml:"imageSets,omitempty"`
 }
@@ -361,6 +385,20 @@ func (p *Package) Validate() error {
 		if err := validatePublishes(p.Publishes); err != nil {
 			return err
 		}
+	}
+
+	seenExternal := map[string]bool{}
+	for i, ec := range p.ExternalConfig {
+		field := fmt.Sprintf("externalConfig[%d]", i)
+		for name, v := range map[string]string{"filename": ec.Filename, "consumer": ec.Consumer, "reason": ec.Reason} {
+			if strings.TrimSpace(v) == "" {
+				return &ValidationError{Field: field + "." + name, Msg: "must not be empty: an unread config is a defect unless someone says who reads it and why"}
+			}
+		}
+		if seenExternal[ec.Filename] {
+			return &ValidationError{Field: field + ".filename", Msg: fmt.Sprintf("%q declared twice", ec.Filename)}
+		}
+		seenExternal[ec.Filename] = true
 	}
 
 	// A package that declares no templates, no lifecycle hooks, no

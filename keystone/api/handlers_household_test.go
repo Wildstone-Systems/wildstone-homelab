@@ -643,3 +643,77 @@ spec:
 		t.Fatalf("second tap = %d, want 200 (a duplicate, not a new answer)", resp2.StatusCode)
 	}
 }
+
+// TestHomeAssistantWireShapeIsAccepted posts the exact body the rendered
+// Home Assistant adapter sends (ADR-W022 H5) — Jinja resolved the way
+// Home Assistant would resolve it, as raw JSON on the wire rather than
+// through this repo's own envelope type.
+//
+// The package test in keystone/vertical proves the configuration renders
+// and agrees with what it declares; nothing there proves the intake
+// accepts it. Both halves have to hold, and they are written in
+// different places by different people, so this is where they meet.
+func TestHomeAssistantWireShapeIsAccepted(t *testing.T) {
+	h := newHarness(t)
+	token := h.addPublisher("publisher-home-automation")
+
+	// Home Assistant's isoformat(): microseconds and a "+00:00" offset,
+	// not Go's "Z".
+	occurred := time.Now().Add(-30 * time.Second).UTC().Format("2006-01-02T15:04:05.000000-07:00")
+	if !strings.HasSuffix(occurred, "+00:00") {
+		t.Fatalf("test fixture is not shaped like Home Assistant's isoformat(): %q", occurred)
+	}
+	body := `{"eventId": "person.mika:person.arrived_home:1757102400", "occurredAt": "` + occurred + `",
+	          "type": "person.arrived_home", "subject": "mika",
+	          "payload": {"entity": "person.mika", "from": "not_home", "to": "home"}}`
+
+	post := func() *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, h.srv.URL+"/api/v1/household/events", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	resp := post()
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("Home Assistant's wire shape = %d, want 201", resp.StatusCode)
+	}
+	// Home Assistant's rest_command has no retry of its own, but a
+	// household running two instances, or an operator replaying, must
+	// not double-count an arrival. The id is derived from the state
+	// transition, so a repeat is the same fact.
+	resp = post()
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("repeat delivery = %d, want 200 (a duplicate, not a second arrival)", resp.StatusCode)
+	}
+
+	var events []runtimedb.HouseholdEvent
+	h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/household/events", nil, &events)
+	if len(events) != 1 {
+		t.Fatalf("stream has %d events, want 1: %+v", len(events), events)
+	}
+	e := events[0]
+	if e.Type != "person.arrived_home" || e.Subject != "mika" || e.Source != "publisher-home-automation" {
+		t.Fatalf("event = %+v", e)
+	}
+	// Compact on the way back out: the encoder normalises the JSON Home
+	// Assistant sent, and the fields are what matter, not its spacing.
+	if !strings.Contains(string(e.Payload), `"entity":"person.mika"`) ||
+		!strings.Contains(string(e.Payload), `"from":"not_home"`) {
+		t.Fatalf("payload = %s", e.Payload)
+	}
+	// The event id survives the response encoder intact — it is the
+	// household's dedupe key, and a redacted one is useless.
+	if e.EventID != "person.mika:person.arrived_home:1757102400" {
+		t.Fatalf("event id = %q", e.EventID)
+	}
+}
