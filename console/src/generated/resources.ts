@@ -88,6 +88,7 @@ export interface IngressSpec {
   tls?: string;
   trustedProxies?: string[];
   acmeDns?: string;
+  tailnetName?: string;
 }
 
 export interface BackupRetention {

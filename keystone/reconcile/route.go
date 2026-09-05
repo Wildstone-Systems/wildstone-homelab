@@ -106,6 +106,11 @@ type ingressPosture struct {
 	// acmeDNS is the DNS-01 provider module name when tls is "public";
 	// empty for every other posture.
 	acmeDNS string
+	// tailnetName and tailnetPorts are the "tailscale" posture's
+	// addressing: the one name the node's certificate covers, and which
+	// port each declared host is served on behind it.
+	tailnetName  string
+	tailnetPorts map[string]int
 }
 
 // terminatedUpstream is the pre-Ingress posture: TLS handled in front,
@@ -126,7 +131,11 @@ func postureOf(desired []resource.Resource) ingressPosture {
 			p.trustedProxies = strings.Join(r.Ingress.TrustedProxies, " ")
 		}
 		p.acmeDNS = r.Ingress.ACMEDNS
+		p.tailnetName = r.Ingress.TailnetName
 		break
+	}
+	if p.tls == "tailscale" {
+		p.tailnetPorts = assignTailnetPorts(desired)
 	}
 	return p
 }
@@ -139,7 +148,7 @@ func postureOf(desired []resource.Resource) ingressPosture {
 // whoever issued it. Both "internal" and "public" do; only the trust
 // story differs, and every rendering decision below turns on the former.
 func (p ingressPosture) terminatesTLS() bool {
-	return p.tls == "internal" || p.tls == "public"
+	return p.tls == "internal" || p.tls == "public" || p.tls == "tailscale"
 }
 
 func (p ingressPosture) siteScheme() string {
@@ -159,6 +168,12 @@ func renderBaseCaddyfile(p ingressPosture) []byte {
 	switch p.tls {
 	case "internal":
 		global += "\tlocal_certs\n"
+	case "tailscale":
+		// Nothing to configure. Caddy fetches *.ts.net certificates from
+		// a locally-running tailscaled automatically, so ordinary
+		// automatic HTTPS is already correct — the only requirement is
+		// that the socket is reachable and the site name is the node's.
+		// Saying anything here would be saying it twice.
 	case "public":
 		// A real CA over DNS-01 (ADR-W019 A9). auto_https stays ON —
 		// unlike local_certs this is the ordinary ACME path, and the only
@@ -226,7 +241,7 @@ func renderRouteFragment(spec *resource.RouteSpec, autheliaAddr string, p ingres
 	var b strings.Builder
 	fmt.Fprintf(&b, "# managed by wildstone-keystone — do not edit\n")
 	fmt.Fprintf(&b, "# classification: %s\n", spec.Classification)
-	fmt.Fprintf(&b, "%s://%s {\n", p.siteScheme(), spec.Host)
+	fmt.Fprintf(&b, "%s://%s {\n", p.siteScheme(), routeSiteAddress(p, spec.Host))
 	if spec.Auth == "authelia_oidc" {
 		// Authelia's forward-auth contract: it answers /api/authz/forward-auth
 		// with 2xx to allow and a redirect to its portal otherwise, and the

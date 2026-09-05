@@ -112,7 +112,18 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 	// expansion always did: a package may satisfy its own requirement.
 	providers := append([]*pkgspec.Package{pkg}, s.Catalog.ProvidersFor(enabled)...)
 
-	rendered, err := capability.NewEngine().Expand(pkg, req.Params, capability.NewCatalog(providers...))
+	// The catalog is told the node's desired state, because addressing
+	// lives in the Ingress declaration rather than in any package
+	// (ADR-W019 A10). Without it, a .Resolved origin would describe the
+	// host a Route declares instead of the one it is served at, and an
+	// OIDC issuer that disagrees with the browser is a login loop.
+	current, err := s.State.Load()
+	if err != nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("loading statefile: %w", err)
+	}
+	catalog := capability.NewCatalog(providers...).WithCurrent(current)
+
+	rendered, err := capability.NewEngine().Expand(pkg, req.Params, catalog)
 	if err != nil {
 		// Expansion failures are the operator's input being wrong — a
 		// missing required param, an unsatisfied requirement — not a

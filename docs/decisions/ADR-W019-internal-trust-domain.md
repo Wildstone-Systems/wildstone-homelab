@@ -290,3 +290,70 @@ mechanism. The certificate is the smaller thing; it should bend.
 is no mechanism to do this that does not amount to writing an MDM, and a
 household has no fleet management. The manual step was not the
 implementation's failure, it was the approach's.
+
+# Part F — Amendment (2026-09-05, binding)
+
+### A10. A tailnet posture, and the addressing it forces
+
+A9 removed the manual trust step at the cost of a domain. That cost is
+not payable on day one: a household installing this has no domain, and
+telling them to buy one before anything works is the same barrier A9
+existed to remove, moved earlier.
+
+Tailscale issues publicly trusted certificates for a node's own MagicDNS
+name, with no domain and no credential, and Caddy fetches them from a
+locally-running `tailscaled` with no configuration whatsoever. So
+`IngressSpec.tls` gains `tailscale`.
+
+**The certificate covers exactly one name.** No wildcards, no
+subdomains, and no way to add records under `ts.net`. Four Routes that
+each declared a hostname cannot each have one. They share the node's
+name and are distinguished by PORT.
+
+**So a Route's `host` becomes its identity, not its address.** Under
+every other posture the two coincide. Under this one the declared host
+stays what the package chose, what policy reads and what an operator
+recognises, while `routeSiteAddress` decides where it is actually
+served. That separation is what lets every service package remain
+untouched while the addressing model underneath changes completely —
+the alternative was rewriting the Route in each of them, which would
+have made the addressing model a property of the catalog rather than of
+the deployment.
+
+**Ports are assigned by Keystone, not declared by packages**, for the
+same reason hostnames are not: a package knows what it is, not what else
+is installed beside it, and a collision is a fact about the neighbours.
+The shipped capabilities are pinned to fixed ports so that installing a
+new service never moves an existing one — a household's bookmarks should
+not break because somebody added something unrelated. The dashboard
+holds 443, so the address people actually type has no port in it.
+
+**Rejected: assignment by sorted position.** Simpler, fully
+deterministic, and it moves every service alphabetically after whatever
+was just installed. Determinism is necessary here — the reconciler
+compares rendered bytes to decide NoOp versus Update — but it is not
+sufficient, because a deterministic function of the whole set is still
+free to churn when the set changes.
+
+**Rejected: the caddy-tailscale plugin.** It would give each Route its
+own tailnet node and therefore its own real hostname, which is strictly
+nicer than ports. It is badged experimental by Tailscale, and using it
+means building and publishing our own Caddy image instead of pinning an
+official one. Neither belongs in the path a non-technical household
+installs by default. The plugin is the right thing to revisit if it
+stabilises.
+
+**Origins are derived from the Ingress declaration, not from package
+params.** Authelia's issuer was built as "https://auth.{public_domain}"
+in `capability.buildResolved`, which assumed a Route is served at the
+host it declares. Under this posture it is not. The fix is not a string
+edit: installed params are not persisted anywhere — the statefile holds
+resources, and `enabledCapabilities` recovers names from resource owners
+— so the only durable record of how a node is addressed is the `Ingress`
+resource A8 created. `.Resolved` therefore reads desired state, and
+builds origins with the same code that renders the Caddy site address.
+
+Two implementations of "which port is auth on" would be two chances to
+disagree, and the disagreement would surface as a login loop rather than
+as anything naming it — the shape of bug this ADR keeps recording. So
+`keystone/ingressorigin` is the single answer, called by both.
