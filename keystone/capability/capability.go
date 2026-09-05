@@ -199,6 +199,22 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 	// Synthesised rather than declared, therefore, but not hidden: it is
 	// an ordinary Secret resource, owned by the requiring capability,
 	// planned and approved like any other.
+	//
+	// A package that declares the Secret ITSELF wins, and this adds
+	// nothing. Appending regardless produced two Secret resources with
+	// one name, the synthesised one last — so documents-paperless, which
+	// declares its client secret `provided: true` because Paperless
+	// needs the value in plaintext and Wildstone's secrets are
+	// write-only, had that declaration silently replaced by a generated
+	// one. The package's own statement about a secret it owns is the
+	// authority; synthesis is the convenience for packages that make no
+	// statement at all.
+	declared := map[string]bool{}
+	for _, res := range out {
+		if res.Kind == resource.KindSecret && res.Secret != nil {
+			declared[res.Secret.Name] = true
+		}
+	}
 	for _, res := range out {
 		if res.Kind != resource.KindOidcClient || res.OidcClient == nil {
 			continue
@@ -206,6 +222,9 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 		name, ok := strings.CutPrefix(res.OidcClient.SecretRef, "secret/")
 		if !ok {
 			continue // validation already refuses anything else
+		}
+		if declared[name] {
+			continue
 		}
 		out = append(out, resource.Resource{
 			ApiVersion: resource.ApiVersion,

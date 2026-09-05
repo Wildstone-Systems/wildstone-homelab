@@ -300,3 +300,65 @@ func TestCatalogProvides(t *testing.T) {
 		t.Error("expected empty catalog Provides = false")
 	}
 }
+
+// TestDeclaredSecretBeatsSynthesis pins which side owns a client secret.
+//
+// The engine synthesises a Secret from an OidcClient's SecretRef so that
+// no consumer has to repeat the naming convention. It appended one
+// unconditionally, so a package that declared the same Secret ITSELF got
+// two resources with one name and the synthesised one last — silently
+// replacing the package's own spec.
+//
+// documents-paperless is the case that matters: it declares its client
+// secret `provided: true`, because Paperless needs the value in
+// plaintext inside a JSON env document and Wildstone's secrets are
+// write-only. Overriding that with a generated one puts random bytes
+// where a shared secret was required, and it surfaces as OIDC login not
+// working rather than as anything naming the secret.
+func TestDeclaredSecretBeatsSynthesis(t *testing.T) {
+	oidcTmpl := `apiVersion: wildstone.dev/v1
+kind: OidcClient
+metadata: { name: app, node: "{{ .Params.node }}" }
+spec:
+  clientId: app
+  clientName: App
+  redirectUris: ["https://app.example.com/cb"]
+  scopes: [openid]
+  authPolicy: two_factor
+  secretRef: secret/app-oidc
+`
+	declaredTmpl := `apiVersion: wildstone.dev/v1
+kind: Secret
+metadata: { name: app-oidc, node: "{{ .Params.node }}" }
+spec: { name: app-oidc, provided: true }
+`
+	for _, tc := range []struct {
+		name         string
+		templates    []string
+		wantProvided bool
+	}{
+		{"package declares it", []string{oidcTmpl, declaredTmpl}, true},
+		{"package says nothing", []string{oidcTmpl}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pkg := simplePackage()
+			pkg.Templates = tc.templates
+			out, err := NewEngine().Expand(pkg, map[string]string{"node": "n1"}, NewCatalog(pkg))
+			if err != nil {
+				t.Fatalf("expand: %v", err)
+			}
+			var secrets []*resource.SecretSpec
+			for _, r := range out {
+				if r.Kind == resource.KindSecret && r.Secret != nil && r.Secret.Name == "app-oidc" {
+					secrets = append(secrets, r.Secret)
+				}
+			}
+			if len(secrets) != 1 {
+				t.Fatalf("want exactly one app-oidc Secret, got %d — a duplicate silently overrides the other", len(secrets))
+			}
+			if secrets[0].Provided != tc.wantProvided {
+				t.Errorf("provided = %v, want %v", secrets[0].Provided, tc.wantProvided)
+			}
+		})
+	}
+}
