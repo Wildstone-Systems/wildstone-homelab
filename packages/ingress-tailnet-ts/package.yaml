@@ -22,6 +22,10 @@
 # What it does need is the socket, which is why tailscaled runs on the
 # HOST and its socket is mounted in. That also means Tailscale is not
 # managed by this package — installing it is the installer's job.
+#
+# PREREQUISITE: tailscaled must expose its socket inside a managed prefix
+# (see the mount below). On a stock install it does not, and this package
+# will converge but serve no certificate.
 apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
@@ -87,8 +91,23 @@ templates:
       mounts:
         - { source: caddy-tailnet-ts-data, target: /data }
         - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }
-        # tailscaled's local API. This is how Caddy asks for the node's
-        # certificate, and it is the whole mechanism — read-only, because
-        # fetching a certificate is all it is for.
-        - { source: /var/run/tailscale/tailscaled.sock, target: /var/run/tailscale/tailscaled.sock, readOnly: true }
+        # tailscaled's local API, which is how Caddy asks for the node's
+        # certificate — the whole mechanism, read-only because fetching a
+        # certificate is all it is for.
+        #
+        # NOT /var/run/tailscale/tailscaled.sock, where tailscaled puts it
+        # by default. Wardstone bind-mounts host paths only from its
+        # managed prefixes (ADR-W003 A1) and refuses anything else at
+        # APPLY time — after the plan is written and approved. So the
+        # socket has to come to the prefix rather than the mount reaching
+        # out of it, which means tailscaled must be started with
+        #
+        #   --socket=/srv/wildstone/tailscale/tailscaled.sock
+        #
+        # That is a host-level prerequisite this package cannot satisfy
+        # itself, and the installer is where it belongs (F59). Until then
+        # it is a documented manual step, and an unsatisfied one shows up
+        # as Caddy serving no certificate rather than as anything naming
+        # the socket.
+        - { source: /srv/wildstone/tailscale/tailscaled.sock, target: /var/run/tailscale/tailscaled.sock, readOnly: true }
       restart: unless-stopped
