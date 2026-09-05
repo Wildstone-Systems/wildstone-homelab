@@ -2,6 +2,7 @@ package pkgtool
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -81,8 +82,17 @@ const fakeToken = "aaaa.bbbb-cccc_dddd"
 // fakeLldap answers the two endpoints the provisioner calls, and records
 // what it was asked to create.
 type fakeLldap struct {
-	mu      sync.Mutex
-	created []string
+	mu           sync.Mutex
+	created      []string
+	createdUsers []string
+	// memberships records "user->group" additions, so a test can assert
+	// both that they happened and that they happened only once.
+	memberships []string
+	// existingUsers is the directory's user list before the run.
+	existingUsers []string
+	// existingMembers maps a username to the groups it is already in,
+	// which is what makes the idempotency assertion meaningful.
+	existingMembers map[string][]string
 	// spaced makes the fake emit JSON with whitespace around separators.
 	// LLDAP is compact today, but {"token": "x"} is equally valid JSON,
 	// and the first version of this script silently found no token in
@@ -129,17 +139,115 @@ func (f *fakeLldap) handler(password string) http.Handler {
 				f.write(w, map[string]any{"data": map[string]any{"createGroup": map[string]int{"id": 1}}})
 				return
 			}
+			if strings.Contains(query, "CreateUser") {
+				vars, _ := body["variables"].(map[string]any)
+				u, _ := vars["u"].(map[string]any)
+				name, _ := u["id"].(string)
+				if name == "explode" {
+					f.write(w, map[string]any{"errors": []map[string]string{{"message": "nope"}}})
+					return
+				}
+				f.mu.Lock()
+				f.createdUsers = append(f.createdUsers, name+"|"+asString(u["displayName"])+"|"+asString(u["email"]))
+				f.mu.Unlock()
+				f.write(w, map[string]any{"data": map[string]any{"createUser": map[string]string{"id": name}}})
+				return
+			}
+			if strings.Contains(query, "AddUserToGroup") {
+				vars, _ := body["variables"].(map[string]any)
+				user, _ := vars["u"].(string)
+				gid, _ := vars["g"].(float64)
+				f.mu.Lock()
+				f.memberships = append(f.memberships, fmt.Sprintf("%s->%d", user, int(gid)))
+				f.mu.Unlock()
+				f.write(w, map[string]any{"data": map[string]any{"addUserToGroup": map[string]bool{"ok": true}}})
+				return
+			}
+			// A single user's memberships, which the script reads before
+			// adding any, so an existing membership is not re-added.
+			if strings.Contains(query, "user(userId:") {
+				name := ""
+				if i := strings.Index(query, "\""); i >= 0 {
+					if j := strings.Index(query[i+1:], "\""); j >= 0 {
+						name = query[i+1 : i+1+j]
+					}
+				}
+				groups := []map[string]any{}
+				f.mu.Lock()
+				for _, g := range f.existingMembers[name] {
+					groups = append(groups, map[string]any{"displayName": g})
+				}
+				f.mu.Unlock()
+				f.write(w, map[string]any{"data": map[string]any{"user": map[string]any{"groups": groups}}})
+				return
+			}
+			if strings.Contains(query, "{users {id}}") {
+				users := []map[string]any{}
+				for _, u := range f.existingUsers {
+					users = append(users, map[string]any{"id": u})
+				}
+				f.write(w, map[string]any{"data": map[string]any{"users": users}})
+				return
+			}
 			// The existing directory. photos_users_extra is here to
 			// prove the presence check is an exact match: a group whose
 			// name merely PREFIXES a desired one must not satisfy it.
-			f.write(w, map[string]any{"data": map[string]any{"groups": []map[string]any{
+			groups := []map[string]any{
 				{"id": 1, "displayName": "lldap_admin"},
 				{"id": 2, "displayName": "photos_users_extra"},
-			}}})
+			}
+			// Groups created earlier in this same run must appear, or the
+			// id lookup for a membership finds nothing — which is exactly
+			// the first-install case, where every group is new.
+			f.mu.Lock()
+			for i, c := range f.created {
+				groups = append(groups, map[string]any{"id": 100 + i, "displayName": c})
+			}
+			f.mu.Unlock()
+			f.write(w, map[string]any{"data": map[string]any{"groups": groups}})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	})
+}
+
+func asString(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+// runProvisionerWithUsers is runProvisioner plus a rendered user list.
+// Separate rather than a changed signature so the existing group-only
+// callers keep asserting exactly what they asserted before.
+func runProvisionerWithUsers(t *testing.T, script, url, password string, groups, users []string) (string, int) {
+	t.Helper()
+	dir := t.TempDir()
+	sh := filepath.Join(dir, "provision-groups.sh")
+	if err := os.WriteFile(sh, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	list := filepath.Join(dir, "groups")
+	if err := os.WriteFile(list, []byte("# managed\n"+strings.Join(groups, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ulist := filepath.Join(dir, "users")
+	if err := os.WriteFile(ulist, []byte("# managed\n"+strings.Join(users, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", sh)
+	cmd.Env = append(os.Environ(),
+		"LLDAP_URL="+url, "GROUPS_FILE="+list, "USERS_FILE="+ulist,
+		"LLDAP_ADMIN_PASSWORD="+password, "LOGIN_ATTEMPTS=2")
+	out, err := cmd.CombinedOutput()
+	code := 0
+	var ee *exec.ExitError
+	if err != nil {
+		if !asExitError(err, &ee) {
+			t.Fatalf("running the provisioner: %v\n%s", err, out)
+		}
+		code = ee.ExitCode()
+	}
+	return string(out), code
 }
 
 // runProvisioner runs the shipped script — the rendered one, not a copy
@@ -267,4 +375,51 @@ func TestProvisionerFailsLoudly(t *testing.T) {
 			t.Errorf("created %v after a failed login", fake.created)
 		}
 	})
+}
+
+// TestProvisionerCreatesUsers runs the shipped script against a directory
+// that already holds one of the two people, and asserts the three things
+// ADR-W020 A3 promises: the missing person is created, memberships are
+// added, and a membership that already exists is not re-added.
+//
+// The second half is what makes it worth running the real script: the
+// membership check reads a per-user query whose response shape the shell
+// matches textually, and a textual match that drifts is invisible until
+// someone is silently missing from a group.
+func TestProvisionerCreatesUsers(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	script := provisionerScript(t)
+	fake := &fakeLldap{
+		existingUsers:   []string{"alice"},
+		existingMembers: map[string][]string{"alice": {"photos_users"}},
+	}
+	srv := httptest.NewServer(fake.handler("pw"))
+	defer srv.Close()
+
+	out, code := runProvisionerWithUsers(t, script, srv.URL, "pw",
+		[]string{"photos_users"},
+		[]string{
+			"alice\tAlice Example\talice@example.com\tphotos_users",
+			"bob\tBob Example\tbob@example.com\tphotos_users",
+		})
+	if code != 0 {
+		t.Fatalf("provisioner exited %d:\n%s", code, out)
+	}
+
+	// bob did not exist and must have been created, with his fields.
+	if len(fake.createdUsers) != 1 || fake.createdUsers[0] != "bob|Bob Example|bob@example.com" {
+		t.Errorf("want bob created once with his display name and email, got %v\n%s", fake.createdUsers, out)
+	}
+	// alice existed: not re-created, and already in photos_users, so not
+	// re-added. bob is added exactly once.
+	for _, m := range fake.memberships {
+		if strings.HasPrefix(m, "alice->") {
+			t.Errorf("alice was re-added to a group she is already in: %v\n%s", fake.memberships, out)
+		}
+	}
+	if len(fake.memberships) != 1 || !strings.HasPrefix(fake.memberships[0], "bob->") {
+		t.Errorf("want exactly one membership add for bob, got %v\n%s", fake.memberships, out)
+	}
 }

@@ -90,6 +90,7 @@ func managedConfigContents(managedPrefix string, desiredByKey map[resKey]resourc
 	// new group is what has to reach the directory, and this is the
 	// whole mechanism by which it does.
 	out[lldapGroupsPath(managedPrefix)] = string(renderLdapGroups(desired))
+	out[lldapUsersPath(managedPrefix)] = string(renderLdapUsers(desired))
 
 	return out
 }

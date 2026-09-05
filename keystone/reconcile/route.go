@@ -73,12 +73,37 @@ func baseCaddyfilePath(managedPrefix string) string {
 // admin off: the admin API is a write surface on the same container that
 // serves family traffic, and nothing in Wildstone drives Caddy through
 // it — the reconciler's mechanism is files plus a reload.
-func renderBaseCaddyfile() []byte {
-	return []byte("# managed by wildstone-keystone — do not edit\n" +
-		"{\n" +
+// defaultTrustedProxies is what the base Caddyfile trusts to have set the
+// X-Forwarded-* headers (ADR-W019 A6).
+//
+// Caddy replaces X-Forwarded-Proto with the scheme of the request IT
+// received unless the sender is a trusted proxy. Without this, a request
+// that was correctly terminated as https upstream reaches Authelia
+// claiming http, and Authelia refuses it outright:
+//
+//	invalid X-Forwarded-Proto header value 'http'
+//
+// which is every OIDC request through either shipped ingress profile.
+//
+// private_ranges rather than 0.0.0.0/0: the terminator in front of this
+// listener is always a container on the bridge or a host on the LAN —
+// cloudflared, the tailnet Caddy, a local TLS front. A list that trusts
+// everyone would let any caller assert any scheme and any client IP,
+// which is the header-spoofing hole the list exists to close.
+const defaultTrustedProxies = "private_ranges"
+
+func renderBaseCaddyfile(trustedProxies string) []byte {
+	global := "{\n" +
 		"\tadmin off\n" +
-		"\tauto_https off\n" +
-		"}\n" +
+		"\tauto_https off\n"
+	if trustedProxies != "" {
+		global += "\tservers {\n" +
+			"\t\ttrusted_proxies static " + trustedProxies + "\n" +
+			"\t}\n"
+	}
+	global += "}\n"
+	return []byte("# managed by wildstone-keystone — do not edit\n" +
+		global +
 		"\n" +
 		"import routes/*.caddy\n" +
 		"\n" +

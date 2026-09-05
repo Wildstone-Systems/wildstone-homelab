@@ -30,6 +30,7 @@ const (
 	KindDnsRecord  Kind = "DnsRecord"
 	KindOidcClient Kind = "OidcClient"
 	KindLdapGroup  Kind = "LdapGroup"
+	KindLdapUser   Kind = "LdapUser"
 	KindBackupPlan Kind = "BackupPlan"
 	KindConfigFile Kind = "ConfigFile"
 	KindJob        Kind = "Job"
@@ -70,6 +71,15 @@ var nameRegexp = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,61}[a-z0-9])?$`)
 // matches nothing — which, since Jellyfin evaluates that filter on every
 // login, locks out users who were working.
 var ldapGroupNameRegexp = regexp.MustCompile(`^[a-z0-9]([a-z0-9_]{0,61}[a-z0-9])?$`)
+
+var ldapEmailRegexp = regexp.MustCompile(`^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$`)
+
+// ldapDisplayNameRegexp is closed for the same reason the others are: a
+// display name reaches the directory inside a JSON document a shell
+// script builds by string concatenation, so a quote or a backslash in it
+// is a broken document at best. Letters, digits, space and the
+// punctuation real names actually use.
+var ldapDisplayNameRegexp = regexp.MustCompile(`^[\p{L}\p{N} .'-]{1,64}$`)
 
 // Metadata is the ownership/placement envelope shared by every resource.
 type Metadata struct {
@@ -421,6 +431,36 @@ type LdapGroupSpec struct {
 	Name string `yaml:"name"`
 }
 
+// LdapUserSpec is the spec for kind LdapUser: a person who must EXIST in
+// the directory, and the groups they must be IN.
+//
+// This carries membership where LdapGroupSpec deliberately does not, and
+// the difference is which end of the relationship is being declared. That
+// comment's objection is to a group owning its member list: a declared
+// list read by a tool with cleanup on starts deleting the memberships
+// someone added by hand. Here the person owns the memberships Wildstone
+// put them in, the provisioner only ever ADDS, and nothing reads this
+// file as an authoritative roster of a group. Adding your sister to
+// photos_users in LLDAP's own UI stays untouched, because nothing here
+// enumerates who is in photos_users.
+//
+// It carries NO credential, and never will (ADR-W020 A4). A password
+// cannot live in a spec: specs live in the Statefile, and the Statefile
+// is replicated, restored and read. The first credential is a single-use
+// claim code held as a Secret, which the person exchanges for a password
+// they choose.
+//
+// Deletion is declaration-only, like LdapGroup: removing an LdapUser
+// stops Wildstone asserting the person, and does not delete them. A
+// control plane that deletes accounts because a YAML file changed is one
+// bad plan away from deleting the household.
+type LdapUserSpec struct {
+	Username    string   `yaml:"username"`
+	DisplayName string   `yaml:"displayName,omitempty"`
+	Email       string   `yaml:"email,omitempty"`
+	Groups      []string `yaml:"groups,omitempty"`
+}
+
 // backupSchedules is the closed set of BackupPlanSpec.Schedule values.
 // Deliberately coarse (no cron expressions): the owner picks a cadence,
 // Keystone picks the moment (ADR-W011 A4 — schedules live in Keystone,
@@ -479,6 +519,7 @@ type Resource struct {
 	DnsRecord  *DnsRecordSpec  `yaml:"-"`
 	OidcClient *OidcClientSpec `yaml:"-"`
 	LdapGroup  *LdapGroupSpec  `yaml:"-"`
+	LdapUser   *LdapUserSpec   `yaml:"-"`
 	BackupPlan *BackupPlanSpec `yaml:"-"`
 	ConfigFile *ConfigFileSpec `yaml:"-"`
 	Job        *JobSpec        `yaml:"-"`
@@ -556,6 +597,13 @@ var registry = map[Kind]kindEntry{
 		// applier will provision against.
 		newSpec:    func() any { return &LdapGroupSpec{} },
 		validate:   validateLdapGroup,
+		nodeScoped: true,
+	},
+	KindLdapUser: {
+		// Same reasoning as LdapGroup: declared-only here, and the node
+		// it is declared against is the one running the directory.
+		newSpec:    func() any { return &LdapUserSpec{} },
+		validate:   validateLdapUser,
 		nodeScoped: true,
 	},
 	KindBackupPlan: {
@@ -950,6 +998,50 @@ func validateBackupPlan(r *Resource) error {
 	ret := r.BackupPlan.Retention
 	if ret.KeepDaily < 0 || ret.KeepWeekly < 0 || ret.KeepMonthly < 0 {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.retention", Msg: "keep counts must not be negative"}
+	}
+	return nil
+}
+
+// validateLdapUser mirrors validateLdapGroup's strictness for the same
+// reason: every field here is interpolated into a GraphQL document and an
+// LDAP distinguished name by a POSIX shell script with no JSON encoder.
+// A closed charset is what makes that safe.
+func validateLdapUser(r *Resource) error {
+	if r.LdapUser == nil {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "ldap user spec missing"}
+	}
+	if r.LdapUser.Username == "" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.username", Msg: "must not be empty"}
+	}
+	if !ldapGroupNameRegexp.MatchString(r.LdapUser.Username) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.username",
+			Msg: "must be an LLDAP username (lowercase alphanumerics and '_'; start/end alphanumeric; \u2264 63 chars) \u2014 it is interpolated into an LDAP filter and a distinguished name"}
+	}
+	for _, g := range r.LdapUser.Groups {
+		if !ldapGroupNameRegexp.MatchString(g) {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.groups",
+				Msg: "group " + g + " is not a valid LLDAP group name"}
+		}
+	}
+	if d := r.LdapUser.DisplayName; d != "" && !ldapDisplayNameRegexp.MatchString(d) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.displayName",
+			Msg: "must be letters, digits, spaces, '.', '-' or apostrophe (\u2264 64 chars) \u2014 it is interpolated into a JSON document built by a shell script"}
+	}
+	// Required, not optional: LLDAP's CreateUserInput takes email as
+	// non-null, so a user without one cannot be created at all. Better to
+	// say so here than to have the provisioning job fail per-user on the
+	// node, or to synthesise an address the household did not choose.
+	if r.LdapUser.Email == "" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.email",
+			Msg: "must not be empty — LLDAP requires an address to create an account"}
+	}
+	// Deliberately narrow rather than RFC-complete: this string is
+	// interpolated into a shell-built JSON document, and the characters
+	// a full RFC 5322 address may contain include the ones that would
+	// break out of it.
+	if e := r.LdapUser.Email; e != "" && !ldapEmailRegexp.MatchString(e) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.email",
+			Msg: "must be a simple address (letters, digits, '.', '_', '%', '+', '-', one '@', a dotted domain)"}
 	}
 	return nil
 }

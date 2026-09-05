@@ -191,6 +191,10 @@ var kindOrder = map[resource.Kind]int{
 	resource.KindVolume:     1,
 	resource.KindConfigFile: 2,
 	resource.KindLdapGroup:  3,
+	// LdapUser shares OidcClient's tier: after LdapGroup, because a
+	// membership needs its group to exist, and before Container/Job,
+	// because the provisioning job is what reaches the directory.
+	resource.KindLdapUser:   4,
 	resource.KindOidcClient: 4,
 	resource.KindContainer:  5,
 	// Job after Container, because a job provisions a service that has
@@ -344,6 +348,8 @@ func specEqual(a, b resource.Resource) bool {
 		return oidcClientEqual(a.OidcClient, b.OidcClient)
 	case resource.KindLdapGroup:
 		return ldapGroupEqual(a.LdapGroup, b.LdapGroup)
+	case resource.KindLdapUser:
+		return ldapUserEqual(a.LdapUser, b.LdapUser)
 	case resource.KindBackupPlan:
 		return backupPlanEqual(a.BackupPlan, b.BackupPlan)
 	case resource.KindConfigFile:
@@ -382,6 +388,31 @@ func oidcClientEqual(a, b *resource.OidcClientSpec) bool {
 		a.SecretRef == b.SecretRef &&
 		stringSliceEqual(a.RedirectUris, b.RedirectUris) &&
 		stringSliceEqual(a.Scopes, b.Scopes)
+}
+
+// ldapUserEqual compares by value. Groups is order-insensitive: the
+// directory has no order, so a package listing the same groups in a
+// different order must not read as drift and replan every tick.
+func ldapUserEqual(a, b *resource.LdapUserSpec) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.Username != b.Username || a.DisplayName != b.DisplayName || a.Email != b.Email {
+		return false
+	}
+	if len(a.Groups) != len(b.Groups) {
+		return false
+	}
+	ag := append([]string(nil), a.Groups...)
+	bg := append([]string(nil), b.Groups...)
+	sort.Strings(ag)
+	sort.Strings(bg)
+	for i := range ag {
+		if ag[i] != bg[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func ldapGroupEqual(a, b *resource.LdapGroupSpec) bool {

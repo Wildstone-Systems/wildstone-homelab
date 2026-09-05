@@ -35,6 +35,7 @@ var kindSpecs = []struct {
 	{resource.KindDnsRecord, reflect.TypeOf(resource.DnsRecordSpec{})},
 	{resource.KindOidcClient, reflect.TypeOf(resource.OidcClientSpec{})},
 	{resource.KindLdapGroup, reflect.TypeOf(resource.LdapGroupSpec{})},
+	{resource.KindLdapUser, reflect.TypeOf(resource.LdapUserSpec{})},
 	{resource.KindBackupPlan, reflect.TypeOf(resource.BackupPlanSpec{})},
 	{resource.KindConfigFile, reflect.TypeOf(resource.ConfigFileSpec{})},
 	{resource.KindJob, reflect.TypeOf(resource.JobSpec{})},

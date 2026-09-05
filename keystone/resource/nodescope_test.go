@@ -89,6 +89,9 @@ func validResourceOfKind(t *testing.T, k Kind) Resource {
 			RedirectUris: []string{"https://r1.example.com/cb"}, SecretRef: "secret/r1-oidc", AuthPolicy: "two_factor"}
 	case KindLdapGroup:
 		r.LdapGroup = &LdapGroupSpec{Name: "r1_users"}
+	case KindLdapUser:
+		r.LdapUser = &LdapUserSpec{Username: "r1", DisplayName: "R One",
+			Email: "r1@example.com", Groups: []string{"r1_users"}}
 	case KindBackupPlan:
 		r.BackupPlan = &BackupPlanSpec{Volumes: []string{"r1"}, Repository: "r1-repo",
 			PasswordSecret: "secret/restic-r1", Schedule: "daily"}
