@@ -75,7 +75,11 @@ export function Services() {
   );
 }
 
-function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => void }) {
+// Exported for the render check in scripts/: a generated form is the
+// part of this screen with real logic, and typecheck cannot tell you it
+// renders. Rendering it caught nothing today only because the wire-shape
+// bug it would have caught was already found by reading the JSON.
+export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => void }) {
   const params = pkg.params ?? [];
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(params.map((p) => [p.name, p.default ?? ""])),

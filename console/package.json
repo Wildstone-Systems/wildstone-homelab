@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
+    "render-check": "esbuild scripts/render-check.tsx --bundle --platform=node --format=cjs --outfile=node_modules/.cache/render-check.cjs --jsx=automatic && node node_modules/.cache/render-check.cjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },
