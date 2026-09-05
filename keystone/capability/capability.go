@@ -11,6 +11,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
@@ -67,6 +68,28 @@ func (e *TemplateError) Unwrap() error { return e.Err }
 // providing package's params.
 type Catalog struct {
 	pkgs []*pkgspec.Package
+	// current is the node's desired state at expansion time. It carries
+	// the Ingress declaration, which is where a deployment's ADDRESSING
+	// lives (ADR-W019 A8/A10) — and addressing is not derivable from the
+	// catalog, because the catalog holds what a package declares, not what
+	// an operator installed it with. A .Resolved value that must match
+	// what a browser sees has to come from here.
+	current []resource.Resource
+}
+
+// WithCurrent returns a Catalog that also knows the node's desired state.
+//
+// Separate from NewCatalog so every existing caller keeps working and
+// gets exactly the behaviour it had: with no current state, addressing
+// falls back to the declared host, which is what every posture but
+// "tailscale" does anyway.
+func (c *Catalog) WithCurrent(desired []resource.Resource) *Catalog {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.current = desired
+	return &out
 }
 
 // NewCatalog builds a Catalog from a set of enabled packages.
@@ -302,17 +325,34 @@ func isYAMLHostileRune(r rune) bool {
 // deliberately small and explicit (ADR-W005 A2 spike scope), documented
 // keys only:
 //
-//   - IssuerURL: derived as "https://auth.{public_domain}" from the
-//     identity:oidc provider's own params (if the catalog contains one,
-//     regardless of whether this package requires identity:oidc — a
-//     package may want it without requiring it, though in practice it's
-//     only populated when a provider exists).
+//   - IssuerURL: the browser-facing origin of the identity provider's
+//     portal. Historically "https://auth.{public_domain}", which assumed
+//     a Route is served at the host it declares. Under the tailnet
+//     posture it is not — every Route shares the node's one certified
+//     name and is told apart by port (ADR-W019 A10) — so this is now
+//     built by ingressorigin, the same code that renders the Caddy site
+//     address. An OIDC issuer is a string that must match what the
+//     browser saw byte for byte; deriving it separately from what is
+//     actually served is how you get a login loop that names nothing.
+//   - TailnetHost: the node's MagicDNS name under the tailnet posture,
+//     empty otherwise. Always present, so a template may test it without
+//     tripping missingkey=error. It exists for the packages that must
+//     name the host they will be REACHED at rather than the one they
+//     declare — Homepage refuses a request whose Host it was not told
+//     about, and under this posture that Host is the tailnet name.
 //   - OidcSecretRef: "secret/<capability>-oidc" for this package's own
 //     capability, the conventional secret reference a package's OidcClient
 //     template should use for SecretRef.
 func buildResolved(pkg *pkgspec.Package, params map[string]string, catalog *Catalog) map[string]string {
+	var current []resource.Resource
+	if catalog != nil {
+		current = catalog.current
+	}
+	posture := ingressorigin.Of(current)
+
 	resolved := map[string]string{
 		"OidcSecretRef": "secret/" + pkg.Metadata.Capability + "-oidc",
+		"TailnetHost":   posture.TailnetName,
 	}
 
 	if providerParams := catalog.providerParams("identity", "oidc"); providerParams != nil {
@@ -321,7 +361,10 @@ func buildResolved(pkg *pkgspec.Package, params map[string]string, catalog *Cata
 			domain = params["public_domain"]
 		}
 		if domain != "" {
-			resolved["IssuerURL"] = "https://auth." + domain
+			// Under every posture but "tailscale" this is unchanged:
+			// OriginFor returns the declared host untouched, so the value
+			// is the "https://auth.<domain>" it always was.
+			resolved["IssuerURL"] = posture.OriginFor("auth." + domain)
 		}
 	}
 

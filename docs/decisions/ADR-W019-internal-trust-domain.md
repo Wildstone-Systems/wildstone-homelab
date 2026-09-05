@@ -343,10 +343,17 @@ official one. Neither belongs in the path a non-technical household
 installs by default. The plugin is the right thing to revisit if it
 stabilises.
 
-**Known incomplete.** Authelia's issuer and redirect URIs are derived in
-`capability.buildResolved` as `https://auth.{public_domain}`, from the
-catalog's declared DEFAULTS. A ported origin is not derivable from
-defaults — it depends on the installed ingress profile's actual params —
-so a login under this posture is not yet correct. The `.Resolved`
-channel needs to see installed params, not just declared ones, and that
-is the next change rather than a workaround here.
+**Origins are derived from the Ingress declaration, not from package
+params.** Authelia's issuer was built as "https://auth.{public_domain}"
+in `capability.buildResolved`, which assumed a Route is served at the
+host it declares. Under this posture it is not. The fix is not a string
+edit: installed params are not persisted anywhere — the statefile holds
+resources, and `enabledCapabilities` recovers names from resource owners
+— so the only durable record of how a node is addressed is the `Ingress`
+resource A8 created. `.Resolved` therefore reads desired state, and
+builds origins with the same code that renders the Caddy site address.
+
+Two implementations of "which port is auth on" would be two chances to
+disagree, and the disagreement would surface as a login loop rather than
+as anything naming it — the shape of bug this ADR keeps recording. So
+`keystone/ingressorigin` is the single answer, called by both.

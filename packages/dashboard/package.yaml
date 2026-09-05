@@ -29,7 +29,18 @@ templates:
     spec:
       image: "ghcr.io/gethomepage/homepage@sha256:da9dca9ec258c628146bed1445da0853f2b88f0b10bafd97c091de807c363d60"
       env:
-        HOMEPAGE_ALLOWED_HOSTS: "home.{{ .Params.public_domain }}"
+        # Homepage refuses any request whose Host it was not told about,
+        # so this must name the host a BROWSER will send — not the one
+        # the Route declares. Under the tailnet posture those differ: the
+        # Route is served at the node's certified name (ADR-W019 A10),
+        # and the dashboard holds 443, so a browser omits the port and
+        # sends the bare tailnet name.
+        #
+        # Both are listed rather than switched between. A deployment can
+        # be reached at its own hostname and over the tailnet at
+        # different times, and a list costs nothing; picking one would
+        # make the other a 400 with no clue as to why.
+        HOMEPAGE_ALLOWED_HOSTS: "home.{{ .Params.public_domain }}{{ if .Resolved.TailnetHost }},{{ .Resolved.TailnetHost }}{{ end }}"
       mounts:
         - { source: homepage-config, target: /app/config }
         # The service list Keystone renders from the Route set (F55,
