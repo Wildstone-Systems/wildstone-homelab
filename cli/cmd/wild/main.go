@@ -51,6 +51,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
+  wild pkg list [-api URL]                   (what Keystone can install)
   wild pkg lint <pkg-dir> [-set k=v ...] [-catalog dir ...]
   wild pkg keygen <key-path>
   wild pkg publish <pkg-dir> -registry <dir> -key <key-path>
@@ -71,6 +72,8 @@ func runPkg(args []string) int {
 	switch args[0] {
 	case "lint":
 		return runLint(args[1:])
+	case "list":
+		return runPkgList(args[1:])
 	case "keygen":
 		if len(args) != 2 {
 			usage()

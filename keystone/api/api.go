@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/catalog"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
@@ -29,8 +30,12 @@ import (
 type Server struct {
 	Principals *principal.Store
 	DB         *runtimedb.DB
-	State      *statefile.Store
-	Log        *slog.Logger
+	// Catalog is what this control plane can install (ADR-W021 A3).
+	// nil leaves the package and capability endpoints answering 503;
+	// every other route is unaffected, the same posture Agents takes.
+	Catalog *catalog.Catalog
+	State   *statefile.Store
+	Log     *slog.Logger
 
 	// OnApproved, when set, is called (non-blocking contract: keep it
 	// cheap) after a plan approval commits — cmd/keystone wires it to the
@@ -124,6 +129,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/plans", s.handle(principal.VerbRead, s.listPlans))
 	mux.Handle("GET /api/v1/plans/{id}", s.handle(principal.VerbRead, s.getPlan))
 	mux.Handle("POST /api/v1/plans", s.handle(principal.VerbPropose, s.proposePlan))
+
+	// Capabilities (ADR-W021 A1): expansion lives here, not in the CLI,
+	// so the Console and wild reach it through the same one API.
+	mux.Handle("GET /api/v1/packages", s.handle(principal.VerbRead, s.listPackages))
+	mux.Handle("POST /api/v1/capabilities", s.handle(principal.VerbPropose, s.enableCapability))
 	mux.Handle("POST /api/v1/plans/{id}/approve", s.handle(principal.VerbApprove, s.approvePlan))
 	mux.Handle("POST /api/v1/plans/{id}/reject", s.handle(principal.VerbApprove, s.rejectPlan))
 

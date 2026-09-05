@@ -27,6 +27,17 @@ type StoredProposal struct {
 	Put    []string      `json:"put,omitempty"`
 	Delete []DeletionRef `json:"delete,omitempty"`
 	Plan   *Plan         `json:"plan"`
+	// Origin records what was ASKED FOR when a proposal came from
+	// enabling a capability, rather than only what it rendered to
+	// (ADR-W021 A2). Without it the audit trail says "fourteen documents
+	// changed", which is a description of consequences and not an answer
+	// to "what did we install" — and an upgrade has no previous input to
+	// diff against.
+	//
+	// It lives here rather than in a PlanRecord column for the same
+	// reason BasedOnHead does: it is part of the proposal, it travels
+	// with it, and adding it here cannot silently miss a writer.
+	Origin *CapabilityOrigin `json:"origin,omitempty"`
 	// Drift marks a proposal raised by the reconcile loop rather than by
 	// a proposer with an intent. Provenance only; nothing branches on it.
 	Drift bool `json:"drift,omitempty"`
@@ -36,4 +47,17 @@ type StoredProposal struct {
 type DeletionRef struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
+}
+
+// CapabilityOrigin is the input a capability proposal was expanded from.
+//
+// Params carry no secret material and must not (ADR-W021 A2): a value
+// stored here reaches the runtime DB and the audit trail. Secrets travel
+// as Secret resources — generated on the node, or declared `provided`
+// and set by the operator — which is the one path that keeps material
+// out of everything that records intent.
+type CapabilityOrigin struct {
+	Package string            `json:"package"`
+	Version string            `json:"version"`
+	Params  map[string]string `json:"params,omitempty"`
 }

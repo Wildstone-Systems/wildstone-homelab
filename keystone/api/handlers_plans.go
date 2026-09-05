@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -58,6 +59,10 @@ type planView struct {
 	Plan        *plan.Plan    `json:"plan,omitempty"`
 	Put         []string      `json:"put,omitempty"`
 	Delete      []deletionRef `json:"delete,omitempty"`
+	// Origin is what a capability install was asked for (ADR-W021 A2).
+	// Surfaced here because a plan the Console cannot attribute to a
+	// package and its params is back to describing consequences.
+	Origin *plan.CapabilityOrigin `json:"origin,omitempty"`
 }
 
 // viewPlan projects one record. A blob that will not parse is not fatal:
@@ -75,6 +80,7 @@ func viewPlan(rec runtimedb.PlanRecord) planView {
 		return v
 	}
 	v.BasedOnHead, v.Plan, v.Put, v.Delete = stored.BasedOnHead, stored.Plan, stored.Put, stored.Delete
+	v.Origin = stored.Origin
 	return v
 }
 
@@ -121,13 +127,29 @@ func (s *Server) proposePlan(r *http.Request, id principal.Identity) (any, int, 
 	return s.submitProposal(id, req)
 }
 
+// proposalOpts carries what a caller knows that the generic propose
+// endpoint does not. Both fields exist for ADR-W021: Origin records what
+// a capability install was ASKED FOR (A2), and DryRun returns the plan a
+// proposal WOULD make without recording it, which is what lets the
+// install form show its consequences and collect operator-supplied
+// secrets before anything is proposed (A5).
+type proposalOpts struct {
+	Origin *plan.CapabilityOrigin
+	DryRun bool
+}
+
+// submitProposal is the generic entry: no origin, not a dry run.
+func (s *Server) submitProposal(id principal.Identity, req proposalRequest) (any, int, error) {
+	return s.submitProposalOpts(id, req, proposalOpts{})
+}
+
 // submitProposal is the ONE proposal pipeline (ADR-W017 A3): validate every
 // document, check standing policy, compute the plan, and insert the
 // `proposed` record. The HTTP propose endpoint and the Butler host both
 // funnel through here, so a Butler-originated proposal is held to exactly
 // the checks a human's is — same validation, same policy engine, same
 // 422-on-violation, same audit events.
-func (s *Server) submitProposal(id principal.Identity, req proposalRequest) (any, int, error) {
+func (s *Server) submitProposalOpts(id principal.Identity, req proposalRequest, opts proposalOpts) (any, int, error) {
 	if req.Summary == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("summary required")
 	}
@@ -197,12 +219,21 @@ func (s *Server) submitProposal(id principal.Identity, req proposalRequest) (any
 	}
 	p.Summary = req.Summary
 
+	// A dry run stops here, having run every check a real proposal runs —
+	// validation, standing policy, the diff — and recorded none of it.
+	// Stopping earlier would preview something weaker than what approval
+	// would face, which is the one thing a preview must not do.
+	if opts.DryRun {
+		return previewOf(p, puts), http.StatusOK, nil
+	}
+
 	stored, err := json.Marshal(storedProposal{
 		BasedOnHead: head,
 		Summary:     req.Summary,
 		Put:         req.Put,
 		Delete:      req.Delete,
 		Plan:        p,
+		Origin:      opts.Origin,
 	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -356,4 +387,23 @@ func (s *Server) event(typ, planID string, id principal.Identity, msg string) {
 	}); err != nil {
 		s.Log.Error("event append failed", "type", typ, "err", err)
 	}
+}
+
+// previewOf is what a dry run returns: the plan, and the secrets only the
+// operator can supply.
+//
+// The second half is the point (ADR-W021 A5). A package declares which
+// secrets it cannot generate, so a render knows them before anything is
+// applied — and an operator who is told up front is not the operator of
+// F37, meeting them one ERROR_CODE_NOT_FOUND at a time, per tick, after
+// approving a plan that could not have worked.
+func previewOf(p *plan.Plan, puts []resource.Resource) map[string]any {
+	provided := []string{}
+	for _, r := range puts {
+		if r.Kind == resource.KindSecret && r.Secret != nil && r.Secret.Provided {
+			provided = append(provided, r.Secret.Name)
+		}
+	}
+	sort.Strings(provided)
+	return map[string]any{"plan": p, "providedSecrets": provided}
 }
