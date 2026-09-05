@@ -54,6 +54,17 @@ params:
   # the explicit way to say you mean every interface.
   - { name: admin_listen_addr, required: true }
 templates:
+  # ---- The secret this capability needs (ADR-W020 / F37).
+  #
+  # `provided`, not generated: the tunnel token is issued by Cloudflare
+  # for a specific tunnel. Random bytes here are not a weaker secret,
+  # they are a broken one, and the failure surfaces as cloudflared
+  # refusing to connect rather than as anything naming the token.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: cloudflared-tunnel-token, node: "{{ .Params.node }}" }
+    spec: { name: cloudflared-tunnel-token, provided: true }
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume

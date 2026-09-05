@@ -9,6 +9,7 @@ export type Kind =
   "DnsRecord" |
   "OidcClient" |
   "LdapGroup" |
+  "LdapUser" |
   "BackupPlan" |
   "ConfigFile" |
   "Job" |
@@ -75,6 +76,13 @@ export interface LdapGroupSpec {
   name: string;
 }
 
+export interface LdapUserSpec {
+  username: string;
+  displayName?: string;
+  email?: string;
+  groups?: string[];
+}
+
 export interface BackupRetention {
   keepDaily?: number;
   keepWeekly?: number;
@@ -102,6 +110,7 @@ export interface SecretSpec {
   name: string;
   kind?: string;
   lengthBytes?: number;
+  provided?: boolean;
 }
 
 export type Spec =
@@ -111,6 +120,7 @@ export type Spec =
   DnsRecordSpec |
   OidcClientSpec |
   LdapGroupSpec |
+  LdapUserSpec |
   BackupPlanSpec |
   ConfigFileSpec |
   JobSpec |
@@ -130,6 +140,7 @@ export interface SpecByKind {
   DnsRecord: DnsRecordSpec;
   OidcClient: OidcClientSpec;
   LdapGroup: LdapGroupSpec;
+  LdapUser: LdapUserSpec;
   BackupPlan: BackupPlanSpec;
   ConfigFile: ConfigFileSpec;
   Job: JobSpec;

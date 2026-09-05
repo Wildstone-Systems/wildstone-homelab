@@ -53,7 +53,7 @@ func writeRenderedConfig(t *testing.T) string {
 		t.Fatal(err)
 	}
 	base := filepath.Join(dir, "Caddyfile")
-	if err := os.WriteFile(base, renderBaseCaddyfile(), 0o644); err != nil {
+	if err := os.WriteFile(base, renderBaseCaddyfile(defaultTrustedProxies), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range routeFixtures {
@@ -136,13 +136,18 @@ func TestRouteFragmentShape(t *testing.T) {
 // TestBaseCaddyfileImportsFragments pins the one line whose absence made
 // every fragment dead weight.
 func TestBaseCaddyfileImportsFragments(t *testing.T) {
-	got := string(renderBaseCaddyfile())
+	got := string(renderBaseCaddyfile(defaultTrustedProxies))
 	// ":80 {\n\tabort" is the default deny (F26): without it Caddy answers
 	// every unrouted Host with an empty 200, so a front door with one
 	// Route still looks alive for any hostname pointed at it. Verified
 	// behaviourally against a real Caddy: routed host 200, unrouted host
 	// connection aborted.
-	for _, want := range []string{"import routes/*.caddy", "auto_https off", "admin off", ":80 {\n\tabort\n}"} {
+	// trusted_proxies (ADR-W019 A6): without it Caddy overwrites
+	// X-Forwarded-Proto with its own inbound scheme and Authelia rejects
+	// every OIDC request with "invalid X-Forwarded-Proto header value
+	// 'http'". Invisible to any test that speaks to Authelia directly,
+	// which is how it survived to a VM.
+	for _, want := range []string{"import routes/*.caddy", "auto_https off", "admin off", ":80 {\n\tabort\n}", "trusted_proxies static private_ranges"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("base Caddyfile missing %q:\n%s", want, got)
 		}
@@ -195,7 +200,7 @@ func TestRenderedConfigWithPlaceholderAndDeletionIsValid(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "routes"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "Caddyfile"), renderBaseCaddyfile(), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "Caddyfile"), renderBaseCaddyfile(defaultTrustedProxies), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	spec := routeFixtures[0].spec

@@ -281,7 +281,7 @@ type managedFile struct {
 func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []managedFile {
 	clientsFile := renderAutheliaClients(desired)
 	return []managedFile{
-		{baseCaddyfilePath(managedPrefix), renderBaseCaddyfile(), false},
+		{baseCaddyfilePath(managedPrefix), renderBaseCaddyfile(defaultTrustedProxies), false},
 		{placeholderFragmentPath(managedPrefix), renderPlaceholderFragment(), false},
 		// The merged Authelia clients file qualifies for the same reason
 		// the other two do. Asserting it before observe also means it is
@@ -307,6 +307,20 @@ func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []manage
 		// is what that job's spec hash is computed from. No secret
 		// references, so no materialization.
 		{lldapGroupsPath(managedPrefix), renderLdapGroups(desired), false},
+		// The merged LLDAP user list, same category as the group list and
+		// ordered after it so a membership's group is on disk first.
+		{lldapUsersPath(managedPrefix), renderLdapUsers(desired), false},
+		// The merged Authelia access-control block. Same category as the
+		// clients file and for the same reason: Authelia reads it, and a
+		// forward_auth emitted by a Route fragment is decided by a rule
+		// that must already be on disk when the fragment goes live. No
+		// secret references, so no materialization.
+		{autheliaAccessPath(managedPrefix), renderAutheliaAccess(desired), false},
+		// Homepage's service list. Same category again: the dashboard
+		// container bind-mounts this file, so it must be on disk before
+		// the container is created — which is exactly what a prereq
+		// guarantees, and why a file mount is safe here (F55).
+		{homepageServicesPath(managedPrefix), renderHomepageServices(desired), false},
 	}
 }
 
@@ -364,7 +378,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	for _, res := range desired {
 		switch res.Kind {
 		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
-			resource.KindLdapGroup, resource.KindBackupPlan, resource.KindConfigFile, resource.KindJob,
+			resource.KindLdapGroup, resource.KindLdapUser, resource.KindBackupPlan, resource.KindConfigFile, resource.KindJob,
 			resource.KindSecret:
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
@@ -498,6 +512,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			}
 		case resource.KindLdapGroup:
 			sr = r.applyLdapGroupStep(ctx, nodeID, step, desiredByKey)
+		case resource.KindLdapUser:
+			sr = r.applyLdapUserStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindBackupPlan:
 			sr = r.applyBackupPlanStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindConfigFile:
@@ -608,7 +624,7 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 			if present {
 				observed = append(observed, obs)
 			}
-		case resource.KindLdapGroup, resource.KindBackupPlan:
+		case resource.KindLdapGroup, resource.KindLdapUser, resource.KindBackupPlan:
 			// Declared-only kinds (ADR-W005 A3 / ADR-W011 A4):
 			// "observe-by-apply", same mechanism as Volume — present iff a
 			// prior successful apply recorded it in the Reconciler's
@@ -832,6 +848,8 @@ func placeholderResource(kind resource.Kind, name string) resource.Resource {
 		r.OidcClient = &resource.OidcClientSpec{}
 	case resource.KindLdapGroup:
 		r.LdapGroup = &resource.LdapGroupSpec{Name: name}
+	case resource.KindLdapUser:
+		r.LdapUser = &resource.LdapUserSpec{Username: name}
 	case resource.KindBackupPlan:
 		r.BackupPlan = &resource.BackupPlanSpec{}
 	case resource.KindConfigFile:
@@ -1334,7 +1352,7 @@ func (r *Reconciler) ensureNodePrereqs(ctx context.Context, nodeID string) strin
 	}
 	res, err = r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_WriteManagedFile{
 		WriteManagedFile: &wsv1.WriteManagedFile{
-			Path: baseCaddyfilePath(r.ManagedPrefix), Content: renderBaseCaddyfile(),
+			Path: baseCaddyfilePath(r.ManagedPrefix), Content: renderBaseCaddyfile(defaultTrustedProxies),
 		},
 	}})
 	if err != nil {

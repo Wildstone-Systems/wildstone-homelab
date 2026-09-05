@@ -86,6 +86,24 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 	}
 
 	var issues []Issue
+	// Params must not carry secret material (ADR-W021 A2). A param's
+	// value is recorded in the plan's Origin, which reaches the runtime
+	// DB and the audit trail — so a package that asks for a password
+	// through a param has quietly created a second path for secret
+	// material, alongside the one designed for it.
+	//
+	// Name-based and deliberately narrow: a check that cannot see values
+	// can only catch the declaration, and a broad match would reject
+	// honest names like tunnel_id or ldap_base_dn. Secrets travel as
+	// Secret resources — generated on the node, or `provided` and set by
+	// the operator.
+	for _, decl := range pkg.Params {
+		if word := secretishParamWord(decl.Name); word != "" {
+			issues = append(issues, Issue{Rule: "params", Msg: fmt.Sprintf(
+				"param %q looks like secret material (%q): a param's value is stored in the plan and the audit trail. "+
+					"Declare a Secret instead — `provided: true` if only the operator can supply it", decl.Name, word)})
+		}
+	}
 	// A package's declared classifications must be in the closed policy
 	// vocabulary. The field was parsed and read nowhere, so
 	// ingress-tailnet shipped `classifications: [admin]` — not a value
@@ -193,4 +211,24 @@ func sanitizeParam(name string) string {
 func isIOError(err error) bool {
 	var pathErr *os.PathError
 	return errors.As(err, &pathErr)
+}
+
+// secretishParamNames is a CLOSED list, for the same reason every other
+// vocabulary in this repo is closed: a heuristic that grows by guessing
+// starts rejecting honest names, and nobody can tell whether a refusal
+// is a rule or an accident.
+var secretishParamNames = []string{
+	"password", "passwd", "secret", "token", "credential", "apikey", "api_key", "private_key", "privatekey",
+}
+
+// secretishParamWord reports which forbidden word a param name contains,
+// or "" if none does.
+func secretishParamWord(name string) string {
+	lower := strings.ToLower(name)
+	for _, w := range secretishParamNames {
+		if strings.Contains(lower, w) {
+			return w
+		}
+	}
+	return ""
 }

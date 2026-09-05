@@ -43,6 +43,43 @@ policies:
   classifications: [family_public]
   dataSensitivity: high
 templates:
+  # ---- The secrets this capability needs (ADR-W020 / F37).
+  #
+  # Two of them are `provided`, and both for the same reason: Paperless
+  # needs the OIDC client secret in PLAINTEXT, inside a JSON document it
+  # reads from an environment variable. Wildstone's secrets are
+  # write-only by design (ADR-W012 W2), so a generated client secret is
+  # a value the operator cannot put into that document. So the operator
+  # owns both, and they must carry the same client secret.
+  #
+  # This is why the OidcClient below references secret/paperless-oidc
+  # rather than the engine-synthesised .Resolved.OidcSecretRef: that
+  # secret is unreadable, and therefore unusable in the providers JSON.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: paperless-postgres-password, node: "{{ .Params.node }}" }
+    spec: { name: paperless-postgres-password }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: paperless-secret-key, node: "{{ .Params.node }}" }
+    spec: { name: paperless-secret-key }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-documents, node: "{{ .Params.node }}" }
+    spec: { name: restic-documents }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: paperless-oidc, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec: { name: paperless-oidc, provided: true }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: paperless-oauth-providers, node: "{{ .Params.node }}" }
+    spec: { name: paperless-oauth-providers, provided: true }
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume

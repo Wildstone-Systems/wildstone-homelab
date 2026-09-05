@@ -49,6 +49,21 @@ imageSets:
       the postgres image supplies one. A version skew between them fails at
       startup with "No vector extension found", not at refresh time.
 templates:
+  # ---- The secrets this capability needs, declared so the node
+  # generates them before anything references one (ADR-W020 / F37).
+  # The OIDC client secret is NOT here: the capability engine
+  # synthesises secret/<capability>-oidc from `requires identity:oidc`,
+  # and one owner for that convention is the point of it.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: immich-postgres-password, node: "{{ .Params.node }}" }
+    spec: { name: immich-postgres-password }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-photos, node: "{{ .Params.node }}" }
+    spec: { name: restic-photos }
   # ---- Storage: the upload volume plus dedicated postgres/redis data
   # volumes (dedicated infra keeps Immich's data on its own backup/upgrade
   # domain — proposal §5.1).

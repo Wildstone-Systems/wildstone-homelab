@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,5 +164,66 @@ func TestSecretOrderedBeforeEverythingThatCanReferenceOne(t *testing.T) {
 				"node resolves those at apply time",
 				plan.KindOrder(resource.KindSecret), later, plan.KindOrder(later), later)
 		}
+	}
+}
+
+// providedSecretResource declares a secret the node must not generate.
+func providedSecretResource(name string) resource.Resource {
+	r := secretResource(name, "")
+	r.Secret = &resource.SecretSpec{Name: name, Provided: true}
+	return r
+}
+
+// TestProvidedSecretsAreNamedTogetherAndNeverGenerated pins the fix for
+// F37. Before this, a secret the operator had to supply was indexed by
+// the reconciler exactly like one the node could make: it was generated
+// as random bytes, and the consuming service failed later for reasons
+// that never named the secret. A Cloudflare tunnel token is the case
+// that makes it obvious — random bytes there are not a weaker token,
+// they are a broken one.
+//
+// Two claims, and the second is the one that was actually painful: they
+// are reported ALL AT ONCE. Discovering missing secrets one per tick,
+// after approving a plan, is the complaint F37 records.
+func TestProvidedSecretsAreNamedTogetherAndNeverGenerated(t *testing.T) {
+	h := startGateway(t, []string{"tok"})
+	agent := newTestAgent(t, h, "node-a", "tok")
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+
+	desired := []resource.Resource{
+		providedSecretResource("cloudflared-tunnel-token"),
+		providedSecretResource("paperless-oauth-providers"),
+		secretResource("immich-postgres-password", ""),
+	}
+	_, err := secretReconciler(&GatewayApplier{Gateway: h.gw}).Reconcile(context.Background(), "node-a", desired)
+	if err == nil {
+		t.Fatal("reconcile succeeded with two operator-supplied secrets absent")
+	}
+	msg := err.Error()
+	for _, want := range []string{"cloudflared-tunnel-token", "paperless-oauth-providers", "wild secret set"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the failure did not name %q, so the operator cannot act on it:\n%s", want, msg)
+		}
+	}
+
+	// Never generated. This is the claim that matters: a generated value
+	// would look like success and fail somewhere else entirely.
+	for _, n := range []string{"cloudflared-tunnel-token", "paperless-oauth-providers"} {
+		if _, ok := agent.secretKind(n); ok {
+			t.Errorf("%s was generated; a provided secret must never be", n)
+		}
+	}
+
+	// Supply them, as an operator would, and the same desired state
+	// converges — including generating the one that IS generatable.
+	agent.putSecret("cloudflared-tunnel-token")
+	agent.putSecret("paperless-oauth-providers")
+	if _, err := secretReconciler(&GatewayApplier{Gateway: h.gw}).Reconcile(context.Background(), "node-a", desired); err != nil {
+		t.Fatalf("reconcile still failed after the secrets were supplied: %v", err)
+	}
+	if _, ok := agent.secretKind("immich-postgres-password"); !ok {
+		t.Error("the generatable secret was not generated")
 	}
 }
