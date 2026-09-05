@@ -316,6 +316,11 @@ func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []manage
 		// that must already be on disk when the fragment goes live. No
 		// secret references, so no materialization.
 		{autheliaAccessPath(managedPrefix), renderAutheliaAccess(desired), false},
+		// Homepage's service list. Same category again: the dashboard
+		// container bind-mounts this file, so it must be on disk before
+		// the container is created — which is exactly what a prereq
+		// guarantees, and why a file mount is safe here (F55).
+		{homepageServicesPath(managedPrefix), renderHomepageServices(desired), false},
 	}
 }
 

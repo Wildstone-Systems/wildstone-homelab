@@ -32,6 +32,16 @@ templates:
         HOMEPAGE_ALLOWED_HOSTS: "home.{{ .Params.public_domain }}"
       mounts:
         - { source: homepage-config, target: /app/config }
+        # The service list Keystone renders from the Route set (F55,
+        # ADR-W021 A6), bind-mounted OVER the sample file Homepage seeds
+        # into its own config volume. A single file rather than the whole
+        # directory: Homepage writes its other config there on first run,
+        # and a read-only /app/config would stop it starting.
+        #
+        # Safe to mount a file that Docker would otherwise create as a
+        # directory, because managed prereq files are written before any
+        # plan step runs — so this exists before the container does.
+        - { source: /etc/wildstone/dashboard/services.yaml, target: /app/config/services.yaml, readOnly: true }
       restart: unless-stopped
   - |
     apiVersion: wildstone.dev/v1
