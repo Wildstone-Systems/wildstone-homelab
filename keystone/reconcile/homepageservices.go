@@ -71,6 +71,13 @@ func homepageTitle(name string) string {
 // context ADR-W019 A7 describes — the first being the CA root a package
 // needs to trust. When that lands, this reads it instead of assuming.
 func renderHomepageServices(desired []resource.Resource) []byte {
+	// The address a browser must use, which under the tailnet posture is
+	// the node's one name and this Route's port rather than the declared
+	// host (ADR-W019 A10). Getting this from the same helper the Caddy
+	// fragments use is the point: a dashboard whose links disagree with
+	// the proxy is worse than no dashboard, because every link looks
+	// deliberate.
+	posture := postureOf(desired)
 	type svc struct{ title, host, capability string }
 	var svcs []svc
 	for _, r := range desired {
@@ -84,7 +91,7 @@ func renderHomepageServices(desired []resource.Resource) []byte {
 		if owner == "dashboard" {
 			continue
 		}
-		svcs = append(svcs, svc{homepageTitle(r.Metadata.Name), r.Route.Host, owner})
+		svcs = append(svcs, svc{homepageTitle(r.Metadata.Name), routeSiteAddress(posture, r.Route.Host), owner})
 	}
 	// Sorted, so the file is a pure function of desired state and does
 	// not churn — a rewritten prereq replaces the container.

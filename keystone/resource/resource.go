@@ -464,6 +464,18 @@ var ingressTLSModes = map[string]bool{
 	// certificate, which is what makes a hostname no public CA would
 	// sign serve real TLS on a LAN.
 	"internal": true,
+	// The proxy terminates with a publicly trusted certificate that a
+	// locally-running tailscaled already holds for this node's MagicDNS
+	// name (ADR-W019 A10). Caddy fetches *.ts.net certificates from
+	// tailscaled with no configuration at all, so this posture carries no
+	// provider and no credential.
+	//
+	// The reason it is a posture rather than a variant of "public": a
+	// tailnet certificate covers ONE name, the node's own, with no
+	// wildcards and no subdomains. Every Route therefore shares a
+	// hostname and is told apart by port, which is a different addressing
+	// model — not a different way of obtaining the same certificate.
+	"tailscale": true,
 	// The proxy terminates with a PUBLICLY TRUSTED certificate it gets
 	// itself, by ACME over a DNS-01 challenge (ADR-W019 A9).
 	//
@@ -533,6 +545,12 @@ type IngressSpec struct {
 	// silently ignoring it would hide a profile that thinks it is
 	// getting a public certificate and is not.
 	ACMEDNS string `yaml:"acmeDns,omitempty"`
+	// TailnetName is the node's MagicDNS name, e.g.
+	// "wildstone.tailnet.ts.net". Required when TLS is "tailscale" and
+	// refused otherwise: it is the single name the tailnet certificate
+	// covers, and therefore the only host any Route on this node can be
+	// served under.
+	TailnetName string `yaml:"tailnetName,omitempty"`
 }
 
 // LdapUserSpec is the spec for kind LdapUser: a person who must EXIST in
@@ -1141,7 +1159,7 @@ func validateIngress(r *Resource) error {
 	}
 	if r.Ingress.TLS != "" && !ingressTLSModes[r.Ingress.TLS] {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.tls",
-			Msg: fmt.Sprintf("%q is not a TLS posture (want \"off\", \"internal\" or \"public\", or empty for off)", r.Ingress.TLS)}
+			Msg: fmt.Sprintf("%q is not a TLS posture (want \"off\", \"internal\", \"public\" or \"tailscale\", or empty for off)", r.Ingress.TLS)}
 	}
 	switch {
 	case r.Ingress.TLS == "public" && r.Ingress.ACMEDNS == "":
@@ -1150,6 +1168,12 @@ func validateIngress(r *Resource) error {
 	case r.Ingress.TLS != "public" && r.Ingress.ACMEDNS != "":
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.acmeDns",
 			Msg: fmt.Sprintf("meaningless when tls is %q: only \"public\" obtains a certificate over ACME", postureOrOff(r.Ingress.TLS))}
+	case r.Ingress.TLS == "tailscale" && r.Ingress.TailnetName == "":
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.tailnetName",
+			Msg: "required when tls is \"tailscale\": the certificate covers exactly one name, so every Route is served under it"}
+	case r.Ingress.TLS != "tailscale" && r.Ingress.TailnetName != "":
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.tailnetName",
+			Msg: fmt.Sprintf("meaningless when tls is %q: only \"tailscale\" collapses every Route onto one host", postureOrOff(r.Ingress.TLS))}
 	case r.Ingress.ACMEDNS != "" && !ingressACMEDNSProviders[r.Ingress.ACMEDNS]:
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.acmeDns",
 			Msg: fmt.Sprintf("%q is not a supported ACME DNS provider (want \"cloudflare\")", r.Ingress.ACMEDNS)}
