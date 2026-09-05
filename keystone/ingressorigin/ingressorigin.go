@@ -162,3 +162,20 @@ func (p Posture) SiteAddress(host string) string {
 func (p Posture) OriginFor(host string) string {
 	return "https://" + p.SiteAddress(host)
 }
+
+// SessionDomain is the cookie domain a session must be scoped to for
+// single sign-on to hold across every service.
+//
+// Under a hostname posture that is the shared parent — services are
+// siblings under it, and a cookie set there is sent to all of them.
+// Under the tailnet posture every service is the SAME host on different
+// ports, and cookies ignore ports entirely, so the host itself is both
+// necessary and sufficient. Scoping to a parent of a ts.net name would
+// also simply fail: ts.net is a public suffix, so a browser refuses a
+// cookie set on the suffix.
+func (p Posture) SessionDomain(publicDomain string) string {
+	if p.TLS == "tailscale" && p.TailnetName != "" {
+		return p.TailnetName
+	}
+	return publicDomain
+}

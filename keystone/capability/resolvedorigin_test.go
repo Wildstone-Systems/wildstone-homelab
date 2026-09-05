@@ -87,3 +87,52 @@ func TestTailnetHostIsAlwaysDefined(t *testing.T) {
 		t.Errorf("TailnetHost = %q", got)
 	}
 }
+
+// Authelia's own configuration is browser-visible, and nothing in the
+// system compares it against what is actually served — so a wrong value
+// here passes every check and fails only at the moment a person tries to
+// log in. These assert the three strings follow the posture.
+
+func TestPortalConfigFollowsTheTailnetPosture(t *testing.T) {
+	cat := NewCatalog(identityProvider()).WithCurrent(tailnetState())
+	got := buildResolved(consumer(), map[string]string{}, cat)
+	for key, want := range map[string]string{
+		// Cookies ignore ports, so the bare host covers every service.
+		"SessionDomain": "wildstone.tailnet.ts.net",
+		"IssuerURL":     "https://wildstone.tailnet.ts.net:7443",
+		"DashboardURL":  "https://wildstone.tailnet.ts.net:443",
+	} {
+		if got[key] != want {
+			t.Errorf("%s\n got %q\nwant %q", key, got[key], want)
+		}
+	}
+}
+
+func TestPortalConfigUnchangedUnderHostnamePostures(t *testing.T) {
+	for _, tls := range []string{"off", "internal"} {
+		cat := NewCatalog(identityProvider()).WithCurrent([]resource.Resource{
+			{Kind: resource.KindIngress, Metadata: resource.Metadata{Name: "ingress", Node: "n1"},
+				Ingress: &resource.IngressSpec{TLS: tls}},
+		})
+		got := buildResolved(consumer(), map[string]string{}, cat)
+		for key, want := range map[string]string{
+			"SessionDomain": "example.com",
+			"IssuerURL":     "https://auth.example.com",
+			"DashboardURL":  "https://home.example.com",
+		} {
+			if got[key] != want {
+				t.Errorf("posture %q: %s got %q, want %q", tls, key, got[key], want)
+			}
+		}
+	}
+}
+
+// A cookie cannot be scoped to a public suffix, and ts.net is one. If
+// SessionDomain ever returned a parent of the tailnet name, every login
+// would silently fail to set a session.
+func TestSessionDomainIsNeverAParentOfATsNetName(t *testing.T) {
+	got := buildResolved(consumer(), map[string]string{}, NewCatalog(identityProvider()).WithCurrent(tailnetState()))["SessionDomain"]
+	if got == "tailnet.ts.net" || got == "ts.net" {
+		t.Fatalf("SessionDomain %q is a public suffix or its parent; browsers refuse such a cookie", got)
+	}
+}
