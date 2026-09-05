@@ -126,3 +126,78 @@ probes), not a scheduling one.
   configured to use them, and every app package's config path currently
   runs through secret materialization in managed files. That lands
   first; this follows.
+
+---
+
+# Part C — Amendments (2026-09-04, binding)
+
+Added after attempting A1–A3 on the homelab VM against v0.1.6-alpha.
+Both are defects in the surrounding surface that A1–A3 assume and do not
+themselves supply; neither changes a decision above.
+
+### A6. The reverse proxy trusts the terminator in front of it
+
+A4 says public TLS terminates upstream and the Caddy listener stays
+plain http. That is right, and incomplete: Caddy replaces
+`X-Forwarded-Proto` with the scheme of the request *it* received unless
+the sender is a trusted proxy. So a correctly-terminated request reaches
+Authelia claiming `http`, and Authelia refuses it outright:
+
+    invalid X-Forwarded-Proto header value 'http'
+
+Observed on `caddy-tailnet` with a local TLS front; `packages/ingress`
+has the same `cloudflared -> Caddy(http) -> Authelia` shape and should
+be assumed to fail identically until tested. **No OIDC request of any
+kind succeeds through either shipped profile today** — this is not an
+edge case, it is the whole feature.
+
+So `renderBaseCaddyfile` emits `trusted_proxies` naming the terminator
+that fronts that listener, and only it: the `cloudflared` container's
+address for the public profile, the tailnet interface for the tailnet
+profile. Never `0.0.0.0/0` — a proxy list that trusts everyone lets any
+container on the bridge assert any scheme and any client IP, which is
+the header-spoofing hole the list exists to close.
+
+**Rejected: setting `X-Forwarded-Proto https` unconditionally.** It
+produces the same result in the working case and lies in the failing
+one. A request that genuinely arrived over http — a misconfigured
+profile, a direct hit on the container — would be relabelled as secure
+instead of rejected, converting a loud, correct failure into a silent
+one that ends in a cookie sent in clear.
+
+### A7. `.Resolved` carries the trust context
+
+B3 requires each package to hand its runtime the internal CA root, in
+whatever form that runtime reads. Nothing supplies the input: a package
+cannot ask whether an internal CA exists, or where its root landed.
+Today `.Resolved` carries `IssuerURL` and `OidcSecretRef` and nothing
+else, and `IssuerURL` is built by concatenating `"https://auth." +
+domain` — so a package cannot distinguish "TLS terminates at Cloudflare
+with a public cert" from "TLS terminates at a Caddy internal CA whose
+root you must trust", and those need different container config.
+
+`.Resolved` therefore grows one documented key,
+`InternalCaBundlePath`: the path, inside the managed prefix, of the root
+the ingress profile currently holds — empty when the active profile
+terminates with a publicly-trusted certificate and there is nothing to
+trust. Small and explicit, per ADR-W005 A2. Packages render
+`REQUESTS_CA_BUNDLE` and friends from its presence, never from a test
+against a profile name — which is what makes the ingress profiles
+genuinely swappable rather than swappable-in-principle.
+
+---
+
+# Part D — Implementation notes for the amendments (non-binding)
+
+- **B5. `trusted_proxies` values are per-profile**, so the value is a
+  parameter of the ingress package, not a constant in the renderer:
+  the renderer is told what to trust and by whom.
+- **B6. A6 lands before A1–A3.** It is a one-line change to a rendered
+  config and it unblocks the OIDC path in profiles that already ship,
+  whereas A1–A3 are the larger internal-listener build. Sequenced the
+  other way, the internal work cannot be verified end to end, because
+  the browser half of every flow still fails.
+- **B7. A regression test worth having**: assert that a request arriving
+  with `X-Forwarded-Proto: https` from the trusted terminator reaches
+  the backend still saying `https`. The bug is invisible to any test
+  that speaks to Authelia directly, which is why it survived to a VM.
