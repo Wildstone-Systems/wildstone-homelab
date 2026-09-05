@@ -334,6 +334,12 @@ func isYAMLHostileRune(r rune) bool {
 //     address. An OIDC issuer is a string that must match what the
 //     browser saw byte for byte; deriving it separately from what is
 //     actually served is how you get a login loop that names nothing.
+//   - SessionDomain: the cookie domain single sign-on must be scoped to.
+//     Was the public domain, which assumed services are siblings under a
+//     shared parent. Under the tailnet posture they are one host on
+//     different ports, and a cookie scoped to a parent of a ts.net name
+//     is refused outright, ts.net being a public suffix.
+//   - DashboardURL: where a login with no particular destination lands.
 //   - TailnetHost: the node's MagicDNS name under the tailnet posture,
 //     empty otherwise. Always present, so a template may test it without
 //     tripping missingkey=error. It exists for the packages that must
@@ -361,10 +367,16 @@ func buildResolved(pkg *pkgspec.Package, params map[string]string, catalog *Cata
 			domain = params["public_domain"]
 		}
 		if domain != "" {
-			// Under every posture but "tailscale" this is unchanged:
-			// OriginFor returns the declared host untouched, so the value
-			// is the "https://auth.<domain>" it always was.
+			// Under every posture but "tailscale" these are unchanged:
+			// OriginFor returns the declared host untouched, so the values
+			// are the "https://auth.<domain>" they always were.
 			resolved["IssuerURL"] = posture.OriginFor("auth." + domain)
+			resolved["SessionDomain"] = posture.SessionDomain(domain)
+			// Where a login with nowhere particular to return to should
+			// land. The dashboard, because it is the page the household
+			// thinks of as "home" — and under the tailnet posture it is
+			// the one address with no port in it.
+			resolved["DashboardURL"] = posture.OriginFor("home." + domain)
 		}
 	}
 

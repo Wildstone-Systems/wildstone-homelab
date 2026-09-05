@@ -178,13 +178,24 @@ templates:
             host: authelia-redis
             port: 6379
           cookies:
-            - domain: {{ .Params.public_domain }}
+            # All three come from .Resolved rather than being assembled
+            # from public_domain, because they are BROWSER-VISIBLE and a
+            # Route is not always served at the host it declares
+            # (ADR-W019 A10). Under the tailnet posture every service is
+            # one host on different ports, and a value built from the
+            # domain here would send the browser somewhere nothing
+            # answers — while every check still passed, because nothing
+            # compares these against what is actually served.
+            #
+            # Under a hostname posture they resolve to exactly the
+            # strings this used to hardcode.
+            - domain: {{ .Resolved.SessionDomain }}
               # MUST be https. 4.39 refuses a non-secure scheme here, and
               # this is the browser-visible URL — never the reverse
               # proxy's own listener scheme, which is plain http behind
               # the tunnel.
-              authelia_url: https://auth.{{ .Params.public_domain }}
-              default_redirection_url: https://{{ .Params.public_domain }}
+              authelia_url: {{ .Resolved.IssuerURL }}
+              default_redirection_url: {{ .Resolved.DashboardURL }}
 
         storage:
           encryption_key: secret/authelia-storage-encryption-key
