@@ -2,7 +2,7 @@
 # Wildstone bootstrap installer (ADR-W014 A2).
 #
 #   Control plane:
-#     sudo ./install.sh --role keystone [--console-dir <dir>]
+#     sudo ./install.sh --role keystone [--console-dir <dir>] [--catalog-dir <dir>]
 #          [--keystone-arg <flag> ...] [--version vX.Y.Z]
 #
 #   The Console is installed from the release's own console_dist.tar.gz
@@ -56,6 +56,7 @@ VERSION="${WILDSTONE_VERSION:-latest}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARTIFACT_DIR=""
 CONSOLE_DIR=""
+CATALOG_DIR=""
 KEYSTONE_ARGS=""
 KEYSTONE_ARGS_SET=0
 TOKEN="${WILDSTONE_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
@@ -88,6 +89,7 @@ while [ $# -gt 0 ]; do
     --version)        VERSION="$2"; shift 2 ;;
     --artifact-dir)   ARTIFACT_DIR="$2"; shift 2 ;;
     --console-dir)    CONSOLE_DIR="$2"; shift 2 ;;
+    --catalog-dir)    CATALOG_DIR="$2"; shift 2 ;;
     --keystone-arg)   KEYSTONE_ARGS="$KEYSTONE_ARGS $2"; KEYSTONE_ARGS_SET=1; shift 2 ;;
     --token)          TOKEN="$2"; shift 2 ;;
     --tailscale-authkey)  TAILSCALE_AUTHKEY="$2"; shift 2 ;;
@@ -264,6 +266,28 @@ release_has() {
   grep -q " $1\$" "$WORK/checksums.txt"
 }
 
+install_packages() {
+  # The packages this control plane can install (ADR-W021 A3). Ships as
+  # a release asset for the same reason the Console does: it is data, it
+  # is architecture-independent, and a host should not need a checkout
+  # or a registry to install what the release shipped with.
+  #
+  # Skipped, not failed, when the release predates the asset —
+  # checksums.txt is the manifest that says which one this is, exactly
+  # as it does for the Console.
+  local dir=/usr/share/wildstone/packages
+  release_has packages.tar.gz || {
+    log "this release has no packages.tar.gz; keystone will start with no catalog"
+    return 0
+  }
+  fetch_asset packages.tar.gz
+  install -d -m 0755 "$dir"
+  find "$dir" -mindepth 1 -delete
+  tar --no-same-owner -xzf "$WORK/packages.tar.gz" -C "$dir"
+  CATALOG_DIR="$dir"
+  log "installed the package catalog to $dir"
+}
+
 fetch_binary() {
   # fetch_binary <name>: obtain and verify <name>_linux_<arch>.tar.gz,
   # extract, install to BIN_DIR.
@@ -296,7 +320,11 @@ install_console() {
   # build's assets behind forever. find -delete on the directory we just
   # created, never rm -rf on a variable.
   find "$dir" -mindepth 1 -delete
-  tar -xzf "$WORK/console_dist.tar.gz" -C "$dir"
+  # --no-same-owner: tar restores ownership from the archive when run
+  # as root, so without it the Console lands owned by whatever uid
+  # built it in CI (1001), giving that uid write access to what the
+  # admin plane serves the moment such a user exists (F42).
+  tar --no-same-owner -xzf "$WORK/console_dist.tar.gz" -C "$dir"
   CONSOLE_DIR="$dir"
   log "installed the Console to $dir"
 }
@@ -390,9 +418,15 @@ if [ "$ROLE" = keystone ]; then
   # Only when the operator did not name one: an explicit --console-dir is
   # a deliberate choice and this must not overwrite it.
   [ -n "$CONSOLE_DIR" ] || install_console
+  [ -n "$CATALOG_DIR" ] || install_packages
   if [ -n "$CONSOLE_DIR" ]; then
     [ -d "$CONSOLE_DIR" ] || fail "--console-dir $CONSOLE_DIR does not exist (build the Console elsewhere and copy dist/ here)"
     KEYSTONE_ARGS="$KEYSTONE_ARGS -console-dir $CONSOLE_DIR"
+    KEYSTONE_ARGS_SET=1
+  fi
+  if [ -n "$CATALOG_DIR" ]; then
+    [ -d "$CATALOG_DIR" ] || fail "--catalog-dir $CATALOG_DIR does not exist"
+    KEYSTONE_ARGS="$KEYSTONE_ARGS -catalog-dir $CATALOG_DIR"
     KEYSTONE_ARGS_SET=1
   fi
   if [ "$KEYSTONE_ARGS_SET" = 0 ] && [ -f "$KEYSTONE_ENV" ]; then
