@@ -14,7 +14,8 @@ export type Kind =
   "BackupPlan" |
   "ConfigFile" |
   "Job" |
-  "Secret";
+  "Secret" |
+  "Automation";
 
 export const API_VERSION = "wildstone.dev/v1";
 
@@ -121,6 +122,48 @@ export interface SecretSpec {
   provided?: boolean;
 }
 
+export interface AutomationTrigger {
+  eventType: string;
+  subject?: string;
+}
+
+export interface AutomationCondition {
+  kind: string;
+  eventType?: string;
+  window?: string;
+  sameSubject?: boolean;
+  after?: string;
+  before?: string;
+  days?: string[];
+}
+
+export interface AutomationContext {
+  kind: string;
+  eventType?: string;
+  sameSubject?: boolean;
+  limit?: number;
+}
+
+export interface AutomationEscalation {
+  prompt: string;
+}
+
+export interface AutomationAction {
+  tool: string;
+  tier: string;
+  params?: Record<string, string>;
+}
+
+export interface AutomationSpec {
+  description: string;
+  disabled?: boolean;
+  trigger: AutomationTrigger;
+  conditions?: AutomationCondition[];
+  context?: AutomationContext[];
+  escalation?: AutomationEscalation;
+  action: AutomationAction;
+}
+
 export type Spec =
   ContainerSpec |
   VolumeSpec |
@@ -133,7 +176,8 @@ export type Spec =
   BackupPlanSpec |
   ConfigFileSpec |
   JobSpec |
-  SecretSpec;
+  SecretSpec |
+  AutomationSpec;
 
 export interface Resource {
   apiVersion: string;
@@ -155,4 +199,5 @@ export interface SpecByKind {
   ConfigFile: ConfigFileSpec;
   Job: JobSpec;
   Secret: SecretSpec;
+  Automation: AutomationSpec;
 }

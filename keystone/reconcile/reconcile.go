@@ -392,6 +392,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 
 	wsDesired := make([]resource.Resource, 0, len(desired))
 	providerDesired := make([]resource.Resource, 0, len(desired))
+	// Keystone-owned kinds (Automation, ADR-W022 A1) are applied nowhere:
+	// they live in the Statefile and the component that acts on them
+	// reads them from there. Observed is therefore desired, by
+	// definition, so they never produce a step — the plan that created
+	// one was the whole act.
+	keystoneDesired := make([]resource.Resource, 0, len(desired))
 	for _, res := range desired {
 		switch res.Kind {
 		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
@@ -400,6 +406,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
 			providerDesired = append(providerDesired, res)
+		case resource.KindAutomation:
+			keystoneDesired = append(keystoneDesired, res)
 		default:
 			return nil, fmt.Errorf("reconcile: unknown kind %q", res.Kind)
 		}
@@ -441,8 +449,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 		return nil, fmt.Errorf("reconcile: observe (provider): %w", err)
 	}
 
-	allDesired := append(append([]resource.Resource{}, wsDesired...), providerDesired...)
-	allObserved := append(append([]resource.Resource{}, observed...), provObserved...)
+	allDesired := append(append(append([]resource.Resource{}, wsDesired...), providerDesired...), keystoneDesired...)
+	allObserved := append(append(append([]resource.Resource{}, observed...), provObserved...), keystoneDesired...)
 
 	p := plan.Diff(allDesired, allObserved)
 	outcome := &Outcome{Plan: p, ForeignDrift: foreign, PrereqRepaired: prereqRepaired}
@@ -537,6 +545,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			sr = r.applyBackupPlanStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindConfigFile:
 			sr = r.applyConfigFileStep(ctx, nodeID, step, desiredByKey)
+		case resource.KindAutomation:
+			// Unreachable by construction (observed == desired above);
+			// stated so the switch is exhaustive and a future caller
+			// handing this engine a foreign plan gets a no-op, not an
+			// incident naming a path that does not exist.
+			sr = StepResult{Step: step, Applied: true, HealthOK: true}
 		default:
 			sr = StepResult{Step: step, Error: fmt.Sprintf("reconcile: kind %s not handled by the Applier/Provider path", step.Kind)}
 		}

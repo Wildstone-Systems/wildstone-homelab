@@ -36,6 +36,9 @@ const (
 	KindConfigFile Kind = "ConfigFile"
 	KindJob        Kind = "Job"
 	KindSecret     Kind = "Secret"
+	// KindAutomation is a household rule (ADR-W022 A1): Keystone-owned,
+	// applied at no node, run by the automation engine.
+	KindAutomation Kind = "Automation"
 )
 
 // ApiVersion is the only supported apiVersion for S2 resources.
@@ -647,6 +650,7 @@ type Resource struct {
 	ConfigFile *ConfigFileSpec `yaml:"-"`
 	Job        *JobSpec        `yaml:"-"`
 	Secret     *SecretSpec     `yaml:"-"`
+	Automation *AutomationSpec `yaml:"-"`
 }
 
 // ValidationError is a typed validation failure, identifying the resource
@@ -758,6 +762,12 @@ var registry = map[Kind]kindEntry{
 		validate:   validateSecret,
 		nodeScoped: true,
 	},
+	KindAutomation: {
+		// Keystone-owned (ADR-W022 A1): the automation engine reads it
+		// from the Statefile; no node, no provider, nothing to apply.
+		newSpec:  func() any { return &AutomationSpec{} },
+		validate: validateAutomation,
+	},
 }
 
 // KnownKind reports whether k is in the closed registry.
@@ -822,6 +832,7 @@ func (r *Resource) validateSpecExclusivity() error {
 		KindLdapGroup:  r.LdapGroup != nil,
 		KindBackupPlan: r.BackupPlan != nil,
 		KindConfigFile: r.ConfigFile != nil,
+		KindAutomation: r.Automation != nil,
 	}
 	for k, isSet := range populated {
 		if k == r.Kind {

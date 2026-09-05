@@ -7,16 +7,18 @@ section cites the ADR that decided it.
 
 The **Statefile** is a git-backed store of typed resources
 (ADR-W004): `Volume`, `ConfigFile`, `LdapGroup`, `OidcClient`,
-`Container`, `Route`, `DnsRecord`, `BackupPlan`. Specs only — observed status never touches
+`Container`, `Route`, `DnsRecord`, `BackupPlan`, and the household's
+`Automation` (ADR-W022). Specs only — observed status never touches
 it. Container images must be digest-pinned (`repo@sha256:...`); the
 agent refuses anything else.
 
-Every resource but `DnsRecord` names the node it is applied at, in
-`metadata.node`, and that field is required: the reconciler groups
-desired state by node and dispatches each group at one agent, so a
-resource with no node is never dispatched anywhere. `DnsRecord` is the
-exception because it is applied through an external provider rather than
-an agent, and it must *not* carry a node.
+Every resource but `DnsRecord` and `Automation` names the node it is
+applied at, in `metadata.node`, and that field is required: the
+reconciler groups desired state by node and dispatches each group at one
+agent, so a resource with no node is never dispatched anywhere.
+`DnsRecord` is an exception because it is applied through an external
+provider rather than an agent; `Automation` because Keystone itself acts
+on it. Neither may carry a node.
 
 For most resources the node is obvious — the machine running the
 container. Two are less so: `OidcClient` and `LdapGroup` are applied at
@@ -274,8 +276,34 @@ exists, and containers referencing the secret are re-created.
 
 Consumers follow the stream with the same cursor and long-poll shape
 as the operational one (`GET /api/v1/household/events?after=N`, or
-`wild household events -follow`). Nothing interprets an event yet; the
-deterministic automation engine that will is the next work package.
+`wild household events -follow`).
+
+### A rule is approved once, then runs on its own
+
+What acts on those facts is an **`Automation`**: a household rule, and
+a Statefile resource like any other (ADR-W022 A1). It reads in order —
+*when* this event arrives (`trigger`), *if* these checks all hold
+(`conditions`: an event absent or present in a window, a time of day, a
+weekday, a cooldown), gather *this much* context (`context`), optionally
+ask the Butler to phrase or decide (`escalation`), then *do* this
+(`action`: a capability's tool, at a risk tier, with params). A rule
+with no `escalation` never involves a model.
+
+Creating or changing a rule is a plan, and it is always Medium: a rule
+acts on the household by itself once approved, so it must always pass a
+human, never unattended drift repair. The Butler may draft one — it is
+the expected author — but it holds no approve verb, so a human signs it.
+Removing a rule is Low; it just stops.
+
+Policy holds every rule, whoever wrote it, to one line (ADR-W022 A5): an
+action's tier must be `read` or `domestic`. A rule cannot restart a
+container or change a route; those are plans, and stay plans. Its params
+are held to the same rule as a container's environment: a secret goes in
+by `secret/<name>` reference or not at all.
+
+An `Automation` carries no node. Keystone owns it: it is present exactly
+when it is desired, the reconciler has nothing to apply, and the
+automation engine — the next work package — reads it from the Statefile.
 
 ## The Butler proposes; humans approve
 

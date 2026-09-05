@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -319,3 +320,60 @@ func TestMintPublisherPlacementFailureRevokes(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// A household rule is proposed, policy-checked, and approved through the
+// ONE plan pipeline (ADR-W022 A1): the Butler may draft it, a human
+// signs it, and a rule that reaches for an infrastructure tier is
+// refused at proposal regardless of who wrote it.
+func TestAutomationTravelsThePlanPipeline(t *testing.T) {
+	h := newHarness(t)
+	ruleYAML := func(tier string) string {
+		data, err := resource.Marshal(resource.Resource{
+			ApiVersion: resource.ApiVersion, Kind: resource.KindAutomation,
+			Metadata: resource.Metadata{Name: "breakfast-check", Owner: "household/mika"},
+			Automation: &resource.AutomationSpec{
+				Description: "Ask about breakfast when leaving without a meal logged",
+				Trigger:     resource.AutomationTrigger{EventType: "person.left_home", Subject: "mika"},
+				Conditions:  []resource.AutomationCondition{{Kind: "eventAbsent", EventType: "pantry.meal_logged", Window: "6h", SameSubject: true}},
+				Action:      resource.AutomationAction{Tool: "notifications.notify", Tier: tier, Params: map[string]string{"message": "Breakfast?"}},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	// Infrastructure tier: 422 from policy, no plan record.
+	var body map[string]any
+	if resp := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/plans",
+		proposalRequest{Summary: "restart on arrival", Put: []string{ruleYAML("high")}}, &body); resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("high-tier rule = %d (%v), want 422", resp.StatusCode, body)
+	}
+
+	// Domestic tier, drafted by the butler: a Medium plan in proposed.
+	var rec runtimedb.PlanRecord
+	if resp := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/plans",
+		proposalRequest{Summary: "breakfast check", Put: []string{ruleYAML("domestic")}}, &rec); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("propose = %d", resp.StatusCode)
+	}
+	if rec.State != runtimedb.PlanProposed || rec.Principal != "butler" || rec.Risk != "Medium" {
+		t.Fatalf("record = %+v", rec)
+	}
+	// The butler cannot approve its own draft; a human can.
+	if resp := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("butler approve = %d, want 403", resp.StatusCode)
+	}
+	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("operator approve = %d", resp.StatusCode)
+	}
+	// Approval committed the rule to the Statefile, where the engine
+	// will read it; and it reads back through the API intact.
+	var view resourceView
+	if resp := h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/resources/Automation/breakfast-check", nil, &view); resp.StatusCode != http.StatusOK {
+		t.Fatalf("get rule = %d", resp.StatusCode)
+	}
+	if view.Kind != "Automation" || view.Node != "" || !strings.Contains(view.YAML, "person.left_home") || strings.Contains(view.YAML, "REDACTED") {
+		t.Fatalf("rule view = %+v", view)
+	}
+}

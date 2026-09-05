@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -107,10 +108,31 @@ func TestStoreAppendStampsSourceAndDedupes(t *testing.T) {
 	}
 }
 
-// pkgspec carries its own copy of the event-type pattern so it stays a
-// leaf package; the two must never drift.
-func TestEventTypePatternMatchesPkgspec(t *testing.T) {
+// pkgspec and resource carry their own copies of the event-type pattern
+// so they stay leaf packages; the three must never drift.
+func TestEventTypePatternMatchesPkgspecAndResource(t *testing.T) {
 	if EventTypeRegexp.String() != pkgspec.EventTypeRegexp.String() {
 		t.Fatalf("household %q != pkgspec %q", EventTypeRegexp, pkgspec.EventTypeRegexp)
+	}
+	// resource's copy is unexported; a rule whose trigger type passes the
+	// household pattern must validate, and one that fails it must not.
+	for _, tc := range []struct {
+		typ string
+		ok  bool
+	}{{"person.left_home", true}, {"calendar.school.closed", true}, {"left_home", false}, {"Person.Left", false}} {
+		if EventTypeRegexp.MatchString(tc.typ) != tc.ok {
+			t.Fatalf("household pattern on %q = %v, want %v", tc.typ, !tc.ok, tc.ok)
+		}
+		r := resource.Resource{
+			ApiVersion: resource.ApiVersion, Kind: resource.KindAutomation,
+			Metadata: resource.Metadata{Name: "x", Owner: "household"},
+			Automation: &resource.AutomationSpec{
+				Description: "x", Trigger: resource.AutomationTrigger{EventType: tc.typ},
+				Action: resource.AutomationAction{Tool: "a.b", Tier: "domestic"},
+			},
+		}
+		if got := r.Validate() == nil; got != tc.ok {
+			t.Fatalf("resource pattern on %q accepted=%v, want %v", tc.typ, got, tc.ok)
+		}
 	}
 }
