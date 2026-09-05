@@ -35,6 +35,16 @@ var imageArgv0 = map[string]string{
 	"cloudflare/cloudflared": "",      // ENTRYPOINT ["cloudflared","--no-autoupdate"]
 	"binwiederhier/ntfy":     "",      // ENTRYPOINT ["ntfy"]
 
+	// Caddy with the caddy-dns/cloudflare module compiled in, for the
+	// DNS-01 profile (ADR-W019 A9). Same shape as stock caddy, and
+	// checked rather than assumed: the image config blob at
+	// sha256:62639363…de96 declares Entrypoint null with Cmd
+	// ["caddy","run","--config","/etc/caddy/Caddyfile","--adapter","caddyfile"],
+	// read from the GHCR registry API on 2026-09-05. Unlike the entries
+	// above, this one did not need a node to check — the registry answers
+	// the question directly when its network is reachable.
+	"ghcr.io/caddybuilds/caddy-cloudflare": "caddy",
+
 	// The subtle third case, and the reason this table asks "what must
 	// argv[0] be" rather than "does the image have an entrypoint":
 	// gotenberg's ENTRYPOINT is ["/usr/bin/tini","--"], a supervisor that

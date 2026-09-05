@@ -464,6 +464,32 @@ var ingressTLSModes = map[string]bool{
 	// certificate, which is what makes a hostname no public CA would
 	// sign serve real TLS on a LAN.
 	"internal": true,
+	// The proxy terminates with a PUBLICLY TRUSTED certificate it gets
+	// itself, by ACME over a DNS-01 challenge (ADR-W019 A9).
+	//
+	// The distinction from "internal" is not how the bytes are encrypted
+	// — both are real TLS — but who already trusts the issuer. An
+	// internal CA means every device that will ever open the page must
+	// first install a root certificate by hand, which is a per-device
+	// manual step a household will not complete and cannot be automated
+	// from here. DNS-01 is what makes a public CA reachable for a name
+	// that resolves to an address the internet cannot route to: the
+	// challenge is answered in DNS, so the certificate authority never
+	// has to connect to the listener.
+	"public": true,
+}
+
+// ingressACMEDNSProviders is the closed set of IngressSpec.ACMEDNS values.
+//
+// Closed for the same reason the TLS modes are: the value is written
+// verbatim into a Caddyfile global option naming a module that must be
+// compiled into the running Caddy. An unrecognized provider is not a
+// degraded certificate, it is a proxy that fails to start.
+var ingressACMEDNSProviders = map[string]bool{
+	// Cloudflare, via the caddy-dns/cloudflare module. Reads its API
+	// token from the CF_API_TOKEN environment variable, which the
+	// ingress package supplies from a Provided Secret.
+	"cloudflare": true,
 }
 
 // IngressSpec is the spec for kind Ingress: how the node's reverse proxy
@@ -500,6 +526,13 @@ type IngressSpec struct {
 	// safe default and also the wrong one behind a tunnel — a profile
 	// with something in front of it must say so.
 	TrustedProxies []string `yaml:"trustedProxies,omitempty"`
+	// ACMEDNS names the DNS provider used to answer the DNS-01
+	// challenge, one of ingressACMEDNSProviders. Required when TLS is
+	// "public" and refused otherwise: a DNS provider is meaningless to a
+	// listener that issues its own certificates or terminates none, and
+	// silently ignoring it would hide a profile that thinks it is
+	// getting a public certificate and is not.
+	ACMEDNS string `yaml:"acmeDns,omitempty"`
 }
 
 // LdapUserSpec is the spec for kind LdapUser: a person who must EXIST in
@@ -1093,13 +1126,33 @@ func validateBackupPlan(r *Resource) error {
 // reason: every field here is interpolated into a GraphQL document and an
 // LDAP distinguished name by a POSIX shell script with no JSON encoder.
 // A closed charset is what makes that safe.
+// postureOrOff names the effective TLS posture for an error message,
+// since empty means "off" and quoting "" back at an operator is noise.
+func postureOrOff(tls string) string {
+	if tls == "" {
+		return "off"
+	}
+	return tls
+}
+
 func validateIngress(r *Resource) error {
 	if r.Ingress == nil {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "ingress spec missing"}
 	}
 	if r.Ingress.TLS != "" && !ingressTLSModes[r.Ingress.TLS] {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.tls",
-			Msg: fmt.Sprintf("%q is not a TLS posture (want \"off\" or \"internal\", or empty for off)", r.Ingress.TLS)}
+			Msg: fmt.Sprintf("%q is not a TLS posture (want \"off\", \"internal\" or \"public\", or empty for off)", r.Ingress.TLS)}
+	}
+	switch {
+	case r.Ingress.TLS == "public" && r.Ingress.ACMEDNS == "":
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.acmeDns",
+			Msg: "required when tls is \"public\": a public certificate for a privately-routed name can only be obtained over DNS-01"}
+	case r.Ingress.TLS != "public" && r.Ingress.ACMEDNS != "":
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.acmeDns",
+			Msg: fmt.Sprintf("meaningless when tls is %q: only \"public\" obtains a certificate over ACME", postureOrOff(r.Ingress.TLS))}
+	case r.Ingress.ACMEDNS != "" && !ingressACMEDNSProviders[r.Ingress.ACMEDNS]:
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.acmeDns",
+			Msg: fmt.Sprintf("%q is not a supported ACME DNS provider (want \"cloudflare\")", r.Ingress.ACMEDNS)}
 	}
 	for _, p := range r.Ingress.TrustedProxies {
 		if strings.ContainsAny(p, " \t\n{}") {
