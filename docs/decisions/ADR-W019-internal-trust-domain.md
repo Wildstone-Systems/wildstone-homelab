@@ -185,6 +185,36 @@ trust. Small and explicit, per ADR-W005 A2. Packages render
 against a profile name — which is what makes the ingress profiles
 genuinely swappable rather than swappable-in-principle.
 
+### A8. The ingress profile's posture is a resource, not a constant or a guess
+
+B5 said `trusted_proxies` should be "a parameter of the ingress package,
+not a constant in the renderer". Implementing A1–A3 showed the same
+channel is needed for a second, larger fact — whether this proxy
+terminates TLS at all — and that neither can be a constant once two
+profiles ship: `caddy-cloudflared` sits behind a tunnel that terminates
+for it, and `caddy-tailnet` has nothing in front and must terminate its
+own. The two need opposite output from the same renderers.
+
+So the channel is a resource kind, `Ingress`, carrying `tls`
+(`off`/`internal`) and `trustedProxies`, declared by whichever ingress
+package is installed. A resource for the reason ADR-W005 gives and the
+Secret kind followed: everything else a package causes to happen on a
+node is one, and being one means it inherits the closed registry,
+validation, plan ordering, approval and audit without rebuilding any of
+them.
+
+A node with no `Ingress` declared renders exactly what it rendered
+before the kind existed — terminated upstream, private ranges trusted.
+An upgrade must not silently change how a household's front door handles
+TLS.
+
+**Rejected: inferring it from the published port.** "The container
+publishes 443, so it terminates TLS" is derivable from desired state and
+would have needed no new kind. It is also precisely the kind of implicit
+heuristic this repo refuses everywhere else, and it would have been
+load-bearing for whether the family's traffic is encrypted. A closed,
+declared vocabulary is worth a resource kind here.
+
 ---
 
 # Part D — Implementation notes for the amendments (non-binding)

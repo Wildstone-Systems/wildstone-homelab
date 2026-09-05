@@ -10,6 +10,7 @@ export type Kind =
   "OidcClient" |
   "LdapGroup" |
   "LdapUser" |
+  "Ingress" |
   "BackupPlan" |
   "ConfigFile" |
   "Job" |
@@ -83,6 +84,11 @@ export interface LdapUserSpec {
   groups?: string[];
 }
 
+export interface IngressSpec {
+  tls?: string;
+  trustedProxies?: string[];
+}
+
 export interface BackupRetention {
   keepDaily?: number;
   keepWeekly?: number;
@@ -121,6 +127,7 @@ export type Spec =
   OidcClientSpec |
   LdapGroupSpec |
   LdapUserSpec |
+  IngressSpec |
   BackupPlanSpec |
   ConfigFileSpec |
   JobSpec |
@@ -141,6 +148,7 @@ export interface SpecByKind {
   OidcClient: OidcClientSpec;
   LdapGroup: LdapGroupSpec;
   LdapUser: LdapUserSpec;
+  Ingress: IngressSpec;
   BackupPlan: BackupPlanSpec;
   ConfigFile: ConfigFileSpec;
   Job: JobSpec;

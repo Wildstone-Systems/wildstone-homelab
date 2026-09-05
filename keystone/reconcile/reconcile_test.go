@@ -109,7 +109,7 @@ func TestConvergeEmptyNodeToVolumeContainerRoute(t *testing.T) {
 	if len(frag) == 0 {
 		t.Fatal("route fragment was not written")
 	}
-	want := renderRouteFragment(desired[2].Route, DefaultAutheliaAddr)
+	want := renderRouteFragment(desired[2].Route, DefaultAutheliaAddr, terminatedUpstream)
 	if string(frag) != string(want) {
 		t.Errorf("route fragment mismatch:\ngot:  %q\nwant: %q", frag, want)
 	}

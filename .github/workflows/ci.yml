@@ -43,6 +43,10 @@ jobs:
             || { echo "release.yml no longer produces console_dist.tar.gz"; exit 1; }
           grep -q 'console_dist\.tar\.gz' scripts/install.sh \
             || { echo "install.sh no longer fetches console_dist.tar.gz"; exit 1; }
+          grep -q 'packages\.tar\.gz' .github/workflows/release.yml \
+            || { echo "release.yml no longer produces packages.tar.gz"; exit 1; }
+          grep -q 'packages\.tar\.gz' scripts/install.sh \
+            || { echo "install.sh no longer fetches packages.tar.gz"; exit 1; }
 
   console:
     name: console (typecheck + build, ADR-W016)

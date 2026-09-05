@@ -56,6 +56,15 @@ jobs:
           # static files a browser runs — so it has no _linux_<arch>
           # suffix, and install.sh fetches it by that plain name.
           tar -czf dist/console_dist.tar.gz -C console/dist .
+          # The packages this release can install (ADR-W021 A3). Also
+          # architecture-independent — YAML a control plane reads — so it
+          # travels under a plain name like the Console does, and is
+          # verified through the same checksums.txt.
+          #
+          # Bundled is not optional: a homelab must not have to host a
+          # registry to install the packages that shipped with the
+          # product. A registry source is additive and comes later.
+          tar -czf dist/packages.tar.gz -C packages .
           cp scripts/install.sh dist/install.sh
           # Bare names, no ./ prefix: the installer greps checksums.txt
           # for " <artifact>$" and verifies in its own workdir.

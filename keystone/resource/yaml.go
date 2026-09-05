@@ -51,6 +51,8 @@ func (r *Resource) specOf() any {
 		return r.LdapGroup
 	case KindLdapUser:
 		return r.LdapUser
+	case KindIngress:
+		return r.Ingress
 	case KindBackupPlan:
 		return r.BackupPlan
 	case KindConfigFile:
@@ -119,6 +121,8 @@ func (r *Resource) UnmarshalYAML(value *yaml.Node) error {
 		r.LdapGroup = spec.(*LdapGroupSpec)
 	case KindLdapUser:
 		r.LdapUser = spec.(*LdapUserSpec)
+	case KindIngress:
+		r.Ingress = spec.(*IngressSpec)
 	case KindBackupPlan:
 		r.BackupPlan = spec.(*BackupPlanSpec)
 	case KindConfigFile:

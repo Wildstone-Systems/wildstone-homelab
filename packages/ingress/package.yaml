@@ -54,6 +54,20 @@ params:
   # the explicit way to say you mean every interface.
   - { name: admin_listen_addr, required: true }
 templates:
+  # ---- How this node's proxy is postured (ADR-W019 B5, F65).
+  #
+  # tls: off — the tunnel terminates TLS and hands Caddy plain http, so
+  # this listener must not try to provision certificates for hostnames it
+  # cannot validate (ADR-W019 A4). trustedProxies names cloudflared, so
+  # the X-Forwarded-Proto it sets survives instead of being overwritten
+  # with this hop's own scheme (A6).
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Ingress
+    metadata: { name: ingress, node: "{{ .Params.node }}" }
+    spec:
+      tls: "off"
+      trustedProxies: [private_ranges]
   # ---- The secret this capability needs (ADR-W020 / F37).
   #
   # `provided`, not generated: the tunnel token is issued by Cloudflare

@@ -53,12 +53,12 @@ func writeRenderedConfig(t *testing.T) string {
 		t.Fatal(err)
 	}
 	base := filepath.Join(dir, "Caddyfile")
-	if err := os.WriteFile(base, renderBaseCaddyfile(defaultTrustedProxies), 0o644); err != nil {
+	if err := os.WriteFile(base, renderBaseCaddyfile(terminatedUpstream), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range routeFixtures {
 		spec := f.spec
-		frag := renderRouteFragment(&spec, DefaultAutheliaAddr)
+		frag := renderRouteFragment(&spec, DefaultAutheliaAddr, terminatedUpstream)
 		if err := os.WriteFile(filepath.Join(dir, "routes", f.name+".caddy"), frag, 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -108,7 +108,7 @@ func TestRouteFragmentShape(t *testing.T) {
 	for _, f := range routeFixtures {
 		t.Run(f.name, func(t *testing.T) {
 			spec := f.spec
-			got := string(renderRouteFragment(&spec, DefaultAutheliaAddr))
+			got := string(renderRouteFragment(&spec, DefaultAutheliaAddr, terminatedUpstream))
 
 			if strings.Contains(got, "container/") {
 				t.Errorf("upstream prefix survived into the config:\n%s", got)
@@ -136,7 +136,7 @@ func TestRouteFragmentShape(t *testing.T) {
 // TestBaseCaddyfileImportsFragments pins the one line whose absence made
 // every fragment dead weight.
 func TestBaseCaddyfileImportsFragments(t *testing.T) {
-	got := string(renderBaseCaddyfile(defaultTrustedProxies))
+	got := string(renderBaseCaddyfile(terminatedUpstream))
 	// ":80 {\n\tabort" is the default deny (F26): without it Caddy answers
 	// every unrouted Host with an empty 200, so a front door with one
 	// Route still looks alive for any hostname pointed at it. Verified
@@ -200,13 +200,13 @@ func TestRenderedConfigWithPlaceholderAndDeletionIsValid(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "routes"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "Caddyfile"), renderBaseCaddyfile(defaultTrustedProxies), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "Caddyfile"), renderBaseCaddyfile(terminatedUpstream), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	spec := routeFixtures[0].spec
 	files := map[string][]byte{
 		"00-wildstone-placeholder.caddy": renderPlaceholderFragment(),
-		"live.caddy":                     renderRouteFragment(&spec, DefaultAutheliaAddr),
+		"live.caddy":                     renderRouteFragment(&spec, DefaultAutheliaAddr, terminatedUpstream),
 		"gone.caddy":                     renderDeletedFragment("gone"),
 	}
 	for n, b := range files {

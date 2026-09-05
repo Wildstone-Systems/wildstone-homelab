@@ -38,9 +38,9 @@ type Metadata struct {
 // package needs satisfied by some other enabled package in the catalog
 // (ADR-W005 A2), e.g. { trait: identity, mode: oidc }.
 type Requirement struct {
-	Trait string `yaml:"trait"`
-	Mode  string `yaml:"mode,omitempty"`
-	Class string `yaml:"class,omitempty"`
+	Trait string `yaml:"trait" json:"trait"`
+	Mode  string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Class string `yaml:"class,omitempty" json:"class,omitempty"`
 }
 
 // Provide is one entry of a package's `provides` list: a trait/mode this
@@ -49,18 +49,18 @@ type Requirement struct {
 // matches a Requirement against a Provide by (Trait, Mode) (Class is not
 // currently matched — reserved for storage-class style requirements).
 type Provide struct {
-	Trait string `yaml:"trait"`
-	Mode  string `yaml:"mode,omitempty"`
-	Class string `yaml:"class,omitempty"`
+	Trait string `yaml:"trait" json:"trait"`
+	Mode  string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Class string `yaml:"class,omitempty" json:"class,omitempty"`
 }
 
 // ParamDecl declares one templating input a package accepts. Required
 // params must be supplied by the caller; non-required params fall back to
 // Default when omitted.
 type ParamDecl struct {
-	Name     string `yaml:"name"`
-	Required bool   `yaml:"required,omitempty"`
-	Default  string `yaml:"default,omitempty"`
+	Name     string `yaml:"name" json:"name"`
+	Required bool   `yaml:"required,omitempty" json:"required,omitempty"`
+	Default  string `yaml:"default,omitempty" json:"default,omitempty"`
 }
 
 // Policies carries the mandatory policy inputs a package declares about the
