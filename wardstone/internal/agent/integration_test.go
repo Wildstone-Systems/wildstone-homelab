@@ -719,6 +719,35 @@ func TestSelfUpdateHappyPathAndBadSignature(t *testing.T) {
 	}
 }
 
+// waitReconnected waits for nodeID to hold a session established AFTER
+// the gateway restarted — not merely for it to hold one.
+//
+// WaitConnected cannot express this and is the wrong primitive here. It
+// polls whether a session exists, and after Stop() the old sessions are
+// still in the registry: each is removed by its stream handler's defer,
+// which only runs once stream.Recv() has returned. So WaitConnected
+// matches the DYING session and returns true immediately, the dispatch
+// that follows is sent on a transport already closing, and the test
+// fails with "transport is closing" — for one node out of twenty, on a
+// loaded runner, roughly never locally.
+//
+// Session identity is what distinguishes the two, and LiveNodes.Since
+// carries it. This is also the honest statement of what the test means
+// to assert: not that the node is connected, which it never stopped
+// appearing to be, but that it connected AGAIN.
+func waitReconnected(gw *gateway.Gateway, nodeID string, after time.Time, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		for _, n := range gw.LiveNodes() {
+			if n.NodeID == nodeID && n.Since.After(after) {
+				return true
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return false
+}
+
 // ---------------------------------------------------------------- reconnect storm
 
 func TestReconnectStorm(t *testing.T) {
@@ -746,6 +775,7 @@ func TestReconnectStorm(t *testing.T) {
 	// storm test needs the same gateway identity back, mirroring a Keystone
 	// process restart with persisted CA. Spike gateway keeps its CA for the
 	// life of the object, so restart = new listener on the same Gateway.
+	restartedAt := time.Now().UTC()
 	lis, err := net.Listen("tcp", h.addr)
 	if err != nil {
 		t.Fatal(err)
@@ -759,7 +789,7 @@ func TestReconnectStorm(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			node := fmt.Sprintf("node-%d", n)
-			if !h.gw.WaitConnected(node, 30*time.Second) {
+			if !waitReconnected(h.gw, node, restartedAt, 30*time.Second) {
 				failures <- node + ": never reconnected"
 				return
 			}
