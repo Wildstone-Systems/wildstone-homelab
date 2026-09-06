@@ -809,10 +809,16 @@ post_install() {
 
   # Re-exec for the node role: the same script, the same code path a
   # separate machine takes, so a single host is not a special case.
-  "$0" --role node --keystone "127.0.0.1:9440" --join-token "$join" \
-       ${fp:+--ca-fingerprint "$fp"} --node-id "$NODE_ID" \
-       ${ARTIFACT_DIR:+--artifact-dir "$ARTIFACT_DIR"} --version "$VERSION" \
-       ${TOKEN:+--token "$TOKEN"} >/dev/null || fail "pairing this host as a node failed"
+  #
+  # Built as an array rather than ${var:+...} inside the command line.
+  # Those expansions are unquoted by construction, so every optional
+  # argument is a word-splitting hazard for the sake of brevity.
+  local -a args=(--role node --keystone "127.0.0.1:9440" --join-token "$join"
+                 --node-id "$NODE_ID" --version "$VERSION")
+  [ -n "$fp" ] && args+=(--ca-fingerprint "$fp")
+  [ -n "$ARTIFACT_DIR" ] && args+=(--artifact-dir "$ARTIFACT_DIR")
+  [ -n "$TOKEN" ] && args+=(--token "$TOKEN")
+  "$0" "${args[@]}" >/dev/null || fail "pairing this host as a node failed"
   wait_agent
   log "node agent connected"
 
@@ -826,7 +832,9 @@ post_install() {
     tsname="$(tailscale status --json 2>/dev/null | grep -m1 '"DNSName"' | sed 's/.*: *"//; s/\.\?",\?$//')"
     tssuffix="$(tailscale status --json 2>/dev/null | grep -m1 '"MagicDNSSuffix"' | sed 's/.*: *"//; s/",\?$//')"
     tsaddr="$(tailscale ip -4 2>/dev/null | head -1)"
-    [ -n "$tsname" ] && [ -n "$tsaddr" ] || fail "could not read this host's tailnet name or address"
+    if [ -z "$tsname" ] || [ -z "$tsaddr" ]; then
+      fail "could not read this host's tailnet name or address"
+    fi
     case "$tsname" in
       *".$tssuffix") ;;
       *) fail "tailnet name '$tsname' is not under this tailnet's suffix '$tssuffix' — refusing to guess" ;;
