@@ -141,9 +141,20 @@ than installing it silently, and offers to set up Tailscale — printing a
 sign-in link to open in any browser, which is also the path to take if
 you have no Tailscale account yet.
 
+It then asks for the account you will log in with, which services you
+want, and shows a summary before doing anything. Approving that summary
+is the approval for every plan the install creates (ADR-W023 A2) — they
+are recorded in the audit trail against your account.
+
+From there it does the rest by itself: installs the control plane, pairs
+this host as its own node, waits for the agent to connect, then installs
+the ingress, identity, the dashboard and your chosen services. It
+finishes by printing the address to open.
+
 Answers are saved to `/var/lib/wildstone/install-answers` (root-only, no
-credentials) as they are given, so an install that fails partway resumes
-without re-asking. Delete that file to start the questions over.
+credentials — the password is used and discarded) as they are given, so
+an install that fails partway resumes without re-asking. Delete that
+file to start the questions over.
 
 Passing any `--role` keeps the old non-interactive behaviour exactly, so
 upgrades, node joins and automation are unchanged — as is a run whose
