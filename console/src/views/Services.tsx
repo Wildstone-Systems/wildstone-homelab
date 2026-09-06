@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { api, EnablePreview, PackageView } from "../api";
 import { Badge, ErrorLine, useLoad } from "../lib";
 
@@ -34,36 +34,45 @@ export function Services() {
             <th>Capability</th>
             <th>Version</th>
             <th>State</th>
+            <th>Address</th>
+            <th>Resources</th>
             <th />
           </tr>
         </thead>
         <tbody>
           {pkgs.map((p) => (
-            <tr key={`${p.name}@${p.version}`}>
+            <Fragment key={`${p.name}@${p.version}`}>
+            <tr>
               <td>{p.name}</td>
               <td>
                 {p.capability}
                 {p.profile ? ` (${p.profile})` : ""}
               </td>
               <td>{p.version}</td>
+              <td>{p.enabled ? <Badge value="enabled" /> : "—"}</td>
+
+              {/* Where it is served, and whether it answers. This is the
+                  answer to "which port is this on", which previously
+                  existed only in <prefix>/routes/ on the node. */}
               <td>
-                {p.enabled ? <Badge value="enabled" /> : "—"}
-                {/* Where it is, and whether it answers. Previously this
-                    existed only in <prefix>/routes/ on the node, so
-                    "which port is this on?" had no answer in the UI. */}
-                {p.addresses?.map((a) => (
-                  <div key={a.route} className={a.healthy ? "" : "bad"}>
-                    <a href={a.url} target="_blank" rel="noreferrer">
-                      {a.url}
-                    </a>
-                    {!a.healthy && (
-                      <span className="muted"> — not answering{a.detail ? `: ${a.detail}` : ""}</span>
-                    )}
-                  </div>
-                ))}
-                {p.enabled && p.resources && p.resources.length > 0 && (
+                {p.addresses?.length
+                  ? p.addresses.map((a) => (
+                      <div key={a.route} className={a.healthy ? "" : "bad"}>
+                        <a href={a.url} target="_blank" rel="noreferrer">
+                          {a.url}
+                        </a>
+                        {!a.healthy && (
+                          <div className="muted">not answering{a.detail ? `: ${a.detail}` : ""}</div>
+                        )}
+                      </div>
+                    ))
+                  : "—"}
+              </td>
+
+              <td>
+                {p.resources?.length ? (
                   <details>
-                    <summary className="muted">{p.resources.length} resource(s)</summary>
+                    <summary>{p.resources.length}</summary>
                     <div className="chips">
                       {p.resources.map((r) => (
                         <span className="chip" key={`${r.kind}/${r.name}`}>
@@ -72,22 +81,25 @@ export function Services() {
                       ))}
                     </div>
                   </details>
+                ) : (
+                  "—"
                 )}
-                {/* Why it will not work here — a reason no form field can
-                    answer, said before the operator installs rather than
-                    after they cannot sign in. */}
-                {p.blockers?.map((b) => (
-                  <div key={b} className="bad">
-                    <strong>Will not work here.</strong> {b}
-                  </div>
-                ))}
               </td>
+
               <td>
                 <button className="action" onClick={() => setChosen(p)}>
                   {p.enabled ? "Reconfigure" : "Install"}
                 </button>
               </td>
             </tr>
+            {p.blockers?.map((b) => (
+              <tr key={b}>
+                <td colSpan={6} className="bad">
+                  <strong>Will not work here.</strong> {b}
+                </td>
+              </tr>
+            ))}
+            </Fragment>
           ))}
         </tbody>
       </table>
