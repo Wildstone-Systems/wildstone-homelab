@@ -482,3 +482,65 @@ bounded, and enveloped as untrusted data, and every conversation is a
 persisted, principal-bound session (`butler` acting-for you). The
 morning report is deterministic — no LLM involved — and keeps working
 with the Butler off.
+
+### Two surfaces: the operator's butler and the household's
+
+The Butler answers on two surfaces (ADR-W026), and they are two
+gateways rather than one gateway with a filter:
+
+| | `admin` | `family` |
+|---|---|---|
+| Endpoint | `POST /api/v1/butler/ask` | `POST /api/v1/household/butler/ask` |
+| Reads | the Statefile, plans, health, diagnosis | the household timeline |
+| Writes | `propose_change` — a plan a human approves | one `domestic`-tier action, through the same gateway an approved household rule uses |
+| Cannot | approve or apply anything | see or touch the home lab at all |
+
+The family surface holds no Statefile, no node reader and no plan
+pipeline — not a filtered one, none — so a household conversation has
+no path to infrastructure to be talked into taking. Its system prompt
+does not describe one either: naming a capability a surface lacks is an
+invitation to try it.
+
+Which surface answered is stamped on the session record from the
+endpoint the request arrived on — never from the request body — so the
+audit trail separates the two forever after:
+`wild butler sessions -surface family`, or the Console's Butler screen,
+which offers the two side by side with the ceilings written out. The
+family surface binds each session to the caller as its member, and every
+action it dispatches carries that member into the domestic gateway's
+audit record.
+
+### Chat: bindings, then a queue
+
+A chat account reaches a Butler only through a **binding** — a row an
+operator created by issuing a single-use claim code (`wild chat code`)
+that the person sends to the bot once. Bindings are per-surface and
+revocable, and every refusal (unknown code, expired, spent, wrong
+transport) is the same answer, so somebody guessing learns nothing. An
+unbound account gets exactly one reply: how to get a code.
+
+An adapter's whole job is protocol translation. It posts what it heard
+to `POST /api/v1/chat/messages`, polls `GET /api/v1/chat/outbound` for
+what to say, and acks what it delivered. It never chooses a surface —
+its credential does, from its role — and it never asserts who somebody
+is; the binding does that. Replies and rule-driven pushes share the one
+queue, so both are delivered and retried the same way, deduped on the
+transport's own message id.
+
+Group chats: the operator surface answers in a direct message only. The
+family surface may answer in a group, and is told in its prompt that the
+audience is shared.
+
+A household rule can ask over chat as well as over ntfy: a package
+declares `send` as a `domestic` tool, the rule names it like any other
+action, and the member's reply — free text, not a button — is matched
+back to the question that is still open for that conversation and
+recorded as `household.answered` with the rule's own correlation id.
+Recording an answer involves no model, so that loop closes with the
+Butler switched off.
+
+Chat transports (Telegram, Matrix, and whatever comes next) are the
+point of the split:
+they arrive as packages, and each one is two separate bots against these
+two endpoints, never one bot deciding for itself which side of the house
+a message belongs to.

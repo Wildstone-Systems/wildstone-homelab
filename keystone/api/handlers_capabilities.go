@@ -329,6 +329,18 @@ func (s *Server) enabledCapabilities() (map[string]bool, error) {
 	return enabled, nil
 }
 
+// CapabilityEnabled reports whether one capability is installed on this
+// deployment, right now. Exported so cmd/keystone can gate a household
+// action on it without a second copy of the "owner says capability/x"
+// rule — two copies is how one of them drifts.
+func (s *Server) CapabilityEnabled(name string) (bool, error) {
+	enabled, err := s.enabledCapabilities()
+	if err != nil {
+		return false, err
+	}
+	return enabled[name], nil
+}
+
 type enableRequest struct {
 	Package string            `json:"package"`
 	Version string            `json:"version,omitempty"`

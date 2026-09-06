@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,13 @@ type ButlerHost struct {
 	// ButlerModeQAOnly runs sessions with the read-only tool set and
 	// dispatch-level refusal of propose_change.
 	Mode runtimedb.ButlerSessionMode
+	// Household carries the family surface's injected seams (ADR-W026
+	// A1): the household timeline reader and the domestic-tier action
+	// dispatcher a family session runs on. A zero value is a working
+	// configuration — the family endpoint then answers that this
+	// deployment has no household surface wired, rather than pretending
+	// to have one.
+	Household butler.HouseholdSeams
 	// Model and Endpoint are the RESOLVED backend the provider talks to —
 	// the flag value when one was given, otherwise the client's own
 	// default. They are display facts for the status endpoint so an
@@ -173,35 +181,41 @@ type storedTranscript struct {
 // entered through the same submitProposal pipeline as the HTTP propose
 // endpoint, as principal "butler" acting-for the caller.
 func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, error) {
+	message, st, err := readAskMessage(r)
+	if err != nil {
+		return nil, st, err
+	}
+	// The unconfigured check lives in the session runner, with the one
+	// snapshot it takes — checking here as well would read the backend
+	// twice for one request, which is the thing ADR-W017 A9's snapshot
+	// exists to prevent.
+	return s.runAdminButlerSession(r.Context(), message, id.Name)
+}
+
+// runAdminButlerSession runs one operator-surface session on behalf of
+// actingFor and returns the ask response. It is shared by the HTTP ask
+// endpoint and the chat inbound endpoint (ADR-W026 A8), so a question
+// asked over Telegram and one asked in the Console take the same path
+// through the same gateway, produce the same audit record, and reach
+// the same ceiling.
+//
+// It takes its OWN snapshot of the backend (ADR-W017 A9) rather than
+// receiving one from its caller: every read of the provider, gateway and
+// mode for one session comes from that single snapshot. Mixing a
+// captured mode with a live provider is how a newly selected model that
+// FAILED its probe would run with the previous model's `full` verdict
+// and be handed proposal tools.
+func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor string) (any, int, error) {
 	askProv, askGw, askMode, _, _ := s.ButlerHost.Current()
-	if s.ButlerHost == nil || askProv == nil || askGw == nil {
+	if askProv == nil || askGw == nil {
 		return nil, http.StatusServiceUnavailable,
 			fmt.Errorf("butler provider not configured (start keystone with -butler-provider)")
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxAskBytes+1))
-	if err != nil {
-		return nil, http.StatusBadRequest, fmt.Errorf("reading body: %w", err)
-	}
-	if len(body) > maxAskBytes {
-		return nil, http.StatusRequestEntityTooLarge, fmt.Errorf("message exceeds %d bytes", maxAskBytes)
-	}
-	var req askRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		return nil, http.StatusBadRequest, fmt.Errorf("parsing ask: %w", err)
-	}
-	if req.Message == "" {
-		return nil, http.StatusBadRequest, fmt.Errorf("message required")
-	}
-
-	// Every read of the backend for this request comes from the ONE
-	// snapshot taken above. Mixing a captured mode with a live provider
-	// is how a newly selected model that FAILED its probe would run with
-	// the previous model's `full` verdict and be handed proposal tools.
 	session := &butler.Session{
 		Gateway:  askGw,
 		ReadOnly: askMode == runtimedb.ButlerModeQAOnly,
 	}
-	tr, err := session.Run(r.Context(), askProv, req.Message)
+	tr, err := session.Run(ctx, askProv, message)
 	if err != nil {
 		// The provider failed mid-session; nothing durable happened (no
 		// proposals are submitted until the session completes).
@@ -212,7 +226,7 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 	// (ADR-W017 A3), as principal "butler" acting-for the caller. Policy
 	// runs again here with the real engine — the session's own gate is a
 	// pre-check, not the authority.
-	butlerID := principal.Identity{Name: butlerPrincipal, Role: runtimedb.RoleButler, ActingFor: id.Name}
+	butlerID := principal.Identity{Name: butlerPrincipal, Role: runtimedb.RoleButler, ActingFor: actingFor}
 	var planIDs, proposalErrs []string
 	for _, call := range tr.Audit.Calls {
 		if call.ResourceYAML == "" || call.Rejected {
@@ -256,9 +270,10 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 	finalText := redact.String(tr.FinalText)
 	sessionID, err := s.DB.InsertButlerSession(runtimedb.ButlerSession{
 		Principal:      butlerPrincipal,
-		ActingFor:      id.Name,
+		ActingFor:      actingFor,
 		Provider:       tr.Audit.Provider,
 		Mode:           askMode,
+		Surface:        runtimedb.ButlerSurfaceAdmin,
 		FinalText:      finalText,
 		Capped:         tr.CappedIterations,
 		TranscriptJSON: redact.String(string(transcriptJSON)),
@@ -266,7 +281,7 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	s.event("butler.session", "", principal.Identity{Name: butlerPrincipal, ActingFor: id.Name},
+	s.event("butler.session", "", principal.Identity{Name: butlerPrincipal, ActingFor: actingFor},
 		fmt.Sprintf("session %s: %d tool calls, %d proposals", sessionID, len(tr.Audit.Calls), len(planIDs)))
 
 	return askResponse{
@@ -279,9 +294,18 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 	}, http.StatusOK, nil
 }
 
+// listButlerSessions lists recorded sessions from BOTH surfaces, newest
+// first. ?surface=admin|family narrows it — the audit question "what has
+// the household's butler been asked to do" is a different question from
+// "what has the operator's", and one list that cannot tell them apart
+// answers neither (ADR-W026 A1).
 func (s *Server) listButlerSessions(r *http.Request, _ principal.Identity) (any, int, error) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	sessions, err := s.DB.ListButlerSessions(limit)
+	surface := runtimedb.ButlerSurface(r.URL.Query().Get("surface"))
+	if surface != "" && !runtimedb.ValidButlerSurface(surface) {
+		return nil, http.StatusBadRequest, fmt.Errorf("unknown surface %q (admin|family)", surface)
+	}
+	sessions, err := s.DB.ListButlerSessions(limit, surface)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -300,4 +324,25 @@ func (s *Server) getButlerSession(r *http.Request, _ principal.Identity) (any, i
 		return nil, http.StatusInternalServerError, err
 	}
 	return sess, http.StatusOK, nil
+}
+
+// readAskMessage reads and bounds one ask body, shared by both surfaces
+// (ADR-W026 A6: inbound text is bounded before anything else looks at
+// it, on the family surface exactly as on the operator's).
+func readAskMessage(r *http.Request) (string, int, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxAskBytes+1))
+	if err != nil {
+		return "", http.StatusBadRequest, fmt.Errorf("reading body: %w", err)
+	}
+	if len(body) > maxAskBytes {
+		return "", http.StatusRequestEntityTooLarge, fmt.Errorf("message exceeds %d bytes", maxAskBytes)
+	}
+	var req askRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return "", http.StatusBadRequest, fmt.Errorf("parsing ask: %w", err)
+	}
+	if req.Message == "" {
+		return "", http.StatusBadRequest, fmt.Errorf("message required")
+	}
+	return req.Message, http.StatusOK, nil
 }

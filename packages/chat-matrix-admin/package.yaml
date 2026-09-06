@@ -1,0 +1,78 @@
+# Chat (Matrix), admin surface: the operator's Butler over Matrix
+# (ADR-W026 A2/A3, work package G5).
+#
+# The same adapter binary as chat-matrix-family, against a DIFFERENT
+# Matrix account, with a DIFFERENT Keystone credential — one holding the
+# `valet` role, which carries the `converse` verb and nothing else. The
+# session it opens does the reading and proposing under an internally
+# constructed identity acting-for you; the bot itself can only relay,
+# and no chat credential can ever approve. Ask it to change something and it answers with a plan id and
+# the words "nothing has changed yet"; approving happens in the Console
+# or `wild`, where a Wildstone credential authenticates you (ADR-W026 A5).
+#
+# This surface answers in a direct room only. A message in a shared room
+# gets one line saying so, and opens no session.
+#
+# INSTALLING (in this order):
+#
+#  1. Make a SECOND Matrix account — not the household's — and get its
+#     access token.
+#
+#  2. Mint its credential (this is what makes it the admin surface):
+#
+#        wild chat adapter chat-matrix-admin -node <node> -surface admin
+#
+#  3. Set the access token, then enable the capability:
+#
+#        wild secret set chat-matrix-admin-token -node <node>
+#
+#  4. Bind your own account:
+#
+#        wild chat code -surface admin -identity <your-principal> -transport matrix
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: chat-matrix-admin
+  version: 1.0.0
+  capability: chat-matrix-admin
+  profile: matrix
+params:
+  - { name: node, required: true, source: node, description: "Which machine runs the adapter." }
+  - name: adapter_image
+    required: true
+    description: "The chat-adapter image, digest-pinned (repo@sha256:...). Build it from cli/cmd/chat-adapter/Dockerfile."
+    example: "registry.example.com/wildstone/chat-adapter@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  - name: keystone_url
+    required: true
+    description: "The Keystone API as the ADAPTER can reach it — usually the tailnet address, not 127.0.0.1."
+    example: "http://100.64.0.1:9441"
+  - name: homeserver_url
+    required: true
+    description: "The Matrix homeserver the bot account lives on."
+    example: "https://matrix.example.org"
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: chat-matrix-admin-token, node: "{{ .Params.node }}" }
+    spec: { name: chat-matrix-admin-token, provided: true }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: chat-matrix-admin-adapter, node: "{{ .Params.node }}" }
+    spec: { name: chat-matrix-admin-adapter, provided: true }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: chat-matrix-admin, node: "{{ .Params.node }}" }
+    spec:
+      image: "{{ .Params.adapter_image }}"
+      env:
+        CHAT_TRANSPORT: matrix
+        KEYSTONE_API: "{{ .Params.keystone_url }}"
+        MATRIX_HOMESERVER: "{{ .Params.homeserver_url }}"
+        MATRIX_ACCESS_TOKEN: "secret/chat-matrix-admin-token"
+        KEYSTONE_TOKEN: "secret/chat-matrix-admin-adapter"
+      restart: unless-stopped
+# No agentTools: a household rule notifies the HOUSEHOLD, not the
+# operator's private bot.

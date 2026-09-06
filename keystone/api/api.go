@@ -224,6 +224,33 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/butler/sessions", s.handle(principal.VerbRead, s.listButlerSessions))
 	mux.Handle("GET /api/v1/butler/sessions/{id}", s.handle(principal.VerbRead, s.getButlerSession))
 
+	// The family surface (ADR-W026 A1): a sibling route, not a mode of
+	// the operator's. Same read verb — talking is not a write — with a
+	// different gateway behind it, one that holds no Statefile access of
+	// any kind. Sessions from both surfaces are listed by the routes
+	// above, which take ?surface= to tell them apart.
+	// Chat bindings (ADR-W026 A4): issuing a code and revoking a binding
+	// are `manage` — deciding who may talk to a Butler is principal
+	// administration. Redeeming is `converse`, because the caller is an
+	// adapter, and a concierge holds that verb and nothing else.
+	mux.Handle("POST /api/v1/chat/claims", s.handle(principal.VerbManage, s.issueChatClaim))
+	mux.Handle("POST /api/v1/chat/bindings/redeem", s.handle(principal.VerbConverse, s.redeemChatClaim))
+	mux.Handle("GET /api/v1/chat/bindings", s.handle(principal.VerbManage, s.listChatBindings))
+	// The adapter contract (ADR-W026 A8): post what you heard, poll for
+	// what to say, ack what you delivered. All three carry `converse`,
+	// and the surface each one acts on comes from the caller's role.
+	// A chat capability's own credential (ADR-W026 A3): the role it gets
+	// is decided by the surface, so a family adapter can never hold more
+	// than converse.
+	mux.Handle("POST /api/v1/chat/adapters/{capability}", s.handle(principal.VerbManage, s.mintChatAdapter))
+	mux.Handle("POST /api/v1/chat/messages", s.handle(principal.VerbConverse, s.receiveChatMessage))
+	mux.Handle("GET /api/v1/chat/outbound", s.handle(principal.VerbConverse, s.pollChatOutbound))
+	mux.Handle("POST /api/v1/chat/outbound/{seq}/ack", s.handle(principal.VerbConverse, s.ackChatOutbound))
+	mux.Handle("POST /api/v1/chat/bindings/{id}/revoke", s.handle(principal.VerbManage, s.revokeChatBinding))
+
+	mux.Handle("GET /api/v1/household/butler", s.handle(principal.VerbRead, s.getHouseholdButlerStatus))
+	mux.Handle("POST /api/v1/household/butler/ask", s.handle(principal.VerbRead, s.askHouseholdButler))
+
 	return mux
 }
 

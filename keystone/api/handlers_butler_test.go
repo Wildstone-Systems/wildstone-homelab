@@ -19,11 +19,16 @@ import (
 type scriptedProvider struct {
 	turns []*provider.ChatResponse
 	i     int
+	// systems records the system prompt of every Chat call, so a test
+	// can assert which SURFACE a session actually ran on rather than
+	// trusting the endpoint it was sent to (ADR-W026 A1/A7).
+	systems []string
 }
 
 func (p *scriptedProvider) Name() string { return "scripted" }
 
-func (p *scriptedProvider) Chat(_ context.Context, _ provider.ChatRequest) (*provider.ChatResponse, error) {
+func (p *scriptedProvider) Chat(_ context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+	p.systems = append(p.systems, req.System)
 	if p.i >= len(p.turns) {
 		return nil, fmt.Errorf("scripted provider exhausted after %d turns", len(p.turns))
 	}

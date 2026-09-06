@@ -1,0 +1,107 @@
+# Chat (Telegram), family surface: the household's Butler, reachable from
+# the app everyone already has open (ADR-W026 A2/A3, work package G4).
+#
+# WHAT THIS RUNS. One small adapter container (cli/cmd/chat-adapter in
+# this repository) that speaks Telegram's Bot API on one side and
+# Keystone's chat contract on the other. It holds a `concierge` token —
+# the converse verb and nothing else — so a compromised adapter can
+# relay messages for accounts a human already bound, and cannot read the
+# house, propose anything, or approve anything.
+#
+# NO INGRESS. Telegram's Bot API is a polling API: the adapter dials OUT
+# and holds the connection open. There is no Route here, no port, and
+# nothing new at the edge — the household gains a chat interface and the
+# attack surface does not move.
+#
+# THE OTHER SURFACE IS A DIFFERENT PACKAGE. chat-telegram-admin runs the
+# operator's Butler over a SEPARATE bot with a SEPARATE token. That is
+# not tidiness: one bot serving both audiences is one compromised phone
+# away from being an infrastructure console, and the split is what makes
+# "the family bot cannot reach the Statefile" true by construction
+# rather than by a filter somebody has to get right.
+#
+# INSTALLING (three steps, in this order):
+#
+#  1. Make the bot. Talk to @BotFather in Telegram, create a bot for the
+#     HOUSEHOLD, and keep its token — it is the value for step 3.
+#
+#  2. Give the capability its Keystone credential, which mints the
+#     concierge principal and places its token on the node as the
+#     provided secret this package's container reads:
+#
+#        wild chat adapter chat-telegram-family -node <node> -surface family
+#
+#  3. Set the bot token as the other provided secret, then enable:
+#
+#        wild secret set chat-telegram-family-bot -node <node>
+#
+#  4. Introduce people. Nobody can talk to the bot until a binding
+#     exists:
+#
+#        wild chat code -surface family -identity <member> -transport telegram
+#
+#     Read the code to them; they send it to the bot on its own, once.
+#
+# THE IMAGE. This repository ships the adapter's source and Dockerfile
+# (cli/cmd/chat-adapter/Dockerfile) and its binary in each release, but
+# publishes no container image: which registry a household trusts is its
+# own decision (ADR-W010's closed-registry posture). So `adapter_image`
+# is a required param — build the image, push it where your nodes can
+# reach it, and pass the digest-pinned reference. Wildstone refuses tags
+# here as it does everywhere (ADR-W003 A4.2).
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: chat-telegram-family
+  version: 1.0.0
+  capability: chat-telegram-family
+  profile: telegram
+params:
+  - { name: node, required: true, source: node, description: "Which machine runs the adapter." }
+  - name: adapter_image
+    required: true
+    description: "The chat-adapter image, digest-pinned (repo@sha256:...). Build it from cli/cmd/chat-adapter/Dockerfile."
+    example: "registry.example.com/wildstone/chat-adapter@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  - name: keystone_url
+    required: true
+    description: "The Keystone API as the ADAPTER can reach it — usually the tailnet address, not 127.0.0.1."
+    example: "http://100.64.0.1:9441"
+templates:
+  # The bot token from BotFather. Provided, not generated: Telegram
+  # issues it, so Wildstone cannot invent it — it can only refuse to
+  # write the container until the operator has supplied it.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: chat-telegram-family-bot, node: "{{ .Params.node }}" }
+    spec: { name: chat-telegram-family-bot, provided: true }
+  # The adapter's Keystone token, placed by `wild chat adapter`. Declared
+  # as provided for the same reason: the mint endpoint writes it, and the
+  # reconciler must refuse to start the container until it exists rather
+  # than starting one that 401s forever with nothing in any log.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: chat-telegram-family-adapter, node: "{{ .Params.node }}" }
+    spec: { name: chat-telegram-family-adapter, provided: true }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: chat-telegram-family, node: "{{ .Params.node }}" }
+    spec:
+      image: "{{ .Params.adapter_image }}"
+      # Configuration is environment, not a command: the image declares
+      # its own ENTRYPOINT, and a container spec that also names the
+      # binary is one image rebuild away from being wrong (F23).
+      env:
+        CHAT_TRANSPORT: telegram
+        KEYSTONE_API: "{{ .Params.keystone_url }}"
+        TELEGRAM_BOT_TOKEN: "secret/chat-telegram-family-bot"
+        KEYSTONE_TOKEN: "secret/chat-telegram-family-adapter"
+      restart: unless-stopped
+# The household action this capability offers (ADR-W024 A5, ADR-W026
+# A8): a rule may send a message over chat exactly as it sends one over
+# ntfy. The domestic gateway will only dispatch it because this line
+# declares it, and only at this tier.
+agentTools:
+  - { name: send, risk: domestic }

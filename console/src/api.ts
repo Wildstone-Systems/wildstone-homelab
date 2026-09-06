@@ -278,9 +278,43 @@ export interface ButlerSession {
   actingFor: string;
   provider: string;
   mode: string;
+  // Which butler answered (ADR-W026 A1). Stamped by the endpoint the
+  // session arrived on, never by the caller.
+  surface: ButlerSurface;
   finalText: string;
   capped: boolean;
   transcriptJson?: string;
+}
+
+// The two surfaces (ADR-W026 A1): the operator's butler reads system
+// state and proposes plans; the household's reads the household timeline
+// and performs domestic actions, with no access to the home lab itself.
+export type ButlerSurface = "admin" | "family";
+
+// --- Chat bindings (ADR-W026 A4). A binding is the only way a chat
+// account reaches a Butler, and it exists only because somebody redeemed
+// a claim code.
+export interface ChatBinding {
+  id: number;
+  transport: string;
+  account: string;
+  surface: ButlerSurface;
+  identity: string;
+  displayName?: string;
+  createdAt: string;
+  createdBy: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+}
+
+// The code comes back exactly once: the server stores only its hash.
+export interface ChatClaim {
+  code: string;
+  surface: ButlerSurface;
+  identity: string;
+  transport?: string;
+  expiresAt: string;
+  note: string;
 }
 
 export interface IdentityNotification {
@@ -340,12 +374,34 @@ export const api = {
     call<unknown>("POST", `/api/v1/plans/${encodeURIComponent(id)}/approve`),
   rejectPlan: (id: string) =>
     call<unknown>("POST", `/api/v1/plans/${encodeURIComponent(id)}/reject`),
-  butlerStatus: () => call<ButlerStatus>("GET", "/api/v1/butler"),
-  askButler: (message: string) => call<AskResponse>("POST", "/api/v1/butler/ask", { message }),
-  butlerSessions: (limit = 20) =>
-    call<ButlerSession[]>("GET", `/api/v1/butler/sessions?limit=${limit}`),
+  // Each surface has its own endpoint rather than a mode flag, so the
+  // Console cannot accidentally send a household question to the
+  // operator's butler or the reverse.
+  butlerStatus: (surface: ButlerSurface = "admin") =>
+    call<ButlerStatus>("GET", surface === "family" ? "/api/v1/household/butler" : "/api/v1/butler"),
+  askButler: (message: string, surface: ButlerSurface = "admin") =>
+    call<AskResponse>(
+      "POST",
+      surface === "family" ? "/api/v1/household/butler/ask" : "/api/v1/butler/ask",
+      { message },
+    ),
+  butlerSessions: (limit = 20, surface?: ButlerSurface) =>
+    call<ButlerSession[]>(
+      "GET",
+      `/api/v1/butler/sessions?limit=${limit}${surface ? `&surface=${surface}` : ""}`,
+    ),
   butlerSession: (id: string) =>
     call<ButlerSession>("GET", `/api/v1/butler/sessions/${encodeURIComponent(id)}`),
+  chatBindings: (withRevoked = false) =>
+    call<ChatBinding[]>("GET", `/api/v1/chat/bindings${withRevoked ? "?revoked=true" : ""}`),
+  issueChatClaim: (surface: ButlerSurface, identity: string, transport?: string) =>
+    call<ChatClaim>("POST", "/api/v1/chat/claims", {
+      surface,
+      identity,
+      ...(transport ? { transport } : {}),
+    }),
+  revokeChatBinding: (id: number) =>
+    call<unknown>("POST", `/api/v1/chat/bindings/${id}/revoke`),
   backups: () => call<{ runs: BackupRun[] }>("GET", "/api/v1/backups"),
   runBackup: (plan: string) =>
     call<unknown>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/run`),

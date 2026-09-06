@@ -1,15 +1,34 @@
 import { useState } from "react";
-import { api, AskResponse, ButlerSession, ButlerStatus } from "../api";
+import { api, AskResponse, ButlerSession, ButlerStatus, ButlerSurface } from "../api";
 import { Badge, ErrorLine, useLoad, when } from "../lib";
-
-// Butler (ADR-W017 A2): one screen for the operator's butler. Asking is a
-// read — the only thing a session can write is a plan in state `proposed`,
-// which a human approves on the Plans screen. This surface never approves.
 import { ButlerSettings } from "./ButlerSettings";
 
+// The two surfaces, as the operator picks between them (ADR-W026 A1).
+// The copy differs because the ceilings differ, and a screen that
+// described them identically would be teaching the wrong thing.
+export const SURFACES: Record<ButlerSurface, { label: string; blurb: string; placeholder: string }> = {
+  admin: {
+    label: "Operator",
+    blurb:
+      "Reads system state and can propose changes — every proposal lands on Plans as `proposed` and waits for your approval.",
+    placeholder: "e.g. why is jellyfin unhealthy? or: expose grafana at grafana.home.arpa",
+  },
+  family: {
+    label: "Household",
+    blurb:
+      "Reads the household timeline and can perform household actions. It has no access to the home lab itself — no containers, storage, accounts or access rules — and cannot propose changes.",
+    placeholder: "e.g. did anyone log breakfast this morning? or: remind everyone about the bins",
+  },
+};
+
+// Butler (ADR-W017 A2, ADR-W026 A1): one screen, two surfaces. Asking is
+// a read on both — the only thing an operator session can write is a plan
+// in state `proposed`, which a human approves on the Plans screen, and a
+// household session cannot write a plan at all. Neither surface approves.
 export function Butler() {
-  const status = useLoad<ButlerStatus>(() => api.butlerStatus(), []);
-  const sessions = useLoad<ButlerSession[]>(() => api.butlerSessions(), []);
+  const [surface, setSurface] = useState<ButlerSurface>("admin");
+  const status = useLoad<ButlerStatus>(() => api.butlerStatus(surface), [surface]);
+  const sessions = useLoad<ButlerSession[]>(() => api.butlerSessions(20, surface), [surface]);
   const [message, setMessage] = useState("");
   const [answer, setAnswer] = useState<AskResponse | null>(null);
   const [askError, setAskError] = useState<string | null>(null);
@@ -25,7 +44,7 @@ export function Butler() {
     setBusy(true);
     setAskError(null);
     api
-      .askButler(text)
+      .askButler(text, surface)
       .then((res) => {
         setAnswer(res);
         setMessage("");
@@ -45,7 +64,9 @@ export function Butler() {
       </h2>
       {/* Behind a toggle on the same screen: asking a question should not
           mean scrolling past a configuration form, and changing the model
-          should not mean finding another tab. */}
+          should not mean finding another tab. The backend it configures is
+          shared — both surfaces run on it — so this sits above the surface
+          switch rather than inside either one. */}
       {showSettings && (
         <div className="card">
           <ButlerSettings
@@ -56,10 +77,24 @@ export function Butler() {
           />
         </div>
       )}
-      <div className="sub">
-        Ask in plain language. The Butler reads state and can propose changes — every proposal
-        lands on Plans as <code>proposed</code> and waits for your approval.
+      <div className="row" style={{ marginBottom: 6 }}>
+        {(Object.keys(SURFACES) as ButlerSurface[]).map((key) => (
+          <button
+            key={key}
+            className={"action" + (surface === key ? " primary" : "")}
+            onClick={() => {
+              if (surface === key) return;
+              setSurface(key);
+              setAnswer(null);
+              setAskError(null);
+              setOpen(null);
+            }}
+          >
+            {SURFACES[key].label}
+          </button>
+        ))}
       </div>
+      <div className="sub">Ask in plain language. {SURFACES[surface].blurb}</div>
       <ErrorLine error={status.error} />
 
       <StatusCard status={status.data} loading={status.loading} />
@@ -68,11 +103,7 @@ export function Butler() {
         <h3>Ask</h3>
         <textarea
           rows={4}
-          placeholder={
-            configured
-              ? "e.g. why is jellyfin unhealthy? or: expose grafana at grafana.home.arpa"
-              : "Configure a provider to enable asking."
-          }
+          placeholder={configured ? SURFACES[surface].placeholder : "Configure a provider to enable asking."}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={(e) => {
@@ -94,7 +125,9 @@ export function Butler() {
         {answer && <Answer answer={answer} />}
       </div>
 
-      <h3 style={{ fontSize: 13, margin: "20px 0 8px" }}>Recent sessions</h3>
+      <h3 style={{ fontSize: 13, margin: "20px 0 8px" }}>
+        Recent {SURFACES[surface].label.toLowerCase()} sessions
+      </h3>
       <ErrorLine error={sessions.error} />
       <table>
         <thead>
@@ -139,7 +172,8 @@ export function Butler() {
             {open.id} — {when(open.createdAt)}
           </h3>
           <div className="muted" style={{ marginBottom: 8 }}>
-            {open.principal} acting for {open.actingFor} · {open.provider} · {open.mode}
+            {open.principal} acting for {open.actingFor} · {open.surface} surface · {open.provider} ·{" "}
+            {open.mode}
           </div>
           <pre>{open.finalText}</pre>
           {open.transcriptJson && (

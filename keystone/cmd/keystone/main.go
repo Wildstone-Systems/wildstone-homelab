@@ -582,6 +582,36 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			log.Error("domestic audit append failed", "tool", c.Tool, "err", eerr)
 		}
 	}
+	// Chat as a household delivery target (ADR-W026 A8, G6). One
+	// executor per installed chat capability that declares `send`, so a
+	// rule names the capability it means rather than a transport the
+	// deployment might run twice. Registration reads the catalog: a
+	// capability whose package does not declare the tool is not wired,
+	// and the gateway's declaration check refuses it either way.
+	//
+	// Family surfaces only. The admin packages declare no agentTools at
+	// all, because a household rule notifies the HOUSEHOLD — pointing one
+	// at the operator's private bot would put household events into the
+	// one conversation that can also propose changes.
+	var chatCapabilities []string
+	if cat != nil {
+		for _, p := range cat.List() {
+			capName := p.Metadata.Capability
+			if !strings.HasPrefix(capName, "chat-") || !strings.HasSuffix(capName, "-family") {
+				continue
+			}
+			declaresSend := false
+			for _, t := range p.AgentTools {
+				if t.Name == "send" {
+					declaresSend = true
+				}
+			}
+			if declaresSend {
+				chatCapabilities = append(chatCapabilities, capName)
+			}
+		}
+	}
+
 	if householdCfg.NtfyURL != "" {
 		mintReply, merr := replyMinter(principals, db, householdCfg.ReplyTTL)
 		if merr != nil {
@@ -595,6 +625,11 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		})
 		log.Info("household actions wired", "tools", actions.Tools(), "replies", householdCfg.ReplyURL != "")
 	}
+
+	// The chat executors are registered after the API server exists,
+	// since their two seams are its methods — see below, where apiSrv is
+	// built. Their names are settled here so the log line above is not
+	// the only place they appear.
 
 	// Household automation engine (ADR-W024 H3): follows the household
 	// stream, records every decision, and hands a fired rule's action to
@@ -635,6 +670,38 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		}
 		return out
 	}
+	// Wire the chat delivery executors now that the API server exists:
+	// both seams are its methods, so keystone/domestic learns neither
+	// the runtime DB nor a chat vendor (ADR-W026 G6).
+	for _, capName := range chatCapabilities {
+		transport := chatTransportFor(capName)
+		capName := capName
+		actions.Register(&domestic.ChatSender{
+			Capability: capName,
+			Transport:  transport,
+			// Registered from the CATALOG, gated on the STATEFILE. The
+			// catalog says a package exists; only an install says this
+			// deployment has it. Checking per call rather than filtering
+			// at registration means enabling a chat capability works
+			// without a restart, and disabling one stops it at once
+			// (ADR-W026 A8).
+			Enabled: func() (bool, error) { return apiSrv.CapabilityEnabled(capName) },
+			Lookup: func(_ context.Context, member string) (domestic.ChatRecipient, error) {
+				target, bindingID, lerr := apiSrv.ChatRecipientFor(transport, member)
+				if lerr != nil {
+					return domestic.ChatRecipient{}, lerr
+				}
+				return domestic.ChatRecipient{Transport: transport, Target: target, BindingID: bindingID}, nil
+			},
+			Ask: func(ctx context.Context, r domestic.ChatRecipient, body, correlationID, rule, subject string) (int64, error) {
+				return apiSrv.AskOverChat(ctx, r.Transport, r.Target, r.BindingID, body, correlationID, rule, subject)
+			},
+		})
+	}
+	if len(chatCapabilities) > 0 {
+		log.Info("chat delivery wired", "capabilities", chatCapabilities, "tools", actions.Tools())
+	}
+
 	apiSrv.CAFingerprint = gw.CA().Fingerprint()
 	apiSrv.GatewayAddr = advertisedGatewayAddr(hosts, lis.Addr().String())
 	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
@@ -710,7 +777,22 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			// What is REGISTERED, not what is declared: a rule naming a
 			// tool no executor backs would be refused at dispatch, and
 			// the household would find out when it did not happen.
+			//
+			// Chat executors are registered for every chat package in the
+			// catalog and gated on the install at dispatch, so the same
+			// gate applies here: a Butler that lists an action this
+			// deployment has not installed will promise the household
+			// something that cannot happen (ADR-W026 A8).
 			for _, tool := range actions.Tools() {
+				if capName, _, ok := strings.Cut(tool, "."); ok && strings.HasPrefix(capName, "chat-") {
+					on, cerr := apiSrv.CapabilityEnabled(capName)
+					if cerr != nil {
+						return v, cerr
+					}
+					if !on {
+						continue
+					}
+				}
 				tier := "domestic"
 				if actions.Declared != nil {
 					capName, name, _ := strings.Cut(tool, ".")
@@ -739,8 +821,62 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			return replay.Summary(20), nil
 		}
 
+		// The family surface (ADR-W026 A1, G1): the SAME provider, a
+		// different gateway. Its seams are the household timeline and
+		// the domestic action gateway — the two things a household rule
+		// already uses — and deliberately nothing else: there is no
+		// Statefile, no node reader and no plan pipeline in this
+		// wiring, so a family session has no path to one.
+		// Which event types are ABOUT A PERSON, from the `subject:
+		// member` each package declares for what it publishes (ADR-W024
+		// A10). It is what lets a group session hear about the front
+		// door and not about who came home (ADR-W026 A7), and it is read
+		// per call so enabling a package mid-run changes the answer.
+		memberScoped := api.MemberScopedTypes(func() map[string]bool {
+			out := map[string]bool{}
+			if cat == nil {
+				return out
+			}
+			for _, p := range cat.List() {
+				if p.Publishes == nil {
+					continue
+				}
+				for _, ev := range p.Publishes.Events {
+					if ev.Subject == "member" {
+						out[ev.Type] = true
+					}
+				}
+			}
+			return out
+		})
+		household := butler.HouseholdSeams{
+			Events:     api.HouseholdEventSeam(db, memberScoped),
+			Vocabulary: bgw.AutomationVocabulary,
+		}
+		if len(actions.Tools()) > 0 {
+			household.Actions = func(ctx context.Context, c butler.HouseholdActionCall) (string, error) {
+				res, aerr := actions.Dispatch(ctx, domestic.Call{
+					Tool:   c.Tool,
+					Tier:   c.Tier,
+					Params: c.Params,
+					// The rule slot names WHO asked, because on this
+					// surface nothing else did: a family session's action
+					// has no Automation behind it, and an audit line
+					// reading "butler-session" with the member as the
+					// subject is the honest record of what happened.
+					Rule:        "butler-session",
+					Subject:     c.Member,
+					TriggerType: "butler.household_session",
+				})
+				if aerr != nil {
+					return "", aerr
+				}
+				return res.Summary, nil
+			}
+		}
+
 		apiSrv.ButlerHost = &api.ButlerHost{
-			Provider: bp, Gateway: bgw, Mode: mode,
+			Provider: bp, Gateway: bgw, Mode: mode, Household: household,
 			Model: backend.Model, Endpoint: backend.Endpoint,
 		}
 		if bp != nil {
@@ -927,4 +1063,16 @@ func seedRefs(rows []runtimedb.Observed) map[string][]reconcile.ManagedRef {
 		byNode[o.Node] = append(byNode[o.Node], reconcile.ManagedRef{Kind: resource.Kind(o.Kind), Name: o.Name})
 	}
 	return byNode
+}
+
+// chatTransportFor reads the transport out of a chat capability's name.
+// The catalog convention is chat-<transport>-<surface>, which is what
+// lets one deployment run Telegram and Matrix side by side with a rule
+// naming which it means.
+func chatTransportFor(capability string) string {
+	rest := strings.TrimPrefix(capability, "chat-")
+	if i := strings.LastIndex(rest, "-"); i > 0 {
+		return rest[:i]
+	}
+	return rest
 }

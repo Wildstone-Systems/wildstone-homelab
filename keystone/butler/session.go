@@ -50,12 +50,38 @@ type Transcript struct {
 	CappedIterations bool
 }
 
-// Session drives a Provider through the Butler's tool gateway (ADR-W006
-// A5): the agent loop. Its only mutation surface is whatever ToolGateway
-// exposes — currently propose_change, which itself never applies anything
-// (see doc.go). Session holds no apply capability of its own.
+// Toolset is the surface a Session drives (ADR-W026 A1). Two implement
+// it, and which one a Session holds is the whole difference between the
+// operator's Butler and the household's:
+//
+//   - *ToolGateway — the operator surface: Statefile reads, diagnosis,
+//     and propose_change.
+//   - *HouseholdGateway — the family surface: household timeline reads
+//     and domestic-tier actions, with no Statefile access at all.
+//
+// The interface carries the system prompt as well as the tools, so a
+// session cannot be opened with one surface's tools and the other's
+// prompt — describing capabilities a surface does not have is exactly
+// the invitation this package spends its comments avoiding.
+type Toolset interface {
+	// OfferedSpecs is the tool set advertised to the model, narrowed to
+	// reads when the session is read-only.
+	OfferedSpecs(readOnly bool) []provider.Tool
+	// Execute runs one tool, enforcing the read-only constraint at the
+	// dispatch boundary rather than only in the offered set.
+	Execute(ctx context.Context, name string, input map[string]any, readOnly bool) (ToolOutcome, error)
+	// SystemPrompt is this surface's instruction hierarchy.
+	SystemPrompt() string
+}
+
+// Session drives a Provider through one of the Butler's tool gateways
+// (ADR-W006 A5): the agent loop. Its only mutation surface is whatever
+// the Toolset exposes — propose_change on the operator surface, which
+// itself never applies anything (see doc.go); a domestic-tier action on
+// the family surface, which cannot touch the Statefile. Session holds no
+// apply capability of its own.
 type Session struct {
-	Gateway *ToolGateway
+	Gateway Toolset
 	// System overrides SystemPrompt if non-empty.
 	System string
 	// MaxIterations bounds tool-call round trips. <= 0 uses
@@ -78,14 +104,11 @@ func (s *Session) systemPrompt() string {
 	if s.System != "" {
 		return s.System
 	}
-	return SystemPrompt
+	return s.Gateway.SystemPrompt()
 }
 
 func (s *Session) toolSpecs() []provider.Tool {
-	if s.ReadOnly {
-		return s.Gateway.ReadOnlyToolSpecs()
-	}
-	return s.Gateway.ToolSpecs()
+	return s.Gateway.OfferedSpecs(s.ReadOnly)
 }
 
 // dispatch routes a model-requested tool call through the gateway, applying
@@ -94,10 +117,7 @@ func (s *Session) toolSpecs() []provider.Tool {
 // its offered set — the enforcement the spec set (offered tools) only
 // advertises.
 func (s *Session) dispatch(ctx context.Context, name string, input map[string]any) (ToolOutcome, error) {
-	if s.ReadOnly {
-		return s.Gateway.DispatchReadOnly(ctx, name, input)
-	}
-	return s.Gateway.Dispatch(ctx, name, input)
+	return s.Gateway.Execute(ctx, name, input, s.ReadOnly)
 }
 
 // Run drives p through the agent loop for one userMessage: send the
