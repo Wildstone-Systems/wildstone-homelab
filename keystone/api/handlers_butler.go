@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
@@ -31,6 +32,12 @@ const butlerPrincipal = "butler"
 // A nil host (provider off/unconfigured) leaves the ask endpoint
 // answering 503; session history stays readable regardless.
 type ButlerHost struct {
+	// mu guards the fields a runtime config change replaces (ADR-W017
+	// A9). Handlers read them while requests are in flight, so swapping
+	// a provider is a write to shared state, not a reassignment nobody
+	// is watching.
+	mu sync.RWMutex
+
 	Provider provider.Provider
 	Gateway  *butler.ToolGateway
 	// Mode is the startup probe's verdict (ADR-W006 A4 / ADR-W017 A4):
@@ -51,6 +58,34 @@ type ButlerHost struct {
 	// to without reading the process's command line.
 	Model    string
 	Endpoint string
+}
+
+// Current returns the live backend under the lock, so a handler that is
+// mid-request keeps a coherent view even if the operator changes the
+// model while it runs.
+//
+// A session in flight finishes against the provider it started with.
+// Swapping under it would produce a transcript whose tool calls and
+// final answer came from different models, which is worse than a slow
+// change taking effect on the next question.
+func (h *ButlerHost) Current() (provider.Provider, *butler.ToolGateway, runtimedb.ButlerSessionMode, string, string) {
+	if h == nil {
+		return nil, nil, "", "", ""
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.Provider, h.Gateway, h.Mode, h.Model, h.Endpoint
+}
+
+// Swap replaces the backend in place. A nil provider means "configured
+// off", which is a legitimate choice and not a failure.
+func (h *ButlerHost) Swap(p provider.Provider, mode runtimedb.ButlerSessionMode, model, endpoint string) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.Provider, h.Mode, h.Model, h.Endpoint = p, mode, model, endpoint
 }
 
 // butlerStatus is what GET /api/v1/butler serves: enough for the Console
@@ -74,8 +109,9 @@ type butlerStatus struct {
 // defense-in-depth, since an openai-compatible base URL is operator-
 // supplied text that could carry a key in a query string.
 func (s *Server) getButlerStatus(_ *http.Request, _ principal.Identity) (any, int, error) {
+	prov, gw, mode, model, endpoint := s.ButlerHost.Current()
 	host := s.ButlerHost
-	if host == nil || host.Provider == nil || host.Gateway == nil {
+	if host == nil || prov == nil || gw == nil {
 		return butlerStatus{
 			Configured: false,
 			Reason:     "no Butler provider configured; start keystone with -butler-provider (off|anthropic|openai|ollama), -butler-model and -butler-endpoint",
@@ -84,9 +120,9 @@ func (s *Server) getButlerStatus(_ *http.Request, _ principal.Identity) (any, in
 	// The offered set, not the registered one: a QA-only session is
 	// handed the read tools only, and the surface should say so rather
 	// than advertise a propose_change the session would refuse.
-	specs := host.Gateway.ToolSpecs()
-	if host.Mode == runtimedb.ButlerModeQAOnly {
-		specs = host.Gateway.ReadOnlyToolSpecs()
+	specs := gw.ToolSpecs()
+	if mode == runtimedb.ButlerModeQAOnly {
+		specs = gw.ReadOnlyToolSpecs()
 	}
 	tools := make([]string, 0, len(specs))
 	for _, t := range specs {
@@ -94,10 +130,10 @@ func (s *Server) getButlerStatus(_ *http.Request, _ principal.Identity) (any, in
 	}
 	return butlerStatus{
 		Configured: true,
-		Provider:   host.Provider.Name(),
-		Model:      host.Model,
-		Endpoint:   redact.String(host.Endpoint),
-		Mode:       string(host.Mode),
+		Provider:   prov.Name(),
+		Model:      model,
+		Endpoint:   redact.String(endpoint),
+		Mode:       string(mode),
 		Tools:      tools,
 	}, http.StatusOK, nil
 }
@@ -145,15 +181,14 @@ type storedTranscript struct {
 // entered through the same submitProposal pipeline as the HTTP propose
 // endpoint, as principal "butler" acting-for the caller.
 func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, error) {
-	if s.ButlerHost == nil || s.ButlerHost.Provider == nil || s.ButlerHost.Gateway == nil {
-		return nil, http.StatusServiceUnavailable,
-			fmt.Errorf("butler provider not configured (start keystone with -butler-provider)")
-	}
 	message, st, err := readAskMessage(r)
 	if err != nil {
 		return nil, st, err
 	}
-
+	// The unconfigured check lives in the session runner, with the one
+	// snapshot it takes — checking here as well would read the backend
+	// twice for one request, which is the thing ADR-W017 A9's snapshot
+	// exists to prevent.
 	return s.runAdminButlerSession(r.Context(), message, id.Name)
 }
 
@@ -163,13 +198,24 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 // asked over Telegram and one asked in the Console take the same path
 // through the same gateway, produce the same audit record, and reach
 // the same ceiling.
+//
+// It takes its OWN snapshot of the backend (ADR-W017 A9) rather than
+// receiving one from its caller: every read of the provider, gateway and
+// mode for one session comes from that single snapshot. Mixing a
+// captured mode with a live provider is how a newly selected model that
+// FAILED its probe would run with the previous model's `full` verdict
+// and be handed proposal tools.
 func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor string) (any, int, error) {
-	host := s.ButlerHost
-	session := &butler.Session{
-		Gateway:  host.Gateway,
-		ReadOnly: host.Mode == runtimedb.ButlerModeQAOnly,
+	askProv, askGw, askMode, _, _ := s.ButlerHost.Current()
+	if askProv == nil || askGw == nil {
+		return nil, http.StatusServiceUnavailable,
+			fmt.Errorf("butler provider not configured (start keystone with -butler-provider)")
 	}
-	tr, err := session.Run(ctx, host.Provider, message)
+	session := &butler.Session{
+		Gateway:  askGw,
+		ReadOnly: askMode == runtimedb.ButlerModeQAOnly,
+	}
+	tr, err := session.Run(ctx, askProv, message)
 	if err != nil {
 		// The provider failed mid-session; nothing durable happened (no
 		// proposals are submitted until the session completes).
@@ -226,7 +272,7 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor s
 		Principal:      butlerPrincipal,
 		ActingFor:      actingFor,
 		Provider:       tr.Audit.Provider,
-		Mode:           host.Mode,
+		Mode:           askMode,
 		Surface:        runtimedb.ButlerSurfaceAdmin,
 		FinalText:      finalText,
 		Capped:         tr.CappedIterations,
@@ -240,7 +286,7 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor s
 
 	return askResponse{
 		SessionID:      sessionID,
-		Mode:           string(host.Mode),
+		Mode:           string(askMode),
 		FinalText:      finalText,
 		Capped:         tr.CappedIterations,
 		PlanIDs:        planIDs,

@@ -186,9 +186,9 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		}
 	}
 
-	if s.ButlerHost == nil || s.ButlerHost.Provider == nil {
-		return nil, http.StatusServiceUnavailable, fmt.Errorf("no Butler provider configured")
-	}
+	// The session runners take their own snapshot of the backend and
+	// answer 503 when none is configured (ADR-W017 A9); reading it here
+	// as well would be a second read of shared state for one request.
 
 	var (
 		out any

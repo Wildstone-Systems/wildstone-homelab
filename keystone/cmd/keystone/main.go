@@ -252,6 +252,61 @@ type butlerBackend struct {
 	Endpoint string
 }
 
+// butlerProviderRef is a provider.Provider that resolves to whatever the
+// Butler is configured with RIGHT NOW.
+//
+// Household escalation (ADR-W024 A6) needs a provider at wiring time,
+// long before an operator may change their mind. Binding it to the
+// process's startup provider meant switching from a hosted model to a
+// local one — or to off — kept sending escalation facts to the old
+// hosted provider: contrary to the saved configuration, and contrary to
+// the reason someone chooses local.
+//
+// Chat on an unconfigured Butler returns an error rather than panicking,
+// and the caller already falls back to the rule's own wording.
+type butlerProviderRef struct{ host *api.ButlerHost }
+
+func (r butlerProviderRef) Name() string {
+	p, _, _, _, _ := r.host.Current()
+	if p == nil {
+		return "unconfigured"
+	}
+	return p.Name()
+}
+
+func (r butlerProviderRef) Chat(ctx context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+	p, _, _, _, _ := r.host.Current()
+	if p == nil {
+		return nil, fmt.Errorf("butler: no provider is configured")
+	}
+	return p.Chat(ctx, req)
+}
+
+// probeButler runs the S4 tool-reliability probe and turns it into a
+// mode plus a sentence an operator can read (ADR-W017 A4/A9).
+//
+// Shared by startup and by a runtime reconfiguration, so a model
+// selected in the Console is held to exactly the check a flagged one is.
+func probeButler(ctx context.Context, p provider.Provider, log *slog.Logger) (runtimedb.ButlerSessionMode, string) {
+	probeCtx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	verdict, err := provider.Probe(probeCtx, p)
+	if err != nil || verdict != provider.Full {
+		detail := verdict.String()
+		if err != nil {
+			// The common case on a local backend is a model that has not
+			// been loaded yet, and "context deadline exceeded" is worth
+			// showing verbatim rather than flattening to "failed" — it
+			// tells the operator to try again once it is warm.
+			detail = err.Error()
+		}
+		log.Warn("butler probe did not pass; sessions run QA-only (read tools, no propose_change)",
+			"provider", p.Name(), "verdict", verdict.String(), "err", err)
+		return runtimedb.ButlerModeQAOnly, detail
+	}
+	return runtimedb.ButlerModeFull, "probe passed: full mode"
+}
+
 // newButlerProvider builds the configured Butler provider, or a nil
 // provider when the Butler is off. API keys come ONLY from the provider's
 // environment variable (ADR-W017 A4) — there is deliberately no key flag.
@@ -613,17 +668,31 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// tool-reliability probe once at startup, and wire the ask endpoint in
 	// the mode the verdict earns. Provider off leaves ButlerHost nil — the
 	// ask endpoint answers 503 with a clear reason.
+	// Stored config wins over the flags (ADR-W017 A9). The flags remain
+	// the bootstrap — a fresh install with -butler-provider still works
+	// and needs no Console — but an operator who has made a choice is
+	// not overruled at the next restart.
+	if stored, ok, serr := db.GetButlerConfig(); serr != nil {
+		log.Error("reading stored butler config; falling back to flags", "err", serr)
+	} else if ok {
+		log.Info("butler config from runtime state", "provider", stored.Provider,
+			"model", stored.Model, "endpoint", stored.Endpoint)
+		butlerCfg = butlerConfig{Provider: stored.Provider, Model: stored.Model, Endpoint: stored.Endpoint}
+	}
+
 	if bp, backend, err := newButlerProvider(butlerCfg); err != nil {
 		return err
-	} else if bp != nil {
-		mode := runtimedb.ButlerModeFull
-		probeCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		verdict, perr := provider.Probe(probeCtx, bp)
-		cancel()
-		if perr != nil || verdict != provider.Full {
-			mode = runtimedb.ButlerModeQAOnly
-			log.Warn("butler probe did not pass; sessions run QA-only (read tools, no propose_change)",
-				"provider", bp.Name(), "verdict", verdict.String(), "err", perr)
+	} else {
+		// Wired even when no provider is configured (ADR-W017 A9). A
+		// fresh install defaults to -butler-provider off, and building
+		// this only for an already-enabled one left the settings screen
+		// answering 503 — so the Console could never turn the Butler ON,
+		// and saving "off" made the state permanent. The one surface for
+		// configuring the Butler must work from the state every
+		// installation starts in.
+		mode := runtimedb.ButlerModeQAOnly
+		if bp != nil {
+			mode, _ = probeButler(context.Background(), bp, log)
 		}
 		bgw := butler.NewToolGateway(state, &butler.AgentReader{Gateway: gw})
 		// The diagnose tool's injected observed seam (ADR-W017 A5): the
@@ -730,8 +799,42 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			Provider: bp, Gateway: bgw, Mode: mode, Household: household,
 			Model: backend.Model, Endpoint: backend.Endpoint,
 		}
-		log.Info("butler enabled", "provider", bp.Name(), "model", backend.Model,
-			"endpoint", backend.Endpoint, "mode", string(mode))
+		if bp != nil {
+			log.Info("butler enabled", "provider", bp.Name(), "model", backend.Model,
+				"endpoint", backend.Endpoint, "mode", string(mode))
+		} else {
+			log.Info("butler not configured; it can be enabled from the Console (ADR-W017 A9)")
+		}
+
+		// Runtime reconfiguration (ADR-W017 A9). Rebuilds the provider
+		// for a new choice, re-runs the probe against THAT provider and
+		// model, and swaps it in — no restart, so changing a model does
+		// not drop agent sessions or propose a drift repair that reports
+		// healthy resources as absent (F75/F76).
+		//
+		// The probe verdict is earned per configuration. A9 exists partly
+		// because a startup probe that timed out against a cold model
+		// pinned the Butler to QAOnly until the next restart, while the
+		// model — once warm — called tools correctly.
+		apiSrv.ApplyButlerConfig = func(ctx context.Context, c runtimedb.ButlerConfig) (runtimedb.ButlerSessionMode, string, error) {
+			np, nbackend, err := newButlerProvider(butlerConfig{
+				Provider: c.Provider, Model: c.Model, Endpoint: c.Endpoint,
+			})
+			if err != nil {
+				return "", "", err
+			}
+			if np == nil {
+				// "off" is a choice, not a failure.
+				apiSrv.ButlerHost.Swap(nil, runtimedb.ButlerModeQAOnly, "", "")
+				log.Info("butler disabled by configuration")
+				return runtimedb.ButlerModeQAOnly, "provider set to off", nil
+			}
+			nmode, detail := probeButler(ctx, np, log)
+			apiSrv.ButlerHost.Swap(np, nmode, nbackend.Model, nbackend.Endpoint)
+			log.Info("butler reconfigured", "provider", np.Name(), "model", nbackend.Model,
+				"endpoint", nbackend.Endpoint, "mode", string(nmode))
+			return nmode, detail, nil
+		}
 
 		// Household escalation (ADR-W024 A6): the same provider, asked a
 		// much smaller question. A Phraser is given no tools at all, and
@@ -743,8 +846,14 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		// reliability, and this call offers no tools. A model too
 		// unreliable to operate the homelab can still write a sentence,
 		// and if it cannot, the rule's own wording is used.
+		// The Phraser follows the CONFIGURED provider, not the one this
+		// process started with. Binding it to `bp` meant that switching
+		// from a hosted provider to a local Ollama — or to off — still
+		// sent household escalation facts to the old hosted provider,
+		// which is contrary to the saved configuration and to the
+		// privacy intent behind choosing local in the first place.
 		phraser := &butler.Phraser{
-			Provider: bp,
+			Provider: butlerProviderRef{host: apiSrv.ButlerHost},
 			Model:    butlerCfg.Model,
 			Record: func(_ context.Context, providerName, prompt, reply string) error {
 				_, rerr := db.InsertButlerSession(runtimedb.ButlerSession{
@@ -771,7 +880,10 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				Rule: req.Rule, Instruction: req.Instruction, Fallback: req.Fallback, Facts: facts,
 			})
 		})
-		log.Info("household escalation enabled", "provider", bp.Name())
+		// Named through the live reference, not the startup provider:
+		// with no provider configured this says so, and after a change
+		// it says what escalation is actually reaching.
+		log.Info("household escalation enabled", "provider", butlerProviderRef{host: apiSrv.ButlerHost}.Name())
 	}
 
 	// Everything the engine needs is wired; start its loop.

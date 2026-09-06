@@ -34,7 +34,21 @@ import (
 // butler and no family one, which is a normal state (nothing household
 // is installed yet), not an error.
 func (h *ButlerHost) householdConfigured() bool {
-	if h == nil || h.Provider == nil {
+	prov, _, _, _, _ := h.Current()
+	if prov == nil {
+		return false
+	}
+	return h.householdWired()
+}
+
+// householdWired reports whether any household seam exists. The seams
+// are set once when cmd/keystone builds the host and are never touched
+// by a runtime provider change (ADR-W017 A9's Swap replaces the backend,
+// not the household wiring), so unlike the backend they need no
+// snapshot — and a model change never costs the family surface its
+// tools.
+func (h *ButlerHost) householdWired() bool {
+	if h == nil {
 		return false
 	}
 	return h.Household.Events != nil || h.Household.Actions != nil
@@ -55,25 +69,26 @@ func (h *ButlerHost) householdGateway(member string) *butler.HouseholdGateway {
 // that cannot answer.
 func (s *Server) getHouseholdButlerStatus(_ *http.Request, id principal.Identity) (any, int, error) {
 	host := s.ButlerHost
-	if !host.householdConfigured() {
+	prov, _, mode, model, endpoint := host.Current()
+	if prov == nil || !host.householdWired() {
 		reason := "no Butler provider configured; start keystone with -butler-provider (off|anthropic|openai|ollama)"
-		if host != nil && host.Provider != nil {
+		if prov != nil {
 			reason = "no household surface wired: this deployment has no household timeline or actions configured"
 		}
 		return butlerStatus{Configured: false, Reason: reason}, http.StatusOK, nil
 	}
 	gw := host.householdGateway(id.Name)
-	specs := gw.OfferedSpecs(host.Mode == runtimedb.ButlerModeQAOnly)
+	specs := gw.OfferedSpecs(mode == runtimedb.ButlerModeQAOnly)
 	tools := make([]string, 0, len(specs))
 	for _, t := range specs {
 		tools = append(tools, t.Name)
 	}
 	return butlerStatus{
 		Configured: true,
-		Provider:   host.Provider.Name(),
-		Model:      host.Model,
-		Endpoint:   redact.String(host.Endpoint),
-		Mode:       string(host.Mode),
+		Provider:   prov.Name(),
+		Model:      model,
+		Endpoint:   redact.String(endpoint),
+		Mode:       string(mode),
 		Tools:      tools,
 	}, http.StatusOK, nil
 }
@@ -119,14 +134,22 @@ func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any
 // and the gateway is built from the member.
 func (s *Server) runFamilyButlerSession(ctx context.Context, message, member, systemExtra string) (any, int, error) {
 	host := s.ButlerHost
+	// One snapshot for the whole session, as the operator surface takes
+	// (ADR-W017 A9): a model swapped in mid-session would produce a
+	// transcript whose tool results and final answer came from different
+	// backends.
+	prov, _, mode, _, _ := host.Current()
+	if prov == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("no Butler provider configured")
+	}
 	session := &butler.Session{
 		Gateway:  host.householdGateway(member),
-		ReadOnly: host.Mode == runtimedb.ButlerModeQAOnly,
+		ReadOnly: mode == runtimedb.ButlerModeQAOnly,
 	}
 	if systemExtra != "" {
 		session.System = butler.HouseholdSystemPrompt + "\n\n" + systemExtra
 	}
-	tr, err := session.Run(ctx, host.Provider, message)
+	tr, err := session.Run(ctx, prov, message)
 	if err != nil {
 		return nil, http.StatusBadGateway, fmt.Errorf("household butler session: %w", err)
 	}
@@ -155,7 +178,7 @@ func (s *Server) runFamilyButlerSession(ctx context.Context, message, member, sy
 		Principal:      butlerPrincipal,
 		ActingFor:      member,
 		Provider:       tr.Audit.Provider,
-		Mode:           host.Mode,
+		Mode:           mode,
 		Surface:        runtimedb.ButlerSurfaceFamily,
 		FinalText:      finalText,
 		Capped:         tr.CappedIterations,
@@ -169,7 +192,7 @@ func (s *Server) runFamilyButlerSession(ctx context.Context, message, member, sy
 
 	return askResponse{
 		SessionID: sessionID,
-		Mode:      string(host.Mode),
+		Mode:      string(mode),
 		FinalText: finalText,
 		Capped:    tr.CappedIterations,
 	}, http.StatusOK, nil
