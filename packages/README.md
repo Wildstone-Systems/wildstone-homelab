@@ -10,6 +10,30 @@ for the binding format spec.
 Launch packages are transcriptions of proven configs from the reference
 deployment — see `testing/fixtures/`.
 
+## Adding a service: start here
+
+```sh
+wild pkg new                          # the three shapes, and which one you want
+wild pkg new my-app -shape config     # writes it, then lints it in front of you
+```
+
+Pick the shape by what you already run:
+
+| shape | when | what you get |
+| --- | --- | --- |
+| `service` | Wildstone installs and runs the app | Volume, Container, Route, OidcClient — SSO already wired |
+| `sidecar` | the app runs elsewhere and *cannot* call a webhook | an adapter container, handed its intake credential |
+| `config` | the app runs elsewhere and *can* call a webhook | one managed config file, no container, no code |
+
+**Try `config` first.** Most services can already POST to a URL under
+some name — "webhook", "notification target", "REST command" — and that
+path needs no adapter and no work on the service's side at all.
+`home-automation/` is the worked example.
+
+Every shape lints clean as written, with TODO markers everywhere a
+decision is yours. `wild pkg new` counts them and prints the exact
+commands to carry on with.
+
 ## Traits: how packages find each other (ADR-W025)
 
 A package does not name another package. It names a **trait** — a

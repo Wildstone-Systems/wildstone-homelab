@@ -55,6 +55,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
+  wild pkg new <name> -shape <shape>         (scaffold a package that lints)
   wild pkg list [-api URL]                   (what Keystone can install)
   wild pkg lint <pkg-dir> [-set k=v ...] [-catalog dir ...]
   wild pkg keygen <key-path>
@@ -102,6 +103,8 @@ func runPkg(args []string) int {
 		return runRefreshDigests(args[1:])
 	case "traits":
 		return runTraits(args[1:])
+	case "new":
+		return runNew(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "wild pkg: unknown subcommand %q\n", args[0])
 		usage()

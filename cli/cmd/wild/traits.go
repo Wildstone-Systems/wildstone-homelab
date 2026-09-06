@@ -85,21 +85,9 @@ func runTraits(args []string) int {
 // written as prose in keystone/trait, and prose printed as one long line
 // is prose nobody reads.
 func indent(text, prefix string) string {
-	const width = 68
-	var lines []string
-	line := prefix
-	for _, word := range strings.Fields(text) {
-		if len(line)+1+len(word) > width && line != prefix {
-			lines = append(lines, line)
-			line = prefix
-		}
-		if line != prefix {
-			line += " "
-		}
-		line += word
-	}
-	if line != prefix {
-		lines = append(lines, line)
+	lines := wrap(text, 68)
+	for i, l := range lines {
+		lines[i] = prefix + l
 	}
 	return strings.Join(lines, "\n")
 }

@@ -204,31 +204,106 @@ has to rediscover.
 Never a real value. A param carrying secret material is refused by lint
 outright (ADR-W021 A2), and an example is written into the repository.
 
+### A5. `wild pkg new` scaffolds a package that lints green, and proves it on the spot
+
+Everything above makes a package CHECKABLE. None of it helps with the
+blank file, and an author's first act was to copy an existing package and
+delete the parts they did not recognise — which is how a scaffold gets
+built anyway, once per person and badly. The forgotten digest pin is a
+validation error they will see; the `auth: none` inherited from the wrong
+donor package is a policy violation they will see later; the `container/`
+prefix in env is six shipped occurrences of a mistake that could never
+have started.
+
+So `wild pkg new <name> -shape <shape>` writes a package with the idioms
+already in place, then **lints what it just wrote and prints the result**,
+against the catalog it found alongside. A scaffold that merely claims to
+be correct is a claim the author cannot check in their first minute; one
+checked in front of them is a starting point they can trust, and the
+command they watched it run is the one they will run again.
+
+Three shapes, ordered by how much work falls on the service's side:
+
+- **`service`** — Wildstone runs the app: Volume, Container, Route,
+  OidcClient, already wired to whichever package provides `identity:oidc`.
+- **`sidecar`** — the app runs elsewhere and cannot call a webhook, so an
+  adapter container watches it and publishes on its behalf.
+- **`config`** — the app runs elsewhere and can already call a webhook, so
+  Wildstone renders one managed config file and nothing else. This is the
+  cheapest integration there is and the one the menu argues for: no
+  container, no adapter, no code on either side.
+
+Binding consequences:
+
+- **Every shape lints green as written**, pinned by
+  `TestScaffoldLintsGreen`. This is not a nicety. A scaffold whose first
+  lint fails teaches the reader that failing output is normal, which is
+  the opposite of what a contract test is for.
+- **Every shape leaves TODOs**, and `wild pkg new` counts them. Correct
+  and unfinished: a file that lints green while saying nothing about what
+  is still the author's decision is one they will ship as-is, placeholder
+  image digest and all.
+- **The image placeholder is all-zeroes.** A digest pin is mandatory and
+  there is no real digest to know at scaffold time, so the choice is
+  between a scaffold that lints and a scaffold with an honest blank.
+  All-zeroes is both: valid syntax, so the first lint is about the
+  author's decisions rather than the placeholder — and no registry will
+  ever serve it, so it cannot reach a deployment pretending to be pinned.
+- **The shape is not a manifest field.** It is a choice about what to
+  write, made once; the file it produces is an ordinary package with
+  nothing recording which scaffold it came from. Declaring the posture in
+  metadata stays with Part B item 1.
+- **It refuses to overwrite.** A scaffold is for a package that does not
+  exist yet, and the alternative is a command that can silently discard an
+  afternoon's work because someone re-ran it with the wrong name.
+
+**Rejected: scaffolding from a copy of a shipped package.** The shipped
+packages are correct for their own service and carry decisions that do
+not transfer — a classification, an auth mode, a subdomain convention —
+and a copy inherits all of them silently. A scaffold that carries TODOs
+where a decision belongs is the difference.
+
 ---
 
 # Part B — The rest of the layer (build order, not decided here)
 
 A1–A4 are the half that had to come first: while `.Resolved` was
 hardcoded, every other improvement would have been decoration on a seam
-that still required a Go patch to cross. What follows is the intended
-order; each gets its own decision when it is scheduled.
+that still required a Go patch to cross. A5 (the scaffold) landed next,
+ahead of the manifest metadata it was originally sequenced behind — the
+shape turned out not to need a manifest field to be useful, and the
+scaffold is what puts A1–A4 in front of an author on their first minute.
+
+What remains, in intended order; each gets its own decision when it is
+scheduled.
 
 1. **Human metadata on the manifest** — `displayName`, `description`,
    `docs`, `maintainer`, and an explicit `integration.shape` (does this
    package RUN the service, adapt one with a sidecar, or only configure
    one that already exists). The Console can render nothing but a slug
    today, and the three shim shapes are declared in `publishes` while the
-   package's overall posture is not declared anywhere.
-2. **`wild pkg new <name> -shape <...>`** — scaffold a package that lints
-   green on the first run. The shape choice is the one from (1), and the
-   `config` shape's scaffold is the important one: it is the path with no
-   work on the service's side at all.
-3. **`packages/AUTHORING.md`** — the five-step page. The knowledge is
-   currently spread across ADR-W005, ADR-W024, `packages/README.md`, and
-   comments in `keystone/capability`.
-4. **Catalog-wide collision checks** — two packages claiming the same
+   package's overall posture is not declared anywhere. A5's scaffolds are
+   where the field would be filled in.
+2. **`packages/AUTHORING.md`** — the page a first-time author reads before
+   running `wild pkg new`. The knowledge is currently spread across
+   ADR-W005, ADR-W024, `packages/README.md`, the scaffold's own comments,
+   and `keystone/capability`.
+3. **Catalog-wide collision checks** — two packages claiming the same
    capability and profile, or the same Route label, are catalog defects
    that only a catalog-wide view can see. A3 is where they land.
+4. **A URL in container env can be refused as secret-shaped.**
+   `redact.SecretShaped` scans a run of `[A-Za-z0-9+/_-]{24,}`, and `/`
+   is in that class — so a path long enough and carrying a digit reads as
+   token material:
+   `https://wildstone.tailnet.ts.net/api/v1/household/events` is refused,
+   while the same host with no `/api/v1/` is not. No shipped package hits
+   it (their env URLs carry no path), and the sidecar scaffold avoids it
+   by leaving `intake_url` without an `example` — but an author who fills
+   in the real intake URL is refused at plan time by a message that names
+   nothing they can act on. The narrow fix is to evaluate a well-formed
+   http(s) URL's segments separately rather than as one run, so a token
+   in any single segment is still caught. It is a change to a security
+   rule and belongs in its own review, not bundled with a scaffold.
 
 Nothing here changes the trust boundary. A package is still data, still
 never executed by the toolchain, and every install is still a plan a human
