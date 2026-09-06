@@ -155,3 +155,24 @@ func TestHomepageChromeIsAPrereqAndInTheDigest(t *testing.T) {
 		}
 	}
 }
+
+// F90: Homepage seeds a widgets.yaml containing a search bar when it
+// finds none. Writing our own replaced that default, and the search bar
+// vanished from a dashboard that had always had one — nobody decided
+// that; it was lost as a side effect of managing the file.
+//
+// The same shape as the sample bookmarks this package already writes an
+// empty file to suppress: taking over a file means taking over
+// everything the default gave you.
+func TestWidgetsKeepTheSearchBar(t *testing.T) {
+	out := string(renderHomepageWidgets())
+	if !strings.Contains(out, "- search:") {
+		t.Errorf("widgets.yaml has no search widget, so managing the file removes the search bar "+
+			"Homepage would otherwise have seeded:\n%s", out)
+	}
+	// First, because it is the top-left of the header and that is where
+	// it was.
+	if i, j := strings.Index(out, "- search:"), strings.Index(out, "- greeting:"); i < 0 || j < 0 || i > j {
+		t.Errorf("search should lead the widget list, as Homepage's own default has it:\n%s", out)
+	}
+}

@@ -94,3 +94,65 @@ flaky test.
   A4 provider config + degraded modes in cmd/keystone.
 - **B2** — A5 diagnose tool + fixture library + morning report.
 - **B3** — A6 red-team test additions.
+
+# Part D — Amendment (2026-09-06, binding)
+
+### A9. Provider config is runtime state, not a startup flag
+
+A4 made the provider, model and endpoint startup flags. That was right
+while the Butler was a thing you turned on once, and wrong the moment
+anybody wanted to change their mind.
+
+What it costs today, measured on the alpha VM: pointing the Butler at a
+household's own Ollama meant editing `/etc/wildstone/keystone.env` and
+restarting the control plane. Restarting Keystone to change a model also
+restarts nothing else — but it does drop every agent session, re-run the
+observe cycle, and (F75/F76) propose a drift repair that reports
+healthy resources as absent. A model change should not put the Console
+into a state where the household looks broken.
+
+Worse, the model name had to be known in advance. Nothing could list
+what an endpoint offered, so the name was typed from memory or read off
+a terminal on another machine — and a typo produced a Butler that
+configured cleanly and failed on first use.
+
+So provider, model and endpoint become **runtime state**, editable
+through the API and the Console, persisted in the runtime DB, and
+applied without restarting Keystone.
+
+**The flags remain, and remain the bootstrap.** A fresh install with
+`-butler-provider ollama` still works and still needs no Console. The
+flags are the DEFAULT; stored config, once set, wins. An operator who
+has never opened the Console is unaffected, and one who has is not
+overruled at the next restart.
+
+**API keys stay in the environment, unchanged.** A4's rule is not
+relaxed: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are read from the
+process environment and are never accepted over the API, never stored in
+the runtime DB, and never returned by a status endpoint. What becomes
+editable is which provider to use and which model to ask — never the
+credential. A provider selected without its key configured reports
+unconfigured with that reason, exactly as an unset flag does now.
+
+**The probe re-runs on change, and its verdict travels with the
+config.** A4's degraded modes are unchanged, but they stop being a
+property of how the process started. Selecting a model runs the S4
+tool-reliability probe against THAT model and records the verdict, so
+QAOnly means "this model did not pass" rather than "something did not
+pass, once, at boot".
+
+That distinction is not academic. On the alpha VM the startup probe
+timed out against a cold Ollama model and pinned the Butler to QAOnly
+until the next restart — while the model, once warm, called tools
+correctly. A verdict earned at the worst possible moment should not
+outlive the moment.
+
+**Rejected: a config file.** It would need a watcher, a parse-failure
+story, and a second place for an operator to look. The runtime DB
+already holds sessions and plans, is backed up with them, and is what
+the API already reads.
+
+**Rejected: leaving the flags authoritative and having the Console print
+the line to paste.** It solves the discovery half — which model exists —
+and leaves the operator editing a systemd environment file to act on the
+answer. The Console would be showing someone what they cannot do.

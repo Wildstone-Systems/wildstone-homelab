@@ -49,7 +49,19 @@ export function Services() {
                 {p.profile ? ` (${p.profile})` : ""}
               </td>
               <td>{p.version}</td>
-              <td>{p.enabled ? <Badge value="enabled" /> : "—"}</td>
+              <td>
+                {p.enabled ? <Badge value="enabled" /> : "—"}
+                {/* An upgrade changes the catalog and leaves installed
+                    capabilities alone, so without this an operator sees
+                    no change and cannot tell "already current" from
+                    "needs re-installing" from "the upgrade failed"
+                    (F91). */}
+                {p.stale && (
+                  <div className="bad">
+                    running {p.installedVersion}, catalog has {p.version} — reconfigure to update
+                  </div>
+                )}
+              </td>
 
               {/* Where it is served, and whether it answers. This is the
                   answer to "which port is this on", which previously

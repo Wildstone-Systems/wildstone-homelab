@@ -5,6 +5,8 @@ import { Badge, ErrorLine, useLoad, when } from "../lib";
 // Butler (ADR-W017 A2): one screen for the operator's butler. Asking is a
 // read — the only thing a session can write is a plan in state `proposed`,
 // which a human approves on the Plans screen. This surface never approves.
+import { ButlerSettings } from "./ButlerSettings";
+
 export function Butler() {
   const status = useLoad<ButlerStatus>(() => api.butlerStatus(), []);
   const sessions = useLoad<ButlerSession[]>(() => api.butlerSessions(), []);
@@ -13,6 +15,7 @@ export function Butler() {
   const [askError, setAskError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<ButlerSession | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
 
   const configured = status.data?.configured === true;
 
@@ -34,7 +37,25 @@ export function Butler() {
 
   return (
     <>
-      <h2>Butler</h2>
+      <h2>
+        Butler
+        <button className="action" style={{ marginLeft: "1em" }} onClick={() => setShowSettings((v) => !v)}>
+          {showSettings ? "Hide settings" : "Settings"}
+        </button>
+      </h2>
+      {/* Behind a toggle on the same screen: asking a question should not
+          mean scrolling past a configuration form, and changing the model
+          should not mean finding another tab. */}
+      {showSettings && (
+        <div className="card">
+          <ButlerSettings
+            onSaved={() => {
+              status.reload();
+              sessions.reload();
+            }}
+          />
+        </div>
+      )}
       <div className="sub">
         Ask in plain language. The Butler reads state and can propose changes — every proposal
         lands on Plans as <code>proposed</code> and waits for your approval.

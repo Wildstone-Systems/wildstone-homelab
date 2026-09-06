@@ -147,6 +147,16 @@ type resourceRef struct {
 // about a capability: where it is, whether it answers, what it created,
 // and what stands in the way. All of it was derivable and none shown.
 type capabilityDetail struct {
+	// InstalledVersion is the package version this capability was
+	// expanded from, when a plan recorded it (ADR-W021 A2). Empty for
+	// anything installed before origins existed.
+	InstalledVersion string `json:"installedVersion,omitempty"`
+	// Stale means the catalog now holds a different version than the one
+	// running. An operator who upgrades otherwise sees no change and
+	// cannot tell "already current" from "needs re-installing" from "the
+	// upgrade failed" — and reasonably concludes the last (F91).
+	Stale bool `json:"stale,omitempty"`
+
 	Addresses []serviceAddress `json:"addresses,omitempty"`
 	Resources []resourceRef    `json:"resources,omitempty"`
 	// Blockers are reasons this will not give a WORKING service.
@@ -219,6 +229,32 @@ func (s *Server) describeCapability(pkg *pkgspec.Package, current []resource.Res
 	return d
 }
 
+// installedVersions maps capability name to the package version its most
+// recent install was expanded from.
+//
+// Read from plan origins rather than from the statefile, because a
+// resource records its owning CAPABILITY and never the package version
+// that produced it — so the plan is the only place the answer exists.
+func (s *Server) installedVersions() map[string]string {
+	out := map[string]string{}
+	recs, err := s.DB.ListPlans(200)
+	if err != nil {
+		return out
+	}
+	// Oldest first, so the newest install for a capability wins.
+	for i := len(recs) - 1; i >= 0; i-- {
+		var stored plan.StoredProposal
+		if json.Unmarshal([]byte(recs[i].PlanJSON), &stored) != nil || stored.Origin == nil {
+			continue
+		}
+		if recs[i].State != runtimedb.PlanApplied {
+			continue
+		}
+		out[stored.Origin.Package] = stored.Origin.Version
+	}
+	return out
+}
+
 // capabilityBlockers are reasons this will not work HERE, as opposed to
 // values the install form can collect.
 func capabilityBlockers(pkg *pkgspec.Package, posture ingressorigin.Posture) []string {
@@ -250,6 +286,7 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 		return nil, http.StatusInternalServerError, err
 	}
 	facts := s.gatherFacts()
+	versions := s.installedVersions()
 	current, _ := s.State.Load()
 	health := map[string]runtimedb.Observed{}
 	if obs, err := s.DB.ListObserved(); err == nil {
@@ -265,7 +302,7 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 			Params: resolveParams(p.Params, facts), Provides: p.Provides, Requires: p.Requires,
 			Publishes:        p.Publishes,
 			Enabled:          enabled[p.Metadata.Capability],
-			capabilityDetail: s.describeCapability(p, current, health),
+			capabilityDetail: s.withVersion(p, s.describeCapability(p, current, health), versions),
 		})
 	}
 	return out, http.StatusOK, nil
@@ -375,4 +412,16 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 			Params:  req.Params,
 		},
 	})
+}
+
+// withVersion marks a capability whose running version is not the one
+// the catalog now holds.
+func (s *Server) withVersion(pkg *pkgspec.Package, d capabilityDetail, versions map[string]string) capabilityDetail {
+	v, known := versions[pkg.Metadata.Name]
+	if !known {
+		return d
+	}
+	d.InstalledVersion = v
+	d.Stale = v != pkg.Metadata.Version
+	return d
 }

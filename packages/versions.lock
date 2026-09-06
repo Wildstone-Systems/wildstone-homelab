@@ -1,0 +1,22 @@
+# What each shipped package's version currently contains (F91).
+#
+# An installed capability records the package version it was expanded
+# from, so a version that does not move when content does makes a stale
+# install indistinguishable from a current one.
+#
+# Regenerate:
+#   UPDATE_PACKAGE_LOCK=1 go test ./pkgtool/ -run PackageContentMatchesItsVersion
+#
+# name  version  sha256(package.yaml)[:16]
+dashboard 1.0.0 9b1a7906c5c14f24
+documents-paperless 1.0.0 9c170ef0020cb14f
+home-automation 1.0.0 582247e5446afba2
+identity 1.0.0 ceca782b8abeef0a
+ingress 1.0.0 af5b7eb1f34992b7
+ingress-tailnet 1.0.0 fbfd59d9ef2dca63
+ingress-tailnet-public 1.0.0 8761c34ce190cc5a
+ingress-tailnet-ts 1.0.0 80c9cc88a0e9090f
+media-jellyfin 1.0.0 3630dea36fc35fec
+monitoring 1.0.0 69713ab679cfdbd7
+notifications 1.0.0 199de20d8e53933e
+photos-immich 1.0.0 edbbeeee8da5ab55

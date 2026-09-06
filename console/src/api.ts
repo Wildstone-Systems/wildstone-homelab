@@ -224,6 +224,10 @@ export interface PackageView {
   enabled: boolean;
   // Where an installed capability is served, whether it answers, what it
   // created, and what stands in the way of it working here.
+  // The version this capability is actually running, and whether the
+  // catalog now holds a different one.
+  installedVersion?: string;
+  stale?: boolean;
   addresses?: ServiceAddress[];
   resources?: ResourceRef[];
   blockers?: string[];
@@ -282,8 +286,36 @@ export interface IdentityNotification {
   note: string;
 }
 
+export interface ButlerModel {
+  name: string;
+  sizeBytes?: number;
+  parameters?: string;
+  // Whether this runs on your hardware or is proxied to a hosted
+  // backend — the difference between a question staying in the house
+  // and leaving it.
+  local: boolean;
+}
+
+export interface ButlerConfig {
+  provider: string;
+  model?: string;
+  endpoint?: string;
+  probeMode?: string;
+  probeDetail?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
 export const api = {
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
+  butlerModels: (endpoint?: string) =>
+    call<{ endpoint: string; models: ButlerModel[] }>(
+      "GET",
+      `/api/v1/butler/models${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ""}`,
+    ),
+  butlerConfig: () => call<{ stored: boolean; config: ButlerConfig }>("GET", "/api/v1/butler/config"),
+  setButlerConfig: (c: { provider: string; model: string; endpoint: string }) =>
+    call<{ stored: boolean; config: ButlerConfig }>("PUT", "/api/v1/butler/config", c),
   identityCode: (node: string) =>
     call<IdentityNotification>("GET", `/api/v1/nodes/${encodeURIComponent(node)}/identity/code`),
   previewCapability: (pkg: string, params: Record<string, string>) =>
