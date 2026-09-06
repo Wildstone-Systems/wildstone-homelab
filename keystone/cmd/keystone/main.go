@@ -39,6 +39,16 @@ import (
 var version = "dev" // set via -ldflags at release
 
 func main() {
+	// Subcommands are matched before flag parsing, because they take
+	// their own flags and must work with the service STOPPED.
+	if len(os.Args) > 1 && os.Args[1] == "claim-code" {
+		if err := claimCode(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "keystone claim-code:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	showVersion := flag.Bool("version", false, "print version and exit")
 	listen := flag.String("listen", ":9440", "agent gateway listen address")
 	apiListen := flag.String("api-listen", "127.0.0.1:9441", "public API listen address (loopback/tailnet at MVP)")
@@ -74,6 +84,59 @@ func main() {
 // 2026-08-25 via the OCI registry API (`wild pkg refresh-digests`'s
 // resolver): restic/restic:latest.
 const defaultResticImage = "restic/restic@sha256:9940e6c7421ab3a21ee9fdc4e91596d04c792b600d31b102696c75cbf3ac4481"
+
+// claimCode mints an admin token against a data directory directly,
+// with Keystone stopped (ADR-W020 A2, closing F44).
+//
+// Why this is not an API call: an API call needs a token, and the state
+// this exists to repair is "there is no usable token". Every other
+// recovery path documented for that state ends in destroying the runtime
+// DB — which discards every principal, every plan and the CA, to recover
+// one credential.
+//
+// The authority check is possession of the data directory. That is root
+// on the host, which is the same proof of physical access the join-token
+// pattern already rests on (ADR-W003 A1), so this adds no new trust
+// assumption; it makes an existing one recoverable.
+//
+// The token is written to a file rather than printed, and this is the
+// point of the change rather than a detail. Printing is what put the
+// only copy in the journal, where scrubbing loses it and where a journal
+// surviving a wipe hands back tokens from three different installs with
+// nothing to distinguish them (F66). A file has one value, is
+// root-readable only, and can be deleted once used.
+func claimCode(args []string) error {
+	fs := flag.NewFlagSet("claim-code", flag.ExitOnError)
+	dataDir := fs.String("data-dir", "/var/lib/wildstone/keystone", "Keystone data directory (the service should be stopped)")
+	name := fs.String("name", "admin", "principal to mint for; created as an admin if absent")
+	out := fs.String("out", "", "file to write the token to (default <data-dir>/claim-code)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	dest := *out
+	if dest == "" {
+		dest = filepath.Join(*dataDir, "claim-code")
+	}
+
+	db, err := runtimedb.Open(filepath.Join(*dataDir, "keystone.db"))
+	if err != nil {
+		return fmt.Errorf("opening the runtime DB (is keystone still running?): %w", err)
+	}
+	defer db.Close()
+
+	token, err := (&principal.Store{DB: db}).EnsureAdmin(*name)
+	if err != nil {
+		return err
+	}
+	// 0600 before any content is written: the file must never exist,
+	// even briefly, with a readable mode.
+	if err := os.WriteFile(dest, []byte(token+"\n"), 0o600); err != nil {
+		return fmt.Errorf("writing %s: %w", dest, err)
+	}
+	fmt.Printf("admin token for %q written to %s (mode 0600)\n", *name, dest)
+	fmt.Println("read it once, use it, then delete the file.")
+	return nil
+}
 
 func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir string, butlerCfg butlerConfig, log *slog.Logger) error {
 	lis, err := net.Listen("tcp", listen)

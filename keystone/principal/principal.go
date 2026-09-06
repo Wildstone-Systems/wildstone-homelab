@@ -135,6 +135,39 @@ func (s *Store) Bootstrap() (string, error) {
 	return s.Mint("admin", "", 0)
 }
 
+// EnsureAdmin mints a token for an admin principal, creating that
+// principal if the table is empty (ADR-W020 A2).
+//
+// Bootstrap deliberately returns "" once any principal exists, which is
+// correct for a start-up path: a running control plane must not mint a
+// second admin every time it restarts. It is also what made admin access
+// unrecoverable — the token existed only in the journal, and scrubbing
+// the journal a beat early left destroying the runtime DB as the only
+// way back (F44). That blocked automated setup three times during
+// v0.1.6-alpha testing and again during v0.1.9-alpha testing, where a
+// journal surviving a wipe returned tokens from three different installs
+// and the first one silently failed.
+//
+// This is the offline escape hatch. It is deliberately NOT reachable
+// from the API: the caller must be able to open the data directory,
+// which means root on the host, which is the same proof of physical
+// access join tokens already rest on (ADR-W003). Nothing new is trusted;
+// an existing assumption is simply made recoverable.
+func (s *Store) EnsureAdmin(name string) (string, error) {
+	if name == "" {
+		name = "admin"
+	}
+	if _, err := s.DB.GetPrincipal(name); err != nil {
+		if !errors.Is(err, runtimedb.ErrNotFound) {
+			return "", err
+		}
+		if err := s.Create(name, runtimedb.RoleAdmin, ""); err != nil {
+			return "", err
+		}
+	}
+	return s.Mint(name, "", 0)
+}
+
 func hashSecret(secret string) string {
 	sum := sha256.Sum256([]byte(secret))
 	return hex.EncodeToString(sum[:])
