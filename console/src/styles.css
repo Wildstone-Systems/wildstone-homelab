@@ -50,6 +50,8 @@ button.action.danger { color: var(--danger); border-color: var(--danger); }
 button.action:disabled { opacity: 0.5; cursor: default; }
 .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
 input[type="text"], input[type="password"] { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font-size: 13px; min-width: 220px; }
+textarea { width: 100%; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font-size: 13px; font-family: inherit; resize: vertical; }
+textarea:disabled { background: var(--bg); color: var(--muted); }
 .error { color: var(--danger); font-size: 13px; margin: 8px 0; }
 .muted { color: var(--muted); font-size: 12px; }
 

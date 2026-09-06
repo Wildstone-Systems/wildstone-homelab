@@ -310,6 +310,23 @@ the steps you redo by hand.
   endpoint answering 503; everything else, including the morning
   report, works regardless.
 
+  A local Ollama needs no key at all, which makes it the shortest path
+  to a working Butler:
+
+  ```
+  keystone \
+    -butler-provider ollama \
+    -butler-endpoint http://localhost:11434 \
+    -butler-model llama3.1
+  ```
+
+  Whatever you choose, the Console's **Butler** screen shows what the
+  flags resolved to — provider, model, endpoint, probe verdict, and the
+  tools that session is offered — and when nothing is configured it says
+  so and prints the flags above rather than just failing. Ask there; a
+  session's proposals appear on **Plans** as `proposed`, and approving
+  them is still a human verb.
+
 ## 5. First workload
 
 Everything changes through a plan: propose (via a package, the Console,

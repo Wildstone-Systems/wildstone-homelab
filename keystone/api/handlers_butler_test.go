@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -220,5 +221,76 @@ func TestButlerAskHostileMessageStopsAtProposed(t *testing.T) {
 	}
 	if refs, err := h.s.State.List(); err != nil || len(refs) != 0 {
 		t.Fatalf("statefile touched (err=%v): %+v", err, refs)
+	}
+}
+
+// The status endpoint is what the Console's Butler surface renders from.
+// Unconfigured is a normal state, not an error: it answers 200 and says
+// what to do about it, so the surface can teach instead of just failing.
+func TestButlerStatusUnconfigured(t *testing.T) {
+	h := newHarness(t)
+	var st butlerStatus
+	resp := h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler", nil, &st)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if st.Configured || st.Provider != "" || len(st.Tools) != 0 {
+		t.Fatalf("status = %+v, want unconfigured and empty", st)
+	}
+	if !strings.Contains(st.Reason, "-butler-provider") {
+		t.Fatalf("reason = %q, want the flag that fixes it", st.Reason)
+	}
+}
+
+func TestButlerStatusReportsResolvedBackend(t *testing.T) {
+	h := newHarness(t)
+	h.wireButler(nil, runtimedb.ButlerModeFull)
+	h.s.ButlerHost.Model = "llama3.1"
+	h.s.ButlerHost.Endpoint = "http://localhost:11434"
+
+	var st butlerStatus
+	if resp := h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler", nil, &st); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if !st.Configured || st.Mode != "full" || st.Model != "llama3.1" || st.Endpoint != "http://localhost:11434" {
+		t.Fatalf("status = %+v", st)
+	}
+	if !slices.Contains(st.Tools, "propose_change") {
+		t.Fatalf("full mode should offer propose_change: %v", st.Tools)
+	}
+}
+
+// The tool list is the OFFERED set, so it tells the truth about a QA-only
+// session rather than advertising a tool that session would refuse.
+func TestButlerStatusQAOnlyOffersReadToolsOnly(t *testing.T) {
+	h := newHarness(t)
+	h.wireButler(nil, runtimedb.ButlerModeQAOnly)
+
+	var st butlerStatus
+	if resp := h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler", nil, &st); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if st.Mode != "qa-only" {
+		t.Fatalf("mode = %q, want qa-only", st.Mode)
+	}
+	if len(st.Tools) == 0 || slices.Contains(st.Tools, "propose_change") {
+		t.Fatalf("qa-only tools = %v, want read tools without propose_change", st.Tools)
+	}
+}
+
+// An operator-supplied base URL is text this deployment did not write. If
+// one carries a key in a query string, the status endpoint must not hand
+// it back — the same redaction every other response body passes through.
+func TestButlerStatusRedactsEndpoint(t *testing.T) {
+	h := newHarness(t)
+	h.wireButler(nil, runtimedb.ButlerModeFull)
+	h.s.ButlerHost.Endpoint = "https://gw.example.com/v1?api_key=wst_" + strings.Repeat("a", 40)
+
+	var st butlerStatus
+	if resp := h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler", nil, &st); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if strings.Contains(st.Endpoint, "wst_"+strings.Repeat("a", 40)) {
+		t.Fatalf("endpoint leaked a credential: %q", st.Endpoint)
 	}
 }

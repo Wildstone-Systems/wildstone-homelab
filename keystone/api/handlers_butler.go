@@ -36,6 +36,62 @@ type ButlerHost struct {
 	// ButlerModeQAOnly runs sessions with the read-only tool set and
 	// dispatch-level refusal of propose_change.
 	Mode runtimedb.ButlerSessionMode
+	// Model and Endpoint are the RESOLVED backend the provider talks to —
+	// the flag value when one was given, otherwise the client's own
+	// default. They are display facts for the status endpoint so an
+	// operator can see what "-butler-provider ollama" actually resolved
+	// to without reading the process's command line.
+	Model    string
+	Endpoint string
+}
+
+// butlerStatus is what GET /api/v1/butler serves: enough for the Console
+// to render the Butler surface honestly whether or not a provider is
+// configured. Reason is filled ONLY when configured is false, and says
+// what to do about it — an unconfigured Butler is the normal state of a
+// fresh install, not an error.
+type butlerStatus struct {
+	Configured bool     `json:"configured"`
+	Provider   string   `json:"provider,omitempty"`
+	Model      string   `json:"model,omitempty"`
+	Endpoint   string   `json:"endpoint,omitempty"`
+	Mode       string   `json:"mode,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
+	Tools      []string `json:"tools,omitempty"`
+}
+
+// getButlerStatus reports whether a Butler is wired and what it is wired
+// to. It carries the read verb like the rest of the Butler routes, and
+// returns no credential: the endpoint is passed through redact as
+// defense-in-depth, since an openai-compatible base URL is operator-
+// supplied text that could carry a key in a query string.
+func (s *Server) getButlerStatus(_ *http.Request, _ principal.Identity) (any, int, error) {
+	host := s.ButlerHost
+	if host == nil || host.Provider == nil || host.Gateway == nil {
+		return butlerStatus{
+			Configured: false,
+			Reason:     "no Butler provider configured; start keystone with -butler-provider (off|anthropic|openai|ollama), -butler-model and -butler-endpoint",
+		}, http.StatusOK, nil
+	}
+	// The offered set, not the registered one: a QA-only session is
+	// handed the read tools only, and the surface should say so rather
+	// than advertise a propose_change the session would refuse.
+	specs := host.Gateway.ToolSpecs()
+	if host.Mode == runtimedb.ButlerModeQAOnly {
+		specs = host.Gateway.ReadOnlyToolSpecs()
+	}
+	tools := make([]string, 0, len(specs))
+	for _, t := range specs {
+		tools = append(tools, t.Name)
+	}
+	return butlerStatus{
+		Configured: true,
+		Provider:   host.Provider.Name(),
+		Model:      host.Model,
+		Endpoint:   redact.String(host.Endpoint),
+		Mode:       string(host.Mode),
+		Tools:      tools,
+	}, http.StatusOK, nil
 }
 
 type askRequest struct {

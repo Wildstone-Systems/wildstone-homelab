@@ -232,6 +232,43 @@ export interface EnablePreview {
   authPolicyWarning?: string;
 }
 
+// --- Butler (ADR-W017). The status endpoint says whether a provider is
+// wired and what it resolved to; an unconfigured Butler answers 200 with
+// a reason, so the surface can teach rather than just fail.
+export interface ButlerStatus {
+  configured: boolean;
+  provider?: string;
+  model?: string;
+  endpoint?: string;
+  mode?: string;
+  reason?: string;
+  tools?: string[];
+}
+
+export interface AskResponse {
+  sessionId: string;
+  mode: string;
+  finalText: string;
+  capped?: boolean;
+  // Plans the session proposed. They are in state `proposed` — a human
+  // approves them on the Plans screen, never here.
+  planIds?: string[];
+  proposalErrors?: string[];
+}
+
+export interface ButlerSession {
+  seq: number;
+  id: string;
+  createdAt: string;
+  principal: string;
+  actingFor: string;
+  provider: string;
+  mode: string;
+  finalText: string;
+  capped: boolean;
+  transcriptJson?: string;
+}
+
 export interface IdentityNotification {
   code?: string;
   body?: string;
@@ -261,6 +298,12 @@ export const api = {
     call<unknown>("POST", `/api/v1/plans/${encodeURIComponent(id)}/approve`),
   rejectPlan: (id: string) =>
     call<unknown>("POST", `/api/v1/plans/${encodeURIComponent(id)}/reject`),
+  butlerStatus: () => call<ButlerStatus>("GET", "/api/v1/butler"),
+  askButler: (message: string) => call<AskResponse>("POST", "/api/v1/butler/ask", { message }),
+  butlerSessions: (limit = 20) =>
+    call<ButlerSession[]>("GET", `/api/v1/butler/sessions?limit=${limit}`),
+  butlerSession: (id: string) =>
+    call<ButlerSession>("GET", `/api/v1/butler/sessions/${encodeURIComponent(id)}`),
   backups: () => call<{ runs: BackupRun[] }>("GET", "/api/v1/backups"),
   runBackup: (plan: string) =>
     call<unknown>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/run`),
