@@ -115,6 +115,9 @@ type TickOutcome struct {
 	DriftProposed string
 	// Repaired is true when a drift tick applied at least one low-risk fix.
 	Repaired bool
+	// Blocked lists resources set aside this tick after failing the same
+	// way repeatedly (F60), so the rest of the plan could proceed.
+	Blocked []reconcile.BlockedResource
 }
 
 // Tick runs one service pass (ADR-W008 A1–A5).
@@ -178,6 +181,12 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	}
 
 	var failures []string
+	acting := map[string]bool{}
+	// Nodes this tick did not actually get to. Their status rows are the
+	// only durable record of what the reconciler manages there — the
+	// managed set is seeded from them on restart (F76) — so a node that
+	// was skipped must keep every row it has.
+	unvisited := map[string]bool{}
 	pendingDrift := false
 	for _, g := range groups {
 		if g.node != "" && l.Connected != nil && !l.Connected(g.node) && hasAgentKinds(g.resources) {
@@ -188,14 +197,24 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 			} else {
 				l.event("reconcile.skipped-offline", g.node, "", nil)
 			}
+			unvisited[g.node] = true
 			continue
 		}
 		outcome, err := l.Rec.Reconcile(ctx, g.node, g.resources)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("node %s: %v", g.node, err))
+			unvisited[g.node] = true
 			continue
 		}
 		l.recordObserved(g, outcome)
+		for _, st := range outcome.Plan.Steps {
+			acting[string(st.Kind)+"/"+st.Name] = true
+		}
+		for _, b := range outcome.Blocked {
+			out.Blocked = append(out.Blocked, b)
+			l.event("reconcile.blocked", g.node, b.Summary(),
+				map[string]string{"kind": string(b.Kind), "name": b.Name})
+		}
 		switch {
 		case outcome.Incident != "":
 			failures = append(failures, fmt.Sprintf("node %s: %s", g.node, outcome.Incident))
@@ -225,6 +244,8 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 			l.event("drift.foreign", g.node, strings.Join(outcome.ForeignDrift, ", "), nil)
 		}
 	}
+
+	l.pruneObserved(desired, acting, unvisited)
 
 	out.Failed = strings.Join(failures, "; ")
 	if planTick {
@@ -342,6 +363,13 @@ func (l *Loop) proposeDrift(desired []resource.Resource) (string, error) {
 // the situation an operator opens it.
 func (l *Loop) recordObserved(g nodeGroup, outcome *reconcile.Outcome) {
 	unhealthy := map[string]string{}
+	// A blocked resource has been REMOVED from the plan, so nothing below
+	// implicates it and it would otherwise be stamped healthy — the same
+	// lie F75 was about, told about the one resource that is genuinely
+	// broken.
+	for _, b := range outcome.Blocked {
+		unhealthy[string(b.Kind)+"/"+b.Name] = b.Summary()
+	}
 	for _, sr := range outcome.Steps {
 		if sr.Applied && sr.HealthOK {
 			if sr.Step.Action == plan.ActionDelete {
@@ -485,6 +513,44 @@ func (l *Loop) Run(ctx context.Context, base time.Duration) {
 				log = slog.Default()
 			}
 			log.Error("reconcile tick", "err", err)
+		}
+	}
+}
+
+// pruneObserved removes status rows for resources that are no longer
+// desired anywhere and that no plan this tick is still acting on.
+//
+// A delete step normally clears the row when it applies. A resource that
+// never existed has no delete step — nothing was ever created — so
+// without this its row sits red forever, describing a service the
+// operator has already removed. That is how a quarantined create looks
+// after the operator takes the fix everyone recommends.
+//
+// Tick-wide rather than per node: a node whose resources never got as
+// far as being managed has no group at all, which is exactly the case
+// this exists for.
+func (l *Loop) pruneObserved(desired []resource.Resource, acting, unvisited map[string]bool) {
+	keep := map[string]bool{}
+	for _, r := range desired {
+		keep[string(r.Kind)+"/"+r.Metadata.Name] = true
+	}
+	// A pending delete keeps its row: the resource still exists in the
+	// runtime, and saying otherwise before it is gone is the same kind
+	// of lie as stamping it healthy.
+	for k := range acting {
+		keep[k] = true
+	}
+	obs, err := l.DB.ListObserved()
+	if err != nil {
+		slog.Default().Error("observed list failed", "err", err)
+		return
+	}
+	for _, o := range obs {
+		if keep[o.Kind+"/"+o.Name] || unvisited[o.Node] {
+			continue
+		}
+		if err := l.DB.DeleteObserved(o.Kind, o.Name); err != nil {
+			slog.Default().Error("observed prune failed", "resource", o.Name, "err", err)
 		}
 	}
 }
