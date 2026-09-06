@@ -104,12 +104,28 @@ func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any
 	if err != nil {
 		return nil, st, err
 	}
+	return s.runFamilyButlerSession(r.Context(), message, id.Name, "")
+}
 
+// runFamilyButlerSession runs one family-surface session for member and
+// returns the ask response. Shared by the HTTP ask endpoint and the chat
+// inbound endpoint (ADR-W026 A8).
+//
+// systemExtra is appended to the family system prompt for the audience
+// the session is speaking to — the group-chat note (A7) is the only user
+// of it today. It can add a constraint to what the Butler SAYS; it
+// cannot add or remove a tool, because the tools come from the gateway
+// and the gateway is built from the member.
+func (s *Server) runFamilyButlerSession(ctx context.Context, message, member, systemExtra string) (any, int, error) {
+	host := s.ButlerHost
 	session := &butler.Session{
-		Gateway:  host.householdGateway(id.Name),
+		Gateway:  host.householdGateway(member),
 		ReadOnly: host.Mode == runtimedb.ButlerModeQAOnly,
 	}
-	tr, err := session.Run(r.Context(), host.Provider, message)
+	if systemExtra != "" {
+		session.System = butler.HouseholdSystemPrompt + "\n\n" + systemExtra
+	}
+	tr, err := session.Run(ctx, host.Provider, message)
 	if err != nil {
 		return nil, http.StatusBadGateway, fmt.Errorf("household butler session: %w", err)
 	}
@@ -136,7 +152,7 @@ func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any
 	finalText := redact.String(tr.FinalText)
 	sessionID, err := s.DB.InsertButlerSession(runtimedb.ButlerSession{
 		Principal:      butlerPrincipal,
-		ActingFor:      id.Name,
+		ActingFor:      member,
 		Provider:       tr.Audit.Provider,
 		Mode:           host.Mode,
 		Surface:        runtimedb.ButlerSurfaceFamily,
@@ -147,7 +163,7 @@ func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	s.event("butler.session", "", principal.Identity{Name: butlerPrincipal, ActingFor: id.Name},
+	s.event("butler.session", "", principal.Identity{Name: butlerPrincipal, ActingFor: member},
 		fmt.Sprintf("household session %s: %d tool calls", sessionID, len(tr.Audit.Calls)))
 
 	return askResponse{

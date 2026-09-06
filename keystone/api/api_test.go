@@ -47,6 +47,9 @@ func newHarness(t *testing.T) *harness {
 	h := &harness{t: t, srv: srv, s: s, tokens: map[runtimedb.Role]string{}}
 	for name, role := range map[string]runtimedb.Role{
 		"root-admin": runtimedb.RoleAdmin, "op": runtimedb.RoleOperator, "butler": runtimedb.RoleButler,
+		// A family-surface chat adapter (ADR-W026 A3): converse and
+		// nothing else.
+		"concierge": runtimedb.RoleConcierge,
 	} {
 		if err := p.Create(name, role, ""); err != nil {
 			t.Fatalf("Create(%s): %v", name, err)

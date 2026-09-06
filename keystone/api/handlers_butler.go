@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -153,12 +154,22 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 		return nil, st, err
 	}
 
+	return s.runAdminButlerSession(r.Context(), message, id.Name)
+}
+
+// runAdminButlerSession runs one operator-surface session on behalf of
+// actingFor and returns the ask response. It is shared by the HTTP ask
+// endpoint and the chat inbound endpoint (ADR-W026 A8), so a question
+// asked over Telegram and one asked in the Console take the same path
+// through the same gateway, produce the same audit record, and reach
+// the same ceiling.
+func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor string) (any, int, error) {
 	host := s.ButlerHost
 	session := &butler.Session{
 		Gateway:  host.Gateway,
 		ReadOnly: host.Mode == runtimedb.ButlerModeQAOnly,
 	}
-	tr, err := session.Run(r.Context(), host.Provider, message)
+	tr, err := session.Run(ctx, host.Provider, message)
 	if err != nil {
 		// The provider failed mid-session; nothing durable happened (no
 		// proposals are submitted until the session completes).
@@ -169,7 +180,7 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 	// (ADR-W017 A3), as principal "butler" acting-for the caller. Policy
 	// runs again here with the real engine — the session's own gate is a
 	// pre-check, not the authority.
-	butlerID := principal.Identity{Name: butlerPrincipal, Role: runtimedb.RoleButler, ActingFor: id.Name}
+	butlerID := principal.Identity{Name: butlerPrincipal, Role: runtimedb.RoleButler, ActingFor: actingFor}
 	var planIDs, proposalErrs []string
 	for _, call := range tr.Audit.Calls {
 		if call.ResourceYAML == "" || call.Rejected {
@@ -213,7 +224,7 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 	finalText := redact.String(tr.FinalText)
 	sessionID, err := s.DB.InsertButlerSession(runtimedb.ButlerSession{
 		Principal:      butlerPrincipal,
-		ActingFor:      id.Name,
+		ActingFor:      actingFor,
 		Provider:       tr.Audit.Provider,
 		Mode:           host.Mode,
 		Surface:        runtimedb.ButlerSurfaceAdmin,
@@ -224,7 +235,7 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	s.event("butler.session", "", principal.Identity{Name: butlerPrincipal, ActingFor: id.Name},
+	s.event("butler.session", "", principal.Identity{Name: butlerPrincipal, ActingFor: actingFor},
 		fmt.Sprintf("session %s: %d tool calls, %d proposals", sessionID, len(tr.Audit.Calls), len(planIDs)))
 
 	return askResponse{

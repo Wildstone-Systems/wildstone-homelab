@@ -33,6 +33,8 @@ func runChat(args []string) int {
 		return runChatBindings(args[1:])
 	case "revoke":
 		return runChatRevoke(args[1:])
+	case "outbound":
+		return runChatOutbound(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "wild chat: unknown subcommand %q\n", args[0])
 		chatUsage()
@@ -45,6 +47,7 @@ func chatUsage() {
   wild chat code -surface admin|family -identity <who> [-transport telegram] [-ttl 15m]
   wild chat bindings [-revoked] [-api URL]
   wild chat revoke <binding-id> [-api URL]
+  wild chat outbound [-surface admin|family] [-transport telegram] [-after N]
 
   -identity is a Keystone principal on the admin surface, and a household
   member on the family surface. The code works once, expires, and can only
@@ -116,4 +119,31 @@ func runChatRevoke(args []string) int {
 	}
 	return simpleCall("chat revoke", *apiBase, token, http.MethodPost,
 		fmt.Sprintf("/api/v1/chat/bindings/%d/revoke", id), nil)
+}
+
+// runChatOutbound reads the delivery queue an adapter polls (ADR-W026
+// A8). It is a debugging view: seeing that a reply was queued but never
+// acked is the difference between "the Butler said nothing" and "the
+// adapter is not running".
+func runChatOutbound(args []string) int {
+	fs := flag.NewFlagSet("wild chat outbound", flag.ExitOnError)
+	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
+	surface := fs.String("surface", "family", "which queue to read: admin | family")
+	transport := fs.String("transport", "", "only messages for this transport")
+	after := fs.Int64("after", 0, "cursor: messages after this seq")
+	fs.Parse(args) //nolint:errcheck // ExitOnError
+	if *surface != "admin" && *surface != "family" {
+		fmt.Fprintln(os.Stderr, "wild chat outbound: -surface must be admin or family")
+		return 2
+	}
+	token, ok := requireToken("chat outbound")
+	if !ok {
+		return 2
+	}
+	q := url.Values{"surface": {*surface}, "after": {strconv.FormatInt(*after, 10)}}
+	if *transport != "" {
+		q.Set("transport", *transport)
+	}
+	return simpleCall("chat outbound", *apiBase, token, http.MethodGet,
+		"/api/v1/chat/outbound?"+q.Encode(), nil)
 }

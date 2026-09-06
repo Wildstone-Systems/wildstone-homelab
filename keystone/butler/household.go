@@ -513,6 +513,22 @@ func householdParams(input map[string]any) (map[string]string, error) {
 	return out, nil
 }
 
+// HouseholdGroupNote is appended to the family prompt when the
+// conversation is a group rather than a direct message (ADR-W026 A7). It
+// constrains what the Butler SAYS; it cannot change what it can do —
+// the tools come from the gateway, which was built from the member
+// before this text was chosen.
+const HouseholdGroupNote = `Audience: this is a GROUP conversation. Several members of the household
+are reading, and people who are not members may be in the room too.
+
+Say only things the whole household may hear. If an answer would reveal
+where one person is, what one person did, or anything about one person
+that they have not already shared with the group, do not put it in this
+message: say that you will send it to them directly instead. When in
+doubt, treat it as private — the cost of being discreet is one extra
+message, and the cost of the alternative is a household member learning
+something about another from a bot.`
+
 // HouseholdSystemPrompt is the family surface's system prompt. It is
 // deliberately not SystemPrompt: that one describes an operator
 // assistant with Statefile tools and a propose path, and describing

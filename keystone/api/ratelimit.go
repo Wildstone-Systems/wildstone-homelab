@@ -27,10 +27,25 @@ const (
 	authPerSec = 25
 	anonBurst  = 5
 	anonPerSec = 1
+	// A chat message can cost a model call, so a chat account gets a
+	// much tighter budget than the adapter's own credential does
+	// (ADR-W026 A6). It is per ACCOUNT, not per adapter: one member
+	// cannot exhaust the household's provider budget, and a wedged
+	// adapter re-sending one conversation cannot loop.
+	chatBurst  = 8
+	chatPerSec = 0.2
 )
 
 func newLimiter() *limiter {
 	return &limiter{buckets: map[string]*bucket{}, now: time.Now}
+}
+
+// allowChat consumes one token from a chat account's own bucket. The
+// key is "<transport>:<account>", and the namespace is kept apart from
+// the principal buckets so an adapter's credential and the accounts it
+// relays for cannot spend each other's budget.
+func (l *limiter) allowChat(account string) bool {
+	return l.take("\x00chat:"+account, chatBurst, chatPerSec)
 }
 
 // allow consumes one token from key's bucket, reporting whether the
@@ -40,6 +55,11 @@ func (l *limiter) allow(key string) bool {
 	if key == anonBucket {
 		burst, perSec = anonBurst, anonPerSec
 	}
+	return l.take(key, burst, perSec)
+}
+
+// take is the shared token-bucket step.
+func (l *limiter) take(key string, burst, perSec float64) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
