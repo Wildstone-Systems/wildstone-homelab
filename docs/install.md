@@ -327,6 +327,71 @@ the steps you redo by hand.
   session's proposals appear on **Plans** as `proposed`, and approving
   them is still a human verb.
 
+## 4b. Optional: talk to the Butler from a chat app
+
+The Butler answers on two surfaces (ADR-W026), and they are two
+different jobs rather than one with a volume knob:
+
+| | operator | household |
+|---|---|---|
+| Reads | the Statefile, plans, health, diagnosis | the household timeline |
+| Writes | proposes a plan a human approves | one `domestic`-tier action |
+| Cannot | approve or apply anything | see or touch the home lab at all |
+
+Both are reachable from a chat app, and **each surface is its own bot
+with its own credential**. That is not tidiness: one bot serving both is
+one compromised phone away from being an infrastructure console.
+
+Approving is never available over chat, for anyone. Ask the operator bot
+to change something and it replies with a plan id and "nothing has
+changed yet" — you approve in the Console or with `wild plan approve`,
+where a Wildstone credential authenticates you. A chat account is
+protected by the vendor's account recovery, which Wildstone does not
+control.
+
+Enabling one, using Telegram's household bot as the example:
+
+```sh
+# 1. Build the adapter image and push it somewhere your nodes can reach.
+#    Wildstone publishes none: which registry you trust is your call.
+docker build -f cli/cmd/chat-adapter/Dockerfile -t <registry>/chat-adapter:1.0.0 .
+docker push <registry>/chat-adapter:1.0.0
+
+# 2. Make the bot (Telegram: talk to @BotFather) and keep its token.
+
+# 3. Mint the adapter's Keystone credential. The surface decides the
+#    role: family -> concierge (converse only), admin -> butler.
+wild chat adapter chat-telegram-family -node <node> -surface family
+
+# 4. Set the bot token, then enable the capability with the image digest.
+wild secret set chat-telegram-family-bot -node <node>
+wild capability enable chat-telegram-family \
+  -set node=<node> \
+  -set keystone_url=http://<tailnet-ip>:9441 \
+  -set adapter_image=<registry>/chat-adapter@sha256:<digest>
+
+# 5. Introduce someone. Nobody can talk to the bot until you do.
+wild chat code -surface family -identity <member> -transport telegram
+```
+
+Read the code out; they send it to the bot on its own, once. It works
+once, expires, and can only ever create the binding it names. After that
+`wild chat bindings` is the access list and `wild chat revoke <id>`
+takes effect on that account's next message.
+
+The adapter **dials out** — Telegram's and Matrix's APIs are polled — so
+this adds no port, no Route and nothing at your edge. `chat-matrix-*` is
+the same shape against a homeserver you can run yourself; the operator
+variants are `chat-telegram-admin` and `chat-matrix-admin`, installed
+the same way with `-surface admin` and a second bot.
+
+Once a household bot is bound, a household rule can ask through it —
+`chat-telegram-family.send` is a `domestic` action like `notifications.notify`
+— and the member's reply lands back on the household timeline as
+`household.answered`, correlated to the rule that asked. Recording an
+answer involves no model, so that loop keeps working with no Butler
+provider configured at all.
+
 ## 5. First workload
 
 Everything changes through a plan: propose (via a package, the Console,

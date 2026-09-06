@@ -340,7 +340,7 @@ func (s *Server) ChatRecipientFor(transport, member string) (target string, bind
 // id, records the question so the member's next reply closes the loop as
 // household.answered (ADR-W024 H4).
 func (s *Server) AskOverChat(ctx context.Context, transport, target string, bindingID int64, body, correlationID, rule, subject string) (int64, error) {
-	seq, err := s.QueueChatPush(ctx, runtimedb.ButlerSurfaceFamily, transport, target, body, correlationID, "")
+	seq, err := s.QueueChatPush(ctx, runtimedb.ButlerSurfaceFamily, transport, target, bindingID, body, correlationID, "")
 	if err != nil {
 		return 0, err
 	}
@@ -369,12 +369,12 @@ func (s *Server) AskOverChat(ctx context.Context, transport, target string, bind
 // because cmd/keystone wires it into the domestic gateway as an
 // executor; it is the same queue, so a push and a reply are delivered
 // and retried identically.
-func (s *Server) QueueChatPush(_ context.Context, surface runtimedb.ButlerSurface, transport, target, body, correlationID, dedupe string) (int64, error) {
+func (s *Server) QueueChatPush(_ context.Context, surface runtimedb.ButlerSurface, transport, target string, bindingID int64, body, correlationID, dedupe string) (int64, error) {
 	if dedupe == "" {
 		dedupe = chatDedupe(surface, transport, target, "", "push", body+time.Now().UTC().Format(time.RFC3339Nano))
 	}
 	seq, err := s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{
-		Surface: surface, Transport: transport, Target: target,
+		Surface: surface, Transport: transport, Target: target, BindingID: bindingID,
 		Body: redact.String(body), Kind: "push", CorrelationID: correlationID, DedupeKey: dedupe,
 	})
 	if err != nil && seq == 0 {
