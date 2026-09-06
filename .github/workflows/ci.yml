@@ -30,8 +30,25 @@ jobs:
       - uses: actions/checkout@v4
       - name: syntax
         run: for f in scripts/*.sh; do bash -n "$f"; done
+      # Pinned by digest, like every other image this project runs
+      # (ADR-W003 A4.2's reasoning, applied to CI). ubuntu-latest's
+      # shellcheck is whatever GitHub last put in the runner image, and
+      # it silently differs from any modern dev machine: 0.9.0 here
+      # against 0.11.0 locally, which reports SC2015 on `a && b || fail`
+      # where 0.11 does not. A shell change can therefore be clean
+      # locally and fail here, or — worse — stop being checked at all
+      # the day GitHub bumps the runner.
+      #
+      # Run the identical check before pushing:
+      #   docker run --rm -v "$PWD:/mnt" koalaman/shellcheck:v0.9.0 scripts/*.sh
+      #
+      # Bumping the version is a deliberate, reviewed change, which is
+      # the whole point of pinning it.
       - name: shellcheck
-        run: shellcheck scripts/*.sh
+        run: |
+          docker run --rm -v "$PWD:/mnt" \
+            koalaman/shellcheck@sha256:f35e8987b02760d4e76fc99a68ad5c42cc10bb32f3dd2143a3cf92f1e5446a45 \
+            scripts/*.sh
       # The Console asset's name lives in two files that never see each
       # other: release.yml produces it, install.sh fetches it. A rename
       # in one would not fail anything until a release was cut and an
