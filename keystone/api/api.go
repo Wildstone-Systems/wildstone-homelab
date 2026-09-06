@@ -213,6 +213,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/butler/sessions", s.handle(principal.VerbRead, s.listButlerSessions))
 	mux.Handle("GET /api/v1/butler/sessions/{id}", s.handle(principal.VerbRead, s.getButlerSession))
 
+	// The family surface (ADR-W026 A1): a sibling route, not a mode of
+	// the operator's. Same read verb — talking is not a write — with a
+	// different gateway behind it, one that holds no Statefile access of
+	// any kind. Sessions from both surfaces are listed by the routes
+	// above, which take ?surface= to tell them apart.
+	mux.Handle("GET /api/v1/household/butler", s.handle(principal.VerbRead, s.getHouseholdButlerStatus))
+	mux.Handle("POST /api/v1/household/butler/ask", s.handle(principal.VerbRead, s.askHouseholdButler))
+
 	return mux
 }
 

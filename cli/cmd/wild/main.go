@@ -46,6 +46,8 @@ func main() {
 		os.Exit(runHousehold(os.Args[2:]))
 	case "automation":
 		os.Exit(runAutomation(os.Args[2:]))
+	case "butler":
+		os.Exit(runButler(os.Args[2:]))
 	default:
 		fmt.Fprintf(os.Stderr, "wild: unknown command %q\n", os.Args[1])
 		usage()

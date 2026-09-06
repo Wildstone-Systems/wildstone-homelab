@@ -635,8 +635,40 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			return replay.Summary(20), nil
 		}
 
+		// The family surface (ADR-W026 A1, G1): the SAME provider, a
+		// different gateway. Its seams are the household timeline and
+		// the domestic action gateway — the two things a household rule
+		// already uses — and deliberately nothing else: there is no
+		// Statefile, no node reader and no plan pipeline in this
+		// wiring, so a family session has no path to one.
+		household := butler.HouseholdSeams{
+			Events:     api.HouseholdEventSeam(db),
+			Vocabulary: bgw.AutomationVocabulary,
+		}
+		if len(actions.Tools()) > 0 {
+			household.Actions = func(ctx context.Context, c butler.HouseholdActionCall) (string, error) {
+				res, aerr := actions.Dispatch(ctx, domestic.Call{
+					Tool:   c.Tool,
+					Tier:   c.Tier,
+					Params: c.Params,
+					// The rule slot names WHO asked, because on this
+					// surface nothing else did: a family session's action
+					// has no Automation behind it, and an audit line
+					// reading "butler-session" with the member as the
+					// subject is the honest record of what happened.
+					Rule:        "butler-session",
+					Subject:     c.Member,
+					TriggerType: "butler.household_session",
+				})
+				if aerr != nil {
+					return "", aerr
+				}
+				return res.Summary, nil
+			}
+		}
+
 		apiSrv.ButlerHost = &api.ButlerHost{
-			Provider: bp, Gateway: bgw, Mode: mode,
+			Provider: bp, Gateway: bgw, Mode: mode, Household: household,
 			Model: backend.Model, Endpoint: backend.Endpoint,
 		}
 		log.Info("butler enabled", "provider", bp.Name(), "model", backend.Model,

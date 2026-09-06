@@ -158,14 +158,6 @@ func (gw *ToolGateway) ReadOnlyToolSpecs() []provider.Tool {
 	return out
 }
 
-// maxContentBytes returns gw.MaxContentBytes, defaulted.
-func (gw *ToolGateway) maxContentBytes() int {
-	if gw.MaxContentBytes > 0 {
-		return gw.MaxContentBytes
-	}
-	return defaultMaxContentBytes
-}
-
 // Dispatch executes the named tool with input and returns the fully
 // processed outcome: EVERY tool's Content passes through redact() here —
 // centralized so a new tool cannot forget it (ADR-W006 B3) — and
@@ -184,19 +176,52 @@ func (gw *ToolGateway) Dispatch(ctx context.Context, name string, input map[stri
 		// back attacker-influenced input.
 		outcome.Content = fmt.Sprintf("error: %v", err)
 	}
+	return finishOutcome(outcome, entry.Untrusted, gw.MaxContentBytes), nil
+}
+
+// finishOutcome is the centralized post-handler pipeline BOTH surfaces
+// run: redact, then envelope attacker-influenceable content, then bound
+// the size. It lives here, shared, so the operator gateway and the
+// family gateway cannot drift apart on the one step neither is allowed
+// to skip (ADR-W006 A5.2/A5.3, ADR-W026 A6). maxBytes <= 0 means the
+// package default.
+func finishOutcome(outcome ToolOutcome, untrusted bool, maxBytes int) ToolOutcome {
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxContentBytes
+	}
 	outcome.Content = redact(outcome.Content)
-	if entry.Untrusted {
+	if untrusted {
 		// Bound the inner content BEFORE enveloping so truncation can never
 		// cut the closing tag and leave the envelope unterminated for this
 		// and every subsequent turn (the envelope tags themselves are small
 		// and fixed, so the total stays close to the budget).
-		inner := truncate(outcome.Content, gw.maxContentBytes())
-		outcome.Content = envelope(inner)
+		outcome.Content = envelope(truncate(outcome.Content, maxBytes))
 	} else {
-		outcome.Content = truncate(outcome.Content, gw.maxContentBytes())
+		outcome.Content = truncate(outcome.Content, maxBytes)
 	}
-	return outcome, nil
+	return outcome
 }
+
+// OfferedSpecs implements Toolset (ADR-W026 A1): the operator surface's
+// offered tool set, narrowed to reads for a QA-only session.
+func (gw *ToolGateway) OfferedSpecs(readOnly bool) []provider.Tool {
+	if readOnly {
+		return gw.ReadOnlyToolSpecs()
+	}
+	return gw.ToolSpecs()
+}
+
+// Execute implements Toolset: dispatch with the session's read-only
+// constraint enforced at the execution boundary.
+func (gw *ToolGateway) Execute(ctx context.Context, name string, input map[string]any, readOnly bool) (ToolOutcome, error) {
+	if readOnly {
+		return gw.DispatchReadOnly(ctx, name, input)
+	}
+	return gw.Dispatch(ctx, name, input)
+}
+
+// SystemPrompt implements Toolset: the operator surface's prompt.
+func (gw *ToolGateway) SystemPrompt() string { return SystemPrompt }
 
 // truncate bounds s to at most n bytes, appending a marker if it cut
 // content off (ADR-W006 A5.3/B3: bound content sizes fed back to the

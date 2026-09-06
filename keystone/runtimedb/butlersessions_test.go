@@ -24,6 +24,7 @@ func TestButlerSessionRoundTrip(t *testing.T) {
 		ActingFor:      "root-admin",
 		Provider:       "scripted",
 		Mode:           ButlerModeFull,
+		Surface:        ButlerSurfaceAdmin,
 		FinalText:      "all healthy",
 		Capped:         true,
 		TranscriptJSON: `{"provider":"scripted"}`,
@@ -40,7 +41,7 @@ func TestButlerSessionRoundTrip(t *testing.T) {
 		t.Fatalf("GetButlerSession: %v", err)
 	}
 	if got.Principal != "butler" || got.ActingFor != "root-admin" || got.Provider != "scripted" ||
-		got.Mode != ButlerModeFull || got.FinalText != "all healthy" || !got.Capped {
+		got.Mode != ButlerModeFull || got.Surface != ButlerSurfaceAdmin || got.FinalText != "all healthy" || !got.Capped {
 		t.Fatalf("round trip mismatch: %+v", got)
 	}
 	if got.TranscriptJSON != `{"provider":"scripted"}` {
@@ -56,12 +57,12 @@ func TestButlerSessionListOmitsTranscript(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		if _, err := db.InsertButlerSession(ButlerSession{
 			Principal: "butler", ActingFor: "op", Provider: "scripted",
-			Mode: ButlerModeQAOnly, TranscriptJSON: `{"big":"transcript"}`,
+			Mode: ButlerModeQAOnly, Surface: ButlerSurfaceAdmin, TranscriptJSON: `{"big":"transcript"}`,
 		}); err != nil {
 			t.Fatalf("insert %d: %v", i, err)
 		}
 	}
-	list, err := db.ListButlerSessions(2)
+	list, err := db.ListButlerSessions(2, "")
 	if err != nil {
 		t.Fatalf("ListButlerSessions: %v", err)
 	}
@@ -81,11 +82,64 @@ func TestButlerSessionListOmitsTranscript(t *testing.T) {
 func TestButlerSessionRequiresPrincipalBinding(t *testing.T) {
 	db := butlerTestDB(t)
 	// ADR-W001: no anonymous session record, ever.
-	if _, err := db.InsertButlerSession(ButlerSession{Principal: "butler"}); err == nil {
+	if _, err := db.InsertButlerSession(ButlerSession{Principal: "butler", Surface: ButlerSurfaceAdmin}); err == nil {
 		t.Fatalf("insert without acting_for succeeded")
 	}
-	if _, err := db.InsertButlerSession(ButlerSession{ActingFor: "root-admin"}); err == nil {
+	if _, err := db.InsertButlerSession(ButlerSession{ActingFor: "root-admin", Surface: ButlerSurfaceAdmin}); err == nil {
 		t.Fatalf("insert without principal succeeded")
+	}
+}
+
+// ADR-W026 A1: the surface is stored, not inferred, and a session that
+// does not name one is refused. Both defaults would be wrong — admin
+// files a household conversation under the operator's ceiling, family
+// hides an operator session from an audit of the Statefile — so there is
+// no default at all.
+func TestButlerSessionRequiresSurface(t *testing.T) {
+	db := butlerTestDB(t)
+	if _, err := db.InsertButlerSession(ButlerSession{Principal: "butler", ActingFor: "op"}); err == nil {
+		t.Fatalf("insert without a surface succeeded")
+	}
+	if _, err := db.InsertButlerSession(ButlerSession{
+		Principal: "butler", ActingFor: "op", Surface: ButlerSurface("operator"),
+	}); err == nil {
+		t.Fatalf("insert with an invented surface succeeded")
+	}
+}
+
+// The two surfaces are separable in the audit record: an operator asking
+// what the household's butler has been asked to do gets exactly that,
+// and the reverse (ADR-W026 A1).
+func TestButlerSessionListBySurface(t *testing.T) {
+	db := butlerTestDB(t)
+	for _, sfc := range []ButlerSurface{ButlerSurfaceAdmin, ButlerSurfaceFamily, ButlerSurfaceAdmin} {
+		if _, err := db.InsertButlerSession(ButlerSession{
+			Principal: "butler", ActingFor: "op", Provider: "scripted",
+			Mode: ButlerModeFull, Surface: sfc,
+		}); err != nil {
+			t.Fatalf("insert %s: %v", sfc, err)
+		}
+	}
+	family, err := db.ListButlerSessions(0, ButlerSurfaceFamily)
+	if err != nil {
+		t.Fatalf("ListButlerSessions(family): %v", err)
+	}
+	if len(family) != 1 || family[0].Surface != ButlerSurfaceFamily {
+		t.Fatalf("family list = %+v, want exactly the one family session", family)
+	}
+	admin, err := db.ListButlerSessions(0, ButlerSurfaceAdmin)
+	if err != nil {
+		t.Fatalf("ListButlerSessions(admin): %v", err)
+	}
+	if len(admin) != 2 {
+		t.Fatalf("admin list = %d sessions, want 2", len(admin))
+	}
+	both, err := db.ListButlerSessions(0, "")
+	if err != nil {
+		t.Fatalf("ListButlerSessions(all): %v", err)
+	}
+	if len(both) != 3 {
+		t.Fatalf("unfiltered list = %d sessions, want 3", len(both))
 	}
 }
 

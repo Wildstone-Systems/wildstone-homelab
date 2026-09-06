@@ -482,3 +482,35 @@ bounded, and enveloped as untrusted data, and every conversation is a
 persisted, principal-bound session (`butler` acting-for you). The
 morning report is deterministic — no LLM involved — and keeps working
 with the Butler off.
+
+### Two surfaces: the operator's butler and the household's
+
+The Butler answers on two surfaces (ADR-W026), and they are two
+gateways rather than one gateway with a filter:
+
+| | `admin` | `family` |
+|---|---|---|
+| Endpoint | `POST /api/v1/butler/ask` | `POST /api/v1/household/butler/ask` |
+| Reads | the Statefile, plans, health, diagnosis | the household timeline |
+| Writes | `propose_change` — a plan a human approves | one `domestic`-tier action, through the same gateway an approved household rule uses |
+| Cannot | approve or apply anything | see or touch the home lab at all |
+
+The family surface holds no Statefile, no node reader and no plan
+pipeline — not a filtered one, none — so a household conversation has
+no path to infrastructure to be talked into taking. Its system prompt
+does not describe one either: naming a capability a surface lacks is an
+invitation to try it.
+
+Which surface answered is stamped on the session record from the
+endpoint the request arrived on — never from the request body — so the
+audit trail separates the two forever after:
+`wild butler sessions -surface family`, or the Console's Butler screen,
+which offers the two side by side with the ceilings written out. The
+family surface binds each session to the caller as its member, and every
+action it dispatches carries that member into the domestic gateway's
+audit record.
+
+Chat transports (Telegram, Discord, Slack) are the point of the split:
+they arrive as packages in a later work package, and each one is two
+separate bots against these two endpoints, never one bot deciding for
+itself which side of the house a message belongs to.

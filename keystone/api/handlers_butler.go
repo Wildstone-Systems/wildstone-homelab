@@ -36,6 +36,13 @@ type ButlerHost struct {
 	// ButlerModeQAOnly runs sessions with the read-only tool set and
 	// dispatch-level refusal of propose_change.
 	Mode runtimedb.ButlerSessionMode
+	// Household carries the family surface's injected seams (ADR-W026
+	// A1): the household timeline reader and the domestic-tier action
+	// dispatcher a family session runs on. A zero value is a working
+	// configuration — the family endpoint then answers that this
+	// deployment has no household surface wired, rather than pretending
+	// to have one.
+	Household butler.HouseholdSeams
 	// Model and Endpoint are the RESOLVED backend the provider talks to —
 	// the flag value when one was given, otherwise the client's own
 	// default. They are display facts for the status endpoint so an
@@ -141,19 +148,9 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 		return nil, http.StatusServiceUnavailable,
 			fmt.Errorf("butler provider not configured (start keystone with -butler-provider)")
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxAskBytes+1))
+	message, st, err := readAskMessage(r)
 	if err != nil {
-		return nil, http.StatusBadRequest, fmt.Errorf("reading body: %w", err)
-	}
-	if len(body) > maxAskBytes {
-		return nil, http.StatusRequestEntityTooLarge, fmt.Errorf("message exceeds %d bytes", maxAskBytes)
-	}
-	var req askRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		return nil, http.StatusBadRequest, fmt.Errorf("parsing ask: %w", err)
-	}
-	if req.Message == "" {
-		return nil, http.StatusBadRequest, fmt.Errorf("message required")
+		return nil, st, err
 	}
 
 	host := s.ButlerHost
@@ -161,7 +158,7 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 		Gateway:  host.Gateway,
 		ReadOnly: host.Mode == runtimedb.ButlerModeQAOnly,
 	}
-	tr, err := session.Run(r.Context(), host.Provider, req.Message)
+	tr, err := session.Run(r.Context(), host.Provider, message)
 	if err != nil {
 		// The provider failed mid-session; nothing durable happened (no
 		// proposals are submitted until the session completes).
@@ -219,6 +216,7 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 		ActingFor:      id.Name,
 		Provider:       tr.Audit.Provider,
 		Mode:           host.Mode,
+		Surface:        runtimedb.ButlerSurfaceAdmin,
 		FinalText:      finalText,
 		Capped:         tr.CappedIterations,
 		TranscriptJSON: redact.String(string(transcriptJSON)),
@@ -239,9 +237,18 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 	}, http.StatusOK, nil
 }
 
+// listButlerSessions lists recorded sessions from BOTH surfaces, newest
+// first. ?surface=admin|family narrows it — the audit question "what has
+// the household's butler been asked to do" is a different question from
+// "what has the operator's", and one list that cannot tell them apart
+// answers neither (ADR-W026 A1).
 func (s *Server) listButlerSessions(r *http.Request, _ principal.Identity) (any, int, error) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	sessions, err := s.DB.ListButlerSessions(limit)
+	surface := runtimedb.ButlerSurface(r.URL.Query().Get("surface"))
+	if surface != "" && !runtimedb.ValidButlerSurface(surface) {
+		return nil, http.StatusBadRequest, fmt.Errorf("unknown surface %q (admin|family)", surface)
+	}
+	sessions, err := s.DB.ListButlerSessions(limit, surface)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -260,4 +267,25 @@ func (s *Server) getButlerSession(r *http.Request, _ principal.Identity) (any, i
 		return nil, http.StatusInternalServerError, err
 	}
 	return sess, http.StatusOK, nil
+}
+
+// readAskMessage reads and bounds one ask body, shared by both surfaces
+// (ADR-W026 A6: inbound text is bounded before anything else looks at
+// it, on the family surface exactly as on the operator's).
+func readAskMessage(r *http.Request) (string, int, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxAskBytes+1))
+	if err != nil {
+		return "", http.StatusBadRequest, fmt.Errorf("reading body: %w", err)
+	}
+	if len(body) > maxAskBytes {
+		return "", http.StatusRequestEntityTooLarge, fmt.Errorf("message exceeds %d bytes", maxAskBytes)
+	}
+	var req askRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return "", http.StatusBadRequest, fmt.Errorf("parsing ask: %w", err)
+	}
+	if req.Message == "" {
+		return "", http.StatusBadRequest, fmt.Errorf("message required")
+	}
+	return req.Message, http.StatusOK, nil
 }
