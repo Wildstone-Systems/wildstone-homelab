@@ -36,6 +36,10 @@ type Posture struct {
 	// Ports maps a Route's declared host to the port it is served on.
 	// Empty under every posture but "tailscale".
 	Ports map[string]int
+	// occupied is every host port some other container already publishes.
+	// Carried so that resolving a host whose Route does not exist yet
+	// obeys the same collision rules the eventual assignment will (F70).
+	occupied map[int]bool
 }
 
 // PortBlock is the closed set of ports the tailnet ingress profile
@@ -80,6 +84,7 @@ func Of(desired []resource.Resource) Posture {
 	}
 	if p.TLS == "tailscale" {
 		p.Ports = assign(desired)
+		p.occupied = portsPublishedByOthers(desired)
 	}
 	return p
 }
@@ -208,9 +213,8 @@ func (p Posture) SiteAddress(host string) string {
 		// exists. Every capability whose origin .Resolved describes is a
 		// shipped, pinned one; an unpinned service has no .Resolved URL to
 		// get wrong, and still falls through to the declared host.
-		if pinned, ok := wellKnown[ServiceLabel(host)]; ok {
-			port = pinned
-		} else {
+		port = p.portForAbsentRoute(host)
+		if port == 0 {
 			return host
 		}
 	}
@@ -221,6 +225,46 @@ func (p Posture) SiteAddress(host string) string {
 // issuer and a dashboard href must both be built from.
 func (p Posture) OriginFor(host string) string {
 	return "https://" + p.SiteAddress(host)
+}
+
+// portForAbsentRoute is the port a Route WOULD be assigned, for a host
+// whose Route is not in desired state yet.
+//
+// It must agree with assign(), and agreeing is the whole difficulty. The
+// pin alone is not enough: assign() treats a pin as a preference and
+// moves the Route when something else already publishes that port (F63).
+// A fallback returning the pin unconditionally would hand Authelia an
+// issuer on 7443 while Caddy, once the Route existed, served it
+// elsewhere — a login that fails with both halves internally consistent
+// and disagreeing with each other (F70).
+//
+// So it applies the same two rules in the same order: the pin if free,
+// otherwise the first free port in the block. Returns 0 when nothing is
+// available, which the caller renders as the declared host.
+func (p Posture) portForAbsentRoute(host string) int {
+	if pinned, ok := wellKnown[ServiceLabel(host)]; ok && p.portFree(pinned) {
+		return pinned
+	}
+	for _, candidate := range PortBlock {
+		if p.portFree(candidate) {
+			return candidate
+		}
+	}
+	return 0
+}
+
+// portFree reports whether a port is neither published by another
+// container nor already assigned to an existing Route.
+func (p Posture) portFree(port int) bool {
+	if p.occupied[port] {
+		return false
+	}
+	for _, assigned := range p.Ports {
+		if assigned == port {
+			return false
+		}
+	}
+	return true
 }
 
 // SessionDomain is the cookie domain a session must be scoped to for

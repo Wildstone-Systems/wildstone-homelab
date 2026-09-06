@@ -182,3 +182,33 @@ func TestPortalURLSharesTheSessionCookieScope(t *testing.T) {
 		t.Errorf("Authelia refuses to start unless authelia_url is within the session domain\n  domain=%q\n  issuer=%q", domain, issuer)
 	}
 }
+
+// TestAbsentRouteHonoursOccupiedPorts is F70, raised by automated review
+// on the F68 fix and confirmed to be real.
+//
+// The two halves of addressing must agree. assign() treats a pinned port
+// as a preference and moves a Route when something else publishes it
+// (F63). If the pre-Route fallback returned the pin unconditionally,
+// then installing identity while another container held 7443 would give
+// Authelia an issuer on 7443, and the Route — once it existed — would be
+// served somewhere else. Both halves internally consistent, disagreeing
+// with each other, and the symptom is a login that fails.
+func TestAbsentRouteHonoursOccupiedPorts(t *testing.T) {
+	current := []resource.Resource{
+		{Kind: resource.KindIngress, Metadata: resource.Metadata{Name: "ingress", Node: "n1"},
+			Ingress: &resource.IngressSpec{TLS: "tailscale", TailnetName: "wildstone.tailnet.ts.net"}},
+		// Something unrelated already holds auth's pinned port.
+		{Kind: resource.KindContainer, Metadata: resource.Metadata{Name: "squatter", Owner: "capability/monitoring", Node: "n1"},
+			Container: &resource.ContainerSpec{
+				Image: "ghcr.io/example/app@sha256:" + strings.Repeat("a", 64),
+				Ports: []string{"0.0.0.0:7443:7443"},
+			}},
+	}
+	issuer := buildResolved(consumer(), map[string]string{}, NewCatalog(identityProvider()).WithCurrent(current))["IssuerURL"]
+	if strings.HasSuffix(issuer, ":7443") {
+		t.Errorf("issuer took a port another container publishes: %s", issuer)
+	}
+	if !strings.HasPrefix(issuer, "https://wildstone.tailnet.ts.net:") {
+		t.Errorf("issuer should still be on the tailnet name with some free port, got %s", issuer)
+	}
+}
