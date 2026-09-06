@@ -53,7 +53,20 @@ templates:
         # it back out and writes it as the page title, which keeps the
         # household's name declared once, here, next to the other
         # dashboard params, instead of hard-coded in Go.
-        WILDSTONE_DASHBOARD_TITLE: "{{ .Params.household_name }}"
+        #
+        # A LITERAL BLOCK SCALAR, not a quoted one. This is the only
+        # param in the catalog that is deliberately free text a person
+        # writes, and a double-quoted scalar breaks on the first name
+        # containing a quote — `The "Reed" Family` rendered invalid YAML,
+        # so the resource failed to parse and the capability could not be
+        # enabled at all. A block scalar processes no escapes, so quotes,
+        # backslashes and colons are all just characters.
+        #
+        # Safe because mergeParams already refuses newlines, tabs and
+        # control characters in every param value (the structural
+        # injection vector), so this can only ever be one plain line.
+        WILDSTONE_DASHBOARD_TITLE: |-
+          {{ .Params.household_name }}
       mounts:
         - { source: homepage-config, target: /app/config }
         # The service list Keystone renders from the Route set (F55,
