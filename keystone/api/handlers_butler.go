@@ -193,12 +193,15 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 		return nil, http.StatusBadRequest, fmt.Errorf("message required")
 	}
 
-	host := s.ButlerHost
+	// Every read of the backend for this request comes from the ONE
+	// snapshot taken above. Mixing a captured mode with a live provider
+	// is how a newly selected model that FAILED its probe would run with
+	// the previous model's `full` verdict and be handed proposal tools.
 	session := &butler.Session{
-		Gateway:  host.Gateway,
+		Gateway:  askGw,
 		ReadOnly: askMode == runtimedb.ButlerModeQAOnly,
 	}
-	tr, err := session.Run(r.Context(), host.Provider, req.Message)
+	tr, err := session.Run(r.Context(), askProv, req.Message)
 	if err != nil {
 		// The provider failed mid-session; nothing durable happened (no
 		// proposals are submitted until the session completes).
@@ -268,7 +271,7 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 
 	return askResponse{
 		SessionID:      sessionID,
-		Mode:           string(host.Mode),
+		Mode:           string(askMode),
 		FinalText:      finalText,
 		Capped:         tr.CappedIterations,
 		PlanIDs:        planIDs,

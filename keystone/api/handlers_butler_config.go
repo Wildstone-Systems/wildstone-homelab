@@ -150,21 +150,30 @@ func (s *Server) setButlerConfig(r *http.Request, id principal.Identity) (any, i
 		Model    string `json:"model"`
 		Endpoint string `json:"endpoint"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// DisallowUnknownFields, so a credential sent in the BODY is refused
+	// rather than silently dropped (A4, unrelaxed by A9).
+	//
+	// The first version of this checked the URL's query parameters,
+	// which is not where anybody would put one: a decoder that discards
+	// unknown fields accepted {"provider":"openai","apiKey":"..."}
+	// without a word, so the operator learned nothing and believed they
+	// had configured a key. Refusing loudly is the whole claim; checking
+	// the wrong place made it false.
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		if f, isCred := credentialField(err); isCred {
+			return nil, http.StatusBadRequest, fmt.Errorf(
+				"%q is not accepted here and is never stored: set ANTHROPIC_API_KEY or OPENAI_API_KEY "+
+					"in keystone's environment instead (ADR-W017 A4)", f)
+		}
 		return nil, http.StatusBadRequest, fmt.Errorf("parsing body: %w", err)
 	}
 	if !butlerProviders[req.Provider] {
 		return nil, http.StatusBadRequest,
 			fmt.Errorf("%q is not a provider (want off, anthropic, openai or ollama)", req.Provider)
 	}
-	// An API key is never accepted here (A4, unrelaxed by A9). Refusing
-	// loudly beats ignoring quietly: an operator who tried to send one
-	// should learn it belongs in the environment, not discover later
-	// that the field they filled in did nothing.
-	if looksLikeCredential(r) {
-		return nil, http.StatusBadRequest,
-			fmt.Errorf("API keys are not accepted here and are never stored; set ANTHROPIC_API_KEY or OPENAI_API_KEY in keystone's environment (ADR-W017 A4)")
-	}
+
 	if s.ApplyButlerConfig == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("this control plane cannot change the Butler at runtime")
 	}
@@ -172,15 +181,24 @@ func (s *Server) setButlerConfig(r *http.Request, id principal.Identity) (any, i
 	stored := runtimedb.ButlerConfig{
 		Provider: req.Provider, Model: req.Model, Endpoint: req.Endpoint, UpdatedBy: id.Name,
 	}
-	if err := s.DB.SetButlerConfig(stored); err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
-	// Applied AFTER the write, so a control plane that restarts between
-	// the two comes back with the choice the operator made rather than
-	// the one it was running.
+	// APPLIED BEFORE IT IS PERSISTED, and the order is the whole point.
+	//
+	// Storing first looked safer — a control plane dying between the two
+	// would come back with the operator's choice. It is much worse: a
+	// choice that cannot be built (anthropic with no ANTHROPIC_API_KEY,
+	// say) would be persisted, take precedence at startup, and
+	// newButlerProvider's error would stop Keystone from starting AT
+	// ALL. A misconfigured Butler must never cost the household its
+	// control plane.
+	//
+	// So an unusable choice is refused here, while the previous provider
+	// keeps answering and nothing durable has changed.
 	mode, detail, err := s.ApplyButlerConfig(r.Context(), stored)
 	if err != nil {
-		return nil, http.StatusBadGateway, fmt.Errorf("stored, but could not be applied: %w", err)
+		return nil, http.StatusBadRequest, fmt.Errorf("not saved: %w", err)
+	}
+	if err := s.DB.SetButlerConfig(stored); err != nil {
+		return nil, http.StatusInternalServerError, err
 	}
 	if err := s.DB.RecordButlerProbe(string(mode), detail); err != nil {
 		s.Log.Error("recording butler probe", "err", err)
@@ -191,13 +209,27 @@ func (s *Server) setButlerConfig(r *http.Request, id principal.Identity) (any, i
 
 var butlerProviders = map[string]bool{"off": true, "anthropic": true, "openai": true, "ollama": true}
 
-// looksLikeCredential reports a body carrying something that should
-// never travel to this endpoint.
-func looksLikeCredential(r *http.Request) bool {
-	for _, k := range []string{"apiKey", "api_key", "token", "secret", "password"} {
-		if r.URL.Query().Has(k) {
-			return true
+// credentialField names the rejected field when an unknown-field error
+// is about something credential-shaped, so the refusal can say what to
+// do instead of only that the body was wrong.
+func credentialField(err error) (string, bool) {
+	msg := err.Error()
+	const marker = `unknown field "`
+	i := strings.Index(msg, marker)
+	if i < 0 {
+		return "", false
+	}
+	rest := msg[i+len(marker):]
+	j := strings.Index(rest, `"`)
+	if j < 0 {
+		return "", false
+	}
+	field := rest[:j]
+	lower := strings.ToLower(field)
+	for _, k := range []string{"key", "token", "secret", "password", "credential"} {
+		if strings.Contains(lower, k) {
+			return field, true
 		}
 	}
-	return false
+	return field, false
 }

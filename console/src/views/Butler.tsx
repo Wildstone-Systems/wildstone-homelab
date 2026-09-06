@@ -48,7 +48,12 @@ export function Butler() {
           should not mean finding another tab. */}
       {showSettings && (
         <div className="card">
-          <ButlerSettings />
+          <ButlerSettings
+            onSaved={() => {
+              status.reload();
+              sessions.reload();
+            }}
+          />
         </div>
       )}
       <div className="sub">

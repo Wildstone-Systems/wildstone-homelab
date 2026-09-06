@@ -25,7 +25,7 @@ function size(m: ButlerModel): string {
   return `${(m.sizeBytes / 1e9).toFixed(1)} GB`;
 }
 
-export function ButlerSettings() {
+export function ButlerSettings({ onSaved }: { onSaved?: () => void }) {
   const status = useLoad(() => api.butlerConfig());
   const [provider, setProvider] = useState("");
   const [endpoint, setEndpoint] = useState("");
@@ -65,6 +65,11 @@ export function ButlerSettings() {
           : `Saved, but running read-only: ${r.config.probeDetail ?? "the model did not pass its tool check"}`,
       );
       status.reload();
+      // The parent screen decides whether Ask is usable from its own
+      // status call, so saving here has to tell it. Without this,
+      // enabling the Butler left Ask disabled and turning it off left
+      // Ask enabled, until the page was reloaded.
+      onSaved?.();
     } catch (err) {
       setError(String(err));
     } finally {
