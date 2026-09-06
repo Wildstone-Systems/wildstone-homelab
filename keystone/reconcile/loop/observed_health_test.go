@@ -111,8 +111,38 @@ func TestDriftAwaitingApprovalIsNotHealthy(t *testing.T) {
 	if o.Healthy {
 		t.Fatalf("container with an unapplied drift plan reported healthy: %+v", o)
 	}
-	if !strings.Contains(o.Detail, "not applied") {
-		t.Fatalf("detail = %q, want it to say the step was not applied", o.Detail)
+	// Not healthy, because it is not converged — but the reason must be
+	// distinguishable from a failure (F75). "Not applied" is true of
+	// both a plan waiting for a human and a step that broke, and an
+	// operator reading the Console has to tell them apart: on the alpha
+	// VM a restart showed 29 of 51 red while every container was up.
+	if !o.AwaitingApproval {
+		t.Errorf("a resource whose plan is waiting for approval is not flagged as such: %+v", o)
+	}
+	if !strings.Contains(o.Detail, "approval") {
+		t.Errorf("detail = %q, want it to say a human has to approve, not merely that nothing was applied", o.Detail)
+	}
+}
+
+// The other half: a step that genuinely failed must NOT be dressed up as
+// waiting for approval. Erring that way would hide a broken resource
+// behind a message saying nothing is wrong with it.
+func TestFailedStepIsNotReportedAsAwaitingApproval(t *testing.T) {
+	l, state, db, _ := harness(t)
+	l.Rec.Applier = &haltingApplier{failName: "app"}
+	if err := state.Put(container("app", "n1", testImage)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	o := observedFor(t, db, "Container", "app")
+	if o.Healthy {
+		t.Fatalf("a failed step reported healthy: %+v", o)
+	}
+	if o.AwaitingApproval {
+		t.Errorf("a failed step claims it is waiting for approval, which tells the operator "+
+			"nothing is wrong when something is: %+v", o)
 	}
 }
 

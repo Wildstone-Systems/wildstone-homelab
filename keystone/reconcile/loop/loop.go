@@ -388,13 +388,25 @@ func (l *Loop) recordObserved(g nodeGroup, outcome *reconcile.Outcome) {
 		}
 		if action, needsWork := planned[key]; needsWork && !converged[key] {
 			o.Healthy = false
-			// The plan action is the whole diagnosis, and it is the
-			// useful one: Create means observe found nothing there.
-			switch action {
-			case plan.ActionCreate:
-				o.Detail = "absent: create planned, not applied"
-			default:
-				o.Detail = "drifted: " + action.String() + " planned, not applied"
+			// WHY it is not applied is the part an operator needs, and
+			// the two reasons are nothing alike (F75). A Medium/High
+			// plan waits for a human — the system behaving exactly as
+			// designed — and saying only "not applied" makes that
+			// indistinguishable from a homelab that has broken.
+			//
+			// On the alpha VM a restart showed 29 of 51 red while every
+			// container was up; the reading fooled the person who wrote
+			// the fix, with the plan history open in front of them.
+			if outcome.PendingApproval {
+				o.AwaitingApproval = true
+				o.Detail = action.String() + " is waiting for your approval; nothing is wrong with this resource"
+			} else {
+				switch action {
+				case plan.ActionCreate:
+					o.Detail = "absent: create planned, not applied"
+				default:
+					o.Detail = "drifted: " + action.String() + " planned, not applied"
+				}
 			}
 		}
 		if detail, bad := unhealthy[key]; bad {

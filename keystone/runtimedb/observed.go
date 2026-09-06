@@ -11,12 +11,17 @@ import (
 // half of the spec/status split (ADR-W004 A1: status never touches the
 // Statefile). The reconciler writes it (E3); the public API serves it.
 type Observed struct {
-	Kind      string    `json:"kind"`
-	Name      string    `json:"name"`
-	Node      string    `json:"node,omitempty"`
-	Healthy   bool      `json:"healthy"`
-	Detail    string    `json:"detail,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Kind    string `json:"kind"`
+	Name    string `json:"name"`
+	Node    string `json:"node,omitempty"`
+	Healthy bool   `json:"healthy"`
+	// AwaitingApproval means this resource is not converged because a
+	// plan is waiting for a human, not because anything failed (F75).
+	// Distinct from Healthy so a surface can say "waiting for you"
+	// rather than colouring it the same red as a broken service.
+	AwaitingApproval bool      `json:"awaitingApproval,omitempty"`
+	Detail           string    `json:"detail,omitempty"`
+	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
 // UpsertObserved records the latest observation for (kind, name).
@@ -25,12 +30,13 @@ func (db *DB) UpsertObserved(o Observed) error {
 		return fmt.Errorf("runtimedb: observed kind and name required")
 	}
 	_, err := db.sql.Exec(
-		`INSERT INTO observed (kind, name, node, healthy, detail, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		`INSERT INTO observed (kind, name, node, healthy, detail, awaiting_approval, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (kind, name) DO UPDATE SET
 		   node = excluded.node, healthy = excluded.healthy,
-		   detail = excluded.detail, updated_at = excluded.updated_at`,
-		o.Kind, o.Name, o.Node, boolInt(o.Healthy), o.Detail, now())
+		   detail = excluded.detail, awaiting_approval = excluded.awaiting_approval,
+		   updated_at = excluded.updated_at`,
+		o.Kind, o.Name, o.Node, boolInt(o.Healthy), o.Detail, boolInt(o.AwaitingApproval), now())
 	if err != nil {
 		return fmt.Errorf("runtimedb: upserting observed %s/%s: %w", o.Kind, o.Name, err)
 	}
@@ -50,7 +56,7 @@ func (db *DB) DeleteObserved(kind, name string) error {
 // ListObserved returns every observation, (kind, name)-ordered.
 func (db *DB) ListObserved() ([]Observed, error) {
 	rows, err := db.sql.Query(
-		`SELECT kind, name, node, healthy, detail, updated_at FROM observed ORDER BY kind, name`)
+		`SELECT kind, name, node, healthy, detail, awaiting_approval, updated_at FROM observed ORDER BY kind, name`)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing observed: %w", err)
 	}
@@ -58,12 +64,12 @@ func (db *DB) ListObserved() ([]Observed, error) {
 	var out []Observed
 	for rows.Next() {
 		var o Observed
-		var healthy int
+		var healthy, awaiting int
 		var ts string
-		if err := rows.Scan(&o.Kind, &o.Name, &o.Node, &healthy, &o.Detail, &ts); err != nil {
+		if err := rows.Scan(&o.Kind, &o.Name, &o.Node, &healthy, &o.Detail, &awaiting, &ts); err != nil {
 			return nil, err
 		}
-		o.Healthy = healthy != 0
+		o.Healthy, o.AwaitingApproval = healthy != 0, awaiting != 0
 		if o.UpdatedAt, err = time.Parse(time.RFC3339Nano, ts); err != nil {
 			return nil, fmt.Errorf("runtimedb: bad observed timestamp %q: %w", ts, err)
 		}
