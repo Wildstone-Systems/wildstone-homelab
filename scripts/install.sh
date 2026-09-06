@@ -222,6 +222,15 @@ if [ -n "$TAILSCALE_AUTHKEY" ]; then
   setup_tailscale
 elif [ -n "$TAILSCALE_HOSTNAME" ]; then
   fail "--tailscale-hostname needs --tailscale-authkey (or TAILSCALE_AUTHKEY)"
+elif command -v tailscale >/dev/null 2>&1 &&
+     tailscale status --json 2>/dev/null | grep -q '"BackendState":[[:space:]]*"Running"'; then
+  # Tailscale is already the operator's, and they passed no key because
+  # there is nothing to join. Expose the socket anyway: it is what the
+  # tailnet ingress profile needs, and gating it behind an auth key made
+  # it unreachable for exactly the hosts most likely to want it — the
+  # ones where Tailscale was set up before Wildstone was.
+  log "tailscale already joined and no auth key given; exposing its socket only"
+  expose_tailscale_socket
 fi
 
 # ---------------------------------------------------------------- fetch
