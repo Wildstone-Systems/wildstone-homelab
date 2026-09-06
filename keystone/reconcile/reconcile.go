@@ -1088,6 +1088,48 @@ func (r *Reconciler) retryProvider(ctx context.Context, fn func() error) error {
 
 // ---------------------------------------------------------------- managed cache
 
+// ManagedRef names one resource the reconciler believes it manages.
+type ManagedRef struct {
+	Kind resource.Kind
+	Name string
+}
+
+// SeedManaged restores what the reconciler manages, from state that
+// outlived the process (F76).
+//
+// `managed` is the record for the kinds that CANNOT be observed on the
+// node — Secret, Volume, BackupPlan. Nothing on a host answers "does
+// this declared secret exist", so the reconciler remembers instead, and
+// its observer reports a key it does not remember as absent.
+//
+// That record was in-memory only, so every restart emptied it and the
+// next tick concluded that every secret, volume and backup plan on a
+// perfectly healthy node was missing. It then planned creates for all of
+// them, and the Console showed 27 of 45 resources unhealthy while every
+// container was up — on an upgrade, which is exactly when an operator
+// cannot tell a broken install from a confused one.
+//
+// Seeding from the observed rows is right because those rows ARE the
+// previous answer: a row exists for what the reconciler last saw
+// present, written by the same loop that is now restarting. Anything
+// genuinely gone since is caught by the next observation, which is the
+// level-triggered behaviour the whole design rests on.
+func (r *Reconciler) SeedManaged(nodeID string, refs []ManagedRef) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.managed == nil {
+		r.managed = map[string]map[resKey]bool{}
+	}
+	m := r.managed[nodeID]
+	if m == nil {
+		m = map[resKey]bool{}
+		r.managed[nodeID] = m
+	}
+	for _, ref := range refs {
+		m[resKey{ref.Kind, ref.Name}] = true
+	}
+}
+
 func (r *Reconciler) markManaged(nodeID string, k resKey, present bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"io"
 	"log/slog"
 	"net"
@@ -470,6 +471,30 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		Connected: gw.Connected,
 		Log:       log,
 	}
+	// Restore what the reconciler manages before the first tick (F76).
+	//
+	// Secret, Volume and BackupPlan cannot be observed on a node — no op
+	// answers "does this declared secret exist" — so the reconciler
+	// remembers, and an unremembered key reads as absent. That memory was
+	// in-process, so every restart emptied it and the next tick planned
+	// creates for every one of them on a healthy node.
+	//
+	// The observed rows are the previous answer, written by this same
+	// loop before it stopped. Anything genuinely gone is caught by the
+	// next observation.
+	if rows, oerr := db.ListObserved(); oerr != nil {
+		log.Error("seeding managed state; the first tick may re-plan resources that already exist", "err", oerr)
+	} else {
+		byNode := map[string][]reconcile.ManagedRef{}
+		for _, o := range rows {
+			byNode[o.Node] = append(byNode[o.Node], reconcile.ManagedRef{Kind: resource.Kind(o.Kind), Name: o.Name})
+		}
+		for node, refs := range byNode {
+			svc.Rec.SeedManaged(node, refs)
+		}
+		log.Info("managed state restored", "nodes", len(byNode), "resources", len(rows))
+	}
+
 	go svc.Run(context.Background(), reconcileEvery)
 
 	// Backup engine (ADR-W011 A4): the timer duty that turns BackupPlan
