@@ -165,7 +165,7 @@ func (r *Reconciler) observeJob(ctx context.Context, nodeID string, k resKey, wa
 		return placeholderResource(resource.KindJob, k.Name), true, nil
 	}
 
-	wantHash := specHash(jobRunSpec(want.Job), ContainerNetwork, configDigest(jobRunSpec(want.Job), cfgContents))
+	wantHash := specHash(jobRunSpec(want.Job), ContainerNetwork, configDigest(r.ManagedPrefix, jobRunSpec(want.Job), cfgContents))
 	if classifyJob(res.GetInspectContainer(), wantHash) == jobSucceeded {
 		return want, true, nil
 	}
@@ -199,7 +199,7 @@ func (r *Reconciler) applyJobStep(ctx context.Context, nodeID string, step plan.
 			sr.Error = pr
 			return sr
 		}
-		digest := configDigest(run, cfgContents)
+		digest := configDigest(r.ManagedPrefix, run, cfgContents)
 		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, run, ContainerNetwork, digest))
 		if err != nil {
 			sr.Error = err.Error()

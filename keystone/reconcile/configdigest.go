@@ -92,6 +92,26 @@ func managedConfigContents(managedPrefix string, desiredByKey map[resKey]resourc
 	out[lldapGroupsPath(managedPrefix)] = string(renderLdapGroups(desired))
 	out[lldapUsersPath(managedPrefix)] = string(renderLdapUsers(desired))
 
+	// Authelia's access rules and the dashboard's service list (F73).
+	// These belong here for exactly the reason the clients file does, and
+	// their absence was not a judgement — it was an omission, and it cost
+	// two silent failures in one evening.
+	//
+	// Authelia enforced a stale access_control for 49 minutes after an
+	// approved plan corrected it, still answering 403 to a login that had
+	// just been fixed. Homepage served a stale service list for an hour
+	// after a capability was installed, showing an empty dashboard. Both
+	// times the file on disk matched desired state exactly, so nothing
+	// was drifting and everything reported healthy — which is precisely
+	// the failure this file exists to prevent, reached by the one route
+	// it did not cover.
+	//
+	// Neither app watches its own config, so the exclusion granted to
+	// Caddy above does not apply: for these, replacing the container IS
+	// the reload.
+	out[autheliaAccessPath(managedPrefix)] = string(renderAutheliaAccess(desired))
+	out[homepageServicesPath(managedPrefix)] = string(renderHomepageServices(desired))
+
 	return out
 }
 
@@ -103,7 +123,7 @@ func managedConfigContents(managedPrefix string, desiredByKey map[resKey]resourc
 // and is NOT replaced when this lands. Only the containers that actually
 // mount managed config churn once, which is the smallest correct blast
 // radius for the change.
-func configDigest(spec *resource.ContainerSpec, contents map[string]string) string {
+func configDigest(managedPrefix string, spec *resource.ContainerSpec, contents map[string]string) string {
 	if spec == nil || len(contents) == 0 {
 		return ""
 	}
@@ -116,6 +136,20 @@ func configDigest(spec *resource.ContainerSpec, contents map[string]string) stri
 	for _, m := range spec.Mounts {
 		if !strings.HasPrefix(m.Source, "/") {
 			continue // named volume: nothing of ours is under it
+		}
+		// A mount of the managed prefix ROOT makes a container a
+		// spectator, not a consumer (F73). Only the ingress profiles
+		// mount it, and they do so to reach <prefix>/routes/ — every
+		// actual consumer mounts its own capability subtree or the single
+		// file it reads.
+		//
+		// Without this, adding a Route would change the dashboard's
+		// service list and Authelia's rules, both under the prefix, and
+		// replace the front door on every Route change — trading Caddy's
+		// free --watch reload for a restart, which the exclusion at the
+		// top of this file exists to avoid.
+		if managedPrefix != "" && path.Clean(m.Source) == path.Clean(managedPrefix) {
+			continue
 		}
 		for p := range contents {
 			if !underMount(m.Source, p) || seen[p] {

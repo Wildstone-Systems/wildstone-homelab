@@ -703,7 +703,7 @@ func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resK
 		return &containerObserveResult{}, placeholderResource(resource.KindContainer, k.Name), nil
 	}
 	inspect := res.GetInspectContainer()
-	if inspect.GetLabels()[specHashLabel] == specHash(want.Container, ContainerNetwork, configDigest(want.Container, cfgContents)) && inspect.GetRunning() {
+	if inspect.GetLabels()[specHashLabel] == specHash(want.Container, ContainerNetwork, configDigest(r.ManagedPrefix, want.Container, cfgContents)) && inspect.GetRunning() {
 		return &containerObserveResult{}, want, nil
 	}
 	// Present but stale (spec drifted, or a pre-spec-hash container) or
@@ -1173,7 +1173,7 @@ func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step
 			sr.Error = pr
 			return sr
 		}
-		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, want.Container, ContainerNetwork, configDigest(want.Container, cfgContents)))
+		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, want.Container, ContainerNetwork, configDigest(r.ManagedPrefix, want.Container, cfgContents)))
 		if err != nil {
 			sr.Error = err.Error()
 			return sr
