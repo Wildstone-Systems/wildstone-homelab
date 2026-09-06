@@ -127,7 +127,7 @@ type serviceAddress struct {
 	Route string `json:"route"`
 	// URL is what a BROWSER should use — derived from the ingress
 	// posture, so the ported form under a tailnet rather than the
-	// hostname the package declared (ADR-W022 A1). This is the answer to
+	// hostname the package declared (ADR-W024 A1). This is the answer to
 	// "which port is this on", which previously existed only in
 	// <prefix>/routes/ on the node.
 	URL string `json:"url"`

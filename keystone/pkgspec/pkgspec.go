@@ -128,13 +128,13 @@ var riskTiers = map[string]bool{
 	"domestic": true,
 }
 
-// EventTypeRegexp is the household event type shape (ADR-W022 A2),
+// EventTypeRegexp is the household event type shape (ADR-W024 A2),
 // duplicated from keystone/household so this package stays a leaf; a test
 // there pins the two equal.
 var EventTypeRegexp = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
 
 // publishShapes is the closed set of ways a package's events reach the
-// household intake (ADR-W022 A10).
+// household intake (ADR-W024 A10).
 var publishShapes = map[string]bool{
 	// native: the app itself posts to the intake. No shim.
 	"native": true,
@@ -147,7 +147,7 @@ var publishShapes = map[string]bool{
 }
 
 // eventSubjects is the closed set of what an event's subject identifies
-// (ADR-W022 A8). Mapping is best-effort per app; "none" is an honest
+// (ADR-W024 A8). Mapping is best-effort per app; "none" is an honest
 // answer for a household-wide fact.
 var eventSubjects = map[string]bool{
 	"member": true, "device": true, "household": true, "none": true,
@@ -161,7 +161,7 @@ var eventFieldTypes = map[string]bool{
 }
 
 // PublishesSpec declares the household events a package emits and how
-// they reach the intake (ADR-W022 A10). Parsed and validated here;
+// they reach the intake (ADR-W024 A10). Parsed and validated here;
 // keystone/capability synthesises the publisher secret from it. A package
 // that publishes nothing omits the block — but every package should
 // answer the question; silence is not an answer.
@@ -186,7 +186,7 @@ type EventField struct {
 }
 
 // ExternalConfigDecl declares a ConfigFile this package renders for a
-// consumer Wildstone does NOT run (ADR-W022 A10, the "config" shim
+// consumer Wildstone does NOT run (ADR-W024 A10, the "config" shim
 // shape). It is the counterpart of a Secret's `provided: true`: the
 // thing on the other end of this file is outside Wildstone, so the
 // invariant that every rendered config is mounted into a container of
@@ -230,7 +230,7 @@ type Package struct {
 	Lifecycle  Lifecycle       `yaml:"lifecycle,omitempty"`
 	AgentTools []AgentToolSpec `yaml:"agentTools,omitempty"`
 	// Publishes declares the household events this package emits
-	// (ADR-W022 A10). nil means it emits none.
+	// (ADR-W024 A10). nil means it emits none.
 	Publishes *PublishesSpec `yaml:"publishes,omitempty"`
 	// ExternalConfig declares rendered ConfigFiles read by something
 	// Wildstone does not run.

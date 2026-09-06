@@ -20,7 +20,7 @@ func automationResource(name string) resource.Resource {
 	}
 }
 
-// An Automation is Keystone-owned (ADR-W022 A1): it is applied nowhere,
+// An Automation is Keystone-owned (ADR-W024 A1): it is applied nowhere,
 // so a pass over one converges with no steps, needs no Applier and no
 // Provider, and never asks for approval — the plan that put it in the
 // Statefile was the whole act.

@@ -1,6 +1,6 @@
 package api
 
-// Household automations (ADR-W022 H3): replaying a rule against history
+// Household automations (ADR-W024 H3): replaying a rule against history
 // with no side effects — the only way to test a rule before approving it
 // (A7), and what the Butler will use to check its own drafts (H7).
 
@@ -104,7 +104,7 @@ func (s *Server) replayAutomation(r *http.Request, id principal.Identity) (any, 
 	}
 
 	// One implementation, shared with the Butler's dry_run_automation
-	// tool (ADR-W022 H7): a rule the Butler tried is a rule the operator
+	// tool (ADR-W024 H7): a rule the Butler tried is a rule the operator
 	// can try identically, and neither gets a different verdict.
 	res, err := s.Automation.ReplayDraft(r.Context(), rule, s.Policy, id.Name, string(id.Role), from, to, limit)
 	if err != nil {

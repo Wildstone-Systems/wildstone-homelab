@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// HouseholdEvent is one row of the household event stream (ADR-W022 A2):
+// HouseholdEvent is one row of the household event stream (ADR-W024 A2):
 // a fact about the household — an arrival, a meal, a calendar change —
 // as distinct from the operational stream in Event. Source is stamped
 // from the publishing principal, RecordedAt by AppendHouseholdEvent;
@@ -115,7 +115,7 @@ func (db *DB) HouseholdEventsAfter(after int64, limit int) ([]HouseholdEvent, er
 
 // HouseholdEventsSince returns up to limit household events that occurred
 // at or after since, oldest first — the window shape a handler's "was
-// breakfast logged this morning?" check needs (ADR-W022 A6). occurred_at
+// breakfast logged this morning?" check needs (ADR-W024 A6). occurred_at
 // stores RFC3339Nano UTC, so the comparison is lexicographic.
 func (db *DB) HouseholdEventsSince(since time.Time, limit int) ([]HouseholdEvent, error) {
 	if limit <= 0 {
@@ -161,7 +161,7 @@ func scanHouseholdEvents(rows *sql.Rows) ([]HouseholdEvent, error) {
 
 // RevokeTokensFor revokes every live token held by principal and returns
 // how many it revoked. Re-minting a publisher's token is a rotation
-// (ADR-W022 A10): the old credential must stop working the moment the
+// (ADR-W024 A10): the old credential must stop working the moment the
 // new one exists, not linger until someone remembers it.
 func (db *DB) RevokeTokensFor(principal string) (int64, error) {
 	res, err := db.sql.Exec(

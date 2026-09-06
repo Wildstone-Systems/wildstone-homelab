@@ -1,6 +1,6 @@
 package butler
 
-// Natural-language rule authoring (ADR-W022 H7): the two read tools that
+// Natural-language rule authoring (ADR-W024 H7): the two read tools that
 // let the Butler turn "whenever I get home, ask whether I got the mail"
 // into an Automation the runtime already understands.
 //

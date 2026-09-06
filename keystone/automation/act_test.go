@@ -86,7 +86,7 @@ func started(t *testing.T, rules ...resource.Resource) (*Engine, *runtimedb.DB) 
 	return e, db
 }
 
-// mailRule is the ADR-W022 A8 example: a rule with no escalation, so H4
+// mailRule is the ADR-W024 A8 example: a rule with no escalation, so H4
 // can close the loop without a model in it.
 func mailRule() resource.Resource {
 	return resource.Resource{

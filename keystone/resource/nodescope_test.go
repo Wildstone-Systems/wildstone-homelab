@@ -49,7 +49,7 @@ func TestNodeScopeIsEnforcedBothWays(t *testing.T) {
 // TestNodeScopedMatchesDispatch is the coupling check: NodeScoped must
 // agree with how the reconciler actually dispatches each kind. DnsRecord
 // is provider-backed (ADR-W004 A5) and Automation is Keystone-owned
-// (ADR-W022 A1) — neither reaches a node agent; everything else in the
+// (ADR-W024 A1) — neither reaches a node agent; everything else in the
 // closed registry does. Adding a kind without deciding this fails here
 // rather than at runtime on the operator's node.
 func TestNodeScopedMatchesDispatch(t *testing.T) {
@@ -111,7 +111,7 @@ func validResourceOfKind(t *testing.T, k Kind) Resource {
 		r.Job = &JobSpec{Run: ContainerSpec{Image: "docker.io/library/nginx@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
 	case KindAutomation:
 		// A rule belongs to the household or a capability, never to
-		// "system" (ADR-W022 A1): someone must be there to be asked.
+		// "system" (ADR-W024 A1): someone must be there to be asked.
 		r.Metadata.Owner = "household"
 		r.Automation = &AutomationSpec{Description: "r1",
 			Trigger: AutomationTrigger{EventType: "person.left_home"},

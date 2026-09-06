@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// breakfastRule is the ADR-W022 H6 target as a resource: the shape every
+// breakfastRule is the ADR-W024 H6 target as a resource: the shape every
 // layer above has to carry.
 func breakfastRule() Resource {
 	return Resource{
@@ -147,7 +147,7 @@ func TestAutomationValidation(t *testing.T) {
 		})
 	}
 	// The schema accepts the whole tier vocabulary; which tiers a rule
-	// may carry is policy's call (ADR-W022 A5), the Route.auth precedent.
+	// may carry is policy's call (ADR-W024 A5), the Route.auth precedent.
 	for _, tier := range []string{"read", "low", "medium", "high", "domestic"} {
 		r := breakfastRule()
 		r.Automation.Action.Tier = tier

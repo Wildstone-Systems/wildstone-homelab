@@ -80,7 +80,7 @@ type Server struct {
 	// answering 503; session history stays readable.
 	ButlerHost *ButlerHost
 
-	// Automation is the household rule engine (ADR-W022 H3), used here
+	// Automation is the household rule engine (ADR-W024 H3), used here
 	// only for side-effect-free replay; cmd/keystone runs its loop. New
 	// wires one over the same DB and Statefile.
 	Automation *automation.Engine
@@ -195,7 +195,7 @@ func (s *Server) Handler() http.Handler {
 	// Morning report (ADR-W017 A5): deterministic digest, read verb.
 	mux.Handle("GET /api/v1/reports/morning", s.handle(principal.VerbRead, s.morningReport))
 
-	// Household events (ADR-W022): the intake (emit — the publisher
+	// Household events (ADR-W024): the intake (emit — the publisher
 	// role's only verb), the cursor (read), and publisher credentialing
 	// (manage).
 	mux.Handle("POST /api/v1/household/events", s.handle(principal.VerbEmit, s.emitHouseholdEvent))

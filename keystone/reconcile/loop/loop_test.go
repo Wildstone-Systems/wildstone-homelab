@@ -324,7 +324,7 @@ func TestBackupPlansAreNotLoopWork(t *testing.T) {
 	}
 }
 
-// An approved plan whose only content is a household rule (ADR-W022 A1)
+// An approved plan whose only content is a household rule (ADR-W024 A1)
 // resolves to applied with no agent involved, and the rule is recorded
 // as observed-healthy at no node.
 func TestPlanTickWithAutomationOnlyResolves(t *testing.T) {

@@ -54,13 +54,13 @@ naming the set. This cannot make a combination *valid*; nothing here pulls
 an image, so nothing here knows what one contains. It only stops the tool
 from creating a mismatch the author never chose.
 
-## The adapter package (ADR-W022 H5)
+## The adapter package (ADR-W024 H5)
 
 `home-automation/` is unlike the rest: it runs nothing. A household with
 home automation already has a Home Assistant, so instead of adopting it
 the package templates one managed file that configures Home Assistant to
 publish household events into Wildstone's intake — the "config" shim
-shape (ADR-W022 A10). It is the model for any third-party service that
+shape (ADR-W024 A10). It is the model for any third-party service that
 can already call a webhook.
 
 Two things it demonstrates that a normal package does not:

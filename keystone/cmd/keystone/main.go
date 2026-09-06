@@ -70,9 +70,9 @@ func main() {
 	butlerProvider := flag.String("butler-provider", "off", "Butler LLM provider: off|anthropic|openai|ollama (ADR-W017 A4); API keys come ONLY from ANTHROPIC_API_KEY/OPENAI_API_KEY env vars, never a flag")
 	butlerModel := flag.String("butler-model", "", "Butler model name; empty uses the provider's default")
 	butlerEndpoint := flag.String("butler-endpoint", "", "Butler provider base URL (openai-compatible gateways, ollama host); empty uses the provider's default")
-	automationEvery := flag.Duration("automation-interval", 15*time.Second, "how often the household automation engine ticks between event pokes (ADR-W022 H3)")
+	automationEvery := flag.Duration("automation-interval", 15*time.Second, "how often the household automation engine ticks between event pokes (ADR-W024 H3)")
 	householdTZ := flag.String("household-timezone", "Local", "IANA time zone the household's rules keep (timeOfDay/weekday conditions), e.g. Europe/London")
-	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W022 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
+	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W024 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
 	replyURL := flag.String("household-reply-url", "", "household event intake URL a notification's reply buttons post to, as a PHONE can reach it (not Keystone's loopback address); empty means notifications carry no reply buttons and a rule that asks for them fails loudly")
 	replyTTL := flag.Duration("household-reply-ttl", 12*time.Hour, "how long a notification's reply token stays valid")
 	flag.Parse()
@@ -165,7 +165,7 @@ func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reco
 }
 
 // householdConfig carries the household automation flags into serve
-// (ADR-W022 H3).
+// (ADR-W024 H3).
 type householdConfig struct {
 	// Interval between engine ticks when no event pokes it.
 	Interval time.Duration
@@ -189,7 +189,7 @@ type householdConfig struct {
 const butlerSessionPrincipal = "butler"
 
 // replyPrincipal publishes a household member's answer to a
-// notification (ADR-W022 H4). It holds the publisher role — one verb,
+// notification (ADR-W024 H4). It holds the publisher role — one verb,
 // emit — because its token travels to a phone inside a notification.
 // Whoever holds one can claim the household answered something, and can
 // do nothing else: not read state, not propose, not approve.
@@ -216,7 +216,7 @@ func replyMinter(principals *principal.Store, db *runtimedb.DB, ttl time.Duratio
 }
 
 // agentToolSources flattens a catalog's agentTools declarations for the
-// domestic gateway's declaration check (ADR-W022 A5).
+// domestic gateway's declaration check (ADR-W024 A5).
 func agentToolSources(cat *catalog.Catalog) []domestic.AgentToolSource {
 	if cat == nil {
 		return nil
@@ -444,7 +444,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	//
 	// Loaded before the household engine because the domestic gateway
 	// checks every household action against the agentTools its owning
-	// package declares (ADR-W022 A5).
+	// package declares (ADR-W024 A5).
 	var cat *catalog.Catalog
 	if catalogDir != "" {
 		loaded, cerr := catalog.LoadDir(catalogDir)
@@ -455,7 +455,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		log.Info("catalog loaded", "dir", catalogDir, "packages", len(cat.List()))
 	}
 
-	// Domestic gateway (ADR-W022 A5, H4): the only way a household rule
+	// Domestic gateway (ADR-W024 A5, H4): the only way a household rule
 	// acts. Executors are registered here and nowhere else; a rule that
 	// names a tool this deployment has not wired is refused with a
 	// reason on the household stream rather than failing silently.
@@ -496,7 +496,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		log.Info("household actions wired", "tools", actions.Tools(), "replies", householdCfg.ReplyURL != "")
 	}
 
-	// Household automation engine (ADR-W022 H3): follows the household
+	// Household automation engine (ADR-W024 H3): follows the household
 	// stream, records every decision, and hands a fired rule's action to
 	// the gateway above.
 	householdLoc, err := time.LoadLocation(householdCfg.Timezone)
@@ -573,7 +573,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			}
 			return out, nil
 		}
-		// Household rule authoring (ADR-W022 H7). Both seams are read
+		// Household rule authoring (ADR-W024 H7). Both seams are read
 		// paths: one describes what a rule may say HERE, the other
 		// replays a draft. Neither can enable a rule — proposing it
 		// still produces a plan a human approves.
@@ -628,7 +628,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		apiSrv.ButlerHost = &api.ButlerHost{Provider: bp, Gateway: bgw, Mode: mode}
 		log.Info("butler enabled", "provider", bp.Name(), "mode", string(mode))
 
-		// Household escalation (ADR-W022 A6): the same provider, asked a
+		// Household escalation (ADR-W024 A6): the same provider, asked a
 		// much smaller question. A Phraser is given no tools at all, and
 		// its answer only ever replaces the wording of one already-
 		// approved action param — so this wiring cannot widen what a

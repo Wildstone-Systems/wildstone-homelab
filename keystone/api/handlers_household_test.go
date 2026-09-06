@@ -329,7 +329,7 @@ func TestMintPublisherPlacementFailureRevokes(t *testing.T) {
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
 // A household rule is proposed, policy-checked, and approved through the
-// ONE plan pipeline (ADR-W022 A1): the Butler may draft it, a human
+// ONE plan pipeline (ADR-W024 A1): the Butler may draft it, a human
 // signs it, and a rule that reaches for an infrastructure tier is
 // refused at proposal regardless of who wrote it.
 func TestAutomationTravelsThePlanPipeline(t *testing.T) {
@@ -385,7 +385,7 @@ func TestAutomationTravelsThePlanPipeline(t *testing.T) {
 	}
 }
 
-// Replay runs a rule over history with no side effects (ADR-W022 A7): an
+// Replay runs a rule over history with no side effects (ADR-W024 A7): an
 // approved rule by name, or a draft by document, from any read principal
 // — and a new event pokes the engine.
 func TestAutomationReplay(t *testing.T) {
@@ -481,7 +481,7 @@ spec:
 }
 
 // TestHouseholdQuestionAndAnswerLoop is the H4 deliverable end to end
-// (ADR-W022): a rule fires, the domestic gateway sends a question with
+// (ADR-W024): a rule fires, the domestic gateway sends a question with
 // answer buttons, a household device taps one, and the answer lands back
 // on the household stream correlated to the question that asked it — no
 // chat surface, no polling, no second channel.
@@ -648,7 +648,7 @@ spec:
 }
 
 // TestHomeAssistantWireShapeIsAccepted posts the exact body the rendered
-// Home Assistant adapter sends (ADR-W022 H5) — Jinja resolved the way
+// Home Assistant adapter sends (ADR-W024 H5) — Jinja resolved the way
 // Home Assistant would resolve it, as raw JSON on the wire rather than
 // through this repo's own envelope type.
 //
@@ -734,7 +734,7 @@ func (p *phrasingProvider) Chat(_ context.Context, req provider.ChatRequest) (*p
 	return &provider.ChatResponse{Text: p.reply}, nil
 }
 
-// TestBreakfastEscalationEndToEnd is the ADR-W022 §5 flow, whole: Home
+// TestBreakfastEscalationEndToEnd is the ADR-W024 §5 flow, whole: Home
 // Assistant's departure event arrives, the rule finds no meal logged,
 // the engine gathers the last few breakfasts, the Butler phrases one
 // informed question from them, and the domestic gateway sends it — with

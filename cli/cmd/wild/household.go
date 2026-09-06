@@ -1,6 +1,6 @@
 package main
 
-// `wild household` (ADR-W022 H1): the household event stream as an API
+// `wild household` (ADR-W024 H1): the household event stream as an API
 // client. `events` follows the cursor; `emit` publishes one fact (an
 // admin token may emit — handy for testing a rule before a real shim
 // exists); `publisher` gives a capability its publisher credential.

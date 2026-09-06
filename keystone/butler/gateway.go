@@ -73,7 +73,7 @@ type ToolGateway struct {
 	// runtimedb. nil makes diagnose answer that no source is configured.
 	Observed func() ([]ObservedResource, error)
 	// AutomationVocabulary is the injected description of what a
-	// household rule may say on THIS deployment (ADR-W022 H7): the event
+	// household rule may say on THIS deployment (ADR-W024 H7): the event
 	// types publishers declare and the actions the domestic gateway can
 	// run. cmd/keystone wires it; this package imports neither the
 	// catalog nor the gateway. nil makes get_automation_schema say the

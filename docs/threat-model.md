@@ -60,7 +60,7 @@ the test that pins it.
   API responses, and Butler transcripts are all behind the shared
   redactor.
 
-### Household publishers and reply tokens (ADR-W022)
+### Household publishers and reply tokens (ADR-W024)
 
 - A publisher holds one verb, `emit`. A compromised integration shim
   can lie about the house — claim an arrival, a meal, a calendar

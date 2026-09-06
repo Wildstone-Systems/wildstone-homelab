@@ -16,7 +16,7 @@ const (
 	RoleOperator Role = "operator"
 	RoleButler   Role = "butler"
 	// RolePublisher may emit household events and nothing else
-	// (ADR-W022 A3): an integration's shim can lie about the house; it
+	// (ADR-W024 A3): an integration's shim can lie about the house; it
 	// cannot read state, propose, or approve.
 	RolePublisher Role = "publisher"
 )

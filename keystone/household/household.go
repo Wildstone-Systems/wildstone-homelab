@@ -1,4 +1,4 @@
-// Package household owns the household event envelope (ADR-W022 A2): the
+// Package household owns the household event envelope (ADR-W024 A2): the
 // canonical shape every publisher — a first-party app, a sidecar adapter,
 // Home Assistant calling a webhook — speaks, and the rules that make an
 // envelope acceptable. Storage is keystone/runtimedb; this package owns
@@ -8,7 +8,7 @@
 // happened, when, to whom, in a small bounded payload. Nothing here
 // interprets one. Anything that reaches a model later does so through the
 // same redaction and untrusted-content envelope every other external text
-// gets (ADR-W022 A4).
+// gets (ADR-W024 A4).
 package household
 
 import (
@@ -25,7 +25,7 @@ import (
 const (
 	// MaxPayloadBytes bounds the payload. An event carries the few fields a
 	// handler needs to decide; the application's database stays
-	// authoritative for the rest (ADR-W022 A2).
+	// authoritative for the rest (ADR-W024 A2).
 	MaxPayloadBytes = 4096
 	// MaxEventIDBytes bounds the publisher-supplied id. A UUID or ULID
 	// fits with room; a payload smuggled into the id does not.
@@ -48,7 +48,7 @@ var EventTypeRegexp = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`
 // Envelope is the wire shape a publisher sends. Source and recorded_at
 // are NOT here: the intake stamps source from the publisher's token and
 // recorded_at from its own clock, so a publisher can only ever speak for
-// itself (ADR-W022 A3).
+// itself (ADR-W024 A3).
 type Envelope struct {
 	EventID       string          `json:"eventId"`
 	OccurredAt    time.Time       `json:"occurredAt"`

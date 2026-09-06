@@ -12,7 +12,7 @@ import (
 )
 
 // AnsweredEventType is the household event a reply button publishes
-// (ADR-W022 H4). It closes the loop the notification opened: the
+// (ADR-W024 H4). It closes the loop the notification opened: the
 // question, the answer, and the rule that asked are one correlated
 // thread on the household stream.
 const AnsweredEventType = "household.answered"

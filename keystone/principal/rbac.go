@@ -17,7 +17,7 @@ const (
 	VerbApprove Verb = "approve"
 	// VerbManage covers principal/token administration and audit reads.
 	VerbManage Verb = "manage"
-	// VerbEmit covers publishing household events (ADR-W022 A3) — the
+	// VerbEmit covers publishing household events (ADR-W024 A3) — the
 	// one verb a publisher holds, and the only thing it can do.
 	VerbEmit Verb = "emit"
 )

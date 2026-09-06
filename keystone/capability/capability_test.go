@@ -367,7 +367,7 @@ spec: { name: app-oidc, provided: true }
 
 // A package that publishes household events gets its publisher secret
 // synthesised — provided, on the package's node — and can reference it
-// as .Resolved.PublisherSecretRef (ADR-W022 A10).
+// as .Resolved.PublisherSecretRef (ADR-W024 A10).
 func TestExpandSynthesisesPublisherSecret(t *testing.T) {
 	pkg := simplePackage()
 	pkg.Publishes = &pkgspec.PublishesSpec{Shape: "sidecar", Events: []pkgspec.PublishedEvent{{Type: "widget.pressed"}}}

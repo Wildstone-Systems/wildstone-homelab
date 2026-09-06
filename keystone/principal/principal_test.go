@@ -165,7 +165,7 @@ func TestRBACTable(t *testing.T) {
 		{runtimedb.RoleButler, VerbApprove, false},
 		{runtimedb.RoleButler, VerbManage, false},
 		{runtimedb.RoleButler, VerbEmit, false},
-		// A publisher emits and nothing else (ADR-W022 A3).
+		// A publisher emits and nothing else (ADR-W024 A3).
 		{runtimedb.RolePublisher, VerbEmit, true},
 		{runtimedb.RolePublisher, VerbRead, false},
 		{runtimedb.RolePublisher, VerbPropose, false},

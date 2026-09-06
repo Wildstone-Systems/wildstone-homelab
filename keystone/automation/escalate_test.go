@@ -23,7 +23,7 @@ func (f *fakeEscalator) Escalate(_ context.Context, req EscalationRequest) (stri
 	return f.reply, f.err
 }
 
-// breakfastWithContext is the ADR-W022 §5 flow: leave home, no meal
+// breakfastWithContext is the ADR-W024 §5 flow: leave home, no meal
 // logged, ask an informed question phrased from the last few breakfasts.
 func breakfastWithContext() resource.Resource {
 	r := rule("breakfast-check",

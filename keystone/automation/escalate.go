@@ -1,6 +1,6 @@
 package automation
 
-// Escalation (ADR-W022 A6, work package H6): the one point where a
+// Escalation (ADR-W024 A6, work package H6): the one point where a
 // household rule involves a model, and the narrowest one that is useful.
 //
 // The engine has already decided that the rule fires, which tool runs, at
@@ -84,7 +84,7 @@ func (f EscalatorFunc) Escalate(ctx context.Context, req EscalationRequest) (str
 	return f(ctx, req)
 }
 
-// gatherFacts retrieves the rule's declared context providers (ADR-W022
+// gatherFacts retrieves the rule's declared context providers (ADR-W024
 // A6). Targeted retrieval, not history: each provider names one event
 // type, an optional same-subject scope, and a bounded count, and the
 // window ends at the trigger so a replay of the same moment sees the

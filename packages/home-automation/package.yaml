@@ -1,4 +1,4 @@
-# Home Automation capability: the Home Assistant adapter (ADR-W022 A10,
+# Home Automation capability: the Home Assistant adapter (ADR-W024 A10,
 # work package H5). This is the first third-party service to publish into
 # Wildstone's household event stream, and it does so in the "config"
 # shape: Home Assistant already knows how to call a webhook, so the
@@ -32,7 +32,7 @@
 #        homeassistant:
 #          packages: !include_dir_named /etc/wildstone/home-automation
 #
-# THE SUBJECT MAPPING (ADR-W022 A8). A household event's subject must
+# THE SUBJECT MAPPING (ADR-W024 A8). A household event's subject must
 # name someone Wildstone can reason about, and Home Assistant's notion of
 # a person is a `person.<object_id>` entity. This adapter declares the
 # mapping it can actually achieve: **the subject is the Home Assistant

@@ -8,7 +8,7 @@ section cites the ADR that decided it.
 The **Statefile** is a git-backed store of typed resources
 (ADR-W004): `Volume`, `ConfigFile`, `LdapGroup`, `OidcClient`,
 `Container`, `Route`, `DnsRecord`, `BackupPlan`, and the household's
-`Automation` (ADR-W022). Specs only — observed status never touches
+`Automation` (ADR-W024). Specs only — observed status never touches
 it. Container images must be digest-pinned (`repo@sha256:...`); the
 agent refuses anything else.
 
@@ -190,7 +190,7 @@ Everything — Console, `wild`, Butler — consumes the ONE public
 HTTP+JSON API (ADR-W007). Callers are **principals** with closed
 roles: `admin` (everything), `operator` (read/propose/approve),
 `butler` (read/propose — structurally cannot approve), `publisher`
-(emit household events, nothing else — ADR-W022). Tokens are
+(emit household events, nothing else — ADR-W024). Tokens are
 opaque `wst_` bearers, stored hashed. Every request runs
 authn → RBAC → rate limit → handler → audit, and every response body
 passes a redacting encoder that strips secret-shaped values.
@@ -246,7 +246,7 @@ never over live data; moving data in place is a deliberate human act.
 ## Household events: facts flow in, from publishers
 
 Alongside the operational event stream there is a second, separate
-one for the household itself (ADR-W022): "Mika left home", "breakfast
+one for the household itself (ADR-W024): "Mika left home", "breakfast
 logged", "school is closed Friday". Each is a small, structured fact —
 a publisher-supplied id, when it happened, whom it is about, a
 namespaced type such as `person.left_home`, and a bounded payload.
@@ -284,7 +284,7 @@ resolved on the node and never held by Keystone. Install it in two
 steps, credential first, then include the rendered file from
 `configuration.yaml`; the package header carries the exact sequence.
 
-Its **subject mapping** is the honest kind ADR-W022 A8 asks for: the
+Its **subject mapping** is the honest kind ADR-W024 A8 asks for: the
 subject is the Home Assistant person's object id, so `person.mika`
 publishes events about `mika`. That is the only stable per-person
 identifier Home Assistant exposes to a template, so the adapter declares
@@ -299,7 +299,7 @@ as the operational one (`GET /api/v1/household/events?after=N`, or
 ### A rule is approved once, then runs on its own
 
 What acts on those facts is an **`Automation`**: a household rule, and
-a Statefile resource like any other (ADR-W022 A1). It reads in order —
+a Statefile resource like any other (ADR-W024 A1). It reads in order —
 *when* this event arrives (`trigger`), *if* these checks all hold
 (`conditions`: an event absent or present in a window, a time of day, a
 weekday, a cooldown), gather *this much* context (`context`), optionally
@@ -313,7 +313,7 @@ human, never unattended drift repair. The Butler may draft one — it is
 the expected author — but it holds no approve verb, so a human signs it.
 Removing a rule is Low; it just stops.
 
-Policy holds every rule, whoever wrote it, to one line (ADR-W022 A5): an
+Policy holds every rule, whoever wrote it, to one line (ADR-W024 A5): an
 action's tier must be `read` or `domestic`. A rule cannot restart a
 container or change a route; those are plans, and stay plans. Its params
 are held to the same rule as a container's environment: a secret goes in
@@ -347,7 +347,7 @@ an hour by the time it is read is recorded as suppressed with a stale
 reason, because a "left home" from six hours ago must not ask about
 breakfast now.
 
-**Replay before trust** (ADR-W022 A7). `wild automation replay
+**Replay before trust** (ADR-W024 A7). `wild automation replay
 <name>` or `replay -file draft.yaml` runs a rule over the last week of
 real events and reports what it would have done, writing nothing. A
 draft is validated and policy-checked on the way, and its violations
@@ -358,7 +358,7 @@ the same endpoint to check its own drafts before proposing them.
 ### Acting: one narrow door, and a question that can be answered
 
 A fired rule's action goes through the **domestic gateway**, and there
-is no other way for a rule to touch anything (ADR-W022 A5). The gateway
+is no other way for a rule to touch anything (ADR-W024 A5). The gateway
 resolves `<capability>.<tool>` to a registered executor, refuses any
 tier but `read` or `domestic`, checks the owning package actually
 declares that tool in its `agentTools` block, bounds the call, and
@@ -399,7 +399,7 @@ stream is append-only and a decision record never changes:
 
 ### Escalation: the model chooses words, never whether
 
-A rule may ask the Butler to phrase one thing (ADR-W022 A6). That is the
+A rule may ask the Butler to phrase one thing (ADR-W024 A6). That is the
 whole of it, and the shape is deliberately narrow:
 
 ```yaml
@@ -440,7 +440,7 @@ it does, change who it reaches, or stop it. A red-team test in
 ### Writing rules in plain English
 
 The other direction: a household member says *"whenever I get home, ask
-whether I got the mail"*, and the Butler writes the rule (ADR-W022 H7).
+whether I got the mail"*, and the Butler writes the rule (ADR-W024 H7).
 It gains two read tools to do it, and no new way to make anything
 happen:
 

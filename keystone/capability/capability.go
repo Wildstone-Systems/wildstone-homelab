@@ -260,7 +260,7 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 	// A package that publishes household events needs a credential to
 	// reach the intake, whatever its shape — a native app, a sidecar, or
 	// Home Assistant calling a webhook all present the same bearer token
-	// (ADR-W022 A10). The token is minted by Keystone and placed on the
+	// (ADR-W024 A10). The token is minted by Keystone and placed on the
 	// node as the provided secret `<capability>-publisher`; the package
 	// references it as .Resolved.PublisherSecretRef. Synthesised the same
 	// way as the OIDC client secret above, and a package that declares
@@ -288,7 +288,7 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 }
 
 // PublisherSecretName is the conventional name of the secret holding a
-// capability's publisher token (ADR-W022 A10): what Expand synthesises
+// capability's publisher token (ADR-W024 A10): what Expand synthesises
 // for a package that publishes, and what `POST
 // /api/v1/household/publishers/{capability}` writes the minted token to.
 func PublisherSecretName(capability string) string {
@@ -386,7 +386,7 @@ func isYAMLHostileRune(r rune) bool {
 //     template should use for SecretRef.
 //   - PublisherSecretRef: "secret/<capability>-publisher", the token a
 //     package that publishes household events presents to the intake
-//     (ADR-W022 A10); put it in the shim's env.
+//     (ADR-W024 A10); put it in the shim's env.
 func buildResolved(pkg *pkgspec.Package, params map[string]string, catalog *Catalog) map[string]string {
 	var current []resource.Resource
 	if catalog != nil {

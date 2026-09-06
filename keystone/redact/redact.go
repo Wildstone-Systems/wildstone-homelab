@@ -51,7 +51,7 @@ var commitRefScanRegexp = regexp.MustCompile(
 	`(?i)\\?"?\b(?:basedOnHead|statefileHead|newHead|head|commit)\\?"?\s*[:=]\s*\\?"?[0-9a-fA-F]{7,64}\\?"?`)
 
 // eventIDRefScanRegexp finds a household event id or correlation id
-// carried under the key that names it, in JSON shape (ADR-W022 A2). A
+// carried under the key that names it, in JSON shape (ADR-W024 A2). A
 // publisher-supplied id is, by construction, whatever shape the
 // publisher's own id scheme produces — a ULID is 26 characters of
 // [0-9A-Z], a UUID is hex with hyphens — and both fall squarely into the

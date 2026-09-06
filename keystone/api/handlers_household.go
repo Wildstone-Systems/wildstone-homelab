@@ -1,6 +1,6 @@
 package api
 
-// Household events (ADR-W022 A2/A3/A10): the intake every publisher
+// Household events (ADR-W024 A2/A3/A10): the intake every publisher
 // speaks to, the cursor every consumer follows, and the one admin verb
 // that gives a capability its publisher credential.
 //
@@ -112,7 +112,7 @@ type mintPublisherRequest struct {
 	Node string `json:"node"`
 }
 
-// mintPublisher gives a capability its publisher credential (ADR-W022
+// mintPublisher gives a capability its publisher credential (ADR-W024
 // A10): the principal `publisher-<capability>` (role publisher, created
 // on first use), a fresh token, and that token placed on the node as the
 // provided secret `<capability>-publisher` — the name the capability

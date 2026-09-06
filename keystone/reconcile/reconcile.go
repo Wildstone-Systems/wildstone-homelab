@@ -392,7 +392,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 
 	wsDesired := make([]resource.Resource, 0, len(desired))
 	providerDesired := make([]resource.Resource, 0, len(desired))
-	// Keystone-owned kinds (Automation, ADR-W022 A1) are applied nowhere:
+	// Keystone-owned kinds (Automation, ADR-W024 A1) are applied nowhere:
 	// they live in the Statefile and the component that acts on them
 	// reads them from there. Observed is therefore desired, by
 	// definition, so they never produce a step — the plan that created

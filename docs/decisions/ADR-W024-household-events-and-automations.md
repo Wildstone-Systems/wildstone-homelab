@@ -1,4 +1,4 @@
-# ADR-W022: Household events and automations — the family's butler, deterministic first
+# ADR-W024: Household events and automations — the family's butler, deterministic first
 
 - **Status:** proposed
 - **Relates to:** ADR-W001 (concierge, acting identity), ADR-W004 (plans

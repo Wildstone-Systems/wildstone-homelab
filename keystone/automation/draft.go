@@ -1,6 +1,6 @@
 package automation
 
-// Drafting a rule (ADR-W022 H7): the one path a proposed household rule
+// Drafting a rule (ADR-W024 H7): the one path a proposed household rule
 // takes before anyone approves it, whoever wrote it.
 //
 // A rule reaches the Statefile the same way every resource does — as a

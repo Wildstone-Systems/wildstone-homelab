@@ -1,4 +1,4 @@
-// Package automation is the deterministic household rule engine (ADR-W022
+// Package automation is the deterministic household rule engine (ADR-W024
 // A6/A7, work package H3): it follows the household event stream, matches
 // each event against the approved Automation resources in the Statefile,
 // evaluates their conditions in code, and records every decision —
@@ -14,7 +14,7 @@
 // Every decision is a pure function of (rule, event, what the stream
 // says) — Evaluate — so a rule can be run against history with no side
 // effects (Replay) before anyone approves it, which is the only way to
-// test a rule (ADR-W022 A7).
+// test a rule (ADR-W024 A7).
 //
 // This package never imports keystone/reconcile (the apply-capable
 // surface) or keystone/butler (the model); structural_test.go pins it.
@@ -308,12 +308,12 @@ type Engine struct {
 	// Now is the engine clock; nil means time.Now.
 	Now func() time.Time
 	// Actions, when set, performs a fired rule's action through the
-	// domestic gateway (ADR-W022 A5). nil leaves decisions recorded and
+	// domestic gateway (ADR-W024 A5). nil leaves decisions recorded and
 	// unacted — which is what a control plane with no capabilities
 	// installed should do, and what the engine did before H4.
 	Actions Actions
 	// Escalator, when set, phrases the one action param a rule's
-	// escalation names (ADR-W022 A6). nil means an escalating rule acts
+	// escalation names (ADR-W024 A6). nil means an escalating rule acts
 	// with the wording its author wrote, which is the deterministic
 	// backbone doing its job rather than a degraded mode.
 	Escalator Escalator
@@ -501,7 +501,7 @@ func (e *Engine) record(d Decision, trigger runtimedb.HouseholdEvent) error {
 }
 
 // Replay evaluates rules against the stream between from and to with no
-// side effects (ADR-W022 A7). Cooldowns are simulated from the replay's
+// side effects (ADR-W024 A7). Cooldowns are simulated from the replay's
 // own firings. limit bounds the events read (0 = 1000).
 func (e *Engine) Replay(ctx context.Context, rules []resource.Resource, from, to time.Time, limit int) ([]Decision, error) {
 	events, err := e.DB.QueryHouseholdEvents(runtimedb.HouseholdQuery{From: from, To: to, Limit: limit})

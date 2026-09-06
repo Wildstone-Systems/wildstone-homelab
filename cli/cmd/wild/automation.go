@@ -1,6 +1,6 @@
 package main
 
-// `wild automation` (ADR-W022 H3): household rules as an API client.
+// `wild automation` (ADR-W024 H3): household rules as an API client.
 // `list` shows the approved rules; `replay` runs one — approved by name
 // or a draft from a file — over history with no side effects, which is
 // how a rule is tested before anyone approves it.

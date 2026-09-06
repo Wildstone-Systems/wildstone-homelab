@@ -1,6 +1,6 @@
 package api
 
-// Natural-language rule authoring, end to end (ADR-W022 H7).
+// Natural-language rule authoring, end to end (ADR-W024 H7).
 //
 // The claim under test is "the AI writes rules the engine already
 // understands; no second execution path". So the test does not stop at a

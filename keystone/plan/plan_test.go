@@ -394,7 +394,7 @@ func TestConfigFileIsOrderedBeforeContainer(t *testing.T) {
 	}
 }
 
-// TestDiffAutomation pins the grading of a household rule (ADR-W022 A1):
+// TestDiffAutomation pins the grading of a household rule (ADR-W024 A1):
 // create and change are Medium — a rule acts on its own once approved,
 // so it must always pass a human, never drift repair — and removal is
 // Low. An unchanged rule, compared deeply, is no step.

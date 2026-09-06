@@ -28,7 +28,7 @@ const (
 )
 
 // automationTiers is the closed set of action tiers a household rule may
-// carry (ADR-W022 A5): read, and domestic — the concierge tier the
+// carry (ADR-W024 A5): read, and domestic — the concierge tier the
 // domestic gateway executes. Infrastructure tiers (low, medium, high)
 // belong to plans; a rule cannot restart a container, whoever wrote it.
 var automationTiers = map[string]bool{"read": true, "domestic": true}
@@ -227,7 +227,7 @@ func routeRules(r resource.Resource, currentRoutes map[string]*resource.RouteSpe
 	return out
 }
 
-// automationRules applies the household-rule invariants (ADR-W022 A5) to
+// automationRules applies the household-rule invariants (ADR-W024 A5) to
 // one proposed Automation, for every principal: the Butler is the
 // expected author, but a human pasting a rule is held to the same line.
 //
@@ -246,7 +246,7 @@ func automationRules(r resource.Resource) []Violation {
 	if !automationTiers[a.Action.Tier] {
 		out = append(out, Violation{
 			Rule: RuleAutomationActionTier, Kind: string(r.Kind), Name: r.Metadata.Name,
-			Msg: fmt.Sprintf("action tier %q: a household rule may only carry read or domestic actions; infrastructure changes are plans, not rules (ADR-W022 A5)", a.Action.Tier),
+			Msg: fmt.Sprintf("action tier %q: a household rule may only carry read or domestic actions; infrastructure changes are plans, not rules (ADR-W024 A5)", a.Action.Tier),
 		})
 	}
 	out = append(out, envSecretRules(r, a.Action.Params)...)

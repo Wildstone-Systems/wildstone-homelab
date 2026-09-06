@@ -1,6 +1,6 @@
 package butler
 
-// Household escalation (ADR-W022 A6/A4, work package H6): the Butler's
+// Household escalation (ADR-W024 A6/A4, work package H6): the Butler's
 // second job, and a deliberately smaller one than operating the homelab.
 //
 // When a household rule fires and asks for escalation, the automation

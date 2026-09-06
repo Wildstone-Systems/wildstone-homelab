@@ -1,4 +1,4 @@
-// Package domestic is the household action layer (ADR-W022 A5): the
+// Package domestic is the household action layer (ADR-W024 A5): the
 // gateway every Automation's action passes through, and the typed
 // executors behind it.
 //
@@ -154,7 +154,7 @@ func (g *Gateway) Dispatch(ctx context.Context, c Call) (Result, error) {
 func (g *Gateway) dispatch(ctx context.Context, c Call) (Result, error) {
 	if !allowedTiers[c.Tier] {
 		return Result{}, &RefusalError{Tool: c.Tool, Reason: fmt.Sprintf(
-			"tier %q: a household rule may only run read or domestic actions; infrastructure changes are plans (ADR-W022 A5)", c.Tier)}
+			"tier %q: a household rule may only run read or domestic actions; infrastructure changes are plans (ADR-W024 A5)", c.Tier)}
 	}
 	capability, tool := c.Capability(), c.ToolName()
 	if capability == "" || tool == "" {

@@ -9,12 +9,12 @@ import (
 	"unicode"
 )
 
-// AutomationSpec is the spec for kind Automation (ADR-W022 A1): a
+// AutomationSpec is the spec for kind Automation (ADR-W024 A1): a
 // household rule, approved once through the plan pipeline like any other
 // resource and then run by the deterministic automation engine without
 // asking again. It is the ONE schema both a human and the Butler author
 // into, and the one the engine executes — there is no second execution
-// path (ADR-W022 H7).
+// path (ADR-W024 H7).
 //
 // A rule reads, in order: WHEN this event arrives (Trigger), IF these
 // checks hold (Conditions, all of them, evaluated in code), gather THIS
@@ -26,7 +26,7 @@ import (
 // Nothing here is executed by this package or by the reconciler. The
 // resource is Keystone-owned: it lives in the Statefile, is applied at
 // no node, and is present exactly when it is desired. The engine
-// (ADR-W022 H3) reads it from there.
+// (ADR-W024 H3) reads it from there.
 type AutomationSpec struct {
 	// Description is the human sentence for the plan review and the
 	// Console: what this rule is for.
@@ -40,14 +40,14 @@ type AutomationSpec struct {
 	// stop here, cheaply, with an automation.suppressed event.
 	Conditions []AutomationCondition `yaml:"conditions,omitempty"`
 	// Context names what the escalation packet may contain — small,
-	// targeted retrievals, never a history dump (ADR-W022 A6).
+	// targeted retrievals, never a history dump (ADR-W024 A6).
 	Context []AutomationContext `yaml:"context,omitempty"`
 	// Escalation, when present, opens a Butler session with the trigger
 	// event and the Context results; the Butler's output is routed to
 	// Action. Absent, Action runs with its fixed Params.
 	Escalation *AutomationEscalation `yaml:"escalation,omitempty"`
 	// Action is the typed operation that runs, through the domestic
-	// gateway (ADR-W022 A5).
+	// gateway (ADR-W024 A5).
 	Action AutomationAction `yaml:"action"`
 }
 
@@ -105,7 +105,7 @@ type AutomationContext struct {
 // named by Into. If the Butler is unconfigured, fails, or answers with
 // nothing usable, the action runs with the wording the rule's author
 // wrote — which is why Into must name a param that already carries a
-// serviceable value (ADR-W022 A6, and the deterministic-backbone
+// serviceable value (ADR-W024 A6, and the deterministic-backbone
 // principle: routine operations work when the model does not).
 type AutomationEscalation struct {
 	// Prompt is the instruction the Butler receives alongside the packet.
@@ -125,7 +125,7 @@ type AutomationAction struct {
 	Tool string `yaml:"tool"`
 	// Tier is the action's risk tier in the shared vocabulary (read, low,
 	// medium, high, domestic). The schema accepts the vocabulary; policy
-	// decides which tiers a household rule may carry (ADR-W022 A5).
+	// decides which tiers a household rule may carry (ADR-W024 A5).
 	Tier string `yaml:"tier"`
 	// Params are the tool's inputs. Values may reference the trigger's
 	// fields with {{ .Subject }} and friends; the engine renders them.

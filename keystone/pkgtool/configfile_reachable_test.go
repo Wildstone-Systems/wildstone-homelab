@@ -36,7 +36,7 @@ func TestRenderedConfigFilesAreMounted(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// A package may declare a rendered config as read by
 			// something Wildstone does not run (pkgspec.ExternalConfig,
-			// ADR-W022 A10) — the Home Assistant adapter is the shipped
+			// ADR-W024 A10) — the Home Assistant adapter is the shipped
 			// case. The declaration is honoured here and audited below:
 			// one that names no rendered file is as much a defect as an
 			// unmounted config, for the same reason an unused policy

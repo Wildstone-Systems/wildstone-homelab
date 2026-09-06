@@ -214,7 +214,7 @@ var kindOrder = map[resource.Kind]int{
 	// Automation after every node-applied kind: a rule may name a
 	// capability's tool, so the capability lands first. Nothing depends
 	// on a rule. Keystone-owned, so the position only orders the plan's
-	// listing; there is no apply to sequence (ADR-W022 A1).
+	// listing; there is no apply to sequence (ADR-W024 A1).
 	resource.KindAutomation: 8,
 	// BackupPlan last: a backup declaration depends on the volumes it
 	// names, and nothing depends on it (ADR-W011 A4).
@@ -643,7 +643,7 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 		return RiskLow, "backup schedule declaration only; runs execute with their own provenance (ADR-W011 A4)"
 	case resource.KindAutomation:
 		// A rule acts on the household on its own once approved — that
-		// approval is the whole point (ADR-W022 A1), so creating or
+		// approval is the whole point (ADR-W024 A1), so creating or
 		// changing one is never Low: Low is the tier drift repair
 		// applies unattended, and a rule must always pass a human.
 		// Removing one is Low: the rule stops, and nothing else changes.

@@ -72,7 +72,7 @@ func TestCommitHeadPreserved(t *testing.T) {
 	}
 }
 
-// TestEventIDPreserved pins the household-id shelter (ADR-W022 A2): a
+// TestEventIDPreserved pins the household-id shelter (ADR-W024 A2): a
 // publisher-supplied id under eventId/correlationId survives whatever
 // shape it has, while the same value under a secret-keyed field, or
 // under no key at all, still redacts.

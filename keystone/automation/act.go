@@ -1,6 +1,6 @@
 package automation
 
-// Acting on a fired decision (ADR-W022 A5, work package H4).
+// Acting on a fired decision (ADR-W024 A5, work package H4).
 //
 // The engine decides; the domestic gateway acts. This file is the seam
 // between them, and it is deliberately thin: render the rule's params
@@ -141,7 +141,7 @@ func (e *Engine) act(ctx context.Context, d Decision, ev runtimedb.HouseholdEven
 	}
 
 	// Escalation replaces the wording of ONE declared param and nothing
-	// else (ADR-W022 A6). It runs before the claim below because it
+	// else (ADR-W024 A6). It runs before the claim below because it
 	// decides what will be dispatched; a crash in between costs a second
 	// model call on the retry, never a second action.
 	if d.Escalates {

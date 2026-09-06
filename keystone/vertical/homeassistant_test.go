@@ -1,6 +1,6 @@
 package vertical
 
-// The Home Assistant adapter (ADR-W022 A10/A8, work package H5): the
+// The Home Assistant adapter (ADR-W024 A10/A8, work package H5): the
 // first third-party service to publish into the household stream.
 //
 // What needs proving is not that a YAML file exists — it is that the
@@ -84,7 +84,7 @@ func expandHomeAutomation(t *testing.T) (*pkgspec.Package, []resource.Resource) 
 func TestHomeAssistantAdapterExpandsToLoadableConfig(t *testing.T) {
 	pkg, out := expandHomeAutomation(t)
 
-	// The shape is "config" (ADR-W022 A10): one managed file and nothing
+	// The shape is "config" (ADR-W024 A10): one managed file and nothing
 	// else. No container — the household already runs Home Assistant,
 	// and adopting it is a different package.
 	if pkg.Publishes == nil || pkg.Publishes.Shape != "config" {
@@ -176,7 +176,7 @@ func TestHomeAssistantDeclarationMatchesItsConfig(t *testing.T) {
 	for _, ev := range pkg.Publishes.Events {
 		declared = append(declared, ev.Type)
 		if ev.Subject != "member" {
-			t.Errorf("%s declares subject %q; this adapter maps a person entity to a member (ADR-W022 A8)", ev.Type, ev.Subject)
+			t.Errorf("%s declares subject %q; this adapter maps a person entity to a member (ADR-W024 A8)", ev.Type, ev.Subject)
 		}
 	}
 	sort.Strings(declared)
@@ -212,7 +212,7 @@ func TestHomeAssistantDeclarationMatchesItsConfig(t *testing.T) {
 		t.Fatalf("action = %+v; the canonical type must come from the trigger id", auto.Action)
 	}
 	// The subject is the person entity's object id — the mapping this
-	// adapter declares it can achieve (ADR-W022 A8).
+	// adapter declares it can achieve (ADR-W024 A8).
 	if auto.Action[0].Data["subject"] != `{{ trigger.entity_id.split('.')[1] }}` {
 		t.Fatalf("subject = %q, want the person entity's object id", auto.Action[0].Data["subject"])
 	}

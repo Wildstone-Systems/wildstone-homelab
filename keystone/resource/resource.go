@@ -36,7 +36,7 @@ const (
 	KindConfigFile Kind = "ConfigFile"
 	KindJob        Kind = "Job"
 	KindSecret     Kind = "Secret"
-	// KindAutomation is a household rule (ADR-W022 A1): Keystone-owned,
+	// KindAutomation is a household rule (ADR-W024 A1): Keystone-owned,
 	// applied at no node, run by the automation engine.
 	KindAutomation Kind = "Automation"
 )
@@ -763,7 +763,7 @@ var registry = map[Kind]kindEntry{
 		nodeScoped: true,
 	},
 	KindAutomation: {
-		// Keystone-owned (ADR-W022 A1): the automation engine reads it
+		// Keystone-owned (ADR-W024 A1): the automation engine reads it
 		// from the Statefile; no node, no provider, nothing to apply.
 		newSpec:  func() any { return &AutomationSpec{} },
 		validate: validateAutomation,
