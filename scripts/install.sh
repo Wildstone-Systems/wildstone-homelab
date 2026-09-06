@@ -68,11 +68,56 @@ NODE_ID="$(hostname -s 2>/dev/null || echo node)"
 TAILSCALE_AUTHKEY="${TAILSCALE_AUTHKEY:-}"
 TAILSCALE_HOSTNAME=""
 SKIP_DOCKER=0
+# INTERACTIVE is decided after flag parsing (ADR-W023 A4): a terminal and
+# no --role means a person is installing; anything else is automation or
+# an upgrade and must behave exactly as it always has.
+INTERACTIVE=0
+ANSWERS="/var/lib/wildstone/install-answers"
 BIN_DIR="/usr/local/bin"
 UNIT_DIR="/etc/systemd/system"
 
 log()  { echo "[wildstone-install] $*"; }
 fail() { echo "[wildstone-install] ERROR: $*" >&2; exit 1; }
+
+
+# ---------------------------------------------------------------- answers
+#
+# Answers persist as they are given so a failed install RESUMES rather
+# than restarting (ADR-W023 A5). Two installs failed partway during
+# v0.1.9-alpha testing; a wizard that loses ten answers to a failure is
+# worse than the script it replaced.
+#
+# No credential is ever written here. The admin password is used and
+# discarded (ADR-W020 A4 keeps credentials out of state), so this file
+# holds only choices — which is also why it is safe to show the operator
+# on a resume.
+answers_load() {
+  [ -f "$ANSWERS" ] || return 0
+  # shellcheck disable=SC1090
+  . "$ANSWERS"
+}
+
+answers_save() { # key value
+  install -d -m 0700 "$(dirname "$ANSWERS")"
+  touch "$ANSWERS"
+  grep -v "^$1=" "$ANSWERS" > "$ANSWERS.tmp" 2>/dev/null || true
+  echo "$1=$(printf %q "$2")" >> "$ANSWERS.tmp"
+  # The mode goes on the file that SURVIVES. Setting it on $ANSWERS
+  # before the rename is theatre: mv replaces that inode with the tmp
+  # file, which carries the umask's mode, and the result was 0644.
+  chmod 0600 "$ANSWERS.tmp"
+  mv "$ANSWERS.tmp" "$ANSWERS"
+}
+
+# ask_yes_no PROMPT DEFAULT(y|n) -> 0 for yes, 1 for no
+ask_yes_no() {
+  local prompt="$1" def="$2" reply hint="[y/N]"
+  [ "$def" = y ] && hint="[Y/n]"
+  printf '\n%s %s ' "$prompt" "$hint" >&2
+  read -r reply </dev/tty || reply=""
+  [ -z "$reply" ] && reply="$def"
+  case "$reply" in [Yy]*) return 0 ;; *) return 1 ;; esac
+}
 
 usage() {
   sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'
@@ -99,6 +144,15 @@ while [ $# -gt 0 ]; do
     *) fail "unknown flag: $1 (try --help)" ;;
   esac
 done
+
+# ---------------------------------------------------------------- mode
+# A terminal and no --role means a person is installing (ADR-W023 A4).
+# Everything else — CI, an upgrade re-run, a node join — takes the
+# flag-driven path unchanged, because both are also this script.
+if [ -z "$ROLE" ] && [ -t 0 ]; then
+  INTERACTIVE=1
+  ROLE=keystone
+fi
 
 # ---------------------------------------------------------------- preflight
 [ "$(id -u)" = 0 ] || fail "must run as root (sudo)"
@@ -128,6 +182,94 @@ case "$ROLE" in
     ;;
   *) fail "--role must be keystone or node" ;;
 esac
+
+
+# ---------------------------------------------------------------- steps 1-4
+#
+# The interactive steps of ADR-W023 A1, in the order the ADR fixes,
+# because the order is a constraint: Docker before anything runs,
+# Tailscale before an ingress can be told what address to bind.
+#
+# Every step is idempotent and skippable when already satisfied (A5), so
+# a resume asks nothing it has already been told.
+
+# Step 1: the licence. Nothing was ever shown before, which is not a
+# defensible default for software that installs a container runtime and
+# a VPN client on someone's machine.
+step_license() {
+  [ "${ACCEPTED_LICENSE:-}" = yes ] && return 0
+  local license="$SCRIPT_DIR/LICENSE"
+  echo
+  echo "Wildstone is free software under the GNU Affero General Public License v3."
+  if [ -f "$license" ]; then
+    echo "The full text is at $license."
+  else
+    echo "The full text: https://www.gnu.org/licenses/agpl-3.0.txt"
+  fi
+  echo "It comes with NO WARRANTY, to the extent permitted by law."
+  ask_yes_no "Accept and continue?" n || fail "licence not accepted; nothing was changed"
+  answers_save ACCEPTED_LICENSE yes
+}
+
+# Step 3: Docker. Today this installs by piping a remote script to a
+# shell with no consent and no mention, which is a significant change to
+# someone's machine made silently.
+step_docker() {
+  if command -v docker >/dev/null; then
+    log "docker is already installed"
+    return 0
+  fi
+  echo
+  echo "Docker is required to run your services and was not found."
+  echo "Installing it runs the official script from https://get.docker.com."
+  ask_yes_no "Install Docker now?" y || fail "Docker is required; install it yourself and re-run"
+  curl -fsSL https://get.docker.com | sh || fail "docker install failed"
+  command -v docker >/dev/null || fail "docker still not found after install"
+  answers_save DOCKER_OK yes
+}
+
+# Step 4: remote access. Reaching the household from outside needs
+# Tailscale, and the auth step leaves the terminal for a browser — that
+# is a real hop and is designed for rather than discovered (ADR-W023 B3).
+step_tailscale() {
+  if tailscale status --json 2>/dev/null | grep -q '"BackendState":[[:space:]]*"Running"'; then
+    log "tailscale is already joined ($(tailscale ip -4 2>/dev/null | head -1))"
+    answers_save WANT_TAILSCALE yes
+    expose_tailscale_socket
+    return 0
+  fi
+  if [ "${WANT_TAILSCALE:-}" = no ]; then
+    log "skipping tailscale (answered previously)"
+    return 0
+  fi
+  echo
+  echo "Tailscale lets you reach your services from anywhere, with a"
+  echo "certificate your browser already trusts and nothing to install"
+  echo "on your phone or laptop. Without it, services are reachable only"
+  echo "from this network."
+  if ! ask_yes_no "Set up Tailscale?" y; then
+    answers_save WANT_TAILSCALE no
+    return 0
+  fi
+  answers_save WANT_TAILSCALE yes
+
+  if ! command -v tailscale >/dev/null; then
+    log "installing tailscale"
+    curl -fsSL https://tailscale.com/install.sh | sh || fail "tailscale install failed"
+  fi
+  systemctl enable --now tailscaled >/dev/null 2>&1 || fail "could not start tailscaled"
+
+  echo
+  echo "A sign-in link will be printed below. Open it in any browser —"
+  echo "your phone is fine. If you have no Tailscale account yet, the"
+  echo "same link will offer to create one (it is free for personal use)."
+  echo
+  # No --authkey: an interactive operator signs in through the browser,
+  # which is also the path someone with no account has to take anyway.
+  tailscale up --hostname "${TAILSCALE_HOSTNAME:-$NODE_ID}" || fail "tailscale sign-in did not complete"
+  log "tailnet address: $(tailscale ip -4 2>/dev/null | head -1 || echo unknown)"
+  expose_tailscale_socket
+}
 
 # ---------------------------------------------------------------- tailnet
 # Runs for either role and before anything is downloaded: a node that
@@ -230,7 +372,15 @@ UNIT
 }
 
 
-if [ -n "$TAILSCALE_AUTHKEY" ]; then
+if [ "$INTERACTIVE" = 1 ]; then
+  answers_load
+  if [ -f "$ANSWERS" ]; then
+    log "resuming a previous install; questions already answered are not asked again"
+  fi
+  step_license
+  step_docker
+  step_tailscale
+elif [ -n "$TAILSCALE_AUTHKEY" ]; then
   [ -n "$TAILSCALE_HOSTNAME" ] || TAILSCALE_HOSTNAME="$NODE_ID"
   setup_tailscale
 elif [ -n "$TAILSCALE_HOSTNAME" ]; then

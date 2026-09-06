@@ -127,6 +127,28 @@ wild node list
 so it is always the current answer. The Console's Nodes view shows the
 same fleet.
 
+### Installing interactively
+
+Run it with no `--role` from a terminal and it asks instead of assuming
+(ADR-W023):
+
+```sh
+sudo bash ./install.sh
+```
+
+It shows the licence, offers to install Docker if it is missing rather
+than installing it silently, and offers to set up Tailscale — printing a
+sign-in link to open in any browser, which is also the path to take if
+you have no Tailscale account yet.
+
+Answers are saved to `/var/lib/wildstone/install-answers` (root-only, no
+credentials) as they are given, so an install that fails partway resumes
+without re-asking. Delete that file to start the questions over.
+
+Passing any `--role` keeps the old non-interactive behaviour exactly, so
+upgrades, node joins and automation are unchanged — as is a run whose
+stdin is not a terminal.
+
 ### Joining the host to a tailnet (optional)
 
 Either role accepts `--tailscale-authkey`, which installs `tailscaled`
