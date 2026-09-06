@@ -15,6 +15,7 @@ import { renderToString } from "react-dom/server";
 import { createElement as h } from "react";
 import { Services, InstallForm } from "../src/views/Services";
 import { Butler, StatusCard, Answer, SURFACES } from "../src/views/Butler";
+import { Chat, IssuedCode } from "../src/views/Chat";
 
 // Exactly what GET /api/v1/packages serves, copied from the live VM.
 const pkg = {
@@ -94,6 +95,25 @@ check("butler screen defaults to the operator surface", butler.includes("waits f
 // assert the copy contract itself rather than the default render.
 check("household blurb names the ceiling", SURFACES.family.blurb.includes("no access to the home lab"));
 check("household blurb does not promise proposals", !SURFACES.family.blurb.includes("propose changes —"));
+
+// Chat bindings (ADR-W026 A4). The screen has to teach two things a
+// person cannot recover from getting wrong: the code is shown once, and
+// a binding is per-surface.
+const chat = renderToString(h(Chat));
+check("Chat renders without throwing", chat.length > 0);
+check("chat screen says bindings are per-surface", chat.includes("per-surface"));
+check("chat screen says chat cannot approve", chat.includes("approve"));
+
+const code = renderToString(
+  h(IssuedCode, {
+    claim: {
+      code: "K7QP-3XMR-9TWD", surface: "family", identity: "sam",
+      expiresAt: "2026-09-06T18:00:00Z", note: "Send this code to the telegram bot.",
+    },
+  }),
+);
+check("issued code is shown", code.includes("K7QP-3XMR-9TWD"));
+check("issued code warns it is shown once", code.includes("only time the code is shown"));
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

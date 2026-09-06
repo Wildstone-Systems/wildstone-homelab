@@ -19,11 +19,18 @@ const (
 	// (ADR-W024 A3): an integration's shim can lie about the house; it
 	// cannot read state, propose, or approve.
 	RolePublisher Role = "publisher"
+	// RoleConcierge is a family-surface chat adapter (ADR-W026 A3): it
+	// holds the `converse` verb and nothing else. It can open a family
+	// session for a chat account bound to a member and carry the answer
+	// back; it cannot read the household stream itself, so a compromised
+	// adapter cannot enumerate the house.
+	RoleConcierge Role = "concierge"
 )
 
 // ValidRole reports whether r is one of the closed role set.
 func ValidRole(r Role) bool {
-	return r == RoleAdmin || r == RoleOperator || r == RoleButler || r == RolePublisher
+	return r == RoleAdmin || r == RoleOperator || r == RoleButler ||
+		r == RolePublisher || r == RoleConcierge
 }
 
 // Principal is who calls the public API. ActingFor is the ADR-W001

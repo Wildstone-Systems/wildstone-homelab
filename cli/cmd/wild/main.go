@@ -48,6 +48,8 @@ func main() {
 		os.Exit(runAutomation(os.Args[2:]))
 	case "butler":
 		os.Exit(runButler(os.Args[2:]))
+	case "chat":
+		os.Exit(runChat(os.Args[2:]))
 	default:
 		fmt.Fprintf(os.Stderr, "wild: unknown command %q\n", os.Args[1])
 		usage()

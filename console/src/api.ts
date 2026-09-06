@@ -284,6 +284,32 @@ export interface ButlerSession {
 // and performs domestic actions, with no access to the home lab itself.
 export type ButlerSurface = "admin" | "family";
 
+// --- Chat bindings (ADR-W026 A4). A binding is the only way a chat
+// account reaches a Butler, and it exists only because somebody redeemed
+// a claim code.
+export interface ChatBinding {
+  id: number;
+  transport: string;
+  account: string;
+  surface: ButlerSurface;
+  identity: string;
+  displayName?: string;
+  createdAt: string;
+  createdBy: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+}
+
+// The code comes back exactly once: the server stores only its hash.
+export interface ChatClaim {
+  code: string;
+  surface: ButlerSurface;
+  identity: string;
+  transport?: string;
+  expiresAt: string;
+  note: string;
+}
+
 export interface IdentityNotification {
   code?: string;
   body?: string;
@@ -331,6 +357,16 @@ export const api = {
     ),
   butlerSession: (id: string) =>
     call<ButlerSession>("GET", `/api/v1/butler/sessions/${encodeURIComponent(id)}`),
+  chatBindings: (withRevoked = false) =>
+    call<ChatBinding[]>("GET", `/api/v1/chat/bindings${withRevoked ? "?revoked=true" : ""}`),
+  issueChatClaim: (surface: ButlerSurface, identity: string, transport?: string) =>
+    call<ChatClaim>("POST", "/api/v1/chat/claims", {
+      surface,
+      identity,
+      ...(transport ? { transport } : {}),
+    }),
+  revokeChatBinding: (id: number) =>
+    call<unknown>("POST", `/api/v1/chat/bindings/${id}/revoke`),
   backups: () => call<{ runs: BackupRun[] }>("GET", "/api/v1/backups"),
   runBackup: (plan: string) =>
     call<unknown>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/run`),

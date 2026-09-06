@@ -20,6 +20,13 @@ const (
 	// VerbEmit covers publishing household events (ADR-W024 A3) — the
 	// one verb a publisher holds, and the only thing it can do.
 	VerbEmit Verb = "emit"
+	// VerbConverse covers speaking to a Butler on behalf of a bound chat
+	// account (ADR-W026 A3): redeeming a claim code, relaying a message
+	// from a bound account, and collecting the replies queued for that
+	// surface. It is the only verb a concierge holds. It carries no read
+	// of Keystone state: an adapter relays a conversation, it does not
+	// have one.
+	VerbConverse Verb = "converse"
 )
 
 // roleVerbs is the closed RBAC table (ADR-W007 A2). The butler row is the
@@ -28,13 +35,24 @@ const (
 // plan awaiting a human.
 var roleVerbs = map[runtimedb.Role]map[Verb]bool{
 	runtimedb.RoleAdmin: {
-		VerbRead: true, VerbPropose: true, VerbApprove: true, VerbManage: true, VerbEmit: true,
+		VerbRead: true, VerbPropose: true, VerbApprove: true, VerbManage: true,
+		VerbEmit: true, VerbConverse: true,
 	},
 	runtimedb.RoleOperator: {
-		VerbRead: true, VerbPropose: true, VerbApprove: true,
+		VerbRead: true, VerbPropose: true, VerbApprove: true, VerbConverse: true,
 	},
+	// The admin-surface chat adapter runs as a butler principal: it may
+	// relay a conversation and, through it, propose — and it still holds
+	// no approve verb, which is what makes ADR-W026 A5 (no approval over
+	// any chat transport) survive a compromised bot token.
 	runtimedb.RoleButler: {
-		VerbRead: true, VerbPropose: true,
+		VerbRead: true, VerbPropose: true, VerbConverse: true,
+	},
+	// A concierge relays and nothing else: not read, not propose, not
+	// emit. A compromised family adapter can carry messages for accounts
+	// a human already bound, and cannot look at the house.
+	runtimedb.RoleConcierge: {
+		VerbConverse: true,
 	},
 	// A publisher emits and nothing else: not read, not propose. A shim
 	// that is compromised can lie about the house; it cannot see or

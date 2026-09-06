@@ -218,6 +218,15 @@ func (s *Server) Handler() http.Handler {
 	// different gateway behind it, one that holds no Statefile access of
 	// any kind. Sessions from both surfaces are listed by the routes
 	// above, which take ?surface= to tell them apart.
+	// Chat bindings (ADR-W026 A4): issuing a code and revoking a binding
+	// are `manage` — deciding who may talk to a Butler is principal
+	// administration. Redeeming is `converse`, because the caller is an
+	// adapter, and a concierge holds that verb and nothing else.
+	mux.Handle("POST /api/v1/chat/claims", s.handle(principal.VerbManage, s.issueChatClaim))
+	mux.Handle("POST /api/v1/chat/bindings/redeem", s.handle(principal.VerbConverse, s.redeemChatClaim))
+	mux.Handle("GET /api/v1/chat/bindings", s.handle(principal.VerbManage, s.listChatBindings))
+	mux.Handle("POST /api/v1/chat/bindings/{id}/revoke", s.handle(principal.VerbManage, s.revokeChatBinding))
+
 	mux.Handle("GET /api/v1/household/butler", s.handle(principal.VerbRead, s.getHouseholdButlerStatus))
 	mux.Handle("POST /api/v1/household/butler/ask", s.handle(principal.VerbRead, s.askHouseholdButler))
 

@@ -3,6 +3,7 @@ import { api, getToken, Identity, setOnUnauthorized, setToken } from "./api";
 import { ErrorLine } from "./lib";
 import { Backups } from "./views/Backups";
 import { Butler } from "./views/Butler";
+import { Chat } from "./views/Chat";
 import { Events } from "./views/Events";
 import { Home } from "./views/Home";
 import { IdentityView } from "./views/Identity";
@@ -15,6 +16,7 @@ type View =
   | "home"
   | "services"
   | "butler"
+  | "chat"
   | "plans"
   | "events"
   | "backups"
@@ -26,6 +28,7 @@ const VIEWS: { id: View; label: string }[] = [
   { id: "home", label: "Home" },
   { id: "services", label: "Services" },
   { id: "butler", label: "Butler" },
+  { id: "chat", label: "Chat" },
   { id: "plans", label: "Plans" },
   { id: "events", label: "Events" },
   { id: "backups", label: "Backups" },
@@ -75,6 +78,7 @@ export function App() {
         {view === "home" && <Home />}
         {view === "services" && <Services />}
         {view === "butler" && <Butler />}
+        {view === "chat" && <Chat />}
         {view === "plans" && <Plans />}
         {view === "events" && <Events />}
         {view === "backups" && <Backups />}
