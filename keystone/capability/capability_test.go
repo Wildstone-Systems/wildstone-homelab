@@ -163,7 +163,15 @@ func identityProviderPackage() *pkgspec.Package {
 			Capability: "identity",
 		},
 		Provides: []pkgspec.Provide{
-			{Trait: "identity", Mode: "oidc"},
+			// The exports packages/identity ships (ADR-W025 A2). Before
+			// them these three values were computed inside the engine, so
+			// a provider fixture needed only to exist; now it has to say
+			// what it hands over, which is the point.
+			{Trait: "identity", Mode: "oidc", Exports: map[string]string{
+				"IssuerURL":     `{{ with .Params.public_domain }}{{ origin (printf "auth.%s" .) }}{{ end }}`,
+				"SessionDomain": `{{ with .Params.public_domain }}{{ sessionDomain . }}{{ end }}`,
+				"DashboardURL":  `{{ with .Params.public_domain }}{{ origin (printf "home.%s" .) }}{{ end }}`,
+			}},
 		},
 		Params: []pkgspec.ParamDecl{
 			{Name: "public_domain", Default: "example.internal"},

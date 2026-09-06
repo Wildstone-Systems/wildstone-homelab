@@ -52,7 +52,7 @@ params:
   # binds every interface is worse than one you had to think about (#41).
   # Normally the node's tailnet address (`tailscale ip -4`); "0.0.0.0" is
   # the explicit way to say you mean every interface.
-  - { name: admin_listen_addr, required: true }
+  - { name: admin_listen_addr, required: true, example: "127.0.0.1" }
 templates:
   # ---- How this node's proxy is postured (ADR-W019 B5, F65).
   #

@@ -182,7 +182,11 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
             <input
               type="text"
               value={values[p.name] ?? ""}
-              placeholder={p.suggested ?? p.default ?? ""}
+              // example LAST, and only here — never in the initial value
+              // above. suggested and default are answers; an example is
+              // only the shape of one, and prefilling it would submit a
+              // fabricated address as though the operator had chosen it.
+              placeholder={p.suggested ?? p.default ?? p.example ?? ""}
               onChange={(e) => {
                 setValues({ ...values, [p.name]: e.target.value });
                 setPreview(null);

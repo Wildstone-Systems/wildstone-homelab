@@ -10,6 +10,103 @@ for the binding format spec.
 Launch packages are transcriptions of proven configs from the reference
 deployment — see `testing/fixtures/`.
 
+## Adding a service: start here
+
+```sh
+wild pkg new                          # the three shapes, and which one you want
+wild pkg new my-app -shape config     # writes it, then lints it in front of you
+```
+
+Pick the shape by what you already run:
+
+| shape | when | what you get |
+| --- | --- | --- |
+| `service` | Wildstone installs and runs the app | Volume, Container, Route, OidcClient — SSO already wired |
+| `sidecar` | the app runs elsewhere and *cannot* call a webhook | an adapter container, handed its intake credential |
+| `config` | the app runs elsewhere and *can* call a webhook | one managed config file, no container, no code |
+
+**Try `config` first.** Most services can already POST to a URL under
+some name — "webhook", "notification target", "REST command" — and that
+path needs no adapter and no work on the service's side at all.
+`home-automation/` is the worked example.
+
+Every shape lints clean as written, with TODO markers everywhere a
+decision is yours. `wild pkg new` counts them and prints the exact
+commands to carry on with.
+
+## Traits: how packages find each other (ADR-W025)
+
+A package does not name another package. It names a **trait** — a
+capability some other package advertises — and receives values from
+whichever package provides it:
+
+```yaml
+requires:
+  - { trait: identity, mode: oidc }   # gives you .Resolved.IssuerURL, ...
+  - { trait: ingress, mode: public }  # structural: the system satisfies it
+  - { trait: storage, class: bulk }   # structural: declare your Volumes
+```
+
+The vocabulary is closed and lives in `keystone/trait`. List it with:
+
+```sh
+wild pkg traits      # names only
+wild pkg traits -v   # with what each trait and .Resolved key means
+```
+
+Lint refuses a trait, mode, or class that is not in it, and names the ones
+that are — so `trait: identiy` is a message about a typo rather than an
+"unsatisfied requirement" during someone else's install.
+
+### Providing values to other packages: `exports`
+
+If your package is the one others depend on, say what it hands them. Each
+key must be one the trait mode declares (`wild pkg traits` lists them):
+
+```yaml
+provides:
+  - trait: identity
+    mode: oidc
+    exports:
+      IssuerURL: '{{ with .Params.public_domain }}{{ origin (printf "auth.%s" .) }}{{ end }}'
+```
+
+Four things to know:
+
+- The template renders over **your own** params, plus `origin` and
+  `sessionDomain`.
+- **Use `origin`, never string concatenation.** It answers where a host is
+  actually *served*, which under the tailnet posture is the node's one
+  certified name plus a port — not the host you declared (ADR-W019 A10).
+  An OIDC issuer is compared byte for byte against what the browser saw.
+- **Wrap it in `with`.** An export that renders empty is not published, so
+  a consumer fails on a missing key instead of receiving `https://auth.`
+  and looping at a login screen.
+- `OidcSecretRef`, `PublisherSecretRef` and `TailnetHost` are yours
+  already — every package gets them — and an export cannot override one.
+
+### Before you open a PR
+
+```sh
+wild pkg lint packages/<your-package>            # your package alone
+cd keystone && go test ./pkgtool/ ./capability/  # the whole catalog, incl. yours
+```
+
+`TestEveryShippedPackageLintsClean` lints every directory under
+`packages/` with the rest of the catalog available, and two companion
+tests check what one package cannot see on its own: that everything you
+`require` has a provider here, and that everything you `export` is a key
+its trait carries.
+
+If a required param needs a value with a *shape* — a listen address, a
+URL — declare an `example` for it. Lint invents `lint-<name>` otherwise,
+which is fine for a domain and nonsense for an IP:
+
+```yaml
+params:
+  - { name: listen_addr, required: true, example: "100.64.0.1" }
+```
+
 ## The two packages (Spike S3)
 
 - **`identity/`** — LLDAP (directory) + Authelia (SSO/OIDC provider),

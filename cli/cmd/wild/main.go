@@ -55,6 +55,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
+  wild pkg new <name> -shape <shape>         (scaffold a package that lints)
   wild pkg list [-api URL]                   (what Keystone can install)
   wild pkg lint <pkg-dir> [-set k=v ...] [-catalog dir ...]
   wild pkg keygen <key-path>
@@ -62,6 +63,7 @@ func usage() {
   wild pkg resolve <name> [-constraint v] -registry <dir>
   wild pkg fetch <name> [-constraint v] -url <registry-url> -pub <key.pub> -dest <dir>
   wild pkg refresh-digests <pkg-dir>
+  wild pkg traits [-v]                       (what a package may provide/require)
   wild secret list|generate|set|rotate ...   (see wild secret)
   wild node list | mint-join ...             (see wild node)
   wild status | plan | capability | logs | audit | backup ...  (API client, ADR-W015)
@@ -99,6 +101,10 @@ func runPkg(args []string) int {
 		return runFetch(args[1:])
 	case "refresh-digests":
 		return runRefreshDigests(args[1:])
+	case "traits":
+		return runTraits(args[1:])
+	case "new":
+		return runNew(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "wild pkg: unknown subcommand %q\n", args[0])
 		usage()

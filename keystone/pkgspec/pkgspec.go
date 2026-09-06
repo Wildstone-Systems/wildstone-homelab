@@ -15,8 +15,11 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
+	"text/template"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/trait"
 	"gopkg.in/yaml.v3"
 )
 
@@ -53,6 +56,27 @@ type Provide struct {
 	Trait string `yaml:"trait" json:"trait"`
 	Mode  string `yaml:"mode,omitempty" json:"mode,omitempty"`
 	Class string `yaml:"class,omitempty" json:"class,omitempty"`
+	// Exports fill the `.Resolved` keys this trait mode carries
+	// (keystone/trait), for every package expanded against a catalog
+	// containing this one. Each value is a template rendered over the
+	// PROVIDER's params plus the addressing functions in
+	// trait.ExportFuncs — see keystone/capability's buildResolved for the
+	// exact context.
+	//
+	// This block is what makes a new integration data rather than a code
+	// change. It used to be Go: the engine looked up "identity"/"oidc" by
+	// name and computed the three OIDC values itself, so the second trait
+	// wanting to hand a consumer anything was a patch to the engine
+	// rather than a package someone wrote.
+	//
+	// An export that renders EMPTY is not published. That is the honest
+	// answer while the fact it derives from is unknown — a portal origin
+	// built from a domain nobody has supplied yet is not a better value
+	// than no value, it is a login loop — and it is why exports are
+	// conventionally written with `with`:
+	//
+	//	IssuerURL: '{{ with .Params.public_domain }}{{ origin (print "auth." .) }}{{ end }}'
+	Exports map[string]string `yaml:"exports,omitempty" json:"exports,omitempty"`
 }
 
 // ParamDecl declares one templating input a package accepts. Required
@@ -77,6 +101,21 @@ type ParamDecl struct {
 	// to answer, and an unrecognised one must fail review rather than
 	// silently render an empty dropdown.
 	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+	// Example is a syntactically valid value for this param, used by lint
+	// to dry-run the package and by the install form as a placeholder.
+	//
+	// It exists because lint's auto-filler invents "lint-<name>", which is
+	// a fine stand-in for a domain or an id and a nonsense one for
+	// anything with a shape: the ingress packages ask for a listen
+	// address, got "lint-listen-addr", and failed validation on a value
+	// no operator would ever have typed. The author of the package is the
+	// only person who knows what shape the value has, so this is where
+	// they say it — once, in the manifest, rather than as a `-set` flag
+	// every person who lints the package has to rediscover.
+	//
+	// Never a real value: a param carrying secret material is refused by
+	// lint outright, and an example is written into the repository.
+	Example string `yaml:"example,omitempty" json:"example,omitempty"`
 }
 
 // ParamSources are the deployment facts a param may be sourced from.
@@ -359,6 +398,9 @@ func (p *Package) Validate() error {
 		if prov.Trait == "" {
 			return &ValidationError{Field: fmt.Sprintf("provides[%d].trait", i), Msg: "must not be empty"}
 		}
+		if err := validateExports(p, prov, fmt.Sprintf("provides[%d].exports", i)); err != nil {
+			return err
+		}
 	}
 
 	// Lifecycle hooks: parsed + schema-checked only. Never executed here or
@@ -444,6 +486,76 @@ func validatePublishes(p *PublishesSpec) error {
 			names[f.Name] = true
 			if !eventFieldTypes[f.Type] {
 				return &ValidationError{Field: ff + ".type", Msg: "must be one of string, number, bool, timestamp"}
+			}
+		}
+	}
+	return nil
+}
+
+// exportStubFuncs is a FuncMap with the right NAMES and no behaviour, so
+// an export template can be parsed here without pkgspec knowing anything
+// about addressing. Parsing is what catches a misspelled function —
+// text/template refuses `{{ orign ... }}` at parse time — and that is the
+// error worth catching at lint, because the alternative is a render
+// failure during an install the operator has already approved.
+var exportStubFuncs = func() template.FuncMap {
+	fm := template.FuncMap{}
+	for _, name := range trait.ExportFuncs {
+		fm[name] = func(...any) string { return "" }
+	}
+	return fm
+}()
+
+// paramFieldRegexp matches a .Params.<name> reference ANYWHERE in a
+// template action, including nested in a function call — unlike
+// paramRefRegexp below, which matches only a bare `{{ .Params.x }}` and
+// exists for a different job (resolving defaults when parsing a template
+// as YAML).
+var paramFieldRegexp = regexp.MustCompile(`\.Params\.([A-Za-z_][A-Za-z0-9_]*)`)
+
+// validateExports checks one `provides` entry's exports as STRUCTURE:
+// non-empty values, templates that parse against the known functions, and
+// param references the package actually declares.
+//
+// Whether the KEY is one this trait mode carries is a vocabulary question
+// and belongs to lint (pkgtool), alongside the classification check, for
+// the same reason: pkgspec must stay able to load a package written
+// against a vocabulary this binary does not have, so that the diagnostic
+// comes from the tool built to explain it rather than from a parser.
+//
+// The param check is the one that pays for itself. An export referencing
+// .Params.public_domian renders empty under missingkey=zero, the export
+// is dropped for being empty, and the consumer's template then fails with
+// a missing .Resolved key three packages away from the typo.
+func validateExports(p *Package, prov Provide, field string) error {
+	if len(prov.Exports) == 0 {
+		return nil
+	}
+	declared := map[string]bool{}
+	for _, d := range p.Params {
+		declared[d.Name] = true
+	}
+	keys := make([]string, 0, len(prov.Exports))
+	for k := range prov.Exports {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // map order must not make the first failure vary between runs
+	for _, key := range keys {
+		kf := field + "." + key
+		expr := prov.Exports[key]
+		if strings.TrimSpace(expr) == "" {
+			return &ValidationError{Field: kf, Msg: "must not be empty: omit the key rather than exporting nothing under it"}
+		}
+		if _, err := template.New(kf).Funcs(exportStubFuncs).Parse(expr); err != nil {
+			return &ValidationError{Field: kf, Msg: fmt.Sprintf(
+				"is not a valid template (%v); the functions available are %s plus Go's own built-ins",
+				err, strings.Join(trait.ExportFuncs, ", "))}
+		}
+		for _, m := range paramFieldRegexp.FindAllStringSubmatch(expr, -1) {
+			if !declared[m[1]] {
+				return &ValidationError{Field: kf, Msg: fmt.Sprintf(
+					"references .Params.%s, which this package does not declare — an export renders over "+
+						"the PROVIDER's own params, so it can only offer what this package asks for", m[1])}
 			}
 		}
 	}
