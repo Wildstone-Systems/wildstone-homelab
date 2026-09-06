@@ -460,6 +460,15 @@ func exportFuncs(p ingressorigin.Posture) template.FuncMap {
 // public_domain is required and undefaulted, so the requesting package's
 // own value is what lands — but a provider that adds a defaulted param
 // will see that default win, and should expect to.
+//
+// It is a real limitation and not only a tidy one: two deployments where
+// the provider's and consumer's value for a name agree cannot tell the
+// difference, and one where they disagree gets an export derived from the
+// consumer's. Confirmed by automated review on the PR that introduced
+// exports. Closing it means giving the Catalog the params each capability
+// was actually installed with — they exist, in plan.CapabilityOrigin, but
+// with no way to ask for them by capability — which is a change to what a
+// Catalog is. ADR-W025 Part B item 4 carries it.
 func exportParams(provider *pkgspec.Package, requesting map[string]string) map[string]string {
 	merged := make(map[string]string, len(requesting)+len(provider.Params))
 	for k, v := range requesting {

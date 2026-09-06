@@ -360,6 +360,35 @@ scheduled.
 3. **Catalog-wide collision checks** — two packages claiming the same
    capability and profile, or the same Route label, are catalog defects
    that only a catalog-wide view can see. A3 is where they land.
+4. **A Catalog holds packages as DECLARED, not as installed.** An export
+   renders over the requesting package's params overlaid by the
+   provider's declared *defaults* (`exportParams`), because a
+   `capability.Catalog` is built from package specs and a default is the
+   only provider-side value in reach. So a provider installed with a
+   required or overridden param — the common case: `public_domain` is
+   required and undefaulted — contributes nothing, and the export falls
+   back to the consumer's own value for that name. Two deployments where
+   those agree, which is every shipped one, cannot tell the difference;
+   one where they do not gets an issuer derived from the consumer's
+   domain.
+
+   This is not new — the hardcoded lookup A2 replaced did exactly the
+   same thing, `providerParams` returning defaults with the consumer's
+   value as the fallback — and A2 preserved it deliberately rather than
+   changing behaviour inside a refactor. Raised by automated review on
+   this PR and confirmed real.
+
+   The fix is to give the Catalog the params each enabled capability was
+   actually installed with. They exist: `plan.CapabilityOrigin` records
+   package, version and params on every capability proposal (A2 of
+   ADR-W021). What is missing is a way to ask for them — the origin lives
+   inside the stored plan's JSON, with no index by capability — so this
+   needs a lookup ("the newest applied plan whose origin names this
+   capability"), a decision about capabilities with no origin at all
+   (installed before ADR-W021, or by hand), and a `Catalog` that carries
+   configured params alongside declared ones. That is a change to what a
+   Catalog IS, and it belongs in its own review rather than inside the
+   change that made exports data.
 
 Nothing here changes the trust boundary. A package is still data, still
 never executed by the toolchain, and every install is still a plan a human

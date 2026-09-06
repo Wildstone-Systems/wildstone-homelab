@@ -192,6 +192,13 @@ export interface ParamDecl {
   // it" — a fact about this deployment, not about the package.
   options?: string[];
   suggested?: string;
+  // A syntactically valid value, written by the package author (ADR-W025
+  // A4). It shows the SHAPE and nothing else — it is not a suggestion for
+  // this deployment and never becomes the field's value, only its
+  // placeholder of last resort. "lint-listen-addr" is what the toolchain
+  // invents without one, and an operator staring at an empty box labelled
+  // listen_addr has the same problem the example exists to solve.
+  example?: string;
 }
 
 export interface ServiceAddress {
