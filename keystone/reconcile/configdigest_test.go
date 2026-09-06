@@ -47,8 +47,8 @@ func TestConfigChangeChangesTheSpecHash(t *testing.T) {
 	before := managedConfigContents(cfgPrefix, byKey(cfgFile("authelia-configuration", "identity", "configuration.yml", "theme: light\n")))
 	after := managedConfigContents(cfgPrefix, byKey(cfgFile("authelia-configuration", "identity", "configuration.yml", "theme: dark\n")))
 
-	h1 := specHash(spec, ContainerNetwork, configDigest(spec, before))
-	h2 := specHash(spec, ContainerNetwork, configDigest(spec, after))
+	h1 := specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, before))
+	h2 := specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, after))
 	if h1 == h2 {
 		t.Fatal("editing a mounted config left the spec hash unchanged: the agent will treat the " +
 			"container as converged and never restart it, so the new config is never read")
@@ -69,8 +69,8 @@ func TestNewOidcClientChangesAutheliaSpecHash(t *testing.T) {
 		OidcClient: &resource.OidcClientSpec{ClientId: "immich", SecretRef: "secret/immich-oidc"},
 	}))
 
-	if specHash(spec, ContainerNetwork, configDigest(spec, none)) ==
-		specHash(spec, ContainerNetwork, configDigest(spec, one)) {
+	if specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, none)) ==
+		specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, one)) {
 		t.Fatal("registering an OidcClient left Authelia's spec hash unchanged: the client is written " +
 			"to clients.yml and the running provider never learns about it")
 	}
@@ -85,12 +85,12 @@ func TestContainerWithNoManagedConfigIsUnaffected(t *testing.T) {
 	spec := &resource.ContainerSpec{Image: "nginx@sha256:abc", Restart: "unless-stopped"}
 
 	contents := managedConfigContents(cfgPrefix, byKey(cfgFile("a", "identity", "configuration.yml", "theme: light\n")))
-	if d := configDigest(spec, contents); d != "" {
+	if d := configDigest(cfgPrefix, spec, contents); d != "" {
 		t.Errorf("a container with no bind mount under the managed prefix got digest %q, want empty", d)
 	}
 
 	const beforeThisChange = "e2d3456039e9a85a"
-	if got := specHash(spec, ContainerNetwork, configDigest(spec, contents)); got != beforeThisChange {
+	if got := specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, contents)); got != beforeThisChange {
 		t.Errorf("spec hash for a config-less container changed to %q (was %q): every such container "+
 			"in the fleet would be replaced once for no reason", got, beforeThisChange)
 	}
@@ -110,8 +110,8 @@ func TestRouteFragmentsAreNotInTheDigest(t *testing.T) {
 		Metadata: resource.Metadata{Name: "photos", Node: "n1", Owner: "capability/photos"},
 		Route:    &resource.RouteSpec{Host: "photos.example.internal", Upstream: "container/immich-server:2283"},
 	}
-	before := configDigest(ingress, managedConfigContents(cfgPrefix, byKey()))
-	after := configDigest(ingress, managedConfigContents(cfgPrefix, byKey(route)))
+	before := configDigest(cfgPrefix, ingress, managedConfigContents(cfgPrefix, byKey()))
+	after := configDigest(cfgPrefix, ingress, managedConfigContents(cfgPrefix, byKey(route)))
 	if before != after {
 		t.Errorf("adding a Route changed the ingress container's config digest (%q -> %q): it would be "+
 			"replaced on every Route change instead of letting Caddy --watch reload it", before, after)
@@ -133,7 +133,7 @@ func TestDigestIgnoresAnAdjacentDirectory(t *testing.T) {
 		Mounts: []resource.Mount{{Source: "/etc/wildstone/identity", Target: "/etc/wildstone/identity"}},
 	}
 	contents := map[string]string{"/etc/wildstone/identity-old/configuration.yml": "stale"}
-	if d := configDigest(spec, contents); d != "" {
+	if d := configDigest(cfgPrefix, spec, contents); d != "" {
 		t.Errorf("a mount of /etc/wildstone/identity picked up /etc/wildstone/identity-old (digest %q)", d)
 	}
 }
@@ -145,10 +145,83 @@ func TestDigestIsOrderIndependent(t *testing.T) {
 	a := cfgFile("one", "identity", "configuration.yml", "a\n")
 	b := cfgFile("two", "identity", "extra.yml", "b\n")
 
-	first := configDigest(spec, managedConfigContents(cfgPrefix, byKey(a, b)))
+	first := configDigest(cfgPrefix, spec, managedConfigContents(cfgPrefix, byKey(a, b)))
 	for i := 0; i < 20; i++ {
-		if got := configDigest(spec, managedConfigContents(cfgPrefix, byKey(b, a))); got != first {
+		if got := configDigest(cfgPrefix, spec, managedConfigContents(cfgPrefix, byKey(b, a))); got != first {
 			t.Fatalf("digest is not stable across map iteration order: %q vs %q", got, first)
 		}
 	}
+}
+
+// F73: a managed config file rewritten without restarting the container
+// that reads it applies and has no effect. Hit twice in one evening —
+// Authelia enforced stale access rules for 49 minutes after an approved
+// plan corrected them, and Homepage served a stale service list for an
+// hour after a capability was installed. Both times the file on disk
+// matched desired state, so nothing was drifting and everything reported
+// healthy.
+//
+// The mechanism to prevent it already existed; these two files were
+// simply not in it.
+
+func TestAutheliaAccessRulesReachTheRunningProvider(t *testing.T) {
+	authelia := &resource.ContainerSpec{
+		Mounts: []resource.Mount{{Source: cfgPrefix + "/authelia", Target: cfgPrefix + "/authelia", ReadOnly: true}},
+	}
+	before := configDigest(cfgPrefix, authelia, managedConfigContents(cfgPrefix, keyed(
+		ingressRes("internal"),
+	)))
+	after := configDigest(cfgPrefix, authelia, managedConfigContents(cfgPrefix, keyed(
+		ingressRes("internal"),
+		tailnetRoute("home", "home.example.com"), // authelia_oidc: adds a rule
+	)))
+	if before == after {
+		t.Error("adding an authenticated Route left Authelia's digest unchanged: it would go on enforcing the old access_control")
+	}
+}
+
+func TestDashboardServiceListReachesTheRunningDashboard(t *testing.T) {
+	homepage := &resource.ContainerSpec{
+		Mounts: []resource.Mount{{Source: cfgPrefix + "/dashboard/services.yaml", Target: "/app/config/services.yaml", ReadOnly: true}},
+	}
+	before := configDigest(cfgPrefix, homepage, managedConfigContents(cfgPrefix, keyed(
+		ingressRes("internal"),
+	)))
+	after := configDigest(cfgPrefix, homepage, managedConfigContents(cfgPrefix, keyed(
+		ingressRes("internal"),
+		tailnetRoute("jellyfin", "jellyfin.example.com"),
+	)))
+	if before == after {
+		t.Error("installing a service left the dashboard's digest unchanged: it would go on showing the old list")
+	}
+}
+
+// The other half of the same change, and the reason the first attempt at
+// it was wrong: the ingress mounts the prefix ROOT to reach routes/, and
+// must not be replaced every time an unrelated capability's config
+// changes. Caddy reloads what it cares about itself.
+func TestPrefixRootMountIsASpectator(t *testing.T) {
+	ingress := &resource.ContainerSpec{
+		Mounts: []resource.Mount{{Source: cfgPrefix, Target: cfgPrefix, ReadOnly: true}},
+	}
+	before := configDigest(cfgPrefix, ingress, managedConfigContents(cfgPrefix, keyed(
+		ingressRes("internal"),
+	)))
+	after := configDigest(cfgPrefix, ingress, managedConfigContents(cfgPrefix, keyed(
+		ingressRes("internal"),
+		tailnetRoute("home", "home.example.com"),
+		tailnetRoute("jellyfin", "jellyfin.example.com"),
+	)))
+	if before != after {
+		t.Errorf("the ingress was replaced by another capability's config change (%q -> %q)", before, after)
+	}
+}
+
+// keyed builds the desired-set map managedConfigContents expects.
+func keyed(rs ...resource.Resource) map[resKey]resource.Resource {
+	out := map[resKey]resource.Resource{}
+	for _, r := range rs {
+		out[resKey{r.Kind, r.Metadata.Name}] = r
+	}
+	return out
 }
