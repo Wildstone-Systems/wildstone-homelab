@@ -334,76 +334,108 @@ func validateAgentTool(t AgentToolSpec, field string) error {
 }
 
 // RouteLabels are the leading labels of the Route hosts a package
-// declares, with param references resolved to their defaults.
+// declares; ContainerNames are the Containers it declares.
 //
-// It reads the raw templates rather than expanding them, because the
-// caller wants to know what a package WOULD be called before anyone has
-// supplied params — which is exactly when an operator is deciding
-// whether to install it. Defaults are the honest answer: they are what
-// the label will be unless somebody overrides it, and an override makes
-// that Route unpinned anyway.
-func RouteLabels(pkg *Package) []string {
+// Both parse the template AS YAML rather than pattern-matching it. The
+// first attempt used regexes and only understood the shipped catalog's
+// own formatting: it required a double-quoted host, so `host: app.example.com`
+// yielded no label and the tailnet blocker was silently skipped, and it
+// required inline-map metadata, so a conventional block `metadata:` with
+// an indented `name:` yielded no container and every profile of a
+// capability was attributed the installed one's resources.
+//
+// A template is not valid YAML on its own — it carries {{ ... }} actions
+// — so each action is replaced by a placeholder first: a param reference
+// by that param's default, anything else by an empty string. What
+// remains parses, and the fields we want are read from the structure
+// rather than guessed from its layout.
+//
+// A template that still will not parse (a conditional spanning
+// structure, say) yields nothing rather than a wrong answer.
+func packageDocs(pkg *Package) []map[string]any {
 	defaults := map[string]string{}
 	for _, p := range pkg.Params {
 		if p.Default != "" {
 			defaults[p.Name] = p.Default
 		}
 	}
-	seen := map[string]bool{}
-	var out []string
+	var out []map[string]any
 	for _, t := range pkg.Templates {
-		for _, m := range routeHostRegexp.FindAllStringSubmatch(t, -1) {
-			// Resolve references FIRST, then split. A param reference
-			// contains dots of its own ("{{ .Params.media_subdomain }}"),
-			// so splitting a raw host on the first dot yields "{{ "
-			// rather than a label.
-			host := paramRefRegexp.ReplaceAllStringFunc(m[1], func(ref string) string {
-				return defaults[paramRefRegexp.FindStringSubmatch(ref)[1]]
-			})
-			label, _, _ := strings.Cut(host, ".")
-			if label != "" && !seen[label] {
-				seen[label] = true
-				out = append(out, label)
+		resolved := templateActionRegexp.ReplaceAllStringFunc(t, func(a string) string {
+			if m := paramRefRegexp.FindStringSubmatch(a); m != nil {
+				return defaults[m[1]]
 			}
+			return ""
+		})
+		var doc map[string]any
+		if err := yaml.Unmarshal([]byte(resolved), &doc); err != nil || doc == nil {
+			continue
 		}
+		out = append(out, doc)
 	}
 	return out
 }
 
-var (
-	routeHostRegexp = regexp.MustCompile(`host:\s*"([^"]+)"`)
-	paramRefRegexp  = regexp.MustCompile(`\{\{\s*\.Params\.([a-z_]+)\s*\}\}`)
-)
+func docString(doc map[string]any, path ...string) string {
+	var cur any = doc
+	for _, k := range path {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return ""
+		}
+		cur = m[k]
+	}
+	sv, _ := cur.(string)
+	return sv
+}
+
+// RouteLabels are the leading labels of the Route hosts a package
+// declares, with param references resolved to their defaults.
+//
+// Defaults are the honest answer before anyone supplies params, which is
+// when an operator is deciding whether to install — and an override
+// makes the Route unpinned anyway, which the install preview reports
+// from the expanded Routes.
+func RouteLabels(pkg *Package) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, doc := range packageDocs(pkg) {
+		if docString(doc, "kind") != "Route" {
+			continue
+		}
+		host := docString(doc, "spec", "host")
+		label, _, _ := strings.Cut(host, ".")
+		if label != "" && !seen[label] {
+			seen[label] = true
+			out = append(out, label)
+		}
+	}
+	return out
+}
 
 // ContainerNames are the Container resources a package declares.
 //
 // Several packages can provide one capability — the four ingress
 // profiles do — and resources are owned by "capability/<name>", not by
-// the package that rendered them. So a capability's resources cannot be
-// attributed to a package by owner alone, and every profile of an
-// installed capability looks installed.
-//
-// A container name is the cheapest thing that distinguishes them:
-// caddy-tailnet-ts exists on a node running that profile and
-// caddy-tailnet does not.
+// the package that rendered them. A container name is the cheapest thing
+// that distinguishes them: caddy-tailnet-ts exists on a node running
+// that profile and caddy-tailnet does not.
 func ContainerNames(pkg *Package) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, t := range pkg.Templates {
-		if !containerKindRegexp.MatchString(t) {
+	for _, doc := range packageDocs(pkg) {
+		if docString(doc, "kind") != "Container" {
 			continue
 		}
-		for _, m := range metadataNameRegexp.FindAllStringSubmatch(t, -1) {
-			if n := m[1]; n != "" && !seen[n] {
-				seen[n] = true
-				out = append(out, n)
-			}
+		if n := docString(doc, "metadata", "name"); n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
 		}
 	}
 	return out
 }
 
 var (
-	containerKindRegexp = regexp.MustCompile(`kind:\s*Container`)
-	metadataNameRegexp  = regexp.MustCompile(`metadata:\s*\{\s*name:\s*([a-zA-Z0-9._-]+)`)
+	templateActionRegexp = regexp.MustCompile(`\{\{[^}]*\}\}`)
+	paramRefRegexp       = regexp.MustCompile(`\{\{\s*\.Params\.([a-z_]+)\s*\}\}`)
 )

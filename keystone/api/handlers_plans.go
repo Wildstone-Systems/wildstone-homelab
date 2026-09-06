@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"io"
 	"net/http"
@@ -226,6 +227,17 @@ func (s *Server) submitProposalOpts(id principal.Identity, req proposalRequest, 
 	// would face, which is the one thing a preview must not do.
 	if opts.DryRun {
 		out := previewOf(p, puts)
+		// Blockers from the EXPANDED Routes, not the package's defaults.
+		// The Services page can only see manifest defaults, so an
+		// operator who overrides docs_subdomain or media_subdomain makes
+		// the Route unpinned and is told nothing (F79). Here the real
+		// hosts exist, so the answer is about what they actually asked
+		// for.
+		if current, err := s.State.Load(); err == nil {
+			if b := expandedRouteBlockers(current, puts); len(b) > 0 {
+				out["blockers"] = b
+			}
+		}
 		// What this does to everyone else's sign-in, before approval
 		// rather than after (F77).
 		if current, err := s.State.Load(); err == nil {
@@ -415,6 +427,35 @@ func previewOf(p *plan.Plan, puts []resource.Resource) map[string]any {
 	}
 	sort.Strings(provided)
 	return map[string]any{"plan": p, "providedSecrets": provided}
+}
+
+// expandedRouteBlockers are reasons the Routes THIS proposal renders will
+// not give a working service here.
+//
+// Computed from the expanded resources rather than the package, because
+// a Route's label comes from a param an operator can override: pinning
+// is a property of the name they chose, not of the manifest.
+func expandedRouteBlockers(current, puts []resource.Resource) []string {
+	posture := ingressorigin.Of(current)
+	if posture.TLS != "tailscale" {
+		return nil
+	}
+	var out []string
+	for _, r := range puts {
+		if r.Kind != resource.KindRoute || r.Route == nil || r.Route.Host == "" {
+			continue
+		}
+		label := ingressorigin.ServiceLabel(r.Route.Host)
+		if _, pinned := ingressorigin.WellKnownPortFor(label); pinned {
+			continue
+		}
+		out = append(out, fmt.Sprintf(
+			"Route %q has no fixed address under a tailnet, so the links this service builds for itself "+
+				"(an OIDC redirect, its own base URL) will not match where it is served — it will install, "+
+				"report healthy, and you will not be able to sign in", r.Metadata.Name))
+	}
+	sort.Strings(out)
+	return out
 }
 
 // authPolicyWarning is what installing this would do to how EVERYONE
