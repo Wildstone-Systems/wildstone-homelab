@@ -596,7 +596,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			// eventually set aside instead of halting this plan forever
 			// (F60). The plan still halts here — it applies in full or
 			// not at all — but the NEXT one will not contain this step.
-			if r.noteStepFailure(nodeID, step, fingerprintOf(desiredByKey[resKey{step.Kind, step.Name}]), sr.Error) {
+			if r.noteStepFailure(nodeID, step, specFingerprint(desiredByKey, step), sr.Error) {
 				outcome.Blocked = append(outcome.Blocked, BlockedResource{
 					Kind: step.Kind, Name: step.Name, Action: step.Action, Reason: sr.Error,
 				})

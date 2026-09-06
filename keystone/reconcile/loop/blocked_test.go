@@ -1,8 +1,12 @@
 package loop
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // F60: a plan applies in full or not at all, so a failed step halts it
@@ -198,4 +202,70 @@ func TestPruningSparesAnOfflineNode(t *testing.T) {
 	}
 	t.Error("the row for a resource on an offline node was pruned; nothing now records that the " +
 		"reconciler manages it, so its deletion will never be planned")
+}
+
+// undeletableApplier lets a container be created but refuses to remove
+// it — an agent that will not, or cannot, take it away.
+type undeletableApplier struct {
+	containerApplier
+	name string
+}
+
+func (a *undeletableApplier) Apply(ctx context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+	if rc := op.GetRemoveContainer(); rc != nil && rc.GetName() == a.name {
+		return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: &wsv1.OpError{
+			Code: wsv1.ErrorCode_ERROR_CODE_RUNTIME, Message: "will not remove",
+		}}}, nil
+	}
+	return a.containerApplier.Apply(ctx, node, op)
+}
+
+// A DELETE can be quarantined too, and that resource is desired by
+// nobody — so the row-pruning that keeps the Console honest would take
+// away the only record that the container is still running. An orphan
+// nothing reports is worse than an orphan.
+func TestAQuarantinedDeleteStaysVisible(t *testing.T) {
+	l, state, db, _ := harness(t)
+	l.Rec.Applier = &undeletableApplier{name: "stuck"}
+	if err := state.Put(container("stuck", "n1", testImage)); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Put(container("other", "n1", testImage)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	// It leaves desired state, and the delete fails every time.
+	if err := state.Delete("Container", "stuck"); err != nil {
+		t.Fatal(err)
+	}
+	// A delete is High risk and waits for a human, so each pass runs on an
+	// approved plan — which is how a real removal reaches the agent.
+	for i := 0; i < 6; i++ {
+		id, err := db.InsertPlan("op", "", "remove stuck", "high", `{"x":1}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.TransitionPlan(id, runtimedb.PlanApproved, "op"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := l.Tick(t.Context()); err != nil {
+			t.Fatalf("tick %d: %v", i, err)
+		}
+	}
+
+	o := observedFor(t, db, "Container", "stuck")
+	if o.Healthy {
+		t.Errorf("a container that could not be removed reports healthy: %+v", o)
+	}
+	if !strings.Contains(o.Detail, "skipped") {
+		t.Errorf("the row still shows the raw failure rather than saying the resource has been set "+
+			"aside and what to do about it: %q", o.Detail)
+	}
+	// And the resource it was holding up got there.
+	if o := observedFor(t, db, "Container", "other"); !o.Healthy {
+		t.Errorf("an unrelated resource never converged behind a stuck delete: %+v", o)
+	}
 }

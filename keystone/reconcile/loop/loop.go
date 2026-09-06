@@ -211,6 +211,13 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 			acting[string(st.Kind)+"/"+st.Name] = true
 		}
 		for _, b := range outcome.Blocked {
+			// A blocked resource keeps its status row even when nothing
+			// desires it any more. A DELETE can be quarantined too — an
+			// agent that refuses to remove a container, say — and that
+			// resource is desired by nobody, so without this the prune
+			// below would take away the only record that it is still
+			// there. An orphan nothing reports is worse than an orphan.
+			acting[string(b.Kind)+"/"+b.Name] = true
 			out.Blocked = append(out.Blocked, b)
 			l.event("reconcile.blocked", g.node, b.Summary(),
 				map[string]string{"kind": string(b.Kind), "name": b.Name})
@@ -442,6 +449,22 @@ func (l *Loop) recordObserved(g nodeGroup, outcome *reconcile.Outcome) {
 			o.Detail = detail
 		}
 		if err := l.DB.UpsertObserved(o); err != nil {
+			slog.Default().Error("observed upsert failed", "resource", key, "err", err)
+		}
+		delete(unhealthy, key)
+	}
+	// Anything left is implicated in a failure but is not in desired
+	// state — a delete that keeps failing, most likely. It still exists,
+	// and the operator is the only one who can do anything about it, so
+	// it gets a row of its own rather than disappearing quietly.
+	for key, detail := range unhealthy {
+		kind, name, ok := strings.Cut(key, "/")
+		if !ok {
+			continue
+		}
+		if err := l.DB.UpsertObserved(runtimedb.Observed{
+			Kind: kind, Name: name, Node: g.node, Detail: detail,
+		}); err != nil {
 			slog.Default().Error("observed upsert failed", "resource", key, "err", err)
 		}
 	}

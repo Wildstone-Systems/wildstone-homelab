@@ -97,13 +97,23 @@ func (r *Reconciler) clearStepFailure(nodeID string, step plan.PlanStep) {
 // forgetUndesired drops quarantine records for resources that have left
 // desired state. A resource the operator removes and later re-adds must
 // get a real attempt, not a sentence carried over from its last life.
+// Records for a failing DELETE are kept: see below.
 func (r *Reconciler) forgetUndesired(nodeID string, desiredByKey map[resKey]resource.Resource) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for k := range r.blocked[nodeID] {
-		if _, ok := desiredByKey[k]; !ok {
-			delete(r.blocked[nodeID], k)
+	for k, b := range r.blocked[nodeID] {
+		if _, ok := desiredByKey[k]; ok {
+			continue
 		}
+		// A quarantined DELETE is about a resource that is SUPPOSED to be
+		// undesired — that is the whole situation. Forgetting it here
+		// reset the count on every tick, so a delete the agent refuses
+		// could never be set aside and went on halting the pass forever,
+		// which is F60 wearing a different hat.
+		if b.action == plan.ActionDelete {
+			continue
+		}
+		delete(r.blocked[nodeID], k)
 	}
 }
 
@@ -169,6 +179,22 @@ func (b BlockedResource) Summary() string {
 	return fmt.Sprintf("%s %s/%s has failed %d times and is being skipped so other resources can converge: %s "+
 		"— fix the cause, or remove it from desired state",
 		b.Action, b.Kind, b.Name, blockAfter, b.Reason)
+}
+
+// absentSpec is the fingerprint of a step whose resource is not in
+// desired state — a delete. It is stable, which is what the quarantine
+// needs: a delete the agent refuses halts the pass exactly like a create
+// does, so it has to be capable of being set aside too, and the "has the
+// spec changed" test has no spec to look at.
+const absentSpec = "<absent from desired state>"
+
+// specFingerprint identifies what a failing step was trying to apply.
+func specFingerprint(desiredByKey map[resKey]resource.Resource, step plan.PlanStep) string {
+	want, ok := desiredByKey[resKey{step.Kind, step.Name}]
+	if !ok {
+		return absentSpec
+	}
+	return fingerprintOf(want)
 }
 
 // fingerprintOf identifies the exact desired spec that failed, so a
