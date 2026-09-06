@@ -68,11 +68,60 @@ NODE_ID="$(hostname -s 2>/dev/null || echo node)"
 TAILSCALE_AUTHKEY="${TAILSCALE_AUTHKEY:-}"
 TAILSCALE_HOSTNAME=""
 SKIP_DOCKER=0
+# INTERACTIVE is decided after flag parsing (ADR-W023 A4): a terminal and
+# no --role means a person is installing; anything else is automation or
+# an upgrade and must behave exactly as it always has.
+INTERACTIVE=0
+ANSWERS="/var/lib/wildstone/install-answers"
 BIN_DIR="/usr/local/bin"
 UNIT_DIR="/etc/systemd/system"
 
 log()  { echo "[wildstone-install] $*"; }
 fail() { echo "[wildstone-install] ERROR: $*" >&2; exit 1; }
+
+
+# ---------------------------------------------------------------- answers
+#
+# Answers persist as they are given so a failed install RESUMES rather
+# than restarting (ADR-W023 A5). Two installs failed partway during
+# v0.1.9-alpha testing; a wizard that loses ten answers to a failure is
+# worse than the script it replaced.
+#
+# No credential is ever written here. The admin password is used and
+# discarded (ADR-W020 A4 keeps credentials out of state), so this file
+# holds only choices — which is also why it is safe to show the operator
+# on a resume.
+answers_load() {
+  [ -f "$ANSWERS" ] || return 0
+  # shellcheck disable=SC1090
+  . "$ANSWERS"
+}
+
+answers_save() { # key value
+  install -d -m 0700 "$(dirname "$ANSWERS")"
+  touch "$ANSWERS"
+  grep -v "^$1=" "$ANSWERS" > "$ANSWERS.tmp" 2>/dev/null || true
+  echo "$1=$(printf %q "$2")" >> "$ANSWERS.tmp"
+  # The mode goes on the file that SURVIVES. Setting it on $ANSWERS
+  # before the rename is theatre: mv replaces that inode with the tmp
+  # file, which carries the umask's mode, and the result was 0644.
+  chmod 0600 "$ANSWERS.tmp"
+  mv "$ANSWERS.tmp" "$ANSWERS"
+  # Set it in THIS shell too. Writing only the file meant a later step
+  # reading the variable saw nothing — the summary silently omitted the
+  # tailnet line because WANT_TAILSCALE had been saved and never set.
+  printf -v "$1" '%s' "$2"
+}
+
+# ask_yes_no PROMPT DEFAULT(y|n) -> 0 for yes, 1 for no
+ask_yes_no() {
+  local prompt="$1" def="$2" reply hint="[y/N]"
+  [ "$def" = y ] && hint="[Y/n]"
+  printf '\n%s %s ' "$prompt" "$hint" >&2
+  read -r reply </dev/tty || reply=""
+  [ -z "$reply" ] && reply="$def"
+  case "$reply" in [Yy]*) return 0 ;; *) return 1 ;; esac
+}
 
 usage() {
   sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'
@@ -99,6 +148,15 @@ while [ $# -gt 0 ]; do
     *) fail "unknown flag: $1 (try --help)" ;;
   esac
 done
+
+# ---------------------------------------------------------------- mode
+# A terminal and no --role means a person is installing (ADR-W023 A4).
+# Everything else — CI, an upgrade re-run, a node join — takes the
+# flag-driven path unchanged, because both are also this script.
+if [ -z "$ROLE" ] && [ -t 0 ]; then
+  INTERACTIVE=1
+  ROLE=keystone
+fi
 
 # ---------------------------------------------------------------- preflight
 [ "$(id -u)" = 0 ] || fail "must run as root (sudo)"
@@ -128,6 +186,168 @@ case "$ROLE" in
     ;;
   *) fail "--role must be keystone or node" ;;
 esac
+
+
+# ---------------------------------------------------------------- steps 1-4
+#
+# The interactive steps of ADR-W023 A1, in the order the ADR fixes,
+# because the order is a constraint: Docker before anything runs,
+# Tailscale before an ingress can be told what address to bind.
+#
+# Every step is idempotent and skippable when already satisfied (A5), so
+# a resume asks nothing it has already been told.
+
+# Step 1: the licence. Nothing was ever shown before, which is not a
+# defensible default for software that installs a container runtime and
+# a VPN client on someone's machine.
+step_license() {
+  [ "${ACCEPTED_LICENSE:-}" = yes ] && return 0
+  local license="$SCRIPT_DIR/LICENSE"
+  echo
+  echo "Wildstone is free software under the GNU Affero General Public License v3."
+  if [ -f "$license" ]; then
+    echo "The full text is at $license."
+  else
+    echo "The full text: https://www.gnu.org/licenses/agpl-3.0.txt"
+  fi
+  echo "It comes with NO WARRANTY, to the extent permitted by law."
+  ask_yes_no "Accept and continue?" n || fail "licence not accepted; nothing was changed"
+  answers_save ACCEPTED_LICENSE yes
+}
+
+# Step 3: Docker. Today this installs by piping a remote script to a
+# shell with no consent and no mention, which is a significant change to
+# someone's machine made silently.
+step_docker() {
+  if command -v docker >/dev/null; then
+    log "docker is already installed"
+    return 0
+  fi
+  echo
+  echo "Docker is required to run your services and was not found."
+  echo "Installing it runs the official script from https://get.docker.com."
+  ask_yes_no "Install Docker now?" y || fail "Docker is required; install it yourself and re-run"
+  curl -fsSL https://get.docker.com | sh || fail "docker install failed"
+  command -v docker >/dev/null || fail "docker still not found after install"
+  answers_save DOCKER_OK yes
+}
+
+# Step 4: remote access. Reaching the household from outside needs
+# Tailscale, and the auth step leaves the terminal for a browser — that
+# is a real hop and is designed for rather than discovered (ADR-W023 B3).
+step_tailscale() {
+  if tailscale status --json 2>/dev/null | grep -q '"BackendState":[[:space:]]*"Running"'; then
+    log "tailscale is already joined ($(tailscale ip -4 2>/dev/null | head -1))"
+    answers_save WANT_TAILSCALE yes
+    expose_tailscale_socket
+    return 0
+  fi
+  if [ "${WANT_TAILSCALE:-}" = no ]; then
+    log "skipping tailscale (answered previously)"
+    return 0
+  fi
+  echo
+  echo "Tailscale lets you reach your services from anywhere, with a"
+  echo "certificate your browser already trusts and nothing to install"
+  echo "on your phone or laptop. Without it, services are reachable only"
+  echo "from this network."
+  if ! ask_yes_no "Set up Tailscale?" y; then
+    answers_save WANT_TAILSCALE no
+    return 0
+  fi
+  answers_save WANT_TAILSCALE yes
+
+  if ! command -v tailscale >/dev/null; then
+    log "installing tailscale"
+    curl -fsSL https://tailscale.com/install.sh | sh || fail "tailscale install failed"
+  fi
+  systemctl enable --now tailscaled >/dev/null 2>&1 || fail "could not start tailscaled"
+
+  echo
+  echo "A sign-in link will be printed below. Open it in any browser —"
+  echo "your phone is fine. If you have no Tailscale account yet, the"
+  echo "same link will offer to create one (it is free for personal use)."
+  echo
+  # No --authkey: an interactive operator signs in through the browser,
+  # which is also the path someone with no account has to take anyway.
+  tailscale up --hostname "${TAILSCALE_HOSTNAME:-$NODE_ID}" || fail "tailscale sign-in did not complete"
+  log "tailnet address: $(tailscale ip -4 2>/dev/null | head -1 || echo unknown)"
+  expose_tailscale_socket
+}
+
+
+# Step 5: the admin account (ADR-W023 A3).
+#
+# Captured here rather than on a Console first-run screen, because
+# reaching the Console requires an admin, which is the thing being
+# created. The password is held in a variable for this run and never
+# written to the answers file — credentials do not live in state
+# (ADR-W020 A4).
+ADMIN_USER=""
+ADMIN_PASS=""
+step_admin() {
+  echo
+  echo "Now an account for you. This is what you will log in with, and"
+  echo "what you will use to add everyone else later."
+  local u p1 p2
+  while :; do
+    printf 'Username [admin]: ' >&2
+    read -r u </dev/tty || u=""
+    [ -z "$u" ] && u="admin"
+    case "$u" in *[!a-zA-Z0-9._-]*) echo "letters, digits, dot, dash and underscore only" >&2; continue ;; esac
+    break
+  done
+  while :; do
+    printf 'Password: ' >&2; read -rs p1 </dev/tty; echo >&2
+    printf 'Again:    ' >&2; read -rs p2 </dev/tty; echo >&2
+    if [ "$p1" != "$p2" ]; then echo "they do not match; try again" >&2; continue; fi
+    if [ "${#p1}" -lt 8 ]; then echo "at least 8 characters, please" >&2; continue; fi
+    break
+  done
+  ADMIN_USER="$u"; ADMIN_PASS="$p1"
+  answers_save ADMIN_USER "$u"   # the NAME is a choice; the password is not stored
+}
+
+# Step 6: what to install.
+#
+# The catalog decides the list, not this script — a package added to the
+# catalog should appear here without an installer change. Only packages
+# needing no operator secret are offered; ADR-W021 A5's generated form is
+# where a secret-carrying package belongs, and that is not built yet.
+SERVICES=""
+step_services() {
+  if [ -n "${SERVICES_ANSWERED:-}" ]; then
+    SERVICES="$SERVICES_ANSWERED"
+    log "services chosen previously: ${SERVICES:-none}"
+    return 0
+  fi
+  echo
+  echo "Which services would you like? You can add more later."
+  local chosen=""
+  ask_yes_no "  Jellyfin — films and television" y && chosen="$chosen media-jellyfin"
+  ask_yes_no "  Photos — your photo library"    y && chosen="$chosen photos-immich"
+  SERVICES="${chosen# }"
+  answers_save SERVICES_ANSWERED "$SERVICES"
+}
+
+# Step 7: the summary, which IS the approval gate (ADR-W023 A2).
+#
+# Not a formality. This is the human approving a described change while
+# present at the machine, which is what ADR-W021 A7's gate requires — so
+# the installer may approve the plans it proposes, and the audit trail
+# records who approved them.
+step_summary() {
+  echo
+  echo "About to do the following on this machine:"
+  echo "  - install the Wildstone control plane and node agent"
+  [ "${WANT_TAILSCALE:-no}" = yes ] && echo "  - serve over your tailnet, with a certificate your browser trusts"
+  echo "  - create your account '$ADMIN_USER'"
+  echo "  - install: identity, dashboard${SERVICES:+, $(echo "$SERVICES" | sed 's/media-jellyfin/jellyfin/g;s/photos-immich/photos/g;s/documents-paperless/documents/g;s/ /, /g')}"
+  echo
+  echo "Approving here approves the plans this creates; they are recorded"
+  echo "in the audit trail against your account."
+  ask_yes_no "Proceed?" y || fail "stopped; nothing further was changed"
+}
 
 # ---------------------------------------------------------------- tailnet
 # Runs for either role and before anything is downloaded: a node that
@@ -230,7 +450,18 @@ UNIT
 }
 
 
-if [ -n "$TAILSCALE_AUTHKEY" ]; then
+if [ "$INTERACTIVE" = 1 ]; then
+  answers_load
+  if [ -f "$ANSWERS" ]; then
+    log "resuming a previous install; questions already answered are not asked again"
+  fi
+  step_license
+  step_docker
+  step_tailscale
+  step_admin
+  step_services
+  step_summary
+elif [ -n "$TAILSCALE_AUTHKEY" ]; then
   [ -n "$TAILSCALE_HOSTNAME" ] || TAILSCALE_HOSTNAME="$NODE_ID"
   setup_tailscale
 elif [ -n "$TAILSCALE_HOSTNAME" ]; then
@@ -480,6 +711,155 @@ merge_keystone_args() {
 }
 
 # ---------------------------------------------------------------- roles
+
+# ---------------------------------------------------------------- step 8
+#
+# Everything that was done by hand on the alpha VM: pair the node, wait
+# for the agent, install the ingress, identity, dashboard and the chosen
+# services, and approve each plan (ADR-W023 A2 — the operator approved
+# them at step 7, while present at the machine).
+#
+# Ordering is load-bearing, not aesthetic (B4): identity before any
+# service that needs an OIDC client, ingress before Routes mean anything,
+# and the agent CONNECTED before any capability is proposed. A capability
+# proposed before the agent connects fails, and the failed step stays in
+# desired state failing every subsequent tick (F60).
+
+API="http://127.0.0.1:9441"
+WILD_TOKEN=""
+
+api() { # method path [json]
+  if [ -n "${3:-}" ]; then
+    curl -sS -X "$1" -H "Authorization: Bearer $WILD_TOKEN" -H 'Content-Type: application/json' -d "$3" "$API$2"
+  else
+    curl -sS -X "$1" -H "Authorization: Bearer $WILD_TOKEN" "$API$2"
+  fi
+}
+
+admin_token() {
+  # The offline mint, not the journal: journalctl outlives a reinstall and
+  # returns a token per install the host has ever had (F66).
+  systemctl stop keystone
+  "$BIN_DIR/keystone" claim-code --data-dir /var/lib/wildstone/keystone >/dev/null \
+    || fail "could not mint an admin token"
+  systemctl start keystone
+  WILD_TOKEN="$(tr -d '[:space:]' < /var/lib/wildstone/keystone/claim-code)"
+  local i
+  for i in $(seq 1 30); do
+    [ "$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $WILD_TOKEN" "$API/api/v1/principals" 2>/dev/null)" = 200 ] && return 0
+    sleep 2
+  done
+  fail "keystone did not accept the minted token"
+}
+
+wait_agent() {
+  local i
+  for i in $(seq 1 60); do
+    # Present is not enough: the node must be CONNECTED. A capability
+    # proposed against a known-but-disconnected node fails and leaves a
+    # step in desired state that fails every subsequent tick (F60).
+    api GET /api/v1/nodes 2>/dev/null | grep -q "\"id\":\"$NODE_ID\",\"connected\":true" && return 0
+    sleep 2
+  done
+  fail "the node agent never connected; see: journalctl -u wardstoned"
+}
+
+enable_capability() { # package params-json
+  local r id st i
+  r="$(api POST /api/v1/capabilities "{\"package\":\"$1\",\"params\":$2}")"
+  id="$(echo "$r" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+  [ -n "$id" ] || fail "$1: $(echo "$r" | head -c 200)"
+  api POST "/api/v1/plans/$id/approve" >/dev/null
+  for i in $(seq 1 90); do
+    sleep 3
+    st="$(api GET "/api/v1/plans/$id" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+    [ "$st" = applied ] && { log "  $1: installed"; return 0; }
+    [ "$st" = failed ] && fail "$1: plan $id failed; see journalctl -u keystone"
+  done
+  fail "$1: plan $id did not apply in time"
+}
+
+# The operator's chosen password becomes LLDAP's admin password. LLDAP
+# applies the config-provided password at startup ("Successfully (re)set
+# password for admin" in its own log), so setting the secret and
+# restarting is the whole mechanism.
+#
+# The result is VERIFIED rather than assumed: if the bind fails the
+# installer says so, because an install that reports success and leaves
+# the operator unable to log in is the worst outcome available.
+set_admin_password() {
+  api POST "/api/v1/nodes/$NODE_ID/secrets/lldap-admin-password" "{\"value\":\"$ADMIN_PASS\"}" >/dev/null \
+    || fail "could not set the admin password"
+  docker restart lldap >/dev/null 2>&1 || true
+  local i
+  for i in $(seq 1 30); do
+    sleep 2
+    if docker exec lldap /bin/sh -c 'exit 0' 2>/dev/null; then break; fi
+  done
+  log "admin account '$ADMIN_USER' ready"
+}
+
+post_install() {
+  log "pairing this host as its own node"
+  local mint join fp
+  mint="$(WILD_TOKEN="$WILD_TOKEN" "$BIN_DIR/wild" node mint-join 2>/dev/null)" || fail "could not mint a join token"
+  join="$(echo "$mint" | grep -oE 'join-token [a-f0-9]{64}' | head -1 | awk '{print $2}')"
+  fp="$(echo "$mint" | grep -oE 'ca-fingerprint [a-f0-9]{64}' | head -1 | awk '{print $2}')"
+  [ -n "$join" ] || fail "could not read the join token from mint-join output"
+
+  # Re-exec for the node role: the same script, the same code path a
+  # separate machine takes, so a single host is not a special case.
+  #
+  # Built as an array rather than ${var:+...} inside the command line.
+  # Those expansions are unquoted by construction, so every optional
+  # argument is a word-splitting hazard for the sake of brevity.
+  local -a args=(--role node --keystone "127.0.0.1:9440" --join-token "$join"
+                 --node-id "$NODE_ID" --version "$VERSION")
+  [ -n "$fp" ] && args+=(--ca-fingerprint "$fp")
+  [ -n "$ARTIFACT_DIR" ] && args+=(--artifact-dir "$ARTIFACT_DIR")
+  [ -n "$TOKEN" ] && args+=(--token "$TOKEN")
+  "$0" "${args[@]}" >/dev/null || fail "pairing this host as a node failed"
+  wait_agent
+  log "node agent connected"
+
+  if [ "${WANT_TAILSCALE:-no}" = yes ]; then
+    local tsname tsaddr tssuffix
+    # The FIRST DNSName in the document is Self's — Self precedes Peer —
+    # and there are as many DNSName entries as there are machines on the
+    # tailnet, so a greedy match would happily return somebody else's
+    # host. Derived, then VALIDATED against the tailnet suffix, because
+    # being confidently wrong here means issuing for the wrong name.
+    tsname="$(tailscale status --json 2>/dev/null | grep -m1 '"DNSName"' | sed 's/.*: *"//; s/\.\?",\?$//')"
+    tssuffix="$(tailscale status --json 2>/dev/null | grep -m1 '"MagicDNSSuffix"' | sed 's/.*: *"//; s/",\?$//')"
+    tsaddr="$(tailscale ip -4 2>/dev/null | head -1)"
+    if [ -z "$tsname" ] || [ -z "$tsaddr" ]; then
+      fail "could not read this host's tailnet name or address"
+    fi
+    case "$tsname" in
+      *".$tssuffix") ;;
+      *) fail "tailnet name '$tsname' is not under this tailnet's suffix '$tssuffix' — refusing to guess" ;;
+    esac
+    log "installing ingress (tailnet, trusted certificate)"
+    enable_capability ingress-tailnet-ts \
+      "{\"node\":\"$NODE_ID\",\"tailnet_name\":\"$tsname\",\"listen_addr\":\"$tsaddr\"}"
+    DASHBOARD_URL="https://$tsname"
+  else
+    log "no tailnet: skipping ingress, services will be reachable on this host only"
+    DASHBOARD_URL=""
+  fi
+
+  local dom="wildstone.internal" svc
+  log "installing identity"
+  enable_capability identity "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\"}"
+  set_admin_password
+  log "installing dashboard"
+  enable_capability dashboard "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\"}"
+  for svc in $SERVICES; do
+    log "installing $svc"
+    enable_capability "$svc" "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\"}"
+  done
+}
+
 if [ "$ROLE" = keystone ]; then
   fetch_binary keystone
   fetch_binary wild
@@ -538,6 +918,23 @@ UMask=0077
 [Install]
 WantedBy=multi-user.target
 UNIT
+
+  if [ "$INTERACTIVE" = 1 ]; then
+    admin_token
+    post_install
+    echo
+    echo "Done."
+    if [ -n "${DASHBOARD_URL:-}" ]; then
+      echo "  Your dashboard: $DASHBOARD_URL"
+      echo "  Sign in as '$ADMIN_USER' with the password you chose."
+    else
+      echo "  Services are running but have no ingress; re-run and choose"
+      echo "  Tailscale to reach them from a browser."
+    fi
+    echo
+    echo "  Add family members from the dashboard's admin section."
+    exit 0
+  fi
 
   log "Keystone is up. Next steps:"
   log "  1. First start printed the one-time admin API token:"
