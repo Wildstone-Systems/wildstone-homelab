@@ -173,49 +173,62 @@ setup_tailscale() {
 # Caddy fetches *.ts.net certificates from tailscaled and needs nothing
 # else, no module and no configuration. But Wardstone bind-mounts host
 # paths ONLY from its managed prefixes (ADR-W003 A1), and tailscaled puts
-# its socket in /run/tailscale, which is not one. A package mounting it
-# there validates, lints, expands, plans — and is refused by the agent at
-# apply time, after the plan is approved.
+# its socket in /run/tailscale, which is not one.
 #
-# A bind mount rather than tailscaled's own --socket flag, deliberately.
-# Moving the socket would work for the container and break every
-# `tailscale status` the operator types, because the CLI looks in the
-# default place. This leaves the socket exactly where it is and makes it
-# visible in a second location as well.
+# A bind mount rather than tailscaled's own --socket flag: moving the
+# socket would satisfy the container and break every `tailscale status`
+# the operator types, because the CLI looks in the default place.
 #
-# Ordered After/Requires tailscaled: /run/tailscale is created by
-# tailscaled at start, so a mount unit that ran first would fail on a
-# missing source.
+# A oneshot SERVICE rather than a .mount unit, and this is not a style
+# choice (F69). A .mount unit gets systemd's default dependencies, which
+# include Before=local-fs.target; ordering it After=tailscaled.service
+# then closes a cycle — tailscaled after sysinit.target after
+# local-fs.target after the mount after tailscaled — and systemd breaks
+# it by DELETING the local-fs.target job. `systemctl enable --now`
+# succeeds after boot has finished, so the damage is invisible until the
+# next reboot. A service carries no such implicit ordering.
 expose_tailscale_socket() {
   install -d -m 0755 /srv/wildstone/tailscale
-  if [ -S /srv/wildstone/tailscale/tailscaled.sock ]; then
+  # Supersede the .mount unit shipped by v0.1.7/v0.1.8, which introduced
+  # the cycle above. Leaving it enabled would keep breaking boot even
+  # though nothing uses it any more.
+  if [ -f /etc/systemd/system/srv-wildstone-tailscale.mount ]; then
+    log "removing the superseded mount unit (F69: it creates a boot ordering cycle)"
+    systemctl disable --now srv-wildstone-tailscale.mount >/dev/null 2>&1 || true
+    umount /srv/wildstone/tailscale 2>/dev/null || true
+    rm -f /etc/systemd/system/srv-wildstone-tailscale.mount
+    systemctl daemon-reload
+  fi
+  if [ -S /srv/wildstone/tailscale/tailscaled.sock ] &&
+     systemctl is-active wildstone-tailscale-socket.service >/dev/null 2>&1; then
     log "tailscaled socket already exposed under /srv/wildstone"
     return 0
   fi
-  cat > /etc/systemd/system/srv-wildstone-tailscale.mount <<'UNIT'
+  cat > /etc/systemd/system/wildstone-tailscale-socket.service <<'UNIT'
 # managed by wildstone-install — do not edit
 [Unit]
-Description=Expose tailscaled's local API inside Wildstone's managed prefix
-Documentation=https://github.com/chickenrat17/wildstone-homelab (ADR-W019 A10)
+Description=Expose tailscaled local API inside Wildstone managed prefix
 After=tailscaled.service
 Requires=tailscaled.service
 
-[Mount]
-What=/run/tailscale
-Where=/srv/wildstone/tailscale
-Type=none
-Options=bind
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/mkdir -p /srv/wildstone/tailscale
+ExecStart=/bin/mount --bind /run/tailscale /srv/wildstone/tailscale
+ExecStop=/bin/umount /srv/wildstone/tailscale
 
 [Install]
 WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload
-  systemctl enable --now srv-wildstone-tailscale.mount >/dev/null 2>&1 \
+  systemctl enable --now wildstone-tailscale-socket.service >/dev/null 2>&1 \
     || fail "could not bind-mount tailscaled's socket into /srv/wildstone"
   [ -S /srv/wildstone/tailscale/tailscaled.sock ] \
     || fail "bind mount reported success but /srv/wildstone/tailscale/tailscaled.sock is not a socket"
   log "tailscaled socket exposed at /srv/wildstone/tailscale/tailscaled.sock"
 }
+
 
 if [ -n "$TAILSCALE_AUTHKEY" ]; then
   [ -n "$TAILSCALE_HOSTNAME" ] || TAILSCALE_HOSTNAME="$NODE_ID"
