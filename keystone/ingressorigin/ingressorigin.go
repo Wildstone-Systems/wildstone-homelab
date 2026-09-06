@@ -193,7 +193,26 @@ func (p Posture) SiteAddress(host string) string {
 	}
 	port, ok := p.Ports[host]
 	if !ok {
-		return host
+		// The Routes being created by THIS expansion are not in desired
+		// state yet — .Resolved feeds the templates that declare them, so
+		// it necessarily runs first. Ports is therefore empty exactly when
+		// a capability is being installed, which is the moment Authelia's
+		// own URLs are computed.
+		//
+		// Falling back to the declared host looked harmless and was not:
+		// it produced authelia_url https://auth.<domain> under a posture
+		// that serves nothing there, and Authelia refused to start with
+		// "does not share a cookie scope" — after the plan had applied.
+		//
+		// The pin is the answer because it does not depend on what else
+		// exists. Every capability whose origin .Resolved describes is a
+		// shipped, pinned one; an unpinned service has no .Resolved URL to
+		// get wrong, and still falls through to the declared host.
+		if pinned, ok := wellKnown[ServiceLabel(host)]; ok {
+			port = pinned
+		} else {
+			return host
+		}
 	}
 	return p.TailnetName + ":" + strconv.Itoa(port)
 }
