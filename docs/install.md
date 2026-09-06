@@ -352,10 +352,11 @@ control.
 Enabling one, using Telegram's household bot as the example:
 
 ```sh
-# 1. Build the adapter image and push it somewhere your nodes can reach.
-#    Wildstone publishes none: which registry you trust is your call.
-docker build -f cli/cmd/chat-adapter/Dockerfile -t <registry>/chat-adapter:1.0.0 .
-docker push <registry>/chat-adapter:1.0.0
+# 1. Build the adapter image and push it (see "Picking a registry" below).
+docker buildx build --platform linux/amd64 \
+  -f cli/cmd/chat-adapter/Dockerfile \
+  -t ghcr.io/<you>/chat-adapter:1.0.0 . --push
+docker buildx imagetools inspect ghcr.io/<you>/chat-adapter:1.0.0   # prints the digest
 
 # 2. Make the bot (Telegram: talk to @BotFather) and keep its token.
 
@@ -386,6 +387,42 @@ this adds no port, no Route and nothing at your edge. `chat-matrix-*` is
 the same shape against a homeserver you can run yourself; the operator
 variants are `chat-telegram-admin` and `chat-matrix-admin`, installed
 the same way with `-surface admin` and a second bot.
+
+### Picking a registry
+
+Wildstone publishes no adapter image. The release pipeline builds
+binaries, not images, so you build this one yourself — and where you put
+it is constrained by one thing worth knowing before you choose.
+
+**It must be pullable without credentials.** Keystone pulls the image
+before every container start, a failed pull stops the step, and that
+pull carries no registry auth. So:
+
+- a **private** registry (private GHCR, a password-protected Docker Hub
+  repo) does not work — the pull fails and the container never starts;
+- **side-loading** with `docker load` on the node does not work either,
+  because the pull still runs and still fails.
+
+**A public repository under your own account is the straightforward
+answer**, and it costs you nothing here. The image is one static binary
+built from open source on a `scratch` base — no secrets are baked into
+it, and every credential (bot token, Keystone token) arrives as an
+environment variable at runtime from your secret store.
+
+Two things to get right:
+
+- **Match your node's architecture.** `docker build` produces your
+  laptop's; if the node is a Pi, pass `--platform linux/arm64`. Building
+  the wrong one fails at start with an exec-format error.
+- **Pass the digest, not the tag.** `adapter_image` is digest-pinned
+  like every image Wildstone runs (ADR-W003 A4.2); `docker buildx
+  imagetools inspect` prints it.
+
+If you would rather nothing were public, the options are a registry on
+your tailnet — which needs each node's Docker daemon configured for it,
+outside Wildstone's management — or adding registry auth to the agent's
+pull, which is recorded as F94 and is a small feature rather than a
+workaround.
 
 Once a household bot is bound, a household rule can ask through it —
 `chat-telegram-family.send` is a `domestic` action like `notifications.notify`
