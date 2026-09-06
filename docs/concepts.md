@@ -531,7 +531,16 @@ Group chats: the operator surface answers in a direct message only. The
 family surface may answer in a group, and is told in its prompt that the
 audience is shared.
 
-Chat transports (Telegram, Discord, Slack) are the point of the split:
+A household rule can ask over chat as well as over ntfy: a package
+declares `send` as a `domestic` tool, the rule names it like any other
+action, and the member's reply — free text, not a button — is matched
+back to the question that is still open for that conversation and
+recorded as `household.answered` with the rule's own correlation id.
+Recording an answer involves no model, so that loop closes with the
+Butler switched off.
+
+Chat transports (Telegram, Matrix, and whatever comes next) are the
+point of the split:
 they arrive as packages, and each one is two separate bots against these
 two endpoints, never one bot deciding for itself which side of the house
 a message belongs to.

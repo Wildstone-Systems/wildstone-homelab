@@ -492,6 +492,36 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			log.Error("domestic audit append failed", "tool", c.Tool, "err", eerr)
 		}
 	}
+	// Chat as a household delivery target (ADR-W026 A8, G6). One
+	// executor per installed chat capability that declares `send`, so a
+	// rule names the capability it means rather than a transport the
+	// deployment might run twice. Registration reads the catalog: a
+	// capability whose package does not declare the tool is not wired,
+	// and the gateway's declaration check refuses it either way.
+	//
+	// Family surfaces only. The admin packages declare no agentTools at
+	// all, because a household rule notifies the HOUSEHOLD — pointing one
+	// at the operator's private bot would put household events into the
+	// one conversation that can also propose changes.
+	var chatCapabilities []string
+	if cat != nil {
+		for _, p := range cat.List() {
+			capName := p.Metadata.Capability
+			if !strings.HasPrefix(capName, "chat-") || !strings.HasSuffix(capName, "-family") {
+				continue
+			}
+			declaresSend := false
+			for _, t := range p.AgentTools {
+				if t.Name == "send" {
+					declaresSend = true
+				}
+			}
+			if declaresSend {
+				chatCapabilities = append(chatCapabilities, capName)
+			}
+		}
+	}
+
 	if householdCfg.NtfyURL != "" {
 		mintReply, merr := replyMinter(principals, db, householdCfg.ReplyTTL)
 		if merr != nil {
@@ -505,6 +535,11 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		})
 		log.Info("household actions wired", "tools", actions.Tools(), "replies", householdCfg.ReplyURL != "")
 	}
+
+	// The chat executors are registered after the API server exists,
+	// since their two seams are its methods — see below, where apiSrv is
+	// built. Their names are settled here so the log line above is not
+	// the only place they appear.
 
 	// Household automation engine (ADR-W024 H3): follows the household
 	// stream, records every decision, and hands a fired rule's action to
@@ -545,6 +580,30 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		}
 		return out
 	}
+	// Wire the chat delivery executors now that the API server exists:
+	// both seams are its methods, so keystone/domestic learns neither
+	// the runtime DB nor a chat vendor (ADR-W026 G6).
+	for _, capName := range chatCapabilities {
+		transport := chatTransportFor(capName)
+		actions.Register(&domestic.ChatSender{
+			Capability: capName,
+			Transport:  transport,
+			Lookup: func(_ context.Context, member string) (domestic.ChatRecipient, error) {
+				target, bindingID, lerr := apiSrv.ChatRecipientFor(transport, member)
+				if lerr != nil {
+					return domestic.ChatRecipient{}, lerr
+				}
+				return domestic.ChatRecipient{Transport: transport, Target: target, BindingID: bindingID}, nil
+			},
+			Ask: func(ctx context.Context, r domestic.ChatRecipient, body, correlationID, rule, subject string) (int64, error) {
+				return apiSrv.AskOverChat(ctx, r.Transport, r.Target, r.BindingID, body, correlationID, rule, subject)
+			},
+		})
+	}
+	if len(chatCapabilities) > 0 {
+		log.Info("chat delivery wired", "capabilities", chatCapabilities, "tools", actions.Tools())
+	}
+
 	apiSrv.CAFingerprint = gw.CA().Fingerprint()
 	apiSrv.GatewayAddr = advertisedGatewayAddr(hosts, lis.Addr().String())
 	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
@@ -798,4 +857,16 @@ func advertisedGatewayAddr(hosts, listen string) string {
 		return net.JoinHostPort(h, port)
 	}
 	return ""
+}
+
+// chatTransportFor reads the transport out of a chat capability's name.
+// The catalog convention is chat-<transport>-<surface>, which is what
+// lets one deployment run Telegram and Matrix side by side with a rule
+// naming which it means.
+func chatTransportFor(capability string) string {
+	rest := strings.TrimPrefix(capability, "chat-")
+	if i := strings.LastIndex(rest, "-"); i > 0 {
+		return rest[:i]
+	}
+	return rest
 }

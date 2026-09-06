@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -24,6 +25,8 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
+	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
+	"github.com/chickenrat17/wildstone-homelab/keystone/household"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -164,6 +167,25 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		systemExtra = butler.HouseholdGroupNote
 	}
 
+	// Is this an ANSWER to something a household rule asked (ADR-W024
+	// H4, ADR-W026 A8)? If so it is a fact, not a conversation: it goes
+	// onto the household timeline correlated to the rule that asked, and
+	// gets a short acknowledgement. No model is involved, so the loop a
+	// rule opens still closes with the Butler switched off — the
+	// deterministic-backbone principle, applied to the one place chat
+	// could quietly have broken it.
+	if surface == runtimedb.ButlerSurfaceFamily {
+		if body, answered := s.recordChatAnswer(binding, conversation, text); answered {
+			seq := s.queueChatReply(surface, transport, conversation, body, binding.ID, "",
+				chatDedupe(transport, conversation, msg.MessageID, "answer", text))
+			if err := s.DB.TouchChatBinding(binding.ID); err != nil {
+				s.Log.Error("touching chat binding failed", "err", err)
+			}
+			return inboundResponse{Accepted: true, Bound: true, Queued: seq,
+				Reason: "recorded as the answer to a household question"}, http.StatusAccepted, nil
+		}
+	}
+
 	if s.ButlerHost == nil || s.ButlerHost.Provider == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("no Butler provider configured")
 	}
@@ -282,6 +304,57 @@ func (s *Server) ackChatOutbound(r *http.Request, id principal.Identity) (any, i
 	return map[string]any{"acked": seq}, http.StatusOK, nil
 }
 
+// ChatRecipientFor resolves a household member to their bound
+// conversation on one transport (ADR-W026 G6). cmd/keystone wires it
+// into the domestic gateway's chat executor; it lives here so the one
+// rule that matters is written next to the endpoints that share it: a
+// rule reaches a member only through a binding a human created, exactly
+// as an inbound message does.
+func (s *Server) ChatRecipientFor(transport, member string) (target string, bindingID int64, err error) {
+	bindings, err := s.DB.ListChatBindings(false)
+	if err != nil {
+		return "", 0, err
+	}
+	for _, b := range bindings {
+		// The family surface only: a household rule notifies the
+		// household, never the operator's private bot, which is also why
+		// the admin packages declare no agentTools.
+		if b.Surface != runtimedb.ButlerSurfaceFamily || b.Transport != transport || b.Identity != member {
+			continue
+		}
+		return b.Account, b.ID, nil
+	}
+	return "", 0, fmt.Errorf("no live %s binding for %q on the family surface", transport, member)
+}
+
+// AskOverChat queues a rule's message and, when it carries a correlation
+// id, records the question so the member's next reply closes the loop as
+// household.answered (ADR-W024 H4).
+func (s *Server) AskOverChat(ctx context.Context, transport, target string, bindingID int64, body, correlationID, rule, subject string) (int64, error) {
+	seq, err := s.QueueChatPush(ctx, runtimedb.ButlerSurfaceFamily, transport, target, body, correlationID, "")
+	if err != nil {
+		return 0, err
+	}
+	if correlationID == "" {
+		// A statement, not a question: nothing to wait for, so nothing
+		// to remember.
+		return seq, nil
+	}
+	if _, err := s.DB.RecordChatQuestion(runtimedb.ChatQuestion{
+		CorrelationID: correlationID,
+		Surface:       runtimedb.ButlerSurfaceFamily,
+		Transport:     transport,
+		Target:        target,
+		Rule:          rule,
+		Subject:       subject,
+	}); err != nil {
+		// The message is already queued; the household will see the
+		// question and their answer will simply be an ordinary message.
+		s.Log.Error("recording chat question", "rule", rule, "err", err)
+	}
+	return seq, nil
+}
+
 // QueueChatPush enqueues a message nobody asked for — a household rule
 // notifying over chat (ADR-W026 A8, work package G6). It is exported
 // because cmd/keystone wires it into the domestic gateway as an
@@ -300,3 +373,60 @@ func (s *Server) QueueChatPush(_ context.Context, surface runtimedb.ButlerSurfac
 	}
 	return seq, nil
 }
+
+// recordChatAnswer closes an open chat question with this message, if
+// there is one, and returns the acknowledgement to send back.
+//
+// The answer is recorded as `household.answered` carrying the ORIGINAL
+// correlation id, so the rule's trigger, its question and the reply are
+// one thread on the timeline — the same record an ntfy answer button
+// produces (ADR-W024 H4), reached by a different road.
+//
+// A question nobody answers expires rather than waiting forever, and a
+// claimed question is claimed once: two messages arriving together
+// produce one answer, not two.
+func (s *Server) recordChatAnswer(binding runtimedb.ChatBinding, conversation, text string) (string, bool) {
+	question, err := s.DB.ClaimChatAnswer(binding.Transport, conversation, runtimedb.ChatQuestionWindow)
+	if err != nil {
+		return "", false // no open question: an ordinary message
+	}
+	subject := question.Subject
+	if subject == "" {
+		subject = binding.Identity
+	}
+	payload, err := json.Marshal(map[string]string{"answer": text, "rule": question.Rule, "via": binding.Transport})
+	if err != nil {
+		s.Log.Error("encoding chat answer payload", "err", err)
+		return "", false
+	}
+	receipt, err := s.householdStore().Append(household.Envelope{
+		EventID:       fmt.Sprintf("chat-answer-%d", question.ID),
+		OccurredAt:    time.Now().UTC(),
+		Type:          domestic.AnsweredEventType,
+		Subject:       subject,
+		Entity:        question.Rule,
+		CorrelationID: question.CorrelationID,
+		Payload:       payload,
+	}, chatAnswerSource)
+	if err != nil {
+		s.Log.Error("recording chat answer", "rule", question.Rule, "err", err)
+		// The question is already claimed, so re-answering it is not
+		// possible; say something true rather than pretending.
+		return "I could not write that down just now, sorry.", true
+	}
+	s.Log.Info("chat answer recorded", "rule", question.Rule, "seq", receipt.Seq,
+		"correlation", question.CorrelationID)
+	if s.Automation != nil {
+		// A recorded fact may itself fire a rule, exactly as one posted
+		// to the intake does.
+		s.Automation.Poke()
+	}
+	return "Thanks — noted.", true
+}
+
+// chatAnswerSource is the household-stream source for an answer that
+// arrived over chat. It is a Keystone-internal source like the
+// automation engine's own records: no publisher token was involved,
+// because the answer came through an authenticated binding rather than
+// through the intake.
+const chatAnswerSource = "chat"
