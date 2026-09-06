@@ -145,11 +145,41 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		return nil, http.StatusTooManyRequests, fmt.Errorf("too many messages; slow down")
 	}
 
+	// Claim this message before anything acts on it (ADR-W026 A8). The
+	// outbound dedupe key protects the REPLY; everything before it — the
+	// provider call, the session record, a domestic action that notifies
+	// a person — happens first and would happen twice on a redelivery.
+	// This is the automation engine's claim-before-dispatch shape
+	// (ADR-W024 H4), and the same deliberate trade: at-most-once, since
+	// a duplicated action is worse than a missed one.
+	claimKey := chatDedupe(surface, transport, conversation, msg.MessageID, "inbound", text)
+	claimed, priorSeq, err := s.DB.ClaimChatInbound(claimKey, surface)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if !claimed {
+		// Already handled: point the adapter at the answer it was given
+		// rather than producing a second one.
+		return inboundResponse{Accepted: true, Bound: true, Queued: priorSeq,
+			Reason: "already handled; the reply is on the queue"}, http.StatusAccepted, nil
+	}
+	// A session that FAILS produced no reply and no side effects worth
+	// protecting, so the claim goes back and a retry can work.
+	settled := false
+	defer func() {
+		if !settled {
+			if rerr := s.DB.ReleaseChatInbound(claimKey); rerr != nil {
+				s.Log.Error("releasing inbound chat claim", "err", rerr)
+			}
+		}
+	}()
+
 	binding, err := s.DB.LookupChatBinding(transport, account, surface)
 	if err != nil {
 		// One reply, no detail, no session row (ADR-W026 A4).
 		seq := s.queueChatReply(surface, transport, conversation, unboundReply, 0, "",
 			chatDedupe(surface, transport, conversation, msg.MessageID, "unbound", text))
+		s.settleInbound(claimKey, seq, &settled)
 		return inboundResponse{Accepted: true, Bound: false, Queued: seq,
 			Reason: "no binding for this account on this surface"}, http.StatusAccepted, nil
 	}
@@ -161,6 +191,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		if surface == runtimedb.ButlerSurfaceAdmin {
 			seq := s.queueChatReply(surface, transport, conversation, adminGroupReply, binding.ID, "",
 				chatDedupe(surface, transport, conversation, msg.MessageID, "admin-group", text))
+			s.settleInbound(claimKey, seq, &settled)
 			return inboundResponse{Accepted: true, Bound: true, Queued: seq,
 				Reason: "the operator surface answers in direct messages only"}, http.StatusAccepted, nil
 		}
@@ -178,9 +209,8 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		if body, answered := s.recordChatAnswer(binding, conversation, text); answered {
 			seq := s.queueChatReply(surface, transport, conversation, body, binding.ID, "",
 				chatDedupe(surface, transport, conversation, msg.MessageID, "answer", text))
-			if err := s.DB.TouchChatBinding(binding.ID); err != nil {
-				s.Log.Error("touching chat binding failed", "err", err)
-			}
+			s.settleInbound(claimKey, seq, &settled)
+			s.touchBinding(binding, conversation, msg.Group)
 			return inboundResponse{Accepted: true, Bound: true, Queued: seq,
 				Reason: "recorded as the answer to a household question"}, http.StatusAccepted, nil
 		}
@@ -195,21 +225,20 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		st  int
 	)
 	if surface == runtimedb.ButlerSurfaceFamily {
-		out, st, err = s.runFamilyButlerSession(r.Context(), text, binding.Identity, systemExtra)
+		out, st, err = s.runFamilySession(r.Context(), text, binding.Identity, systemExtra, msg.Group)
 	} else {
 		out, st, err = s.runAdminButlerSession(r.Context(), text, binding.Identity)
 	}
 	if err != nil {
 		return nil, st, err
 	}
-	if err := s.DB.TouchChatBinding(binding.ID); err != nil {
-		s.Log.Error("touching chat binding failed", "err", err)
-	}
+	s.touchBinding(binding, conversation, msg.Group)
 
 	ask, _ := out.(askResponse)
 	body := chatReplyBody(ask)
 	seq := s.queueChatReply(surface, transport, conversation, body, binding.ID, "",
 		chatDedupe(surface, transport, conversation, msg.MessageID, ask.SessionID, text))
+	s.settleInbound(claimKey, seq, &settled)
 	return inboundResponse{Accepted: true, Bound: true, Queued: seq}, http.StatusAccepted, nil
 }
 
@@ -331,6 +360,17 @@ func (s *Server) ChatRecipientFor(transport, member string) (target string, bind
 		if b.Surface != runtimedb.ButlerSurfaceFamily || b.Transport != transport || b.Identity != member {
 			continue
 		}
+		// The direct conversation, not the account. On Telegram they are
+		// the same value and either would work; on Matrix the account is
+		// an MXID and only a room can be sent to, so addressing the
+		// account would queue a message that can never be delivered
+		// (ADR-W026 A8). A binding with no recorded conversation falls
+		// back to the account: right where they coincide, and honest
+		// where they do not — the send fails visibly rather than going
+		// quietly nowhere.
+		if b.Conversation != "" {
+			return b.Conversation, b.ID, nil
+		}
 		return b.Account, b.ID, nil
 	}
 	return "", 0, fmt.Errorf("no live %s binding for %q on the family surface", transport, member)
@@ -439,3 +479,30 @@ func (s *Server) recordChatAnswer(binding runtimedb.ChatBinding, conversation, t
 // because the answer came through an authenticated binding rather than
 // through the intake.
 const chatAnswerSource = "chat"
+
+// settleInbound records the reply against the claim and marks it kept,
+// so the deferred release does not hand back a claim whose work
+// actually happened.
+func (s *Server) settleInbound(claimKey string, seq int64, settled *bool) {
+	*settled = true
+	if err := s.DB.RecordChatInboundReply(claimKey, seq); err != nil {
+		s.Log.Error("recording inbound chat reply", "err", err)
+	}
+}
+
+// touchBinding stamps last use and, for a DIRECT message, refreshes
+// where a rule should reach this person later (ADR-W026 A8).
+//
+// Only a direct message updates it: the room a group conversation
+// happens in is not the place to send somebody a private question, and
+// treating it as one is how a rule's "did you get the mail?" ends up in
+// front of the whole household.
+func (s *Server) touchBinding(binding runtimedb.ChatBinding, conversation string, group bool) {
+	direct := conversation
+	if group {
+		direct = ""
+	}
+	if err := s.DB.TouchChatBinding(binding.ID, direct); err != nil {
+		s.Log.Error("touching chat binding failed", "err", err)
+	}
+}

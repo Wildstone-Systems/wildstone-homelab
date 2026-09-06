@@ -67,11 +67,32 @@ func surfacePath(surface, suffix string) (string, error) {
 }
 
 func runButlerAsk(args []string) int {
+	// The question is a positional and comes off FIRST. Go's flag package
+	// stops parsing at the first non-flag argument, so parsing before
+	// this split silently swallowed every trailing flag into the
+	// question — and `-surface family` becoming part of the text meant
+	// the question went to the OPERATOR butler with no sign anything was
+	// wrong. A wrong surface must never be something a typo can cause
+	// quietly (ADR-W026 A1).
+	first, rest := splitLeadingArg(args)
 	fs := flag.NewFlagSet("wild butler ask", flag.ExitOnError)
 	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
 	surface := fs.String("surface", "admin", "which butler to ask: admin | family")
-	fs.Parse(args) //nolint:errcheck // ExitOnError
-	message := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	fs.Parse(rest) //nolint:errcheck // ExitOnError
+	// An unquoted question leaves its remaining words as positionals.
+	// Joining them back is fine; a FLAG among them is not — it means a
+	// flag came after unquoted words and was never parsed, so refuse
+	// rather than ask the wrong butler.
+	words := []string{first}
+	for _, extra := range fs.Args() {
+		if strings.HasPrefix(extra, "-") {
+			fmt.Fprintf(os.Stderr, "wild butler ask: %q came after the question, where it is text rather than a flag.\n", extra)
+			fmt.Fprintln(os.Stderr, `  Quote the question and put flags after it:  wild butler ask "why is jellyfin unhealthy?" -surface family`)
+			return 2
+		}
+		words = append(words, extra)
+	}
+	message := strings.TrimSpace(strings.Join(words, " "))
 	if message == "" {
 		fmt.Fprintln(os.Stderr, `wild butler ask: give a question, e.g. wild butler ask "why is jellyfin unhealthy?"`)
 		return 2

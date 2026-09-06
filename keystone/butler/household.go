@@ -97,6 +97,12 @@ type HouseholdLookup struct {
 	Subject string
 	// Limit is how many, newest first. 1..MaxHouseholdFacts.
 	Limit int
+	// IncludeUnattributed widens a Subject-narrowed lookup to also
+	// return facts about nobody in particular — the household's own
+	// events. It exists for group sessions (ADR-W026 A7), where the read
+	// is pinned to the asker but the shared half of the timeline is
+	// exactly what a room is asking about.
+	IncludeUnattributed bool
 }
 
 // HouseholdActionCall is one typed action a family session asks for. The
@@ -158,7 +164,32 @@ type householdEntry struct {
 type HouseholdGateway struct {
 	seams  HouseholdSeams
 	member string
-	tools  map[string]householdEntry
+	// group marks a session whose audience is a room rather than one
+	// person (ADR-W026 A7). It narrows what the READ tool will return,
+	// structurally — see NewHouseholdGroupGateway.
+	group bool
+	tools map[string]householdEntry
+}
+
+// NewHouseholdGroupGateway builds a family gateway for a session whose
+// audience is a GROUP (ADR-W026 A7).
+//
+// It is a different constructor rather than a flag on a request because
+// the difference is a capability, not a preference: a group gateway will
+// not return another member's events at all. Telling the model "this is
+// a shared room, be discreet" is worth doing and is done — but a prompt
+// is a request, and a request is not a boundary. A model that
+// misclassifies a fact, or one following an adversarial message in the
+// room, cannot disclose what its tools never handed it.
+//
+// What it still cannot do is judge the CONTENT of a household-wide fact,
+// so a payload that happens to name someone can still be read aloud.
+// Narrowing the subject is the boundary that can be drawn structurally;
+// the rest is the prompt's job, and the prompt says so.
+func NewHouseholdGroupGateway(member string, seams HouseholdSeams) *HouseholdGateway {
+	gw := NewHouseholdGateway(member, seams)
+	gw.group = true
+	return gw
 }
 
 // NewHouseholdGateway builds a family gateway bound to member. An empty
@@ -344,10 +375,28 @@ func handleHouseholdEvents(ctx context.Context, gw *HouseholdGateway, input map[
 	if strings.EqualFold(subject, "me") {
 		subject = gw.member
 	}
+	// In a GROUP the timeline read is narrowed to the asker and to
+	// household-wide facts, whatever subject was named (ADR-W026 A7).
+	// This is the boundary that does not depend on the model behaving:
+	// another member's movements are not fetched, so they cannot be
+	// repeated into a room that member is not in.
+	if gw.group {
+		if subject != "" && subject != gw.member {
+			return ToolOutcome{Content: fmt.Sprintf(
+				"In a group conversation I only look up %s's own activity and things the whole "+
+					"household shares. Ask me directly for anything about someone else.", gw.member),
+				Rejected: true}, nil
+		}
+		subject = gw.member
+	}
 	facts, err := gw.seams.Events(ctx, HouseholdLookup{
 		EventType: strings.TrimSpace(stringInput(input, "eventType")),
 		Subject:   subject,
 		Limit:     limit,
+		// A group read also asks for the household's own shared facts —
+		// the ones with no subject — alongside the asker's, so "is the
+		// dishwasher done?" still works in the kitchen room.
+		IncludeUnattributed: gw.group,
 	})
 	if err != nil {
 		return ToolOutcome{}, fmt.Errorf("reading household timeline: %w", err)

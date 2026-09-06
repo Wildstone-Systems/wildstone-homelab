@@ -90,8 +90,8 @@ func (s *Store) IssueChatClaim(surface runtimedb.ButlerSurface, identity, transp
 // failure — unknown, expired, spent, wrong transport — comes back as
 // runtimedb.ErrClaimCode, so a caller trying codes learns nothing from
 // which one it was.
-func (s *Store) RedeemChatClaim(code, transport, account, displayName string) (runtimedb.ChatBinding, error) {
-	return s.DB.RedeemChatClaimCode(hashSecret(NormalizeClaimCode(code)), transport, account, displayName)
+func (s *Store) RedeemChatClaim(code, transport, account, displayName, conversation string) (runtimedb.ChatBinding, error) {
+	return s.DB.RedeemChatClaimCode(hashSecret(NormalizeClaimCode(code)), transport, account, displayName, conversation)
 }
 
 // NormalizeClaimCode makes a typed code match an issued one: people add

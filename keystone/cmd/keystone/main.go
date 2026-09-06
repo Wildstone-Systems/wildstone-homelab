@@ -675,9 +675,17 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// the runtime DB nor a chat vendor (ADR-W026 G6).
 	for _, capName := range chatCapabilities {
 		transport := chatTransportFor(capName)
+		capName := capName
 		actions.Register(&domestic.ChatSender{
 			Capability: capName,
 			Transport:  transport,
+			// Registered from the CATALOG, gated on the STATEFILE. The
+			// catalog says a package exists; only an install says this
+			// deployment has it. Checking per call rather than filtering
+			// at registration means enabling a chat capability works
+			// without a restart, and disabling one stops it at once
+			// (ADR-W026 A8).
+			Enabled: func() (bool, error) { return apiSrv.CapabilityEnabled(capName) },
 			Lookup: func(_ context.Context, member string) (domestic.ChatRecipient, error) {
 				target, bindingID, lerr := apiSrv.ChatRecipientFor(transport, member)
 				if lerr != nil {
@@ -769,7 +777,22 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			// What is REGISTERED, not what is declared: a rule naming a
 			// tool no executor backs would be refused at dispatch, and
 			// the household would find out when it did not happen.
+			//
+			// Chat executors are registered for every chat package in the
+			// catalog and gated on the install at dispatch, so the same
+			// gate applies here: a Butler that lists an action this
+			// deployment has not installed will promise the household
+			// something that cannot happen (ADR-W026 A8).
 			for _, tool := range actions.Tools() {
+				if capName, _, ok := strings.Cut(tool, "."); ok && strings.HasPrefix(capName, "chat-") {
+					on, cerr := apiSrv.CapabilityEnabled(capName)
+					if cerr != nil {
+						return v, cerr
+					}
+					if !on {
+						continue
+					}
+				}
 				tier := "domestic"
 				if actions.Declared != nil {
 					capName, name, _ := strings.Cut(tool, ".")

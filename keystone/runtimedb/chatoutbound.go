@@ -192,3 +192,52 @@ func (db *DB) pruneChatOutbound() {
 		 WHERE created_at < ? AND (delivered_at != '' OR expires_at < ?)`,
 		cutoff, now())
 }
+
+// ClaimChatInbound reserves one inbound message before anything acts on
+// it (ADR-W026 A8). It returns claimed=false when this message has been
+// handled already, along with the seq of the reply it produced, so a
+// redelivery can be acknowledged with the same answer rather than
+// answered twice.
+//
+// The claim is taken BEFORE the session rather than after, because
+// everything expensive and everything with side effects happens in
+// between: the provider call, the session record, and on the family
+// surface a domestic action that may notify a person.
+func (db *DB) ClaimChatInbound(dedupeKey string, surface ButlerSurface) (claimed bool, seq int64, err error) {
+	if dedupeKey == "" {
+		return false, 0, fmt.Errorf("runtimedb: an inbound claim needs a dedupe key")
+	}
+	if !ValidButlerSurface(surface) {
+		return false, 0, fmt.Errorf("runtimedb: inbound claim surface %q is not admin|family", surface)
+	}
+	_, err = db.sql.Exec(
+		`INSERT INTO chat_inbound (dedupe_key, surface, claimed_at) VALUES (?, ?, ?)`,
+		dedupeKey, string(surface), now())
+	if err == nil {
+		return true, 0, nil
+	}
+	if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		return false, 0, fmt.Errorf("runtimedb: claiming inbound message: %w", err)
+	}
+	if qerr := db.sql.QueryRow(
+		`SELECT queued_seq FROM chat_inbound WHERE dedupe_key = ?`, dedupeKey).Scan(&seq); qerr != nil {
+		return false, 0, nil
+	}
+	return false, seq, nil
+}
+
+// RecordChatInboundReply attaches the queued reply to a claim, so a
+// later redelivery can point at the answer that was already given.
+func (db *DB) RecordChatInboundReply(dedupeKey string, seq int64) error {
+	_, err := db.sql.Exec(`UPDATE chat_inbound SET queued_seq = ? WHERE dedupe_key = ?`, seq, dedupeKey)
+	return err
+}
+
+// ReleaseChatInbound gives a claim back. A session that failed produced
+// no reply and no side effects worth protecting, so the message should
+// be retryable — at-most-once is about not repeating what HAPPENED, not
+// about refusing to retry what did not.
+func (db *DB) ReleaseChatInbound(dedupeKey string) error {
+	_, err := db.sql.Exec(`DELETE FROM chat_inbound WHERE dedupe_key = ? AND queued_seq = 0`, dedupeKey)
+	return err
+}

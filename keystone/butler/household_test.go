@@ -345,3 +345,67 @@ func TestHouseholdSessionRunsOnItsOwnSurface(t *testing.T) {
 		t.Fatalf("family session produced plans: %+v", tr.Audit.Plans)
 	}
 }
+
+// The group boundary is structural, not a request in a prompt
+// (ADR-W026 A7). A group session does not FETCH another member's
+// events, so a model that misclassifies a fact — or one following an
+// adversarial message in the room — has nothing to disclose.
+func TestGroupGatewayWillNotFetchAnotherMember(t *testing.T) {
+	var asked []HouseholdLookup
+	seams, _ := householdSeams(t)
+	inner := seams.Events
+	seams.Events = func(ctx context.Context, q HouseholdLookup) ([]HouseholdFact, error) {
+		asked = append(asked, q)
+		return inner(ctx, q)
+	}
+	gw := NewHouseholdGroupGateway("mika", seams)
+
+	// Naming somebody else is refused outright, and no lookup is made.
+	out, err := gw.Dispatch(context.Background(), "get_household_events", map[string]any{
+		"subject": "sam",
+	})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if !out.Rejected {
+		t.Fatalf("a group session looked up another member: %q", out.Content)
+	}
+	if len(asked) != 0 {
+		t.Fatalf("the seam was called for another member: %+v", asked)
+	}
+
+	// An unqualified lookup is pinned to the asker, and widened to the
+	// household's own shared facts rather than to everyone's.
+	if _, err := gw.Dispatch(context.Background(), "get_household_events", map[string]any{}); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(asked) != 1 {
+		t.Fatalf("lookups = %+v, want one", asked)
+	}
+	if asked[0].Subject != "mika" || !asked[0].IncludeUnattributed {
+		t.Fatalf("group lookup = %+v, want it pinned to the asker plus shared facts", asked[0])
+	}
+}
+
+// A DIRECT session is unchanged: the household timeline is shared, and
+// asking about another member one-to-one is the normal case.
+func TestDirectGatewayStillReadsTheHousehold(t *testing.T) {
+	var asked []HouseholdLookup
+	seams, _ := householdSeams(t)
+	inner := seams.Events
+	seams.Events = func(ctx context.Context, q HouseholdLookup) ([]HouseholdFact, error) {
+		asked = append(asked, q)
+		return inner(ctx, q)
+	}
+	gw := NewHouseholdGateway("mika", seams)
+	out, err := gw.Dispatch(context.Background(), "get_household_events", map[string]any{"subject": "sam"})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if out.Rejected {
+		t.Fatalf("a direct session refused an ordinary lookup: %q", out.Content)
+	}
+	if len(asked) != 1 || asked[0].Subject != "sam" || asked[0].IncludeUnattributed {
+		t.Fatalf("direct lookup = %+v", asked)
+	}
+}

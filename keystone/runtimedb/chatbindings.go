@@ -24,10 +24,15 @@ type ChatBinding struct {
 	Surface     ButlerSurface `json:"surface"`
 	Identity    string        `json:"identity"`
 	DisplayName string        `json:"displayName,omitempty"`
-	CreatedAt   time.Time     `json:"createdAt"`
-	CreatedBy   string        `json:"createdBy"`
-	LastUsedAt  time.Time     `json:"lastUsedAt,omitempty"`
-	RevokedAt   time.Time     `json:"revokedAt,omitempty"`
+	// Conversation is where to reach this account when nobody asked — a
+	// rule's question rather than a reply. On Telegram it equals the
+	// account; on Matrix it is the direct room, which the account (an
+	// MXID) is not (ADR-W026 A8).
+	Conversation string    `json:"conversation,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+	CreatedBy    string    `json:"createdBy"`
+	LastUsedAt   time.Time `json:"lastUsedAt,omitempty"`
+	RevokedAt    time.Time `json:"revokedAt,omitempty"`
 }
 
 // Revoked reports whether this binding has been withdrawn.
@@ -85,7 +90,7 @@ func (db *DB) InsertChatClaimCode(hash string, c ChatClaimCode) error {
 // An existing live binding for the same (transport, account, surface) is
 // revoked first, so re-binding an account — a new phone, a re-installed
 // app — is a normal act rather than a unique-constraint failure.
-func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName string) (ChatBinding, error) {
+func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName, conversation string) (ChatBinding, error) {
 	if transport == "" || account == "" {
 		return ChatBinding{}, fmt.Errorf("runtimedb: redeeming requires a transport and account")
 	}
@@ -128,9 +133,9 @@ func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName string) 
 		return ChatBinding{}, fmt.Errorf("runtimedb: replacing binding: %w", err)
 	}
 	res, err := tx.Exec(
-		`INSERT INTO chat_bindings (transport, account, surface, identity, display_name, created_at, created_by)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		transport, account, surface, identity, displayName, stamp, createdBy)
+		`INSERT INTO chat_bindings (transport, account, surface, identity, display_name, conversation, created_at, created_by)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		transport, account, surface, identity, displayName, conversation, stamp, createdBy)
 	if err != nil {
 		return ChatBinding{}, fmt.Errorf("runtimedb: inserting binding: %w", err)
 	}
@@ -152,7 +157,8 @@ func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName string) 
 	}
 	return ChatBinding{
 		ID: id, Transport: transport, Account: account, Surface: ButlerSurface(surface),
-		Identity: identity, DisplayName: displayName, CreatedAt: created, CreatedBy: createdBy,
+		Identity: identity, DisplayName: displayName, Conversation: conversation,
+		CreatedAt: created, CreatedBy: createdBy,
 	}, nil
 }
 
@@ -161,7 +167,7 @@ func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName string) 
 // take effect on the next message.
 func (db *DB) LookupChatBinding(transport, account string, surface ButlerSurface) (ChatBinding, error) {
 	row := db.sql.QueryRow(
-		`SELECT id, transport, account, surface, identity, display_name, created_at, created_by, last_used_at, revoked_at
+		`SELECT id, transport, account, surface, identity, display_name, conversation, created_at, created_by, last_used_at, revoked_at
 		 FROM chat_bindings WHERE transport = ? AND account = ? AND surface = ? AND revoked_at = ''`,
 		transport, account, string(surface))
 	b, err := scanChatBinding(row)
@@ -181,7 +187,7 @@ func (db *DB) ListChatBindings(withRevoked bool) ([]ChatBinding, error) {
 		where = " WHERE revoked_at = ''"
 	}
 	rows, err := db.sql.Query(
-		`SELECT id, transport, account, surface, identity, display_name, created_at, created_by, last_used_at, revoked_at
+		`SELECT id, transport, account, surface, identity, display_name, conversation, created_at, created_by, last_used_at, revoked_at
 		 FROM chat_bindings` + where + ` ORDER BY id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing chat bindings: %w", err)
@@ -217,9 +223,17 @@ func (db *DB) RevokeChatBinding(id int64) error {
 }
 
 // TouchChatBinding stamps last use, so the operator's list shows which
-// bindings are alive and which are forgotten phones.
-func (db *DB) TouchChatBinding(id int64) error {
-	_, err := db.sql.Exec(`UPDATE chat_bindings SET last_used_at = ? WHERE id = ?`, now(), id)
+// bindings are alive and which are forgotten phones. A non-empty
+// conversation refreshes where a rule should reach this account: the
+// direct room a person messages from is the one to answer in, and it can
+// change (a new device, a recreated room).
+func (db *DB) TouchChatBinding(id int64, conversation string) error {
+	if conversation == "" {
+		_, err := db.sql.Exec(`UPDATE chat_bindings SET last_used_at = ? WHERE id = ?`, now(), id)
+		return err
+	}
+	_, err := db.sql.Exec(
+		`UPDATE chat_bindings SET last_used_at = ?, conversation = ? WHERE id = ?`, now(), conversation, id)
 	return err
 }
 
@@ -227,7 +241,7 @@ func scanChatBinding(r rowScanner) (ChatBinding, error) {
 	var b ChatBinding
 	var surface, created, lastUsed, revoked string
 	if err := r.Scan(&b.ID, &b.Transport, &b.Account, &surface, &b.Identity, &b.DisplayName,
-		&created, &b.CreatedBy, &lastUsed, &revoked); err != nil {
+		&b.Conversation, &created, &b.CreatedBy, &lastUsed, &revoked); err != nil {
 		return ChatBinding{}, err
 	}
 	b.Surface = ButlerSurface(surface)

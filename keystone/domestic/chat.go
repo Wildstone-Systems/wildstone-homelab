@@ -50,6 +50,16 @@ type ChatSender struct {
 	// id, records the question so the member's reply can close the loop
 	// as household.answered (ADR-W024 H4). It returns the queued seq.
 	Ask func(ctx context.Context, r ChatRecipient, body, correlationID, rule, subject string) (int64, error)
+	// Enabled reports whether this capability is installed on the
+	// deployment RIGHT NOW.
+	//
+	// It is checked per call rather than at registration because a
+	// capability can be enabled or disabled while the control plane
+	// runs, and an executor registry rebuilt only at startup would
+	// answer for a chat adapter that was uninstalled this morning — or
+	// refuse one installed an hour ago until the next restart. nil means
+	// "assume enabled", for tests and for a deployment with no catalog.
+	Enabled func() (bool, error)
 }
 
 // Name implements Executor.
@@ -59,6 +69,19 @@ func (c *ChatSender) Name() string { return c.Capability + ".send" }
 func (c *ChatSender) Execute(ctx context.Context, call Call) (Result, error) {
 	if c.Lookup == nil || c.Ask == nil {
 		return Result{}, &RefusalError{Tool: call.Tool, Reason: "chat delivery is not wired on this control plane"}
+	}
+	if c.Enabled != nil {
+		on, err := c.Enabled()
+		if err != nil {
+			return Result{}, fmt.Errorf("domestic: %s: checking whether the capability is enabled: %w", call.Tool, err)
+		}
+		if !on {
+			// The catalog knows this package; this deployment has not
+			// installed it. Saying so beats queueing a message into a
+			// transport nothing is running.
+			return Result{}, &RefusalError{Tool: call.Tool, Reason: fmt.Sprintf(
+				"capability %s is not enabled on this deployment", c.Capability)}
+		}
 	}
 	body := strings.TrimSpace(call.Params["message"])
 	if body == "" {

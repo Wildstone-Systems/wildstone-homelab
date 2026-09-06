@@ -175,7 +175,7 @@ func (a *adapter) receiveLoop(ctx context.Context) {
 // interprets messages is an adapter with opinions about the household.
 func (a *adapter) handle(ctx context.Context, m Incoming) {
 	if code, ok := claimCodeIn(m.Text); ok && !m.Group {
-		if err := a.keystone.redeem(ctx, a.transport.Name(), m.Account, m.DisplayName, code); err != nil {
+		if err := a.keystone.redeem(ctx, a.transport.Name(), m.Account, m.DisplayName, m.Conversation, code); err != nil {
 			// The refusal is deliberately vague — Keystone does not say
 			// why, and neither does this.
 			a.reply(ctx, m.Conversation, "That code did not work. Ask for a fresh one.")

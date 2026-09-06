@@ -109,3 +109,38 @@ func TestChatSenderStillPassesTheGatewayTierCheck(t *testing.T) {
 		t.Fatalf("a refused call reached the executor: %v", *asked)
 	}
 }
+
+// The catalog says a package exists; only an install says this
+// deployment has it. A chat action whose capability is not enabled is
+// refused rather than queueing a message into a transport nothing is
+// running (ADR-W026 A8).
+func TestChatSenderRefusesADisabledCapability(t *testing.T) {
+	s, asked := testSender(t)
+	enabled := false
+	s.Enabled = func() (bool, error) { return enabled, nil }
+
+	_, err := s.Execute(context.Background(), Call{
+		Tool: s.Name(), Tier: "domestic", Rule: "mail-check", Subject: "sam",
+		Params: map[string]string{"message": "did the mail arrive?"},
+	})
+	var refusal *RefusalError
+	if !errors.As(err, &refusal) || !strings.Contains(refusal.Reason, "not enabled") {
+		t.Fatalf("err = %v, want a refusal naming the disabled capability", err)
+	}
+	if len(*asked) != 0 {
+		t.Fatalf("a disabled capability queued a message: %v", *asked)
+	}
+
+	// Enabling it takes effect on the next call — no restart, because
+	// the check is per call rather than at registration.
+	enabled = true
+	if _, err := s.Execute(context.Background(), Call{
+		Tool: s.Name(), Tier: "domestic", Rule: "mail-check", Subject: "sam",
+		Params: map[string]string{"message": "did the mail arrive?"},
+	}); err != nil {
+		t.Fatalf("Execute after enabling: %v", err)
+	}
+	if len(*asked) != 1 {
+		t.Fatalf("asked = %v, want the message queued once enabled", *asked)
+	}
+}

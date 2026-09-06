@@ -59,9 +59,15 @@ func (k *keystoneClient) send(ctx context.Context, msg keystoneInbound) error {
 	return err
 }
 
-func (k *keystoneClient) redeem(ctx context.Context, transport, account, displayName, code string) error {
+// redeem exchanges a claim code for a binding. It reports the DIRECT
+// conversation the code arrived in as well as the account: on Matrix
+// they are different values and only the conversation can be sent to,
+// so a rule that wants to reach this person later needs it recorded now
+// (ADR-W026 A8).
+func (k *keystoneClient) redeem(ctx context.Context, transport, account, displayName, conversation, code string) error {
 	_, err := k.call(ctx, http.MethodPost, "/api/v1/chat/bindings/redeem", map[string]string{
-		"transport": transport, "account": account, "displayName": displayName, "code": code,
+		"transport": transport, "account": account, "displayName": displayName,
+		"conversation": conversation, "code": code,
 	})
 	return err
 }

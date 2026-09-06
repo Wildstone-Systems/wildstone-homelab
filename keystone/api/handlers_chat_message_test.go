@@ -220,6 +220,75 @@ func TestChatRedeliveryIsDeduped(t *testing.T) {
 	if queued := h.poll(t, runtimedb.RoleConcierge, ""); len(queued) != 1 {
 		t.Fatalf("queued = %+v, want exactly one reply", queued)
 	}
+	// And nothing ran a second time BEFORE the reply was deduplicated:
+	// the claim is taken ahead of the session, so a redelivery costs no
+	// provider call and writes no second session record (ADR-W026 A8).
+	p, _, _, _, _ := h.s.ButlerHost.Current()
+	if scripted, ok := p.(*scriptedProvider); ok && scripted.i != 1 {
+		t.Fatalf("the provider was called %d times for one message", scripted.i)
+	}
+	var sessions []runtimedb.ButlerSession
+	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &sessions)
+	if len(sessions) != 1 {
+		t.Fatalf("a redelivered message opened %d sessions, want 1", len(sessions))
+	}
+}
+
+// A redelivery must not repeat a DOMESTIC ACTION either — the case the
+// outbound dedupe could never have covered, because the action happens
+// before any reply exists (ADR-W024 H4's at-most-once, applied to chat).
+func TestChatRedeliveryDoesNotRepeatAnAction(t *testing.T) {
+	h := newHarness(t)
+	dispatched := h.wireHouseholdButler([]*provider.ChatResponse{
+		{ToolCalls: []provider.ToolCall{{ID: "tc-1", Name: "do_household_action", Input: map[string]any{
+			"tool":   "notifications.notify",
+			"params": map[string]any{"topic": "household", "message": "bins tonight"},
+		}}}},
+		{Text: "Told them."},
+		// A second run would find these and act again.
+		{ToolCalls: []provider.ToolCall{{ID: "tc-2", Name: "do_household_action", Input: map[string]any{
+			"tool":   "notifications.notify",
+			"params": map[string]any{"topic": "household", "message": "bins tonight"},
+		}}}},
+		{Text: "Told them again."},
+	}, runtimedb.ButlerModeFull)
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+
+	body := map[string]any{
+		"transport": "telegram", "account": "12345",
+		"text": "remind everyone about the bins", "messageId": "m-1",
+	}
+	h.send(runtimedb.RoleConcierge, body)
+	h.send(runtimedb.RoleConcierge, body)
+
+	if len(*dispatched) != 1 {
+		t.Fatalf("a redelivered message performed %d actions, want 1", len(*dispatched))
+	}
+}
+
+// A session that FAILS releases its claim: at-most-once protects what
+// happened, not what did not, so the adapter's retry still gets served.
+func TestChatFailedSessionIsRetryable(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull) // no scripted turns: the provider errors
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+
+	body := map[string]any{
+		"transport": "telegram", "account": "12345", "text": "hello", "messageId": "m-1",
+	}
+	if resp, _ := h.send(runtimedb.RoleConcierge, body); resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 from the exhausted provider", resp.StatusCode)
+	}
+	// Give it something to answer with, and retry the SAME message.
+	h.s.ButlerHost.Swap(&scriptedProvider{turns: []*provider.ChatResponse{{Text: "hello back"}}},
+		runtimedb.ButlerModeFull, "", "")
+	resp, out := h.send(runtimedb.RoleConcierge, body)
+	if resp.StatusCode != http.StatusAccepted || out.Queued == 0 {
+		t.Fatalf("the retry after a failure was refused: status = %d, out = %+v", resp.StatusCode, out)
+	}
+	if queued := h.poll(t, runtimedb.RoleConcierge, ""); len(queued) != 1 {
+		t.Fatalf("queued = %+v, want the retry's reply", queued)
+	}
 }
 
 // One account cannot spend the household's provider budget (ADR-W026

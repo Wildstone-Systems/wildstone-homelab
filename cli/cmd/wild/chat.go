@@ -104,16 +104,21 @@ func runChatBindings(args []string) int {
 }
 
 func runChatRevoke(args []string) int {
+	// The positional comes off FIRST, then the flags — Go's flag package
+	// stops parsing at the first non-flag argument, so parsing before
+	// this split would leave `-api` sitting in Args() as text nobody
+	// reads. Same shape as `wild secret set <name> -node ...`.
+	raw, rest := splitLeadingArg(args)
 	fs := flag.NewFlagSet("wild chat revoke", flag.ExitOnError)
 	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
-	fs.Parse(args) //nolint:errcheck // ExitOnError
-	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: wild chat revoke <binding-id>")
+	fs.Parse(rest) //nolint:errcheck // ExitOnError
+	if raw == "" || fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: wild chat revoke <binding-id> [-api URL]")
 		return 2
 	}
-	id, err := strconv.ParseInt(fs.Arg(0), 10, 64)
+	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "wild chat revoke: %q is not a binding id\n", fs.Arg(0))
+		fmt.Fprintf(os.Stderr, "wild chat revoke: %q is not a binding id\n", raw)
 		return 2
 	}
 	token, ok := requireToken("chat revoke")
@@ -157,12 +162,16 @@ func runChatOutbound(args []string) int {
 // placed on the node as the provided secret the adapter's container
 // reads. Running it again rotates the token.
 func runChatAdapter(args []string) int {
+	// Positional first, then flags (see runChatRevoke): parsing first
+	// would stop at the capability name and leave every flag unset,
+	// which is exactly what the documented command looked like doing.
+	capability, rest := splitLeadingArg(args)
 	fs := flag.NewFlagSet("wild chat adapter", flag.ExitOnError)
 	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
 	node := fs.String("node", "", "which node the adapter runs on")
 	surface := fs.String("surface", "", "which butler this adapter serves: admin | family")
-	fs.Parse(args) //nolint:errcheck // ExitOnError
-	if fs.NArg() != 1 {
+	fs.Parse(rest) //nolint:errcheck // ExitOnError
+	if capability == "" || fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "usage: wild chat adapter <capability> -node <node> -surface admin|family")
 		return 2
 	}
@@ -179,6 +188,6 @@ func runChatAdapter(args []string) int {
 		return 2
 	}
 	return simpleCall("chat adapter", *apiBase, token, http.MethodPost,
-		"/api/v1/chat/adapters/"+url.PathEscape(fs.Arg(0)),
+		"/api/v1/chat/adapters/"+url.PathEscape(capability),
 		map[string]string{"node": *node, "surface": *surface})
 }

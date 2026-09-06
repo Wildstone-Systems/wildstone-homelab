@@ -230,6 +230,12 @@ func TestAdapterRedeemsClaimCodes(t *testing.T) {
 	if ks.redeems[0]["account"] != "12345" || ks.redeems[0]["displayName"] != "@sam" {
 		t.Fatalf("redeem body = %+v", ks.redeems[0])
 	}
+	// The direct conversation travels with the redemption: on a
+	// transport where it differs from the account (Matrix), it is the
+	// only value a rule can later send to (ADR-W026 A8).
+	if ks.redeems[0]["conversation"] != "chat-1" {
+		t.Fatalf("redeem did not report the conversation: %+v", ks.redeems[0])
+	}
 	if len(ks.inbound) != 0 {
 		t.Fatalf("a claim code was also relayed as a question: %+v", ks.inbound)
 	}

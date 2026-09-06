@@ -95,6 +95,12 @@ type redeemRequest struct {
 	Transport   string `json:"transport"`
 	Account     string `json:"account"`
 	DisplayName string `json:"displayName,omitempty"`
+	// Conversation is the direct chat the code arrived in — where a
+	// household rule should reach this person later. On Telegram it
+	// equals the account; on Matrix it is the room, and the account (an
+	// MXID) cannot be sent to (ADR-W026 A8). Optional: a transport that
+	// does not distinguish them can leave it out.
+	Conversation string `json:"conversation,omitempty"`
 }
 
 // redeemChatClaim exchanges a code for a binding. The caller is an
@@ -111,7 +117,8 @@ func (s *Server) redeemChatClaim(r *http.Request, id principal.Identity) (any, i
 	if transport == "" || account == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("transport and account are required")
 	}
-	binding, err := s.Principals.RedeemChatClaim(req.Code, transport, account, trimDisplayName(req.DisplayName))
+	binding, err := s.Principals.RedeemChatClaim(req.Code, transport, account,
+		trimDisplayName(req.DisplayName), strings.TrimSpace(req.Conversation))
 	if errors.Is(err, runtimedb.ErrClaimCode) {
 		// One refusal for every reason (unknown, expired, spent, wrong
 		// transport): an adapter relaying codes for strangers must not be

@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"unicode/utf8"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
@@ -61,6 +62,13 @@ func (h *ButlerHost) householdWired() bool {
 // different one.
 func (h *ButlerHost) householdGateway(member string) *butler.HouseholdGateway {
 	return butler.NewHouseholdGateway(member, h.Household)
+}
+
+// householdGroupGateway builds the gateway for a session whose audience
+// is a room (ADR-W026 A7): the same seams, narrowed so another member's
+// events are never fetched.
+func (h *ButlerHost) householdGroupGateway(member string) *butler.HouseholdGateway {
+	return butler.NewHouseholdGroupGateway(member, h.Household)
 }
 
 // getHouseholdButlerStatus is the family surface's half of the status
@@ -133,6 +141,13 @@ func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any
 // cannot add or remove a tool, because the tools come from the gateway
 // and the gateway is built from the member.
 func (s *Server) runFamilyButlerSession(ctx context.Context, message, member, systemExtra string) (any, int, error) {
+	return s.runFamilySession(ctx, message, member, systemExtra, false)
+}
+
+// runFamilySession is the shared body. group selects the narrowed
+// gateway (ADR-W026 A7) — the audience decides which CAPABILITIES the
+// session has, not merely what its prompt asks it to do.
+func (s *Server) runFamilySession(ctx context.Context, message, member, systemExtra string, group bool) (any, int, error) {
 	host := s.ButlerHost
 	// One snapshot for the whole session, as the operator surface takes
 	// (ADR-W017 A9): a model swapped in mid-session would produce a
@@ -142,8 +157,12 @@ func (s *Server) runFamilyButlerSession(ctx context.Context, message, member, sy
 	if prov == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("no Butler provider configured")
 	}
+	gateway := host.householdGateway(member)
+	if group {
+		gateway = host.householdGroupGateway(member)
+	}
 	session := &butler.Session{
-		Gateway:  host.householdGateway(member),
+		Gateway:  gateway,
 		ReadOnly: mode == runtimedb.ButlerModeQAOnly,
 	}
 	if systemExtra != "" {
@@ -263,6 +282,28 @@ func HouseholdEventSeam(db *runtimedb.DB) func(context.Context, butler.Household
 		})
 		if err != nil {
 			return nil, err
+		}
+		if q.IncludeUnattributed && q.Subject != "" {
+			// A group session reads the asker's own facts plus the
+			// household's shared ones (ADR-W026 A7). Two narrow queries
+			// rather than one wide one: there is no query shape that
+			// means "these two subjects and no others", and widening the
+			// filter to get one would be the boundary quietly coming off.
+			shared, serr := db.QueryHouseholdEvents(runtimedb.HouseholdQuery{
+				Type:       q.EventType,
+				Subject:    "",
+				SubjectSet: true,
+				Limit:      limit,
+				Newest:     true,
+			})
+			if serr != nil {
+				return nil, serr
+			}
+			rows = append(rows, shared...)
+			sort.Slice(rows, func(i, j int) bool { return rows[i].Seq > rows[j].Seq })
+			if len(rows) > limit {
+				rows = rows[:limit]
+			}
 		}
 		return householdFactsFrom(rows), nil
 	}
