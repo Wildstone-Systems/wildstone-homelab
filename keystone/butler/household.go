@@ -97,12 +97,20 @@ type HouseholdLookup struct {
 	Subject string
 	// Limit is how many, newest first. 1..MaxHouseholdFacts.
 	Limit int
-	// IncludeUnattributed widens a Subject-narrowed lookup to also
-	// return facts about nobody in particular — the household's own
-	// events. It exists for group sessions (ADR-W026 A7), where the read
-	// is pinned to the asker but the shared half of the timeline is
-	// exactly what a room is asking about.
-	IncludeUnattributed bool
+	// GroupSafe asks the seam to withhold facts ABOUT ANOTHER PERSON
+	// (ADR-W026 A7): a group session may hear about the house, its
+	// devices, and the asker, and never about the member who is not in
+	// the room.
+	//
+	// Which event types are about a person is not something this package
+	// can know — it is the `subject: member` a package declares for each
+	// event type it publishes (ADR-W024 A10) — so the gateway states the
+	// INTENT and the seam, which has the deployment's vocabulary,
+	// applies it.
+	GroupSafe bool
+	// Member is who is asking. Only meaningful with GroupSafe, where it
+	// is the one person whose own facts stay visible.
+	Member string
 }
 
 // HouseholdActionCall is one typed action a family session asks for. The
@@ -375,28 +383,23 @@ func handleHouseholdEvents(ctx context.Context, gw *HouseholdGateway, input map[
 	if strings.EqualFold(subject, "me") {
 		subject = gw.member
 	}
-	// In a GROUP the timeline read is narrowed to the asker and to
-	// household-wide facts, whatever subject was named (ADR-W026 A7).
-	// This is the boundary that does not depend on the model behaving:
-	// another member's movements are not fetched, so they cannot be
-	// repeated into a room that member is not in.
-	if gw.group {
-		if subject != "" && subject != gw.member {
-			return ToolOutcome{Content: fmt.Sprintf(
-				"In a group conversation I only look up %s's own activity and things the whole "+
-					"household shares. Ask me directly for anything about someone else.", gw.member),
-				Rejected: true}, nil
-		}
-		subject = gw.member
-	}
+	// In a GROUP the read is narrowed to what a room may hear: the
+	// house and its devices, plus the asker's own facts. Another
+	// member's are withheld by the seam, so they never reach the model
+	// and cannot be repeated into a room that member is not in
+	// (ADR-W026 A7).
+	//
+	// The narrowing is by WHOSE fact it is, not by subject-shaped
+	// guesswork: an earlier version pinned the read to the asker and to
+	// facts with no subject at all, which hid the front door along with
+	// Sam — and "is the door still unlocked?" is exactly the question a
+	// kitchen group asks.
 	facts, err := gw.seams.Events(ctx, HouseholdLookup{
 		EventType: strings.TrimSpace(stringInput(input, "eventType")),
 		Subject:   subject,
 		Limit:     limit,
-		// A group read also asks for the household's own shared facts —
-		// the ones with no subject — alongside the asker's, so "is the
-		// dishwasher done?" still works in the kitchen room.
-		IncludeUnattributed: gw.group,
+		GroupSafe: gw.group,
+		Member:    gw.member,
 	})
 	if err != nil {
 		return ToolOutcome{}, fmt.Errorf("reading household timeline: %w", err)
@@ -570,13 +573,19 @@ func householdParams(input map[string]any) (map[string]string, error) {
 const HouseholdGroupNote = `Audience: this is a GROUP conversation. Several members of the household
 are reading, and people who are not members may be in the room too.
 
-Say only things the whole household may hear. If an answer would reveal
-where one person is, what one person did, or anything about one person
-that they have not already shared with the group, do not put it in this
-message: say that you will send it to them directly instead. When in
-doubt, treat it as private — the cost of being discreet is one extra
-message, and the cost of the alternative is a household member learning
-something about another from a bot.`
+Your lookups are already narrowed for this: you can see the household's
+own facts, its devices, and the person asking — another member's
+activity is not available to you here at all, so you cannot reveal it
+and should not pretend to know it.
+
+What is left to you is the CONTENT of what you can see. A shared entry
+may still name somebody — a calendar note, a message someone logged —
+and repeating that into a room is the same disclosure by a different
+route. If a fact you can see says something about a person that they
+have not evidently shared with this room, leave it out and offer to send
+it to them directly. When in doubt, treat it as private: the cost of
+being discreet is one extra message, and the cost of the alternative is
+a household member learning something about another from a bot.`
 
 // HouseholdSystemPrompt is the family surface's system prompt. It is
 // deliberately not SystemPrompt: that one describes an operator

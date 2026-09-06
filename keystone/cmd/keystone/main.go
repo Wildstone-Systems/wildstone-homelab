@@ -827,8 +827,30 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		// already uses — and deliberately nothing else: there is no
 		// Statefile, no node reader and no plan pipeline in this
 		// wiring, so a family session has no path to one.
+		// Which event types are ABOUT A PERSON, from the `subject:
+		// member` each package declares for what it publishes (ADR-W024
+		// A10). It is what lets a group session hear about the front
+		// door and not about who came home (ADR-W026 A7), and it is read
+		// per call so enabling a package mid-run changes the answer.
+		memberScoped := api.MemberScopedTypes(func() map[string]bool {
+			out := map[string]bool{}
+			if cat == nil {
+				return out
+			}
+			for _, p := range cat.List() {
+				if p.Publishes == nil {
+					continue
+				}
+				for _, ev := range p.Publishes.Events {
+					if ev.Subject == "member" {
+						out[ev.Type] = true
+					}
+				}
+			}
+			return out
+		})
 		household := butler.HouseholdSeams{
-			Events:     api.HouseholdEventSeam(db),
+			Events:     api.HouseholdEventSeam(db, memberScoped),
 			Vocabulary: bgw.AutomationVocabulary,
 		}
 		if len(actions.Tools()) > 0 {

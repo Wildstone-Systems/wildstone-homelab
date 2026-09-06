@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"unicode/utf8"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
@@ -267,44 +266,101 @@ func householdDetail(payload []byte) string {
 // session cannot ask for the whole timeline, because there is no value
 // of HouseholdLookup that means "everything" — an absent limit becomes
 // the default, and an oversized one is clamped.
-func HouseholdEventSeam(db *runtimedb.DB) func(context.Context, butler.HouseholdLookup) ([]butler.HouseholdFact, error) {
+//
+// memberScoped reports whether an event type is ABOUT A PERSON — the
+// `subject: member` a package declares for each type it publishes
+// (ADR-W024 A10). It is the whole basis of the group rule below, and it
+// comes from the catalog rather than from anything a message can say.
+// A nil function means nothing is member-scoped, which is the right
+// reading for a deployment with no catalog: no declarations, no claims
+// about whose facts these are.
+func HouseholdEventSeam(db *runtimedb.DB, memberScoped func(eventType string) bool) func(context.Context, butler.HouseholdLookup) ([]butler.HouseholdFact, error) {
 	return func(_ context.Context, q butler.HouseholdLookup) ([]butler.HouseholdFact, error) {
 		limit := q.Limit
 		if limit <= 0 || limit > butler.MaxHouseholdFacts {
 			limit = butler.MaxHouseholdFacts
 		}
+		// A group read fetches wider, because the rule below removes rows
+		// after the query: asking for five and dropping three would
+		// answer with two when five were available.
+		fetch := limit
+		if q.GroupSafe {
+			fetch = limit * groupOverfetch
+		}
 		rows, err := db.QueryHouseholdEvents(runtimedb.HouseholdQuery{
 			Type:       q.EventType,
 			Subject:    q.Subject,
 			SubjectSet: q.Subject != "",
-			Limit:      limit,
+			Limit:      fetch,
 			Newest:     true,
 		})
 		if err != nil {
 			return nil, err
 		}
-		if q.IncludeUnattributed && q.Subject != "" {
-			// A group session reads the asker's own facts plus the
-			// household's shared ones (ADR-W026 A7). Two narrow queries
-			// rather than one wide one: there is no query shape that
-			// means "these two subjects and no others", and widening the
-			// filter to get one would be the boundary quietly coming off.
-			shared, serr := db.QueryHouseholdEvents(runtimedb.HouseholdQuery{
-				Type:       q.EventType,
-				Subject:    "",
-				SubjectSet: true,
-				Limit:      limit,
-				Newest:     true,
-			})
-			if serr != nil {
-				return nil, serr
-			}
-			rows = append(rows, shared...)
-			sort.Slice(rows, func(i, j int) bool { return rows[i].Seq > rows[j].Seq })
-			if len(rows) > limit {
-				rows = rows[:limit]
-			}
+		if q.GroupSafe {
+			rows = groupSafeRows(rows, q.Member, memberScoped)
+		}
+		if len(rows) > limit {
+			rows = rows[:limit]
 		}
 		return householdFactsFrom(rows), nil
+	}
+}
+
+// groupOverfetch is how much wider a group read looks, to leave room for
+// the rows the rule removes.
+const groupOverfetch = 4
+
+// groupSafeRows drops facts about a person who is not the asker
+// (ADR-W026 A7).
+//
+// The rule is deliberately about WHOSE fact it is rather than what the
+// fact says. A subject filter can tell that `person.left_home` belongs
+// to Sam; nothing here can read the note inside a shared calendar entry
+// that happens to mention her. That limit is real and is recorded in the
+// ADR — the prompt asks for discretion about content, and this is the
+// part that does not depend on the model agreeing.
+func groupSafeRows(rows []runtimedb.HouseholdEvent, member string, memberScoped func(string) bool) []runtimedb.HouseholdEvent {
+	if memberScoped == nil {
+		// No declarations to reason from. Withhold every attributed fact
+		// except the asker's rather than assume the unknown ones are
+		// harmless: a deployment with no catalog is not a deployment
+		// where everyone's movements are public.
+		memberScoped = func(string) bool { return true }
+	}
+	out := rows[:0]
+	for _, r := range rows {
+		// Nobody's fact — the house itself, or a publisher that declared
+		// no subject. A room may hear it.
+		if r.Subject == "" {
+			out = append(out, r)
+			continue
+		}
+		// A device, a room, a vehicle: not a person, so not private to
+		// one. This is the case the first attempt got wrong.
+		if !memberScoped(r.Type) {
+			out = append(out, r)
+			continue
+		}
+		// A person's fact: only if it is the asker's own.
+		if r.Subject == member {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// MemberScopedTypes builds the memberScoped function from a catalog's
+// `publishes` declarations: the event types whose subject is a member.
+//
+// It is a function rather than a snapshot map so that enabling a package
+// mid-run changes the answer, the same way the chat action gate reads
+// the Statefile per call rather than at startup.
+func MemberScopedTypes(types func() map[string]bool) func(string) bool {
+	return func(eventType string) bool {
+		if types == nil {
+			return true
+		}
+		return types()[eventType]
 	}
 }

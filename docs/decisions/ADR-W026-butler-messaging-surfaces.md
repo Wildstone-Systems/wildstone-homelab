@@ -205,9 +205,47 @@ exactly where "did anyone take the bins out" belongs), under two rules:
 
 - Attribution is the **sending** account's binding. An unbound member
   of the group gets A4's reply, not an answer.
-- A group is a shared audience: the surface renders only facts already
-  shared with the household. Anything scoped to one member goes to that
-  member's direct message, with a one-line pointer in the group.
+- A group is a shared audience: the surface may read the household's own
+  facts, its devices, and the ASKER's own — never another member's.
+
+**Amended after review.** The second rule was first written as prompt
+text, which review rightly called what it was: a request, not a
+boundary. It is now a capability. A group session is built on a
+different gateway, and its reads are narrowed before they reach the
+model.
+
+The narrowing is by WHOSE fact a thing is, and that comes from a
+declaration a package already makes — the `subject: member | device |
+household | none` on each event type it publishes (ADR-W024 A10). An
+event about a person is withheld unless it is the asker's; an event
+about a device or about the household is not. Nothing here reads the
+model's mind or the message's tone.
+
+A first attempt narrowed instead to "the asker plus facts with no
+subject at all", which is the same idea done with the wrong key: it
+hid the front door along with the other member, and "is the door still
+unlocked?" is exactly what a kitchen group asks. Whose fact it is, not
+whether it has a subject.
+
+Two limits are deliberate and recorded rather than fixed:
+
+- **Content inside a shared fact.** A household-wide calendar entry
+  whose note names somebody is visible, because a subject filter cannot
+  read a sentence. The prompt asks for discretion about content, and
+  that part is model compliance — narrowed to the one place it cannot
+  be structural.
+- **No private routing.** A group answer goes to the group; there is no
+  path that redirects part of it to a direct message. With the read
+  narrowed there is no member-private material in the session to
+  redirect, and building one would mean the model deciding what is
+  private — the dependency this amendment exists to remove. A rule that
+  must say something privately already has the deterministic path: a
+  `chat.send` to that member's own conversation (A8), which never passes
+  through the group session.
+
+With no catalog, nothing is declared, and every attributed fact except
+the asker's is withheld. A deployment that has declared nothing is not
+one where everyone's movements are public.
 
 ### A8. Outbound is a queue the adapter polls, and a `domestic` action a rule can name
 
