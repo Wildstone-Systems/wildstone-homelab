@@ -88,8 +88,8 @@ Four things to know:
 ### Before you open a PR
 
 ```sh
-wild pkg lint packages/<your-package>            # your package alone
-cd keystone && go test ./pkgtool/ ./capability/  # the whole catalog, incl. yours
+wild pkg lint packages/<your-package>                        # your package alone
+cd keystone && go test ./pkgtool/ ./capability/ ./reconcile/ # the whole catalog, incl. yours
 ```
 
 `TestEveryShippedPackageLintsClean` lints every directory under
@@ -97,6 +97,13 @@ cd keystone && go test ./pkgtool/ ./capability/  # the whole catalog, incl. your
 tests check what one package cannot see on its own: that everything you
 `require` has a provider here, and that everything you `export` is a key
 its trait carries.
+
+`./reconcile/` is in that list for one more catalog-wide check:
+`TestEveryShippedRouteHasAPresentationRow` fails if a Route you declare
+has no row in the dashboard's presentation table. See
+[Appearing on the dashboard](#appearing-on-the-dashboard-f55-f87) — it is
+one line, and without it your service renders on the family's dashboard
+as an unbranded placeholder.
 
 If a required param needs a value with a *shape* — a listen address, a
 URL — declare an `example` for it. Lint invents `lint-<name>` otherwise,
@@ -182,6 +189,52 @@ Two things it demonstrates that a normal package does not:
   spell an action `{{ ... }}`. Every Jinja expression is wrapped in a Go
   raw string — ``{{`...`}}`` — so it survives expansion literally.
   Contiguous Jinja goes in one wrapper rather than one per expression.
+
+## Appearing on the dashboard (F55, F87)
+
+A package does **not** declare how it looks on the Homepage dashboard.
+Everything the dashboard shows is derived from the Route the package
+already declares, by `keystone/reconcile/homepageservices.go`:
+
+| What you see | Where it comes from |
+| --- | --- |
+| The link | `Route.host`, resolved to the address a browser actually uses |
+| The group (Household / Admin) | `Route.classification` — `admin_tailscale` is Admin |
+| Status dot | `Route.upstream`, dialled over the Wildstone Docker network |
+| Name, icon, description | The `homepageApps` table, keyed by the upstream container name |
+
+So integrating a new service is: declare a Route (which you must do
+anyway to be reachable), then add **one row** to `homepageApps`:
+
+```go
+"paperless": {"Documents", "paperless-ngx", "Scanned paperwork you can search"},
+//  ^ container   ^ title    ^ dashboard-icons slug   ^ one line, for the family
+```
+
+An app with no row still renders — a titled name from the Route, a
+generic icon, and the capability as its description. Nothing breaks; it
+just looks unbranded. But `TestEveryShippedRouteHasAPresentationRow`
+walks `packages/` and fails if a **shipped** package's Route has no row,
+so an unbranded card can only ever be a third party's, never ours.
+
+Two things deliberately **not** package fields:
+
+- **Icon and description.** A package declaring them restates what its
+  own Route already implies — the "declaring half of a relationship"
+  trap ADR-W021 A6 rejects for the href itself. One table means one
+  place to look and one place to fix.
+- **The status probe target.** It is always the container, never the
+  `https://` link: the household CA is not trusted inside the Homepage
+  container (so every dot would be red under `tls: internal`), and a
+  forward-auth Route answers a login redirect that says the proxy is up
+  and nothing about the app.
+
+Per-service **widgets** (Jellyfin's now-playing, Immich's photo count)
+are not wired yet, and the blocker is not the renderer: each needs the
+app's API key, secrets are write-only (ADR-W012 W2), and only a
+materializing write resolves a `secret/` reference — so `widgets.yaml`
+would need a materialize flag that depends on which apps are installed.
+Tracked as F87.
 
 ## Container-to-container addressing
 

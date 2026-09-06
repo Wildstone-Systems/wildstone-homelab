@@ -653,16 +653,59 @@ func docString(doc map[string]any, path ...string) string {
 func RouteLabels(pkg *Package) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, doc := range packageDocs(pkg) {
-		if docString(doc, "kind") != "Route" {
-			continue
-		}
-		host := docString(doc, "spec", "host")
-		label, _, _ := strings.Cut(host, ".")
+	for _, r := range Routes(pkg) {
+		label, _, _ := strings.Cut(r.Host, ".")
 		if label != "" && !seen[label] {
 			seen[label] = true
 			out = append(out, label)
 		}
+	}
+	return out
+}
+
+// RouteDecl is one Route a package declares, read from the template as
+// YAML with param references resolved to their defaults — the same way
+// RouteLabels and ContainerNames read theirs, and for the reason F86
+// gives: a regex understands only the shipped catalog's own formatting,
+// so a package written in ordinary YAML is silently skipped.
+//
+// Enough of the spec to answer "what would the dashboard show for this",
+// which is the caller this exists for: the reconciler's presentation
+// table is keyed on the upstream container, and `portal` Routes are
+// never listed at all.
+type RouteDecl struct {
+	Name           string
+	Host           string
+	Upstream       string
+	Auth           string
+	Classification string
+}
+
+// UpstreamContainer is the container half of "container/<name>:<port>",
+// or "" for a Route pointing at an "ip:port" this package does not run.
+func (r RouteDecl) UpstreamContainer() string {
+	rest, ok := strings.CutPrefix(r.Upstream, "container/")
+	if !ok {
+		return ""
+	}
+	name, _, _ := strings.Cut(rest, ":")
+	return name
+}
+
+// Routes returns every Route a package declares.
+func Routes(pkg *Package) []RouteDecl {
+	var out []RouteDecl
+	for _, doc := range packageDocs(pkg) {
+		if docString(doc, "kind") != "Route" {
+			continue
+		}
+		out = append(out, RouteDecl{
+			Name:           docString(doc, "metadata", "name"),
+			Host:           docString(doc, "spec", "host"),
+			Upstream:       docString(doc, "spec", "upstream"),
+			Auth:           docString(doc, "spec", "auth"),
+			Classification: docString(doc, "spec", "classification"),
+		})
 	}
 	return out
 }

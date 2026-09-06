@@ -331,6 +331,14 @@ func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []manage
 		// the container is created — which is exactly what a prereq
 		// guarantees, and why a file mount is safe here (F55).
 		{homepageServicesPath(managedPrefix), renderHomepageServices(desired), false},
+		// The dashboard's chrome (F87): the layout that turns the service
+		// list into a grid, the info widgets, and an empty bookmark list
+		// that stops Homepage seeding its sample one. Same category as the
+		// service list above, and ordered after it so the layout naming a
+		// group is never on disk before the services in it.
+		{homepageSettingsPath(managedPrefix), renderHomepageSettings(desired), false},
+		{homepageWidgetsPath(managedPrefix), renderHomepageWidgets(), false},
+		{homepageBookmarksPath(managedPrefix), renderHomepageBookmarks(), false},
 	}
 }
 

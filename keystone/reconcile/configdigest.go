@@ -112,6 +112,15 @@ func managedConfigContents(managedPrefix string, desiredByKey map[resKey]resourc
 	out[autheliaAccessPath(managedPrefix)] = string(renderAutheliaAccess(desired))
 	out[homepageServicesPath(managedPrefix)] = string(renderHomepageServices(desired))
 
+	// The dashboard's chrome, for the identical reason (F87). Homepage
+	// reads settings.yaml, widgets.yaml and bookmarks.yaml exactly once
+	// at start, so a layout corrected on disk and not restarted is the
+	// same silent no-op F73 describes — and the layout is the file that
+	// changes when a capability adds the first Admin-classified Route.
+	out[homepageSettingsPath(managedPrefix)] = string(renderHomepageSettings(desired))
+	out[homepageWidgetsPath(managedPrefix)] = string(renderHomepageWidgets())
+	out[homepageBookmarksPath(managedPrefix)] = string(renderHomepageBookmarks())
+
 	return out
 }
 
