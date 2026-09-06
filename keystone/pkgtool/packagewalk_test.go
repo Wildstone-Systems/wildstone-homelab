@@ -84,6 +84,15 @@ func walkShipped(t *testing.T) map[string]shipped {
 				params[d.Name] = v
 			} else if d.Default != "" {
 				params[d.Name] = d.Default
+			} else if d.Example != "" {
+				// The same fallback `wild pkg lint` uses: the package
+				// author is the only person who knows a param's SHAPE,
+				// and a marker where a digest-pinned image belongs fails
+				// on a value no operator would ever type. Without this
+				// the walk and lint disagree about the same package,
+				// which is the one thing the conformance gate exists to
+				// prevent.
+				params[d.Name] = d.Example
 			} else {
 				params[d.Name] = "lint-" + sanitizeParam(d.Name)
 			}

@@ -228,6 +228,10 @@ func (s *Server) Handler() http.Handler {
 	// The adapter contract (ADR-W026 A8): post what you heard, poll for
 	// what to say, ack what you delivered. All three carry `converse`,
 	// and the surface each one acts on comes from the caller's role.
+	// A chat capability's own credential (ADR-W026 A3): the role it gets
+	// is decided by the surface, so a family adapter can never hold more
+	// than converse.
+	mux.Handle("POST /api/v1/chat/adapters/{capability}", s.handle(principal.VerbManage, s.mintChatAdapter))
 	mux.Handle("POST /api/v1/chat/messages", s.handle(principal.VerbConverse, s.receiveChatMessage))
 	mux.Handle("GET /api/v1/chat/outbound", s.handle(principal.VerbConverse, s.pollChatOutbound))
 	mux.Handle("POST /api/v1/chat/outbound/{seq}/ack", s.handle(principal.VerbConverse, s.ackChatOutbound))

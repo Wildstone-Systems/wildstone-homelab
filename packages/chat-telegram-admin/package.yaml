@@ -1,0 +1,90 @@
+# Chat (Telegram), admin surface: the operator's Butler, reachable from
+# the phone in your pocket (ADR-W026 A2/A3, work package G4).
+#
+# WHAT THIS RUNS. The same adapter binary as chat-telegram-family
+# (cli/cmd/chat-adapter), against a DIFFERENT bot, with a DIFFERENT
+# token. It holds a `butler` token: read, propose, converse — and, by
+# the RBAC table, never approve.
+#
+# WHAT IT CANNOT DO, and why that is the point. You can ask it why a
+# service is unhealthy and you can ask it to change something; it will
+# answer with a plan id and the words "nothing has changed yet". Approving
+# happens in the Console or `wild`, where a Wildstone credential
+# authenticates you (ADR-W026 A5). A Telegram account is protected by
+# Telegram's account recovery, which Wildstone does not control: someone
+# who takes over your phone number should reach a Butler that can
+# DESCRIBE your homelab, not one that can apply changes to it.
+#
+# NO INGRESS. The adapter dials out to Telegram and holds the connection
+# open. No Route, no port, nothing new at the edge.
+#
+# GROUPS. This surface answers in a direct message only. A group message
+# gets one line saying so, and opens no session.
+#
+# INSTALLING (in this order):
+#
+#  1. Make a SECOND bot with @BotFather — not the household's. Two
+#     audiences, two bots.
+#
+#  2. Mint the credential (this is what makes it the admin surface):
+#
+#        wild chat adapter chat-telegram-admin -node <node> -surface admin
+#
+#  3. Set the bot token, then enable the capability:
+#
+#        wild secret set chat-telegram-admin-bot -node <node>
+#
+#  4. Bind your own account:
+#
+#        wild chat code -surface admin -identity <your-principal> -transport telegram
+#
+# THE IMAGE. As for the family package: this repository ships the source,
+# the Dockerfile and the released binary, and publishes no image —
+# `adapter_image` is a required, digest-pinned param.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: chat-telegram-admin
+  version: 1.0.0
+  capability: chat-telegram-admin
+  profile: telegram
+params:
+  - { name: node, required: true, source: node, description: "Which machine runs the adapter." }
+  - name: adapter_image
+    required: true
+    description: "The chat-adapter image, digest-pinned (repo@sha256:...). Build it from cli/cmd/chat-adapter/Dockerfile."
+    example: "registry.example.com/wildstone/chat-adapter@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  - name: keystone_url
+    required: true
+    description: "The Keystone API as the ADAPTER can reach it — usually the tailnet address, not 127.0.0.1."
+    example: "http://100.64.0.1:9441"
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: chat-telegram-admin-bot, node: "{{ .Params.node }}" }
+    spec: { name: chat-telegram-admin-bot, provided: true }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: chat-telegram-admin-adapter, node: "{{ .Params.node }}" }
+    spec: { name: chat-telegram-admin-adapter, provided: true }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: chat-telegram-admin, node: "{{ .Params.node }}" }
+    spec:
+      image: "{{ .Params.adapter_image }}"
+      # Configuration is environment, not a command: the image declares
+      # its own ENTRYPOINT, and a container spec that also names the
+      # binary is one image rebuild away from being wrong (F23).
+      env:
+        CHAT_TRANSPORT: telegram
+        KEYSTONE_API: "{{ .Params.keystone_url }}"
+        TELEGRAM_BOT_TOKEN: "secret/chat-telegram-admin-bot"
+        KEYSTONE_TOKEN: "secret/chat-telegram-admin-adapter"
+      restart: unless-stopped
+# No agentTools: a household rule notifies the HOUSEHOLD, not the
+# operator's private bot. The operator's alerting is the morning report
+# and ntfy, and pointing a rule at this surface would put household
+# events into the one conversation that can also propose changes.

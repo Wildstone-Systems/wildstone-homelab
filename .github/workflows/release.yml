@@ -52,6 +52,11 @@ jobs:
           build keystone   keystone  ./cmd/keystone
           build wardstoned wardstone ./cmd/wardstoned
           build wild       cli       ./cmd/wild
+          # The chat transport adapter (ADR-W026 G4). Shipped as a
+          # binary like everything else; the container image a household
+          # runs it in is built from cli/cmd/chat-adapter/Dockerfile
+          # against whichever registry that household trusts.
+          build chat-adapter cli ./cmd/chat-adapter
           # The Console's built output. Architecture-independent — it is
           # static files a browser runs — so it has no _linux_<arch>
           # suffix, and install.sh fetches it by that plain name.

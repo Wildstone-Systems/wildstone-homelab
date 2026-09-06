@@ -267,6 +267,19 @@ func PublisherSecretName(capability string) string {
 	return capability + "-publisher"
 }
 
+// AdapterSecretName is the conventional name of the secret holding a
+// chat adapter's Keystone token (ADR-W026 A3): what `POST
+// /api/v1/chat/adapters/{capability}` writes the minted token to, and
+// what a chat package's Container references in its environment.
+//
+// It is deliberately per-CAPABILITY rather than per-transport, because
+// the two surfaces of one transport are two capabilities — two bots, two
+// principals, two tokens — and giving them one secret name would be the
+// single credential the whole design refuses.
+func AdapterSecretName(capability string) string {
+	return capability + "-adapter"
+}
+
 // templateContext is the small, explicit context every template renders
 // over (ADR-W005 A2): .Params is the merged (required+defaulted) param map;
 // .Resolved carries dependency-derived outputs — see buildResolved for the

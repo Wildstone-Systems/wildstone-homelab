@@ -35,6 +35,8 @@ func runChat(args []string) int {
 		return runChatRevoke(args[1:])
 	case "outbound":
 		return runChatOutbound(args[1:])
+	case "adapter":
+		return runChatAdapter(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "wild chat: unknown subcommand %q\n", args[0])
 		chatUsage()
@@ -48,6 +50,7 @@ func chatUsage() {
   wild chat bindings [-revoked] [-api URL]
   wild chat revoke <binding-id> [-api URL]
   wild chat outbound [-surface admin|family] [-transport telegram] [-after N]
+  wild chat adapter <capability> -node <node> -surface admin|family
 
   -identity is a Keystone principal on the admin surface, and a household
   member on the family surface. The code works once, expires, and can only
@@ -146,4 +149,36 @@ func runChatOutbound(args []string) int {
 	}
 	return simpleCall("chat outbound", *apiBase, token, http.MethodGet,
 		"/api/v1/chat/outbound?"+q.Encode(), nil)
+}
+
+// runChatAdapter gives a chat capability its Keystone credential
+// (ADR-W026 A3): the principal is minted with the role the SURFACE
+// implies — concierge for family, butler for admin — and its token is
+// placed on the node as the provided secret the adapter's container
+// reads. Running it again rotates the token.
+func runChatAdapter(args []string) int {
+	fs := flag.NewFlagSet("wild chat adapter", flag.ExitOnError)
+	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
+	node := fs.String("node", "", "which node the adapter runs on")
+	surface := fs.String("surface", "", "which butler this adapter serves: admin | family")
+	fs.Parse(args) //nolint:errcheck // ExitOnError
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: wild chat adapter <capability> -node <node> -surface admin|family")
+		return 2
+	}
+	if *node == "" {
+		fmt.Fprintln(os.Stderr, "wild chat adapter: -node is required")
+		return 2
+	}
+	if *surface != "admin" && *surface != "family" {
+		fmt.Fprintln(os.Stderr, "wild chat adapter: -surface must be admin or family")
+		return 2
+	}
+	token, ok := requireToken("chat adapter")
+	if !ok {
+		return 2
+	}
+	return simpleCall("chat adapter", *apiBase, token, http.MethodPost,
+		"/api/v1/chat/adapters/"+url.PathEscape(fs.Arg(0)),
+		map[string]string{"node": *node, "surface": *surface})
 }
