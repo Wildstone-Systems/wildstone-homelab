@@ -32,6 +32,12 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
+// chatFallbackWindow is how long a dedupe key built from message TEXT
+// stands for one message (see chatDedupe). Long enough to absorb a
+// transport's redelivery, short enough that saying "yes" twice in an
+// afternoon is two answers rather than one.
+const chatFallbackWindow = 10 * time.Minute
+
 // unboundReply is the ONLY thing an unbound account is told (ADR-W026
 // A4). It names no member, confirms no account, and describes nothing
 // about the deployment: someone messaging a bot they found should learn
@@ -79,21 +85,17 @@ type inboundResponse struct {
 // surfaceForCaller decides which Butler this caller may reach.
 //
 //   - concierge → family, always. It has no other spelling.
-//   - butler    → admin, always. The admin adapter's role.
+//   - valet     → admin, always. The admin adapter's own role, which is
+//     NOT the butler role every external agent already holds (ADR-W024
+//     A5): a chat verb there would have handed each of them this queue.
 //   - read-holding humans (admin/operator) → whichever they name, so the
 //     Console and `wild` can exercise the contract end to end.
 func surfaceForCaller(id principal.Identity, requested string) (runtimedb.ButlerSurface, error) {
-	switch id.Role {
-	case runtimedb.RoleConcierge:
-		if requested != "" && requested != string(runtimedb.ButlerSurfaceFamily) {
-			return "", fmt.Errorf("this credential serves the family surface")
+	if surface, isAdapter := adapterSurface(id); isAdapter {
+		if requested != "" && requested != string(surface) {
+			return "", fmt.Errorf("this credential serves the %s surface", surface)
 		}
-		return runtimedb.ButlerSurfaceFamily, nil
-	case runtimedb.RoleButler:
-		if requested != "" && requested != string(runtimedb.ButlerSurfaceAdmin) {
-			return "", fmt.Errorf("this credential serves the admin surface")
-		}
-		return runtimedb.ButlerSurfaceAdmin, nil
+		return surface, nil
 	}
 	if !principal.Allowed(id.Role, principal.VerbRead) {
 		return "", fmt.Errorf("this credential cannot choose a surface")
@@ -103,6 +105,24 @@ func surfaceForCaller(id principal.Identity, requested string) (runtimedb.Butler
 		return "", fmt.Errorf("surface must be admin or family")
 	}
 	return surface, nil
+}
+
+// adapterSurface reports the surface a CHAT ADAPTER's credential is
+// pinned to, and whether the caller is one at all.
+//
+// The distinction matters wherever a check exists to stop a bot acting
+// on the wrong surface: a human with the Console or `wild` is not a bot
+// pinned to one, and holding them to an adapter's constraint would only
+// stop an operator redeeming a code on behalf of somebody standing next
+// to them.
+func adapterSurface(id principal.Identity) (runtimedb.ButlerSurface, bool) {
+	switch id.Role {
+	case runtimedb.RoleConcierge:
+		return runtimedb.ButlerSurfaceFamily, true
+	case runtimedb.RoleValet:
+		return runtimedb.ButlerSurfaceAdmin, true
+	}
+	return "", false
 }
 
 // receiveChatMessage is the adapter's inbound door (ADR-W026 A8).
@@ -141,7 +161,12 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// Rate limits are per ACCOUNT, applied before the binding lookup, so
 	// an unbound stranger cannot spend the household's provider budget
 	// or flood the outbound queue with guidance replies.
-	if !s.limiter.allowChat(transport + ":" + account) {
+	// The bucket key carries the SURFACE for the same reason the dedupe
+	// key does: on Telegram one person's account id is identical across
+	// both bots, so without it eight messages to the household bot would
+	// spend the operator bot's budget and answer a real operator request
+	// with a 429.
+	if !s.limiter.allowChat(string(surface) + ":" + transport + ":" + account) {
 		return nil, http.StatusTooManyRequests, fmt.Errorf("too many messages; slow down")
 	}
 
@@ -298,8 +323,19 @@ func chatDedupe(surface runtimedb.ButlerSurface, transport, conversation, messag
 	if messageID != "" {
 		return fmt.Sprintf("%s:%s:%s:%s", surface, transport, conversation, messageID)
 	}
-	sum := sha256.Sum256([]byte(string(surface) + "\x00" + transport + "\x00" + conversation + "\x00" + discriminator + "\x00" + text))
-	return fmt.Sprintf("%s:%s:%s:h%s", surface, transport, conversation, hex.EncodeToString(sum[:8]))
+	// No message id: the text stands in for one, bucketed by time.
+	//
+	// Without the bucket the key is permanent, so the first "yes" in a
+	// conversation would claim that text forever and every later "yes"
+	// would be silently treated as a redelivery of it — an adapter that
+	// omits message ids would answer each phrase once and then go quiet.
+	// Bucketing bounds that to one window: a genuine redelivery inside
+	// it collapses, and the same words tomorrow are a new message.
+	bucket := time.Now().UTC().Truncate(chatFallbackWindow).Unix()
+	sum := sha256.Sum256([]byte(string(surface) + "\x00" + transport + "\x00" + conversation +
+		"\x00" + discriminator + "\x00" + text))
+	return fmt.Sprintf("%s:%s:%s:h%s-%d", surface, transport, conversation,
+		hex.EncodeToString(sum[:8]), bucket)
 }
 
 // pollChatOutbound is the adapter's delivery cursor (ADR-W026 A8): the

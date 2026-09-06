@@ -191,6 +191,14 @@ func (db *DB) pruneChatOutbound() {
 		`DELETE FROM chat_outbound
 		 WHERE created_at < ? AND (delivered_at != '' OR expires_at < ?)`,
 		cutoff, now())
+	// Inbound claims are swept on the same schedule and for the same
+	// reason. A claim only has to outlive the window in which a
+	// transport might redeliver its message; keeping them forever would
+	// make an old claim point at an outbound row that has itself been
+	// pruned, and the adapter would be answered with a seq that no
+	// longer exists.
+	db.sql.Exec( //nolint:errcheck // best effort
+		`DELETE FROM chat_inbound WHERE claimed_at < ?`, cutoff)
 }
 
 // ClaimChatInbound reserves one inbound message before anything acts on

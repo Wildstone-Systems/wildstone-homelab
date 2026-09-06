@@ -3,8 +3,11 @@
 #
 # WHAT THIS RUNS. The same adapter binary as chat-telegram-family
 # (cli/cmd/chat-adapter), against a DIFFERENT bot, with a DIFFERENT
-# token. It holds a `butler` token: read, propose, converse — and, by
-# the RBAC table, never approve.
+# token. It holds a `valet` token, which carries the `converse` verb
+# and nothing else — not read, not propose, and certainly not approve.
+# The session it opens does the reading and proposing, under an
+# internally constructed identity acting-for you; the bot itself can
+# only relay.
 #
 # WHAT IT CANNOT DO, and why that is the point. You can ask it why a
 # service is unhealthy and you can ask it to change something; it will

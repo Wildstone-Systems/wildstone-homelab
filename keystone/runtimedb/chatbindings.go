@@ -90,7 +90,11 @@ func (db *DB) InsertChatClaimCode(hash string, c ChatClaimCode) error {
 // An existing live binding for the same (transport, account, surface) is
 // revoked first, so re-binding an account — a new phone, a re-installed
 // app — is a normal act rather than a unique-constraint failure.
-func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName, conversation string) (ChatBinding, error) {
+// want is the surface the REDEEMING bot serves. A code for the other
+// surface is refused without being burned: a household code sent to the
+// operator's bot by mistake should be usable on the right one a minute
+// later, not spent on a binding that bot can never resolve.
+func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName, conversation string, want ButlerSurface) (ChatBinding, error) {
 	if transport == "" || account == "" {
 		return ChatBinding{}, fmt.Errorf("runtimedb: redeeming requires a transport and account")
 	}
@@ -115,6 +119,12 @@ func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName, convers
 		return ChatBinding{}, ErrClaimCode
 	}
 	if codeTransport != "" && codeTransport != transport {
+		return ChatBinding{}, ErrClaimCode
+	}
+	// Checked BEFORE the burn, and reported as the same refusal every
+	// other bad code gets: a bot relaying codes for strangers must not
+	// learn that this one was real and merely for the other surface.
+	if want != "" && ButlerSurface(surface) != want {
 		return ChatBinding{}, ErrClaimCode
 	}
 	exp, err := time.Parse(time.RFC3339Nano, expiresAt)

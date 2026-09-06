@@ -105,13 +105,32 @@ that authenticates there.
 The package declares which surface an instance serves as a param, and
 the capability engine mints the matching principal at install:
 
-- `chat-<transport>-admin` → role `butler` (read + propose, the
-  ADR-W007 RBAC row that already cannot approve).
 - `chat-<transport>-family` → a new role `concierge`, holding one new
   verb `converse` and nothing else. Not read. Not emit. It can open a
   family session for a bound member and deliver the answer back; it
   cannot read the household stream itself, and a compromised family
   adapter cannot enumerate the house.
+- `chat-<transport>-admin` → a new role `valet`, holding `converse` and
+  nothing else either.
+
+**Amended after review.** The admin adapter was first specified as the
+existing `butler` role, on the reasoning that it relays a surface which
+reads and proposes. That was wrong, and wrong in a way that only shows
+on upgrade: ADR-W024 A5 makes every external agent — Hermes, Codex,
+anything else — a `butler`-role principal, so putting `converse` on that
+row would have handed each of them the operator's private chat queue and
+the ability to post as bound accounts. A new capability must not appear
+on credentials minted before it existed.
+
+Neither adapter needs more than `converse`. A session's proposals are
+submitted under an internally constructed `butler` identity acting-for
+the bound person, never under the adapter's own credential — so the
+admin adapter holds no propose verb of its own, and (A5) no approve.
+
+The capability's NAME decides which role is minted, and the request must
+agree with it: `chat-<transport>-<surface>` is checked at mint time, so
+`-surface admin` against the family package is refused rather than
+quietly placing an operator credential in the household bot's secret.
 
 **Rejected:** one bot that switches surface on who is speaking. The
 switch is a single `if` between the family and the Statefile.

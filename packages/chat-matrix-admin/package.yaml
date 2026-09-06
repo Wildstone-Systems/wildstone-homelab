@@ -3,8 +3,10 @@
 #
 # The same adapter binary as chat-matrix-family, against a DIFFERENT
 # Matrix account, with a DIFFERENT Keystone credential — one holding the
-# butler role, which by the RBAC table can read and propose and can never
-# approve. Ask it to change something and it answers with a plan id and
+# `valet` role, which carries the `converse` verb and nothing else. The
+# session it opens does the reading and proposing under an internally
+# constructed identity acting-for you; the bot itself can only relay,
+# and no chat credential can ever approve. Ask it to change something and it answers with a plan id and
 # the words "nothing has changed yet"; approving happens in the Console
 # or `wild`, where a Wildstone credential authenticates you (ADR-W026 A5).
 #

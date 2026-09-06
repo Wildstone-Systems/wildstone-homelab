@@ -141,8 +141,8 @@ func TestChatSurfaceComesFromTheCredential(t *testing.T) {
 		t.Fatalf("status = %d, out = %+v, want an unbound answer", resp.StatusCode, out)
 	}
 
-	// An admin-surface adapter (butler role) cannot claim the family one.
-	resp, _ = h.send(runtimedb.RoleButler, map[string]any{
+	// An admin-surface adapter (valet role) cannot claim the family one.
+	resp, _ = h.send(runtimedb.RoleValet, map[string]any{
 		"transport": "telegram", "account": "12345", "text": "hello",
 		"surface": "family", "messageId": "m-3",
 	})
@@ -162,14 +162,14 @@ func TestChatGroupRules(t *testing.T) {
 	h.bindAccount(t, "family", "sam", "telegram", "777")
 
 	// Admin surface, group: one refusal, no session.
-	resp, out := h.send(runtimedb.RoleButler, map[string]any{
+	resp, out := h.send(runtimedb.RoleValet, map[string]any{
 		"transport": "telegram", "account": "555", "conversation": "group-1", "group": true,
 		"text": "how is the disk?", "messageId": "g-1",
 	})
 	if resp.StatusCode != http.StatusAccepted || !strings.Contains(out.Reason, "direct messages only") {
 		t.Fatalf("status = %d, out = %+v", resp.StatusCode, out)
 	}
-	admin := h.poll(t, runtimedb.RoleButler, "")
+	admin := h.poll(t, runtimedb.RoleValet, "")
 	if len(admin) != 1 || !strings.Contains(admin[0].Body, "direct message") {
 		t.Fatalf("admin group reply = %+v", admin)
 	}
@@ -367,13 +367,13 @@ func TestChatAdminReplyPointsAtApproval(t *testing.T) {
 	h.wireButler(proposeGrafanaTurns(), runtimedb.ButlerModeFull)
 	h.bindAccount(t, "admin", "root-admin", "telegram", "555")
 
-	resp, out := h.send(runtimedb.RoleButler, map[string]any{
+	resp, out := h.send(runtimedb.RoleValet, map[string]any{
 		"transport": "telegram", "account": "555", "text": "expose grafana", "messageId": "m-1",
 	})
 	if resp.StatusCode != http.StatusAccepted || !out.Bound {
 		t.Fatalf("status = %d, out = %+v", resp.StatusCode, out)
 	}
-	queued := h.poll(t, runtimedb.RoleButler, "")
+	queued := h.poll(t, runtimedb.RoleValet, "")
 	if len(queued) != 1 {
 		t.Fatalf("queued = %+v", queued)
 	}
@@ -399,7 +399,7 @@ func TestChatOutboundIsScopedToSurface(t *testing.T) {
 		"transport": "telegram", "account": "777", "text": "hello", "messageId": "m-1",
 	})
 
-	if got := h.poll(t, runtimedb.RoleButler, ""); len(got) != 0 {
+	if got := h.poll(t, runtimedb.RoleValet, ""); len(got) != 0 {
 		t.Fatalf("the admin adapter read the family queue: %+v", got)
 	}
 	if got := h.poll(t, runtimedb.RoleConcierge, ""); len(got) != 1 {
@@ -426,7 +426,7 @@ func TestChatDedupeDoesNotCollideAcrossSurfaces(t *testing.T) {
 		"text": "hello", "messageId": "7",
 	}
 	_, family := h.send(runtimedb.RoleConcierge, body)
-	_, admin := h.send(runtimedb.RoleButler, body)
+	_, admin := h.send(runtimedb.RoleValet, body)
 	if family.Queued == 0 || admin.Queued == 0 || family.Queued == admin.Queued {
 		t.Fatalf("family queued %d, admin queued %d — want two distinct replies",
 			family.Queued, admin.Queued)
@@ -434,7 +434,56 @@ func TestChatDedupeDoesNotCollideAcrossSurfaces(t *testing.T) {
 	if got := h.poll(t, runtimedb.RoleConcierge, ""); len(got) != 1 {
 		t.Fatalf("family queue = %+v, want its own reply", got)
 	}
-	if got := h.poll(t, runtimedb.RoleButler, ""); len(got) != 1 {
+	if got := h.poll(t, runtimedb.RoleValet, ""); len(got) != 1 {
 		t.Fatalf("admin queue = %+v, want its own reply", got)
+	}
+}
+
+// A dedupe key built from message TEXT (no transport message id) must
+// not claim that text forever: an adapter that omits ids would answer
+// "yes" once in a conversation and then go quiet on it permanently.
+func TestChatFallbackDedupeIsBounded(t *testing.T) {
+	first := chatDedupe(runtimedb.ButlerSurfaceFamily, "telegram", "12345", "", "inbound", "yes")
+	same := chatDedupe(runtimedb.ButlerSurfaceFamily, "telegram", "12345", "", "inbound", "yes")
+	if first != same {
+		t.Fatalf("the same text in the same window produced two keys — a redelivery would be answered twice")
+	}
+	// The key carries a time bucket, so the same words in a later window
+	// are a new message rather than a redelivery of an old one.
+	if !strings.Contains(first, "-") {
+		t.Fatalf("fallback key %q carries no window", first)
+	}
+	// And the surface still separates the two bots.
+	admin := chatDedupe(runtimedb.ButlerSurfaceAdmin, "telegram", "12345", "", "inbound", "yes")
+	if admin == first {
+		t.Fatalf("the fallback key collides across surfaces")
+	}
+}
+
+// One account's flood on the household bot must not spend the operator
+// bot's budget: on Telegram the account id is the same across both.
+func TestChatRateLimitIsPerSurface(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler([]*provider.ChatResponse{{Text: "hi"}}, runtimedb.ButlerModeFull)
+
+	limited := false
+	for i := 0; i < chatBurst+3; i++ {
+		resp, _ := h.send(runtimedb.RoleConcierge, map[string]any{
+			"transport": "telegram", "account": "12345", "text": "hi", "messageId": itoa(int64(i)),
+		})
+		if resp.StatusCode == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Fatalf("the family surface was never limited")
+	}
+	// The SAME account on the operator bot still has its own budget.
+	resp, _ := h.send(runtimedb.RoleValet, map[string]any{
+		"transport": "telegram", "account": "12345", "text": "how is the disk?", "messageId": "a-1",
+	})
+	if resp.StatusCode == http.StatusTooManyRequests {
+		t.Fatalf("a flood on the household bot spent the operator bot's budget")
 	}
 }

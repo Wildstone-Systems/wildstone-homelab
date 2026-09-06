@@ -360,7 +360,9 @@ docker push <registry>/chat-adapter:1.0.0
 # 2. Make the bot (Telegram: talk to @BotFather) and keep its token.
 
 # 3. Mint the adapter's Keystone credential. The surface decides the
-#    role: family -> concierge (converse only), admin -> butler.
+#    role: family -> concierge, admin -> valet. Both hold the `converse`
+#    verb and nothing else, and the capability's name has to agree with
+#    the surface you ask for.
 wild chat adapter chat-telegram-family -node <node> -surface family
 
 # 4. Set the bot token, then enable the capability with the image digest.

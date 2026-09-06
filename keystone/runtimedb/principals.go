@@ -25,12 +25,20 @@ const (
 	// back; it cannot read the household stream itself, so a compromised
 	// adapter cannot enumerate the house.
 	RoleConcierge Role = "concierge"
+	// RoleValet is an admin-surface chat adapter (ADR-W026 A3). Like a
+	// concierge it holds `converse` and nothing else.
+	//
+	// It is deliberately NOT the butler role. ADR-W024 A5 makes every
+	// external agent a butler-role principal, so putting the chat verb
+	// there would hand each of them the operator's private chat queue —
+	// a capability appearing on credentials minted before it existed.
+	RoleValet Role = "valet"
 )
 
 // ValidRole reports whether r is one of the closed role set.
 func ValidRole(r Role) bool {
 	return r == RoleAdmin || r == RoleOperator || r == RoleButler ||
-		r == RolePublisher || r == RoleConcierge
+		r == RolePublisher || r == RoleConcierge || r == RoleValet
 }
 
 // Principal is who calls the public API. ActingFor is the ADR-W001

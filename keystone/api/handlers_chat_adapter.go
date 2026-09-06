@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
@@ -42,19 +43,35 @@ func roleForSurface(surface runtimedb.ButlerSurface) (runtimedb.Role, error) {
 	case runtimedb.ButlerSurfaceFamily:
 		return runtimedb.RoleConcierge, nil
 	case runtimedb.ButlerSurfaceAdmin:
-		return runtimedb.RoleButler, nil
+		return runtimedb.RoleValet, nil
 	default:
 		return "", fmt.Errorf("surface must be admin or family")
 	}
+}
+
+// capabilitySurface reads the surface out of a chat capability's name.
+//
+// The catalog convention is chat-<transport>-<surface>, and it is
+// load-bearing rather than decorative: without this check, `wild chat
+// adapter chat-telegram-family -surface admin` would mint an
+// admin-surface credential into the FAMILY package's secret, and the
+// household's bot would come up talking to the operator's Butler. One
+// typo would defeat the two-package boundary the whole design rests on
+// (ADR-W026 A3), silently and at install time.
+func capabilitySurface(capability string) (runtimedb.ButlerSurface, bool) {
+	switch {
+	case strings.HasSuffix(capability, "-"+string(runtimedb.ButlerSurfaceFamily)):
+		return runtimedb.ButlerSurfaceFamily, true
+	case strings.HasSuffix(capability, "-"+string(runtimedb.ButlerSurfaceAdmin)):
+		return runtimedb.ButlerSurfaceAdmin, true
+	}
+	return "", false
 }
 
 // mintChatAdapter gives a chat capability its Keystone credential.
 // Minting again is rotation: earlier tokens are revoked before the new
 // one is placed, and containers referencing the secret are re-created.
 func (s *Server) mintChatAdapter(r *http.Request, id principal.Identity) (any, int, error) {
-	if s.Agents == nil {
-		return nil, http.StatusServiceUnavailable, fmt.Errorf("agent plane not wired")
-	}
 	capName := r.PathValue("capability")
 	if !capabilityNameRegexp.MatchString(capName) {
 		return nil, http.StatusBadRequest, fmt.Errorf("capability must be lowercase [a-z0-9._-], 1–52 chars")
@@ -66,9 +83,29 @@ func (s *Server) mintChatAdapter(r *http.Request, id principal.Identity) (any, i
 	if req.Node == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("node required: the token is placed on the node as a provided secret")
 	}
-	role, err := roleForSurface(runtimedb.ButlerSurface(req.Surface))
+	surface := runtimedb.ButlerSurface(req.Surface)
+	role, err := roleForSurface(surface)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
+	}
+	// The capability names the surface it is for; the request must agree
+	// with it. Minting the wrong one is not a permission error the
+	// operator would see later — it is a family bot wired to the
+	// operator's Butler, working perfectly, for as long as nobody looks.
+	if named, ok := capabilitySurface(capName); !ok {
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"capability %q does not name a surface: a chat capability is chat-<transport>-admin or chat-<transport>-family", capName)
+	} else if named != surface {
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"capability %q is the %s surface, but -surface %s was asked for; install the %s package instead",
+			capName, named, surface, "chat-<transport>-"+string(surface))
+	}
+
+	// Everything the REQUEST can get wrong is answered before anything
+	// the deployment can: an operator who mistyped a surface should be
+	// told so whether or not a node happens to be connected.
+	if s.Agents == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("agent plane not wired")
 	}
 
 	name := chatAdapterPrincipalPrefix + capName

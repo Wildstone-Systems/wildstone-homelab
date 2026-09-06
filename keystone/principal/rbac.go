@@ -41,17 +41,27 @@ var roleVerbs = map[runtimedb.Role]map[Verb]bool{
 	runtimedb.RoleOperator: {
 		VerbRead: true, VerbPropose: true, VerbApprove: true, VerbConverse: true,
 	},
-	// The admin-surface chat adapter runs as a butler principal: it may
-	// relay a conversation and, through it, propose — and it still holds
-	// no approve verb, which is what makes ADR-W026 A5 (no approval over
-	// any chat transport) survive a compromised bot token.
+	// Unchanged by the chat work, deliberately. ADR-W024 A5 makes every
+	// external agent — Hermes, Codex, anything else — a butler-role
+	// principal, so a chat verb here would appear on credentials minted
+	// long before chat existed and hand them the operator's private
+	// queue. The adapters get their own roles below.
 	runtimedb.RoleButler: {
-		VerbRead: true, VerbPropose: true, VerbConverse: true,
+		VerbRead: true, VerbPropose: true,
 	},
-	// A concierge relays and nothing else: not read, not propose, not
-	// emit. A compromised family adapter can carry messages for accounts
-	// a human already bound, and cannot look at the house.
+	// The two chat adapters relay and nothing else: not read, not
+	// propose, not emit. A compromised adapter can carry messages for
+	// accounts a human already bound, and cannot look at the house.
+	//
+	// Neither needs more. A session's proposals are submitted under an
+	// internally constructed butler identity acting-for the bound
+	// person, never under the adapter's own credential — so even the
+	// admin-surface adapter holds no propose verb of its own, and
+	// certainly no approve (ADR-W026 A5).
 	runtimedb.RoleConcierge: {
+		VerbConverse: true,
+	},
+	runtimedb.RoleValet: {
 		VerbConverse: true,
 	},
 	// A publisher emits and nothing else: not read, not propose. A shim

@@ -117,8 +117,18 @@ func (s *Server) redeemChatClaim(r *http.Request, id principal.Identity) (any, i
 	if transport == "" || account == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("transport and account are required")
 	}
+	// The redeeming BOT's own surface, from its role. A code for the
+	// other surface is then refused rather than burned: redeeming a
+	// family code on the operator's bot used to succeed, spend the code,
+	// and leave the person bound on a surface that bot never resolves —
+	// so they read as unbound, with nothing left to retry.
+	//
+	// A human caller (the Console, `wild`) is pinned to no surface and
+	// constrains nothing: they can redeem on behalf of whoever is
+	// standing next to them, which is the whole point of a claim code.
+	want, _ := adapterSurface(id)
 	binding, err := s.Principals.RedeemChatClaim(req.Code, transport, account,
-		trimDisplayName(req.DisplayName), strings.TrimSpace(req.Conversation))
+		trimDisplayName(req.DisplayName), strings.TrimSpace(req.Conversation), want)
 	if errors.Is(err, runtimedb.ErrClaimCode) {
 		// One refusal for every reason (unknown, expired, spent, wrong
 		// transport): an adapter relaying codes for strangers must not be
