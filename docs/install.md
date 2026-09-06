@@ -352,11 +352,21 @@ control.
 Enabling one, using Telegram's household bot as the example:
 
 ```sh
-# 1. Build the adapter image and push it (see "Picking a registry" below).
+# 1. Build the adapter image and push it, then MAKE THE REPOSITORY
+#    PUBLIC and prove an anonymous pull works. See "Picking a registry"
+#    below — a private repository is the one way this goes wrong.
 docker buildx build --platform linux/amd64 \
   -f cli/cmd/chat-adapter/Dockerfile \
   -t ghcr.io/<you>/chat-adapter:1.0.0 . --push
 docker buildx imagetools inspect ghcr.io/<you>/chat-adapter:1.0.0   # prints the digest
+
+#    On GHCR a newly published package is PRIVATE. Make it public once:
+#    github.com/users/<you>/packages/container/chat-adapter/settings
+#    -> Danger Zone -> Change visibility -> Public. (One way: a public
+#    package cannot be made private again.) Then verify as the node sees
+#    it, with no credentials:
+docker logout ghcr.io
+docker pull ghcr.io/<you>/chat-adapter@sha256:<digest>
 
 # 2. Make the bot (Telegram: talk to @BotFather) and keep its token.
 
@@ -403,14 +413,28 @@ pull carries no registry auth. So:
 - **side-loading** with `docker load` on the node does not work either,
   because the pull still runs and still fails.
 
+This is easy to trip over on GHCR specifically, because **a package you
+publish there is private until you say otherwise**. Your own `docker
+push` and `imagetools inspect` are authenticated and succeed, so nothing
+looks wrong until `wild capability enable` and the pull on the node
+fails. Flip it under the package's settings -> Danger Zone -> Change
+visibility -> Public (or set the default for new packages under your
+account's Settings -> Packages -> Package creation). Note that this is
+one-way: a package made public cannot be made private again.
+
 **A public repository under your own account is the straightforward
 answer**, and it costs you nothing here. The image is one static binary
 built from open source on a `scratch` base — no secrets are baked into
 it, and every credential (bot token, Keystone token) arrives as an
 environment variable at runtime from your secret store.
 
-Two things to get right:
+Three things to get right:
 
+- **Check the pull the way the node will.** `docker logout <registry>`
+  and then pull the digest. If that works from a machine holding no
+  credentials, it will work on the node; if it 401s or 404s, the
+  repository is still private. Whatever registry you pick, this is the
+  check that catches it.
 - **Match your node's architecture.** `docker build` produces your
   laptop's; if the node is a Pi, pass `--platform linux/arm64`. Building
   the wrong one fails at start with an exec-format error.
