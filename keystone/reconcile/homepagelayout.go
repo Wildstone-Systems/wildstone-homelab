@@ -129,12 +129,27 @@ func renderHomepageSettings(desired []resource.Resource) []byte {
 //     installed. That is the F81 shape and it needs a decision, not a
 //     patch. See the F87 row.
 //
-// What is left needs nothing: the greeting, the clock, and the host's
-// own resources. `resources` reads /proc from inside the container,
-// which on a normal Docker host is the host's — so the numbers are the
-// machine's, not the container's.
+// What is left needs nothing: search, the greeting, the clock, and the
+// host's own resources. `resources` reads /proc from inside the
+// container, which on a normal Docker host is the host's — so the
+// numbers are the machine's, not the container's.
+//
+// SEARCH IS FIRST, and it is here because taking it away was a
+// regression nobody chose (F90). Homepage seeds a default widgets.yaml
+// containing a search bar when it finds none; writing this file
+// replaced that default, so the search bar simply vanished from a
+// dashboard that had always had one. Nothing declared it should go —
+// it was lost as a side effect of managing the file at all, which is
+// the same shape as the sample bookmarks this package already writes an
+// empty file to suppress.
+//
+// duckduckgo because it is Homepage's own default and this is a
+// restoration, not a new opinion about where a household should search.
 func renderHomepageWidgets() []byte {
 	return []byte(`# managed by wildstone-keystone — do not edit
+- search:
+    provider: duckduckgo
+    target: _blank
 - greeting:
     text_size: xl
     text: Welcome home

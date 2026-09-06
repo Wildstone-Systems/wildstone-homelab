@@ -224,6 +224,10 @@ export interface PackageView {
   enabled: boolean;
   // Where an installed capability is served, whether it answers, what it
   // created, and what stands in the way of it working here.
+  // The version this capability is actually running, and whether the
+  // catalog now holds a different one.
+  installedVersion?: string;
+  stale?: boolean;
   addresses?: ServiceAddress[];
   resources?: ResourceRef[];
   blockers?: string[];

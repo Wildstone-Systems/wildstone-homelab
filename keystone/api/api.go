@@ -209,6 +209,10 @@ func (s *Server) Handler() http.Handler {
 	// pipeline as POST /plans, as principal "butler" acting-for the
 	// caller, and only a human approve verb moves them further.
 	mux.Handle("GET /api/v1/butler", s.handle(principal.VerbRead, s.getButlerStatus))
+	// Admin-only: it reaches out to an operator-supplied address from
+	// inside the control plane, which is not a read a viewer should be
+	// able to make.
+	mux.Handle("GET /api/v1/butler/models", s.handle(principal.VerbManage, s.listButlerModels))
 	mux.Handle("POST /api/v1/butler/ask", s.handle(principal.VerbRead, s.askButler))
 	mux.Handle("GET /api/v1/butler/sessions", s.handle(principal.VerbRead, s.listButlerSessions))
 	mux.Handle("GET /api/v1/butler/sessions/{id}", s.handle(principal.VerbRead, s.getButlerSession))
