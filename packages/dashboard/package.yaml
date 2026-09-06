@@ -53,6 +53,15 @@ templates:
         # directory, because managed prereq files are written before any
         # plan step runs — so this exists before the container does.
         - { source: /etc/wildstone/dashboard/services.yaml, target: /app/config/services.yaml, readOnly: true }
+        # The rest of Homepage's config, managed for the same reason and
+        # by the same mechanism (F87). settings.yaml carries the LAYOUT,
+        # whose group names have to match the service list's — two files
+        # that must agree, so one renderer derives both. bookmarks.yaml
+        # is deliberately empty: without it Homepage seeds its "My First
+        # Group" sample underneath the household's real services.
+        - { source: /etc/wildstone/dashboard/settings.yaml, target: /app/config/settings.yaml, readOnly: true }
+        - { source: /etc/wildstone/dashboard/widgets.yaml, target: /app/config/widgets.yaml, readOnly: true }
+        - { source: /etc/wildstone/dashboard/bookmarks.yaml, target: /app/config/bookmarks.yaml, readOnly: true }
       restart: unless-stopped
   - |
     apiVersion: wildstone.dev/v1
