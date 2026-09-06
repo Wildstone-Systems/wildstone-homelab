@@ -194,6 +194,18 @@ export interface ParamDecl {
   suggested?: string;
 }
 
+export interface ServiceAddress {
+  route: string;
+  url: string;
+  healthy: boolean;
+  detail?: string;
+}
+
+export interface ResourceRef {
+  kind: string;
+  name: string;
+}
+
 export interface PackageView {
   name: string;
   version: string;
@@ -203,6 +215,11 @@ export interface PackageView {
   provides?: { trait: string; mode?: string }[];
   requires?: { trait: string; mode?: string }[];
   enabled: boolean;
+  // Where an installed capability is served, whether it answers, what it
+  // created, and what stands in the way of it working here.
+  addresses?: ServiceAddress[];
+  resources?: ResourceRef[];
+  blockers?: string[];
 }
 
 // EnablePreview is a dry run: the plan a proposal WOULD make, and the

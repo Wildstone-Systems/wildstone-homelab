@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -331,3 +332,110 @@ func validateAgentTool(t AgentToolSpec, field string) error {
 	}
 	return nil
 }
+
+// RouteLabels are the leading labels of the Route hosts a package
+// declares; ContainerNames are the Containers it declares.
+//
+// Both parse the template AS YAML rather than pattern-matching it. The
+// first attempt used regexes and only understood the shipped catalog's
+// own formatting: it required a double-quoted host, so `host: app.example.com`
+// yielded no label and the tailnet blocker was silently skipped, and it
+// required inline-map metadata, so a conventional block `metadata:` with
+// an indented `name:` yielded no container and every profile of a
+// capability was attributed the installed one's resources.
+//
+// A template is not valid YAML on its own — it carries {{ ... }} actions
+// — so each action is replaced by a placeholder first: a param reference
+// by that param's default, anything else by an empty string. What
+// remains parses, and the fields we want are read from the structure
+// rather than guessed from its layout.
+//
+// A template that still will not parse (a conditional spanning
+// structure, say) yields nothing rather than a wrong answer.
+func packageDocs(pkg *Package) []map[string]any {
+	defaults := map[string]string{}
+	for _, p := range pkg.Params {
+		if p.Default != "" {
+			defaults[p.Name] = p.Default
+		}
+	}
+	var out []map[string]any
+	for _, t := range pkg.Templates {
+		resolved := templateActionRegexp.ReplaceAllStringFunc(t, func(a string) string {
+			if m := paramRefRegexp.FindStringSubmatch(a); m != nil {
+				return defaults[m[1]]
+			}
+			return ""
+		})
+		var doc map[string]any
+		if err := yaml.Unmarshal([]byte(resolved), &doc); err != nil || doc == nil {
+			continue
+		}
+		out = append(out, doc)
+	}
+	return out
+}
+
+func docString(doc map[string]any, path ...string) string {
+	var cur any = doc
+	for _, k := range path {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return ""
+		}
+		cur = m[k]
+	}
+	sv, _ := cur.(string)
+	return sv
+}
+
+// RouteLabels are the leading labels of the Route hosts a package
+// declares, with param references resolved to their defaults.
+//
+// Defaults are the honest answer before anyone supplies params, which is
+// when an operator is deciding whether to install — and an override
+// makes the Route unpinned anyway, which the install preview reports
+// from the expanded Routes.
+func RouteLabels(pkg *Package) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, doc := range packageDocs(pkg) {
+		if docString(doc, "kind") != "Route" {
+			continue
+		}
+		host := docString(doc, "spec", "host")
+		label, _, _ := strings.Cut(host, ".")
+		if label != "" && !seen[label] {
+			seen[label] = true
+			out = append(out, label)
+		}
+	}
+	return out
+}
+
+// ContainerNames are the Container resources a package declares.
+//
+// Several packages can provide one capability — the four ingress
+// profiles do — and resources are owned by "capability/<name>", not by
+// the package that rendered them. A container name is the cheapest thing
+// that distinguishes them: caddy-tailnet-ts exists on a node running
+// that profile and caddy-tailnet does not.
+func ContainerNames(pkg *Package) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, doc := range packageDocs(pkg) {
+		if docString(doc, "kind") != "Container" {
+			continue
+		}
+		if n := docString(doc, "metadata", "name"); n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+var (
+	templateActionRegexp = regexp.MustCompile(`\{\{[^}]*\}\}`)
+	paramRefRegexp       = regexp.MustCompile(`\{\{\s*\.Params\.([a-z_]+)\s*\}\}`)
+)
