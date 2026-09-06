@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type telegram struct {
@@ -31,6 +32,16 @@ type telegram struct {
 	// offset is Telegram's own cursor: updates are acknowledged by
 	// asking for the next one.
 	offset int64
+	// started is false until the first poll has taken a cursor.
+	//
+	// Telegram holds undelivered updates for 24 hours and hands the whole
+	// backlog to the next getUpdates that carries no offset, so an
+	// adapter restarted after an outage would answer a day of questions
+	// at once. Keystone's dedupe key would not save it: a queued reply
+	// expires, so the same message answered again is a new message. The
+	// first poll therefore takes the cursor and relays nothing — the same
+	// rule the Matrix driver follows for the same reason.
+	started bool
 }
 
 func newTelegram(token string, pollWait time.Duration) (Transport, error) {
@@ -85,8 +96,16 @@ func (t *telegram) Receive(ctx context.Context) ([]Incoming, error) {
 		"timeout":         {strconv.Itoa(int(t.timeout.Seconds()))},
 		"allowed_updates": {`["message"]`},
 	}
-	if t.offset > 0 {
+	switch {
+	case t.offset > 0:
 		q.Set("offset", strconv.FormatInt(t.offset, 10))
+	case !t.started:
+		// offset=-1 asks for the LAST update only, which is how a
+		// Telegram client says "tell me where the stream is, not what I
+		// missed". timeout=0 so startup does not block for a poll
+		// interval before the adapter is live.
+		q.Set("offset", "-1")
+		q.Set("timeout", "0")
 	}
 	var envelope struct {
 		OK          bool             `json:"ok"`
@@ -99,10 +118,18 @@ func (t *telegram) Receive(ctx context.Context) ([]Incoming, error) {
 	if !envelope.OK {
 		return nil, fmt.Errorf("telegram getUpdates: %s", envelope.Description)
 	}
+	// The first poll establishes the cursor and relays nothing: whatever
+	// it returned is backlog by definition.
+	first := !t.started
+	t.started = true
+
 	var out []Incoming
 	for _, u := range envelope.Result {
 		if u.UpdateID >= t.offset {
 			t.offset = u.UpdateID + 1
+		}
+		if first {
+			continue
 		}
 		if u.Message == nil || strings.TrimSpace(u.Message.Text) == "" {
 			continue // a photo, a sticker, a join event: nothing to relay
@@ -128,10 +155,17 @@ func displayName(username, firstName string) string {
 
 func (t *telegram) Send(ctx context.Context, conversation, body string) error {
 	// Telegram's own limit is 4096 characters; the queue bounds the body
-	// below that, and this is the belt to that braces.
+	// below that, and this is the belt to that braces. The cut is on a
+	// rune boundary — half a rune is invalid UTF-8, which Telegram
+	// rejects outright, so a naive slice would turn a long message into
+	// no message.
 	const maxTelegramBody = 4096
 	if len(body) > maxTelegramBody {
-		body = body[:maxTelegramBody]
+		cut := maxTelegramBody
+		for cut > 0 && !utf8.RuneStart(body[cut]) {
+			cut--
+		}
+		body = body[:cut]
 	}
 	payload := url.Values{"chat_id": {conversation}, "text": {body}}
 	var envelope struct {

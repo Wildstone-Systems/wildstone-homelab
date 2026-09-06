@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"unicode/utf8"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
@@ -202,10 +203,17 @@ func householdDetail(payload []byte) string {
 	}
 	const maxDetail = 300
 	s := string(payload)
-	if len(s) > maxDetail {
-		s = s[:maxDetail] + "…"
+	if len(s) <= maxDetail {
+		return s
 	}
-	return s
+	// Cut on a rune boundary: a payload is publisher-written text and
+	// may be any language, and half a rune is invalid UTF-8 rather than
+	// a shortened word.
+	cut := maxDetail
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 // HouseholdEventSeam builds the family surface's timeline reader over

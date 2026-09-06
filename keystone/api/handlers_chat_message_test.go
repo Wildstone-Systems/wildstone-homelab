@@ -337,3 +337,35 @@ func TestChatOutboundIsScopedToSurface(t *testing.T) {
 		t.Fatalf("the family adapter cannot read its own queue: %+v", got)
 	}
 }
+
+// One person, two bots, one chat id. In Telegram a private chat's id is
+// the user's OWN id — the same value for every bot they talk to — and
+// message ids are a per-chat sequence, so the same (transport,
+// conversation, message id) can legitimately arrive on both surfaces.
+// The dedupe key carries the surface, so both bots answer; without it
+// one of them would go quiet for no visible reason.
+func TestChatDedupeDoesNotCollideAcrossSurfaces(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler([]*provider.ChatResponse{
+		{Text: "household answer"}, {Text: "operator answer"},
+	}, runtimedb.ButlerModeFull)
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+	h.bindAccount(t, "admin", "root-admin", "telegram", "12345")
+
+	body := map[string]any{
+		"transport": "telegram", "account": "12345", "conversation": "12345",
+		"text": "hello", "messageId": "7",
+	}
+	_, family := h.send(runtimedb.RoleConcierge, body)
+	_, admin := h.send(runtimedb.RoleButler, body)
+	if family.Queued == 0 || admin.Queued == 0 || family.Queued == admin.Queued {
+		t.Fatalf("family queued %d, admin queued %d — want two distinct replies",
+			family.Queued, admin.Queued)
+	}
+	if got := h.poll(t, runtimedb.RoleConcierge, ""); len(got) != 1 {
+		t.Fatalf("family queue = %+v, want its own reply", got)
+	}
+	if got := h.poll(t, runtimedb.RoleButler, ""); len(got) != 1 {
+		t.Fatalf("admin queue = %+v, want its own reply", got)
+	}
+}

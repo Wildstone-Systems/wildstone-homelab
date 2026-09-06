@@ -149,7 +149,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	if err != nil {
 		// One reply, no detail, no session row (ADR-W026 A4).
 		seq := s.queueChatReply(surface, transport, conversation, unboundReply, 0, "",
-			chatDedupe(transport, conversation, msg.MessageID, "unbound", text))
+			chatDedupe(surface, transport, conversation, msg.MessageID, "unbound", text))
 		return inboundResponse{Accepted: true, Bound: false, Queued: seq,
 			Reason: "no binding for this account on this surface"}, http.StatusAccepted, nil
 	}
@@ -160,7 +160,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	if msg.Group {
 		if surface == runtimedb.ButlerSurfaceAdmin {
 			seq := s.queueChatReply(surface, transport, conversation, adminGroupReply, binding.ID, "",
-				chatDedupe(transport, conversation, msg.MessageID, "admin-group", text))
+				chatDedupe(surface, transport, conversation, msg.MessageID, "admin-group", text))
 			return inboundResponse{Accepted: true, Bound: true, Queued: seq,
 				Reason: "the operator surface answers in direct messages only"}, http.StatusAccepted, nil
 		}
@@ -177,7 +177,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	if surface == runtimedb.ButlerSurfaceFamily {
 		if body, answered := s.recordChatAnswer(binding, conversation, text); answered {
 			seq := s.queueChatReply(surface, transport, conversation, body, binding.ID, "",
-				chatDedupe(transport, conversation, msg.MessageID, "answer", text))
+				chatDedupe(surface, transport, conversation, msg.MessageID, "answer", text))
 			if err := s.DB.TouchChatBinding(binding.ID); err != nil {
 				s.Log.Error("touching chat binding failed", "err", err)
 			}
@@ -209,7 +209,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	ask, _ := out.(askResponse)
 	body := chatReplyBody(ask)
 	seq := s.queueChatReply(surface, transport, conversation, body, binding.ID, "",
-		chatDedupe(transport, conversation, msg.MessageID, ask.SessionID, text))
+		chatDedupe(surface, transport, conversation, msg.MessageID, ask.SessionID, text))
 	return inboundResponse{Accepted: true, Bound: true, Queued: seq}, http.StatusAccepted, nil
 }
 
@@ -256,12 +256,21 @@ func (s *Server) queueChatReply(surface runtimedb.ButlerSurface, transport, targ
 // own message id is the anchor when it gives one; otherwise a hash of
 // the text and conversation stands in, which collapses an identical
 // message replayed within the window rather than answering it twice.
-func chatDedupe(transport, conversation, messageID, discriminator, text string) string {
+//
+// The SURFACE is part of the key, and has to be. In Telegram a private
+// chat's id is the user's own id — the same value for every bot they
+// talk to — and message ids are a per-chat sequence, so one person
+// messaging both the household bot and the operator bot can produce the
+// same (transport, conversation, message id) twice. Without the surface
+// here, the second bot's reply would be silently deduplicated away as a
+// duplicate of the first's, and the household would watch one of their
+// two bots go quiet for no visible reason.
+func chatDedupe(surface runtimedb.ButlerSurface, transport, conversation, messageID, discriminator, text string) string {
 	if messageID != "" {
-		return fmt.Sprintf("%s:%s:%s", transport, conversation, messageID)
+		return fmt.Sprintf("%s:%s:%s:%s", surface, transport, conversation, messageID)
 	}
-	sum := sha256.Sum256([]byte(transport + "\x00" + conversation + "\x00" + discriminator + "\x00" + text))
-	return fmt.Sprintf("%s:%s:h%s", transport, conversation, hex.EncodeToString(sum[:8]))
+	sum := sha256.Sum256([]byte(string(surface) + "\x00" + transport + "\x00" + conversation + "\x00" + discriminator + "\x00" + text))
+	return fmt.Sprintf("%s:%s:%s:h%s", surface, transport, conversation, hex.EncodeToString(sum[:8]))
 }
 
 // pollChatOutbound is the adapter's delivery cursor (ADR-W026 A8): the
@@ -362,7 +371,7 @@ func (s *Server) AskOverChat(ctx context.Context, transport, target string, bind
 // and retried identically.
 func (s *Server) QueueChatPush(_ context.Context, surface runtimedb.ButlerSurface, transport, target, body, correlationID, dedupe string) (int64, error) {
 	if dedupe == "" {
-		dedupe = chatDedupe(transport, target, "", "push", body+time.Now().UTC().Format(time.RFC3339Nano))
+		dedupe = chatDedupe(surface, transport, target, "", "push", body+time.Now().UTC().Format(time.RFC3339Nano))
 	}
 	seq, err := s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{
 		Surface: surface, Transport: transport, Target: target,

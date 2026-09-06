@@ -17,7 +17,33 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
+
+// truncateUTF8 bounds s to at most n bytes, cutting on a rune boundary.
+// Cutting mid-rune is not a cosmetic problem: the result is invalid
+// UTF-8, which a JSON encoder mangles and some transports refuse, so a
+// long reply would fail to send rather than arrive shortened.
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
+}
+
+// ChatOutboundRetention is how long a settled message — delivered, or
+// expired undelivered — stays in the table before it is swept.
+//
+// The queue is a queue, not a log: the household stream records what a
+// rule did, the butler_sessions table records what was said, and this
+// records only what still needs delivering. Keeping every message
+// forever would make the busiest table in the deployment the one nothing
+// reads, and its dedupe index the thing that grows without bound.
+const ChatOutboundRetention = 7 * 24 * time.Hour
 
 // DefaultChatOutboundTTL is how long a queued message stays deliverable.
 // A chat reply is worthless long after the question, and a stale one is
@@ -63,15 +89,14 @@ func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
 	if strings.TrimSpace(m.Body) == "" {
 		return 0, fmt.Errorf("runtimedb: refusing to queue an empty chat message")
 	}
-	if len(m.Body) > MaxChatBodyBytes {
-		m.Body = m.Body[:MaxChatBodyBytes]
-	}
+	m.Body = truncateUTF8(m.Body, MaxChatBodyBytes)
 	if m.Kind == "" {
 		m.Kind = "reply"
 	}
 	if m.ExpiresAt.IsZero() {
 		m.ExpiresAt = time.Now().Add(DefaultChatOutboundTTL)
 	}
+	db.pruneChatOutbound()
 	res, err := db.sql.Exec(
 		`INSERT INTO chat_outbound (surface, transport, target, body, kind, binding_id, correlation_id, dedupe_key, created_at, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -150,4 +175,20 @@ func (db *DB) AckChatOutbound(surface ButlerSurface, seq int64) error {
 	}
 	_, err = db.sql.Exec(`UPDATE chat_outbound SET delivered_at = ? WHERE seq = ?`, now(), seq)
 	return err
+}
+
+// pruneChatOutbound drops settled messages older than the retention
+// window. It runs on enqueue rather than on a timer: the table only
+// grows when something is queued, so that is exactly when it is worth
+// looking, and a household's message rate makes this a few rows at a
+// time over an indexed predicate.
+//
+// A failure is logged nowhere and returned nowhere on purpose: failing
+// to tidy up must never fail the message that was being queued.
+func (db *DB) pruneChatOutbound() {
+	cutoff := time.Now().Add(-ChatOutboundRetention).UTC().Format(time.RFC3339Nano)
+	db.sql.Exec( //nolint:errcheck // best effort: tidying must not fail a send
+		`DELETE FROM chat_outbound
+		 WHERE created_at < ? AND (delivered_at != '' OR expires_at < ?)`,
+		cutoff, now())
 }

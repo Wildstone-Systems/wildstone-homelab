@@ -33,6 +33,12 @@ func TestTelegramReceiveMapping(t *testing.T) {
 	defer srv.Close()
 
 	tg := &telegram{token: "bot-token", base: srv.URL, timeout: time.Second, http: srv.Client()}
+	// The first poll only takes the cursor (see
+	// TestTelegramFirstPollTakesTheCursorNotTheBacklog); the mapping is
+	// what the polls after it do.
+	if _, err := tg.Receive(context.Background()); err != nil {
+		t.Fatalf("first Receive: %v", err)
+	}
 	msgs, err := tg.Receive(context.Background())
 	if err != nil {
 		t.Fatalf("Receive: %v", err)
@@ -118,5 +124,49 @@ func TestTelegramReportsAPIErrors(t *testing.T) {
 func TestTelegramRequiresAToken(t *testing.T) {
 	if _, err := newTelegram("", time.Second); err == nil {
 		t.Fatalf("an empty token was accepted")
+	}
+}
+
+// A restarted adapter must not answer the backlog (ADR-W026 A8).
+//
+// Telegram holds undelivered updates for 24 hours and hands them all to
+// the next getUpdates that carries no offset. Keystone's dedupe key is
+// anchored on the message id, but a queued reply EXPIRES — so an adapter
+// restarted a day later would re-answer yesterday's questions, and the
+// household would get a burst of replies to things they had forgotten
+// asking. The Matrix driver takes a cursor and no backlog on its first
+// sync; this is the same rule for the same reason.
+func TestTelegramFirstPollTakesTheCursorNotTheBacklog(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.String())
+		w.Write([]byte(telegramUpdates)) //nolint:errcheck // test fake
+	}))
+	defer srv.Close()
+
+	tg := &telegram{token: "bot-token", base: srv.URL, timeout: time.Second, http: srv.Client()}
+	first, err := tg.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("first Receive: %v", err)
+	}
+	if len(first) != 0 {
+		t.Fatalf("the first poll relayed %d backlogged message(s): %+v", len(first), first)
+	}
+	// It still advanced past them, so the second poll is live traffic
+	// only — and it asked Telegram for just the tail rather than the
+	// whole backlog.
+	if tg.offset != 104 {
+		t.Fatalf("offset = %d, want 104 after taking the cursor", tg.offset)
+	}
+	if !strings.Contains(paths[0], "offset=-1") || !strings.Contains(paths[0], "timeout=0") {
+		t.Fatalf("first poll did not ask for the tail: %s", paths[0])
+	}
+
+	msgs, err := tg.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("second Receive: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("second poll = %+v, want the live messages", msgs)
 	}
 }

@@ -8,8 +8,8 @@ import { Badge, ErrorLine, useLoad, when } from "../lib";
 // only way a binding is ever created, and the code is shown exactly
 // once — the server keeps only its hash, so there is no "show it again".
 export function Chat() {
-  const bindings = useLoad<ChatBinding[]>(() => api.chatBindings(showRevoked), []);
   const [showRevoked, setShowRevoked] = useState(false);
+  const bindings = useLoad<ChatBinding[]>(() => api.chatBindings(showRevoked), [showRevoked]);
   const [surface, setSurface] = useState<ButlerSurface>("family");
   const [identity, setIdentity] = useState("");
   const [transport, setTransport] = useState("");
@@ -80,13 +80,7 @@ export function Chat() {
 
       <h3 style={{ fontSize: 13, margin: "20px 0 8px" }}>Bindings</h3>
       <div className="row">
-        <button
-          className="action"
-          onClick={() => {
-            setShowRevoked(!showRevoked);
-            setTimeout(() => bindings.reload(), 0);
-          }}
-        >
+        <button className="action" onClick={() => setShowRevoked(!showRevoked)}>
           {showRevoked ? "Live only" : "Show revoked"}
         </button>
       </div>
