@@ -82,7 +82,10 @@ export function Services() {
 export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => void }) {
   const params = pkg.params ?? [];
   const [values, setValues] = useState<Record<string, string>>(() =>
-    Object.fromEntries(params.map((p) => [p.name, p.default ?? ""])),
+    // suggested before default: a package's default is a property of the
+    // PACKAGE, and suggested is a property of THIS deployment — which
+    // node exists, which domain everything else already uses.
+    Object.fromEntries(params.map((p) => [p.name, p.suggested ?? p.default ?? ""])),
   );
   const [preview, setPreview] = useState<EnablePreview | null>(null);
   const [busy, setBusy] = useState(false);
@@ -108,16 +111,37 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
           <label>
             {p.name}
             {p.required ? " *" : ""}
+            {p.description && <div className="muted">{p.description}</div>}
           </label>
-          <input
-            type="text"
-            value={values[p.name] ?? ""}
-            placeholder={p.default ?? ""}
-            onChange={(e) => {
-              setValues({ ...values, [p.name]: e.target.value });
-              setPreview(null);
-            }}
-          />
+          {p.options && p.options.length > 0 ? (
+            // A choice, not a blank box. The control plane knows the
+            // answers; asking the operator to retype one is how a
+            // capability ends up on a node that does not exist.
+            <select
+              value={values[p.name] ?? ""}
+              onChange={(e) => {
+                setValues({ ...values, [p.name]: e.target.value });
+                setPreview(null);
+              }}
+            >
+              {!values[p.name] && <option value="">choose…</option>}
+              {p.options.map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="text"
+              value={values[p.name] ?? ""}
+              placeholder={p.suggested ?? p.default ?? ""}
+              onChange={(e) => {
+                setValues({ ...values, [p.name]: e.target.value });
+                setPreview(null);
+              }}
+            />
+          )}
         </div>
       ))}
 
@@ -139,6 +163,15 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
             {preview.plan?.steps?.length ?? 0} step(s), overall risk{" "}
             {preview.plan?.overallRisk ?? "?"}. Nothing has been recorded yet.
           </div>
+          {preview.authPolicyWarning && (
+            // Louder than the secrets list on purpose: a missing secret
+            // stops one service converging, this changes how the whole
+            // household signs in (F77).
+            <div className="card bad">
+              <strong>This changes sign-in for everyone</strong>
+              <div>{preview.authPolicyWarning}</div>
+            </div>
+          )}
           {preview.providedSecrets.length > 0 && (
             <div className="warn">
               <strong>You must supply these secrets before this can converge.</strong> They

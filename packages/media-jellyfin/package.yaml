@@ -27,18 +27,18 @@ requires:
   - { trait: ingress, mode: public }
   - { trait: storage, class: bulk }
 params:
-  - { name: public_domain, required: true }
-  - { name: media_subdomain, default: jellyfin }
-  - { name: node, required: true }
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: media_subdomain, default: jellyfin, description: "The name this service appears under, e.g. jellyfin." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
   # Node running the identity provider, whose managed config the
   # OidcClient/LdapGroup resources are rendered into. Defaults to this
   # package's own node, which is right for a single-node homelab; set it
   # explicitly when identity runs elsewhere.
-  - { name: identity_node, default: "" }
+  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
   # Host path of the media library; must resolve under a Wardstone
   # managed prefix (default prefixes: /etc/wildstone, /srv/wildstone).
-  - { name: media_path, default: /srv/wildstone/media }
-  - { name: timezone, default: UTC }
+  - { name: media_path, default: /srv/wildstone/media, description: "Folder on this machine holding your films and television." }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
 policies:
   classifications: [family_public]
   dataSensitivity: medium

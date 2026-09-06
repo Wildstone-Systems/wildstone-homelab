@@ -29,12 +29,12 @@ provides:
   # (ADR-W013 A2).
   - { trait: identity, mode: ldap }
 params:
-  - { name: public_domain, required: true }
-  - { name: node, required: true }
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
   # The directory's base DN. It now appears in two places that MUST
   # agree — LLDAP's own env and Authelia's authentication_backend — so it
   # is a param rather than a literal repeated twice.
-  - { name: ldap_base_dn, default: "dc=wildstone,dc=internal" }
+  - { name: ldap_base_dn, default: "dc=wildstone,dc=internal", description: "The directory’s root name. The default is fine unless you know you need otherwise." }
 policies:
   classifications: [family_public, admin_tailscale]
   dataSensitivity: high
@@ -208,7 +208,19 @@ templates:
         notifier:
           disable_startup_check: true
           filesystem:
-            filename: /config/notification.txt
+            # Under the managed prefix, NOT in the container's own volume
+            # (F78). Authelia has no mail relay and will not get one
+            # (ADR-W020 A6), so a one-time code is delivered to a file —
+            # and a file inside a named volume is reachable only by
+            # someone with root and docker on the host. That made
+            # two-factor impossible to enrol for the person it protects,
+            # which is a lockout, not an inconvenience.
+            #
+            # /srv/wildstone is a Wardstone managed prefix, so the agent
+            # can read it with the op it already has, and the admin can
+            # be shown the code in the Console — ADR-W020 A6's
+            # out-of-band human delivery, with a surface to deliver from.
+            filename: /srv/wildstone/identity/notification.txt
 
         regulation:
           max_retries: 4
@@ -294,6 +306,9 @@ templates:
       # can inspect it, and materialized file content is not.
       mounts:
         - { source: authelia-config, target: /config }
+        # Writable, unlike the other managed mounts: this is the one
+        # place Authelia produces something a human needs to read back.
+        - { source: /srv/wildstone/identity, target: /srv/wildstone/identity }
         # Two read-only subtrees of the managed prefix, because the two
         # managed files are named by two different rules and both rules
         # are right:

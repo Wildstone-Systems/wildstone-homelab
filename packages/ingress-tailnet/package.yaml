@@ -33,18 +33,18 @@ provides:
 params:
   # The name the private Caddy answers to, e.g. a MagicDNS name or an
   # internal zone. No public_domain: this profile never serves one.
-  - { name: admin_domain, required: true }
-  - { name: node, required: true }
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
   # Host port for the private listener. Defaults to the same 8443
   # packages/ingress uses for caddy-private, so the two profiles are
   # swappable without rewriting Routes.
-  - { name: listen_port, default: "443" }
+  - { name: listen_port, default: "443", description: "The port the proxy listens on." }
   # Host address to bind. Required and undefaulted on purpose: this
   # profile's whole claim is that it is private, and a default would let
   # that claim be true only by accident (#41). Normally the node's
   # tailnet address (`tailscale ip -4`); pass "0.0.0.0" to say
   # explicitly that you want every interface.
-  - { name: listen_addr, required: true }
+  - { name: listen_addr, required: true, description: "The address the proxy listens on. Normally this machine’s tailnet address." }
 policies:
   classifications: [admin_tailscale]
 templates:

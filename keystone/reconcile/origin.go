@@ -27,3 +27,6 @@ func routeSiteAddress(p ingressPosture, host string) string {
 		Ports:       p.tailnetPorts,
 	}.SiteAddress(host)
 }
+
+// wellKnownPortFor is the pin for a service label (F82).
+func wellKnownPortFor(label string) (int, bool) { return ingressorigin.WellKnownPortFor(label) }

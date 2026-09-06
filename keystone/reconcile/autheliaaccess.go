@@ -54,6 +54,50 @@ func stricter(candidate, current string) bool {
 	return policyRank[candidate] > policyRank[current]
 }
 
+// AccessPolicies is the policy Authelia will enforce per domain, derived
+// from desired state.
+//
+// Exported because the install preview must be able to ask the same
+// question this file answers: installing a service can RAISE the policy
+// for every other service, and an operator should be told before
+// approving rather than discovering it when their household cannot log
+// in (F77). Two implementations of "what policy will apply" would be two
+// chances to disagree, which is F70's lesson.
+func AccessPolicies(desired []resource.Resource) map[string]string {
+	posture := ingressorigin.Of(desired)
+	hostOf := func(declared string) string {
+		served := posture.SiteAddress(declared)
+		if h, _, ok := strings.Cut(served, ":"); ok {
+			return h
+		}
+		return served
+	}
+	byDomain := map[string]string{}
+	for _, r := range desired {
+		if r.Kind != resource.KindRoute || r.Route == nil {
+			continue
+		}
+		var policy string
+		switch r.Route.Auth {
+		case "portal":
+			policy = "bypass"
+		case "authelia_oidc":
+			policy = accessPolicyFor(r.Route.Classification)
+		default:
+			continue
+		}
+		host := hostOf(r.Route.Host)
+		if stricter(policy, byDomain[host]) {
+			byDomain[host] = policy
+		}
+	}
+	return byDomain
+}
+
+// PolicyStricter reports whether a is stricter than b, for callers
+// comparing a before and after.
+func PolicyStricter(a, b string) bool { return stricter(a, b) }
+
 // renderAutheliaAccess builds the access_control block from desired Routes.
 //
 // Only Auth == "authelia_oidc" needs a rule: that is the one value for
@@ -77,44 +121,8 @@ func renderAutheliaAccess(desired []resource.Resource) []byte {
 	// shares one hostname and differs by port, and Authelia matches
 	// `domain` against the hostname — so a port here would match nothing
 	// and we would have traded one silent deny for another.
-	posture := ingressorigin.Of(desired)
-	hostOf := func(declared string) string {
-		served := posture.SiteAddress(declared)
-		if h, _, ok := strings.Cut(served, ":"); ok {
-			return h
-		}
-		return served
-	}
-
 	type rule struct{ domain, policy string }
-	byDomain := map[string]string{}
-	for _, r := range desired {
-		if r.Kind != resource.KindRoute || r.Route == nil {
-			continue
-		}
-		var policy string
-		switch r.Route.Auth {
-		case "portal":
-			policy = "bypass"
-		case "authelia_oidc":
-			policy = accessPolicyFor(r.Route.Classification)
-		default:
-			continue
-		}
-		// Collapsing is the dangerous part. When several Routes share a
-		// hostname the STRICTEST policy wins, and in particular a portal's
-		// bypass never covers a domain that also serves an authenticated
-		// Route — that would be an authentication bypass, which is very
-		// much worse than the 403 this function exists to fix.
-		//
-		// Dropping the bypass costs nothing: renderRouteFragment emits
-		// forward_auth only for authelia_oidc, so Authelia is never
-		// consulted for a portal Route and never has to allow it.
-		host := hostOf(r.Route.Host)
-		if stricter(policy, byDomain[host]) {
-			byDomain[host] = policy
-		}
-	}
+	byDomain := AccessPolicies(desired)
 
 	rules := make([]rule, 0, len(byDomain))
 	for domain, policy := range byDomain {

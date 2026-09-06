@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
@@ -20,13 +21,102 @@ type packageView struct {
 	Version    string                `json:"version"`
 	Capability string                `json:"capability"`
 	Profile    string                `json:"profile,omitempty"`
-	Params     []pkgspec.ParamDecl   `json:"params,omitempty"`
+	Params     []paramView           `json:"params,omitempty"`
 	Provides   []pkgspec.Provide     `json:"provides,omitempty"`
 	Requires   []pkgspec.Requirement `json:"requires,omitempty"`
 	Enabled    bool                  `json:"enabled"`
 }
 
 // listPackages answers what this control plane can install.
+
+// paramView is a ParamDecl plus what this deployment already knows about
+// it (ADR-W021 A5, extended).
+//
+// The form was generated from the package alone, so it asked for facts
+// the control plane was already holding: which node — there is one — and
+// which domain — every installed capability used the same one. Asking is
+// the defect; a description only makes the question answerable.
+type paramView struct {
+	pkgspec.ParamDecl
+	// Options, when non-empty, are the only sensible answers. The form
+	// should offer a choice rather than a blank box.
+	Options []string `json:"options,omitempty"`
+	// Suggested is the value to prefill. Separate from Default because a
+	// package's default is a property of the PACKAGE, and this is a
+	// property of the deployment.
+	Suggested string `json:"suggested,omitempty"`
+}
+
+// deploymentFacts are the answers Keystone can supply for ParamSources.
+type deploymentFacts struct {
+	nodes  []string
+	domain string
+}
+
+// gatherFacts reads what the deployment already knows.
+//
+// The domain comes from the Routes that exist rather than from any
+// stored answer: a Route host is "<service>.<domain>", so the deployment
+// states its own domain by having any Route at all. That also means the
+// answer is right even for a deployment nobody recorded params for —
+// which is every deployment installed before capability origins were
+// recorded.
+func (s *Server) gatherFacts() deploymentFacts {
+	var f deploymentFacts
+	// Recorded nodes, not only live ones: a node that is briefly
+	// disconnected is still where a capability belongs, and offering an
+	// empty list because an agent is restarting would be worse than
+	// offering a node that needs to come back.
+	if recorded, err := s.DB.ListNodes(); err == nil {
+		for _, n := range recorded {
+			f.nodes = append(f.nodes, n.NodeID)
+		}
+	}
+	sort.Strings(f.nodes)
+
+	current, err := s.State.Load()
+	if err != nil {
+		return f
+	}
+	counts := map[string]int{}
+	for _, r := range current {
+		if r.Kind != resource.KindRoute || r.Route == nil || r.Route.Host == "" {
+			continue
+		}
+		if _, rest, ok := strings.Cut(r.Route.Host, "."); ok && rest != "" {
+			counts[rest]++
+		}
+	}
+	best := 0
+	for d, n := range counts {
+		// Ties broken by name so the answer does not depend on map order.
+		if n > best || (n == best && d < f.domain) {
+			f.domain, best = d, n
+		}
+	}
+	return f
+}
+
+func resolveParams(decls []pkgspec.ParamDecl, f deploymentFacts) []paramView {
+	out := make([]paramView, 0, len(decls))
+	for _, d := range decls {
+		v := paramView{ParamDecl: d}
+		switch d.Source {
+		case "node":
+			v.Options = f.nodes
+			if len(f.nodes) == 1 {
+				v.Suggested = f.nodes[0]
+			}
+		case "domain":
+			if f.domain != "" {
+				v.Suggested = f.domain
+			}
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
 func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int, error) {
 	if s.Catalog == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("no catalog is configured (keystone -catalog-dir)")
@@ -35,12 +125,13 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	facts := s.gatherFacts()
 	out := []packageView{}
 	for _, p := range s.Catalog.List() {
 		out = append(out, packageView{
 			Name: p.Metadata.Name, Version: p.Metadata.Version,
 			Capability: p.Metadata.Capability, Profile: p.Metadata.Profile,
-			Params: p.Params, Provides: p.Provides, Requires: p.Requires,
+			Params: resolveParams(p.Params, facts), Provides: p.Provides, Requires: p.Requires,
 			Enabled: enabled[p.Metadata.Capability],
 		})
 	}

@@ -14,8 +14,8 @@ metadata:
   capability: notifications
   profile: ntfy
 params:
-  - { name: public_domain, required: true }
-  - { name: node, required: true }
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
 templates:
   - |
     apiVersion: wildstone.dev/v1

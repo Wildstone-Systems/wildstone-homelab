@@ -64,6 +64,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1600,8 +1601,64 @@ func (r *Reconciler) runReload(ctx context.Context) error {
 // resolve from the op surface available to S2b, so such routes are
 // gate-pass-by-construction (the WriteManagedFile success is the whole
 // gate for them). Flagged as a known limitation in the S2b report.
+
+// routeFrontDoor is the host:port a Route is served at, when that is a
+// thing the node can actually connect to.
+//
+// Only under the tailnet posture: there the address is the node's own
+// MagicDNS name, which resolves on the node itself. Under a hostname
+// posture the declared host may resolve nowhere near here, which is why
+// the upstream probe skipped these entirely.
+func (r *Reconciler) routeFrontDoor(spec *resource.RouteSpec) (string, uint32, bool) {
+	p := r.currentPosture()
+	if p.tls != "tailscale" || p.tailnetName == "" {
+		return "", 0, false
+	}
+	host, portStr, ok := strings.Cut(routeSiteAddress(p, spec.Host), ":")
+	if !ok {
+		return "", 0, false // no port assigned: nothing is serving it
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return "", 0, false
+	}
+	return host, uint32(port), true
+}
+
 func (r *Reconciler) probeRoute(ctx context.Context, nodeID string, spec *resource.RouteSpec) bool {
+	// Under the tailnet posture, probe the FRONT DOOR rather than the
+	// upstream (F83). This is the only check that can tell whether Caddy
+	// accepted the config it was just handed: it rejects a whole file on
+	// any ambiguity and keeps serving the previous one, so the fragment
+	// on disk is correct, every resource reports healthy, and the port
+	// this Route was assigned is not bound by anything.
+	//
+	// That happened: a port reassignment briefly gave two sites the same
+	// address, Caddy refused the file, and the front door served stale
+	// routing — one service's link reaching another, a second reaching
+	// nothing — for as long as nobody looked.
+	if host, port, ok := r.routeFrontDoor(spec); ok {
+		attempts, backoff := r.healthGateParams()
+		for i := 0; i < attempts; i++ {
+			res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ProbeTcp{
+				ProbeTcp: &wsv1.ProbeTcp{Host: host, Port: port},
+			}})
+			if err == nil && res.GetError() == nil && res.GetProbeTcp().GetReachable() {
+				return true
+			}
+			if i < attempts-1 {
+				select {
+				case <-ctx.Done():
+					return false
+				case <-time.After(backoff):
+				}
+			}
+		}
+		return false
+	}
 	if strings.HasPrefix(spec.Upstream, "container/") {
+		// No front door to probe and a container upstream the agent
+		// cannot dial by name: nothing to check, as before.
 		return true
 	}
 	url := "http://" + spec.Upstream

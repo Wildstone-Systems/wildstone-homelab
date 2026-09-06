@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"io"
 	"net/http"
 	"sort"
@@ -224,7 +225,15 @@ func (s *Server) submitProposalOpts(id principal.Identity, req proposalRequest, 
 	// Stopping earlier would preview something weaker than what approval
 	// would face, which is the one thing a preview must not do.
 	if opts.DryRun {
-		return previewOf(p, puts), http.StatusOK, nil
+		out := previewOf(p, puts)
+		// What this does to everyone else's sign-in, before approval
+		// rather than after (F77).
+		if current, err := s.State.Load(); err == nil {
+			if w := authPolicyWarning(current, puts); w != "" {
+				out["authPolicyWarning"] = w
+			}
+		}
+		return out, http.StatusOK, nil
 	}
 
 	stored, err := json.Marshal(storedProposal{
@@ -406,4 +415,29 @@ func previewOf(p *plan.Plan, puts []resource.Resource) map[string]any {
 	}
 	sort.Strings(provided)
 	return map[string]any{"plan": p, "providedSecrets": provided}
+}
+
+// authPolicyWarning is what installing this would do to how EVERYONE
+// signs in (F77).
+//
+// Under a posture where every Route shares one hostname, Authelia can
+// enforce one policy for the whole deployment, so the strictest Route
+// decides for all of them. Installing a monitoring tool classified
+// admin_tailscale therefore put two-factor on a family dashboard — and
+// nothing said so until the household could not log in.
+//
+// The dry run already computes the plan and holds the classifications.
+// It has always been able to answer this; it was simply never asked.
+func authPolicyWarning(current, adding []resource.Resource) string {
+	before := reconcile.AccessPolicies(current)
+	after := reconcile.AccessPolicies(append(append([]resource.Resource{}, current...), adding...))
+	for domain, want := range after {
+		if reconcile.PolicyStricter(want, before[domain]) && before[domain] != "" {
+			return fmt.Sprintf(
+				"installing this raises the sign-in requirement to %q for EVERY service on %s, not just this one — "+
+					"under this addressing everything shares one hostname, so one policy applies to all of it",
+				want, domain)
+		}
+	}
+	return ""
 }

@@ -184,6 +184,14 @@ export interface ParamDecl {
   name: string;
   required?: boolean;
   default?: string;
+  // What the field MEANS, in words someone who does not know the
+  // internals can act on (ADR-W021 A5).
+  description?: string;
+  // What the DEPLOYMENT already knows. options means "these are the
+  // only sensible answers"; suggested means "this is almost certainly
+  // it" — a fact about this deployment, not about the package.
+  options?: string[];
+  suggested?: string;
 }
 
 export interface PackageView {
@@ -202,10 +210,21 @@ export interface PackageView {
 export interface EnablePreview {
   plan: Plan;
   providedSecrets: string[];
+  // What installing this does to how EVERYONE signs in. Present only
+  // when it raises the requirement for services already installed.
+  authPolicyWarning?: string;
+}
+
+export interface IdentityNotification {
+  code?: string;
+  body?: string;
+  note: string;
 }
 
 export const api = {
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
+  identityCode: (node: string) =>
+    call<IdentityNotification>("GET", `/api/v1/nodes/${encodeURIComponent(node)}/identity/code`),
   previewCapability: (pkg: string, params: Record<string, string>) =>
     call<EnablePreview>("POST", "/api/v1/capabilities", {
       package: pkg,

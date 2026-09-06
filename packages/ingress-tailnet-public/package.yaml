@@ -47,14 +47,14 @@ params:
   # The Cloudflare zone Routes are served under, e.g. "example.com".
   # Same meaning as in packages/ingress: the zone itself, with records
   # named relative to it.
-  - { name: public_domain, required: true }
-  - { name: node, required: true }
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
   # The node's tailnet address, e.g. `tailscale ip -4`. Every name under
   # public_domain resolves here, so it is what "reachable over the
   # tailnet and nowhere else" actually means. Required and undefaulted
   # for the reason caddy-tailnet gives (#41).
-  - { name: listen_addr, required: true }
-  - { name: listen_port, default: "443" }
+  - { name: listen_addr, required: true, description: "The address the proxy listens on. Normally this machine’s tailnet address." }
+  - { name: listen_port, default: "443", description: "The port the proxy listens on." }
 policies:
   classifications: [admin_tailscale]
 templates:
