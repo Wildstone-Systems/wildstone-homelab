@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"net/http"
 	"net/url"
 	"sort"
@@ -126,4 +127,77 @@ func looksLocal(name string, size int64) bool {
 	}
 	const smallestPlausibleWeights = 1 << 20 // 1 MiB
 	return size >= smallestPlausibleWeights
+}
+
+// getButlerConfig serves the stored choice, if any.
+//
+// Absent is a normal state, not an error: a deployment running on its
+// startup flags has never stored anything, and A9 keeps those flags as
+// the bootstrap.
+func (s *Server) getButlerConfig(_ *http.Request, _ principal.Identity) (any, int, error) {
+	c, ok, err := s.DB.GetButlerConfig()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return map[string]any{"stored": ok, "config": c}, http.StatusOK, nil
+}
+
+// setButlerConfig records a provider choice and applies it without
+// restarting Keystone (ADR-W017 A9).
+func (s *Server) setButlerConfig(r *http.Request, id principal.Identity) (any, int, error) {
+	var req struct {
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+		Endpoint string `json:"endpoint"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return nil, http.StatusBadRequest, fmt.Errorf("parsing body: %w", err)
+	}
+	if !butlerProviders[req.Provider] {
+		return nil, http.StatusBadRequest,
+			fmt.Errorf("%q is not a provider (want off, anthropic, openai or ollama)", req.Provider)
+	}
+	// An API key is never accepted here (A4, unrelaxed by A9). Refusing
+	// loudly beats ignoring quietly: an operator who tried to send one
+	// should learn it belongs in the environment, not discover later
+	// that the field they filled in did nothing.
+	if looksLikeCredential(r) {
+		return nil, http.StatusBadRequest,
+			fmt.Errorf("API keys are not accepted here and are never stored; set ANTHROPIC_API_KEY or OPENAI_API_KEY in keystone's environment (ADR-W017 A4)")
+	}
+	if s.ApplyButlerConfig == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("this control plane cannot change the Butler at runtime")
+	}
+
+	stored := runtimedb.ButlerConfig{
+		Provider: req.Provider, Model: req.Model, Endpoint: req.Endpoint, UpdatedBy: id.Name,
+	}
+	if err := s.DB.SetButlerConfig(stored); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	// Applied AFTER the write, so a control plane that restarts between
+	// the two comes back with the choice the operator made rather than
+	// the one it was running.
+	mode, detail, err := s.ApplyButlerConfig(r.Context(), stored)
+	if err != nil {
+		return nil, http.StatusBadGateway, fmt.Errorf("stored, but could not be applied: %w", err)
+	}
+	if err := s.DB.RecordButlerProbe(string(mode), detail); err != nil {
+		s.Log.Error("recording butler probe", "err", err)
+	}
+	out, _, _ := s.DB.GetButlerConfig()
+	return map[string]any{"stored": true, "config": out}, http.StatusOK, nil
+}
+
+var butlerProviders = map[string]bool{"off": true, "anthropic": true, "openai": true, "ollama": true}
+
+// looksLikeCredential reports a body carrying something that should
+// never travel to this endpoint.
+func looksLikeCredential(r *http.Request) bool {
+	for _, k := range []string{"apiKey", "api_key", "token", "secret", "password"} {
+		if r.URL.Query().Has(k) {
+			return true
+		}
+	}
+	return false
 }

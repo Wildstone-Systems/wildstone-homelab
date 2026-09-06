@@ -252,6 +252,31 @@ type butlerBackend struct {
 	Endpoint string
 }
 
+// probeButler runs the S4 tool-reliability probe and turns it into a
+// mode plus a sentence an operator can read (ADR-W017 A4/A9).
+//
+// Shared by startup and by a runtime reconfiguration, so a model
+// selected in the Console is held to exactly the check a flagged one is.
+func probeButler(ctx context.Context, p provider.Provider, log *slog.Logger) (runtimedb.ButlerSessionMode, string) {
+	probeCtx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	verdict, err := provider.Probe(probeCtx, p)
+	if err != nil || verdict != provider.Full {
+		detail := verdict.String()
+		if err != nil {
+			// The common case on a local backend is a model that has not
+			// been loaded yet, and "context deadline exceeded" is worth
+			// showing verbatim rather than flattening to "failed" — it
+			// tells the operator to try again once it is warm.
+			detail = err.Error()
+		}
+		log.Warn("butler probe did not pass; sessions run QA-only (read tools, no propose_change)",
+			"provider", p.Name(), "verdict", verdict.String(), "err", err)
+		return runtimedb.ButlerModeQAOnly, detail
+	}
+	return runtimedb.ButlerModeFull, "probe passed: full mode"
+}
+
 // newButlerProvider builds the configured Butler provider, or a nil
 // provider when the Butler is off. API keys come ONLY from the provider's
 // environment variable (ADR-W017 A4) — there is deliberately no key flag.
@@ -554,18 +579,22 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// tool-reliability probe once at startup, and wire the ask endpoint in
 	// the mode the verdict earns. Provider off leaves ButlerHost nil — the
 	// ask endpoint answers 503 with a clear reason.
+	// Stored config wins over the flags (ADR-W017 A9). The flags remain
+	// the bootstrap — a fresh install with -butler-provider still works
+	// and needs no Console — but an operator who has made a choice is
+	// not overruled at the next restart.
+	if stored, ok, serr := db.GetButlerConfig(); serr != nil {
+		log.Error("reading stored butler config; falling back to flags", "err", serr)
+	} else if ok {
+		log.Info("butler config from runtime state", "provider", stored.Provider,
+			"model", stored.Model, "endpoint", stored.Endpoint)
+		butlerCfg = butlerConfig{Provider: stored.Provider, Model: stored.Model, Endpoint: stored.Endpoint}
+	}
+
 	if bp, backend, err := newButlerProvider(butlerCfg); err != nil {
 		return err
 	} else if bp != nil {
-		mode := runtimedb.ButlerModeFull
-		probeCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		verdict, perr := provider.Probe(probeCtx, bp)
-		cancel()
-		if perr != nil || verdict != provider.Full {
-			mode = runtimedb.ButlerModeQAOnly
-			log.Warn("butler probe did not pass; sessions run QA-only (read tools, no propose_change)",
-				"provider", bp.Name(), "verdict", verdict.String(), "err", perr)
-		}
+		mode, _ := probeButler(context.Background(), bp, log)
 		bgw := butler.NewToolGateway(state, &butler.AgentReader{Gateway: gw})
 		// The diagnose tool's injected observed seam (ADR-W017 A5): the
 		// butler package reads observed health through this closure and
@@ -641,6 +670,36 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		}
 		log.Info("butler enabled", "provider", bp.Name(), "model", backend.Model,
 			"endpoint", backend.Endpoint, "mode", string(mode))
+
+		// Runtime reconfiguration (ADR-W017 A9). Rebuilds the provider
+		// for a new choice, re-runs the probe against THAT provider and
+		// model, and swaps it in — no restart, so changing a model does
+		// not drop agent sessions or propose a drift repair that reports
+		// healthy resources as absent (F75/F76).
+		//
+		// The probe verdict is earned per configuration. A9 exists partly
+		// because a startup probe that timed out against a cold model
+		// pinned the Butler to QAOnly until the next restart, while the
+		// model — once warm — called tools correctly.
+		apiSrv.ApplyButlerConfig = func(ctx context.Context, c runtimedb.ButlerConfig) (runtimedb.ButlerSessionMode, string, error) {
+			np, nbackend, err := newButlerProvider(butlerConfig{
+				Provider: c.Provider, Model: c.Model, Endpoint: c.Endpoint,
+			})
+			if err != nil {
+				return "", "", err
+			}
+			if np == nil {
+				// "off" is a choice, not a failure.
+				apiSrv.ButlerHost.Swap(nil, runtimedb.ButlerModeQAOnly, "", "")
+				log.Info("butler disabled by configuration")
+				return runtimedb.ButlerModeQAOnly, "provider set to off", nil
+			}
+			nmode, detail := probeButler(ctx, np, log)
+			apiSrv.ButlerHost.Swap(np, nmode, nbackend.Model, nbackend.Endpoint)
+			log.Info("butler reconfigured", "provider", np.Name(), "model", nbackend.Model,
+				"endpoint", nbackend.Endpoint, "mode", string(nmode))
+			return nmode, detail, nil
+		}
 
 		// Household escalation (ADR-W024 A6): the same provider, asked a
 		// much smaller question. A Phraser is given no tools at all, and

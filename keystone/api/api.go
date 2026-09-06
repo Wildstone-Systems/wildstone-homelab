@@ -79,6 +79,11 @@ type Server struct {
 	// cmd/keystone wires it from -butler-provider. nil leaves ask
 	// answering 503; session history stays readable.
 	ButlerHost *ButlerHost
+	// ApplyButlerConfig rebuilds the provider for a new choice and
+	// returns the probe's verdict for THAT provider and model (ADR-W017
+	// A9). cmd/keystone wires it; nil leaves the config endpoints
+	// answering 503 rather than storing a choice nothing will honour.
+	ApplyButlerConfig func(context.Context, runtimedb.ButlerConfig) (runtimedb.ButlerSessionMode, string, error)
 
 	// Automation is the household rule engine (ADR-W024 H3), used here
 	// only for side-effect-free replay; cmd/keystone runs its loop. New
@@ -213,6 +218,8 @@ func (s *Server) Handler() http.Handler {
 	// inside the control plane, which is not a read a viewer should be
 	// able to make.
 	mux.Handle("GET /api/v1/butler/models", s.handle(principal.VerbManage, s.listButlerModels))
+	mux.Handle("GET /api/v1/butler/config", s.handle(principal.VerbManage, s.getButlerConfig))
+	mux.Handle("PUT /api/v1/butler/config", s.handle(principal.VerbManage, s.setButlerConfig))
 	mux.Handle("POST /api/v1/butler/ask", s.handle(principal.VerbRead, s.askButler))
 	mux.Handle("GET /api/v1/butler/sessions", s.handle(principal.VerbRead, s.listButlerSessions))
 	mux.Handle("GET /api/v1/butler/sessions/{id}", s.handle(principal.VerbRead, s.getButlerSession))
