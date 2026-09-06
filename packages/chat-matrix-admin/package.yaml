@@ -29,6 +29,11 @@
 #  4. Bind your own account:
 #
 #        wild chat code -surface admin -identity <your-principal> -transport matrix
+#
+# THE IMAGE. As for the Telegram packages: build it from
+# cli/cmd/chat-adapter/Dockerfile and pass the digest. It must be
+# pullable WITHOUT credentials, because Keystone's pull carries no
+# registry auth. See docs/install.md, "Picking a registry".
 apiVersion: wildstone.dev/v1
 kind: Package
 metadata:

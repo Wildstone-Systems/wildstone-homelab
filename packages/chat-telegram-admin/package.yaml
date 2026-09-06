@@ -42,8 +42,11 @@
 #        wild chat code -surface admin -identity <your-principal> -transport telegram
 #
 # THE IMAGE. As for the family package: this repository ships the source,
-# the Dockerfile and the released binary, and publishes no image —
-# `adapter_image` is a required, digest-pinned param.
+# the Dockerfile and the released binary and publishes no container
+# image, so `adapter_image` is a required, digest-pinned param. It must
+# be pullable WITHOUT credentials — Keystone's pull carries no registry
+# auth — so a private registry will not work. See docs/install.md,
+# "Picking a registry".
 apiVersion: wildstone.dev/v1
 kind: Package
 metadata:

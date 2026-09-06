@@ -42,13 +42,22 @@
 #
 #     Read the code to them; they send it to the bot on its own, once.
 #
-# THE IMAGE. This repository ships the adapter's source and Dockerfile
+# THE IMAGE. This repository ships the adapter's source, its Dockerfile
 # (cli/cmd/chat-adapter/Dockerfile) and its binary in each release, but
-# publishes no container image: which registry a household trusts is its
-# own decision (ADR-W010's closed-registry posture). So `adapter_image`
-# is a required param — build the image, push it where your nodes can
-# reach it, and pass the digest-pinned reference. Wildstone refuses tags
-# here as it does everywhere (ADR-W003 A4.2).
+# publishes no container image — the release pipeline builds binaries,
+# not images, and adding a published image is a distribution decision
+# nobody has made. So `adapter_image` is a required param: build it, push
+# it where your nodes can reach it, and pass the digest-pinned reference.
+# Wildstone refuses tags here as it does everywhere (ADR-W003 A4.2).
+#
+# IT MUST BE PULLABLE WITHOUT CREDENTIALS. Keystone pulls the image
+# before every container start and a failed pull stops the step, and the
+# pull carries no registry auth — so a private registry does not work,
+# and neither does loading the image onto the node by hand. A public
+# repository is the straightforward answer, and costs nothing here: this
+# image is one static binary built from open source, with every
+# credential arriving as an environment variable at runtime. See
+# docs/install.md, "Picking a registry".
 apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
