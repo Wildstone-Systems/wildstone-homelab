@@ -15,12 +15,37 @@ import (
 // there produces a login loop — and nothing in the failure names the
 // disagreement.
 
+// identityProvider is the shipped identity package reduced to the part
+// these tests are about: the exports it hands its consumers.
+//
+// The three expressions are the ones packages/identity/package.yaml
+// actually ships, and TestShippedIdentityPackageStillExportsThePortal
+// (exports_test.go) loads the real file and asserts it resolves to the
+// same values — so this fixture cannot quietly drift into testing a
+// mechanism the catalog no longer uses.
 func identityProvider() *pkgspec.Package {
 	return &pkgspec.Package{
 		Metadata: pkgspec.Metadata{Name: "identity", Capability: "identity"},
-		Provides: []pkgspec.Provide{{Trait: "identity", Mode: "oidc"}},
-		Params:   []pkgspec.ParamDecl{{Name: "public_domain", Default: "example.com"}},
+		Provides: []pkgspec.Provide{{Trait: "identity", Mode: "oidc", Exports: map[string]string{
+			"IssuerURL":     `{{ with .Params.public_domain }}{{ origin (printf "auth.%s" .) }}{{ end }}`,
+			"SessionDomain": `{{ with .Params.public_domain }}{{ sessionDomain . }}{{ end }}`,
+			"DashboardURL":  `{{ with .Params.public_domain }}{{ origin (printf "home.%s" .) }}{{ end }}`,
+		}}},
+		Params: []pkgspec.ParamDecl{{Name: "public_domain", Default: "example.com"}},
 	}
+}
+
+// resolve is buildResolved with its error asserted away. An export that
+// fails to render is a package bug, not an expected outcome, so every
+// test here wants it to stop the run rather than to silently yield a map
+// with a key missing.
+func resolve(t *testing.T, pkg *pkgspec.Package, params map[string]string, cat *Catalog) map[string]string {
+	t.Helper()
+	got, err := buildResolved(pkg, params, cat)
+	if err != nil {
+		t.Fatalf("buildResolved: %v", err)
+	}
+	return got
 }
 
 func consumer() *pkgspec.Package {
@@ -40,7 +65,7 @@ func tailnetState() []resource.Resource {
 
 func TestIssuerFollowsTheTailnetPosture(t *testing.T) {
 	cat := NewCatalog(identityProvider()).WithCurrent(tailnetState())
-	got := buildResolved(consumer(), map[string]string{}, cat)["IssuerURL"]
+	got := resolve(t, consumer(), map[string]string{}, cat)["IssuerURL"]
 	want := "https://wildstone.tailnet.ts.net:7443"
 	if got != want {
 		t.Errorf("issuer must be where Authelia is actually served\n got %q\nwant %q", got, want)
@@ -59,7 +84,7 @@ func TestIssuerUnchangedWithoutTheTailnetPosture(t *testing.T) {
 			Ingress: &resource.IngressSpec{TLS: "off"}}},
 	} {
 		cat := NewCatalog(identityProvider()).WithCurrent(current)
-		if got := buildResolved(consumer(), map[string]string{}, cat)["IssuerURL"]; got != "https://auth.example.com" {
+		if got := resolve(t, consumer(), map[string]string{}, cat)["IssuerURL"]; got != "https://auth.example.com" {
 			t.Errorf("%s: issuer changed to %q", name, got)
 		}
 	}
@@ -69,7 +94,7 @@ func TestIssuerUnchangedWithoutTheTailnetPosture(t *testing.T) {
 // and every caller that does not know about addressing keeps behaving
 // exactly as it did.
 func TestCatalogWithoutCurrentStateStillResolves(t *testing.T) {
-	if got := buildResolved(consumer(), map[string]string{}, NewCatalog(identityProvider()))["IssuerURL"]; got != "https://auth.example.com" {
+	if got := resolve(t, consumer(), map[string]string{}, NewCatalog(identityProvider()))["IssuerURL"]; got != "https://auth.example.com" {
 		t.Errorf("plain catalog regressed: %q", got)
 	}
 }
@@ -77,14 +102,14 @@ func TestCatalogWithoutCurrentStateStillResolves(t *testing.T) {
 // TailnetHost is always present so a template may test it without
 // tripping missingkey=error, and empty when there is no tailnet.
 func TestTailnetHostIsAlwaysDefined(t *testing.T) {
-	got, ok := buildResolved(consumer(), map[string]string{}, NewCatalog(identityProvider()))["TailnetHost"]
+	got, ok := resolve(t, consumer(), map[string]string{}, NewCatalog(identityProvider()))["TailnetHost"]
 	if !ok {
 		t.Fatal("TailnetHost must exist even with no tailnet, or templates referencing it fail to render")
 	}
 	if got != "" {
 		t.Errorf("want empty without a tailnet, got %q", got)
 	}
-	if got := buildResolved(consumer(), map[string]string{}, NewCatalog(identityProvider()).WithCurrent(tailnetState()))["TailnetHost"]; got != "wildstone.tailnet.ts.net" {
+	if got := resolve(t, consumer(), map[string]string{}, NewCatalog(identityProvider()).WithCurrent(tailnetState()))["TailnetHost"]; got != "wildstone.tailnet.ts.net" {
 		t.Errorf("TailnetHost = %q", got)
 	}
 }
@@ -96,7 +121,7 @@ func TestTailnetHostIsAlwaysDefined(t *testing.T) {
 
 func TestPortalConfigFollowsTheTailnetPosture(t *testing.T) {
 	cat := NewCatalog(identityProvider()).WithCurrent(tailnetState())
-	got := buildResolved(consumer(), map[string]string{}, cat)
+	got := resolve(t, consumer(), map[string]string{}, cat)
 	for key, want := range map[string]string{
 		// Cookies ignore ports, so the bare host covers every service.
 		"SessionDomain": "wildstone.tailnet.ts.net",
@@ -115,7 +140,7 @@ func TestPortalConfigUnchangedUnderHostnamePostures(t *testing.T) {
 			{Kind: resource.KindIngress, Metadata: resource.Metadata{Name: "ingress", Node: "n1"},
 				Ingress: &resource.IngressSpec{TLS: tls}},
 		})
-		got := buildResolved(consumer(), map[string]string{}, cat)
+		got := resolve(t, consumer(), map[string]string{}, cat)
 		for key, want := range map[string]string{
 			"SessionDomain": "example.com",
 			"IssuerURL":     "https://auth.example.com",
@@ -132,7 +157,7 @@ func TestPortalConfigUnchangedUnderHostnamePostures(t *testing.T) {
 // SessionDomain ever returned a parent of the tailnet name, every login
 // would silently fail to set a session.
 func TestSessionDomainIsNeverAParentOfATsNetName(t *testing.T) {
-	got := buildResolved(consumer(), map[string]string{}, NewCatalog(identityProvider()).WithCurrent(tailnetState()))["SessionDomain"]
+	got := resolve(t, consumer(), map[string]string{}, NewCatalog(identityProvider()).WithCurrent(tailnetState()))["SessionDomain"]
 	if got == "tailnet.ts.net" || got == "ts.net" {
 		t.Fatalf("SessionDomain %q is a public suffix or its parent; browsers refuse such a cookie", got)
 	}
@@ -159,7 +184,7 @@ func TestOriginsResolveBeforeTheirRoutesExist(t *testing.T) {
 		{Kind: resource.KindIngress, Metadata: resource.Metadata{Name: "ingress", Node: "n1"},
 			Ingress: &resource.IngressSpec{TLS: "tailscale", TailnetName: "wildstone.tailnet.ts.net"}},
 	}
-	got := buildResolved(consumer(), map[string]string{}, NewCatalog(identityProvider()).WithCurrent(current))
+	got := resolve(t, consumer(), map[string]string{}, NewCatalog(identityProvider()).WithCurrent(current))
 	for key, want := range map[string]string{
 		"IssuerURL":     "https://wildstone.tailnet.ts.net:7443",
 		"DashboardURL":  "https://wildstone.tailnet.ts.net:443",
@@ -176,7 +201,7 @@ func TestOriginsResolveBeforeTheirRoutesExist(t *testing.T) {
 // same host, which is what makes ports work at all — cookies ignore
 // ports.
 func TestPortalURLSharesTheSessionCookieScope(t *testing.T) {
-	got := buildResolved(consumer(), map[string]string{}, NewCatalog(identityProvider()).WithCurrent(tailnetState()))
+	got := resolve(t, consumer(), map[string]string{}, NewCatalog(identityProvider()).WithCurrent(tailnetState()))
 	domain, issuer := got["SessionDomain"], got["IssuerURL"]
 	if !strings.Contains(issuer, "://"+domain) {
 		t.Errorf("Authelia refuses to start unless authelia_url is within the session domain\n  domain=%q\n  issuer=%q", domain, issuer)
@@ -204,7 +229,7 @@ func TestAbsentRouteHonoursOccupiedPorts(t *testing.T) {
 				Ports: []string{"0.0.0.0:7443:7443"},
 			}},
 	}
-	issuer := buildResolved(consumer(), map[string]string{}, NewCatalog(identityProvider()).WithCurrent(current))["IssuerURL"]
+	issuer := resolve(t, consumer(), map[string]string{}, NewCatalog(identityProvider()).WithCurrent(current))["IssuerURL"]
 	if strings.HasSuffix(issuer, ":7443") {
 		t.Errorf("issuer took a port another container publishes: %s", issuer)
 	}

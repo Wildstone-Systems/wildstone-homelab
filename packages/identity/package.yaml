@@ -23,10 +23,40 @@ metadata:
   capability: identity
   profile: authelia-lldap
 provides:
-  - { trait: identity, mode: oidc }
+  # WHAT THIS PACKAGE HANDS TO ITS CONSUMERS (ADR-W025 A2). These three
+  # values were computed inside the Capability Engine, from a hardcoded
+  # lookup of "identity"/"oidc" — which made every new integration a
+  # patch to Go rather than a package someone wrote. They live here now,
+  # and the engine no longer knows what identity is.
+  #
+  # `origin` and `sessionDomain` answer where a host is actually SERVED
+  # under this deployment's ingress posture, which is a different
+  # question from where its Route was declared (ADR-W019 A10). Do not
+  # rebuild these by concatenating strings: an OIDC issuer is compared
+  # byte for byte against what the browser saw, and under the tailnet
+  # posture that is the node's one certified name plus a port — not the
+  # host below.
+  #
+  # `with` rather than a bare expression on purpose. Before anyone has
+  # supplied public_domain the export renders empty and is therefore NOT
+  # published, so a consumer fails on a missing .Resolved key — which
+  # names the problem — instead of receiving "https://auth." and looping
+  # forever at a login screen, which names nothing.
+  - trait: identity
+    mode: oidc
+    exports:
+      IssuerURL: '{{ with .Params.public_domain }}{{ origin (printf "auth.%s" .) }}{{ end }}'
+      SessionDomain: '{{ with .Params.public_domain }}{{ sessionDomain . }}{{ end }}'
+      # Where a sign-in with nowhere particular to return to should land.
+      # The dashboard, because it is the page the household thinks of as
+      # home — and under the tailnet posture it is the one address with
+      # no port in it.
+      DashboardURL: '{{ with .Params.public_domain }}{{ origin (printf "home.%s" .) }}{{ end }}'
   # The package deploys LLDAP itself, so the directory is equally its
   # provision — media-jellyfin's LDAP-Auth posture requires it
-  # (ADR-W013 A2).
+  # (ADR-W013 A2). No exports: a consumer names the directory container
+  # and its base DN through its own params, because those are deployment
+  # facts rather than provider-derived ones.
   - { trait: identity, mode: ldap }
 params:
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }

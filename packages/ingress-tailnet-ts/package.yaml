@@ -45,7 +45,7 @@ params:
   # The node's tailnet address. Required and undefaulted for the reason
   # caddy-tailnet gives (#41): a profile whose whole claim is that it is
   # private must not be private only by accident.
-  - { name: listen_addr, required: true, description: "The address the proxy listens on. Normally this machine’s tailnet address." }
+  - { name: listen_addr, required: true, example: "100.64.0.1", description: "The address the proxy listens on. Normally this machine’s tailnet address." }
 policies:
   classifications: [admin_tailscale]
 templates:

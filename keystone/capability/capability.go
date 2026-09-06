@@ -8,12 +8,14 @@ package capability
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"strings"
 	"text/template"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/chickenrat17/wildstone-homelab/keystone/trait"
 )
 
 // MissingParamError reports a required ParamDecl with no value supplied, or
@@ -99,53 +101,18 @@ func NewCatalog(pkgs ...*pkgspec.Package) *Catalog {
 
 // Provides reports whether some package in the catalog advertises the given
 // (trait, mode) pair via its `provides` list.
-func (c *Catalog) Provides(trait, mode string) bool {
+func (c *Catalog) Provides(traitName, mode string) bool {
 	if c == nil {
 		return false
 	}
 	for _, pkg := range c.pkgs {
 		for _, p := range pkg.Provides {
-			if p.Trait == trait && p.Mode == mode {
+			if p.Trait == traitName && p.Mode == mode {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-// providerParams returns the merged params of the first catalog package
-// that provides (trait, mode), or nil if none does. Used to derive
-// .Resolved values (e.g. IssuerURL) from the providing package's own
-// declared param defaults — a small, explicit, spike-scoped mechanism
-// (ADR-W005 A2: "keep .Resolved a documented, small, explicit map — don't
-// over-engineer").
-func (c *Catalog) providerParams(trait, mode string) map[string]string {
-	if c == nil {
-		return nil
-	}
-	for _, pkg := range c.pkgs {
-		for _, p := range pkg.Provides {
-			if p.Trait == trait && p.Mode == mode {
-				merged := map[string]string{}
-				for _, decl := range pkg.Params {
-					if decl.Default != "" {
-						merged[decl.Name] = decl.Default
-					}
-				}
-				return merged
-			}
-		}
-	}
-	return nil
-}
-
-// structuralTraits are requirements the engine satisfies itself rather
-// than through the catalog (ADR-W010 A1): a CLOSED list, mirroring the
-// closed-registry philosophy — adding one is a reviewed code change, and
-// each entry must name the system mechanism that satisfies it.
-var structuralTraits = map[string]bool{
-	"ingress": true, // reverse-proxy/Route machinery (ADR-W004 A1)
-	"storage": true, // declared Volumes (ADR-W004 A1)
 }
 
 // Engine expands packages into resources.
@@ -166,11 +133,13 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 	}
 
 	for _, req := range pkg.Requires {
-		if structuralTraits[req.Trait] {
+		if trait.IsStructural(req.Trait) {
 			// ingress/storage are system mechanisms, always satisfiable
 			// (ADR-W010 A1 making ADR-W005 A2's prose real): ingress by the
 			// reverse-proxy/Route machinery, storage by declared Volumes.
-			// They contribute nothing to .Resolved.
+			// They contribute nothing to .Resolved. Which traits are
+			// structural is keystone/trait's to say, so the engine and the
+			// vocabulary lint reads cannot disagree about it.
 			continue
 		}
 		if !catalog.Provides(req.Trait, req.Mode) {
@@ -178,7 +147,10 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 		}
 	}
 
-	resolved := buildResolved(pkg, merged, catalog)
+	resolved, err := buildResolved(pkg, merged, catalog)
+	if err != nil {
+		return nil, err
+	}
 	wantOwner := "capability/" + pkg.Metadata.Capability
 
 	ctx := templateContext{Params: merged, Resolved: resolved}
@@ -356,41 +328,63 @@ func isYAMLHostileRune(r rune) bool {
 	return r == '\n' || r == '\r' || r == '\t' || r < 0x20 || r == 0x7f
 }
 
-// buildResolved constructs the .Resolved map exposed to templates. This is
-// deliberately small and explicit (ADR-W005 A2 spike scope), documented
-// keys only:
+// buildResolved constructs the .Resolved map exposed to templates. It has
+// two halves, and keystone/trait is the written form of both.
 //
-//   - IssuerURL: the browser-facing origin of the identity provider's
-//     portal. Historically "https://auth.{public_domain}", which assumed
-//     a Route is served at the host it declares. Under the tailnet
-//     posture it is not — every Route shares the node's one certified
-//     name and is told apart by port (ADR-W019 A10) — so this is now
-//     built by ingressorigin, the same code that renders the Caddy site
-//     address. An OIDC issuer is a string that must match what the
-//     browser saw byte for byte; deriving it separately from what is
-//     actually served is how you get a login loop that names nothing.
-//   - SessionDomain: the cookie domain single sign-on must be scoped to.
-//     Was the public domain, which assumed services are siblings under a
-//     shared parent. Under the tailnet posture they are one host on
-//     different ports, and a cookie scoped to a parent of a ts.net name
-//     is refused outright, ts.net being a public suffix.
-//   - DashboardURL: where a login with no particular destination lands.
-//   - TailnetHost: the node's MagicDNS name under the tailnet posture,
-//     empty otherwise. Always present, so a template may test it without
-//     tripping missingkey=error. It exists for the packages that must
-//     name the host they will be REACHED at rather than the one they
-//     declare — Homepage refuses a request whose Host it was not told
-//     about, and under this posture that Host is the tailnet name.
+// INTRINSIC keys (trait.Intrinsic) come from the package itself or from
+// the node's own state, so every package gets them whatever it requires:
+//
 //   - OidcSecretRef: "secret/<capability>-oidc" for this package's own
 //     capability, the conventional secret reference a package's OidcClient
 //     template should use for SecretRef.
 //   - PublisherSecretRef: "secret/<capability>-publisher", the token a
 //     package that publishes household events presents to the intake
 //     (ADR-W024 A10); put it in the shim's env.
-func buildResolved(pkg *pkgspec.Package, params map[string]string, catalog *Catalog) map[string]string {
+//   - TailnetHost: the node's MagicDNS name under the tailnet posture,
+//     empty otherwise. Always present, so a template may test it without
+//     tripping missingkey=error. It exists for the packages that must
+//     name the host they will be REACHED at rather than the one they
+//     declare — Homepage refuses a request whose Host it was not told
+//     about, and under this posture that Host is the tailnet name.
+//
+// TRAIT-CARRIED keys come from the `exports` of packages in the catalog.
+// IssuerURL, SessionDomain and DashboardURL used to be computed right
+// here, from a hardcoded lookup of "identity"/"oidc" — which meant a
+// second trait wanting to hand a consumer anything was a patch to this
+// function rather than a package someone wrote. They now live in
+// packages/identity's own `provides` block, and this function no longer
+// knows what identity is.
+//
+// The values are unchanged, including the two subtleties that are now the
+// identity package's to state:
+//
+//   - an origin is where a Route is SERVED, not where it was declared.
+//     Under the tailnet posture every Route shares the node's one
+//     certified name and is told apart by port (ADR-W019 A10); an OIDC
+//     issuer must match what the browser saw byte for byte, and deriving
+//     it separately from what is actually served is how you get a login
+//     loop that names nothing.
+//   - a session domain cannot be a public suffix or a parent of one.
+//     ts.net is one, so the tailnet posture scopes the cookie to the full
+//     node name rather than to any parent of it.
+//
+// RESOLUTION ORDER, stated because a package author will eventually meet
+// it: intrinsic keys are written first and cannot be overridden, and among
+// providers the first in catalog order to export a key keeps it. Catalog
+// order is the caller's — keystone/api builds it from what the deployment
+// has enabled — so this is the same "first provider wins" rule the old
+// hardcoded lookup had.
+//
+// An export that renders EMPTY is not published, so a consumer referencing
+// it fails loudly at its own template rather than receiving a half-built
+// URL. A portal origin derived from a domain nobody has supplied yet is
+// not a better answer than no answer.
+func buildResolved(pkg *pkgspec.Package, params map[string]string, catalog *Catalog) (map[string]string, error) {
 	var current []resource.Resource
+	var pkgs []*pkgspec.Package
 	if catalog != nil {
 		current = catalog.current
+		pkgs = catalog.pkgs
 	}
 	posture := ingressorigin.Of(current)
 
@@ -400,26 +394,113 @@ func buildResolved(pkg *pkgspec.Package, params map[string]string, catalog *Cata
 		"TailnetHost":        posture.TailnetName,
 	}
 
-	if providerParams := catalog.providerParams("identity", "oidc"); providerParams != nil {
-		domain := providerParams["public_domain"]
-		if domain == "" {
-			domain = params["public_domain"]
-		}
-		if domain != "" {
-			// Under every posture but "tailscale" these are unchanged:
-			// OriginFor returns the declared host untouched, so the values
-			// are the "https://auth.<domain>" they always were.
-			resolved["IssuerURL"] = posture.OriginFor("auth." + domain)
-			resolved["SessionDomain"] = posture.SessionDomain(domain)
-			// Where a login with nowhere particular to return to should
-			// land. The dashboard, because it is the page the household
-			// thinks of as "home" — and under the tailnet posture it is
-			// the one address with no port in it.
-			resolved["DashboardURL"] = posture.OriginFor("home." + domain)
+	funcs := exportFuncs(posture)
+	for _, provider := range pkgs {
+		var ctx *exportContext // built lazily: most packages export nothing
+		for _, prov := range provider.Provides {
+			for _, key := range sortedKeys(prov.Exports) {
+				if _, taken := resolved[key]; taken {
+					continue
+				}
+				if ctx == nil {
+					ctx = &exportContext{Params: exportParams(provider, params)}
+				}
+				value, err := renderExport(provider.Metadata.Name, key, prov.Exports[key], *ctx, funcs)
+				if err != nil {
+					return nil, err
+				}
+				if value == "" {
+					continue
+				}
+				resolved[key] = value
+			}
 		}
 	}
 
-	return resolved
+	return resolved, nil
+}
+
+// exportContext is what an export template renders over. Deliberately
+// only .Params: an export answers "what do I hand my consumers", and the
+// only inputs to that are what the provider was configured with and where
+// this deployment serves things — the latter arriving as functions rather
+// than as data, because it is computed rather than declared.
+type exportContext struct {
+	Params map[string]string
+}
+
+// exportFuncs binds trait.ExportFuncs to a posture.
+//
+// Every function is total — it takes `any`, stringifies, and cannot fail
+// — so a rendered export cannot error on a type. That matters because the
+// alternative is an install that fails after approval, while a plan is
+// being expanded, with a message about a template rather than about the
+// package that shipped it.
+//
+// TestExportFuncsMatchTheVocabulary pins this map equal to
+// trait.ExportFuncs. A name declared there and not bound here would parse
+// at lint and fail at expansion, which is exactly the split between "the
+// vocabulary" and "the engine" that this design exists to prevent.
+func exportFuncs(p ingressorigin.Posture) template.FuncMap {
+	return template.FuncMap{
+		"origin":        func(host any) string { return p.OriginFor(fmt.Sprint(host)) },
+		"sessionDomain": func(domain any) string { return p.SessionDomain(fmt.Sprint(domain)) },
+	}
+}
+
+// exportParams are the params an export renders over: the requesting
+// package's params, overlaid by the PROVIDER's declared defaults.
+//
+// The overlay direction preserves what the hardcoded lookup did (provider
+// default first, requesting package's param as the fallback) and is worth
+// naming as the spike-scoped compromise it is: a Catalog holds packages as
+// DECLARED, not the params a deployment actually enabled them with, so a
+// provider's default is the only provider-side value available here. For
+// the one value this has ever carried it makes no practical difference —
+// public_domain is required and undefaulted, so the requesting package's
+// own value is what lands — but a provider that adds a defaulted param
+// will see that default win, and should expect to.
+func exportParams(provider *pkgspec.Package, requesting map[string]string) map[string]string {
+	merged := make(map[string]string, len(requesting)+len(provider.Params))
+	for k, v := range requesting {
+		merged[k] = v
+	}
+	for _, decl := range provider.Params {
+		if decl.Default != "" {
+			merged[decl.Name] = decl.Default
+		}
+	}
+	return merged
+}
+
+// renderExport renders one export value. missingkey=zero rather than
+// error: pkgspec already refuses an export naming a param its own package
+// does not declare, so a key absent here means an optional param with no
+// default, and the empty string is the honest answer — one an export
+// written with `with` handles by publishing nothing.
+func renderExport(pkgName, key, expr string, ctx exportContext, funcs template.FuncMap) (string, error) {
+	t, err := template.New(pkgName + ".exports." + key).Funcs(funcs).Option("missingkey=zero").Parse(expr)
+	if err != nil {
+		return "", &TemplateError{Package: pkgName, Err: fmt.Errorf("exports.%s: parsing: %w", key, err)}
+	}
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, ctx); err != nil {
+		return "", &TemplateError{Package: pkgName, Err: fmt.Errorf("exports.%s: executing: %w", key, err)}
+	}
+	return strings.TrimSpace(buf.String()), nil
+}
+
+// sortedKeys makes export evaluation order deterministic. Map order would
+// otherwise decide which of two providers of a key wins on any given run,
+// and a .Resolved that varies between two renders of identical inputs is a
+// reconciler that sees a change where none happened.
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func renderTemplate(pkgName string, index int, tmplStr string, ctx templateContext) ([]byte, error) {

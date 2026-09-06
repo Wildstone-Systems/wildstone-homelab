@@ -16,12 +16,13 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/chickenrat17/wildstone-homelab/keystone/trait"
 )
 
 // Issue is one lint finding. Lint returns findings rather than stopping
 // at the first failure — a package author fixes a batch at a time.
 type Issue struct {
-	Rule string // "spec", "expand", "policy"
+	Rule string // "spec", "expand", "trait", "params", "classification", "container-env-ref", "policy"
 	Msg  string
 }
 
@@ -30,10 +31,14 @@ func (i Issue) String() string { return i.Rule + ": " + i.Msg }
 // LintOptions configures a lint run.
 type LintOptions struct {
 	// Fillers supply values for required params during the dry-run
-	// Expand. Any required param not covered is auto-filled with
+	// Expand, and win over everything else. A required param not covered
+	// falls back to the param's declared `example`, and failing that to
 	// "lint-<name>" (name-regexp-safe), so a package lints without the
-	// author inventing throwaway values; pass real-shaped fillers when a
-	// template is sensitive to the value's shape.
+	// author inventing throwaway values.
+	//
+	// Prefer declaring `example` in the package over passing a filler
+	// here: a filler is known to whoever typed this command, and an
+	// example is known to everyone who ever lints the package.
 	Fillers map[string]string
 	// CatalogDirs name package directories whose Provides satisfy this
 	// package's requires (e.g. lint photos-immich with the identity
@@ -73,19 +78,32 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 		if !decl.Required {
 			continue
 		}
+		// Fillers first (the caller knows this run), then the package's own
+		// declared example (the author knows the shape), then the
+		// name-derived stand-in — which is adequate for a domain or an id
+		// and nonsense for anything with a shape, which is exactly why
+		// ParamDecl.Example exists.
 		if v, ok := opts.Fillers[decl.Name]; ok {
 			params[decl.Name] = v
+		} else if decl.Example != "" {
+			params[decl.Name] = decl.Example
 		} else {
 			params[decl.Name] = "lint-" + sanitizeParam(decl.Name)
 		}
 	}
 
+	// The trait vocabulary is checked BEFORE expansion, and reported
+	// alongside an expansion failure rather than instead of it. An
+	// unknown trait in `requires` makes Expand fail with "unsatisfied
+	// requirement identiy:oidc" — true, vaguer, and the only thing the
+	// author would otherwise see, which is how the typo stays a typo.
+	issues := traitIssues(pkg)
+
 	rendered, err := capability.NewEngine().Expand(pkg, params, catalog)
 	if err != nil {
-		return []Issue{{Rule: "expand", Msg: err.Error()}}, nil
+		return append(issues, Issue{Rule: "expand", Msg: err.Error()}), nil
 	}
 
-	var issues []Issue
 	// Params must not carry secret material (ADR-W021 A2). A param's
 	// value is recorded in the plan's Origin, which reaches the runtime
 	// DB and the audit trail — so a package that asks for a password
@@ -120,6 +138,7 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 			})
 		}
 	}
+
 	for _, r := range rendered {
 		issues = append(issues, containerEnvIssues(r)...)
 	}
@@ -132,6 +151,111 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 		issues = append(issues, Issue{Rule: "policy", Msg: v.String()})
 	}
 	return issues, nil
+}
+
+// traitIssues checks a package's `provides` and `requires` against the
+// closed vocabulary in keystone/trait (ADR-W025 A1).
+//
+// It lives in lint rather than in pkgspec.Validate for the same reason
+// the classification check does: pkgspec must stay able to LOAD a package
+// written against a vocabulary this binary does not have, so that the
+// diagnostic comes from the tool built to explain it — with the list of
+// what does exist — rather than from a parser refusing to start.
+//
+// The failure this replaces is the quiet one. `requires: {trait: identiy}`
+// was not a malformed package, merely one nothing satisfied, and it
+// surfaced at INSTALL time as "unsatisfied requirement identiy:oidc":
+// a message that names the typo without saying it is one, to an operator
+// who did not write the package. On the `provides` side there was no
+// failure at all — a package advertising a name nobody spells the same
+// way is silently useful to nobody.
+func traitIssues(pkg *pkgspec.Package) []Issue {
+	var issues []Issue
+
+	check := func(field, traitName, mode, class string) trait.Trait {
+		t, ok := trait.Lookup(traitName)
+		if !ok {
+			issues = append(issues, Issue{Rule: "trait", Msg: fmt.Sprintf(
+				"%s: trait %q is not in the vocabulary (%s). Adding one is a reviewed change to keystone/trait",
+				field, traitName, strings.Join(trait.Names(), ", "))})
+			return trait.Trait{}
+		}
+		if mode != "" {
+			if _, ok := t.LookupMode(mode); !ok {
+				issues = append(issues, Issue{Rule: "trait", Msg: fmt.Sprintf(
+					"%s: trait %q has no mode %q (%s)",
+					field, traitName, mode, modeList(t))})
+			}
+		}
+		if class != "" && !t.HasClass(class) {
+			issues = append(issues, Issue{Rule: "trait", Msg: fmt.Sprintf(
+				"%s: trait %q has no class %q (%s)",
+				field, traitName, class, classList(t))})
+		}
+		return t
+	}
+
+	for i, req := range pkg.Requires {
+		check(fmt.Sprintf("requires[%d]", i), req.Trait, req.Mode, req.Class)
+	}
+	for i, prov := range pkg.Provides {
+		field := fmt.Sprintf("provides[%d]", i)
+		t := check(field, prov.Trait, prov.Mode, prov.Class)
+		if len(prov.Exports) == 0 {
+			continue
+		}
+		mode, ok := t.LookupMode(prov.Mode)
+		if !ok {
+			continue // already reported as an unknown trait or mode
+		}
+		// An export key nothing consumes is not a harmless extra: the
+		// author believes they published a value, every consumer's
+		// template fails on a missing key, and nothing connects the two.
+		for _, key := range sortedExportKeys(prov.Exports) {
+			if mode.HasExport(key) {
+				continue
+			}
+			msg := fmt.Sprintf("%s.exports: trait %s:%s carries no key %q (%s)",
+				field, prov.Trait, prov.Mode, key, exportList(mode))
+			if owner, ownerMode, found := trait.ExportKeyOwner(key); found {
+				msg += fmt.Sprintf("; %q is carried by %s:%s", key, owner, ownerMode)
+			} else if trait.IsIntrinsic(key) {
+				msg += fmt.Sprintf("; %q is intrinsic — every package already has it, and an export cannot override one", key)
+			}
+			issues = append(issues, Issue{Rule: "trait", Msg: msg})
+		}
+	}
+	return issues
+}
+
+func modeList(t trait.Trait) string {
+	if len(t.Modes) == 0 {
+		return "it has no modes; omit the field"
+	}
+	return "its modes are " + strings.Join(t.ModeNames(), ", ")
+}
+
+func classList(t trait.Trait) string {
+	if len(t.Classes) == 0 {
+		return "it has no classes; omit the field"
+	}
+	return "its classes are " + strings.Join(t.ClassNames(), ", ")
+}
+
+func exportList(m trait.Mode) string {
+	if len(m.Exports) == 0 {
+		return "it carries none"
+	}
+	return "it carries " + strings.Join(m.ExportKeys(), ", ")
+}
+
+func sortedExportKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out) // map order must not make lint output nondeterministic
+	return out
 }
 
 // containerEnvIssues rejects a "container/<name>" reference in a
