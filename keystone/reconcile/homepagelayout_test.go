@@ -50,14 +50,20 @@ func TestHomepageLayoutNamesOnlyGroupsThatExist(t *testing.T) {
 	}
 }
 
-// TestHomepageSettingsWithNoServicesOmitsTheLayout: an empty `layout:`
-// key is not the same as an absent one.
-func TestHomepageSettingsWithNoServicesOmitsTheLayout(t *testing.T) {
+// TestHomepageLayoutCoversTheEmptyState. A household with no services
+// still renders one guidance card, and it is in a group — so the layout
+// must name that group too. If the two files disagree, the card falls
+// back to Homepage's default list style, which is the whole failure mode
+// the shared homepageEntries exists to rule out.
+func TestHomepageLayoutCoversTheEmptyState(t *testing.T) {
 	got := string(renderHomepageSettings(nil))
-	if strings.Contains(got, "layout:") {
-		t.Errorf("emitted an empty layout block:\n%s", got)
+	if !strings.Contains(got, "  "+homepageGroups[0]+":\n    style: row\n") {
+		t.Errorf("the empty state's group is not laid out:\n%s", got)
 	}
-	if !strings.Contains(got, "title: Household") {
+	if strings.Contains(got, "  Admin:") {
+		t.Errorf("laid out a group the empty state does not use:\n%s", got)
+	}
+	if !strings.Contains(got, `title: "Household"`) {
 		t.Errorf("the rest of the settings must still render:\n%s", got)
 	}
 }

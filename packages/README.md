@@ -206,8 +206,9 @@ anyway to be reachable), then add **one row** to `homepageApps`:
 
 An app with no row still renders — a titled name from the Route, a
 generic icon, and the capability as its description. Nothing breaks; it
-just looks unbranded, which is the honest signal that nobody has
-described it yet.
+just looks unbranded. But `TestEveryShippedRouteHasAPresentationRow`
+walks `packages/` and fails if a **shipped** package's Route has no row,
+so an unbranded card can only ever be a third party's, never ours.
 
 Two things deliberately **not** package fields:
 

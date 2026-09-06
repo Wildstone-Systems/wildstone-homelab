@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
@@ -70,15 +72,30 @@ func TestHomepageSkipsThePortalAndItself(t *testing.T) {
 	}
 }
 
-// TestHomepageEmptyIsAValidList, not an absent file: Homepage seeds its
-// sample config into any file it does not find, which is the whole bug.
-func TestHomepageEmptyIsAValidList(t *testing.T) {
+// TestHomepageEmptyRendersGuidanceNotABlankPage.
+//
+// The file must never be absent — Homepage seeds its sample config into
+// any file it does not find, which is the whole of F55. It must also not
+// be blank, which is the F87 half: zero services is the NORMAL state of
+// a correct fresh install (ingress, identity and the dashboard are all
+// excluded from this list by design), so the operator's reward for a
+// clean install was a page with nothing on it and no way to tell working
+// from broken.
+func TestHomepageEmptyRendersGuidanceNotABlankPage(t *testing.T) {
 	got := string(renderHomepageServices(nil))
-	if !strings.Contains(got, "[]") {
-		t.Errorf("want an empty YAML list, got:\n%s", got)
+	if !strings.Contains(got, "- Household:") {
+		t.Errorf("want a real group so the page is not blank:\n%s", got)
 	}
-	if strings.Contains(got, "Household") {
-		t.Errorf("empty render should not open a group:\n%s", got)
+	if !strings.Contains(got, "Nothing installed yet") {
+		t.Errorf("want a card saying so:\n%s", got)
+	}
+	if !strings.Contains(got, "wild capability enable") {
+		t.Errorf("want the command that fixes it:\n%s", got)
+	}
+	// Still a list Homepage will parse, so it never falls back to its own
+	// sample services.
+	if strings.Contains(got, "My First Service") {
+		t.Errorf("rendered Homepage's sample content:\n%s", got)
 	}
 }
 
@@ -243,5 +260,75 @@ func TestHomepageDisambiguatesDuplicateTitles(t *testing.T) {
 	}
 	if strings.Count(got, "href:") != 2 {
 		t.Errorf("want two entries, got:\n%s", got)
+	}
+}
+
+// TestHomepageTitleComesFromTheHousehold. The name is a param on the
+// dashboard package, carried through the container spec because a param
+// is known only at expansion and this renderer runs later, against
+// desired state.
+func TestHomepageTitleComesFromTheHousehold(t *testing.T) {
+	c := dashboardContainer("node-a")
+	c.Container.Env = map[string]string{dashboardTitleEnv: "The Reed Family"}
+	got := string(renderHomepageSettings([]resource.Resource{c}))
+	if !strings.Contains(got, `title: "The Reed Family"`) {
+		t.Errorf("want the household's own name:\n%s", got)
+	}
+}
+
+// TestHomepageTitleFallsBackToADefault: a dashboard with a plain title
+// is working, one that fails to render is not. Every unusable value
+// takes the default rather than the page.
+func TestHomepageTitleFallsBackToADefault(t *testing.T) {
+	for name, env := range map[string]map[string]string{
+		"unset":    nil,
+		"empty":    {dashboardTitleEnv: "   "},
+		"a secret": {dashboardTitleEnv: "secret/household-name"},
+		"controls": {dashboardTitleEnv: "\x00\x01"},
+		"newlines": {dashboardTitleEnv: "\n\n"},
+	} {
+		c := dashboardContainer("node-a")
+		c.Container.Env = env
+		got := string(renderHomepageSettings([]resource.Resource{c}))
+		if !strings.Contains(got, `title: "Household"`) {
+			t.Errorf("%s: want the default title:\n%s", name, got)
+		}
+	}
+}
+
+// TestHomepageTitleIsSafeInYAML. The title is the one genuinely free-text
+// value this package writes into a file a third party parses: everything
+// else is a validated resource name, a host, or a constant.
+func TestHomepageTitleIsSafeInYAML(t *testing.T) {
+	c := dashboardContainer("node-a")
+	c.Container.Env = map[string]string{dashboardTitleEnv: `Bob: "the" builder` + "\nstatusStyle: basic"}
+	got := string(renderHomepageSettings([]resource.Resource{c}))
+	// Parsing is the assertion, not a substring search: the injected text
+	// legitimately APPEARS in the file, safely inside a quoted scalar.
+	// What matters is that YAML reads it as part of the title and the
+	// real statusStyle key is untouched.
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil {
+		t.Fatalf("title made settings.yaml unparsable: %v\n%s", err, got)
+	}
+	if doc["title"] != `Bob: "the" builder statusStyle: basic` {
+		t.Errorf("title round-trip = %q", doc["title"])
+	}
+	if doc["statusStyle"] != "dot" {
+		t.Errorf("statusStyle = %v, want dot", doc["statusStyle"])
+	}
+}
+
+// TestHomepageTitleIsBounded: a page heading, not a paragraph.
+func TestHomepageTitleIsBounded(t *testing.T) {
+	c := dashboardContainer("node-a")
+	c.Container.Env = map[string]string{dashboardTitleEnv: strings.Repeat("x", 500)}
+	got := string(renderHomepageSettings([]resource.Resource{c}))
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(doc["title"].(string)); n > maxDashboardTitle {
+		t.Errorf("title is %d runes, want <= %d", n, maxDashboardTitle)
 	}
 }

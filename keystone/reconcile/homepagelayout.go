@@ -76,7 +76,7 @@ func renderHomepageSettings(desired []resource.Resource) []byte {
 
 	var b strings.Builder
 	b.WriteString("# managed by wildstone-keystone — do not edit\n")
-	b.WriteString("title: Household\n")
+	b.WriteString("title: " + yamlQuote(dashboardTitle(desired)) + "\n")
 	b.WriteString("description: Everything this household runs\n")
 	b.WriteString("theme: dark\n")
 	b.WriteString("color: slate\n")

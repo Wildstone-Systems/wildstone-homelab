@@ -39,6 +39,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
@@ -142,6 +143,97 @@ func upstreamContainerName(upstream string) string {
 	return addr
 }
 
+// dashboardTitleEnv is the environment variable the dashboard package
+// sets from its `household_name` param, and the ONLY way a person's own
+// words reach a rendered file.
+//
+// Homepage ignores it — the title it uses comes from settings.yaml,
+// which this renderer writes. The variable exists because a param is
+// known only during template expansion, and the renderers run later
+// against desired state; the container spec is the one carrier the
+// dashboard package has that survives that gap. Reading it here keeps
+// the household's name declared in exactly one place, next to the other
+// dashboard params, rather than hard-coded in Go.
+const dashboardTitleEnv = "WILDSTONE_DASHBOARD_TITLE"
+
+// defaultDashboardTitle is what an install that never set the param
+// gets. It is also what an operator gets who sets it to something
+// unusable, which is deliberate: a dashboard with a plain title is
+// working, a dashboard that fails to render is not.
+const defaultDashboardTitle = "Household"
+
+// maxDashboardTitle bounds the title. A page heading, not a paragraph.
+const maxDashboardTitle = 64
+
+// dashboardTitle is the household's own name for the page.
+func dashboardTitle(desired []resource.Resource) string {
+	for _, r := range dashboardContainers(desired) {
+		if v, ok := r.Container.Env[dashboardTitleEnv]; ok {
+			if clean := sanitizeTitle(v); clean != "" {
+				return clean
+			}
+		}
+	}
+	return defaultDashboardTitle
+}
+
+// sanitizeTitle reduces operator free text to something safe to place in
+// a YAML scalar and sane to render.
+//
+// Control characters and newlines are dropped rather than escaped: this
+// value is written into a file a third party parses, and the narrow
+// answer ("what a page heading may contain") is a much smaller thing to
+// get right than YAML quoting in general. An unresolved secret reference
+// is refused outright — the dashboard is family-facing, and a title is
+// not a place anyone should be putting one.
+func sanitizeTitle(v string) string {
+	if strings.HasPrefix(v, "secret/") {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range v {
+		if r == '\n' || r == '\r' || r == '\t' {
+			b.WriteRune(' ')
+			continue
+		}
+		if unicode.IsControl(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	out := strings.TrimSpace(b.String())
+	if len([]rune(out)) > maxDashboardTitle {
+		out = strings.TrimSpace(string([]rune(out)[:maxDashboardTitle]))
+	}
+	return out
+}
+
+// yamlQuote emits a double-quoted YAML scalar. Every other value this
+// package writes is drawn from a validated charset (a resource name, a
+// host, a constant); the title is the one that is genuinely free text.
+func yamlQuote(v string) string {
+	esc := strings.ReplaceAll(v, `\`, `\\`)
+	esc = strings.ReplaceAll(esc, `"`, `\"`)
+	return `"` + esc + `"`
+}
+
+// dashboardContainers is every container the dashboard capability owns,
+// in a deterministic order.
+func dashboardContainers(desired []resource.Resource) []resource.Resource {
+	var out []resource.Resource
+	for _, r := range desired {
+		if r.Kind != resource.KindContainer || r.Container == nil {
+			continue
+		}
+		if strings.TrimPrefix(r.Metadata.Owner, "capability/") != "dashboard" {
+			continue
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
+	return out
+}
+
 // dashboardNode is the node Homepage itself runs on, or "" if the
 // dashboard capability is not installed.
 //
@@ -152,13 +244,7 @@ func upstreamContainerName(upstream string) string {
 // every node, which is what nodePrereqFiles assumes.
 func dashboardNode(desired []resource.Resource) string {
 	node := ""
-	for _, r := range desired {
-		if r.Kind != resource.KindContainer || r.Container == nil {
-			continue
-		}
-		if strings.TrimPrefix(r.Metadata.Owner, "capability/") != "dashboard" {
-			continue
-		}
+	for _, r := range dashboardContainers(desired) {
 		if r.Metadata.Node == "" {
 			continue
 		}
@@ -231,13 +317,6 @@ func renderHomepageServices(desired []resource.Resource) []byte {
 
 	var b strings.Builder
 	b.WriteString("# managed by wildstone-keystone — do not edit\n")
-	if len(entries) == 0 {
-		// A valid empty list, not an absent file. Homepage seeds its own
-		// sample config into any config file it does not find, which is
-		// how "My First Service" appears on a working install.
-		b.WriteString("# no routed services on this node yet\n[]\n")
-		return []byte(b.String())
-	}
 	for _, group := range homepageGroups {
 		if !homepageGroupUsed(entries, group) {
 			continue
@@ -248,7 +327,9 @@ func renderHomepageServices(desired []resource.Resource) []byte {
 				continue
 			}
 			fmt.Fprintf(&b, "    - %s:\n", e.title)
-			fmt.Fprintf(&b, "        href: %s\n", e.href)
+			if e.href != "" {
+				fmt.Fprintf(&b, "        href: %s\n", e.href)
+			}
 			if e.desc != "" {
 				fmt.Fprintf(&b, "        description: %s\n", e.desc)
 			}
@@ -337,7 +418,34 @@ func homepageEntries(desired []resource.Resource) []homepageEntry {
 			entries[i].title = fmt.Sprintf("%s (%s)", entries[i].title, entries[i].name)
 		}
 	}
+	if len(entries) == 0 {
+		return []homepageEntry{homepageEmptyState}
+	}
 	return entries
+}
+
+// homepageEmptyState is what a household with no routed services sees.
+//
+// Zero services is the NORMAL state of a correct fresh install, not an
+// error: ingress, identity and the dashboard all go in before anything a
+// family uses, and all three are excluded from this list by design. So
+// the operator's reward for a clean install was a blank page with
+// nothing to distinguish "working, nothing installed" from "broken".
+//
+// An ENTRY rather than a special case inside renderHomepageServices,
+// because settings.yaml lays out the groups homepageEntries reports: a
+// card the layout has never heard of falls back to Homepage's default
+// list style, which is the disagreement between the two files this
+// design exists to prevent.
+//
+// No href — there is nowhere to send a browser, and Homepage renders a
+// card without one perfectly well. The command is the useful part.
+var homepageEmptyState = homepageEntry{
+	group: homepageGroups[0],
+	title: "Nothing installed yet",
+	icon:  homepageFallbackIcon,
+	desc:  "Add a capability with `wild capability enable <name>` and it appears here",
+	name:  "empty",
 }
 
 // homepageGroupUsed reports whether any entry lands in a group. An empty
