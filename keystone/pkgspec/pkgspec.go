@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -331,3 +332,78 @@ func validateAgentTool(t AgentToolSpec, field string) error {
 	}
 	return nil
 }
+
+// RouteLabels are the leading labels of the Route hosts a package
+// declares, with param references resolved to their defaults.
+//
+// It reads the raw templates rather than expanding them, because the
+// caller wants to know what a package WOULD be called before anyone has
+// supplied params — which is exactly when an operator is deciding
+// whether to install it. Defaults are the honest answer: they are what
+// the label will be unless somebody overrides it, and an override makes
+// that Route unpinned anyway.
+func RouteLabels(pkg *Package) []string {
+	defaults := map[string]string{}
+	for _, p := range pkg.Params {
+		if p.Default != "" {
+			defaults[p.Name] = p.Default
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range pkg.Templates {
+		for _, m := range routeHostRegexp.FindAllStringSubmatch(t, -1) {
+			// Resolve references FIRST, then split. A param reference
+			// contains dots of its own ("{{ .Params.media_subdomain }}"),
+			// so splitting a raw host on the first dot yields "{{ "
+			// rather than a label.
+			host := paramRefRegexp.ReplaceAllStringFunc(m[1], func(ref string) string {
+				return defaults[paramRefRegexp.FindStringSubmatch(ref)[1]]
+			})
+			label, _, _ := strings.Cut(host, ".")
+			if label != "" && !seen[label] {
+				seen[label] = true
+				out = append(out, label)
+			}
+		}
+	}
+	return out
+}
+
+var (
+	routeHostRegexp = regexp.MustCompile(`host:\s*"([^"]+)"`)
+	paramRefRegexp  = regexp.MustCompile(`\{\{\s*\.Params\.([a-z_]+)\s*\}\}`)
+)
+
+// ContainerNames are the Container resources a package declares.
+//
+// Several packages can provide one capability — the four ingress
+// profiles do — and resources are owned by "capability/<name>", not by
+// the package that rendered them. So a capability's resources cannot be
+// attributed to a package by owner alone, and every profile of an
+// installed capability looks installed.
+//
+// A container name is the cheapest thing that distinguishes them:
+// caddy-tailnet-ts exists on a node running that profile and
+// caddy-tailnet does not.
+func ContainerNames(pkg *Package) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range pkg.Templates {
+		if !containerKindRegexp.MatchString(t) {
+			continue
+		}
+		for _, m := range metadataNameRegexp.FindAllStringSubmatch(t, -1) {
+			if n := m[1]; n != "" && !seen[n] {
+				seen[n] = true
+				out = append(out, n)
+			}
+		}
+	}
+	return out
+}
+
+var (
+	containerKindRegexp = regexp.MustCompile(`kind:\s*Container`)
+	metadataNameRegexp  = regexp.MustCompile(`metadata:\s*\{\s*name:\s*([a-zA-Z0-9._-]+)`)
+)

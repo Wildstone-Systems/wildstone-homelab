@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"net/http"
 	"sort"
 	"strings"
@@ -25,6 +27,7 @@ type packageView struct {
 	Provides   []pkgspec.Provide     `json:"provides,omitempty"`
 	Requires   []pkgspec.Requirement `json:"requires,omitempty"`
 	Enabled    bool                  `json:"enabled"`
+	capabilityDetail
 }
 
 // listPackages answers what this control plane can install.
@@ -117,6 +120,126 @@ func resolveParams(decls []pkgspec.ParamDecl, f deploymentFacts) []paramView {
 	return out
 }
 
+// serviceAddress is where an installed capability's Route is served, and
+// whether it answers.
+type serviceAddress struct {
+	Route string `json:"route"`
+	// URL is what a BROWSER should use — derived from the ingress
+	// posture, so the ported form under a tailnet rather than the
+	// hostname the package declared (ADR-W022 A1). This is the answer to
+	// "which port is this on", which previously existed only in
+	// <prefix>/routes/ on the node.
+	URL string `json:"url"`
+	// Healthy reflects observed state. Since the Route health gate
+	// probes the front door (F84), this means the address answers rather
+	// than that a file was written.
+	Healthy bool   `json:"healthy"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+type resourceRef struct {
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+}
+
+// capabilityDetail is what the Services page could not previously say
+// about a capability: where it is, whether it answers, what it created,
+// and what stands in the way. All of it was derivable and none shown.
+type capabilityDetail struct {
+	Addresses []serviceAddress `json:"addresses,omitempty"`
+	Resources []resourceRef    `json:"resources,omitempty"`
+	// Blockers are reasons this will not give a WORKING service.
+	// Distinct from providedSecrets, which the form already collects:
+	// these cannot be answered by filling in a field.
+	Blockers []string `json:"blockers,omitempty"`
+}
+
+// packageIsTheInstalledOne reports whether THIS package is the profile
+// providing its capability here, rather than a sibling that could.
+//
+// A package declaring no containers is treated as the installed one:
+// there is nothing to distinguish it by, and showing its capability's
+// resources is closer to right than showing none.
+func packageIsTheInstalledOne(pkg *pkgspec.Package, current []resource.Resource) bool {
+	names := pkgspec.ContainerNames(pkg)
+	if len(names) == 0 {
+		return true
+	}
+	present := map[string]bool{}
+	for _, r := range current {
+		if r.Kind == resource.KindContainer {
+			present[r.Metadata.Name] = true
+		}
+	}
+	for _, n := range names {
+		if present[n] {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) describeCapability(pkg *pkgspec.Package, current []resource.Resource, health map[string]runtimedb.Observed) capabilityDetail {
+	var d capabilityDetail
+	owner := "capability/" + pkg.Metadata.Capability
+	posture := ingressorigin.Of(current)
+
+	// Resources are owned by the CAPABILITY, not the package, so several
+	// profiles of one capability all match the owner and every one of
+	// them looks installed. Attribute only to the profile whose own
+	// containers are actually present.
+	if !packageIsTheInstalledOne(pkg, current) {
+		d.Blockers = capabilityBlockers(pkg, posture)
+		return d
+	}
+
+	for _, r := range current {
+		if r.Metadata.Owner != owner {
+			continue
+		}
+		d.Resources = append(d.Resources, resourceRef{Kind: string(r.Kind), Name: r.Metadata.Name})
+		if r.Kind != resource.KindRoute || r.Route == nil || r.Route.Host == "" {
+			continue
+		}
+		a := serviceAddress{Route: r.Metadata.Name, URL: posture.OriginFor(r.Route.Host)}
+		if o, ok := health[string(r.Kind)+"/"+r.Metadata.Name]; ok {
+			a.Healthy, a.Detail = o.Healthy, o.Detail
+		}
+		d.Addresses = append(d.Addresses, a)
+	}
+	sort.Slice(d.Resources, func(i, j int) bool {
+		if d.Resources[i].Kind != d.Resources[j].Kind {
+			return d.Resources[i].Kind < d.Resources[j].Kind
+		}
+		return d.Resources[i].Name < d.Resources[j].Name
+	})
+	sort.Slice(d.Addresses, func(i, j int) bool { return d.Addresses[i].Route < d.Addresses[j].Route })
+	d.Blockers = capabilityBlockers(pkg, posture)
+	return d
+}
+
+// capabilityBlockers are reasons this will not work HERE, as opposed to
+// values the install form can collect.
+func capabilityBlockers(pkg *pkgspec.Package, posture ingressorigin.Posture) []string {
+	var out []string
+	if posture.TLS != "tailscale" {
+		return out
+	}
+	// F79: under a shared hostname an unpinned service cannot know its
+	// own origin when it is expanded, so any URL it builds for a browser
+	// — an OIDC redirect, its own base URL — will not match where it is
+	// served. It converges, reports healthy, and cannot be signed into.
+	for _, label := range pkgspec.RouteLabels(pkg) {
+		if _, pinned := ingressorigin.WellKnownPortFor(label); !pinned {
+			out = append(out, "under a tailnet this service's address is not fixed, so the links it builds for "+
+				"itself (an OIDC redirect, its own base URL) will not match where it is served — it will install, "+
+				"report healthy, and you will not be able to sign in")
+			break
+		}
+	}
+	return out
+}
+
 func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int, error) {
 	if s.Catalog == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("no catalog is configured (keystone -catalog-dir)")
@@ -126,13 +249,21 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 		return nil, http.StatusInternalServerError, err
 	}
 	facts := s.gatherFacts()
+	current, _ := s.State.Load()
+	health := map[string]runtimedb.Observed{}
+	if obs, err := s.DB.ListObserved(); err == nil {
+		for _, o := range obs {
+			health[string(o.Kind)+"/"+o.Name] = o
+		}
+	}
 	out := []packageView{}
 	for _, p := range s.Catalog.List() {
 		out = append(out, packageView{
 			Name: p.Metadata.Name, Version: p.Metadata.Version,
 			Capability: p.Metadata.Capability, Profile: p.Metadata.Profile,
 			Params: resolveParams(p.Params, facts), Provides: p.Provides, Requires: p.Requires,
-			Enabled: enabled[p.Metadata.Capability],
+			Enabled:          enabled[p.Metadata.Capability],
+			capabilityDetail: s.describeCapability(p, current, health),
 		})
 	}
 	return out, http.StatusOK, nil

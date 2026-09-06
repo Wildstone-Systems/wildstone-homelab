@@ -46,7 +46,42 @@ export function Services() {
                 {p.profile ? ` (${p.profile})` : ""}
               </td>
               <td>{p.version}</td>
-              <td>{p.enabled ? <Badge value="enabled" /> : "—"}</td>
+              <td>
+                {p.enabled ? <Badge value="enabled" /> : "—"}
+                {/* Where it is, and whether it answers. Previously this
+                    existed only in <prefix>/routes/ on the node, so
+                    "which port is this on?" had no answer in the UI. */}
+                {p.addresses?.map((a) => (
+                  <div key={a.route} className={a.healthy ? "" : "bad"}>
+                    <a href={a.url} target="_blank" rel="noreferrer">
+                      {a.url}
+                    </a>
+                    {!a.healthy && (
+                      <span className="muted"> — not answering{a.detail ? `: ${a.detail}` : ""}</span>
+                    )}
+                  </div>
+                ))}
+                {p.enabled && p.resources && p.resources.length > 0 && (
+                  <details>
+                    <summary className="muted">{p.resources.length} resource(s)</summary>
+                    <div className="chips">
+                      {p.resources.map((r) => (
+                        <span className="chip" key={`${r.kind}/${r.name}`}>
+                          {r.kind}/{r.name}
+                        </span>
+                      ))}
+                    </div>
+                  </details>
+                )}
+                {/* Why it will not work here — a reason no form field can
+                    answer, said before the operator installs rather than
+                    after they cannot sign in. */}
+                {p.blockers?.map((b) => (
+                  <div key={b} className="bad">
+                    <strong>Will not work here.</strong> {b}
+                  </div>
+                ))}
+              </td>
               <td>
                 <button className="action" onClick={() => setChosen(p)}>
                   {p.enabled ? "Reconfigure" : "Install"}
