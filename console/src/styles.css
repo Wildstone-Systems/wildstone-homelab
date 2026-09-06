@@ -57,3 +57,12 @@ textarea:disabled { background: var(--bg); color: var(--muted); }
 
 .gate { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
 .gate .card { width: 360px; }
+
+/* A plan waiting for a human is not a fault (F75). Amber, not red:
+   a restart used to paint most of the Home page red while every
+   container was up and healthy, and an operator could not tell that
+   from a homelab that had actually broken. */
+.chip.waiting {
+  border-color: #b7791f;
+  color: #b7791f;
+}

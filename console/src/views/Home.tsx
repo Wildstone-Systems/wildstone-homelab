@@ -23,8 +23,8 @@ export function Home() {
     <>
       <h2>Home</h2>
       <div className="sub">
-        {resources.length} resource(s) across {owners.length} owner(s); unhealthy chips are
-        outlined red with the observed detail.
+        {resources.length} resource(s) across {owners.length} owner(s). Red means something is
+        wrong; amber means a plan is waiting for your approval. Hover for the detail.
       </div>
       {owners.length === 0 && <div className="muted">Statefile is empty — enable a capability.</div>}
       {owners.map((owner) => (
@@ -33,12 +33,17 @@ export function Home() {
           <div className="chips">
             {(groups.get(owner) ?? []).map((r) => {
               const o = health.get(`${r.kind}/${r.name}`);
-              const bad = o !== undefined && !o.healthy;
+              // Three states, not two (F75). A plan waiting for a
+              // human is not a fault, and colouring it the same red as
+              // a broken service is how a restart made a working
+              // homelab look like it had fallen over.
+              const waiting = o !== undefined && !o.healthy && o.awaitingApproval === true;
+              const bad = o !== undefined && !o.healthy && !waiting;
               return (
                 <span
-                  className={`chip${bad ? " bad" : ""}`}
+                  className={`chip${bad ? " bad" : ""}${waiting ? " waiting" : ""}`}
                   key={`${r.kind}/${r.name}`}
-                  title={bad ? o.detail : `${r.kind} on ${r.node ?? "-"}`}
+                  title={bad || waiting ? o.detail : `${r.kind} on ${r.node ?? "-"}`}
                 >
                   {r.kind}/{r.name}
                 </span>

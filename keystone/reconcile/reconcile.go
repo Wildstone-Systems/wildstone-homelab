@@ -117,6 +117,12 @@ type Outcome struct {
 	// Approve callback (or one that returned false) authorized it — in
 	// that case nothing in Plan was applied at all.
 	PendingApproval bool
+
+	// Blocked lists resources set aside after repeated identical failure
+	// (F60). They are NOT in Plan.Steps: the rest of the plan proceeds
+	// without them, and the operator is told which resource is stuck and
+	// why rather than watching everything else fail behind it.
+	Blocked []BlockedResource
 	// Incident is set when a step's op failed outright (not a health-gate
 	// failure — see Rolledback for that) after exhausting retries, or hit
 	// the Volume-Delete apply-time refusal. Later steps were not attempted.
@@ -220,6 +226,9 @@ type Reconciler struct {
 
 	mu      sync.Mutex
 	managed map[string]map[resKey]bool // nodeID -> (kind,name) -> Reconciler believes it exists
+	// blocked counts consecutive identical failures per resource, so a
+	// step that cannot succeed stops holding up every other one (F60).
+	blocked map[string]map[resKey]*blockInfo
 	// posture is the node's ingress posture for the tick in flight,
 	// derived from desired state at the top of Reconcile.
 	//
@@ -461,8 +470,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	allObserved := append(append(append([]resource.Resource{}, observed...), provObserved...), keystoneDesired...)
 
 	p := plan.Diff(allDesired, allObserved)
-	outcome := &Outcome{Plan: p, ForeignDrift: foreign, PrereqRepaired: prereqRepaired}
+
+	// Set aside anything that has failed identically several times, so
+	// one impossible step stops holding up every other resource (F60).
+	// Done BEFORE the approval gate: a blocked step must not drag the
+	// whole plan to Medium/High and demand approval for work that cannot
+	// be performed.
+	desiredForBlock := make(map[resKey]resource.Resource, len(allDesired))
+	for _, res := range allDesired {
+		desiredForBlock[resKey{res.Kind, res.Metadata.Name}] = res
+	}
+	blocking := r.blockedSteps(nodeID, desiredForBlock)
+	r.forgetUndesired(nodeID, desiredForBlock)
+	p, blockedNow := withoutBlocked(p, blocking)
+
+	outcome := &Outcome{Plan: p, ForeignDrift: foreign, PrereqRepaired: prereqRepaired, Blocked: blockedNow}
 	if len(p.Steps) == 0 {
+		// Applied even with blocked resources: everything that COULD be
+		// done, was. Reporting failure here would make a control plane
+		// look broken for as long as one resource is stuck, which is the
+		// state F60 is about.
 		outcome.Applied = true
 		return outcome, nil
 	}
@@ -565,6 +592,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 		outcome.Steps = append(outcome.Steps, sr)
 
 		if !sr.Applied {
+			// Counted so that a step failing the same way every tick is
+			// eventually set aside instead of halting this plan forever
+			// (F60). The plan still halts here — it applies in full or
+			// not at all — but the NEXT one will not contain this step.
+			if r.noteStepFailure(nodeID, step, specFingerprint(desiredByKey, step), sr.Error) {
+				outcome.Blocked = append(outcome.Blocked, BlockedResource{
+					Kind: step.Kind, Name: step.Name, Action: step.Action, Reason: sr.Error,
+				})
+			}
 			outcome.Incident = fmt.Sprintf("%s %s/%s: %s", step.Action, step.Kind, step.Name, sr.Error)
 			return outcome, nil
 		}
@@ -572,6 +608,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			outcome.Rolledback = true
 			return outcome, nil
 		}
+		// A step that applied is not a failing step any more, whatever
+		// it did before.
+		r.clearStepFailure(nodeID, step)
 	}
 
 	outcome.Applied = true
@@ -1087,6 +1126,82 @@ func (r *Reconciler) retryProvider(ctx context.Context, fn func() error) error {
 }
 
 // ---------------------------------------------------------------- managed cache
+
+// ManagedRef names one resource the reconciler believes it manages.
+type ManagedRef struct {
+	Kind resource.Kind
+	Name string
+}
+
+// SeedManaged restores what the reconciler manages, from state that
+// outlived the process (F76).
+//
+// `managed` is the record for the kinds that CANNOT be observed on the
+// node — Secret, Volume, BackupPlan. Nothing on a host answers "does
+// this declared secret exist", so the reconciler remembers instead, and
+// its observer reports a key it does not remember as absent.
+//
+// That record was in-memory only, so every restart emptied it and the
+// next tick concluded that every secret, volume and backup plan on a
+// perfectly healthy node was missing. It then planned creates for all of
+// them, and the Console showed 27 of 45 resources unhealthy while every
+// container was up — on an upgrade, which is exactly when an operator
+// cannot tell a broken install from a confused one.
+//
+// Seeding from the observed rows is right because those rows ARE the
+// previous answer: a row exists for what the reconciler last saw
+// present, written by the same loop that is now restarting.
+//
+// For the kinds this node observes for real — Container, Route,
+// ConfigFile, Job, OidcClient — anything genuinely gone since is caught
+// by the next observation, which is the level-triggered behaviour the
+// design rests on. For the observe-by-apply kinds it is NOT: a volume
+// deleted by hand while Keystone was stopped is reported present on the
+// strength of a stale row, because nothing on the node can be asked.
+// That is the standing limitation of declared-state kinds (ADR-W004
+// S2b), not something seeding introduces — but seeding is where it now
+// gets its longest reach, and it is recorded rather than glossed
+// (friction F93).
+//
+// Kinds the observer does not handle are dropped rather than trusted:
+// seeding one makes it a candidate for observation, and observe fails
+// the whole node's pass on a kind it cannot handle. A single stored
+// DnsRecord row would therefore break every tick after a restart.
+// Callers should not have to know the observer's coverage.
+func (r *Reconciler) SeedManaged(nodeID string, refs []ManagedRef) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.managed == nil {
+		r.managed = map[string]map[resKey]bool{}
+	}
+	m := r.managed[nodeID]
+	if m == nil {
+		m = map[resKey]bool{}
+		r.managed[nodeID] = m
+	}
+	for _, ref := range refs {
+		if !observableKind(ref.Kind) {
+			continue
+		}
+		m[resKey{ref.Kind, ref.Name}] = true
+	}
+}
+
+// observableKind reports whether observe handles a kind on a node. It
+// mirrors the switch in observe, whose default is a hard error for the
+// whole pass — DnsRecord and Automation are driven by providers and by
+// the automation engine, and never belong to a node's managed set.
+func observableKind(k resource.Kind) bool {
+	switch k {
+	case resource.KindSecret, resource.KindJob, resource.KindContainer,
+		resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
+		resource.KindConfigFile, resource.KindLdapGroup, resource.KindLdapUser,
+		resource.KindIngress, resource.KindBackupPlan:
+		return true
+	default:
+		return false
+	}
+}
 
 func (r *Reconciler) markManaged(nodeID string, k resKey, present bool) {
 	r.mu.Lock()

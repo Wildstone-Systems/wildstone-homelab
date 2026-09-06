@@ -20,6 +20,9 @@ export interface ResourceView {
 }
 
 export interface Observed {
+  // Not converged because a plan is waiting for a human, not because
+  // anything failed. Rendered differently from a real problem.
+  awaitingApproval?: boolean;
   kind: string;
   name: string;
   node?: string;

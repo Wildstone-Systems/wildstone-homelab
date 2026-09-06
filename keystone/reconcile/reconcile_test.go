@@ -380,3 +380,72 @@ func TestForeignDriftNeverPlannedAsDelete(t *testing.T) {
 		t.Error("the foreign container should be untouched (still present and running)")
 	}
 }
+
+// TestSeedManagedSurvivesARestart is F76.
+//
+// Secret, Volume and BackupPlan cannot be observed on a node — nothing
+// answers "does this declared secret exist" — so the reconciler
+// remembers what it manages, and an unremembered key reads as absent.
+//
+// That memory lived only in the process. Every restart emptied it, so
+// the next tick concluded every secret and volume on a healthy node was
+// missing and planned creates for all of them: 27 of 45 resources
+// reported unhealthy on the alpha VM while every container was up, on an
+// upgrade, which is precisely when an operator cannot tell a broken
+// install from a confused one.
+func TestSeedManagedSurvivesARestart(t *testing.T) {
+	// A reconciler that has just started knows nothing.
+	fresh := &Reconciler{ManagedPrefix: "/etc/wildstone"}
+	if fresh.isManaged("node-a", resKey{resource.KindSecret, "lldap-admin-password"}) {
+		t.Fatal("a fresh reconciler should remember nothing")
+	}
+
+	// Seeded from what the previous process observed, it remembers
+	// exactly what that process last saw present.
+	fresh.SeedManaged("node-a", []ManagedRef{
+		{Kind: resource.KindSecret, Name: "lldap-admin-password"},
+		{Kind: resource.KindVolume, Name: "homepage-config"},
+	})
+	for _, k := range []resKey{
+		{resource.KindSecret, "lldap-admin-password"},
+		{resource.KindVolume, "homepage-config"},
+	} {
+		if !fresh.isManaged("node-a", k) {
+			t.Errorf("%s/%s reads as absent after a restart, so a create would be planned for something that exists",
+				k.Kind, k.Name)
+		}
+	}
+	// And nothing it was never told about.
+	if fresh.isManaged("node-a", resKey{resource.KindVolume, "never-seen"}) {
+		t.Error("seeding invented a resource that was never observed")
+	}
+	// Seeding one node must not speak for another.
+	if fresh.isManaged("node-b", resKey{resource.KindVolume, "homepage-config"}) {
+		t.Error("seeding node-a claimed a resource on node-b")
+	}
+}
+
+// A kind the observer does not handle must never enter the managed set.
+// Seeding one makes it a candidate for observation, and observe's default
+// case is a hard error for the WHOLE node's pass — so a single stored
+// DnsRecord row would break every tick after a restart, on any
+// deployment that had ever recorded one. Raised by review on the F76 fix.
+func TestSeedingIgnoresKindsTheObserverCannotHandle(t *testing.T) {
+	r := &Reconciler{ManagedPrefix: "/etc/wildstone"}
+	r.SeedManaged("node-a", []ManagedRef{
+		{Kind: resource.KindVolume, Name: "homepage-config"},
+		{Kind: resource.KindDnsRecord, Name: "home.example.com"},
+		{Kind: resource.KindAutomation, Name: "lights-off"},
+	})
+	if !r.isManaged("node-a", resKey{resource.KindVolume, "homepage-config"}) {
+		t.Error("a seedable kind was dropped")
+	}
+	for _, k := range []resKey{
+		{resource.KindDnsRecord, "home.example.com"},
+		{resource.KindAutomation, "lights-off"},
+	} {
+		if r.isManaged("node-a", k) {
+			t.Errorf("%s was seeded into a node's managed set; observe fails the whole pass on it", k.Kind)
+		}
+	}
+}
