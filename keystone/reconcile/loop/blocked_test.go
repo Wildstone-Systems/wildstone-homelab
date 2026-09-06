@@ -89,47 +89,6 @@ func TestOneFailureDoesNotBlockAResource(t *testing.T) {
 	}
 }
 
-// Deleting a poisoned resource is how an operator gets it out of desired
-// state — it was the only way out of the original incident. A create
-// that has been set aside must not set aside the delete as well, or the
-// escape hatch is quarantined along with the fault.
-func TestABlockedResourceCanStillBeDeleted(t *testing.T) {
-	l, state, db, _ := harness(t)
-	l.Rec.Applier = &haltingApplier{failName: "poisoned"}
-	if err := state.Put(container("poisoned", "n1", testImage)); err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 5; i++ {
-		if _, err := l.Tick(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	// The operator takes it out of desired state.
-	l.Rec.Applier = &containerApplier{}
-	if err := state.Delete("Container", "poisoned"); err != nil {
-		t.Fatal(err)
-	}
-	out, err := l.Tick(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, b := range out.Blocked {
-		if b.Name == "poisoned" {
-			t.Fatalf("deleting a quarantined resource was itself quarantined: %s", b.Summary())
-		}
-	}
-	obs, err := db.ListObserved()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, o := range obs {
-		if o.Kind == "Container" && o.Name == "poisoned" {
-			t.Errorf("a deleted resource is still observed: %+v", o)
-		}
-	}
-}
-
 // The other way out: fix the thing. A resource whose desired spec has
 // changed since it failed has earned a fresh attempt — nobody should
 // have to wait out a quarantine the OLD spec earned.

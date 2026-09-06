@@ -1150,9 +1150,24 @@ type ManagedRef struct {
 //
 // Seeding from the observed rows is right because those rows ARE the
 // previous answer: a row exists for what the reconciler last saw
-// present, written by the same loop that is now restarting. Anything
-// genuinely gone since is caught by the next observation, which is the
-// level-triggered behaviour the whole design rests on.
+// present, written by the same loop that is now restarting.
+//
+// For the kinds this node observes for real — Container, Route,
+// ConfigFile, Job, OidcClient — anything genuinely gone since is caught
+// by the next observation, which is the level-triggered behaviour the
+// design rests on. For the observe-by-apply kinds it is NOT: a volume
+// deleted by hand while Keystone was stopped is reported present on the
+// strength of a stale row, because nothing on the node can be asked.
+// That is the standing limitation of declared-state kinds (ADR-W004
+// S2b), not something seeding introduces — but seeding is where it now
+// gets its longest reach, and it is recorded rather than glossed
+// (friction F93).
+//
+// Kinds the observer does not handle are dropped rather than trusted:
+// seeding one makes it a candidate for observation, and observe fails
+// the whole node's pass on a kind it cannot handle. A single stored
+// DnsRecord row would therefore break every tick after a restart.
+// Callers should not have to know the observer's coverage.
 func (r *Reconciler) SeedManaged(nodeID string, refs []ManagedRef) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1165,7 +1180,26 @@ func (r *Reconciler) SeedManaged(nodeID string, refs []ManagedRef) {
 		r.managed[nodeID] = m
 	}
 	for _, ref := range refs {
+		if !observableKind(ref.Kind) {
+			continue
+		}
 		m[resKey{ref.Kind, ref.Name}] = true
+	}
+}
+
+// observableKind reports whether observe handles a kind on a node. It
+// mirrors the switch in observe, whose default is a hard error for the
+// whole pass — DnsRecord and Automation are driven by providers and by
+// the automation engine, and never belong to a node's managed set.
+func observableKind(k resource.Kind) bool {
+	switch k {
+	case resource.KindSecret, resource.KindJob, resource.KindContainer,
+		resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
+		resource.KindConfigFile, resource.KindLdapGroup, resource.KindLdapUser,
+		resource.KindIngress, resource.KindBackupPlan:
+		return true
+	default:
+		return false
 	}
 }
 

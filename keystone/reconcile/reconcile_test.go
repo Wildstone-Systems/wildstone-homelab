@@ -424,3 +424,28 @@ func TestSeedManagedSurvivesARestart(t *testing.T) {
 		t.Error("seeding node-a claimed a resource on node-b")
 	}
 }
+
+// A kind the observer does not handle must never enter the managed set.
+// Seeding one makes it a candidate for observation, and observe's default
+// case is a hard error for the WHOLE node's pass — so a single stored
+// DnsRecord row would break every tick after a restart, on any
+// deployment that had ever recorded one. Raised by review on the F76 fix.
+func TestSeedingIgnoresKindsTheObserverCannotHandle(t *testing.T) {
+	r := &Reconciler{ManagedPrefix: "/etc/wildstone"}
+	r.SeedManaged("node-a", []ManagedRef{
+		{Kind: resource.KindVolume, Name: "homepage-config"},
+		{Kind: resource.KindDnsRecord, Name: "home.example.com"},
+		{Kind: resource.KindAutomation, Name: "lights-off"},
+	})
+	if !r.isManaged("node-a", resKey{resource.KindVolume, "homepage-config"}) {
+		t.Error("a seedable kind was dropped")
+	}
+	for _, k := range []resKey{
+		{resource.KindDnsRecord, "home.example.com"},
+		{resource.KindAutomation, "lights-off"},
+	} {
+		if r.isManaged("node-a", k) {
+			t.Errorf("%s was seeded into a node's managed set; observe fails the whole pass on it", k.Kind)
+		}
+	}
+}
