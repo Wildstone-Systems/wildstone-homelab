@@ -197,7 +197,7 @@ params:
   # As the ADAPTER can reach it. The Keystone API binds loopback and the
   # tailnet by default, so this is usually a tailnet address rather than
   # 127.0.0.1 — the adapter is a container, and loopback is its own.
-  - { name: intake_url, required: true, description: "Where the adapter posts household events, e.g. https://<node>.<tailnet>.ts.net/api/v1/household/events" }
+  - { name: intake_url, required: true, example: "https://wildstone.tailnet.ts.net/api/v1/household/events", description: "Where the adapter posts household events." }
   # TODO: whatever the adapter needs to reach the service it watches.
   - { name: service_url, required: true, example: "http://192.168.1.10:8080", description: "The service this adapter watches." }
 # The household events this capability emits (ADR-W024 A10). Declaring

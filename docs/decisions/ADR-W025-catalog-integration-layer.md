@@ -6,7 +6,9 @@
   the closed-registry posture), ADR-W019 A10 (addressing under the
   tailnet posture), ADR-W021 (the catalog is Keystone's; `requires`
   resolves against what is enabled), ADR-W024 A10 (`publishes` and the
-  three shim shapes)
+  three shim shapes). A6 amends the shape heuristics ADR-W009 A2's
+  `secret-values-forbidden` rule and ADR-W007 A5's redaction share; it
+  narrows what those count as a secret VALUE and changes neither rule.
 - **Audience:** decision record AND implementation spec for the layer a
   package author writes against. Part A is binding. Part B is the build
   order for the rest of the layer, and is not decided here.
@@ -263,6 +265,73 @@ not transfer — a classification, an auth mode, a subdomain convention —
 and a copy inherits all of them silently. A scaffold that carries TODOs
 where a decision belongs is the difference.
 
+### A6. A URL is structure, not a value: `redact` shelters http(s) URLs
+
+Found while building A5's sidecar shape, and it ran in both directions at
+once. `redact`'s base64 shape rule scans runs of `[A-Za-z0-9+/_-]{24,}`,
+and `/` is in that class — so a URL path of ordinary short segments reads
+as one long token run:
+
+```
+https://wildstone.tailnet.ts.net/api/v1/household/events  → judged secret
+https://wildstone.tailnet.ts.net/household/events         → fine
+```
+
+The policy engine's `secret-values-forbidden` rule therefore **refused** a
+sidecar carrying the household intake URL in its env — a package that
+cannot be planned at all, told only that its "value is secret-shaped",
+which names nothing the author can act on. And the redactor wrote
+`[REDACTED]` over the same string, so the plan step that would have
+explained where the service posts was unreadable. That second half is
+F27's failure exactly: a plan a human cannot read is a plan that cannot
+be reviewed. No shipped package hit either, because their env URLs carry
+no path; the first one to need a real path would have.
+
+An http(s) URL is now sheltered, the same mechanism digest pins (ADR-W004
+A1) and `Kind/name` references (F27, F36) already use. The judgement is
+per-part, not per-URL:
+
+- **A URL is sheltered only when NO part of it is token-shaped.** The
+  match is split on `/?#&=:@.` — chosen because none of those characters
+  appears inside base64url or hex material, so the split can never break
+  a token into pieces small enough to hide. A token in a path segment, a
+  query value, or a fragment still trips on its own and the whole URL
+  falls through to the value rules.
+- **Userinfo is refused outright**, before shape is considered.
+  `https://admin:…@host/path` is the textbook way a credential reaches a
+  config value, and it is what this rule is for.
+- **The shelter is stricter than `SecretShaped`'s own bar**, ignoring its
+  digit requirement, so sheltering can never make `String()` less
+  aggressive than it was before the shelter existed.
+- **Sheltered URLs carry their own sentinel**, distinct from the
+  secret-reference one, so `kvSecretRegexp` still redacts a URL sitting
+  under a credential-shaped key. Sharing a marker would have exempted
+  `WEBHOOK_TOKEN: https://hooks.example.com/…` from the one rule that
+  catches a credential by its KEY rather than its shape — the regression
+  the tests caught while this was being written.
+- **The anchor is the scheme.** `ftp://` and everything else are judged
+  exactly as before; widening the set would be a decision about a value
+  class nobody has needed, made by accident.
+
+Two residual gaps, stated rather than papered over. A secret containing a
+raw `/` that also breaks into pieces all shorter than 24 characters would
+pass — that is a deliberately obfuscated secret, not the pasted literal
+these rules exist for. And a short credential in a URL
+(`https://admin:hunter2@host/…`) is not caught by shape and never was.
+Both are covered where it matters by the rules that read the KEY: the
+policy engine requires a credential-shaped key to hold a `secret/<name>`
+reference and nothing else, and `kvSecretRegexp` redacts such a value
+whatever its shape.
+
+**Rejected: exempting anything that parses as a URL.** That is the
+version of this change that silently stops catching presigned URLs,
+webhook secrets and userinfo credentials — every case in
+`TestURLsCarryingCredentialsAreStillCaught`.
+
+**Rejected: sheltering in `SecretShaped` only.** It would have fixed the
+refusal and left the plan unreadable, which is half a fix and the wrong
+half: the two are supposed to agree about what counts as a secret.
+
 ---
 
 # Part B — The rest of the layer (build order, not decided here)
@@ -291,19 +360,6 @@ scheduled.
 3. **Catalog-wide collision checks** — two packages claiming the same
    capability and profile, or the same Route label, are catalog defects
    that only a catalog-wide view can see. A3 is where they land.
-4. **A URL in container env can be refused as secret-shaped.**
-   `redact.SecretShaped` scans a run of `[A-Za-z0-9+/_-]{24,}`, and `/`
-   is in that class — so a path long enough and carrying a digit reads as
-   token material:
-   `https://wildstone.tailnet.ts.net/api/v1/household/events` is refused,
-   while the same host with no `/api/v1/` is not. No shipped package hits
-   it (their env URLs carry no path), and the sidecar scaffold avoids it
-   by leaving `intake_url` without an `example` — but an author who fills
-   in the real intake URL is refused at plan time by a message that names
-   nothing they can act on. The narrow fix is to evaluate a well-formed
-   http(s) URL's segments separately rather than as one run, so a token
-   in any single segment is still caught. It is a change to a security
-   rule and belongs in its own review, not bundled with a scaffold.
 
 Nothing here changes the trust boundary. A package is still data, still
 never executed by the toolchain, and every install is still a plan a human

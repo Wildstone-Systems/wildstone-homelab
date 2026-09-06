@@ -8,6 +8,7 @@ package redact
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -129,6 +130,85 @@ func kindRefIsSafe(match string) bool {
 	return true
 }
 
+// urlScanRegexp finds an http(s) URL anywhere in a larger string.
+//
+// Sheltered for the same reason digest pins and Kind/name references are
+// (F27, F36): a URL is structure, not a value, and the base64 shape rule
+// fires on it because "/" is in that character class. A path of ordinary
+// short segments reads as one long run:
+//
+//	https://wildstone.tailnet.ts.net/api/v1/household/events  → redacted
+//	https://wildstone.tailnet.ts.net/household/events         → fine
+//
+// Two consequences, and neither is cosmetic. The policy engine's
+// secret-values-forbidden rule REFUSES the first one, so a sidecar
+// carrying the household intake URL in its env cannot be planned at all —
+// and the message says "value is secret-shaped", which names nothing the
+// author can act on. And the redactor writes [REDACTED] over it, so a
+// plan step naming where a service posts is a plan step nobody can
+// review. No shipped package hit either, because their env URLs carry no
+// path; the first one to need a real path would have.
+//
+// The character class stops at whitespace, quotes and backslashes for
+// kvSecretRegexp's reason: String also runs over serialized JSON, and a
+// greedier match would eat a closing quote and corrupt the document.
+var urlScanRegexp = regexp.MustCompile(
+	`\bhttps?://[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]+`)
+
+// urlDelimiters are the characters urlIsSafe splits a URL on before
+// judging its parts.
+//
+// The set is chosen for one property: none of them appears inside base64,
+// base64url, or hex material. "-" and "_" are base64url's own alphabet
+// and are deliberately absent, so a token is never broken up by this
+// split. "/" and "+" ARE in standard base64 — but standard base64 is not
+// URL-safe and must be percent-encoded to appear in one, so inside a
+// well-formed URL a "/" is a path delimiter rather than token content.
+//
+// The residual escape is worth stating plainly: a secret containing a raw
+// "/" that also breaks into pieces all shorter than 24 characters would
+// pass. That is a deliberately obfuscated secret rather than an
+// accidental one, and it is not the case these rules exist for — an
+// accidental literal is one someone pasted whole. Anything under a
+// credential-shaped KEY is caught regardless of shape by kvSecretRegexp,
+// and the policy engine additionally requires such a key to hold a
+// secret/<name> reference and nothing else.
+const urlDelimiters = "/?#&=:@."
+
+// urlIsSafe reports whether a matched URL may be sheltered: it is safe
+// only when NO part of it is itself token-shaped.
+//
+// Deliberately stricter than SecretShaped's own bar. SecretShaped ignores
+// a base64-shaped run with no digits; this does not, so that sheltering a
+// URL can never make String() less aggressive than it was before the
+// shelter existed. The shelter's job is to stop the STRUCTURE of a URL
+// reading as a token, not to excuse anything carried inside one.
+//
+// Userinfo is refused outright. "https://user:t0ken@host/path" is the
+// textbook way a credential ends up in a config value, and it is exactly
+// what this rule is for — the whole URL falls through to the value rules,
+// which take the credential.
+func urlIsSafe(match string) bool {
+	u, err := url.Parse(match)
+	if err != nil || u.User != nil {
+		return false
+	}
+	for _, part := range strings.FieldsFunc(match, func(r rune) bool {
+		return strings.ContainsRune(urlDelimiters, r)
+	}) {
+		if hexTokenRegexp.MatchString(part) {
+			return false
+		}
+		for _, m := range base64TokenRegexp.FindAllString(part, -1) {
+			if isSeparatedIdentifier(m) {
+				continue // a name, not a value
+			}
+			return false
+		}
+	}
+	return true
+}
+
 func kindNames() []string {
 	kinds := resource.Kinds()
 	names := make([]string, 0, len(kinds))
@@ -229,6 +309,17 @@ const Placeholder = "[REDACTED]"
 // sheltered reference and avoid redacting it.
 const secretRefSentinelMarker = "\x00SECROUND\x00"
 
+// urlSentinelMarker shields a sheltered URL from the value-shaped rules,
+// and is DISTINCT from secretRefSentinelMarker on purpose.
+//
+// kvSecretRegexp declines to redact a value carrying the secret-ref
+// marker, because a reference under a credential-shaped key is still a
+// reference. A URL is not: "WEBHOOK_TOKEN: https://hooks.example.com/t/abc"
+// is a secret webhook whatever its structure looks like, and sharing one
+// marker with references would have quietly exempted it from the one rule
+// that catches a credential by its KEY rather than by its shape.
+const urlSentinelMarker = "\x00URLROUND\x00"
+
 // SecretShaped reports whether s contains a secret-VALUE shape (long hex
 // or base64 runs), ignoring sheltered forms — secret/<name> references
 // and sha256 digest pins are not secrets. The policy engine's
@@ -239,7 +330,18 @@ func SecretShaped(s string) bool {
 	if s == "" {
 		return false
 	}
-	sheltered := secretRefScanRegexp.ReplaceAllString(s, "")
+	// URLs first, so the value rules never see a path as one long run —
+	// and before the other shelters, so the URL is judged exactly as
+	// written. A shelter that blanked a fragment mid-URL would leave
+	// urlIsSafe deciding about a string that no longer represents the
+	// value anyone supplied.
+	sheltered := urlScanRegexp.ReplaceAllStringFunc(s, func(m string) string {
+		if urlIsSafe(m) {
+			return ""
+		}
+		return m // something inside it is token-shaped; let the value rules take it
+	})
+	sheltered = secretRefScanRegexp.ReplaceAllString(sheltered, "")
 	sheltered = digestPinScanRegexp.ReplaceAllString(sheltered, "")
 	sheltered = commitRefScanRegexp.ReplaceAllString(sheltered, "")
 	sheltered = eventIDRefScanRegexp.ReplaceAllString(sheltered, "")
@@ -286,7 +388,19 @@ func String(s string) string {
 	// by swapping them for placeholders that don't look like secrets, then
 	// restoring the originals at the end.
 	var refs []string
-	protected := secretRefScanRegexp.ReplaceAllStringFunc(s, func(m string) string {
+	// URLs first (see urlScanRegexp): a plan step naming where a service
+	// posts is one a human has to be able to read. Under their own marker,
+	// so that kvSecretRegexp still redacts one sitting under a
+	// credential-shaped key.
+	var urls []string
+	protected := urlScanRegexp.ReplaceAllStringFunc(s, func(m string) string {
+		if !urlIsSafe(m) {
+			return m
+		}
+		urls = append(urls, m)
+		return fmt.Sprintf("%s%d\x00", urlSentinelMarker, len(urls)-1)
+	})
+	protected = secretRefScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
 		refs = append(refs, m)
 		return fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, len(refs)-1)
 	})
@@ -345,6 +459,13 @@ func String(s string) string {
 	for i, ref := range refs {
 		placeholder := fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, i)
 		protected = strings.ReplaceAll(protected, placeholder, ref)
+	}
+	// A URL sentinel that kvSecretRegexp replaced with the placeholder is
+	// simply not here to restore, which is the intended outcome: the key
+	// said the whole value was a credential.
+	for i, u := range urls {
+		placeholder := fmt.Sprintf("%s%d\x00", urlSentinelMarker, i)
+		protected = strings.ReplaceAll(protected, placeholder, u)
 	}
 	return protected
 }
