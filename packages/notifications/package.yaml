@@ -44,3 +44,9 @@ templates:
       upstream: "container/ntfy:80"
       auth: none
       classification: family_private
+# The household action this capability offers (ADR-W001, ADR-W024 A5):
+# the domestic gateway will only dispatch notifications.notify because
+# this line declares it, and only at this tier. A rule that names a tool
+# no package declares is refused before any executor sees it.
+agentTools:
+  - { name: notify, risk: domestic }

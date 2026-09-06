@@ -41,6 +41,7 @@ var kindSpecs = []struct {
 	{resource.KindConfigFile, reflect.TypeOf(resource.ConfigFileSpec{})},
 	{resource.KindJob, reflect.TypeOf(resource.JobSpec{})},
 	{resource.KindSecret, reflect.TypeOf(resource.SecretSpec{})},
+	{resource.KindAutomation, reflect.TypeOf(resource.AutomationSpec{})},
 }
 
 func main() {

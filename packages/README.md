@@ -54,6 +54,38 @@ naming the set. This cannot make a combination *valid*; nothing here pulls
 an image, so nothing here knows what one contains. It only stops the tool
 from creating a mismatch the author never chose.
 
+## The adapter package (ADR-W024 H5)
+
+`home-automation/` is unlike the rest: it runs nothing. A household with
+home automation already has a Home Assistant, so instead of adopting it
+the package templates one managed file that configures Home Assistant to
+publish household events into Wildstone's intake — the "config" shim
+shape (ADR-W024 A10). It is the model for any third-party service that
+can already call a webhook.
+
+Two things it demonstrates that a normal package does not:
+
+- **`publishes`**, which declares the event types the capability emits
+  and earns it a provided `<capability>-publisher` secret. `wild
+  household publisher home-automation -node <node>` mints the token and
+  places it on the node; the rendered config references it, and the node
+  resolves the reference at write time. Enabling the capability before
+  minting fails loudly on the missing provided secret, which is the
+  right way round.
+- **`externalConfig`**, which declares that the rendered file is read by
+  something Wildstone does not run. Without it the file trips the
+  standing invariant that every rendered config is mounted into a
+  container of its own package — the check that exists because Authelia
+  once shipped a correct `configuration.yml` on disk that its container
+  never read. A declaration names the consumer and the reason; a stale
+  one (naming a file the package does not render) fails just as loudly,
+  for the same reason an unused policy exemption fails startup.
+- **Double templating.** The file is rendered by Wildstone's Go
+  templates once and by Home Assistant's Jinja forever after, and both
+  spell an action `{{ ... }}`. Every Jinja expression is wrapped in a Go
+  raw string — ``{{`...`}}`` — so it survives expansion literally.
+  Contiguous Jinja goes in one wrapper rather than one per expression.
+
 ## Container-to-container addressing
 
 Containers on the Wildstone network reach each other by container-name

@@ -31,6 +31,23 @@ var walkFillers = map[string]string{
 // instead of skipping. A skip would be the same hole as a guard that
 // silently stops running: green, and checking nothing.
 func renderShippedPackages(t *testing.T) map[string][]resource.Resource {
+	out := make(map[string][]resource.Resource)
+	for name, sp := range walkShipped(t) {
+		out[name] = sp.rendered
+	}
+	return out
+}
+
+// shipped pairs a package with what it renders, for the checks that need
+// to read a package's own declarations to judge its output.
+type shipped struct {
+	pkg      *pkgspec.Package
+	rendered []resource.Resource
+}
+
+// walkShipped is the single walk both accessors share. Two walks is how
+// one of them quietly stops seeing a package the other one checks.
+func walkShipped(t *testing.T) map[string]shipped {
 	t.Helper()
 	root, err := filepath.Abs("../../packages")
 	if err != nil {
@@ -59,7 +76,7 @@ func renderShippedPackages(t *testing.T) map[string][]resource.Resource {
 	}
 
 	catalog := capability.NewCatalog(all...)
-	out := make(map[string][]resource.Resource, len(all))
+	out := make(map[string]shipped, len(all))
 	for i, pkg := range all {
 		params := map[string]string{}
 		for _, d := range pkg.Params {
@@ -75,7 +92,7 @@ func renderShippedPackages(t *testing.T) map[string][]resource.Resource {
 		if err != nil {
 			t.Fatalf("expand %s: %v", names[i], err)
 		}
-		out[names[i]] = rendered
+		out[names[i]] = shipped{pkg: pkg, rendered: rendered}
 	}
 	return out
 }

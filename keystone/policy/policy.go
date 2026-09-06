@@ -24,7 +24,14 @@ const (
 	RuleAdminStructural          = "admin-structural"
 	RuleSecretValuesForbidden    = "secret-values-forbidden"
 	RuleButlerAdminScope         = "butler-admin-scope"
+	RuleAutomationActionTier     = "automation-action-tier"
 )
+
+// automationTiers is the closed set of action tiers a household rule may
+// carry (ADR-W024 A5): read, and domestic — the concierge tier the
+// domestic gateway executes. Infrastructure tiers (low, medium, high)
+// belong to plans; a rule cannot restart a container, whoever wrote it.
+var automationTiers = map[string]bool{"read": true, "domestic": true}
 
 // Classifications is the closed vocabulary, adopted unchanged from the
 // reference deployment (ADR-W009 A2 / scope Appendix B).
@@ -134,6 +141,11 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 				continue
 			}
 			all = append(all, envSecretRules(r, r.Job.Run.Env)...)
+		case resource.KindAutomation:
+			if r.Automation == nil {
+				continue
+			}
+			all = append(all, automationRules(r)...)
 		}
 	}
 	// Deletions of admin routes by the butler (RuleButlerAdminScope
@@ -212,6 +224,32 @@ func routeRules(r resource.Resource, currentRoutes map[string]*resource.RouteSpe
 			})
 		}
 	}
+	return out
+}
+
+// automationRules applies the household-rule invariants (ADR-W024 A5) to
+// one proposed Automation, for every principal: the Butler is the
+// expected author, but a human pasting a rule is held to the same line.
+//
+// The tier rule is the load-bearing one. An Automation's action runs
+// without a per-firing approval — that is what makes it a rule — so the
+// only actions it may carry are the ones the domestic gateway is allowed
+// to execute unattended. Anything that would change infrastructure is a
+// plan, and stays a plan.
+//
+// Its params are held to the container-env secret rule: a rule that
+// carries a token in a param has put a secret in the Statefile, and the
+// engine would hand it to a tool and, through escalation, to a model.
+func automationRules(r resource.Resource) []Violation {
+	var out []Violation
+	a := r.Automation
+	if !automationTiers[a.Action.Tier] {
+		out = append(out, Violation{
+			Rule: RuleAutomationActionTier, Kind: string(r.Kind), Name: r.Metadata.Name,
+			Msg: fmt.Sprintf("action tier %q: a household rule may only carry read or domestic actions; infrastructure changes are plans, not rules (ADR-W024 A5)", a.Action.Tier),
+		})
+	}
+	out = append(out, envSecretRules(r, a.Action.Params)...)
 	return out
 }
 

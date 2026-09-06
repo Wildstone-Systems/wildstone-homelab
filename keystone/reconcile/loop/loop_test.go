@@ -323,3 +323,51 @@ func TestBackupPlansAreNotLoopWork(t *testing.T) {
 		t.Fatalf("backup plan record state = %s, loop must leave it alone", rec.State)
 	}
 }
+
+// An approved plan whose only content is a household rule (ADR-W024 A1)
+// resolves to applied with no agent involved, and the rule is recorded
+// as observed-healthy at no node.
+func TestPlanTickWithAutomationOnlyResolves(t *testing.T) {
+	l, state, db, app := harness(t)
+	rule := resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindAutomation,
+		Metadata:   resource.Metadata{Name: "breakfast-check", Owner: "household/mika"},
+		Automation: &resource.AutomationSpec{
+			Description: "breakfast",
+			Trigger:     resource.AutomationTrigger{EventType: "person.left_home"},
+			Action:      resource.AutomationAction{Tool: "notifications.notify", Tier: "domestic"},
+		},
+	}
+	if err := state.Put(rule); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Commit("test", "plan-1", "add rule"); err != nil {
+		t.Fatal(err)
+	}
+	id, err := db.InsertPlan("butler", "mika", "add rule", "medium", `{"x":1}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TransitionPlan(id, runtimedb.PlanApproved, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := l.Tick(t.Context())
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if out.Failed != "" || len(out.PlanIDs) != 1 {
+		t.Fatalf("plan tick = %+v", out)
+	}
+	rec, err := db.GetPlan(id)
+	if err != nil || rec.State != runtimedb.PlanApplied {
+		t.Fatalf("plan = %+v, %v; want applied", rec, err)
+	}
+	if app.ops != 0 {
+		t.Fatalf("%d agent op(s) dispatched for a rule that is applied nowhere", app.ops)
+	}
+	obs, err := db.ListObserved()
+	if err != nil || len(obs) != 1 || !obs[0].Healthy || obs[0].Kind != "Automation" || obs[0].Node != "" {
+		t.Fatalf("observed = %+v, %v", obs, err)
+	}
+}

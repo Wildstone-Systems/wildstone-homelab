@@ -15,11 +15,15 @@ const (
 	RoleAdmin    Role = "admin"
 	RoleOperator Role = "operator"
 	RoleButler   Role = "butler"
+	// RolePublisher may emit household events and nothing else
+	// (ADR-W024 A3): an integration's shim can lie about the house; it
+	// cannot read state, propose, or approve.
+	RolePublisher Role = "publisher"
 )
 
 // ValidRole reports whether r is one of the closed role set.
 func ValidRole(r Role) bool {
-	return r == RoleAdmin || r == RoleOperator || r == RoleButler
+	return r == RoleAdmin || r == RoleOperator || r == RoleButler || r == RolePublisher
 }
 
 // Principal is who calls the public API. ActingFor is the ADR-W001

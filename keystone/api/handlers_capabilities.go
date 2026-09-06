@@ -19,14 +19,15 @@ import (
 // packageView is what the Console browses. Params travel with their
 // required/default, because that is the install form (ADR-W021 A5).
 type packageView struct {
-	Name       string                `json:"name"`
-	Version    string                `json:"version"`
-	Capability string                `json:"capability"`
-	Profile    string                `json:"profile,omitempty"`
-	Params     []paramView           `json:"params,omitempty"`
-	Provides   []pkgspec.Provide     `json:"provides,omitempty"`
-	Requires   []pkgspec.Requirement `json:"requires,omitempty"`
-	Enabled    bool                  `json:"enabled"`
+	Name       string                 `json:"name"`
+	Version    string                 `json:"version"`
+	Capability string                 `json:"capability"`
+	Profile    string                 `json:"profile,omitempty"`
+	Params     []paramView            `json:"params,omitempty"`
+	Provides   []pkgspec.Provide      `json:"provides,omitempty"`
+	Requires   []pkgspec.Requirement  `json:"requires,omitempty"`
+	Publishes  *pkgspec.PublishesSpec `json:"publishes,omitempty"`
+	Enabled    bool                   `json:"enabled"`
 	capabilityDetail
 }
 
@@ -126,7 +127,7 @@ type serviceAddress struct {
 	Route string `json:"route"`
 	// URL is what a BROWSER should use — derived from the ingress
 	// posture, so the ported form under a tailnet rather than the
-	// hostname the package declared (ADR-W022 A1). This is the answer to
+	// hostname the package declared (ADR-W024 A1). This is the answer to
 	// "which port is this on", which previously existed only in
 	// <prefix>/routes/ on the node.
 	URL string `json:"url"`
@@ -262,6 +263,7 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 			Name: p.Metadata.Name, Version: p.Metadata.Version,
 			Capability: p.Metadata.Capability, Profile: p.Metadata.Profile,
 			Params: resolveParams(p.Params, facts), Provides: p.Provides, Requires: p.Requires,
+			Publishes:        p.Publishes,
 			Enabled:          enabled[p.Metadata.Capability],
 			capabilityDetail: s.describeCapability(p, current, health),
 		})

@@ -231,3 +231,123 @@ func TestParseAndValidateRejectMalformedYAML(t *testing.T) {
 		t.Fatal("expected parse error for malformed YAML")
 	}
 }
+
+func TestValidatePublishes(t *testing.T) {
+	base := func() *Package {
+		pkg, err := Parse([]byte(wellFormed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pkg
+	}
+	good := &PublishesSpec{Shape: "sidecar", Events: []PublishedEvent{
+		{Type: "person.left_home", Subject: "member", Fields: []EventField{{Name: "zone", Type: "string"}}},
+		{Type: "calendar.school.closed"},
+	}}
+	pkg := base()
+	pkg.Publishes = good
+	if err := pkg.Validate(); err != nil {
+		t.Fatalf("well-formed publishes: %v", err)
+	}
+
+	for name, tc := range map[string]struct {
+		spec  *PublishesSpec
+		field string
+	}{
+		"bad shape":      {&PublishesSpec{Shape: "logtail", Events: good.Events}, "publishes.shape"},
+		"no events":      {&PublishesSpec{Shape: "native"}, "publishes.events"},
+		"flat type":      {&PublishesSpec{Shape: "native", Events: []PublishedEvent{{Type: "left_home"}}}, "publishes.events[0].type"},
+		"duplicate type": {&PublishesSpec{Shape: "native", Events: []PublishedEvent{{Type: "a.b"}, {Type: "a.b"}}}, "publishes.events[1].type"},
+		"bad subject":    {&PublishesSpec{Shape: "native", Events: []PublishedEvent{{Type: "a.b", Subject: "pet"}}}, "publishes.events[0].subject"},
+		"bad field type": {&PublishesSpec{Shape: "native", Events: []PublishedEvent{{Type: "a.b", Fields: []EventField{{Name: "x", Type: "blob"}}}}}, "publishes.events[0].fields[0].type"},
+		"dup field":      {&PublishesSpec{Shape: "native", Events: []PublishedEvent{{Type: "a.b", Fields: []EventField{{Name: "x", Type: "string"}, {Name: "x", Type: "bool"}}}}}, "publishes.events[0].fields[1].name"},
+	} {
+		pkg := base()
+		pkg.Publishes = tc.spec
+		err := pkg.Validate()
+		ve, ok := err.(*ValidationError)
+		if !ok {
+			t.Errorf("%s: err = %v, want *ValidationError", name, err)
+			continue
+		}
+		if ve.Field != tc.field {
+			t.Errorf("%s: field = %q, want %q", name, ve.Field, tc.field)
+		}
+	}
+
+	// A YAML round trip: the block parses from a document the way a
+	// package author writes it.
+	doc := strings.Replace(wellFormed, "agentTools:", `publishes:
+  shape: config
+  events:
+    - { type: person.arrived_home, subject: member, description: "HA person entity entered the home zone" }
+agentTools:`, 1)
+	parsed, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := parsed.Validate(); err != nil {
+		t.Fatalf("parsed publishes: %v", err)
+	}
+	if parsed.Publishes == nil || parsed.Publishes.Shape != "config" || parsed.Publishes.Events[0].Subject != "member" {
+		t.Fatalf("publishes = %+v", parsed.Publishes)
+	}
+}
+
+func TestValidateExternalConfig(t *testing.T) {
+	base := func() *Package {
+		pkg, err := Parse([]byte(wellFormed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pkg
+	}
+	pkg := base()
+	pkg.ExternalConfig = []ExternalConfigDecl{
+		{Filename: "wildstone.yaml", Consumer: "Home Assistant", Reason: "runs outside Wildstone"},
+	}
+	if err := pkg.Validate(); err != nil {
+		t.Fatalf("well-formed externalConfig: %v", err)
+	}
+
+	for name, tc := range map[string]struct {
+		decls []ExternalConfigDecl
+		field string
+	}{
+		"no filename":  {[]ExternalConfigDecl{{Consumer: "HA", Reason: "r"}}, "externalConfig[0].filename"},
+		"no consumer":  {[]ExternalConfigDecl{{Filename: "f.yaml", Reason: "r"}}, "externalConfig[0].consumer"},
+		"no reason":    {[]ExternalConfigDecl{{Filename: "f.yaml", Consumer: "HA"}}, "externalConfig[0].reason"},
+		"blank reason": {[]ExternalConfigDecl{{Filename: "f.yaml", Consumer: "HA", Reason: "   "}}, "externalConfig[0].reason"},
+		"duplicate": {[]ExternalConfigDecl{
+			{Filename: "f.yaml", Consumer: "HA", Reason: "r"},
+			{Filename: "f.yaml", Consumer: "HA", Reason: "r"},
+		}, "externalConfig[1].filename"},
+	} {
+		pkg := base()
+		pkg.ExternalConfig = tc.decls
+		err := pkg.Validate()
+		ve, ok := err.(*ValidationError)
+		if !ok {
+			t.Errorf("%s: err = %v, want *ValidationError", name, err)
+			continue
+		}
+		if ve.Field != tc.field {
+			t.Errorf("%s: field = %q, want %q", name, ve.Field, tc.field)
+		}
+	}
+
+	// It parses from a document the way an author writes it.
+	doc := strings.Replace(wellFormed, "agentTools:", `externalConfig:
+  - { filename: wildstone.yaml, consumer: Home Assistant, reason: "runs outside Wildstone" }
+agentTools:`, 1)
+	parsed, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := parsed.Validate(); err != nil {
+		t.Fatalf("parsed externalConfig: %v", err)
+	}
+	if len(parsed.ExternalConfig) != 1 || parsed.ExternalConfig[0].Consumer != "Home Assistant" {
+		t.Fatalf("externalConfig = %+v", parsed.ExternalConfig)
+	}
+}

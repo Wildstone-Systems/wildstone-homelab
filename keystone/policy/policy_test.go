@@ -33,6 +33,19 @@ func container(name string, env map[string]string) resource.Resource {
 	}
 }
 
+func automation(name, tier string, params map[string]string) resource.Resource {
+	return resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindAutomation,
+		Metadata:   resource.Metadata{Name: name, Owner: "household"},
+		Automation: &resource.AutomationSpec{
+			Description: "test rule",
+			Trigger:     resource.AutomationTrigger{EventType: "person.left_home"},
+			Action:      resource.AutomationAction{Tool: "notifications.notify", Tier: tier, Params: params},
+		},
+	}
+}
+
 func ruleIDs(vs []Violation) []string {
 	var out []string
 	for _, v := range vs {
@@ -145,6 +158,42 @@ func TestRules(t *testing.T) {
 				Proposed: []resource.Resource{route("console", "admin_tailscale", "none")},
 				Current:  []resource.Resource{route("console", "admin_tailscale", "authelia_oidc")},
 				Role:     "operator",
+			},
+		},
+		{
+			name:   "household rule with a domestic action",
+			change: Change{Proposed: []resource.Resource{automation("breakfast", "domestic", nil)}, Role: "butler"},
+		},
+		{
+			name:   "household rule with a read action",
+			change: Change{Proposed: []resource.Resource{automation("breakfast", "read", nil)}},
+		},
+		{
+			name:      "household rule with an infrastructure-tier action, from the butler",
+			change:    Change{Proposed: []resource.Resource{automation("restart-things", "high", nil)}, Role: "butler"},
+			wantRules: []string{RuleAutomationActionTier},
+		},
+		{
+			name:      "household rule with an infrastructure-tier action, from an operator, is refused the same",
+			change:    Change{Proposed: []resource.Resource{automation("restart-things", "medium", nil)}, Role: "operator"},
+			wantRules: []string{RuleAutomationActionTier},
+		},
+		{
+			name: "household rule carrying a literal secret in a param",
+			change: Change{Proposed: []resource.Resource{automation("leaky", "domestic",
+				map[string]string{"api_key": "hunter2"})}},
+			wantRules: []string{RuleSecretValuesForbidden},
+		},
+		{
+			name: "household rule referencing a secret by name in a param is fine",
+			change: Change{Proposed: []resource.Resource{automation("clean", "domestic",
+				map[string]string{"api_key": "secret/ntfy-token"})}},
+		},
+		{
+			name: "untouched household rule with a bad tier is legacy drift, not a block",
+			change: Change{
+				Proposed: []resource.Resource{automation("old", "high", nil), route("app", "family_public", "authelia_oidc")},
+				Current:  []resource.Resource{automation("old", "high", nil)},
 			},
 		},
 		{

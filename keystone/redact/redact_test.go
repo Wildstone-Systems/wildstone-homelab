@@ -71,3 +71,46 @@ func TestCommitHeadPreserved(t *testing.T) {
 		t.Fatalf("hash under an unrelated key survived: %q", out)
 	}
 }
+
+// TestEventIDPreserved pins the household-id shelter (ADR-W024 A2): a
+// publisher-supplied id under eventId/correlationId survives whatever
+// shape it has, while the same value under a secret-keyed field, or
+// under no key at all, still redacts.
+func TestEventIDPreserved(t *testing.T) {
+	for _, id := range []string{
+		"01J6ZK8Q2M7Y4N3R5T9V1W0X2A",                   // ULID
+		"550e8400-e29b-41d4-a716-446655440000",         // UUID
+		"ha-01J6ZK8Q2M7Y4N3R5T9V1W0X2A",                // prefixed ULID
+		"pantry:meal:20260905T073000Z:mika",           // structured
+		"7f3a9c2e1b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c", // content hash
+		"school-pickup-suppression@41207:act",          // an engine decision id
+	} {
+		body := `{"seq":1,"eventId":"` + id + `","correlationId":"` + id + `","type":"person.left_home"}`
+		if out := String(body); out != body {
+			t.Errorf("id %q redacted: %s", id, out)
+		}
+		// The escaped form, as a body serialized inside a JSON string.
+		escaped := `{\"eventId\":\"` + id + `\"}`
+		if out := String(escaped); out != escaped {
+			t.Errorf("escaped id %q redacted: %s", id, out)
+		}
+		// The same value under a secret key, or bare, is still a value.
+		if out := String(`{"token":"` + id + `"}`); strings.Contains(out, id) {
+			t.Errorf("id-shaped token survived: %s", out)
+		}
+	}
+	// A secret beside a sheltered id: the id stays, the secret goes.
+	in := `{"eventId":"01J6ZK8Q2M7Y4N3R5T9V1W0X2A","payload":{"apiKey":"KNOWNFAKE0123456789abcdefghij"}}`
+	out := String(in)
+	if !strings.Contains(out, "01J6ZK8Q2M7Y4N3R5T9V1W0X2A") || strings.Contains(out, "KNOWNFAKE") {
+		t.Fatalf("adjacent: %s", out)
+	}
+	// Oversize under the key is not sheltered.
+	long := strings.Repeat("A", 129)
+	if out := String(`{"eventId":"` + long + `"}`); strings.Contains(out, long) {
+		t.Fatalf("oversize id sheltered: %s", out)
+	}
+	if SecretShaped(`{"eventId":"01J6ZK8Q2M7Y4N3R5T9V1W0X2A"}`) {
+		t.Fatal("SecretShaped fired on a keyed event id")
+	}
+}

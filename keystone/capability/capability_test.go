@@ -1,8 +1,10 @@
 package capability
 
 import (
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"strings"
 	"testing"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 )
@@ -360,5 +362,93 @@ spec: { name: app-oidc, provided: true }
 				t.Errorf("provided = %v, want %v", secrets[0].Provided, tc.wantProvided)
 			}
 		})
+	}
+}
+
+// A package that publishes household events gets its publisher secret
+// synthesised — provided, on the package's node — and can reference it
+// as .Resolved.PublisherSecretRef (ADR-W024 A10).
+func TestExpandSynthesisesPublisherSecret(t *testing.T) {
+	pkg := simplePackage()
+	pkg.Publishes = &pkgspec.PublishesSpec{Shape: "sidecar", Events: []pkgspec.PublishedEvent{{Type: "widget.pressed"}}}
+	pkg.Templates = append(pkg.Templates, `apiVersion: wildstone.dev/v1
+kind: Container
+metadata: { name: widget-shim, node: "{{ .Params.node }}" }
+spec:
+  image: "ghcr.io/example/shim@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  env: { WILDSTONE_TOKEN: "{{ .Resolved.PublisherSecretRef }}" }
+`)
+	out, err := NewEngine().Expand(pkg, map[string]string{"node": "n1"}, NewCatalog(pkg))
+	if err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+	var secret *resource.Resource
+	var shim *resource.Resource
+	for i := range out {
+		switch {
+		case out[i].Kind == resource.KindSecret && out[i].Secret != nil && out[i].Secret.Name == "widgets-publisher":
+			secret = &out[i]
+		case out[i].Kind == resource.KindContainer && out[i].Metadata.Name == "widget-shim":
+			shim = &out[i]
+		}
+	}
+	if secret == nil {
+		t.Fatal("no widgets-publisher Secret synthesised")
+	}
+	if !secret.Secret.Provided || secret.Metadata.Node != "n1" || secret.Metadata.Owner != "capability/widgets" {
+		t.Fatalf("publisher secret = %+v / %+v", secret.Metadata, secret.Secret)
+	}
+	if shim == nil || shim.Container.Env["WILDSTONE_TOKEN"] != "secret/widgets-publisher" {
+		t.Fatalf("shim env did not resolve PublisherSecretRef: %+v", shim)
+	}
+	if PublisherSecretName("widgets") != secret.Secret.Name {
+		t.Fatalf("PublisherSecretName(widgets) = %q, want %q", PublisherSecretName("widgets"), secret.Secret.Name)
+	}
+
+	// A package that declares the Secret itself wins, as with OIDC.
+	declared := simplePackage()
+	declared.Publishes = pkg.Publishes
+	declared.Templates = append(declared.Templates, `apiVersion: wildstone.dev/v1
+kind: Secret
+metadata: { name: widgets-publisher, node: "{{ .Params.node }}" }
+spec: { name: widgets-publisher, provided: true }
+`)
+	out, err = NewEngine().Expand(declared, map[string]string{"node": "n1"}, NewCatalog(declared))
+	if err != nil {
+		t.Fatalf("expand declared: %v", err)
+	}
+	n := 0
+	for _, r := range out {
+		if r.Kind == resource.KindSecret && r.Secret.Name == "widgets-publisher" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("want exactly one widgets-publisher Secret, got %d", n)
+	}
+
+	// No node param: the secret has nowhere to live, and Expand says so
+	// rather than emitting a resource the reconciler cannot dispatch.
+	nodeless := simplePackage()
+	nodeless.Params = nil
+	nodeless.Templates = []string{`apiVersion: wildstone.dev/v1
+kind: Container
+metadata: { name: widget-server, node: "n1" }
+spec: { image: "ghcr.io/example/widget@sha256:1111111111111111111111111111111111111111111111111111111111111111" }
+`}
+	nodeless.Publishes = pkg.Publishes
+	if _, err := NewEngine().Expand(nodeless, nil, NewCatalog(nodeless)); err == nil || !strings.Contains(err.Error(), "no node param") {
+		t.Fatalf("nodeless publisher: err = %v, want a no-node-param error", err)
+	}
+
+	// A package that does not publish gets no publisher secret.
+	out, err = NewEngine().Expand(simplePackage(), map[string]string{"node": "n1"}, NewCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range out {
+		if r.Kind == resource.KindSecret {
+			t.Fatalf("non-publishing package grew a Secret: %+v", r)
+		}
 	}
 }

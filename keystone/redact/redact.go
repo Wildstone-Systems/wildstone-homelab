@@ -50,6 +50,32 @@ var digestPinScanRegexp = regexp.MustCompile(
 var commitRefScanRegexp = regexp.MustCompile(
 	`(?i)\\?"?\b(?:basedOnHead|statefileHead|newHead|head|commit)\\?"?\s*[:=]\s*\\?"?[0-9a-fA-F]{7,64}\\?"?`)
 
+// eventIDRefScanRegexp finds a household event id or correlation id
+// carried under the key that names it, in JSON shape (ADR-W024 A2). A
+// publisher-supplied id is, by construction, whatever shape the
+// publisher's own id scheme produces — a ULID is 26 characters of
+// [0-9A-Z], a UUID is hex with hyphens — and both fall squarely into the
+// value rules below, so without this shelter every event read back
+// through the API carried "[REDACTED]" where its identity should be. An
+// id nobody can read is an id nobody can dedupe, replay, or correlate
+// against, which is the whole reason the envelope has one.
+//
+// Keyed on the field name, like the commit shelter, because the value's
+// shape is exactly what cannot be trusted to distinguish it. The value
+// class is the id character set — which includes "@" and ":", the
+// separators the automation engine's own decision ids use
+// ("<rule>@<triggerSeq>:act") — and the length bound mirrors the intake's
+// (keystone/household MaxEventIDBytes), so an oversize value is not
+// sheltered. As with commit hashes, the quotes may be backslash-escaped.
+//
+// Not a leak: the value under these keys came from a publisher, not from
+// anything Keystone holds. A publisher that writes a secret it already
+// holds into an id has exfiltrated nothing it did not have, and the
+// Butler's own tool-result redaction is a separate layer that still
+// runs over anything an id carries into a model.
+var eventIDRefScanRegexp = regexp.MustCompile(
+	`\\?"(?:eventId|correlationId)\\?"\s*:\s*\\?"[A-Za-z0-9._:+@-]{1,128}\\?"`)
+
 // kindRefScanRegexp finds a resource reference of the form "Kind/name"
 // over the closed kind vocabulary. These are sheltered for exactly the
 // reason digest pins are: an ordinary "Volume/immich-postgres-data" is a
@@ -216,6 +242,7 @@ func SecretShaped(s string) bool {
 	sheltered := secretRefScanRegexp.ReplaceAllString(s, "")
 	sheltered = digestPinScanRegexp.ReplaceAllString(sheltered, "")
 	sheltered = commitRefScanRegexp.ReplaceAllString(sheltered, "")
+	sheltered = eventIDRefScanRegexp.ReplaceAllString(sheltered, "")
 	sheltered = kindRefScanRegexp.ReplaceAllStringFunc(sheltered, func(m string) string {
 		if kindRefIsSafe(m) {
 			return ""
@@ -271,6 +298,12 @@ func String(s string) string {
 	// So do Statefile commit hashes named by their key (see
 	// commitRefScanRegexp).
 	protected = commitRefScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
+		refs = append(refs, m)
+		return fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, len(refs)-1)
+	})
+	// And household event/correlation ids named by their key (see
+	// eventIDRefScanRegexp).
+	protected = eventIDRefScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
 		refs = append(refs, m)
 		return fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, len(refs)-1)
 	})

@@ -7,6 +7,7 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
@@ -210,6 +211,11 @@ var kindOrder = map[resource.Kind]int{
 	resource.KindJob:       5,
 	resource.KindRoute:     6,
 	resource.KindDnsRecord: 7,
+	// Automation after every node-applied kind: a rule may name a
+	// capability's tool, so the capability lands first. Nothing depends
+	// on a rule. Keystone-owned, so the position only orders the plan's
+	// listing; there is no apply to sequence (ADR-W024 A1).
+	resource.KindAutomation: 8,
 	// BackupPlan last: a backup declaration depends on the volumes it
 	// names, and nothing depends on it (ADR-W011 A4).
 	resource.KindBackupPlan: 9,
@@ -367,6 +373,8 @@ func specEqual(a, b resource.Resource) bool {
 			return a.Job == b.Job
 		}
 		return containerEqual(&a.Job.Run, &b.Job.Run)
+	case resource.KindAutomation:
+		return a.Automation != nil && b.Automation != nil && reflect.DeepEqual(a.Automation, b.Automation)
 	default:
 		return false
 	}
@@ -633,6 +641,16 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 			return RiskMedium, "backup coverage removed: no data deleted, but the named volumes stop being backed up"
 		}
 		return RiskLow, "backup schedule declaration only; runs execute with their own provenance (ADR-W011 A4)"
+	case resource.KindAutomation:
+		// A rule acts on the household on its own once approved — that
+		// approval is the whole point (ADR-W024 A1), so creating or
+		// changing one is never Low: Low is the tier drift repair
+		// applies unattended, and a rule must always pass a human.
+		// Removing one is Low: the rule stops, and nothing else changes.
+		if action == ActionDelete {
+			return RiskLow, "rule removed: it stops firing; nothing else changes"
+		}
+		return RiskMedium, "a household rule that will act on its own once approved: review its trigger, conditions, and action"
 	default:
 		return RiskMedium, "unrecognized kind"
 	}

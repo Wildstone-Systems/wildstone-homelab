@@ -17,6 +17,9 @@ const (
 	VerbApprove Verb = "approve"
 	// VerbManage covers principal/token administration and audit reads.
 	VerbManage Verb = "manage"
+	// VerbEmit covers publishing household events (ADR-W024 A3) — the
+	// one verb a publisher holds, and the only thing it can do.
+	VerbEmit Verb = "emit"
 )
 
 // roleVerbs is the closed RBAC table (ADR-W007 A2). The butler row is the
@@ -25,13 +28,19 @@ const (
 // plan awaiting a human.
 var roleVerbs = map[runtimedb.Role]map[Verb]bool{
 	runtimedb.RoleAdmin: {
-		VerbRead: true, VerbPropose: true, VerbApprove: true, VerbManage: true,
+		VerbRead: true, VerbPropose: true, VerbApprove: true, VerbManage: true, VerbEmit: true,
 	},
 	runtimedb.RoleOperator: {
 		VerbRead: true, VerbPropose: true, VerbApprove: true,
 	},
 	runtimedb.RoleButler: {
 		VerbRead: true, VerbPropose: true,
+	},
+	// A publisher emits and nothing else: not read, not propose. A shim
+	// that is compromised can lie about the house; it cannot see or
+	// touch the Statefile.
+	runtimedb.RolePublisher: {
+		VerbEmit: true,
 	},
 }
 

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/catalog"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
@@ -79,6 +80,16 @@ type Server struct {
 	// answering 503; session history stays readable.
 	ButlerHost *ButlerHost
 
+	// Automation is the household rule engine (ADR-W024 H3), used here
+	// only for side-effect-free replay; cmd/keystone runs its loop. New
+	// wires one over the same DB and Statefile.
+	Automation *automation.Engine
+	// OnHouseholdEvent, when set, is called after a new household event
+	// is recorded (not after a duplicate) — cmd/keystone wires it to the
+	// engine's Poke so a rule is evaluated when its trigger lands, not
+	// at the next interval.
+	OnHouseholdEvent func()
+
 	// BackupRun / BackupRestore reach the backup engine (ADR-W015 A3) —
 	// cmd/keystone wires Engine.RunNow and Engine.RestoreAlongside. nil
 	// leaves the backup endpoints answering 503.
@@ -101,6 +112,7 @@ func New(p *principal.Store, db *runtimedb.DB, state *statefile.Store, log *slog
 		State:      state,
 		Log:        log,
 		Policy:     policy.NewEngine(nil),
+		Automation: &automation.Engine{DB: db, State: state, Log: log},
 		limiter:    newLimiter(),
 	}
 }
@@ -182,6 +194,15 @@ func (s *Server) Handler() http.Handler {
 
 	// Morning report (ADR-W017 A5): deterministic digest, read verb.
 	mux.Handle("GET /api/v1/reports/morning", s.handle(principal.VerbRead, s.morningReport))
+
+	// Household events (ADR-W024): the intake (emit — the publisher
+	// role's only verb), the cursor (read), and publisher credentialing
+	// (manage).
+	mux.Handle("POST /api/v1/household/events", s.handle(principal.VerbEmit, s.emitHouseholdEvent))
+	mux.Handle("GET /api/v1/household/events", s.handle(principal.VerbRead, s.listHouseholdEvents))
+	mux.Handle("POST /api/v1/household/publishers/{capability}", s.handle(principal.VerbManage, s.mintPublisher))
+	// Replay is a read: it evaluates and returns, writes nothing.
+	mux.Handle("POST /api/v1/household/automations/replay", s.handle(principal.VerbRead, s.replayAutomation))
 
 	// Butler (ADR-W017 A2): ask carries the read verb — conversing is not
 	// a write; a session's proposals enter through the same submitProposal

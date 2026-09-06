@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -17,20 +18,24 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/api"
+	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/backup"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/catalog"
+	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/gateway"
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingest"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile/loop"
+	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/report"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
@@ -65,6 +70,11 @@ func main() {
 	butlerProvider := flag.String("butler-provider", "off", "Butler LLM provider: off|anthropic|openai|ollama (ADR-W017 A4); API keys come ONLY from ANTHROPIC_API_KEY/OPENAI_API_KEY env vars, never a flag")
 	butlerModel := flag.String("butler-model", "", "Butler model name; empty uses the provider's default")
 	butlerEndpoint := flag.String("butler-endpoint", "", "Butler provider base URL (openai-compatible gateways, ollama host); empty uses the provider's default")
+	automationEvery := flag.Duration("automation-interval", 15*time.Second, "how often the household automation engine ticks between event pokes (ADR-W024 H3)")
+	householdTZ := flag.String("household-timezone", "Local", "IANA time zone the household's rules keep (timeOfDay/weekday conditions), e.g. Europe/London")
+	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W024 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
+	replyURL := flag.String("household-reply-url", "", "household event intake URL a notification's reply buttons post to, as a PHONE can reach it (not Keystone's loopback address); empty means notifications carry no reply buttons and a rule that asks for them fails loudly")
+	replyTTL := flag.Duration("household-reply-ttl", 12*time.Hour, "how long a notification's reply token stays valid")
 	flag.Parse()
 
 	if *showVersion {
@@ -74,7 +84,11 @@ func main() {
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	butlerCfg := butlerConfig{Provider: *butlerProvider, Model: *butlerModel, Endpoint: *butlerEndpoint}
-	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, butlerCfg, log); err != nil {
+	householdCfg := householdConfig{
+		Interval: *automationEvery, Timezone: *householdTZ,
+		NtfyURL: *ntfyURL, ReplyURL: *replyURL, ReplyTTL: *replyTTL,
+	}
+	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, butlerCfg, householdCfg, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
 		os.Exit(1)
 	}
@@ -138,7 +152,7 @@ func claimCode(args []string) error {
 	return nil
 }
 
-func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir string, butlerCfg butlerConfig, log *slog.Logger) error {
+func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir string, butlerCfg butlerConfig, householdCfg householdConfig, log *slog.Logger) error {
 	lis, err := net.Listen("tcp", listen)
 	if err != nil {
 		return err
@@ -147,7 +161,78 @@ func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reco
 	if err != nil {
 		return err
 	}
-	return serve(lis, apiLis, joinTokens, hosts, dataDir, ingestEvery, reconcileEvery, managedPrefix, backupEvery, resticImage, consoleDir, catalogDir, butlerCfg, log, os.Stdout)
+	return serve(lis, apiLis, joinTokens, hosts, dataDir, ingestEvery, reconcileEvery, managedPrefix, backupEvery, resticImage, consoleDir, catalogDir, butlerCfg, householdCfg, log, os.Stdout)
+}
+
+// householdConfig carries the household automation flags into serve
+// (ADR-W024 H3).
+type householdConfig struct {
+	// Interval between engine ticks when no event pokes it.
+	Interval time.Duration
+	// Timezone is the IANA name the household's rules keep; "" or
+	// "Local" is the host's.
+	Timezone string
+	// NtfyURL is where the notifications.notify action publishes; empty
+	// leaves that executor unregistered.
+	NtfyURL string
+	// ReplyURL is the intake address a notification's reply buttons
+	// post to, as a household device can reach it.
+	ReplyURL string
+	// ReplyTTL bounds a reply token's life.
+	ReplyTTL time.Duration
+}
+
+// butlerSessionPrincipal is the acting principal on every Butler session
+// record (ADR-W001 A1). The small-duplicated-constant pattern: the API
+// owns the same string for the sessions it creates, and this file needs
+// the value rather than that package.
+const butlerSessionPrincipal = "butler"
+
+// replyPrincipal publishes a household member's answer to a
+// notification (ADR-W024 H4). It holds the publisher role — one verb,
+// emit — because its token travels to a phone inside a notification.
+// Whoever holds one can claim the household answered something, and can
+// do nothing else: not read state, not propose, not approve.
+const replyPrincipal = "publisher-replies"
+
+// replyMinter returns the seam the notifier uses to mint a short-lived
+// reply token per notification. The principal is created once here
+// rather than lazily per call, so two notifications racing cannot both
+// try to create it.
+func replyMinter(principals *principal.Store, db *runtimedb.DB, ttl time.Duration) (func(context.Context) (string, error), error) {
+	if _, err := db.GetPrincipal(replyPrincipal); errors.Is(err, runtimedb.ErrNotFound) {
+		if cerr := principals.Create(replyPrincipal, runtimedb.RolePublisher, ""); cerr != nil {
+			return nil, fmt.Errorf("creating the %s principal: %w", replyPrincipal, cerr)
+		}
+	} else if err != nil {
+		return nil, err
+	}
+	if ttl <= 0 {
+		ttl = 12 * time.Hour
+	}
+	return func(context.Context) (string, error) {
+		return principals.Mint(replyPrincipal, "", ttl)
+	}, nil
+}
+
+// agentToolSources flattens a catalog's agentTools declarations for the
+// domestic gateway's declaration check (ADR-W024 A5).
+func agentToolSources(cat *catalog.Catalog) []domestic.AgentToolSource {
+	if cat == nil {
+		return nil
+	}
+	var out []domestic.AgentToolSource
+	for _, p := range cat.List() {
+		if len(p.AgentTools) == 0 {
+			continue
+		}
+		tools := map[string]string{}
+		for _, t := range p.AgentTools {
+			tools[t.Name] = t.Risk
+		}
+		out = append(out, domestic.AgentToolSource{Capability: p.Metadata.Capability, Tools: tools})
+	}
+	return out
 }
 
 // butlerConfig carries the -butler-* flags into serve (ADR-W017 A4).
@@ -230,7 +315,7 @@ func withConsole(apiHandler http.Handler, dir string) http.Handler {
 // serve wires and runs both planes over already-bound listeners —
 // separated from run so the boot integration test can use :0 listeners.
 // bootstrapOut receives the one-time admin token on first start.
-func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir string, butlerCfg butlerConfig, log *slog.Logger, bootstrapOut io.Writer) error {
+func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir string, butlerCfg butlerConfig, householdCfg householdConfig, log *slog.Logger, bootstrapOut io.Writer) error {
 	// recordNode is bound once the runtime DB is open, a few lines below.
 	// The indirection is safe without synchronisation: the gateway cannot
 	// deliver a node event before gw.Serve, which is the last statement in
@@ -351,21 +436,90 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		}
 	}()
 
-	// Public plane. Plan approval pokes the reconcile service (R2a).
-	apiSrv := api.New(principals, db, state, log)
 	// The catalog is what this control plane can install. A directory
 	// that cannot be read is fatal rather than skipped: an operator who
 	// passed -catalog-dir meant it, and silently serving an empty
 	// catalog would make "the package is not there" the symptom of a
 	// typo in a path.
+	//
+	// Loaded before the household engine because the domestic gateway
+	// checks every household action against the agentTools its owning
+	// package declares (ADR-W024 A5).
+	var cat *catalog.Catalog
 	if catalogDir != "" {
-		cat, err := catalog.LoadDir(catalogDir)
-		if err != nil {
-			return err
+		loaded, cerr := catalog.LoadDir(catalogDir)
+		if cerr != nil {
+			return cerr
 		}
-		apiSrv.Catalog = cat
+		cat = loaded
 		log.Info("catalog loaded", "dir", catalogDir, "packages", len(cat.List()))
 	}
+
+	// Domestic gateway (ADR-W024 A5, H4): the only way a household rule
+	// acts. Executors are registered here and nowhere else; a rule that
+	// names a tool this deployment has not wired is refused with a
+	// reason on the household stream rather than failing silently.
+	actions := &domestic.Gateway{Log: log}
+	if cat != nil {
+		// Only with a catalog: DeclaredFromPackages over an empty set
+		// would refuse every action, which is not what "no catalog" means.
+		actions.Declared = domestic.DeclaredFromPackages(agentToolSources(cat))
+	}
+	actions.Audit = func(c domestic.Call, r domestic.Result, aerr error) {
+		ev := runtimedb.Event{
+			Type: "domestic.acted", Kind: "Automation", Name: c.Rule, Message: r.Summary,
+			Attrs: map[string]string{"tool": c.Tool, "tier": c.Tier, "subject": c.Subject},
+		}
+		if aerr != nil {
+			var refusal *domestic.RefusalError
+			ev.Type = "domestic.failed"
+			if errors.As(aerr, &refusal) {
+				ev.Type = "domestic.refused"
+			}
+			ev.Message = aerr.Error()
+		}
+		if _, eerr := db.AppendEvent(ev); eerr != nil {
+			log.Error("domestic audit append failed", "tool", c.Tool, "err", eerr)
+		}
+	}
+	if householdCfg.NtfyURL != "" {
+		mintReply, merr := replyMinter(principals, db, householdCfg.ReplyTTL)
+		if merr != nil {
+			return merr
+		}
+		actions.Register(&domestic.Notifier{
+			BaseURL:   householdCfg.NtfyURL,
+			Token:     os.Getenv("NTFY_TOKEN"),
+			ReplyURL:  householdCfg.ReplyURL,
+			MintReply: mintReply,
+		})
+		log.Info("household actions wired", "tools", actions.Tools(), "replies", householdCfg.ReplyURL != "")
+	}
+
+	// Household automation engine (ADR-W024 H3): follows the household
+	// stream, records every decision, and hands a fired rule's action to
+	// the gateway above.
+	householdLoc, err := time.LoadLocation(householdCfg.Timezone)
+	if err != nil {
+		return fmt.Errorf("-household-timezone %q: %w", householdCfg.Timezone, err)
+	}
+	automationEvery := householdCfg.Interval
+	if automationEvery <= 0 {
+		automationEvery = 15 * time.Second
+	}
+	auto := &automation.Engine{
+		DB: db, State: state, Log: log, Location: householdLoc, Actions: actions,
+	}
+	// Run starts below, once the Butler wiring has had its chance to
+	// install the escalator: the engine's fields are read by its loop,
+	// so everything it needs is set before that loop exists.
+
+	// Public plane. Plan approval pokes the reconcile service (R2a); a
+	// new household event pokes the automation engine.
+	apiSrv := api.New(principals, db, state, log)
+	apiSrv.Automation = auto
+	apiSrv.OnHouseholdEvent = auto.Poke
+	apiSrv.Catalog = cat
 	apiSrv.OnApproved = svc.Poke
 	apiSrv.Policy = pol
 	apiSrv.Agents = &reconcile.GatewayApplier{Gateway: gw} // secrets endpoints (ADR-W012 W2)
@@ -419,9 +573,104 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			}
 			return out, nil
 		}
+		// Household rule authoring (ADR-W024 H7). Both seams are read
+		// paths: one describes what a rule may say HERE, the other
+		// replays a draft. Neither can enable a rule — proposing it
+		// still produces a plan a human approves.
+		bgw.AutomationVocabulary = func() (butler.HouseholdVocabulary, error) {
+			v := butler.HouseholdVocabulary{}
+			if cat != nil {
+				seen := map[string]bool{}
+				for _, p := range cat.List() {
+					if p.Publishes == nil {
+						continue
+					}
+					for _, ev := range p.Publishes.Events {
+						if !seen[ev.Type] {
+							seen[ev.Type] = true
+							v.EventTypes = append(v.EventTypes, ev.Type)
+						}
+					}
+				}
+			}
+			// What is REGISTERED, not what is declared: a rule naming a
+			// tool no executor backs would be refused at dispatch, and
+			// the household would find out when it did not happen.
+			for _, tool := range actions.Tools() {
+				tier := "domestic"
+				if actions.Declared != nil {
+					capName, name, _ := strings.Cut(tool, ".")
+					if declared, ok := actions.Declared(capName, name); ok {
+						tier = declared
+					}
+				}
+				v.Actions = append(v.Actions, butler.HouseholdAction{Tool: tool, Tier: tier})
+			}
+			return v, nil
+		}
+		bgw.DryRunAutomation = func(ctx context.Context, doc string, days int) (string, error) {
+			rule, perr := automation.ParseDraft(doc)
+			if perr != nil {
+				return "", perr
+			}
+			if days <= 0 {
+				days = int(automation.DefaultDraftWindow / (24 * time.Hour))
+			}
+			to := time.Now()
+			replay, rerr := auto.ReplayDraft(ctx, rule, pol,
+				butlerSessionPrincipal, string(runtimedb.RoleButler), to.AddDate(0, 0, -days), to, 0)
+			if rerr != nil {
+				return "", rerr
+			}
+			return replay.Summary(20), nil
+		}
+
 		apiSrv.ButlerHost = &api.ButlerHost{Provider: bp, Gateway: bgw, Mode: mode}
 		log.Info("butler enabled", "provider", bp.Name(), "mode", string(mode))
+
+		// Household escalation (ADR-W024 A6): the same provider, asked a
+		// much smaller question. A Phraser is given no tools at all, and
+		// its answer only ever replaces the wording of one already-
+		// approved action param — so this wiring cannot widen what a
+		// household rule may do, whatever the model is told.
+		//
+		// The QA-only verdict is not consulted: it grades tool-calling
+		// reliability, and this call offers no tools. A model too
+		// unreliable to operate the homelab can still write a sentence,
+		// and if it cannot, the rule's own wording is used.
+		phraser := &butler.Phraser{
+			Provider: bp,
+			Model:    butlerCfg.Model,
+			Record: func(_ context.Context, providerName, prompt, reply string) error {
+				_, rerr := db.InsertButlerSession(runtimedb.ButlerSession{
+					Principal: butlerSessionPrincipal,
+					// An escalation has no human caller. Recording the
+					// engine as the acting identity keeps ADR-W001 A1's
+					// "no anonymous path" true rather than exempting the
+					// one session type a person did not start.
+					ActingFor:      automation.Source,
+					Provider:       providerName,
+					Mode:           runtimedb.ButlerModeFull,
+					FinalText:      redact.String(reply),
+					TranscriptJSON: redact.String(`{"kind":"household-escalation","prompt":` + strconv.Quote(prompt) + `}`),
+				})
+				return rerr
+			},
+		}
+		auto.Escalator = automation.EscalatorFunc(func(ctx context.Context, req automation.EscalationRequest) (string, error) {
+			facts := make([]butler.Fact, 0, len(req.Facts))
+			for _, f := range req.Facts {
+				facts = append(facts, butler.Fact{Label: f.Label, Content: f.Content})
+			}
+			return phraser.Phrase(ctx, butler.PhraseRequest{
+				Rule: req.Rule, Instruction: req.Instruction, Fallback: req.Fallback, Facts: facts,
+			})
+		})
+		log.Info("household escalation enabled", "provider", bp.Name())
 	}
+
+	// Everything the engine needs is wired; start its loop.
+	go auto.Run(context.Background(), automationEvery)
 
 	// Morning report timer (ADR-W017 A5): once a day at 07:00 local, build
 	// the deterministic report and append its summary to the event stream

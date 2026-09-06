@@ -48,15 +48,16 @@ func TestNodeScopeIsEnforcedBothWays(t *testing.T) {
 
 // TestNodeScopedMatchesDispatch is the coupling check: NodeScoped must
 // agree with how the reconciler actually dispatches each kind. DnsRecord
-// is the sole provider-backed kind (ADR-W004 A5); everything else in the
-// closed registry goes to a node agent. Adding a kind without deciding
-// this fails here rather than at runtime on the operator's node.
+// is provider-backed (ADR-W004 A5) and Automation is Keystone-owned
+// (ADR-W024 A1) — neither reaches a node agent; everything else in the
+// closed registry does. Adding a kind without deciding this fails here
+// rather than at runtime on the operator's node.
 func TestNodeScopedMatchesDispatch(t *testing.T) {
-	providerBacked := map[Kind]bool{KindDnsRecord: true}
+	notAtANode := map[Kind]bool{KindDnsRecord: true, KindAutomation: true}
 	for _, k := range Kinds() {
-		if NodeScoped(k) == providerBacked[k] {
-			t.Errorf("%s: NodeScoped=%v but provider-backed=%v — they must be opposites",
-				k, NodeScoped(k), providerBacked[k])
+		if NodeScoped(k) == notAtANode[k] {
+			t.Errorf("%s: NodeScoped=%v but dispatched-off-node=%v — they must be opposites",
+				k, NodeScoped(k), notAtANode[k])
 		}
 	}
 }
@@ -108,6 +109,13 @@ func validResourceOfKind(t *testing.T, k Kind) Resource {
 		// No restart policy and no ports: validateJob refuses both, and
 		// this fixture has to pass validation to reach the scope check.
 		r.Job = &JobSpec{Run: ContainerSpec{Image: "docker.io/library/nginx@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
+	case KindAutomation:
+		// A rule belongs to the household or a capability, never to
+		// "system" (ADR-W024 A1): someone must be there to be asked.
+		r.Metadata.Owner = "household"
+		r.Automation = &AutomationSpec{Description: "r1",
+			Trigger: AutomationTrigger{EventType: "person.left_home"},
+			Action:  AutomationAction{Tool: "notifications.notify", Tier: "domestic"}}
 	default:
 		t.Fatalf("kind %s has no fixture here — a kind was added without deciding its node scope", k)
 	}

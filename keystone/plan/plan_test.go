@@ -393,3 +393,42 @@ func TestConfigFileIsOrderedBeforeContainer(t *testing.T) {
 			KindOrder(resource.KindConfigFile), KindOrder(resource.KindContainer))
 	}
 }
+
+// TestDiffAutomation pins the grading of a household rule (ADR-W024 A1):
+// create and change are Medium — a rule acts on its own once approved,
+// so it must always pass a human, never drift repair — and removal is
+// Low. An unchanged rule, compared deeply, is no step.
+func TestDiffAutomation(t *testing.T) {
+	rule := func(window string) resource.Resource {
+		return resource.Resource{
+			Kind:     resource.KindAutomation,
+			Metadata: resource.Metadata{Name: "breakfast-check", Owner: "household/mika"},
+			Automation: &resource.AutomationSpec{
+				Description: "breakfast",
+				Trigger:     resource.AutomationTrigger{EventType: "person.left_home"},
+				Conditions:  []resource.AutomationCondition{{Kind: "cooldown", Window: window}},
+				Action:      resource.AutomationAction{Tool: "notifications.notify", Tier: "domestic", Params: map[string]string{"message": "hi"}},
+			},
+		}
+	}
+	p := Diff([]resource.Resource{rule("20h")}, nil)
+	if len(p.Steps) != 1 || p.Steps[0].Action != ActionCreate || p.OverallRisk != RiskMedium {
+		t.Fatalf("create plan = %+v", p)
+	}
+	p = Diff([]resource.Resource{rule("20h")}, []resource.Resource{rule("20h")})
+	if len(p.Steps) != 0 {
+		t.Fatalf("unchanged Automation produced steps: %+v", p.Steps)
+	}
+	p = Diff([]resource.Resource{rule("6h")}, []resource.Resource{rule("20h")})
+	if len(p.Steps) != 1 || p.Steps[0].Action != ActionUpdate || p.OverallRisk != RiskMedium {
+		t.Fatalf("update plan = %+v", p)
+	}
+	p = Diff(nil, []resource.Resource{rule("20h")})
+	if len(p.Steps) != 1 || p.Steps[0].Action != ActionDelete || p.OverallRisk != RiskLow {
+		t.Fatalf("delete plan = %+v", p)
+	}
+	if KindOrder(resource.KindAutomation) <= KindOrder(resource.KindContainer) {
+		t.Fatalf("Automation (%d) must sort after Container (%d): a rule names a capability's tool",
+			KindOrder(resource.KindAutomation), KindOrder(resource.KindContainer))
+	}
+}

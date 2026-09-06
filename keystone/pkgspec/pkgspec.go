@@ -128,6 +128,84 @@ var riskTiers = map[string]bool{
 	"domestic": true,
 }
 
+// EventTypeRegexp is the household event type shape (ADR-W024 A2),
+// duplicated from keystone/household so this package stays a leaf; a test
+// there pins the two equal.
+var EventTypeRegexp = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+
+// publishShapes is the closed set of ways a package's events reach the
+// household intake (ADR-W024 A10).
+var publishShapes = map[string]bool{
+	// native: the app itself posts to the intake. No shim.
+	"native": true,
+	// sidecar: an adapter container declared in this package's templates
+	// listens to the app and posts on its behalf.
+	"sidecar": true,
+	// config: the app can call a webhook itself and this package ships
+	// that configuration as a ConfigFile.
+	"config": true,
+}
+
+// eventSubjects is the closed set of what an event's subject identifies
+// (ADR-W024 A8). Mapping is best-effort per app; "none" is an honest
+// answer for a household-wide fact.
+var eventSubjects = map[string]bool{
+	"member": true, "device": true, "household": true, "none": true,
+}
+
+// eventFieldTypes is the closed set of payload field types a package may
+// declare. Deliberately small: a payload is the few fields a handler
+// needs, not the record.
+var eventFieldTypes = map[string]bool{
+	"string": true, "number": true, "bool": true, "timestamp": true,
+}
+
+// PublishesSpec declares the household events a package emits and how
+// they reach the intake (ADR-W024 A10). Parsed and validated here;
+// keystone/capability synthesises the publisher secret from it. A package
+// that publishes nothing omits the block — but every package should
+// answer the question; silence is not an answer.
+type PublishesSpec struct {
+	Shape  string           `yaml:"shape"`
+	Events []PublishedEvent `yaml:"events"`
+}
+
+// PublishedEvent declares one event type a package emits.
+type PublishedEvent struct {
+	Type        string       `yaml:"type"`
+	Subject     string       `yaml:"subject,omitempty"` // default "none"
+	Description string       `yaml:"description,omitempty"`
+	Fields      []EventField `yaml:"fields,omitempty"`
+}
+
+// EventField declares one payload field.
+type EventField struct {
+	Name     string `yaml:"name"`
+	Type     string `yaml:"type"`
+	Required bool   `yaml:"required,omitempty"`
+}
+
+// ExternalConfigDecl declares a ConfigFile this package renders for a
+// consumer Wildstone does NOT run (ADR-W024 A10, the "config" shim
+// shape). It is the counterpart of a Secret's `provided: true`: the
+// thing on the other end of this file is outside Wildstone, so the
+// invariant that every rendered config is mounted into a container of
+// its own package cannot hold, and saying so is the point.
+//
+// Undeclared, such a file is indistinguishable from the Authelia bug
+// that invariant exists to catch — a correct config on disk that the
+// application never reads. Declared, it is a deliberate hand-off with a
+// named consumer and a reason a reviewer can weigh.
+type ExternalConfigDecl struct {
+	// Filename matches the ConfigFile's spec.filename.
+	Filename string `yaml:"filename"`
+	// Consumer names what reads it, e.g. "Home Assistant".
+	Consumer string `yaml:"consumer"`
+	// Reason says why that consumer is outside Wildstone, and how the
+	// file reaches it.
+	Reason string `yaml:"reason"`
+}
+
 // AgentToolSpec declares one concierge-agent tool a package exposes
 // (ADR-W001). Parsed and schema-checked only at the spike, never executed.
 type AgentToolSpec struct {
@@ -151,6 +229,12 @@ type Package struct {
 	Templates  []string        `yaml:"templates,omitempty"`
 	Lifecycle  Lifecycle       `yaml:"lifecycle,omitempty"`
 	AgentTools []AgentToolSpec `yaml:"agentTools,omitempty"`
+	// Publishes declares the household events this package emits
+	// (ADR-W024 A10). nil means it emits none.
+	Publishes *PublishesSpec `yaml:"publishes,omitempty"`
+	// ExternalConfig declares rendered ConfigFiles read by something
+	// Wildstone does not run.
+	ExternalConfig []ExternalConfigDecl `yaml:"externalConfig,omitempty"`
 	// ImageSets group images that must be upgraded together.
 	ImageSets []ImageSet `yaml:"imageSets,omitempty"`
 }
@@ -297,6 +381,26 @@ func (p *Package) Validate() error {
 		}
 	}
 
+	if p.Publishes != nil {
+		if err := validatePublishes(p.Publishes); err != nil {
+			return err
+		}
+	}
+
+	seenExternal := map[string]bool{}
+	for i, ec := range p.ExternalConfig {
+		field := fmt.Sprintf("externalConfig[%d]", i)
+		for name, v := range map[string]string{"filename": ec.Filename, "consumer": ec.Consumer, "reason": ec.Reason} {
+			if strings.TrimSpace(v) == "" {
+				return &ValidationError{Field: field + "." + name, Msg: "must not be empty: an unread config is a defect unless someone says who reads it and why"}
+			}
+		}
+		if seenExternal[ec.Filename] {
+			return &ValidationError{Field: field + ".filename", Msg: fmt.Sprintf("%q declared twice", ec.Filename)}
+		}
+		seenExternal[ec.Filename] = true
+	}
+
 	// A package that declares no templates, no lifecycle hooks, no
 	// agentTools, and no provides is producing nothing — reject it as
 	// malformed rather than silently accepting a no-op package.
@@ -305,6 +409,44 @@ func (p *Package) Validate() error {
 		return &ValidationError{Field: "templates", Msg: "must not be empty: package declares no templates, hooks, agentTools, or provides"}
 	}
 
+	return nil
+}
+
+func validatePublishes(p *PublishesSpec) error {
+	if !publishShapes[p.Shape] {
+		return &ValidationError{Field: "publishes.shape", Msg: "must be one of native, sidecar, config"}
+	}
+	if len(p.Events) == 0 {
+		return &ValidationError{Field: "publishes.events", Msg: "must declare at least one event type (omit the block for a package that publishes nothing)"}
+	}
+	seen := map[string]bool{}
+	for i, ev := range p.Events {
+		field := fmt.Sprintf("publishes.events[%d]", i)
+		if !EventTypeRegexp.MatchString(ev.Type) {
+			return &ValidationError{Field: field + ".type", Msg: fmt.Sprintf("%q must be namespace.name in lowercase [a-z0-9_], e.g. person.left_home", ev.Type)}
+		}
+		if seen[ev.Type] {
+			return &ValidationError{Field: field + ".type", Msg: fmt.Sprintf("%q declared twice", ev.Type)}
+		}
+		seen[ev.Type] = true
+		if ev.Subject != "" && !eventSubjects[ev.Subject] {
+			return &ValidationError{Field: field + ".subject", Msg: "must be one of member, device, household, none"}
+		}
+		names := map[string]bool{}
+		for j, f := range ev.Fields {
+			ff := fmt.Sprintf("%s.fields[%d]", field, j)
+			if f.Name == "" {
+				return &ValidationError{Field: ff + ".name", Msg: "must not be empty"}
+			}
+			if names[f.Name] {
+				return &ValidationError{Field: ff + ".name", Msg: fmt.Sprintf("%q declared twice", f.Name)}
+			}
+			names[f.Name] = true
+			if !eventFieldTypes[f.Type] {
+				return &ValidationError{Field: ff + ".type", Msg: "must be one of string, number, bool, timestamp"}
+			}
+		}
+	}
 	return nil
 }
 

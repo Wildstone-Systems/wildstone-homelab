@@ -164,6 +164,15 @@ func TestRBACTable(t *testing.T) {
 		// The load-bearing row: the Butler can NEVER approve (ADR-W007 A2).
 		{runtimedb.RoleButler, VerbApprove, false},
 		{runtimedb.RoleButler, VerbManage, false},
+		{runtimedb.RoleButler, VerbEmit, false},
+		// A publisher emits and nothing else (ADR-W024 A3).
+		{runtimedb.RolePublisher, VerbEmit, true},
+		{runtimedb.RolePublisher, VerbRead, false},
+		{runtimedb.RolePublisher, VerbPropose, false},
+		{runtimedb.RolePublisher, VerbApprove, false},
+		{runtimedb.RolePublisher, VerbManage, false},
+		{runtimedb.RoleAdmin, VerbEmit, true},
+		{runtimedb.RoleOperator, VerbEmit, false},
 		{runtimedb.Role("root"), VerbRead, false},
 	}
 	for _, c := range cases {
