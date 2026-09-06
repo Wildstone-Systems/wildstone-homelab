@@ -14,6 +14,7 @@
 package reconcile
 
 import (
+	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
 	"path"
 	"sort"
 	"strings"
@@ -42,6 +43,17 @@ func accessPolicyFor(classification string) string {
 	}
 }
 
+// policyRank orders Authelia policies from most permissive to least, so
+// collapsing several Routes onto one domain can take the strictest.
+// Erring strict means a service can end up better protected than
+// declared; erring permissive means one is exposed. Only one of those is
+// survivable.
+var policyRank = map[string]int{"": 0, "bypass": 1, "one_factor": 2, "two_factor": 3, "deny": 4}
+
+func stricter(candidate, current string) bool {
+	return policyRank[candidate] > policyRank[current]
+}
+
 // renderAutheliaAccess builds the access_control block from desired Routes.
 //
 // Only Auth == "authelia_oidc" needs a rule: that is the one value for
@@ -55,18 +67,58 @@ func accessPolicyFor(classification string) string {
 // an absent access_control would hand the decision to whatever Authelia's
 // built-in default happens to be in the version we shipped against.
 func renderAutheliaAccess(desired []resource.Resource) []byte {
+	// Rules must name the host a BROWSER sends, not the one a package
+	// declared (F71). Under the tailnet posture those differ, and rules
+	// naming the declared host match nothing at all — so default_policy
+	// catches every request and a correctly-configured login page answers
+	// 403 to everyone.
+	//
+	// The hostname only, never host:port. Under that posture every Route
+	// shares one hostname and differs by port, and Authelia matches
+	// `domain` against the hostname — so a port here would match nothing
+	// and we would have traded one silent deny for another.
+	posture := ingressorigin.Of(desired)
+	hostOf := func(declared string) string {
+		served := posture.SiteAddress(declared)
+		if h, _, ok := strings.Cut(served, ":"); ok {
+			return h
+		}
+		return served
+	}
+
 	type rule struct{ domain, policy string }
-	var rules []rule
+	byDomain := map[string]string{}
 	for _, r := range desired {
 		if r.Kind != resource.KindRoute || r.Route == nil {
 			continue
 		}
+		var policy string
 		switch r.Route.Auth {
 		case "portal":
-			rules = append(rules, rule{r.Route.Host, "bypass"})
+			policy = "bypass"
 		case "authelia_oidc":
-			rules = append(rules, rule{r.Route.Host, accessPolicyFor(r.Route.Classification)})
+			policy = accessPolicyFor(r.Route.Classification)
+		default:
+			continue
 		}
+		// Collapsing is the dangerous part. When several Routes share a
+		// hostname the STRICTEST policy wins, and in particular a portal's
+		// bypass never covers a domain that also serves an authenticated
+		// Route — that would be an authentication bypass, which is very
+		// much worse than the 403 this function exists to fix.
+		//
+		// Dropping the bypass costs nothing: renderRouteFragment emits
+		// forward_auth only for authelia_oidc, so Authelia is never
+		// consulted for a portal Route and never has to allow it.
+		host := hostOf(r.Route.Host)
+		if stricter(policy, byDomain[host]) {
+			byDomain[host] = policy
+		}
+	}
+
+	rules := make([]rule, 0, len(byDomain))
+	for domain, policy := range byDomain {
+		rules = append(rules, rule{domain, policy})
 	}
 	// Sorted so the file is a pure function of desired state: an
 	// unstable order would rewrite the file, and restart Authelia,

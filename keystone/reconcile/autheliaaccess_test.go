@@ -86,3 +86,74 @@ func TestAccessOrderIsStable(t *testing.T) {
 		t.Errorf("render is order-dependent:\n%s\n---\n%s", a, b)
 	}
 }
+
+// F71: rules must name the host a browser sends. Under the tailnet
+// posture a rule naming the declared host matches nothing, so
+// default_policy catches every request and a correctly-configured login
+// page answers 403 to everyone — which is exactly what a clean install
+// of v0.1.9-alpha did.
+func TestAccessRulesNameTheServedHost(t *testing.T) {
+	desired := []resource.Resource{
+		tailnetIngress("wildstone.tailnet.ts.net"),
+		tailnetRoute("home", "home.example.com"),
+	}
+	out := string(renderAutheliaAccess(desired))
+	if !strings.Contains(out, "domain: wildstone.tailnet.ts.net") {
+		t.Errorf("rules must name the served host:\n%s", out)
+	}
+	if strings.Contains(out, "domain: home.example.com") {
+		t.Errorf("rules named the declared host, which nothing sends:\n%s", out)
+	}
+}
+
+// The dangerous half of the same change. A portal Route carries bypass;
+// under the tailnet posture it shares a hostname with authenticated
+// Routes. Emitting both would let bypass cover the whole domain —
+// silently unauthenticating every service, which is very much worse than
+// the 403 being fixed.
+func TestPortalBypassNeverCoversAnAuthenticatedDomain(t *testing.T) {
+	portal := tailnetRoute("auth", "auth.example.com")
+	portal.Route.Auth = "portal"
+	desired := []resource.Resource{
+		tailnetIngress("wildstone.tailnet.ts.net"),
+		portal,
+		tailnetRoute("home", "home.example.com"), // authelia_oidc
+	}
+	out := string(renderAutheliaAccess(desired))
+	if strings.Contains(out, "bypass") {
+		t.Errorf("bypass covers a domain that also serves an authenticated Route:\n%s", out)
+	}
+	if !strings.Contains(out, "one_factor") {
+		t.Errorf("the authenticated policy was lost:\n%s", out)
+	}
+}
+
+// Hostname only. Authelia matches `domain` against the hostname, so a
+// host:port rule would match nothing — trading one silent deny for
+// another.
+func TestAccessRulesCarryNoPort(t *testing.T) {
+	desired := []resource.Resource{
+		tailnetIngress("wildstone.tailnet.ts.net"),
+		tailnetRoute("home", "home.example.com"),
+		tailnetRoute("jellyfin", "jellyfin.example.com"),
+	}
+	out := string(renderAutheliaAccess(desired))
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "domain:") && strings.Contains(line, ":8443") {
+			t.Errorf("rule carries a port Authelia will not match: %q", line)
+		}
+	}
+}
+
+// Hostname postures must be untouched: a rule per declared host, exactly
+// as before.
+func TestAccessRulesUnchangedUnderHostnamePostures(t *testing.T) {
+	desired := []resource.Resource{
+		ingressRes("internal"),
+		tailnetRoute("home", "home.example.com"),
+	}
+	out := string(renderAutheliaAccess(desired))
+	if !strings.Contains(out, "domain: home.example.com") {
+		t.Errorf("declared host lost under a hostname posture:\n%s", out)
+	}
+}
