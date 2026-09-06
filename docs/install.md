@@ -138,6 +138,29 @@ sudo bash ./install.sh --role node ... \
   --tailscale-hostname media-1        # defaults to --node-id
 ```
 
+### If the admin token is lost
+
+The token printed at first start exists only in that one line of output.
+If it is gone — scrubbed, never captured, or lost among tokens from
+earlier installs on the same host — mint a new one offline:
+
+```sh
+sudo systemctl stop keystone
+sudo keystone claim-code --data-dir /var/lib/wildstone/keystone
+sudo systemctl start keystone
+sudo cat /var/lib/wildstone/keystone/claim-code   # then delete it
+```
+
+This creates the `admin` principal if it does not exist and mints a
+token either way. Existing principals and their tokens are untouched.
+The authority check is possession of the data directory, i.e. root on
+the host — the same proof of physical access join tokens already rely
+on, so nothing new is trusted.
+
+Note that `journalctl` outlives a reinstall, so grepping it for `wst_`
+returns a token per install the host has ever had, oldest first (F66).
+Prefer this command over the journal.
+
 `TAILSCALE_AUTHKEY` in the environment works too. The key is passed
 straight to `tailscale up` and never written to disk or printed — use a
 pre-authorized, ideally ephemeral key. Tailscale SSH is deliberately
