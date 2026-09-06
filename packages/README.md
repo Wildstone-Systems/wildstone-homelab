@@ -88,8 +88,8 @@ Four things to know:
 ### Before you open a PR
 
 ```sh
-wild pkg lint packages/<your-package>            # your package alone
-cd keystone && go test ./pkgtool/ ./capability/  # the whole catalog, incl. yours
+wild pkg lint packages/<your-package>                        # your package alone
+cd keystone && go test ./pkgtool/ ./capability/ ./reconcile/ # the whole catalog, incl. yours
 ```
 
 `TestEveryShippedPackageLintsClean` lints every directory under
@@ -97,6 +97,13 @@ cd keystone && go test ./pkgtool/ ./capability/  # the whole catalog, incl. your
 tests check what one package cannot see on its own: that everything you
 `require` has a provider here, and that everything you `export` is a key
 its trait carries.
+
+`./reconcile/` is in that list for one more catalog-wide check:
+`TestEveryShippedRouteHasAPresentationRow` fails if a Route you declare
+has no row in the dashboard's presentation table. See
+[Appearing on the dashboard](#appearing-on-the-dashboard-f55-f87) — it is
+one line, and without it your service renders on the family's dashboard
+as an unbranded placeholder.
 
 If a required param needs a value with a *shape* — a listen address, a
 URL — declare an `example` for it. Lint invents `lint-<name>` otherwise,
