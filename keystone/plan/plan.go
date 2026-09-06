@@ -665,3 +665,17 @@ func KindOrder(k resource.Kind) int {
 	}
 	return len(kindOrder)
 }
+
+// WithSteps returns p with a different step list and its OverallRisk
+// recomputed.
+//
+// Exported so a caller that must drop steps — the reconciler setting a
+// repeatedly-failing resource aside (F60) — cannot end up with a plan
+// whose risk grade describes steps it no longer contains. The rule for
+// deriving that grade lives here and should have exactly one
+// implementation.
+func WithSteps(p Plan, steps []PlanStep) Plan {
+	p.Steps = steps
+	p.OverallRisk = overallRisk(steps)
+	return p
+}

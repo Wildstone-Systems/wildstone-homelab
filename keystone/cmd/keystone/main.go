@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"io"
 	"log/slog"
 	"net"
@@ -470,6 +471,40 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		Connected: gw.Connected,
 		Log:       log,
 	}
+	// Restore what the reconciler manages before the first tick (F76).
+	//
+	// Secret, Volume and BackupPlan cannot be observed on a node — no op
+	// answers "does this declared secret exist" — so the reconciler
+	// remembers, and an unremembered key reads as absent. That memory was
+	// in-process, so every restart emptied it and the next tick planned
+	// creates for every one of them on a healthy node.
+	//
+	// The observed rows are the previous answer, written by this same
+	// loop before it stopped.
+	//
+	// Only the HEALTHY rows. An unhealthy row is the previous loop saying
+	// it did not get this resource into its desired state — a create that
+	// failed leaves `absent: create planned, not applied` — and seeding
+	// that would restore it as present: for a kind that cannot be
+	// observed, the missing resource would then compare equal to desired,
+	// no create would ever be planned again, and the next status write
+	// would even call it healthy. A resource that does not exist would be
+	// green forever. Re-planning the create instead is both correct and
+	// safe, because these applies are idempotent: EnsureSecret returns an
+	// existing secret untouched unless rotation is asked for, and
+	// EnsureVolume is a no-op on a volume that is already there.
+	if rows, oerr := db.ListObserved(); oerr != nil {
+		log.Error("seeding managed state; the first tick may re-plan resources that already exist", "err", oerr)
+	} else {
+		byNode := seedRefs(rows)
+		seeded := 0
+		for node, refs := range byNode {
+			svc.Rec.SeedManaged(node, refs)
+			seeded += len(refs)
+		}
+		log.Info("managed state restored", "nodes", len(byNode), "resources", seeded, "rows", len(rows))
+	}
+
 	go svc.Run(context.Background(), reconcileEvery)
 
 	// Backup engine (ADR-W011 A4): the timer duty that turns BackupPlan
@@ -878,4 +913,18 @@ func advertisedGatewayAddr(hosts, listen string) string {
 		return net.JoinHostPort(h, port)
 	}
 	return ""
+}
+
+// seedRefs turns observed rows into per-node managed references, keeping
+// only the rows that say a resource was actually there. See the seeding
+// block in run() for why unhealthy rows are dropped.
+func seedRefs(rows []runtimedb.Observed) map[string][]reconcile.ManagedRef {
+	byNode := map[string][]reconcile.ManagedRef{}
+	for _, o := range rows {
+		if !o.Healthy {
+			continue
+		}
+		byNode[o.Node] = append(byNode[o.Node], reconcile.ManagedRef{Kind: resource.Kind(o.Kind), Name: o.Name})
+	}
+	return byNode
 }

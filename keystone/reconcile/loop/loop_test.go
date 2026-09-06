@@ -105,7 +105,7 @@ func TestQuietTickDoesNothing(t *testing.T) {
 		t.Fatalf("quiet tick dispatched %d ops", app.ops)
 	}
 	if types := eventTypes(t, db); len(types) != 0 {
-		t.Fatalf("quiet tick emitted events: %v (ADR-W008 A5: no heartbeats)", types)
+		t.Fatalf("quiet tick emitted events: %v (ADR-W008 A6: no heartbeats)", types)
 	}
 }
 

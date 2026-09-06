@@ -1,0 +1,13 @@
+-- Distinguish "waiting for a human" from "broken" (F75).
+--
+-- A resource with a planned step that has not been applied was recorded
+-- as unhealthy with "absent: create planned, not applied" — the same
+-- shape as a genuine failure. But a Medium/High plan is not applied
+-- because it is WAITING FOR APPROVAL, which is the system behaving
+-- exactly as designed, and an operator reading the Console cannot tell
+-- that from a homelab that has actually broken.
+--
+-- On the alpha VM a restart showed 29 of 51 resources red while every
+-- container was up and healthy. That reading fooled the person who
+-- wrote the fix, with the plan history open in front of them.
+ALTER TABLE observed ADD COLUMN awaiting_approval BOOLEAN NOT NULL DEFAULT 0;

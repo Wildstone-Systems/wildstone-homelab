@@ -115,6 +115,9 @@ type TickOutcome struct {
 	DriftProposed string
 	// Repaired is true when a drift tick applied at least one low-risk fix.
 	Repaired bool
+	// Blocked lists resources set aside this tick after failing the same
+	// way repeatedly (F60), so the rest of the plan could proceed.
+	Blocked []reconcile.BlockedResource
 }
 
 // Tick runs one service pass (ADR-W008 A1–A5).
@@ -178,6 +181,12 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	}
 
 	var failures []string
+	acting := map[string]bool{}
+	// Nodes this tick did not actually get to. Their status rows are the
+	// only durable record of what the reconciler manages there — the
+	// managed set is seeded from them on restart (F76) — so a node that
+	// was skipped must keep every row it has.
+	unvisited := map[string]bool{}
 	pendingDrift := false
 	for _, g := range groups {
 		if g.node != "" && l.Connected != nil && !l.Connected(g.node) && hasAgentKinds(g.resources) {
@@ -188,14 +197,31 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 			} else {
 				l.event("reconcile.skipped-offline", g.node, "", nil)
 			}
+			unvisited[g.node] = true
 			continue
 		}
 		outcome, err := l.Rec.Reconcile(ctx, g.node, g.resources)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("node %s: %v", g.node, err))
+			unvisited[g.node] = true
 			continue
 		}
 		l.recordObserved(g, outcome)
+		for _, st := range outcome.Plan.Steps {
+			acting[string(st.Kind)+"/"+st.Name] = true
+		}
+		for _, b := range outcome.Blocked {
+			// A blocked resource keeps its status row even when nothing
+			// desires it any more. A DELETE can be quarantined too — an
+			// agent that refuses to remove a container, say — and that
+			// resource is desired by nobody, so without this the prune
+			// below would take away the only record that it is still
+			// there. An orphan nothing reports is worse than an orphan.
+			acting[string(b.Kind)+"/"+b.Name] = true
+			out.Blocked = append(out.Blocked, b)
+			l.event("reconcile.blocked", g.node, b.Summary(),
+				map[string]string{"kind": string(b.Kind), "name": b.Name})
+		}
 		switch {
 		case outcome.Incident != "":
 			failures = append(failures, fmt.Sprintf("node %s: %s", g.node, outcome.Incident))
@@ -225,6 +251,8 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 			l.event("drift.foreign", g.node, strings.Join(outcome.ForeignDrift, ", "), nil)
 		}
 	}
+
+	l.pruneObserved(desired, acting, unvisited)
 
 	out.Failed = strings.Join(failures, "; ")
 	if planTick {
@@ -342,6 +370,13 @@ func (l *Loop) proposeDrift(desired []resource.Resource) (string, error) {
 // the situation an operator opens it.
 func (l *Loop) recordObserved(g nodeGroup, outcome *reconcile.Outcome) {
 	unhealthy := map[string]string{}
+	// A blocked resource has been REMOVED from the plan, so nothing below
+	// implicates it and it would otherwise be stamped healthy — the same
+	// lie F75 was about, told about the one resource that is genuinely
+	// broken.
+	for _, b := range outcome.Blocked {
+		unhealthy[string(b.Kind)+"/"+b.Name] = b.Summary()
+	}
 	for _, sr := range outcome.Steps {
 		if sr.Applied && sr.HealthOK {
 			if sr.Step.Action == plan.ActionDelete {
@@ -388,13 +423,25 @@ func (l *Loop) recordObserved(g nodeGroup, outcome *reconcile.Outcome) {
 		}
 		if action, needsWork := planned[key]; needsWork && !converged[key] {
 			o.Healthy = false
-			// The plan action is the whole diagnosis, and it is the
-			// useful one: Create means observe found nothing there.
-			switch action {
-			case plan.ActionCreate:
-				o.Detail = "absent: create planned, not applied"
-			default:
-				o.Detail = "drifted: " + action.String() + " planned, not applied"
+			// WHY it is not applied is the part an operator needs, and
+			// the two reasons are nothing alike (F75). A Medium/High
+			// plan waits for a human — the system behaving exactly as
+			// designed — and saying only "not applied" makes that
+			// indistinguishable from a homelab that has broken.
+			//
+			// On the alpha VM a restart showed 29 of 51 red while every
+			// container was up; the reading fooled the person who wrote
+			// the fix, with the plan history open in front of them.
+			if outcome.PendingApproval {
+				o.AwaitingApproval = true
+				o.Detail = action.String() + " is waiting for your approval; nothing is wrong with this resource"
+			} else {
+				switch action {
+				case plan.ActionCreate:
+					o.Detail = "absent: create planned, not applied"
+				default:
+					o.Detail = "drifted: " + action.String() + " planned, not applied"
+				}
 			}
 		}
 		if detail, bad := unhealthy[key]; bad {
@@ -402,6 +449,22 @@ func (l *Loop) recordObserved(g nodeGroup, outcome *reconcile.Outcome) {
 			o.Detail = detail
 		}
 		if err := l.DB.UpsertObserved(o); err != nil {
+			slog.Default().Error("observed upsert failed", "resource", key, "err", err)
+		}
+		delete(unhealthy, key)
+	}
+	// Anything left is implicated in a failure but is not in desired
+	// state — a delete that keeps failing, most likely. It still exists,
+	// and the operator is the only one who can do anything about it, so
+	// it gets a row of its own rather than disappearing quietly.
+	for key, detail := range unhealthy {
+		kind, name, ok := strings.Cut(key, "/")
+		if !ok {
+			continue
+		}
+		if err := l.DB.UpsertObserved(runtimedb.Observed{
+			Kind: kind, Name: name, Node: g.node, Detail: detail,
+		}); err != nil {
 			slog.Default().Error("observed upsert failed", "resource", key, "err", err)
 		}
 	}
@@ -473,6 +536,44 @@ func (l *Loop) Run(ctx context.Context, base time.Duration) {
 				log = slog.Default()
 			}
 			log.Error("reconcile tick", "err", err)
+		}
+	}
+}
+
+// pruneObserved removes status rows for resources that are no longer
+// desired anywhere and that no plan this tick is still acting on.
+//
+// A delete step normally clears the row when it applies. A resource that
+// never existed has no delete step — nothing was ever created — so
+// without this its row sits red forever, describing a service the
+// operator has already removed. That is how a quarantined create looks
+// after the operator takes the fix everyone recommends.
+//
+// Tick-wide rather than per node: a node whose resources never got as
+// far as being managed has no group at all, which is exactly the case
+// this exists for.
+func (l *Loop) pruneObserved(desired []resource.Resource, acting, unvisited map[string]bool) {
+	keep := map[string]bool{}
+	for _, r := range desired {
+		keep[string(r.Kind)+"/"+r.Metadata.Name] = true
+	}
+	// A pending delete keeps its row: the resource still exists in the
+	// runtime, and saying otherwise before it is gone is the same kind
+	// of lie as stamping it healthy.
+	for k := range acting {
+		keep[k] = true
+	}
+	obs, err := l.DB.ListObserved()
+	if err != nil {
+		slog.Default().Error("observed list failed", "err", err)
+		return
+	}
+	for _, o := range obs {
+		if keep[o.Kind+"/"+o.Name] || unvisited[o.Node] {
+			continue
+		}
+		if err := l.DB.DeleteObserved(o.Kind, o.Name); err != nil {
+			slog.Default().Error("observed prune failed", "resource", o.Name, "err", err)
 		}
 	}
 }

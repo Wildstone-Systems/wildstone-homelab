@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
 // TestBootServesBothPlanes is the E2/K6 boot test: one DataDir, both
@@ -122,5 +124,29 @@ func TestBootServesBothPlanes(t *testing.T) {
 			t.Fatalf("ingested resource never served; got %+v", views)
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// Seeding restores what the previous process managed — but an unhealthy
+// row is that process saying it did NOT get the resource into its
+// desired state. A failed Volume create leaves "absent: create planned,
+// not applied"; seeding it would restore the volume as present, and
+// since a Volume cannot be observed on a node, the missing volume would
+// compare equal to desired forever: no create ever planned again, and
+// the next status write calling it healthy. A resource that does not
+// exist, green for good. Raised by review on the F76 fix.
+func TestSeedRefsKeepsOnlyRowsThatSayTheResourceWasThere(t *testing.T) {
+	byNode := seedRefs([]runtimedb.Observed{
+		{Kind: "Volume", Name: "there", Node: "node-a", Healthy: true},
+		{Kind: "Volume", Name: "never-created", Node: "node-a", Detail: "absent: create planned, not applied"},
+		{Kind: "Secret", Name: "awaiting", Node: "node-a", AwaitingApproval: true,
+			Detail: "Create is waiting for your approval; nothing is wrong with this resource"},
+	})
+	var got []string
+	for _, ref := range byNode["node-a"] {
+		got = append(got, string(ref.Kind)+"/"+ref.Name)
+	}
+	if len(got) != 1 || got[0] != "Volume/there" {
+		t.Errorf("seeded %v; want only the row that reported the resource present", got)
 	}
 }
