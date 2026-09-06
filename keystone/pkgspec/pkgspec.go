@@ -61,6 +61,32 @@ type ParamDecl struct {
 	Name     string `yaml:"name" json:"name"`
 	Required bool   `yaml:"required,omitempty" json:"required,omitempty"`
 	Default  string `yaml:"default,omitempty" json:"default,omitempty"`
+	// Description is what this param MEANS, in words an operator who
+	// does not know the internals can act on. It exists because the
+	// generated form (ADR-W021 A5) could previously render only a name:
+	// "admin_domain *" is an unanswerable question for the person
+	// ADR-W023 A8 targets, and the explanation was sitting three lines
+	// away in a YAML comment the form cannot see.
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	// Source names a fact the DEPLOYMENT already knows, so the form can
+	// offer it rather than ask for it. One of paramSources; empty means
+	// the value is genuinely the operator's to invent.
+	//
+	// A closed set on purpose: each value is a query Keystone knows how
+	// to answer, and an unrecognised one must fail review rather than
+	// silently render an empty dropdown.
+	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+}
+
+// ParamSources are the deployment facts a param may be sourced from.
+var ParamSources = map[string]bool{
+	// Which machine to install on. Options are the nodes the control
+	// plane knows; with one node there is nothing to choose.
+	"node": true,
+	// The domain other capabilities on this deployment already use.
+	// Asking each package separately is how two capabilities end up
+	// under different domains for no reason anyone intended.
+	"domain": true,
 }
 
 // Policies carries the mandatory policy inputs a package declares about the

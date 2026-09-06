@@ -64,12 +64,34 @@ var PortBlock = []int{443, 7443, 8443, 9443, 10443, 11443, 12443, 13443, 14443, 
 // "home.example.com" — because that label is what the package chose and
 // the rest is the deployment's domain. Pinning the whole host would
 // unpin everything the moment the domain changed.
+// EVERY shipped capability is pinned, not just some (F82). An unpinned
+// service takes the next free port, which moves when anything sorting
+// before it is installed — so installing ntfy moved uptime-kuma from
+// 10443 to 11443 and every bookmark to it pointed at the wrong service.
+// TestInstallingAServiceDoesNotMoveTheOthers only ever covered the
+// pinned ones; pinning them all is what makes the property true.
+//
+// It also fixes two quieter things. "docs" was pinned and never matched:
+// documents-paperless labels its Route from docs_subdomain, which
+// defaults to "paperless", so that pin has been dead. And an unpinned
+// service cannot know its own origin at expansion time (F79), which is
+// why its self-referential URLs come out wrong — a pin is what makes
+// that knowable.
+//
+// Ports chosen to match a deployment that already has these installed,
+// so landing this moves nothing that is currently running.
+//
+// A pin follows the DEFAULT label. Overriding media_subdomain or
+// docs_subdomain makes that Route unpinned again, and it will take the
+// next free port like any third-party package.
 var wellKnown = map[string]int{
-	"home":     443,   // the dashboard: the address people actually type
-	"auth":     7443,  // Authelia, which needs its own origin for OIDC
-	"jellyfin": 8443,  //
-	"photos":   9443,  //
-	"docs":     10443, //
+	"home":      443,   // the dashboard: the address people actually type
+	"auth":      7443,  // Authelia, which needs its own origin for OIDC
+	"jellyfin":  8443,  // media-jellyfin, via media_subdomain
+	"photos":    9443,  // photos-immich, via photos_subdomain
+	"ntfy":      10443, // notifications
+	"uptime":    11443, // monitoring
+	"paperless": 12443, // documents-paperless, via docs_subdomain
 }
 
 // Of derives the addressing posture from desired state.
@@ -282,4 +304,11 @@ func (p Posture) SessionDomain(publicDomain string) string {
 		return p.TailnetName
 	}
 	return publicDomain
+}
+
+// WellKnownPortFor exposes the pin for a service label, so tests and
+// callers can assert the shipped catalog is pinned in full (F82).
+func WellKnownPortFor(label string) (int, bool) {
+	p, ok := wellKnown[label]
+	return p, ok
 }

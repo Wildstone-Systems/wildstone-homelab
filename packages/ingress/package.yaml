@@ -42,11 +42,11 @@ provides:
   - { trait: ingress, mode: public }
   - { trait: ingress, mode: private }
 params:
-  - { name: public_domain, required: true }
-  - { name: node, required: true }
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
   # The Cloudflare tunnel UUID (from `cloudflared tunnel create`), used
   # for the wildcard CNAME target <tunnel_id>.cfargotunnel.com.
-  - { name: tunnel_id, required: true }
+  - { name: tunnel_id, required: true, description: "The Cloudflare tunnel UUID from `cloudflared tunnel create`." }
   # Host address the private admin listener binds. Required, and
   # deliberately without a default: a "tailnet-only" surface that quietly
   # binds every interface is worse than one you had to think about (#41).

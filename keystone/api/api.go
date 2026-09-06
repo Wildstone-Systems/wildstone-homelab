@@ -138,6 +138,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/plans/{id}/reject", s.handle(principal.VerbApprove, s.rejectPlan))
 
 	mux.Handle("GET /api/v1/audit", s.handle(principal.VerbManage, s.listAudit))
+	// Admin-only: the pending one-time code is a credential in flight.
+	mux.Handle("GET /api/v1/nodes/{node}/identity/code", s.handle(principal.VerbManage, s.identityCode))
 	mux.Handle("GET /api/v1/principals", s.handle(principal.VerbManage, s.listPrincipals))
 	mux.Handle("POST /api/v1/principals", s.handle(principal.VerbManage, s.createPrincipal))
 	mux.Handle("POST /api/v1/principals/{name}/disable", s.handle(principal.VerbManage, s.setPrincipalDisabled(true)))

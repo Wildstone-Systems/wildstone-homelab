@@ -4,12 +4,13 @@ import { ErrorLine } from "./lib";
 import { Backups } from "./views/Backups";
 import { Events } from "./views/Events";
 import { Home } from "./views/Home";
+import { IdentityView } from "./views/Identity";
 import { Nodes } from "./views/Nodes";
 import { Plans } from "./views/Plans";
 import { Secrets } from "./views/Secrets";
 import { Services } from "./views/Services";
 
-type View = "home" | "services" | "plans" | "events" | "backups" | "nodes" | "secrets";
+type View = "home" | "services" | "plans" | "events" | "backups" | "nodes" | "secrets" | "identity";
 
 const VIEWS: { id: View; label: string }[] = [
   { id: "home", label: "Home" },
@@ -19,6 +20,7 @@ const VIEWS: { id: View; label: string }[] = [
   { id: "backups", label: "Backups" },
   { id: "nodes", label: "Nodes" },
   { id: "secrets", label: "Secrets" },
+  { id: "identity", label: "Identity" },
 ];
 
 export function App() {
@@ -66,6 +68,7 @@ export function App() {
         {view === "backups" && <Backups />}
         {view === "nodes" && <Nodes />}
         {view === "secrets" && <Secrets />}
+        {view === "identity" && <IdentityView />}
       </main>
     </div>
   );

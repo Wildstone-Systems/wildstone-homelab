@@ -15,8 +15,8 @@ metadata:
 params:
   # The tailnet-facing admin domain (e.g. the MagicDNS name or an
   # internal zone) that caddy-private serves.
-  - { name: admin_domain, required: true }
-  - { name: node, required: true }
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
 templates:
   - |
     apiVersion: wildstone.dev/v1

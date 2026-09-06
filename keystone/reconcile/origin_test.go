@@ -188,3 +188,68 @@ func TestPinnedPortYieldsWhenTaken(t *testing.T) {
 		t.Error("the dashboard was left unserved rather than moved")
 	}
 }
+
+// TestEveryShippedServiceIsPinned is F82. The previous test asserted
+// that installing a service does not move the others — but only checked
+// PINNED ones, so every unpinned service was still exposed and I
+// described the guarantee as though it were general.
+//
+// Installing notifications moved uptime-kuma from 10443 to 11443 on a
+// live deployment, and every bookmark to it then pointed at ntfy. The
+// property only holds if the shipped catalog is pinned in full.
+func TestEveryShippedServiceIsPinned(t *testing.T) {
+	// The label each shipped package gives its Route, by default.
+	for _, label := range []string{"home", "auth", "jellyfin", "photos", "ntfy", "uptime", "paperless"} {
+		if _, ok := wellKnownPortFor(label); !ok {
+			t.Errorf("%q is a shipped Route label with no pinned port: installing anything that "+
+				"sorts before it will move it, and every bookmark to it breaks", label)
+		}
+	}
+}
+
+// The specific regression: ntfy must not displace uptime.
+func TestInstallingNtfyDoesNotMoveUptime(t *testing.T) {
+	base := []resource.Resource{
+		tailnetIngress("wildstone.tailnet.ts.net"),
+		tailnetRoute("uptime", "uptime.example.com"),
+	}
+	before := postureOf(base)
+	after := postureOf(append(append([]resource.Resource{}, base...),
+		tailnetRoute("ntfy", "ntfy.example.com")))
+	if got, want := routeSiteAddress(after, "uptime.example.com"), routeSiteAddress(before, "uptime.example.com"); got != want {
+		t.Errorf("installing ntfy moved uptime from %s to %s", want, got)
+	}
+}
+
+// TestRouteHealthProbesTheFrontDoor is F83. The Route health gate
+// returned true for every shipped package, because they all use
+// "container/<name>:<port>" upstreams and the probe skipped those
+// outright — so the gate existed and never ran for anything we ship.
+//
+// That is how Caddy could refuse a config and keep serving the previous
+// one while every resource reported healthy: the fragment on disk was
+// correct, and nothing ever asked whether the port it named was bound.
+func TestRouteHealthProbesTheFrontDoor(t *testing.T) {
+	r := &Reconciler{ManagedPrefix: "/etc/wildstone"}
+	r.posture = postureOf([]resource.Resource{
+		tailnetIngress("wildstone.tailnet.ts.net"),
+		tailnetRoute("home", "home.example.com"),
+	})
+	host, port, ok := r.routeFrontDoor(&resource.RouteSpec{Host: "home.example.com", Upstream: "container/homepage:3000"})
+	if !ok {
+		t.Fatal("a container upstream under the tailnet posture must still be probed at its front door")
+	}
+	if host != "wildstone.tailnet.ts.net" || port != 443 {
+		t.Errorf("probing %s:%d, want wildstone.tailnet.ts.net:443", host, port)
+	}
+}
+
+// A hostname posture keeps the old behaviour: the declared host may
+// resolve nowhere near the node, which is why it was skipped.
+func TestFrontDoorProbeSkippedUnderHostnamePostures(t *testing.T) {
+	r := &Reconciler{ManagedPrefix: "/etc/wildstone"}
+	r.posture = postureOf([]resource.Resource{ingressRes("internal")})
+	if _, _, ok := r.routeFrontDoor(&resource.RouteSpec{Host: "home.example.com"}); ok {
+		t.Error("a hostname posture has no front door the node can be sure of reaching")
+	}
+}

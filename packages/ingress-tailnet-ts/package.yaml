@@ -40,12 +40,12 @@ params:
   # what `tailscale status --json | jq -r .Self.DNSName` prints, without
   # the trailing dot. It is the only name the certificate covers, so it
   # is the only name any Route on this node can be served under.
-  - { name: tailnet_name, required: true }
-  - { name: node, required: true }
+  - { name: tailnet_name, required: true, description: "This machine’s full Tailscale name, e.g. box.tailnet.ts.net." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
   # The node's tailnet address. Required and undefaulted for the reason
   # caddy-tailnet gives (#41): a profile whose whole claim is that it is
   # private must not be private only by accident.
-  - { name: listen_addr, required: true }
+  - { name: listen_addr, required: true, description: "The address the proxy listens on. Normally this machine’s tailnet address." }
 policies:
   classifications: [admin_tailscale]
 templates:
