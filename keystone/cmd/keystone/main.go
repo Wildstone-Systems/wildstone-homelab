@@ -242,17 +242,27 @@ type butlerConfig struct {
 	Endpoint string
 }
 
-// newButlerProvider builds the configured Butler provider, or (nil, nil)
-// when the Butler is off. API keys come ONLY from the provider's
+// butlerBackend is what the flags RESOLVED to: the model and base URL the
+// provider will actually talk to, including each client's own default
+// when the flag was left empty. It carries no credential — it exists so
+// the Console's Butler surface (GET /api/v1/butler) can show an operator
+// where their Butler points without them reading the command line.
+type butlerBackend struct {
+	Model    string
+	Endpoint string
+}
+
+// newButlerProvider builds the configured Butler provider, or a nil
+// provider when the Butler is off. API keys come ONLY from the provider's
 // environment variable (ADR-W017 A4) — there is deliberately no key flag.
-func newButlerProvider(cfg butlerConfig) (provider.Provider, error) {
+func newButlerProvider(cfg butlerConfig) (provider.Provider, butlerBackend, error) {
 	switch cfg.Provider {
 	case "", "off":
-		return nil, nil
+		return nil, butlerBackend{}, nil
 	case "anthropic":
 		key := os.Getenv("ANTHROPIC_API_KEY")
 		if key == "" {
-			return nil, fmt.Errorf("-butler-provider anthropic requires ANTHROPIC_API_KEY in the environment")
+			return nil, butlerBackend{}, fmt.Errorf("-butler-provider anthropic requires ANTHROPIC_API_KEY in the environment")
 		}
 		p := provider.NewAnthropicProvider(key)
 		if cfg.Model != "" {
@@ -261,11 +271,11 @@ func newButlerProvider(cfg butlerConfig) (provider.Provider, error) {
 		if cfg.Endpoint != "" {
 			p.BaseURL = cfg.Endpoint
 		}
-		return p, nil
+		return p, butlerBackend{Model: p.Model, Endpoint: p.BaseURL}, nil
 	case "openai":
 		key := os.Getenv("OPENAI_API_KEY")
 		if key == "" {
-			return nil, fmt.Errorf("-butler-provider openai requires OPENAI_API_KEY in the environment")
+			return nil, butlerBackend{}, fmt.Errorf("-butler-provider openai requires OPENAI_API_KEY in the environment")
 		}
 		base := cfg.Endpoint
 		if base == "" {
@@ -275,7 +285,7 @@ func newButlerProvider(cfg butlerConfig) (provider.Provider, error) {
 		if cfg.Model != "" {
 			p.Model = cfg.Model
 		}
-		return p, nil
+		return p, butlerBackend{Model: p.Model, Endpoint: p.BaseURL}, nil
 	case "ollama":
 		host := cfg.Endpoint
 		if host == "" {
@@ -285,9 +295,9 @@ func newButlerProvider(cfg butlerConfig) (provider.Provider, error) {
 		if cfg.Model != "" {
 			p.Model = cfg.Model
 		}
-		return p, nil
+		return p, butlerBackend{Model: p.Model, Endpoint: p.Host}, nil
 	default:
-		return nil, fmt.Errorf("unknown -butler-provider %q (want off|anthropic|openai|ollama)", cfg.Provider)
+		return nil, butlerBackend{}, fmt.Errorf("unknown -butler-provider %q (want off|anthropic|openai|ollama)", cfg.Provider)
 	}
 }
 
@@ -544,7 +554,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// tool-reliability probe once at startup, and wire the ask endpoint in
 	// the mode the verdict earns. Provider off leaves ButlerHost nil — the
 	// ask endpoint answers 503 with a clear reason.
-	if bp, err := newButlerProvider(butlerCfg); err != nil {
+	if bp, backend, err := newButlerProvider(butlerCfg); err != nil {
 		return err
 	} else if bp != nil {
 		mode := runtimedb.ButlerModeFull
@@ -625,8 +635,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			return replay.Summary(20), nil
 		}
 
-		apiSrv.ButlerHost = &api.ButlerHost{Provider: bp, Gateway: bgw, Mode: mode}
-		log.Info("butler enabled", "provider", bp.Name(), "mode", string(mode))
+		apiSrv.ButlerHost = &api.ButlerHost{
+			Provider: bp, Gateway: bgw, Mode: mode,
+			Model: backend.Model, Endpoint: backend.Endpoint,
+		}
+		log.Info("butler enabled", "provider", bp.Name(), "model", backend.Model,
+			"endpoint", backend.Endpoint, "mode", string(mode))
 
 		// Household escalation (ADR-W024 A6): the same provider, asked a
 		// much smaller question. A Phraser is given no tools at all, and

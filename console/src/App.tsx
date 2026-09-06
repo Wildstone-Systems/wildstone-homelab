@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, getToken, Identity, setOnUnauthorized, setToken } from "./api";
 import { ErrorLine } from "./lib";
 import { Backups } from "./views/Backups";
+import { Butler } from "./views/Butler";
 import { Events } from "./views/Events";
 import { Home } from "./views/Home";
 import { IdentityView } from "./views/Identity";
@@ -10,11 +11,21 @@ import { Plans } from "./views/Plans";
 import { Secrets } from "./views/Secrets";
 import { Services } from "./views/Services";
 
-type View = "home" | "services" | "plans" | "events" | "backups" | "nodes" | "secrets" | "identity";
+type View =
+  | "home"
+  | "services"
+  | "butler"
+  | "plans"
+  | "events"
+  | "backups"
+  | "nodes"
+  | "secrets"
+  | "identity";
 
 const VIEWS: { id: View; label: string }[] = [
   { id: "home", label: "Home" },
   { id: "services", label: "Services" },
+  { id: "butler", label: "Butler" },
   { id: "plans", label: "Plans" },
   { id: "events", label: "Events" },
   { id: "backups", label: "Backups" },
@@ -63,6 +74,7 @@ export function App() {
       <main className="main">
         {view === "home" && <Home />}
         {view === "services" && <Services />}
+        {view === "butler" && <Butler />}
         {view === "plans" && <Plans />}
         {view === "events" && <Events />}
         {view === "backups" && <Backups />}

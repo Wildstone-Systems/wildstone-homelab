@@ -208,6 +208,7 @@ func (s *Server) Handler() http.Handler {
 	// a write; a session's proposals enter through the same submitProposal
 	// pipeline as POST /plans, as principal "butler" acting-for the
 	// caller, and only a human approve verb moves them further.
+	mux.Handle("GET /api/v1/butler", s.handle(principal.VerbRead, s.getButlerStatus))
 	mux.Handle("POST /api/v1/butler/ask", s.handle(principal.VerbRead, s.askButler))
 	mux.Handle("GET /api/v1/butler/sessions", s.handle(principal.VerbRead, s.listButlerSessions))
 	mux.Handle("GET /api/v1/butler/sessions/{id}", s.handle(principal.VerbRead, s.getButlerSession))
