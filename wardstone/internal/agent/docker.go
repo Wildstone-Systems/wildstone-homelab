@@ -162,6 +162,10 @@ type hostConfig struct {
 	// the allowlists in devices.go; nothing else constructs a hostConfig.
 	Devices []deviceMapping `json:"Devices,omitempty"`
 	CapAdd  []string        `json:"CapAdd,omitempty"`
+	// ExtraHosts are "name:ip" entries Docker writes into the
+	// container's /etc/hosts (protocol minor 14). Resolved by the agent
+	// from host_aliases, because the node is where the name resolves.
+	ExtraHosts []string `json:"ExtraHosts,omitempty"`
 }
 
 // deviceMapping is Docker's HostConfig.Devices entry.

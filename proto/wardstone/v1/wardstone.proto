@@ -228,6 +228,29 @@ message EnsureContainer {
   // it and never will be, for the reason Exec(string) is not an op.
   // A pre-minor-12 agent ignores this field.
   repeated string cap_add = 11;
+  // Hostnames the container must be able to RESOLVE, which the node
+  // resolves on its own behalf and writes into the container's
+  // /etc/hosts (protocol minor 14).
+  //
+  // This exists for one shape of problem: a name that is correct for the
+  // browser but unresolvable from inside a container. Under the tailnet
+  // ingress posture the OIDC issuer is the node's MagicDNS name, because
+  // an issuer must match what the browser saw byte for byte (ADR-W019
+  // A10) — but Docker's embedded DNS forwards to the host's EXTERNAL
+  // nameservers and never learns a .ts.net name, so every server-side
+  // discovery and token exchange fails with "Name or service not known"
+  // and the app answers 500 to a login it never got to attempt.
+  //
+  // The node resolves these rather than Keystone supplying addresses,
+  // because the node is where the name works: MagicDNS is configured on
+  // the host. A name that does not resolve is skipped rather than
+  // failing the container — the app then reports the same error it would
+  // have anyway, which is a better failure than a service that will not
+  // start.
+  //
+  // A pre-minor-14 agent ignores this field, so the container starts
+  // exactly as it does today.
+  repeated string host_aliases = 12;
 }
 
 message PortBinding {

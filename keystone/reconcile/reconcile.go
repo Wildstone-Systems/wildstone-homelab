@@ -658,6 +658,10 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 	// agree on what a container's configuration is, or every tick sees
 	// drift it just finished fixing.
 	cfgContents := managedConfigContents(r.ManagedPrefix, desiredByKey)
+	// Same reasoning as cfgContents above: derived from the same desired
+	// set on both paths, so observe and apply agree on what a container
+	// is. Disagreeing here means a container recreated every tick.
+	hostAliases := hostAliasesFor(desiredByKey)
 
 	// Candidates = every desired (kind,name) (to detect Create/Update/
 	// NoOp) union every key the Reconciler currently believes it manages
@@ -680,7 +684,7 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 				observed = append(observed, obs)
 			}
 		case resource.KindJob:
-			obs, present, oerr := r.observeJob(ctx, nodeID, k, want, isDesired, cfgContents)
+			obs, present, oerr := r.observeJob(ctx, nodeID, k, want, isDesired, cfgContents, hostAliases)
 			if oerr != nil {
 				return nil, nil, oerr
 			}
@@ -688,7 +692,7 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 				observed = append(observed, obs)
 			}
 		case resource.KindContainer:
-			res, obs, oerr := r.observeContainer(ctx, nodeID, k, want, isDesired, cfgContents)
+			res, obs, oerr := r.observeContainer(ctx, nodeID, k, want, isDesired, cfgContents, hostAliases)
 			if oerr != nil {
 				return nil, nil, oerr
 			}
@@ -779,7 +783,7 @@ type containerObserveResult struct {
 // An INVALID reply means the agent predates the op (protocol minor 5):
 // fall back to the pre-R2c presence-only ContainerStats observe so an
 // N−1 agent keeps its exact previous behavior.
-func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resKey, want resource.Resource, isDesired bool, cfgContents map[string]string) (*containerObserveResult, resource.Resource, error) {
+func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resKey, want resource.Resource, isDesired bool, cfgContents map[string]string, hostAliases []string) (*containerObserveResult, resource.Resource, error) {
 	res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_InspectContainer{
 		InspectContainer: &wsv1.InspectContainer{Name: k.Name},
 	}})
@@ -802,7 +806,7 @@ func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resK
 		return &containerObserveResult{}, placeholderResource(resource.KindContainer, k.Name), nil
 	}
 	inspect := res.GetInspectContainer()
-	if inspect.GetLabels()[specHashLabel] == specHash(want.Container, ContainerNetwork, configDigest(r.ManagedPrefix, want.Container, cfgContents)) && inspect.GetRunning() {
+	if inspect.GetLabels()[specHashLabel] == specHash(want.Container, ContainerNetwork, configDigest(r.ManagedPrefix, want.Container, cfgContents), hostAliases) && inspect.GetRunning() {
 		return &containerObserveResult{}, want, nil
 	}
 	// Present but stale (spec drifted, or a pre-spec-hash container) or
@@ -1323,6 +1327,7 @@ func (r *Reconciler) ManagedNodes() []string {
 // ---------------------------------------------------------------- apply: Container
 
 func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step plan.PlanStep, desiredByKey map[resKey]resource.Resource, cfgContents map[string]string) StepResult {
+	hostAliases := hostAliasesFor(desiredByKey)
 	sr := StepResult{Step: step}
 	key := resKey{step.Kind, step.Name}
 
@@ -1354,7 +1359,7 @@ func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step
 			sr.Error = pr
 			return sr
 		}
-		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, want.Container, ContainerNetwork, configDigest(r.ManagedPrefix, want.Container, cfgContents)))
+		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, want.Container, ContainerNetwork, configDigest(r.ManagedPrefix, want.Container, cfgContents), hostAliases))
 		if err != nil {
 			sr.Error = err.Error()
 			return sr
@@ -1505,7 +1510,7 @@ func (r *Reconciler) autheliaAddr() string {
 // hashing the empty string: that keeps every container which reads no
 // managed config on the hash it already has, so this dimension replaces
 // only the containers it actually applies to.
-func specHash(spec *resource.ContainerSpec, network, cfgDigest string) string {
+func specHash(spec *resource.ContainerSpec, network, cfgDigest string, aliases []string) string {
 	data, err := json.Marshal(spec)
 	if err != nil {
 		// A ContainerSpec is plain data; Marshal cannot fail on it. Guard
@@ -1516,6 +1521,14 @@ func specHash(spec *resource.ContainerSpec, network, cfgDigest string) string {
 	data = append(data, []byte("\x00net="+network)...)
 	if cfgDigest != "" {
 		data = append(data, []byte("\x00cfg="+cfgDigest)...)
+	}
+	// Host aliases are part of a container's effective configuration: one
+	// that cannot resolve its own issuer is not the same container as one
+	// that can. Folding them in means a posture change recreates the
+	// containers that depend on it, rather than leaving them with a
+	// stale /etc/hosts nobody can see.
+	for _, a := range aliases {
+		data = append(data, []byte("\x00alias="+a)...)
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:8])
@@ -1614,7 +1627,7 @@ func (r *Reconciler) refuseIfAgentTooOld(nodeID string, step plan.PlanStep, spec
 		step.Kind, step.Name, need, nodeID, have)
 }
 
-func containerEnsureOp(name string, spec *resource.ContainerSpec, network, cfgDigest string) *wsv1.Operation {
+func containerEnsureOp(name string, spec *resource.ContainerSpec, network, cfgDigest string, aliases []string) *wsv1.Operation {
 	var ports []*wsv1.PortBinding
 	for _, p := range spec.Ports {
 		m, ok := resource.ParsePortMapping(p)
@@ -1641,11 +1654,12 @@ func containerEnsureOp(name string, spec *resource.ContainerSpec, network, cfgDi
 	}
 	return &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: &wsv1.EnsureContainer{
 		Name: name, Image: spec.Image, Env: spec.Env, Ports: ports, Mounts: mounts, RestartPolicy: spec.Restart,
-		Command: spec.Command,
-		Network: network,
-		Devices: devices,
-		CapAdd:  spec.CapAdd,
-		Labels:  map[string]string{specHashLabel: specHash(spec, network, cfgDigest)},
+		Command:     spec.Command,
+		Network:     network,
+		Devices:     devices,
+		CapAdd:      spec.CapAdd,
+		HostAliases: aliases,
+		Labels:      map[string]string{specHashLabel: specHash(spec, network, cfgDigest, aliases)},
 	}}}
 }
 

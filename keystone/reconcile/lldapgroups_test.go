@@ -73,8 +73,8 @@ func TestNewGroupRerunsTheProvisioningJob(t *testing.T) {
 	before := managedConfigContents(testManagedPrefix, byKey(groupRes("media_users")))
 	after := managedConfigContents(testManagedPrefix, byKey(groupRes("media_users"), groupRes("photos_users")))
 
-	h1 := specHash(provisioner, ContainerNetwork, configDigest(cfgPrefix, provisioner, before))
-	h2 := specHash(provisioner, ContainerNetwork, configDigest(cfgPrefix, provisioner, after))
+	h1 := specHash(provisioner, ContainerNetwork, configDigest(cfgPrefix, provisioner, before), nil)
+	h2 := specHash(provisioner, ContainerNetwork, configDigest(cfgPrefix, provisioner, after), nil)
 	if h1 == h2 {
 		t.Fatal("declaring a new LdapGroup left the provisioning job's spec hash unchanged: the group " +
 			"is written to the list and the job never runs again, so the group is never created and " +

@@ -594,6 +594,7 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 			RestartPolicy: restartPolicy{Name: restart},
 			Devices:       devices,
 			CapAdd:        capAdd,
+			ExtraHosts:    resolveHostAliases(ctx, op.GetHostAliases(), a.log),
 		},
 		NetworkingConfig: netCfg,
 	})

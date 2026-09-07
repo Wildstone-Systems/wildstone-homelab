@@ -118,7 +118,7 @@ func classifyJob(inspect *wsv1.InspectContainerResult, wantHash string) jobState
 // time. It is the right side of the trade because the alternative — a
 // job that gives up — leaves a half-provisioned system that no amount
 // of fixing the underlying problem will converge.
-func (r *Reconciler) observeJob(ctx context.Context, nodeID string, k resKey, want resource.Resource, isDesired bool, cfgContents map[string]string) (resource.Resource, bool, error) {
+func (r *Reconciler) observeJob(ctx context.Context, nodeID string, k resKey, want resource.Resource, isDesired bool, cfgContents map[string]string, hostAliases []string) (resource.Resource, bool, error) {
 	res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_InspectContainer{
 		InspectContainer: &wsv1.InspectContainer{Name: k.Name},
 	}})
@@ -165,7 +165,7 @@ func (r *Reconciler) observeJob(ctx context.Context, nodeID string, k resKey, wa
 		return placeholderResource(resource.KindJob, k.Name), true, nil
 	}
 
-	wantHash := specHash(jobRunSpec(want.Job), ContainerNetwork, configDigest(r.ManagedPrefix, jobRunSpec(want.Job), cfgContents))
+	wantHash := specHash(jobRunSpec(want.Job), ContainerNetwork, configDigest(r.ManagedPrefix, jobRunSpec(want.Job), cfgContents), hostAliases)
 	if classifyJob(res.GetInspectContainer(), wantHash) == jobSucceeded {
 		return want, true, nil
 	}
@@ -180,6 +180,7 @@ func (r *Reconciler) observeJob(ctx context.Context, nodeID string, k resKey, wa
 // stopped -> start, which re-runs the same command. The last is what
 // makes a failed job retry rather than needing a remove first.
 func (r *Reconciler) applyJobStep(ctx context.Context, nodeID string, step plan.PlanStep, desiredByKey map[resKey]resource.Resource, cfgContents map[string]string) StepResult {
+	aliases := hostAliasesFor(desiredByKey)
 	sr := StepResult{Step: step}
 	key := resKey{step.Kind, step.Name}
 
@@ -204,7 +205,7 @@ func (r *Reconciler) applyJobStep(ctx context.Context, nodeID string, step plan.
 			return sr
 		}
 		digest := configDigest(r.ManagedPrefix, run, cfgContents)
-		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, run, ContainerNetwork, digest))
+		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, run, ContainerNetwork, digest, aliases))
 		if err != nil {
 			sr.Error = err.Error()
 			return sr
@@ -215,7 +216,7 @@ func (r *Reconciler) applyJobStep(ctx context.Context, nodeID string, step plan.
 		}
 		sr.Applied = true
 
-		state, exit := r.waitJobFinished(ctx, nodeID, step.Name, specHash(run, ContainerNetwork, digest))
+		state, exit := r.waitJobFinished(ctx, nodeID, step.Name, specHash(run, ContainerNetwork, digest, aliases))
 		switch state {
 		case jobSucceeded:
 			sr.HealthOK = true

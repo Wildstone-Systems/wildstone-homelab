@@ -39,6 +39,9 @@ func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 		if ds := o.EnsureContainer.GetDevices(); len(ds) > 0 {
 			attrs = append(attrs, slog.String("devices", describeDevices(ds)))
 		}
+		if aliases := o.EnsureContainer.GetHostAliases(); len(aliases) > 0 {
+			attrs = append(attrs, slog.Any("host_aliases", aliases))
+		}
 		if caps := o.EnsureContainer.GetCapAdd(); len(caps) > 0 {
 			attrs = append(attrs, slog.String("cap_add", strings.Join(caps, ",")))
 		}
