@@ -180,7 +180,7 @@ func (r *Reconciler) observeJob(ctx context.Context, nodeID string, k resKey, wa
 // stopped -> start, which re-runs the same command. The last is what
 // makes a failed job retry rather than needing a remove first.
 func (r *Reconciler) applyJobStep(ctx context.Context, nodeID string, step plan.PlanStep, desiredByKey map[resKey]resource.Resource, cfgContents map[string]string) StepResult {
-	aliases := hostAliasesFor(desiredByKey)
+	aliases := r.hostAliasesForNode(nodeID, desiredByKey)
 	sr := StepResult{Step: step}
 	key := resKey{step.Kind, step.Name}
 

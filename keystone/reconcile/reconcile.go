@@ -661,7 +661,7 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 	// Same reasoning as cfgContents above: derived from the same desired
 	// set on both paths, so observe and apply agree on what a container
 	// is. Disagreeing here means a container recreated every tick.
-	hostAliases := hostAliasesFor(desiredByKey)
+	hostAliases := r.hostAliasesForNode(nodeID, desiredByKey)
 
 	// Candidates = every desired (kind,name) (to detect Create/Update/
 	// NoOp) union every key the Reconciler currently believes it manages
@@ -1327,7 +1327,7 @@ func (r *Reconciler) ManagedNodes() []string {
 // ---------------------------------------------------------------- apply: Container
 
 func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step plan.PlanStep, desiredByKey map[resKey]resource.Resource, cfgContents map[string]string) StepResult {
-	hostAliases := hostAliasesFor(desiredByKey)
+	hostAliases := r.hostAliasesForNode(nodeID, desiredByKey)
 	sr := StepResult{Step: step}
 	key := resKey{step.Kind, step.Name}
 

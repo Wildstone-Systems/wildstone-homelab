@@ -28,6 +28,41 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
+// hostAliasesForNode returns the names containers on this node must
+// resolve, and NOTHING if the node's agent is too old to write them.
+//
+// The version gate is not politeness, it is what stops a silent
+// permanent failure. host_aliases arrived in protocol minor 14. A
+// minor-13 agent ignores the field but still labels the container with
+// whatever spec hash Keystone sent — so if the hash counted the aliases,
+// a container created by the old agent would carry the ALIAS-AWARE hash
+// while having no /etc/hosts entry at all. Upgrade the agent afterwards
+// and observation finds a hash that matches, calls the container
+// converged, and never recreates it: the entry never arrives, login
+// stays broken, and every surface reports green.
+//
+// Returning nothing below minor 14 makes the hash identical to what it
+// was before this feature existed, so nothing churns while the agent is
+// old — and the moment the agent reports 14 the aliases enter the hash,
+// the hash changes, and the container is recreated with its entry. The
+// fix arrives by itself, in the right order, with no operator step.
+//
+// An UNKNOWN minor is treated as too old, for the same reason: assuming
+// support we cannot see is how the silent version of this bug gets in.
+func (r *Reconciler) hostAliasesForNode(nodeID string, desiredByKey map[resKey]resource.Resource) []string {
+	if r.AgentProtocolMinor == nil {
+		return nil
+	}
+	minor, known := r.AgentProtocolMinor(nodeID)
+	if !known || minor < hostAliasesProtocolMinor {
+		return nil
+	}
+	return hostAliasesFor(desiredByKey)
+}
+
+// hostAliasesProtocolMinor is the minor that introduced host_aliases.
+const hostAliasesProtocolMinor = 14
+
 // hostAliasesFor returns the names containers on this node must resolve.
 //
 // Empty under every posture but tailscale: with ordinary DNS the issuer
