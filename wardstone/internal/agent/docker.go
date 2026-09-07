@@ -273,8 +273,13 @@ func (d *dockerClient) stats(ctx context.Context, id string) (statsResult, error
 }
 
 type volumeInspectResult struct {
-	Name   string            `json:"Name"`
-	Labels map[string]string `json:"Labels"`
+	Name string `json:"Name"`
+	// Mountpoint is the host path backing the volume. Needed by the seed
+	// ops, which write into an application's own data before it first
+	// starts; every other op reaches a volume by mounting it into a
+	// container instead.
+	Mountpoint string            `json:"Mountpoint"`
+	Labels     map[string]string `json:"Labels"`
 }
 
 // volumeInspect returns nil, notFound-error when the volume does not

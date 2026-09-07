@@ -81,6 +81,19 @@ func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 		return "PutSecret", []slog.Attr{slog.String("name", o.PutSecret.GetName())}
 	case *wsv1.Operation_ListSecrets:
 		return "ListSecrets", nil
+	case *wsv1.Operation_SeedVolumeFile:
+		// Volume and path only. A seed's content is package-rendered
+		// config that may carry a reference to something sensitive, and
+		// is treated like every other file body: not logged.
+		return "SeedVolumeFile", []slog.Attr{
+			slog.String("volume", o.SeedVolumeFile.GetVolume()),
+			slog.String("path", o.SeedVolumeFile.GetPath()),
+		}
+	case *wsv1.Operation_StatVolumeFile:
+		return "StatVolumeFile", []slog.Attr{
+			slog.String("volume", o.StatVolumeFile.GetVolume()),
+			slog.String("path", o.StatVolumeFile.GetPath()),
+		}
 	case *wsv1.Operation_InspectContainer:
 		return "InspectContainer", []slog.Attr{slog.String("name", o.InspectContainer.GetName())}
 	case *wsv1.Operation_PruneImages:

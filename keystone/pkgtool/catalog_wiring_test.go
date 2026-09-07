@@ -1,6 +1,7 @@
 package pkgtool
 
 import (
+	"encoding/json"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -395,5 +396,126 @@ func TestCatalogShipsTheLaunchServiceSet(t *testing.T) {
 	}
 	if len(dirs) < 50 {
 		t.Errorf("the catalog ships %d packages; the expansion committed to at least 50", len(dirs))
+	}
+}
+
+// TestShippedSeedsNameDeclaredVolumes: a SeedFile writes into a volume by
+// name, before the app starts. A name no Volume in the package declares
+// is a seed the node refuses (the volume does not exist) or, worse, one
+// that lands in a volume belonging to someone else.
+func TestShippedSeedsNameDeclaredVolumes(t *testing.T) {
+	checked := 0
+	for name, rendered := range renderShippedPackages(t) {
+		t.Run(name, func(t *testing.T) {
+			volumes := map[string]bool{}
+			for _, r := range rendered {
+				if r.Kind == resource.KindVolume && r.Volume != nil {
+					volumes[r.Volume.Name] = true
+				}
+			}
+			for _, r := range rendered {
+				if r.Kind != resource.KindSeedFile || r.SeedFile == nil {
+					continue
+				}
+				checked++
+				if !volumes[r.SeedFile.Volume] {
+					t.Errorf("SeedFile %q writes into volume %q, which this package does not declare",
+						r.Metadata.Name, r.SeedFile.Volume)
+				}
+			}
+		})
+	}
+	_ = checked // a catalog with no seeds at all is legitimate
+}
+
+// TestHomeAssistantSeedsItsProxyTrust pins the specific regression, and
+// the specific SHAPE of the fix.
+//
+// Home Assistant reads http: exactly once, on its first start. Deliver
+// that setting any later and the service answers 400 to every proxied
+// request while reporting a perfectly converged install.
+//
+// Delivering it through configuration.yaml does not work either, and
+// fails later, which is worse: a migrated YAML block is staged as a
+// PENDING config on trial and auto-reverts after five minutes unless a
+// person promotes it in the UI. So the settings store is seeded directly
+// with the value already in `stable`. See ADR-W029.
+func TestHomeAssistantSeedsItsProxyTrust(t *testing.T) {
+	rendered, ok := renderShippedPackages(t)["home-assistant"]
+	if !ok {
+		t.Fatal("home-assistant is not in the catalog")
+	}
+
+	seeds := map[string]string{}
+	for _, r := range rendered {
+		if r.Kind == resource.KindSeedFile && r.SeedFile != nil {
+			seeds[r.SeedFile.Path] = r.SeedFile.Content
+		}
+	}
+
+	store, ok := seeds[".storage/http"]
+	if !ok {
+		t.Fatal("home-assistant does not seed .storage/http: the proxy trust would arrive as a five-minute trial and auto-revert")
+	}
+	var parsed struct {
+		Data struct {
+			Stable struct {
+				UseXForwardedFor bool     `json:"use_x_forwarded_for"`
+				TrustedProxies   []string `json:"trusted_proxies"`
+			} `json:"stable"`
+			Pending           any  `json:"pending"`
+			YamlMigrationDone bool `json:"yaml_migration_done"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(store), &parsed); err != nil {
+		t.Fatalf("the seeded settings store is not valid JSON (%v):\n%s", err, store)
+	}
+	if !parsed.Data.Stable.UseXForwardedFor {
+		t.Error("use_x_forwarded_for must be in the CONFIRMED `stable` slot, or proxied requests 400")
+	}
+	if parsed.Data.Pending != nil {
+		t.Error("`pending` must be null: a pending config is a trial that auto-reverts after five minutes")
+	}
+	if !parsed.Data.YamlMigrationDone {
+		t.Error("yaml_migration_done must be true, or the first boot migrates YAML and stages a trial")
+	}
+	// The derived value, not a per-package guess.
+	if len(parsed.Data.Stable.TrustedProxies) == 0 {
+		t.Error("no trusted_proxies seeded")
+	}
+	var sawDockerRange bool
+	for _, c := range parsed.Data.Stable.TrustedProxies {
+		if c == "172.16.0.0/12" {
+			sawDockerRange = true
+		}
+	}
+	if !sawDockerRange {
+		t.Errorf("trusted_proxies should come from .Resolved.ProxyTrustCIDRs; got %v", parsed.Data.Stable.TrustedProxies)
+	}
+
+	// With the migration marked done, a leftover http: block in YAML is
+	// ignored and only raises a "your YAML is being ignored" repair
+	// notice — so the seeded configuration.yaml must not carry one.
+	config, ok := seeds["configuration.yaml"]
+	if !ok {
+		t.Fatal("home-assistant does not seed configuration.yaml")
+	}
+	for _, line := range strings.Split(config, "\n") {
+		if strings.HasPrefix(line, "http:") {
+			t.Error("configuration.yaml carries an http: block; with the migration already done it is ignored and only raises a repair notice")
+		}
+	}
+
+	// Home Assistant only creates its default config directory when
+	// configuration.yaml is ABSENT, and returns early the moment it finds
+	// one. Seeding that file therefore means seeding every sibling its
+	// own `!include` lines name, or the first boot fails on a missing
+	// file. .HA_VERSION is included because its absence is read as
+	// version 0.7.7 and runs years of migrations against a directory
+	// created seconds ago.
+	for _, want := range []string{"automations.yaml", "scripts.yaml", "scenes.yaml", ".HA_VERSION"} {
+		if _, ok := seeds[want]; !ok {
+			t.Errorf("configuration.yaml is seeded but %s is not: Home Assistant will not create it, and the first boot fails", want)
+		}
 	}
 }

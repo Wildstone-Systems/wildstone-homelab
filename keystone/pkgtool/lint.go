@@ -22,7 +22,7 @@ import (
 // Issue is one lint finding. Lint returns findings rather than stopping
 // at the first failure — a package author fixes a batch at a time.
 type Issue struct {
-	Rule string // "spec", "expand", "trait", "params", "classification", "container-env-ref", "policy"
+	Rule string // "spec", "expand", "trait", "params", "classification", "container-env-ref", "policy", "manual-step", "seed-volume"
 	Msg  string
 }
 
@@ -142,6 +142,8 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 	for _, r := range rendered {
 		issues = append(issues, containerEnvIssues(r)...)
 	}
+	issues = append(issues, manualStepIssues(pkg, rendered)...)
+	issues = append(issues, seedIssues(rendered)...)
 	violations, exempted := policy.NewEngine(nil).Validate(policy.Change{
 		Proposed:  rendered,
 		Principal: "pkgtool/lint",

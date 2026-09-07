@@ -436,7 +436,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	for _, res := range desired {
 		switch res.Kind {
 		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
-			resource.KindLdapGroup, resource.KindLdapUser, resource.KindIngress, resource.KindBackupPlan, resource.KindConfigFile, resource.KindJob,
+			resource.KindLdapGroup, resource.KindLdapUser, resource.KindIngress, resource.KindBackupPlan, resource.KindConfigFile, resource.KindSeedFile, resource.KindJob,
 			resource.KindSecret:
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
@@ -607,6 +607,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			sr = r.applyBackupPlanStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindConfigFile:
 			sr = r.applyConfigFileStep(ctx, nodeID, step, desiredByKey)
+		case resource.KindSeedFile:
+			sr = r.applySeedFileStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindAutomation:
 			// Unreachable by construction (observed == desired above);
 			// stated so the switch is exhaustive and a future caller
@@ -725,6 +727,14 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 			}
 		case resource.KindConfigFile:
 			obs, present, oerr := r.observeConfigFile(ctx, nodeID, k, want, isDesired)
+			if oerr != nil {
+				return nil, nil, oerr
+			}
+			if present {
+				observed = append(observed, obs)
+			}
+		case resource.KindSeedFile:
+			obs, present, oerr := r.observeSeedFile(ctx, nodeID, k, want, isDesired)
 			if oerr != nil {
 				return nil, nil, oerr
 			}
@@ -963,6 +973,8 @@ func placeholderResource(kind resource.Kind, name string) resource.Resource {
 		r.BackupPlan = &resource.BackupPlanSpec{}
 	case resource.KindConfigFile:
 		r.ConfigFile = &resource.ConfigFileSpec{}
+	case resource.KindSeedFile:
+		r.SeedFile = &resource.SeedFileSpec{}
 	}
 	return r
 }
@@ -1222,7 +1234,7 @@ func observableKind(k resource.Kind) bool {
 	switch k {
 	case resource.KindSecret, resource.KindJob, resource.KindContainer,
 		resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
-		resource.KindConfigFile, resource.KindLdapGroup, resource.KindLdapUser,
+		resource.KindConfigFile, resource.KindSeedFile, resource.KindLdapGroup, resource.KindLdapUser,
 		resource.KindIngress, resource.KindBackupPlan:
 		return true
 	default:

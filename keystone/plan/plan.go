@@ -195,7 +195,11 @@ var kindOrder = map[resource.Kind]int{
 	resource.KindIngress:    0,
 	resource.KindVolume:     1,
 	resource.KindConfigFile: 2,
-	resource.KindLdapGroup:  3,
+	// SeedFile with ConfigFile: after Volume, because it writes INTO one,
+	// and before Container, because the whole point is to land before the
+	// application first reads its config.
+	resource.KindSeedFile:  2,
+	resource.KindLdapGroup: 3,
 	// LdapUser shares OidcClient's tier: after LdapGroup, because a
 	// membership needs its group to exist, and before Container/Job,
 	// because the provisioning job is what reaches the directory.
@@ -366,6 +370,8 @@ func specEqual(a, b resource.Resource) bool {
 		return backupPlanEqual(a.BackupPlan, b.BackupPlan)
 	case resource.KindConfigFile:
 		return a.ConfigFile != nil && b.ConfigFile != nil && *a.ConfigFile == *b.ConfigFile
+	case resource.KindSeedFile:
+		return a.SeedFile != nil && b.SeedFile != nil && *a.SeedFile == *b.SeedFile
 	case resource.KindSecret:
 		return a.Secret != nil && b.Secret != nil && *a.Secret == *b.Secret
 	case resource.KindJob:
@@ -588,6 +594,17 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 			// authenticating anybody — neither visible until the app next
 			// reads the file, which may be long after the plan applied.
 			return RiskMedium, "configuration changed: the app may fail to start, or start behaving differently"
+		}
+	case resource.KindSeedFile:
+		switch action {
+		case ActionCreate:
+			// Written only if absent, into a volume nothing has started
+			// reading yet. The one case that cannot go wrong.
+			return RiskLow, "seed file written before the app first starts, and only if it is not already there"
+		default:
+			// An update is a recorded no-op and a delete never diffs, so
+			// neither touches the running app.
+			return RiskLow, "the app owns this file now; Wildstone leaves it alone"
 		}
 	case resource.KindSecret:
 		// Creating a secret is additive and affects nothing that exists:

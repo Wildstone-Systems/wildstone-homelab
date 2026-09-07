@@ -322,13 +322,17 @@ export function RemoveForm({
 }) {
   const remove = useAction();
   const done = remove.state.phase === "done" ? remove.state : null;
-  // Volumes are never deleted, so they are never proposed. Keystone
-  // refuses a Volume Delete outright (ADR-W004 A4: no Wardstone op
-  // exists to delete a volume, and it never auto-deletes data), so a
-  // plan containing one can never apply — it fails every pass until
-  // F60 sets the step aside, taking the rest of the removal with it.
-  const volumes = owned.filter((r) => r.kind === "Volume");
-  const deletable = owned.filter((r) => r.kind !== "Volume");
+  // Volumes and seeded files are never deleted, so they are never
+  // proposed. Keystone refuses a Volume Delete outright (ADR-W004 A4: no
+  // Wardstone op exists to delete a volume, and it never auto-deletes
+  // data), so a plan containing one can never apply — it fails every
+  // pass until F60 sets the step aside, taking the rest of the removal
+  // with it. A SeedFile is the same promise one layer up: the file was
+  // written into the app's own volume and belongs to the household from
+  // the moment it landed, so it survives too. Listing either as
+  // "deleted" would be telling the operator something untrue.
+  const kept = owned.filter((r) => r.kind === "Volume" || r.kind === "SeedFile");
+  const deletable = owned.filter((r) => r.kind !== "Volume" && r.kind !== "SeedFile");
 
   if (done) {
     return (
@@ -351,14 +355,14 @@ export function RemoveForm({
         This proposes deleting everything <strong>{pkg.capability}</strong> owns. Nothing happens
         until you approve the plan.
       </p>
-      {/* Volumes are the part a plan cannot undo. Everything else this
+      {/* Stored data is the part a plan cannot undo. Everything else this
           deletes can be reinstalled; what was stored cannot. */}
-      {volumes.length > 0 && (
+      {kept.length > 0 && (
         <div className="callout callout-warn">
           <strong>
-            {volumes.length === 1 ? "One volume stays" : `${volumes.length} volumes stay`}
+            {kept.length === 1 ? "One item stays" : `${kept.length} items stay`}
           </strong>{" "}
-          — {volumes.map((v) => v.name).join(", ")}. Wildstone never deletes data, so what is
+          — {kept.map((v) => v.name).join(", ")}. Wildstone never deletes data, so what is
           stored there survives this removal and reinstalling picks it back up. Delete it on the
           node yourself if you want the space.
         </div>
@@ -379,7 +383,7 @@ export function RemoveForm({
               <td>{r.node ?? "—"}</td>
             </tr>
           ))}
-          {volumes.map((r) => (
+          {kept.map((r) => (
             <tr key={`${r.kind}/${r.name}`} style={{ opacity: 0.55 }}>
               <td>{r.kind}</td>
               <td>{r.name}</td>
@@ -398,9 +402,9 @@ export function RemoveForm({
       {owned.length === 0 && error === null && loading && (
         <div className="muted">Reading the statefile…</div>
       )}
-      {deletable.length === 0 && volumes.length > 0 && error === null && !loading && (
+      {deletable.length === 0 && kept.length > 0 && error === null && !loading && (
         <div className="muted">
-          This capability owns only volumes, and volumes are never deleted. There is nothing to
+          This capability owns only stored data, which is never deleted. There is nothing to
           propose.
         </div>
       )}

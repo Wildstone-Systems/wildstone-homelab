@@ -405,6 +405,7 @@ func buildResolved(pkg *pkgspec.Package, params map[string]string, catalog *Cata
 		"OidcSecretRef":      "secret/" + pkg.Metadata.Capability + "-oidc",
 		"PublisherSecretRef": "secret/" + PublisherSecretName(pkg.Metadata.Capability),
 		"TailnetHost":        posture.TailnetName,
+		"ProxyTrustCIDRs":    proxyTrustCIDRs,
 	}
 
 	funcs := exportFuncs(posture)
@@ -432,6 +433,29 @@ func buildResolved(pkg *pkgspec.Package, params map[string]string, catalog *Cata
 
 	return resolved, nil
 }
+
+// proxyTrustCIDRs is the .Resolved value an app behind the reverse proxy
+// uses to decide whose X-Forwarded-For it will believe.
+//
+// It is the private ranges Docker allocates bridge networks from, plus
+// loopback, rendered as a YAML flow sequence so a template can write it
+// straight into a config:
+//
+//	trusted_proxies: {{ .Resolved.ProxyTrustCIDRs }}
+//
+// This is deliberately broader than the one subnet Wildstone's network
+// actually occupies, because nothing asks Docker what that subnet is —
+// Docker assigns it, and no operation reports it back. The practical
+// trust boundary is therefore "any container on this host", which is the
+// same boundary the app already has: everything on that network can
+// already reach its port directly. Narrowing it to the observed subnet
+// means teaching HostFacts about networks, and is worth doing when a
+// second node makes the difference real.
+//
+// The value is a constant rather than a per-node computation so that it
+// cannot silently differ between the plan a person approved and the file
+// that lands.
+const proxyTrustCIDRs = `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/32"]`
 
 // exportContext is what an export template renders over. Deliberately
 // only .Params: an export answers "what do I hand my consumers", and the

@@ -13,6 +13,7 @@ export type Kind =
   "Ingress" |
   "BackupPlan" |
   "ConfigFile" |
+  "SeedFile" |
   "Job" |
   "Secret" |
   "Automation";
@@ -118,6 +119,12 @@ export interface ConfigFileSpec {
   content: string;
 }
 
+export interface SeedFileSpec {
+  volume: string;
+  path: string;
+  content: string;
+}
+
 export interface JobSpec {
   run: ContainerSpec;
 }
@@ -183,6 +190,7 @@ export type Spec =
   IngressSpec |
   BackupPlanSpec |
   ConfigFileSpec |
+  SeedFileSpec |
   JobSpec |
   SecretSpec |
   AutomationSpec;
@@ -205,6 +213,7 @@ export interface SpecByKind {
   Ingress: IngressSpec;
   BackupPlan: BackupPlanSpec;
   ConfigFile: ConfigFileSpec;
+  SeedFile: SeedFileSpec;
   Job: JobSpec;
   Secret: SecretSpec;
   Automation: AutomationSpec;

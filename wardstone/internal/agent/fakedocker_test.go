@@ -38,6 +38,9 @@ type fakeContainer struct {
 type fakeVolume struct {
 	name   string
 	labels map[string]string
+	// mountpoint is the host directory backing the volume. Only the seed
+	// ops read it; everything else reaches a volume by mounting it.
+	mountpoint string
 }
 
 type fakeNetwork struct {
@@ -91,6 +94,14 @@ func (f *fakeDocker) addForeignVolume(name string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumes[name] = &fakeVolume{name: name, labels: map[string]string{"someone-else": "true"}}
+}
+
+// addOwnedVolumeAt seeds a wildstone-owned volume backed by a real
+// directory, so the seed ops have somewhere to write.
+func (f *fakeDocker) addOwnedVolumeAt(name, dir string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumes[name] = &fakeVolume{name: name, labels: map[string]string{OwnerLabel: ownerValue}, mountpoint: dir}
 }
 
 // addOwnedNetwork seeds a pre-existing wildstone-owned network, as
@@ -200,7 +211,7 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"Name": v.name, "Labels": v.labels})
+		json.NewEncoder(w).Encode(map[string]any{"Name": v.name, "Labels": v.labels, "Mountpoint": v.mountpoint})
 		return
 	}
 

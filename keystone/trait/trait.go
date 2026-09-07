@@ -116,6 +116,13 @@ var Intrinsic = []Export{
 			"in the shim's env, or in the config it renders for an external consumer.",
 	},
 	{
+		Key: "ProxyTrustCIDRs",
+		Description: "The address ranges the Wildstone reverse proxy reaches an app from, as a " +
+			"YAML flow sequence: [\"10.0.0.0/8\", …]. An app that sits behind the proxy and " +
+			"honours X-Forwarded-For needs to be told which peers may set it; deriving it " +
+			"here is what stops each package guessing its own list.",
+	},
+	{
 		Key: "TailnetHost",
 		Description: "The node's MagicDNS name under the tailnet ingress posture, and the " +
 			"empty string otherwise. Always defined, so a template may test it without " +

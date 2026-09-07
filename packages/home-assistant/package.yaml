@@ -24,11 +24,41 @@
 # household's own devices, with the app's own access control at the
 # app layer, and policy-clean off the public class (ADR-W009).
 #
-# The managed configuration file below tells Home Assistant to trust
-# the Wildstone proxy's X-Forwarded-For (it refuses proxied requests
-# otherwise) and includes /config/wildstone as a packages directory,
-# so the home-automation adapter's rendered file is picked up when that
-# capability is installed on the same node.
+# TRUSTING THE PROXY, AND WHY IT IS SEEDED INTO THE SETTINGS STORE.
+# Home Assistant refuses a proxied request unless it has been told which
+# peers may set X-Forwarded-For, answering 400 with "not set-up for
+# reverse proxies". Delivering that setting is harder than it looks, and
+# the two obvious ways both fail:
+#
+#   - A managed ConfigFile mounted alongside the app cannot work. On its
+#     first boot Home Assistant migrates any `http:` block out of
+#     configuration.yaml into its own settings store and records the
+#     migration as done; from then on the YAML is ignored permanently.
+#     Anything mounted after that first boot has already missed its turn.
+#
+#   - Seeding the `http:` block into configuration.yaml does not work
+#     either, and fails LATER, which is worse. A migrated YAML block is
+#     staged as a PENDING config on trial: unless a person promotes it in
+#     the UI within five minutes (AUTO_REVERT_DELAY), Home Assistant
+#     reverts to the stable config, restarts, and marks the pending one
+#     as failed so it is never applied again. The service works, then
+#     silently stops working, with no plan and no event to explain it.
+#
+# So the settings store itself is seeded, with the proxy trust already in
+# `stable` and the YAML migration already marked done. No trial, no
+# revert, no human. configuration.yaml deliberately carries NO http:
+# block: with the migration marked done, a leftover one only raises a
+# "your YAML is being ignored" repair notice.
+#
+# This does couple the package to Home Assistant's on-disk store shape,
+# which is why the image below is digest-pinned and why
+# TestSeededHomeAssistantTrustsTheProxy boots THAT image and asserts a
+# proxied request survives past the five-minute trial window. If a future
+# Home Assistant changes the store, that test fails loudly rather than a
+# household discovering it as a 400.
+#
+# Nothing here asks the operator to do anything, and nothing is guessed:
+# the proxy ranges come from .Resolved.ProxyTrustCIDRs.
 #
 # Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
 #   ghcr.io/home-assistant/home-assistant:stable -> sha256:612d7676...2918
@@ -36,7 +66,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: home-assistant
-  version: 1.0.0
+  version: 1.1.0
   capability: home-assistant
   profile: container
 requires:
@@ -65,33 +95,118 @@ templates:
     kind: Volume
     metadata: { name: home-assistant-backup-repo, node: "{{ .Params.node }}" }
     spec: { name: home-assistant-backup-repo }
-  # A Home Assistant "package": one file that carries whole config
-  # sections. Included from configuration.yaml — the operator adds the
-  # two `homeassistant: packages:` lines shown in the file once, on
-  # first setup, and everything Wildstone manages arrives through it.
+  # The first-run configuration directory. Every file here is what Home
+  # Assistant itself would have written (homeassistant/config.py:
+  # DEFAULT_CONFIG and _write_default_config), with the http: block added
+  # — the one thing that must be present before the first boot.
+  #
+  # scripts.yaml and scenes.yaml are written "{}" and "[]" rather than
+  # the empty files Home Assistant creates, because an empty seed is
+  # refused: seeding an empty file would claim the path and stop the app
+  # writing its own. The values are the empty mapping and empty list those
+  # includes parse to, so the result is identical.
   - |
     apiVersion: wildstone.dev/v1
-    kind: ConfigFile
-    metadata: { name: home-assistant-wildstone, node: "{{ .Params.node }}" }
+    kind: SeedFile
+    metadata: { name: home-assistant-configuration, node: "{{ .Params.node }}" }
     spec:
-      filename: wildstone.yaml
+      volume: home-assistant-config
+      path: configuration.yaml
       content: |
-        # Managed by Wildstone — do not edit. Changes are reverted on the
-        # next reconcile tick.
-        #
-        # Include from /config/configuration.yaml (once):
-        #   homeassistant:
-        #     packages: !include_dir_named /config/wildstone
-        http:
-          # The Wildstone proxy sits in front; without this Home Assistant
-          # answers proxied requests with 400 "A request from a reverse
-          # proxy was received but no trusted_proxies configured".
-          use_x_forwarded_for: true
-          trusted_proxies:
-            - 172.16.0.0/12
-            - 10.0.0.0/8
-            - 192.168.0.0/16
-            - 127.0.0.1
+        # Seeded once by Wildstone when this capability was installed.
+        # This file is YOURS: edit it freely, Wildstone will not rewrite it.
+
+        # Loads default set of integrations. Do not remove.
+        default_config:
+
+        # Load frontend themes from the themes folder
+        frontend:
+          themes: !include_dir_merge_named themes
+
+        automation: !include automations.yaml
+        script: !include scripts.yaml
+        scene: !include scenes.yaml
+
+        # No http: block here on purpose. The reverse-proxy trust lives in
+        # Home Assistant's settings store, seeded alongside this file;
+        # change it in Settings > System > Network.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: SeedFile
+    metadata: { name: home-assistant-http-settings, node: "{{ .Params.node }}" }
+    spec:
+      volume: home-assistant-config
+      path: .storage/http
+      # Home Assistant's own settings store for the http integration,
+      # written as it writes it. The proxy trust goes straight into
+      # "stable" — the confirmed-working slot — with "pending" empty, so
+      # there is no trial to promote and nothing to auto-revert.
+      # "yaml_migration_done" is already true so the first boot does not
+      # try to migrate YAML that deliberately has no http: block.
+      content: |
+        {
+          "version": 2,
+          "minor_version": 2,
+          "key": "http",
+          "data": {
+            "stable": {
+              "server_port": 8123,
+              "cors_allowed_origins": ["https://cast.home-assistant.io"],
+              "use_x_forwarded_for": true,
+              "trusted_proxies": {{ .Resolved.ProxyTrustCIDRs }},
+              "login_attempts_threshold": -1,
+              "ip_ban_enabled": true,
+              "ssl_profile": "modern",
+              "use_x_frame_options": true,
+              "created_at": "2026-01-01T00:00:00+00:00",
+              "error": null,
+              "error_message": null
+            },
+            "pending": null,
+            "yaml_migration_done": true
+          }
+        }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: SeedFile
+    metadata: { name: home-assistant-version, node: "{{ .Params.node }}" }
+    spec:
+      volume: home-assistant-config
+      path: .HA_VERSION
+      # Must match the version of the pinned image below. Home Assistant
+      # reads this to decide whether to run a configuration upgrade, and
+      # treats the file's ABSENCE as version 0.7.7 — so omitting it would
+      # run every migration since 2019 against a directory that was
+      # created moments ago.
+      content: |
+        2026.9.1
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: SeedFile
+    metadata: { name: home-assistant-automations, node: "{{ .Params.node }}" }
+    spec:
+      volume: home-assistant-config
+      path: automations.yaml
+      content: |
+        []
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: SeedFile
+    metadata: { name: home-assistant-scripts, node: "{{ .Params.node }}" }
+    spec:
+      volume: home-assistant-config
+      path: scripts.yaml
+      content: |
+        {}
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: SeedFile
+    metadata: { name: home-assistant-scenes, node: "{{ .Params.node }}" }
+    spec:
+      volume: home-assistant-config
+      path: scenes.yaml
+      content: |
+        []
   - |
     apiVersion: wildstone.dev/v1
     kind: Container
@@ -102,7 +217,6 @@ templates:
         TZ: "{{ .Params.timezone }}"
       mounts:
         - { source: home-assistant-config, target: /config }
-        - { source: /etc/wildstone/home-assistant, target: /config/wildstone, readOnly: true }
       restart: unless-stopped
   - |
     apiVersion: wildstone.dev/v1
