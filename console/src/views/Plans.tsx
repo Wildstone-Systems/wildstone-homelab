@@ -1,5 +1,5 @@
-import { ArrowCounterClockwise, SealCheck, XCircle } from "@phosphor-icons/react";
-import { api, type Plan, type PlanRecord } from "../api";
+import { ArrowCounterClockwise, SealCheck, WarningCircle, XCircle } from "@phosphor-icons/react";
+import { api, type EventRow, type Plan, type PlanRecord } from "../api";
 import { ago, ErrorLine, useAction, useLoad, when } from "../lib";
 import { useConsoleState } from "../state";
 import { kindOf, StatusPill } from "../ui/status";
@@ -20,18 +20,46 @@ export function Plans() {
   // The shared poll already has the plans; the fetch is what gives us a
   // reload after an approval without waiting for the next tick.
   const plans = list.data ?? snap?.plans ?? [];
-  return <PlansView plans={plans} onResolved={list.reload} />;
+  return <PlansView plans={plans} events={snap?.events ?? []} onResolved={list.reload} />;
+}
+
+// whyItFailed finds the reason a plan failed.
+//
+// The reconciler writes an excellent message when it refuses — it names
+// the exact `wild secret set` commands, for instance — into a
+// reconcile.failed event carrying the plan ids in its attrs. Nothing
+// showed it. A plan that says only "failed" sends an operator to the
+// Activity stream to correlate timestamps by hand, and the failure that
+// prompted this change blocked every LATER plan too, so three unrelated
+// plans failed with a reason none of them displayed.
+export function whyItFailed(plan: PlanRecord, events: EventRow[]): string | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.type !== "reconcile.failed") continue;
+    const named = (e.attrs?.plans ?? "").split(",").map((s) => s.trim());
+    if (named.includes(plan.id)) return e.message;
+  }
+  return undefined;
 }
 
 export function PlansView({
   plans,
+  events = [],
   onResolved,
 }: {
   plans: PlanRecord[];
+  events?: EventRow[];
   onResolved: () => void;
 }) {
   const pending = plans.filter((p) => p.state === "proposed");
   const resolved = plans.filter((p) => p.state !== "proposed");
+  // A failure the console can still explain is worth raising out of the
+  // history table: it is the reason the next thing you try will fail
+  // too. One whose event has aged out of the kept window stays in the
+  // table, because a card with nothing to say is just a louder row.
+  const explained = resolved
+    .map((p) => ({ plan: p, why: whyItFailed(p, events) }))
+    .filter((x): x is { plan: PlanRecord; why: string } => x.why !== undefined);
 
   return (
     <>
@@ -45,6 +73,32 @@ export function PlansView({
         <div className="bands">
           {pending.map((p) => (
             <PendingPlan key={p.id} plan={p} onResolved={onResolved} />
+          ))}
+        </div>
+      )}
+
+      {explained.length > 0 && (
+        <div className="bands" style={{ marginTop: "var(--space-8)" }}>
+          {explained.map(({ plan, why }) => (
+            <ProblemCard
+              key={plan.id}
+              severity="bad"
+              icon={<WarningCircle size={16} weight="fill" color="var(--st-bad)" />}
+              title={plan.summary}
+              meta={
+                <>
+                  <StatusPill kind="bad">{plan.state}</StatusPill>
+                  <span className="muted tnum" title={when(plan.resolvedAt ?? plan.createdAt)}>
+                    {plan.id} · {ago(plan.resolvedAt ?? plan.createdAt)}
+                  </span>
+                </>
+              }
+            >
+              {/* The reconciler's own words. It names what to do; the
+                  console's job is to put them where the failure is,
+                  not to paraphrase them. */}
+              <pre className="failure">{why}</pre>
+            </ProblemCard>
           ))}
         </div>
       )}
