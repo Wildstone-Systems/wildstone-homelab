@@ -241,18 +241,43 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		}
 	}
 
+	// "New conversation, please." Without a way to say this a thread
+	// can only be ended by waiting out the idle window, which means a
+	// fresh question inherits the previous topic for half an hour.
+	// Handled here rather than in an adapter so both transports get it
+	// from one implementation.
+	if isChatReset(text) {
+		if err := s.DB.ClearChatThread(transport, conversation, surface); err != nil {
+			s.Log.Error("clearing chat thread failed", "err", err)
+		}
+		seq := s.queueChatReply(surface, transport, conversation,
+			"Starting fresh. The previous conversation is still recorded — this one just won't build on it.",
+			binding.ID, "", chatDedupe(surface, transport, conversation, msg.MessageID, "reset", text))
+		s.settleInbound(claimKey, seq, &settled)
+		s.touchBinding(binding, conversation, msg.Group)
+		return inboundResponse{Accepted: true, Bound: true, Queued: seq,
+			Reason: "started a new conversation"}, http.StatusAccepted, nil
+	}
+
 	// The session runners take their own snapshot of the backend and
 	// answer 503 when none is configured (ADR-W017 A9); reading it here
 	// as well would be a second read of shared state for one request.
+
+	// A conversation continues rather than restarting (ADR-W027 A11).
+	// Without this every message opened a new session, so asking "why?"
+	// after an answer reached a Butler that had never heard the first
+	// question — the multi-turn work landed for the Console and left
+	// this path passing nil.
+	prior := s.chatThread(transport, conversation, surface, binding.Identity)
 
 	var (
 		out any
 		st  int
 	)
 	if surface == runtimedb.ButlerSurfaceFamily {
-		out, st, err = s.runFamilySession(r.Context(), text, binding.Identity, systemExtra, msg.Group, nil)
+		out, st, err = s.runFamilySession(r.Context(), text, binding.Identity, systemExtra, msg.Group, prior)
 	} else {
-		out, st, err = s.runAdminButlerSession(r.Context(), text, binding.Identity, nil)
+		out, st, err = s.runAdminButlerSession(r.Context(), text, binding.Identity, prior)
 	}
 	if err != nil {
 		return nil, st, err
@@ -260,11 +285,71 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	s.touchBinding(binding, conversation, msg.Group)
 
 	ask, _ := out.(askResponse)
+	if ask.SessionID != "" {
+		if err := s.DB.SetChatThreadSession(transport, conversation, surface, ask.SessionID); err != nil {
+			// The answer already happened and is about to be sent. A
+			// thread pointer that failed to save costs the NEXT message
+			// its context; dropping this reply would cost this one
+			// entirely.
+			s.Log.Error("recording chat thread failed", "err", err)
+		}
+	}
 	body := chatReplyBody(ask)
 	seq := s.queueChatReply(surface, transport, conversation, body, binding.ID, "",
 		chatDedupe(surface, transport, conversation, msg.MessageID, ask.SessionID, text))
 	s.settleInbound(claimKey, seq, &settled)
 	return inboundResponse{Accepted: true, Bound: true, Queued: seq}, http.StatusAccepted, nil
+}
+
+// isChatReset reports whether a message means "start over". The set is
+// deliberately small and exact — a message that merely CONTAINS "new"
+// is a question, not a command, and swallowing it as one would lose
+// what the person actually asked.
+func isChatReset(text string) bool {
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "/new", "/reset", "/clear":
+		return true
+	}
+	return false
+}
+
+// chatIdleWindow is how long a chat conversation stays open. A message
+// after this starts a new session rather than silently resuming one the
+// person has forgotten — and a Butler answering in the context of
+// yesterday's question is harder to understand than one that starts
+// clean.
+const chatIdleWindow = 30 * time.Minute
+
+// chatThread is the conversation this message continues, or nil for a
+// new one.
+//
+// The stored session is checked against the CALLER before it is
+// continued. A pointer row is keyed by transport, conversation and
+// surface, but the session it names carries its own acting_for and
+// surface, and those are the authority — a thread pointer that has
+// drifted (a binding revoked and reissued to somebody else on the same
+// chat id) must not hand a stranger the previous person's conversation.
+func (s *Server) chatThread(transport, conversation string, surface runtimedb.ButlerSurface, identity string) *turnContext {
+	id, ok, err := s.DB.ChatThreadSession(transport, conversation, surface, chatIdleWindow)
+	if err != nil {
+		s.Log.Error("reading chat thread failed", "err", err)
+		return nil
+	}
+	if !ok {
+		return nil
+	}
+	sess, err := s.DB.GetButlerSession(id)
+	if err != nil {
+		// Including ErrNotFound: a pointer to a session that is gone is
+		// a new conversation, not a failure.
+		return nil
+	}
+	if sess.ActingFor != identity || sess.Surface != surface {
+		s.Log.Warn("chat thread pointed at another principal's session; starting fresh",
+			"session", id, "expected", identity, "got", sess.ActingFor)
+		return nil
+	}
+	return &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}
 }
 
 // chatReplyBody renders a completed session as the message a person
