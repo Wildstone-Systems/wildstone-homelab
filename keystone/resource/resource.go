@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -112,15 +113,44 @@ type ContainerSpec struct {
 	// Image must be digest-pinned (ADR-W003 A4.2 regex).
 	Image string            `yaml:"image"`
 	Env   map[string]string `yaml:"env,omitempty"`
-	// Ports are "[HOST_IP:]host:container" mappings, in Docker's own
-	// syntax. Omitting HOST_IP binds every interface — state an address
-	// (an IPv6 one in brackets) to keep a listener off the public ones.
+	// Ports are "[HOST_IP:]host:container[/udp]" mappings, in Docker's
+	// own syntax. Omitting HOST_IP binds every interface — state an
+	// address (an IPv6 one in brackets) to keep a listener off the
+	// public ones. Omitting the protocol means TCP; "/udp" publishes
+	// the UDP side (protocol minor 12), which a DNS resolver or a
+	// torrent client's DHT needs and which used to be unsayable.
 	Ports  []string `yaml:"ports,omitempty"`
 	Mounts []Mount  `yaml:"mounts,omitempty"`
 	// Command is the container argument vector, appended after the
 	// image's entrypoint (docker Cmd; ADR-W011 A3, protocol minor 6).
 	Command []string `yaml:"command,omitempty"`
 	Restart string   `yaml:"restart,omitempty"`
+	// Devices are host device nodes handed to the container (protocol
+	// minor 12): a Zigbee stick, a GPU's render node, /dev/net/tun.
+	// Sources must be on the closed device allowlist (DeviceAllowed);
+	// the agent enforces the same list, so a package that names
+	// /dev/sda fails lint here rather than an approved plan there.
+	//
+	// The json tags are load-bearing: the reconciler's spec hash is
+	// json.Marshal of this struct, and a nil slice with no tag marshals
+	// as null — so adding a field without omitempty would move the hash
+	// of every container in the fleet and replace all of them once for
+	// nothing (TestContainerWithNoManagedConfigIsUnaffected).
+	Devices []DeviceMapping `yaml:"devices,omitempty" json:"devices,omitempty"`
+	// CapAdd are Linux capabilities added over Docker's default set,
+	// named without the CAP_ prefix (protocol minor 12). Closed set:
+	// ContainerCapabilities. SYS_ADMIN is not in it and never will be.
+	CapAdd []string `yaml:"capAdd,omitempty" json:"capAdd,omitempty"`
+}
+
+// DeviceMapping is one host device visible inside a container.
+type DeviceMapping struct {
+	// Source is the host path, e.g. /dev/ttyUSB0 or
+	// /dev/serial/by-id/usb-...; the agent resolves aliases itself.
+	Source string `yaml:"source"`
+	// Target is the path inside the container. Empty means the same
+	// path as Source, which is what nearly every image expects.
+	Target string `yaml:"target,omitempty"`
 }
 
 // VolumeSpec is the spec for kind Volume, applied via Wardstone EnsureVolume.
@@ -865,6 +895,31 @@ func validateContainer(r *Resource) error {
 			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.mounts[%d].target", i), Msg: "must not be empty"}
 		}
 	}
+	for i, d := range r.Container.Devices {
+		if d.Source == "" || !path.IsAbs(d.Source) || path.Clean(d.Source) != d.Source {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.devices[%d].source", i),
+				Msg: fmt.Sprintf("%q must be an absolute, clean path under /dev", d.Source)}
+		}
+		if !DeviceAllowed(d.Source) {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.devices[%d].source", i),
+				Msg: fmt.Sprintf("%q is not on the device allowlist (%s); the agent refuses it too, and a block "+
+					"device is never handed to a container", d.Source, deviceClasses)}
+		}
+		if d.Target != "" && (!path.IsAbs(d.Target) || path.Clean(d.Target) != d.Target) {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.devices[%d].target", i),
+				Msg: fmt.Sprintf("%q must be an absolute, clean path, or empty for the same path as source", d.Target)}
+		}
+	}
+	for i, c := range r.Container.CapAdd {
+		if ContainerCapabilities[c] {
+			continue
+		}
+		msg := fmt.Sprintf("%q is not on the capability allowlist (%s)", c, strings.Join(ContainerCapabilityNames(), ", "))
+		if strings.HasPrefix(c, "CAP_") {
+			msg = fmt.Sprintf("%q: name it without the CAP_ prefix, as Docker does", c)
+		}
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.capAdd[%d]", i), Msg: msg}
+	}
 	return nil
 }
 
@@ -956,12 +1011,44 @@ func SecretKindNames() []string {
 // reconciler parses the same string with the same function, so anything
 // that validates here renders there.
 func validatePortMapping(r *Resource, p string) error {
-	if _, _, _, ok := SplitPortMapping(p); !ok {
+	if _, ok := ParsePortMapping(p); !ok {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.ports",
-			Msg: fmt.Sprintf("%q must be \"[HOST_IP:]host:container\" with numeric ports in 1-65535 "+
+			Msg: fmt.Sprintf("%q must be \"[HOST_IP:]host:container[/udp]\" with numeric ports in 1-65535 "+
 				"and, if present, a literal IP address (IPv6 in brackets: \"[::1]:8443:80\")", p)}
 	}
 	return nil
+}
+
+// PortMapping is one parsed ContainerSpec.Ports entry.
+type PortMapping struct {
+	// HostIP is empty when the mapping names no address, which is
+	// Docker's "every interface" default.
+	HostIP        string
+	HostPort      uint32
+	ContainerPort uint32
+	// Protocol is "tcp" or "udp"; the parser fills in "tcp" when the
+	// mapping carries no suffix, so callers never see "".
+	Protocol string
+}
+
+// ParsePortMapping is SplitPortMapping with the protocol: the "/udp"
+// (or explicit "/tcp") suffix Docker accepts on a published port.
+func ParsePortMapping(s string) (PortMapping, bool) {
+	proto := "tcp"
+	if rest, suffix, found := strings.Cut(s, "/"); found {
+		switch suffix {
+		case "tcp", "udp":
+			proto = suffix
+		default:
+			return PortMapping{}, false
+		}
+		s = rest
+	}
+	hostIP, hostPort, containerPort, ok := splitPortMapping(s)
+	if !ok {
+		return PortMapping{}, false
+	}
+	return PortMapping{HostIP: hostIP, HostPort: hostPort, ContainerPort: containerPort, Protocol: proto}, true
 }
 
 // SplitPortMapping parses one ContainerSpec.Ports entry into the fields of
@@ -974,6 +1061,13 @@ func validatePortMapping(r *Resource, p string) error {
 // before, which is how "host:container" came to be enforced at the door
 // while the wire protocol had carried host_ip since minor 1.
 func SplitPortMapping(s string) (hostIP string, hostPort, containerPort uint32, ok bool) {
+	m, ok := ParsePortMapping(s)
+	return m.HostIP, m.HostPort, m.ContainerPort, ok
+}
+
+// splitPortMapping parses the address-and-ports half, protocol already
+// stripped.
+func splitPortMapping(s string) (hostIP string, hostPort, containerPort uint32, ok bool) {
 	rest := s
 	switch {
 	// Bracketed IPv6, exactly as Docker writes it: "[fd7a::1]:8443:80".

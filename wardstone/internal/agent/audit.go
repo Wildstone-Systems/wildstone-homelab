@@ -16,6 +16,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 )
@@ -27,10 +28,21 @@ import (
 func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 	switch o := op.GetOp().(type) {
 	case *wsv1.Operation_EnsureContainer:
-		return "EnsureContainer", []slog.Attr{
+		attrs := []slog.Attr{
 			slog.String("name", o.EnsureContainer.GetName()),
 			slog.String("image", o.EnsureContainer.GetImage()),
 		}
+		// Host access is the audit-worthy half of a container spec
+		// (protocol minor 12): which devices and capabilities a
+		// container was granted is what a reader of this log wants to
+		// know first when something on the host misbehaves.
+		if ds := o.EnsureContainer.GetDevices(); len(ds) > 0 {
+			attrs = append(attrs, slog.String("devices", describeDevices(ds)))
+		}
+		if caps := o.EnsureContainer.GetCapAdd(); len(caps) > 0 {
+			attrs = append(attrs, slog.String("cap_add", strings.Join(caps, ",")))
+		}
+		return "EnsureContainer", attrs
 	case *wsv1.Operation_StopContainer:
 		return "StopContainer", []slog.Attr{slog.String("name", o.StopContainer.GetName())}
 	case *wsv1.Operation_ContainerLogs:

@@ -1,0 +1,153 @@
+# Cameras capability, profile "frigate": Frigate NVR — records the
+# household's IP cameras and detects people, cars and pets in them.
+#
+# WHAT THIS SHIPS. Frigate with one camera declared through params and
+# the rest added to the package. Detection runs on the CPU unless
+# coral_device names a Coral TPU (/dev/apex_0 for the PCIe/M.2 ones;
+# USB Corals arrive through /dev/bus/usb), and video decoding uses the
+# CPU unless gpu_device names a render node (/dev/dri for Intel and
+# AMD). Both are handed to the container by the agent (protocol minor
+# 12), which refuses any path outside its device allowlist. CPU
+# detection is fine for one or two cameras at detect resolution.
+#
+# THE CONFIG. Frigate reads ONE config file, named by CONFIG_FILE, and
+# this package manages it — cameras added through Frigate's UI editor
+# are written back to that file and would be reverted on the next
+# reconcile tick, so cameras are declared here. A read-only mount of
+# the managed directory makes that explicit rather than surprising.
+#
+# THE ROUTE. Frigate's own login is switched off in favour of the
+# proxy's: Authelia's forward-auth sets Remote-User, and Frigate's
+# proxy.header_map turns that into the signed-in user (port 8971, the
+# authenticated listener — never 5000, which trusts everything).
+# admin_tailscale: camera feeds are the operator's, not a public page.
+#
+# MQTT is optional and off by default; set mqtt_host to "mosquitto"
+# after installing mqtt-mosquitto to get events into Home Assistant.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/blakeblackshear/frigate:stable -> sha256:d4351369...7010
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: cameras-frigate
+  version: 1.0.0
+  capability: cameras
+  profile: frigate
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+  - { trait: storage, class: bulk }
+params:
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: camera_name, default: front_door, description: "A short name for your first camera, letters and underscores only, e.g. front_door." }
+  - { name: camera_rtsp_url, required: true, example: "rtsp://192.168.1.50:554/stream1", description: "The RTSP stream address of your first camera, e.g. rtsp://192.168.1.50:554/stream1. If it needs a login, put it in the address (rtsp://user:pass@host/...) and add more cameras in the config file later." }
+  - { name: mqtt_host, default: "", description: "Container name of an MQTT broker to publish events to, e.g. mosquitto. Leave empty for none." }
+  - { name: retain_days, default: "7", description: "How many days of recordings to keep." }
+  - { name: gpu_device, default: "", example: "/dev/dri", description: "A GPU render node for hardware video decoding, e.g. /dev/dri on Intel or AMD. Leave empty to decode on the CPU." }
+  - { name: coral_device, default: "", example: "/dev/apex_0", description: "A Coral TPU for detection, e.g. /dev/apex_0 for the PCIe or M.2 versions, or /dev/bus/usb for the USB one. Leave empty to detect on the CPU." }
+policies:
+  classifications: [admin_tailscale]
+  dataSensitivity: high
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: frigate-config, node: "{{ .Params.node }}" }
+    spec: { name: frigate-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: frigate-media, node: "{{ .Params.node }}" }
+    spec: { name: frigate-media }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: frigate-config, node: "{{ .Params.node }}" }
+    spec:
+      filename: config.yml
+      content: |
+        # Managed by Wildstone — do not edit. Changes are reverted on the
+        # next reconcile tick; add cameras to the package instead.
+        auth:
+          enabled: false
+        proxy:
+          header_map:
+            user: remote-user
+        mqtt:
+          enabled: {{ if .Params.mqtt_host }}true{{ else }}false{{ end }}
+          {{ with .Params.mqtt_host }}host: {{ . }}{{ end }}
+        detectors:
+        {{- if .Params.coral_device }}
+          coral:
+            type: edgetpu
+            device: {{ if eq .Params.coral_device "/dev/bus/usb" }}usb{{ else }}pci{{ end }}
+        {{- else }}
+          cpu1:
+            type: cpu
+            num_threads: 3
+        {{- end }}
+        {{- if .Params.gpu_device }}
+        ffmpeg:
+          hwaccel_args: preset-vaapi
+        {{- end }}
+        record:
+          enabled: true
+          retain:
+            days: {{ .Params.retain_days }}
+            mode: motion
+          alerts:
+            retain:
+              days: {{ .Params.retain_days }}
+          detections:
+            retain:
+              days: {{ .Params.retain_days }}
+        snapshots:
+          enabled: true
+          retain:
+            default: {{ .Params.retain_days }}
+        detect:
+          width: 1280
+          height: 720
+          fps: 5
+        objects:
+          track: [person, car, dog, cat]
+        cameras:
+          {{ .Params.camera_name }}:
+            ffmpeg:
+              inputs:
+                - path: "{{ .Params.camera_rtsp_url }}"
+                  roles: [detect, record]
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: frigate, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/blakeblackshear/frigate@sha256:d4351369984d4a9e2a49ac59736f6490856a7ea11f7790040746d21496967010"
+      env:
+        TZ: "{{ .Params.timezone }}"
+        CONFIG_FILE: /etc/wildstone/cameras/config.yml
+      mounts:
+        - { source: frigate-config, target: /config }
+        - { source: frigate-media, target: /media/frigate }
+        - { source: /etc/wildstone/cameras, target: /etc/wildstone/cameras, readOnly: true }
+      devices:
+        {{- with .Params.gpu_device }}
+        - { source: "{{ . }}" }
+        {{- end }}
+        {{- with .Params.coral_device }}
+        - { source: "{{ . }}" }
+        {{- end }}
+        {{- if not (or .Params.gpu_device .Params.coral_device) }} []{{ end }}
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: frigate, node: "{{ .Params.node }}" }
+    spec:
+      host: "frigate.{{ .Params.admin_domain }}"
+      upstream: "container/frigate:8971"
+      auth: authelia_oidc
+      classification: admin_tailscale

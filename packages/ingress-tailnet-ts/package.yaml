@@ -30,7 +30,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: ingress-tailnet-ts
-  version: 1.0.0
+  version: 1.1.0
   capability: ingress
   profile: caddy-tailnet-ts
 provides:
@@ -76,6 +76,10 @@ templates:
         # Publishing only some would leave a Route that was assigned a
         # port genuinely unreachable, with nothing anywhere saying so —
         # the config would render, converge, and report healthy.
+        #
+        # The list is keystone/ingressorigin's PortBlock, verbatim, and
+        # TestTailnetIngressPublishesTheWholePortBlock fails if the two
+        # ever disagree: 443, then every thousandth port from 7443 up.
         - "{{ .Params.listen_addr }}:443:443"
         - "{{ .Params.listen_addr }}:7443:7443"
         - "{{ .Params.listen_addr }}:8443:8443"
@@ -88,6 +92,42 @@ templates:
         - "{{ .Params.listen_addr }}:15443:15443"
         - "{{ .Params.listen_addr }}:16443:16443"
         - "{{ .Params.listen_addr }}:17443:17443"
+        - "{{ .Params.listen_addr }}:18443:18443"
+        - "{{ .Params.listen_addr }}:19443:19443"
+        - "{{ .Params.listen_addr }}:20443:20443"
+        - "{{ .Params.listen_addr }}:21443:21443"
+        - "{{ .Params.listen_addr }}:22443:22443"
+        - "{{ .Params.listen_addr }}:23443:23443"
+        - "{{ .Params.listen_addr }}:24443:24443"
+        - "{{ .Params.listen_addr }}:25443:25443"
+        - "{{ .Params.listen_addr }}:26443:26443"
+        - "{{ .Params.listen_addr }}:27443:27443"
+        - "{{ .Params.listen_addr }}:28443:28443"
+        - "{{ .Params.listen_addr }}:29443:29443"
+        - "{{ .Params.listen_addr }}:30443:30443"
+        - "{{ .Params.listen_addr }}:31443:31443"
+        - "{{ .Params.listen_addr }}:32443:32443"
+        - "{{ .Params.listen_addr }}:33443:33443"
+        - "{{ .Params.listen_addr }}:34443:34443"
+        - "{{ .Params.listen_addr }}:35443:35443"
+        - "{{ .Params.listen_addr }}:36443:36443"
+        - "{{ .Params.listen_addr }}:37443:37443"
+        - "{{ .Params.listen_addr }}:38443:38443"
+        - "{{ .Params.listen_addr }}:39443:39443"
+        - "{{ .Params.listen_addr }}:40443:40443"
+        - "{{ .Params.listen_addr }}:41443:41443"
+        - "{{ .Params.listen_addr }}:42443:42443"
+        - "{{ .Params.listen_addr }}:43443:43443"
+        - "{{ .Params.listen_addr }}:44443:44443"
+        - "{{ .Params.listen_addr }}:45443:45443"
+        - "{{ .Params.listen_addr }}:46443:46443"
+        - "{{ .Params.listen_addr }}:47443:47443"
+        - "{{ .Params.listen_addr }}:48443:48443"
+        - "{{ .Params.listen_addr }}:49443:49443"
+        - "{{ .Params.listen_addr }}:50443:50443"
+        - "{{ .Params.listen_addr }}:51443:51443"
+        - "{{ .Params.listen_addr }}:52443:52443"
+        - "{{ .Params.listen_addr }}:53443:53443"
       mounts:
         - { source: caddy-tailnet-ts-data, target: /data }
         - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }

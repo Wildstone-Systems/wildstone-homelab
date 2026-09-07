@@ -1,0 +1,66 @@
+# MQTT capability, profile "mosquitto": the message bus that lets the
+# household's devices talk to each other — Zigbee2MQTT publishes onto
+# it, Frigate publishes onto it, Home Assistant listens. Nothing a
+# person opens, so no Route and no dashboard card.
+#
+# WHO CAN CONNECT. The broker is reachable by container name
+# ("mosquitto", port 1883) from every container on the Wildstone
+# network, and from nowhere else: the port is deliberately NOT
+# published on the host. Anonymous access is on, and that is only
+# acceptable because the Docker network is the whole audience — a
+# broker every device on the LAN could publish to unauthenticated is
+# one compromised bulb away from a compromised house.
+#
+# Reaching it from the LAN (an ESP sensor, a Home Assistant elsewhere)
+# needs a password file in Mosquitto's own hashed format, which the
+# node's secret materialization does not produce yet. Until it does,
+# this package offers no listen-address param on purpose; see
+# packages/README.md, "Not shipped, and why".
+#
+# Mosquitto's image runs /usr/sbin/mosquitto -c
+# /mosquitto/config/mosquitto.conf by default, and the managed config
+# directory is mounted at exactly that path, so no command is needed.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   eclipse-mosquitto:latest -> sha256:6f8d8a94...9797
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: mqtt-mosquitto
+  version: 1.0.0
+  capability: mqtt
+  profile: mosquitto
+params:
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+policies:
+  classifications: [internal_only]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: mosquitto-data, node: "{{ .Params.node }}" }
+    spec: { name: mosquitto-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: mosquitto-conf, node: "{{ .Params.node }}" }
+    spec:
+      filename: mosquitto.conf
+      content: |
+        # Managed by Wildstone — do not edit.
+        listener 1883
+        allow_anonymous true
+        persistence true
+        persistence_location /mosquitto/data/
+        log_dest stdout
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: mosquitto, node: "{{ .Params.node }}" }
+    spec:
+      image: "eclipse-mosquitto@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797"
+      mounts:
+        - { source: /etc/wildstone/mqtt, target: /mosquitto/config, readOnly: true }
+        - { source: mosquitto-data, target: /mosquitto/data }
+      restart: unless-stopped

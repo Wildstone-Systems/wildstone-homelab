@@ -1,0 +1,70 @@
+# DNS capability, profile "adguard-home": AdGuard Home, network-wide ad
+# blocking by being the household's DNS server. dns-pihole is the other
+# profile of this capability; install one.
+#
+# READ THIS BEFORE INSTALLING. Port 53 is published over both UDP and
+# TCP (protocol minor 12; a node whose agent predates it publishes TCP
+# only). systemd-resolved usually holds 127.0.0.53:53 on the host, so
+# bind dns_listen_addr to the node's LAN address, then point the
+# router's DHCP at it.
+#
+# FIRST RUN. AdGuard Home starts a setup wizard on port 3000 and then
+# moves its interface to whatever port the wizard chose. The Route
+# points at 3000, so IN THE WIZARD, KEEP THE ADMIN INTERFACE ON PORT
+# 3000 and "all interfaces" — then the address you used to set it up
+# keeps working. AdGuard writes its own configuration file, which is
+# why this package manages none: a managed file would revert every
+# setting the wizard saved.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   adguard/adguardhome:latest -> sha256:aba9e3bf...74f0
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: dns-adguard
+  version: 1.0.0
+  capability: dns
+  profile: adguard-home
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+params:
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: dns_listen_addr, default: "", example: "192.168.1.10", description: "Which address on this machine answers DNS, e.g. 192.168.1.10. Leave empty for every interface." }
+policies:
+  classifications: [admin_tailscale]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: adguard-work, node: "{{ .Params.node }}" }
+    spec: { name: adguard-work }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: adguard-conf, node: "{{ .Params.node }}" }
+    spec: { name: adguard-conf }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: adguard-home, node: "{{ .Params.node }}" }
+    spec:
+      image: "adguard/adguardhome@sha256:aba9e3bf0613be3ba3755e1fc311b126e2c24bec25e18b6483894a88283074f0"
+      ports:
+        - "{{ with .Params.dns_listen_addr }}{{ . }}:{{ end }}53:53/udp"
+        - "{{ with .Params.dns_listen_addr }}{{ . }}:{{ end }}53:53"
+      mounts:
+        - { source: adguard-work, target: /opt/adguardhome/work }
+        - { source: adguard-conf, target: /opt/adguardhome/conf }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: adguard, node: "{{ .Params.node }}" }
+    spec:
+      host: "adguard.{{ .Params.admin_domain }}"
+      upstream: "container/adguard-home:3000"
+      auth: authelia_oidc
+      classification: admin_tailscale

@@ -452,6 +452,28 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	if oerr != nil {
 		return nil, oerr
 	}
+	// Devices and capabilities (protocol minor 12) are checked here, up
+	// front, for the same reason: a device that is not on the allowlist
+	// or not plugged in yet must fail the op with the OLD container still
+	// running. Checked after the replace below, enabling Frigate's Coral
+	// before the TPU was seated turned a validation error into an
+	// outage — the healthy container was already stopped and removed
+	// when NOT_FOUND came back.
+	var devices []deviceMapping
+	for _, d := range op.GetDevices() {
+		dm, oe := a.checkDevice(d)
+		if oe != nil {
+			return nil, oe
+		}
+		devices = append(devices, dm)
+	}
+	var capAdd []string
+	for _, c := range op.GetCapAdd() {
+		if oe := checkCapability(c); oe != nil {
+			return nil, oe
+		}
+		capAdd = append(capAdd, c)
+	}
 	// A network must exist and be wildstone-owned before anything is
 	// attached to it (protocol minor 8). Attaching to a foreign network
 	// would join the container to whatever else lives there, so the same
@@ -538,7 +560,7 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	}
 	ports := map[string][]portBinding{}
 	for _, p := range op.GetPorts() {
-		key := fmt.Sprintf("%d/tcp", p.GetContainerPort())
+		key := fmt.Sprintf("%d/%s", p.GetContainerPort(), portProtocol(p.GetProtocol()))
 		ports[key] = append(ports[key], portBinding{HostIP: p.GetHostIp(), HostPort: fmt.Sprint(p.GetHostPort())})
 	}
 	restart := op.GetRestartPolicy()
@@ -560,6 +582,8 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 			Binds:         binds,
 			PortBindings:  ports,
 			RestartPolicy: restartPolicy{Name: restart},
+			Devices:       devices,
+			CapAdd:        capAdd,
 		},
 		NetworkingConfig: netCfg,
 	})

@@ -1,0 +1,96 @@
+# Indexers capability, profile "prowlarr": Prowlarr manages the indexers every other *arr searches, in one place, and syncs them to Radarr, Sonarr and Lidarr automatically.
+#
+# Part of the *arr set: indexers-prowlarr finds releases, this hands
+# them to downloads-qbittorrent, and imports the result into the
+# library that media-jellyfin or media-plex serves. Each reaches the
+# others by container name on the Wildstone network ("prowlarr",
+# "qbittorrent", ...), which is what you type into its Settings.
+#
+# THE FOLDER LAYOUT. Downloads at /data/downloads and the library at
+# /data/media, the same paths in every *arr container and in
+# qBittorrent, so imports are instant hard links rather than copies.
+# Keep both folders on one filesystem.
+#
+# Prowlarr needs no library folders of its own — it only searches —
+# but mounts the same two so a package author comparing the four sees
+# one shape rather than three and an exception. Indexers that hide
+# behind Cloudflare need captcha-flaresolverr, reached as
+# http://flaresolverr:8191 under Settings > Indexers.
+#
+# Its own login is off by default on a fresh install; the Route is
+# behind Authelia forward-auth on the admin surface, which is the
+# login it has. Config (the database, the settings) is backed up
+# weekly; the library is bulk content, outside restic (ADR-W013 A4).
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/linuxserver/prowlarr:latest -> sha256:91844fa2...a782
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: indexers-prowlarr
+  version: 1.0.0
+  capability: indexers
+  profile: prowlarr
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+  - { trait: storage, class: bulk }
+params:
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: downloads_path, default: /srv/wildstone/downloads, description: "Folder on this machine where downloads land. Must match the downloads package." }
+  - { name: media_path, default: /srv/wildstone/media, description: "Folder on this machine holding your library." }
+policies:
+  classifications: [admin_tailscale]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-indexers, node: "{{ .Params.node }}" }
+    spec: { name: restic-indexers }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: prowlarr-config, node: "{{ .Params.node }}" }
+    spec: { name: prowlarr-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: indexers-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: indexers-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: prowlarr, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/linuxserver/prowlarr@sha256:91844fa2c927ad6ede5630127183cc7868b175f6223e83e6a5da1fffea2aa782"
+      env:
+        PUID: "1000"
+        PGID: "1000"
+        TZ: "{{ .Params.timezone }}"
+      mounts:
+        - { source: prowlarr-config, target: /config }
+        - { source: "{{ .Params.downloads_path }}", target: /data/downloads }
+        - { source: "{{ .Params.media_path }}", target: /data/media }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: prowlarr, node: "{{ .Params.node }}" }
+    spec:
+      host: "prowlarr.{{ .Params.admin_domain }}"
+      upstream: "container/prowlarr:9696"
+      auth: authelia_oidc
+      classification: admin_tailscale
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: indexers, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [prowlarr-config]
+      repository: indexers-backup-repo
+      passwordSecret: secret/restic-indexers
+      schedule: weekly
+      retention: { keepWeekly: 4 }

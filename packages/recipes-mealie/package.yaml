@@ -1,0 +1,108 @@
+# Recipes capability, profile "mealie": the household's recipe book —
+# paste a link and it imports the recipe — with meal plans and a
+# shopping list that everyone's phone can open.
+#
+# SINGLE SIGN-ON. Mealie speaks OpenID Connect natively, so the Route
+# is app_oidc with an OidcClient registration; the sign-in page offers
+# the household account, and new people are created on first login.
+# Mealie also creates a local admin (changeme@example.com /
+# MyPassword) on first start — sign in with it once to make the OIDC
+# users admins, then change or remove it.
+#
+# Everything (recipes, images, plans) is one volume, backed up daily.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/mealie-recipes/mealie:latest -> sha256:6066c29e...9ba2
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: recipes-mealie
+  version: 1.0.0
+  capability: recipes
+  profile: mealie
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: public }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: recipes_subdomain, default: recipes, description: "The name this service appears under, e.g. recipes." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+policies:
+  classifications: [family_public]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-recipes, node: "{{ .Params.node }}" }
+    spec: { name: restic-recipes }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: mealie-data, node: "{{ .Params.node }}" }
+    spec: { name: mealie-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: recipes-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: recipes-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: mealie, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/mealie-recipes/mealie@sha256:6066c29eca95a6cac640ecadf734799522f3b646ee4a714e0d13ce795d989ba2"
+      env:
+        TZ: "{{ .Params.timezone }}"
+        BASE_URL: "https://{{ .Params.recipes_subdomain }}.{{ .Params.public_domain }}"
+        ALLOW_SIGNUP: "false"
+        OIDC_AUTH_ENABLED: "true"
+        OIDC_PROVIDER_NAME: Authelia
+        OIDC_CONFIGURATION_URL: "{{ .Resolved.IssuerURL }}/.well-known/openid-configuration"
+        OIDC_CLIENT_ID: mealie
+        OIDC_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
+        OIDC_SIGNUP_ENABLED: "true"
+        OIDC_AUTO_REDIRECT: "false"
+        OIDC_USER_CLAIM: email
+      mounts:
+        - { source: mealie-data, target: /app/data }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: recipes, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.recipes_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/mealie:9000"
+      auth: app_oidc
+      classification: family_public
+  # The OidcClient lives on THIS package's node, not on a separate
+  # identity node: the engine synthesises the client secret on the
+  # OidcClient's node, the container reads the same reference on its
+  # own node, and secrets are node-local — a split would leave the app
+  # unable to materialise a secret that exists one machine over. Keystone
+  # merges every node's OidcClients into the provider's clients file
+  # regardless of where they are declared.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: mealie, node: "{{ .Params.node }}" }
+    spec:
+      clientId: mealie
+      clientName: Mealie
+      redirectUris:
+        - "https://{{ .Params.recipes_subdomain }}.{{ .Params.public_domain }}/login"
+      scopes: [openid, profile, email, groups]
+      authPolicy: two_factor
+      secretRef: "{{ .Resolved.OidcSecretRef }}"
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: recipes, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [mealie-data]
+      repository: recipes-backup-repo
+      passwordSecret: secret/restic-recipes
+      schedule: daily
+      retention: { keepDaily: 7, keepWeekly: 4 }

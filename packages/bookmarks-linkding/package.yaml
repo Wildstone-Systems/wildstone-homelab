@@ -1,0 +1,80 @@
+# Bookmarks capability, profile "linkding": a place to keep links, with
+# tags, search, and a browser extension that saves the page you are on.
+#
+# SIGN-IN THROUGH THE PROXY. linkding trusts an upstream proxy to say
+# who the user is (LD_ENABLE_AUTH_PROXY), and Authelia's forward-auth
+# sets exactly that header — so the Route is authelia_oidc and a
+# household member who is signed in to Authelia is simply signed in
+# here too, with an account created on first visit. No second login,
+# no OidcClient. A superuser named after ld_admin_user is created on
+# first start for the admin pages.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   sissbruecker/linkding:latest -> sha256:0c0a9a04...78d2
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: bookmarks-linkding
+  version: 1.0.0
+  capability: bookmarks
+  profile: linkding
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: public }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: bookmarks_subdomain, default: bookmarks, description: "The name this service appears under, e.g. bookmarks." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: ld_admin_user, default: admin, description: "The household username that should be linkding's administrator." }
+policies:
+  classifications: [family_public]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-bookmarks, node: "{{ .Params.node }}" }
+    spec: { name: restic-bookmarks }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: linkding-data, node: "{{ .Params.node }}" }
+    spec: { name: linkding-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: bookmarks-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: bookmarks-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: linkding, node: "{{ .Params.node }}" }
+    spec:
+      image: "sissbruecker/linkding@sha256:0c0a9a04c7ebd644293c37f98710872fe7cdff0ea1ff7fd9be4d235e4c4678d2"
+      env:
+        LD_SUPERUSER_NAME: "{{ .Params.ld_admin_user }}"
+        LD_ENABLE_AUTH_PROXY: "True"
+        LD_AUTH_PROXY_USERNAME_HEADER: HTTP_REMOTE_USER
+        LD_CSRF_TRUSTED_ORIGINS: "https://{{ .Params.bookmarks_subdomain }}.{{ .Params.public_domain }}"
+      mounts:
+        - { source: linkding-data, target: /etc/linkding/data }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: bookmarks, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.bookmarks_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/linkding:9090"
+      auth: authelia_oidc
+      classification: family_public
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: bookmarks, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [linkding-data]
+      repository: bookmarks-backup-repo
+      passwordSecret: secret/restic-bookmarks
+      schedule: daily
+      retention: { keepDaily: 7, keepWeekly: 4 }

@@ -1,0 +1,79 @@
+# Downloads capability, profile "qbittorrent": the download client the
+# *arr packages (movies-radarr, tv-sonarr, music-lidarr) hand work to.
+# They reach it as "qbittorrent" on port 8080 by container-name DNS.
+#
+# THE FOLDER LAYOUT MATTERS. Every *arr package and this one mount the
+# same two host folders at the same in-container paths — downloads at
+# /data/downloads and the media library at /data/media — so a finished
+# download can be hard-linked into the library instantly instead of
+# copied. Keep both folders on the same filesystem for that to work.
+#
+# FIRST LOGIN. qBittorrent prints a one-time password for the admin
+# user in its container log on first start (`wild logs qbittorrent`);
+# set a permanent one under Tools > Options > Web UI. The Route sits
+# behind Authelia forward-auth on the admin surface as well.
+#
+# The listening port (6881) is published over TCP and UDP, so DHT and
+# uTP work as well as trackers. To send traffic through a VPN, install
+# vpn-gluetun and set qBittorrent's proxy (Tools > Options >
+# Connection > Proxy Server) to HTTP, host gluetun, port 8888, with
+# "Use proxy for peer connections" on — Gluetun blocks everything else
+# on that path if the tunnel drops.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/linuxserver/qbittorrent:latest -> sha256:8d48fa8c...1cee
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: downloads-qbittorrent
+  version: 1.0.0
+  capability: downloads
+  profile: qbittorrent
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+  - { trait: storage, class: bulk }
+params:
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: downloads_path, default: /srv/wildstone/downloads, description: "Folder on this machine where downloads land." }
+  - { name: media_path, default: /srv/wildstone/media, description: "Folder on this machine holding your library, so finished downloads can be hard-linked into it." }
+policies:
+  classifications: [admin_tailscale]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: qbittorrent-config, node: "{{ .Params.node }}" }
+    spec: { name: qbittorrent-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: qbittorrent, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/linuxserver/qbittorrent@sha256:8d48fa8c619caadfb103f04efea8747e2a2762d6c7551690919cffb987e61cee"
+      env:
+        PUID: "1000"
+        PGID: "1000"
+        TZ: "{{ .Params.timezone }}"
+        WEBUI_PORT: "8080"
+        TORRENTING_PORT: "6881"
+      ports:
+        - "6881:6881"
+        - "6881:6881/udp"
+      mounts:
+        - { source: qbittorrent-config, target: /config }
+        - { source: "{{ .Params.downloads_path }}", target: /data/downloads }
+        - { source: "{{ .Params.media_path }}", target: /data/media }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: torrents, node: "{{ .Params.node }}" }
+    spec:
+      host: "torrents.{{ .Params.admin_domain }}"
+      upstream: "container/qbittorrent:8080"
+      auth: authelia_oidc
+      classification: admin_tailscale

@@ -1,0 +1,57 @@
+# Language models capability, profile "ollama": runs open-weight models
+# (Llama, Mistral, Gemma, ...) on the household's own hardware, so the
+# questions asked of them never leave the house.
+#
+# NO ROUTE, ON PURPOSE. Ollama is an API with no login of its own, so
+# it is reached only from other containers on the Wildstone network —
+# ai-open-webui is the household's front door to it, and reaches it as
+# http://ollama:11434 by container-name DNS. A browser-facing Route
+# would be an unauthenticated model API on the proxy, which is the one
+# thing the policy engine exists to refuse.
+#
+# CPU-only as shipped. A GPU needs device passthrough the protocol does
+# not carry yet (ADR-W013 A2 records the same gap for /dev/dri). Small
+# models (a few billion parameters) are usable on a modern CPU; pull
+# one from the Open WebUI admin page or with
+# `docker exec ollama ollama pull llama3.2`.
+#
+# Models are large and re-downloadable, so the volume is deliberately
+# outside any BackupPlan (the ADR-W013 A4 "rip it again" posture).
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ollama/ollama:latest -> sha256:32931b46...9eb2
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: ai-ollama
+  version: 1.0.0
+  capability: language-models
+  profile: ollama
+requires:
+  - { trait: storage, class: bulk }
+params:
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  # How long a model stays loaded in memory after its last request.
+  # Ollama's own default is five minutes; a household that chats in
+  # bursts wastes the reload each time.
+  - { name: keep_alive, default: "30m", description: "How long to keep a model loaded after its last use, e.g. 30m or 2h." }
+policies:
+  classifications: [internal_only]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: ollama-models, node: "{{ .Params.node }}" }
+    spec: { name: ollama-models }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: ollama, node: "{{ .Params.node }}" }
+    spec:
+      image: "ollama/ollama@sha256:32931b46719f673c05fdbaa81ccb26da18ea4a1c57590a754874ab28ba269eb2"
+      env:
+        OLLAMA_KEEP_ALIVE: "{{ .Params.keep_alive }}"
+      mounts:
+        - { source: ollama-models, target: /root/.ollama }
+      restart: unless-stopped

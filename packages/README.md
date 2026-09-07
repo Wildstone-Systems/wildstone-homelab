@@ -10,6 +10,133 @@ for the binding format spec.
 Launch packages are transcriptions of proven configs from the reference
 deployment — see `testing/fixtures/`.
 
+## The catalog
+
+Fifty-three packages. Every one lints clean against the rest of the
+catalog, pins real image digests, has a row on the dashboard, a pinned
+tailnet port, and passes the cross-resource checks in
+`keystone/pkgtool/catalog_wiring_test.go` (secrets referenced are
+declared, mounts name declared volumes, Routes point at a container the
+package runs, OIDC redirects land on a host the package serves, backup
+plans name real volumes). `TestCatalogShipsTheLaunchServiceSet` holds the
+list below together.
+
+Three sign-in postures appear, and which one a package uses is a fact
+about the app, recorded in each package's header:
+
+| posture | Route `auth` | when |
+| --- | --- | --- |
+| Household SSO, the app does it | `app_oidc` + an `OidcClient` | the app speaks OpenID Connect itself |
+| Household SSO, the proxy does it | `authelia_oidc` | browser-only apps with no login worth keeping |
+| The app's own login | `none` on `family_private` / `admin_tailscale` | phone apps or APIs that cannot follow a login redirect (the ntfy posture) |
+
+| package | capability | what the household gets | sign-in |
+| --- | --- | --- | --- |
+| `identity` | identity | LLDAP + Authelia — accounts and two-factor | portal |
+| `ingress`, `ingress-tailnet`, `ingress-tailnet-public`, `ingress-tailnet-ts` | ingress | Caddy, in four postures (ADR-W019) | — |
+| `dashboard` | dashboard | Homepage, rendered from desired state | proxy |
+| `dashboard-homarr` | homarr | Homarr, a hand-arranged start page | app OIDC |
+| `notifications` | notifications | ntfy push alerts | own |
+| `monitoring` | monitoring | Uptime Kuma | proxy |
+| `monitoring-beszel` | host-monitoring | Beszel host and container graphs (hub; agents install on each host) | proxy |
+| `metrics-grafana` | metrics | Grafana dashboards | app OIDC |
+| `metrics-prometheus` | timeseries | Prometheus, the store Grafana reads | internal |
+| `home-automation` | home-automation | adapter for a Home Assistant that already exists | — |
+| `home-assistant` | home-assistant | Home Assistant, run here | own |
+| `mqtt-mosquitto` | mqtt | Mosquitto broker, reachable from containers only | internal |
+| `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a USB stick or a network coordinator | proxy |
+| `cameras-frigate` | cameras | Frigate NVR (CPU, Coral or GPU) | proxy |
+| `dns-pihole`, `dns-adguard` | dns | Pi-hole or AdGuard Home, on 53/udp and 53/tcp | proxy |
+| `vpn-gluetun` | vpn | Gluetun VPN client with a kill switch and an HTTP proxy for other containers | internal |
+| `passwords-vaultwarden` | passwords | Vaultwarden, Bitwarden-compatible | app OIDC |
+| `ai-ollama` | language-models | Ollama, models at home | internal |
+| `ai-open-webui` | ai-chat | Open WebUI, the chat page over Ollama | app OIDC |
+| `media-jellyfin`, `media-plex` | media | Jellyfin (LDAP) or Plex | app LDAP / own |
+| `photos-immich` | photos | Immich | app OIDC |
+| `documents-paperless` | documents | Paperless-ngx | app OIDC |
+| `music-navidrome` | music | Navidrome, Subsonic-compatible | own |
+| `audiobooks-audiobookshelf` | audiobooks | Audiobookshelf | own |
+| `books-calibre-web`, `books-kavita` | books | Calibre-Web (a Calibre library) or Kavita (plain folders) | own |
+| `downloads-qbittorrent` | downloads | qBittorrent | proxy |
+| `movies-radarr`, `tv-sonarr`, `music-lidarr` | movie/tv/music-automation | the *arr set, sharing `/data/{media,downloads}` | proxy |
+| `indexers-prowlarr` | indexers | Prowlarr | proxy |
+| `subtitles-bazarr` | subtitles | Bazarr | proxy |
+| `captcha-flaresolverr` | captcha-solver | FlareSolverr, for Prowlarr | internal |
+| `requests-seerr` | requests | Seerr (formerly Jellyseerr) | own |
+| `recipes-mealie` | recipes | Mealie | app OIDC |
+| `feeds-freshrss` | feeds | FreshRSS | app OIDC |
+| `bookmarks-linkding` | bookmarks | linkding, signed in by the proxy's header | proxy |
+| `sync-syncthing` | file-sync | Syncthing | proxy |
+| `files-filebrowser` | files | File Browser | own |
+| `code-gitea` | code | Gitea | own |
+| `inventory-homebox` | inventory | Homebox | own |
+| `budget-actual` | budget | Actual Budget | own |
+| `pdf-stirling` | pdf-tools | Stirling PDF | proxy |
+| `tools-it-tools` | utilities | IT-Tools | proxy |
+| `chat-telegram-*`, `chat-matrix-*` | chat | the Butler over Telegram / Matrix (ADR-W026) | — |
+
+### Host access: devices, capabilities, UDP
+
+A container spec can ask for three pieces of the host beyond Docker
+(protocol minor 12), and each is a closed allowlist enforced by the
+agent and checked by lint:
+
+```yaml
+spec:
+  ports:
+    - "53:53/udp"                       # protocol suffix; absent means tcp
+  devices:
+    - { source: /dev/serial/by-id/usb-...-port0 }   # target defaults to source
+    - { source: /dev/dri }
+  capAdd: [NET_ADMIN]
+```
+
+Devices must match one of the classes in `keystone/resource/hostaccess.go`
+(GPU render nodes, `/dev/net/tun`, USB and serial radios, `/dev/bus/usb`,
+Coral TPUs, video devices) — never a block device. Capabilities are
+`NET_ADMIN`, `NET_RAW` and `SYS_NICE`; `SYS_ADMIN` is not on the list and
+will not be. The agent resolves device aliases and refuses one that
+leads outside the list. A node whose agent predates minor 12 ignores all
+three: the port publishes as TCP, the device is absent, the capability
+is not granted, and the app says what it is missing.
+
+### Not shipped, and why
+
+Recorded here rather than left in someone's head (ADR-W018 A4).
+
+- **wg-easy / a WireGuard server** — needs `SYS_MODULE` and two sysctls
+  (`net.ipv4.ip_forward`, `src_valid_mark`). Sysctls are not in the
+  container spec, and `SYS_MODULE` loads kernel code, which is not a
+  capability a household service gets. `vpn-gluetun` covers the client
+  side.
+- **Joining another container's network namespace** (Docker's
+  `network_mode: "container:gluetun"`) — the spec cannot say it, and a
+  joined container is no longer reachable by its own name, which changes
+  what a Route's upstream means. Gluetun's HTTP proxy is the shipped
+  path; namespace sharing is a separate decision.
+- **Publishing Mosquitto to the LAN** — Mosquitto authenticates with a
+  password file in its own hashed format, and the node's secret
+  materialization produces Authelia's pbkdf2 form, not Mosquitto's. An
+  anonymous broker on the LAN is not an option, so the broker stays on
+  the container network until a Mosquitto-shaped digest exists.
+- **Split-node OIDC** — the engine synthesises an app's client secret on
+  the node its `OidcClient` is declared on, and the app's container reads
+  the same reference on its own node. Secrets are node-local, so the new
+  OIDC packages declare no `identity_node` param and keep both on one
+  node. `photos-immich` and `documents-paperless` still offer the param;
+  it works only when the two nodes are the same.
+- **Anything that mounts the Docker socket** (Portainer, Dozzle,
+  Watchtower, Beszel's agent) — Wardstone bind-mounts only from its
+  managed prefixes (ADR-W003 A1), and the socket is the one path that
+  would let a container do what the agent exists to mediate.
+- **NVIDIA GPUs for Ollama** — the device nodes are on the allowlist,
+  but CUDA in a container also needs the NVIDIA container runtime's
+  library injection, which is a runtime hook rather than a device.
+  Intel and AMD render nodes work for transcoding today.
+- **UniFi Network Application** — wants host networking for device
+  adoption and a MongoDB with an init script; deferred until a household
+  asks for it.
+
 ## Adding a service: start here
 
 ```sh

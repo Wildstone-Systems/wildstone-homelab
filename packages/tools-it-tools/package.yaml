@@ -1,0 +1,45 @@
+# Utilities capability, profile "it-tools": a page of small tools —
+# QR codes, password generator, unit and date converters, JSON and
+# hash helpers — that would otherwise be typed into a stranger's
+# website.
+#
+# Static: no login, no storage, nothing to back up. Behind Authelia
+# forward-auth on the family class because a generator of passwords
+# and QR codes for the household is not a page the internet needs.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   corentinth/it-tools:latest -> sha256:8b812874...a61f
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: tools-it-tools
+  version: 1.0.0
+  capability: utilities
+  profile: it-tools
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: public }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: tools_subdomain, default: tools, description: "The name this service appears under, e.g. tools." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+policies:
+  classifications: [family_public]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: it-tools, node: "{{ .Params.node }}" }
+    spec:
+      image: "corentinth/it-tools@sha256:8b8128748339583ca951af03dfe02a9a4d7363f61a216226fc28030731a5a61f"
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: tools, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.tools_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/it-tools:80"
+      auth: authelia_oidc
+      classification: family_public

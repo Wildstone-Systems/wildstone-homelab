@@ -45,13 +45,28 @@ type Posture struct {
 // PortBlock is the closed set of ports the tailnet ingress profile
 // publishes, in assignment order.
 //
-// Closed and small on purpose. Every entry is a port the ingress
-// container must publish, and publishing is declared statically in the
-// package — so an unbounded range would mean either a container binding
-// hundreds of ports it will never use, or an assignment that silently
-// fails for the service that lands outside it. Twelve is more Routes
-// than the shipped catalog has capabilities.
-var PortBlock = []int{443, 7443, 8443, 9443, 10443, 11443, 12443, 13443, 14443, 15443, 16443, 17443}
+// Closed on purpose. Every entry is a port the ingress container must
+// publish, and publishing is declared statically in the package — so an
+// unbounded range would mean either a container binding hundreds of
+// ports it will never use, or an assignment that silently fails for the
+// service that lands outside it.
+//
+// It was twelve, which was "more Routes than the shipped catalog has
+// capabilities" when the catalog had seven. The catalog now ships
+// several dozen routed services, every one pinned below (F82 requires
+// it), so the block is sized to the catalog plus room for a household's
+// own packages: 443 and then every thousandth port from 7443 up. The
+// ingress-tailnet-ts package publishes exactly this list, and
+// TestTailnetIngressPublishesTheWholePortBlock holds the two together.
+var PortBlock = portBlock()
+
+func portBlock() []int {
+	out := []int{443}
+	for p := 7443; p <= 53443; p += 1000 {
+		out = append(out, p)
+	}
+	return out
+}
 
 // wellKnown pins the shipped capabilities to fixed ports.
 //
@@ -92,6 +107,43 @@ var wellKnown = map[string]int{
 	"ntfy":      10443, // notifications
 	"uptime":    11443, // monitoring
 	"paperless": 12443, // documents-paperless, via docs_subdomain
+
+	// The 2026-09 catalog expansion. Each label is the DEFAULT the package
+	// gives its Route (its *_subdomain param, or the literal host label
+	// for admin surfaces). New ports continue from where the launch set
+	// left off, so nothing already running moved when these landed.
+	"hass":       13443, // home-assistant, via hass_subdomain
+	"plex":       14443, // media-plex, via media_subdomain
+	"vault":      15443, // passwords-vaultwarden, via vault_subdomain
+	"chat":       16443, // ai-open-webui, via chat_subdomain
+	"music":      17443, // music-navidrome, via music_subdomain
+	"audiobooks": 18443, // audiobooks-audiobookshelf, via audiobooks_subdomain
+	"books":      19443, // books-calibre-web, via books_subdomain
+	"kavita":     20443, // books-kavita, via books_subdomain
+	"recipes":    21443, // recipes-mealie, via recipes_subdomain
+	"bookmarks":  22443, // bookmarks-linkding, via bookmarks_subdomain
+	"rss":        23443, // feeds-freshrss, via feeds_subdomain
+	"pdf":        24443, // pdf-stirling, via pdf_subdomain
+	"tools":      25443, // tools-it-tools, via tools_subdomain
+	"files":      26443, // files-filebrowser, via files_subdomain
+	"inventory":  27443, // inventory-homebox, via inventory_subdomain
+	"budget":     28443, // budget-actual, via budget_subdomain
+	"requests":   29443, // requests-seerr, via requests_subdomain
+	"homarr":     30443, // dashboard-homarr, via homarr_subdomain
+	"frigate":    31443, // cameras-frigate
+	"pihole":     32443, // dns-pihole
+	"adguard":    33443, // dns-adguard
+	"zigbee":     34443, // zigbee-zigbee2mqtt
+	"grafana":    35443, // metrics-grafana
+	"torrents":   36443, // downloads-qbittorrent
+	"radarr":     37443, // movies-radarr
+	"sonarr":     38443, // tv-sonarr
+	"lidarr":     39443, // music-lidarr
+	"prowlarr":   40443, // indexers-prowlarr
+	"bazarr":     41443, // subtitles-bazarr
+	"beszel":     42443, // monitoring-beszel
+	"sync":       43443, // sync-syncthing
+	"git":        44443, // code-gitea
 }
 
 // Of derives the addressing posture from desired state.
@@ -189,8 +241,11 @@ func portsPublishedByOthers(desired []resource.Resource) map[int]bool {
 			continue
 		}
 		for _, p := range r.Container.Ports {
-			if _, hostPort, _, ok := resource.SplitPortMapping(p); ok {
-				taken[int(hostPort)] = true
+			// UDP publications do not collide with the proxy's TCP
+			// listeners: a DNS server on 53/udp and nothing else leaves
+			// every port in the block free.
+			if m, ok := resource.ParsePortMapping(p); ok && m.Protocol == "tcp" {
+				taken[int(m.HostPort)] = true
 			}
 		}
 	}

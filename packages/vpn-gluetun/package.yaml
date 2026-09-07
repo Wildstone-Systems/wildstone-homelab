@@ -1,0 +1,89 @@
+# VPN capability, profile "gluetun": a VPN client the household's other
+# containers can send their traffic through, with a kill switch — if
+# the tunnel drops, nothing leaks, because Gluetun's firewall allows
+# nothing but the tunnel.
+#
+# WHAT IT NEEDS FROM THE HOST, and why this package could not exist
+# before protocol minor 12: the NET_ADMIN capability, to create and
+# route through a tunnel interface inside its own network namespace,
+# and /dev/net/tun. Both are on the agent's closed allowlists
+# (wardstone/internal/agent/devices.go); SYS_MODULE is not, so the
+# WireGuard kernel module must already be loaded on the node — it is,
+# on every kernel since 5.6 — and Gluetun falls back to its userspace
+# implementation otherwise.
+#
+# HOW OTHER CONTAINERS USE IT. Gluetun runs an HTTP proxy on port 8888,
+# reachable by container name: point qBittorrent (Tools > Options >
+# Connection > Proxy Server: HTTP, host gluetun, port 8888, "use proxy
+# for peer connections") or anything else at http://gluetun:8888 and its
+# traffic leaves through the tunnel. Sharing Gluetun's whole network
+# namespace (Docker's network_mode: "container:gluetun") is the other
+# common arrangement; the container spec cannot say that yet, and it
+# would change how Routes reach the joined container, so it is a
+# separate decision.
+#
+# INSTALLING. Only WireGuard providers as shipped: pick vpn_provider
+# from Gluetun's list (mullvad, protonvpn, airvpn, ivpn, surfshark,
+# nordvpn, ... — see its wiki), generate a WireGuard configuration in
+# the provider's account page, and before enabling set the private key
+# from it as the provided secret:
+#
+#     wild secret set gluetun-wireguard-private-key -node <node>
+#
+# The interface address from the same configuration is a param, not a
+# secret: it identifies the tunnel endpoint and is useless without the
+# key.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   qmcgaw/gluetun:latest -> sha256:89e3cbe2...dfe4
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: vpn-gluetun
+  version: 1.0.0
+  capability: vpn
+  profile: gluetun
+params:
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: vpn_provider, required: true, example: "mullvad", description: "Your VPN provider, as Gluetun names it: mullvad, protonvpn, airvpn, ivpn, surfshark, nordvpn, ..." }
+  - { name: wireguard_addresses, required: true, example: "10.64.0.2/32", description: "The interface address from the WireGuard configuration your provider generated, e.g. 10.64.0.2/32." }
+  - { name: server_countries, default: "Netherlands", description: "Which country to connect through, as the provider spells it. Several may be separated by commas." }
+policies:
+  classifications: [internal_only]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: gluetun-wireguard-private-key, node: "{{ .Params.node }}" }
+    spec: { name: gluetun-wireguard-private-key, provided: true }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: gluetun-data, node: "{{ .Params.node }}" }
+    spec: { name: gluetun-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: gluetun, node: "{{ .Params.node }}" }
+    spec:
+      image: "qmcgaw/gluetun@sha256:89e3cbe22e0d6f09a18d3e86269392fd9f7f08e8991040741e577f8f127cdfe4"
+      env:
+        TZ: "{{ .Params.timezone }}"
+        VPN_SERVICE_PROVIDER: "{{ .Params.vpn_provider }}"
+        VPN_TYPE: wireguard
+        WIREGUARD_PRIVATE_KEY: "secret/gluetun-wireguard-private-key"
+        WIREGUARD_ADDRESSES: "{{ .Params.wireguard_addresses }}"
+        SERVER_COUNTRIES: "{{ .Params.server_countries }}"
+        HTTPPROXY: "on"
+        HTTPPROXY_LISTENING_ADDRESS: ":8888"
+        # The Docker network's own ranges, so containers on it can reach
+        # the proxy through Gluetun's firewall.
+        FIREWALL_OUTBOUND_SUBNETS: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
+      devices:
+        - { source: /dev/net/tun }
+      capAdd: [NET_ADMIN]
+      mounts:
+        - { source: gluetun-data, target: /gluetun }
+      restart: unless-stopped

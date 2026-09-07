@@ -467,6 +467,17 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		Rec: &reconcile.Reconciler{
 			Applier:       &reconcile.GatewayApplier{Gateway: gw},
 			ManagedPrefix: managedPrefix,
+			// Which protocol minor each connected agent speaks, so a
+			// spec that needs minor 12 is refused on an older node
+			// rather than half-applied there.
+			AgentProtocolMinor: func(nodeID string) (uint32, bool) {
+				for _, n := range gw.LiveNodes() {
+					if n.NodeID == nodeID {
+						return n.ProtocolMinor, true
+					}
+				}
+				return 0, false
+			},
 		},
 		Connected: gw.Connected,
 		Log:       log,
