@@ -66,3 +66,30 @@ func ContainerCapabilityNames() []string {
 	sort.Strings(out)
 	return out
 }
+
+// HostAccessProtocolMinor is the wardstone protocol minor that first
+// carried UDP port publication, devices and capabilities.
+const HostAccessProtocolMinor = 12
+
+// RequiredProtocolMinor reports the lowest agent protocol minor that can
+// honour this spec in full, or 0 when any agent can. An agent below it
+// does not fail: it IGNORES the fields it cannot read, which is the
+// wrong kind of quiet — a "/udp" port published as TCP is a second
+// binding on the same TCP port, which Docker refuses, and a device or
+// capability simply absent leaves the app to discover it. The
+// reconciler asks this before dispatching, so the answer is a refusal
+// naming the node rather than a container that failed to start.
+func (s *ContainerSpec) RequiredProtocolMinor() uint32 {
+	if s == nil {
+		return 0
+	}
+	if len(s.Devices) > 0 || len(s.CapAdd) > 0 {
+		return HostAccessProtocolMinor
+	}
+	for _, p := range s.Ports {
+		if m, ok := ParsePortMapping(p); ok && m.Protocol == "udp" {
+			return HostAccessProtocolMinor
+		}
+	}
+	return 0
+}

@@ -11,8 +11,14 @@
 # authentication settings once an OIDC source is added there.
 #
 # SSH pushes go to port 2222 on the node (published from the
-# container's 22). Registration is closed; the first account is
-# created through the setup page on first visit and becomes admin.
+# container's 22) — bound to ssh_listen_addr, which is required and
+# deliberately has no default, for the reason the ingress package's
+# admin listener has none (#41): an admin surface that quietly binds
+# every interface is worse than one you had to think about. Normally
+# the node's tailnet address (`tailscale ip -4`); "0.0.0.0" is the
+# explicit way to say every interface. Registration is closed; the
+# first account is created through the setup page on first visit and
+# becomes admin.
 #
 # Repositories, the database and settings are one volume, backed up
 # daily.
@@ -32,6 +38,7 @@ params:
   - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
   - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: ssh_listen_addr, required: true, example: "100.64.0.1", description: "Which address on this machine accepts git-over-SSH, normally its tailnet address (tailscale ip -4). Use 0.0.0.0 to mean every interface." }
 policies:
   classifications: [admin_tailscale]
   dataSensitivity: high
@@ -68,7 +75,7 @@ templates:
         GITEA__server__SSH_PORT: "2222"
         GITEA__service__DISABLE_REGISTRATION: "true"
       ports:
-        - "2222:22"
+        - "{{ .Params.ssh_listen_addr }}:2222:22"
       mounts:
         - { source: gitea-data, target: /data }
       restart: unless-stopped

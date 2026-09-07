@@ -1,7 +1,10 @@
 package reconcile
 
 import (
+	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
@@ -95,5 +98,61 @@ func TestContainerEnsureOpCarriesHostAccess(t *testing.T) {
 		if specHash(base, ContainerNetwork, "") == specHash(changed, ContainerNetwork, "") {
 			t.Errorf("spec hash is blind to %s, so adding one would never redeploy", name)
 		}
+	}
+}
+
+// TestMinor12SpecIsRefusedOnAnOlderAgent: the one-minor-skew guarantee
+// makes a minor-11 agent a legitimate peer, and it IGNORES the minor-12
+// fields rather than refusing them — so "53:53/udp" reaches it as a
+// second 53/tcp binding and Docker refuses the create. The reconciler
+// must refuse the step first, naming the node, and must not touch the
+// node at all; on a minor-12 agent the same spec applies.
+func TestMinor12SpecIsRefusedOnAnOlderAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		minor uint32
+		known bool
+		want  bool // applied
+	}{
+		{"minor 11 refuses", 11, true, false},
+		{"minor 12 applies", 12, true, true},
+		{"unknown minor applies", 0, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := startGateway(t, []string{"tok"})
+			agent := newTestAgent(t, h, "node-a", "tok")
+			if !h.gw.WaitConnected("node-a", 10*time.Second) {
+				t.Fatal("agent never connected")
+			}
+			pihole := containerResource("pihole", testDigestImage)
+			pihole.Container.Ports = []string{"53:53/udp", "53:53"}
+			r := newReconciler(&GatewayApplier{Gateway: h.gw})
+			r.AgentProtocolMinor = func(string) (uint32, bool) { return tc.minor, tc.known }
+			outcome, err := r.Reconcile(context.Background(), "node-a", []resource.Resource{pihole})
+			if err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			_, exists := agent.containerExists("pihole")
+			if exists != tc.want {
+				t.Fatalf("container exists = %v, want %v (outcome %+v)", exists, tc.want, outcome)
+			}
+			if tc.want {
+				return
+			}
+			var msg string
+			for _, sr := range outcome.Steps {
+				if sr.Step.Name == "pihole" {
+					msg = sr.Error
+				}
+			}
+			for _, want := range []string{"protocol minor 12", "node-a", "minor 11", "upgrade wardstoned"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("step error %q does not say %q", msg, want)
+				}
+			}
+			if agent.opCount("EnsureContainer") != 0 || agent.opCount("PullImage") != 0 {
+				t.Error("the node was touched before the refusal")
+			}
+		})
 	}
 }

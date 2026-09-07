@@ -9,7 +9,7 @@
 #
 # name  version  sha256(package.yaml)[:16]
 ai-ollama 1.0.0 f6b24b7aed67c8ea
-ai-open-webui 1.0.0 86d50d6a889cc5b8
+ai-open-webui 1.0.0 8f8d5bb985d2af88
 audiobooks-audiobookshelf 1.0.0 138d855a6e7db25e
 bookmarks-linkding 1.0.0 9db9e414b77c30d5
 books-calibre-web 1.0.0 aaabe8ebed789763
@@ -21,14 +21,14 @@ chat-matrix-admin 1.0.2 b30335cccac333e3
 chat-matrix-family 1.0.2 45e17a94238eb43b
 chat-telegram-admin 1.0.2 81fda57e489701e6
 chat-telegram-family 1.0.2 985c13742423aaf2
-code-gitea 1.0.0 e024c78f4b6d41a0
+code-gitea 1.0.0 d5f1e1352c4d96e3
 dashboard 1.0.0 9b1a7906c5c14f24
-dashboard-homarr 1.0.0 cf3f6457c65d9fe0
+dashboard-homarr 1.0.0 5d5202618f1d95b2
 dns-adguard 1.0.0 f6d2fac07714a6dc
 dns-pihole 1.0.0 90ad478195c6e52d
 documents-paperless 1.0.0 9c170ef0020cb14f
 downloads-qbittorrent 1.0.0 8cc3e4bf0ab76c29
-feeds-freshrss 1.0.0 e43e9863d7a58876
+feeds-freshrss 1.0.0 baac799b7eb631ec
 files-filebrowser 1.0.0 46eee31c2917a189
 home-assistant 1.0.0 bd5447a82a7e04b6
 home-automation 1.0.0 582247e5446afba2
@@ -41,19 +41,19 @@ ingress-tailnet-ts 1.1.0 ae41849e2d8ab27e
 inventory-homebox 1.0.0 e9c2ac3746dc8f4f
 media-jellyfin 1.0.0 3630dea36fc35fec
 media-plex 1.0.0 85f5587faf47a242
-metrics-grafana 1.0.0 3b72cbfec00d703c
+metrics-grafana 1.0.0 e2f9e11215626471
 metrics-prometheus 1.0.0 9a93297824a6b973
 monitoring 1.0.0 69713ab679cfdbd7
 monitoring-beszel 1.0.0 1e493734e08d9d83
 movies-radarr 1.0.0 4e7823f2ff20c51a
-mqtt-mosquitto 1.0.0 993a456ba7d0d981
+mqtt-mosquitto 1.0.0 655714a2a046b37b
 music-lidarr 1.0.0 c94780310c262054
 music-navidrome 1.0.0 2a3c49b9f378d738
 notifications 1.0.0 199de20d8e53933e
-passwords-vaultwarden 1.0.0 89c20af3ae2802af
+passwords-vaultwarden 1.0.0 6663d8af4c7fa124
 pdf-stirling 1.0.0 406324d4385b76a0
 photos-immich 1.0.0 edbbeeee8da5ab55
-recipes-mealie 1.0.0 cadfa15eb5c93bec
+recipes-mealie 1.0.0 a1217c400386eba2
 requests-seerr 1.0.0 a6280497bc006397
 subtitles-bazarr 1.0.0 61ede7b84f9148a9
 sync-syncthing 1.0.0 ebf0894472434562

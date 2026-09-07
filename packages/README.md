@@ -43,7 +43,7 @@ about the app, recorded in each package's header:
 | `metrics-prometheus` | timeseries | Prometheus, the store Grafana reads | internal |
 | `home-automation` | home-automation | adapter for a Home Assistant that already exists | — |
 | `home-assistant` | home-assistant | Home Assistant, run here | own |
-| `mqtt-mosquitto` | mqtt | Mosquitto broker | internal |
+| `mqtt-mosquitto` | mqtt | Mosquitto broker, reachable from containers only | internal |
 | `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a USB stick or a network coordinator | proxy |
 | `cameras-frigate` | cameras | Frigate NVR (CPU, Coral or GPU) | proxy |
 | `dns-pihole`, `dns-adguard` | dns | Pi-hole or AdGuard Home, on 53/udp and 53/tcp | proxy |
@@ -114,6 +114,17 @@ Recorded here rather than left in someone's head (ADR-W018 A4).
   joined container is no longer reachable by its own name, which changes
   what a Route's upstream means. Gluetun's HTTP proxy is the shipped
   path; namespace sharing is a separate decision.
+- **Publishing Mosquitto to the LAN** — Mosquitto authenticates with a
+  password file in its own hashed format, and the node's secret
+  materialization produces Authelia's pbkdf2 form, not Mosquitto's. An
+  anonymous broker on the LAN is not an option, so the broker stays on
+  the container network until a Mosquitto-shaped digest exists.
+- **Split-node OIDC** — the engine synthesises an app's client secret on
+  the node its `OidcClient` is declared on, and the app's container reads
+  the same reference on its own node. Secrets are node-local, so the new
+  OIDC packages declare no `identity_node` param and keep both on one
+  node. `photos-immich` and `documents-paperless` still offer the param;
+  it works only when the two nodes are the same.
 - **Anything that mounts the Docker socket** (Portainer, Dozzle,
   Watchtower, Beszel's agent) — Wardstone bind-mounts only from its
   managed prefixes (ADR-W003 A1), and the socket is the one path that

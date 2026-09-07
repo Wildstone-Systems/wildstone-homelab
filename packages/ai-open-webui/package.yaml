@@ -30,7 +30,6 @@ params:
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: chat_subdomain, default: chat, description: "The name this service appears under, e.g. chat." }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
   - { name: ollama_url, default: "http://ollama:11434", description: "Where the models run. The default is the ai-ollama package on the same machine." }
 policies:
   classifications: [family_public]
@@ -86,10 +85,17 @@ templates:
       upstream: "container/open-webui:8080"
       auth: app_oidc
       classification: family_public
+  # The OidcClient lives on THIS package's node, not on a separate
+  # identity node: the engine synthesises the client secret on the
+  # OidcClient's node, the container reads the same reference on its
+  # own node, and secrets are node-local — a split would leave the app
+  # unable to materialise a secret that exists one machine over. Keystone
+  # merges every node's OidcClients into the provider's clients file
+  # regardless of where they are declared.
   - |
     apiVersion: wildstone.dev/v1
     kind: OidcClient
-    metadata: { name: open-webui, node: "{{ or .Params.identity_node .Params.node }}" }
+    metadata: { name: open-webui, node: "{{ .Params.node }}" }
     spec:
       clientId: open-webui
       clientName: Open WebUI

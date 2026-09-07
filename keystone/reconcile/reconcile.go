@@ -169,6 +169,24 @@ type Reconciler struct {
 	// the container the identity package deploys.
 	AutheliaAddr string
 
+	// AgentProtocolMinor answers which v1 minor the node's agent speaks,
+	// from its Hello; false when the node is not connected or the caller
+	// has no gateway to ask. Production callers set this from
+	// gateway.LiveNodes.
+	//
+	// It exists for the fields an older agent IGNORES rather than
+	// refuses (UDP ports, devices, capabilities — protocol minor 12).
+	// The one-minor-skew guarantee (ADR-W003) means such an agent is a
+	// legitimate peer, and for every earlier field "ignored" degraded
+	// gracefully. Not here: a "/udp" mapping read as TCP duplicates the
+	// TCP binding on the same port and Docker refuses the create, so a
+	// DNS package that works on a minor-12 node fails to start on a
+	// minor-11 one with an error about port allocation. The reconciler
+	// refuses such a step up front instead, naming the node and the
+	// upgrade. nil never refuses, which keeps every existing caller and
+	// test exactly as it was.
+	AgentProtocolMinor func(nodeID string) (minor uint32, known bool)
+
 	// Approve decides whether a Medium/High risk plan.Plan may apply. nil
 	// (the zero value) means default-deny (ADR-W004 A3: "Medium/High
 	// require explicit approval") — every Medium/High plan comes back as
@@ -1303,6 +1321,10 @@ func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step
 		// Network before pull before ensure: the agent refuses to attach
 		// to a network that does not exist, and refuses to create a
 		// container whose image is absent.
+		if ne := r.refuseIfAgentTooOld(nodeID, step, want.Container); ne != "" {
+			sr.Error = ne
+			return sr
+		}
 		if ne := r.ensureNodePrereqs(ctx, nodeID); ne != "" {
 			sr.Error = ne
 			return sr
@@ -1551,6 +1573,24 @@ func (r *Reconciler) pullImage(ctx context.Context, nodeID, image string) string
 		return fmt.Sprintf("pull %s: %s: %s", image, oe.GetCode(), oe.GetMessage())
 	}
 	return ""
+}
+
+// refuseIfAgentTooOld returns the step error for a spec the node's agent
+// cannot honour, or "" when it can (or when nobody can say). See the
+// AgentProtocolMinor field for why this is a refusal and not a warning.
+func (r *Reconciler) refuseIfAgentTooOld(nodeID string, step plan.PlanStep, spec *resource.ContainerSpec) string {
+	need := spec.RequiredProtocolMinor()
+	if need == 0 || r.AgentProtocolMinor == nil {
+		return ""
+	}
+	have, known := r.AgentProtocolMinor(nodeID)
+	if !known || have >= need {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s needs wardstone protocol minor %d (a UDP port, a device or a capability) and the agent on "+
+		"node %s speaks minor %d: upgrade wardstoned there first. An older agent would publish the UDP port as a second "+
+		"TCP binding, which Docker refuses, and start the container without its devices and capabilities",
+		step.Kind, step.Name, need, nodeID, have)
 }
 
 func containerEnsureOp(name string, spec *resource.ContainerSpec, network, cfgDigest string) *wsv1.Operation {

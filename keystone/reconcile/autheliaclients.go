@@ -21,10 +21,12 @@ package reconcile
 
 import (
 	"fmt"
+	"net/url"
 	"path"
 	"sort"
 	"strings"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
@@ -79,11 +81,74 @@ func renderAutheliaClients(desired []resource.Resource) []byte {
 	renderClaimsPolicies(&b, clients)
 	renderAuthorizationPolicies(&b, clients)
 
+	served := servedOriginFor(desired)
 	b.WriteString("    clients:\n")
 	for _, c := range clients {
-		renderClient(&b, c)
+		renderClient(&b, c, served)
 	}
 	return []byte(b.String())
+}
+
+// servedOriginFor answers, for a host some Route in desired declares,
+// the browser-facing host:port it is actually SERVED at — or "" when
+// that is the declared host itself, which is every posture but the
+// tailnet's (ADR-W019 A10).
+//
+// A package registers its OIDC callback under the host it declared, and
+// under the tailnet posture the browser is never there: it is at
+// <tailnet-name>:<port>. An app that builds the callback from the
+// request it received sends that served form, and Authelia rejects a
+// redirect_uri it was not told about — the F79 failure, seen from the
+// provider's side. The renderer therefore registers BOTH forms: the
+// declared one for an app that builds the callback from its configured
+// base URL, the served one for an app that builds it from the request.
+// Nothing is rewritten, so every hostname posture renders exactly what
+// it did before.
+func servedOriginFor(desired []resource.Resource) func(host string) string {
+	posture := ingressorigin.Of(desired)
+	declared := map[string]bool{}
+	for _, r := range desired {
+		if r.Kind == resource.KindRoute && r.Route != nil {
+			declared[r.Route.Host] = true
+		}
+	}
+	return func(host string) string {
+		if !declared[host] {
+			return ""
+		}
+		if addr := posture.SiteAddress(host); addr != host {
+			return addr
+		}
+		return ""
+	}
+}
+
+// redirectURIs is the registered list for one client: what the package
+// declared, plus the served-origin twin of each https URI whose host a
+// Route in this deployment serves somewhere else. Order is preserved
+// and duplicates dropped, so the file stays byte-stable across ticks.
+func redirectURIs(c *resource.OidcClientSpec, served func(string) string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(u string) {
+		if !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	for _, raw := range c.RedirectUris {
+		add(raw)
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme != "https" {
+			continue
+		}
+		if at := served(u.Host); at != "" {
+			twin := *u
+			twin.Host = at
+			add(twin.String())
+		}
+	}
+	return out
 }
 
 // renderClaimsPolicies emits one claims policy per client that wants
@@ -157,7 +222,7 @@ func effectiveAuthPolicy(c *resource.OidcClientSpec) string {
 	return c.AuthPolicy
 }
 
-func renderClient(b *strings.Builder, c *resource.OidcClientSpec) {
+func renderClient(b *strings.Builder, c *resource.OidcClientSpec, served func(string) string) {
 	fmt.Fprintf(b, "      - client_id: '%s'\n", c.ClientId)
 	fmt.Fprintf(b, "        client_name: '%s'\n", c.ClientName)
 	// pbkdf2: asks the node to substitute the DIGEST of this secret
@@ -197,7 +262,7 @@ func renderClient(b *strings.Builder, c *resource.OidcClientSpec) {
 	}
 
 	b.WriteString("        redirect_uris:\n")
-	for _, u := range c.RedirectUris {
+	for _, u := range redirectURIs(c, served) {
 		fmt.Fprintf(b, "          - '%s'\n", u)
 	}
 	if len(c.Scopes) > 0 {

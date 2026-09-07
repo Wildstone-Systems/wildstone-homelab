@@ -245,3 +245,54 @@ func TestEnsureContainerCarriesHostAccessToDocker(t *testing.T) {
 		t.Error("a container was created despite the refused capability")
 	}
 }
+
+// TestBadDeviceOnUpdateLeavesTheOldContainerRunning: an update that adds
+// a device which is not there yet — enabling Frigate's Coral before the
+// TPU is seated — must fail with the previous, healthy container still
+// running. The first version of ensureContainer checked devices after
+// the replace path had already stopped and removed it, so a validation
+// error became an outage.
+func TestBadDeviceOnUpdateLeavesTheOldContainerRunning(t *testing.T) {
+	fake := newFakeDocker(t)
+	h := startGateway(t, []string{"tok"}, "")
+	newTestAgent(t, h, "node-a", "tok", func(c *Config) { c.DockerEndpoint = fake.URL() })
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+	res := dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{
+		EnsureContainer: &wsv1.EnsureContainer{
+			Name: "frigate", Image: testDigestImage,
+			Labels: map[string]string{SpecHashLabel: "v1"},
+		},
+	}})
+	if oe := res.GetError(); oe != nil {
+		t.Fatalf("first ensure: %v", oe)
+	}
+	fake.mu.Lock()
+	firstID := fake.containers["frigate"].id
+	fake.mu.Unlock()
+
+	// A changed spec (new hash) that adds an absent device.
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{
+		EnsureContainer: &wsv1.EnsureContainer{
+			Name: "frigate", Image: testDigestImage,
+			Labels:  map[string]string{SpecHashLabel: "v2"},
+			Devices: []*wsv1.DeviceMapping{{HostPath: "/dev/apex_0"}},
+		},
+	}})
+	if oe := res.GetError(); oe == nil || oe.GetCode() != wsv1.ErrorCode_ERROR_CODE_NOT_FOUND {
+		t.Fatalf("absent device: got %v, want NOT_FOUND", res.GetError())
+	}
+	fake.mu.Lock()
+	c, present := fake.containers["frigate"]
+	fake.mu.Unlock()
+	if !present {
+		t.Fatal("the old container was removed before the device was validated")
+	}
+	if c.id != firstID || !c.running {
+		t.Errorf("the old container was replaced or stopped: id=%s running=%v (was %s)", c.id, c.running, firstID)
+	}
+	if c.labels[SpecHashLabel] != "v1" {
+		t.Errorf("spec hash label = %q, want the pre-update v1", c.labels[SpecHashLabel])
+	}
+}

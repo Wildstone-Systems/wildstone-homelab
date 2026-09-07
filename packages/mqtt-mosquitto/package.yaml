@@ -5,15 +5,17 @@
 #
 # WHO CAN CONNECT. The broker is reachable by container name
 # ("mosquitto", port 1883) from every container on the Wildstone
-# network, and by default from nowhere else. Anonymous access is on for
-# that network only, which is the honest posture while the wire format
-# has no way to hand a container a generated password file in the
-# shape Mosquitto wants (hashed, one line per user). A Home Assistant
-# or ESP device on the LAN needs the port published: set
-# mqtt_listen_addr to the node's LAN address, and then DO set a
-# password in Mosquitto's own tooling (mosquitto_passwd) — a broker
-# every device on the LAN can publish to unauthenticated is one
-# compromised bulb away from a compromised house.
+# network, and from nowhere else: the port is deliberately NOT
+# published on the host. Anonymous access is on, and that is only
+# acceptable because the Docker network is the whole audience — a
+# broker every device on the LAN could publish to unauthenticated is
+# one compromised bulb away from a compromised house.
+#
+# Reaching it from the LAN (an ESP sensor, a Home Assistant elsewhere)
+# needs a password file in Mosquitto's own hashed format, which the
+# node's secret materialization does not produce yet. Until it does,
+# this package offers no listen-address param on purpose; see
+# packages/README.md, "Not shipped, and why".
 #
 # Mosquitto's image runs /usr/sbin/mosquitto -c
 # /mosquitto/config/mosquitto.conf by default, and the managed config
@@ -30,7 +32,6 @@ metadata:
   profile: mosquitto
 params:
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: mqtt_listen_addr, default: "", example: "192.168.1.10", description: "Publish the broker on this address so devices outside Wildstone can reach it, e.g. 192.168.1.10. Leave empty to keep it inside Wildstone." }
 policies:
   classifications: [internal_only]
   dataSensitivity: medium
@@ -59,7 +60,6 @@ templates:
     metadata: { name: mosquitto, node: "{{ .Params.node }}" }
     spec:
       image: "eclipse-mosquitto@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797"
-      ports: {{ with .Params.mqtt_listen_addr }}["{{ . }}:1883:1883"]{{ else }}[]{{ end }}
       mounts:
         - { source: /etc/wildstone/mqtt, target: /mosquitto/config, readOnly: true }
         - { source: mosquitto-data, target: /mosquitto/data }

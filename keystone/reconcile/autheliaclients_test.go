@@ -255,3 +255,49 @@ func TestZeroClientsCarriesNoProviderKeys(t *testing.T) {
 			"to materialize it — which is exactly the first-install failure just fixed")
 	}
 }
+
+// TestTailnetRegistersTheServedCallbackToo is F79 seen from the
+// provider's side. A package registers its callback under the host it
+// declared; under the tailnet posture the browser is at
+// <tailnet-name>:<port>, an app that builds the callback from the
+// request sends that, and Authelia refuses a redirect_uri it was not
+// told about. Both forms must be registered — and under a hostname
+// posture nothing may change, or every deployment's clients file would
+// be rewritten by this commit.
+func TestTailnetRegistersTheServedCallbackToo(t *testing.T) {
+	client := oidcClient("open-webui", func(s *resource.OidcClientSpec) {
+		s.RedirectUris = []string{"https://chat.example.com/oauth/oidc/callback", "app.example:///callback"}
+	})
+	route := tailnetRoute("chat", "chat.example.com")
+
+	under := string(renderAutheliaClients([]resource.Resource{
+		tailnetIngress("wildstone.tailnet.ts.net"), route, client,
+	}))
+	for _, want := range []string{
+		"- 'https://chat.example.com/oauth/oidc/callback'",
+		"- 'https://wildstone.tailnet.ts.net:16443/oauth/oidc/callback'", // chat is pinned to 16443
+		"- 'app.example:///callback'",
+	} {
+		if !strings.Contains(under, want) {
+			t.Errorf("tailnet rendering lacks %s:\n%s", want, under)
+		}
+	}
+	if n := strings.Count(under, "app.example:///callback"); n != 1 {
+		t.Errorf("app-scheme callback rendered %d times, want 1", n)
+	}
+
+	// No Route declares the host: nothing to say about where it is
+	// served, so nothing is added.
+	orphan := string(renderAutheliaClients([]resource.Resource{
+		tailnetIngress("wildstone.tailnet.ts.net"), client,
+	}))
+	if strings.Contains(orphan, "tailnet.ts.net") {
+		t.Errorf("a callback on a host no Route serves grew a tailnet twin:\n%s", orphan)
+	}
+
+	// Hostname posture: byte-for-byte what it was.
+	plain := string(renderAutheliaClients([]resource.Resource{route, client}))
+	if strings.Contains(plain, "tailnet") || strings.Count(plain, "callback'") != 2 {
+		t.Errorf("hostname posture changed the rendering:\n%s", plain)
+	}
+}

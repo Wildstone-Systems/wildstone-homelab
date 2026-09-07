@@ -33,7 +33,6 @@ params:
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: homarr_subdomain, default: homarr, description: "The name this service appears under, e.g. homarr." }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
 policies:
   classifications: [family_public]
   dataSensitivity: medium
@@ -75,10 +74,17 @@ templates:
       upstream: "container/homarr:7575"
       auth: app_oidc
       classification: family_public
+  # The OidcClient lives on THIS package's node, not on a separate
+  # identity node: the engine synthesises the client secret on the
+  # OidcClient's node, the container reads the same reference on its
+  # own node, and secrets are node-local — a split would leave the app
+  # unable to materialise a secret that exists one machine over. Keystone
+  # merges every node's OidcClients into the provider's clients file
+  # regardless of where they are declared.
   - |
     apiVersion: wildstone.dev/v1
     kind: OidcClient
-    metadata: { name: homarr, node: "{{ or .Params.identity_node .Params.node }}" }
+    metadata: { name: homarr, node: "{{ .Params.node }}" }
     spec:
       clientId: homarr
       clientName: Homarr

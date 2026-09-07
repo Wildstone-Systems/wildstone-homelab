@@ -117,3 +117,24 @@ func TestParsePortMappingProtocol(t *testing.T) {
 		t.Errorf("SplitPortMapping with a suffix = (%q, %d, %d, %v)", ip, hp, cp, ok)
 	}
 }
+
+func TestRequiredProtocolMinor(t *testing.T) {
+	for name, tc := range map[string]struct {
+		spec ContainerSpec
+		want uint32
+	}{
+		"plain":    {ContainerSpec{Image: "x", Ports: []string{"53:53", "127.0.0.1:8080:80/tcp"}}, 0},
+		"udp":      {ContainerSpec{Image: "x", Ports: []string{"53:53/udp"}}, HostAccessProtocolMinor},
+		"device":   {ContainerSpec{Image: "x", Devices: []DeviceMapping{{Source: "/dev/net/tun"}}}, HostAccessProtocolMinor},
+		"cap":      {ContainerSpec{Image: "x", CapAdd: []string{"NET_ADMIN"}}, HostAccessProtocolMinor},
+		"nil spec": {ContainerSpec{}, 0},
+	} {
+		if got := tc.spec.RequiredProtocolMinor(); got != tc.want {
+			t.Errorf("%s: RequiredProtocolMinor = %d, want %d", name, got, tc.want)
+		}
+	}
+	var nilSpec *ContainerSpec
+	if nilSpec.RequiredProtocolMinor() != 0 {
+		t.Error("nil spec must need nothing")
+	}
+}
