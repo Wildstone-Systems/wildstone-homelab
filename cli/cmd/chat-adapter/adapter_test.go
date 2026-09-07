@@ -479,6 +479,39 @@ func TestAdapterPublishesTheMenuKeystoneSent(t *testing.T) {
 	}
 }
 
+// nil and empty are different answers, and the difference decides
+// whether a stale menu is cleared. Reported by Codex on #112.
+func TestEmptyMenuIsPublishedButUnknownIsNot(t *testing.T) {
+	// Keystone says this surface offers nothing: the vendor must be
+	// told, or the bot keeps advertising commands it no longer answers.
+	empty := &fakeTransport{}
+	ksEmpty := &fakeKeystone{commands: []Command{}}
+	a, done := newTestAdapter(t, ksEmpty, empty)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	runUntil(ctx, a, func() bool { return len(empty.menus()) > 0 })
+	cancel()
+	done()
+	if got := empty.menus(); len(got) == 0 {
+		t.Fatal("an explicit empty menu was never published, so a stale one would survive")
+	} else if len(got[0]) != 0 {
+		t.Fatalf("published %+v, want the empty list", got[0])
+	}
+
+	// Keystone told us nothing — an older control plane, or a response
+	// we could not read. Publishing would wipe a working menu.
+	unknown := &fakeTransport{}
+	b, done2 := newTestAdapter(t, &fakeKeystone{}, unknown)
+	defer done2()
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel2()
+	runUntil(ctx2, b, func() bool { return len(unknown.menus()) > 0 })
+	for _, m := range unknown.menus() {
+		if m != nil {
+			t.Fatalf("published %+v when Keystone said nothing", m)
+		}
+	}
+}
+
 // A vendor that rejects the menu must not take the adapter down with
 // it. Commands still work when the menu is stale; they do not work at
 // all if the adapter stops relaying messages.

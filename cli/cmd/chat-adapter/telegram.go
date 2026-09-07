@@ -225,7 +225,19 @@ func (t *telegram) Send(ctx context.Context, conversation, body string) error {
 // adapters sharing one token would overwrite each other's menus. Each
 // surface has its own bot, so that does not arise here.
 func (t *telegram) Advertise(ctx context.Context, commands []Command) error {
-	if len(commands) == 0 {
+	// nil and empty mean different things, and the difference decides
+	// whether a stale menu is cleared.
+	//
+	// nil is "we were not told" — a Keystone too old to send the field,
+	// or a response we could not read. Publishing then would wipe a
+	// working menu on a transient failure.
+	//
+	// An empty-but-not-nil slice is Keystone saying this surface offers
+	// nothing, and it has to reach the vendor: setMyCommands with an
+	// empty list is the only way a command REMOVED from Keystone leaves
+	// the menu. Skipping it would leave a bot advertising commands it
+	// no longer answers.
+	if commands == nil {
 		return nil
 	}
 	encoded, err := json.Marshal(commands)
