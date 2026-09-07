@@ -14,7 +14,7 @@
 import { renderToString } from "react-dom/server";
 import { createElement as h } from "react";
 import { Services, InstallForm } from "../src/views/Services";
-import { Butler, StatusCard, Answer, SURFACES } from "../src/views/Butler";
+import { Butler, StatusCard, SURFACES, Thread, ToolTrace, Turn } from "../src/views/Butler";
 import { Chat, IssuedCode } from "../src/views/Chat";
 import { Freshness, Shell, TokenGate } from "../src/App";
 import { HomeView, buildProblems } from "../src/views/Home";
@@ -113,13 +113,83 @@ const on = renderToString(
 check("configured card shows the resolved backend", on.includes("llama3.1") && on.includes("11434"));
 check("qa-only card explains the withheld tool", on.includes("propose_change"));
 
-// A proposal is reported as awaiting approval — this screen never
-// approves, and must not imply it did.
-const answered = renderToString(
-  h(Answer, { answer: { sessionId: "bs-1", mode: "full", finalText: "done", planIds: ["p-1"] } }),
+// The thread (ADR-W027). A proposal renders as the SAME card Plans
+// shows, with the same handlers — one component, two placements, which
+// is what keeps "the Butler proposes but never acts" visible. This
+// screen never approves anything by itself and must not imply it did.
+const PROPOSAL: PlanRecord = {
+  seq: 1, id: "plan-77", createdAt: "2026-09-07T00:01:00Z", principal: "butler", actingFor: "mika",
+  summary: "prune the jellyfin transcode cache", risk: "medium", state: "proposed",
+  plan: { steps: [{ kind: "Volume", name: "jellyfin-cache", action: "prune", risk: "medium", blastRadius: "drops cached transcodes" }] },
+};
+const answerTurn = renderToString(
+  h(Turn, {
+    turn: { ordinal: 1, role: "assistant", text: "I've proposed a plan; you approve it.", createdAt: "", planIds: ["plan-77"] },
+    proposals: [PROPOSAL], onResolved: () => {},
+  }),
 );
-check("answer points proposals at Plans", answered.includes("awaiting your approval"));
-check("answer names the plan id", answered.includes("p-1"));
+check("a proposal in the thread is the plan card", answerTurn.includes("prune the jellyfin transcode cache"));
+check("the thread's proposal keeps the approve button", answerTurn.includes("Approve") && answerTurn.includes("Reject"));
+check("the thread's proposal shows the blast radius", answerTurn.includes("drops cached transcodes"));
+// A proposal whose plan record has not been fetched still names it
+// rather than silently dropping it.
+const unfetched = renderToString(
+  h(Turn, {
+    turn: { ordinal: 1, role: "assistant", text: "Proposed.", createdAt: "", planIds: ["plan-88"] },
+    proposals: [], onResolved: () => {},
+  }),
+);
+check("an unfetched proposal is still named", unfetched.includes("plan-88") && unfetched.includes("open Plans"));
+
+// The tool trace is a quiet line, not a panel: what the Butler read is
+// worth being able to check and not worth reading every time.
+const trace = renderToString(
+  h(ToolTrace, {
+    turn: { ordinal: 1, role: "assistant", text: "x", createdAt: "",
+      transcriptJson: JSON.stringify({ provider: "ollama", calls: [
+        { name: "get_health", input: { kind: "Container" }, result: "1 unhealthy" },
+        { name: "get_health", input: {}, result: "ok" },
+        { name: "get_resource", input: {}, result: "ok" },
+      ] }) },
+  }),
+);
+check("the trace counts the calls and names them once each", text(trace).includes("3 tool calls · get_health, get_resource"), text(trace));
+check("the trace is collapsed by default", !trace.includes("1 unhealthy"), trace);
+const noTrace = renderToString(h(ToolTrace, { turn: { ordinal: 1, role: "assistant", text: "x", createdAt: "" } }));
+check("an answer with no tool calls shows no trace", noTrace === "", noTrace);
+// A transcript that is not the JSON we expect must not take the screen
+// down with it.
+const junkTrace = renderToString(h(ToolTrace, { turn: { ordinal: 1, role: "assistant", text: "x", createdAt: "", transcriptJson: "not json" } }));
+check("an unreadable transcript is survived, not thrown on", junkTrace === "", junkTrace);
+
+// A conversation reads as one: the question, then the answer.
+const thread = renderToString(
+  h(Thread, {
+    surface: "admin", pending: null, proposals: [], onProposalResolved: () => {},
+    session: {
+      seq: 1, id: "bs-1", createdAt: "", principal: "butler", actingFor: "mika",
+      provider: "ollama", mode: "full", surface: "admin", finalText: "Two nodes.", capped: false,
+      turns: [
+        { ordinal: 0, role: "user", text: "what nodes do I have?", createdAt: "" },
+        { ordinal: 1, role: "assistant", text: "Two nodes: n1 and n2.", createdAt: "" },
+      ],
+    },
+  }),
+);
+check("the thread shows the question and the answer in order",
+  thread.indexOf("what nodes do I have?") < thread.indexOf("Two nodes: n1 and n2."), thread);
+check("the question is styled as the person's", thread.includes("msg-user"));
+// A turn that hit the tool-call cap says its answer may be incomplete.
+const capped = renderToString(
+  h(Turn, { turn: { ordinal: 1, role: "assistant", text: "partial", createdAt: "", capped: true }, proposals: [], onResolved: () => {} }),
+);
+check("a capped turn admits it may be incomplete", capped.includes("may be incomplete"));
+
+// An empty thread teaches the surface rather than showing a blank box.
+const emptyThread = renderToString(
+  h(Thread, { surface: "family", session: null, pending: null, proposals: [], onProposalResolved: () => {} }),
+);
+check("an empty thread teaches the surface's ceiling", emptyThread.includes("no access to the home lab"), emptyThread);
 
 // The two surfaces (ADR-W026 A1). The screen defaults to the operator's
 // and offers the household's beside it; the household blurb has to say
@@ -127,7 +197,15 @@ check("answer names the plan id", answered.includes("p-1"));
 // on both surfaces is how a person ends up asking the family butler to
 // restart a container and believing it might.
 check("butler screen offers both surfaces", butler.includes("Operator") && butler.includes("Household"));
-check("butler screen defaults to the operator surface", butler.includes("waits for your approval"));
+check("butler screen defaults to the operator surface",
+  /class="btn btn-primary"[^>]*>Operator/.test(butler), butler.slice(0, 600));
+// Before a status response arrives the screen shows the unconfigured
+// card, which is what a fresh install sees — never a blank thread.
+check("butler screen is never blank while it checks", butler.includes("Checking the Butler") || butler.includes("Not configured"), butler.slice(0, 400));
+const adminThread = renderToString(
+  h(Thread, { surface: "admin", session: null, pending: null, proposals: [], onProposalResolved: () => {} }),
+);
+check("the operator thread promises approval, not action", adminThread.includes("waits for your approval"), adminThread);
 // The household blurb renders only once that surface is selected, so
 // assert the copy contract itself rather than the default render.
 check("household blurb names the ceiling", SURFACES.family.blurb.includes("no access to the home lab"));

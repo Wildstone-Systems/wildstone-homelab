@@ -250,9 +250,9 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		st  int
 	)
 	if surface == runtimedb.ButlerSurfaceFamily {
-		out, st, err = s.runFamilySession(r.Context(), text, binding.Identity, systemExtra, msg.Group)
+		out, st, err = s.runFamilySession(r.Context(), text, binding.Identity, systemExtra, msg.Group, nil)
 	} else {
-		out, st, err = s.runAdminButlerSession(r.Context(), text, binding.Identity)
+		out, st, err = s.runAdminButlerSession(r.Context(), text, binding.Identity, nil)
 	}
 	if err != nil {
 		return nil, st, err

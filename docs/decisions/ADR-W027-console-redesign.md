@@ -152,6 +152,56 @@ On a phone the rail becomes a bottom bar. The case that has to survive
 there is the glance: is anything wrong, approve the plan, re-run the
 thing that failed.
 
+### A11. A Butler session becomes a conversation
+
+The one API change the redesign needed, and it is public API rather
+than a console convenience: `POST /api/v1/butler/sessions/{id}/ask`
+appends a turn to an existing session, and `GET
+/api/v1/butler/sessions/{id}` returns the whole conversation. The CLI
+and the chat adapters get follow-ups from the same endpoint.
+
+Four decisions inside it:
+
+**The question is stored.** It never was. A session recorded what the
+Butler said and not what it was asked, which was enough to audit the
+answer and not enough to read the exchange or to ask a second question.
+Migration 0013 backfills existing sessions with their answer alone —
+a conversation that opens with an answer, which is true, rather than an
+invented question.
+
+**One endpoint, not one per surface.** ADR-W026 A1 gave each surface its
+own ask endpoint so the Console could not send a household question to
+the operator's Butler. That separation is preserved and in fact
+strengthened here: the surface comes from the STORED session, so it is
+decided by the endpoint the conversation started on and cannot be named
+by the follow-up request at all.
+
+**Only the person a session was recorded for may continue it.** An
+operator can still read anyone's session — that is what the audit is
+for — but reading a conversation and speaking into it are different
+acts, and the second one is not an audit.
+
+**History carries the text, not the tool traffic.** A tool result is a
+reading taken at a moment. Replaying "jellyfin's health endpoint returns
+500" into a turn an hour later hands the model a stale fact with the
+authority of a fresh one. The earlier answer already summarises what
+those reads found, in the model's own words, and if the follow-up needs
+the current reading the model can take it again. `MaxIterations` bounds
+each turn rather than the conversation: the cap exists to stop a runaway
+loop, and a second question is not one.
+
+Per-turn storage matters for the audit too. "Which reads produced THIS
+answer, and which plans did THIS answer propose" stays answerable once
+a session has answered three times; one merged trace per session
+cannot answer it.
+
+### A12. A proposal is the same card wherever you meet it
+
+The Butler thread renders a proposal with the Plans screen's own
+component and the same handlers. One component, two placements — which
+is what keeps "the Butler can propose but never act" visible rather
+than merely stated: the approve button is yours, in both places.
+
 ---
 
 # Part B — Notes
@@ -165,6 +215,7 @@ client-side derivation when it lands.
 | Want | Today | Console does |
 | --- | --- | --- |
 | Observation history | `/observed` is current state only | accumulates from the event stream, draws nothing below four samples (A9) |
+| Multi-turn Butler | closed by A11 — `POST /butler/sessions/{id}/ask` | — |
 | Statefile head | only via `PlanRecord.basedOnHead` | reads the newest plan's `basedOnHead`; a `GET /status` would serve it directly |
 | Reconcile age | only via `reconcile.tick` events | reads the newest tick out of the polled stream |
 | Volume fill | no volume usage on the wire | hides the bar rather than inventing one |

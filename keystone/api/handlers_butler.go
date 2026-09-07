@@ -189,7 +189,64 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 	// snapshot it takes — checking here as well would read the backend
 	// twice for one request, which is the thing ADR-W017 A9's snapshot
 	// exists to prevent.
-	return s.runAdminButlerSession(r.Context(), message, id.Name)
+	return s.runAdminButlerSession(r.Context(), message, id.Name, nil)
+}
+
+// turnContext carries an existing conversation into a session run
+// (ADR-W027). A nil *turnContext is a first question, which opens a new
+// session; a non-nil one appends to the session it names.
+type turnContext struct {
+	SessionID string
+	History   []provider.Message
+}
+
+// historyFrom replays a stored conversation as provider messages. Only
+// the user and assistant TEXT crosses over — see butler.Session.History
+// for why the tool traffic deliberately does not.
+func historyFrom(turns []runtimedb.ButlerTurn) []provider.Message {
+	out := make([]provider.Message, 0, len(turns))
+	for _, t := range turns {
+		if t.Text == "" {
+			continue
+		}
+		out = append(out, provider.Message{Role: t.Role, Text: t.Text})
+	}
+	return out
+}
+
+// continueButlerSession appends a follow-up to a conversation that
+// already exists (ADR-W027). It is one endpoint rather than one per
+// surface, and that is not a step back from ADR-W026 A1's separation:
+// the surface comes from the STORED session, so it is decided by the
+// endpoint the conversation started on and cannot be chosen by this
+// request. A caller cannot move a household question onto the
+// operator's Butler by continuing it here.
+//
+// Only the person the session was recorded for may continue it. An
+// operator can still READ anyone's session — that is what the audit is
+// for — but reading a conversation and speaking into it are different
+// acts, and the second one is not an audit.
+func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (any, int, error) {
+	message, st, err := readAskMessage(r)
+	if err != nil {
+		return nil, st, err
+	}
+	sess, err := s.DB.GetButlerSession(r.PathValue("id"))
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, http.StatusNotFound, fmt.Errorf("butler session not found")
+	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if sess.ActingFor != id.Name {
+		return nil, http.StatusForbidden,
+			fmt.Errorf("session %s belongs to %s; a conversation can only be continued by the person it was recorded for", sess.ID, sess.ActingFor)
+	}
+	prior := &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}
+	if sess.Surface == runtimedb.ButlerSurfaceFamily {
+		return s.runFamilySession(r.Context(), message, sess.ActingFor, "", false, prior)
+	}
+	return s.runAdminButlerSession(r.Context(), message, sess.ActingFor, prior)
 }
 
 // runAdminButlerSession runs one operator-surface session on behalf of
@@ -205,7 +262,7 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 // captured mode with a live provider is how a newly selected model that
 // FAILED its probe would run with the previous model's `full` verdict
 // and be handed proposal tools.
-func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor string) (any, int, error) {
+func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor string, prior *turnContext) (any, int, error) {
 	askProv, askGw, askMode, _, _ := s.ButlerHost.Current()
 	if askProv == nil || askGw == nil {
 		return nil, http.StatusServiceUnavailable,
@@ -214,6 +271,9 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor s
 	session := &butler.Session{
 		Gateway:  askGw,
 		ReadOnly: askMode == runtimedb.ButlerModeQAOnly,
+	}
+	if prior != nil {
+		session.History = prior.History
 	}
 	tr, err := session.Run(ctx, askProv, message)
 	if err != nil {
@@ -268,7 +328,18 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor s
 		return nil, http.StatusInternalServerError, fmt.Errorf("encoding transcript: %w", err)
 	}
 	finalText := redact.String(tr.FinalText)
-	sessionID, err := s.DB.InsertButlerSession(runtimedb.ButlerSession{
+	turns := []runtimedb.ButlerTurn{
+		// The question is stored too, which it never was before
+		// ADR-W027. It goes through redact for the same reason the
+		// answer does: it is operator-supplied text that can carry
+		// secret-shaped content, and it is about to be persisted.
+		{Role: runtimedb.ButlerRoleUser, Text: redact.String(message)},
+		{
+			Role: runtimedb.ButlerRoleAssistant, Text: finalText, Capped: tr.CappedIterations,
+			TranscriptJSON: redact.String(string(transcriptJSON)), PlanIDs: planIDs,
+		},
+	}
+	sessionID, err := s.recordTurn(prior, runtimedb.ButlerSession{
 		Principal:      butlerPrincipal,
 		ActingFor:      actingFor,
 		Provider:       tr.Audit.Provider,
@@ -277,6 +348,7 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor s
 		FinalText:      finalText,
 		Capped:         tr.CappedIterations,
 		TranscriptJSON: redact.String(string(transcriptJSON)),
+		Turns:          turns,
 	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -299,6 +371,20 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor s
 // the household's butler been asked to do" is a different question from
 // "what has the operator's", and one list that cannot tell them apart
 // answers neither (ADR-W026 A1).
+// recordTurn opens a new session or appends to the one prior names,
+// and returns the session id either way. Both surfaces persist through
+// here so that "a follow-up lands in the conversation it answers" is one
+// decision rather than two implementations of it.
+func (s *Server) recordTurn(prior *turnContext, sess runtimedb.ButlerSession) (string, error) {
+	if prior == nil {
+		return s.DB.InsertButlerSession(sess)
+	}
+	if err := s.DB.AppendButlerTurns(prior.SessionID, sess.Turns); err != nil {
+		return "", err
+	}
+	return prior.SessionID, nil
+}
+
 func (s *Server) listButlerSessions(r *http.Request, _ principal.Identity) (any, int, error) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	surface := runtimedb.ButlerSurface(r.URL.Query().Get("surface"))

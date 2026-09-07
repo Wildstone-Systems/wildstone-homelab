@@ -223,6 +223,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/butler/ask", s.handle(principal.VerbRead, s.askButler))
 	mux.Handle("GET /api/v1/butler/sessions", s.handle(principal.VerbRead, s.listButlerSessions))
 	mux.Handle("GET /api/v1/butler/sessions/{id}", s.handle(principal.VerbRead, s.getButlerSession))
+	// A follow-up carries the read verb like the first question does:
+	// conversing is not a write. The surface it runs on comes from the
+	// stored session, never from this request (ADR-W027).
+	mux.Handle("POST /api/v1/butler/sessions/{id}/ask", s.handle(principal.VerbRead, s.continueButlerSession))
 
 	// The family surface (ADR-W026 A1): a sibling route, not a mode of
 	// the operator's. Same read verb — talking is not a write — with a
