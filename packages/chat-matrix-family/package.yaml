@@ -39,13 +39,15 @@
 #
 # THE IMAGE. As for the Telegram packages: build it from
 # cli/cmd/chat-adapter/Dockerfile and pass the digest. It must be
-# pullable WITHOUT credentials, because Keystone's pull carries no
-# registry auth. See docs/install.md, "Picking a registry".
+# pullable BY THE NODE: a public repository needs nothing further, and a
+# private one needs its credential placed first with
+# `wild secret set registry.<host> -node <node>`. See docs/install.md,
+# "Picking a registry".
 apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: chat-matrix-family
-  version: 1.0.0
+  version: 1.0.1
   capability: chat-matrix-family
   profile: matrix
 params:

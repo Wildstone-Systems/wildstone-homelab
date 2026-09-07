@@ -68,6 +68,14 @@ func (e *dockerError) Error() string  { return fmt.Sprintf("docker: %d: %s", e.s
 func (e *dockerError) notFound() bool { return e.status == http.StatusNotFound }
 
 func (d *dockerClient) call(ctx context.Context, method, path string, query url.Values, body any) ([]byte, error) {
+	return d.callWithHeaders(ctx, method, path, query, body, nil)
+}
+
+// callWithHeaders is call plus request headers, for the one caller that
+// needs them (the registry credential on a pull). The header value is
+// never logged: the error path below reports the daemon's response, not
+// the request.
+func (d *dockerClient) callWithHeaders(ctx context.Context, method, path string, query url.Values, body any, headers map[string]string) ([]byte, error) {
 	u := d.base + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -86,6 +94,9 @@ func (d *dockerClient) call(ctx context.Context, method, path string, query url.
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	resp, err := d.http.Do(req)
 	if err != nil {
@@ -204,8 +215,16 @@ func (d *dockerClient) logs(ctx context.Context, name string, tail uint32, since
 	return d.call(ctx, "GET", "/containers/"+url.PathEscape(name)+"/logs", q, nil)
 }
 
-func (d *dockerClient) pull(ctx context.Context, ref string) error {
-	_, err := d.call(ctx, "POST", "/images/create", url.Values{"fromImage": {ref}}, nil)
+// pull fetches an image. auth, when non-empty, is a base64url AuthConfig
+// for the registry the ref names — see registryauth.go. It is a header
+// rather than a query parameter deliberately: query strings end up in
+// proxy and daemon logs.
+func (d *dockerClient) pull(ctx context.Context, ref, auth string) error {
+	var headers map[string]string
+	if auth != "" {
+		headers = map[string]string{"X-Registry-Auth": auth}
+	}
+	_, err := d.callWithHeaders(ctx, "POST", "/images/create", url.Values{"fromImage": {ref}}, nil, headers)
 	return err
 }
 

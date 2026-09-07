@@ -43,15 +43,16 @@
 #
 # THE IMAGE. As for the family package: this repository ships the source,
 # the Dockerfile and the released binary and publishes no container
-# image, so `adapter_image` is a required, digest-pinned param. It must
-# be pullable WITHOUT credentials — Keystone's pull carries no registry
-# auth — so a private registry will not work. See docs/install.md,
+# image, so `adapter_image` is a required, digest-pinned param. The node
+# must be able to pull it: a public repository needs nothing further, and
+# a private one needs its credential placed first with
+# `wild secret set registry.<host> -node <node>`. See docs/install.md,
 # "Picking a registry".
 apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: chat-telegram-admin
-  version: 1.0.0
+  version: 1.0.1
   capability: chat-telegram-admin
   profile: telegram
 params:
