@@ -813,3 +813,9 @@ details > pre { margin-top: var(--space-2); }
    panel reads as two things. */
 .drawer .panel { background: none; box-shadow: none; padding: 0; margin-top: 0; }
 .drawer .panel h3 { margin-right: var(--space-8); }
+
+/* The owner listing on a removal that found nothing. Monospace names in
+   a tight list: it is meant to be read once, compared, and quoted into
+   a bug report. */
+.owner-list { margin: var(--space-2) 0 0; padding-left: 18px; max-height: 220px; overflow-y: auto; }
+.owner-list li { margin-bottom: 2px; }

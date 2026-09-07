@@ -18,7 +18,7 @@ import { Butler, StatusCard, SURFACES, Thread, ToolTrace, Turn } from "../src/vi
 import { Chat, IssuedCode } from "../src/views/Chat";
 import { Freshness, Shell, TokenGate } from "../src/App";
 import { HomeView, buildProblems } from "../src/views/Home";
-import { ServicesView, InstalledTile, AvailableRow, matching, RemoveForm } from "../src/views/Services";
+import { ServicesView, InstalledTile, AvailableRow, matching, RemoveForm, ownerCounts } from "../src/views/Services";
 import { groupServices, upstreamContainer } from "../src/services";
 import { eventKind } from "../src/ui/HourChart";
 import type { ConsoleSnapshot } from "../src/state";
@@ -585,6 +585,37 @@ const nothingOwned = renderToString(h(RemoveForm, {
 }));
 check("removing something that owns nothing says so", nothingOwned.includes("nothing to remove"));
 check("and names the owner it looked for", text(nothingOwned).includes("capability/ghost"), text(nothingOwned).slice(0, 400));
+
+// "Nothing is owned by X" is the same sentence whether X is misspelt,
+// whether the resources are filed under another owner, or whether the
+// list arrived empty for a reason nobody can see. Showing the owners
+// that WERE there is what makes the three distinguishable — this went
+// unexplained on a live deployment for want of exactly that.
+check("owner counts are tallied and ordered by size",
+  JSON.stringify(ownerCounts([
+    { kind: "Secret", name: "a", owner: "capability/identity", node: "n1", yaml: "" },
+    { kind: "Secret", name: "b", owner: "capability/media", node: "n1", yaml: "" },
+    { kind: "Secret", name: "c", owner: "capability/identity", node: "n1", yaml: "" },
+  ])) === JSON.stringify([["capability/identity", 2], ["capability/media", 1]]));
+
+const withOwners = renderToString(h(RemoveForm, {
+  pkg: { name: "ghost", version: "1.0.0", capability: "ghost", enabled: true },
+  owned: [],
+  owners: [["capability/identity", 17], ["capability/media", 8]] as [string, number][],
+  onDone: () => {},
+}));
+check("an empty result shows what the statefile DID report",
+  withOwners.includes("capability/identity") && withOwners.includes("capability/media"),
+  withOwners.slice(0, 600));
+check("and totals them, so the list can be compared at a glance",
+  text(withOwners).includes("25 resources"), text(withOwners).slice(0, 700));
+// A statefile that reported nothing at all is a different problem again.
+const noOwnersAtAll = renderToString(h(RemoveForm, {
+  pkg: { name: "ghost", version: "1.0.0", capability: "ghost", enabled: true },
+  owned: [], owners: [], onDone: () => {},
+}));
+check("no resources at all is called out as its own oddity",
+  noOwnersAtAll.includes("no resources at all"), noOwnersAtAll.slice(0, 400));
 check("and offers no button to press", nothingOwned.includes("disabled"), nothingOwned.slice(0, 300));
 
 // "I could not read the statefile" and "this owns nothing" look
