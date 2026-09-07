@@ -127,6 +127,19 @@ var ParamSources = map[string]bool{
 	// Asking each package separately is how two capabilities end up
 	// under different domains for no reason anyone intended.
 	"domain": true,
+	// The public API's base URL as something running ON A NODE can
+	// reach it — the same routable address the pairing command already
+	// advertises for the gateway, with the API's port. The control
+	// plane knows this; making every operator work it out by hand (and
+	// discover that 127.0.0.1 means the container, not the host) is a
+	// question it can answer itself.
+	"keystone_url": true,
+	// The chat adapter image this deployment already runs, read from an
+	// installed chat capability's Container. Nothing publishes this
+	// image — the operator builds and pushes it — so the second adapter
+	// should not have to be told a digest the first one is already
+	// using.
+	"chat_adapter_image": true,
 }
 
 // Policies carries the mandatory policy inputs a package declares about the

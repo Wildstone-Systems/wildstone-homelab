@@ -75,6 +75,16 @@ type Server struct {
 	// response notes — a wrong address is worse than a visible blank.
 	GatewayAddr string
 
+	// APIURL is this API's base URL as something running ON A NODE
+	// reaches it — the routable -hosts SAN the pairing command already
+	// advertises, with the API's own port. It fills the `keystone_url`
+	// param source, so a package that needs to tell a container where
+	// the control plane is does not have to ask an operator to work out
+	// that 127.0.0.1 would mean the container itself. Empty when no
+	// routable SAN exists, which leaves the field blank rather than
+	// suggesting an address nothing can reach.
+	APIURL string
+
 	// ButlerHost hosts the Butler ask endpoint (ADR-W017 A2/A4) —
 	// cmd/keystone wires it from -butler-provider. nil leaves ask
 	// answering 503; session history stays readable.
@@ -84,6 +94,18 @@ type Server struct {
 	// A9). cmd/keystone wires it; nil leaves the config endpoints
 	// answering 503 rather than storing a choice nothing will honour.
 	ApplyButlerConfig func(context.Context, runtimedb.ButlerConfig) (runtimedb.ButlerSessionMode, string, error)
+
+	// HouseholdLoc is the IANA zone the household keeps (-household-
+	// timezone). "Today" means midnight THERE, not midnight wherever
+	// the control plane's process happens to think it is. nil falls
+	// back to the process's local zone.
+	HouseholdLoc *time.Location
+	// MemberScoped reports whether a household event type is about a
+	// PERSON rather than about the house (ADR-W026 A7). Used to withhold
+	// one member's movements from a room the whole family is in; nil
+	// withholds every attributed fact but the asker's, which is the
+	// safe direction.
+	MemberScoped func(eventType string) bool
 
 	// Automation is the household rule engine (ADR-W024 H3), used here
 	// only for side-effect-free replay; cmd/keystone runs its loop. New

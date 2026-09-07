@@ -17,10 +17,10 @@ books-kavita 1.0.0 2d516590ecdc90e8
 budget-actual 1.0.0 109c9ff70faf48b1
 cameras-frigate 1.0.0 6655c73651bf9438
 captcha-flaresolverr 1.0.0 fbf33e7a47aaf512
-chat-matrix-admin 1.0.1 a7ba4b00a86d619f
-chat-matrix-family 1.0.1 74fd7e4ab01eb793
-chat-telegram-admin 1.0.1 a7d28e4dfbdd0ee5
-chat-telegram-family 1.0.1 05472613bafbfdc2
+chat-matrix-admin 1.0.2 b30335cccac333e3
+chat-matrix-family 1.0.2 45e17a94238eb43b
+chat-telegram-admin 1.0.2 81fda57e489701e6
+chat-telegram-family 1.0.2 985c13742423aaf2
 code-gitea 1.0.0 e024c78f4b6d41a0
 dashboard 1.0.0 9b1a7906c5c14f24
 dashboard-homarr 1.0.0 cf3f6457c65d9fe0

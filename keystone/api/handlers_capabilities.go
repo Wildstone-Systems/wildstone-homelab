@@ -61,6 +61,12 @@ type paramView struct {
 type deploymentFacts struct {
 	nodes  []string
 	domain string
+	// keystoneURL is the public API as something on a node reaches it,
+	// and chatAdapterImage is the adapter image already installed here.
+	// Both are empty when the deployment cannot answer, which the form
+	// renders as an ordinary blank rather than a guess.
+	keystoneURL      string
+	chatAdapterImage string
 }
 
 // gatherFacts reads what the deployment already knows.
@@ -88,8 +94,21 @@ func (s *Server) gatherFacts() deploymentFacts {
 	if err != nil {
 		return f
 	}
+	f.keystoneURL = s.APIURL
+
 	counts := map[string]int{}
+	// The adapter image an installed chat capability already runs. Two
+	// installed adapters are resolved by the lowest resource NAME, so
+	// the answer is stable rather than dependent on statefile order.
+	adapterFrom := ""
 	for _, r := range current {
+		if r.Kind == resource.KindContainer && r.Container != nil &&
+			strings.HasPrefix(r.Metadata.Owner, "capability/"+chatCapabilityPrefix) &&
+			r.Container.Image != "" {
+			if adapterFrom == "" || r.Metadata.Name < adapterFrom {
+				adapterFrom, f.chatAdapterImage = r.Metadata.Name, r.Container.Image
+			}
+		}
 		if r.Kind != resource.KindRoute || r.Route == nil || r.Route.Host == "" {
 			continue
 		}
@@ -121,6 +140,10 @@ func resolveParams(decls []pkgspec.ParamDecl, f deploymentFacts) []paramView {
 			if f.domain != "" {
 				v.Suggested = f.domain
 			}
+		case "keystone_url":
+			v.Suggested = f.keystoneURL
+		case "chat_adapter_image":
+			v.Suggested = f.chatAdapterImage
 		}
 		out = append(out, v)
 	}
