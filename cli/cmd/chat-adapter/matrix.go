@@ -57,6 +57,12 @@ func newMatrix(homeserver, token string, pollWait time.Duration) (Transport, err
 	return m, nil
 }
 
+// Advertise is a no-op: Matrix has no command-menu concept, and
+// inventing one — posting a list into the room, say — would be this
+// adapter deciding to send an unasked-for message. Commands still work;
+// /help is how they are discovered here.
+func (m *matrix) Advertise(context.Context, []Command) error { return nil }
+
 func (m *matrix) Name() string { return "matrix" }
 
 func (m *matrix) client() *http.Client {

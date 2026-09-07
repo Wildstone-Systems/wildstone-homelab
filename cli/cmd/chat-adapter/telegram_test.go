@@ -170,3 +170,67 @@ func TestTelegramFirstPollTakesTheCursorNotTheBacklog(t *testing.T) {
 		t.Fatalf("second poll = %+v, want the live messages", msgs)
 	}
 }
+
+// setMyCommands is what puts the tappable list beside the message box.
+// nil and empty are different answers here: nil is "Keystone did not
+// tell us", empty is "this surface offers nothing" — and only the
+// second may reach Telegram, because an empty list is the only way a
+// removed command leaves the menu.
+func TestTelegramAdvertise(t *testing.T) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("parsing form: %v", err)
+		}
+		calls = append(calls, r.FormValue("commands"))
+		w.Write([]byte(`{"ok":true}`)) //nolint:errcheck // test fake
+	}))
+	defer srv.Close()
+	tg := &telegram{token: "bot-token", base: srv.URL, timeout: time.Second, http: srv.Client()}
+
+	// Unknown: the menu already on the bot must survive.
+	if err := tg.Advertise(context.Background(), nil); err != nil {
+		t.Fatalf("Advertise(nil): %v", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("a nil list reached Telegram: %v", calls)
+	}
+
+	// Explicitly none: Telegram must be told, or the bot keeps
+	// advertising commands it no longer answers.
+	if err := tg.Advertise(context.Background(), []Command{}); err != nil {
+		t.Fatalf("Advertise(empty): %v", err)
+	}
+	if len(calls) != 1 || calls[0] != "[]" {
+		t.Fatalf("empty list sent %q, want []", calls)
+	}
+
+	// The real thing, as Telegram's own schema wants it: bare names,
+	// no slash.
+	if err := tg.Advertise(context.Background(), []Command{
+		{Command: "status", Description: "is anything wrong"},
+	}); err != nil {
+		t.Fatalf("Advertise: %v", err)
+	}
+	if len(calls) != 2 || !strings.Contains(calls[1], `"command":"status"`) {
+		t.Fatalf("sent %q", calls[1])
+	}
+	if strings.Contains(calls[1], `"/status"`) {
+		t.Fatalf("the slash was sent to Telegram: %q", calls[1])
+	}
+}
+
+// Telegram answers 200 with ok:false for a rejected menu, and that has
+// to be an error rather than a silent no-op.
+func TestTelegramAdvertiseSurfacesARefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"ok":false,"description":"BAD_REQUEST: command name is invalid"}`)) //nolint:errcheck
+	}))
+	defer srv.Close()
+	tg := &telegram{token: "bot-token", base: srv.URL, timeout: time.Second, http: srv.Client()}
+
+	err := tg.Advertise(context.Background(), []Command{{Command: "Bad Name", Description: "x"}})
+	if err == nil || !strings.Contains(err.Error(), "command name is invalid") {
+		t.Fatalf("err = %v, want Telegram's own reason", err)
+	}
+}

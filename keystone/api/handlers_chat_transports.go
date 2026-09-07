@@ -229,7 +229,21 @@ func (s *Server) registerChatAdapter(r *http.Request, id principal.Identity) (an
 	if err := s.DB.UpsertChatAdapter(rec); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return map[string]any{"capability": capability, "handle": handle, "surface": string(surface)}, http.StatusOK, nil
+	// The commands this surface offers travel back with the
+	// registration, so the adapter can publish them to the vendor's own
+	// menu without carrying its own copy of the list. One table decides
+	// what exists, what /help says, and what the menu shows — an
+	// adapter with its own copy would drift, and the drift that matters
+	// is a household bot advertising /status.
+	//
+	// registerLoop repeats on a heartbeat, so a command added here
+	// reaches the menu on the next beat rather than on a redeploy.
+	return map[string]any{
+		"capability": capability,
+		"handle":     handle,
+		"surface":    string(surface),
+		"commands":   commandsFor(surface),
+	}, http.StatusOK, nil
 }
 
 // inviteLink turns a claim code into something a person can tap.

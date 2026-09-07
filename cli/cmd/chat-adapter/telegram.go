@@ -206,6 +206,57 @@ func (t *telegram) Send(ctx context.Context, conversation, body string) error {
 	return nil
 }
 
+// Advertise publishes the command menu with setMyCommands, which is
+// what puts the tappable list beside the message box.
+//
+// It is called on every registration heartbeat rather than once at
+// startup, so a command added to Keystone appears without redeploying
+// anything. Telegram replaces the whole list each call, which is the
+// behaviour we want: a command REMOVED from Keystone should disappear
+// from the menu, and an incremental update could not express that.
+//
+// The scope is left at Telegram's default, which covers private chats
+// and groups alike. A narrower group scope is possible and deliberately
+// not used yet: /today already behaves differently in a room, and
+// hiding it there would make the room's version undiscoverable rather
+// than safer.
+//
+// One caveat worth knowing: setMyCommands is global per BOT TOKEN. Two
+// adapters sharing one token would overwrite each other's menus. Each
+// surface has its own bot, so that does not arise here.
+func (t *telegram) Advertise(ctx context.Context, commands []Command) error {
+	// nil and empty mean different things, and the difference decides
+	// whether a stale menu is cleared.
+	//
+	// nil is "we were not told" — a Keystone too old to send the field,
+	// or a response we could not read. Publishing then would wipe a
+	// working menu on a transient failure.
+	//
+	// An empty-but-not-nil slice is Keystone saying this surface offers
+	// nothing, and it has to reach the vendor: setMyCommands with an
+	// empty list is the only way a command REMOVED from Keystone leaves
+	// the menu. Skipping it would leave a bot advertising commands it
+	// no longer answers.
+	if commands == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(commands)
+	if err != nil {
+		return err
+	}
+	var envelope struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := t.post(ctx, "setMyCommands", url.Values{"commands": {string(encoded)}}, &envelope); err != nil {
+		return err
+	}
+	if !envelope.OK {
+		return fmt.Errorf("telegram setMyCommands: %s", envelope.Description)
+	}
+	return nil
+}
+
 func (t *telegram) get(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.endpoint(path), nil)
 	if err != nil {
