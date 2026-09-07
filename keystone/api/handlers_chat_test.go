@@ -34,6 +34,10 @@ func (h *harness) ensureChatPrereqs(t *testing.T, surface, identity, transport s
 			haveMember = true
 		}
 	}
+	// Credentialing is part of the prerequisite, not decoration: a code
+	// may only name an adapter that can actually redeem one.
+	h.adapterToken(t, "chat-"+transport+"-"+surface)
+
 	changed := false
 	if !haveAdapter {
 		name := "chat-" + transport + "-" + surface + "-state"

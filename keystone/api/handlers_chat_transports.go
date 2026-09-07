@@ -42,11 +42,22 @@ type chatTransport struct {
 	Capability string `json:"capability"`
 	// Installed is whether this deployment has that capability.
 	Installed bool `json:"installed"`
-	// Credentialed is whether the adapter has been given its Keystone
-	// token (`wild chat adapter`, or the Services screen). An installed
-	// adapter without one is running and cannot talk to Keystone, so an
-	// invite issued for it will never be redeemed.
+	// Credentialed is whether the adapter holds a LIVE Keystone token
+	// (`wild chat adapter`, or the Console). An installed adapter
+	// without one is running and cannot talk to Keystone, so an invite
+	// issued for it can never be redeemed.
+	//
+	// Deliberately not "the principal exists": credentialing creates the
+	// principal, mints a token and places it on the node, and a
+	// placement that fails revokes the token and leaves the principal.
+	// Reading that as credentialed would mark a failed step complete.
 	Credentialed bool `json:"credentialed"`
+	// Node is where an installed adapter runs, from the resources the
+	// capability owns. It is what a rotation or a bot-token write must
+	// target: minting onto a different node revokes the running
+	// adapter's token and places the replacement where nothing reads it,
+	// leaving the container permanently unauthorized.
+	Node string `json:"node,omitempty"`
 	// Handle is the bot itself, as the adapter reported it: a Telegram
 	// username, a Matrix MXID. Empty until an adapter has checked in,
 	// which is also the honest answer — nothing else in the deployment
@@ -91,6 +102,12 @@ func (s *Server) chatTransports() ([]chatTransport, error) {
 	// nothing installed still learns what to install. Fall back to the
 	// installed set alone: a deployment running without -catalog-dir
 	// still has adapters, and they still work.
+	// Where each installed chat capability actually runs.
+	nodes, err := s.capabilityNodes()
+	if err != nil {
+		return nil, err
+	}
+
 	names := map[string]bool{}
 	for _, p := range s.Catalog.List() {
 		if strings.HasPrefix(p.Metadata.Capability, chatCapabilityPrefix) {
@@ -122,6 +139,7 @@ func (s *Server) chatTransports() ([]chatTransport, error) {
 			Capability:   name,
 			Installed:    enabled[name],
 			Credentialed: s.adapterCredentialed(name),
+			Node:         nodes[name],
 		}
 		if a, err := s.DB.GetChatAdapter(name); err == nil {
 			t.Handle = a.Handle
@@ -254,14 +272,46 @@ func (s *Server) linkForClaim(surface runtimedb.ButlerSurface, transport, code s
 	return link, a.Handle, carriesCode
 }
 
-// adapterCredentialed reports whether the adapter principal for a chat
-// capability exists and is live. A disabled one counts as absent: its
-// token is refused, which is the same thing from the invite's point of
-// view.
+// adapterCredentialed reports whether a chat capability's adapter can
+// actually authenticate: its principal exists, is enabled, and holds at
+// least one token that is neither revoked nor expired.
+//
+// A disabled principal and a revoked token count the same as no
+// credential at all, because that is what they are from the adapter's
+// side — the request is refused either way.
 func (s *Server) adapterCredentialed(capability string) bool {
-	p, err := s.DB.GetPrincipal(chatAdapterPrincipalPrefix + capability)
-	if err != nil {
+	name := chatAdapterPrincipalPrefix + capability
+	p, err := s.DB.GetPrincipal(name)
+	if err != nil || p.Disabled {
 		return false
 	}
-	return !p.Disabled
+	live, err := s.DB.LiveTokensFor(name)
+	return err == nil && live > 0
+}
+
+// capabilityNodes maps each capability to the node its resources are on.
+// A capability spanning nodes has no single answer, and reports none
+// rather than an arbitrary one.
+func (s *Server) capabilityNodes() (map[string]string, error) {
+	current, err := s.State.Load()
+	if err != nil {
+		return nil, fmt.Errorf("loading statefile: %w", err)
+	}
+	nodes := map[string]string{}
+	split := map[string]bool{}
+	for _, r := range current {
+		name, ok := strings.CutPrefix(r.Metadata.Owner, "capability/")
+		if !ok || name == "" || r.Metadata.Node == "" {
+			continue
+		}
+		switch {
+		case split[name]:
+		case nodes[name] == "":
+			nodes[name] = r.Metadata.Node
+		case nodes[name] != r.Metadata.Node:
+			split[name] = true
+			delete(nodes, name)
+		}
+	}
+	return nodes, nil
 }

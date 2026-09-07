@@ -28,6 +28,12 @@ type packageView struct {
 	Requires   []pkgspec.Requirement  `json:"requires,omitempty"`
 	Publishes  *pkgspec.PublishesSpec `json:"publishes,omitempty"`
 	Enabled    bool                   `json:"enabled"`
+	// ProvidedSecrets are the secrets this package declares that only an
+	// operator can supply. A form that collects them must ask for THESE
+	// names: they differ per package (a Telegram bot token, a Matrix
+	// access token) and a guessed name writes into a secret nothing
+	// reads.
+	ProvidedSecrets []string `json:"providedSecrets,omitempty"`
 	capabilityDetail
 }
 
@@ -301,6 +307,7 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 			Capability: p.Metadata.Capability, Profile: p.Metadata.Profile,
 			Params: resolveParams(p.Params, facts), Provides: p.Provides, Requires: p.Requires,
 			Publishes:        p.Publishes,
+			ProvidedSecrets:  pkgspec.ProvidedSecrets(p),
 			Enabled:          enabled[p.Metadata.Capability],
 			capabilityDetail: s.withVersion(p, s.describeCapability(p, current, health), versions),
 		})

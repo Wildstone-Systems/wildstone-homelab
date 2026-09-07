@@ -240,19 +240,6 @@ func (s *Server) addHouseholdMember(r *http.Request, id principal.Identity) (any
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	groups := make([]string, 0, len(req.Groups))
-	for _, g := range req.Groups {
-		g = strings.TrimSpace(g)
-		if g == "" {
-			continue
-		}
-		if _, ok := declared[g]; !ok {
-			return nil, http.StatusBadRequest, fmt.Errorf(
-				"no capability declares the group %q: install the app that owns it first, or leave it out", g)
-		}
-		groups = append(groups, g)
-	}
-	sort.Strings(groups)
 
 	// The person cannot already be declared. Re-declaring would compute
 	// an update plan whose diff looks like a rename, and the operator
@@ -271,6 +258,31 @@ func (s *Server) addHouseholdMember(r *http.Request, id principal.Identity) (any
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
+
+	// A membership is only real on the directory the group is declared
+	// against: the reconciler renders the user list per node, so a group
+	// from node A named on a person declared on node B cannot be created
+	// by B's provisioning job. Nothing fails — the plan applies, the
+	// account appears, and the person silently lacks the app they were
+	// added for.
+	groups := make([]string, 0, len(req.Groups))
+	for _, g := range req.Groups {
+		g = strings.TrimSpace(g)
+		if g == "" {
+			continue
+		}
+		d, ok := declared[g]
+		if !ok {
+			return nil, http.StatusBadRequest, fmt.Errorf(
+				"no capability declares the group %q: install the app that owns it first, or leave it out", g)
+		}
+		if d.node != node {
+			return nil, http.StatusBadRequest, fmt.Errorf(
+				"group %q is declared on node %s, not on the directory this person goes on (%s)", g, d.node, node)
+		}
+		groups = append(groups, g)
+	}
+	sort.Strings(groups)
 
 	res := resource.Resource{
 		ApiVersion: resource.ApiVersion,

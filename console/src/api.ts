@@ -222,6 +222,11 @@ export interface PackageView {
   capability: string;
   profile?: string;
   params?: ParamDecl[];
+  // The secrets only an operator can supply, as this package declares
+  // them. They are not derivable from a convention — the Telegram
+  // adapter reads <capability>-bot and the Matrix one <capability>-token
+  // — so a form that collects one must ask for these names.
+  providedSecrets?: string[];
   provides?: { trait: string; mode?: string }[];
   requires?: { trait: string; mode?: string }[];
   enabled: boolean;
@@ -374,6 +379,12 @@ export interface ChatTransport {
   // running now. A bot nobody has messaged and a bot that is down look
   // identical without this.
   online: boolean;
+  // Where an installed adapter runs, from the resources its capability
+  // owns. Rotating its credential or writing its bot token must target
+  // THIS node: doing either on another one revokes the running
+  // adapter's token and places the replacement where nothing reads it.
+  // Empty when the capability's resources span nodes.
+  node?: string;
 }
 
 export interface IdentityNotification {

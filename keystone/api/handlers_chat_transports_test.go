@@ -51,14 +51,39 @@ func TestChatTransportsAreTheInstalledAdapters(t *testing.T) {
 	if got[0].Credentialed {
 		t.Fatal("credentialed before the adapter was given a token")
 	}
+	if got[0].Node != "n1" {
+		t.Fatalf("node = %q, want the node its resources are on", got[0].Node)
+	}
 
+	// The principal alone is not a credential. Credentialing mints a
+	// token AND places it on the node; a placement that fails revokes
+	// the token and leaves the principal behind, and reading that as
+	// done would mark a failed step complete.
 	if err := h.s.Principals.Create(chatAdapterPrincipalPrefix+"chat-telegram-family", runtimedb.RoleConcierge, ""); err != nil {
 		t.Fatal(err)
 	}
 	got = nil
 	h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/chat/transports", nil, &got)
+	if len(got) != 1 || got[0].Credentialed {
+		t.Fatalf("transports = %+v, want NOT credentialed while the principal holds no live token", got)
+	}
+
+	h.adapterToken(t, "chat-telegram-family")
+	got = nil
+	h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/chat/transports", nil, &got)
 	if len(got) != 1 || !got[0].Credentialed {
 		t.Fatalf("transports after minting = %+v, want credentialed", got)
+	}
+
+	// A revoked token is no credential either: it is refused on the
+	// adapter's next request exactly like an absent one.
+	if _, err := h.s.DB.RevokeTokensFor(chatAdapterPrincipalPrefix + "chat-telegram-family"); err != nil {
+		t.Fatal(err)
+	}
+	got = nil
+	h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/chat/transports", nil, &got)
+	if len(got) != 1 || got[0].Credentialed {
+		t.Fatalf("transports after revoking = %+v, want NOT credentialed", got)
 	}
 }
 
@@ -108,6 +133,18 @@ func TestChatClaimIsCheckedAgainstTheDeployment(t *testing.T) {
 		"surface": "family", "identity": "sam", "transport": "telegram",
 	}, nil); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("installed transport: status = %d, want 201", resp.StatusCode)
+	}
+
+	// Installed but no longer able to authenticate: revoking the
+	// adapter's token must close the invite path too, or the operator
+	// hands out codes for a bot that cannot redeem them.
+	if _, err := h.s.DB.RevokeTokensFor(chatAdapterPrincipalPrefix + "chat-telegram-family"); err != nil {
+		t.Fatal(err)
+	}
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/chat/claims", map[string]any{
+		"surface": "family", "identity": "sam", "transport": "telegram",
+	}, nil); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("uncredentialed adapter: status = %d, want 400", resp.StatusCode)
 	}
 }
 

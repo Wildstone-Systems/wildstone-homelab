@@ -160,6 +160,33 @@ func TestAddHouseholdMemberRefusals(t *testing.T) {
 		t.Fatalf("wrong node: status = %d, want 400", resp.StatusCode)
 	}
 
+	// A group declared on ANOTHER directory is refused. The reconciler
+	// renders the user list per node, so B's provisioning job cannot
+	// create a membership in a group only A declares — the plan would
+	// apply, the account would appear, and the person would silently
+	// lack the app they were added for.
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindLdapGroup,
+		Metadata:  resource.Metadata{Name: "media-users", Owner: "capability/media", Node: "n2"},
+		LdapGroup: &resource.LdapGroupSpec{Name: "media_users"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.State.Commit("test", "seed", "a second directory"); err != nil {
+		t.Fatal(err)
+	}
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/members", map[string]any{
+		"username": "kim", "email": "kim@example.com", "node": "n1", "groups": []string{"media_users"},
+	}, nil); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("group on another directory: status = %d, want 400", resp.StatusCode)
+	}
+	// The same group on its own directory is fine.
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/members", map[string]any{
+		"username": "kim", "email": "kim@example.com", "node": "n2", "groups": []string{"media_users"},
+	}, nil); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("group on its own directory: status = %d, want 201", resp.StatusCode)
+	}
+
 	// Adding a person is a propose act: a concierge relaying chat cannot
 	// invent one.
 	if resp := h.do(runtimedb.RoleConcierge, http.MethodPost, "/api/v1/household/members", map[string]any{

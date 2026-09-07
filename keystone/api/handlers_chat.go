@@ -143,13 +143,28 @@ func (s *Server) checkClaimTarget(surface runtimedb.ButlerSurface, identity, tra
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}
-	installed := []string{}
+	// Installed is not enough: an adapter with no live Keystone token
+	// cannot redeem anything, so a code issued for it is exactly the
+	// unredeemable invite this check exists to prevent. That state is
+	// reachable — installing through Services without credentialing, or
+	// a setup interrupted between the two.
+	installed, uncredentialed := []string{}, []string{}
 	for _, t := range transports {
-		if t.Installed && t.Surface == string(surface) {
+		if !t.Installed || t.Surface != string(surface) {
+			continue
+		}
+		if t.Credentialed {
 			installed = append(installed, t.Transport)
+		} else {
+			uncredentialed = append(uncredentialed, t.Transport)
 		}
 	}
 	if len(installed) == 0 {
+		if len(uncredentialed) > 0 {
+			return http.StatusBadRequest, fmt.Errorf(
+				"the %s %s adapter has no Keystone token, so it cannot redeem a code: credential it first (wild chat adapter chat-%s-%s -node <node> -surface %s)",
+				surface, strings.Join(uncredentialed, "/"), uncredentialed[0], surface, surface)
+		}
 		return http.StatusBadRequest, fmt.Errorf(
 			"no %s chat adapter is installed: there is no bot to send a code to (install chat-<transport>-%s)",
 			surface, surface)
@@ -160,6 +175,11 @@ func (s *Server) checkClaimTarget(surface runtimedb.ButlerSurface, identity, tra
 		return http.StatusOK, nil
 	}
 	if !slices.Contains(installed, transport) {
+		if slices.Contains(uncredentialed, transport) {
+			return http.StatusBadRequest, fmt.Errorf(
+				"the %s %s adapter has no Keystone token, so it cannot redeem a code: credential it first",
+				surface, transport)
+		}
 		return http.StatusBadRequest, fmt.Errorf(
 			"no %s adapter on the %s surface: this deployment has %s",
 			transport, surface, strings.Join(installed, ", "))

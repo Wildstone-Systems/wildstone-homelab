@@ -6,6 +6,7 @@ import {
   ChatTransport,
   HouseholdMember,
   NodeInfo,
+  PackageView,
   PlanRecord,
   Principal,
   SecretInfo,
@@ -40,7 +41,13 @@ export function ConnectChat() {
   const chosenPackage = chatPackages.find((p) => p.capability === capability) ?? chatPackages[0];
   const chosen = (transports.data ?? []).find((t) => t.capability === chosenPackage?.capability);
   const nodeList = nodes.data?.nodes ?? [];
-  const activeNode = node || nodeList[0]?.id || "";
+  // An installed adapter's node is a FACT, not a choice. Defaulting to
+  // the first node in the inventory and offering "Rotate" would revoke
+  // the running adapter's token and place the replacement on a machine
+  // nothing reads it from, leaving that container permanently
+  // unauthorized with no error anywhere.
+  const installedNode = chosen?.installed ? chosen.node : "";
+  const activeNode = installedNode || node || nodeList[0]?.id || "";
 
   return (
     <>
@@ -64,7 +71,11 @@ export function ConnectChat() {
             </option>
           ))}
         </select>
-        <select value={activeNode} onChange={(e) => setNode(e.target.value)}>
+        <select
+          value={activeNode}
+          disabled={installedNode !== ""}
+          onChange={(e) => setNode(e.target.value)}
+        >
           {nodeList.length === 0 && <option value="">no nodes</option>}
           {nodeList.map((n) => (
             <option key={n.id} value={n.id}>
@@ -74,13 +85,28 @@ export function ConnectChat() {
           ))}
         </select>
       </div>
+      {chosen?.installed && !chosen.node && (
+        <div className="muted">
+          This capability is installed but its resources span nodes, so this screen cannot say
+          which one runs the adapter. Rotate its credential with{" "}
+          <code>wild chat adapter {chosen.capability} -node &lt;node&gt; -surface {chosen.surface}</code>{" "}
+          rather than from here.
+        </div>
+      )}
+      {installedNode !== "" && (
+        <div className="muted">
+          Installed on {installedNode}. That is where its credential and bot token live, so it is
+          not a choice while it is installed.
+        </div>
+      )}
 
       {chosenPackage && activeNode && (
         <Steps
-          capability={chosenPackage.capability}
+          pkg={chosenPackage}
           node={activeNode}
           nodes={nodeList}
           transport={chosen}
+          canAct={!chosen?.installed || installedNode !== ""}
           onChanged={() => transports.reload()}
         />
       )}
@@ -96,19 +122,36 @@ export function surfaceOf(capability: string): ButlerSurface {
   return capability.endsWith("-admin") ? "admin" : "family";
 }
 
+// vendorSecret is the provided secret the OPERATOR supplies — the bot
+// token — as opposed to the one credentialing places (the adapter's own
+// Keystone token, always <capability>-adapter).
+//
+// Read from the package rather than assumed, because the two transports
+// disagree: chat-telegram-* declares <capability>-bot and chat-matrix-*
+// declares <capability>-token.
+export function vendorSecret(pkg: PackageView): string {
+  const provided = (pkg.providedSecrets ?? []).filter((s) => s !== `${pkg.capability}-adapter`);
+  return provided[0] ?? "";
+}
+
 function Steps({
-  capability,
+  pkg,
   node,
   nodes,
   transport,
+  canAct,
   onChanged,
 }: {
-  capability: string;
+  pkg: PackageView;
   node: string;
   nodes: NodeInfo[];
   transport?: ChatTransport;
+  // False when the deployment cannot say which node to act on, so the
+  // buttons that write to one are withheld rather than guessing.
+  canAct: boolean;
   onChanged: () => void;
 }) {
+  const capability = pkg.capability;
   const secrets = useLoad<{ node: string; secrets: SecretInfo[] }>(
     () => api.nodeSecrets(node),
     [node],
@@ -116,8 +159,14 @@ function Steps({
   const members = useLoad<HouseholdMember[]>(() => api.householdMembers());
   const principals = useLoad<Principal[]>(() => api.principals());
   const surface = surfaceOf(capability);
-  const botSecret = `${capability}-bot`;
-  const tokenSet = (secrets.data?.secrets ?? []).some((s) => s.name === botSecret);
+  // The vendor's token, as THIS package declares it: chat-telegram-*
+  // reads <capability>-bot and chat-matrix-* reads <capability>-token.
+  // Assuming either would write the operator's token into a secret
+  // nothing reads and leave the declared one absent, so the reconciler
+  // would refuse to start a container while this screen showed the step
+  // as done.
+  const botSecret = vendorSecret(pkg);
+  const tokenSet = botSecret !== "" && (secrets.data?.secrets ?? []).some((s) => s.name === botSecret);
 
   return (
     <>
@@ -138,16 +187,17 @@ function Steps({
         node={node}
         surface={surface}
         done={!!transport?.credentialed}
+        canAct={canAct}
         onDone={onChanged}
       />
-      <TokenStep node={node} secret={botSecret} done={tokenSet} onDone={secrets.reload} />
-      <InstallStep
-        capability={capability}
+      <TokenStep
         node={node}
-        nodes={nodes}
-        done={!!transport?.installed}
-        onDone={onChanged}
+        secret={botSecret}
+        done={tokenSet}
+        canAct={canAct}
+        onDone={secrets.reload}
       />
+      <InstallStep pkg={pkg} node={node} nodes={nodes} done={!!transport?.installed} onDone={onChanged} />
       <Step
         n={5}
         title="The bot checks in"
@@ -204,12 +254,14 @@ function MintStep({
   node,
   surface,
   done,
+  canAct,
   onDone,
 }: {
   capability: string;
   node: string;
   surface: ButlerSurface;
   done: boolean;
+  canAct: boolean;
   onDone: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -235,7 +287,7 @@ function MintStep({
       }
     >
       <div className="row">
-        <button className="action" disabled={busy} onClick={mint}>
+        <button className="action" disabled={busy || !canAct} onClick={mint}>
           {busy ? "Minting…" : done ? "Rotate" : "Mint credential"}
         </button>
       </div>
@@ -248,11 +300,13 @@ function TokenStep({
   node,
   secret,
   done,
+  canAct,
   onDone,
 }: {
   node: string;
   secret: string;
   done: boolean;
+  canAct: boolean;
   onDone: () => void;
 }) {
   const [value, setValue] = useState("");
@@ -276,9 +330,11 @@ function TokenStep({
       title="Paste the bot token"
       done={done}
       note={
-        done
-          ? `Set as secret/${secret}. It is write-only — nothing, this screen included, can read it back. Paste a new one to replace it.`
-          : `The token BotFather gave you. It is stored as secret/${secret} on ${node} and is never readable again.`
+        secret === ""
+          ? "This package declares no operator-supplied secret, so there is nothing to paste."
+          : done
+            ? `Set as secret/${secret}. It is write-only — nothing, this screen included, can read it back. Paste a new one to replace it.`
+            : `The token the chat vendor gave you. It is stored as secret/${secret} on ${node}, the name this package reads, and is never readable again.`
       }
     >
       <div className="row">
@@ -288,7 +344,11 @@ function TokenStep({
           value={value}
           onChange={(e) => setValue(e.target.value)}
         />
-        <button className="action" disabled={busy || value === ""} onClick={save}>
+        <button
+          className="action"
+          disabled={busy || value === "" || secret === "" || !canAct}
+          onClick={save}
+        >
           {busy ? "Saving…" : done ? "Replace" : "Save token"}
         </button>
       </div>
@@ -297,34 +357,45 @@ function TokenStep({
   );
 }
 
-function InstallStep({
-  capability,
+export function InstallStep({
+  pkg,
   node,
   nodes,
   done,
   onDone,
 }: {
-  capability: string;
+  pkg: PackageView;
   node: string;
   nodes: NodeInfo[];
   done: boolean;
   onDone: () => void;
 }) {
-  const [image, setImage] = useState("");
-  const [keystoneUrl, setKeystoneUrl] = useState("");
+  // Every param the package asks for, minus the node (chosen above).
+  // Generated rather than hard-coded: chat-matrix-* declares a
+  // homeserver_url that chat-telegram-* does not, and a form that sent
+  // only Telegram's three params had every Matrix install rejected for a
+  // missing required param before a plan could exist.
+  const fields = (pkg.params ?? []).filter((p) => p.name !== "node");
+  const [values, setValues] = useState<Record<string, string>>({});
   const [plan, setPlan] = useState<PlanRecord | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const valueOf = (name: string) => values[name] ?? "";
+  const missing = fields
+    .filter((f) => f.required && valueOf(f.name).trim() === "" && !f.suggested && !f.default)
+    .map((f) => f.name);
+
   const propose = () => {
     setBusy(true);
     setError(null);
+    const params: Record<string, string> = { node };
+    for (const f of fields) {
+      const v = valueOf(f.name).trim() || f.suggested || "";
+      if (v !== "") params[f.name] = v;
+    }
     api
-      .enableCapability(capability, {
-        node,
-        adapter_image: image.trim(),
-        keystone_url: keystoneUrl.trim(),
-      })
+      .enableCapability(pkg.capability, params)
       .then(setPlan)
       .catch((e: Error) => setError(e.message))
       .finally(() => setBusy(false));
@@ -351,31 +422,33 @@ function InstallStep({
       note={
         done
           ? "Installed. The container dials out to the chat vendor and to Keystone: it opens no port and adds nothing at your edge."
-          : `Needs a digest-pinned image your nodes can pull with NO credentials — the agent's pull carries no registry auth — and the Keystone URL as the CONTAINER sees it, usually the tailnet address of ${nodes[0]?.id ?? "the node"} rather than 127.0.0.1.`
+          : `The image must be digest-pinned and pullable with NO credentials — the agent's pull carries no registry auth — and the Keystone URL is the one the CONTAINER sees, usually the tailnet address of ${nodes[0]?.id ?? "the node"} rather than 127.0.0.1.`
       }
     >
       {!done && (
         <>
+          {fields.map((f) => (
+            <div className="row" key={f.name}>
+              <label style={{ minWidth: 140 }}>
+                {f.name}
+                {f.required ? " *" : ""}
+              </label>
+              <input
+                type="text"
+                style={{ flex: 1 }}
+                placeholder={f.suggested || f.default || f.example || f.description || f.name}
+                value={valueOf(f.name)}
+                onChange={(e) => setValues({ ...values, [f.name]: e.target.value })}
+              />
+            </div>
+          ))}
           <div className="row">
-            <input
-              type="text"
-              placeholder="adapter_image, e.g. ghcr.io/you/chat-adapter@sha256:…"
-              value={image}
-              onChange={(e) => setImage(e.target.value)}
-            />
-            <input
-              type="text"
-              placeholder="keystone_url, e.g. http://100.64.0.1:9441"
-              value={keystoneUrl}
-              onChange={(e) => setKeystoneUrl(e.target.value)}
-            />
-            <button
-              className="action"
-              disabled={busy || image.trim() === "" || keystoneUrl.trim() === ""}
-              onClick={propose}
-            >
+            <button className="action" disabled={busy || missing.length > 0} onClick={propose}>
               {busy ? "Proposing…" : "Propose install"}
             </button>
+            {missing.length > 0 && (
+              <span className="muted">fill in {missing.join(", ")}</span>
+            )}
           </div>
           {plan && (
             <div className="row">

@@ -17,7 +17,7 @@ import { Services, InstallForm } from "../src/views/Services";
 import { Butler, StatusCard, Answer, SURFACES } from "../src/views/Butler";
 import { Chat, IssuedCode, Prerequisites } from "../src/views/Chat";
 import { Household, AddMember } from "../src/views/Household";
-import { ConnectChat, InviteStep, surfaceOf } from "../src/views/ConnectChat";
+import { ConnectChat, InstallStep, InviteStep, surfaceOf, vendorSecret } from "../src/views/ConnectChat";
 
 // Exactly what GET /api/v1/packages serves, copied from the live VM.
 const pkg = {
@@ -184,6 +184,36 @@ const connect = renderToString(h(ConnectChat));
 check("Connect screen renders without throwing", connect.length > 0);
 check("connect screen says each surface is its own bot", connect.includes("its own bot"));
 check("surface comes from the capability name", surfaceOf("chat-telegram-admin") === "admin" && surfaceOf("chat-telegram-family") === "family");
+
+// The install form is generated from the PACKAGE. chat-matrix-* asks
+// for a homeserver_url that chat-telegram-* does not, and a form that
+// sent only Telegram's params had every Matrix install rejected for a
+// missing required param before a plan could exist.
+const matrixPkg = {
+  name: "chat-matrix-family", version: "1.0.0", capability: "chat-matrix-family", enabled: false,
+  params: [
+    { name: "node", required: true },
+    { name: "adapter_image", required: true },
+    { name: "keystone_url", required: true },
+    { name: "homeserver_url", required: true },
+  ],
+  providedSecrets: ["chat-matrix-family-token", "chat-matrix-family-adapter"],
+};
+const install = renderToString(
+  h(InstallStep, { pkg: matrixPkg as never, node: "n1", nodes: [], done: false, onDone: () => {} }),
+);
+check("install form asks for every package param", install.includes("homeserver_url") && install.includes("adapter_image"));
+check("the node is not asked for twice", !install.includes(">node<"));
+check("propose is gated until the required params are filled", install.includes("fill in"));
+
+// The operator-supplied secret is read from the package, never guessed:
+// Telegram declares <capability>-bot and Matrix <capability>-token, and
+// a guessed name writes the token into a secret nothing reads.
+check("matrix vendor secret", vendorSecret(matrixPkg as never) === "chat-matrix-family-token");
+check("telegram vendor secret", vendorSecret({
+  capability: "chat-telegram-family",
+  providedSecrets: ["chat-telegram-family-bot", "chat-telegram-family-adapter"],
+} as never) === "chat-telegram-family-bot");
 
 const online = {
   transport: "telegram", surface: "family" as const, capability: "chat-telegram-family",
