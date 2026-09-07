@@ -65,7 +65,7 @@ export function ConsoleStateProvider({ children }: { children: ReactNode }) {
         }
         // Nodes go in the same map under their own prefix, so the fleet
         // gets the check history the resources already had.
-        for (const n of nodes.nodes) {
+        for (const n of nodes.nodes ?? []) {
           record(history.current, nodeKey(n.id), n.connected ? "ok" : "bad");
         }
 
@@ -74,7 +74,7 @@ export function ConsoleStateProvider({ children }: { children: ReactNode }) {
           snap: {
             observed,
             plans,
-            nodes: nodes.nodes,
+            nodes: nodes.nodes ?? [],
             events: events.current,
             pending: plans.filter((p) => p.state === "proposed"),
             unhealthy: observed.filter((o) => !o.healthy && !o.awaitingApproval),

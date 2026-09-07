@@ -36,20 +36,25 @@ await page.locator('input[type="password"]').fill(TOKEN);
 await page.getByRole("button", { name: /continue|enter|go|sign|open/i }).or(page.locator("button")).first().click();
 await page.waitForTimeout(1500);
 
-check("logged in (nav appears)", await page.locator("nav.nav").count() > 0);
+check("logged in (rail appears)", await page.locator("nav.rail").count() > 0);
 check("Services tab exists", await page.getByRole("button", { name: "Services" }).count() > 0);
 
 await page.getByRole("button", { name: "Services" }).click();
 await page.waitForTimeout(1500);
 
+// Since ADR-W027 the catalog is two halves: what is installed is a
+// board of tiles, what could be is a table of rows.
 const rows = await page.locator("table tbody tr").count();
-check("catalog table has rows", rows >= 9, `got ${rows}`);
+const tiles = await page.locator(".tile").count();
+check("catalog lists the packages", rows + tiles >= 9, `${rows} available rows + ${tiles} installed tiles`);
 check("documents-paperless listed", await page.locator("text=documents-paperless").count() > 0);
-check("identity shows as enabled", await page.locator("tr", { hasText: "identity" }).locator("text=enabled").count() > 0);
+check("identity shows as installed", await page.locator(".tile", { hasText: "identity" }).count() > 0);
+check("an installed capability says whether it answers",
+  await page.locator(".tile", { hasText: "identity" }).locator("text=/answering|no address/").count() > 0);
 
 // Install flow
 const row = page.locator("tr", { hasText: "documents-paperless" });
-await row.getByRole("button", { name: /Install|Reconfigure/ }).click();
+await row.getByRole("button", { name: /Install/ }).click();
 await page.waitForTimeout(800);
 
 const inputs = await page.locator(".panel input").count();

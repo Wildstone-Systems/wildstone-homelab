@@ -16,16 +16,21 @@ export function Drawer({
   children: ReactNode;
 }) {
   const panel = useRef<HTMLDivElement>(null);
+  // Callers pass an inline arrow, so onClose is a new function every
+  // render. Depending on it would re-run this effect each time and
+  // re-focus the panel out from under whatever the reader had focused.
+  const close = useRef(onClose);
+  close.current = onClose;
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") close.current();
     };
     document.addEventListener("keydown", onKey);
     panel.current?.focus();
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   return (

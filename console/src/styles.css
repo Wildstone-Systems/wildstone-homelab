@@ -54,6 +54,11 @@
      contrast than mixing bright ink toward a dark one.
      scripts/contrast-check.mjs holds both lines in CI. */
   --muted: color-mix(in srgb, var(--color-text) 58%, transparent);
+  /* Icons carry the rail, and a 1.5px stroke reads lighter than text at
+     the same ratio. They get their own mix, above the text floor in
+     both themes, rather than the nav quietly becoming the least
+     legible thing on the screen. */
+  --icon: color-mix(in srgb, var(--color-text) 68%, transparent);
 
   /* Semantic status, deliberately not the accent: an operator must be
      able to tell "this is selected" from "this is broken". */
@@ -95,6 +100,7 @@
     --color-accent: #5d5294;
     --mark: #423a6a;
     --muted: color-mix(in srgb, var(--color-text) 70%, transparent);
+    --icon: color-mix(in srgb, var(--color-text) 82%, transparent);
     --st-ok: #1f6b42;
     --st-ok-bg: #e2f0e7;
     --st-warn: #8a5b00;
@@ -115,6 +121,7 @@
   --color-accent: #5d5294;
   --mark: #423a6a;
   --muted: color-mix(in srgb, var(--color-text) 70%, transparent);
+  --icon: color-mix(in srgb, var(--color-text) 82%, transparent);
   --st-ok: #1f6b42;
   --st-ok-bg: #e2f0e7;
   --st-warn: #8a5b00;
@@ -216,7 +223,7 @@ pre {
   padding: 0;
   background: none;
   border-radius: var(--radius-md);
-  color: var(--muted);
+  color: var(--icon);
   cursor: pointer;
   transition: color 0.12s, background 0.12s;
 }

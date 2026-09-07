@@ -62,14 +62,15 @@ const light = { ...dark, ...tokens(block(':root[data-theme="light"]')) };
 
 // The muted floor, per theme: the mix is read out of the token rather
 // than assumed, so lowering it to save a shade fails here first.
-function mutedMix(t, theme) {
-  const m = /var\(--color-text\)\s*(\d+)%/.exec(t["--muted"] ?? "");
+function pct(value, theme, name) {
+  const m = /var\(--color-text\)\s*(\d+)%/.exec(value ?? "");
   if (!m) {
-    console.log(`FAIL: ${theme} --muted is not a percentage mix of --color-text`);
+    console.log(`FAIL: ${theme} ${name} is not a percentage mix of --color-text`);
     process.exit(1);
   }
   return Number(m[1]) / 100;
 }
+const mutedMix = (t, theme) => pct(t["--muted"], theme, "--muted");
 
 let failures = 0;
 function check(theme, label, fg, bg, floor = AA) {
@@ -92,6 +93,10 @@ for (const [theme, t] of [["dark", dark], ["light", light]]) {
     check(theme, `muted (${Math.round(mutedPct * 100)}%) on ${gname}`, mix(ink, mutedPct, ground), ground);
     // The accent carries links and the primary button's label.
     check(theme, `accent on ${gname}`, hex(t["--color-accent"]), ground);
+    // Rail glyphs are 1.5px strokes: they sit above the text floor in
+    // both themes rather than at it.
+    const iconPct = pct(t["--icon"], theme, "--icon");
+    check(theme, `icon (${Math.round(iconPct * 100)}%) on ${gname}`, mix(ink, iconPct, ground), ground);
   }
 
   // Status as ink on the ground: the metric numerals and the problem
