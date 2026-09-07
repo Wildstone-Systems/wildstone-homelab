@@ -51,6 +51,11 @@ type fakeDocker struct {
 	networks     map[string]*fakeNetwork
 	seq          int
 	pruneFilters string // last filters query param /images/prune received
+	// pullAuth is the X-Registry-Auth header the last pull carried, so a
+	// test can assert both that a credential reached Docker and that one
+	// did not reach a registry it was not for.
+	pullAuth  string
+	pullImage string
 }
 
 var containerPath = regexp.MustCompile(`^/containers/([^/]+)(/(json|start|stop|logs|stats))?$`)
@@ -150,6 +155,9 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 
 	if r.URL.Path == "/images/create" && r.Method == http.MethodPost {
 		ref := r.URL.Query().Get("fromImage")
+		// handle() already holds f.mu; the mutex is not reentrant.
+		f.pullAuth = r.Header.Get("X-Registry-Auth")
+		f.pullImage = ref
 		if !strings.Contains(ref, "@sha256:") {
 			// The agent must never send un-pinned refs; fail loudly if it does.
 			http.Error(w, `{"message":"fake docker: refusing un-pinned pull"}`, http.StatusBadRequest)

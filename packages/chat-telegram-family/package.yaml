@@ -50,19 +50,23 @@
 # it where your nodes can reach it, and pass the digest-pinned reference.
 # Wildstone refuses tags here as it does everywhere (ADR-W003 A4.2).
 #
-# IT MUST BE PULLABLE WITHOUT CREDENTIALS. Keystone pulls the image
-# before every container start and a failed pull stops the step, and the
-# pull carries no registry auth — so a private registry does not work,
-# and neither does loading the image onto the node by hand. A public
-# repository is the straightforward answer, and costs nothing here: this
-# image is one static binary built from open source, with every
+# THE NODE MUST BE ABLE TO PULL IT. Keystone pulls the image before every
+# container start and a failed pull stops the step. A public repository
+# needs nothing further; a private one needs the credential on the node
+# first, as a secret named after the registry:
+#
+#     wild secret set registry.ghcr.io -node <node>   # username:password
+#
+# Loading the image onto the node by hand still does not help — the pull
+# runs regardless. A public repository costs nothing here either way:
+# this image is one static binary built from open source, with every
 # credential arriving as an environment variable at runtime. See
 # docs/install.md, "Picking a registry".
 apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: chat-telegram-family
-  version: 1.0.0
+  version: 1.0.1
   capability: chat-telegram-family
   profile: telegram
 params:
