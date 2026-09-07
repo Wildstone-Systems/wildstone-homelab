@@ -30,17 +30,26 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
 // registrySecretPrefix names the node secret holding one registry's
-// credential. The rest of the name is the registry host with any port
-// separator flattened, because a secret name is used verbatim as a file
+// credential. The rest of the name is the registry host with its port
+// separator rewritten, because a secret name is used verbatim as a file
 // name and may not contain a colon:
 //
-//	ghcr.io                  -> registry.ghcr.io
-//	registry.example.com:5000 -> registry.registry.example.com-5000
+//	ghcr.io                   -> registry.ghcr.io
+//	registry.example.com:5000 -> registry.registry.example.com_5000
 //	(no host in the ref)      -> registry.docker.io
+//
+// The rewrite is ':' -> '_' rather than ':' -> '-' precisely because it
+// must be REVERSIBLE. A hyphen is legal in a hostname, so flattening to
+// one made `example.com:5000` and the entirely different host
+// `example.com-5000` the same secret — and a package pulling from the
+// second would have been handed the credential for the first. An
+// underscore cannot appear in a registry host at all (validRegistryHost
+// enforces it), so no two hosts can produce one name.
 const registrySecretPrefix = "registry."
 
 // defaultRegistryHost is where a reference with no host comes from, the
@@ -55,6 +64,12 @@ type registryAuth struct {
 	Password      string `json:"password"`
 	ServerAddress string `json:"serveraddress"`
 }
+
+// validRegistryHost is an RFC 1123 host with an optional port. It is the
+// invariant the secret naming rests on: no underscore, so ':' -> '_' is
+// injective, and no separator that could reach outside the secrets
+// directory.
+var validRegistryHost = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(:[0-9]{1,5})?$`)
 
 // registryHostOf extracts the registry host from an image reference.
 //
@@ -76,9 +91,22 @@ func registryHostOf(image string) string {
 }
 
 // registrySecretName is the node secret a given host's credential lives
-// in.
+// in, or "" for a host this agent will not look one up for.
+//
+// Refusing is the safe direction: no name means no credential means an
+// anonymous pull, which fails visibly at the registry rather than
+// sending somebody's token somewhere it was not meant to go.
 func registrySecretName(host string) string {
-	return registrySecretPrefix + strings.ReplaceAll(host, ":", "-")
+	if !validRegistryHost.MatchString(host) {
+		return ""
+	}
+	name := registrySecretPrefix + strings.ReplaceAll(host, ":", "_")
+	// A name the store could not hold cannot name a credential either —
+	// the operator was never able to set one under it.
+	if validSecretName(name) != nil {
+		return ""
+	}
+	return name
 }
 
 // registryAuthFor returns the X-Registry-Auth header value for pulling
@@ -93,7 +121,7 @@ func registrySecretName(host string) string {
 func (a *Agent) registryAuthFor(image string) (string, error) {
 	host := registryHostOf(image)
 	name := registrySecretName(host)
-	if !a.secretExists(name) {
+	if name == "" || !a.secretExists(name) {
 		return "", nil
 	}
 	value, err := a.openSecret(name)

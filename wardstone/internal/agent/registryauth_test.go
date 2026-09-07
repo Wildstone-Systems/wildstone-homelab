@@ -34,12 +34,12 @@ func TestRegistryHostOf(t *testing.T) {
 }
 
 // A host's credential lives in a secret named after it, with the port
-// separator flattened — a secret name is a file name and may not carry a
+// separator rewritten — a secret name is a file name and may not carry a
 // colon.
 func TestRegistrySecretName(t *testing.T) {
 	for host, want := range map[string]string{
 		"ghcr.io":                   "registry.ghcr.io",
-		"registry.example.com:5000": "registry.registry.example.com-5000",
+		"registry.example.com:5000": "registry.registry.example.com_5000",
 		"docker.io":                 "registry.docker.io",
 	} {
 		if got := registrySecretName(host); got != want {
@@ -48,6 +48,65 @@ func TestRegistrySecretName(t *testing.T) {
 		if oerr := validSecretName(want); oerr != nil {
 			t.Fatalf("%q is not a storable secret name: %v", want, oerr.GetMessage())
 		}
+	}
+}
+
+// Two DIFFERENT hosts must never name one secret. Flattening the port
+// separator to a hyphen did exactly that: "example.com:5000" and the
+// unrelated (and perfectly legal) host "example.com-5000" collapsed
+// together, so a package pulling from the second would have been handed
+// the credential for the first.
+func TestRegistrySecretNamesDoNotCollide(t *testing.T) {
+	withPort := registrySecretName("example.com:5000")
+	lookalike := registrySecretName("example.com-5000")
+	if withPort == "" || lookalike == "" {
+		t.Fatalf("both are valid hosts: %q %q", withPort, lookalike)
+	}
+	if withPort == lookalike {
+		t.Fatalf("distinct hosts share the secret %q", withPort)
+	}
+
+	// The property, not just the example: no two of these agree.
+	seen := map[string]string{}
+	for _, host := range []string{
+		"example.com:5000", "example.com-5000", "example.com_5000",
+		"example.com", "example.com:80", "sub.example.com:5000",
+		"localhost:5000", "localhost-5000", "ghcr.io", "docker.io",
+	} {
+		name := registrySecretName(host)
+		if name == "" {
+			continue // refused, which is the safe answer
+		}
+		if other, dup := seen[name]; dup {
+			t.Fatalf("hosts %q and %q both name secret %q", other, host, name)
+		}
+		seen[name] = host
+	}
+}
+
+// A host this agent cannot name a secret for gets no credential at all —
+// an anonymous pull, which fails at the registry, rather than a lookup
+// under some flattened name that could belong to another host.
+func TestUnnameableHostsGetNoCredential(t *testing.T) {
+	for _, host := range []string{
+		"example.com_5000",       // underscore: the port rewrite's escape
+		"-example.com",           // not a hostname
+		"..",                     // a relative path, not a host
+		"example.com:notaport",   // a port that is not a number
+		strings.Repeat("a", 300), // longer than any secret name
+		"example.com:5000:6000",  // two ports
+	} {
+		if got := registrySecretName(host); got != "" {
+			t.Fatalf("registrySecretName(%q) = %q, want no name", host, got)
+		}
+	}
+
+	// And the whole path refuses rather than erroring: the pull simply
+	// carries no credential.
+	a := storeOnlyAgent(t)
+	auth, err := a.registryAuthFor("example.com_5000/x/y" + testDigest)
+	if err != nil || auth != "" {
+		t.Fatalf("auth = %q, err = %v; want an anonymous pull", auth, err)
 	}
 }
 

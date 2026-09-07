@@ -433,9 +433,11 @@ For a **private** registry, give the node the credential once:
 
 ```sh
 # The secret is named after the registry: registry.<host>, with any
-# port's colon written as a dash (registry.example.com:5000 ->
-# registry.registry.example.com-5000). The value is username:password —
-# on GHCR, your GitHub username and a read:packages token.
+# port's colon written as an underscore (registry.example.com:5000 ->
+# registry.registry.example.com_5000 — an underscore because it cannot
+# appear in a host, so no two registries can name one secret). The value
+# is username:password — on GHCR, your GitHub username and a
+# read:packages token.
 wild secret set registry.ghcr.io -node <node>
 ```
 
