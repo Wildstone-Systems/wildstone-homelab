@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ArrowSquareOut, Package, WarningCircle } from "@phosphor-icons/react";
-import { api, EnablePreview, PackageView } from "../api";
-import { ErrorLine, useLoad } from "../lib";
+import { api, EnablePreview, PackageView, ResourceView } from "../api";
+import { ErrorLine, useAction, useLoad } from "../lib";
 import { StatusPill } from "../ui/status";
 import { Drawer } from "../ui/Drawer";
 
@@ -24,15 +24,36 @@ import { Drawer } from "../ui/Drawer";
 // of F37.
 export function Services() {
   const list = useLoad(() => api.packages(), []);
+  // Removing a capability proposes deleting everything it owns, and
+  // only the statefile knows what that is.
+  const resources = useLoad(() => api.resources(), []);
   if (list.error) return <ErrorLine error={list.error} />;
-  return <ServicesView pkgs={list.data ?? []} onInstalled={list.reload} />;
+  return (
+    <ServicesView
+      pkgs={list.data ?? []}
+      resources={resources.data ?? []}
+      onInstalled={() => {
+        list.reload();
+        resources.reload();
+      }}
+    />
+  );
 }
 
 // Separated from its fetch so the render check can put the catalog in a
 // state: installed and available together, nothing installed yet, and a
 // package that will not work here.
-export function ServicesView({ pkgs, onInstalled }: { pkgs: PackageView[]; onInstalled: () => void }) {
+export function ServicesView({
+  pkgs,
+  resources = [],
+  onInstalled,
+}: {
+  pkgs: PackageView[];
+  resources?: ResourceView[];
+  onInstalled: () => void;
+}) {
   const [chosen, setChosen] = useState<PackageView | null>(null);
+  const [removing, setRemoving] = useState<PackageView | null>(null);
   const [query, setQuery] = useState("");
   const installed = pkgs.filter((p) => p.enabled);
   const all = pkgs.filter((p) => !p.enabled);
@@ -57,7 +78,12 @@ export function ServicesView({ pkgs, onInstalled }: { pkgs: PackageView[]; onIns
           </div>
           <div className="tiles" style={{ marginBottom: "var(--space-8)" }}>
             {installed.map((p) => (
-              <InstalledTile key={`${p.name}@${p.version}`} pkg={p} onReconfigure={() => setChosen(p)} />
+              <InstalledTile
+                key={`${p.name}@${p.version}`}
+                pkg={p}
+                onReconfigure={() => setChosen(p)}
+                onRemove={() => setRemoving(p)}
+              />
             ))}
           </div>
         </>
@@ -114,6 +140,19 @@ export function ServicesView({ pkgs, onInstalled }: { pkgs: PackageView[]; onIns
           at the bottom meant scrolling past every row to reach it, and
           scrolling back to find where you had been — which got worse
           with every package added. */}
+      <Drawer open={removing !== null} onClose={() => setRemoving(null)} title={removing?.name} wide>
+        {removing && (
+          <RemoveForm
+            pkg={removing}
+            owned={resources.filter((r) => r.owner === `capability/${removing.capability}`)}
+            onDone={() => {
+              setRemoving(null);
+              onInstalled();
+            }}
+          />
+        )}
+      </Drawer>
+
       <Drawer open={chosen !== null} onClose={() => setChosen(null)} title={chosen?.name} wide>
         {chosen && (
           <InstallForm
@@ -147,7 +186,15 @@ export function matching(pkgs: PackageView[], query: string): PackageView[] {
 // where it answers, whether it does, and what it is made of. This is
 // the answer to "which port is this on", which before the addresses
 // endpoint existed only in <prefix>/routes/ on the node.
-export function InstalledTile({ pkg, onReconfigure }: { pkg: PackageView; onReconfigure: () => void }) {
+export function InstalledTile({
+  pkg,
+  onReconfigure,
+  onRemove,
+}: {
+  pkg: PackageView;
+  onReconfigure: () => void;
+  onRemove?: () => void;
+}) {
   const answering = pkg.addresses?.filter((a) => a.healthy).length ?? 0;
   const total = pkg.addresses?.length ?? 0;
   return (
@@ -209,7 +256,116 @@ export function InstalledTile({ pkg, onReconfigure }: { pkg: PackageView; onReco
       <button className="btn btn-secondary btn-block" onClick={onReconfigure}>
         Reconfigure
       </button>
+      {onRemove && (
+        <button className="btn btn-ghost" onClick={onRemove}>
+          Remove…
+        </button>
+      )}
     </div>
+  );
+}
+
+// Removing a capability is a plan like any other: it proposes deleting
+// everything the capability owns, and a human approves it. There is no
+// disable endpoint and there should not be one — a side door around the
+// human gate is what ground rule 4 exists to prevent.
+//
+// `wild capability disable` has always built this same body from the
+// same two calls; the Console simply never offered it, so a
+// half-installed capability could only be cleared from a terminal. That
+// matters more than it sounds: a capability that cannot converge blocks
+// the WHOLE node, so every later plan fails until it is gone.
+export function RemoveForm({
+  pkg,
+  owned,
+  onDone,
+}: {
+  pkg: PackageView;
+  owned: ResourceView[];
+  onDone: () => void;
+}) {
+  const remove = useAction();
+  const done = remove.state.phase === "done" ? remove.state : null;
+  const volumes = owned.filter((r) => r.kind === "Volume");
+
+  if (done) {
+    return (
+      <>
+        <StatusPill kind="ok">{done.message}</StatusPill>
+        <p className="problem-body">
+          Nothing has been deleted yet. The plan is waiting on Plans, and the resources go when
+          you approve it.
+        </p>
+        <button className="btn btn-secondary" onClick={onDone}>
+          Close
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <p className="problem-body">
+        This proposes deleting everything <strong>{pkg.capability}</strong> owns. Nothing happens
+        until you approve the plan.
+      </p>
+      {/* Volumes are the part a plan cannot undo. Everything else this
+          deletes can be reinstalled; what was stored cannot. */}
+      {volumes.length > 0 && (
+        <div className="callout callout-bad">
+          <strong>
+            {volumes.length === 1
+              ? "One volume goes with it"
+              : `${volumes.length} volumes go with it`}
+          </strong>{" "}
+          — anything stored in {volumes.map((v) => v.name).join(", ")} is deleted with the
+          capability, and no plan brings it back. Take a backup first if you might want it.
+        </div>
+      )}
+      <table>
+        <thead>
+          <tr>
+            <th>kind</th>
+            <th>name</th>
+            <th>node</th>
+          </tr>
+        </thead>
+        <tbody>
+          {owned.map((r) => (
+            <tr key={`${r.kind}/${r.name}`}>
+              <td>{r.kind}</td>
+              <td>{r.name}</td>
+              <td>{r.node ?? "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {owned.length === 0 && (
+        <div className="muted">
+          Nothing in the statefile is owned by this capability, so there is nothing to remove.
+        </div>
+      )}
+      <div className="row">
+        <button
+          className="btn btn-danger"
+          disabled={remove.state.phase === "busy" || owned.length === 0}
+          onClick={() =>
+            remove.run(
+              () => api.disableCapability(pkg.capability, owned),
+              "removal proposed — approve it on Plans",
+            )
+          }
+        >
+          {remove.state.phase === "busy"
+            ? "Proposing…"
+            : `Propose removing ${owned.length === 1 ? "1 resource" : `${owned.length} resources`}`}
+        </button>
+        <button className="btn btn-ghost" onClick={onDone}>
+          Keep it
+        </button>
+      </div>
+      {remove.state.phase === "error" && <ErrorLine error={remove.state.message} />}
+    </>
   );
 }
 
