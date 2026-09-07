@@ -154,6 +154,9 @@ export function ServicesView({
           <RemoveForm
             pkg={removing}
             owned={resources.filter((r) => r.owner === `capability/${removing.capability}`)}
+            // Every owner the statefile actually reported, so an empty
+            // result can be read rather than guessed at.
+            owners={ownerCounts(resources)}
             error={resourcesError}
             loading={resourcesLoading}
             onDone={() => {
@@ -286,15 +289,30 @@ export function InstalledTile({
 // half-installed capability could only be cleared from a terminal. That
 // matters more than it sounds: a capability that cannot converge blocks
 // the WHOLE node, so every later plan fails until it is gone.
+// ownerCounts is what the statefile said, by owner. It exists because
+// a removal that found nothing is unreadable without it: "nothing is
+// owned by capability/X" is the same sentence whether X is misspelt,
+// whether the resources are filed under a different owner, or whether
+// the list arrived empty for a reason nobody can see. Showing the
+// owners that WERE there turns an unexplainable report into one the
+// person looking at it can answer.
+export function ownerCounts(resources: ResourceView[]): [string, number][] {
+  const counts = new Map<string, number>();
+  for (const r of resources) counts.set(r.owner, (counts.get(r.owner) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
 export function RemoveForm({
   pkg,
   owned,
+  owners = [],
   error = null,
   loading = false,
   onDone,
 }: {
   pkg: PackageView;
   owned: ResourceView[];
+  owners?: [string, number][];
   // "I could not read the statefile" and "this owns nothing" look
   // identical from an empty list, and only one of them is safe to
   // believe.
@@ -388,9 +406,31 @@ export function RemoveForm({
       )}
       {owned.length === 0 && error === null && !loading && (
         <div className="muted">
-          Nothing in the statefile is owned by <code>capability/{pkg.capability}</code>, so there
-          is nothing to remove. If you expected resources here, they are filed under a different
-          owner — the capability name, not the package name.
+          <p>
+            Nothing in the statefile is owned by <code>capability/{pkg.capability}</code>, so
+            there is nothing to remove.
+          </p>
+          {owners.length > 0 ? (
+            <>
+              <p>
+                The statefile reported {resourceCount(owners)} under {owners.length}{" "}
+                {owners.length === 1 ? "owner" : "owners"}. If what you expected is here under a
+                different name, that is the bug — tell someone, with this list:
+              </p>
+              <ul className="owner-list">
+                {owners.map(([owner, n]) => (
+                  <li key={owner}>
+                    <code>{owner || "(no owner)"}</code> — {n}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p>
+              The statefile reported no resources at all, under any owner — which is itself
+              worth reporting, because a running deployment has some.
+            </p>
+          )}
         </div>
       )}
       <div className="row">
@@ -415,6 +455,11 @@ export function RemoveForm({
       {remove.state.phase === "error" && <ErrorLine error={remove.state.message} />}
     </>
   );
+}
+
+function resourceCount(owners: [string, number][]): string {
+  const n = owners.reduce((sum, [, c]) => sum + c, 0);
+  return `${n} ${n === 1 ? "resource" : "resources"}`;
 }
 
 // What stands in the way is stated on the row, before Install is
