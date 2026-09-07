@@ -22,7 +22,6 @@ export function Household() {
 
   return (
     <>
-      <h2>Household</h2>
       <div className="sub">
         Everyone with an account here. Adding someone proposes a plan; their account is created
         when you approve it, without a password — they set their own through the sign-in page's
@@ -32,7 +31,10 @@ export function Household() {
 
       <AddMember groups={groups.data ?? []} members={members.data ?? []} onDone={members.reload} />
 
-      <h3 style={{ fontSize: 13, margin: "20px 0 8px" }}>Members</h3>
+      <div className="sect" style={{ marginTop: "var(--space-8)" }}>
+        <span className="eyebrow">Members</span>
+        <span className="fade" />
+      </div>
       <table>
         <thead>
           <tr>
@@ -162,7 +164,7 @@ export function AddMember({
             ))}
           </select>
         )}
-        <button className="action primary" disabled={busy || !ready} onClick={add}>
+        <button className="btn btn-primary" disabled={busy || !ready} onClick={add}>
           {busy ? "Proposing…" : "Propose"}
         </button>
       </div>

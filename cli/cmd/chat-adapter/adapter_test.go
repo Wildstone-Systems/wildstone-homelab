@@ -230,10 +230,15 @@ func TestAdapterRedeemsClaimCodes(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	// Wait for the REPLIES as well as the redemptions. The adapter
+	// records a redemption and then answers it, so a condition on the
+	// redemptions alone can return between those two steps and find one
+	// reply where this test asserts two.
 	runUntil(ctx, a, func() bool {
 		ks.mu.Lock()
-		defer ks.mu.Unlock()
-		return len(ks.redeems) >= 2
+		redeemed := len(ks.redeems)
+		ks.mu.Unlock()
+		return redeemed >= 2 && len(tr.sentMessages()) >= 2
 	})
 
 	ks.mu.Lock()

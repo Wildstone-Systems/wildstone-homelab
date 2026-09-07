@@ -66,7 +66,7 @@ jobs:
             || { echo "install.sh no longer fetches packages.tar.gz"; exit 1; }
 
   console:
-    name: console (typecheck + build, ADR-W016)
+    name: console (typecheck + build + checks, ADR-W016/W027)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -79,6 +79,14 @@ jobs:
         run: cd console && npm ci
       - name: typecheck + build
         run: cd console && npm run build
+      # The render check proves the screens and the shared components
+      # render; the contrast check proves the token set is legible on
+      # both grounds (ADR-W027). Neither needs a browser or a control
+      # plane, so both belong here rather than in the e2e job.
+      - name: render check
+        run: cd console && npm run render-check
+      - name: contrast check
+        run: cd console && npm run contrast-check
 
   go:
     name: go (${{ matrix.goarch }})

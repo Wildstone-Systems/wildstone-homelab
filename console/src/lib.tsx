@@ -21,22 +21,33 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[] = []) {
   return { data, error, loading, reload };
 }
 
-export function Badge({ value }: { value: string }) {
-  const cls = value.toLowerCase().replace(/[^a-z]/g, "");
-  const known = [
-    "low",
-    "medium",
-    "high",
-    "applied",
-    "proposed",
-    "failed",
-    "rejected",
-    "succeeded",
-    "running",
-    "ok",
-    "bad",
-  ];
-  return <span className={`badge ${known.includes(cls) ? cls : "neutral"}`}>{value}</span>;
+export type ActionState =
+  | { phase: "idle" }
+  | { phase: "busy" }
+  | { phase: "done"; message: string }
+  | { phase: "error"; message: string };
+
+// useAction: the counterpart to useLoad for the write half. It replaces
+// the busy/actionError pair that was copied into Plans, Backups,
+// Secrets, Nodes and Services, and it keeps the RESULT in the state —
+// so the card that fired the action can say what happened instead of
+// silently reloading and looking untouched.
+export function useAction() {
+  const [state, setState] = useState<ActionState>({ phase: "idle" });
+
+  const run = useCallback(async (fn: () => Promise<unknown>, doneMessage: string) => {
+    setState({ phase: "busy" });
+    try {
+      await fn();
+      setState({ phase: "done", message: doneMessage });
+    } catch (e) {
+      setState({ phase: "error", message: (e as Error).message });
+    }
+  }, []);
+
+  const reset = useCallback(() => setState({ phase: "idle" }), []);
+
+  return { state, run, reset };
 }
 
 export function ErrorLine({ error }: { error: string | null }) {
@@ -47,4 +58,48 @@ export function when(iso?: string): string {
   if (!iso) return "";
   const d = new Date(iso);
   return isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+// "3d 4h" — how long something has been the way it is. Uptime reads as
+// a duration; a join date reads as a date, and they are not the same
+// question.
+export function duration(since?: string, now: Date = new Date()): string {
+  if (!since) return "—";
+  const d = new Date(since);
+  if (isNaN(d.getTime())) return "—";
+  const secs = Math.max(0, Math.round((now.getTime() - d.getTime()) / 1000));
+  const days = Math.floor(secs / 86400);
+  const hours = Math.floor((secs % 86400) / 3600);
+  const mins = Math.floor((secs % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  if (mins > 0) return `${mins}m`;
+  return `${secs}s`;
+}
+
+// "in 14m" — how long is left. ago() clamps at zero, so it reads a
+// future timestamp as "0s ago"; an expiry needs the other direction.
+export function until(iso?: string, now: Date = new Date()): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const secs = Math.round((d.getTime() - now.getTime()) / 1000);
+  if (secs <= 0) return "expired";
+  if (secs < 60) return `in ${secs}s`;
+  if (secs < 3600) return `in ${Math.round(secs / 60)}m`;
+  if (secs < 86400) return `in ${Math.round(secs / 3600)}h`;
+  return `in ${Math.round(secs / 86400)}d`;
+}
+
+// "12s ago" / "4m ago" — the header says how fresh the console is, and
+// an operator reads an age faster than a timestamp.
+export function ago(at?: Date | string, now: Date = new Date()): string {
+  if (!at) return "never";
+  const d = typeof at === "string" ? new Date(at) : at;
+  if (isNaN(d.getTime())) return "never";
+  const secs = Math.max(0, Math.round((now.getTime() - d.getTime()) / 1000));
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+  return `${Math.round(secs / 86400)}d ago`;
 }

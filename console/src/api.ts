@@ -286,9 +286,27 @@ export interface ButlerSession {
   // Which butler answered (ADR-W026 A1). Stamped by the endpoint the
   // session arrived on, never by the caller.
   surface: ButlerSurface;
+  // The LAST turn's answer and transcript, kept for every reader that
+  // predates turns. A session is a conversation now (ADR-W027).
   finalText: string;
   capped: boolean;
   transcriptJson?: string;
+  // Set by GET /butler/sessions/{id}, omitted from the list.
+  turns?: ButlerTurn[];
+}
+
+// One message in a session. The tool traffic is not a turn: it is
+// recorded inside the assistant turn it produced, so "which reads
+// produced THIS answer" stays answerable once a session has answered
+// more than once.
+export interface ButlerTurn {
+  ordinal: number;
+  role: "user" | "assistant";
+  text: string;
+  createdAt: string;
+  capped?: boolean;
+  transcriptJson?: string;
+  planIds?: string[];
 }
 
 // The two surfaces (ADR-W026 A1): the operator's butler reads system
@@ -462,6 +480,11 @@ export const api = {
     ),
   butlerSession: (id: string) =>
     call<ButlerSession>("GET", `/api/v1/butler/sessions/${encodeURIComponent(id)}`),
+  // A follow-up. There is one endpoint rather than one per surface
+  // because the surface comes from the stored session — continuing a
+  // household conversation cannot move it onto the operator's Butler.
+  continueButlerSession: (id: string, message: string) =>
+    call<AskResponse>("POST", `/api/v1/butler/sessions/${encodeURIComponent(id)}/ask`, { message }),
   chatBindings: (withRevoked = false) =>
     call<ChatBinding[]>("GET", `/api/v1/chat/bindings${withRevoked ? "?revoked=true" : ""}`),
   issueChatClaim: (surface: ButlerSurface, identity: string, transport?: string) =>

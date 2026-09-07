@@ -91,6 +91,20 @@ type Session struct {
 	// only, omitting propose_change (ADR-W006 A4: QAOnly mode for a model
 	// that failed the tool-reliability probe).
 	ReadOnly bool
+	// History is the conversation so far, replayed as context for a
+	// follow-up (ADR-W027). It carries the user and assistant TEXT of
+	// earlier turns and never their tool traffic.
+	//
+	// That is a deliberate omission, not an oversight. A tool result is
+	// a reading taken at a moment — "jellyfin's health endpoint returns
+	// 500" — and replaying it hours later hands the model a stale fact
+	// with the authority of a fresh one. The earlier answer already
+	// summarises what those reads found, in the model's own words, and
+	// if the follow-up needs the current reading the model can take it
+	// again. Nothing here is trusted more than it was when it was said:
+	// the whole history passed through Dispatch's redaction before it
+	// was ever stored.
+	History []provider.Message
 }
 
 func (s *Session) maxIterations() int {
@@ -121,13 +135,17 @@ func (s *Session) dispatch(ctx context.Context, name string, input map[string]an
 }
 
 // Run drives p through the agent loop for one userMessage: send the
-// system prompt + tool set + conversation, execute any tool calls the
-// model requests through the gateway (which redacts, envelopes, and
-// bounds every result — ToolGateway.Dispatch), feed results back, and
+// system prompt + tool set + History + the new message, execute any tool
+// calls the model requests through the gateway (which redacts, envelopes,
+// and bounds every result — ToolGateway.Dispatch), feed results back, and
 // repeat until the model stops requesting tools or MaxIterations is hit.
+//
+// MaxIterations bounds THIS turn's tool calls, not the conversation's:
+// a follow-up gets its own budget, because the ceiling exists to stop a
+// runaway loop and a second question is not one.
 func (s *Session) Run(ctx context.Context, p provider.Provider, userMessage string) (*Transcript, error) {
 	tr := &Transcript{Audit: Audit{Provider: p.Name()}}
-	messages := []provider.Message{{Role: "user", Text: userMessage}}
+	messages := append(append([]provider.Message{}, s.History...), provider.Message{Role: "user", Text: userMessage})
 	tools := s.toolSpecs()
 
 	for i := 0; i < s.maxIterations(); i++ {

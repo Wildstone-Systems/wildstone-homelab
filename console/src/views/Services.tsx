@@ -1,31 +1,66 @@
-import { Fragment, useState } from "react";
+import { useState } from "react";
+import { ArrowSquareOut, Package, WarningCircle } from "@phosphor-icons/react";
 import { api, EnablePreview, PackageView } from "../api";
-import { Badge, ErrorLine, useLoad } from "../lib";
+import { ErrorLine, useLoad } from "../lib";
+import { StatusPill } from "../ui/status";
 
-// Services (ADR-W021 A5): the catalog, and installing from it.
+// Services (ADR-W021 A5, ADR-W027): the catalog, and installing from it.
 //
-// The form is GENERATED from the package. A package already declares its
-// params with required/default, so there is nothing to hand-maintain here
-// and nothing to drift when a package gains one.
+// Two halves, because they answer two different questions. What IS
+// installed is a status board — where each thing answers and whether it
+// does. What COULD be is a decision list, and a row that will not work
+// here says so before Install is pressed rather than after a plan is
+// approved.
 //
-// Install is two steps on purpose. The first is a dry run, which runs
-// every check a real proposal runs — validation, standing policy, the
-// diff — records none of it, and comes back with the plan and the
-// secrets only the operator can supply. That second list is the point:
-// meeting a missing secret as a failed reconcile tick, after approving a
-// plan that could not have worked, is the shape of F37.
+// The form below is GENERATED from the package and is unchanged. A
+// package already declares its params with required/default, so there
+// is nothing to hand-maintain and nothing to drift when a package gains
+// one. Install stays two steps: the first is a dry run, which runs every
+// check a real proposal runs, records none of it, and comes back with
+// the plan and the secrets only the operator can supply. That second
+// list is the point — meeting a missing secret as a failed reconcile
+// tick, after approving a plan that could not have worked, is the shape
+// of F37.
 export function Services() {
   const list = useLoad(() => api.packages(), []);
-  const [chosen, setChosen] = useState<PackageView | null>(null);
   if (list.error) return <ErrorLine error={list.error} />;
-  const pkgs = list.data ?? [];
+  return <ServicesView pkgs={list.data ?? []} onInstalled={list.reload} />;
+}
+
+// Separated from its fetch so the render check can put the catalog in a
+// state: installed and available together, nothing installed yet, and a
+// package that will not work here.
+export function ServicesView({ pkgs, onInstalled }: { pkgs: PackageView[]; onInstalled: () => void }) {
+  const [chosen, setChosen] = useState<PackageView | null>(null);
+  const installed = pkgs.filter((p) => p.enabled);
+  const available = pkgs.filter((p) => !p.enabled);
 
   return (
     <>
-      <h2>Services</h2>
       <div className="sub">
         What this control plane can install. Installing proposes a plan — a human still
         approves it.
+      </div>
+
+      {installed.length > 0 && (
+        <>
+          <div className="sect">
+            <span className="eyebrow">Installed</span>
+            <span className="muted">{installed.length}</span>
+            <span className="fade" />
+          </div>
+          <div className="tiles" style={{ marginBottom: "var(--space-8)" }}>
+            {installed.map((p) => (
+              <InstalledTile key={`${p.name}@${p.version}`} pkg={p} onReconfigure={() => setChosen(p)} />
+            ))}
+          </div>
+        </>
+      )}
+
+      <div className="sect">
+        <span className="eyebrow">Available</span>
+        <span className="muted">{available.length}</span>
+        <span className="fade" />
       </div>
       <table>
         <thead>
@@ -33,88 +68,17 @@ export function Services() {
             <th>Package</th>
             <th>Capability</th>
             <th>Version</th>
-            <th>State</th>
-            <th>Address</th>
-            <th>Resources</th>
+            <th>Needs</th>
             <th />
           </tr>
         </thead>
         <tbody>
-          {pkgs.map((p) => (
-            <Fragment key={`${p.name}@${p.version}`}>
-            <tr>
-              <td>{p.name}</td>
-              <td>
-                {p.capability}
-                {p.profile ? ` (${p.profile})` : ""}
-              </td>
-              <td>{p.version}</td>
-              <td>
-                {p.enabled ? <Badge value="enabled" /> : "—"}
-                {/* An upgrade changes the catalog and leaves installed
-                    capabilities alone, so without this an operator sees
-                    no change and cannot tell "already current" from
-                    "needs re-installing" from "the upgrade failed"
-                    (F91). */}
-                {p.stale && (
-                  <div className="bad">
-                    running {p.installedVersion}, catalog has {p.version} — reconfigure to update
-                  </div>
-                )}
-              </td>
-
-              {/* Where it is served, and whether it answers. This is the
-                  answer to "which port is this on", which previously
-                  existed only in <prefix>/routes/ on the node. */}
-              <td>
-                {p.addresses?.length
-                  ? p.addresses.map((a) => (
-                      <div key={a.route} className={a.healthy ? "" : "bad"}>
-                        <a href={a.url} target="_blank" rel="noreferrer">
-                          {a.url}
-                        </a>
-                        {!a.healthy && (
-                          <div className="muted">not answering{a.detail ? `: ${a.detail}` : ""}</div>
-                        )}
-                      </div>
-                    ))
-                  : "—"}
-              </td>
-
-              <td>
-                {p.resources?.length ? (
-                  <details>
-                    <summary>{p.resources.length}</summary>
-                    <div className="chips">
-                      {p.resources.map((r) => (
-                        <span className="chip" key={`${r.kind}/${r.name}`}>
-                          {r.kind}/{r.name}
-                        </span>
-                      ))}
-                    </div>
-                  </details>
-                ) : (
-                  "—"
-                )}
-              </td>
-
-              <td>
-                <button className="action" onClick={() => setChosen(p)}>
-                  {p.enabled ? "Reconfigure" : "Install"}
-                </button>
-              </td>
-            </tr>
-            {p.blockers?.map((b) => (
-              <tr key={b}>
-                <td colSpan={6} className="bad">
-                  <strong>Will not work here.</strong> {b}
-                </td>
-              </tr>
-            ))}
-            </Fragment>
+          {available.map((p) => (
+            <AvailableRow key={`${p.name}@${p.version}`} pkg={p} onInstall={() => setChosen(p)} />
           ))}
         </tbody>
       </table>
+
       {pkgs.length === 0 && (
         <div className="sub">
           The catalog is empty. Keystone was started without <code>-catalog-dir</code>, or
@@ -126,10 +90,116 @@ export function Services() {
           pkg={chosen}
           onDone={() => {
             setChosen(null);
-            list.reload();
+            onInstalled();
           }}
         />
       )}
+    </>
+  );
+}
+
+// An installed capability, as a status board rather than a table row:
+// where it answers, whether it does, and what it is made of. This is
+// the answer to "which port is this on", which before the addresses
+// endpoint existed only in <prefix>/routes/ on the node.
+export function InstalledTile({ pkg, onReconfigure }: { pkg: PackageView; onReconfigure: () => void }) {
+  const answering = pkg.addresses?.filter((a) => a.healthy).length ?? 0;
+  const total = pkg.addresses?.length ?? 0;
+  return (
+    <div className="tile" style={{ cursor: "default" }}>
+      <div className="tile-head">
+        <Package size={16} />
+        <span className="tile-name">{pkg.name}</span>
+      </div>
+      <div className="tile-what">
+        {pkg.capability}
+        {pkg.profile ? ` (${pkg.profile})` : ""}
+      </div>
+
+      <div className="tile-foot">
+        <StatusPill kind={total === 0 ? "mute" : answering === total ? "ok" : "bad"}>
+          {total === 0 ? "no address" : answering === total ? "answering" : `${answering} of ${total} answering`}
+        </StatusPill>
+      </div>
+
+      {pkg.addresses?.map((a) => (
+        <div key={a.route} className="tile-host">
+          <a href={a.url} target="_blank" rel="noreferrer">
+            {a.url}
+          </a>
+          <ArrowSquareOut size={11} style={{ marginLeft: 4, verticalAlign: "-1px" }} />
+          {!a.healthy && (
+            <div className="danger-line">not answering{a.detail ? `: ${a.detail}` : ""}</div>
+          )}
+        </div>
+      ))}
+
+      <div className="tile-meta">
+        <span className="tnum">{pkg.installedVersion ?? pkg.version}</span>
+        {pkg.resources?.length ? (
+          <span>
+            {pkg.resources.length} {pkg.resources.length === 1 ? "resource" : "resources"}
+          </span>
+        ) : null}
+      </div>
+
+      {/* An upgrade changes the catalog and leaves installed capabilities
+          alone, so without this an operator sees no change and cannot
+          tell "already current" from "needs re-installing" from "the
+          upgrade failed" (F91). */}
+      {pkg.stale && (
+        <StatusPill
+          kind="warn"
+          title={`running ${pkg.installedVersion}, catalog has ${pkg.version} — reconfigure to update`}
+        >
+          update to {pkg.version}
+        </StatusPill>
+      )}
+      {pkg.blockers?.map((b) => (
+        <div className="blocker" key={b}>
+          <strong>Will not work here.</strong> {b}
+        </div>
+      ))}
+
+      <button className="btn btn-secondary btn-block" onClick={onReconfigure}>
+        Reconfigure
+      </button>
+    </div>
+  );
+}
+
+// What stands in the way is stated on the row, before Install is
+// pressed. A blocker cannot be answered by filling in a field, so
+// offering the form for one is offering a dead end.
+export function AvailableRow({ pkg, onInstall }: { pkg: PackageView; onInstall: () => void }) {
+  const required = (pkg.params ?? []).filter((p) => p.required).map((p) => p.name);
+  const blocked = (pkg.blockers?.length ?? 0) > 0;
+  return (
+    <>
+      <tr>
+        <td>{pkg.name}</td>
+        <td>
+          {pkg.capability}
+          {pkg.profile ? ` (${pkg.profile})` : ""}
+        </td>
+        <td className="tnum">{pkg.version}</td>
+        <td className="muted">{required.length > 0 ? required.join(", ") : "nothing"}</td>
+        <td>
+          <button className="btn btn-secondary" disabled={blocked} onClick={onInstall}>
+            Install
+          </button>
+        </td>
+      </tr>
+      {pkg.blockers?.map((b) => (
+        <tr key={b}>
+          <td colSpan={5}>
+            <div className="blocker">
+              <WarningCircle size={14} weight="fill" style={{ verticalAlign: "-2px", marginRight: 6 }} />
+              <strong>Will not work here.</strong> {b}
+            </div>
+          </td>
+        </tr>
+      ))}
     </>
   );
 }
@@ -166,7 +236,7 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
         {pkg.name} {pkg.version}
       </h3>
       {params.map((p) => (
-        <div className="row" key={p.name}>
+        <div className="field" key={p.name}>
           <label>
             {p.name}
             {p.required ? " *" : ""}
@@ -212,7 +282,7 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
 
       {!preview && (
         <button
-          className="action"
+          className="btn btn-primary"
           disabled={busy || missing.length > 0}
           onClick={() => run(api.previewCapability(pkg.name, values), setPreview)}
         >
@@ -230,13 +300,13 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
             // Louder than the secrets list on purpose: a missing secret
             // stops one service converging, this changes how the whole
             // household signs in (F77).
-            <div className="card bad">
+            <div className="callout callout-bad">
               <strong>This changes sign-in for everyone</strong>
               <div>{preview.authPolicyWarning}</div>
             </div>
           )}
           {preview.providedSecrets.length > 0 && (
-            <div className="warn">
+            <div className="callout callout-warn">
               <strong>You must supply these secrets before this can converge.</strong> They
               are not generated, because only you can produce a correct value:
               <ul>
@@ -250,7 +320,7 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
             </div>
           )}
           <button
-            className="action"
+            className="btn btn-primary"
             disabled={busy}
             onClick={() => run(api.enableCapability(pkg.name, values), onDone)}
           >
@@ -258,7 +328,7 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
           </button>
         </>
       )}
-      <button className="action" disabled={busy} onClick={onDone}>
+      <button className="btn btn-secondary" disabled={busy} onClick={onDone}>
         Cancel
       </button>
     </div>

@@ -51,7 +51,6 @@ export function ConnectChat() {
 
   return (
     <>
-      <h2>Connect a chat app</h2>
       <div className="sub">
         Each surface is its own bot with its own credential — the household bot cannot see the home
         lab, and neither bot can approve anything. Pick which one you are setting up; every step
@@ -287,7 +286,7 @@ function MintStep({
       }
     >
       <div className="row">
-        <button className="action" disabled={busy || !canAct} onClick={mint}>
+        <button className="btn btn-secondary" disabled={busy || !canAct} onClick={mint}>
           {busy ? "Minting…" : done ? "Rotate" : "Mint credential"}
         </button>
       </div>
@@ -345,7 +344,7 @@ function TokenStep({
           onChange={(e) => setValue(e.target.value)}
         />
         <button
-          className="action"
+          className="btn btn-secondary"
           disabled={busy || value === "" || secret === "" || !canAct}
           onClick={save}
         >
@@ -443,7 +442,7 @@ export function InstallStep({
             </div>
           ))}
           <div className="row">
-            <button className="action" disabled={busy || missing.length > 0} onClick={propose}>
+            <button className="btn btn-secondary" disabled={busy || missing.length > 0} onClick={propose}>
               {busy ? "Proposing…" : "Propose install"}
             </button>
             {missing.length > 0 && (
@@ -455,7 +454,7 @@ export function InstallStep({
               <span className="muted">
                 Plan {plan.id} is waiting for you. Nothing has changed yet.
               </span>
-              <button className="action primary" disabled={busy} onClick={approve}>
+              <button className="btn btn-primary" disabled={busy} onClick={approve}>
                 Approve it
               </button>
             </div>
@@ -538,7 +537,7 @@ export function InviteStep({
           ))}
         </select>
         <button
-          className="action primary"
+          className="btn btn-primary"
           disabled={busy || who === "" || !transport?.installed}
           onClick={invite}
         >
@@ -550,7 +549,7 @@ export function InviteStep({
         <div style={{ marginTop: 10 }}>
           <pre>{claim.link || claim.code}</pre>
           <div className="row">
-            <button className="action" onClick={copy}>
+            <button className="btn btn-secondary" onClick={copy}>
               {copied ? "Copied" : claim.link ? "Copy link" : "Copy code"}
             </button>
           </div>

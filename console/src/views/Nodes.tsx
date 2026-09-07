@@ -1,6 +1,10 @@
 import { useState } from "react";
+import { Cpu } from "@phosphor-icons/react";
 import { api, BlockDevice, JoinTokenResponse, ListeningPort, NodeInfo } from "../api";
-import { Badge, ErrorLine, useLoad, when } from "../lib";
+import { ago, duration, ErrorLine, useLoad, when } from "../lib";
+import { nodeKey, useConsoleState } from "../state";
+import { Dot, Kind, StatusPill } from "../ui/status";
+import { Sparkline } from "../ui/Sparkline";
 
 // Nodes (ADR-W016 A2 / ADR-W014 A3 / E10-U2): pairing plus the
 // onboarding validation probes of scope §7.2 — mint the join token,
@@ -12,6 +16,7 @@ export function Nodes() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const fleet = useLoad(() => api.nodes());
+  const { snap } = useConsoleState();
   const nodes = fleet.data?.nodes ?? [];
 
   const mint = () => {
@@ -26,14 +31,23 @@ export function Nodes() {
 
   return (
     <>
-      <h2>Nodes</h2>
-      <Inventory nodes={nodes} error={fleet.error} loading={fleet.loading} reload={fleet.reload} />
+      <Inventory
+        nodes={nodes}
+        error={fleet.error}
+        loading={fleet.loading}
+        reload={fleet.reload}
+        history={snap?.history}
+      />
+      <div className="sect" style={{ marginTop: "var(--space-8)" }}>
+        <span className="eyebrow">Pairing</span>
+        <span className="fade" />
+      </div>
       <div className="sub">
         Pair a new machine: mint a single-use join token, run the install command on it as root,
         then validate it below. The token is shown exactly once.
       </div>
       <div className="row">
-        <button className="action primary" disabled={busy} onClick={mint}>
+        <button className="btn btn-primary" disabled={busy} onClick={mint}>
           Mint join token
         </button>
       </div>
@@ -63,26 +77,36 @@ export function Nodes() {
   );
 }
 
-// Inventory (#30): the fleet at a glance. Until this existed no screen in
-// the product could answer "what nodes do I have, and are they connected?"
-// — this view offered a join-token button and a probe panel driven by a
-// node name you had to already know and type in by hand.
-function Inventory({
+// Inventory (#30, ADR-W027): the fleet as cards. Until #30 no screen in
+// the product could answer "what nodes do I have, and are they
+// connected?" — this view offered a join-token button and a probe panel
+// driven by a node name you had to already know and type in by hand.
+//
+// Uptime is the numeral because it is the question: a node that has been
+// up for eleven days and one that reconnected ninety seconds ago are in
+// very different states, and both said "connected".
+export function Inventory({
   nodes,
   error,
   loading,
   reload,
+  history,
 }: {
   nodes: NodeInfo[];
   error: string | null;
   loading: boolean;
   reload: () => void;
+  history?: Map<string, Kind[]>;
 }) {
   return (
-    <div className="card">
-      <div className="row">
-        <h3>Fleet</h3>
-        <button className="action" disabled={loading} onClick={reload}>
+    <>
+      <div className="sect">
+        <span className="eyebrow">Fleet</span>
+        <span className="muted">
+          {nodes.filter((n) => n.connected).length} of {nodes.length} connected
+        </span>
+        <span className="fade" />
+        <button className="btn btn-ghost" disabled={loading} onClick={reload}>
           Refresh
         </button>
       </div>
@@ -93,35 +117,41 @@ function Inventory({
           machine you want to add.
         </div>
       )}
-      {nodes.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>Node</th>
-              <th>State</th>
-              <th>Agent</th>
-              <th>Protocol</th>
-              <th>Since</th>
-              <th>First joined</th>
-            </tr>
-          </thead>
-          <tbody>
-            {nodes.map((n) => (
-              <tr key={n.id}>
-                <td>{n.id}</td>
-                <td>
-                  <Badge value={n.connected ? "ok" : "bad"} />{" "}
-                  {n.connected ? "connected" : "disconnected"}
-                </td>
-                <td>{n.agentVersion || "—"}</td>
-                <td>{n.protocolMinor ? `minor ${n.protocolMinor}` : "—"}</td>
-                <td>{when(n.connected ? n.connectedSince : n.lastSeenAt)}</td>
-                <td>{when(n.firstJoinedAt)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <div className="tiles">
+        {nodes.map((n) => (
+          <NodeCard key={n.id} node={n} samples={history?.get(nodeKey(n.id)) ?? []} />
+        ))}
+      </div>
+    </>
+  );
+}
+
+export function NodeCard({ node, samples }: { node: NodeInfo; samples: Kind[] }) {
+  const kind: Kind = node.connected ? "ok" : "bad";
+  return (
+    <div className="tile" style={{ cursor: "default" }}>
+      <div className="tile-head">
+        <Cpu size={16} />
+        <span className="tile-name">{node.id}</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+        <span className="num" style={{ fontSize: 26 }}>
+          {duration(node.connected ? node.connectedSince : node.lastSeenAt)}
+        </span>
+        <span className="unit">{node.connected ? "connected" : "since last seen"}</span>
+      </div>
+      <div className="tile-foot">
+        <Dot kind={kind} pulse={node.connected} />
+        <StatusPill kind={kind}>{node.connected ? "connected" : "disconnected"}</StatusPill>
+      </div>
+      <Sparkline samples={samples} height={12} label={`the last ${samples.length} checks`} />
+      <div className="tile-meta">
+        <span>agent {node.agentVersion || "unknown"}</span>
+        {node.protocolMinor !== undefined && <span>proto minor {node.protocolMinor}</span>}
+      </div>
+      <div className="tile-meta">
+        <span title={when(node.firstJoinedAt)}>joined {ago(node.firstJoinedAt)}</span>
+      </div>
     </div>
   );
 }
@@ -179,14 +209,14 @@ function Probes({ nodes }: { nodes: NodeInfo[] }) {
           />
         )}
         <button
-          className="action"
+          className="btn btn-secondary"
           disabled={busy || !node}
           onClick={() => run(async () => setDevices((await api.probeBlockDevices(node)).devices))}
         >
           Block devices
         </button>
         <button
-          className="action"
+          className="btn btn-secondary"
           disabled={busy || !node}
           onClick={() => run(async () => setPorts((await api.probePorts(node)).ports))}
         >
@@ -200,13 +230,13 @@ function Probes({ nodes }: { nodes: NodeInfo[] }) {
           value={target}
           onChange={(e) => setTarget(e.target.value)}
         />
-        <button className="action" disabled={busy || !node || !target} onClick={() => dial("nfs")}>
+        <button className="btn btn-secondary" disabled={busy || !node || !target} onClick={() => dial("nfs")}>
           NFS
         </button>
-        <button className="action" disabled={busy || !node || !target} onClick={() => dial("smb")}>
+        <button className="btn btn-secondary" disabled={busy || !node || !target} onClick={() => dial("smb")}>
           SMB
         </button>
-        <button className="action" disabled={busy || !node || !target} onClick={() => dial("http")}>
+        <button className="btn btn-secondary" disabled={busy || !node || !target} onClick={() => dial("http")}>
           HTTP
         </button>
       </div>

@@ -140,13 +140,13 @@ func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any
 // cannot add or remove a tool, because the tools come from the gateway
 // and the gateway is built from the member.
 func (s *Server) runFamilyButlerSession(ctx context.Context, message, member, systemExtra string) (any, int, error) {
-	return s.runFamilySession(ctx, message, member, systemExtra, false)
+	return s.runFamilySession(ctx, message, member, systemExtra, false, nil)
 }
 
 // runFamilySession is the shared body. group selects the narrowed
 // gateway (ADR-W026 A7) — the audience decides which CAPABILITIES the
 // session has, not merely what its prompt asks it to do.
-func (s *Server) runFamilySession(ctx context.Context, message, member, systemExtra string, group bool) (any, int, error) {
+func (s *Server) runFamilySession(ctx context.Context, message, member, systemExtra string, group bool, prior *turnContext) (any, int, error) {
 	host := s.ButlerHost
 	// One snapshot for the whole session, as the operator surface takes
 	// (ADR-W017 A9): a model swapped in mid-session would produce a
@@ -166,6 +166,9 @@ func (s *Server) runFamilySession(ctx context.Context, message, member, systemEx
 	}
 	if systemExtra != "" {
 		session.System = butler.HouseholdSystemPrompt + "\n\n" + systemExtra
+	}
+	if prior != nil {
+		session.History = prior.History
 	}
 	tr, err := session.Run(ctx, prov, message)
 	if err != nil {
@@ -192,7 +195,7 @@ func (s *Server) runFamilySession(ctx context.Context, message, member, systemEx
 		return nil, http.StatusInternalServerError, fmt.Errorf("encoding transcript: %w", err)
 	}
 	finalText := redact.String(tr.FinalText)
-	sessionID, err := s.DB.InsertButlerSession(runtimedb.ButlerSession{
+	sessionID, err := s.recordTurn(prior, runtimedb.ButlerSession{
 		Principal:      butlerPrincipal,
 		ActingFor:      member,
 		Provider:       tr.Audit.Provider,
@@ -201,6 +204,13 @@ func (s *Server) runFamilySession(ctx context.Context, message, member, systemEx
 		FinalText:      finalText,
 		Capped:         tr.CappedIterations,
 		TranscriptJSON: redact.String(string(transcriptJSON)),
+		Turns: []runtimedb.ButlerTurn{
+			{Role: runtimedb.ButlerRoleUser, Text: redact.String(message)},
+			{
+				Role: runtimedb.ButlerRoleAssistant, Text: finalText, Capped: tr.CappedIterations,
+				TranscriptJSON: redact.String(string(transcriptJSON)),
+			},
+		},
 	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
