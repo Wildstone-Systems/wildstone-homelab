@@ -571,7 +571,24 @@ const nothingOwned = renderToString(h(RemoveForm, {
   owned: [], onDone: () => {},
 }));
 check("removing something that owns nothing says so", nothingOwned.includes("nothing to remove"));
+check("and names the owner it looked for", text(nothingOwned).includes("capability/ghost"), text(nothingOwned).slice(0, 400));
 check("and offers no button to press", nothingOwned.includes("disabled"), nothingOwned.slice(0, 300));
+
+// "I could not read the statefile" and "this owns nothing" look
+// identical from an empty list, and only one of them is safe to
+// believe. The first said "nothing to remove" and sent the reason
+// nowhere.
+const unreadable = renderToString(h(RemoveForm, {
+  pkg: { name: "ghost", version: "1.0.0", capability: "ghost", enabled: true },
+  owned: [], error: "500: loading statefile", onDone: () => {},
+}));
+check("a failed read is not reported as an empty one", !unreadable.includes("nothing to remove"), unreadable.slice(0, 300));
+check("a failed read says so, and why", unreadable.includes("could not be read") && unreadable.includes("loading statefile"));
+const stillLoading = renderToString(h(RemoveForm, {
+  pkg: { name: "ghost", version: "1.0.0", capability: "ghost", enabled: true },
+  owned: [], loading: true, onDone: () => {},
+}));
+check("a list still loading is not reported as empty", !stillLoading.includes("nothing to remove"), stillLoading.slice(0, 300));
 
 const noAddr = renderToString(h(InstalledTile, { pkg: { name: "monitoring", version: "0.4.0", capability: "monitoring", enabled: true }, onReconfigure: () => {} }));
 check("an installed capability with no address says so", noAddr.includes("no address"), noAddr);
