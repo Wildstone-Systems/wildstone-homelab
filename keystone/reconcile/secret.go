@@ -74,64 +74,98 @@ func listSecretsOp() *wsv1.Operation {
 	return &wsv1.Operation{Op: &wsv1.Operation_ListSecrets{ListSecrets: &wsv1.ListSecrets{}}}
 }
 
-// missingProvidedSecrets reports every desired provided-secret absent from
-// the node, in one message.
+// awaitingProvidedSecrets reports which CAPABILITIES cannot converge for
+// want of a secret only the operator can supply, keyed by owner, plus a
+// hard error if the node could not be asked at all.
 //
-// All of them, not the first: the whole complaint behind F37 is that a
-// missing secret surfaces one per tick, after approval, so an operator
-// fixes one and meets the next. Naming them together, with the command
-// that fixes each, turns an indefinite sequence into a single task.
-func (r *Reconciler) missingProvidedSecrets(ctx context.Context, nodeID string, provided []*resource.SecretSpec) string {
-	if len(provided) == 0 {
-		return ""
+// It used to abort the whole node (ADR-W028). One capability enabled
+// without its secrets stopped every other capability on the machine from
+// converging, so an unrelated install approved afterwards failed too,
+// with a message about secrets it had never heard of. The scope of the
+// problem is the capability that declared the secret; the scope of the
+// consequence should match it.
+func (r *Reconciler) awaitingProvidedSecrets(
+	ctx context.Context, nodeID string, desired []resource.Resource,
+) (map[string]string, string) {
+	byOwner := map[string][]*resource.SecretSpec{}
+	var all []*resource.SecretSpec
+	for _, res := range desired {
+		if res.Kind != resource.KindSecret || res.Secret == nil || !res.Secret.Provided {
+			continue
+		}
+		all = append(all, res.Secret)
+		owner := res.Metadata.Owner
+		byOwner[owner] = append(byOwner[owner], res.Secret)
 	}
+	if len(all) == 0 {
+		return nil, ""
+	}
+	have, err := r.presentSecrets(ctx, nodeID)
+	if err != "" {
+		// Not being able to ASK is a node-wide fault, and stays one:
+		// converging on a guess about which secrets exist is worse than
+		// not converging.
+		return nil, err
+	}
+	blocked := map[string]string{}
+	for owner, specs := range byOwner {
+		var missing []string
+		for _, spec := range specs {
+			if !have[spec.Name] {
+				missing = append(missing, spec.Name)
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		sort.Strings(missing)
+		var b strings.Builder
+		// All of this owner's missing secrets, not the first: the whole
+		// complaint behind F37 is that they surface one per tick, so an
+		// operator fixes one and meets the next.
+		fmt.Fprintf(&b, "%d secret(s) must be supplied before %s can converge. They are declared, "+
+			"not generated, because only you can produce a correct value:",
+			len(missing), strings.TrimPrefix(owner, "capability/"))
+		for _, n := range missing {
+			fmt.Fprintf(&b, "\n    wild secret set %s -node %s", n, nodeID)
+		}
+		blocked[owner] = b.String()
+	}
+	return blocked, ""
+}
+
+// presentSecrets is what the node says it holds.
+func (r *Reconciler) presentSecrets(ctx context.Context, nodeID string) (map[string]bool, string) {
 	out, err := r.retryDispatch(ctx, nodeID, listSecretsOp())
 	if err != nil {
-		return fmt.Sprintf("listing secrets to check the ones you must supply: %v", err)
+		return nil, fmt.Sprintf("listing secrets to check the ones you must supply: %v", err)
 	}
 	if oe := out.GetError(); oe != nil {
-		return fmt.Sprintf("listing secrets to check the ones you must supply: %s: %s", oe.GetCode(), oe.GetMessage())
+		return nil, fmt.Sprintf("listing secrets to check the ones you must supply: %s: %s",
+			oe.GetCode(), oe.GetMessage())
 	}
 	have := make(map[string]bool)
 	for _, si := range out.GetListSecrets().GetSecrets() {
 		have[si.GetName()] = true
 	}
-	var missing []string
-	for _, spec := range provided {
-		if !have[spec.Name] {
-			missing = append(missing, spec.Name)
-		}
-	}
-	if len(missing) == 0 {
-		return ""
-	}
-	sort.Strings(missing)
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d secret(s) must be supplied before this node can converge. They are declared, not generated, because only you can produce a correct value:", len(missing))
-	for _, n := range missing {
-		fmt.Fprintf(&b, "\n    wild secret set %s -node %s", n, nodeID)
-	}
-	return b.String()
+	return have, ""
 }
 
-func (r *Reconciler) ensureNodeSecrets(ctx context.Context, nodeID string, desired []resource.Resource) string {
+// ensureNodeSecrets generates every desired Secret that is not
+// operator-supplied. Capabilities awaiting a supplied secret are skipped
+// rather than aborting the node: their steps are removed from the plan
+// by the caller, so generating their other secrets would be work for a
+// capability that is not going to converge this pass.
+func (r *Reconciler) ensureNodeSecrets(
+	ctx context.Context, nodeID string, desired []resource.Resource, awaiting map[string]string,
+) string {
 	if nodeID == "" {
 		return ""
 	}
-	// Provided secrets are checked FIRST and reported together, so the
-	// operator learns the whole list before anything else can fail for
-	// want of one.
-	var provided []*resource.SecretSpec
 	for _, res := range desired {
-		if res.Kind == resource.KindSecret && res.Secret != nil && res.Secret.Provided {
-			provided = append(provided, res.Secret)
+		if _, blocked := awaiting[res.Metadata.Owner]; blocked {
+			continue
 		}
-	}
-	if msg := r.missingProvidedSecrets(ctx, nodeID, provided); msg != "" {
-		return msg
-	}
-
-	for _, res := range desired {
 		if res.Kind != resource.KindSecret || res.Secret == nil {
 			continue
 		}

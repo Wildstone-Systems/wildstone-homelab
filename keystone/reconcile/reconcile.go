@@ -466,7 +466,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	// the ordering note in secret.go. A failure here is reported the same
 	// way a failed prereq is, since it has the same cause and the same
 	// consequence — nothing further on this node can be written.
-	if serr := r.ensureNodeSecrets(ctx, nodeID, wsDesired); serr != "" {
+	// A capability awaiting a secret only the operator can supply is set
+	// aside, not allowed to stop the node (ADR-W028). Its steps come out
+	// of the plan below; everything else converges.
+	awaiting, serr := r.awaitingProvidedSecrets(ctx, nodeID, wsDesired)
+	if serr != "" {
+		return nil, fmt.Errorf("reconcile: %s", serr)
+	}
+	if serr := r.ensureNodeSecrets(ctx, nodeID, wsDesired, awaiting); serr != "" {
 		return nil, fmt.Errorf("reconcile: %s", serr)
 	}
 
@@ -501,6 +508,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	blocking := r.blockedSteps(nodeID, desiredForBlock)
 	r.forgetUndesired(nodeID, desiredForBlock)
 	p, blockedNow := withoutBlocked(p, blocking)
+	p, awaitingNow := withoutAwaitingSecrets(p, desiredForBlock, awaiting)
+	blockedNow = append(blockedNow, awaitingNow...)
 
 	outcome := &Outcome{Plan: p, ForeignDrift: foreign, PrereqRepaired: prereqRepaired, Blocked: blockedNow}
 	if len(p.Steps) == 0 {
