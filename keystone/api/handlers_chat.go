@@ -51,6 +51,16 @@ type claimResponse struct {
 	Transport string `json:"transport,omitempty"`
 	ExpiresAt string `json:"expiresAt"`
 	Note      string `json:"note"`
+	// Handle is the bot this code should be sent to, and Link opens a
+	// chat with it. Both are empty until an adapter for that transport
+	// has checked in: nothing else in the deployment knows which bot
+	// the token belongs to (the token is write-only).
+	//
+	// On Telegram the link CARRIES the code, so the person taps it and
+	// is bound without typing anything. Elsewhere it only opens the
+	// conversation, and the code is still read out.
+	Handle string `json:"handle,omitempty"`
+	Link   string `json:"link,omitempty"`
 }
 
 // issueChatClaim mints a claim code (ADR-W026 A4). Manage verb: this is
@@ -77,8 +87,20 @@ func (s *Server) issueChatClaim(r *http.Request, id principal.Identity) (any, in
 	s.event("chat.claim_issued", rec.Identity, id,
 		fmt.Sprintf("claim code issued for the %s surface, expires %s", rec.Surface, rec.ExpiresAt.UTC().Format(time.RFC3339)))
 
+	link, handle, carriesCode := s.linkForClaim(surface, rec.Transport, code)
+	expires := rec.ExpiresAt.UTC().Format(time.RFC3339)
 	note := fmt.Sprintf("Send this code to the %s bot as a direct message. It works once, expires %s, and can only bind %q on the %s surface.",
-		orAny(rec.Transport), rec.ExpiresAt.UTC().Format(time.RFC3339), rec.Identity, rec.Surface)
+		orAny(rec.Transport), expires, rec.Identity, rec.Surface)
+	switch {
+	case carriesCode:
+		// The link IS the code in tappable form, which is worth saying
+		// plainly: forwarding the link is forwarding the invite.
+		note = fmt.Sprintf("Send this link to %s. It opens @%s and carries the code, so there is nothing to type — and anyone who has the link can use it. It works once, expires %s, and binds only the %s surface.",
+			rec.Identity, handle, expires, rec.Surface)
+	case link != "":
+		note = fmt.Sprintf("The link opens a chat with %s; %s still sends the code itself. It works once, expires %s, and binds only the %s surface.",
+			handle, rec.Identity, expires, rec.Surface)
+	}
 	return claimResponse{
 		Code:      code,
 		Surface:   string(rec.Surface),
@@ -86,6 +108,8 @@ func (s *Server) issueChatClaim(r *http.Request, id principal.Identity) (any, in
 		Transport: rec.Transport,
 		ExpiresAt: rec.ExpiresAt.UTC().Format(time.RFC3339),
 		Note:      note,
+		Handle:    handle,
+		Link:      link,
 	}, http.StatusCreated, nil
 }
 

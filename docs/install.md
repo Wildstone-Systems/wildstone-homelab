@@ -349,7 +349,17 @@ where a Wildstone credential authenticates you. A chat account is
 protected by the vendor's account recovery, which Wildstone does not
 control.
 
-Enabling one, using Telegram's household bot as the example:
+**From the Console: Connect chat.** The screen walks the same steps in
+order and reads each one back from the deployment — credential minted,
+bot token set, capability installed, bot checked in — so you can leave
+and come back, and a half-finished setup says which half. It ends with
+an invite **link**: on Telegram it opens the bot with the code already
+in it, so the person taps once and types nothing. (The link carries the
+code, so forwarding the link is forwarding the invite.) The one step it
+cannot do for you is the image, below.
+
+The same thing from the command line, using Telegram's household bot as
+the example:
 
 ```sh
 # 1. Build the adapter image and push it, then MAKE THE REPOSITORY
@@ -391,6 +401,14 @@ Read the code out; they send it to the bot on its own, once. It works
 once, expires, and can only ever create the binding it names. After that
 `wild chat bindings` is the access list and `wild chat revoke <id>`
 takes effect on that account's next message.
+
+The adapter reports which bot it is (`wild chat transports` shows the
+handle and whether it has checked in recently), and that is what lets
+the Console hand you `https://t.me/<bot>?start=<code>` instead of a code
+to read aloud. Keystone builds that URL itself from the handle — an
+adapter supplies the handle, never the link, because a link the operator
+trusts and a compromised adapter chose is how an invite ends up in
+somebody else's bot.
 
 The adapter **dials out** — Telegram's and Matrix's APIs are polled — so
 this adds no port, no Route and nothing at your edge. `chat-matrix-*` is

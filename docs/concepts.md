@@ -519,6 +519,14 @@ revocable, and every refusal (unknown code, expired, spent, wrong
 transport) is the same answer, so somebody guessing learns nothing. An
 unbound account gets exactly one reply: how to get a code.
 
+An invite can be a link rather than a code to read aloud. The adapter
+reports its own bot's handle on a heartbeat — it is the only party that
+can, since the bot token is a write-only secret — and Keystone builds
+`https://t.me/<bot>?start=<code>` from it. Tapping that opens the bot
+with the code already in it, so the person types nothing; the code is
+still single-use, still expiring, and still binds only what it names. On
+a transport with no such payload the link just opens the conversation.
+
 Neither half of an invite is free text. A code names a person — a
 declared household member on the family surface (see **The household's
 people** below), a Keystone principal on the operator's — and a

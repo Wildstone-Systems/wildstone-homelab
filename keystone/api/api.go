@@ -248,6 +248,13 @@ func (s *Server) Handler() http.Handler {
 	// What an invite may name: the chat adapters this deployment has,
 	// rather than whatever the operator types (ADR-W026 A3).
 	mux.Handle("GET /api/v1/chat/transports", s.handle(principal.VerbManage, s.listChatTransports))
+	// An adapter says which bot it is, on startup and on a heartbeat.
+	// Registered before the {capability} pattern above only in reading
+	// order — the mux prefers the literal segment either way, so a
+	// capability may not be called "self".
+	// Converse: it is the adapter speaking about itself, and which
+	// capability it speaks for comes from its own principal.
+	mux.Handle("POST /api/v1/chat/adapters/self", s.handle(principal.VerbConverse, s.registerChatAdapter))
 	// The adapter contract (ADR-W026 A8): post what you heard, poll for
 	// what to say, ack what you delivered. All three carry `converse`,
 	// and the surface each one acts on comes from the caller's role.

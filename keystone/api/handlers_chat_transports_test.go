@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
@@ -105,5 +108,115 @@ func TestChatClaimIsCheckedAgainstTheDeployment(t *testing.T) {
 		"surface": "family", "identity": "sam", "transport": "telegram",
 	}, nil); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("installed transport: status = %d, want 201", resp.StatusCode)
+	}
+}
+
+// doToken issues a request with an arbitrary principal's token, for the
+// adapters that are not one of the harness's fixed roles.
+func (h *harness) doToken(token, method, path string, body any, out any) *http.Response {
+	h.t.Helper()
+	var buf bytes.Buffer
+	if body != nil {
+		if err := json.NewEncoder(&buf).Encode(body); err != nil {
+			h.t.Fatalf("encode body: %v", err)
+		}
+	}
+	req, err := http.NewRequest(method, h.srv.URL+path, &buf)
+	if err != nil {
+		h.t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		h.t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			h.t.Fatalf("%s %s: decoding body: %v", method, path, err)
+		}
+	}
+	return resp
+}
+
+// adapterToken credentials one chat capability the way `wild chat
+// adapter` does, and returns its token.
+func (h *harness) adapterToken(t *testing.T, capability string) string {
+	t.Helper()
+	name := chatAdapterPrincipalPrefix + capability
+	if _, err := h.s.DB.GetPrincipal(name); err != nil {
+		if err := h.s.Principals.Create(name, runtimedb.RoleConcierge, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tok, err := h.s.Principals.Mint(name, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
+// An adapter is the only part of the deployment that knows its bot's
+// handle — the token is write-only — so it reports it, and that is what
+// turns a claim code into something a person can tap.
+func TestAdapterRegistersItsBotAndTheInviteBecomesALink(t *testing.T) {
+	h := newHarness(t)
+	h.ensureChatPrereqs(t, "family", "sam", "telegram")
+	token := h.adapterToken(t, "chat-telegram-family")
+
+	if resp := h.doToken(token, http.MethodPost, "/api/v1/chat/adapters/self", map[string]any{
+		"transport": "telegram", "handle": "@wildstone_house_bot", "displayName": "The House",
+	}, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("register: status = %d, want 200", resp.StatusCode)
+	}
+
+	var got []chatTransport
+	h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/chat/transports", nil, &got)
+	if len(got) != 1 || got[0].Handle != "wildstone_house_bot" || !got[0].Online {
+		t.Fatalf("transports = %+v, want an online bot with its handle", got)
+	}
+
+	claim := h.issueClaim(t, "family", "sam", "telegram")
+	want := "https://t.me/wildstone_house_bot?start=" + claim.Code
+	if claim.Link != want {
+		t.Fatalf("link = %q, want %q", claim.Link, want)
+	}
+	if !strings.Contains(claim.Note, "carries the code") {
+		t.Fatalf("note = %q, want it to say the link carries the code", claim.Note)
+	}
+}
+
+// The handle is untrusted text from a process holding only converse,
+// and it ends up in a URL an operator taps. Anything that could carry a
+// scheme, a host or a query is refused rather than escaped.
+func TestAdapterHandleIsBounded(t *testing.T) {
+	h := newHarness(t)
+	token := h.adapterToken(t, "chat-telegram-family")
+
+	for _, handle := range []string{
+		"evil.com/bot", "bot?start=x", "bot bot", "a", "@matrix:example.org",
+		strings.Repeat("b", 33), "bot#fragment", "https://t.me/bot",
+	} {
+		if resp := h.doToken(token, http.MethodPost, "/api/v1/chat/adapters/self", map[string]any{
+			"transport": "telegram", "handle": handle,
+		}, nil); resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("handle %q: status = %d, want 400", handle, resp.StatusCode)
+		}
+	}
+
+	// It cannot register as a transport its capability is not, either:
+	// the capability name decides, not the body.
+	if resp := h.doToken(token, http.MethodPost, "/api/v1/chat/adapters/self", map[string]any{
+		"transport": "matrix", "handle": "@bot:example.org",
+	}, nil); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("wrong transport: status = %d, want 400", resp.StatusCode)
+	}
+
+	// And nobody but an adapter may register at all: an admin token
+	// holds converse, and is still not a bot.
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/chat/adapters/self", map[string]any{
+		"transport": "telegram", "handle": "wildstone_house_bot",
+	}, nil); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("admin register: status = %d, want 403", resp.StatusCode)
 	}
 }

@@ -4,6 +4,7 @@ import { ErrorLine } from "./lib";
 import { Backups } from "./views/Backups";
 import { Butler } from "./views/Butler";
 import { Chat } from "./views/Chat";
+import { ConnectChat } from "./views/ConnectChat";
 import { Events } from "./views/Events";
 import { Home } from "./views/Home";
 import { Household } from "./views/Household";
@@ -19,6 +20,7 @@ type View =
   | "butler"
   | "chat"
   | "household"
+  | "connect"
   | "plans"
   | "events"
   | "backups"
@@ -32,6 +34,7 @@ const VIEWS: { id: View; label: string }[] = [
   { id: "butler", label: "Butler" },
   { id: "chat", label: "Chat" },
   { id: "household", label: "Household" },
+  { id: "connect", label: "Connect chat" },
   { id: "plans", label: "Plans" },
   { id: "events", label: "Events" },
   { id: "backups", label: "Backups" },
@@ -83,6 +86,7 @@ export function App() {
         {view === "butler" && <Butler />}
         {view === "chat" && <Chat />}
         {view === "household" && <Household />}
+        {view === "connect" && <ConnectChat />}
         {view === "plans" && <Plans />}
         {view === "events" && <Events />}
         {view === "backups" && <Backups />}

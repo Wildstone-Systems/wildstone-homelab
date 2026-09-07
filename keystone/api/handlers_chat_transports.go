@@ -17,11 +17,16 @@ package api
 // an empty list.
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
 // chatCapabilityPrefix is the first half of the catalog convention.
@@ -42,7 +47,24 @@ type chatTransport struct {
 	// adapter without one is running and cannot talk to Keystone, so an
 	// invite issued for it will never be redeemed.
 	Credentialed bool `json:"credentialed"`
+	// Handle is the bot itself, as the adapter reported it: a Telegram
+	// username, a Matrix MXID. Empty until an adapter has checked in,
+	// which is also the honest answer — nothing else in the deployment
+	// knows it.
+	Handle string `json:"handle,omitempty"`
+	// SeenAt is the adapter's last heartbeat, and Online is whether that
+	// was recent enough to mean it is running now. A bot that has never
+	// checked in and a bot that stopped an hour ago look identical
+	// without this.
+	SeenAt string `json:"seenAt,omitempty"`
+	Online bool   `json:"online"`
 }
+
+// adapterOnlineWindow is how long a heartbeat counts for. The adapter
+// re-registers well inside it, so a row older than this means the
+// container is not running (or cannot reach Keystone, which the operator
+// needs to know just as much).
+const adapterOnlineWindow = 30 * time.Minute
 
 // listChatTransports enumerates the chat capabilities in the catalog,
 // marking which are installed and credentialed. Manage verb: it is read
@@ -94,13 +116,19 @@ func (s *Server) chatTransports() ([]chatTransport, error) {
 		if transport == "" {
 			continue
 		}
-		out = append(out, chatTransport{
+		t := chatTransport{
 			Transport:    transport,
 			Surface:      string(surface),
 			Capability:   name,
 			Installed:    enabled[name],
 			Credentialed: s.adapterCredentialed(name),
-		})
+		}
+		if a, err := s.DB.GetChatAdapter(name); err == nil {
+			t.Handle = a.Handle
+			t.SeenAt = a.SeenAt.UTC().Format(time.RFC3339)
+			t.Online = time.Since(a.SeenAt) < adapterOnlineWindow
+		}
+		out = append(out, t)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Transport != out[j].Transport {
@@ -109,6 +137,121 @@ func (s *Server) chatTransports() ([]chatTransport, error) {
 		return out[i].Surface < out[j].Surface
 	})
 	return out, nil
+}
+
+// registerRequest is what an adapter says about itself on startup and on
+// its heartbeat. It carries no claim about WHICH capability it is — that
+// comes from its own principal — so the worst a compromised adapter can
+// do here is lie about its own bot's handle.
+type registerRequest struct {
+	Transport   string `json:"transport"`
+	Handle      string `json:"handle"`
+	DisplayName string `json:"displayName,omitempty"`
+}
+
+// handlePatterns bound what a handle may look like, per transport. This
+// is not cosmetic validation: the handle is untrusted text that ends up
+// in a URL an operator is invited to tap, so anything that could carry a
+// scheme, a host or a query is refused rather than escaped. A transport
+// with no pattern here has no invite link and no registration.
+var handlePatterns = map[string]*regexp.Regexp{
+	// Telegram usernames: 5-32 of [A-Za-z0-9_], and the bot API returns
+	// them without the leading @.
+	"telegram": regexp.MustCompile(`^[A-Za-z0-9_]{5,32}$`),
+	// Matrix user ids: @localpart:server[:port].
+	"matrix": regexp.MustCompile(`^@[a-z0-9._=+/-]{1,255}:[A-Za-z0-9.-]{1,255}(:[0-9]{1,5})?$`),
+}
+
+// registerChatAdapter records which bot an adapter is (converse verb —
+// it is the adapter speaking about itself, and it is the only thing it
+// may say that is not a relayed message).
+func (s *Server) registerChatAdapter(r *http.Request, id principal.Identity) (any, int, error) {
+	var req registerRequest
+	if st, err := decodeChatBody(r, &req); err != nil {
+		return nil, st, err
+	}
+	// Which capability this is comes from the caller's own principal,
+	// minted as chat-<capability> when the adapter was credentialed.
+	capability, ok := strings.CutPrefix(id.Name, chatAdapterPrincipalPrefix)
+	if !ok || capability == "" {
+		return nil, http.StatusForbidden, fmt.Errorf(
+			"only a chat adapter's own credential may register a bot")
+	}
+	surface, ok := capabilitySurface(capability)
+	if !ok {
+		return nil, http.StatusBadRequest, fmt.Errorf("capability %q does not name a surface", capability)
+	}
+	transport := strings.TrimSpace(req.Transport)
+	handle := strings.TrimSpace(strings.TrimPrefix(req.Handle, "@"))
+	if transport == "matrix" {
+		handle = "@" + handle
+	}
+	// The capability name already says which transport this is; a
+	// registration that disagrees with it is refused rather than
+	// believed, for the same reason a surface is never taken from a
+	// request body.
+	if want := strings.TrimSuffix(strings.TrimPrefix(capability, chatCapabilityPrefix), "-"+string(surface)); want != transport {
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"capability %q is the %s transport, but %q was reported", capability, want, transport)
+	}
+	pattern, known := handlePatterns[transport]
+	if !known {
+		return nil, http.StatusBadRequest, fmt.Errorf("transport %q has no known handle format", transport)
+	}
+	if !pattern.MatchString(handle) {
+		return nil, http.StatusBadRequest, fmt.Errorf("that is not a %s handle", transport)
+	}
+	rec := runtimedb.ChatAdapter{
+		Capability:  capability,
+		Transport:   transport,
+		Surface:     string(surface),
+		Handle:      handle,
+		DisplayName: trimDisplayName(req.DisplayName),
+	}
+	if err := s.DB.UpsertChatAdapter(rec); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return map[string]any{"capability": capability, "handle": handle, "surface": string(surface)}, http.StatusOK, nil
+}
+
+// inviteLink turns a claim code into something a person can tap.
+//
+// It is built HERE, from a validated handle and a code Keystone just
+// minted, rather than from anything an adapter sent: a URL supplied by
+// the adapter would be a link the operator trusts and the adapter chose,
+// which is how a code ends up pasted into somebody else's bot.
+//
+// Telegram carries the code in the link (the bot receives it as
+// "/start <code>"), so the person taps once and is bound. Matrix has no
+// such payload, so the link only opens the conversation and the code is
+// still sent by hand.
+func inviteLink(transport, handle, code string) (url string, carriesCode bool) {
+	if handle == "" {
+		return "", false
+	}
+	switch transport {
+	case "telegram":
+		return "https://t.me/" + handle + "?start=" + code, true
+	case "matrix":
+		return "https://matrix.to/#/" + handle, false
+	}
+	return "", false
+}
+
+// linkForClaim finds the bot a code should be sent to, if one has
+// checked in. An unknown transport, an adapter that has never
+// registered, or a code that names no transport all yield no link — the
+// code still works, and the note still says what to do with it.
+func (s *Server) linkForClaim(surface runtimedb.ButlerSurface, transport, code string) (link, handle string, carriesCode bool) {
+	if transport == "" {
+		return "", "", false
+	}
+	a, err := s.DB.GetChatAdapter(chatCapabilityPrefix + transport + "-" + string(surface))
+	if errors.Is(err, runtimedb.ErrNotFound) || err != nil {
+		return "", "", false
+	}
+	link, carriesCode = inviteLink(a.Transport, a.Handle, code)
+	return link, a.Handle, carriesCode
 }
 
 // adapterCredentialed reports whether the adapter principal for a chat

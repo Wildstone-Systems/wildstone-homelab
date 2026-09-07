@@ -216,7 +216,7 @@ export function Prerequisites({
       .join(", ");
     notes.push(
       `No ${surface} chat adapter is installed, so there is no bot for a code to be sent to.` +
-        (available ? ` Install one from Services: ${available}.` : ""),
+        (available ? ` Set one up on the Connect chat screen: ${available}.` : ""),
     );
   } else if (chosen && !chosen.credentialed) {
     notes.push(
@@ -239,7 +239,10 @@ export function Prerequisites({
 export function IssuedCode({ claim }: { claim: ChatClaim }) {
   return (
     <div style={{ marginTop: 10 }}>
-      <pre>{claim.code}</pre>
+      {/* The link IS the code on a transport that carries a payload, so
+          it is shown in the code's place rather than beside it: two
+          things to hand over invites handing over the wrong one. */}
+      <pre>{claim.link || claim.code}</pre>
       <div className="muted">{claim.note}</div>
       <div className="muted">
         This is the only time the code is shown. If it is lost, issue another one.

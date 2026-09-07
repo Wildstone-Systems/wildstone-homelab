@@ -315,6 +315,11 @@ export interface ChatClaim {
   transport?: string;
   expiresAt: string;
   note: string;
+  // The bot to send it to, and a link that opens a chat with it. Both
+  // are known only once that adapter has checked in. On Telegram the
+  // link CARRIES the code, so tapping it is the whole invite.
+  handle?: string;
+  link?: string;
 }
 
 // --- Household members (ADR-W020 A3, ADR-W023 A7). A member IS an
@@ -360,6 +365,15 @@ export interface ChatTransport {
   // means the bot is running and cannot reach the control plane, so an
   // invite issued for it can never be redeemed.
   credentialed: boolean;
+  // The bot itself, as the adapter reported it — a Telegram username, a
+  // Matrix MXID. Empty until one has checked in; nothing else in the
+  // deployment knows it, because the bot token is write-only.
+  handle?: string;
+  seenAt?: string;
+  // Whether that check-in was recent enough to mean the adapter is
+  // running now. A bot nobody has messaged and a bot that is down look
+  // identical without this.
+  online: boolean;
 }
 
 export interface IdentityNotification {
@@ -448,6 +462,15 @@ export const api = {
   revokeChatBinding: (id: number) =>
     call<unknown>("POST", `/api/v1/chat/bindings/${id}/revoke`),
   chatTransports: () => call<ChatTransport[]>("GET", "/api/v1/chat/transports"),
+  // Gives a chat capability its Keystone token and places it on the
+  // node as the secret the adapter container reads. Minting again is
+  // rotation: earlier tokens are revoked first.
+  mintChatAdapter: (capability: string, node: string, surface: ButlerSurface) =>
+    call<{ principal: string; secret: string; node: string }>(
+      "POST",
+      `/api/v1/chat/adapters/${encodeURIComponent(capability)}`,
+      { node, surface },
+    ),
   principals: () => call<Principal[]>("GET", "/api/v1/principals"),
   householdMembers: () => call<HouseholdMember[]>("GET", "/api/v1/household/members"),
   householdGroups: () => call<HouseholdGroup[]>("GET", "/api/v1/household/groups"),

@@ -17,6 +17,7 @@ import { Services, InstallForm } from "../src/views/Services";
 import { Butler, StatusCard, Answer, SURFACES } from "../src/views/Butler";
 import { Chat, IssuedCode, Prerequisites } from "../src/views/Chat";
 import { Household, AddMember } from "../src/views/Household";
+import { ConnectChat, InviteStep, surfaceOf } from "../src/views/ConnectChat";
 
 // Exactly what GET /api/v1/packages serves, copied from the live VM.
 const pkg = {
@@ -176,6 +177,49 @@ const twoNodes = renderToString(
   }),
 );
 check("two directories are disambiguated", twoNodes.includes("directory node"));
+
+// Connect a chat app (ADR-W026 A2/A3). The steps are read from the
+// deployment, and the payoff is a link that carries the code.
+const connect = renderToString(h(ConnectChat));
+check("Connect screen renders without throwing", connect.length > 0);
+check("connect screen says each surface is its own bot", connect.includes("its own bot"));
+check("surface comes from the capability name", surfaceOf("chat-telegram-admin") === "admin" && surfaceOf("chat-telegram-family") === "family");
+
+const online = {
+  transport: "telegram", surface: "family" as const, capability: "chat-telegram-family",
+  installed: true, credentialed: true, handle: "wildstone_house_bot", online: true,
+};
+const invite = renderToString(
+  h(InviteStep, {
+    surface: "family", transport: online,
+    members: [{ username: "sam", displayName: "Sam", groups: [], owner: "system", node: "n1" }],
+    principals: [],
+  }),
+);
+check("invite offers the declared member", invite.includes("Sam"));
+check("invite asks for a link, not a code", invite.includes("Get invite link"));
+
+// With nobody declared there is nothing to invite, and the screen says
+// where that is fixed rather than showing an empty dropdown.
+const nobody = renderToString(
+  h(InviteStep, { surface: "family", transport: online, members: [], principals: [] }),
+);
+check("no members points at the Household screen", nobody.includes("Household screen"));
+
+// The link replaces the code when there is one: two things to hand over
+// invites handing over the wrong one.
+const linked = renderToString(
+  h(IssuedCode, {
+    claim: {
+      code: "K7QP-3XMR-9TWD", surface: "family", identity: "sam",
+      expiresAt: "2026-09-07T18:00:00Z", note: "Send this link to sam.",
+      handle: "wildstone_house_bot",
+      link: "https://t.me/wildstone_house_bot?start=K7QP-3XMR-9TWD",
+    },
+  }),
+);
+check("the link is what is shown", linked.includes("t.me/wildstone_house_bot?start=K7QP-3XMR-9TWD"));
+check("the raw code is not shown beside it", !linked.includes(">K7QP-3XMR-9TWD<"));
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
