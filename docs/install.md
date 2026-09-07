@@ -363,8 +363,10 @@ the example:
 
 ```sh
 # 1. Build the adapter image and push it, then MAKE THE REPOSITORY
-#    PUBLIC and prove an anonymous pull works. See "Picking a registry"
-#    below — a private repository is the one way this goes wrong.
+#    PUBLIC and prove an anonymous pull works — or keep it private and
+#    give the node the credential once with
+#    `wild secret set registry.ghcr.io -node <node>` (value:
+#    username:password). See "Picking a registry" below.
 docker buildx build --platform linux/amd64 \
   -f cli/cmd/chat-adapter/Dockerfile \
   -t ghcr.io/<you>/chat-adapter:1.0.0 . --push
@@ -422,37 +424,55 @@ Wildstone publishes no adapter image. The release pipeline builds
 binaries, not images, so you build this one yourself — and where you put
 it is constrained by one thing worth knowing before you choose.
 
-**It must be pullable without credentials.** Keystone pulls the image
-before every container start, a failed pull stops the step, and that
-pull carries no registry auth. So:
+**A public repository is the simplest answer, and a private one works
+too** — it just needs a credential on the node first. Keystone pulls the
+image before every container start and a failed pull stops the step, so
+whichever you choose, the node must be able to pull it unattended.
 
-- a **private** registry (private GHCR, a password-protected Docker Hub
-  repo) does not work — the pull fails and the container never starts;
-- **side-loading** with `docker load` on the node does not work either,
-  because the pull still runs and still fails.
+For a **private** registry, give the node the credential once:
 
-This is easy to trip over on GHCR specifically, because **a package you
-publish there is private until you say otherwise**. Your own `docker
-push` and `imagetools inspect` are authenticated and succeed, so nothing
-looks wrong until `wild capability enable` and the pull on the node
-fails. Flip it under the package's settings -> Danger Zone -> Change
-visibility -> Public (or set the default for new packages under your
-account's Settings -> Packages -> Package creation). Note that this is
-one-way: a package made public cannot be made private again.
+```sh
+# The secret is named after the registry: registry.<host>, with any
+# port's colon written as a dash (registry.example.com:5000 ->
+# registry.registry.example.com-5000). The value is username:password —
+# on GHCR, your GitHub username and a read:packages token.
+wild secret set registry.ghcr.io -node <node>
+```
 
-**A public repository under your own account is the straightforward
-answer**, and it costs you nothing here. The image is one static binary
-built from open source on a `scratch` base — no secrets are baked into
-it, and every credential (bot token, Keystone token) arrives as an
-environment variable at runtime from your secret store.
+The agent looks that up on the node at pull time and sends it as the
+registry credential. It never leaves the node and Keystone can never
+read it back (ADR-W012), and a credential is used **only** for the
+registry its name matches — a package naming an image on another host
+gets an anonymous pull, not your token.
+
+Two things this does not change. **Side-loading** with `docker load` on
+the node still does not work: the pull runs regardless. And a **missing**
+credential still reads as "not found" rather than "unauthorized", which
+is the confusing failure — if a private pull fails on the node, check
+the secret exists on that node and is `username:password`.
+
+On GHCR this is easy to trip over, because **a package you publish there
+is private until you say otherwise**. Your own `docker push` and
+`imagetools inspect` are authenticated and succeed, so nothing looks
+wrong until the pull on the node fails. Either set
+`registry.ghcr.io` as above, or flip the package public under its
+settings -> Danger Zone -> Change visibility -> Public (one-way: a
+public package cannot be made private again).
+
+**A public repository under your own account costs you nothing here.**
+The image is one static binary built from open source on a `scratch`
+base — no secrets are baked into it, and every credential (bot token,
+Keystone token) arrives as an environment variable at runtime from your
+secret store.
 
 Three things to get right:
 
-- **Check the pull the way the node will.** `docker logout <registry>`
-  and then pull the digest. If that works from a machine holding no
-  credentials, it will work on the node; if it 401s or 404s, the
-  repository is still private. Whatever registry you pick, this is the
-  check that catches it.
+- **Check the pull the way the node will.** For a public repository,
+  `docker logout <registry>` and then pull the digest: if that works
+  from a machine holding no credentials, it will work on the node. For a
+  private one, the equivalent check is that `wild secret set
+  registry.<host>` has been run against THAT node — the credential is
+  per-node, because it lives in the node's own secret store.
 - **Match your node's architecture.** `docker build` produces your
   laptop's; if the node is a Pi, pass `--platform linux/arm64`. Building
   the wrong one fails at start with an exec-format error.

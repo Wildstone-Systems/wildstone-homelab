@@ -8,10 +8,10 @@
 #   UPDATE_PACKAGE_LOCK=1 go test ./pkgtool/ -run PackageContentMatchesItsVersion
 #
 # name  version  sha256(package.yaml)[:16]
-chat-matrix-admin 1.0.0 ab2ae2239c057886
-chat-matrix-family 1.0.0 b7cca3afe6d9efae
-chat-telegram-admin 1.0.0 52c567016f699040
-chat-telegram-family 1.0.0 9f458661de18b577
+chat-matrix-admin 1.0.1 a7ba4b00a86d619f
+chat-matrix-family 1.0.1 74fd7e4ab01eb793
+chat-telegram-admin 1.0.1 a7d28e4dfbdd0ee5
+chat-telegram-family 1.0.1 05472613bafbfdc2
 dashboard 1.0.0 9b1a7906c5c14f24
 documents-paperless 1.0.0 9c170ef0020cb14f
 home-automation 1.0.0 582247e5446afba2

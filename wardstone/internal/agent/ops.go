@@ -623,7 +623,16 @@ func (a *Agent) pullImage(ctx context.Context, op *wsv1.PullImage) (*wsv1.OpResu
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
 			"image %q is not digest-pinned (repo@sha256:... required)", op.GetImage())
 	}
-	if err := a.docker.pull(ctx, op.GetImage()); err != nil {
+	// A credential for this image's registry, if the node holds one
+	// (F94). Absent is the ordinary case and stays an anonymous pull;
+	// present-but-unreadable is an error, because an anonymous pull
+	// against a private registry fails as "not found" and sends the
+	// operator looking for the wrong problem.
+	auth, err := a.registryAuthFor(op.GetImage())
+	if err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "%v", err)
+	}
+	if err := a.docker.pull(ctx, op.GetImage(), auth); err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "pull: %v", err)
 	}
 	digest := op.GetImage()[strings.Index(op.GetImage(), "@")+1:]
