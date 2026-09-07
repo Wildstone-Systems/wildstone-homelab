@@ -17,6 +17,7 @@ export function ProblemCard({
   actions,
   aside,
   compact,
+  children,
 }: {
   severity: Kind;
   icon?: ReactNode;
@@ -26,6 +27,10 @@ export function ProblemCard({
   actions?: ReactNode;
   aside?: ReactNode;
   compact?: boolean;
+  // Detail that belongs to the decision — a plan's steps, a run's
+  // history. It sits between the explanation and the buttons, because
+  // it is what you read before you press one.
+  children?: ReactNode;
 }) {
   if (compact) {
     return (
@@ -48,7 +53,8 @@ export function ProblemCard({
           {meta}
         </div>
         {body && <p className="problem-body">{body}</p>}
-        {actions && <div className="problem-actions">{actions}</div>}
+        {children}
+        {actions && <div className="problem-actions" style={children ? { marginTop: "var(--space-4)" } : undefined}>{actions}</div>}
       </div>
       {aside && <div className="problem-aside">{aside}</div>}
     </div>

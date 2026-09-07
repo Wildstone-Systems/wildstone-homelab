@@ -17,10 +17,10 @@ import { ago, ErrorLine } from "./lib";
 import { ConsoleStateProvider, useConsoleState } from "./state";
 import { Dot, Kind, StatusPill } from "./ui/status";
 import { Rail, RailItem } from "./ui/Rail";
+import { Activity } from "./views/Activity";
 import { Backups } from "./views/Backups";
 import { Butler } from "./views/Butler";
 import { Chat } from "./views/Chat";
-import { Events } from "./views/Events";
 import { Home } from "./views/Home";
 import { IdentityView } from "./views/Identity";
 import { Nodes } from "./views/Nodes";
@@ -141,7 +141,7 @@ export function Shell() {
           {view === "butler" && <Butler />}
           {view === "chat" && <Chat />}
           {view === "plans" && <Plans />}
-          {view === "activity" && <Events />}
+          {view === "activity" && <Activity />}
           {view === "backups" && <Backups />}
           {view === "nodes" && <Nodes />}
           {view === "secrets" && <Secrets />}
@@ -156,12 +156,15 @@ export function Shell() {
 // the newest plan's basedOnHead and the reconcile age from the newest
 // reconcile.tick — both already on the wire. A GET /status would serve
 // them directly, and this block is what it would replace.
-function Freshness() {
+export function Freshness() {
   const { snap, error } = useConsoleState();
   if (!snap) return null;
 
   const head = snap.plans.find((p) => p.basedOnHead)?.basedOnHead;
-  const tick = [...snap.events].reverse().find((e) => e.type === "reconcile.tick");
+  // Any reconcile outcome dates the last pass — applied, blocked,
+  // failed or skipped. Matching one exact type is how this went blank
+  // the first time.
+  const tick = [...snap.events].reverse().find((e) => e.type.startsWith("reconcile."));
   const live: Kind = error ? "bad" : "ok";
 
   return (

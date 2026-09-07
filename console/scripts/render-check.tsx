@@ -16,14 +16,17 @@ import { createElement as h } from "react";
 import { Services, InstallForm } from "../src/views/Services";
 import { Butler, StatusCard, Answer, SURFACES } from "../src/views/Butler";
 import { Chat, IssuedCode } from "../src/views/Chat";
-import { Shell, TokenGate } from "../src/App";
+import { Freshness, Shell, TokenGate } from "../src/App";
 import { HomeView, buildProblems } from "../src/views/Home";
 import { ServicesView, InstalledTile, AvailableRow } from "../src/views/Services";
 import { groupServices, upstreamContainer } from "../src/services";
 import { eventKind } from "../src/ui/HourChart";
 import type { ConsoleSnapshot } from "../src/state";
-import type { Observed, PackageView, ResourceView } from "../src/api";
-import { ConsoleStateProvider } from "../src/state";
+import type { BackupRun, EventRow, Observed, PackageView, PlanRecord, ResourceView } from "../src/api";
+import { PlansView, PendingPlan, PlanSteps } from "../src/views/Plans";
+import { ActivityView } from "../src/views/Activity";
+import { BackupsView, byPlan, explain } from "../src/views/Backups";
+import { ConsoleStateContext, ConsoleStateProvider } from "../src/state";
 import { kindOf, StatusPill } from "../src/ui/status";
 import { MIN_SAMPLES, Sparkline } from "../src/ui/Sparkline";
 import { FillBar, Metric } from "../src/ui/Metric";
@@ -173,7 +176,11 @@ check("pill carries its kind as a class", pill.includes("st st-warn"), pill);
 // A sparkline drawn from three samples would imply history the console
 // does not have. It draws nothing until it has MIN_SAMPLES.
 const thin = renderToString(h(Sparkline, { samples: Array(MIN_SAMPLES - 1).fill("ok") }));
-check("sparkline is silent below the minimum", thin === "", thin);
+check("derived history is silent below the minimum", thin === "", thin);
+// Runs the API recorded are real history however few there are, and
+// hiding them would be its own kind of lie.
+const recorded = renderToString(h(Sparkline, { samples: ["ok", "bad"], min: 1 }));
+check("recorded history draws however short it is", (recorded.match(/<span/g) ?? []).length === 2, recorded);
 const spark = renderToString(h(Sparkline, { samples: ["ok", "ok", "bad", "ok", "ok"] }));
 check("sparkline draws one bar per sample", (spark.match(/<span/g) ?? []).length === 5, spark);
 check("sparkline says how far back it goes", spark.includes("since this page loaded"));
@@ -264,6 +271,22 @@ for (const label of ["Home", "Services", "Butler", "Chat", "Plans", "Activity", 
 check("shell names the screen you are on", shell.includes("Household"), shell);
 check("empty shell claims no freshness it cannot prove", !shell.includes(">live<"), shell);
 
+// The header's reconcile age comes from the newest reconcile event of
+// ANY outcome. Matching one exact type is how it went blank the first
+// time — Keystone emits reconcile.applied, never reconcile.tick.
+const fresh = renderToString(
+  h(ConsoleStateContext.Provider, {
+    value: { error: null, snap: {
+      observed: [], nodes: [], plans: [{ seq: 1, id: "p", createdAt: "", principal: "x", summary: "", risk: "low", state: "applied", basedOnHead: "5a01c4e9f0" }],
+      events: [{ seq: 1, time: new Date(Date.now() - 120000).toISOString(), type: "reconcile.applied", node: "n1" }],
+      pending: [], unhealthy: [], awaiting: [], history: new Map(), lastPollAt: new Date(),
+    } },
+  }, h(Freshness)),
+);
+check("the header dates the last reconcile pass", text(fresh).includes("reconciled 2m ago"), text(fresh));
+check("the header shows the statefile head, shortened", text(fresh).includes("statefile 5a01c4"), text(fresh));
+check("a healthy poll reads live", fresh.includes("live"));
+
 // ---------------------------------------------- the service join
 // Home and Services are drawn from three calls joined client-side. The
 // join is the part with logic, and none of it is visible to tsc.
@@ -328,10 +351,17 @@ check("an unobserved container is muted, not green", unobserved[0].services[0].h
 // Event types are classified by shape, so a type added to Keystone
 // tomorrow is drawn as ordinary traffic rather than as a fault.
 for (const [type, want] of [
-  ["reconcile.failed", "bad"], ["reconcile.blocked", "bad"], ["agent.disconnected", "bad"],
+  ["reconcile.failed", "bad"], ["reconcile.blocked", "bad"], ["statefile.invalid", "bad"],
+  ["secret.rotate-failed", "bad"], ["publisher.mint-failed", "bad"],
   ["plan.proposed", "warn"], ["reconcile.skipped-offline", "warn"], ["drift.pending-approval", "warn"],
+  ["drift.superseded", "warn"], ["policy.exempted", "warn"],
+  // A plan someone rejected is a decision, not a fault.
+  ["plan.rejected", "warn"], ["policy.rejected", "warn"],
   ["reconcile.applied", "ok"], ["backup.completed", "ok"], ["drift.repaired", "ok"],
-  ["butler.session", "mute"], ["something.new", "mute"],
+  ["secret.rotated", "ok"], ["chat.bound", "ok"], ["token.minted", "ok"],
+  // An event type nobody here has an opinion about is ordinary
+  // traffic. Keystone gaining one must not paint the chart red.
+  ["butler.session", "mute"], ["report.morning", "mute"], ["something.entirely.new", "mute"],
 ] as [string, string][]) {
   check(`eventKind(${type}) is ${want}`, eventKind(type) === want, eventKind(type));
 }
@@ -414,6 +444,94 @@ check("an unblocked row's Install is not", !openRow.includes("disabled"), openRo
 
 const noAddr = renderToString(h(InstalledTile, { pkg: { name: "monitoring", version: "0.4.0", capability: "monitoring", enabled: true }, onReconfigure: () => {} }));
 check("an installed capability with no address says so", noAddr.includes("no address"), noAddr);
+
+// ------------------------------------------------------------- Plans
+// The one screen where a click changes the household. Everything
+// approval needs has to be ON the card, and the result has to land
+// there too (ADR-W027 A7).
+const PENDING: PlanRecord = {
+  seq: 9, id: "plan-0f3a91", createdAt: "2026-09-07T00:01:00Z", principal: "butler",
+  actingFor: "mika", summary: "prune the jellyfin transcode cache", risk: "high",
+  state: "proposed", basedOnHead: "5a01c4e9f0",
+  plan: { steps: [
+    { description: "stop the container", kind: "Container", name: "jellyfin", action: "stop", risk: "medium", blastRadius: "jellyfin is offline for about 20 seconds" },
+    { description: "restore the volume", kind: "Volume", name: "jellyfin-cache", action: "restore", risk: "high", blastRadius: "replaces the cache volume's contents" },
+  ] },
+};
+const RESOLVED: PlanRecord = {
+  seq: 8, id: "plan-9b2d10", createdAt: "2026-09-06T22:00:00Z", principal: "mika",
+  summary: "install monitoring", risk: "low", state: "applied",
+  resolvedBy: "mika", resolvedAt: "2026-09-06T22:04:00Z",
+};
+
+const card = renderToString(h(PendingPlan, { plan: PENDING, onResolved: () => {} }));
+check("the plan card carries the decision", card.includes("Approve") && card.includes("Reject"));
+check("the plan card names who proposed it, for whom", text(card).includes("Proposed by butler acting for mika"), text(card).slice(0, 700));
+check("the plan card names the statefile it was built against", text(card).includes("5a01c4e9"));
+check("the plan card shows every step's blast radius", card.includes("offline for about 20 seconds") && card.includes("replaces the cache volume"));
+// A high-risk plan that could be taken a safer way says so, because
+// the safer way is on a different screen and nobody will guess.
+check("a high-risk plan says to read the blast radius", card.includes("High risk"));
+check("a restoring plan offers the reversible route", text(card).includes("alongside the live data"), text(card).slice(0, 900));
+const gentle = renderToString(h(PendingPlan, { plan: { ...PENDING, risk: "low", plan: { steps: [] } }, onResolved: () => {} }));
+check("a low-risk plan is not shouted at", !gentle.includes("High risk"));
+check("a plan with no steps says so", gentle.includes("carries no expanded steps"));
+
+const plans = renderToString(h(PlansView, { plans: [PENDING, RESOLVED], onResolved: () => {} }));
+check("pending plans are cards, resolved ones a table", plans.includes("Resolved") && plans.includes("plan-9b2d10"));
+check("a resolved plan records who resolved it", plans.includes("mika"));
+// "never" would be a worse answer than nothing for a plan resolved
+// before the API recorded who and when.
+const older = renderToString(h(PlansView, { plans: [{ ...RESOLVED, resolvedBy: undefined, resolvedAt: undefined }], onResolved: () => {} }));
+check("a plan with no resolution record says nothing, not never", !older.includes("never"), older);
+const quiet = renderToString(h(PlansView, { plans: [RESOLVED], onResolved: () => {} }));
+check("nothing pending says so", quiet.includes("Nothing is waiting for you"));
+check("nothing pending still shows the history", quiet.includes("plan-9b2d10"));
+
+const steps = renderToString(h(PlanSteps, { plan: PENDING.plan }));
+check("steps name their target as kind/name", steps.includes("Volume") && steps.includes("jellyfin-cache"));
+
+// ---------------------------------------------------------- Activity
+const EVENTS: EventRow[] = [
+  { seq: 1, time: "2026-09-07T00:00:00Z", type: "reconcile.applied", node: "n1", message: "n1 converged" },
+  { seq: 2, time: "2026-09-07T00:02:00Z", type: "reconcile.failed", node: "n2", message: "n2 step failed" },
+  { seq: 3, time: "2026-09-07T00:03:00Z", type: "plan.proposed", message: "plan-0f3a91 proposed", attrs: { plan: "plan-0f3a91", actingFor: "" } },
+];
+const now = new Date("2026-09-07T00:05:00Z");
+const act = renderToString(h(ActivityView, { events: EVENTS, now, error: null, loading: false }));
+check("activity is newest first", act.indexOf("plan.proposed") < act.indexOf("reconcile.applied"), "");
+check("activity offers its four filters", ["Everything", "Needs me", "Failures", "By node"].every((f) => act.includes(f)));
+check("activity shows ages, not raw timestamps", text(act).includes("2m ago") && !act.includes("2026-09-07T00:03"), "");
+// An attribute with no value is noise, not information.
+check("empty attributes are dropped", !act.includes("actingFor="), "");
+const quietAct = renderToString(h(ActivityView, { events: [], now, error: null, loading: false }));
+check("an empty stream says why it is empty", quietAct.includes("since the console was opened"));
+const loadingAct = renderToString(h(ActivityView, { events: [], now, error: null, loading: true }));
+check("a stream with no poll yet says it is waiting", loadingAct.includes("Waiting for the first poll"));
+
+// ----------------------------------------------------------- Backups
+const RUNS: BackupRun[] = [
+  { seq: 1, planName: "identity", runKind: "scheduled", startedAt: "2026-09-06T03:00:00Z", finishedAt: "2026-09-06T03:01:16Z", status: "succeeded", detail: "214 MB in 76s" },
+  { seq: 2, planName: "jellyfin", runKind: "scheduled", startedAt: "2026-09-07T03:00:00Z", status: "failed", detail: "repository is locked by a stale run." },
+  { seq: 3, planName: "identity", runKind: "scheduled", startedAt: "2026-09-07T03:00:00Z", finishedAt: "2026-09-07T03:01:02Z", status: "succeeded" },
+];
+const ledgers = byPlan(RUNS);
+check("a failing plan sorts above a healthy one", ledgers[0].name === "jellyfin", ledgers.map((l) => l.name).join(","));
+check("each plan keeps its newest run first", ledgers[1].runs[0].seq === 3);
+
+// A failure that repeats the engine's sentence leaves the operator
+// where they started. A locked repository has one specific answer.
+const locked = explain(RUNS[1], ledgers[0]);
+check("a locked repository explains itself", locked.includes("stale lock") || locked.includes("stale run"), locked);
+check("a locked repository says unlocking is a plan", locked.includes("goes through a plan"), locked);
+
+const backups = renderToString(h(BackupsView, { runs: RUNS, onRan: () => {} }));
+check("each backup plan gets a card", backups.includes("jellyfin") && backups.includes("identity"));
+check("a backup card offers both actions", backups.includes("Run now") && backups.includes("Restore alongside"));
+check("a backup card shows its run history", text(backups).includes("Last 2 runs") && text(backups).includes("Last run"), text(backups).slice(0, 400));
+check("a two-run history is actually drawn", backups.includes("last 2 recorded runs"), "");
+const noBackups = renderToString(h(BackupsView, { runs: [], onRan: () => {} }));
+check("no runs explains when a plan appears", noBackups.includes("after its first run"));
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

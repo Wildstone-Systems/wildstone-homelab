@@ -1,13 +1,29 @@
 import { EventRow } from "../api";
 import { Kind, KIND_COLOR } from "./status";
 
-// What a control plane's event types mean, by shape rather than by a
-// list that goes stale the moment someone adds one. A type nobody here
-// has an opinion about is drawn as ordinary traffic, not as a fault.
+// What a control plane's event type means, matched on its VERB rather
+// than against a list of the types Keystone happens to emit today. A
+// type nobody here has an opinion about is drawn as ordinary traffic,
+// which is the right default: an unrecognised event is not a fault.
+//
+// The verbs, against the stream as it stands: reconcile.applied /
+// blocked / failed / skipped-offline, drift.repaired / foreign /
+// superseded / pending-approval, prereq.repaired, plan.proposed /
+// approved / rejected / superseded, backup.started / completed /
+// failed, secret.rotated / rotate-failed, policy.exempted / rejected,
+// statefile.adopted / invalid / oob-accepted / oob-reverted,
+// token.minted, chat.bound / revoked, butler.session, report.morning.
 export function eventKind(type: string): Kind {
-  if (/\.(failed|blocked)$/.test(type) || type.includes("disconnected")) return "bad";
-  if (/\.(proposed|superseded|pending-approval|skipped-offline|foreign)$/.test(type)) return "warn";
-  if (/\.(applied|approved|repaired|completed|started|minted|rotated|set)$/.test(type)) return "ok";
+  const verb = type.slice(type.lastIndexOf(".") + 1);
+  // Something went wrong on its own.
+  if (/^(failed|blocked|invalid)$/.test(verb) || verb.endsWith("-failed")) return "bad";
+  // Something is waiting on a person, or went a way they should know
+  // about. A plan someone rejected is a decision, not a fault.
+  if (/^(proposed|pending-approval|skipped-offline|superseded|rejected|foreign|exempted|oob-reverted)$/.test(verb))
+    return "warn";
+  // Something finished, and finished properly.
+  if (/^(applied|approved|repaired|completed|started|minted|rotated|bound|adopted|created|oob-accepted)$/.test(verb))
+    return "ok";
   return "mute";
 }
 

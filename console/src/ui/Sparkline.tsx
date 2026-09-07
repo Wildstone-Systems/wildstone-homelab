@@ -9,22 +9,28 @@ const BAR: Record<Kind, { h: number; c: string }> = {
   mute: { h: 4, c: "var(--hair)" },
 };
 
-// Until an observation-history endpoint exists these samples come from
-// the event stream the console already polls, so a fresh load has very
-// few. Render nothing below MIN rather than implying history we do not
-// have — the caller shows the caption that says how far back it goes.
+// Health history is accumulated from the event stream, because there is
+// no endpoint for it — so a fresh load has almost none, and four bars
+// drawn from four seconds of watching would imply history we do not
+// have. Below MIN_SAMPLES, derived history draws nothing.
+//
+// Runs the API actually recorded are different: two recorded backup
+// runs ARE two runs, and hiding them would be its own kind of lie. Those
+// callers pass min={1}.
 export const MIN_SAMPLES = 4;
 
 export function Sparkline({
   samples,
   height = 15,
   label,
+  min = MIN_SAMPLES,
 }: {
   samples: Kind[];
   height?: number;
   label?: string;
+  min?: number;
 }) {
-  if (samples.length < MIN_SAMPLES) return null;
+  if (samples.length < min) return null;
   return (
     <div
       style={{ display: "flex", gap: 2, height, alignItems: "flex-end" }}

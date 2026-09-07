@@ -25,7 +25,10 @@ interface ConsoleState {
   error: string | null;
 }
 
-const Ctx = createContext<ConsoleState>({ snap: null, error: null });
+// Exported so the render check can put the shell in a state. Screens
+// read it through useConsoleState().
+export const ConsoleStateContext = createContext<ConsoleState>({ snap: null, error: null });
+const Ctx = ConsoleStateContext;
 
 // One poll for the whole shell. The rail pips, the live pill, Home's
 // metric strip and Activity all read from this — one timer and one

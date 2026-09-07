@@ -1,119 +1,200 @@
-import { useState } from "react";
-import { api, type Plan } from "../api";
-import { Badge, ErrorLine, useLoad, when } from "../lib";
+import { ArrowCounterClockwise, SealCheck, XCircle } from "@phosphor-icons/react";
+import { api, type Plan, type PlanRecord } from "../api";
+import { ago, ErrorLine, useAction, useLoad, when } from "../lib";
+import { useConsoleState } from "../state";
+import { kindOf, StatusPill } from "../ui/status";
+import { ProblemCard } from "../ui/ProblemCard";
 
-// Plans (ADR-W016 A2): the signature interaction. The review pane shows
-// everything approval needs — summary, risk, who proposed for whom, and
-// the plan's steps with their blast radius — with Approve/Reject.
+// Plans (ADR-W016 A2, ADR-W027 A7): the signature interaction, and the
+// one screen where a click changes the household.
+//
+// Everything approval needs is on the card — summary, risk, who
+// proposed it for whom, and every step with its blast radius — so
+// approving never means opening something else first. The result lands
+// on the same card: who approved it and when, or why it failed. The old
+// screen fired the request and left the page exactly as it was.
 export function Plans() {
-  const [selected, setSelected] = useState<string | null>(null);
-  const list = useLoad(() => api.plans());
+  const { snap } = useConsoleState();
+  const list = useLoad(() => api.plans(), []);
   if (list.error) return <ErrorLine error={list.error} />;
-  const plans = list.data ?? [];
+  // The shared poll already has the plans; the fetch is what gives us a
+  // reload after an approval without waiting for the next tick.
+  const plans = list.data ?? snap?.plans ?? [];
+  return <PlansView plans={plans} onResolved={list.reload} />;
+}
+
+export function PlansView({
+  plans,
+  onResolved,
+}: {
+  plans: PlanRecord[];
+  onResolved: () => void;
+}) {
+  const pending = plans.filter((p) => p.state === "proposed");
+  const resolved = plans.filter((p) => p.state !== "proposed");
 
   return (
     <>
       <div className="sub">
-        Every intentional change is a plan; Medium/High wait here for a human.
+        Every intentional change is a plan; medium and high risk wait here for a human.
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>id</th>
-            <th>state</th>
-            <th>risk</th>
-            <th>summary</th>
-            <th>proposed by</th>
-            <th>created</th>
-          </tr>
-        </thead>
-        <tbody>
-          {plans.map((p) => (
-            <tr className="clickable" key={p.id} onClick={() => setSelected(p.id)}>
-              <td>{p.id}</td>
-              <td>
-                <Badge value={p.state} />
-              </td>
-              <td>
-                <Badge value={p.risk} />
-              </td>
-              <td>{p.summary}</td>
-              <td>
-                {p.principal}
-                {p.actingFor ? ` (for ${p.actingFor})` : ""}
-              </td>
-              <td>{when(p.createdAt)}</td>
-            </tr>
+
+      {pending.length === 0 ? (
+        <div className="allwell">Nothing is waiting for you.</div>
+      ) : (
+        <div className="bands">
+          {pending.map((p) => (
+            <PendingPlan key={p.id} plan={p} onResolved={onResolved} />
           ))}
-        </tbody>
-      </table>
-      {selected && <PlanReview id={selected} onDone={list.reload} />}
+        </div>
+      )}
+
+      {resolved.length > 0 && (
+        <>
+          <div className="sect" style={{ marginTop: "var(--space-8)" }}>
+            <span className="eyebrow">Resolved</span>
+            <span className="muted">{resolved.length}</span>
+            <span className="fade" />
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>id</th>
+                <th>state</th>
+                <th>risk</th>
+                <th>summary</th>
+                <th>proposed by</th>
+                <th>resolved</th>
+              </tr>
+            </thead>
+            <tbody>
+              {resolved.map((p) => (
+                <tr key={p.id}>
+                  <td className="tnum">{p.id}</td>
+                  <td>
+                    <StatusPill kind={kindOf(p.state)}>{p.state}</StatusPill>
+                  </td>
+                  <td>
+                    <StatusPill kind={kindOf(p.risk)}>{p.risk}</StatusPill>
+                  </td>
+                  <td>{p.summary}</td>
+                  <td>
+                    {p.principal}
+                    {p.actingFor ? ` (for ${p.actingFor})` : ""}
+                  </td>
+                  {/* A plan resolved before the API recorded who and
+                      when has neither, and "never" would be a worse
+                      answer than saying nothing. */}
+                  <td title={when(p.resolvedAt)}>
+                    {[p.resolvedBy, p.resolvedAt && ago(p.resolvedAt)].filter(Boolean).join(" · ") || "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
     </>
   );
 }
 
-function PlanReview({ id, onDone }: { id: string; onDone: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const plan = useLoad(() => api.plan(id), [id]);
-  if (plan.error) return <ErrorLine error={plan.error} />;
-  const p = plan.data;
-  if (!p) return null;
+// One pending plan, with its decision on it. Approve and Reject share a
+// single useAction, so the two buttons, the pill and the explanation all
+// read from one state and cannot disagree about what happened.
+export function PendingPlan({ plan, onResolved }: { plan: PlanRecord; onResolved: () => void }) {
+  const act = useAction();
+  // Narrowed rather than boolean, so the message and the phase cannot
+  // drift apart: if it is done, it has a result to show.
+  const done = act.state.phase === "done" ? act.state : null;
+  const busy = act.state.phase === "busy";
 
-  const act = (fn: (id: string) => Promise<unknown>) => {
-    setBusy(true);
-    setActionError(null);
-    fn(id)
-      .then(() => {
-        plan.reload();
-        onDone();
-      })
-      .catch((e: Error) => setActionError(e.message))
-      .finally(() => setBusy(false));
-  };
+  const resolve = (verb: "approve" | "reject") => () =>
+    act.run(
+      () =>
+        (verb === "approve" ? api.approvePlan(plan.id) : api.rejectPlan(plan.id)).then(onResolved),
+      verb === "approve"
+        ? "approved — handed to the reconciler"
+        : "rejected — the Butler is told why on its next session",
+    );
+
+  const risky = kindOf(plan.risk) === "bad";
+  const restores = (plan.plan?.steps ?? []).some((s) => (s.action ?? "").toLowerCase().includes("restore"));
 
   return (
-    <div className="card" style={{ marginTop: 16 }}>
-      <h3>
-        {p.id} — {p.summary}
-      </h3>
-      <div className="row">
-        <Badge value={p.state} />
-        <Badge value={p.risk} />
-        <span className="muted">
-          proposed by {p.principal}
-          {p.actingFor ? ` acting for ${p.actingFor}` : ""} at {when(p.createdAt)}
-          {p.resolvedBy ? `; resolved by ${p.resolvedBy}` : ""}
-        </span>
-      </div>
-      <PlanSteps plan={p.plan} />
-      {p.state === "proposed" && (
-        <div className="row">
-          <button className="btn btn-primary" disabled={busy} onClick={() => act(api.approvePlan)}>
-            Approve
-          </button>
-          <button className="btn btn-danger" disabled={busy} onClick={() => act(api.rejectPlan)}>
-            Reject
-          </button>
+    <ProblemCard
+      severity={done ? "ok" : kindOf(plan.risk)}
+      icon={<SealCheck size={16} weight="fill" color={done ? "var(--st-ok)" : "var(--st-warn)"} />}
+      title={plan.summary}
+      meta={
+        <>
+          <StatusPill kind={done ? "ok" : kindOf(plan.state)}>
+            {done ? done.message : plan.state}
+          </StatusPill>
+          <StatusPill kind={kindOf(plan.risk)}>{plan.risk} risk</StatusPill>
+          <span className="muted tnum" title={when(plan.createdAt)}>
+            {plan.id} · {ago(plan.createdAt)}
+          </span>
+        </>
+      }
+      body={
+        <>
+          Proposed by {plan.principal}
+          {plan.actingFor ? ` acting for ${plan.actingFor}` : ""}
+          {plan.basedOnHead ? `, against statefile ${plan.basedOnHead.slice(0, 8)}` : ""}.{" "}
+          {done
+            ? "Nothing else is waiting on you for this one."
+            : "Approving records who approved it and hands the plan to the reconciler."}
+        </>
+      }
+      actions={
+        <>
+          {!done && (
+            <>
+              <button className="btn btn-primary" disabled={busy} onClick={resolve("approve")}>
+                <SealCheck size={14} />
+                {busy ? "Working…" : "Approve"}
+              </button>
+              <button className="btn btn-danger" disabled={busy} onClick={resolve("reject")}>
+                <XCircle size={14} />
+                Reject
+              </button>
+            </>
+          )}
+          {act.state.phase === "error" && <ErrorLine error={act.state.message} />}
+        </>
+      }
+    >
+      {risky && (
+        <div className="callout callout-bad">
+          <strong>High risk.</strong> Read the blast radius on every step below before approving.
+          {restores && (
+            <>
+              {" "}
+              A restore can be taken alongside the live data instead of over it — Backups offers
+              that, and it is reversible where this is not.
+            </>
+          )}
         </div>
       )}
-      <ErrorLine error={actionError} />
-    </div>
+      <PlanSteps plan={plan.plan} />
+    </ProblemCard>
   );
 }
 
-// PlanSteps renders the plan's steps. The API serves the plan as a
-// structured object now, so there is no JSON to parse here and no raw
-// dump to fall back to — a plan with no steps says so rather than
-// showing an escape sequence.
-function PlanSteps({ plan }: { plan?: Plan }) {
-  if (!plan) return null;
-  const steps = plan.steps ?? [];
+// The API serves the plan as a structured object, so there is no JSON to
+// parse here and no raw dump to fall back to — a plan with no steps says
+// so rather than showing an escape sequence.
+export function PlanSteps({ plan }: { plan?: Plan }) {
+  const steps = plan?.steps ?? [];
   if (steps.length === 0) {
-    return <div className="muted">This plan has no steps.</div>;
+    return (
+      <div className="muted" style={{ marginTop: "var(--space-3)" }}>
+        This plan carries no expanded steps.
+      </div>
+    );
   }
   return (
-    <table style={{ margin: "8px 0" }}>
+    <table style={{ margin: "var(--space-3) 0 0" }}>
       <thead>
         <tr>
           <th>step</th>
@@ -130,8 +211,13 @@ function PlanSteps({ plan }: { plan?: Plan }) {
             <td>
               {s.kind ?? ""}/{s.name ?? ""}
             </td>
-            <td>{s.action ?? ""}</td>
-            <td>{s.risk ? <Badge value={s.risk} /> : ""}</td>
+            <td>
+              {(s.action ?? "").toLowerCase().includes("restore") && (
+                <ArrowCounterClockwise size={12} style={{ verticalAlign: "-1px", marginRight: 4 }} />
+              )}
+              {s.action ?? ""}
+            </td>
+            <td>{s.risk ? <StatusPill kind={kindOf(s.risk)}>{s.risk}</StatusPill> : ""}</td>
             <td>{s.blastRadius ?? ""}</td>
           </tr>
         ))}
