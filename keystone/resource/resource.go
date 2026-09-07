@@ -35,6 +35,7 @@ const (
 	KindIngress    Kind = "Ingress"
 	KindBackupPlan Kind = "BackupPlan"
 	KindConfigFile Kind = "ConfigFile"
+	KindSeedFile   Kind = "SeedFile"
 	KindJob        Kind = "Job"
 	KindSecret     Kind = "Secret"
 	// KindAutomation is a household rule (ADR-W024 A1): Keystone-owned,
@@ -447,6 +448,69 @@ type JobSpec struct {
 	Run ContainerSpec `yaml:"run"`
 }
 
+// seedSegmentRegexp bounds ONE segment of a SeedFileSpec.Path. Unlike a
+// ConfigFile's filename, a seed path may contain separators (an app's
+// config often lives a directory down) and may be a dot-file: Home
+// Assistant's own first-run state includes ".HA_VERSION", and a rule that
+// banned dot-led names would rule out the case seeding exists for.
+//
+// Dot-files are therefore allowed and TRAVERSAL is what is refused — "."
+// and ".." are rejected by name in validateSeedPath, because those two
+// are the only segments that mean anything other than "a file here".
+var seedSegmentRegexp = regexp.MustCompile(`^[A-Za-z0-9._-]{1,63}$`)
+
+// validateSeedPath reports whether p is a relative path that stays inside
+// its volume: no leading slash, at least one segment, and no segment that
+// is empty, ".", or "..".
+func validateSeedPath(p string) bool {
+	if p == "" || strings.HasPrefix(p, "/") {
+		return false
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "." || seg == ".." || !seedSegmentRegexp.MatchString(seg) {
+			return false
+		}
+	}
+	return true
+}
+
+// SeedFileSpec is the spec for kind SeedFile: a file a package places
+// into its app's OWN data volume, once, before the app first starts.
+//
+// It is the mirror image of ConfigFile, and the difference is ownership.
+// A ConfigFile is Wildstone's: it lives under the managed prefix, is
+// rewritten to match desired state on every tick, and the app may not
+// edit it. A SeedFile is the APP'S from the moment it lands: written only
+// if absent, never rewritten, never reverted, never deleted.
+//
+// It exists because some applications only read a setting on their first
+// start. Home Assistant is the case that forced it — on first boot it
+// migrates any http: block out of configuration.yaml into its own store
+// and marks the migration done, after which that YAML is ignored
+// permanently. A file mounted alongside the app after that boot can never
+// take effect, however correct it is. Seeding is how a package gets a
+// setting in before the door closes.
+//
+// Because the file becomes user data, the write is guarded on both sides:
+// the node creates it with O_EXCL so an existing file is never clobbered,
+// and Volume names a volume the same capability owns, so a package cannot
+// seed into another capability's data.
+//
+// A SeedFile is never deleted. Removing the capability leaves the file
+// alone, for the same reason removing a capability leaves its volumes
+// alone (ADR-W004 A4): it is the household's data by then, not ours.
+type SeedFileSpec struct {
+	// Volume is the Volume this capability owns, by name.
+	Volume string `yaml:"volume"`
+	// Path is relative to the volume root: "configuration.yaml".
+	Path string `yaml:"path"`
+	// Content is the rendered file. Secret references are NOT resolved
+	// here: a seed is written once and then owned by the app, so a
+	// rotated secret could never be re-materialized into it, and a stale
+	// credential frozen into user data is worse than no credential.
+	Content string `yaml:"content"`
+}
+
 type ConfigFileSpec struct {
 	// Filename is one path segment: "configuration.yml", "immich.json".
 	Filename string `yaml:"filename"`
@@ -678,6 +742,7 @@ type Resource struct {
 	Ingress    *IngressSpec    `yaml:"-"`
 	BackupPlan *BackupPlanSpec `yaml:"-"`
 	ConfigFile *ConfigFileSpec `yaml:"-"`
+	SeedFile   *SeedFileSpec   `yaml:"-"`
 	Job        *JobSpec        `yaml:"-"`
 	Secret     *SecretSpec     `yaml:"-"`
 	Automation *AutomationSpec `yaml:"-"`
@@ -780,6 +845,13 @@ var registry = map[Kind]kindEntry{
 		validate:   validateConfigFile,
 		nodeScoped: true,
 	},
+	KindSeedFile: {
+		// Written into a volume on a specific node, so node-scoped for
+		// exactly the reason Volume is.
+		newSpec:    func() any { return &SeedFileSpec{} },
+		validate:   validateSeedFile,
+		nodeScoped: true,
+	},
 	KindJob: {
 		newSpec:    func() any { return &JobSpec{} },
 		validate:   validateJob,
@@ -862,6 +934,7 @@ func (r *Resource) validateSpecExclusivity() error {
 		KindLdapGroup:  r.LdapGroup != nil,
 		KindBackupPlan: r.BackupPlan != nil,
 		KindConfigFile: r.ConfigFile != nil,
+		KindSeedFile:   r.SeedFile != nil,
 		KindAutomation: r.Automation != nil,
 	}
 	for k, isSet := range populated {
@@ -1216,6 +1289,45 @@ func validateConfigFile(r *Resource) error {
 	}
 	return nil
 }
+
+func validateSeedFile(r *Resource) error {
+	if r.SeedFile == nil {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "seed file spec missing"}
+	}
+	if !nameRegexp.MatchString(r.SeedFile.Volume) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.volume",
+			Msg: "must name the Volume this capability owns"}
+	}
+	if !validateSeedPath(r.SeedFile.Path) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.path",
+			Msg: `must be a relative path inside the volume ("configuration.yaml", ".HA_VERSION", "custom/settings.json"): no leading slash, and no "." or ".." segment`}
+	}
+	if r.SeedFile.Content == "" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.content",
+			Msg: "must not be empty: seeding an empty file would claim the path and stop the app writing its own"}
+	}
+	// A seed writes into user data, so the owning capability is what
+	// bounds which volume it may write into. A system-owned seed has no
+	// such bound and is refused, the same as a system-owned ConfigFile.
+	if _, ok := strings.CutPrefix(r.Metadata.Owner, "capability/"); !ok {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "metadata.owner",
+			Msg: "must be capability/<name>: a seed may only write into a volume its own capability owns"}
+	}
+	// Secret references are refused rather than silently left literal. A
+	// seed is written once and then owned by the app, so a reference here
+	// would either freeze a value that can never rotate or, worse, land
+	// as the literal text "secret/foo" in a config nobody reads again.
+	if secretRefInSeed.MatchString(r.SeedFile.Content) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.content",
+			Msg: "must not carry a secret reference: a seed is written once and owned by the app afterwards, so a secret in one can never be rotated — use a ConfigFile for anything secret-bearing"}
+	}
+	return nil
+}
+
+// secretRefInSeed mirrors the agent's reference syntax, used here only to
+// REFUSE one. Kept separate from the reconciler's copy so this package
+// keeps no dependency on it.
+var secretRefInSeed = regexp.MustCompile(`(pbkdf2:)?secret/[A-Za-z0-9][A-Za-z0-9._-]{0,63}`)
 
 func validateBackupPlan(r *Resource) error {
 	if r.BackupPlan == nil {

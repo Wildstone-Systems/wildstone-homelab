@@ -117,6 +117,16 @@ func (a *Agent) dispatchOp(ctx context.Context, opID string, op *wsv1.Operation)
 		if r, oerr = a.listSecrets(); oerr == nil {
 			res.Result = r
 		}
+	case *wsv1.Operation_SeedVolumeFile:
+		var r *wsv1.OpResult_SeedVolumeFile
+		if r, oerr = a.seedVolumeFile(ctx, o.SeedVolumeFile); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_StatVolumeFile:
+		var r *wsv1.OpResult_StatVolumeFile
+		if r, oerr = a.statVolumeFile(ctx, o.StatVolumeFile); oerr == nil {
+			res.Result = r
+		}
 	case *wsv1.Operation_PruneImages:
 		var r *wsv1.OpResult_PruneImages
 		if r, oerr = a.pruneImages(ctx, o.PruneImages); oerr == nil {

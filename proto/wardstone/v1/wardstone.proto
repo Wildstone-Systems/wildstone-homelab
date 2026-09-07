@@ -132,6 +132,8 @@ message Operation {
     EnsureSecret ensure_secret = 27;
     PutSecret put_secret = 28;
     ListSecrets list_secrets = 29;
+    SeedVolumeFile seed_volume_file = 30;
+    StatVolumeFile stat_volume_file = 31;
   }
 }
 
@@ -168,6 +170,8 @@ message OpResult {
     EnsureSecretResult ensure_secret = 29;
     PutSecretResult put_secret = 30;
     ListSecretsResult list_secrets = 31;
+    SeedVolumeFileResult seed_volume_file = 32;
+    StatVolumeFileResult stat_volume_file = 33;
   }
 }
 
@@ -440,6 +444,49 @@ message WriteManagedFileResult {
   // sha256 of the content AS SUPPLIED, before any materialization — the
   // caller can only verify what it sent.
   string sha256_hex = 1;
+}
+
+// SeedVolumeFile writes a file INTO an application's own data volume, and
+// only if it is not already there (protocol minor 13).
+//
+// This is deliberately not WriteManagedFile with a different prefix. A
+// managed file is Wildstone's: it is rewritten to match desired state on
+// every tick, and the app may not edit it. A seed is the opposite — it is
+// the app's file from the moment it lands. Wildstone writes it once,
+// because some applications only read a setting on their FIRST start
+// (Home Assistant migrates http: out of YAML into its own store and never
+// reads that YAML again), and never touches it afterwards. An operator or
+// the app itself may edit it freely.
+//
+// Write-if-absent is the whole safety property, enforced at the node with
+// O_EXCL rather than a read-then-write: a seed can only ever create a file
+// that was not there, so it cannot clobber user data no matter how often
+// it is retried, and no ordering between two seeds can lose an edit.
+message SeedVolumeFile {
+  string volume = 1; // docker volume name; must already exist
+  string path = 2;   // relative path within the volume; no absolute, no ".."
+  bytes content = 3;
+  uint32 mode = 4; // e.g. 0644; 0 = 0644
+}
+
+message SeedVolumeFileResult {
+  // False means the file already existed and was left exactly as it was.
+  // Not an error: it is the expected steady state after the first seed.
+  bool written = 1;
+}
+
+// StatVolumeFile reports whether a path exists inside a volume, so
+// observation of a seed can be existence-only. Content is deliberately NOT
+// returned: after seeding, the file belongs to the application, and a
+// reconciler that compared it against the original would report drift
+// every time a user edited their own config.
+message StatVolumeFile {
+  string volume = 1;
+  string path = 2;
+}
+
+message StatVolumeFileResult {
+  bool exists = 1;
 }
 
 message ReadManagedFile {

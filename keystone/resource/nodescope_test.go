@@ -103,6 +103,11 @@ func validResourceOfKind(t *testing.T, k Kind) Resource {
 		// unlike every other kind it cannot be owned by "system".
 		r.Metadata.Owner = "capability/r1"
 		r.ConfigFile = &ConfigFileSpec{Filename: "config.yml", Content: "a: b\n"}
+	case KindSeedFile:
+		// Like ConfigFile, a seed is bounded by its owning capability:
+		// that is what says which volume it may write into.
+		r.Metadata.Owner = "capability/r1"
+		r.SeedFile = &SeedFileSpec{Volume: "r1-config", Path: "configuration.yaml", Content: "a: b\n"}
 	case KindSecret:
 		r.Secret = &SecretSpec{Name: "r1-oidc", Kind: "rsa_private_key"}
 	case KindJob:

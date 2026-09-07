@@ -557,6 +557,7 @@ const OWNED: ResourceView[] = [
   { kind: "Container", name: "chat-telegram-family", owner: "capability/chat-telegram-family", node: "n1", yaml: "" },
   { kind: "Secret", name: "chat-telegram-family-bot", owner: "capability/chat-telegram-family", node: "n1", yaml: "" },
   { kind: "Volume", name: "chat-telegram-family-data", owner: "capability/chat-telegram-family", node: "n1", yaml: "" },
+  { kind: "SeedFile", name: "chat-telegram-family-config", owner: "capability/chat-telegram-family", node: "n1", yaml: "" },
 ];
 const removeForm = renderToString(h(RemoveForm, {
   pkg: { name: "chat-telegram-family", version: "1.0.2", capability: "chat-telegram-family", enabled: true },
@@ -567,7 +568,21 @@ check("removal lists every resource it touches", OWNED.every((r) => removeForm.i
 // containing one can NEVER apply — it fails every pass until F60 sets
 // the step aside, taking the rest of the removal with it. Proposing one
 // is not a warning-worthy risk; it is a plan that cannot work.
-check("a volume is never proposed for deletion", removeForm.includes("volume stays"), removeForm.slice(0, 600));
+check("a volume is never proposed for deletion", removeForm.includes("items stay"), removeForm.slice(0, 600));
+// A SeedFile was written into the app's own volume and belongs to the
+// household from the moment it landed (ADR-W029 A2), so it survives a
+// removal exactly as the volume does. Listing it as "deleted" would tell
+// the operator something untrue.
+check(
+  "a seeded file is never proposed for deletion",
+  !/<td>SeedFile<\/td><td>chat-telegram-family-config<\/td><td>n1<\/td>/.test(removeForm),
+  removeForm.slice(0, 800),
+);
+check(
+  "the kept list names the seeded file",
+  removeForm.includes("chat-telegram-family-config"),
+  removeForm.slice(0, 800),
+);
 check("and the count excludes it", removeForm.includes("Propose removing 2 resources"), removeForm.slice(0, 900));
 check("the volume is still shown, marked kept", removeForm.includes("kept"), removeForm.slice(0, 900));
 // A capability that is nothing but a volume has nothing to propose.
