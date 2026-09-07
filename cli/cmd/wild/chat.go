@@ -35,6 +35,8 @@ func runChat(args []string) int {
 		return runChatRevoke(args[1:])
 	case "outbound":
 		return runChatOutbound(args[1:])
+	case "transports":
+		return runChatTransports(args[1:])
 	case "adapter":
 		return runChatAdapter(args[1:])
 	default:
@@ -51,9 +53,14 @@ func chatUsage() {
   wild chat revoke <binding-id> [-api URL]
   wild chat outbound [-surface admin|family] [-transport telegram] [-after N]
   wild chat adapter <capability> -node <node> -surface admin|family
+  wild chat transports [-api URL]
 
   -identity is a Keystone principal on the admin surface, and a household
-  member on the family surface. The code works once, expires, and can only
+  member on the family surface — one this deployment has DECLARED (see
+  wild household members), not any name. -transport must be one this
+  deployment has an adapter installed for (see wild chat transports); a
+  code for a bot that does not exist is valid, unredeemable, and looks
+  exactly like a working one. The code works once, expires, and can only
   ever produce the binding it names.`)
 }
 
@@ -85,6 +92,19 @@ func runChatCode(args []string) int {
 		body["ttlSeconds"] = int(ttl.Seconds())
 	}
 	return simpleCall("chat code", *apiBase, token, http.MethodPost, "/api/v1/chat/claims", body)
+}
+
+// runChatTransports lists the chat adapters this deployment has, which
+// is the closed set of answers to `wild chat code -transport`.
+func runChatTransports(args []string) int {
+	fs := flag.NewFlagSet("wild chat transports", flag.ExitOnError)
+	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
+	fs.Parse(args) //nolint:errcheck // ExitOnError
+	token, ok := requireToken("chat transports")
+	if !ok {
+		return 2
+	}
+	return simpleCall("chat transports", *apiBase, token, http.MethodGet, "/api/v1/chat/transports", nil)
 }
 
 func runChatBindings(args []string) int {

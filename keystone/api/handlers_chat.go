@@ -19,11 +19,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -49,6 +51,16 @@ type claimResponse struct {
 	Transport string `json:"transport,omitempty"`
 	ExpiresAt string `json:"expiresAt"`
 	Note      string `json:"note"`
+	// Handle is the bot this code should be sent to, and Link opens a
+	// chat with it. Both are empty until an adapter for that transport
+	// has checked in: nothing else in the deployment knows which bot
+	// the token belongs to (the token is write-only).
+	//
+	// On Telegram the link CARRIES the code, so the person taps it and
+	// is bound without typing anything. Elsewhere it only opens the
+	// conversation, and the code is still read out.
+	Handle string `json:"handle,omitempty"`
+	Link   string `json:"link,omitempty"`
 }
 
 // issueChatClaim mints a claim code (ADR-W026 A4). Manage verb: this is
@@ -62,17 +74,33 @@ func (s *Server) issueChatClaim(r *http.Request, id principal.Identity) (any, in
 	if !runtimedb.ValidButlerSurface(surface) {
 		return nil, http.StatusBadRequest, fmt.Errorf("surface must be admin or family")
 	}
+	identity := strings.TrimSpace(req.Identity)
+	transport := strings.TrimSpace(req.Transport)
+	if st, err := s.checkClaimTarget(surface, identity, transport); err != nil {
+		return nil, st, err
+	}
 	ttl := time.Duration(req.TTLSeconds) * time.Second
-	code, rec, err := s.Principals.IssueChatClaim(surface, strings.TrimSpace(req.Identity),
-		strings.TrimSpace(req.Transport), id.Name, ttl)
+	code, rec, err := s.Principals.IssueChatClaim(surface, identity, transport, id.Name, ttl)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
 	s.event("chat.claim_issued", rec.Identity, id,
 		fmt.Sprintf("claim code issued for the %s surface, expires %s", rec.Surface, rec.ExpiresAt.UTC().Format(time.RFC3339)))
 
+	link, handle, carriesCode := s.linkForClaim(surface, rec.Transport, code)
+	expires := rec.ExpiresAt.UTC().Format(time.RFC3339)
 	note := fmt.Sprintf("Send this code to the %s bot as a direct message. It works once, expires %s, and can only bind %q on the %s surface.",
-		orAny(rec.Transport), rec.ExpiresAt.UTC().Format(time.RFC3339), rec.Identity, rec.Surface)
+		orAny(rec.Transport), expires, rec.Identity, rec.Surface)
+	switch {
+	case carriesCode:
+		// The link IS the code in tappable form, which is worth saying
+		// plainly: forwarding the link is forwarding the invite.
+		note = fmt.Sprintf("Send this link to %s. It opens @%s and carries the code, so there is nothing to type — and anyone who has the link can use it. It works once, expires %s, and binds only the %s surface.",
+			rec.Identity, handle, expires, rec.Surface)
+	case link != "":
+		note = fmt.Sprintf("The link opens a chat with %s; %s still sends the code itself. It works once, expires %s, and binds only the %s surface.",
+			handle, rec.Identity, expires, rec.Surface)
+	}
 	return claimResponse{
 		Code:      code,
 		Surface:   string(rec.Surface),
@@ -80,7 +108,98 @@ func (s *Server) issueChatClaim(r *http.Request, id principal.Identity) (any, in
 		Transport: rec.Transport,
 		ExpiresAt: rec.ExpiresAt.UTC().Format(time.RFC3339),
 		Note:      note,
+		Handle:    handle,
+		Link:      link,
 	}, http.StatusCreated, nil
+}
+
+// checkClaimTarget refuses an invite that could never be redeemed
+// (ADR-W026 A3/A4). Both halves of a code — who it binds and where it
+// is redeemed — have a closed set of real answers, and a code naming
+// anything else is not a small mistake: it looks exactly like a working
+// one, and the operator finds out when somebody they invited says
+// nothing ever happened.
+//
+// The family half is what changed with ADR-W020 A3. When a household
+// member was an LDAP account this control plane did not own, a typo
+// could only be caught by a person; now a member IS a declared
+// `LdapUser`, so the roster is right here to check against.
+func (s *Server) checkClaimTarget(surface runtimedb.ButlerSurface, identity, transport string) (int, error) {
+	// The admin half is checked where it lives: IssueChatClaim resolves
+	// the principal, and re-checking here would be a second copy to
+	// drift from.
+	if surface == runtimedb.ButlerSurfaceFamily {
+		members, err := s.householdMemberNames()
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		if !members[identity] {
+			return http.StatusBadRequest, fmt.Errorf(
+				"%q is not a household member: add them first, then invite them", identity)
+		}
+	}
+
+	transports, err := s.chatTransports()
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	// Installed is not enough: an adapter with no live Keystone token
+	// cannot redeem anything, so a code issued for it is exactly the
+	// unredeemable invite this check exists to prevent. That state is
+	// reachable — installing through Services without credentialing, or
+	// a setup interrupted between the two.
+	installed, uncredentialed := []string{}, []string{}
+	for _, t := range transports {
+		if !t.Installed || t.Surface != string(surface) {
+			continue
+		}
+		if t.Credentialed {
+			installed = append(installed, t.Transport)
+		} else {
+			uncredentialed = append(uncredentialed, t.Transport)
+		}
+	}
+	if len(installed) == 0 {
+		if len(uncredentialed) > 0 {
+			return http.StatusBadRequest, fmt.Errorf(
+				"the %s %s adapter has no Keystone token, so it cannot redeem a code: credential it first (wild chat adapter chat-%s-%s -node <node> -surface %s)",
+				surface, strings.Join(uncredentialed, "/"), uncredentialed[0], surface, surface)
+		}
+		return http.StatusBadRequest, fmt.Errorf(
+			"no %s chat adapter is installed: there is no bot to send a code to (install chat-<transport>-%s)",
+			surface, surface)
+	}
+	if transport == "" {
+		// A code with no transport is redeemable on any of them, which
+		// is only meaningful because at least one exists.
+		return http.StatusOK, nil
+	}
+	if !slices.Contains(installed, transport) {
+		if slices.Contains(uncredentialed, transport) {
+			return http.StatusBadRequest, fmt.Errorf(
+				"the %s %s adapter has no Keystone token, so it cannot redeem a code: credential it first",
+				surface, transport)
+		}
+		return http.StatusBadRequest, fmt.Errorf(
+			"no %s adapter on the %s surface: this deployment has %s",
+			transport, surface, strings.Join(installed, ", "))
+	}
+	return http.StatusOK, nil
+}
+
+// householdMemberNames is the declared roster as a set.
+func (s *Server) householdMemberNames() (map[string]bool, error) {
+	current, err := s.State.Load()
+	if err != nil {
+		return nil, fmt.Errorf("loading statefile: %w", err)
+	}
+	names := map[string]bool{}
+	for _, r := range current {
+		if r.Kind == resource.KindLdapUser && r.LdapUser != nil && r.LdapUser.Username != "" {
+			names[r.LdapUser.Username] = true
+		}
+	}
+	return names, nil
 }
 
 func orAny(transport string) string {

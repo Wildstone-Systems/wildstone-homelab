@@ -1,4 +1,4 @@
--- 0013: a Butler session becomes a conversation (ADR-W027).
+-- 0014: a Butler session becomes a conversation (ADR-W027).
 --
 -- Until now a session was one exchange: the caller's question was never
 -- stored at all, and the answer was a single final_text column. That is

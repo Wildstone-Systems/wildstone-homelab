@@ -100,18 +100,18 @@ func TestButlerTurnRoleIsClosed(t *testing.T) {
 	}
 }
 
-// 0013 backfills every session that predates turns with its answer.
+// 0014 backfills every session that predates turns with its answer.
 // There is no user turn to recover, because the question was never
 // stored — a reader sees a conversation that opens with an answer,
 // which is true, rather than an invented question.
-func TestMigration0013BackfillsExistingSessions(t *testing.T) {
+func TestMigration0014BackfillsExistingSessions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
 	db, err := openUnmigrated(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.migrateThrough("migrations/0012_valet_role.sql"); err != nil {
-		t.Fatalf("migrating through 0012: %v", err)
+	if err := db.migrateThrough("migrations/0013_chat_adapters.sql"); err != nil {
+		t.Fatalf("migrating through 0013: %v", err)
 	}
 	id, err := db.InsertButlerSession(ButlerSession{
 		Principal: "butler", ActingFor: "mika", Provider: "ollama",
@@ -119,13 +119,13 @@ func TestMigration0013BackfillsExistingSessions(t *testing.T) {
 		FinalText: "n2 has been offline since 14:04.", TranscriptJSON: `{"provider":"ollama"}`,
 	})
 	if err != nil {
-		t.Fatalf("inserting a pre-0013 session: %v", err)
+		t.Fatalf("inserting a pre-0014 session: %v", err)
 	}
 	db.Close()
 
 	db2, err := Open(path)
 	if err != nil {
-		t.Fatalf("Open (applies 0013): %v", err)
+		t.Fatalf("Open (applies 0014): %v", err)
 	}
 	defer db2.Close()
 	sess, err := db2.GetButlerSession(id)

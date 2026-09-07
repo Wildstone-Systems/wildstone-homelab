@@ -209,6 +209,15 @@ func (s *Server) Handler() http.Handler {
 	// Replay is a read: it evaluates and returns, writes nothing.
 	mux.Handle("POST /api/v1/household/automations/replay", s.handle(principal.VerbRead, s.replayAutomation))
 
+	// Household members (ADR-W020 A3, ADR-W023 A7): the household's
+	// account list IS the LdapUser resources in the Statefile. Reading
+	// the roster is a read; adding a person is a propose, because that
+	// is literally what it does — the account exists once a human
+	// approves the plan.
+	mux.Handle("GET /api/v1/household/members", s.handle(principal.VerbRead, s.listHouseholdMembers))
+	mux.Handle("POST /api/v1/household/members", s.handle(principal.VerbPropose, s.addHouseholdMember))
+	mux.Handle("GET /api/v1/household/groups", s.handle(principal.VerbRead, s.listHouseholdGroups))
+
 	// Butler (ADR-W017 A2): ask carries the read verb — conversing is not
 	// a write; a session's proposals enter through the same submitProposal
 	// pipeline as POST /plans, as principal "butler" acting-for the
@@ -240,6 +249,16 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/chat/claims", s.handle(principal.VerbManage, s.issueChatClaim))
 	mux.Handle("POST /api/v1/chat/bindings/redeem", s.handle(principal.VerbConverse, s.redeemChatClaim))
 	mux.Handle("GET /api/v1/chat/bindings", s.handle(principal.VerbManage, s.listChatBindings))
+	// What an invite may name: the chat adapters this deployment has,
+	// rather than whatever the operator types (ADR-W026 A3).
+	mux.Handle("GET /api/v1/chat/transports", s.handle(principal.VerbManage, s.listChatTransports))
+	// An adapter says which bot it is, on startup and on a heartbeat.
+	// Registered before the {capability} pattern above only in reading
+	// order — the mux prefers the literal segment either way, so a
+	// capability may not be called "self".
+	// Converse: it is the adapter speaking about itself, and which
+	// capability it speaks for comes from its own principal.
+	mux.Handle("POST /api/v1/chat/adapters/self", s.handle(principal.VerbConverse, s.registerChatAdapter))
 	// The adapter contract (ADR-W026 A8): post what you heard, poll for
 	// what to say, ack what you delivered. All three carry `converse`,
 	// and the surface each one acts on comes from the caller's role.

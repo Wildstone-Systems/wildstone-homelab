@@ -91,6 +91,31 @@ type telegramUpdate struct {
 	} `json:"message"`
 }
 
+// Identify asks Telegram who this bot is. The username is what a
+// t.me/<username>?start=<code> invite link is built from, and it is not
+// derivable from anything else the deployment holds: the bot token is a
+// write-only secret to Keystone.
+func (t *telegram) Identify(ctx context.Context) (string, string, error) {
+	var envelope struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		Result      struct {
+			Username  string `json:"username"`
+			FirstName string `json:"first_name"`
+		} `json:"result"`
+	}
+	if err := t.get(ctx, "getMe", &envelope); err != nil {
+		return "", "", err
+	}
+	if !envelope.OK {
+		return "", "", fmt.Errorf("telegram getMe: %s", envelope.Description)
+	}
+	if envelope.Result.Username == "" {
+		return "", "", fmt.Errorf("telegram getMe returned no username")
+	}
+	return envelope.Result.Username, envelope.Result.FirstName, nil
+}
+
 func (t *telegram) Receive(ctx context.Context) ([]Incoming, error) {
 	q := url.Values{
 		"timeout":         {strconv.Itoa(int(t.timeout.Seconds()))},

@@ -782,3 +782,8 @@ tr.clickable:hover { background: var(--faint); }
 
 details summary { cursor: pointer; }
 details > pre { margin-top: var(--space-2); }
+
+/* An invite link is handed over whole, not read aloud: it gets room to
+   wrap and nothing else. The code beside it would be the wrong thing to
+   copy, so only one of the two is ever shown. */
+.invite-link { font-size: 13px; user-select: all; }

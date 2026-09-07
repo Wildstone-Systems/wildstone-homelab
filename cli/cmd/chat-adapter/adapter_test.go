@@ -24,6 +24,10 @@ type sentMessage struct{ conversation, body string }
 
 func (f *fakeTransport) Name() string { return "faketransport" }
 
+func (f *fakeTransport) Identify(context.Context) (string, string, error) {
+	return "fakebot", "Fake Bot", nil
+}
+
 func (f *fakeTransport) Receive(ctx context.Context) ([]Incoming, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -66,6 +70,8 @@ type fakeKeystone struct {
 	acked    []int64
 	pending  []outboundMessage
 	rejectID string
+	// registered is every self-registration the adapter posted.
+	registered []map[string]string
 }
 
 func (f *fakeKeystone) handler() http.Handler {
@@ -93,6 +99,14 @@ func (f *fakeKeystone) handler() http.Handler {
 		}
 		w.WriteHeader(http.StatusCreated)
 		w.Write([]byte(`{"id":1}`)) //nolint:errcheck
+	})
+	mux.HandleFunc("POST /api/v1/chat/adapters/self", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body) //nolint:errcheck // test fake
+		f.mu.Lock()
+		f.registered = append(f.registered, body)
+		f.mu.Unlock()
+		w.Write([]byte(`{"ok":true}`)) //nolint:errcheck
 	})
 	mux.HandleFunc("GET /api/v1/chat/outbound", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -313,5 +327,101 @@ func runUntil(ctx context.Context, a *adapter, cond func() bool) {
 			return
 		case <-time.After(5 * time.Millisecond):
 		}
+	}
+}
+
+// A tapped invite link arrives as "/start <code>", not as a bare code.
+// Without stripping the command the one-tap invite silently does
+// nothing: the message reads as an ordinary sentence and is relayed to
+// a Butler that has no idea who is speaking.
+func TestTappedInviteLinkRedeems(t *testing.T) {
+	ks := &fakeKeystone{}
+	tr := &fakeTransport{incoming: [][]Incoming{{{
+		Account: "12345", Conversation: "12345", Text: "/start K7QP-3XMR-9TWD", MessageID: "m-1",
+	}}}}
+	a, done := newTestAdapter(t, ks, tr)
+	defer done()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runUntil(ctx, a, func() bool {
+		ks.mu.Lock()
+		defer ks.mu.Unlock()
+		return len(ks.redeems) > 0
+	})
+
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	if len(ks.redeems) != 1 || ks.redeems[0]["code"] != "K7QP-3XMR-9TWD" {
+		t.Fatalf("redeems = %+v, want the code out of the /start payload", ks.redeems)
+	}
+	if len(ks.inbound) != 0 {
+		t.Fatalf("a claim was also relayed as a message: %+v", ks.inbound)
+	}
+}
+
+// Pressing Start with no invite is the first thing anybody does. It has
+// to say something: silence from a bot is indistinguishable from a
+// broken one.
+func TestBareStartIsAnswered(t *testing.T) {
+	ks := &fakeKeystone{}
+	tr := &fakeTransport{incoming: [][]Incoming{{{
+		Account: "12345", Conversation: "12345", Text: "/start", MessageID: "m-1",
+	}}}}
+	a, done := newTestAdapter(t, ks, tr)
+	defer done()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runUntil(ctx, a, func() bool { return len(tr.sentMessages()) > 0 })
+
+	sent := tr.sentMessages()
+	if len(sent) != 1 || !strings.Contains(sent[0].body, "invite") {
+		t.Fatalf("sent = %+v, want an explanation of what is missing", sent)
+	}
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	if len(ks.inbound) != 0 || len(ks.redeems) != 0 {
+		t.Fatalf("a bare /start reached Keystone: inbound=%+v redeems=%+v", ks.inbound, ks.redeems)
+	}
+}
+
+// "/startle the cat" is a sentence. Only the command is stripped.
+func TestStartStrippingIsExact(t *testing.T) {
+	for text, want := range map[string]string{
+		"/start K7QP-3XMR-9TWD":         "K7QP-3XMR-9TWD",
+		"/start@house_bot K7QP3XMR9TWD": "K7QP3XMR9TWD",
+		"/start":                        "",
+		"/startle the cat":              "/startle the cat",
+		"tell me about /start":          "tell me about /start",
+	} {
+		got, _ := withoutStartCommand(text)
+		if got != want {
+			t.Fatalf("withoutStartCommand(%q) = %q, want %q", text, got, want)
+		}
+	}
+}
+
+// The adapter reports which bot it is, so an invite can be a link. It is
+// the only party that can: Keystone holds the bot token write-only.
+func TestAdapterRegistersItsHandle(t *testing.T) {
+	ks := &fakeKeystone{}
+	tr := &fakeTransport{}
+	a, done := newTestAdapter(t, ks, tr)
+	defer done()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runUntil(ctx, a, func() bool {
+		ks.mu.Lock()
+		defer ks.mu.Unlock()
+		return len(ks.registered) > 0
+	})
+
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	got := ks.registered[0]
+	if got["handle"] != "fakebot" || got["transport"] != "faketransport" {
+		t.Fatalf("registered %+v, want the transport's own handle", got)
 	}
 }

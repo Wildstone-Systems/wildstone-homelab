@@ -61,6 +61,12 @@ type Transport interface {
 	Receive(ctx context.Context) ([]Incoming, error)
 	// Send delivers one message to a conversation.
 	Send(ctx context.Context, conversation, body string) error
+	// Identify reports the bot's own handle — a Telegram username, a
+	// Matrix MXID — and what the vendor calls it. This adapter is the
+	// only part of the deployment that can answer: Keystone holds the
+	// bot token write-only and can never read it back, so without this
+	// an invite cannot name the bot a person is meant to message.
+	Identify(ctx context.Context) (handle, displayName string, err error)
 }
 
 func main() {
@@ -141,11 +147,52 @@ type adapter struct {
 
 func (a *adapter) run(ctx context.Context) {
 	done := make(chan struct{}, 2)
+	go a.registerLoop(ctx)
 	go func() { a.receiveLoop(ctx); done <- struct{}{} }()
 	go func() { a.deliverLoop(ctx); done <- struct{}{} }()
 	<-done
 	<-done
 	a.log.Info("chat adapter stopped")
+}
+
+// registerHeartbeat is how often the adapter says it is still here.
+// Keystone treats a stale registration as "the bot is not running",
+// which is what lets the Console tell a bot nobody has messaged from a
+// bot that is down — so this has to be comfortably inside the window
+// Keystone considers live.
+const registerHeartbeat = 10 * time.Minute
+
+// registerLoop tells Keystone which bot this is, and keeps saying so.
+//
+// It is a heartbeat rather than a one-shot because the useful answer is
+// not "the handle" but "the handle, and this adapter was running a
+// minute ago". A failure here never stops the adapter: an unregistered
+// adapter relays messages perfectly, it just cannot be turned into a tap
+// -to-connect link.
+func (a *adapter) registerLoop(ctx context.Context) {
+	backoff := time.Second
+	for ctx.Err() == nil {
+		handle, displayName, err := a.transport.Identify(ctx)
+		if err == nil {
+			err = a.keystone.register(ctx, a.transport.Name(), handle, displayName)
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			a.log.Warn("registering the bot's handle", "err", err,
+				"note", "messages still work; the Console cannot offer a connect link until this succeeds")
+			backoff = sleepBackoff(ctx, backoff)
+			continue
+		}
+		backoff = time.Second
+		a.log.Info("registered", "transport", a.transport.Name(), "handle", handle)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(registerHeartbeat):
+		}
+	}
 }
 
 // receiveLoop carries what people said to Keystone.
@@ -174,7 +221,15 @@ func (a *adapter) receiveLoop(ctx context.Context) {
 // adapter knows. Everything else is relayed verbatim — an adapter that
 // interprets messages is an adapter with opinions about the household.
 func (a *adapter) handle(ctx context.Context, m Incoming) {
-	if code, ok := claimCodeIn(m.Text); ok && !m.Group {
+	text, wasStart := withoutStartCommand(m.Text)
+	if wasStart && strings.TrimSpace(text) == "" && !m.Group {
+		// Somebody opened the bot and pressed Start with no invite. It
+		// is the first thing anyone does, and silence here reads as a
+		// broken bot.
+		a.reply(ctx, m.Conversation, "Hello. I need an invite before we can talk — ask whoever runs the house for one.")
+		return
+	}
+	if code, ok := claimCodeIn(text); ok && !m.Group {
 		if err := a.keystone.redeem(ctx, a.transport.Name(), m.Account, m.DisplayName, m.Conversation, code); err != nil {
 			// The refusal is deliberately vague — Keystone does not say
 			// why, and neither does this.
@@ -258,6 +313,32 @@ func sleepBackoff(ctx context.Context, d time.Duration) time.Duration {
 // claimAlphabet is the claim code's alphabet (keystone/principal): no
 // 0/O, no 1/I/L, no vowels.
 const claimAlphabet = "23456789BCDFGHJKMNPQRSTVWXYZ"
+
+// withoutStartCommand strips a leading /start, which is how a tapped
+// invite link arrives: Telegram turns t.me/<bot>?start=<code> into the
+// message "/start <code>", and a bot added to a group gets
+// "/start@thebot". Without this the code arrives wrapped in a command
+// and reads as an ordinary sentence, so the one-tap invite silently does
+// nothing.
+func withoutStartCommand(text string) (string, bool) {
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(trimmed, "/start") {
+		return text, false
+	}
+	rest := strings.TrimPrefix(trimmed, "/start")
+	// "/start@botname payload": the command may be addressed.
+	if strings.HasPrefix(rest, "@") {
+		if i := strings.IndexAny(rest, " \t"); i >= 0 {
+			rest = rest[i:]
+		} else {
+			rest = ""
+		}
+	} else if rest != "" && !strings.ContainsAny(rest[:1], " \t") {
+		// "/startle" is a word, not the command.
+		return text, false
+	}
+	return strings.TrimSpace(rest), true
+}
 
 // claimCodeIn reports whether a message is somebody sending their claim
 // code, and returns it. The test is strict on purpose: the message must

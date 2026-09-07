@@ -212,6 +212,27 @@ func (db *DB) TouchToken(hash string) error {
 
 // RevokeToken marks a token revoked. Revoking an already-revoked token is
 // a no-op, not an error (idempotent for the admin API).
+// LiveTokensFor counts the usable tokens a principal holds: not
+// revoked, not expired.
+//
+// "The principal exists" is not the same question, and the difference is
+// a real state the system produces: credentialing a chat adapter creates
+// the principal, mints a token, and places it on the node — and when the
+// placement fails it revokes the token and leaves the principal behind.
+// A caller asking "is this adapter credentialed" and getting yes from an
+// existing principal would be reading a failed step as a finished one.
+func (db *DB) LiveTokensFor(principal string) (int, error) {
+	var n int
+	err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM tokens
+		 WHERE principal = ? AND revoked_at = '' AND (expires_at = '' OR expires_at > ?)`,
+		principal, now()).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: counting tokens for %s: %w", principal, err)
+	}
+	return n, nil
+}
+
 func (db *DB) RevokeToken(hash string) error {
 	res, err := db.sql.Exec(
 		`UPDATE tokens SET revoked_at = ? WHERE hash = ? AND revoked_at = ''`, now(), hash)

@@ -132,17 +132,25 @@ nothing else changes.
 
 ### A10. Navigation is an icon rail, and Chat sits with the Butler
 
-Ten screens, in this order:
+Twelve screens, in this order:
 
-    Home · Services · Butler · Chat · Plans · Activity · Backups · Nodes
+    Home · Services · Butler · Chat · Household · Connect chat ·
+    Plans · Activity · Backups · Nodes
     ─────
     Secrets · Identity
 
 Events is renamed Activity. Chat (ADR-W026 A4) is placed immediately
 after Butler because it answers "who may talk to the Butler, and as
 whom" — it is read as part of the Butler's surface, not as another
-piece of infrastructure. The rule below the divider stays what it was:
-the screens you visit when something specific needs doing.
+piece of infrastructure. Household and Connect chat (ADR-W026 A2/A3)
+follow it for the same reason: the three of them are one subject.
+The rule below the divider stays what it was: the screens you visit
+when something specific needs doing.
+
+Twelve is a lot for one rail, and it is worth revisiting. Connect chat
+is a setup flow run once per adapter, which is the argument for moving
+it below the divider; it stays above for now because it is the screen
+Chat sends you to when no adapter is installed.
 
 Icons carry the nav, so every item keeps its label as both a `title`
 and an `aria-label`, and a pip appears only when that screen has
@@ -165,7 +173,7 @@ Four decisions inside it:
 **The question is stored.** It never was. A session recorded what the
 Butler said and not what it was asked, which was enough to audit the
 answer and not enough to read the exchange or to ask a second question.
-Migration 0013 backfills existing sessions with their answer alone —
+Migration 0014 backfills existing sessions with their answer alone —
 a conversation that opens with an answer, which is true, rather than an
 invented question.
 

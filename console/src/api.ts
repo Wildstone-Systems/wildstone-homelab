@@ -222,6 +222,11 @@ export interface PackageView {
   capability: string;
   profile?: string;
   params?: ParamDecl[];
+  // The secrets only an operator can supply, as this package declares
+  // them. They are not derivable from a convention — the Telegram
+  // adapter reads <capability>-bot and the Matrix one <capability>-token
+  // — so a form that collects one must ask for these names.
+  providedSecrets?: string[];
   provides?: { trait: string; mode?: string }[];
   requires?: { trait: string; mode?: string }[];
   enabled: boolean;
@@ -333,6 +338,71 @@ export interface ChatClaim {
   transport?: string;
   expiresAt: string;
   note: string;
+  // The bot to send it to, and a link that opens a chat with it. Both
+  // are known only once that adapter has checked in. On Telegram the
+  // link CARRIES the code, so tapping it is the whole invite.
+  handle?: string;
+  link?: string;
+}
+
+// --- Household members (ADR-W020 A3, ADR-W023 A7). A member IS an
+// `LdapUser` in the Statefile: the household's account list lives in
+// state, in plans, in approval and in audit, rather than in LLDAP's own
+// UI where a restore would bring back every group with nobody in them.
+export interface HouseholdMember {
+  username: string;
+  displayName?: string;
+  email?: string;
+  groups: string[];
+  // "system" for someone an operator added, "capability/<name>" for an
+  // account a package asserts.
+  owner: string;
+  node: string;
+}
+
+// A Keystone principal. An admin-surface binding names one: the chat
+// account speaks as that principal, so the invite picks from the ones
+// that exist rather than trusting a typed name.
+export interface Principal {
+  name: string;
+  role: string;
+  actingFor?: string;
+  disabled?: boolean;
+  createdAt: string;
+}
+
+export interface HouseholdGroup {
+  name: string;
+  owner: string;
+  node: string;
+}
+
+// --- Chat transports (ADR-W026 A3). What an invite may name: the
+// adapters this deployment actually has, not a free-text guess.
+export interface ChatTransport {
+  transport: string;
+  surface: ButlerSurface;
+  capability: string;
+  installed: boolean;
+  // Whether the adapter has its Keystone token. Installed without one
+  // means the bot is running and cannot reach the control plane, so an
+  // invite issued for it can never be redeemed.
+  credentialed: boolean;
+  // The bot itself, as the adapter reported it — a Telegram username, a
+  // Matrix MXID. Empty until one has checked in; nothing else in the
+  // deployment knows it, because the bot token is write-only.
+  handle?: string;
+  seenAt?: string;
+  // Whether that check-in was recent enough to mean the adapter is
+  // running now. A bot nobody has messaged and a bot that is down look
+  // identical without this.
+  online: boolean;
+  // Where an installed adapter runs, from the resources its capability
+  // owns. Rotating its credential or writing its bot token must target
+  // THIS node: doing either on another one revokes the running
+  // adapter's token and places the replacement where nothing reads it.
+  // Empty when the capability's resources span nodes.
+  node?: string;
 }
 
 export interface IdentityNotification {
@@ -425,6 +495,28 @@ export const api = {
     }),
   revokeChatBinding: (id: number) =>
     call<unknown>("POST", `/api/v1/chat/bindings/${id}/revoke`),
+  chatTransports: () => call<ChatTransport[]>("GET", "/api/v1/chat/transports"),
+  // Gives a chat capability its Keystone token and places it on the
+  // node as the secret the adapter container reads. Minting again is
+  // rotation: earlier tokens are revoked first.
+  mintChatAdapter: (capability: string, node: string, surface: ButlerSurface) =>
+    call<{ principal: string; secret: string; node: string }>(
+      "POST",
+      `/api/v1/chat/adapters/${encodeURIComponent(capability)}`,
+      { node, surface },
+    ),
+  principals: () => call<Principal[]>("GET", "/api/v1/principals"),
+  householdMembers: () => call<HouseholdMember[]>("GET", "/api/v1/household/members"),
+  householdGroups: () => call<HouseholdGroup[]>("GET", "/api/v1/household/groups"),
+  // Adding a member proposes a plan; the account exists once a human
+  // approves it on the Plans screen.
+  addHouseholdMember: (m: {
+    username: string;
+    displayName: string;
+    email: string;
+    groups: string[];
+    node?: string;
+  }) => call<PlanRecord>("POST", "/api/v1/household/members", m),
   backups: () => call<{ runs: BackupRun[] }>("GET", "/api/v1/backups"),
   runBackup: (plan: string) =>
     call<unknown>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/run`),

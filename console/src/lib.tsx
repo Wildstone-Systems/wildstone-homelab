@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { kindOf, StatusPill } from "./ui/status";
 
 // useLoad: the Console's one data-fetch pattern — load on mount, expose
 // reload, surface the error inline. Boring on purpose.
@@ -51,13 +50,6 @@ export function useAction() {
   return { state, run, reset };
 }
 
-// Badge: the pre-redesign call site for a status word. It now renders a
-// StatusPill so the screens that have not been rebuilt yet already
-// speak the new vocabulary; it goes when the last of them lands.
-export function Badge({ value }: { value: string }) {
-  return <StatusPill kind={kindOf(value)}>{value}</StatusPill>;
-}
-
 export function ErrorLine({ error }: { error: string | null }) {
   return error ? <div className="error">{error}</div> : null;
 }
@@ -83,6 +75,20 @@ export function duration(since?: string, now: Date = new Date()): string {
   if (hours > 0) return `${hours}h ${mins}m`;
   if (mins > 0) return `${mins}m`;
   return `${secs}s`;
+}
+
+// "in 14m" — how long is left. ago() clamps at zero, so it reads a
+// future timestamp as "0s ago"; an expiry needs the other direction.
+export function until(iso?: string, now: Date = new Date()): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const secs = Math.round((d.getTime() - now.getTime()) / 1000);
+  if (secs <= 0) return "expired";
+  if (secs < 60) return `in ${secs}s`;
+  if (secs < 3600) return `in ${Math.round(secs / 60)}m`;
+  if (secs < 86400) return `in ${Math.round(secs / 3600)}h`;
+  return `in ${Math.round(secs / 86400)}d`;
 }
 
 // "12s ago" / "4m ago" — the header says how fresh the console is, and

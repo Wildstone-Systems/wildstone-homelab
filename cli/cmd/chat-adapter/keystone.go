@@ -72,6 +72,16 @@ func (k *keystoneClient) redeem(ctx context.Context, transport, account, display
 	return err
 }
 
+// register tells Keystone which bot this adapter is. Which CAPABILITY
+// that is comes from this credential's own principal, server-side, so
+// nothing sent here can claim to be a different adapter.
+func (k *keystoneClient) register(ctx context.Context, transport, handle, displayName string) error {
+	_, err := k.call(ctx, http.MethodPost, "/api/v1/chat/adapters/self", map[string]string{
+		"transport": transport, "handle": handle, "displayName": displayName,
+	})
+	return err
+}
+
 // poll long-polls this adapter's outbound queue. The cursor is always 0:
 // the queue returns undelivered messages only, so "everything not yet
 // acked" is the correct read after a restart, a crash, or a redeploy —

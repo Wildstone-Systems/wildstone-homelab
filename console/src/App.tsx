@@ -6,11 +6,13 @@ import {
   House,
   IdentificationCard,
   Key,
+  PlugsConnected,
   Pulse,
   SealCheck,
   ShieldCheck,
   Sparkle,
   SquaresFour,
+  UsersThree,
 } from "@phosphor-icons/react";
 import { api, getToken, Identity, setOnUnauthorized, setToken } from "./api";
 import { ago, ErrorLine } from "./lib";
@@ -21,7 +23,9 @@ import { Activity } from "./views/Activity";
 import { Backups } from "./views/Backups";
 import { Butler } from "./views/Butler";
 import { Chat } from "./views/Chat";
+import { ConnectChat } from "./views/ConnectChat";
 import { Home } from "./views/Home";
+import { Household } from "./views/Household";
 import { IdentityView } from "./views/Identity";
 import { Nodes } from "./views/Nodes";
 import { Plans } from "./views/Plans";
@@ -33,6 +37,8 @@ type View =
   | "services"
   | "butler"
   | "chat"
+  | "household"
+  | "connect"
   | "plans"
   | "activity"
   | "backups"
@@ -43,11 +49,17 @@ type View =
 // The eyebrow says what kind of thing the screen is; the title names
 // it. Both come from the design, and the pair is what tells you where
 // you are once the nav is icons.
+//
+// Home's eyebrow is "Overview" rather than "Household", which is what
+// the design called it: there is a screen named Household now, and two
+// different things under one word is worse than a duller word.
 const TITLES: Record<View, [string, string]> = {
-  home: ["Household", "Home"],
+  home: ["Overview", "Home"],
   services: ["Catalog", "Services"],
   butler: ["Operator", "Butler"],
   chat: ["Access", "Chat"],
+  household: ["People", "Household"],
+  connect: ["Setup", "Connect chat"],
   plans: ["Approvals", "Plans"],
   activity: ["Stream", "Activity"],
   backups: ["Standing duty", "Backups"],
@@ -100,6 +112,8 @@ export function Shell() {
       { id: "services", label: "Services", icon: <SquaresFour size={ICON} /> },
       { id: "butler", label: "Butler", icon: <Sparkle size={ICON} /> },
       { id: "chat", label: "Chat", icon: <ChatsCircle size={ICON} /> },
+      { id: "household", label: "Household", icon: <UsersThree size={ICON} /> },
+      { id: "connect", label: "Connect chat", icon: <PlugsConnected size={ICON} /> },
       { id: "plans", label: "Plans", icon: <SealCheck size={ICON} />, pip: plansPip },
       { id: "activity", label: "Activity", icon: <Pulse size={ICON} /> },
       { id: "backups", label: "Backups", icon: <Archive size={ICON} /> },
@@ -140,6 +154,8 @@ export function Shell() {
           {view === "services" && <Services />}
           {view === "butler" && <Butler />}
           {view === "chat" && <Chat />}
+          {view === "household" && <Household />}
+          {view === "connect" && <ConnectChat />}
           {view === "plans" && <Plans />}
           {view === "activity" && <Activity />}
           {view === "backups" && <Backups />}
