@@ -1,0 +1,86 @@
+# Files capability, profile "filebrowser": a web view of a folder on
+# this machine — upload, download, share a link, preview — for the
+# household member who does not want to learn a sync client.
+#
+# THE FOLDER is a read-write host path under the managed prefix; the
+# default is the same media root the media packages serve, so what the
+# family uploads here is what Jellyfin or Plex sees. Change files_path
+# to point it somewhere else. The database volume (accounts, shares,
+# settings) is backed up weekly; the files are content on the storage
+# layer.
+#
+# THE ROUTE. File Browser runs its own login (it prints the admin
+# password in its container log on first start: `wild logs
+# filebrowser`) and shares links that must open without one, so the
+# proxy passes through (auth: none) on the family_private class — the
+# ntfy posture.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   filebrowser/filebrowser:latest -> sha256:a469ea07...b9a
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: files-filebrowser
+  version: 1.0.0
+  capability: files
+  profile: filebrowser
+requires:
+  - { trait: ingress, mode: private }
+  - { trait: storage, class: bulk }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: files_subdomain, default: files, description: "The name this service appears under, e.g. files." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: files_path, default: /srv/wildstone/media, description: "Folder on this machine to browse." }
+policies:
+  classifications: [family_private]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-files, node: "{{ .Params.node }}" }
+    spec: { name: restic-files }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: filebrowser-database, node: "{{ .Params.node }}" }
+    spec: { name: filebrowser-database }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: files-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: files-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: filebrowser, node: "{{ .Params.node }}" }
+    spec:
+      image: "filebrowser/filebrowser@sha256:a469ea076d4a1b4b1d86a41d130f2f536cd9da996a2b1fb39c0d7635f9d89b9a"
+      env:
+        FB_DATABASE: /database/filebrowser.db
+        FB_ROOT: /srv
+        FB_PORT: "80"
+      mounts:
+        - { source: filebrowser-database, target: /database }
+        - { source: "{{ .Params.files_path }}", target: /srv }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: files, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.files_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/filebrowser:80"
+      auth: none
+      classification: family_private
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: files, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [filebrowser-database]
+      repository: files-backup-repo
+      passwordSecret: secret/restic-files
+      schedule: weekly
+      retention: { keepWeekly: 4 }

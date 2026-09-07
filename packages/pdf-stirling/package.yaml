@@ -1,0 +1,57 @@
+# PDF tools capability, profile "stirling-pdf": merge, split, rotate,
+# compress, sign and convert PDFs in the browser, on the household's
+# own machine rather than on a website that keeps a copy.
+#
+# Stirling has no login of its own as shipped (its optional security
+# mode is off), so the Route is behind Authelia forward-auth: signed in
+# to the household, signed in here. family_public because it is a
+# family tool, and the proxy is what authenticates it. Nothing is
+# stored between uses; the one volume holds settings and any custom
+# pipelines and is not worth a BackupPlan.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/stirling-tools/stirling-pdf:latest -> sha256:3b3670fc...3396
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: pdf-stirling
+  version: 1.0.0
+  capability: pdf-tools
+  profile: stirling-pdf
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: public }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: pdf_subdomain, default: pdf, description: "The name this service appears under, e.g. pdf." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+policies:
+  classifications: [family_public]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: stirling-pdf-configs, node: "{{ .Params.node }}" }
+    spec: { name: stirling-pdf-configs }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: stirling-pdf, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/stirling-tools/stirling-pdf@sha256:3b3670fce70b396ec56ba380a3cc7858e0abf83fe13f31c88f7737847763a396"
+      env:
+        DISABLE_ADDITIONAL_FEATURES: "true"
+        LANGS: en_GB
+      mounts:
+        - { source: stirling-pdf-configs, target: /configs }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: pdf, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.pdf_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/stirling-pdf:8080"
+      auth: authelia_oidc
+      classification: family_public

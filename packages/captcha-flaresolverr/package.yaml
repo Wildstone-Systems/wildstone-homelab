@@ -1,0 +1,36 @@
+# Captcha solver capability, profile "flaresolverr": a headless browser
+# that indexers-prowlarr sends requests through when an indexer hides
+# behind Cloudflare's "checking your browser" page. Nothing a person
+# opens: no Route, no volume, no state.
+#
+# Prowlarr reaches it as http://flaresolverr:8191 by container-name
+# DNS (Settings > Indexers > add a FlareSolverr proxy). Only install it
+# when an indexer actually needs it — it runs a full Chromium and is
+# the heaviest idle container in this catalog for its size.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/flaresolverr/flaresolverr:latest -> sha256:139dfee1...6a47
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: captcha-flaresolverr
+  version: 1.0.0
+  capability: captcha-solver
+  profile: flaresolverr
+params:
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+policies:
+  classifications: [internal_only]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: flaresolverr, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/flaresolverr/flaresolverr@sha256:139dfee1c6f89249c8d665d1333a42e8ec74ec0a86bc6bb1c8461e10d3a66a47"
+      env:
+        TZ: "{{ .Params.timezone }}"
+        LOG_LEVEL: info
+      restart: unless-stopped

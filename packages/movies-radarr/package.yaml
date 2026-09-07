@@ -1,0 +1,90 @@
+# Movie automation capability, profile "radarr": Radarr watches for the films you want and files them into the library when they arrive.
+#
+# Part of the *arr set: indexers-prowlarr finds releases, this hands
+# them to downloads-qbittorrent, and imports the result into the
+# library that media-jellyfin or media-plex serves. Each reaches the
+# others by container name on the Wildstone network ("prowlarr",
+# "qbittorrent", ...), which is what you type into its Settings.
+#
+# THE FOLDER LAYOUT. Downloads at /data/downloads and the library at
+# /data/media, the same paths in every *arr container and in
+# qBittorrent, so imports are instant hard links rather than copies.
+# Keep both folders on one filesystem.
+#
+# Its own login is off by default on a fresh install; the Route is
+# behind Authelia forward-auth on the admin surface, which is the
+# login it has. Config (the database, the settings) is backed up
+# weekly; the library is bulk content, outside restic (ADR-W013 A4).
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/linuxserver/radarr:latest -> sha256:95ba0801...f3ef
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: movies-radarr
+  version: 1.0.0
+  capability: movie-automation
+  profile: radarr
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+  - { trait: storage, class: bulk }
+params:
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: downloads_path, default: /srv/wildstone/downloads, description: "Folder on this machine where downloads land. Must match the downloads package." }
+  - { name: media_path, default: /srv/wildstone/media, description: "Folder on this machine holding your library." }
+policies:
+  classifications: [admin_tailscale]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-movie-automation, node: "{{ .Params.node }}" }
+    spec: { name: restic-movie-automation }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: radarr-config, node: "{{ .Params.node }}" }
+    spec: { name: radarr-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: movie-automation-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: movie-automation-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: radarr, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/linuxserver/radarr@sha256:95ba0801df4d9d1d79d0d9a3849f656542497dab061d91b87ad4f53a71aff3ef"
+      env:
+        PUID: "1000"
+        PGID: "1000"
+        TZ: "{{ .Params.timezone }}"
+      mounts:
+        - { source: radarr-config, target: /config }
+        - { source: "{{ .Params.downloads_path }}", target: /data/downloads }
+        - { source: "{{ .Params.media_path }}", target: /data/media }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: radarr, node: "{{ .Params.node }}" }
+    spec:
+      host: "radarr.{{ .Params.admin_domain }}"
+      upstream: "container/radarr:7878"
+      auth: authelia_oidc
+      classification: admin_tailscale
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: movie-automation, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [radarr-config]
+      repository: movie-automation-backup-repo
+      passwordSecret: secret/restic-movie-automation
+      schedule: weekly
+      retention: { keepWeekly: 4 }

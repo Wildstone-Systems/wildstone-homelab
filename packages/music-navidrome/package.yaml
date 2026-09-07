@@ -1,0 +1,84 @@
+# Music capability, profile "navidrome": streams the household's own
+# music collection to browsers and to any Subsonic-compatible app
+# (Symfonium, play:Sub, DSub, Feishin, ...).
+#
+# THE LIBRARY is a read-only host-path mount under the managed prefix,
+# defaulting to a folder inside the media root the other media packages
+# use. Navidrome never writes to it. Playlists, play counts, ratings and
+# accounts live in the data volume, backed up weekly.
+#
+# THE ROUTE. Navidrome's own login, plus the Subsonic API the apps use
+# (which authenticates per request and cannot follow a login redirect),
+# so the proxy passes through (auth: none) on the family_private class —
+# the ntfy posture.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   deluan/navidrome:latest -> sha256:90129391...8e40
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: music-navidrome
+  version: 1.0.0
+  capability: music
+  profile: navidrome
+requires:
+  - { trait: ingress, mode: private }
+  - { trait: storage, class: bulk }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: music_subdomain, default: music, description: "The name this service appears under, e.g. music." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: music_path, default: /srv/wildstone/media/music, description: "Folder on this machine holding your music." }
+policies:
+  classifications: [family_private]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-music, node: "{{ .Params.node }}" }
+    spec: { name: restic-music }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: navidrome-data, node: "{{ .Params.node }}" }
+    spec: { name: navidrome-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: music-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: music-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: navidrome, node: "{{ .Params.node }}" }
+    spec:
+      image: "deluan/navidrome@sha256:9012939114fbb1bb641b81cf96dec5ded15f0aafefe8d47a511d7cb919658e40"
+      env:
+        ND_MUSICFOLDER: /music
+        ND_DATAFOLDER: /data
+        ND_SCANSCHEDULE: 1h
+        ND_LOGLEVEL: info
+      mounts:
+        - { source: navidrome-data, target: /data }
+        - { source: "{{ .Params.music_path }}", target: /music, readOnly: true }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: music, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.music_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/navidrome:4533"
+      auth: none
+      classification: family_private
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: music, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [navidrome-data]
+      repository: music-backup-repo
+      passwordSecret: secret/restic-music
+      schedule: weekly
+      retention: { keepWeekly: 4 }

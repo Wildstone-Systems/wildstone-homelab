@@ -1,0 +1,77 @@
+# Budget capability, profile "actual": Actual Budget — envelope
+# budgeting the household does together, syncing between everyone's
+# devices through this server. The budget file itself is encrypted
+# on the devices; the server only relays it.
+#
+# THE ROUTE. Actual sets a server password on first visit and its
+# apps sign in with it, so the proxy passes through (auth: none) on the
+# family_private class — the ntfy posture. Actual can also use OpenID
+# Connect ("Login with OpenID") once configured from its own settings.
+#
+# Everything is one volume, backed up daily.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   actualbudget/actual-server:latest -> sha256:552beab3...21d3
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: budget-actual
+  version: 1.0.0
+  capability: budget
+  profile: actual
+requires:
+  - { trait: ingress, mode: private }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: budget_subdomain, default: budget, description: "The name this service appears under, e.g. budget." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+policies:
+  classifications: [family_private]
+  dataSensitivity: high
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-budget, node: "{{ .Params.node }}" }
+    spec: { name: restic-budget }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: actual-data, node: "{{ .Params.node }}" }
+    spec: { name: actual-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: budget-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: budget-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: actual, node: "{{ .Params.node }}" }
+    spec:
+      image: "actualbudget/actual-server@sha256:552beab3dec8c93d46b8b9245612d63c3f123b8a45063a474f53e229b17621d3"
+      env:
+        ACTUAL_PORT: "5006"
+        ACTUAL_TRUSTED_PROXIES: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
+      mounts:
+        - { source: actual-data, target: /data }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: budget, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.budget_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/actual:5006"
+      auth: none
+      classification: family_private
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: budget, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [actual-data]
+      repository: budget-backup-repo
+      passwordSecret: secret/restic-budget
+      schedule: daily
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

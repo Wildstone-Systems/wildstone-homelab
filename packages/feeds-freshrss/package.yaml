@@ -1,0 +1,116 @@
+# Feeds capability, profile "freshrss": an RSS reader — every site the
+# household follows, in one page, on every device, with apps that
+# speak the Google Reader and Fever APIs.
+#
+# SINGLE SIGN-ON. FreshRSS speaks OpenID Connect natively, so the
+# Route is app_oidc with an OidcClient registration. FreshRSS runs a
+# short setup wizard on first visit: choose the "HTTP (OIDC)" auth
+# method there and the household account signs in from then on. The
+# reader apps use per-user API passwords set in FreshRSS itself, not
+# the OIDC login.
+#
+# OIDC_CLIENT_CRYPTO_KEY signs the OIDC session cookie; generated on
+# the node. Feeds, articles and accounts are one volume, backed up
+# weekly.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   freshrss/freshrss:latest -> sha256:ab6b3631...1a4d
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: feeds-freshrss
+  version: 1.0.0
+  capability: feeds
+  profile: freshrss
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: public }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: feeds_subdomain, default: rss, description: "The name this service appears under, e.g. rss." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+policies:
+  classifications: [family_public]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: freshrss-oidc-crypto-key, node: "{{ .Params.node }}" }
+    spec: { name: freshrss-oidc-crypto-key }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-feeds, node: "{{ .Params.node }}" }
+    spec: { name: restic-feeds }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: freshrss-data, node: "{{ .Params.node }}" }
+    spec: { name: freshrss-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: freshrss-extensions, node: "{{ .Params.node }}" }
+    spec: { name: freshrss-extensions }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: feeds-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: feeds-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: freshrss, node: "{{ .Params.node }}" }
+    spec:
+      image: "freshrss/freshrss@sha256:ab6b363102ccdbc39f6a62db926f567c61a5289bf25ba460f1c34423d8cc1a4d"
+      env:
+        TZ: "{{ .Params.timezone }}"
+        CRON_MIN: "13,43"
+        BASE_URL: "https://{{ .Params.feeds_subdomain }}.{{ .Params.public_domain }}"
+        TRUSTED_PROXY: "172.16.0.0/12 10.0.0.0/8 192.168.0.0/16"
+        OIDC_ENABLED: "1"
+        OIDC_PROVIDER_METADATA_URL: "{{ .Resolved.IssuerURL }}/.well-known/openid-configuration"
+        OIDC_CLIENT_ID: freshrss
+        OIDC_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
+        OIDC_CLIENT_CRYPTO_KEY: "secret/freshrss-oidc-crypto-key"
+        OIDC_REMOTE_USER_CLAIM: preferred_username
+        OIDC_SCOPES: "openid profile email"
+        OIDC_X_FORWARDED_HEADERS: "X-Forwarded-Host X-Forwarded-Port X-Forwarded-Proto"
+      mounts:
+        - { source: freshrss-data, target: /var/www/FreshRSS/data }
+        - { source: freshrss-extensions, target: /var/www/FreshRSS/extensions }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: rss, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.feeds_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/freshrss:80"
+      auth: app_oidc
+      classification: family_public
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: freshrss, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      clientId: freshrss
+      clientName: FreshRSS
+      redirectUris:
+        - "https://{{ .Params.feeds_subdomain }}.{{ .Params.public_domain }}/i/oidc/"
+      scopes: [openid, profile, email]
+      authPolicy: two_factor
+      secretRef: "{{ .Resolved.OidcSecretRef }}"
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: feeds, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [freshrss-data]
+      repository: feeds-backup-repo
+      passwordSecret: secret/restic-feeds
+      schedule: weekly
+      retention: { keepWeekly: 4 }

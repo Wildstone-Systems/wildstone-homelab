@@ -1,9 +1,12 @@
 package reconcile
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
@@ -197,13 +200,45 @@ func TestPinnedPortYieldsWhenTaken(t *testing.T) {
 // Installing notifications moved uptime-kuma from 10443 to 11443 on a
 // live deployment, and every bookmark to it then pointed at ntfy. The
 // property only holds if the shipped catalog is pinned in full.
+//
+// Walked from packages/ rather than listed, since the catalog expansion:
+// a list is exactly how the next package gets left out of the property
+// it exists to hold. The same walk lives in keystone/pkgtool
+// (TestEveryShippedRouteLabelIsPinned) with the rendered catalog; this
+// one stays here, next to the assignment logic, reading the declared
+// labels the same way the Console's install blocker does.
 func TestEveryShippedServiceIsPinned(t *testing.T) {
-	// The label each shipped package gives its Route, by default.
-	for _, label := range []string{"home", "auth", "jellyfin", "photos", "ntfy", "uptime", "paperless"} {
-		if _, ok := wellKnownPortFor(label); !ok {
-			t.Errorf("%q is a shipped Route label with no pinned port: installing anything that "+
-				"sorts before it will move it, and every bookmark to it breaks", label)
+	root, err := filepath.Abs("../../packages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
 		}
+		path := filepath.Join(root, e.Name(), "package.yaml")
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		pkg, err := pkgspec.Load(path)
+		if err != nil {
+			t.Fatalf("%s: %v", e.Name(), err)
+		}
+		for _, label := range pkgspec.RouteLabels(pkg) {
+			checked++
+			if _, ok := wellKnownPortFor(label); !ok {
+				t.Errorf("%q (packages/%s) is a shipped Route label with no pinned port: installing anything that "+
+					"sorts before it will move it, and every bookmark to it breaks", label, e.Name())
+			}
+		}
+	}
+	if checked < 7 {
+		t.Fatalf("checked only %d labels — the walk is broken, not the packages", checked)
 	}
 }
 

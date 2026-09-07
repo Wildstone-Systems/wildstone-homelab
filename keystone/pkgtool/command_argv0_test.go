@@ -69,6 +69,14 @@ var imageArgv0 = map[string]string{
 	// Cmd-only EnsureContainer. Evidence: alpine's published Dockerfile
 	// is FROM scratch with only CMD ["/bin/sh"].
 	"alpine": "/bin/sh",
+
+	// Prometheus's image declares ENTRYPOINT ["/bin/prometheus"] with
+	// CMD ["--config.file=/etc/prometheus/prometheus.yml",
+	// "--storage.tsdb.path=/prometheus"], so a command carries flags
+	// only — the authelia shape. Evidence: the published Dockerfile at
+	// prometheus/prometheus@main, and the image config blob read from
+	// Docker Hub on 2026-09-07 while resolving the package's digest.
+	"prom/prometheus": "",
 }
 
 // TestPackageCommandsNameTheirBinary walks every shipped package's

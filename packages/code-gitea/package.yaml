@@ -1,0 +1,93 @@
+# Code capability, profile "gitea": a Git server for the household's
+# own projects and dotfiles — like GitHub, but the repositories never
+# leave the house.
+#
+# THE ROUTE. Gitea runs its own login, and `git push` over HTTPS sends
+# its credentials in the request rather than following a login page,
+# so the proxy passes through (auth: none). admin_tailscale: this is
+# the operator's tool, served on the admin surface and reachable from
+# the tailnet — which is the authentication a git client cannot be
+# asked for. Gitea also offers "Sign in with OpenID" from its own
+# authentication settings once an OIDC source is added there.
+#
+# SSH pushes go to port 2222 on the node (published from the
+# container's 22). Registration is closed; the first account is
+# created through the setup page on first visit and becomes admin.
+#
+# Repositories, the database and settings are one volume, backed up
+# daily.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   gitea/gitea:latest -> sha256:87a67ee0...3bef
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: code-gitea
+  version: 1.0.0
+  capability: code
+  profile: gitea
+requires:
+  - { trait: ingress, mode: private }
+params:
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+policies:
+  classifications: [admin_tailscale]
+  dataSensitivity: high
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-code, node: "{{ .Params.node }}" }
+    spec: { name: restic-code }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: gitea-data, node: "{{ .Params.node }}" }
+    spec: { name: gitea-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: code-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: code-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: gitea, node: "{{ .Params.node }}" }
+    spec:
+      image: "gitea/gitea@sha256:87a67ee09d3ae0d1df5fda5dcda3e2a1f9236a45b0a59025d6e00e46adc43bef"
+      env:
+        TZ: "{{ .Params.timezone }}"
+        USER_UID: "1000"
+        USER_GID: "1000"
+        GITEA__database__DB_TYPE: sqlite3
+        GITEA__server__DOMAIN: "git.{{ .Params.admin_domain }}"
+        GITEA__server__ROOT_URL: "https://git.{{ .Params.admin_domain }}/"
+        GITEA__server__SSH_DOMAIN: "git.{{ .Params.admin_domain }}"
+        GITEA__server__SSH_PORT: "2222"
+        GITEA__service__DISABLE_REGISTRATION: "true"
+      ports:
+        - "2222:22"
+      mounts:
+        - { source: gitea-data, target: /data }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: git, node: "{{ .Params.node }}" }
+    spec:
+      host: "git.{{ .Params.admin_domain }}"
+      upstream: "container/gitea:3000"
+      auth: none
+      classification: admin_tailscale
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: code, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [gitea-data]
+      repository: code-backup-repo
+      passwordSecret: secret/restic-code
+      schedule: daily
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

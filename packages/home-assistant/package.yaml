@@ -1,0 +1,127 @@
+# Home Assistant capability, profile "container": Wildstone RUNS Home
+# Assistant, for a household that does not already have one. The other
+# Home Assistant package in this catalog (home-automation/) is the
+# opposite case — an adapter for a Home Assistant that lives elsewhere —
+# and the two are separate capabilities on purpose, so installing one
+# never replaces the other's resources.
+#
+# WHAT WORKS, AND WHAT NEEDS THE HOST. Home Assistant runs happily on
+# the Wildstone Docker network: the dashboard, automations, cloud
+# integrations, MQTT (see mqtt-mosquitto), and Zigbee over the network
+# (see zigbee-zigbee2mqtt) all work as shipped. Two things do not,
+# and are recorded here rather than left for the operator to discover:
+#
+#   - USB radios (Zigbee/Z-Wave sticks) need a ContainerSpec.devices
+#     field that does not exist yet (the same gap ADR-W013 A2 records
+#     for Jellyfin's /dev/dri). Use a network coordinator instead.
+#   - mDNS/SSDP discovery of LAN devices (Chromecast, HomeKit, Sonos)
+#     needs host networking, which the protocol deliberately does not
+#     offer. Most such integrations accept an IP address when asked.
+#
+# THE ROUTE. Home Assistant runs its own login and its mobile app talks
+# to the same URL, so the proxy passes through (auth: none) and the
+# Route is family_private — the same posture as ntfy: reachable by the
+# household's own devices, with the app's own access control at the
+# app layer, and policy-clean off the public class (ADR-W009).
+#
+# The managed configuration file below tells Home Assistant to trust
+# the Wildstone proxy's X-Forwarded-For (it refuses proxied requests
+# otherwise) and includes /config/wildstone as a packages directory,
+# so the home-automation adapter's rendered file is picked up when that
+# capability is installed on the same node.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/home-assistant/home-assistant:stable -> sha256:612d7676...2918
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: home-assistant
+  version: 1.0.0
+  capability: home-assistant
+  profile: container
+requires:
+  - { trait: ingress, mode: private }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: hass_subdomain, default: hass, description: "The name this service appears under, e.g. hass." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+policies:
+  classifications: [family_private]
+  dataSensitivity: high
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-home-assistant, node: "{{ .Params.node }}" }
+    spec: { name: restic-home-assistant }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: home-assistant-config, node: "{{ .Params.node }}" }
+    spec: { name: home-assistant-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: home-assistant-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: home-assistant-backup-repo }
+  # A Home Assistant "package": one file that carries whole config
+  # sections. Included from configuration.yaml — the operator adds the
+  # two `homeassistant: packages:` lines shown in the file once, on
+  # first setup, and everything Wildstone manages arrives through it.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: home-assistant-wildstone, node: "{{ .Params.node }}" }
+    spec:
+      filename: wildstone.yaml
+      content: |
+        # Managed by Wildstone — do not edit. Changes are reverted on the
+        # next reconcile tick.
+        #
+        # Include from /config/configuration.yaml (once):
+        #   homeassistant:
+        #     packages: !include_dir_named /config/wildstone
+        http:
+          # The Wildstone proxy sits in front; without this Home Assistant
+          # answers proxied requests with 400 "A request from a reverse
+          # proxy was received but no trusted_proxies configured".
+          use_x_forwarded_for: true
+          trusted_proxies:
+            - 172.16.0.0/12
+            - 10.0.0.0/8
+            - 192.168.0.0/16
+            - 127.0.0.1
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: home-assistant, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/home-assistant/home-assistant@sha256:612d76760b544cb40b7ba01387fdac964c59a6a550a50a4d30b4773c822d2918"
+      env:
+        TZ: "{{ .Params.timezone }}"
+      mounts:
+        - { source: home-assistant-config, target: /config }
+        - { source: /etc/wildstone/home-assistant, target: /config/wildstone, readOnly: true }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: hass, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.hass_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/home-assistant:8123"
+      auth: none
+      classification: family_private
+  # Backup: the config volume holds every automation, dashboard and
+  # integration credential the household has set up. Daily.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: home-assistant, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [home-assistant-config]
+      repository: home-assistant-backup-repo
+      passwordSecret: secret/restic-home-assistant
+      schedule: daily
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

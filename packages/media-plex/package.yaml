@@ -1,0 +1,107 @@
+# Media capability, profile "plex": the alternative to media-jellyfin
+# for a household whose devices and habits are already Plex's. Same
+# capability, different profile — install one or the other.
+#
+# WHY THIS NEEDS A CLAIM TOKEN. A Plex server is tied to a plex.tv
+# account, and a server that is not reached from the local network at
+# first start (it is reached through the Wildstone proxy) cannot be
+# claimed from the browser. So the operator fetches a claim token from
+# https://www.plex.tv/claim (it lasts four minutes) and sets it as the
+# provided secret BEFORE enabling:
+#
+#     wild secret set plex-claim -node <node>
+#
+# The token is only read on first start; once claimed it is ignored.
+#
+# THE ROUTE. Plex authenticates every client against plex.tv itself, and
+# its apps do not tolerate a login page in front of the API — so the
+# proxy passes through (auth: none) and the Route is family_private, the
+# same honest posture as ntfy. In each Plex app, or under Settings >
+# Network > "Custom server access URLs", enter https://plex.<domain>.
+#
+# Hardware transcoding needs /dev/dri, which needs a ContainerSpec
+# field the protocol does not have (ADR-W013 A2). CPU transcoding works.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   plexinc/pms-docker:latest -> sha256:83a425ae...ac9e
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: media-plex
+  version: 1.0.0
+  capability: media
+  profile: plex
+requires:
+  - { trait: ingress, mode: private }
+  - { trait: storage, class: bulk }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: media_subdomain, default: plex, description: "The name this service appears under, e.g. plex." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: media_path, default: /srv/wildstone/media, description: "Folder on this machine holding your films and television." }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+policies:
+  classifications: [family_private]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: plex-claim, node: "{{ .Params.node }}" }
+    spec: { name: plex-claim, provided: true }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-media, node: "{{ .Params.node }}" }
+    spec: { name: restic-media }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: plex-config, node: "{{ .Params.node }}" }
+    spec: { name: plex-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: plex-transcode, node: "{{ .Params.node }}" }
+    spec: { name: plex-transcode }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: media-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: media-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: plex, node: "{{ .Params.node }}" }
+    spec:
+      image: "plexinc/pms-docker@sha256:83a425ae9e133b1cb2cc3b809556e01c61cd8ff65c582e41b4374bc2210bac9e"
+      env:
+        TZ: "{{ .Params.timezone }}"
+        PLEX_CLAIM: "secret/plex-claim"
+        ADVERTISE_IP: "https://{{ .Params.media_subdomain }}.{{ .Params.public_domain }}"
+      mounts:
+        - { source: plex-config, target: /config }
+        - { source: plex-transcode, target: /transcode }
+        - { source: "{{ .Params.media_path }}", target: /data, readOnly: true }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: plex, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.media_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/plex:32400"
+      auth: none
+      classification: family_private
+  # Backup hook (ADR-W013 A4): config only, weekly — the library is
+  # bulk replaceable content, deliberately outside restic.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: media, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [plex-config]
+      repository: media-backup-repo
+      passwordSecret: secret/restic-media
+      schedule: weekly
+      retention: { keepWeekly: 4 }

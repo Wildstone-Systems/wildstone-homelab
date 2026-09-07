@@ -1,0 +1,96 @@
+# Zigbee capability, profile "zigbee2mqtt": bridges Zigbee bulbs,
+# sensors and switches onto MQTT, where Home Assistant picks them up
+# automatically. Needs a broker: install mqtt-mosquitto first (the
+# default mqtt_server names it).
+#
+# THE COORDINATOR MUST BE ON THE NETWORK. A USB Zigbee stick needs a
+# ContainerSpec.devices field the protocol does not have yet (the gap
+# ADR-W013 A2 records), so this package supports network coordinators
+# — an SLZB-06, a Tube's ZB, an ESPHome-flashed stick — reached as
+# tcp://<address>:<port>. Choose the adapter type to match it:
+# "zstack" for Texas Instruments (SLZB-06, most sticks), "ember" for
+# Silicon Labs (SLZB-06M, Sonoff Dongle-E), "deconz" for ConBee.
+#
+# CONFIGURATION IS ENVIRONMENT, NOT A FILE. Zigbee2MQTT owns its
+# configuration.yaml and writes paired devices into it, so a managed
+# file would lose the devices on the next tick. The ZIGBEE2MQTT_CONFIG_*
+# variables override just the values this package decides and leave
+# the rest to the app. The volume is backed up daily because it holds
+# the network key and every pairing — losing it means re-pairing
+# every device in the house.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   koenkk/zigbee2mqtt:latest -> sha256:fef0de76...20f3
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: zigbee-zigbee2mqtt
+  version: 1.0.0
+  capability: zigbee
+  profile: zigbee2mqtt
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+params:
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: coordinator_url, required: true, example: "tcp://192.168.1.60:6638", description: "Where your network Zigbee coordinator is, e.g. tcp://192.168.1.60:6638." }
+  - { name: coordinator_adapter, default: zstack, description: "The coordinator's chip family: zstack, ember, deconz, zigate or zboss." }
+  - { name: mqtt_server, default: "mqtt://mosquitto:1883", description: "The MQTT broker to publish to. The default is the mqtt-mosquitto package on the same machine." }
+policies:
+  classifications: [admin_tailscale]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-zigbee, node: "{{ .Params.node }}" }
+    spec: { name: restic-zigbee }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: zigbee2mqtt-data, node: "{{ .Params.node }}" }
+    spec: { name: zigbee2mqtt-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: zigbee-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: zigbee-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: zigbee2mqtt, node: "{{ .Params.node }}" }
+    spec:
+      image: "koenkk/zigbee2mqtt@sha256:fef0de769dcd04c27b3a6d277b61046eb96284bdd4198dcb1687c3a01b3020f3"
+      env:
+        TZ: "{{ .Params.timezone }}"
+        ZIGBEE2MQTT_CONFIG_MQTT_SERVER: "{{ .Params.mqtt_server }}"
+        ZIGBEE2MQTT_CONFIG_SERIAL_PORT: "{{ .Params.coordinator_url }}"
+        ZIGBEE2MQTT_CONFIG_SERIAL_ADAPTER: "{{ .Params.coordinator_adapter }}"
+        ZIGBEE2MQTT_CONFIG_FRONTEND_ENABLED: "true"
+        ZIGBEE2MQTT_CONFIG_FRONTEND_PORT: "8080"
+        ZIGBEE2MQTT_CONFIG_HOMEASSISTANT_ENABLED: "true"
+        ZIGBEE2MQTT_CONFIG_ADVANCED_LOG_LEVEL: info
+      mounts:
+        - { source: zigbee2mqtt-data, target: /app/data }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: zigbee, node: "{{ .Params.node }}" }
+    spec:
+      host: "zigbee.{{ .Params.admin_domain }}"
+      upstream: "container/zigbee2mqtt:8080"
+      auth: authelia_oidc
+      classification: admin_tailscale
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: zigbee, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [zigbee2mqtt-data]
+      repository: zigbee-backup-repo
+      passwordSecret: secret/restic-zigbee
+      schedule: daily
+      retention: { keepDaily: 7, keepWeekly: 4 }

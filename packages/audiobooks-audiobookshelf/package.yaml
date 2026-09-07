@@ -1,0 +1,97 @@
+# Audiobooks capability, profile "audiobookshelf": audiobooks and
+# podcasts, with progress that follows you between the phone app and
+# the browser.
+#
+# THE LIBRARY is a read-write host-path mount under the managed prefix
+# (audiobookshelf writes cover art and metadata files beside the
+# audio), defaulting to a folder inside the same media root the other
+# media packages use. Podcasts it downloads itself go into their own
+# volume. Neither is in the BackupPlan — bulk content stays on the
+# storage layer (ADR-W013 A4); the config and metadata volumes, which
+# hold every account and listening position, are backed up daily.
+#
+# THE ROUTE. Its own login, plus phone apps that talk to the same URL,
+# so the proxy passes through (auth: none) on the family_private class
+# — the ntfy posture. Audiobookshelf can be pointed at the household's
+# OIDC provider from its own settings page.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/advplyr/audiobookshelf:latest -> sha256:180acad3...1a8e
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: audiobooks-audiobookshelf
+  version: 1.0.0
+  capability: audiobooks
+  profile: audiobookshelf
+requires:
+  - { trait: ingress, mode: private }
+  - { trait: storage, class: bulk }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: audiobooks_subdomain, default: audiobooks, description: "The name this service appears under, e.g. audiobooks." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: audiobooks_path, default: /srv/wildstone/media/audiobooks, description: "Folder on this machine holding your audiobooks." }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+policies:
+  classifications: [family_private]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-audiobooks, node: "{{ .Params.node }}" }
+    spec: { name: restic-audiobooks }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: audiobookshelf-config, node: "{{ .Params.node }}" }
+    spec: { name: audiobookshelf-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: audiobookshelf-metadata, node: "{{ .Params.node }}" }
+    spec: { name: audiobookshelf-metadata }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: audiobookshelf-podcasts, node: "{{ .Params.node }}" }
+    spec: { name: audiobookshelf-podcasts }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: audiobooks-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: audiobooks-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: audiobookshelf, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/advplyr/audiobookshelf@sha256:180acad33d69c99ed208676465d8edcb268fa46967735579a7810859885b1a8e"
+      env:
+        TZ: "{{ .Params.timezone }}"
+      mounts:
+        - { source: audiobookshelf-config, target: /config }
+        - { source: audiobookshelf-metadata, target: /metadata }
+        - { source: audiobookshelf-podcasts, target: /podcasts }
+        - { source: "{{ .Params.audiobooks_path }}", target: /audiobooks }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: audiobooks, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.audiobooks_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/audiobookshelf:80"
+      auth: none
+      classification: family_private
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: audiobooks, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [audiobookshelf-config, audiobookshelf-metadata]
+      repository: audiobooks-backup-repo
+      passwordSecret: secret/restic-audiobooks
+      schedule: daily
+      retention: { keepDaily: 7, keepWeekly: 4 }

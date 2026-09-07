@@ -1,0 +1,82 @@
+# Subtitles capability, profile "bazarr": fetches subtitles for
+# whatever movies-radarr and tv-sonarr have filed, in the languages
+# the household reads. Point it at "radarr" (port 7878) and "sonarr"
+# (port 8989) by container name in its Settings.
+#
+# THE FOLDER LAYOUT. The library at /data/media, the same path the
+# *arr packages use, so the paths Radarr and Sonarr report are the
+# paths Bazarr finds the files at — no path mapping needed.
+#
+# Behind Authelia forward-auth on the admin surface; config backed up
+# weekly.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/linuxserver/bazarr:latest -> sha256:a20fb11a...8d59
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: subtitles-bazarr
+  version: 1.0.0
+  capability: subtitles
+  profile: bazarr
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+  - { trait: storage, class: bulk }
+params:
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: media_path, default: /srv/wildstone/media, description: "Folder on this machine holding your library." }
+policies:
+  classifications: [admin_tailscale]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-subtitles, node: "{{ .Params.node }}" }
+    spec: { name: restic-subtitles }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: bazarr-config, node: "{{ .Params.node }}" }
+    spec: { name: bazarr-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: subtitles-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: subtitles-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: bazarr, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/linuxserver/bazarr@sha256:a20fb11a440d704a9d61c283aa26462aad33dc63223b173f8d8c77d33e8e9d59"
+      env:
+        PUID: "1000"
+        PGID: "1000"
+        TZ: "{{ .Params.timezone }}"
+      mounts:
+        - { source: bazarr-config, target: /config }
+        - { source: "{{ .Params.media_path }}", target: /data/media }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: bazarr, node: "{{ .Params.node }}" }
+    spec:
+      host: "bazarr.{{ .Params.admin_domain }}"
+      upstream: "container/bazarr:6767"
+      auth: authelia_oidc
+      classification: admin_tailscale
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: subtitles, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [bazarr-config]
+      repository: subtitles-backup-repo
+      passwordSecret: secret/restic-subtitles
+      schedule: weekly
+      retention: { keepWeekly: 4 }

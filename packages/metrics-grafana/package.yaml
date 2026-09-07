@@ -1,0 +1,139 @@
+# Metrics capability, profile "grafana": dashboards over whatever
+# numbers the household collects. Pairs with metrics-prometheus (the
+# store), which the provisioned datasource below points at by
+# container name; Grafana simply shows that datasource as unreachable
+# until Prometheus is installed.
+#
+# SINGLE SIGN-ON. Grafana's generic OAuth speaks OpenID Connect, so the
+# Route is app_oidc with an OidcClient registration; the sign-in page
+# offers "Sign in with Authelia". The local admin account remains,
+# with a generated password, for the day the identity provider is
+# what you are debugging.
+#
+# THE PROVISIONING FILE. Grafana reads datasources from a directory at
+# start, so the managed config directory is mounted there read-only.
+# A datasource defined in a provisioning file cannot be edited in the
+# UI, which is the point: it is declared, and it comes back.
+#
+# admin_tailscale: an operator's tool, not a family page.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   grafana/grafana:latest -> sha256:f772d434...4283
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: metrics-grafana
+  version: 1.0.0
+  capability: metrics
+  profile: grafana
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+params:
+  # public_domain rather than admin_domain, even though this is an admin
+  # surface: the identity provider's exports (.Resolved.IssuerURL) render
+  # over the REQUESTING package's params, so a package that signs in
+  # through OIDC has to carry the same domain param the provider does.
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
+  - { name: prometheus_url, default: "http://prometheus:9090", description: "Where the metrics store is. The default is the metrics-prometheus package on the same machine." }
+policies:
+  classifications: [admin_tailscale]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: grafana-admin-password, node: "{{ .Params.node }}" }
+    spec: { name: grafana-admin-password }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: grafana-data, node: "{{ .Params.node }}" }
+    spec: { name: grafana-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: grafana-datasources, node: "{{ .Params.node }}" }
+    spec:
+      filename: datasources.yaml
+      content: |
+        # Managed by Wildstone — do not edit.
+        apiVersion: 1
+        datasources:
+          - name: Prometheus
+            type: prometheus
+            uid: wildstone-prometheus
+            access: proxy
+            url: "{{ .Params.prometheus_url }}"
+            isDefault: true
+            editable: false
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: grafana-ini, node: "{{ .Params.node }}" }
+    spec:
+      filename: grafana.ini
+      content: |
+        # Managed by Wildstone — do not edit.
+        [auth.generic_oauth]
+        enabled = true
+        name = Authelia
+        client_id = grafana
+        client_secret = {{ .Resolved.OidcSecretRef }}
+        scopes = openid profile email groups
+        auth_url = {{ .Resolved.IssuerURL }}/api/oidc/authorization
+        token_url = {{ .Resolved.IssuerURL }}/api/oidc/token
+        api_url = {{ .Resolved.IssuerURL }}/api/oidc/userinfo
+        use_pkce = true
+        login_attribute_path = preferred_username
+        name_attribute_path = name
+        allow_sign_up = true
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: grafana, node: "{{ .Params.node }}" }
+    spec:
+      image: "grafana/grafana@sha256:f772d434e8fab0049deb2b1b30abd43342bcfca1537614aa8d36080232cf4283"
+      env:
+        GF_SERVER_ROOT_URL: "https://grafana.{{ .Params.public_domain }}"
+        GF_SECURITY_ADMIN_USER: admin
+        GF_SECURITY_ADMIN_PASSWORD: "secret/grafana-admin-password"
+        GF_USERS_ALLOW_SIGN_UP: "false"
+        # The OAuth settings live in the managed grafana.ini below, not
+        # here: Grafana's env names for them include TOKEN_URL, which the
+        # policy engine reads as credential-shaped and refuses as a
+        # literal (§9.2-3). A config file carries the same settings and
+        # resolves the one real secret reference on the node.
+        GF_PATHS_CONFIG: /etc/wildstone/metrics/grafana.ini
+      mounts:
+        - { source: grafana-data, target: /var/lib/grafana }
+        # The managed directory twice: once where Grafana looks for
+        # datasource provisioning (it reads only *.yaml there, so the
+        # ini beside it is ignored), once at the path GF_PATHS_CONFIG
+        # names.
+        - { source: /etc/wildstone/metrics, target: /etc/grafana/provisioning/datasources, readOnly: true }
+        - { source: /etc/wildstone/metrics, target: /etc/wildstone/metrics, readOnly: true }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: grafana, node: "{{ .Params.node }}" }
+    spec:
+      host: "grafana.{{ .Params.public_domain }}"
+      upstream: "container/grafana:3000"
+      auth: app_oidc
+      classification: admin_tailscale
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: grafana, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      clientId: grafana
+      clientName: Grafana
+      redirectUris:
+        - "https://grafana.{{ .Params.public_domain }}/login/generic_oauth"
+      scopes: [openid, profile, email, groups]
+      authPolicy: two_factor
+      secretRef: "{{ .Resolved.OidcSecretRef }}"

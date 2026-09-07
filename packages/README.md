@@ -10,6 +10,97 @@ for the binding format spec.
 Launch packages are transcriptions of proven configs from the reference
 deployment — see `testing/fixtures/`.
 
+## The catalog
+
+Fifty-two packages. Every one lints clean against the rest of the
+catalog, pins real image digests, has a row on the dashboard, a pinned
+tailnet port, and passes the cross-resource checks in
+`keystone/pkgtool/catalog_wiring_test.go` (secrets referenced are
+declared, mounts name declared volumes, Routes point at a container the
+package runs, OIDC redirects land on a host the package serves, backup
+plans name real volumes). `TestCatalogShipsTheLaunchServiceSet` holds the
+list below together.
+
+Three sign-in postures appear, and which one a package uses is a fact
+about the app, recorded in each package's header:
+
+| posture | Route `auth` | when |
+| --- | --- | --- |
+| Household SSO, the app does it | `app_oidc` + an `OidcClient` | the app speaks OpenID Connect itself |
+| Household SSO, the proxy does it | `authelia_oidc` | browser-only apps with no login worth keeping |
+| The app's own login | `none` on `family_private` / `admin_tailscale` | phone apps or APIs that cannot follow a login redirect (the ntfy posture) |
+
+| package | capability | what the household gets | sign-in |
+| --- | --- | --- | --- |
+| `identity` | identity | LLDAP + Authelia — accounts and two-factor | portal |
+| `ingress`, `ingress-tailnet`, `ingress-tailnet-public`, `ingress-tailnet-ts` | ingress | Caddy, in four postures (ADR-W019) | — |
+| `dashboard` | dashboard | Homepage, rendered from desired state | proxy |
+| `dashboard-homarr` | homarr | Homarr, a hand-arranged start page | app OIDC |
+| `notifications` | notifications | ntfy push alerts | own |
+| `monitoring` | monitoring | Uptime Kuma | proxy |
+| `monitoring-beszel` | host-monitoring | Beszel host and container graphs (hub; agents install on each host) | proxy |
+| `metrics-grafana` | metrics | Grafana dashboards | app OIDC |
+| `metrics-prometheus` | timeseries | Prometheus, the store Grafana reads | internal |
+| `home-automation` | home-automation | adapter for a Home Assistant that already exists | — |
+| `home-assistant` | home-assistant | Home Assistant, run here | own |
+| `mqtt-mosquitto` | mqtt | Mosquitto broker | internal |
+| `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a network coordinator | proxy |
+| `cameras-frigate` | cameras | Frigate NVR (CPU detection) | proxy |
+| `dns-pihole`, `dns-adguard` | dns | Pi-hole or AdGuard Home (see the port-53 note below) | proxy |
+| `passwords-vaultwarden` | passwords | Vaultwarden, Bitwarden-compatible | app OIDC |
+| `ai-ollama` | language-models | Ollama, models at home | internal |
+| `ai-open-webui` | ai-chat | Open WebUI, the chat page over Ollama | app OIDC |
+| `media-jellyfin`, `media-plex` | media | Jellyfin (LDAP) or Plex | app LDAP / own |
+| `photos-immich` | photos | Immich | app OIDC |
+| `documents-paperless` | documents | Paperless-ngx | app OIDC |
+| `music-navidrome` | music | Navidrome, Subsonic-compatible | own |
+| `audiobooks-audiobookshelf` | audiobooks | Audiobookshelf | own |
+| `books-calibre-web`, `books-kavita` | books | Calibre-Web (a Calibre library) or Kavita (plain folders) | own |
+| `downloads-qbittorrent` | downloads | qBittorrent | proxy |
+| `movies-radarr`, `tv-sonarr`, `music-lidarr` | movie/tv/music-automation | the *arr set, sharing `/data/{media,downloads}` | proxy |
+| `indexers-prowlarr` | indexers | Prowlarr | proxy |
+| `subtitles-bazarr` | subtitles | Bazarr | proxy |
+| `captcha-flaresolverr` | captcha-solver | FlareSolverr, for Prowlarr | internal |
+| `requests-seerr` | requests | Seerr (formerly Jellyseerr) | own |
+| `recipes-mealie` | recipes | Mealie | app OIDC |
+| `feeds-freshrss` | feeds | FreshRSS | app OIDC |
+| `bookmarks-linkding` | bookmarks | linkding, signed in by the proxy's header | proxy |
+| `sync-syncthing` | file-sync | Syncthing | proxy |
+| `files-filebrowser` | files | File Browser | own |
+| `code-gitea` | code | Gitea | own |
+| `inventory-homebox` | inventory | Homebox | own |
+| `budget-actual` | budget | Actual Budget | own |
+| `pdf-stirling` | pdf-tools | Stirling PDF | proxy |
+| `tools-it-tools` | utilities | IT-Tools | proxy |
+| `chat-telegram-*`, `chat-matrix-*` | chat | the Butler over Telegram / Matrix (ADR-W026) | — |
+
+### Not shipped, and why
+
+Recorded here rather than left in someone's head (ADR-W018 A4). Each
+is a gap in the container spec or the wire protocol, not in the
+package format, and closes the day that field is added deliberately.
+
+- **Gluetun, WireGuard, wg-easy** — need `NET_ADMIN` and `/dev/net/tun`.
+  `ContainerSpec` has no capabilities or devices field, and adding one is
+  a protocol change on both sides of the agent (ADR-W003), the same gap
+  ADR-W013 A2 records for Jellyfin's `/dev/dri`. Until then there is no
+  VPN-routed download path; `downloads-qbittorrent` says so in its header.
+- **UDP port 53 for Pi-hole / AdGuard Home** — `PortBinding` on the wire
+  carries no protocol, and the agent publishes TCP only. Both DNS
+  packages install, their interfaces work, and TCP lookups answer; they
+  are not yet usable as the network's resolver. Same for qBittorrent's
+  DHT and Syncthing's QUIC, which degrade rather than fail.
+- **USB radios (Zigbee, Z-Wave), Coral TPUs, GPUs** — devices again.
+  `zigbee-zigbee2mqtt` supports network coordinators instead;
+  `cameras-frigate` and `ai-ollama` run on the CPU.
+- **Anything that mounts the Docker socket** (Portainer, Dozzle,
+  Watchtower, Beszel's agent) — Wardstone bind-mounts only from its
+  managed prefixes (ADR-W003 A1), and the socket is the one path that
+  would let a container do what the agent exists to mediate.
+- **UniFi Network Application** — wants host networking for device
+  adoption and a MongoDB with an init script; deferred until a household
+  asks for it.
+
 ## Adding a service: start here
 
 ```sh

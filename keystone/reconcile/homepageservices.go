@@ -91,6 +91,44 @@ var homepageApps = map[string]homepageApp{
 	"home-assistant": {"Home Assistant", "home-assistant", "Lights, sensors and automations"},
 	"homeassistant":  {"Home Assistant", "home-assistant", "Lights, sensors and automations"},
 	"homepage":       {"Home", "homepage", "This dashboard"},
+
+	// The catalog expansion of 2026-09: one row per new package's upstream
+	// container, in the order a household would meet them. Icon slugs are
+	// dashboard-icons names, checked against that repository's index at
+	// authoring time; a slug that later disappears renders as a broken
+	// image rather than failing a test, which is the trade the header of
+	// this table records.
+	"frigate":        {"Cameras", "frigate", "Camera recordings and who was at the door"},
+	"plex":           {"Plex", "plex", "Films, series and music"},
+	"pihole":         {"Pi-hole", "pi-hole", "Ad blocking for the whole network"},
+	"adguard-home":   {"AdGuard Home", "adguard-home", "Ad blocking for the whole network"},
+	"vaultwarden":    {"Passwords", "vaultwarden", "The household password vault"},
+	"zigbee2mqtt":    {"Zigbee", "zigbee2mqtt", "Zigbee bulbs, sensors and switches"},
+	"open-webui":     {"Chat", "open-webui", "Talk to an AI that runs at home"},
+	"grafana":        {"Grafana", "grafana", "Graphs of how everything is doing"},
+	"qbittorrent":    {"Downloads", "qbittorrent", "The download queue"},
+	"radarr":         {"Radarr", "radarr", "Films on the way"},
+	"sonarr":         {"Sonarr", "sonarr", "Series on the way"},
+	"lidarr":         {"Lidarr", "lidarr", "Albums on the way"},
+	"prowlarr":       {"Prowlarr", "prowlarr", "Where downloads are searched for"},
+	"bazarr":         {"Bazarr", "bazarr", "Subtitles for the library"},
+	"seerr":          {"Requests", "jellyseerr", "Ask for a film or a series"},
+	"homarr":         {"Homarr", "homarr", "Your own start page"},
+	"audiobookshelf": {"Audiobooks", "audiobookshelf", "Audiobooks and podcasts"},
+	"navidrome":      {"Music", "navidrome", "Your music collection"},
+	"beszel":         {"Beszel", "beszel", "How the machines are doing"},
+	"calibre-web":    {"Books", "calibre-web", "The e-book library"},
+	"kavita":         {"Kavita", "kavita", "Books, comics and manga"},
+	"mealie":         {"Recipes", "mealie", "Recipes, meal plans and the shopping list"},
+	"linkding":       {"Bookmarks", "linkding", "Links worth keeping"},
+	"syncthing":      {"Syncthing", "syncthing", "Folders kept in step between devices"},
+	"freshrss":       {"Feeds", "freshrss", "Every site you follow, in one page"},
+	"stirling-pdf":   {"PDF tools", "stirling-pdf", "Merge, split and sign PDFs"},
+	"it-tools":       {"Tools", "it-tools", "QR codes, converters and generators"},
+	"filebrowser":    {"Files", "filebrowser", "Browse and share files"},
+	"gitea":          {"Gitea", "gitea", "The household's code and dotfiles"},
+	"homebox":        {"Inventory", "homebox", "What we own and where it is"},
+	"actual":         {"Budget", "actual-budget", "The household budget"},
 }
 
 // homepageFallbackIcon is what an app with no row gets. A generic

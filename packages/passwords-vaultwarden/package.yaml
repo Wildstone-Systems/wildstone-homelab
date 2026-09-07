@@ -1,0 +1,115 @@
+# Passwords capability, profile "vaultwarden": a Bitwarden-compatible
+# password manager the household hosts itself. Every official Bitwarden
+# app (browser, phone, desktop) points at this server instead of
+# bitwarden.com.
+#
+# SINGLE SIGN-ON. Vaultwarden speaks OpenID Connect natively, so the
+# Route is app_oidc with an OidcClient registration: people sign in
+# with "Log in with SSO" using the household account, and the master
+# password still encrypts the vault — SSO proves who you are, it never
+# sees what you store. SSO_ONLY is off so the email+master-password
+# path keeps working for apps that predate SSO support. Vaultwarden
+# asks the provider for offline_access (refresh tokens), so the client
+# is registered with that scope.
+#
+# THE ADMIN PAGE (/admin) is protected by a generated token. Signups
+# are off: an operator invites people from the admin page, or turns
+# SSO_SIGNUPS_ENABLED on to let SSO create accounts on first login.
+#
+# Vault data is the most sensitive thing this catalog holds; the
+# backup is daily.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   vaultwarden/server:latest -> sha256:094b5689...d912
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: passwords-vaultwarden
+  version: 1.0.0
+  capability: passwords
+  profile: vaultwarden
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: public }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: vault_subdomain, default: vault, description: "The name this service appears under, e.g. vault." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
+policies:
+  classifications: [family_public]
+  dataSensitivity: high
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: vaultwarden-admin-token, node: "{{ .Params.node }}" }
+    spec: { name: vaultwarden-admin-token, lengthBytes: 48 }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-passwords, node: "{{ .Params.node }}" }
+    spec: { name: restic-passwords }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: vaultwarden-data, node: "{{ .Params.node }}" }
+    spec: { name: vaultwarden-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: passwords-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: passwords-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: vaultwarden, node: "{{ .Params.node }}" }
+    spec:
+      image: "vaultwarden/server@sha256:094b5689ed81549bd293418395c7cf495ae9d960fc2d4928cef2083ef913d912"
+      env:
+        DOMAIN: "https://{{ .Params.vault_subdomain }}.{{ .Params.public_domain }}"
+        SIGNUPS_ALLOWED: "false"
+        INVITATIONS_ALLOWED: "true"
+        ADMIN_TOKEN: "secret/vaultwarden-admin-token"
+        SSO_ENABLED: "true"
+        SSO_ONLY: "false"
+        SSO_SIGNUPS_ENABLED: "true"
+        SSO_AUTHORITY: "{{ .Resolved.IssuerURL }}"
+        SSO_CLIENT_ID: vaultwarden
+        SSO_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
+        SSO_SCOPES: "email profile offline_access"
+        SSO_PKCE: "true"
+      mounts:
+        - { source: vaultwarden-data, target: /data }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: vault, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.vault_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/vaultwarden:80"
+      auth: app_oidc
+      classification: family_public
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: vaultwarden, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      clientId: vaultwarden
+      clientName: Vaultwarden
+      redirectUris:
+        - "https://{{ .Params.vault_subdomain }}.{{ .Params.public_domain }}/identity/connect/oidc-signin"
+      scopes: [openid, profile, email, offline_access]
+      authPolicy: two_factor
+      secretRef: "{{ .Resolved.OidcSecretRef }}"
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: passwords, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [vaultwarden-data]
+      repository: passwords-backup-repo
+      passwordSecret: secret/restic-passwords
+      schedule: daily
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

@@ -1,0 +1,89 @@
+# Homarr: a second, hand-arranged start page — tiles, widgets, live
+# status for each app — for a household that wants more than the
+# generated dashboard. It is its OWN capability rather than a profile
+# of `dashboard`: Keystone renders the Homepage dashboard from desired
+# state and treats every container of that capability as Homepage, so
+# a Homarr filed under it would be handed Homepage's config files.
+# Both can be installed; Homepage stays the page Wildstone maintains.
+#
+# SINGLE SIGN-ON. Homarr speaks OpenID Connect natively, so the Route
+# is app_oidc with an OidcClient registration; people sign in with the
+# household account, and the first one to do so should be made admin
+# from Homarr's own user management.
+#
+# THE ENCRYPTION KEY is `provided`, not generated: Homarr requires
+# exactly 64 hexadecimal characters and validates the shape, and the
+# node's generated secrets are base64. Before enabling:
+#
+#     openssl rand -hex 32 | wild secret set homarr-encryption-key -node <node>
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/homarr-labs/homarr:latest -> sha256:f23ad77a...175e
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: dashboard-homarr
+  version: 1.0.0
+  capability: homarr
+  profile: homarr
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: public }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: homarr_subdomain, default: homarr, description: "The name this service appears under, e.g. homarr." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
+policies:
+  classifications: [family_public]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: homarr-encryption-key, node: "{{ .Params.node }}" }
+    spec: { name: homarr-encryption-key, provided: true }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: homarr-appdata, node: "{{ .Params.node }}" }
+    spec: { name: homarr-appdata }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: homarr, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/homarr-labs/homarr@sha256:f23ad77a681b8a2d90a024a26699829176ff5c60bd54ecbc62d203ad4a2f175e"
+      env:
+        SECRET_ENCRYPTION_KEY: "secret/homarr-encryption-key"
+        AUTH_PROVIDERS: oidc
+        AUTH_OIDC_ISSUER: "{{ .Resolved.IssuerURL }}"
+        AUTH_OIDC_CLIENT_ID: homarr
+        AUTH_OIDC_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
+        AUTH_OIDC_CLIENT_NAME: Authelia
+        AUTH_OIDC_SCOPE_OVERWRITE: "openid email profile groups"
+        AUTH_OIDC_GROUPS_ATTRIBUTE: groups
+      mounts:
+        - { source: homarr-appdata, target: /appdata }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: homarr, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.homarr_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/homarr:7575"
+      auth: app_oidc
+      classification: family_public
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: homarr, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      clientId: homarr
+      clientName: Homarr
+      redirectUris:
+        - "https://{{ .Params.homarr_subdomain }}.{{ .Params.public_domain }}/api/auth/callback/oidc"
+      scopes: [openid, profile, email, groups]
+      authPolicy: two_factor
+      secretRef: "{{ .Resolved.OidcSecretRef }}"
