@@ -15,7 +15,9 @@ import { renderToString } from "react-dom/server";
 import { createElement as h } from "react";
 import { Services, InstallForm } from "../src/views/Services";
 import { Butler, StatusCard, Answer, SURFACES } from "../src/views/Butler";
-import { Chat, IssuedCode } from "../src/views/Chat";
+import { Chat, IssuedCode, Prerequisites } from "../src/views/Chat";
+import { Household, AddMember } from "../src/views/Household";
+import { ConnectChat, InstallStep, InviteStep, surfaceOf, vendorSecret } from "../src/views/ConnectChat";
 
 // Exactly what GET /api/v1/packages serves, copied from the live VM.
 const pkg = {
@@ -114,6 +116,140 @@ const code = renderToString(
 );
 check("issued code is shown", code.includes("K7QP-3XMR-9TWD"));
 check("issued code warns it is shown once", code.includes("only time the code is shown"));
+
+// An invite needs a person to invite and a bot to send the code to. An
+// empty dropdown is not an answer, so the screen says which is missing
+// and where it is fixed.
+const missing = renderToString(
+  h(Prerequisites, {
+    surface: "family", usable: [], chosen: undefined, allTransports: [
+      { transport: "telegram", surface: "family", capability: "chat-telegram-family", installed: false, credentialed: false },
+    ], haveIdentities: false,
+  }),
+);
+check("no members points at the Household screen", missing.includes("Household screen"));
+check("no adapter names the package to install", missing.includes("chat-telegram-family"));
+
+// Installed but never given a token: the bot is running and cannot
+// redeem anything, which looks identical to a working one.
+const uncredentialed = renderToString(
+  h(Prerequisites, {
+    surface: "family",
+    usable: [{ transport: "telegram", surface: "family", capability: "chat-telegram-family", installed: true, credentialed: false }],
+    chosen: { transport: "telegram", surface: "family", capability: "chat-telegram-family", installed: true, credentialed: false },
+    allTransports: [], haveIdentities: true,
+  }),
+);
+check("an adapter with no token is called out", uncredentialed.includes("wild chat adapter"));
+
+// Household members (ADR-W020 A3). The screen has to say the two things
+// an operator would otherwise assume wrongly: adding somebody proposes a
+// plan rather than creating an account, and no password is set here.
+const household = renderToString(h(Household));
+check("Household renders without throwing", household.length > 0);
+check("household screen says adding proposes a plan", household.includes("proposes a plan"));
+check("household screen says the password is not set here", household.includes("reset flow"));
+
+const addMember = renderToString(
+  h(AddMember, {
+    groups: [
+      { name: "photos_users", owner: "capability/photos", node: "n1" },
+      { name: "media_users", owner: "capability/media", node: "n1" },
+    ],
+    members: [{ username: "sam", groups: ["photos_users"], owner: "system", node: "n1" }],
+    onDone: () => {},
+  }),
+);
+check("group checkboxes are offered, not typed", addMember.includes("photos_users") && addMember.includes('type="checkbox"'));
+check("one directory node is not asked for", !addMember.includes("directory node"));
+check("no password field on the add form", !addMember.includes('type="password"'));
+
+// A deployment with two directories has to be asked which one, because
+// a person declared against the wrong node is never provisioned.
+const twoNodes = renderToString(
+  h(AddMember, {
+    groups: [
+      { name: "photos_users", owner: "capability/photos", node: "n1" },
+      { name: "media_users", owner: "capability/media", node: "n2" },
+    ],
+    members: [],
+    onDone: () => {},
+  }),
+);
+check("two directories are disambiguated", twoNodes.includes("directory node"));
+
+// Connect a chat app (ADR-W026 A2/A3). The steps are read from the
+// deployment, and the payoff is a link that carries the code.
+const connect = renderToString(h(ConnectChat));
+check("Connect screen renders without throwing", connect.length > 0);
+check("connect screen says each surface is its own bot", connect.includes("its own bot"));
+check("surface comes from the capability name", surfaceOf("chat-telegram-admin") === "admin" && surfaceOf("chat-telegram-family") === "family");
+
+// The install form is generated from the PACKAGE. chat-matrix-* asks
+// for a homeserver_url that chat-telegram-* does not, and a form that
+// sent only Telegram's params had every Matrix install rejected for a
+// missing required param before a plan could exist.
+const matrixPkg = {
+  name: "chat-matrix-family", version: "1.0.0", capability: "chat-matrix-family", enabled: false,
+  params: [
+    { name: "node", required: true },
+    { name: "adapter_image", required: true },
+    { name: "keystone_url", required: true },
+    { name: "homeserver_url", required: true },
+  ],
+  providedSecrets: ["chat-matrix-family-token", "chat-matrix-family-adapter"],
+};
+const install = renderToString(
+  h(InstallStep, { pkg: matrixPkg as never, node: "n1", nodes: [], done: false, onDone: () => {} }),
+);
+check("install form asks for every package param", install.includes("homeserver_url") && install.includes("adapter_image"));
+check("the node is not asked for twice", !install.includes(">node<"));
+check("propose is gated until the required params are filled", install.includes("fill in"));
+
+// The operator-supplied secret is read from the package, never guessed:
+// Telegram declares <capability>-bot and Matrix <capability>-token, and
+// a guessed name writes the token into a secret nothing reads.
+check("matrix vendor secret", vendorSecret(matrixPkg as never) === "chat-matrix-family-token");
+check("telegram vendor secret", vendorSecret({
+  capability: "chat-telegram-family",
+  providedSecrets: ["chat-telegram-family-bot", "chat-telegram-family-adapter"],
+} as never) === "chat-telegram-family-bot");
+
+const online = {
+  transport: "telegram", surface: "family" as const, capability: "chat-telegram-family",
+  installed: true, credentialed: true, handle: "wildstone_house_bot", online: true,
+};
+const invite = renderToString(
+  h(InviteStep, {
+    surface: "family", transport: online,
+    members: [{ username: "sam", displayName: "Sam", groups: [], owner: "system", node: "n1" }],
+    principals: [],
+  }),
+);
+check("invite offers the declared member", invite.includes("Sam"));
+check("invite asks for a link, not a code", invite.includes("Get invite link"));
+
+// With nobody declared there is nothing to invite, and the screen says
+// where that is fixed rather than showing an empty dropdown.
+const nobody = renderToString(
+  h(InviteStep, { surface: "family", transport: online, members: [], principals: [] }),
+);
+check("no members points at the Household screen", nobody.includes("Household screen"));
+
+// The link replaces the code when there is one: two things to hand over
+// invites handing over the wrong one.
+const linked = renderToString(
+  h(IssuedCode, {
+    claim: {
+      code: "K7QP-3XMR-9TWD", surface: "family", identity: "sam",
+      expiresAt: "2026-09-07T18:00:00Z", note: "Send this link to sam.",
+      handle: "wildstone_house_bot",
+      link: "https://t.me/wildstone_house_bot?start=K7QP-3XMR-9TWD",
+    },
+  }),
+);
+check("the link is what is shown", linked.includes("t.me/wildstone_house_bot?start=K7QP-3XMR-9TWD"));
+check("the raw code is not shown beside it", !linked.includes(">K7QP-3XMR-9TWD<"));
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

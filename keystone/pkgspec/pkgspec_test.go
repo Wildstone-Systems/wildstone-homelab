@@ -351,3 +351,46 @@ agentTools:`, 1)
 		t.Fatalf("externalConfig = %+v", parsed.ExternalConfig)
 	}
 }
+
+// The secrets an operator must supply are read from the package, not
+// guessed from a convention: the two chat transports name theirs
+// differently, and a form that assumed either would write the token into
+// a secret nothing reads.
+func TestProvidedSecretsComeFromThePackage(t *testing.T) {
+	pkg := &Package{Templates: []string{
+		"apiVersion: wildstone.dev/v1\nkind: Secret\nmetadata: { name: chat-matrix-family-token, node: n1 }\nspec: { name: chat-matrix-family-token, provided: true }\n",
+		"apiVersion: wildstone.dev/v1\nkind: Secret\nmetadata: { name: chat-matrix-family-generated, node: n1 }\nspec: { name: chat-matrix-family-generated }\n",
+		"apiVersion: wildstone.dev/v1\nkind: Container\nmetadata: { name: chat-matrix-family, node: n1 }\nspec: { image: x }\n",
+	}}
+	got := ProvidedSecrets(pkg)
+	if len(got) != 1 || got[0] != "chat-matrix-family-token" {
+		t.Fatalf("ProvidedSecrets = %v, want only the provided one", got)
+	}
+}
+
+// Every chat package in the shipped catalog declares exactly the two
+// provided secrets the Console's connect flow collects and mints: the
+// vendor's token, and the adapter's own Keystone credential.
+func TestShippedChatPackagesDeclareTheirSecrets(t *testing.T) {
+	for _, name := range []string{
+		"chat-telegram-family", "chat-telegram-admin", "chat-matrix-family", "chat-matrix-admin",
+	} {
+		pkg, err := Load(filepath.Join("..", "..", "packages", name, "package.yaml"))
+		if err != nil {
+			t.Fatalf("loading %s: %v", name, err)
+		}
+		got := ProvidedSecrets(pkg)
+		if len(got) != 2 {
+			t.Fatalf("%s: provided secrets = %v, want the vendor token and the adapter credential", name, got)
+		}
+		var vendor []string
+		for _, s := range got {
+			if s != name+"-adapter" {
+				vendor = append(vendor, s)
+			}
+		}
+		if len(vendor) != 1 {
+			t.Fatalf("%s: could not tell the vendor token from the adapter credential in %v", name, got)
+		}
+	}
+}

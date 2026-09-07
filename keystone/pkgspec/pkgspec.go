@@ -732,6 +732,40 @@ func ContainerNames(pkg *Package) []string {
 	return out
 }
 
+// ProvidedSecrets are the Secret resources a package declares as
+// `provided: true` — the ones an operator must supply, because nothing
+// in the control plane can invent them (a vendor's bot token, an API
+// key).
+//
+// The names differ per package and are not derivable from a convention:
+// the Telegram adapter reads chat-telegram-family-bot and the Matrix one
+// chat-matrix-family-token. A form that assumed either would write the
+// operator's token into a secret nothing reads, leave the declared one
+// absent, and produce a container the reconciler correctly refuses to
+// start — with the screen showing the step as done.
+func ProvidedSecrets(pkg *Package) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, doc := range packageDocs(pkg) {
+		if docString(doc, "kind") != "Secret" {
+			continue
+		}
+		spec, _ := doc["spec"].(map[string]any)
+		if provided, _ := spec["provided"].(bool); !provided {
+			continue
+		}
+		name := docString(doc, "spec", "name")
+		if name == "" {
+			name = docString(doc, "metadata", "name")
+		}
+		if name != "" && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 var (
 	templateActionRegexp = regexp.MustCompile(`\{\{[^}]*\}\}`)
 	paramRefRegexp       = regexp.MustCompile(`\{\{\s*\.Params\.([a-z_]+)\s*\}\}`)

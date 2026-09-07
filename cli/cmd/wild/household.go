@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -28,6 +29,10 @@ func runHousehold(args []string) int {
 		return runHouseholdEmit(args[1:])
 	case "publisher":
 		return runHouseholdPublisher(args[1:])
+	case "members":
+		return runHouseholdMembers(args[1:])
+	case "member":
+		return runHouseholdMemberAdd(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "wild household: unknown subcommand %q\n", args[0])
 		householdUsage()
@@ -141,13 +146,88 @@ func runHouseholdPublisher(args []string) int {
 	return simpleCall("household publisher", *apiBase, token, http.MethodPost, path, map[string]string{"node": *node})
 }
 
+// runHouseholdMembers lists the household's declared accounts — the
+// LdapUsers in the Statefile (ADR-W020 A3), which is the same roster the
+// Console shows and the same one a chat invite may name.
+func runHouseholdMembers(args []string) int {
+	fs := flag.NewFlagSet("wild household members", flag.ExitOnError)
+	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
+	fs.Parse(args) //nolint:errcheck // ExitOnError
+	token, ok := requireToken("household members")
+	if !ok {
+		return 2
+	}
+	out, err := apiCall(*apiBase, token, http.MethodGet, "/api/v1/household/members", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "wild household members: %v\n", err)
+		return 1
+	}
+	var members []struct {
+		Username    string   `json:"username"`
+		DisplayName string   `json:"displayName"`
+		Email       string   `json:"email"`
+		Groups      []string `json:"groups"`
+	}
+	if err := json.Unmarshal([]byte(out), &members); err != nil {
+		fmt.Fprintf(os.Stderr, "wild household members: %v\n", err)
+		return 1
+	}
+	if len(members) == 0 {
+		fmt.Println("no household members are declared")
+		return 0
+	}
+	for _, m := range members {
+		fmt.Printf("%s\t%s\t%s\t%s\n", m.Username, m.DisplayName, m.Email, strings.Join(m.Groups, ","))
+	}
+	return 0
+}
+
+// runHouseholdMemberAdd proposes the plan that declares a person. It
+// creates nothing: a human approves the plan, and the identity
+// capability's provisioning job creates the account — with no password,
+// because a credential never lives in declared state (ADR-W020 A4).
+func runHouseholdMemberAdd(args []string) int {
+	username, rest := splitLeadingArg(args)
+	if username == "" {
+		fmt.Fprintln(os.Stderr, "usage: wild household member <username> -email <address> [-name \"Full Name\"] [-groups a,b] [-node id] [-api URL]")
+		return 2
+	}
+	fs := flag.NewFlagSet("wild household member", flag.ExitOnError)
+	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
+	email := fs.String("email", "", "the person's email address (required: LLDAP cannot create an account without one)")
+	name := fs.String("name", "", "display name")
+	groups := fs.String("groups", "", "comma-separated groups to put them in; each must be one a capability declares")
+	node := fs.String("node", "", "directory node (only needed when more than one runs a directory)")
+	fs.Parse(rest) //nolint:errcheck // ExitOnError
+	if *email == "" {
+		fmt.Fprintln(os.Stderr, "wild household member: -email is required")
+		return 2
+	}
+	token, ok := requireToken("household member")
+	if !ok {
+		return 2
+	}
+	body := map[string]any{"username": username, "displayName": *name, "email": *email}
+	if *groups != "" {
+		body["groups"] = strings.Split(*groups, ",")
+	}
+	if *node != "" {
+		body["node"] = *node
+	}
+	return simpleCall("household member", *apiBase, token, http.MethodPost, "/api/v1/household/members", body)
+}
+
 func householdUsage() {
 	fmt.Fprintln(os.Stderr, `usage:
   wild household events [-after N] [-limit N] [-follow] [-api URL]
   wild household emit -type <ns.name> [-subject S] [-entity E] [-id ID] [-payload JSON] [-correlation C] [-api URL]
   wild household publisher <capability> -node <id> [-api URL]
+  wild household members [-api URL]
+  wild household member <username> -email <address> [-name "Full Name"] [-groups a,b] [-node id] [-api URL]
 Authentication: set WILD_TOKEN. events needs read; emit needs emit (a
 publisher or admin token); publisher needs an admin token — it mints
 the capability's publisher principal and places its token on the node
-as secret/<capability>-publisher (minting again rotates it).`)
+as secret/<capability>-publisher (minting again rotates it). members
+needs read; member needs propose — it PROPOSES the account, which
+exists once the plan is approved and carries no password.`)
 }

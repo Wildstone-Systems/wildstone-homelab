@@ -89,6 +89,19 @@ type syncResponse struct {
 	} `json:"rooms"`
 }
 
+// Identify reports this bot's MXID. Matrix has no invite payload, so
+// the link it produces only opens the conversation — the code is still
+// sent by hand — but naming the right bot is most of the problem when a
+// household runs two.
+func (m *matrix) Identify(ctx context.Context) (string, string, error) {
+	if m.userID == "" {
+		if err := m.whoami(ctx); err != nil {
+			return "", "", err
+		}
+	}
+	return m.userID, "", nil
+}
+
 func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 	if m.userID == "" {
 		if err := m.whoami(ctx); err != nil {
