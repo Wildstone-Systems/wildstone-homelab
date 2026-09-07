@@ -241,22 +241,24 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		}
 	}
 
-	// "New conversation, please." Without a way to say this a thread
-	// can only be ended by waiting out the idle window, which means a
-	// fresh question inherits the previous topic for half an hour.
-	// Handled here rather than in an adapter so both transports get it
-	// from one implementation.
-	if isChatReset(text) {
-		if err := s.DB.ClearChatThread(transport, conversation, surface, binding.Identity); err != nil {
-			s.Log.Error("clearing chat thread failed", "err", err)
-		}
-		seq := s.queueChatReply(surface, transport, conversation,
-			"Starting fresh. The previous conversation is still recorded — this one just won't build on it.",
-			binding.ID, "", chatDedupe(surface, transport, conversation, msg.MessageID, "reset", text))
+	// Slash commands are answered here, deterministically: no model
+	// runs and nothing is proposed. An exact question deserves an exact
+	// answer, and these keep working when the Butler is off or the
+	// startup probe put it in qa-only.
+	if body, reason, handled := s.runChatCommand(chatCommandCtx{
+		Surface:      surface,
+		Transport:    transport,
+		Conversation: conversation,
+		Identity:     binding.Identity,
+		Binding:      binding,
+		Group:        msg.Group,
+	}, text); handled {
+		seq := s.queueChatReply(surface, transport, conversation, body, binding.ID, "",
+			chatDedupe(surface, transport, conversation, msg.MessageID, "command", text))
 		s.settleInbound(claimKey, seq, &settled)
 		s.touchBinding(binding, conversation, msg.Group)
 		return inboundResponse{Accepted: true, Bound: true, Queued: seq,
-			Reason: "started a new conversation"}, http.StatusAccepted, nil
+			Reason: reason}, http.StatusAccepted, nil
 	}
 
 	// The session runners take their own snapshot of the backend and
@@ -299,18 +301,6 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		chatDedupe(surface, transport, conversation, msg.MessageID, ask.SessionID, text))
 	s.settleInbound(claimKey, seq, &settled)
 	return inboundResponse{Accepted: true, Bound: true, Queued: seq}, http.StatusAccepted, nil
-}
-
-// isChatReset reports whether a message means "start over". The set is
-// deliberately small and exact — a message that merely CONTAINS "new"
-// is a question, not a command, and swallowing it as one would lose
-// what the person actually asked.
-func isChatReset(text string) bool {
-	switch strings.ToLower(strings.TrimSpace(text)) {
-	case "/new", "/reset", "/clear":
-		return true
-	}
-	return false
 }
 
 // chatIdleWindow is how long a chat conversation stays open. A message

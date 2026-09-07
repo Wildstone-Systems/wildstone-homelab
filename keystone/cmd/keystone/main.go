@@ -652,6 +652,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Public plane. Plan approval pokes the reconcile service (R2a); a
 	// new household event pokes the automation engine.
 	apiSrv := api.New(principals, db, state, log)
+	apiSrv.HouseholdLoc = householdLoc
 	apiSrv.Automation = auto
 	apiSrv.OnHouseholdEvent = auto.Poke
 	apiSrv.Catalog = cat
@@ -833,6 +834,8 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		// A10). It is what lets a group session hear about the front
 		// door and not about who came home (ADR-W026 A7), and it is read
 		// per call so enabling a package mid-run changes the answer.
+		// The same rule the family timeline uses, so /today withholds
+		// exactly what a spoken answer would.
 		memberScoped := api.MemberScopedTypes(func() map[string]bool {
 			out := map[string]bool{}
 			if cat == nil {
@@ -850,6 +853,9 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			}
 			return out
 		})
+		// /today reads the timeline directly rather than through the
+		// seam, so it needs the same rule the seam applies.
+		apiSrv.MemberScoped = memberScoped
 		household := butler.HouseholdSeams{
 			Events:     api.HouseholdEventSeam(db, memberScoped),
 			Vocabulary: bgw.AutomationVocabulary,
