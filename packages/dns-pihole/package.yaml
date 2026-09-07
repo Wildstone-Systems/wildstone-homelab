@@ -2,19 +2,13 @@
 # by being the household's DNS server. dns-adguard is the other profile
 # of this capability; install one.
 #
-# READ THIS BEFORE INSTALLING. Two things about port 53:
-#
-#   1. Wildstone's agent publishes container ports over TCP only — the
-#      wire protocol's PortBinding has no protocol field yet. Nearly
-#      every DNS client asks over UDP first, so until that field exists
-#      Pi-hole answers TCP lookups and its web interface works, but it
-#      is NOT yet usable as the network's resolver. That is a protocol
-#      addition to make deliberately (ADR-W003), not something this
-#      package can work around. Tracked as the gap this header names.
-#   2. On Ubuntu and most systemd hosts, systemd-resolved already holds
-#      port 53 on 127.0.0.53. Binding dns_listen_addr to the node's LAN
-#      address (the default asks for every interface) avoids the clash,
-#      or disable the stub listener in resolved.conf.
+# READ THIS BEFORE INSTALLING. Port 53 is published over both UDP and
+# TCP (protocol minor 12; a node whose agent predates it publishes TCP
+# only, and resolvers ask over UDP first). On Ubuntu and most systemd
+# hosts, systemd-resolved already holds port 53 on 127.0.0.53: bind
+# dns_listen_addr to the node's LAN address (the default asks for every
+# interface) to avoid the clash, or disable the stub listener in
+# resolved.conf. Then point the router's DHCP at that address.
 #
 # The admin password is generated on the node and set through Pi-hole's
 # v6 environment override; read it with `wild secret` tooling or reset
@@ -67,6 +61,7 @@ templates:
         # whole LAN is the client.
         FTLCONF_dns_listeningMode: all
       ports:
+        - "{{ with .Params.dns_listen_addr }}{{ . }}:{{ end }}53:53/udp"
         - "{{ with .Params.dns_listen_addr }}{{ . }}:{{ end }}53:53"
       mounts:
         - { source: pihole-data, target: /etc/pihole }

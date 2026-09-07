@@ -13,12 +13,12 @@
 # set a permanent one under Tools > Options > Web UI. The Route sits
 # behind Authelia forward-auth on the admin surface as well.
 #
-# The listening port (6881) is published over TCP; the agent has no
-# UDP publication yet, so DHT and uTP are unavailable — trackers and
-# TCP peers work. No VPN: routing this through one needs the NET_ADMIN
-# capability and a /dev/net/tun device, neither of which the container
-# spec can declare (see the header of the missing gluetun package in
-# packages/README.md).
+# The listening port (6881) is published over TCP and UDP, so DHT and
+# uTP work as well as trackers. To send traffic through a VPN, install
+# vpn-gluetun and set qBittorrent's proxy (Tools > Options >
+# Connection > Proxy Server) to HTTP, host gluetun, port 8888, with
+# "Use proxy for peer connections" on — Gluetun blocks everything else
+# on that path if the tunnel drops.
 #
 # Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
 #   ghcr.io/linuxserver/qbittorrent:latest -> sha256:8d48fa8c...1cee
@@ -62,6 +62,7 @@ templates:
         TORRENTING_PORT: "6881"
       ports:
         - "6881:6881"
+        - "6881:6881/udp"
       mounts:
         - { source: qbittorrent-config, target: /config }
         - { source: "{{ .Params.downloads_path }}", target: /data/downloads }

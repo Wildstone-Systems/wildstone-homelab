@@ -1556,20 +1556,34 @@ func (r *Reconciler) pullImage(ctx context.Context, nodeID, image string) string
 func containerEnsureOp(name string, spec *resource.ContainerSpec, network, cfgDigest string) *wsv1.Operation {
 	var ports []*wsv1.PortBinding
 	for _, p := range spec.Ports {
-		hostIP, hostPort, containerPort, ok := resource.SplitPortMapping(p)
+		m, ok := resource.ParsePortMapping(p)
 		if !ok {
 			continue // malformed mapping; not this package's job to re-validate
 		}
-		ports = append(ports, &wsv1.PortBinding{HostIp: hostIP, HostPort: hostPort, ContainerPort: containerPort})
+		// TCP is spelled explicitly rather than left UNSPECIFIED. Both
+		// mean TCP to the agent; the explicit value is what makes a
+		// spec that SAYS tcp distinguishable on the wire from one that
+		// predates the field (protocol minor 12).
+		proto := wsv1.PortProtocol_PORT_PROTOCOL_TCP
+		if m.Protocol == "udp" {
+			proto = wsv1.PortProtocol_PORT_PROTOCOL_UDP
+		}
+		ports = append(ports, &wsv1.PortBinding{HostIp: m.HostIP, HostPort: m.HostPort, ContainerPort: m.ContainerPort, Protocol: proto})
 	}
 	var mounts []*wsv1.Mount
 	for _, m := range spec.Mounts {
 		mounts = append(mounts, &wsv1.Mount{Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
 	}
+	var devices []*wsv1.DeviceMapping
+	for _, d := range spec.Devices {
+		devices = append(devices, &wsv1.DeviceMapping{HostPath: d.Source, ContainerPath: d.Target})
+	}
 	return &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: &wsv1.EnsureContainer{
 		Name: name, Image: spec.Image, Env: spec.Env, Ports: ports, Mounts: mounts, RestartPolicy: spec.Restart,
 		Command: spec.Command,
 		Network: network,
+		Devices: devices,
+		CapAdd:  spec.CapAdd,
 		Labels:  map[string]string{specHashLabel: specHash(spec, network, cfgDigest)},
 	}}}
 }

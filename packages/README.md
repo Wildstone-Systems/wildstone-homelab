@@ -12,7 +12,7 @@ deployment — see `testing/fixtures/`.
 
 ## The catalog
 
-Fifty-two packages. Every one lints clean against the rest of the
+Fifty-three packages. Every one lints clean against the rest of the
 catalog, pins real image digests, has a row on the dashboard, a pinned
 tailnet port, and passes the cross-resource checks in
 `keystone/pkgtool/catalog_wiring_test.go` (secrets referenced are
@@ -44,9 +44,10 @@ about the app, recorded in each package's header:
 | `home-automation` | home-automation | adapter for a Home Assistant that already exists | — |
 | `home-assistant` | home-assistant | Home Assistant, run here | own |
 | `mqtt-mosquitto` | mqtt | Mosquitto broker | internal |
-| `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a network coordinator | proxy |
-| `cameras-frigate` | cameras | Frigate NVR (CPU detection) | proxy |
-| `dns-pihole`, `dns-adguard` | dns | Pi-hole or AdGuard Home (see the port-53 note below) | proxy |
+| `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a USB stick or a network coordinator | proxy |
+| `cameras-frigate` | cameras | Frigate NVR (CPU, Coral or GPU) | proxy |
+| `dns-pihole`, `dns-adguard` | dns | Pi-hole or AdGuard Home, on 53/udp and 53/tcp | proxy |
+| `vpn-gluetun` | vpn | Gluetun VPN client with a kill switch and an HTTP proxy for other containers | internal |
 | `passwords-vaultwarden` | passwords | Vaultwarden, Bitwarden-compatible | app OIDC |
 | `ai-ollama` | language-models | Ollama, models at home | internal |
 | `ai-open-webui` | ai-chat | Open WebUI, the chat page over Ollama | app OIDC |
@@ -74,29 +75,53 @@ about the app, recorded in each package's header:
 | `tools-it-tools` | utilities | IT-Tools | proxy |
 | `chat-telegram-*`, `chat-matrix-*` | chat | the Butler over Telegram / Matrix (ADR-W026) | — |
 
+### Host access: devices, capabilities, UDP
+
+A container spec can ask for three pieces of the host beyond Docker
+(protocol minor 12), and each is a closed allowlist enforced by the
+agent and checked by lint:
+
+```yaml
+spec:
+  ports:
+    - "53:53/udp"                       # protocol suffix; absent means tcp
+  devices:
+    - { source: /dev/serial/by-id/usb-...-port0 }   # target defaults to source
+    - { source: /dev/dri }
+  capAdd: [NET_ADMIN]
+```
+
+Devices must match one of the classes in `keystone/resource/hostaccess.go`
+(GPU render nodes, `/dev/net/tun`, USB and serial radios, `/dev/bus/usb`,
+Coral TPUs, video devices) — never a block device. Capabilities are
+`NET_ADMIN`, `NET_RAW` and `SYS_NICE`; `SYS_ADMIN` is not on the list and
+will not be. The agent resolves device aliases and refuses one that
+leads outside the list. A node whose agent predates minor 12 ignores all
+three: the port publishes as TCP, the device is absent, the capability
+is not granted, and the app says what it is missing.
+
 ### Not shipped, and why
 
-Recorded here rather than left in someone's head (ADR-W018 A4). Each
-is a gap in the container spec or the wire protocol, not in the
-package format, and closes the day that field is added deliberately.
+Recorded here rather than left in someone's head (ADR-W018 A4).
 
-- **Gluetun, WireGuard, wg-easy** — need `NET_ADMIN` and `/dev/net/tun`.
-  `ContainerSpec` has no capabilities or devices field, and adding one is
-  a protocol change on both sides of the agent (ADR-W003), the same gap
-  ADR-W013 A2 records for Jellyfin's `/dev/dri`. Until then there is no
-  VPN-routed download path; `downloads-qbittorrent` says so in its header.
-- **UDP port 53 for Pi-hole / AdGuard Home** — `PortBinding` on the wire
-  carries no protocol, and the agent publishes TCP only. Both DNS
-  packages install, their interfaces work, and TCP lookups answer; they
-  are not yet usable as the network's resolver. Same for qBittorrent's
-  DHT and Syncthing's QUIC, which degrade rather than fail.
-- **USB radios (Zigbee, Z-Wave), Coral TPUs, GPUs** — devices again.
-  `zigbee-zigbee2mqtt` supports network coordinators instead;
-  `cameras-frigate` and `ai-ollama` run on the CPU.
+- **wg-easy / a WireGuard server** — needs `SYS_MODULE` and two sysctls
+  (`net.ipv4.ip_forward`, `src_valid_mark`). Sysctls are not in the
+  container spec, and `SYS_MODULE` loads kernel code, which is not a
+  capability a household service gets. `vpn-gluetun` covers the client
+  side.
+- **Joining another container's network namespace** (Docker's
+  `network_mode: "container:gluetun"`) — the spec cannot say it, and a
+  joined container is no longer reachable by its own name, which changes
+  what a Route's upstream means. Gluetun's HTTP proxy is the shipped
+  path; namespace sharing is a separate decision.
 - **Anything that mounts the Docker socket** (Portainer, Dozzle,
   Watchtower, Beszel's agent) — Wardstone bind-mounts only from its
   managed prefixes (ADR-W003 A1), and the socket is the one path that
   would let a container do what the agent exists to mediate.
+- **NVIDIA GPUs for Ollama** — the device nodes are on the allowlist,
+  but CUDA in a container also needs the NVIDIA container runtime's
+  library injection, which is a runtime hook rather than a device.
+  Intel and AMD render nodes work for transcoding today.
 - **UniFi Network Application** — wants host networking for device
   adoption and a MongoDB with an init script; deferred until a household
   asks for it.

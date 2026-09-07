@@ -31,6 +31,11 @@ export interface Mount {
   readOnly?: boolean;
 }
 
+export interface DeviceMapping {
+  source: string;
+  target?: string;
+}
+
 export interface ContainerSpec {
   image: string;
   env?: Record<string, string>;
@@ -38,6 +43,8 @@ export interface ContainerSpec {
   mounts?: Mount[];
   command?: string[];
   restart?: string;
+  devices?: DeviceMapping[];
+  capAdd?: string[];
 }
 
 export interface VolumeSpec {

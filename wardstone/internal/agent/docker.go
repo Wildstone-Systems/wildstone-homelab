@@ -158,6 +158,17 @@ type hostConfig struct {
 	Binds         []string                 `json:"Binds,omitempty"`
 	PortBindings  map[string][]portBinding `json:"PortBindings,omitempty"`
 	RestartPolicy restartPolicy            `json:"RestartPolicy"`
+	// Devices and CapAdd (protocol minor 12) reach here only through
+	// the allowlists in devices.go; nothing else constructs a hostConfig.
+	Devices []deviceMapping `json:"Devices,omitempty"`
+	CapAdd  []string        `json:"CapAdd,omitempty"`
+}
+
+// deviceMapping is Docker's HostConfig.Devices entry.
+type deviceMapping struct {
+	PathOnHost        string `json:"PathOnHost"`
+	PathInContainer   string `json:"PathInContainer"`
+	CgroupPermissions string `json:"CgroupPermissions"`
 }
 
 type portBinding struct {

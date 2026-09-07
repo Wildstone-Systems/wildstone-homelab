@@ -3,13 +3,16 @@
 # automatically. Needs a broker: install mqtt-mosquitto first (the
 # default mqtt_server names it).
 #
-# THE COORDINATOR MUST BE ON THE NETWORK. A USB Zigbee stick needs a
-# ContainerSpec.devices field the protocol does not have yet (the gap
-# ADR-W013 A2 records), so this package supports network coordinators
-# — an SLZB-06, a Tube's ZB, an ESPHome-flashed stick — reached as
-# tcp://<address>:<port>. Choose the adapter type to match it:
-# "zstack" for Texas Instruments (SLZB-06, most sticks), "ember" for
-# Silicon Labs (SLZB-06M, Sonoff Dongle-E), "deconz" for ConBee.
+# THE COORDINATOR: a USB stick on this machine, or a coordinator on the
+# network. For a stick, set usb_device to its stable name under
+# /dev/serial/by-id/ (ls that directory with the stick plugged in);
+# the agent hands it to the container (protocol minor 12) and refuses
+# any path outside its device allowlist. For a network coordinator —
+# an SLZB-06, a Tube's ZB, an ESPHome-flashed stick — set
+# coordinator_url to tcp://<address>:<port> and leave usb_device empty.
+# Either way, choose the adapter type to match the chip: "zstack" for
+# Texas Instruments (SLZB-06, Sonoff Dongle-P, most sticks), "ember"
+# for Silicon Labs (SLZB-06M, Sonoff Dongle-E), "deconz" for ConBee.
 #
 # CONFIGURATION IS ENVIRONMENT, NOT A FILE. Zigbee2MQTT owns its
 # configuration.yaml and writes paired devices into it, so a managed
@@ -35,7 +38,8 @@ params:
   - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
   - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
-  - { name: coordinator_url, required: true, example: "tcp://192.168.1.60:6638", description: "Where your network Zigbee coordinator is, e.g. tcp://192.168.1.60:6638." }
+  - { name: usb_device, default: "", example: "/dev/serial/by-id/usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_0001-if00-port0", description: "A USB Zigbee stick plugged into this machine, by its name under /dev/serial/by-id/. Leave empty to use a network coordinator instead." }
+  - { name: coordinator_url, default: "tcp://192.168.1.60:6638", description: "Where a network Zigbee coordinator is, e.g. tcp://192.168.1.60:6638. Ignored when usb_device is set." }
   - { name: coordinator_adapter, default: zstack, description: "The coordinator's chip family: zstack, ember, deconz, zigate or zboss." }
   - { name: mqtt_server, default: "mqtt://mosquitto:1883", description: "The MQTT broker to publish to. The default is the mqtt-mosquitto package on the same machine." }
 policies:
@@ -66,7 +70,7 @@ templates:
       env:
         TZ: "{{ .Params.timezone }}"
         ZIGBEE2MQTT_CONFIG_MQTT_SERVER: "{{ .Params.mqtt_server }}"
-        ZIGBEE2MQTT_CONFIG_SERIAL_PORT: "{{ .Params.coordinator_url }}"
+        ZIGBEE2MQTT_CONFIG_SERIAL_PORT: "{{ or .Params.usb_device .Params.coordinator_url }}"
         ZIGBEE2MQTT_CONFIG_SERIAL_ADAPTER: "{{ .Params.coordinator_adapter }}"
         ZIGBEE2MQTT_CONFIG_FRONTEND_ENABLED: "true"
         ZIGBEE2MQTT_CONFIG_FRONTEND_PORT: "8080"
@@ -74,6 +78,7 @@ templates:
         ZIGBEE2MQTT_CONFIG_ADVANCED_LOG_LEVEL: info
       mounts:
         - { source: zigbee2mqtt-data, target: /app/data }
+      devices: {{ with .Params.usb_device }}[{ source: "{{ . }}" }]{{ else }}[]{{ end }}
       restart: unless-stopped
   - |
     apiVersion: wildstone.dev/v1

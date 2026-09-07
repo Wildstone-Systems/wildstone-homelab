@@ -29,6 +29,10 @@ type fakeContainer struct {
 	// networks records the EndpointsConfig keys the create body carried,
 	// so a test can assert what the container was attached to.
 	networks []string
+	// host is the HostConfig the create body carried, so a test can
+	// assert what the container was granted (ports by protocol,
+	// devices, capabilities) rather than only that it was created.
+	host hostConfig
 }
 
 type fakeVolume struct {
@@ -131,6 +135,7 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 			Image            string            `json:"Image"`
 			Labels           map[string]string `json:"Labels"`
 			Env              []string          `json:"Env"`
+			HostConfig       hostConfig        `json:"HostConfig"`
 			NetworkingConfig *struct {
 				EndpointsConfig map[string]struct{} `json:"EndpointsConfig"`
 			} `json:"NetworkingConfig"`
@@ -146,7 +151,7 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		f.seq++
-		c := &fakeContainer{id: fmt.Sprintf("cid-%d", f.seq), image: body.Image, labels: body.Labels, env: body.Env, networks: nets}
+		c := &fakeContainer{id: fmt.Sprintf("cid-%d", f.seq), image: body.Image, labels: body.Labels, env: body.Env, networks: nets, host: body.HostConfig}
 		f.containers[name] = c
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]string{"Id": c.id})

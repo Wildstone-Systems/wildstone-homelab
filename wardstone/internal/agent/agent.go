@@ -77,7 +77,19 @@ import (
 //	immediately were indistinguishable — and a job whose success cannot
 //	be observed cannot be reconciled. An agent below 11 leaves status
 //	empty, which readers treat as unknown and fall back to `running`.
-const ProtocolMinor = 11
+//
+// 12: adds PortBinding.protocol, EnsureContainer.devices and
+//
+//	EnsureContainer.cap_add. Every published port was TCP, so a DNS
+//	resolver could not answer the UDP query every client sends first;
+//	no container could be handed a Zigbee stick, a GPU or /dev/net/tun;
+//	and nothing could hold NET_ADMIN, so a VPN client could not run.
+//	Devices and capabilities are CLOSED allowlists on this side
+//	(devices.go): the agent refuses /dev/sda and SYS_ADMIN for the reason
+//	it refuses Exec(string). A pre-minor-12 agent ignores all three
+//	fields — a UDP port is published as TCP, a device is absent, a
+//	capability is not granted — and the app reports what it is missing.
+const ProtocolMinor = 12
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

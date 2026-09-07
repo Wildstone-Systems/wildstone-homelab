@@ -15,7 +15,7 @@ bookmarks-linkding 1.0.0 9db9e414b77c30d5
 books-calibre-web 1.0.0 aaabe8ebed789763
 books-kavita 1.0.0 2d516590ecdc90e8
 budget-actual 1.0.0 109c9ff70faf48b1
-cameras-frigate 1.0.0 609259318e6a312a
+cameras-frigate 1.0.0 6655c73651bf9438
 captcha-flaresolverr 1.0.0 fbf33e7a47aaf512
 chat-matrix-admin 1.0.1 a7ba4b00a86d619f
 chat-matrix-family 1.0.1 74fd7e4ab01eb793
@@ -24,10 +24,10 @@ chat-telegram-family 1.0.1 05472613bafbfdc2
 code-gitea 1.0.0 e024c78f4b6d41a0
 dashboard 1.0.0 9b1a7906c5c14f24
 dashboard-homarr 1.0.0 cf3f6457c65d9fe0
-dns-adguard 1.0.0 284a632e1aa55eea
-dns-pihole 1.0.0 f367afa93662616c
+dns-adguard 1.0.0 f6d2fac07714a6dc
+dns-pihole 1.0.0 90ad478195c6e52d
 documents-paperless 1.0.0 9c170ef0020cb14f
-downloads-qbittorrent 1.0.0 2fab7f7f1fcbe4c2
+downloads-qbittorrent 1.0.0 8cc3e4bf0ab76c29
 feeds-freshrss 1.0.0 e43e9863d7a58876
 files-filebrowser 1.0.0 46eee31c2917a189
 home-assistant 1.0.0 bd5447a82a7e04b6
@@ -56,7 +56,8 @@ photos-immich 1.0.0 edbbeeee8da5ab55
 recipes-mealie 1.0.0 cadfa15eb5c93bec
 requests-seerr 1.0.0 a6280497bc006397
 subtitles-bazarr 1.0.0 61ede7b84f9148a9
-sync-syncthing 1.0.0 9433117415dd3275
+sync-syncthing 1.0.0 ebf0894472434562
 tools-it-tools 1.0.0 08d30d25834cb937
 tv-sonarr 1.0.0 80ee61e5151e29fe
-zigbee-zigbee2mqtt 1.0.0 68e41db6c4fea7cb
+vpn-gluetun 1.0.0 6f2affdc836ba949
+zigbee-zigbee2mqtt 1.0.0 a31520c7d6e5ea88

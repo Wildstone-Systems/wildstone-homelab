@@ -7,13 +7,11 @@
 # they are ordinary files the operator can see and back up; Syncthing's
 # own database and keys are the config volume, backed up weekly.
 #
-# PORT 22000 is published over TCP for other devices to connect
-# directly; the agent has no UDP publication yet, so QUIC and local
-# discovery are unavailable — add this machine to each device by its
-# device ID and address (tcp://<address>:22000) rather than waiting for
-# it to be found. The web interface is behind Authelia forward-auth on
-# the admin surface, and Syncthing's own GUI password can stay unset
-# behind it.
+# PORT 22000 is published over TCP and UDP (QUIC) for other devices to
+# connect directly, and 21027/udp for local discovery, so devices on
+# the LAN find this machine on their own; add remote ones by device ID.
+# The web interface is behind Authelia forward-auth on the admin
+# surface, and Syncthing's own GUI password can stay unset behind it.
 #
 # Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
 #   syncthing/syncthing:latest -> sha256:8c8ff37a...aec0
@@ -65,6 +63,8 @@ templates:
         STGUIADDRESS: "0.0.0.0:8384"
       ports:
         - "22000:22000"
+        - "22000:22000/udp"
+        - "21027:21027/udp"
       mounts:
         - { source: syncthing-config, target: /var/syncthing/config }
         - { source: "{{ .Params.sync_path }}", target: /var/syncthing/data }

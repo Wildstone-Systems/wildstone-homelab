@@ -538,8 +538,23 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	}
 	ports := map[string][]portBinding{}
 	for _, p := range op.GetPorts() {
-		key := fmt.Sprintf("%d/tcp", p.GetContainerPort())
+		key := fmt.Sprintf("%d/%s", p.GetContainerPort(), portProtocol(p.GetProtocol()))
 		ports[key] = append(ports[key], portBinding{HostIP: p.GetHostIp(), HostPort: fmt.Sprint(p.GetHostPort())})
+	}
+	var devices []deviceMapping
+	for _, d := range op.GetDevices() {
+		dm, oe := a.checkDevice(d)
+		if oe != nil {
+			return nil, oe
+		}
+		devices = append(devices, dm)
+	}
+	var capAdd []string
+	for _, c := range op.GetCapAdd() {
+		if oe := checkCapability(c); oe != nil {
+			return nil, oe
+		}
+		capAdd = append(capAdd, c)
 	}
 	restart := op.GetRestartPolicy()
 	if restart == "" {
@@ -560,6 +575,8 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 			Binds:         binds,
 			PortBindings:  ports,
 			RestartPolicy: restartPolicy{Name: restart},
+			Devices:       devices,
+			CapAdd:        capAdd,
 		},
 		NetworkingConfig: netCfg,
 	})

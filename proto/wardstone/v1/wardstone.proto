@@ -210,12 +210,47 @@ message EnsureContainer {
   // Empty attaches nothing, leaving the pre-minor-8 default bridge
   // behavior; a pre-minor-8 agent ignores this field.
   string network = 9;
+  // Host devices handed to the container (protocol minor 12): a Zigbee
+  // stick on /dev/ttyUSB0, a GPU's /dev/dri, a VPN's /dev/net/tun. The
+  // agent refuses any path outside its closed device allowlist — a
+  // block device is never a "device" in this sense, because handing a
+  // container /dev/sda is handing it the host. A pre-minor-12 agent
+  // ignores this field, so the container starts without the device and
+  // the app reports it missing, which is loud where it matters.
+  repeated DeviceMapping devices = 10;
+  // Linux capabilities added over Docker's default set (protocol minor
+  // 12), by name without the CAP_ prefix: "NET_ADMIN". The agent holds
+  // a closed allowlist and refuses everything else; SYS_ADMIN is not on
+  // it and never will be, for the reason Exec(string) is not an op.
+  // A pre-minor-12 agent ignores this field.
+  repeated string cap_add = 11;
 }
 
 message PortBinding {
   uint32 host_port = 1;
   uint32 container_port = 2;
   string host_ip = 3; // default 0.0.0.0
+  // Transport (protocol minor 12). UNSPECIFIED means TCP, so an older
+  // Keystone that never sets it publishes exactly what it always has.
+  // Until this field existed every published port was TCP, which is
+  // why the catalog's DNS packages could not answer the UDP query every
+  // resolver sends first.
+  PortProtocol protocol = 4;
+}
+
+enum PortProtocol {
+  PORT_PROTOCOL_UNSPECIFIED = 0; // TCP
+  PORT_PROTOCOL_TCP = 1;
+  PORT_PROTOCOL_UDP = 2;
+}
+
+// DeviceMapping is one host device visible inside a container, in
+// Docker's own terms: PathOnHost, PathInContainer (empty means the same
+// path), and the cgroup permissions, which the agent always sets to
+// "rwm" — a device a container may not open is not worth mapping.
+message DeviceMapping {
+  string host_path = 1;
+  string container_path = 2;
 }
 
 message Mount {

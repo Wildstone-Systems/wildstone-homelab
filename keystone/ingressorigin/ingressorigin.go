@@ -241,8 +241,11 @@ func portsPublishedByOthers(desired []resource.Resource) map[int]bool {
 			continue
 		}
 		for _, p := range r.Container.Ports {
-			if _, hostPort, _, ok := resource.SplitPortMapping(p); ok {
-				taken[int(hostPort)] = true
+			// UDP publications do not collide with the proxy's TCP
+			// listeners: a DNS server on 53/udp and nothing else leaves
+			// every port in the block free.
+			if m, ok := resource.ParsePortMapping(p); ok && m.Protocol == "tcp" {
+				taken[int(m.HostPort)] = true
 			}
 		}
 	}

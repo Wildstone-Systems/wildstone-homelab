@@ -2,13 +2,11 @@
 # blocking by being the household's DNS server. dns-pihole is the other
 # profile of this capability; install one.
 #
-# READ THIS BEFORE INSTALLING. The same two port-53 facts dns-pihole
-# records apply here: Wildstone's agent publishes ports over TCP only
-# (no protocol field in the wire format yet), so AdGuard answers TCP
-# lookups and its interface works, but it is not yet usable as the
-# network's resolver until that protocol addition lands; and
-# systemd-resolved usually holds 127.0.0.53:53 on the host, so bind
-# dns_listen_addr to the node's LAN address.
+# READ THIS BEFORE INSTALLING. Port 53 is published over both UDP and
+# TCP (protocol minor 12; a node whose agent predates it publishes TCP
+# only). systemd-resolved usually holds 127.0.0.53:53 on the host, so
+# bind dns_listen_addr to the node's LAN address, then point the
+# router's DHCP at it.
 #
 # FIRST RUN. AdGuard Home starts a setup wizard on port 3000 and then
 # moves its interface to whatever port the wizard chose. The Route
@@ -55,6 +53,7 @@ templates:
     spec:
       image: "adguard/adguardhome@sha256:aba9e3bf0613be3ba3755e1fc311b126e2c24bec25e18b6483894a88283074f0"
       ports:
+        - "{{ with .Params.dns_listen_addr }}{{ . }}:{{ end }}53:53/udp"
         - "{{ with .Params.dns_listen_addr }}{{ . }}:{{ end }}53:53"
       mounts:
         - { source: adguard-work, target: /opt/adguardhome/work }
