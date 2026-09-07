@@ -163,3 +163,22 @@ func TestSeedOnMissingVolumeIsNotFound(t *testing.T) {
 		t.Errorf("want NOT_FOUND for a missing volume, got %v", res.GetError())
 	}
 }
+
+// Regression: a symlink EARLIER in the path, with a later component
+// missing. EvalSymlinks on the parent returns ENOENT, so a fallback that
+// trusts the unresolved parent lets MkdirAll follow the symlink and
+// write outside the volume — with host privileges.
+func TestSeedRefusesASymlinkWithAMissingLaterComponent(t *testing.T) {
+	h, dir := seedHarness(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dir, "escape")); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+	res := dispatch(t, h, "node-a", seedOp("escape/newdir/pwned.yaml", "x"))
+	if res.GetError() == nil {
+		t.Error("a seed followed a symlink out of the volume via a missing subdirectory")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "newdir", "pwned.yaml")); err == nil {
+		t.Error("the write landed outside the volume")
+	}
+}

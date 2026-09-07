@@ -40,12 +40,30 @@ Guarantees, in order of how much they matter:
   stat-then-write: the kernel decides, so a retry, a concurrent seed and
   a household editing the file at the same moment cannot combine into a
   lost edit.
-- **Confined to a volume the same capability owns**, checked after
-  resolving symlinks on the parent, so a symlink planted inside a volume
-  cannot redirect a write onto the host.
+- **Confined to the volume, by the kernel.** Every path is resolved
+  through an `os.Root` anchored at the volume, so no symlink at any
+  component can redirect a write onto the host. Done by hand first, and
+  wrongly: resolving only the parent and treating `ENOENT` as proof of
+  confinement lets `escape -> /etc` with path `escape/newdir/file`
+  through, because the missing `newdir` masks the symlink above it. That
+  wrote outside the volume, as root, and reported success.
+- **Confined to a volume the same capability owns**, enforced in the
+  RECONCILER, because it is the only side that can be: the node's owner
+  label says Wildstone created the volume, not which capability owns it.
+  `pkgtool`'s `seed-volume` rule checks the same thing at lint time so an
+  author learns before an install, but the reconciler's copy is the
+  load-bearing one — a hand-written statefile never passes through lint.
 - **Observed by existence, never by content.** Comparing content would
   report drift the moment somebody edited their own config, and
   "converged" would come to mean "nobody has touched their settings".
+- **Unobservable is absent, never an error.** An agent one minor behind
+  answers `INVALID` for an op it does not know. Treating that as an
+  observation failure aborts the pass for the WHOLE NODE, so one
+  SeedFile in desired state would stop every unrelated capability
+  converging until the agent was upgraded — the exact blast radius
+  ADR-W028 exists to remove. Absent instead keeps the node reconciling
+  and lets the seed's own apply report the skew, halting that capability
+  alone.
 - **Never deleted.** An undesired seed observes as absent, so no Delete
   is ever diffed. Uninstalling a capability leaves its seeded config
   exactly where it is, for the same reason it leaves its volumes

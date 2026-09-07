@@ -57,6 +57,43 @@ var manualStepPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bby hand\b`),
 }
 
+// seedIssues checks that every SeedFile writes into a Volume the same
+// package declares.
+//
+// The reconciler enforces this too, and that is the load-bearing copy —
+// a hand-written statefile never passes through lint. This one exists so
+// a package author learns at lint time rather than watching an install
+// fail on a node, and because the node CANNOT check it: its owner label
+// says Wildstone created the volume, not which capability owns it.
+func seedIssues(rendered []resource.Resource) []Issue {
+	volumes := map[string]string{} // name -> owner
+	for _, r := range rendered {
+		if r.Kind == resource.KindVolume && r.Volume != nil {
+			volumes[r.Volume.Name] = r.Metadata.Owner
+		}
+	}
+	var issues []Issue
+	for _, r := range rendered {
+		if r.Kind != resource.KindSeedFile || r.SeedFile == nil {
+			continue
+		}
+		owner, ok := volumes[r.SeedFile.Volume]
+		if !ok {
+			issues = append(issues, Issue{Rule: "seed-volume", Msg: fmt.Sprintf(
+				"SeedFile/%s writes into volume %q, which this package does not declare. A seed may only "+
+					"write into a volume its own capability owns — otherwise it drops a file into a "+
+					"neighbouring capability's data.", r.Metadata.Name, r.SeedFile.Volume)})
+			continue
+		}
+		if owner != r.Metadata.Owner {
+			issues = append(issues, Issue{Rule: "seed-volume", Msg: fmt.Sprintf(
+				"SeedFile/%s (owner %s) writes into volume %q owned by %s",
+				r.Metadata.Name, r.Metadata.Owner, r.SeedFile.Volume, owner)})
+		}
+	}
+	return issues
+}
+
 // manualStepIssues reports rendered ConfigFile/SeedFile content that
 // instructs a person, excusing only files declared in externalConfig.
 func manualStepIssues(pkg *pkgspec.Package, rendered []resource.Resource) []Issue {

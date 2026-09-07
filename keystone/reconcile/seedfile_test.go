@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
@@ -53,7 +54,10 @@ func TestSeedFileCreateSendsTheSeed(t *testing.T) {
 	want := seedResource()
 	sr := r.applySeedFileStep(context.Background(), "n1",
 		plan.PlanStep{Kind: resource.KindSeedFile, Name: "ha-config", Action: plan.ActionCreate},
-		map[resKey]resource.Resource{{resource.KindSeedFile, "ha-config"}: want})
+		map[resKey]resource.Resource{
+			{resource.KindSeedFile, "ha-config"}: want,
+			{resource.KindVolume, "ha-config"}:   volumeOwnedBy("ha-config", "capability/home-assistant"),
+		})
 
 	if !sr.Applied || !sr.HealthOK {
 		t.Fatalf("create should apply cleanly, got %+v", sr)
@@ -152,5 +156,85 @@ func TestSeedFileUndesiredNeverDiffsADelete(t *testing.T) {
 	}
 	if len(a.statted) != 0 {
 		t.Error("an undesired seed should not even be statted: its spec is gone")
+	}
+}
+
+func volumeOwnedBy(name, owner string) resource.Resource {
+	return resource.Resource{
+		Kind:     resource.KindVolume,
+		Metadata: resource.Metadata{Name: name, Owner: owner, Node: "n1"},
+		Volume:   &resource.VolumeSpec{Name: name},
+	}
+}
+
+// A seed may only write into its OWN capability's volume. The node
+// cannot check this — its owner label says Wildstone created the volume,
+// not which capability it belongs to — so Keystone is the only place it
+// can be enforced, and the resource contract already promised it.
+func TestSeedRefusesAnotherCapabilitysVolume(t *testing.T) {
+	a := &seedApplier{}
+	r := seedReconciler(a)
+	seed := seedResource() // owner capability/home-assistant, volume "ha-config"
+	desired := map[resKey]resource.Resource{
+		{resource.KindSeedFile, "ha-config"}: seed,
+		// The volume exists, but it is someone else's.
+		{resource.KindVolume, "ha-config"}: volumeOwnedBy("ha-config", "capability/paperless"),
+	}
+	sr := r.applySeedFileStep(context.Background(), "n1",
+		plan.PlanStep{Kind: resource.KindSeedFile, Name: "ha-config", Action: plan.ActionCreate}, desired)
+
+	if sr.Applied {
+		t.Fatal("a seed into another capability's volume must not apply")
+	}
+	if len(a.seeded) != 0 {
+		t.Fatal("nothing may be dispatched to the node")
+	}
+	if !strings.Contains(sr.Error, "capability/paperless") {
+		t.Errorf("the error should name the owner it collided with, got %q", sr.Error)
+	}
+}
+
+func TestSeedRefusesAVolumeNotInDesiredState(t *testing.T) {
+	a := &seedApplier{}
+	r := seedReconciler(a)
+	seed := seedResource()
+	sr := r.applySeedFileStep(context.Background(), "n1",
+		plan.PlanStep{Kind: resource.KindSeedFile, Name: "ha-config", Action: plan.ActionCreate},
+		map[resKey]resource.Resource{{resource.KindSeedFile, "ha-config"}: seed})
+
+	if sr.Applied || len(a.seeded) != 0 {
+		t.Fatal("a seed naming an undeclared volume must not be dispatched")
+	}
+}
+
+func TestSeedAppliesIntoItsOwnCapabilitysVolume(t *testing.T) {
+	a := &seedApplier{}
+	r := seedReconciler(a)
+	seed := seedResource()
+	desired := map[resKey]resource.Resource{
+		{resource.KindSeedFile, "ha-config"}: seed,
+		{resource.KindVolume, "ha-config"}:   volumeOwnedBy("ha-config", "capability/home-assistant"),
+	}
+	sr := r.applySeedFileStep(context.Background(), "n1",
+		plan.PlanStep{Kind: resource.KindSeedFile, Name: "ha-config", Action: plan.ActionCreate}, desired)
+	if !sr.Applied || len(a.seeded) != 1 {
+		t.Fatalf("the ordinary case must still apply: %+v", sr)
+	}
+}
+
+// An agent one minor behind answers INVALID for an op it does not know.
+// Reporting that as an observation ERROR would abort the pass for the
+// whole node, stopping every unrelated capability from converging until
+// the agent was upgraded (ADR-W028).
+func TestSeedSkewDoesNotStopTheWholeNode(t *testing.T) {
+	a := &seedApplier{statErr: wsv1.ErrorCode_ERROR_CODE_INVALID}
+	r := seedReconciler(a)
+	_, present, err := r.observeSeedFile(context.Background(), "n1",
+		resKey{resource.KindSeedFile, "ha-config"}, seedResource(), true)
+	if err != nil {
+		t.Fatalf("an agent one minor behind must not fail the node's observe pass: %v", err)
+	}
+	if present {
+		t.Error("an unobservable seed is reported absent, so its own apply reports the skew")
 	}
 }
