@@ -421,7 +421,7 @@ export function InstallStep({
       note={
         done
           ? "Installed. The container dials out to the chat vendor and to Keystone: it opens no port and adds nothing at your edge."
-          : `The image must be digest-pinned and pullable with NO credentials — the agent's pull carries no registry auth — and the Keystone URL is the one the CONTAINER sees, usually the tailnet address of ${nodes[0]?.id ?? "the node"} rather than 127.0.0.1.`
+          : `The image must be digest-pinned, and the NODE must be able to pull it — a public repository needs nothing further, a private one needs its credential on the node first, as a secret named after the registry (e.g. registry.ghcr.io). The Keystone URL is the one the CONTAINER sees, usually the tailnet address of ${nodes[0]?.id ?? "the node"} rather than 127.0.0.1.`
       }
     >
       {!done && (

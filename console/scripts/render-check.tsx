@@ -793,6 +793,15 @@ const install = renderToString(
 );
 check("install form asks for every package param", install.includes("homeserver_url") && install.includes("adapter_image"));
 check("the node is not asked for twice", !install.includes(">node<"));
+// #108 made the agent's pull carry registry auth from a node secret,
+// and updated the packages and the install guide. This screen still
+// said credentials were impossible, which is the shape of copy that
+// rots silently: it is a sentence, not a type. Assert the correction so
+// the next change to that behaviour has to come past here.
+check("the install step does not claim credentials are impossible",
+  !/NO credentials|carries no registry auth/.test(install), install.slice(0, 400));
+check("the install step says a private registry needs a node secret",
+  install.includes("secret named after the registry"), install.slice(0, 400));
 check("propose is gated until the required params are filled", install.includes("fill in"));
 
 // The operator-supplied secret is read from the package, never guessed:
