@@ -798,3 +798,18 @@ details > pre { margin-top: var(--space-2); }
   background: var(--st-bad-bg);
   box-shadow: none;
 }
+/* A form needs more room than a detail panel. Still a drawer rather
+   than a modal: the catalog behind it keeps its scroll position, so
+   closing the form returns you to the row you opened, not the top of
+   forty-six of them. */
+.drawer-wide { width: min(680px, 100%); }
+
+/* The catalog search sits in the section rule rather than above it, so
+   the count beside it reads as "N of M shown". */
+.search { min-width: 0; width: 200px; min-height: 28px; padding: 3px 9px; font-size: 13px; }
+
+/* Inside the drawer the form is the whole surface, so it drops the
+   card treatment it needs when it sits on the page — a panel inside a
+   panel reads as two things. */
+.drawer .panel { background: none; box-shadow: none; padding: 0; margin-top: 0; }
+.drawer .panel h3 { margin-right: var(--space-8); }

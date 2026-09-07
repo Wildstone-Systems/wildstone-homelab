@@ -8,11 +8,16 @@ export function Drawer({
   open,
   onClose,
   title,
+  wide,
   children,
 }: {
   open: boolean;
   onClose: () => void;
   title?: string;
+  // A form needs more room than a detail panel: the install form has
+  // labelled fields and a preview, and 440px turns every label onto
+  // its own line.
+  wide?: boolean;
   children: ReactNode;
 }) {
   const panel = useRef<HTMLDivElement>(null);
@@ -36,7 +41,7 @@ export function Drawer({
   return (
     <div className="drawer-scrim" onClick={onClose}>
       <div
-        className="drawer"
+        className={wide ? "drawer drawer-wide" : "drawer"}
         role="dialog"
         aria-modal="true"
         aria-label={title}

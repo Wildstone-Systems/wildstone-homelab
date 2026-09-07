@@ -18,7 +18,7 @@ import { Butler, StatusCard, SURFACES, Thread, ToolTrace, Turn } from "../src/vi
 import { Chat, IssuedCode } from "../src/views/Chat";
 import { Freshness, Shell, TokenGate } from "../src/App";
 import { HomeView, buildProblems } from "../src/views/Home";
-import { ServicesView, InstalledTile, AvailableRow } from "../src/views/Services";
+import { ServicesView, InstalledTile, AvailableRow, matching } from "../src/views/Services";
 import { groupServices, upstreamContainer } from "../src/services";
 import { eventKind } from "../src/ui/HourChart";
 import type { ConsoleSnapshot } from "../src/state";
@@ -527,6 +527,27 @@ const blockedRow = renderToString(h("table", null, h("tbody", null, h(AvailableR
 check("the blocked row's Install is disabled", blockedRow.includes("disabled"), blockedRow);
 const openRow = renderToString(h("table", null, h("tbody", null, h(AvailableRow, { pkg: PACKAGES[2], onInstall: () => {} }))));
 check("an unblocked row's Install is not", !openRow.includes("disabled"), openRow);
+
+// Forty-six available packages is a scroll, and the catalog only
+// grows. Search filters on name AND capability, because which one you
+// remember depends on why you are looking.
+const CATALOG: PackageView[] = [
+  { name: "media-jellyfin", version: "1.0.0", capability: "media", profile: "jellyfin", enabled: false },
+  { name: "photos-immich", version: "1.0.0", capability: "photos", enabled: false },
+  { name: "books-kavita", version: "1.0.0", capability: "books", enabled: false },
+];
+check("search finds a package by its name", matching(CATALOG, "jellyfin").length === 1);
+check("search finds a package by what it does", matching(CATALOG, "photos").length === 1);
+check("search finds a package by its profile", matching(CATALOG, "jellyfin")[0].name === "media-jellyfin");
+check("search is case-insensitive and substring", matching(CATALOG, "KAVI").length === 1);
+check("an empty query is not a filter", matching(CATALOG, "   ").length === 3);
+check("a query that matches nothing returns nothing", matching(CATALOG, "zzz").length === 0);
+
+const searched = renderToString(h(ServicesView, { pkgs: CATALOG, onInstalled: () => {} }));
+check("the catalog offers a search box", searched.includes('aria-label="search the catalog"'), searched.slice(0, 400));
+// The install form opens beside the catalog, not under it: inline at
+// the bottom meant scrolling past every row to reach it.
+check("the install form is not rendered inline", !searched.includes("Propose plan"), searched.slice(0, 300));
 
 const noAddr = renderToString(h(InstalledTile, { pkg: { name: "monitoring", version: "0.4.0", capability: "monitoring", enabled: true }, onReconfigure: () => {} }));
 check("an installed capability with no address says so", noAddr.includes("no address"), noAddr);

@@ -3,6 +3,7 @@ import { ArrowSquareOut, Package, WarningCircle } from "@phosphor-icons/react";
 import { api, EnablePreview, PackageView } from "../api";
 import { ErrorLine, useLoad } from "../lib";
 import { StatusPill } from "../ui/status";
+import { Drawer } from "../ui/Drawer";
 
 // Services (ADR-W021 A5, ADR-W027): the catalog, and installing from it.
 //
@@ -32,8 +33,13 @@ export function Services() {
 // package that will not work here.
 export function ServicesView({ pkgs, onInstalled }: { pkgs: PackageView[]; onInstalled: () => void }) {
   const [chosen, setChosen] = useState<PackageView | null>(null);
+  const [query, setQuery] = useState("");
   const installed = pkgs.filter((p) => p.enabled);
-  const available = pkgs.filter((p) => !p.enabled);
+  const all = pkgs.filter((p) => !p.enabled);
+  // Name and capability, because people look for both — "jellyfin" is
+  // a package and "media" is what it does, and which one you remember
+  // depends on why you are looking.
+  const available = matching(all, query);
 
   return (
     <>
@@ -59,8 +65,18 @@ export function ServicesView({ pkgs, onInstalled }: { pkgs: PackageView[]; onIns
 
       <div className="sect">
         <span className="eyebrow">Available</span>
-        <span className="muted">{available.length}</span>
+        <span className="muted">
+          {query ? `${available.length} of ${all.length}` : all.length}
+        </span>
         <span className="fade" />
+        <input
+          type="text"
+          className="search"
+          aria-label="search the catalog"
+          placeholder="search…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
       </div>
       <table>
         <thead>
@@ -79,22 +95,51 @@ export function ServicesView({ pkgs, onInstalled }: { pkgs: PackageView[]; onIns
         </tbody>
       </table>
 
+      {query !== "" && available.length === 0 && (
+        <div className="muted">
+          Nothing in the catalog matches “{query}”.{" "}
+          <button className="btn btn-ghost" onClick={() => setQuery("")}>
+            Clear
+          </button>
+        </div>
+      )}
       {pkgs.length === 0 && (
         <div className="sub">
           The catalog is empty. Keystone was started without <code>-catalog-dir</code>, or
           this release shipped no packages.
         </div>
       )}
-      {chosen && (
-        <InstallForm
-          pkg={chosen}
-          onDone={() => {
-            setChosen(null);
-            onInstalled();
-          }}
-        />
-      )}
+
+      {/* The form opens beside the catalog rather than under it. Inline
+          at the bottom meant scrolling past every row to reach it, and
+          scrolling back to find where you had been — which got worse
+          with every package added. */}
+      <Drawer open={chosen !== null} onClose={() => setChosen(null)} title={chosen?.name} wide>
+        {chosen && (
+          <InstallForm
+            pkg={chosen}
+            onDone={() => {
+              setChosen(null);
+              onInstalled();
+            }}
+          />
+        )}
+      </Drawer>
     </>
+  );
+}
+
+// matching filters the catalog on name and capability. Case-insensitive
+// and substring rather than prefix: somebody looking for "jellyfin"
+// should find "media-jellyfin".
+export function matching(pkgs: PackageView[], query: string): PackageView[] {
+  const q = query.trim().toLowerCase();
+  if (q === "") return pkgs;
+  return pkgs.filter(
+    (p) =>
+      p.name.toLowerCase().includes(q) ||
+      p.capability.toLowerCase().includes(q) ||
+      (p.profile ?? "").toLowerCase().includes(q),
   );
 }
 
