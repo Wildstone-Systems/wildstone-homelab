@@ -40,7 +40,6 @@ export function IdentityView() {
 
   return (
     <>
-      <h2>Identity</h2>
       <div className="sub">
         When someone sets up two-factor or resets a password, the code is
         delivered here rather than by email — read it and pass it on.

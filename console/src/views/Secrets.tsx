@@ -10,7 +10,6 @@ export function Secrets() {
   const [active, setActive] = useState<string | null>(null);
   return (
     <>
-      <h2>Secrets</h2>
       <div className="sub">
         Admin-only; values are write-only by construction. Pick the node to manage.
       </div>
@@ -21,7 +20,7 @@ export function Secrets() {
           value={node}
           onChange={(e) => setNode(e.target.value)}
         />
-        <button className="action" disabled={!node} onClick={() => setActive(node)}>
+        <button className="btn btn-secondary" disabled={!node} onClick={() => setActive(node)}>
           Load
         </button>
       </div>
@@ -68,7 +67,7 @@ function NodeSecrets({ node }: { node: string }) {
             onChange={(e) => setValue(e.target.value)}
           />
           <button
-            className="action primary"
+            className="btn btn-primary"
             disabled={busy || !name}
             onClick={() => run(api.setSecret(node, name, value || undefined))}
           >
@@ -92,7 +91,7 @@ function NodeSecrets({ node }: { node: string }) {
               <td>v{s.version}</td>
               <td>
                 <button
-                  className="action danger"
+                  className="btn btn-danger"
                   disabled={busy}
                   onClick={() => run(api.rotateSecret(node, s.name))}
                   title="Regenerates the value and re-creates dependent containers"

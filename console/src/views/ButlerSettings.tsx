@@ -79,7 +79,7 @@ export function ButlerSettings({ onSaved }: { onSaved?: () => void }) {
 
   return (
     <>
-      <h2>Butler settings</h2>
+      <h3>Butler settings</h3>
       <div className="sub">
         Which model answers questions about your household. Changes apply immediately —
         Keystone is not restarted.
@@ -140,7 +140,7 @@ export function ButlerSettings({ onSaved }: { onSaved?: () => void }) {
       )}
 
       <div className="row">
-        <button className="action" onClick={save} disabled={busy !== null || (p !== "off" && !m)}>
+        <button className="btn btn-secondary" onClick={save} disabled={busy !== null || (p !== "off" && !m)}>
           {busy === "save" ? "applying…" : "Save and apply"}
         </button>
       </div>

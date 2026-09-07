@@ -13,7 +13,6 @@ export function Plans() {
 
   return (
     <>
-      <h2>Plans</h2>
       <div className="sub">
         Every intentional change is a plan; Medium/High wait here for a human.
       </div>
@@ -90,10 +89,10 @@ function PlanReview({ id, onDone }: { id: string; onDone: () => void }) {
       <PlanSteps plan={p.plan} />
       {p.state === "proposed" && (
         <div className="row">
-          <button className="action primary" disabled={busy} onClick={() => act(api.approvePlan)}>
+          <button className="btn btn-primary" disabled={busy} onClick={() => act(api.approvePlan)}>
             Approve
           </button>
-          <button className="action danger" disabled={busy} onClick={() => act(api.rejectPlan)}>
+          <button className="btn btn-danger" disabled={busy} onClick={() => act(api.rejectPlan)}>
             Reject
           </button>
         </div>

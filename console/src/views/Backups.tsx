@@ -23,17 +23,16 @@ export function Backups() {
 
   return (
     <>
-      <h2>Backups</h2>
       <div className="sub">
         Scheduled runs are the engine's standing duty; buttons run or restore-alongside now.
       </div>
       {plans.map((plan) => (
         <div className="row" key={plan}>
           <strong style={{ fontSize: 13 }}>{plan}</strong>
-          <button className="action" disabled={busy} onClick={() => act(api.runBackup, plan)}>
+          <button className="btn btn-secondary" disabled={busy} onClick={() => act(api.runBackup, plan)}>
             Run now
           </button>
-          <button className="action" disabled={busy} onClick={() => act(api.restoreBackup, plan)}>
+          <button className="btn btn-secondary" disabled={busy} onClick={() => act(api.restoreBackup, plan)}>
             Restore alongside
           </button>
         </div>

@@ -40,7 +40,6 @@ export function Chat() {
 
   return (
     <>
-      <h2>Chat</h2>
       <div className="sub">
         A chat account reaches a Butler only through a binding you created here. Bindings are
         per-surface: an account bound to the household Butler cannot reach the operator one, and
@@ -68,7 +67,7 @@ export function Chat() {
             onChange={(e) => setTransport(e.target.value)}
           />
           <button
-            className="action primary"
+            className="btn btn-primary"
             disabled={busy || identity.trim() === ""}
             onClick={issue}
           >
@@ -80,7 +79,7 @@ export function Chat() {
 
       <h3 style={{ fontSize: 13, margin: "20px 0 8px" }}>Bindings</h3>
       <div className="row">
-        <button className="action" onClick={() => setShowRevoked(!showRevoked)}>
+        <button className="btn btn-secondary" onClick={() => setShowRevoked(!showRevoked)}>
           {showRevoked ? "Live only" : "Show revoked"}
         </button>
       </div>
@@ -115,7 +114,7 @@ export function Chat() {
                 {b.revokedAt ? (
                   <span className="muted">revoked {when(b.revokedAt)}</span>
                 ) : (
-                  <button className="action" onClick={() => revoke(b)}>
+                  <button className="btn btn-secondary" onClick={() => revoke(b)}>
                     Revoke
                   </button>
                 )}

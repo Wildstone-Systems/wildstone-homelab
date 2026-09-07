@@ -21,7 +21,6 @@ export function Home() {
 
   return (
     <>
-      <h2>Home</h2>
       <div className="sub">
         {resources.length} resource(s) across {owners.length} owner(s). Red means something is
         wrong; amber means a plan is waiting for your approval. Hover for the detail.

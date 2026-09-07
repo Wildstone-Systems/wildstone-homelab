@@ -26,14 +26,13 @@ export function Nodes() {
 
   return (
     <>
-      <h2>Nodes</h2>
       <Inventory nodes={nodes} error={fleet.error} loading={fleet.loading} reload={fleet.reload} />
       <div className="sub">
         Pair a new machine: mint a single-use join token, run the install command on it as root,
         then validate it below. The token is shown exactly once.
       </div>
       <div className="row">
-        <button className="action primary" disabled={busy} onClick={mint}>
+        <button className="btn btn-primary" disabled={busy} onClick={mint}>
           Mint join token
         </button>
       </div>
@@ -82,7 +81,7 @@ function Inventory({
     <div className="card">
       <div className="row">
         <h3>Fleet</h3>
-        <button className="action" disabled={loading} onClick={reload}>
+        <button className="btn btn-secondary" disabled={loading} onClick={reload}>
           Refresh
         </button>
       </div>
@@ -179,14 +178,14 @@ function Probes({ nodes }: { nodes: NodeInfo[] }) {
           />
         )}
         <button
-          className="action"
+          className="btn btn-secondary"
           disabled={busy || !node}
           onClick={() => run(async () => setDevices((await api.probeBlockDevices(node)).devices))}
         >
           Block devices
         </button>
         <button
-          className="action"
+          className="btn btn-secondary"
           disabled={busy || !node}
           onClick={() => run(async () => setPorts((await api.probePorts(node)).ports))}
         >
@@ -200,13 +199,13 @@ function Probes({ nodes }: { nodes: NodeInfo[] }) {
           value={target}
           onChange={(e) => setTarget(e.target.value)}
         />
-        <button className="action" disabled={busy || !node || !target} onClick={() => dial("nfs")}>
+        <button className="btn btn-secondary" disabled={busy || !node || !target} onClick={() => dial("nfs")}>
           NFS
         </button>
-        <button className="action" disabled={busy || !node || !target} onClick={() => dial("smb")}>
+        <button className="btn btn-secondary" disabled={busy || !node || !target} onClick={() => dial("smb")}>
           SMB
         </button>
-        <button className="action" disabled={busy || !node || !target} onClick={() => dial("http")}>
+        <button className="btn btn-secondary" disabled={busy || !node || !target} onClick={() => dial("http")}>
           HTTP
         </button>
       </div>

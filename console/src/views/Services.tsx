@@ -22,7 +22,6 @@ export function Services() {
 
   return (
     <>
-      <h2>Services</h2>
       <div className="sub">
         What this control plane can install. Installing proposes a plan — a human still
         approves it.
@@ -99,7 +98,7 @@ export function Services() {
               </td>
 
               <td>
-                <button className="action" onClick={() => setChosen(p)}>
+                <button className="btn btn-secondary" onClick={() => setChosen(p)}>
                   {p.enabled ? "Reconfigure" : "Install"}
                 </button>
               </td>
@@ -212,7 +211,7 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
 
       {!preview && (
         <button
-          className="action"
+          className="btn btn-secondary"
           disabled={busy || missing.length > 0}
           onClick={() => run(api.previewCapability(pkg.name, values), setPreview)}
         >
@@ -250,7 +249,7 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
             </div>
           )}
           <button
-            className="action"
+            className="btn btn-secondary"
             disabled={busy}
             onClick={() => run(api.enableCapability(pkg.name, values), onDone)}
           >
@@ -258,7 +257,7 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
           </button>
         </>
       )}
-      <button className="action" disabled={busy} onClick={onDone}>
+      <button className="btn btn-secondary" disabled={busy} onClick={onDone}>
         Cancel
       </button>
     </div>

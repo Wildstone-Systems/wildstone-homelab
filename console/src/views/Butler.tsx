@@ -56,12 +56,11 @@ export function Butler() {
 
   return (
     <>
-      <h2>
-        Butler
-        <button className="action" style={{ marginLeft: "1em" }} onClick={() => setShowSettings((v) => !v)}>
+      <div className="row" style={{ marginTop: 0 }}>
+        <button className="btn btn-secondary" onClick={() => setShowSettings((v) => !v)}>
           {showSettings ? "Hide settings" : "Settings"}
         </button>
-      </h2>
+      </div>
       {/* Behind a toggle on the same screen: asking a question should not
           mean scrolling past a configuration form, and changing the model
           should not mean finding another tab. The backend it configures is
@@ -81,7 +80,7 @@ export function Butler() {
         {(Object.keys(SURFACES) as ButlerSurface[]).map((key) => (
           <button
             key={key}
-            className={"action" + (surface === key ? " primary" : "")}
+            className={"btn " + (surface === key ? "btn-primary" : "btn-secondary")}
             onClick={() => {
               if (surface === key) return;
               setSurface(key);
@@ -113,7 +112,7 @@ export function Butler() {
         />
         <div className="row">
           <button
-            className="action primary"
+            className="btn btn-primary"
             disabled={!configured || busy || message.trim() === ""}
             onClick={ask}
           >

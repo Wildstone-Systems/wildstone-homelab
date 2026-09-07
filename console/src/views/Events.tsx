@@ -37,7 +37,6 @@ export function Events() {
 
   return (
     <>
-      <h2>Events</h2>
       <div className="sub">Operational stream, newest last; polling every {POLL_MS / 1000}s.</div>
       <ErrorLine error={error} />
       <table>
