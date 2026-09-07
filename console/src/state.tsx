@@ -61,8 +61,12 @@ export function ConsoleStateProvider({ children }: { children: ReactNode }) {
         for (const o of observed) {
           const key = `${o.kind}/${o.name}`;
           const kind: Kind = o.healthy ? "ok" : o.awaitingApproval ? "warn" : "bad";
-          const prev = history.current.get(key) ?? [];
-          history.current.set(key, [...prev, kind].slice(-HISTORY));
+          record(history.current, key, kind);
+        }
+        // Nodes go in the same map under their own prefix, so the fleet
+        // gets the check history the resources already had.
+        for (const n of nodes.nodes) {
+          record(history.current, nodeKey(n.id), n.connected ? "ok" : "bad");
         }
 
         setState({
@@ -94,6 +98,17 @@ export function ConsoleStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return <Ctx.Provider value={state}>{children}</Ctx.Provider>;
+}
+
+// The history key for a node. Nodes and resources share one map, and a
+// prefix is what stops a node called "jellyfin" colliding with a
+// container called "jellyfin".
+export function nodeKey(id: string): string {
+  return `node/${id}`;
+}
+
+function record(into: Map<string, Kind[]>, key: string, kind: Kind) {
+  into.set(key, [...(into.get(key) ?? []), kind].slice(-HISTORY));
 }
 
 export function useConsoleState(): ConsoleState {

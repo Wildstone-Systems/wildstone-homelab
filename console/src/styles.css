@@ -757,3 +757,21 @@ tr.clickable:hover { background: var(--faint); }
   .convos { width: 100%; }
   .msg, .msg-butler, .trace, .msg-note { max-width: 100%; }
 }
+
+/* --------------------------------------------- codes read out loud */
+
+/* An identity code and a chat claim code are both read aloud or typed
+   by hand, once. Both get display size and letter spacing for the same
+   reason: a misread character is a lockout. */
+.identity-code {
+  font-family: var(--font-mono);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  margin: var(--space-3) 0;
+  color: var(--color-text);
+  word-break: break-all;
+}
+
+details summary { cursor: pointer; }
+details > pre { margin-top: var(--space-2); }

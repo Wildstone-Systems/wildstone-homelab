@@ -26,6 +26,11 @@ import type { BackupRun, EventRow, Observed, PackageView, PlanRecord, ResourceVi
 import { PlansView, PendingPlan, PlanSteps } from "../src/views/Plans";
 import { ActivityView } from "../src/views/Activity";
 import { BackupsView, byPlan, explain } from "../src/views/Backups";
+import { SecretsView, usedBy } from "../src/views/Secrets";
+import { ChatView } from "../src/views/Chat";
+import { IdentityCode } from "../src/views/Identity";
+import { Inventory, NodeCard } from "../src/views/Nodes";
+import type { ChatBinding, NodeInfo, SecretInfo } from "../src/api";
 import { ConsoleStateContext, ConsoleStateProvider } from "../src/state";
 import { kindOf, StatusPill } from "../src/ui/status";
 import { MIN_SAMPLES, Sparkline } from "../src/ui/Sparkline";
@@ -610,6 +615,83 @@ check("a backup card shows its run history", text(backups).includes("Last 2 runs
 check("a two-run history is actually drawn", backups.includes("last 2 recorded runs"), "");
 const noBackups = renderToString(h(BackupsView, { runs: [], onRan: () => {} }));
 check("no runs explains when a plan appears", noBackups.includes("after its first run"));
+
+// ------------------------------------------------------------- Nodes
+// Uptime is the numeral because it is the question: a node up for
+// eleven days and one that reconnected ninety seconds ago were both
+// just "connected".
+const NODES: NodeInfo[] = [
+  { id: "n1", connected: true, agentVersion: "0.9.2", protocolMinor: 3,
+    firstJoinedAt: "2026-06-01T00:00:00Z", lastSeenAt: "2026-09-07T00:05:00Z",
+    connectedSince: new Date(Date.now() - 3 * 86400000 - 4 * 3600000).toISOString() },
+  { id: "n2", connected: false, agentVersion: "0.9.2",
+    firstJoinedAt: "2026-06-01T00:00:00Z", lastSeenAt: new Date(Date.now() - 6 * 60000).toISOString() },
+];
+const up = renderToString(h(NodeCard, { node: NODES[0], samples: ["ok", "ok", "ok", "ok"] }));
+check("a connected node leads with its uptime", text(up).includes("3d 4h") && text(up).includes("connected"), text(up));
+const down = renderToString(h(NodeCard, { node: NODES[1], samples: [] }));
+check("a disconnected node dates its last sighting", text(down).includes("6m") && text(down).includes("since last seen"), text(down));
+check("a disconnected node is not pulsing", !down.includes("dot pulse"), down);
+
+const fleet = renderToString(h(Inventory, { nodes: NODES, error: null, loading: false, reload: () => {} }));
+check("the fleet counts what is connected", text(fleet).includes("1 of 2 connected"), text(fleet));
+const noFleet = renderToString(h(Inventory, { nodes: [], error: null, loading: false, reload: () => {} }));
+check("an empty fleet says how to add one", noFleet.includes("Mint a join token"));
+
+// ----------------------------------------------------------- Secrets
+// Rotation re-creates dependents, so the list of names was a dare
+// without the column that says what rotating one will restart.
+const owners = usedBy(PACKAGES.concat([{
+  name: "identity", version: "1.9.3", capability: "identity", enabled: true,
+  resources: [
+    { kind: "Secret", name: "authelia-jwt-secret" },
+    { kind: "Secret", name: "lldap-jwt-secret" },
+    { kind: "Container", name: "authelia" },
+  ],
+}]));
+check("a secret is attributed to the capability that owns it", owners.get("authelia-jwt-secret")?.join(",") === "identity", JSON.stringify([...owners]));
+check("a container is not mistaken for a secret", owners.get("authelia") === undefined);
+
+const SECRETS: SecretInfo[] = [
+  { name: "authelia-jwt-secret", version: 2, updatedUnixSec: 1757000000 },
+  { name: "orphaned-secret", version: 1 },
+];
+const secrets = renderToString(h(SecretsView, { node: "n1", secrets: SECRETS, owners, reload: () => {} }));
+check("the secrets table says what uses each one", secrets.includes("identity"));
+// A secret nothing uses is a fact worth stating: it is the one that is
+// safe to rotate and the one that may not belong there.
+check("a secret nothing uses says so", secrets.includes("nothing installed uses it"));
+check("secrets say a typed value never comes back", secrets.includes("never readable again"));
+const noSecrets = renderToString(h(SecretsView, { node: "n1", secrets: [], owners: new Map(), reload: () => {} }));
+check("a node with no secrets says so", noSecrets.includes("No secrets on this node yet"));
+
+// -------------------------------------------------------------- Chat
+const BINDINGS: ChatBinding[] = [
+  { id: 1, transport: "telegram", account: "@sam", displayName: "Sam", surface: "family",
+    identity: "sam", createdAt: "2026-09-01T00:00:00Z", createdBy: "mika",
+    lastUsedAt: "2026-09-06T00:00:00Z" },
+  { id: 2, transport: "telegram", account: "@old", surface: "admin", identity: "mika",
+    createdAt: "2026-08-01T00:00:00Z", createdBy: "mika", revokedAt: "2026-09-02T00:00:00Z" },
+];
+const chat2 = renderToString(h(ChatView, { bindings: BINDINGS, showRevoked: true, onToggleRevoked: () => {}, reload: () => {} }));
+// "family" and "admin" are wire values. The screen says Household and
+// Operator, which is what the Butler's own surface switch calls them.
+check("a binding names its butler the way the Butler screen does", chat2.includes("Household") && chat2.includes("Operator"), chat2.slice(0, 600));
+check("a revoked binding is shown as revoked, not hidden", chat2.includes("revoked"));
+check("a binding that has never been used says never", chat2.includes("never"));
+const noneBound = renderToString(h(ChatView, { bindings: [], showRevoked: false, onToggleRevoked: () => {}, reload: () => {} }));
+check("no bindings explains how one is made", noneBound.includes("send it to the bot"));
+
+// ---------------------------------------------------------- Identity
+// The code is read aloud or typed by hand, once. A misread character is
+// a lockout, so it gets display size — and no invented countdown: the
+// wire carries no expiry, so the screen dates the READ instead.
+const idCode = renderToString(h(IdentityCode, { note: { code: "483 190", note: "for sam@home.arpa" }, readAt: new Date(Date.now() - 60000) }));
+check("the identity code is set at display size", idCode.includes("identity-code"), idCode);
+check("the identity code says when it was read", text(idCode).includes("read 1m ago"), text(idCode));
+check("the identity screen invents no expiry", !idCode.includes("expires"), idCode);
+const noCode = renderToString(h(IdentityCode, { note: { note: "" }, readAt: new Date() }));
+check("no code waiting says what to do", noCode.includes("Ask the person to request one"));
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

@@ -68,6 +68,23 @@ export function when(iso?: string): string {
   return isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
+// "3d 4h" — how long something has been the way it is. Uptime reads as
+// a duration; a join date reads as a date, and they are not the same
+// question.
+export function duration(since?: string, now: Date = new Date()): string {
+  if (!since) return "—";
+  const d = new Date(since);
+  if (isNaN(d.getTime())) return "—";
+  const secs = Math.max(0, Math.round((now.getTime() - d.getTime()) / 1000));
+  const days = Math.floor(secs / 86400);
+  const hours = Math.floor((secs % 86400) / 3600);
+  const mins = Math.floor((secs % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  if (mins > 0) return `${mins}m`;
+  return `${secs}s`;
+}
+
 // "12s ago" / "4m ago" — the header says how fresh the console is, and
 // an operator reads an age faster than a timestamp.
 export function ago(at?: Date | string, now: Date = new Date()): string {
