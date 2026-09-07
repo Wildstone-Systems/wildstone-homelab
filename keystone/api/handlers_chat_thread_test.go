@@ -190,7 +190,7 @@ func TestChatResetStartsANewConversation(t *testing.T) {
 	_, out := h.send(runtimedb.RoleConcierge, map[string]any{
 		"transport": "telegram", "account": "12345", "text": "/new", "messageId": "m-2",
 	})
-	if out.Reason != "started a new conversation" {
+	if out.Reason != "answered /new" {
 		t.Fatalf("reset reason = %q", out.Reason)
 	}
 	h.send(runtimedb.RoleConcierge, map[string]any{
@@ -220,15 +220,24 @@ func TestChatResetStartsANewConversation(t *testing.T) {
 }
 
 // A message that merely contains the word is a question, not a command.
-func TestChatResetIsExactMatchOnly(t *testing.T) {
-	for _, s := range []string{"/new", "/reset", "/clear", " /NEW ", "/New"} {
-		if !isChatReset(s) {
-			t.Errorf("isChatReset(%q) = false, want true", s)
+// Only a leading slash makes one, and the name has to match exactly.
+func TestChatCommandParsingIsExact(t *testing.T) {
+	for _, in := range []string{"new", "what is new?", "clear the cache", "reset the router", "", "  "} {
+		if _, _, ok := parseChatCommand(in); ok {
+			t.Errorf("parseChatCommand(%q) claimed a command", in)
 		}
 	}
-	for _, s := range []string{"new", "what is new?", "/newsletter", "clear the cache", "reset the router"} {
-		if isChatReset(s) {
-			t.Errorf("isChatReset(%q) = true, want false", s)
+	for _, tc := range []struct{ in, name, arg string }{
+		{"/new", "new", ""},
+		{" /RESET ", "reset", ""},
+		{"/plan plan-0f3a91", "plan", "plan-0f3a91"},
+		// Telegram addresses a command in a group as /status@thebot.
+		{"/status@wildstone_bot", "status", ""},
+		{"/newsletter", "newsletter", ""},
+	} {
+		name, arg, ok := parseChatCommand(tc.in)
+		if !ok || name != tc.name || arg != tc.arg {
+			t.Errorf("parseChatCommand(%q) = (%q, %q, %v)", tc.in, name, arg, ok)
 		}
 	}
 }
