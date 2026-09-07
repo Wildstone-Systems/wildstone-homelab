@@ -787,3 +787,14 @@ details > pre { margin-top: var(--space-2); }
    wrap and nothing else. The code beside it would be the wrong thing to
    copy, so only one of the two is ever shown. */
 .invite-link { font-size: 13px; user-select: all; }
+
+/* The reconciler's failure message, verbatim. It is pre-formatted
+   because it contains the commands to run, and reflowing a command is
+   how somebody pastes half of one. */
+.failure {
+  margin: var(--space-3) 0 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  background: var(--st-bad-bg);
+  box-shadow: none;
+}
