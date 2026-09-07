@@ -17,6 +17,12 @@ import { Services, InstallForm } from "../src/views/Services";
 import { Butler, StatusCard, Answer, SURFACES } from "../src/views/Butler";
 import { Chat, IssuedCode } from "../src/views/Chat";
 import { Shell, TokenGate } from "../src/App";
+import { HomeView, buildProblems } from "../src/views/Home";
+import { ServicesView, InstalledTile, AvailableRow } from "../src/views/Services";
+import { groupServices, upstreamContainer } from "../src/services";
+import { eventKind } from "../src/ui/HourChart";
+import type { ConsoleSnapshot } from "../src/state";
+import type { Observed, PackageView, ResourceView } from "../src/api";
 import { ConsoleStateProvider } from "../src/state";
 import { kindOf, StatusPill } from "../src/ui/status";
 import { MIN_SAMPLES, Sparkline } from "../src/ui/Sparkline";
@@ -201,18 +207,25 @@ check("problem card renders its aside", problem.includes("100% of 48 GB"));
 
 const tile = renderToString(
   h(ServiceTile, {
-    name: "jellyfin", what: "Movies and TV", host: "jellyfin.home.arpa",
-    health: "bad", state: "health 500", resourceCount: 5,
-    launchHref: "https://jellyfin.home.arpa",
+    service: {
+      key: "Container/jellyfin", kind: "Container", name: "jellyfin", node: "n1",
+      health: "bad", state: "unhealthy", detail: "health 500",
+      url: "https://jellyfin.home.arpa", urlHealthy: false,
+    },
   }),
 );
-check("tile names the service and what it does", tile.includes("jellyfin") && tile.includes("Movies and TV"));
-check("tile pluralises its resource count", text(tile).includes("5 resources"), tile);
+check("tile names the service and where it answers", tile.includes("jellyfin.home.arpa"), tile);
+check("tile offers the launch arrow when there is an address", tile.includes("launch"), tile);
+// A container no Route points at is reachable only from inside the
+// household. That is a fact about it, not a gap in what we know, so it
+// says so rather than showing an empty line.
 const oneTile = renderToString(
-  h(ServiceTile, { name: "lldap", health: "ok", state: "healthy", resourceCount: 1 }),
+  h(ServiceTile, {
+    service: { key: "Container/lldap", kind: "Container", name: "lldap", health: "ok", state: "healthy" },
+  }),
 );
-check("tile says 1 resource, not 1 resources", text(oneTile).includes("1 resource<"), oneTile);
-check("tile without a link offers no launch arrow", !oneTile.includes("launch"), oneTile);
+check("unrouted tile says internal only", oneTile.includes("internal only"), oneTile);
+check("tile without an address offers no launch arrow", !oneTile.includes("launch"), oneTile);
 
 // Icons carry the nav, so every item must still have a name a screen
 // reader and a tooltip can use.
@@ -250,6 +263,157 @@ for (const label of ["Home", "Services", "Butler", "Chat", "Plans", "Activity", 
 }
 check("shell names the screen you are on", shell.includes("Household"), shell);
 check("empty shell claims no freshness it cannot prove", !shell.includes(">live<"), shell);
+
+// ---------------------------------------------- the service join
+// Home and Services are drawn from three calls joined client-side. The
+// join is the part with logic, and none of it is visible to tsc.
+
+// A Route's spec is the one place the statefile records which container
+// an address belongs to.
+check("upstream names the container", upstreamContainer('spec:\n  upstream: "container/authelia:9091"\n') === "authelia");
+check("upstream tolerates no quotes", upstreamContainer("  upstream: container/lldap:17170") === "lldap");
+check("an ip upstream names no container", upstreamContainer("  upstream: 10.0.0.4:8080") === undefined);
+check("no yaml, no container", upstreamContainer(undefined) === undefined);
+
+const RESOURCES: ResourceView[] = [
+  { kind: "Container", name: "jellyfin", owner: "capability/media", node: "n1", yaml: "" },
+  { kind: "Volume", name: "jellyfin-cache", owner: "capability/media", node: "n1", yaml: "" },
+  { kind: "Route", name: "media", owner: "capability/media", node: "n1",
+    yaml: 'spec:\n  host: jellyfin.home.arpa\n  upstream: "container/jellyfin:8096"\n' },
+  { kind: "Container", name: "authelia", owner: "capability/identity", node: "n1", yaml: "" },
+  { kind: "Container", name: "lldap", owner: "capability/identity", node: "n1", yaml: "" },
+  { kind: "Route", name: "auth", owner: "capability/identity", node: "n1",
+    yaml: 'spec:\n  host: auth.home.arpa\n  upstream: "container/authelia:9091"\n' },
+];
+const PACKAGES: PackageView[] = [
+  { name: "media-jellyfin", version: "1.2.0", installedVersion: "1.1.0", stale: true,
+    capability: "media", enabled: true,
+    addresses: [{ route: "media", url: "https://jellyfin.home.arpa", healthy: false, detail: "health 500" }] },
+  { name: "identity", version: "1.9.3", capability: "identity", enabled: true,
+    addresses: [{ route: "auth", url: "https://auth.home.arpa", healthy: true }] },
+  { name: "photos-immich", version: "1.4.0", capability: "photos", enabled: false,
+    params: [{ name: "public_domain", required: true }, { name: "node", required: true }, { name: "timezone", default: "UTC" }] },
+  { name: "home-automation", version: "0.7.1", capability: "automation", enabled: false,
+    blockers: ["needs a Zigbee coordinator; none was probed"] },
+];
+const SICK: Observed[] = [
+  { kind: "Container", name: "jellyfin", node: "n1", healthy: false, detail: "health 500 — transcode cache full", updatedAt: "2026-09-07T00:00:00Z" },
+  { kind: "Container", name: "authelia", node: "n1", healthy: true, updatedAt: "2026-09-07T00:00:00Z" },
+  { kind: "Container", name: "lldap", node: "n1", healthy: true, updatedAt: "2026-09-07T00:00:00Z" },
+];
+
+const groups = groupServices(PACKAGES, RESOURCES, SICK);
+check("a group is an owner, named without its prefix", groups.map((g) => g.label).join(",") === "media,identity", JSON.stringify(groups.map((g) => g.label)));
+check("unhealthy groups sort first", groups[0].label === "media");
+check("only containers become tiles", groups[0].services.length === 1 && groups[0].services[0].name === "jellyfin");
+check("a group counts all its resources, not just its tiles", groups[0].resourceCount === 3);
+check("the route's upstream gives the tile its address", groups[0].services[0].url === "https://jellyfin.home.arpa");
+check("a container no route points at has none", groups[1].services.find((s) => s.name === "lldap")?.url === undefined);
+check("the group reports the installed version, not the catalog's", groups[0].version === "1.1.0");
+check("a newer catalog version is flagged", groups[0].stale === true && groups[0].catalogVersion === "1.2.0");
+
+// F75: a resource held back by a plan awaiting a human is amber. It is
+// not a fault, and colouring it red is how a restart made a working
+// homelab look like it had fallen over.
+const waiting = groupServices(
+  PACKAGES, RESOURCES,
+  [{ kind: "Container", name: "jellyfin", healthy: false, awaitingApproval: true, updatedAt: "2026-09-07T00:00:00Z" }],
+);
+check("awaiting approval is amber, not red", waiting[0].services[0].health === "warn", waiting[0].services[0].health);
+check("awaiting approval says what it is waiting for", waiting[0].services[0].state === "waiting on a plan");
+// A container nothing has reported on is not a healthy one.
+const unobserved = groupServices(PACKAGES, RESOURCES, []);
+check("an unobserved container is muted, not green", unobserved[0].services[0].health === "mute");
+
+// Event types are classified by shape, so a type added to Keystone
+// tomorrow is drawn as ordinary traffic rather than as a fault.
+for (const [type, want] of [
+  ["reconcile.failed", "bad"], ["reconcile.blocked", "bad"], ["agent.disconnected", "bad"],
+  ["plan.proposed", "warn"], ["reconcile.skipped-offline", "warn"], ["drift.pending-approval", "warn"],
+  ["reconcile.applied", "ok"], ["backup.completed", "ok"], ["drift.repaired", "ok"],
+  ["butler.session", "mute"], ["something.new", "mute"],
+] as [string, string][]) {
+  check(`eventKind(${type}) is ${want}`, eventKind(type) === want, eventKind(type));
+}
+
+// ------------------------------------------------------ Home, both states
+function snapshot(over: Partial<ConsoleSnapshot> = {}): ConsoleSnapshot {
+  return {
+    observed: SICK, nodes: [], events: [], plans: [], pending: [],
+    unhealthy: SICK.filter((o) => !o.healthy), awaiting: [],
+    history: new Map(), lastPollAt: new Date("2026-09-07T00:05:00Z"),
+    ...over,
+  };
+}
+
+const bad = renderToString(h(HomeView, {
+  snap: snapshot({
+    nodes: [{ id: "n1", connected: true, firstJoinedAt: "", lastSeenAt: "" },
+            { id: "n2", connected: false, firstJoinedAt: "", lastSeenAt: "2026-09-07T00:00:00Z" }],
+    pending: [{ seq: 1, id: "plan-0f3a91", createdAt: "2026-09-07T00:01:00Z", principal: "butler",
+                summary: "prune the jellyfin transcode cache", risk: "medium", state: "proposed",
+                plan: { steps: [{ kind: "Container", name: "jellyfin", action: "restart" }] } }],
+  }),
+  pkgs: PACKAGES, resources: RESOURCES, onNavigate: () => {},
+}));
+check("bad day names the unhealthy service", bad.includes("jellyfin is unhealthy"), bad.slice(0, 400));
+check("bad day says why, in the reconciler's words", bad.includes("transcode cache full"));
+check("bad day reports the offline node", bad.includes("n2 is not connected"));
+check("bad day counts unhealthy against the total", text(bad).includes("unhealthy of 6"), text(bad).slice(0, 900));
+
+// A plan that already explains an unhealthy resource is folded into
+// that resource's card. The operator has one problem, not two.
+const folded = buildProblems(snapshot({
+  pending: [{ seq: 1, id: "plan-0f3a91", createdAt: "", principal: "butler", summary: "prune the cache",
+              risk: "medium", state: "proposed",
+              plan: { steps: [{ kind: "Container", name: "jellyfin" }] } }],
+}));
+check("a plan explaining a fault is folded into it", folded.length === 1, JSON.stringify(folded.map((p) => p.id)));
+check("the folded card offers the plan", folded[0].cta === "Review plan" && folded[0].plan?.id === "plan-0f3a91");
+// One that explains nothing on the board still needs a decision.
+const standalone = buildProblems(snapshot({
+  observed: [], unhealthy: [],
+  pending: [{ seq: 1, id: "plan-77", createdAt: "", principal: "mika", summary: "install photos", risk: "low", state: "proposed" }],
+}));
+check("a plan explaining nothing gets its own card", standalone.length === 1 && standalone[0].id === "plan:plan-77");
+check("with no fault to fix, the fault is not invented", !standalone.some((p) => p.severity === "bad"));
+
+// The good day is the state users see most and the old console handled
+// least: no banners, nothing waiting.
+const well = renderToString(h(HomeView, {
+  snap: snapshot({ observed: SICK.map((o) => ({ ...o, healthy: true, detail: undefined })), unhealthy: [],
+                   nodes: [{ id: "n1", connected: true, firstJoinedAt: "", lastSeenAt: "" }] }),
+  pkgs: PACKAGES, resources: RESOURCES, onNavigate: () => {},
+}));
+check("the good day says so plainly", well.includes("Everything converged"));
+check("the good day raises no problem card", !well.includes("is unhealthy"), well.slice(0, 300));
+check("the good day still shows the services", well.includes("jellyfin") && well.includes("lldap"));
+
+// An empty statefile is a fresh install, not an error.
+const empty = renderToString(h(HomeView, {
+  snap: snapshot({ observed: [], unhealthy: [] }), pkgs: [], resources: [], onNavigate: () => {},
+}));
+check("an empty statefile points at Services", empty.includes("enable a capability"), empty.slice(0, 300));
+
+// ------------------------------------------------------------ Services
+const catalog = renderToString(h(ServicesView, { pkgs: PACKAGES, onInstalled: () => {} }));
+check("catalog separates installed from available", catalog.includes("Installed") && catalog.includes("Available"));
+check("an installed capability shows where it answers", catalog.includes("https://auth.home.arpa"));
+check("an address that does not answer says so", catalog.includes("not answering"));
+check("a stale install offers the newer version", text(catalog).includes("update to 1.2.0"), text(catalog).slice(0, 600));
+// What stands in the way is stated before Install is pressed, not
+// after a plan is approved.
+check("a blocker is stated on the row", catalog.includes("Zigbee coordinator"));
+check("a blocked package cannot be installed", /Zigbee[\s\S]*?<\/tr>/.test(catalog) && catalog.includes("disabled"), "");
+check("required params are named before the form opens", text(catalog).includes("public_domain, node"));
+
+const blockedRow = renderToString(h("table", null, h("tbody", null, h(AvailableRow, { pkg: PACKAGES[3], onInstall: () => {} }))));
+check("the blocked row's Install is disabled", blockedRow.includes("disabled"), blockedRow);
+const openRow = renderToString(h("table", null, h("tbody", null, h(AvailableRow, { pkg: PACKAGES[2], onInstall: () => {} }))));
+check("an unblocked row's Install is not", !openRow.includes("disabled"), openRow);
+
+const noAddr = renderToString(h(InstalledTile, { pkg: { name: "monitoring", version: "0.4.0", capability: "monitoring", enabled: true }, onReconfigure: () => {} }));
+check("an installed capability with no address says so", noAddr.includes("no address"), noAddr);
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

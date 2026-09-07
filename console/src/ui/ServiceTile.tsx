@@ -1,34 +1,22 @@
-import { ReactNode } from "react";
 import { ArrowSquareOut } from "@phosphor-icons/react";
-import { Kind, StatusPill, Dot } from "./status";
+import { Service } from "../services";
+import { Kind } from "./status";
+import { StatusPill, Dot } from "./status";
 import { Sparkline } from "./Sparkline";
 
-// A service as the household thinks of it: a name, what it does, where
-// it answers. The tile opens the detail drawer; only the corner arrow
-// leaves the console.
+// A service as the household meets it: a name, where it answers, and
+// whether it is up. The tile opens the detail drawer; only the corner
+// arrow leaves the console.
 export function ServiceTile({
-  name,
-  what,
-  host,
-  health,
-  state,
-  resourceCount,
-  icon,
+  service,
   samples,
   onOpen,
-  launchHref,
 }: {
-  name: string;
-  what?: string;
-  host?: string;
-  health: Kind;
-  state: string;
-  resourceCount: number;
-  icon?: ReactNode;
+  service: Service;
   samples?: Kind[];
   onOpen?: () => void;
-  launchHref?: string;
 }) {
+  const { name, node, url, health, state } = service;
   return (
     <div
       className="tile"
@@ -43,35 +31,39 @@ export function ServiceTile({
       }}
       aria-label={`${name} — ${state}`}
     >
-      {launchHref && (
+      {url && (
         <a
           className="launch"
-          href={launchHref}
+          href={url}
           target="_blank"
           rel="noreferrer"
           onClick={(e) => e.stopPropagation()}
           aria-label={`Open ${name} in a new tab`}
-          title={`Open ${name}`}
+          title={`Open ${url}`}
         >
           <ArrowSquareOut size={14} />
         </a>
       )}
       <div className="tile-head">
-        {icon}
         <span className="tile-name">{name}</span>
       </div>
-      {what && <div className="tile-what">{what}</div>}
+      <div className="tile-host tnum" title={url}>
+        {url ? hostOf(url) : "internal only"}
+      </div>
       <div className="tile-foot">
         <Dot kind={health} />
         <StatusPill kind={health}>{state}</StatusPill>
       </div>
-      <div className="tile-meta">
-        <span>
-          {resourceCount} {resourceCount === 1 ? "resource" : "resources"}
-        </span>
-        {host && <span title={host}>{host}</span>}
-      </div>
+      <div className="tile-meta">{node && <span>{node}</span>}</div>
       {samples && <Sparkline samples={samples} height={12} />}
     </div>
   );
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }

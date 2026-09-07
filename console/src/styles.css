@@ -578,3 +578,81 @@ tr.clickable:hover { background: var(--faint); }
 .btn-block { width: 100%; margin-top: var(--space-2); }
 .sect { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
 .fade { flex: 1; height: 1px; background: var(--hair); }
+
+/* ---------------------------------------------------------- home bands */
+
+/* The metric strip runs the full width of the screen area, so it steps
+   back out of the screen's padding rather than the shell growing a
+   special case for one view. */
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--hair);
+  margin: calc(var(--space-6) * -1) calc(var(--space-6) * -1) var(--space-6);
+}
+.bands { display: flex; flex-direction: column; gap: var(--space-8); }
+
+.allwell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: 14px;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
+
+.group-name { font-size: 15px; font-weight: 500; color: var(--color-text); padding-inline: 0; }
+.group-name:hover { background: none; text-decoration: underline; text-underline-offset: 4px; }
+
+.tile-host { color: var(--muted); font-size: 12px; }
+
+.blocker {
+  border-left: 3px solid var(--st-bad);
+  background: var(--st-bad-bg);
+  color: var(--color-text);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 13px;
+  margin-bottom: var(--space-3);
+}
+
+@media (max-width: 720px) {
+  .strip { margin: calc(var(--space-4) * -1) calc(var(--space-4) * -1) var(--space-4); }
+}
+
+/* ---------------------------------------------------- install form */
+
+.panel {
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-6);
+  margin-top: var(--space-6);
+}
+.panel h3 { font-size: 17px; margin-bottom: var(--space-4); }
+
+.field { margin-bottom: var(--space-4); max-width: 52ch; }
+.field > label { display: block; font-size: 13px; margin-bottom: 5px; }
+.field > label .muted { display: block; margin: 2px 0 4px; }
+.field input, .field select { width: 100%; }
+
+/* A blocker or a policy change is not a status pill: it is a paragraph
+   that has to be read. The auth-policy one is louder than the secrets
+   list on purpose — a missing secret stops one service converging,
+   that changes how the whole household signs in (F77). */
+.callout {
+  border-left: 3px solid;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: var(--space-3) var(--space-4);
+  margin: var(--space-4) 0;
+  font-size: 13px;
+}
+.callout ul { margin: var(--space-2) 0; padding-left: 18px; }
+.callout-bad { border-color: var(--st-bad); background: var(--st-bad-bg); }
+.callout-warn { border-color: var(--st-warn); background: var(--st-warn-bg); }
+
+.danger-line { color: var(--st-bad); font-size: 11.5px; }
+
+/* Tiles in a grid stretch to the tallest; a button pinned to the bottom
+   keeps the row of them from looking ragged. */
+.tile .btn-block { margin-top: auto; }
+.tile > .st { align-self: flex-start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; display: inline-block; }

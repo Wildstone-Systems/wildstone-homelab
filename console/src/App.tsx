@@ -136,7 +136,7 @@ export function Shell() {
         </div>
         <div className="screen">
           <ErrorLine error={error} />
-          {view === "home" && <Home />}
+          {view === "home" && <Home onNavigate={setView} />}
           {view === "services" && <Services />}
           {view === "butler" && <Butler />}
           {view === "chat" && <Chat />}
