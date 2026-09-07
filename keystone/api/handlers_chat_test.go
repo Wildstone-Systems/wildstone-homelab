@@ -6,13 +6,70 @@ import (
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
+
+// ensureChatPrereqs declares what an invite requires before one can be
+// issued: an installed adapter for that surface, and — on the family
+// surface — the person the code names, who is an `LdapUser` in the
+// Statefile (ADR-W020 A3). A test that skips this is testing a code
+// nobody could ever redeem.
+func (h *harness) ensureChatPrereqs(t *testing.T, surface, identity, transport string) {
+	t.Helper()
+	if transport == "" {
+		transport = "telegram"
+	}
+	current, err := h.s.State.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := "capability/chat-" + transport + "-" + surface
+	haveAdapter, haveMember := false, false
+	for _, r := range current {
+		if r.Metadata.Owner == owner {
+			haveAdapter = true
+		}
+		if r.Kind == resource.KindLdapUser && r.LdapUser != nil && r.LdapUser.Username == identity {
+			haveMember = true
+		}
+	}
+	changed := false
+	if !haveAdapter {
+		name := "chat-" + transport + "-" + surface + "-state"
+		if err := h.s.State.Put(resource.Resource{
+			ApiVersion: resource.ApiVersion, Kind: resource.KindVolume,
+			Metadata: resource.Metadata{Name: name, Owner: owner, Node: "n1"},
+			Volume:   &resource.VolumeSpec{Name: name},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		changed = true
+	}
+	if surface == "family" && !haveMember {
+		if err := h.s.State.Put(resource.Resource{
+			ApiVersion: resource.ApiVersion, Kind: resource.KindLdapUser,
+			Metadata: resource.Metadata{Name: identity, Owner: "system", Node: "n1"},
+			LdapUser: &resource.LdapUserSpec{
+				Username: identity, DisplayName: identity, Email: identity + "@example.com",
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		changed = true
+	}
+	if changed {
+		if err := h.s.State.Commit("test", "seed", "chat prerequisites"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 // issueClaim mints a code through the API as an admin, the way an
 // operator does.
 func (h *harness) issueClaim(t *testing.T, surface, identity, transport string) claimResponse {
 	t.Helper()
+	h.ensureChatPrereqs(t, surface, identity, transport)
 	var out claimResponse
 	resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/claims", map[string]any{
 		"surface": surface, "identity": identity, "transport": transport,

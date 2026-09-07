@@ -19,11 +19,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -62,9 +64,13 @@ func (s *Server) issueChatClaim(r *http.Request, id principal.Identity) (any, in
 	if !runtimedb.ValidButlerSurface(surface) {
 		return nil, http.StatusBadRequest, fmt.Errorf("surface must be admin or family")
 	}
+	identity := strings.TrimSpace(req.Identity)
+	transport := strings.TrimSpace(req.Transport)
+	if st, err := s.checkClaimTarget(surface, identity, transport); err != nil {
+		return nil, st, err
+	}
 	ttl := time.Duration(req.TTLSeconds) * time.Second
-	code, rec, err := s.Principals.IssueChatClaim(surface, strings.TrimSpace(req.Identity),
-		strings.TrimSpace(req.Transport), id.Name, ttl)
+	code, rec, err := s.Principals.IssueChatClaim(surface, identity, transport, id.Name, ttl)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
@@ -81,6 +87,75 @@ func (s *Server) issueChatClaim(r *http.Request, id principal.Identity) (any, in
 		ExpiresAt: rec.ExpiresAt.UTC().Format(time.RFC3339),
 		Note:      note,
 	}, http.StatusCreated, nil
+}
+
+// checkClaimTarget refuses an invite that could never be redeemed
+// (ADR-W026 A3/A4). Both halves of a code — who it binds and where it
+// is redeemed — have a closed set of real answers, and a code naming
+// anything else is not a small mistake: it looks exactly like a working
+// one, and the operator finds out when somebody they invited says
+// nothing ever happened.
+//
+// The family half is what changed with ADR-W020 A3. When a household
+// member was an LDAP account this control plane did not own, a typo
+// could only be caught by a person; now a member IS a declared
+// `LdapUser`, so the roster is right here to check against.
+func (s *Server) checkClaimTarget(surface runtimedb.ButlerSurface, identity, transport string) (int, error) {
+	// The admin half is checked where it lives: IssueChatClaim resolves
+	// the principal, and re-checking here would be a second copy to
+	// drift from.
+	if surface == runtimedb.ButlerSurfaceFamily {
+		members, err := s.householdMemberNames()
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		if !members[identity] {
+			return http.StatusBadRequest, fmt.Errorf(
+				"%q is not a household member: add them first, then invite them", identity)
+		}
+	}
+
+	transports, err := s.chatTransports()
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	installed := []string{}
+	for _, t := range transports {
+		if t.Installed && t.Surface == string(surface) {
+			installed = append(installed, t.Transport)
+		}
+	}
+	if len(installed) == 0 {
+		return http.StatusBadRequest, fmt.Errorf(
+			"no %s chat adapter is installed: there is no bot to send a code to (install chat-<transport>-%s)",
+			surface, surface)
+	}
+	if transport == "" {
+		// A code with no transport is redeemable on any of them, which
+		// is only meaningful because at least one exists.
+		return http.StatusOK, nil
+	}
+	if !slices.Contains(installed, transport) {
+		return http.StatusBadRequest, fmt.Errorf(
+			"no %s adapter on the %s surface: this deployment has %s",
+			transport, surface, strings.Join(installed, ", "))
+	}
+	return http.StatusOK, nil
+}
+
+// householdMemberNames is the declared roster as a set.
+func (s *Server) householdMemberNames() (map[string]bool, error) {
+	current, err := s.State.Load()
+	if err != nil {
+		return nil, fmt.Errorf("loading statefile: %w", err)
+	}
+	names := map[string]bool{}
+	for _, r := range current {
+		if r.Kind == resource.KindLdapUser && r.LdapUser != nil && r.LdapUser.Username != "" {
+			names[r.LdapUser.Username] = true
+		}
+	}
+	return names, nil
 }
 
 func orAny(transport string) string {

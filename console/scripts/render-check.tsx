@@ -15,7 +15,8 @@ import { renderToString } from "react-dom/server";
 import { createElement as h } from "react";
 import { Services, InstallForm } from "../src/views/Services";
 import { Butler, StatusCard, Answer, SURFACES } from "../src/views/Butler";
-import { Chat, IssuedCode } from "../src/views/Chat";
+import { Chat, IssuedCode, Prerequisites } from "../src/views/Chat";
+import { Household, AddMember } from "../src/views/Household";
 
 // Exactly what GET /api/v1/packages serves, copied from the live VM.
 const pkg = {
@@ -114,6 +115,67 @@ const code = renderToString(
 );
 check("issued code is shown", code.includes("K7QP-3XMR-9TWD"));
 check("issued code warns it is shown once", code.includes("only time the code is shown"));
+
+// An invite needs a person to invite and a bot to send the code to. An
+// empty dropdown is not an answer, so the screen says which is missing
+// and where it is fixed.
+const missing = renderToString(
+  h(Prerequisites, {
+    surface: "family", usable: [], chosen: undefined, allTransports: [
+      { transport: "telegram", surface: "family", capability: "chat-telegram-family", installed: false, credentialed: false },
+    ], haveIdentities: false,
+  }),
+);
+check("no members points at the Household screen", missing.includes("Household screen"));
+check("no adapter names the package to install", missing.includes("chat-telegram-family"));
+
+// Installed but never given a token: the bot is running and cannot
+// redeem anything, which looks identical to a working one.
+const uncredentialed = renderToString(
+  h(Prerequisites, {
+    surface: "family",
+    usable: [{ transport: "telegram", surface: "family", capability: "chat-telegram-family", installed: true, credentialed: false }],
+    chosen: { transport: "telegram", surface: "family", capability: "chat-telegram-family", installed: true, credentialed: false },
+    allTransports: [], haveIdentities: true,
+  }),
+);
+check("an adapter with no token is called out", uncredentialed.includes("wild chat adapter"));
+
+// Household members (ADR-W020 A3). The screen has to say the two things
+// an operator would otherwise assume wrongly: adding somebody proposes a
+// plan rather than creating an account, and no password is set here.
+const household = renderToString(h(Household));
+check("Household renders without throwing", household.length > 0);
+check("household screen says adding proposes a plan", household.includes("proposes a plan"));
+check("household screen says the password is not set here", household.includes("reset flow"));
+
+const addMember = renderToString(
+  h(AddMember, {
+    groups: [
+      { name: "photos_users", owner: "capability/photos", node: "n1" },
+      { name: "media_users", owner: "capability/media", node: "n1" },
+    ],
+    members: [{ username: "sam", groups: ["photos_users"], owner: "system", node: "n1" }],
+    onDone: () => {},
+  }),
+);
+check("group checkboxes are offered, not typed", addMember.includes("photos_users") && addMember.includes('type="checkbox"'));
+check("one directory node is not asked for", !addMember.includes("directory node"));
+check("no password field on the add form", !addMember.includes('type="password"'));
+
+// A deployment with two directories has to be asked which one, because
+// a person declared against the wrong node is never provisioned.
+const twoNodes = renderToString(
+  h(AddMember, {
+    groups: [
+      { name: "photos_users", owner: "capability/photos", node: "n1" },
+      { name: "media_users", owner: "capability/media", node: "n2" },
+    ],
+    members: [],
+    onDone: () => {},
+  }),
+);
+check("two directories are disambiguated", twoNodes.includes("directory node"));
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

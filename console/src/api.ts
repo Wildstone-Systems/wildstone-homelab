@@ -317,6 +317,51 @@ export interface ChatClaim {
   note: string;
 }
 
+// --- Household members (ADR-W020 A3, ADR-W023 A7). A member IS an
+// `LdapUser` in the Statefile: the household's account list lives in
+// state, in plans, in approval and in audit, rather than in LLDAP's own
+// UI where a restore would bring back every group with nobody in them.
+export interface HouseholdMember {
+  username: string;
+  displayName?: string;
+  email?: string;
+  groups: string[];
+  // "system" for someone an operator added, "capability/<name>" for an
+  // account a package asserts.
+  owner: string;
+  node: string;
+}
+
+// A Keystone principal. An admin-surface binding names one: the chat
+// account speaks as that principal, so the invite picks from the ones
+// that exist rather than trusting a typed name.
+export interface Principal {
+  name: string;
+  role: string;
+  actingFor?: string;
+  disabled?: boolean;
+  createdAt: string;
+}
+
+export interface HouseholdGroup {
+  name: string;
+  owner: string;
+  node: string;
+}
+
+// --- Chat transports (ADR-W026 A3). What an invite may name: the
+// adapters this deployment actually has, not a free-text guess.
+export interface ChatTransport {
+  transport: string;
+  surface: ButlerSurface;
+  capability: string;
+  installed: boolean;
+  // Whether the adapter has its Keystone token. Installed without one
+  // means the bot is running and cannot reach the control plane, so an
+  // invite issued for it can never be redeemed.
+  credentialed: boolean;
+}
+
 export interface IdentityNotification {
   code?: string;
   body?: string;
@@ -402,6 +447,19 @@ export const api = {
     }),
   revokeChatBinding: (id: number) =>
     call<unknown>("POST", `/api/v1/chat/bindings/${id}/revoke`),
+  chatTransports: () => call<ChatTransport[]>("GET", "/api/v1/chat/transports"),
+  principals: () => call<Principal[]>("GET", "/api/v1/principals"),
+  householdMembers: () => call<HouseholdMember[]>("GET", "/api/v1/household/members"),
+  householdGroups: () => call<HouseholdGroup[]>("GET", "/api/v1/household/groups"),
+  // Adding a member proposes a plan; the account exists once a human
+  // approves it on the Plans screen.
+  addHouseholdMember: (m: {
+    username: string;
+    displayName: string;
+    email: string;
+    groups: string[];
+    node?: string;
+  }) => call<PlanRecord>("POST", "/api/v1/household/members", m),
   backups: () => call<{ runs: BackupRun[] }>("GET", "/api/v1/backups"),
   runBackup: (plan: string) =>
     call<unknown>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/run`),

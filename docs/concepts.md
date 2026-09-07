@@ -519,6 +519,15 @@ revocable, and every refusal (unknown code, expired, spent, wrong
 transport) is the same answer, so somebody guessing learns nothing. An
 unbound account gets exactly one reply: how to get a code.
 
+Neither half of an invite is free text. A code names a person — a
+declared household member on the family surface (see **The household's
+people** below), a Keystone principal on the operator's — and a
+transport this deployment has an adapter installed for
+(`GET /api/v1/chat/transports`). Anything else is refused when the code
+is issued rather than when the person it was meant for says nothing ever
+happened: a code for a bot that does not exist is valid, unredeemable,
+and looks exactly like a working one.
+
 An adapter's whole job is protocol translation. It posts what it heard
 to `POST /api/v1/chat/messages`, polls `GET /api/v1/chat/outbound` for
 what to say, and acks what it delivered. It never chooses a surface —
@@ -538,6 +547,27 @@ back to the question that is still open for that conversation and
 recorded as `household.answered` with the rule's own correlation id.
 Recording an answer involves no model, so that loop closes with the
 Butler switched off.
+
+### The household's people
+
+A household member is an `LdapUser` in the Statefile (ADR-W020 A3) — not
+a row somebody typed into LLDAP's own admin UI. The admin adds people
+from the Console's Household screen or `wild household member`, which
+**proposes a plan**; approving it is what declares the person, and the
+identity capability's provisioning job then creates the account and adds
+the group memberships it is missing. The job only ever adds: no plan
+removes an account, because a control plane that deletes people because
+a YAML file changed is one bad plan away from deleting the household.
+
+No password travels with any of that (ADR-W020 A4). The account exists
+and cannot sign in until the person sets their own credential through
+the sign-in page's reset flow.
+
+Group memberships are offered from the `LdapGroup`s capabilities have
+declared, and a group nothing declares is refused: the provisioning job
+is additive and best-effort, so an invented group name fails one
+membership in a container log rather than the request, and the person
+quietly cannot open the app they were added for.
 
 Chat transports (Telegram, Matrix, and whatever comes next) are the
 point of the split:
