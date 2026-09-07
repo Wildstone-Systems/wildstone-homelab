@@ -704,6 +704,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 
 	apiSrv.CAFingerprint = gw.CA().Fingerprint()
 	apiSrv.GatewayAddr = advertisedGatewayAddr(hosts, lis.Addr().String())
+	apiSrv.APIURL = advertisedAPIURL(hosts, apiLis.Addr().String())
 	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
 	apiSrv.BackupRestore = bak.RestoreAlongside
 
@@ -1033,6 +1034,58 @@ func splitNonEmpty(s string) []string {
 // the pairing endpoint says so rather than emitting a loopback address a
 // second machine cannot reach.
 func advertisedGatewayAddr(hosts, listen string) string {
+	return advertisedAddr(hosts, listen)
+}
+
+// advertisedAPIURL is the same answer for the PUBLIC API, as a URL: the
+// address a container on a node dials to reach the control plane. It
+// fills the `keystone_url` param source.
+//
+// It deliberately reuses the gateway's own selection rather than
+// choosing differently. Two rules for "which of our addresses can a
+// node reach" would drift, and an operator debugging one would have to
+// discover the other; whichever SAN they put first governs both.
+// It differs from the gateway in one way that matters. The two listen
+// separately, and -api-listen's documented default is loopback — so a
+// deployment can have routable gateway SANs while the API answers only
+// on 127.0.0.1. Advertising a SAN in that case would prefill a
+// `keystone_url` nothing is listening on, and the adapter installed
+// with it could never check in. A loopback-bound API advertises
+// nothing, which leaves the field blank for an operator to answer.
+func advertisedAPIURL(hosts, listen string) string {
+	if boundToLoopback(listen) {
+		return ""
+	}
+	addr := advertisedAddr(hosts, listen)
+	if addr == "" {
+		return ""
+	}
+	return "http://" + addr
+}
+
+// boundToLoopback reports whether a listener answers only on loopback.
+// A wildcard bind (0.0.0.0, ::, or an empty host) answers everywhere
+// and is not loopback-only.
+func boundToLoopback(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return false
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		return false
+	case "localhost":
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// advertisedAddr picks the first -hosts SAN that isn't loopback and
+// joins it to the port actually bound. The SANs are already the names
+// the certificate is valid for, so a name that isn't in there could not
+// be used anyway.
+func advertisedAddr(hosts, listen string) string {
 	_, port, err := net.SplitHostPort(listen)
 	if err != nil || port == "" {
 		return ""
