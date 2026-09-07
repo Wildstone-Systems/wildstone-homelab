@@ -83,6 +83,100 @@ func TestChatThreadsAreNotSharedAcrossSurfaces(t *testing.T) {
 	}
 }
 
+// One conversation, two front doors. A thread carried on in the Console
+// must not be called stale because Telegram has been quiet — they are
+// the same conversation, and idleness is a property of it rather than
+// of the transport that last touched it.
+func TestConsoleActivityKeepsAChatThreadAlive(t *testing.T) {
+	h := newHarness(t)
+	h.wireButler(answerTurns("from telegram", "from the console", "back on telegram"), runtimedb.ButlerModeFull)
+	h.bindAccount(t, "admin", "op", "telegram", "12345")
+
+	h.send(runtimedb.RoleValet, map[string]any{
+		"transport": "telegram", "account": "12345", "text": "first, on telegram",
+		"messageId": "m-1", "surface": "admin",
+	})
+	var sessions []runtimedb.ButlerSession
+	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &sessions)
+	if len(sessions) != 1 {
+		t.Fatalf("sessions after the first message = %d", len(sessions))
+	}
+
+	// Continue it from the Console, as the same principal.
+	if resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/sessions/"+sessions[0].ID+"/ask",
+		map[string]string{"message": "second, in the console"}, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("console follow-up: status = %d", resp.StatusCode)
+	}
+
+	// Back to Telegram: still the same conversation.
+	h.send(runtimedb.RoleValet, map[string]any{
+		"transport": "telegram", "account": "12345", "text": "third, on telegram",
+		"messageId": "m-2", "surface": "admin",
+	})
+
+	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &sessions)
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %d, want the conversation to have survived the round trip", len(sessions))
+	}
+	var full runtimedb.ButlerSession
+	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions/"+sessions[0].ID, nil, &full)
+	if len(full.Turns) != 6 {
+		t.Fatalf("turns = %d, want 6 across both surfaces", len(full.Turns))
+	}
+	// And the last Telegram turn was told about the Console one.
+	convos := h.scripted(t).convos
+	last := convos[len(convos)-1]
+	var sawConsole bool
+	for _, m := range last {
+		if m.Text == "second, in the console" {
+			sawConsole = true
+		}
+	}
+	if !sawConsole {
+		t.Fatalf("the telegram follow-up did not replay the console turn: %+v", last)
+	}
+}
+
+// A group room has several bound members speaking into one
+// conversation, and a session is principal-bound — Alice cannot
+// continue Bob's. With one pointer per room the speaker changing would
+// rewrite it, and BOTH of them would lose their thread on every
+// alternate message. Reported by Codex on #109.
+func TestGroupMembersKeepSeparateThreads(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(answerTurns("a1", "b1", "a2", "b2"), runtimedb.ButlerModeFull)
+	h.bindAccount(t, "family", "alice", "telegram", "111")
+	h.bindAccount(t, "family", "bob", "telegram", "222")
+
+	// Alice, Bob, Alice, Bob — all in the same room.
+	for i, m := range []struct{ account, text string }{
+		{"111", "alice one"}, {"222", "bob one"}, {"111", "alice two"}, {"222", "bob two"},
+	} {
+		resp, out := h.send(runtimedb.RoleConcierge, map[string]any{
+			"transport": "telegram", "account": m.account, "conversation": "room-1",
+			"group": true, "text": m.text, "messageId": string(rune('a' + i)),
+		})
+		if resp.StatusCode != http.StatusAccepted || !out.Bound {
+			t.Fatalf("message %d: status = %d out = %+v", i, resp.StatusCode, out)
+		}
+	}
+
+	var sessions []runtimedb.ButlerSession
+	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &sessions)
+	if len(sessions) != 2 {
+		t.Fatalf("sessions = %d, want one per member: %+v", len(sessions), sessions)
+	}
+	// Each member's second message continued their OWN first one.
+	for _, s := range sessions {
+		var full runtimedb.ButlerSession
+		h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions/"+s.ID, nil, &full)
+		if len(full.Turns) != 4 {
+			t.Fatalf("%s (%s) has %d turns; the other speaker took its thread",
+				s.ID, s.ActingFor, len(full.Turns))
+		}
+	}
+}
+
 // Without a way to say "start over", a fresh question inherits the
 // previous topic until the idle window expires.
 func TestChatResetStartsANewConversation(t *testing.T) {

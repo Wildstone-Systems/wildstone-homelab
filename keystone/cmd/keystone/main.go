@@ -1045,12 +1045,40 @@ func advertisedGatewayAddr(hosts, listen string) string {
 // choosing differently. Two rules for "which of our addresses can a
 // node reach" would drift, and an operator debugging one would have to
 // discover the other; whichever SAN they put first governs both.
+// It differs from the gateway in one way that matters. The two listen
+// separately, and -api-listen's documented default is loopback — so a
+// deployment can have routable gateway SANs while the API answers only
+// on 127.0.0.1. Advertising a SAN in that case would prefill a
+// `keystone_url` nothing is listening on, and the adapter installed
+// with it could never check in. A loopback-bound API advertises
+// nothing, which leaves the field blank for an operator to answer.
 func advertisedAPIURL(hosts, listen string) string {
+	if boundToLoopback(listen) {
+		return ""
+	}
 	addr := advertisedAddr(hosts, listen)
 	if addr == "" {
 		return ""
 	}
 	return "http://" + addr
+}
+
+// boundToLoopback reports whether a listener answers only on loopback.
+// A wildcard bind (0.0.0.0, ::, or an empty host) answers everywhere
+// and is not loopback-only.
+func boundToLoopback(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return false
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		return false
+	case "localhost":
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // advertisedAddr picks the first -hosts SAN that isn't loopback and

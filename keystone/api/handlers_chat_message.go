@@ -247,7 +247,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// Handled here rather than in an adapter so both transports get it
 	// from one implementation.
 	if isChatReset(text) {
-		if err := s.DB.ClearChatThread(transport, conversation, surface); err != nil {
+		if err := s.DB.ClearChatThread(transport, conversation, surface, binding.Identity); err != nil {
 			s.Log.Error("clearing chat thread failed", "err", err)
 		}
 		seq := s.queueChatReply(surface, transport, conversation,
@@ -286,7 +286,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 
 	ask, _ := out.(askResponse)
 	if ask.SessionID != "" {
-		if err := s.DB.SetChatThreadSession(transport, conversation, surface, ask.SessionID); err != nil {
+		if err := s.DB.SetChatThreadSession(transport, conversation, surface, binding.Identity, ask.SessionID); err != nil {
 			// The answer already happened and is about to be sent. A
 			// thread pointer that failed to save costs the NEXT message
 			// its context; dropping this reply would cost this one
@@ -330,7 +330,7 @@ const chatIdleWindow = 30 * time.Minute
 // drifted (a binding revoked and reissued to somebody else on the same
 // chat id) must not hand a stranger the previous person's conversation.
 func (s *Server) chatThread(transport, conversation string, surface runtimedb.ButlerSurface, identity string) *turnContext {
-	id, ok, err := s.DB.ChatThreadSession(transport, conversation, surface, chatIdleWindow)
+	id, ok, err := s.DB.ChatThreadSession(transport, conversation, surface, identity)
 	if err != nil {
 		s.Log.Error("reading chat thread failed", "err", err)
 		return nil
@@ -347,6 +347,13 @@ func (s *Server) chatThread(transport, conversation string, surface runtimedb.Bu
 	if sess.ActingFor != identity || sess.Surface != surface {
 		s.Log.Warn("chat thread pointed at another principal's session; starting fresh",
 			"session", id, "expected", identity, "got", sess.ActingFor)
+		return nil
+	}
+	// Age is measured from the conversation's newest turn, on ANY
+	// surface. Measuring it from the pointer would call a thread dead
+	// that was alive two minutes ago in the Console — the same
+	// conversation, carried on somewhere else.
+	if last := sess.LastTurnAt(); last.IsZero() || time.Since(last) > chatIdleWindow {
 		return nil
 	}
 	return &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}
