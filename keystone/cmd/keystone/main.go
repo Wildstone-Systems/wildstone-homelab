@@ -704,6 +704,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 
 	apiSrv.CAFingerprint = gw.CA().Fingerprint()
 	apiSrv.GatewayAddr = advertisedGatewayAddr(hosts, lis.Addr().String())
+	apiSrv.APIURL = advertisedAPIURL(hosts, apiLis.Addr().String())
 	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
 	apiSrv.BackupRestore = bak.RestoreAlongside
 
@@ -1033,6 +1034,30 @@ func splitNonEmpty(s string) []string {
 // the pairing endpoint says so rather than emitting a loopback address a
 // second machine cannot reach.
 func advertisedGatewayAddr(hosts, listen string) string {
+	return advertisedAddr(hosts, listen)
+}
+
+// advertisedAPIURL is the same answer for the PUBLIC API, as a URL: the
+// address a container on a node dials to reach the control plane. It
+// fills the `keystone_url` param source.
+//
+// It deliberately reuses the gateway's own selection rather than
+// choosing differently. Two rules for "which of our addresses can a
+// node reach" would drift, and an operator debugging one would have to
+// discover the other; whichever SAN they put first governs both.
+func advertisedAPIURL(hosts, listen string) string {
+	addr := advertisedAddr(hosts, listen)
+	if addr == "" {
+		return ""
+	}
+	return "http://" + addr
+}
+
+// advertisedAddr picks the first -hosts SAN that isn't loopback and
+// joins it to the port actually bound. The SANs are already the names
+// the certificate is valid for, so a name that isn't in there could not
+// be used anyway.
+func advertisedAddr(hosts, listen string) string {
 	_, port, err := net.SplitHostPort(listen)
 	if err != nil || port == "" {
 		return ""

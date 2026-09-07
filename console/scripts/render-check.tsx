@@ -802,6 +802,33 @@ check("the install step does not claim credentials are impossible",
   !/NO credentials|carries no registry auth/.test(install), install.slice(0, 400));
 check("the install step says a private registry needs a node secret",
   install.includes("secret named after the registry"), install.slice(0, 400));
+
+// A param the deployment can enumerate is a choice, not a blank —
+// retyping a node id from memory is how a capability lands on a machine
+// that does not exist. The Services form has always done this; this
+// screen asked for free text even when the answer was known.
+const sourced = renderToString(h(InstallStep, {
+  pkg: {
+    name: "chat-telegram-family", version: "1.0.1", capability: "chat-telegram-family", enabled: false,
+    params: [
+      { name: "node", required: true },
+      { name: "adapter_image", required: true, suggested: "reg:5000/chat-adapter@sha256:abc" },
+      { name: "keystone_url", required: true, suggested: "http://100.64.0.59:9441" },
+      { name: "extra", required: true, options: ["one", "two"] },
+    ],
+  } as never,
+  node: "n1", nodes: [], done: false, onDone: () => {},
+}));
+check("an enumerable param renders as a picker", /<select[^>]*aria-label="extra"/.test(sourced), sourced.slice(0, 600));
+check("the picker offers what the deployment knows", sourced.includes(">one<") && sourced.includes(">two<"));
+// A known answer must be IN the field, not grey placeholder text behind
+// it: that is how an operator ends up believing it is theirs to work out.
+check("a suggested answer is prefilled, not merely hinted",
+  sourced.includes('value="http://100.64.0.59:9441"'), sourced.slice(0, 900));
+check("a suggested image is prefilled too",
+  sourced.includes('value="reg:5000/chat-adapter@sha256:abc"'), sourced.slice(0, 900));
+// And with nothing suggested the field stays empty and gates the button.
+check("an unanswerable param still gates the install", install.includes("fill in"), install.slice(0, 300));
 check("propose is gated until the required params are filled", install.includes("fill in"));
 
 // The operator-supplied secret is read from the package, never guessed:

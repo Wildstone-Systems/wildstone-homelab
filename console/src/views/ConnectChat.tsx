@@ -375,7 +375,17 @@ export function InstallStep({
   // only Telegram's three params had every Matrix install rejected for a
   // missing required param before a plan could exist.
   const fields = (pkg.params ?? []).filter((p) => p.name !== "node");
-  const [values, setValues] = useState<Record<string, string>>({});
+  // Prefill what the deployment already knows. `suggested` is an ANSWER
+  // — a fact about this deployment, like the Keystone URL a container
+  // reaches us on — where `example` is only the shape of one, so only
+  // the first becomes a value. Leaving a known answer as grey
+  // placeholder text is how an operator ends up believing the field is
+  // theirs to work out.
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      fields.filter((f) => f.suggested).map((f) => [f.name, f.suggested as string]),
+    ),
+  );
   const [plan, setPlan] = useState<PlanRecord | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -426,19 +436,42 @@ export function InstallStep({
     >
       {!done && (
         <>
+          {/* A param the deployment can enumerate is a choice, not a
+              blank: `node` arrives with the node list, and retyping one
+              of those from memory is how a capability lands on a machine
+              that does not exist. The Services install form has always
+              done this; this screen asked for free text even when the
+              answer was already known. */}
           {fields.map((f) => (
             <div className="row" key={f.name}>
               <label style={{ minWidth: 140 }}>
                 {f.name}
                 {f.required ? " *" : ""}
               </label>
-              <input
-                type="text"
-                style={{ flex: 1 }}
-                placeholder={f.suggested || f.default || f.example || f.description || f.name}
-                value={valueOf(f.name)}
-                onChange={(e) => setValues({ ...values, [f.name]: e.target.value })}
-              />
+              {f.options && f.options.length > 0 ? (
+                <select
+                  style={{ flex: 1 }}
+                  aria-label={f.name}
+                  value={valueOf(f.name)}
+                  onChange={(e) => setValues({ ...values, [f.name]: e.target.value })}
+                >
+                  {!valueOf(f.name) && <option value="">choose…</option>}
+                  {f.options.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  style={{ flex: 1 }}
+                  aria-label={f.name}
+                  placeholder={f.suggested || f.default || f.example || f.description || f.name}
+                  value={valueOf(f.name)}
+                  onChange={(e) => setValues({ ...values, [f.name]: e.target.value })}
+                />
+              )}
             </div>
           ))}
           <div className="row">

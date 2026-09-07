@@ -47,17 +47,19 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: chat-matrix-family
-  version: 1.0.1
+  version: 1.0.2
   capability: chat-matrix-family
   profile: matrix
 params:
   - { name: node, required: true, source: node, description: "Which machine runs the adapter." }
   - name: adapter_image
     required: true
+    source: chat_adapter_image
     description: "The chat-adapter image, digest-pinned (repo@sha256:...). Build it from cli/cmd/chat-adapter/Dockerfile."
     example: "registry.example.com/wildstone/chat-adapter@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   - name: keystone_url
     required: true
+    source: keystone_url
     description: "The Keystone API as the ADAPTER can reach it — usually the tailnet address, not 127.0.0.1."
     example: "http://100.64.0.1:9441"
   - name: homeserver_url
