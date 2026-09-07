@@ -172,13 +172,66 @@ type BlockedResource struct {
 	Name   string
 	Action plan.Action
 	Reason string
+	// Awaiting marks a resource set aside because its CAPABILITY is
+	// waiting for something only the operator can give it, rather than
+	// because the step failed repeatedly (ADR-W028). The two need
+	// different words: one has been tried and failed, the other has
+	// never been tried and should not be.
+	Awaiting bool
 }
 
 // Summary is what an operator needs: which resource, and what to do.
 func (b BlockedResource) Summary() string {
+	if b.Awaiting {
+		// The reason is already a whole explanation naming the commands
+		// to run. Wrapping it in "has failed 3 times" would be false:
+		// nothing was attempted.
+		return fmt.Sprintf("%s %s/%s is waiting: %s", b.Action, b.Kind, b.Name, b.Reason)
+	}
 	return fmt.Sprintf("%s %s/%s has failed %d times and is being skipped so other resources can converge: %s "+
 		"— fix the cause, or remove it from desired state",
 		b.Action, b.Kind, b.Name, blockAfter, b.Reason)
+}
+
+// withoutAwaitingSecrets removes the steps of a capability that cannot
+// converge for want of an operator-supplied secret, so the rest of the
+// node converges without it (ADR-W028).
+//
+// DELETES are never removed, and that is the important part. The way out
+// of this state is to remove the capability, and a removal is a delete —
+// blocking it would make the trap inescapable from the Console, which is
+// exactly the corner this change exists to open up. A delete also cannot
+// need the secret it is deleting.
+//
+// A step whose resource is not in desired state is a delete by
+// definition, so it is not attributable to an owner and is left alone.
+func withoutAwaitingSecrets(
+	p *plan.Plan, desiredByKey map[resKey]resource.Resource, awaiting map[string]string,
+) (*plan.Plan, []BlockedResource) {
+	if len(awaiting) == 0 {
+		return p, nil
+	}
+	var kept []plan.PlanStep
+	var skipped []BlockedResource
+	for _, st := range p.Steps {
+		want, isDesired := desiredByKey[resKey{st.Kind, st.Name}]
+		reason, blocked := "", false
+		if isDesired && st.Action != plan.ActionDelete {
+			reason, blocked = awaiting[want.Metadata.Owner]
+		}
+		if !blocked {
+			kept = append(kept, st)
+			continue
+		}
+		skipped = append(skipped, BlockedResource{
+			Kind: st.Kind, Name: st.Name, Action: st.Action, Reason: reason, Awaiting: true,
+		})
+	}
+	if len(skipped) == 0 {
+		return p, nil
+	}
+	out := plan.WithSteps(*p, kept)
+	return &out, skipped
 }
 
 // absentSpec is the fingerprint of a step whose resource is not in

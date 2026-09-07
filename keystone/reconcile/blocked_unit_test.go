@@ -1,6 +1,7 @@
 package reconcile
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
@@ -84,5 +85,50 @@ func TestADifferentErrorStartsTheCountAgain(t *testing.T) {
 	r.noteStepFailure("node-a", s, "spec-v1", "no such image")
 	if r.noteStepFailure("node-a", s, "spec-v1", "port already allocated") {
 		t.Error("a run of different errors was quarantined as though it were the same failure repeating")
+	}
+}
+
+// The way OUT of a capability awaiting a secret is to remove it, and a
+// removal is a delete. Blocking deletes would make the trap inescapable
+// — which is the corner ADR-W028 exists to open up, so it has a test of
+// its own rather than resting on a comment.
+func TestAwaitingSecretsNeverBlocksADelete(t *testing.T) {
+	owner := "capability/chat-telegram-family"
+	desired := map[resKey]resource.Resource{
+		{resource.KindContainer, "keep-me"}: {
+			Kind: resource.KindContainer, Metadata: resource.Metadata{Name: "keep-me", Owner: owner},
+		},
+	}
+	p := &plan.Plan{Steps: []plan.PlanStep{
+		// A create for the blocked capability: set aside.
+		{Kind: resource.KindContainer, Name: "keep-me", Action: plan.ActionCreate},
+		// A delete of something it owns, no longer in desired: must run.
+		{Kind: resource.KindContainer, Name: "chat-telegram-family", Action: plan.ActionDelete},
+		// A create for a capability that is fine: must run.
+		{Kind: resource.KindContainer, Name: "open-webui", Action: plan.ActionCreate},
+	}}
+	awaiting := map[string]string{owner: "1 secret(s) must be supplied"}
+
+	out, skipped := withoutAwaitingSecrets(p, desired, awaiting)
+	var kept []string
+	for _, st := range out.Steps {
+		kept = append(kept, fmt.Sprintf("%v %s", st.Action, st.Name))
+	}
+	if len(out.Steps) != 2 {
+		t.Fatalf("kept %v, want the delete and the unrelated create", kept)
+	}
+	for _, want := range []string{"chat-telegram-family", "open-webui"} {
+		var found bool
+		for _, st := range out.Steps {
+			if st.Name == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s was removed from the plan; kept %v", want, kept)
+		}
+	}
+	if len(skipped) != 1 || skipped[0].Name != "keep-me" {
+		t.Fatalf("skipped = %+v, want only the blocked capability's create", skipped)
 	}
 }

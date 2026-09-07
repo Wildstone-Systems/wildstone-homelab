@@ -197,14 +197,21 @@ func TestProvidedSecretsAreNamedTogetherAndNeverGenerated(t *testing.T) {
 		providedSecretResource("paperless-oauth-providers"),
 		secretResource("immich-postgres-password", ""),
 	}
-	_, err := secretReconciler(&GatewayApplier{Gateway: h.gw}).Reconcile(context.Background(), "node-a", desired)
-	if err == nil {
-		t.Fatal("reconcile succeeded with two operator-supplied secrets absent")
+	// Since ADR-W028 this no longer fails the node: the capability
+	// awaiting the secrets is set aside and everything else converges.
+	// The reporting claim is unchanged and is what F37 was about — the
+	// operator learns about BOTH at once, with the command for each.
+	out, err := secretReconciler(&GatewayApplier{Gateway: h.gw}).Reconcile(context.Background(), "node-a", desired)
+	if err != nil {
+		t.Fatalf("a capability awaiting a secret failed the whole node: %v", err)
 	}
-	msg := err.Error()
+	if len(out.Blocked) == 0 {
+		t.Fatal("nothing was reported as blocked, so the operator is told nothing")
+	}
+	msg := out.Blocked[0].Reason
 	for _, want := range []string{"cloudflared-tunnel-token", "paperless-oauth-providers", "wild secret set"} {
 		if !strings.Contains(msg, want) {
-			t.Errorf("the failure did not name %q, so the operator cannot act on it:\n%s", want, msg)
+			t.Errorf("the block did not name %q, so the operator cannot act on it:\n%s", want, msg)
 		}
 	}
 
@@ -225,5 +232,65 @@ func TestProvidedSecretsAreNamedTogetherAndNeverGenerated(t *testing.T) {
 	}
 	if _, ok := agent.secretKind("immich-postgres-password"); !ok {
 		t.Error("the generatable secret was not generated")
+	}
+}
+
+// ownedProvidedSecret is a provided secret filed under a capability, so
+// a test can say which capability is waiting.
+func ownedProvidedSecret(owner, name string) resource.Resource {
+	r := providedSecretResource(name)
+	r.Metadata.Owner = "capability/" + owner
+	return r
+}
+
+func ownedSecret(owner, name string) resource.Resource {
+	r := secretResource(name, "")
+	r.Metadata.Owner = "capability/" + owner
+	return r
+}
+
+// One capability enabled without its secrets used to stop every OTHER
+// capability on the machine from converging, so an unrelated install
+// approved afterwards failed too — with a message about secrets it had
+// never heard of. That is ADR-W028, and it is the whole reason the
+// scope of the consequence now matches the scope of the problem.
+func TestOneCapabilityAwaitingASecretDoesNotStopTheOthers(t *testing.T) {
+	h := startGateway(t, []string{"tok"})
+	agent := newTestAgent(t, h, "node-a", "tok")
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+
+	desired := []resource.Resource{
+		ownedProvidedSecret("chat-telegram-family", "chat-telegram-family-bot"),
+		ownedSecret("ai-chat", "open-webui-secret-key"),
+		ownedSecret("identity", "authelia-jwt-secret"),
+	}
+	out, err := secretReconciler(&GatewayApplier{Gateway: h.gw}).Reconcile(context.Background(), "node-a", desired)
+	if err != nil {
+		t.Fatalf("one capability's missing secret failed the node: %v", err)
+	}
+
+	// The capabilities that CAN converge, did.
+	for _, n := range []string{"open-webui-secret-key", "authelia-jwt-secret"} {
+		if _, ok := agent.secretKind(n); !ok {
+			t.Errorf("%s was not generated; an unrelated capability was held back", n)
+		}
+	}
+	// And the one that cannot is named, with what to do about it.
+	if len(out.Blocked) == 0 {
+		t.Fatal("the waiting capability was not reported")
+	}
+	var found bool
+	for _, b := range out.Blocked {
+		if strings.Contains(b.Reason, "chat-telegram-family-bot") {
+			found = true
+			if !strings.Contains(b.Reason, "chat-telegram-family can converge") {
+				t.Errorf("the block does not name the capability waiting:\n%s", b.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("the missing secret was not named: %+v", out.Blocked)
 	}
 }

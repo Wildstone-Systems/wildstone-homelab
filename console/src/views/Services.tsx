@@ -32,6 +32,11 @@ export function Services() {
     <ServicesView
       pkgs={list.data ?? []}
       resources={resources.data ?? []}
+      // Without this a failed resources call is indistinguishable from
+      // a capability that owns nothing: the drawer said "nothing to
+      // remove" and the reason went nowhere.
+      resourcesError={resources.error}
+      resourcesLoading={resources.loading}
       onInstalled={() => {
         list.reload();
         resources.reload();
@@ -46,10 +51,14 @@ export function Services() {
 export function ServicesView({
   pkgs,
   resources = [],
+  resourcesError = null,
+  resourcesLoading = false,
   onInstalled,
 }: {
   pkgs: PackageView[];
   resources?: ResourceView[];
+  resourcesError?: string | null;
+  resourcesLoading?: boolean;
   onInstalled: () => void;
 }) {
   const [chosen, setChosen] = useState<PackageView | null>(null);
@@ -145,6 +154,8 @@ export function ServicesView({
           <RemoveForm
             pkg={removing}
             owned={resources.filter((r) => r.owner === `capability/${removing.capability}`)}
+            error={resourcesError}
+            loading={resourcesLoading}
             onDone={() => {
               setRemoving(null);
               onInstalled();
@@ -278,10 +289,17 @@ export function InstalledTile({
 export function RemoveForm({
   pkg,
   owned,
+  error = null,
+  loading = false,
   onDone,
 }: {
   pkg: PackageView;
   owned: ResourceView[];
+  // "I could not read the statefile" and "this owns nothing" look
+  // identical from an empty list, and only one of them is safe to
+  // believe.
+  error?: string | null;
+  loading?: boolean;
   onDone: () => void;
 }) {
   const remove = useAction();
@@ -340,15 +358,27 @@ export function RemoveForm({
           ))}
         </tbody>
       </table>
-      {owned.length === 0 && (
+      {owned.length === 0 && error !== null && (
+        <div className="callout callout-bad">
+          <strong>The statefile could not be read</strong>, so what this capability owns is
+          unknown — not empty. Nothing is proposed from a list that failed to load.
+          <ErrorLine error={error} />
+        </div>
+      )}
+      {owned.length === 0 && error === null && loading && (
+        <div className="muted">Reading the statefile…</div>
+      )}
+      {owned.length === 0 && error === null && !loading && (
         <div className="muted">
-          Nothing in the statefile is owned by this capability, so there is nothing to remove.
+          Nothing in the statefile is owned by <code>capability/{pkg.capability}</code>, so there
+          is nothing to remove. If you expected resources here, they are filed under a different
+          owner — the capability name, not the package name.
         </div>
       )}
       <div className="row">
         <button
           className="btn btn-danger"
-          disabled={remove.state.phase === "busy" || owned.length === 0}
+          disabled={remove.state.phase === "busy" || owned.length === 0 || error !== null}
           onClick={() =>
             remove.run(
               () => api.disableCapability(pkg.capability, owned),
