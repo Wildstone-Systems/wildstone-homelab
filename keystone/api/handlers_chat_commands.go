@@ -88,6 +88,34 @@ func init() {
 	}
 }
 
+// chatCommandInfo is one entry in a vendor's own command menu. Name
+// carries no slash and no argument: Telegram's setMyCommands takes the
+// bare word and renders the slash itself.
+type chatCommandInfo struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+// commandsFor is the menu a bot on this surface should publish.
+//
+// Aliases collapse to their first name — /new appears, /reset and
+// /clear still work but do not clutter a menu whose whole job is
+// discovery. It is filtered by surface for the same reason /help is:
+// a household bot offering /status in its menu would teach exactly the
+// thing ADR-W026 A1 makes structural.
+func commandsFor(surface runtimedb.ButlerSurface) []chatCommandInfo {
+	out := []chatCommandInfo{}
+	seen := map[string]bool{}
+	for _, cmd := range chatCommands {
+		if !cmd.offeredOn(surface) || seen[cmd.Help] {
+			continue
+		}
+		seen[cmd.Help] = true
+		out = append(out, chatCommandInfo{Command: cmd.Name, Description: cmd.Help})
+	}
+	return out
+}
+
 // parseChatCommand splits "/plan plan-0f3a91" into name and argument. A
 // message that does not begin with "/" is not a command — it is a
 // question, and it goes to the Butler untouched.

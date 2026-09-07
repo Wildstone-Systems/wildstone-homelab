@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -206,5 +207,99 @@ func TestPlanCommandReadsButSaysApprovalIsElsewhere(t *testing.T) {
 	}
 	if got := h.ask(t, runtimedb.RoleValet, "12345", "/plan plan-nope", "admin"); !strings.Contains(got, "don't have a plan") {
 		t.Fatalf("/plan with a bad id = %q", got)
+	}
+}
+
+// The menu a bot publishes is filtered by surface for the same reason
+// /help is. A household bot whose Telegram menu offers /status teaches
+// exactly the thing ADR-W026 A1 makes structural — and a menu is more
+// convincing than help text, because it is tappable.
+func TestCommandMenuIsFilteredBySurface(t *testing.T) {
+	family := commandsFor(runtimedb.ButlerSurfaceFamily)
+	admin := commandsFor(runtimedb.ButlerSurfaceAdmin)
+
+	has := func(cmds []chatCommandInfo, name string) bool {
+		for _, c := range cmds {
+			if c.Command == name {
+				return true
+			}
+		}
+		return false
+	}
+	for _, name := range []string{"status", "plans", "plan", "nodes", "backups", "services"} {
+		if has(family, name) {
+			t.Errorf("the household menu offers /%s", name)
+		}
+		if !has(admin, name) {
+			t.Errorf("the operator menu is missing /%s", name)
+		}
+	}
+	for _, name := range []string{"today", "actions"} {
+		if !has(family, name) {
+			t.Errorf("the household menu is missing /%s", name)
+		}
+		if has(admin, name) {
+			t.Errorf("the operator menu offers /%s", name)
+		}
+	}
+	for _, name := range []string{"help", "whoami", "new"} {
+		if !has(family, name) || !has(admin, name) {
+			t.Errorf("/%s should be on both menus", name)
+		}
+	}
+	// Aliases collapse: the menu exists for discovery, and three
+	// entries that do one thing is clutter.
+	if has(admin, "reset") || has(admin, "clear") {
+		t.Errorf("aliases leaked into the menu: %+v", admin)
+	}
+}
+
+// Telegram refuses a command whose name is not 1-32 of [a-z0-9_], and
+// a description outside 3-256 characters. A menu entry the vendor
+// rejects takes the WHOLE call down, so one bad help string would leave
+// every command unlisted.
+func TestCommandMenuEntriesAreValidForTelegram(t *testing.T) {
+	name := regexp.MustCompile(`^[a-z0-9_]{1,32}$`)
+	for _, surface := range []runtimedb.ButlerSurface{runtimedb.ButlerSurfaceAdmin, runtimedb.ButlerSurfaceFamily} {
+		for _, c := range commandsFor(surface) {
+			if !name.MatchString(c.Command) {
+				t.Errorf("%s: %q is not a valid Telegram command name", surface, c.Command)
+			}
+			if n := len(c.Description); n < 3 || n > 256 {
+				t.Errorf("%s: /%s description is %d characters", surface, c.Command, n)
+			}
+			// The name is the bare word: Telegram renders the slash.
+			if strings.HasPrefix(c.Command, "/") {
+				t.Errorf("%s: /%s carries its own slash", surface, c.Command)
+			}
+		}
+	}
+}
+
+// The menu comes back with the registration, so an adapter never has to
+// carry its own copy of the list — the drift that would produce is a
+// household bot advertising /status.
+func TestRegisterReturnsTheSurfacesCommands(t *testing.T) {
+	h := newHarness(t)
+	var out struct {
+		Surface  string            `json:"surface"`
+		Commands []chatCommandInfo `json:"commands"`
+	}
+	token := h.adapterToken(t, "chat-telegram-family")
+	resp := h.doToken(token, http.MethodPost, "/api/v1/chat/adapters/self",
+		map[string]any{"transport": "telegram", "handle": "wildstone_house_bot"}, &out)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("register: status = %d", resp.StatusCode)
+	}
+	if out.Surface != "family" {
+		t.Fatalf("surface = %q", out.Surface)
+	}
+	if len(out.Commands) == 0 {
+		t.Fatal("registration returned no commands")
+	}
+	for _, c := range out.Commands {
+		if c.Command == "status" {
+			t.Fatalf("a family adapter was handed the operator's menu: %+v", out.Commands)
+		}
 	}
 }

@@ -67,6 +67,23 @@ type Transport interface {
 	// bot token write-only and can never read it back, so without this
 	// an invite cannot name the bot a person is meant to message.
 	Identify(ctx context.Context) (handle, displayName string, err error)
+	// Advertise publishes the command list to the vendor's own menu,
+	// where the vendor has one. Telegram does (setMyCommands); Matrix
+	// does not, and implements this as a no-op rather than inventing
+	// something that looks like one.
+	//
+	// The list comes from Keystone, which knows this adapter's surface
+	// from the credential it authenticated with. The adapter carries no
+	// copy: a household bot advertising /status is precisely the drift
+	// a second source of truth would produce.
+	Advertise(ctx context.Context, commands []Command) error
+}
+
+// Command is one entry in a vendor's command menu. Name carries no
+// slash: the vendors render that themselves.
+type Command struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
 }
 
 func main() {
@@ -173,8 +190,9 @@ func (a *adapter) registerLoop(ctx context.Context) {
 	backoff := time.Second
 	for ctx.Err() == nil {
 		handle, displayName, err := a.transport.Identify(ctx)
+		var commands []Command
 		if err == nil {
-			err = a.keystone.register(ctx, a.transport.Name(), handle, displayName)
+			commands, err = a.keystone.register(ctx, a.transport.Name(), handle, displayName)
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -187,6 +205,13 @@ func (a *adapter) registerLoop(ctx context.Context) {
 		}
 		backoff = time.Second
 		a.log.Info("registered", "transport", a.transport.Name(), "handle", handle)
+		// A failed menu update is not a failed registration. Messages
+		// and commands both still work; only the tap-to-see list is
+		// stale, and the next heartbeat retries it.
+		if err := a.transport.Advertise(ctx, commands); err != nil && ctx.Err() == nil {
+			a.log.Warn("publishing the command menu", "err", err,
+				"note", "commands still work; the menu may be stale until the next heartbeat")
+		}
 		select {
 		case <-ctx.Done():
 			return

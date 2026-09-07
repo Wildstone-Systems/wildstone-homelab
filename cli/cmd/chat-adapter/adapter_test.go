@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,15 +15,30 @@ import (
 // fakeTransport stands in for a chat vendor: queued incoming messages,
 // recorded outgoing ones. No network, no vendor.
 type fakeTransport struct {
-	mu       sync.Mutex
-	incoming [][]Incoming
-	sent     []sentMessage
-	sendErr  error
+	mu           sync.Mutex
+	incoming     [][]Incoming
+	sent         []sentMessage
+	sendErr      error
+	advertised   [][]Command
+	advertiseErr error
 }
 
 type sentMessage struct{ conversation, body string }
 
 func (f *fakeTransport) Name() string { return "faketransport" }
+
+func (f *fakeTransport) Advertise(_ context.Context, cmds []Command) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.advertised = append(f.advertised, cmds)
+	return f.advertiseErr
+}
+
+func (f *fakeTransport) menus() [][]Command {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][]Command(nil), f.advertised...)
+}
 
 func (f *fakeTransport) Identify(context.Context) (string, string, error) {
 	return "fakebot", "Fake Bot", nil
@@ -72,6 +88,8 @@ type fakeKeystone struct {
 	rejectID string
 	// registered is every self-registration the adapter posted.
 	registered []map[string]string
+	// commands is what registration answers with — the surface's menu.
+	commands []Command
 }
 
 func (f *fakeKeystone) handler() http.Handler {
@@ -105,8 +123,11 @@ func (f *fakeKeystone) handler() http.Handler {
 		json.NewDecoder(r.Body).Decode(&body) //nolint:errcheck // test fake
 		f.mu.Lock()
 		f.registered = append(f.registered, body)
+		cmds := f.commands
 		f.mu.Unlock()
-		w.Write([]byte(`{"ok":true}`)) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck // test fake
+			"ok": true, "commands": cmds,
+		})
 	})
 	mux.HandleFunc("GET /api/v1/chat/outbound", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -428,5 +449,53 @@ func TestAdapterRegistersItsHandle(t *testing.T) {
 	got := ks.registered[0]
 	if got["handle"] != "fakebot" || got["transport"] != "faketransport" {
 		t.Fatalf("registered %+v, want the transport's own handle", got)
+	}
+}
+
+// The menu comes from Keystone, which knows this adapter's surface from
+// the credential it authenticated with. The adapter carries no copy of
+// the list: a household bot advertising /status is precisely the drift
+// a second source of truth would produce.
+func TestAdapterPublishesTheMenuKeystoneSent(t *testing.T) {
+	ks := &fakeKeystone{commands: []Command{
+		{Command: "help", Description: "what this bot answers"},
+		{Command: "today", Description: "what has happened in the house today"},
+	}}
+	tr := &fakeTransport{}
+	a, done := newTestAdapter(t, ks, tr)
+	defer done()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runUntil(ctx, a, func() bool { return len(tr.menus()) > 0 })
+
+	menus := tr.menus()
+	if len(menus) == 0 {
+		t.Fatal("the adapter published no menu")
+	}
+	got := menus[0]
+	if len(got) != 2 || got[0].Command != "help" || got[1].Command != "today" {
+		t.Fatalf("published %+v, want exactly what Keystone sent", got)
+	}
+}
+
+// A vendor that rejects the menu must not take the adapter down with
+// it. Commands still work when the menu is stale; they do not work at
+// all if the adapter stops relaying messages.
+func TestMenuFailureDoesNotStopMessages(t *testing.T) {
+	ks := &fakeKeystone{
+		commands: []Command{{Command: "help", Description: "what this bot answers"}},
+		pending:  []outboundMessage{{Seq: 3, Target: "chat-1", Body: "hello"}},
+	}
+	tr := &fakeTransport{advertiseErr: errors.New("telegram said no")}
+	a, done := newTestAdapter(t, ks, tr)
+	defer done()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runUntil(ctx, a, func() bool { return len(tr.sentMessages()) > 0 })
+
+	if got := tr.sentMessages(); len(got) != 1 || got[0].body != "hello" {
+		t.Fatalf("a failed menu update stopped delivery: %+v", got)
 	}
 }

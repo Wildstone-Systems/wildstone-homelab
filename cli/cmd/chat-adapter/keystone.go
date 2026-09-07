@@ -75,11 +75,26 @@ func (k *keystoneClient) redeem(ctx context.Context, transport, account, display
 // register tells Keystone which bot this adapter is. Which CAPABILITY
 // that is comes from this credential's own principal, server-side, so
 // nothing sent here can claim to be a different adapter.
-func (k *keystoneClient) register(ctx context.Context, transport, handle, displayName string) error {
-	_, err := k.call(ctx, http.MethodPost, "/api/v1/chat/adapters/self", map[string]string{
+// register tells Keystone which bot this adapter is, and gets back the
+// commands this adapter's SURFACE offers. The surface is not sent: it
+// comes from the credential, so an adapter cannot ask for another
+// surface's menu.
+func (k *keystoneClient) register(ctx context.Context, transport, handle, displayName string) ([]Command, error) {
+	data, err := k.call(ctx, http.MethodPost, "/api/v1/chat/adapters/self", map[string]string{
 		"transport": transport, "handle": handle, "displayName": displayName,
 	})
-	return err
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Commands []Command `json:"commands"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		// The registration itself succeeded; a body we cannot read
+		// costs the menu, not the adapter.
+		return nil, nil
+	}
+	return out.Commands, nil
 }
 
 // poll long-polls this adapter's outbound queue. The cursor is always 0:
