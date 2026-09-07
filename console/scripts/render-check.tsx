@@ -18,7 +18,7 @@ import { Butler, StatusCard, SURFACES, Thread, ToolTrace, Turn } from "../src/vi
 import { Chat, IssuedCode } from "../src/views/Chat";
 import { Freshness, Shell, TokenGate } from "../src/App";
 import { HomeView, buildProblems } from "../src/views/Home";
-import { ServicesView, InstalledTile, AvailableRow, matching } from "../src/views/Services";
+import { ServicesView, InstalledTile, AvailableRow, matching, RemoveForm } from "../src/views/Services";
 import { groupServices, upstreamContainer } from "../src/services";
 import { eventKind } from "../src/ui/HourChart";
 import type { ConsoleSnapshot } from "../src/state";
@@ -548,6 +548,30 @@ check("the catalog offers a search box", searched.includes('aria-label="search t
 // The install form opens beside the catalog, not under it: inline at
 // the bottom meant scrolling past every row to reach it.
 check("the install form is not rendered inline", !searched.includes("Propose plan"), searched.slice(0, 300));
+
+// The Console had no way to remove a capability at all, so a
+// half-installed one could only be cleared from a terminal — and a
+// capability that cannot converge blocks the whole node, which makes
+// every LATER plan fail too.
+const OWNED: ResourceView[] = [
+  { kind: "Container", name: "chat-telegram-family", owner: "capability/chat-telegram-family", node: "n1", yaml: "" },
+  { kind: "Secret", name: "chat-telegram-family-bot", owner: "capability/chat-telegram-family", node: "n1", yaml: "" },
+  { kind: "Volume", name: "chat-telegram-family-data", owner: "capability/chat-telegram-family", node: "n1", yaml: "" },
+];
+const removeForm = renderToString(h(RemoveForm, {
+  pkg: { name: "chat-telegram-family", version: "1.0.2", capability: "chat-telegram-family", enabled: true },
+  owned: OWNED, onDone: () => {},
+}));
+check("removal lists every resource that goes", OWNED.every((r) => removeForm.includes(r.name)), removeForm.slice(0, 400));
+// Volumes are the part a plan cannot undo.
+check("removal warns about the volume specifically", removeForm.includes("no plan brings it back"), removeForm.slice(0, 500));
+check("removal says nothing happens without approval", text(removeForm).includes("until you approve the plan"));
+const nothingOwned = renderToString(h(RemoveForm, {
+  pkg: { name: "ghost", version: "1.0.0", capability: "ghost", enabled: true },
+  owned: [], onDone: () => {},
+}));
+check("removing something that owns nothing says so", nothingOwned.includes("nothing to remove"));
+check("and offers no button to press", nothingOwned.includes("disabled"), nothingOwned.slice(0, 300));
 
 const noAddr = renderToString(h(InstalledTile, { pkg: { name: "monitoring", version: "0.4.0", capability: "monitoring", enabled: true }, onReconfigure: () => {} }));
 check("an installed capability with no address says so", noAddr.includes("no address"), noAddr);

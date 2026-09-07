@@ -457,6 +457,16 @@ export const api = {
   events: (after: number, limit = 100) =>
     call<EventRow[]>("GET", `/api/v1/events?after=${after}&limit=${limit}`),
   plans: () => call<PlanRecord[]>("GET", "/api/v1/plans"),
+  // Removing a capability is an ordinary plan proposing the deletion of
+  // everything it owns. There is no disable endpoint and there should
+  // not be one: a side door around the human gate is what ground rule 4
+  // exists to prevent. `wild capability disable` builds this same body
+  // from the same two calls.
+  disableCapability: (capability: string, owned: { kind: string; name: string }[]) =>
+    call<PlanRecord>("POST", "/api/v1/plans", {
+      summary: `disable capability ${capability} (${owned.length} resource(s) removed)`,
+      delete: owned.map((r) => ({ kind: r.kind, name: r.name })),
+    }),
   plan: (id: string) => call<PlanRecord>("GET", `/api/v1/plans/${encodeURIComponent(id)}`),
   approvePlan: (id: string) =>
     call<unknown>("POST", `/api/v1/plans/${encodeURIComponent(id)}/approve`),
