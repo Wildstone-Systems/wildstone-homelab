@@ -562,9 +562,22 @@ const removeForm = renderToString(h(RemoveForm, {
   pkg: { name: "chat-telegram-family", version: "1.0.2", capability: "chat-telegram-family", enabled: true },
   owned: OWNED, onDone: () => {},
 }));
-check("removal lists every resource that goes", OWNED.every((r) => removeForm.includes(r.name)), removeForm.slice(0, 400));
-// Volumes are the part a plan cannot undo.
-check("removal warns about the volume specifically", removeForm.includes("no plan brings it back"), removeForm.slice(0, 500));
+check("removal lists every resource it touches", OWNED.every((r) => removeForm.includes(r.name)), removeForm.slice(0, 400));
+// Keystone refuses a Volume Delete outright (ADR-W004 A4), so a plan
+// containing one can NEVER apply — it fails every pass until F60 sets
+// the step aside, taking the rest of the removal with it. Proposing one
+// is not a warning-worthy risk; it is a plan that cannot work.
+check("a volume is never proposed for deletion", removeForm.includes("volume stays"), removeForm.slice(0, 600));
+check("and the count excludes it", removeForm.includes("Propose removing 2 resources"), removeForm.slice(0, 900));
+check("the volume is still shown, marked kept", removeForm.includes("kept"), removeForm.slice(0, 900));
+// A capability that is nothing but a volume has nothing to propose.
+const onlyVolumes = renderToString(h(RemoveForm, {
+  pkg: { name: "data-only", version: "1.0.0", capability: "data-only", enabled: true },
+  owned: [{ kind: "Volume", name: "somedata", owner: "capability/data-only", node: "n1", yaml: "" }],
+  onDone: () => {},
+}));
+check("a capability of only volumes proposes nothing", onlyVolumes.includes("nothing to propose"), onlyVolumes.slice(0, 400));
+check("and its button is disabled", onlyVolumes.includes("disabled"), onlyVolumes.slice(0, 400));
 check("removal says nothing happens without approval", text(removeForm).includes("until you approve the plan"));
 const nothingOwned = renderToString(h(RemoveForm, {
   pkg: { name: "ghost", version: "1.0.0", capability: "ghost", enabled: true },
