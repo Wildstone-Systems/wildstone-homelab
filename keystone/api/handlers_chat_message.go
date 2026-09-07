@@ -251,6 +251,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		Conversation: conversation,
 		Identity:     binding.Identity,
 		Binding:      binding,
+		Group:        msg.Group,
 	}, text); handled {
 		seq := s.queueChatReply(surface, transport, conversation, body, binding.ID, "",
 			chatDedupe(surface, transport, conversation, msg.MessageID, "command", text))

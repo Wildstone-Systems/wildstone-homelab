@@ -33,7 +33,11 @@ type chatCommandCtx struct {
 	Conversation string
 	Identity     string
 	Binding      runtimedb.ChatBinding
-	Arg          string
+	// Group is true when the message came from a room several people
+	// can read. It is the difference between answering a person and
+	// announcing to an audience (ADR-W026 A7).
+	Group bool
+	Arg   string
 }
 
 type chatCommand struct {
@@ -137,17 +141,26 @@ func (s *Server) chatHelp(c chatCommandCtx) (string, error) {
 		which = "the operator"
 	}
 	fmt.Fprintf(&b, "I'm %s butler. Ask me anything in plain language, or use:\n", which)
-	seen := map[string]bool{}
+	// Commands that share a help line are aliases, and listing only the
+	// first would hide /reset and /clear from the person most likely to
+	// try them. They go on one line together.
+	var order []string
+	names := map[string][]string{}
 	for _, cmd := range chatCommands {
-		if !cmd.offeredOn(c.Surface) || seen[cmd.Help] {
+		if !cmd.offeredOn(c.Surface) {
 			continue
 		}
-		seen[cmd.Help] = true
 		name := "/" + cmd.Name
 		if cmd.Arg != "" {
 			name += " " + cmd.Arg
 		}
-		fmt.Fprintf(&b, "\n%s — %s", name, cmd.Help)
+		if _, seen := names[cmd.Help]; !seen {
+			order = append(order, cmd.Help)
+		}
+		names[cmd.Help] = append(names[cmd.Help], name)
+	}
+	for _, help := range order {
+		fmt.Fprintf(&b, "\n%s — %s", strings.Join(names[help], ", "), help)
 	}
 	return b.String(), nil
 }
@@ -212,14 +225,12 @@ func (s *Server) statusSummary() (statusSummary, error) {
 			st.Unhealthy = append(st.Unhealthy, o)
 		}
 	}
-	plans, err := s.DB.ListPlans(200)
-	if err != nil {
+	// The state query, not a page of history: a plan left unresolved
+	// while two hundred newer ones came and went is exactly the plan
+	// somebody needs reminding about, and a newest-first page is where
+	// it would disappear.
+	if st.PendingPlans, err = s.DB.PlansInState(runtimedb.PlanProposed); err != nil {
 		return st, err
-	}
-	for _, p := range plans {
-		if p.State == "proposed" {
-			st.PendingPlans = append(st.PendingPlans, p)
-		}
 	}
 	if st.Nodes, err = s.DB.ListNodes(); err != nil {
 		return st, err
@@ -235,7 +246,11 @@ func (s *Server) statusSummary() (statusSummary, error) {
 			st.Connected++
 		}
 	}
-	events, err := s.DB.EventsAfter(0, 300)
+	// A window, not a page. EventsAfter(0, n) returns the OLDEST n, so
+	// on any deployment with a real event history it would report the
+	// first reconcile ever and never move again. A week is long enough
+	// that "no reconcile in the window" is itself the honest answer.
+	events, err := s.DB.EventsSince(time.Now().Add(-7*24*time.Hour), 5000)
 	if err != nil {
 		return st, err
 	}
@@ -261,7 +276,11 @@ func (s *Server) chatStatus(_ chatCommandCtx) (string, error) {
 		fmt.Fprintf(&b, " (%d more held back by a plan awaiting you)", st.Awaiting)
 	}
 	fmt.Fprintf(&b, "\n%s waiting for approval", plural(len(st.PendingPlans), "plan", "plans"))
-	fmt.Fprintf(&b, "\n%d of %d nodes connected", st.Connected, len(st.Nodes))
+	if len(st.Nodes) == 0 {
+		b.WriteString("\nno nodes have joined yet")
+	} else {
+		fmt.Fprintf(&b, "\n%d of %d nodes connected", st.Connected, len(st.Nodes))
+	}
 	if !st.LastReconcile.IsZero() {
 		fmt.Fprintf(&b, "\nlast reconcile %s ago", roughly(time.Since(st.LastReconcile)))
 	}
@@ -328,8 +347,14 @@ func (s *Server) chatPlan(c chatCommandCtx) (string, error) {
 		b.WriteString("\n\nThis plan carries no expanded steps.")
 	}
 	for _, st := range steps {
-		fmt.Fprintf(&b, "\n\n· %s", strings.TrimSpace(st.Description))
-		fmt.Fprintf(&b, "\n  %s/%s — %s", st.Kind, st.Name, st.Action)
+		// The description usually already reads "Create Route/grafana",
+		// so printing kind/name and action underneath it says the same
+		// thing twice — which on a phone is half the screen.
+		if d := strings.TrimSpace(st.Description); d != "" {
+			fmt.Fprintf(&b, "\n\n· %s", d)
+		} else {
+			fmt.Fprintf(&b, "\n\n· %s/%s — %s", st.Kind, st.Name, st.Action)
+		}
 		if st.BlastRadius != "" {
 			fmt.Fprintf(&b, "\n  %s", st.BlastRadius)
 		}
@@ -420,11 +445,14 @@ func (s *Server) chatServices(_ chatCommandCtx) (string, error) {
 	for _, o := range observed {
 		health[o.Kind+"/"+o.Name] = o
 	}
-	type owner struct{ total, bad int }
+	type owner struct{ total, bad, unknown int }
 	byOwner := map[string]*owner{}
 	for _, r := range current {
-		name := strings.TrimPrefix(r.Metadata.Owner, "capability/")
-		if name == "" || r.Metadata.Owner == "system" {
+		// An actual prefix check. TrimPrefix returns the string
+		// unchanged when the prefix is absent, so "household" and
+		// "system" would have been listed as installed capabilities.
+		name, ok := strings.CutPrefix(r.Metadata.Owner, "capability/")
+		if !ok || name == "" {
 			continue
 		}
 		o := byOwner[name]
@@ -433,7 +461,15 @@ func (s *Server) chatServices(_ chatCommandCtx) (string, error) {
 			byOwner[name] = o
 		}
 		o.total++
-		if h, ok := health[string(r.Kind)+"/"+r.Metadata.Name]; ok && !h.Healthy && !h.AwaitingApproval {
+		h, seen := health[string(r.Kind)+"/"+r.Metadata.Name]
+		switch {
+		case !seen:
+			// Nothing has reported on it — before its first reconcile,
+			// or while its node is away. Not healthy; not a fault
+			// either. Counting it as healthy would report success from
+			// the absence of evidence.
+			o.unknown++
+		case !h.Healthy && !h.AwaitingApproval:
 			o.bad++
 		}
 	}
@@ -449,15 +485,22 @@ func (s *Server) chatServices(_ chatCommandCtx) (string, error) {
 		if bi != bj {
 			return bi
 		}
+		ui, uj := byOwner[names[i]].unknown > 0, byOwner[names[j]].unknown > 0
+		if ui != uj {
+			return ui
+		}
 		return names[i] < names[j]
 	})
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s installed:", plural(len(names), "capability", "capabilities"))
 	for _, n := range names {
 		o := byOwner[n]
-		if o.bad > 0 {
+		switch {
+		case o.bad > 0:
 			fmt.Fprintf(&b, "\n· %s — %d of %d unhealthy", n, o.bad, o.total)
-		} else {
+		case o.unknown > 0:
+			fmt.Fprintf(&b, "\n· %s — %d of %d not yet observed", n, o.unknown, o.total)
+		default:
 			fmt.Fprintf(&b, "\n· %s — healthy (%s)", n, plural(o.total, "resource", "resources"))
 		}
 	}
@@ -466,11 +509,34 @@ func (s *Server) chatServices(_ chatCommandCtx) (string, error) {
 
 // ---------------------------------------------------------- household
 
-func (s *Server) chatToday(_ chatCommandCtx) (string, error) {
-	midnight := time.Now().Truncate(24 * time.Hour)
-	rows, err := s.DB.HouseholdEventsSince(midnight, 40)
+func (s *Server) chatToday(c chatCommandCtx) (string, error) {
+	// Midnight where the HOUSEHOLD is, not where the process thinks it
+	// is. Around either zone's midnight the two disagree about which
+	// day it is, and the household's answer is the right one.
+	loc := s.HouseholdLoc
+	if loc == nil {
+		loc = time.Local
+	}
+	now := time.Now().In(loc)
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+
+	// A room hears less than a person does. Overfetch, because the
+	// filter removes rows after the query.
+	fetch := 40
+	if c.Group {
+		fetch *= groupOverfetch
+	}
+	rows, err := s.DB.HouseholdEventsSince(midnight, fetch)
 	if err != nil {
 		return "", err
+	}
+	if c.Group {
+		// The same rule the spoken answer applies (ADR-W026 A7): a
+		// group hears about the house, not about the other person.
+		rows = groupSafeRows(rows, c.Identity, s.MemberScoped)
+	}
+	if len(rows) > 40 {
+		rows = rows[:40]
 	}
 	if len(rows) == 0 {
 		return "Nothing has been recorded in the house today.", nil
@@ -478,7 +544,7 @@ func (s *Server) chatToday(_ chatCommandCtx) (string, error) {
 	var b strings.Builder
 	b.WriteString("Today:")
 	for _, e := range rows {
-		fmt.Fprintf(&b, "\n· %s %s", e.OccurredAt.Local().Format("15:04"), e.Type)
+		fmt.Fprintf(&b, "\n· %s %s", e.OccurredAt.In(loc).Format("15:04"), e.Type)
 		if e.Subject != "" {
 			fmt.Fprintf(&b, " — %s", e.Subject)
 		}

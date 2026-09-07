@@ -95,6 +95,18 @@ type Server struct {
 	// answering 503 rather than storing a choice nothing will honour.
 	ApplyButlerConfig func(context.Context, runtimedb.ButlerConfig) (runtimedb.ButlerSessionMode, string, error)
 
+	// HouseholdLoc is the IANA zone the household keeps (-household-
+	// timezone). "Today" means midnight THERE, not midnight wherever
+	// the control plane's process happens to think it is. nil falls
+	// back to the process's local zone.
+	HouseholdLoc *time.Location
+	// MemberScoped reports whether a household event type is about a
+	// PERSON rather than about the house (ADR-W026 A7). Used to withhold
+	// one member's movements from a room the whole family is in; nil
+	// withholds every attributed fact but the asker's, which is the
+	// safe direction.
+	MemberScoped func(eventType string) bool
+
 	// Automation is the household rule engine (ADR-W024 H3), used here
 	// only for side-effect-free replay; cmd/keystone runs its loop. New
 	// wires one over the same DB and Statefile.

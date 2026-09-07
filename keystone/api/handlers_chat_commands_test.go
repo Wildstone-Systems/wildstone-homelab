@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
@@ -84,7 +85,7 @@ func TestCommandsAnswerWithNoButlerConfigured(t *testing.T) {
 	h.s.ButlerHost = nil
 
 	got := h.ask(t, runtimedb.RoleValet, "12345", "/status", "admin")
-	if !strings.Contains(got, "nodes connected") {
+	if !strings.Contains(got, "no nodes have joined yet") {
 		t.Fatalf("/status with no butler = %q", got)
 	}
 }
@@ -132,6 +133,53 @@ func TestWhoamiNamesTheSurfaceAndItsCeiling(t *testing.T) {
 	}
 	if !strings.Contains(admin, "cannot approve") {
 		t.Fatalf("admin /whoami does not state the approval ceiling: %q", admin)
+	}
+}
+
+// A room hears about the house, not about the other person
+// (ADR-W026 A7). /today reads the timeline directly rather than through
+// the family seam, so it has to apply the same rule the seam does —
+// otherwise it discloses one member's movements to everyone in the
+// room. Reported by Codex on #110 as a P1.
+func TestTodayWithholdsAnotherMembersFactsInAGroup(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	h.s.MemberScoped = func(eventType string) bool { return eventType == "presence.arrived" }
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+
+	for _, e := range []runtimedb.HouseholdEvent{
+		{EventID: "e1", Source: "test", Type: "presence.arrived", Subject: "robin", OccurredAt: time.Now()},
+		{EventID: "e2", Source: "test", Type: "presence.arrived", Subject: "sam", OccurredAt: time.Now()},
+		{EventID: "e3", Source: "test", Type: "bins.collected", OccurredAt: time.Now()},
+	} {
+		if _, _, err := h.s.DB.AppendHouseholdEvent(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// In a direct chat, sam sees everything the household recorded.
+	direct := h.ask(t, runtimedb.RoleConcierge, "12345", "/today", "family")
+	if !strings.Contains(direct, "robin") {
+		t.Fatalf("direct /today withheld a fact it should show: %q", direct)
+	}
+
+	// In a room, robin's movements are not sam's to broadcast.
+	var out inboundResponse
+	resp := h.do(runtimedb.RoleConcierge, "POST", "/api/v1/chat/messages", map[string]any{
+		"transport": "telegram", "account": "12345", "conversation": "room-1",
+		"group": true, "text": "/today", "messageId": "g-1", "surface": "family",
+	}, &out)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("group /today: status = %d", resp.StatusCode)
+	}
+	queued := h.poll(t, runtimedb.RoleConcierge, "")
+	group := queued[len(queued)-1].Body
+	if strings.Contains(group, "robin") {
+		t.Fatalf("group /today disclosed another member's movements: %q", group)
+	}
+	// It still answers — the house's own facts are the room's business.
+	if !strings.Contains(group, "bins.collected") {
+		t.Fatalf("group /today withheld a fact about the house: %q", group)
 	}
 }
 
