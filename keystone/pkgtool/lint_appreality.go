@@ -31,7 +31,8 @@ import (
 //     vars underneath them. The provider was configured correctly and the
 //     framework in front of it was not configured at all, so every login
 //     returned to ?error=Configuration and the cookies it wrote could
-//     never be read back (#139).
+//     never be read back. Fixed by hand once the logs were read; the
+//     requiredEnv row below is what would have said it at lint (#139).
 //
 // None is a malformed package. Each is a package that was never compared
 // against the thing it configures.

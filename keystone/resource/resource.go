@@ -906,6 +906,25 @@ func KnownKind(k Kind) bool {
 	return ok
 }
 
+// KnownKinds lists every registered kind, sorted.
+//
+// It exists so that anything DESCRIBING the closed set reads it rather
+// than restating it. A hand-written list is not merely duplication: the
+// Butler's propose_change named six of the fourteen in its input schema,
+// and the model concluded from that schema that it could not write a
+// ConfigFile — a thing the gateway accepts, validates and plans exactly
+// like the six it did name. Tool metadata that disagrees with the
+// enforcement point is a capability the model will not use, or one it
+// will promise and not have.
+func KnownKinds() []Kind {
+	out := make([]Kind, 0, len(registry))
+	for k := range registry {
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
 // Validate checks common fields (apiVersion, kind known, name, owner, spec
 // exclusivity) plus the kind-specific rules from ADR-W004 A1, returning a
 // *ValidationError (or a wrapped list) on failure.
