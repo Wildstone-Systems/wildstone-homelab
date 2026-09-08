@@ -30,4 +30,4 @@ The design brief (`00-design-brief-v0.1.md`) and architecture proposal
 Proposed Butler architecture (discussion, not as-built documentation):
 
 - [ADR-W030](decisions/ADR-W030-butler-continuity-durable-work-and-scoped-integrations.md) — continuity, durable work, and scoped integrations.
-- [Capability and design brief](butler-capability-and-design-brief.md) — detailed product decisions, configurable policies, phased scope, and illustrative routines.
+- [Capability and design brief](butler-capability-and-design-brief.md) — non-normative rationale, deployment examples, and delivery sequencing behind the ADR.
