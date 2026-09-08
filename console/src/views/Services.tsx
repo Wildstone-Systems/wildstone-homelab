@@ -330,6 +330,12 @@ function RemoveFormLoader(props: {
               .map((st) => ({ kind: st.kind as string, name: st.name as string }))
           : undefined
       }
+      // Until the dry run answers there is no plan to preview, and the
+      // stamp fallback below is a DIFFERENT list — it cannot know what a
+      // surviving sibling needs. Passing `loading` alone left the propose
+      // button live during that window, so a quick click acted on a list
+      // that named Secret/restic-books and a plan that did not.
+      previewError={preview.error}
       loading={props.loading || preview.loading}
     />
   );
@@ -356,6 +362,7 @@ export function RemoveForm({
   owned,
   owners = [],
   plannedDeletes,
+  previewError = null,
   error = null,
   loading = false,
   onDone,
@@ -371,6 +378,10 @@ export function RemoveForm({
   // approved. Absent (no dry run yet, or an older server) falls back to
   // the stamps, which is right whenever nothing is shared.
   plannedDeletes?: { kind: string; name: string }[];
+  // Why there is no plan to show. Removal is blocked while this is set:
+  // the fallback list is not what would be deleted, and offering a
+  // destructive button over the wrong list is worse than offering none.
+  previewError?: string | null;
   // "I could not read the statefile" and "this owns nothing" look
   // identical from an empty list, and only one of them is safe to
   // believe.
@@ -480,6 +491,17 @@ export function RemoveForm({
       {owned.length === 0 && error === null && loading && (
         <div className="muted">Reading the statefile…</div>
       )}
+      {previewError !== null && (
+        <div className="callout callout-bad">
+          <strong>Could not work out what removing this would delete.</strong>
+          <div>{previewError}</div>
+          <div>
+            The list below is this package's resources by name, which is not the same as the plan
+            — anything a surviving profile still needs is excluded server-side. Close and reopen
+            to try again.
+          </div>
+        </div>
+      )}
       {sharedKept.length > 0 && (
         <div className="callout callout-warn">
           <strong>Another profile of this capability still needs these, so they stay:</strong>
@@ -532,7 +554,13 @@ export function RemoveForm({
       <div className="row">
         <button
           className="btn btn-danger"
-          disabled={remove.state.phase === "busy" || deletable.length === 0 || error !== null}
+          disabled={
+            remove.state.phase === "busy" ||
+            deletable.length === 0 ||
+            error !== null ||
+            loading ||
+            previewError !== null
+          }
           onClick={() =>
             remove.run(
               () => api.disablePackage(pkg.name),

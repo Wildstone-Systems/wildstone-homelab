@@ -256,3 +256,46 @@ func TestSecretReadersMatchAMountOfTheFileItself(t *testing.T) {
 		t.Fatalf("containers = %v, want the file and prefix mounts and not the unrelated one", containers)
 	}
 }
+
+// A secret name that prefixes another must not match it. restic-music
+// and restic-music-automation are both ordinary catalog names, and
+// substring matching rotated the first into rewriting the second's file
+// — then stopped and removed every container mounting it.
+func TestSecretReadersMatchWholeReferencesOnly(t *testing.T) {
+	s := &Server{ManagedPrefix: "/etc/wildstone"}
+	desired := []resource.Resource{
+		{Kind: resource.KindConfigFile, Metadata: resource.Metadata{Name: "other", Owner: "capability/music-automation", Node: "n1"},
+			ConfigFile: &resource.ConfigFileSpec{Filename: "a.yml", Content: "password: secret/restic-music-automation\n"}},
+		{Kind: resource.KindContainer, Metadata: resource.Metadata{Name: "lidarr", Owner: "capability/music-automation", Node: "n1"},
+			Container: &resource.ContainerSpec{Image: "x",
+				Mounts: []resource.Mount{{Source: "/etc/wildstone/music-automation", Target: "/x"}}}},
+	}
+	containers, files, err := s.secretReaders(desired, "n1", "restic-music")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 || len(containers) != 0 {
+		t.Fatalf("a longer name was matched by a shorter one: files=%v containers=%v", files, containers)
+	}
+	// The longer name still matches itself.
+	if _, files, _ := s.secretReaders(desired, "n1", "restic-music-automation"); len(files) != 1 {
+		t.Fatalf("the exact name must still match, got %v", files)
+	}
+}
+
+// The agent's pbkdf2: prefix is part of the same token, so a digest
+// reference counts as a reference.
+func TestSecretReadersMatchADigestReference(t *testing.T) {
+	s := &Server{ManagedPrefix: "/etc/wildstone"}
+	desired := []resource.Resource{
+		{Kind: resource.KindConfigFile, Metadata: resource.Metadata{Name: "clients", Owner: "capability/identity", Node: "n1"},
+			ConfigFile: &resource.ConfigFileSpec{Filename: "clients.yml", Content: "client_secret: pbkdf2:secret/photos-oidc\n"}},
+	}
+	_, files, err := s.secretReaders(desired, "n1", "photos-oidc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("a pbkdf2: reference is still a reference, got %v", files)
+	}
+}

@@ -394,7 +394,7 @@ func (s *Server) secretReaders(desired []resource.Resource, node, name string) (
 				}
 			}
 		case res.Kind == resource.KindConfigFile && res.ConfigFile != nil:
-			if !strings.Contains(res.ConfigFile.Content, ref) {
+			if !contentReferencesSecret(res.ConfigFile.Content, name) {
 				continue
 			}
 			files = append(files, res)
@@ -427,6 +427,32 @@ func (s *Server) secretReaders(desired []resource.Resource, node, name string) (
 	}
 	sort.Strings(containers)
 	return containers, files, nil
+}
+
+// secretRefInContent mirrors the agent's materializer token, and the
+// reconciler's copy of it (keystone/reconcile/configfile.go) — the same
+// small-duplicated-constant pattern, for the same reason: a mismatch
+// here means Keystone acts on a reference the agent would not
+// substitute, or misses one it would.
+var secretRefInContent = regexp.MustCompile(`(?:pbkdf2:)?secret/([A-Za-z0-9][A-Za-z0-9._-]{0,63})`)
+
+// contentReferencesSecret reports whether content names THIS secret,
+// matching whole references rather than substrings.
+//
+// strings.Contains was wrong at a boundary that really occurs: the
+// catalog ships restic-music and music-automation ships beside it, so a
+// name that prefixes another is an ordinary thing to have. Rotating
+// secret/restic-music then matched a file naming only
+// secret/restic-music-automation, rewrote it, and stopped and removed
+// every container mounting it — a service interruption caused entirely
+// by a missing word boundary.
+func contentReferencesSecret(content, name string) bool {
+	for _, m := range secretRefInContent.FindAllStringSubmatch(content, -1) {
+		if m[1] == name {
+			return true
+		}
+	}
+	return false
 }
 
 // mountCovers reports whether a bind mount's source reaches any of the

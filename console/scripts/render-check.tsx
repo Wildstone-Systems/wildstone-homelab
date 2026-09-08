@@ -647,6 +647,32 @@ const ambiguous: ResourceView[] = [
 check("an ambiguous unstamped resource is not claimed",
   ownedByPackage(ambiguous, { name: "books-kavita", version: "1.0.3", capability: "books", enabled: true }).length === 0);
 
+// Removal is blocked until the dry run answers. The fallback list is a
+// DIFFERENT list — it cannot know what a surviving sibling needs — so a
+// click during the loading window would act on a list naming
+// Secret/restic-books over a plan that excludes it.
+const removeLoading = renderToString(h(RemoveForm, {
+  pkg: { name: "books-kavita", version: "1.0.3", capability: "books", enabled: true },
+  owned: BOOKS, loading: true, onDone: () => {},
+}));
+check("removal is not offered while the preview is loading", removeLoading.includes("disabled"), removeLoading.slice(0, 400));
+// A preview that failed says so, and still does not offer the button.
+const previewFailed = renderToString(h(RemoveForm, {
+  pkg: { name: "books-kavita", version: "1.0.3", capability: "books", enabled: true },
+  owned: BOOKS, previewError: "node unreachable", onDone: () => {},
+}));
+check("a failed preview is surfaced", previewFailed.includes("Could not work out what removing this would delete"), previewFailed.slice(0, 500));
+check("and removal stays blocked", previewFailed.includes("disabled"), previewFailed.slice(0, 500));
+// With the plan in hand, only what Keystone will delete is offered, and
+// what a sibling keeps is shown as kept rather than silently dropped.
+const withPlan = renderToString(h(RemoveForm, {
+  pkg: { name: "books-kavita", version: "1.0.3", capability: "books", enabled: true },
+  owned: BOOKS.filter((r) => r.package === "books-kavita"),
+  plannedDeletes: [{ kind: "Container", name: "kavita" }],
+  onDone: () => {},
+}));
+check("a shared resource the sibling needs is shown as kept", withPlan.includes("still needs these"), withPlan.slice(0, 900));
+
 const removeForm = renderToString(h(RemoveForm, {
   pkg: { name: "chat-telegram-family", version: "1.0.2", capability: "chat-telegram-family", enabled: true },
   owned: OWNED, onDone: () => {},
