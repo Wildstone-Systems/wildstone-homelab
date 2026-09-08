@@ -22,7 +22,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: tv-sonarr
-  version: 1.0.0
+  version: 1.0.1
   capability: tv-automation
   profile: sonarr
 requires:
@@ -33,8 +33,8 @@ params:
   - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
   - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
-  - { name: downloads_path, default: /srv/wildstone/downloads, description: "Folder on this machine where downloads land. Must match the downloads package." }
-  - { name: media_path, default: /srv/wildstone/media, description: "Folder on this machine holding your library." }
+  - { name: downloads_path, default: /srv/wildstone/downloads, description: "Folder on this machine where downloads land. Must match the downloads package.", source: directory }
+  - { name: media_path, default: /srv/wildstone/media, description: "Folder on this machine holding your library.", source: directory }
 policies:
   classifications: [admin_tailscale]
   dataSensitivity: low

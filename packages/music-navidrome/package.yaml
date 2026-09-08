@@ -18,7 +18,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: music-navidrome
-  version: 1.0.0
+  version: 1.0.1
   capability: music
   profile: navidrome
 requires:
@@ -28,7 +28,7 @@ params:
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: music_subdomain, default: music, description: "The name this service appears under, e.g. music." }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: music_path, default: /srv/wildstone/media/music, description: "Folder on this machine holding your music." }
+  - { name: music_path, default: /srv/wildstone/media/music, description: "Folder on this machine holding your music.", source: directory }
 policies:
   classifications: [family_private]
   dataSensitivity: low

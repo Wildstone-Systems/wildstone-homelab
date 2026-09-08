@@ -92,6 +92,41 @@ check("required params marked", label.replace(/<!--.*?-->/g, "") === "public_dom
 check("defaults shown as placeholders", form.includes('placeholder="paperless"'));
 check("preview gated until required filled", form.includes("fill in public_domain, node"));
 
+// A path param renders a PICKER, not a blank box. The free-text version
+// is what let "/[REDACTED]" through: the operator was shown a corrupted
+// default and had nothing to check it against (ADR-W021 A5).
+const dirPkg = {
+  name: "audiobooks-audiobookshelf",
+  version: "1.0.0",
+  capability: "audiobooks",
+  enabled: false,
+  params: [
+    { name: "node", required: true, source: "node", options: ["n1"] },
+    { name: "audiobooks_path", default: "/srv/wildstone/media/audiobooks", source: "directory" },
+  ],
+};
+const dirForm = renderToString(h(InstallForm, { pkg: dirPkg as never, onDone: () => {} }));
+check("a directory param renders a picker", dirForm.includes('aria-label="folder path"'), dirForm.slice(0, 400));
+check("the picker offers browsing", dirForm.includes("Browse"), dirForm.slice(0, 400));
+// Until a node is chosen there is no filesystem to browse, and saying so
+// beats a button that fails.
+check("browsing waits for a node", dirForm.includes("Choose a node first"), dirForm.slice(0, 600));
+
+// A capability already installed must be offered what it is RUNNING
+// with, not the package's default. home-assistant was installed with
+// timezone=CST and the default is UTC; offering UTC would move a
+// household's clock on the next reconfigure.
+const installedPkg = {
+  name: "home-assistant",
+  version: "1.1.0",
+  capability: "home-assistant",
+  enabled: true,
+  params: [{ name: "timezone", default: "UTC", installed: "CST" }],
+};
+const installedForm = renderToString(h(InstallForm, { pkg: installedPkg as never, onDone: () => {} }));
+check("installed value wins over the package default", installedForm.includes('value="CST"'), installedForm.slice(0, 500));
+check("the package default is not offered instead", !installedForm.includes('value="UTC"'), installedForm.slice(0, 500));
+
 const list = renderToString(h(Services));
 check("Services renders without throwing", list.length > 0);
 

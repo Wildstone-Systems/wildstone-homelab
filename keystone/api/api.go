@@ -197,6 +197,9 @@ func (s *Server) Handler() http.Handler {
 	// the set endpoint once and are never persisted, logged, or readable
 	// back (the protocol has no GetSecret arm).
 	mux.Handle("GET /api/v1/nodes/{node}/secrets", s.handle(principal.VerbManage, s.listNodeSecrets))
+	// The install form's folder picker (ADR-W021 A5). Read-only, confined
+	// to the prefixes a bind mount may name.
+	mux.Handle("GET /api/v1/nodes/{node}/directories", s.handle(principal.VerbRead, s.listDirectories))
 	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}", s.handle(principal.VerbManage, s.setSecret))
 	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}/rotate", s.handle(principal.VerbManage, s.rotateSecret))
 

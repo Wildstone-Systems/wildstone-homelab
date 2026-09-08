@@ -21,7 +21,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: files-filebrowser
-  version: 1.0.0
+  version: 1.0.1
   capability: files
   profile: filebrowser
 requires:
@@ -31,7 +31,7 @@ params:
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: files_subdomain, default: files, description: "The name this service appears under, e.g. files." }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: files_path, default: /srv/wildstone/media, description: "Folder on this machine to browse." }
+  - { name: files_path, default: /srv/wildstone/media, description: "Folder on this machine to browse.", source: directory }
 policies:
   classifications: [family_private]
   dataSensitivity: medium

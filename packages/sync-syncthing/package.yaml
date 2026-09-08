@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: sync-syncthing
-  version: 1.0.0
+  version: 1.0.1
   capability: file-sync
   profile: syncthing
 requires:
@@ -29,7 +29,7 @@ requires:
 params:
   - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: sync_path, default: /srv/wildstone/sync, description: "Folder on this machine that holds the synced folders." }
+  - { name: sync_path, default: /srv/wildstone/sync, description: "Folder on this machine that holds the synced folders.", source: directory }
 policies:
   classifications: [admin_tailscale]
   dataSensitivity: high

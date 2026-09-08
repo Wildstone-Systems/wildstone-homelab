@@ -519,3 +519,42 @@ func TestHomeAssistantSeedsItsProxyTrust(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryPathParamOffersAPicker: a param whose value is a folder must
+// declare `source: directory`, so the form renders a picker instead of a
+// blank box.
+//
+// A free-text path is the field that let a corrupted default through
+// unnoticed — the redactor turned a package's own default into
+// "/[REDACTED]", the API served it back as the value to submit, and the
+// operator accepted what they were shown, because a blank box gives you
+// nothing to check a value against. Tagging the nineteen that existed
+// fixed those nineteen; this is what keeps it true of the twentieth.
+//
+// Matched on the name ending in _path, which is the convention every
+// shipped package already follows. A folder param named something else
+// is not caught here, and renaming the convention is the thing that
+// would have to change.
+func TestEveryPathParamOffersAPicker(t *testing.T) {
+	checked := 0
+	for _, dir := range packageDirs(t) {
+		pkg, err := pkgspec.Load(filepath.Join(dir, "package.yaml"))
+		if err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		for _, p := range pkg.Params {
+			if !strings.HasSuffix(p.Name, "_path") {
+				continue
+			}
+			checked++
+			if p.Source != "directory" {
+				t.Errorf("%s: param %q is a folder but declares source %q — it should be `source: directory`, "+
+					"so the form offers a picker instead of a box the operator cannot check a value against",
+					filepath.Base(dir), p.Name, p.Source)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no path params found at all — the walk is broken, not the packages")
+	}
+}

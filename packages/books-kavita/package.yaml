@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: books-kavita
-  version: 1.0.0
+  version: 1.0.1
   capability: books
   profile: kavita
 requires:
@@ -29,7 +29,7 @@ params:
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: books_subdomain, default: kavita, description: "The name this service appears under, e.g. kavita." }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: books_path, default: /srv/wildstone/media/books, description: "Folder on this machine holding your books and comics." }
+  - { name: books_path, default: /srv/wildstone/media/books, description: "Folder on this machine holding your books and comics.", source: directory }
   - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
 policies:
   classifications: [family_private]
