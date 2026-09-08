@@ -23,6 +23,7 @@ export const API_VERSION = "wildstone.dev/v1";
 export interface Metadata {
   name: string;
   owner: string;
+  package?: string;
   node?: string;
 }
 
@@ -131,6 +132,7 @@ export interface JobSpec {
 
 export interface SecretSpec {
   name: string;
+  purpose?: string;
   kind?: string;
   lengthBytes?: number;
   provided?: boolean;

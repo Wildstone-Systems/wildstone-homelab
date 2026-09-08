@@ -616,11 +616,11 @@ func TestSiblingProfilesDoNotCollide(t *testing.T) {
 					// construction and is not a disagreement.
 					body, err := resource.Marshal(resource.Resource{
 						ApiVersion: r.ApiVersion, Kind: r.Kind,
-						Metadata:   resource.Metadata{Name: r.Metadata.Name, Owner: r.Metadata.Owner, Node: r.Metadata.Node},
-						Container:  r.Container, Route: r.Route, Volume: r.Volume, Secret: r.Secret,
+						Metadata:  resource.Metadata{Name: r.Metadata.Name, Owner: r.Metadata.Owner, Node: r.Metadata.Node},
+						Container: r.Container, Route: r.Route, Volume: r.Volume, Secret: r.Secret,
 						ConfigFile: r.ConfigFile, BackupPlan: r.BackupPlan, OidcClient: r.OidcClient,
-						SeedFile:   r.SeedFile, Job: r.Job, LdapGroup: r.LdapGroup, Ingress: r.Ingress,
-						DnsRecord:  r.DnsRecord,
+						SeedFile: r.SeedFile, Job: r.Job, LdapGroup: r.LdapGroup, Ingress: r.Ingress,
+						DnsRecord: r.DnsRecord,
 					})
 					if err != nil {
 						t.Fatalf("%s: marshalling %s: %v", pkgName, key, err)
