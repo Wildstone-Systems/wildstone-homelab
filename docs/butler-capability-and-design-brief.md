@@ -62,6 +62,8 @@ Shared adult household access avoids a complex adult role hierarchy. It does not
 4. Add voice later. Local transcription is preferred; Kokoro is the owner's initial text-to-speech preference. Voice uses the same identities, conversations, and tool boundaries.
 5. Consider the Child surface only after its separate transport, admission, guardian, and boundary checks are designed and verified.
 
+After ADR acceptance, revise this sequence into implementation-sized work packages mapped to its sections and B1 amendments: identity/admission, task ledger, adapter queue/roles, credential onboarding, approval transport, recovery quarantine, and related boundaries. Each package should carry its applicable Part C acceptance evidence. That decomposition is follow-up work, not an implementation expansion in this PR.
+
 These are sequencing preferences, not fixed delivery estimates. Automatic tool development, unrestricted execution, autonomous agent teams, and provider-account cost enforcement are deferred.
 
 ## Reading the proposal
