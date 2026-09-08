@@ -129,6 +129,14 @@ var homepageApps = map[string]homepageApp{
 	"gitea":          {"Gitea", "gitea", "The household's code and dotfiles"},
 	"homebox":        {"Inventory", "homebox", "What we own and where it is"},
 	"actual":         {"Budget", "actual-budget", "The household budget"},
+
+	// The mail capability presents two surfaces, so it has two rows.
+	// Davis has no dashboard-icons slug of its own, so it takes a
+	// Material Design icon in the shape of the thing it serves rather
+	// than a guess at a slug that would render as a broken image —
+	// the same reasoning as homepageFallbackIcon below.
+	"roundcube": {"Mail", "roundcube", "Your email, in a browser"},
+	"davis":     {"Calendars", "mdi-calendar-month", "Calendars and contacts, synced to every phone"},
 }
 
 // homepageFallbackIcon is what an app with no row gets. A generic

@@ -144,6 +144,8 @@ var wellKnown = map[string]int{
 	"beszel":     42443, // monitoring-beszel
 	"sync":       43443, // sync-syncthing
 	"git":        44443, // code-gitea
+	"mail":       45443, // mail-roundcube, via mail_subdomain
+	"calendar":   46443, // mail-roundcube's calendar surface, via calendar_subdomain
 }
 
 // Of derives the addressing posture from desired state.

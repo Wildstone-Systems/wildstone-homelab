@@ -12,7 +12,7 @@ deployment — see `testing/fixtures/`.
 
 ## The catalog
 
-Fifty-three packages. Every one lints clean against the rest of the
+Fifty-four packages. Every one lints clean against the rest of the
 catalog, pins real image digests, has a row on the dashboard, a pinned
 tailnet port, and passes the cross-resource checks in
 `keystone/pkgtool/catalog_wiring_test.go` (secrets referenced are
@@ -65,6 +65,7 @@ about the app, recorded in each package's header:
 | `requests-seerr` | requests | Seerr (formerly Jellyseerr) | own |
 | `recipes-mealie` | recipes | Mealie | app OIDC |
 | `feeds-freshrss` | feeds | FreshRSS | app OIDC |
+| `mail-roundcube` | mail | Roundcube webmail plus Davis for calendars and contacts, both against a mailbox you already have elsewhere | own |
 | `bookmarks-linkding` | bookmarks | linkding, signed in by the proxy's header | proxy |
 | `sync-syncthing` | file-sync | Syncthing | proxy |
 | `files-filebrowser` | files | File Browser | own |
