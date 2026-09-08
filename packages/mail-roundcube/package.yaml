@@ -38,6 +38,24 @@
 # resyncs after a loss gets whatever this volume says — so the plan is
 # daily rather than the weekly a replaceable library gets.
 #
+# WHAT IS NOT IN THAT REPOSITORY, AND WHY IT MATTERS. Roundcube keeps
+# sessions in its database, and a live session holds the person's IMAP
+# password encrypted with des_key. So the backed-up set must not also
+# carry that key, or one snapshot is enough to recover a working mail
+# credential. It does not, and neither volume holding the key is in the
+# plan: the image writes both generated config files into /var/www/html
+# (roundcube-www, excluded), and with ROUNDCUBEMAIL_DES_KEY set what it
+# writes is `getenv('ROUNDCUBEMAIL_DES_KEY')` — a reference, not the
+# value. The key exists in the node's sealed secret store and in the
+# container's environment, and nowhere a restic snapshot reaches.
+#
+# roundcube-config is excluded from the plan for the same reason rather
+# than for its contents. Nothing writes to it: the image only reads
+# *.php from it, as includes an operator may drop in, and an override
+# an operator writes by hand is the one place a credential could
+# plausibly land next to the sessions. It holds nothing of the
+# household's, so excluding it costs nothing and closes that.
+#
 # THE MIGRATION JOB. Davis is a Symfony application: its schema is
 # created by doctrine migrations, and the standalone image runs none at
 # startup (its CMD is supervisord). kind: Job is the mechanism for
@@ -123,6 +141,10 @@ templates:
     kind: Volume
     metadata: { name: roundcube-www, node: "{{ .Params.node }}" }
     spec: { name: roundcube-www }
+  # A mount point for operator-written *.php overrides, which the image
+  # includes if it finds any. Wildstone writes nothing here — every
+  # setting this package has is an environment variable — and it is
+  # deliberately outside the backup plan; see the header.
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
@@ -274,14 +296,16 @@ templates:
       auth: none
       classification: family_private
   # ---- Backups (ADR-W013 A4): the two sqlite databases, daily. Not
-  # roundcube-www (the image rebuilds it) and not the mail itself (it
-  # lives at the provider).
+  # roundcube-www or roundcube-config (the image rebuilds one and reads
+  # the other; keeping des_key out of the snapshot that holds sessions
+  # is the point — see the header) and not the mail itself, which lives
+  # at the provider.
   - |
     apiVersion: wildstone.dev/v1
     kind: BackupPlan
     metadata: { name: mail, node: "{{ .Params.node }}" }
     spec:
-      volumes: [roundcube-db, roundcube-config, davis-data]
+      volumes: [roundcube-db, davis-data]
       repository: mail-backup-repo
       passwordSecret: secret/restic-mail
       schedule: daily
