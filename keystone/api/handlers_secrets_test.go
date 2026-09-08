@@ -17,6 +17,10 @@ type secretsFakeAgent struct {
 	secrets map[string]uint32
 	removed []string
 	stopped []string
+	// written records managed-file paths, so a test can assert that a
+	// secret held inside a FILE is rewritten and not merely re-created
+	// around.
+	written []string
 }
 
 func (f *secretsFakeAgent) Apply(_ context.Context, _ string, op *wsv1.Operation) (*wsv1.OpResult, error) {
@@ -44,6 +48,9 @@ func (f *secretsFakeAgent) Apply(_ context.Context, _ string, op *wsv1.Operation
 			res.Secrets = append(res.Secrets, &wsv1.SecretInfo{Name: name, Version: v})
 		}
 		return &wsv1.OpResult{Result: &wsv1.OpResult_ListSecrets{ListSecrets: res}}, nil
+	case *wsv1.Operation_WriteManagedFile:
+		f.written = append(f.written, o.WriteManagedFile.GetPath())
+		return &wsv1.OpResult{}, nil
 	case *wsv1.Operation_StopContainer:
 		f.stopped = append(f.stopped, o.StopContainer.GetName())
 		return &wsv1.OpResult{}, nil
@@ -275,5 +282,51 @@ func TestSecretGenerateOnAnExistingSecretRestartsNothing(t *testing.T) {
 	h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/nodes/n1/secrets/davis-admin-password", nil, nil)
 	if len(fake.removed) != 0 {
 		t.Fatalf("a no-op generate restarted %v", fake.removed)
+	}
+}
+
+// Rotation rewrites the files a secret is written into, not only the
+// containers whose env names it. Reading only the containers left
+// rotation with the bug `set` had just been fixed for: the file keeps
+// the old value and the re-created container starts against it, while
+// the endpoint reports success.
+func TestSecretRotateRewritesSecretBackedFiles(t *testing.T) {
+	h := newHarness(t)
+	fake := &secretsFakeAgent{}
+	h.s.Agents = fake
+	h.s.ManagedPrefix = "/etc/wildstone"
+	put := func(r resource.Resource) {
+		t.Helper()
+		if err := h.s.State.Put(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindConfigFile,
+		Metadata:   resource.Metadata{Name: "immich-config", Owner: "capability/photos", Node: "n1"},
+		ConfigFile: &resource.ConfigFileSpec{Filename: "immich.json", Content: `{"s":"secret/photos-oidc"}`},
+	})
+	put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindContainer,
+		Metadata: resource.Metadata{Name: "immich-server", Owner: "capability/photos", Node: "n1"},
+		Container: &resource.ContainerSpec{Image: "ghcr.io/x/y@" + testDigest,
+			Mounts: []resource.Mount{{Source: "/etc/wildstone/photos", Target: "/etc/wildstone/photos"}}},
+	})
+	if err := h.s.State.Commit("test", "seed", "seed"); err != nil {
+		t.Fatal(err)
+	}
+	h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/nodes/n1/secrets/photos-oidc",
+		map[string]string{"value": "KNOWN-FAKE-v1"}, nil)
+	fake.written = nil
+	fake.removed = nil
+
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/nodes/n1/secrets/photos-oidc/rotate", nil, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("rotate = %d", resp.StatusCode)
+	}
+	if len(fake.written) != 1 || fake.written[0] != "/etc/wildstone/photos/immich.json" {
+		t.Fatalf("rotation must rewrite the file holding the secret, wrote %v", fake.written)
+	}
+	if len(fake.removed) != 1 || fake.removed[0] != "immich-server" {
+		t.Fatalf("removed = %v, want the container that mounts it", fake.removed)
 	}
 }

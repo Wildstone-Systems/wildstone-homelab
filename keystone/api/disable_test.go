@@ -1,8 +1,10 @@
 package api
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
@@ -186,5 +188,71 @@ func TestSecretReadersAreNodeScoped(t *testing.T) {
 	}
 	if len(containers) != 0 || len(files) != 0 {
 		t.Fatalf("another node's readers leaked in: %v %v", containers, files)
+	}
+}
+
+// A retained shared resource must not keep a removed package installed.
+//
+// Removing books-kavita deliberately KEEPS Secret/restic-books, because
+// the surviving book app needs it — and it stays stamped books-kavita.
+// Treating any stamped resource as proof of installation left the
+// removed package in Installed for ever: no way to put it back, and a
+// second removal answering "nothing installed to remove".
+func TestARetainedSharedResourceDoesNotKeepAPackageInstalled(t *testing.T) {
+	pkg := &pkgspec.Package{
+		Metadata:  pkgspec.Metadata{Name: "books-kavita", Capability: "books"},
+		Templates: []string{"apiVersion: wildstone.dev/v1\nkind: Container\nmetadata: {name: kavita}\nspec: {image: x}\n"},
+	}
+	current := []resource.Resource{
+		// Kavita's container is gone; only the shared secret remains.
+		res(resource.KindSecret, "restic-books", "capability/books", "books-kavita"),
+		res(resource.KindContainer, "calibre-web", "capability/books", "books-calibre-web"),
+	}
+	if packageIsInstalled(pkg, current) {
+		t.Fatal("a retained shared resource is not an installed package")
+	}
+	// ...and it IS installed once its own container is back.
+	current = append(current, res(resource.KindContainer, "kavita", "capability/books", "books-kavita"))
+	if !packageIsInstalled(pkg, current) {
+		t.Fatal("a package running its own container is installed")
+	}
+}
+
+// A package that runs nothing — the config-shim shape — has no container
+// to look for, so its stamp is the only evidence there is.
+func TestAContainerlessPackageIsInstalledByItsStamp(t *testing.T) {
+	pkg := &pkgspec.Package{Metadata: pkgspec.Metadata{Name: "home-automation-hass", Capability: "home-automation"}}
+	current := []resource.Resource{
+		res(resource.KindConfigFile, "hass-wildstone", "capability/home-automation", "home-automation-hass"),
+	}
+	if !packageIsInstalled(pkg, current) {
+		t.Fatal("a shim package is installed when its rendered file is present")
+	}
+}
+
+// A container mounting the config FILE is a reader too, not only one
+// mounting the directory it sits in.
+func TestSecretReadersMatchAMountOfTheFileItself(t *testing.T) {
+	s := &Server{ManagedPrefix: "/etc/wildstone"}
+	desired := []resource.Resource{
+		{Kind: resource.KindConfigFile, Metadata: resource.Metadata{Name: "cfg", Owner: "capability/foo", Node: "n1"},
+			ConfigFile: &resource.ConfigFileSpec{Filename: "config.yml", Content: "secret/foo-token"}},
+		{Kind: resource.KindContainer, Metadata: resource.Metadata{Name: "mounts-the-file", Owner: "capability/foo", Node: "n1"},
+			Container: &resource.ContainerSpec{Image: "x",
+				Mounts: []resource.Mount{{Source: "/etc/wildstone/foo/config.yml", Target: "/app/config.yml"}}}},
+		{Kind: resource.KindContainer, Metadata: resource.Metadata{Name: "mounts-the-prefix", Owner: "capability/foo", Node: "n1"},
+			Container: &resource.ContainerSpec{Image: "x",
+				Mounts: []resource.Mount{{Source: "/etc/wildstone", Target: "/etc/wildstone"}}}},
+		{Kind: resource.KindContainer, Metadata: resource.Metadata{Name: "mounts-elsewhere", Owner: "capability/foo", Node: "n1"},
+			Container: &resource.ContainerSpec{Image: "x",
+				Mounts: []resource.Mount{{Source: "/etc/wildstone/other", Target: "/x"}}}},
+	}
+	containers, _, err := s.secretReaders(desired, "n1", "foo-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(containers, ",")
+	if got != "mounts-the-file,mounts-the-prefix" {
+		t.Fatalf("containers = %v, want the file and prefix mounts and not the unrelated one", containers)
 	}
 }

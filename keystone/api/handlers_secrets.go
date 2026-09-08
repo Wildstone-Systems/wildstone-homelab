@@ -245,7 +245,18 @@ func (s *Server) rotateSecret(r *http.Request, id principal.Identity) (any, int,
 		return nil, status, err
 	}
 
-	dependents, err := s.secretDependents(node, name)
+	// Files as well as containers. Reading only the containers here is
+	// what left rotation with the exact bug `set` had just been fixed
+	// for: photos-oidc lives inside immich.json, so a rotation that
+	// re-creates Immich without rewriting the file restarts it against
+	// the old value and reports success. Observation cannot repair it
+	// afterwards — the comparison is on the unchanged pre-materialization
+	// content — so the poke does not save it either.
+	desired, err := s.State.Load()
+	if err != nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("loading statefile: %w", err)
+	}
+	dependents, files, err := s.secretReaders(desired, node, name)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -261,7 +272,7 @@ func (s *Server) rotateSecret(r *http.Request, id principal.Identity) (any, int,
 		}
 	}
 
-	version, failure := s.executeRotation(r, node, name, dependents)
+	version, failure := s.executeRotation(r, node, name, dependents, files)
 	if failure != nil {
 		if terr := s.DB.TransitionPlan(planID, runtimedb.PlanFailed, id.Name); terr != nil {
 			s.Log.Error("rotation plan transition", "plan", planID, "err", terr)
@@ -284,7 +295,7 @@ func (s *Server) rotateSecret(r *http.Request, id principal.Identity) (any, int,
 
 // executeRotation regenerates the secret, then removes each dependent so
 // the level-triggered loop re-creates it against the new value.
-func (s *Server) executeRotation(r *http.Request, node, name string, dependents []string) (uint32, error) {
+func (s *Server) executeRotation(r *http.Request, node, name string, dependents []string, files []resource.Resource) (uint32, error) {
 	res, err := s.Agents.Apply(r.Context(), node, &wsv1.Operation{Op: &wsv1.Operation_EnsureSecret{
 		EnsureSecret: &wsv1.EnsureSecret{Name: name, Rotate: true},
 	}})
@@ -295,6 +306,11 @@ func (s *Server) executeRotation(r *http.Request, node, name string, dependents 
 		return 0, fmt.Errorf("node %s: %s", node, oe.GetMessage())
 	}
 	version := res.GetEnsureSecret().GetVersion()
+	// Files first, so a re-created container never starts against the
+	// value that was just retired.
+	if err := s.rewriteConfigFiles(r, node, files); err != nil {
+		return version, err
+	}
 	if err := s.recreateDependents(r, node, dependents); err != nil {
 		return version, err
 	}
@@ -353,8 +369,14 @@ func (s *Server) secretDependents(node, name string) ([]string, error) {
 func (s *Server) secretReaders(desired []resource.Resource, node, name string) (containers []string, files []resource.Resource, err error) {
 	ref := "secret/" + name
 	seen := map[string]bool{}
-	// Directories whose contents change when this secret does.
-	dirs := map[string]bool{}
+	// The paths whose contents change when this secret does — each
+	// rendered file, and the directory holding it. Both, because a
+	// package may mount either: photos-immich mounts the capability
+	// directory, and a package mounting one config file directly is just
+	// as valid. Matching only the directory missed the second kind, so
+	// the file was rewritten and the process that read it at startup was
+	// left running against the old value.
+	paths := map[string]bool{}
 
 	for _, res := range desired {
 		if res.Metadata.Node != node {
@@ -377,8 +399,10 @@ func (s *Server) secretReaders(desired []resource.Resource, node, name string) (
 			}
 			files = append(files, res)
 			cap, ok := strings.CutPrefix(res.Metadata.Owner, "capability/")
-			if ok && cap != "" {
-				dirs[path.Join(s.managedPrefix(), cap)] = true
+			if ok && cap != "" && res.ConfigFile.Filename != "" {
+				dir := path.Join(s.managedPrefix(), cap)
+				paths[dir] = true
+				paths[path.Join(dir, res.ConfigFile.Filename)] = true
 			}
 		}
 	}
@@ -394,7 +418,7 @@ func (s *Server) secretReaders(desired []resource.Resource, node, name string) (
 			continue
 		}
 		for _, m := range res.Container.Mounts {
-			if dirs[m.Source] {
+			if mountCovers(m.Source, paths) {
 				seen[res.Metadata.Name] = true
 				containers = append(containers, res.Metadata.Name)
 				break
@@ -403,6 +427,24 @@ func (s *Server) secretReaders(desired []resource.Resource, node, name string) (
 	}
 	sort.Strings(containers)
 	return containers, files, nil
+}
+
+// mountCovers reports whether a bind mount's source reaches any of the
+// paths a secret's files live at — the file itself, or any directory
+// above it. A container mounting /etc/wildstone reads
+// /etc/wildstone/photos/immich.json just as surely as one mounting the
+// file, and equality on the directory saw neither.
+func mountCovers(source string, paths map[string]bool) bool {
+	if source == "" {
+		return false
+	}
+	source = path.Clean(source)
+	for p := range paths {
+		if p == source || strings.HasPrefix(p, source+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // managedPrefix is where ConfigFiles are rendered, matching the

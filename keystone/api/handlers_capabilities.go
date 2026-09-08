@@ -357,7 +357,15 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 	}
 	facts := s.gatherFacts()
 	versions, installedParams := s.installedFromPlans()
-	current, _ := s.State.Load()
+	// Checked, now that Enabled is derived from it. Discarding this error
+	// used to cost nothing — the field came from enabledCapabilities(),
+	// which returned one. Left discarded it turns an unreadable statefile
+	// into a 200 saying every service is absent, and a Console offering
+	// to install things that are already running.
+	current, err := s.State.Load()
+	if err != nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("loading statefile: %w", err)
+	}
 	health := map[string]runtimedb.Observed{}
 	if obs, err := s.DB.ListObserved(); err == nil {
 		for _, o := range obs {
@@ -737,23 +745,36 @@ func packagesUnder(capName string, current []resource.Resource) []string {
 // present — the same question packageIsTheInstalledOne answers, asked of
 // a sibling rather than of the package being acted on.
 func packageIsInstalled(pkg *pkgspec.Package, current []resource.Resource) bool {
-	for _, r := range current {
-		if r.Metadata.Package == pkg.Metadata.Name {
-			return true
-		}
-	}
 	names := pkgspec.ContainerNames(pkg)
-	if len(names) == 0 {
+	if len(names) > 0 {
+		// A package that RUNS something is installed when that thing is
+		// present, and by nothing else.
+		//
+		// "Any resource carrying this package's stamp" was the obvious
+		// rule and the wrong one, because a removal deliberately RETAINS
+		// what a surviving sibling still needs. Remove books-kavita and
+		// Secret/restic-books stays, still stamped books-kavita — so the
+		// package read as installed for ever: it kept a tile in
+		// Installed, offered no way to put it back, and a second removal
+		// answered "nothing installed to remove".
+		present := map[string]bool{}
+		for _, r := range current {
+			if r.Kind == resource.KindContainer {
+				present[r.Metadata.Name] = true
+			}
+		}
+		for _, n := range names {
+			if present[n] {
+				return true
+			}
+		}
 		return false
 	}
-	present := map[string]bool{}
+	// A package that runs nothing — the config-shim shape, ADR-W024 A10
+	// — has no container to look for, so its own stamp is the only
+	// evidence there is.
 	for _, r := range current {
-		if r.Kind == resource.KindContainer {
-			present[r.Metadata.Name] = true
-		}
-	}
-	for _, n := range names {
-		if present[n] {
+		if r.Metadata.Package == pkg.Metadata.Name {
 			return true
 		}
 	}

@@ -152,13 +152,11 @@ export function ServicesView({
           with every package added. */}
       <Drawer open={removing !== null} onClose={() => setRemoving(null)} title={removing?.name} wide>
         {removing && (
-          <RemoveForm
+          <RemoveFormLoader
             pkg={removing}
             // This PACKAGE's resources. Filtering by capability showed a
             // sibling profile's containers in the list of what a removal
-            // would delete — and then deleted them. Keystone recomputes
-            // this authoritatively when the plan is proposed; the same
-            // rule here is what makes the preview match.
+            // would delete — and then deleted them.
             owned={ownedByPackage(resources, removing)}
             // Every owner the statefile actually reported, so an empty
             // result can be read rather than guessed at.
@@ -308,6 +306,35 @@ export function ownerCounts(resources: ResourceView[]): [string, number][] {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
+// RemoveFormLoader asks Keystone what the removal would actually do,
+// then shows it. The dry run is the same code path the real proposal
+// takes, so the preview cannot drift from the plan; a failure to reach
+// it falls back to the stamps rather than blocking the removal.
+function RemoveFormLoader(props: {
+  pkg: PackageView;
+  owned: ResourceView[];
+  owners?: [string, number][];
+  error?: string | null;
+  loading?: boolean;
+  onDone: () => void;
+}) {
+  const preview = useLoad(() => api.previewDisablePackage(props.pkg.name), [props.pkg.name]);
+  const steps = preview.data?.plan?.steps;
+  return (
+    <RemoveForm
+      {...props}
+      plannedDeletes={
+        steps
+          ? steps
+              .filter((st) => st.kind && st.name)
+              .map((st) => ({ kind: st.kind as string, name: st.name as string }))
+          : undefined
+      }
+      loading={props.loading || preview.loading}
+    />
+  );
+}
+
 // ownedByPackage is what a removal of THIS package would touch.
 //
 // It mirrors Keystone's rule, which is the authority: a resource stamped
@@ -328,6 +355,7 @@ export function RemoveForm({
   pkg,
   owned,
   owners = [],
+  plannedDeletes,
   error = null,
   loading = false,
   onDone,
@@ -335,6 +363,14 @@ export function RemoveForm({
   pkg: PackageView;
   owned: ResourceView[];
   owners?: [string, number][];
+  // What Keystone says it will delete, from the endpoint's own dry run.
+  // The stamps here cannot answer it alone: a resource a surviving
+  // sibling still needs is excluded server-side, so listing by stamp
+  // showed Secret/restic-books as deletable and then did not delete it —
+  // a destructive-action preview disagreeing with the plan being
+  // approved. Absent (no dry run yet, or an older server) falls back to
+  // the stamps, which is right whenever nothing is shared.
+  plannedDeletes?: { kind: string; name: string }[];
   // "I could not read the statefile" and "this owns nothing" look
   // identical from an empty list, and only one of them is safe to
   // believe.
@@ -354,7 +390,26 @@ export function RemoveForm({
   // the moment it landed, so it survives too. Listing either as
   // "deleted" would be telling the operator something untrue.
   const kept = owned.filter((r) => r.kind === "Volume" || r.kind === "SeedFile");
-  const deletable = owned.filter((r) => r.kind !== "Volume" && r.kind !== "SeedFile");
+  const planned = plannedDeletes
+    ? new Set(plannedDeletes.map((d) => `${d.kind}/${d.name}`))
+    : null;
+  const deletable = owned.filter(
+    (r) =>
+      r.kind !== "Volume" &&
+      r.kind !== "SeedFile" &&
+      (planned === null || planned.has(`${r.kind}/${r.name}`)),
+  );
+  // Shown as kept rather than dropped from the list: "this survives
+  // because something else needs it" is a fact worth reading before
+  // approving a removal.
+  const sharedKept = planned
+    ? owned.filter(
+        (r) =>
+          r.kind !== "Volume" &&
+          r.kind !== "SeedFile" &&
+          !planned.has(`${r.kind}/${r.name}`),
+      )
+    : [];
 
   if (done) {
     return (
@@ -424,6 +479,20 @@ export function RemoveForm({
       )}
       {owned.length === 0 && error === null && loading && (
         <div className="muted">Reading the statefile…</div>
+      )}
+      {sharedKept.length > 0 && (
+        <div className="callout callout-warn">
+          <strong>Another profile of this capability still needs these, so they stay:</strong>
+          <ul>
+            {sharedKept.map((r) => (
+              <li key={`${r.kind}/${r.name}`}>
+                <code>
+                  {r.kind}/{r.name}
+                </code>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
       {deletable.length === 0 && kept.length > 0 && error === null && !loading && (
         <div className="muted">

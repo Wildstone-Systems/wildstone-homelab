@@ -513,6 +513,14 @@ export const api = {
   // control plane has them.
   disablePackage: (pkg: string) =>
     call<PlanRecord>("POST", "/api/v1/capabilities/disable", { package: pkg }),
+  // The same computation without proposing anything, so the preview is
+  // the plan rather than a second guess at it. Filtering by package
+  // stamp here still disagreed with the server: the surviving sibling's
+  // needs are excluded there and cannot be known from the stamps alone,
+  // so Secret/restic-books was listed as deletable and then wasn't
+  // deleted.
+  previewDisablePackage: (pkg: string) =>
+    call<PlanRecord>("POST", "/api/v1/capabilities/disable", { package: pkg, dryRun: true }),
   plan: (id: string) => call<PlanRecord>("GET", `/api/v1/plans/${encodeURIComponent(id)}`),
   approvePlan: (id: string) =>
     call<unknown>("POST", `/api/v1/plans/${encodeURIComponent(id)}/approve`),
