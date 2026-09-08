@@ -90,8 +90,43 @@ func (db *DB) GetPlan(id string) (PlanRecord, error) {
 	return scanPlan(row)
 }
 
+// AppliedPlanJSON returns the stored JSON of the newest applied plans,
+// newest first.
+//
+// It exists because ListPlans deliberately blanks plan_json — a listing
+// of every plan carrying every plan's full document would be enormous —
+// and a caller that needs the ORIGIN of an install had no way to get it
+// short of one GetPlan per row.
+//
+// That gap was not theoretical. installedVersions() read ListPlans and
+// unmarshalled the JSON it does not return, so every unmarshal failed,
+// the version map was always empty, and the Console's "this capability
+// is behind the catalog" (F91) reported nothing on any deployment. The
+// feature had been shipped, tested against a fake, and was inert.
+func (db *DB) AppliedPlanJSON(limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := db.sql.Query(
+		`SELECT plan_json FROM plans WHERE state = ? ORDER BY seq DESC LIMIT ?`,
+		string(PlanApplied), limit)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing applied plans: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var j string
+		if err := rows.Scan(&j); err != nil {
+			return nil, fmt.Errorf("runtimedb: scanning applied plan: %w", err)
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
 // ListPlans returns the newest limit plans, newest first, without their
-// full JSON (fetch one with GetPlan).
+// full JSON (fetch one with GetPlan, or AppliedPlanJSON for origins).
 func (db *DB) ListPlans(limit int) ([]PlanRecord, error) {
 	if limit <= 0 {
 		limit = 50

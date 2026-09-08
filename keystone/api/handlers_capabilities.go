@@ -289,17 +289,18 @@ func (s *Server) installedVersions() map[string]string {
 // and no memory of the install itself.
 func (s *Server) installedFromPlans() (versions map[string]string, params map[string]map[string]string) {
 	versions, params = map[string]string{}, map[string]map[string]string{}
-	recs, err := s.DB.ListPlans(200)
+	// AppliedPlanJSON, not ListPlans: the listing deliberately blanks
+	// plan_json, so reading origins from it silently found nothing on
+	// every deployment — which is how F91's "you are behind the catalog"
+	// came to report nothing at all.
+	docs, err := s.DB.AppliedPlanJSON(200)
 	if err != nil {
 		return versions, params
 	}
 	// Oldest first, so the newest install for a capability wins.
-	for i := len(recs) - 1; i >= 0; i-- {
+	for i := len(docs) - 1; i >= 0; i-- {
 		var stored plan.StoredProposal
-		if json.Unmarshal([]byte(recs[i].PlanJSON), &stored) != nil || stored.Origin == nil {
-			continue
-		}
-		if recs[i].State != runtimedb.PlanApplied {
+		if json.Unmarshal([]byte(docs[i]), &stored) != nil || stored.Origin == nil {
 			continue
 		}
 		versions[stored.Origin.Package] = stored.Origin.Version
