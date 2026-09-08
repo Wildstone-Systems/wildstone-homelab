@@ -39,6 +39,7 @@ ingress-tailnet 1.0.0 fbfd59d9ef2dca63
 ingress-tailnet-public 1.0.0 8761c34ce190cc5a
 ingress-tailnet-ts 1.1.0 ae41849e2d8ab27e
 inventory-homebox 1.0.0 e9c2ac3746dc8f4f
+mail-roundcube 1.0.0 79d6317059adc0a1
 media-jellyfin 1.0.0 3630dea36fc35fec
 media-plex 1.0.0 85f5587faf47a242
 metrics-grafana 1.0.0 e2f9e11215626471

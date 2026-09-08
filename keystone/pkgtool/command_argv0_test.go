@@ -77,6 +77,17 @@ var imageArgv0 = map[string]string{
 	// prometheus/prometheus@main, and the image config blob read from
 	// Docker Hub on 2026-09-07 while resolving the package's digest.
 	"prom/prometheus": "",
+
+	// Davis's standalone image declares no ENTRYPOINT — its CMD is
+	// ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"], which
+	// runs Caddy and php-fpm — so a Cmd-only EnsureContainer that
+	// wants the migration console instead must name the binary. It is
+	// /bin/sh: the schema migration and the chown that lets php-fpm's
+	// non-root workers create the database file are one run, and the
+	// image is alpine-based, so sh is there. Evidence: the published
+	// docker/Dockerfile-standalone at tchapi/davis@main, whose final
+	// stage sets no ENTRYPOINT and no USER.
+	"ghcr.io/tchapi/davis-standalone": "/bin/sh",
 }
 
 // TestPackageCommandsNameTheirBinary walks every shipped package's
