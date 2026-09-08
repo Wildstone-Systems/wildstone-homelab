@@ -217,6 +217,84 @@ catalog and the recorded install params — what a package DECLARES, not
 merely what is installed — and the CLI has neither. Both bugs above were
 client-side, and neither was possible to get right there.
 
+### A9. A login box is a claim about credentials, and it has to be answered
+
+`mail-roundcube` is correct. Roundcube and Davis both authenticate
+against the household's own IMAP server, so a person has one credential
+— their mail password, checked by their provider, stored nowhere here.
+The wiring is right: Davis's own `.env` documents `IMAP_AUTH_URL` as
+`host[:port]`, which is what the package renders, and every secret the
+capability generates materialized correctly.
+
+Both surfaces were still unusable, and for a reason no check here could
+see. The household clicked "Mail", met a username and password field,
+tried the password they know, and got "invalid credentials". What Gmail
+actually said was in a container log nobody was reading:
+
+    AUTHENTICATE PLAIN: Application-specific password required
+
+Gmail, Outlook and Yahoo stopped accepting an account password over IMAP.
+The credential is an App Password from the provider, and nothing in the
+product said so — the design was written down in a YAML comment, the
+dashboard card said "Your email, in a browser", and the install form
+asked for an IMAP host without ever naming what people would sign in
+with.
+
+So: a package whose sign-in posture is "the app's own login" must say
+WHICH credential, where the person meets the login — the dashboard row,
+which is the only text between a household member and the box. And where
+a common provider refuses the obvious answer, the package says that too,
+on the param an operator is filling in at install time.
+
+The related trap, from the same package: `davis-admin-password` is
+generated and write-only, so the admin page it protects could not be
+opened by anyone, ever. That is a defensible security posture — the page
+is closed rather than open with a default, and household members never
+need it — but a generated secret nobody can read is a login nobody can
+perform, and the param that mentions it now says so and names the
+command that sets it.
+
+None of this is checkable by lint. It is the same lesson as A1 in a
+different place: what a package claims about the world outside it has to
+be verified against that world, and then written where the person who
+hits it will read it.
+
+### A10. A secret says what it is for, and setting one takes effect
+
+Write-only is not negotiable (ADR-W012 W2): the protocol has no
+GetSecret arm, so a generated value cannot be shown to anyone, ever.
+That is a property worth keeping, and it has a consequence the product
+has to carry rather than hide — the only way into a service whose
+password was generated is to SET it to a value you choose.
+
+Two things made that unreachable without a terminal.
+
+`SecretSpec.Purpose` did not exist, so the Secrets screen could show a
+name, a version, and what rotating it would restart, and nothing about
+what any of it meant. `davis-admin-password` does not tell a household
+admin that it is the calendar service's admin login, that the username
+beside it is `admin`, or that the value cannot be read back. Packages
+now declare that sentence and the screen shows it, joined from the
+package because the node holds values and knows nothing about what they
+are for.
+
+And `wild secret set` did not take effect. `recreateDependents` is
+documented right beside it — "stops and removes each dependent container
+so the level-triggered loop re-creates it against the secret's new
+value" — and rotation called it while set did not. A container's
+environment is fixed when it is created, so setting the Davis admin
+password wrote the value, reported success, and left the service
+checking the previous one. A new value nothing reads is not a new value.
+Set now propagates exactly as rotate does, reports how many containers
+it re-created, and skips the case that must not restart anything: a
+generate on a secret that already exists, which is the install-time
+"make sure this is here" call.
+
+The general rule: an operator should not need a shell for anything the
+household product asks them to do. Where a design forces a step —
+write-only forces "set, do not discover" — the surface has to say so at
+the point of the step, and the step has to work.
+
 ---
 
 # Part B — Guidance (not binding, but this is the shape of the work)

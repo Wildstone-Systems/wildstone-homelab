@@ -146,9 +146,16 @@ func TestSecretRotateRemovesDependentsWithProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Seed the secret, then rotate.
+	// Seed the secret, then rotate. Seeding is itself a `set` with a
+	// value, and a set now re-creates what reads the secret for the same
+	// reason a rotation does — so clear what that removed before
+	// asserting on the rotation's own effect.
 	h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/nodes/n1/secrets/tunnel-token",
 		map[string]string{"value": "KNOWN-FAKE-v1"}, nil)
+	if len(fake.removed) != 1 || fake.removed[0] != "cloudflared" {
+		t.Fatalf("setting a value must re-create what reads it, removed = %v", fake.removed)
+	}
+	fake.removed = nil
 	var rot struct {
 		Version           uint32   `json:"version"`
 		DependentsRemoved []string `json:"dependentsRemoved"`
@@ -190,5 +197,83 @@ func TestSecretRotateRemovesDependentsWithProvenance(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no secret.rotated event")
+	}
+}
+
+// Setting a value must reach the thing that reads it.
+//
+// It did not, once. `wild secret set` wrote the value to the node and
+// reported success while every container holding the previous one went
+// on holding it — a container's environment is fixed when it is created,
+// which this file's own header says about rotation and which set never
+// acted on. An operator set the Davis admin password, was told it
+// worked, and still could not sign in to the page it protects.
+func TestSecretSetRecreatesWhatReadsIt(t *testing.T) {
+	h := newHarness(t)
+	fake := &secretsFakeAgent{}
+	h.s.Agents = fake
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindContainer,
+		Metadata:   resource.Metadata{Name: "davis", Owner: "capability/mail", Node: "n1"},
+		Container: &resource.ContainerSpec{Image: "ghcr.io/x/y@" + testDigest,
+			Env: map[string]string{"ADMIN_PASSWORD": "secret/davis-admin-password"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A container on the same node that does NOT read it stays running.
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindContainer,
+		Metadata:   resource.Metadata{Name: "roundcube", Owner: "capability/mail", Node: "n1"},
+		Container:  &resource.ContainerSpec{Image: "ghcr.io/x/y@" + testDigest, Env: map[string]string{"TZ": "UTC"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.State.Commit("test", "seed", "seed"); err != nil {
+		t.Fatal(err)
+	}
+
+	var out struct {
+		Recreated int `json:"recreated"`
+	}
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/nodes/n1/secrets/davis-admin-password",
+		map[string]string{"value": "KNOWN-FAKE-CHOSEN"}, &out); resp.StatusCode != http.StatusOK {
+		t.Fatalf("set = %d", resp.StatusCode)
+	}
+	if len(fake.removed) != 1 || fake.removed[0] != "davis" {
+		t.Fatalf("removed = %v, want exactly [davis]", fake.removed)
+	}
+	if out.Recreated != 1 {
+		t.Errorf("recreated = %d, want 1 — the caller should be told what was restarted", out.Recreated)
+	}
+}
+
+// Generating a secret that already exists is the install-time "make sure
+// this is here" call. It changes no value, so it must not restart a
+// service that is running fine.
+func TestSecretGenerateOnAnExistingSecretRestartsNothing(t *testing.T) {
+	h := newHarness(t)
+	fake := &secretsFakeAgent{}
+	h.s.Agents = fake
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindContainer,
+		Metadata:   resource.Metadata{Name: "davis", Owner: "capability/mail", Node: "n1"},
+		Container: &resource.ContainerSpec{Image: "ghcr.io/x/y@" + testDigest,
+			Env: map[string]string{"ADMIN_PASSWORD": "secret/davis-admin-password"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.State.Commit("test", "seed", "seed"); err != nil {
+		t.Fatal(err)
+	}
+	// First generate creates it (and may re-create: nothing held a value).
+	h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/nodes/n1/secrets/davis-admin-password", nil, nil)
+	fake.removed = nil
+	// Second generate is a no-op on the value.
+	h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/nodes/n1/secrets/davis-admin-password", nil, nil)
+	if len(fake.removed) != 0 {
+		t.Fatalf("a no-op generate restarted %v", fake.removed)
 	}
 }

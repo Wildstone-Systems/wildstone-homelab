@@ -26,7 +26,7 @@ import type { BackupRun, EventRow, Observed, PackageView, PlanRecord, ResourceVi
 import { PlansView, PendingPlan, PlanSteps } from "../src/views/Plans";
 import { ActivityView } from "../src/views/Activity";
 import { BackupsView, byPlan, explain } from "../src/views/Backups";
-import { SecretsView, usedBy } from "../src/views/Secrets";
+import { SecretsView, usedBy, purposeOf } from "../src/views/Secrets";
 import { ChatView } from "../src/views/Chat";
 import { IdentityCode } from "../src/views/Identity";
 import { Inventory, NodeCard } from "../src/views/Nodes";
@@ -841,13 +841,31 @@ const SECRETS: SecretInfo[] = [
   { name: "authelia-jwt-secret", version: 2, updatedUnixSec: 1757000000 },
   { name: "orphaned-secret", version: 1 },
 ];
-const secrets = renderToString(h(SecretsView, { node: "n1", secrets: SECRETS, owners, reload: () => {} }));
+// What a name MEANS. A screen of identifiers is unusable by exactly the
+// person who needs one of them: the operator who does not already know.
+const purposes = purposeOf([{
+  name: "mail-roundcube", version: "1.0.3", capability: "mail", enabled: true,
+  resources: [
+    { kind: "Secret", name: "authelia-jwt-secret", purpose: "The calendar admin page — sign in as 'admin'." },
+    { kind: "Container", name: "davis", purpose: "not a secret" },
+  ],
+}]);
+check("a secret's purpose is read from its package", purposes.get("authelia-jwt-secret")?.includes("sign in as") === true);
+check("only secrets carry a purpose", purposes.get("davis") === undefined);
+
+const secrets = renderToString(h(SecretsView, { node: "n1", secrets: SECRETS, owners, purposes, reload: () => {} }));
 check("the secrets table says what uses each one", secrets.includes("identity"));
+check("the secrets table says what a secret is for", secrets.includes("sign in as"));
+// Setting a value you choose is the only way into a service whose
+// password was generated, so it is a button on the row rather than a
+// name to retype into the form above.
+check("each secret can be set from its own row", secrets.includes("Set\u2026") || secrets.includes("Set…"));
+check("secrets explain why a generated value cannot be shown", secrets.includes("set it\nto a value you choose") || secrets.includes("to a value you choose"));
 // A secret nothing uses is a fact worth stating: it is the one that is
 // safe to rotate and the one that may not belong there.
 check("a secret nothing uses says so", secrets.includes("nothing installed uses it"));
 check("secrets say a typed value never comes back", secrets.includes("never readable again"));
-const noSecrets = renderToString(h(SecretsView, { node: "n1", secrets: [], owners: new Map(), reload: () => {} }));
+const noSecrets = renderToString(h(SecretsView, { node: "n1", secrets: [], owners: new Map(), purposes: new Map(), reload: () => {} }));
 check("a node with no secrets says so", noSecrets.includes("No secrets on this node yet"));
 
 // -------------------------------------------------------------- Chat

@@ -434,6 +434,23 @@ th {
   color: var(--muted);
   border-bottom: 1px solid var(--hair);
 }
+/* A row's buttons sit on one line, and the column is exactly as wide as
+   they need it to be.
+   width:1% is the shrink-to-fit idiom for an auto-layout table: this
+   column takes only what its content needs and the others absorb the
+   rest. With nowrap beside it, adding a second button WIDENS this column
+   instead of wrapping underneath the first — which is what doubled the
+   height of every row in the secrets table. */
+td.row-actions { width: 1%; white-space: nowrap; }
+/* A purpose is a sentence, and an auto-layout table will widen a column
+   to fit the longest unbroken line in it. Capped so the explanation
+   wraps under the name instead of squeezing every other column. */
+.secret-purpose { max-width: 46ch; white-space: normal; margin-top: 2px; }
+td.row-actions .actions { display: flex; align-items: center; gap: var(--space-2); }
+/* An error still wraps: it is prose, and it is the one thing here that
+   can be longer than the column. */
+td.row-actions .error { white-space: normal; margin: var(--space-2) 0 0; }
+
 tr.clickable { cursor: pointer; }
 tr.clickable:hover { background: var(--faint); }
 

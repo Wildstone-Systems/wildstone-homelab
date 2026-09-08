@@ -57,6 +57,25 @@ export function usedBy(pkgs: PackageView[]): Map<string, string[]> {
   return out;
 }
 
+// purposeOf maps a secret name to what its package says it is FOR.
+//
+// The table could say a name, a version and what rotating it would
+// restart, and nothing about what any of it meant. "davis-admin-password"
+// does not tell a household admin that it is the calendar service's admin
+// login, that the username beside it is `admin`, or that the generated
+// value cannot be read back — so the page it opens stayed shut and the
+// answer lived in a YAML comment.
+export function purposeOf(pkgs: PackageView[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const p of pkgs) {
+    for (const r of p.resources ?? []) {
+      if (r.kind !== "Secret" || !r.purpose) continue;
+      out.set(r.name, r.purpose);
+    }
+  }
+  return out;
+}
+
 function NodeSecrets({ node }: { node: string }) {
   const list = useLoad(() => api.nodeSecrets(node), [node]);
   const catalog = useLoad(() => api.packages(), []);
@@ -66,6 +85,7 @@ function NodeSecrets({ node }: { node: string }) {
       node={node}
       secrets={list.data?.secrets ?? []}
       owners={usedBy(catalog.data ?? [])}
+      purposes={purposeOf(catalog.data ?? [])}
       loading={list.loading}
       reload={list.reload}
     />
@@ -76,12 +96,14 @@ export function SecretsView({
   node,
   secrets,
   owners,
+  purposes,
   loading,
   reload,
 }: {
   node: string;
   secrets: SecretInfo[];
   owners: Map<string, string[]>;
+  purposes?: Map<string, string>;
   loading?: boolean;
   reload: () => void;
 }) {
@@ -102,6 +124,7 @@ export function SecretsView({
             onChange={(e) => setName(e.target.value)}
           />
           <input
+            id="secret-value"
             type="password"
             placeholder="value (empty = generate on the node)"
             aria-label="secret value"
@@ -128,7 +151,8 @@ export function SecretsView({
         </div>
         <div className="muted">
           A value typed here transits once and is never readable again — not by this screen, not
-          by the API.
+          by the API. That is why a generated password cannot be shown to you: to use one, set it
+          to a value you choose. Whatever reads it is re-created so the new value takes effect.
         </div>
         {set.state.phase === "error" && <ErrorLine error={set.state.message} />}
       </div>
@@ -145,7 +169,18 @@ export function SecretsView({
         </thead>
         <tbody>
           {secrets.map((s) => (
-            <SecretRow key={s.name} node={node} secret={s} owners={owners.get(s.name) ?? []} reload={reload} />
+            <SecretRow
+              key={s.name}
+              node={node}
+              secret={s}
+              owners={owners.get(s.name) ?? []}
+              purpose={purposes?.get(s.name)}
+              onSet={() => {
+                setName(s.name);
+                document.getElementById("secret-value")?.focus();
+              }}
+              reload={reload}
+            />
           ))}
         </tbody>
       </table>
@@ -160,11 +195,15 @@ function SecretRow({
   node,
   secret,
   owners,
+  purpose,
+  onSet,
   reload,
 }: {
   node: string;
   secret: SecretInfo;
   owners: string[];
+  purpose?: string;
+  onSet: () => void;
   reload: () => void;
 }) {
   const rotate = useAction();
@@ -176,6 +215,10 @@ function SecretRow({
           <Key size={13} />
           {secret.name}
         </span>
+        {/* What the name means. Without it the whole table is
+            identifiers, and the operator who needs one of these is
+            exactly the one who does not already know. */}
+        {purpose && <div className="muted secret-purpose">{purpose}</div>}
       </td>
       <td className="tnum">v{secret.version}</td>
       {/* What rotating this will restart. Without it the button is a
@@ -199,10 +242,23 @@ function SecretRow({
           ? new Date(secret.updatedUnixSec * 1000).toLocaleDateString()
           : "—"}
       </td>
-      <td>
+      {/* row-actions keeps both buttons on one line and lets the column
+          be exactly as wide as they need. Without it the second button
+          wrapped underneath the first, doubling the height of every row
+          in the table. */}
+      <td className="row-actions">
         {done ? (
           <StatusPill kind="ok">{done.message}</StatusPill>
         ) : (
+          <div className="actions">
+          {/* Setting a value you choose is the ONLY way into a service
+              whose password was generated, because no value can be read
+              back. It needed to be a button on the row: retyping the
+              name into the form above is how an operator ends up in a
+              terminal instead. */}
+          <button className="btn btn-secondary" onClick={onSet} title={`Set ${secret.name} to a value you choose`}>
+            Set…
+          </button>
           <button
             className="btn btn-danger"
             disabled={rotate.state.phase === "busy"}
@@ -220,6 +276,7 @@ function SecretRow({
           >
             {rotate.state.phase === "busy" ? "Rotating…" : "Rotate"}
           </button>
+          </div>
         )}
         {rotate.state.phase === "error" && <ErrorLine error={rotate.state.message} />}
       </td>

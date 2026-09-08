@@ -408,6 +408,20 @@ var secretKinds = map[string]bool{
 // secrets they name have to exist before the plan runs at all.
 type SecretSpec struct {
 	Name string `yaml:"name"`
+	// Purpose is one line saying what this secret is FOR, in words an
+	// operator who did not write the package can act on.
+	//
+	// The Secrets screen could show a name, a version and what would
+	// restart, and nothing about what any of it meant. A household
+	// admin looking at `davis-admin-password` had no way to learn that
+	// it is the calendar service's admin login, that the username
+	// beside it is `admin`, or that the generated value cannot be read
+	// back — so the one page it opens stayed shut, and the answer lived
+	// in a YAML comment in this repository.
+	//
+	// Optional: a secret whose name is self-evident to the person who
+	// will read it needs no sentence.
+	Purpose string `yaml:"purpose,omitempty"`
 	// Kind is one of secretKinds. Empty means "random", so a package
 	// that just needs a password says nothing.
 	Kind string `yaml:"kind,omitempty"`

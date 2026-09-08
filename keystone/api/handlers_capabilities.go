@@ -190,6 +190,11 @@ type serviceAddress struct {
 type resourceRef struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
+	// Purpose is a Secret's one-line explanation, carried here so the
+	// Secrets screen can say what a name means. Joined from the package
+	// rather than from the node: the node holds values and knows
+	// nothing about what they are for.
+	Purpose string `json:"purpose,omitempty"`
 }
 
 // capabilityDetail is what the Services page could not previously say
@@ -257,7 +262,11 @@ func (s *Server) describeCapability(pkg *pkgspec.Package, current []resource.Res
 		if r.Metadata.Owner != owner {
 			continue
 		}
-		d.Resources = append(d.Resources, resourceRef{Kind: string(r.Kind), Name: r.Metadata.Name})
+		ref := resourceRef{Kind: string(r.Kind), Name: r.Metadata.Name}
+		if r.Kind == resource.KindSecret && r.Secret != nil {
+			ref.Purpose = r.Secret.Purpose
+		}
+		d.Resources = append(d.Resources, ref)
 		if r.Kind != resource.KindRoute || r.Route == nil || r.Route.Host == "" {
 			continue
 		}
