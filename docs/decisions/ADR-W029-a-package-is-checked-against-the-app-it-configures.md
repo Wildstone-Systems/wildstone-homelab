@@ -180,6 +180,43 @@ They can be folded back onto a shared `chat` capability now, but doing
 so re-owns live resources, so it is left for a deliberate migration
 rather than bundled here.
 
+### A8. Removing an app names the app, and never removes data
+
+`wild capability disable <capability>` deleted everything owned by
+`capability/<name>`. That was unambiguous only while a capability could
+have one profile. With two installed it means three different things,
+and it took the most destructive reading.
+
+It now names a PACKAGE, everywhere — including for the capabilities that
+only ever have one profile, so one command means one thing. A capability
+name is answered with the packages installed under it rather than with a
+guess.
+
+Two rules ride with it, and both were learned the hard way while getting
+this wrong twice client-side:
+
+- **It never leaves the named package's own capability.** Scoped per
+  capability instead, the legacy-attribution rule applied to every
+  capability with no stamped resources — so disabling one book app
+  proposed deleting Authelia, LLDAP, Caddy, the dashboard and the chat
+  adapters. 34 resources, from a command naming one app.
+- **It never deletes what a surviving sibling still needs.** Both book
+  packages declare `Secret/restic-books`, the restic repository
+  password, and whichever installed last owns the stamp on it. A lost
+  repository password is not a broken backup, it is an unreadable one.
+
+And the rule `droppedByUpgrade` already had, which this never got: DATA
+IS NEVER PROPOSED FOR DELETION. Volumes and SeedFiles belong to the
+household (ADR-W004 A4), and the reconciler refuses a Volume Delete
+outright — so proposing one never removed data, it only guaranteed the
+plan ended in a step that failed every tick until F60 set it aside.
+Removing an app is not removing the library it was reading.
+
+The computation lives in Keystone, not the CLI. Answering it needs the
+catalog and the recorded install params — what a package DECLARES, not
+merely what is installed — and the CLI has neither. Both bugs above were
+client-side, and neither was possible to get right there.
+
 ---
 
 # Part B — Guidance (not binding, but this is the shape of the work)

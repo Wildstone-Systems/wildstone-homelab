@@ -103,13 +103,31 @@ func (db *DB) GetPlan(id string) (PlanRecord, error) {
 // the version map was always empty, and the Console's "this capability
 // is behind the catalog" (F91) reported nothing on any deployment. The
 // feature had been shipped, tested against a fake, and was inert.
+// It returns every plan whose approval COMMITTED the change, which is a
+// wider set than state = applied and deliberately so. The reconcile loop
+// says it plainly: "approval already committed the change", and on a
+// node that does not converge, "the Statefile is not reverted on
+// failure: desired stays desired and the next tick retries". So `failed`
+// means the node has not caught up yet, not that the install never
+// happened.
+//
+// Reading only `applied` made that difference visible in the worst way.
+// A Route health gate wrongly failed a books-calibre-web install that
+// had already written timezone America/Chicago into desired state; the
+// plan was recorded failed, so the newest APPLIED origin stayed the
+// older one, and the install form went on offering the household a
+// timezone — CST — that the running container no longer had and that
+// validation would now refuse.
+//
+// proposed/rejected/superseded stay out: those never reached the
+// Statefile, and they are the ones that genuinely never happened.
 func (db *DB) AppliedPlanJSON(limit int) ([]string, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	rows, err := db.sql.Query(
-		`SELECT plan_json FROM plans WHERE state = ? ORDER BY seq DESC LIMIT ?`,
-		string(PlanApplied), limit)
+		`SELECT plan_json FROM plans WHERE state IN (?, ?, ?, ?) ORDER BY seq DESC LIMIT ?`,
+		string(PlanApproved), string(PlanApplying), string(PlanApplied), string(PlanFailed), limit)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing applied plans: %w", err)
 	}

@@ -52,13 +52,40 @@ func TestListPlansOmitsJSONAndAppliedPlanJSONReturnsIt(t *testing.T) {
 	}
 }
 
-// Only applied plans: a proposal that failed or was superseded never
-// described what is RUNNING.
-func TestAppliedPlanJSONIgnoresPlansThatNeverApplied(t *testing.T) {
+// A plan that never reached the Statefile is not an install. Approval is
+// what commits a change, so `proposed`, `rejected` and `superseded` are
+// the states that genuinely never happened — and they are the ones this
+// leaves out.
+func TestAppliedPlanJSONIgnoresPlansThatNeverCommitted(t *testing.T) {
 	db := open(t)
 	if _, err := db.InsertPlan("admin", "", "proposed only", "low", `{"origin":{"package":"never"}}`); err != nil {
 		t.Fatal(err)
 	}
+	rejected, err := db.InsertPlan("admin", "", "rejected one", "low", `{"origin":{"package":"rejected"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TransitionPlan(rejected, PlanRejected, "admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	docs, err := db.AppliedPlanJSON(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 0 {
+		t.Errorf("a plan that never committed is not an install, got %v", docs)
+	}
+}
+
+// A plan that failed at the NODE still changed desired state — the loop
+// says so: "approval already committed the change", and "the Statefile
+// is not reverted on failure: desired stays desired and the next tick
+// retries". Excluding it made the Console describe an install by the
+// params of the one before it, which is how a form went on offering a
+// timezone the running container no longer had.
+func TestAppliedPlanJSONKeepsAPlanThatFailedAtTheNode(t *testing.T) {
+	db := open(t)
 	failed, err := db.InsertPlan("admin", "", "failed one", "low", `{"origin":{"package":"failed"}}`)
 	if err != nil {
 		t.Fatal(err)
@@ -73,30 +100,7 @@ func TestAppliedPlanJSONIgnoresPlansThatNeverApplied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(docs) != 0 {
-		t.Errorf("only applied plans describe what is running, got %v", docs)
-	}
-}
-
-// Newest first, so a caller walking backwards lets the newest install win.
-func TestAppliedPlanJSONIsNewestFirst(t *testing.T) {
-	db := open(t)
-	for _, name := range []string{"first", "second"} {
-		id, err := db.InsertPlan("admin", "", name, "low", `{"origin":{"package":"`+name+`"}}`)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, to := range []PlanState{PlanApproved, PlanApplying, PlanApplied} {
-			if err := db.TransitionPlan(id, to, "admin"); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	docs, err := db.AppliedPlanJSON(10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(docs) != 2 || !strings.Contains(docs[0], "second") {
-		t.Fatalf("want newest first, got %v", docs)
+	if len(docs) != 1 {
+		t.Fatalf("a committed plan describes the install even when the node lagged, got %v", docs)
 	}
 }

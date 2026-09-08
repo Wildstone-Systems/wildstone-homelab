@@ -3,8 +3,9 @@ package main
 // `wild capability` (ADR-W015 A2): enable names a package in KEYSTONE's
 // catalog and POSTs to /api/v1/capabilities, which expands it there and
 // proposes the result as an ordinary plan — so policy, risk grading and
-// approval apply unchanged; there is no side door. disable proposes
-// deletion of everything the capability owns.
+// approval apply unchanged; there is no side door. disable names a
+// package and proposes deletion of what that package produced, never
+// the data it was using.
 //
 // Expansion used to happen HERE, from a package directory on the
 // operator's disk. That meant Keystone never saw a package: the Console
@@ -95,37 +96,23 @@ func capabilityEnable(apiBase, token, target, version string, sets, catalogs mul
 	return simpleCall("capability", apiBase, token, http.MethodPost, "/api/v1/capabilities", body)
 }
 
+// capabilityDisable asks Keystone to remove what one package produced.
+//
+// Computed there, not here. Two client-side attempts got it wrong in
+// ways worth remembering: the first swept every capability whose
+// resources predated provenance, proposing to delete Authelia, LLDAP,
+// Caddy and the dashboard from a command naming one book app. The
+// second was correctly scoped and still proposed deleting
+// Secret/restic-books — the restic repository password, which the
+// SURVIVING book app also needs.
+//
+// Both failures have the same cause: the CLI can see what is installed,
+// and cannot see what a package DECLARES. Only the control plane holds
+// the catalog and the recorded install params, so only it can answer
+// "what would the sibling still need". This is a client of that answer.
 func capabilityDisable(apiBase, token, name string) int {
-	raw, err := apiCall(apiBase, token, http.MethodGet, "/api/v1/resources", nil)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "wild capability disable:", err)
-		return 1
-	}
-	var views []struct {
-		Kind  string `json:"kind"`
-		Name  string `json:"name"`
-		Owner string `json:"owner"`
-	}
-	if err := json.Unmarshal([]byte(raw), &views); err != nil {
-		fmt.Fprintln(os.Stderr, "wild capability disable: parsing resources:", err)
-		return 1
-	}
-	owner := "capability/" + name
-	var deletes []map[string]string
-	for _, v := range views {
-		if v.Owner == owner {
-			deletes = append(deletes, map[string]string{"kind": v.Kind, "name": v.Name})
-		}
-	}
-	if len(deletes) == 0 {
-		fmt.Fprintf(os.Stderr, "wild capability disable: no resources owned by %s\n", owner)
-		return 1
-	}
-	body := map[string]any{
-		"summary": fmt.Sprintf("disable capability %s (%d resource(s) removed)", name, len(deletes)),
-		"delete":  deletes,
-	}
-	return simpleCall("capability", apiBase, token, http.MethodPost, "/api/v1/plans", body)
+	body := map[string]any{"package": name}
+	return simpleCall("capability", apiBase, token, http.MethodPost, "/api/v1/capabilities/disable", body)
 }
 
 // multiFlag collects a repeatable string flag.
@@ -137,7 +124,7 @@ func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 func capabilityUsage() {
 	fmt.Fprintln(os.Stderr, `usage:
   wild capability enable <package> [-set k=v ...] [-version v] [-dry-run] [-api URL]
-  wild capability disable <capability-name> [-api URL]
+  wild capability disable <package> [-api URL]
   wild pkg list                                    (what the catalog holds)
 The package is named from Keystone's catalog; expansion happens there.
 -dry-run renders and checks without proposing, and prints the secrets

@@ -179,6 +179,7 @@ func (s *Server) Handler() http.Handler {
 	// so the Console and wild reach it through the same one API.
 	mux.Handle("GET /api/v1/packages", s.handle(principal.VerbRead, s.listPackages))
 	mux.Handle("POST /api/v1/capabilities", s.handle(principal.VerbPropose, s.enableCapability))
+	mux.Handle("POST /api/v1/capabilities/disable", s.handle(principal.VerbPropose, s.disableCapability))
 	mux.Handle("POST /api/v1/plans/{id}/approve", s.handle(principal.VerbApprove, s.approvePlan))
 	mux.Handle("POST /api/v1/plans/{id}/reject", s.handle(principal.VerbApprove, s.rejectPlan))
 
