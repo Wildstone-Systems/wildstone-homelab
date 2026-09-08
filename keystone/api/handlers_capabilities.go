@@ -78,6 +78,8 @@ type deploymentFacts struct {
 	// renders as an ordinary blank rather than a guess.
 	keystoneURL      string
 	chatAdapterImage string
+	// intakeURL is the household event endpoint, base plus path.
+	intakeURL string
 	// timezone is the household's clock, as Keystone was started with.
 	// Empty when it is the default "Local", which is not a zone anybody
 	// means and not an answer worth suggesting.
@@ -110,6 +112,9 @@ func (s *Server) gatherFacts() deploymentFacts {
 		return f
 	}
 	f.keystoneURL = s.APIURL
+	if s.APIURL != "" {
+		f.intakeURL = strings.TrimSuffix(s.APIURL, "/") + "/api/v1/household/events"
+	}
 	if s.HouseholdTimezone != "Local" {
 		f.timezone = s.HouseholdTimezone
 	}
@@ -162,6 +167,8 @@ func resolveParams(decls []pkgspec.ParamDecl, f deploymentFacts, installed map[s
 			v.Suggested = f.keystoneURL
 		case "chat_adapter_image":
 			v.Suggested = f.chatAdapterImage
+		case "household_intake_url":
+			v.Suggested = f.intakeURL
 		case "timezone":
 			v.Suggested = f.timezone
 		}

@@ -22,7 +22,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: documents-paperless
-  version: 1.0.1
+  version: 1.0.2
   capability: documents
   profile: paperless
 requires:
@@ -166,6 +166,18 @@ templates:
       env:
         PAPERLESS_REDIS: "redis://paperless-redis:6379"
         PAPERLESS_DBHOST: paperless-postgres
+        # The database credentials the postgres container was created
+        # with. Without them Paperless falls back to its own defaults —
+        # user "paperless", password "paperless" — while postgres holds
+        # the generated secret, so every start ended in:
+        #
+        #   FATAL: password authentication failed for user "paperless"
+        #
+        # Two containers in one package sharing a credential have to be
+        # told the SAME reference; setting it on one side only is a
+        # package that cannot start the app it installs.
+        PAPERLESS_DBUSER: paperless
+        PAPERLESS_DBPASS: "secret/paperless-postgres-password"
         PAPERLESS_TIKA_ENABLED: "1"
         PAPERLESS_TIKA_GOTENBERG_ENDPOINT: "http://paperless-gotenberg:3000"
         PAPERLESS_TIKA_ENDPOINT: "http://paperless-tika:9998"

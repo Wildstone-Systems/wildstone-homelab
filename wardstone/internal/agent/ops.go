@@ -389,12 +389,41 @@ func (a *Agent) writeManagedFile(op *wsv1.WriteManagedFile) (*wsv1.OpResult_Writ
 		mode &= 0o600
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// MkdirAll and WriteFile both apply the PROCESS UMASK to the mode
+	// they are given, and wardstoned runs with UMask=0077. Every mode
+	// chosen above was therefore silently discarded: a 0644 config landed
+	// 0600 inside a 0700 directory, exactly like the 0600 the branch
+	// above narrows secret-bearing files to. The distinction this
+	// function goes to some trouble to draw did not survive the write.
+	//
+	// The cost was a container that could not read its own configuration.
+	// Prometheus runs as nobody and Grafana as uid 472; both mount a
+	// managed config carrying no secret at all, and both crash-looped on
+	// "permission denied" while every Wildstone surface reported the
+	// capability installed. Authelia works only because its package pins
+	// PUID=0, which is a workaround for this and reads as a preference.
+	//
+	// So the mode is set explicitly, after creation and before the
+	// rename that publishes it. UMask stays where it is: it is a sane
+	// default for everything else this agent writes, and the point here
+	// is that a managed file's mode is a decision, not a leftover.
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "mkdir: %v", err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "chmod dir: %v", err)
 	}
 	tmp := path + ".wildstone-tmp"
 	if err := os.WriteFile(tmp, content, mode); err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "write: %v", err)
+	}
+	// On the tmp file, because rename carries the inode's mode across —
+	// setting it after the rename would leave a window in which the
+	// published file is readable by nobody, or by everybody.
+	if err := os.Chmod(tmp, mode); err != nil {
+		os.Remove(tmp)
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "chmod: %v", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)

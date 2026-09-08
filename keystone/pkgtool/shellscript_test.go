@@ -268,6 +268,19 @@ func runProvisioner(t *testing.T, script, url, password string, groups []string)
 	cmd := exec.Command("/bin/sh", sh)
 	cmd.Env = append(os.Environ(),
 		"LLDAP_URL="+url, "GROUPS_FILE="+list, "LLDAP_ADMIN_PASSWORD="+password,
+		// USERS_FILE too, even though this test is about GROUPS. Without
+		// it the script falls back to its shipped default and reads
+		// /etc/wildstone/lldap/users — the REAL one, on whatever machine
+		// the suite happens to run on.
+		//
+		// That passed everywhere by accident: on a build host the path
+		// does not exist, and on a deployment host the directory was
+		// mode 0700 so a non-root `[ -f ]` was simply false. The moment
+		// managed directories started landing 0755 as intended, the test
+		// found a real users file it could stat and not read, and failed
+		// on the host's permissions rather than on anything it asserts.
+		// A unit test must not depend on the machine's /etc.
+		"USERS_FILE="+filepath.Join(dir, "no-users-file"),
 		// The shipped default is 10 attempts at 2s apart. The failures
 		// exercised here are permanent, so waiting out the real retry
 		// budget would add 20s to the suite to observe the same exit.

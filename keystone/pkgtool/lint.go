@@ -155,6 +155,7 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 	for _, r := range rendered {
 		issues = append(issues, containerEnvIssues(r)...)
 		issues = append(issues, inertEnvIssues(r)...)
+		issues = append(issues, requiredEnvIssues(r)...)
 	}
 	issues = append(issues, manualStepIssues(pkg, rendered)...)
 	issues = append(issues, seedIssues(rendered)...)

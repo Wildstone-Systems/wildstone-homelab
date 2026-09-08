@@ -653,3 +653,99 @@ func sortedNames(m map[string]shipped) []string {
 	sort.Strings(out)
 	return out
 }
+
+// TestAPasswordSetOnADatabaseIsGivenToItsApp: when a package creates a
+// database with a generated password, something else in that package has
+// to be told the same secret.
+//
+// documents-paperless set POSTGRES_PASSWORD on its postgres container
+// and gave the app only PAPERLESS_DBHOST. Paperless fell back to its own
+// defaults — user "paperless", password "paperless" — while postgres
+// held the generated value, so every start ended in:
+//
+//	FATAL: password authentication failed for user "paperless"
+//
+// It lints clean, reconciles clean, and cannot work. The reference is
+// declared, mounted and materialized correctly; it is simply only on one
+// side of a conversation between two containers.
+//
+// Checked per package rather than per resource, because a single
+// container can say nothing about whether anyone is listening.
+func TestAPasswordSetOnADatabaseIsGivenToItsApp(t *testing.T) {
+	// The env names that CREATE a database credential, by image family.
+	creators := map[string]bool{
+		"POSTGRES_PASSWORD":          true,
+		"MYSQL_PASSWORD":             true,
+		"MARIADB_PASSWORD":           true,
+		"MONGO_INITDB_ROOT_PASSWORD": true,
+	}
+	checked := 0
+	for name, rendered := range renderShippedPackages(t) {
+		t.Run(name, func(t *testing.T) {
+			// Every secret reference this package's containers make.
+			refs := map[string]int{}
+			created := map[string]string{} // secret -> the container that creates it
+			for _, r := range rendered {
+				if r.Kind != resource.KindContainer || r.Container == nil {
+					continue
+				}
+				for k, v := range r.Container.Env {
+					ref, ok := strings.CutPrefix(strings.TrimSpace(v), "secret/")
+					if !ok {
+						continue
+					}
+					refs[ref]++
+					if creators[k] {
+						created[ref] = r.Metadata.Name
+					}
+				}
+			}
+			for ref, by := range created {
+				checked++
+				if refs[ref] < 2 {
+					t.Errorf("Container/%s creates a database with secret/%s and nothing else in this package "+
+						"references it. The app will fall back to its own default credentials and fail to "+
+						"authenticate; both sides of the connection need the same reference.", by, ref)
+				}
+			}
+		})
+	}
+	if checked == 0 {
+		t.Fatal("no package created a database credential — this test walked nothing")
+	}
+}
+
+// TestEveryRequiredParamCanBeAnswered: a required param the operator
+// must invent needs a description, because the install form renders a
+// name and a description and cannot see this repository.
+//
+// ParamDecl.Description exists for exactly this — "admin_domain *" is an
+// unanswerable question, and the explanation was sitting three lines
+// away in a YAML comment. Two packages had drifted back: home-automation
+// asked for node, intake_url and people with no description on any of
+// them, and ingress asked which address its admin surface should bind
+// with the reasoning in a comment above.
+//
+// A param with a `source` is exempt: the deployment answers it, so the
+// form offers a value rather than an empty box.
+func TestEveryRequiredParamCanBeAnswered(t *testing.T) {
+	checked := 0
+	for name, sp := range walkShipped(t) {
+		t.Run(name, func(t *testing.T) {
+			for _, p := range sp.pkg.Params {
+				if !p.Required || p.Source != "" {
+					continue
+				}
+				checked++
+				if strings.TrimSpace(p.Description) == "" {
+					t.Errorf("required param %q has no description. The install form shows its NAME and "+
+						"nothing else, so an operator sees %q and an empty box; a comment above it in "+
+						"package.yaml is not something the form can read.", p.Name, p.Name+" *")
+				}
+			}
+		})
+	}
+	if checked == 0 {
+		t.Fatal("no required param needed a description — this test walked nothing")
+	}
+}
