@@ -209,6 +209,60 @@ func urlIsSafe(match string) bool {
 	return true
 }
 
+// absPathScanRegexp finds an absolute POSIX filesystem path.
+//
+// Sheltered for exactly the reason URLs and digest pins are: a path is
+// STRUCTURE, not a value. The base64 shape rule is
+// `[A-Za-z0-9+/_-]{24,}`, and "/" is in that class — so every absolute
+// path of 24 characters or more looked like token material and was
+// redacted.
+//
+// That was not a cosmetic failure. Redaction is a serialization property
+// applied to every API response (ADR-W007 A5), and the console's install
+// form uses the values the API serves as the values it SUBMITS. So a
+// package's own default path came back as "/[REDACTED]", the form
+// offered it, the operator accepted what they were shown, and
+// "/[REDACTED]" was written into desired state as a real bind mount. The
+// node then refused it — correctly, it resolves outside every managed
+// prefix — and the install failed forever, three ticks at a time.
+//
+// Four shipped packages could not be installed with their own defaults:
+// audiobooks-audiobookshelf, books-calibre-web, books-kavita and
+// music-navidrome. Every one of them is a media package, because media
+// packages are the ones whose paths are long.
+//
+// The character class deliberately excludes "+" and "=": they are base64
+// alphabet and padding, they do not appear in ordinary paths, and
+// leaving them out means a base64 blob that happens to start with "/"
+// is not matched here at all.
+var absPathScanRegexp = regexp.MustCompile(`/[A-Za-z0-9._/-]{2,}`)
+
+// pathIsSafe judges a candidate path the way urlIsSafe judges a URL:
+// split it into segments and decline the shelter if any segment is
+// itself secret-shaped. A path is a sequence of names, and a name is not
+// a value — but "/" + one long base64 run is a value wearing a slash.
+func pathIsSafe(match string) bool {
+	segments := strings.Split(strings.Trim(match, "/"), "/")
+	if len(segments) == 0 {
+		return false
+	}
+	for _, seg := range segments {
+		if seg == "" {
+			continue
+		}
+		if hexTokenRegexp.MatchString(seg) {
+			return false
+		}
+		for _, m := range base64TokenRegexp.FindAllString(seg, -1) {
+			if isSeparatedIdentifier(m) {
+				continue // a name, not a value
+			}
+			return false
+		}
+	}
+	return true
+}
+
 func kindNames() []string {
 	kinds := resource.Kinds()
 	names := make([]string, 0, len(kinds))
@@ -319,6 +373,15 @@ const secretRefSentinelMarker = "\x00SECROUND\x00"
 // marker with references would have quietly exempted it from the one rule
 // that catches a credential by its KEY rather than by its shape.
 const urlSentinelMarker = "\x00URLROUND\x00"
+
+// pathSentinelMarker shelters absolute filesystem paths.
+//
+// Their own marker rather than the secret-reference one, for the reason
+// URLs have theirs: a value restored from the reference marker survives
+// kvSecretRegexp, and a path sitting under a credential-shaped key is
+// still a credential. Under this marker the keyword rule replaces the
+// whole value and the sentinel is simply not here to restore.
+const pathSentinelMarker = "\x00PATHROUND\x00"
 
 // SecretShaped reports whether s contains a secret-VALUE shape (long hex
 // or base64 runs), ignoring sheltered forms — secret/<name> references
@@ -431,6 +494,18 @@ func String(s string) string {
 		return fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, len(refs)-1)
 	})
 
+	var paths []string
+	// Absolute filesystem paths (see absPathScanRegexp). Last of the
+	// shelters, so a path that is part of a URL or a digest pin has
+	// already been taken by the more specific rule that understands it.
+	protected = absPathScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
+		if !pathIsSafe(m) {
+			return m
+		}
+		paths = append(paths, m)
+		return fmt.Sprintf("%s%d\x00", pathSentinelMarker, len(paths)-1)
+	})
+
 	protected = hexTokenRegexp.ReplaceAllString(protected, Placeholder)
 	// An identifier is a name, not a value, and must survive to be read
 	// (see isSeparatedIdentifier). This declines the replacement in place
@@ -466,6 +541,12 @@ func String(s string) string {
 	for i, u := range urls {
 		placeholder := fmt.Sprintf("%s%d\x00", urlSentinelMarker, i)
 		protected = strings.ReplaceAll(protected, placeholder, u)
+	}
+	// Same for paths, and for the same reason: one the keyword rule
+	// replaced is not here to restore.
+	for i, path := range paths {
+		placeholder := fmt.Sprintf("%s%d\x00", pathSentinelMarker, i)
+		protected = strings.ReplaceAll(protected, placeholder, path)
 	}
 	return protected
 }
