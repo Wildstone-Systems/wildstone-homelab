@@ -89,7 +89,7 @@ import (
 //	it refuses Exec(string). A pre-minor-12 agent ignores all three
 //	fields — a UDP port is published as TCP, a device is absent, a
 //	capability is not granted — and the app reports what it is missing.
-const ProtocolMinor = 13
+const ProtocolMinor = 14
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

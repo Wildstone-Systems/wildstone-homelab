@@ -1837,7 +1837,30 @@ type EnsureContainer struct {
 	// a closed allowlist and refuses everything else; SYS_ADMIN is not on
 	// it and never will be, for the reason Exec(string) is not an op.
 	// A pre-minor-12 agent ignores this field.
-	CapAdd        []string `protobuf:"bytes,11,rep,name=cap_add,json=capAdd,proto3" json:"cap_add,omitempty"`
+	CapAdd []string `protobuf:"bytes,11,rep,name=cap_add,json=capAdd,proto3" json:"cap_add,omitempty"`
+	// Hostnames the container must be able to RESOLVE, which the node
+	// resolves on its own behalf and writes into the container's
+	// /etc/hosts (protocol minor 14).
+	//
+	// This exists for one shape of problem: a name that is correct for the
+	// browser but unresolvable from inside a container. Under the tailnet
+	// ingress posture the OIDC issuer is the node's MagicDNS name, because
+	// an issuer must match what the browser saw byte for byte (ADR-W019
+	// A10) — but Docker's embedded DNS forwards to the host's EXTERNAL
+	// nameservers and never learns a .ts.net name, so every server-side
+	// discovery and token exchange fails with "Name or service not known"
+	// and the app answers 500 to a login it never got to attempt.
+	//
+	// The node resolves these rather than Keystone supplying addresses,
+	// because the node is where the name works: MagicDNS is configured on
+	// the host. A name that does not resolve is skipped rather than
+	// failing the container — the app then reports the same error it would
+	// have anyway, which is a better failure than a service that will not
+	// start.
+	//
+	// A pre-minor-14 agent ignores this field, so the container starts
+	// exactly as it does today.
+	HostAliases   []string `protobuf:"bytes,12,rep,name=host_aliases,json=hostAliases,proto3" json:"host_aliases,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1945,6 +1968,13 @@ func (x *EnsureContainer) GetDevices() []*DeviceMapping {
 func (x *EnsureContainer) GetCapAdd() []string {
 	if x != nil {
 		return x.CapAdd
+	}
+	return nil
+}
+
+func (x *EnsureContainer) GetHostAliases() []string {
+	if x != nil {
+		return x.HostAliases
 	}
 	return nil
 }
@@ -5739,7 +5769,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x06result\"P\n" +
 	"\aOpError\x12+\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x17.wardstone.v1.ErrorCodeR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xb4\x04\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xd7\x04\n" +
 	"\x0fEnsureContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x128\n" +
@@ -5752,7 +5782,8 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\anetwork\x18\t \x01(\tR\anetwork\x125\n" +
 	"\adevices\x18\n" +
 	" \x03(\v2\x1b.wardstone.v1.DeviceMappingR\adevices\x12\x17\n" +
-	"\acap_add\x18\v \x03(\tR\x06capAdd\x1a6\n" +
+	"\acap_add\x18\v \x03(\tR\x06capAdd\x12!\n" +
+	"\fhost_aliases\x18\f \x03(\tR\vhostAliases\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +

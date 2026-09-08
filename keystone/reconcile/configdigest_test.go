@@ -47,8 +47,8 @@ func TestConfigChangeChangesTheSpecHash(t *testing.T) {
 	before := managedConfigContents(cfgPrefix, byKey(cfgFile("authelia-configuration", "identity", "configuration.yml", "theme: light\n")))
 	after := managedConfigContents(cfgPrefix, byKey(cfgFile("authelia-configuration", "identity", "configuration.yml", "theme: dark\n")))
 
-	h1 := specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, before))
-	h2 := specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, after))
+	h1 := specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, before), nil)
+	h2 := specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, after), nil)
 	if h1 == h2 {
 		t.Fatal("editing a mounted config left the spec hash unchanged: the agent will treat the " +
 			"container as converged and never restart it, so the new config is never read")
@@ -69,8 +69,8 @@ func TestNewOidcClientChangesAutheliaSpecHash(t *testing.T) {
 		OidcClient: &resource.OidcClientSpec{ClientId: "immich", SecretRef: "secret/immich-oidc"},
 	}))
 
-	if specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, none)) ==
-		specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, one)) {
+	if specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, none), nil) ==
+		specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, one), nil) {
 		t.Fatal("registering an OidcClient left Authelia's spec hash unchanged: the client is written " +
 			"to clients.yml and the running provider never learns about it")
 	}
@@ -90,7 +90,7 @@ func TestContainerWithNoManagedConfigIsUnaffected(t *testing.T) {
 	}
 
 	const beforeThisChange = "e2d3456039e9a85a"
-	if got := specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, contents)); got != beforeThisChange {
+	if got := specHash(spec, ContainerNetwork, configDigest(cfgPrefix, spec, contents), nil); got != beforeThisChange {
 		t.Errorf("spec hash for a config-less container changed to %q (was %q): every such container "+
 			"in the fleet would be replaced once for no reason", got, beforeThisChange)
 	}
