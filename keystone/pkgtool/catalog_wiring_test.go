@@ -653,3 +653,64 @@ func sortedNames(m map[string]shipped) []string {
 	sort.Strings(out)
 	return out
 }
+
+// TestAPasswordSetOnADatabaseIsGivenToItsApp: when a package creates a
+// database with a generated password, something else in that package has
+// to be told the same secret.
+//
+// documents-paperless set POSTGRES_PASSWORD on its postgres container
+// and gave the app only PAPERLESS_DBHOST. Paperless fell back to its own
+// defaults — user "paperless", password "paperless" — while postgres
+// held the generated value, so every start ended in:
+//
+//	FATAL: password authentication failed for user "paperless"
+//
+// It lints clean, reconciles clean, and cannot work. The reference is
+// declared, mounted and materialized correctly; it is simply only on one
+// side of a conversation between two containers.
+//
+// Checked per package rather than per resource, because a single
+// container can say nothing about whether anyone is listening.
+func TestAPasswordSetOnADatabaseIsGivenToItsApp(t *testing.T) {
+	// The env names that CREATE a database credential, by image family.
+	creators := map[string]bool{
+		"POSTGRES_PASSWORD":          true,
+		"MYSQL_PASSWORD":             true,
+		"MARIADB_PASSWORD":           true,
+		"MONGO_INITDB_ROOT_PASSWORD": true,
+	}
+	checked := 0
+	for name, rendered := range renderShippedPackages(t) {
+		t.Run(name, func(t *testing.T) {
+			// Every secret reference this package's containers make.
+			refs := map[string]int{}
+			created := map[string]string{} // secret -> the container that creates it
+			for _, r := range rendered {
+				if r.Kind != resource.KindContainer || r.Container == nil {
+					continue
+				}
+				for k, v := range r.Container.Env {
+					ref, ok := strings.CutPrefix(strings.TrimSpace(v), "secret/")
+					if !ok {
+						continue
+					}
+					refs[ref]++
+					if creators[k] {
+						created[ref] = r.Metadata.Name
+					}
+				}
+			}
+			for ref, by := range created {
+				checked++
+				if refs[ref] < 2 {
+					t.Errorf("Container/%s creates a database with secret/%s and nothing else in this package "+
+						"references it. The app will fall back to its own default credentials and fail to "+
+						"authenticate; both sides of the connection need the same reference.", by, ref)
+				}
+			}
+		})
+	}
+	if checked == 0 {
+		t.Fatal("no package created a database credential — this test walked nothing")
+	}
+}

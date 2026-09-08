@@ -26,7 +26,7 @@ dashboard 1.0.1 c0a5ca5341926568
 dashboard-homarr 1.0.1 2749995ac7e10227
 dns-adguard 1.0.1 64b38a3352ca358e
 dns-pihole 1.0.1 580d2adc5d34c138
-documents-paperless 1.0.1 ccb94de323540fc0
+documents-paperless 1.0.2 a258d873b4e143bc
 downloads-qbittorrent 1.0.2 663381e9d95edce0
 feeds-freshrss 1.0.1 8a75bb28ea9c6465
 files-filebrowser 1.0.1 39f776ac3cd55073
@@ -38,11 +38,11 @@ ingress 1.0.1 ab355e7bb4ab2f6d
 ingress-tailnet 1.0.1 59e7276e5bb0a51c
 ingress-tailnet-public 1.0.1 16dea82d8a073bdf
 ingress-tailnet-ts 1.1.1 61c1e5cfa0848b4b
-inventory-homebox 1.0.1 caba2595c946fbb2
+inventory-homebox 1.0.2 0895c8362291f964
 mail-roundcube 1.0.3 263209fecaf58b8d
 media-jellyfin 1.0.2 b1a5557b5043f296
 media-plex 1.0.2 5b792e3919a95d8a
-metrics-grafana 1.0.1 07196d74bdfc0c7b
+metrics-grafana 1.0.2 a6451806df20268c
 metrics-prometheus 1.0.0 9a93297824a6b973
 monitoring 1.0.0 69713ab679cfdbd7
 monitoring-beszel 1.0.1 cbbd3ba4052fdc76
@@ -57,7 +57,7 @@ photos-immich 1.0.1 ca6bb9afd82a91af
 recipes-mealie 1.0.1 37f0c771bc7816f5
 requests-seerr 1.0.1 d4c08d771b164c6b
 subtitles-bazarr 1.0.2 e3556aa2a7bd503e
-sync-syncthing 1.0.1 5c43a6e9070c78ca
+sync-syncthing 1.0.2 5a20ec6bdab54726
 tools-it-tools 1.0.0 08d30d25834cb937
 tv-sonarr 1.0.2 acb8a17adf7fac6d
 vpn-gluetun 1.0.1 6e37d2b00dace21f

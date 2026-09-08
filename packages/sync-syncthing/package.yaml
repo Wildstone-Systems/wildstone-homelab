@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: sync-syncthing
-  version: 1.0.1
+  version: 1.0.2
   capability: file-sync
   profile: syncthing
 requires:
@@ -66,7 +66,17 @@ templates:
         - "22000:22000/udp"
         - "21027:21027/udp"
       mounts:
-        - { source: syncthing-config, target: /var/syncthing/config }
+        # /var/syncthing, not /var/syncthing/config — the image's HOME.
+        #
+        # The entrypoint runs `chown "$PUID:$PGID" "$HOME"` and drops to
+        # that uid, and that chown is NOT recursive. Mounted one level
+        # deeper, Docker creates /var/syncthing/config root-owned, the
+        # chown above it never reaches inside, and Syncthing exits on its
+        # first write: "save cert: open /var/syncthing/config/cert.pem:
+        # permission denied". Mounted at HOME the same chown lands on the
+        # volume root, and config/ is created inside it by a process that
+        # owns the directory.
+        - { source: syncthing-config, target: /var/syncthing }
         - { source: "{{ .Params.sync_path }}", target: /var/syncthing/data }
       restart: unless-stopped
   - |

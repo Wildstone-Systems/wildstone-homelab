@@ -203,13 +203,20 @@ Put the answers in the package header, where the next author finds them.
    examples. Getting this wrong is invisible: an env var the app ignores
    still reconciles, still appears in `docker inspect`, and still does
    nothing.
-2. **Does the image declare a `HEALTHCHECK`?** `docker inspect` answers
+2. **What does the app refuse to start without?** Run the image with
+   exactly the environment your package gives it, and read what happens
+   — before believing it works. `inventory-homebox` shipped without
+   `HBOX_AUTH_API_KEY_PEPPER`, which Homebox panics on before opening
+   its database; the container reconciled, the capability read as
+   installed, and it crash-looped 58 times behind a 502. Record what you
+   find in `keystone/pkgtool.requiredEnv`, the mirror of `inertEnv`.
+3. **Does the image declare a `HEALTHCHECK`?** `docker inspect` answers
    it. Without one, "the container is running" is the strongest thing
    Wildstone can say — and for an s6/linuxserver.io image that stays
    true after the app inside has died. Say so in the header.
-3. **What does the app need to know about its own address?** If
+4. **What does the app need to know about its own address?** If
    anything, build it with `origin`, never concatenation — see below.
-4. **What claims does it need from the identity provider?** Open WebUI
+5. **What claims does it need from the identity provider?** Open WebUI
    refuses a login carrying no `email` claim. That is a fact about Open
    WebUI *and* a constraint on how the directory is provisioned.
 

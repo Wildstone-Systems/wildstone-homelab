@@ -23,7 +23,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: metrics-grafana
-  version: 1.0.1
+  version: 1.0.2
   capability: metrics
   profile: grafana
 requires:
@@ -80,7 +80,11 @@ templates:
         enabled = true
         name = Authelia
         client_id = grafana
-        client_secret = {{ .Resolved.OidcSecretRef }}
+        # client_secret is NOT here: see GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
+        # in the container's env. A secret reference in this file makes it
+        # a materialized file, which the node writes 0600 root-owned — and
+        # Grafana runs as uid 472, so it could not read its own config and
+        # crash-looped on "permission denied".
         scopes = openid profile email groups
         auth_url = {{ .Resolved.IssuerURL }}/api/oidc/authorization
         token_url = {{ .Resolved.IssuerURL }}/api/oidc/token
@@ -100,11 +104,21 @@ templates:
         GF_SECURITY_ADMIN_USER: admin
         GF_SECURITY_ADMIN_PASSWORD: "secret/grafana-admin-password"
         GF_USERS_ALLOW_SIGN_UP: "false"
-        # The OAuth settings live in the managed grafana.ini below, not
-        # here: Grafana's env names for them include TOKEN_URL, which the
-        # policy engine reads as credential-shaped and refuses as a
-        # literal (§9.2-3). A config file carries the same settings and
-        # resolves the one real secret reference on the node.
+        # The one OAuth setting that is a SECRET comes through the
+        # environment, as a reference — the same shape as the admin
+        # password above, and what §9.2-3 asks for. The rule refuses a
+        # credential-shaped env carrying a LITERAL; a secret/<name>
+        # reference is the sanctioned form, which the comment this
+        # replaces had read as a blanket refusal.
+        #
+        # It matters because the alternative put the reference in
+        # grafana.ini, and a file carrying a secret reference is
+        # materialized — written 0600 and root-owned, which Grafana,
+        # running as uid 472, cannot read. The rest of the OAuth settings
+        # stay in that file: their env names include TOKEN_URL, which the
+        # same rule reads as credential-shaped, and a URL is not a secret
+        # to reference.
+        GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
         GF_PATHS_CONFIG: /etc/wildstone/metrics/grafana.ini
       mounts:
         - { source: grafana-data, target: /var/lib/grafana }

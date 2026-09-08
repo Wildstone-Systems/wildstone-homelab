@@ -327,6 +327,70 @@ and is not made worse by it, but `wild secret rotate <capability>-oidc`
 should be considered unsafe until the reconciler can be told that a
 secret version moved.
 
+### A12. What an image REQUIRES is written down beside what it ignores
+
+`inventory-homebox` shipped without `HBOX_AUTH_API_KEY_PEPPER`. Homebox
+panics on it before it opens its database:
+
+    panic: auth.api_key_pepper must be set to at least 32 bytes
+
+The Container reconciled, Docker reported it, the capability read as
+installed — and the app crash-looped 58 times behind a 502. A package
+that cannot start the app it installs is this ADR's own A1 in its
+purest form, and it shipped anyway.
+
+`pkgtool.requiredEnv` is the mirror of `inertEnv` (A5), and the two are
+the same knowledge from opposite ends. A5 catches configuring an app
+through a door it does not have; this catches failing to configure it
+through the door it insists on. Neither is derivable from a manifest:
+the only source is the app's startup path, read by someone integrating
+it, and this is where that reading gets written down.
+
+The check is trivial once the row exists, which is the point. What is
+not trivial is noticing — so the pre-write question in Part B gains one:
+**what does this app refuse to start without?** Run the image with the
+package's environment and nothing else before believing the answer.
+
+### A13. Installing every package is the check nothing else performs
+
+Twenty-three packages were installed on a live node, probed on their own
+port and through the front door, and removed again. Eighteen worked.
+Five could not start, and each had shipped, linted clean, and reported
+itself installed:
+
+| package | fault |
+| --- | --- |
+| `inventory-homebox` | never set `HBOX_AUTH_API_KEY_PEPPER`; the app panics before opening its database |
+| `metrics-prometheus` | ran as `nobody` against a managed config the agent wrote root-only |
+| `metrics-grafana` | put its OIDC secret in a config file, which makes that file 0600, which uid 472 cannot read |
+| `sync-syncthing` | mounted its volume one level below the directory the image's entrypoint chowns |
+| `documents-paperless` | set `POSTGRES_PASSWORD` on the database and never told the app what it was |
+
+Two of those are packages configuring an app through a door it does not
+have (A1's shape). Two are permissions. One — paperless — is a package
+that could never have worked for anybody: the credential was declared,
+materialized and delivered correctly, to one side of a conversation
+between two containers.
+
+The sweep also found what no package could: a Route delete asserted its
+file read back EMPTY while writing a tombstone comment, so the gate
+never passed, the plan halted, and the Container delete after it never
+ran. Every removal on every deployment had been leaving a container
+behind. Nothing in the catalog could have surfaced that, because it is
+not in the catalog.
+
+So: **install it.** Lint is necessary and it is not sufficient; the only
+check that catches "this cannot start" is starting it. The harness is
+four steps and worth keeping — enable, wait for readiness (a declared
+healthcheck, or retries where there is none), probe the container's own
+port AND the front door, remove and confirm it went.
+
+Two cautions learned by getting them wrong. Probing at "container
+running" tested a Java app three seconds into a forty-second boot and
+reported a fault that was not there. And a 302 at the front door is
+CORRECT for a proxy-auth route — it is the Authelia redirect — so a
+sweep that flags non-200 flags most of the catalog.
+
 ---
 
 # Part B — Guidance (not binding, but this is the shape of the work)
@@ -363,7 +427,12 @@ author will find them:
 2. **Which of those settings survive a restart, and which are read once
    at install?** A setting stored in the app's database is not
    Wildstone's to state unless a file overrides it.
-3. **Does the image declare a `HEALTHCHECK`?** `docker inspect` answers
+3. **What does it refuse to start without?** Run the image with exactly
+   the environment the package gives it and read what happens. Homebox
+   panics on a missing `HBOX_AUTH_API_KEY_PEPPER`; the package shipped
+   without it and the crash-loop was invisible behind a 502. Record what
+   you find in `pkgtool.requiredEnv`.
+4. **Does the image declare a `HEALTHCHECK`?** `docker inspect` answers
    it. If not, say so in the header (A6).
 4. **What does this app need to know about its own address?** If
    anything, it is `origin`, never concatenation (A4).
