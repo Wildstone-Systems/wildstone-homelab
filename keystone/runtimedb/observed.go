@@ -19,9 +19,20 @@ type Observed struct {
 	// plan is waiting for a human, not because anything failed (F75).
 	// Distinct from Healthy so a surface can say "waiting for you"
 	// rather than colouring it the same red as a broken service.
-	AwaitingApproval bool      `json:"awaitingApproval,omitempty"`
-	Detail           string    `json:"detail,omitempty"`
-	UpdatedAt        time.Time `json:"updatedAt"`
+	AwaitingApproval bool `json:"awaitingApproval,omitempty"`
+	// AppHealth is the container's OWN healthcheck, verbatim from Docker
+	// ("starting", "healthy", "unhealthy"), and empty when the image
+	// declares none.
+	//
+	// Distinct from Healthy for the reason AwaitingApproval is: it
+	// answers a different question. Healthy means Wildstone got the
+	// container into the shape desired state asked for; this means the
+	// thing inside it says it can serve. Empty is NO OPINION and must
+	// never be rendered as a problem — most images declare no
+	// healthcheck at all.
+	AppHealth string    `json:"appHealth,omitempty"`
+	Detail    string    `json:"detail,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // UpsertObserved records the latest observation for (kind, name).
@@ -30,13 +41,14 @@ func (db *DB) UpsertObserved(o Observed) error {
 		return fmt.Errorf("runtimedb: observed kind and name required")
 	}
 	_, err := db.sql.Exec(
-		`INSERT INTO observed (kind, name, node, healthy, detail, awaiting_approval, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO observed (kind, name, node, healthy, detail, awaiting_approval, app_health, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (kind, name) DO UPDATE SET
 		   node = excluded.node, healthy = excluded.healthy,
 		   detail = excluded.detail, awaiting_approval = excluded.awaiting_approval,
+		   app_health = excluded.app_health,
 		   updated_at = excluded.updated_at`,
-		o.Kind, o.Name, o.Node, boolInt(o.Healthy), o.Detail, boolInt(o.AwaitingApproval), now())
+		o.Kind, o.Name, o.Node, boolInt(o.Healthy), o.Detail, boolInt(o.AwaitingApproval), o.AppHealth, now())
 	if err != nil {
 		return fmt.Errorf("runtimedb: upserting observed %s/%s: %w", o.Kind, o.Name, err)
 	}
@@ -56,7 +68,7 @@ func (db *DB) DeleteObserved(kind, name string) error {
 // ListObserved returns every observation, (kind, name)-ordered.
 func (db *DB) ListObserved() ([]Observed, error) {
 	rows, err := db.sql.Query(
-		`SELECT kind, name, node, healthy, detail, awaiting_approval, updated_at FROM observed ORDER BY kind, name`)
+		`SELECT kind, name, node, healthy, detail, awaiting_approval, app_health, updated_at FROM observed ORDER BY kind, name`)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing observed: %w", err)
 	}
@@ -66,7 +78,7 @@ func (db *DB) ListObserved() ([]Observed, error) {
 		var o Observed
 		var healthy, awaiting int
 		var ts string
-		if err := rows.Scan(&o.Kind, &o.Name, &o.Node, &healthy, &o.Detail, &awaiting, &ts); err != nil {
+		if err := rows.Scan(&o.Kind, &o.Name, &o.Node, &healthy, &o.Detail, &awaiting, &o.AppHealth, &ts); err != nil {
 			return nil, err
 		}
 		o.Healthy, o.AwaitingApproval = healthy != 0, awaiting != 0

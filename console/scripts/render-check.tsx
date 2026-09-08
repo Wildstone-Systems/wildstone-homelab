@@ -19,7 +19,7 @@ import { Chat, IssuedCode } from "../src/views/Chat";
 import { Freshness, Shell, TokenGate } from "../src/App";
 import { HomeView, buildProblems } from "../src/views/Home";
 import { ServicesView, InstalledTile, AvailableRow, matching, RemoveForm, ownerCounts } from "../src/views/Services";
-import { groupServices, upstreamContainer } from "../src/services";
+import { groupServices, upstreamContainer , healthOf } from "../src/services";
 import { eventKind } from "../src/ui/HourChart";
 import type { ConsoleSnapshot } from "../src/state";
 import type { BackupRun, EventRow, Observed, PackageView, PlanRecord, ResourceView } from "../src/api";
@@ -126,6 +126,32 @@ const installedPkg = {
 const installedForm = renderToString(h(InstallForm, { pkg: installedPkg as never, onDone: () => {} }));
 check("installed value wins over the package default", installedForm.includes('value="CST"'), installedForm.slice(0, 500));
 check("the package default is not offered instead", !installedForm.includes('value="UTC"'), installedForm.slice(0, 500));
+
+// Converged is not the same as serving. Wildstone's "healthy" means the
+// container matches desired state; whether the app inside can answer
+// anybody is a different question, and only the app can answer it.
+//
+// open-webui was converged and refusing connections at the same time,
+// for several minutes, while every surface read 0 unhealthy and the
+// dashboard offered a link that would not load.
+{
+  const conv = (appHealth?: string, healthy = true) =>
+    healthOf({ kind: "Container", name: "c", healthy, appHealth } as never);
+
+  check("an app still starting reads amber, not green",
+    conv("starting").health === "warn" && conv("starting").state === "starting up",
+    JSON.stringify(conv("starting")));
+  check("a converged container whose app is unhealthy is not called healthy",
+    conv("unhealthy").health === "warn" && conv("unhealthy").state === "running, not ready",
+    JSON.stringify(conv("unhealthy")));
+  // Most images declare no healthcheck. Silence is not a problem.
+  check("no healthcheck reads healthy", conv(undefined).health === "ok", JSON.stringify(conv(undefined)));
+  check("a healthy app reads healthy", conv("healthy").health === "ok", JSON.stringify(conv("healthy")));
+  // A container that is NOT converged is still the reconciler's problem,
+  // whatever the app thinks of itself.
+  check("unconverged stays red regardless of the app's opinion",
+    conv("healthy", false).health === "bad", JSON.stringify(conv("healthy", false)));
+}
 
 const list = renderToString(h(Services));
 check("Services renders without throwing", list.length > 0);

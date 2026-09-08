@@ -1,0 +1,16 @@
+-- Distinguish "Wildstone is finished" from "the app is ready".
+--
+-- healthy means CONVERGED: the container matches desired state. That is
+-- the reconciler's question and the right one for it to ask. It is not
+-- the operator's question, which is whether the service works.
+--
+-- open-webui was installed and every surface read 0 unhealthy while
+-- Docker's own healthcheck said "unhealthy" for several minutes — the
+-- app was downloading a model and refusing connections. Nothing was
+-- wrong, and nothing said what was happening either. The dashboard
+-- offered a link to a service that would not answer.
+--
+-- app_health is the container's own opinion, verbatim from Docker:
+-- "starting", "healthy", "unhealthy", or empty when the image declares
+-- no healthcheck. Empty is "no opinion" — never "unhealthy".
+ALTER TABLE observed ADD COLUMN app_health TEXT NOT NULL DEFAULT '';

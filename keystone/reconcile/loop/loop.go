@@ -420,6 +420,11 @@ func (l *Loop) recordObserved(g nodeGroup, outcome *reconcile.Outcome) {
 		o := runtimedb.Observed{
 			Kind: string(r.Kind), Name: r.Metadata.Name, Node: g.node,
 			Healthy: true,
+			// The application's own opinion, independent of whether
+			// Wildstone considers this converged. A container can be
+			// exactly what desired state asked for and still be
+			// downloading a model and refusing connections.
+			AppHealth: outcome.AppHealth[key],
 		}
 		if action, needsWork := planned[key]; needsWork && !converged[key] {
 			o.Healthy = false

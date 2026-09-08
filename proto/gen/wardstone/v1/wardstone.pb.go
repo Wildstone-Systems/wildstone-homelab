@@ -2826,8 +2826,27 @@ type InspectContainerResult struct {
 	// every other state, including the states where nothing has run at
 	// all. Never read it without checking status first — a zero here is
 	// "no information" far more often than it is "succeeded".
-	Status        string `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
-	ExitCode      int32  `protobuf:"varint,5,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	Status   string `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	ExitCode int32  `protobuf:"varint,5,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	// The APPLICATION'S own opinion of itself: Docker's State.Health.Status
+	// verbatim — "starting", "healthy", "unhealthy" — and empty when the
+	// image declares no healthcheck (protocol minor 16).
+	//
+	// Distinct from `running` and `status` because it answers a different
+	// question. Those say whether Wildstone got the container into the
+	// shape desired state asked for; this says whether the thing inside it
+	// is ready to serve anybody. A container can be running, converged and
+	// reported healthy by every surface while the app inside is still
+	// building an index and refusing connections — which is exactly what
+	// open-webui did on its first boot, for several minutes, while the
+	// dashboard read 0 unhealthy.
+	//
+	// Verbatim rather than an enum, for the same reason `status` is: the
+	// engine owns this vocabulary, and a mapping kept in this repo is a
+	// mapping that goes stale. An agent older than minor 16 leaves it
+	// empty, which is indistinguishable from "no healthcheck defined" and
+	// must be read as "no opinion" either way.
+	AppHealth     string `protobuf:"bytes,6,opt,name=app_health,json=appHealth,proto3" json:"app_health,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2895,6 +2914,13 @@ func (x *InspectContainerResult) GetExitCode() int32 {
 		return x.ExitCode
 	}
 	return 0
+}
+
+func (x *InspectContainerResult) GetAppHealth() string {
+	if x != nil {
+		return x.AppHealth
+	}
+	return ""
 }
 
 type PruneImages struct {
@@ -5980,13 +6006,15 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0fmem_usage_bytes\x18\x02 \x01(\x04R\rmemUsageBytes\x12&\n" +
 	"\x0fmem_limit_bytes\x18\x03 \x01(\x04R\rmemLimitBytes\"&\n" +
 	"\x10InspectContainer\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"\x82\x02\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"\xa1\x02\n" +
 	"\x16InspectContainerResult\x12\x18\n" +
 	"\arunning\x18\x01 \x01(\bR\arunning\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12H\n" +
 	"\x06labels\x18\x03 \x03(\v20.wardstone.v1.InspectContainerResult.LabelsEntryR\x06labels\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\x1b\n" +
-	"\texit_code\x18\x05 \x01(\x05R\bexitCode\x1a9\n" +
+	"\texit_code\x18\x05 \x01(\x05R\bexitCode\x12\x1d\n" +
+	"\n" +
+	"app_health\x18\x06 \x01(\tR\tappHealth\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\r\n" +

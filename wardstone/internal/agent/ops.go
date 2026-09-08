@@ -734,6 +734,14 @@ func (a *Agent) inspectContainer(ctx context.Context, op *wsv1.InspectContainer)
 		Labels:   ci.Config.Labels,
 		Status:   ci.State.Status,
 		ExitCode: ci.State.ExitCode,
+		AppHealth: func() string {
+			// Empty when the image declares no healthcheck, which is not
+			// the same as unhealthy and must never be read as it.
+			if ci.State.Health == nil {
+				return ""
+			}
+			return ci.State.Health.Status
+		}(),
 	}}, nil
 }
 
