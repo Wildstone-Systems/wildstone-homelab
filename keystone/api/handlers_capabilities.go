@@ -365,6 +365,57 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 	return out, http.StatusOK, nil
 }
 
+// droppedByUpgrade is what this capability owns today that its new
+// expansion no longer produces.
+//
+// Installing over an existing capability only ever added: the proposal
+// carried Put and nothing else, so a resource the previous version
+// declared and the new one does not simply stayed. home-assistant 1.1.0
+// replaced a mounted ConfigFile with seeded files, and after the upgrade
+// the statefile still held configfile/home-assistant-wildstone —
+// reconciled forever, written to disk forever, mounted by nothing.
+//
+// Harmless there, and not harmless in general: the same gap leaves a
+// Route serving a container the package has dropped, or a Job running
+// against a service that no longer exists. An upgrade that does not
+// converge to the new package's definition is not an upgrade.
+//
+// DATA IS NEVER PROPOSED FOR DELETION. Volumes and seeded files belong
+// to the household from the moment they land (ADR-W004 A4, ADR-W029 A2)
+// — and a Volume delete cannot apply at all, so proposing one would fail
+// the whole plan every tick until F60 set it aside, taking the rest of
+// the upgrade with it. A package that stops declaring a volume leaves
+// the data exactly where it is.
+func droppedByUpgrade(capName string, current, rendered []resource.Resource) []plan.DeletionRef {
+	owner := "capability/" + capName
+	type key struct{ kind, name string }
+	produced := map[key]bool{}
+	for _, r := range rendered {
+		produced[key{string(r.Kind), r.Metadata.Name}] = true
+	}
+	var out []plan.DeletionRef
+	for _, r := range current {
+		if r.Metadata.Owner != owner {
+			continue
+		}
+		if r.Kind == resource.KindVolume || r.Kind == resource.KindSeedFile {
+			continue
+		}
+		if produced[key{string(r.Kind), r.Metadata.Name}] {
+			continue
+		}
+		out = append(out, plan.DeletionRef{Kind: string(r.Kind), Name: r.Metadata.Name})
+	}
+	// Deterministic, so the same upgrade proposes the same plan twice.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
 // enabledCapabilities reads which capabilities the deployment has, from
 // the owners already recorded on desired resources.
 //
@@ -472,7 +523,8 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 	return s.submitProposalOpts(id, proposalRequest{
 		Summary: fmt.Sprintf("enable capability %s (package %s %s)",
 			pkg.Metadata.Capability, pkg.Metadata.Name, pkg.Metadata.Version),
-		Put: docs,
+		Put:    docs,
+		Delete: droppedByUpgrade(pkg.Metadata.Capability, current, rendered),
 	}, proposalOpts{
 		DryRun: req.DryRun,
 		Origin: &plan.CapabilityOrigin{

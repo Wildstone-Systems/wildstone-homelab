@@ -1,0 +1,101 @@
+package api
+
+import (
+	"testing"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+)
+
+func owned(kind resource.Kind, name, owner string) resource.Resource {
+	return resource.Resource{Kind: kind, Metadata: resource.Metadata{Name: name, Owner: owner, Node: "n1"}}
+}
+
+// The live case. home-assistant 1.1.0 replaced a mounted ConfigFile with
+// seeded files. Installing over the old version only ever added, so the
+// statefile kept configfile/home-assistant-wildstone — reconciled
+// forever, written to disk forever, mounted by nothing.
+func TestUpgradeDropsWhatTheNewVersionNoLongerDeclares(t *testing.T) {
+	current := []resource.Resource{
+		owned(resource.KindContainer, "home-assistant", "capability/home-assistant"),
+		owned(resource.KindConfigFile, "home-assistant-wildstone", "capability/home-assistant"),
+	}
+	rendered := []resource.Resource{
+		owned(resource.KindContainer, "home-assistant", "capability/home-assistant"),
+		owned(resource.KindSeedFile, "home-assistant-configuration", "capability/home-assistant"),
+	}
+	got := droppedByUpgrade("home-assistant", current, rendered)
+	if len(got) != 1 {
+		t.Fatalf("want the dropped ConfigFile, got %v", got)
+	}
+	if got[0].Kind != "ConfigFile" || got[0].Name != "home-assistant-wildstone" {
+		t.Errorf("wrong resource: %+v", got[0])
+	}
+}
+
+// Data is never proposed for deletion. A Volume delete cannot apply at
+// all (ADR-W004 A4), so proposing one would fail the whole plan every
+// tick until F60 set it aside — taking the rest of the upgrade with it.
+func TestUpgradeNeverProposesDeletingData(t *testing.T) {
+	current := []resource.Resource{
+		owned(resource.KindVolume, "ha-config", "capability/home-assistant"),
+		owned(resource.KindSeedFile, "ha-seed", "capability/home-assistant"),
+		owned(resource.KindRoute, "hass", "capability/home-assistant"),
+	}
+	// The new version declares none of them.
+	got := droppedByUpgrade("home-assistant", current, nil)
+	for _, d := range got {
+		if d.Kind == "Volume" || d.Kind == "SeedFile" {
+			t.Errorf("data must never be proposed for deletion, got %+v", d)
+		}
+	}
+	if len(got) != 1 || got[0].Kind != "Route" {
+		t.Fatalf("want only the Route, got %v", got)
+	}
+}
+
+// Another capability's resources are not this upgrade's business.
+func TestUpgradeLeavesOtherCapabilitiesAlone(t *testing.T) {
+	current := []resource.Resource{
+		owned(resource.KindRoute, "photos", "capability/photos-immich"),
+		owned(resource.KindRoute, "hass", "capability/home-assistant"),
+	}
+	got := droppedByUpgrade("home-assistant", current, nil)
+	if len(got) != 1 || got[0].Name != "hass" {
+		t.Fatalf("want only this capability's Route, got %v", got)
+	}
+}
+
+// A reinstall of the same version drops nothing, so an upgrade that
+// changes no resources proposes no deletions.
+func TestReinstallingTheSameVersionDropsNothing(t *testing.T) {
+	same := []resource.Resource{
+		owned(resource.KindContainer, "home-assistant", "capability/home-assistant"),
+		owned(resource.KindRoute, "hass", "capability/home-assistant"),
+	}
+	if got := droppedByUpgrade("home-assistant", same, same); len(got) != 0 {
+		t.Fatalf("want none, got %v", got)
+	}
+}
+
+// The same upgrade must propose the same plan twice: a set iterated in
+// map order would produce a different document each time, and approval
+// compares against what was proposed.
+func TestDroppedResourcesAreOrdered(t *testing.T) {
+	current := []resource.Resource{
+		owned(resource.KindRoute, "b", "capability/x"),
+		owned(resource.KindRoute, "a", "capability/x"),
+		owned(resource.KindConfigFile, "c", "capability/x"),
+	}
+	first := droppedByUpgrade("x", current, nil)
+	for i := 0; i < 20; i++ {
+		again := droppedByUpgrade("x", current, nil)
+		for j := range first {
+			if first[j] != again[j] {
+				t.Fatalf("order is not stable: %v vs %v", first, again)
+			}
+		}
+	}
+	if first[0].Kind != "ConfigFile" || first[1].Name != "a" {
+		t.Errorf("want kind then name order, got %v", first)
+	}
+}
