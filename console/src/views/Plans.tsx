@@ -1,9 +1,23 @@
-import { ArrowCounterClockwise, SealCheck, WarningCircle, XCircle } from "@phosphor-icons/react";
+import { useEffect, useState } from "react";
+import {
+  ArrowCounterClockwise,
+  CaretDown,
+  CaretRight,
+  Pulse,
+  SealCheck,
+  WarningCircle,
+  XCircle,
+} from "@phosphor-icons/react";
 import { api, type EventRow, type Plan, type PlanRecord } from "../api";
-import { ago, ErrorLine, useAction, useLoad, when } from "../lib";
+import { ago, ErrorLine, useAction, useDismissals, useLoad, when } from "../lib";
 import { useConsoleState } from "../state";
-import { kindOf, StatusPill } from "../ui/status";
+import { kindOf, KIND_COLOR, StatusPill } from "../ui/status";
 import { ProblemCard } from "../ui/ProblemCard";
+
+// How many resolved plans the history shows before you ask for more.
+// A household with three hundred plans behind it is still a page that
+// opens instantly.
+const PAGE = 10;
 
 // Plans (ADR-W016 A2, ADR-W027 A7): the signature interaction, and the
 // one screen where a click changes the household.
@@ -13,14 +27,21 @@ import { ProblemCard } from "../ui/ProblemCard";
 // approving never means opening something else first. The result lands
 // on the same card: who approved it and when, or why it failed. The old
 // screen fired the request and left the page exactly as it was.
-export function Plans() {
+export function Plans({ onNavigate }: { onNavigate?: (view: "activity") => void }) {
   const { snap } = useConsoleState();
   const list = useLoad(() => api.plans(), []);
   if (list.error) return <ErrorLine error={list.error} />;
   // The shared poll already has the plans; the fetch is what gives us a
   // reload after an approval without waiting for the next tick.
   const plans = list.data ?? snap?.plans ?? [];
-  return <PlansView plans={plans} events={snap?.events ?? []} onResolved={list.reload} />;
+  return (
+    <PlansView
+      plans={plans}
+      events={snap?.events ?? []}
+      onResolved={list.reload}
+      onNavigate={onNavigate}
+    />
+  );
 }
 
 // whyItFailed finds the reason a plan failed.
@@ -46,20 +67,28 @@ export function PlansView({
   plans,
   events = [],
   onResolved,
+  onNavigate,
 }: {
   plans: PlanRecord[];
   events?: EventRow[];
   onResolved: () => void;
+  onNavigate?: (view: "activity") => void;
 }) {
   const pending = plans.filter((p) => p.state === "proposed");
   const resolved = plans.filter((p) => p.state !== "proposed");
+  const dismissals = useDismissals();
   // A failure the console can still explain is worth raising out of the
   // history table: it is the reason the next thing you try will fail
   // too. One whose event has aged out of the kept window stays in the
   // table, because a card with nothing to say is just a louder row.
+  //
+  // It stops being worth raising once you have read it, and until now
+  // there was no way to say so — the poll re-rendered the same three
+  // cards above every approval, forever.
   const explained = resolved
     .map((p) => ({ plan: p, why: whyItFailed(p, events) }))
-    .filter((x): x is { plan: PlanRecord; why: string } => x.why !== undefined);
+    .filter((x): x is { plan: PlanRecord; why: string } => x.why !== undefined)
+    .filter((x) => !dismissals.ids.includes(x.plan.id));
 
   return (
     <>
@@ -67,18 +96,8 @@ export function PlansView({
         Every intentional change is a plan; medium and high risk wait here for a human.
       </div>
 
-      {pending.length === 0 ? (
-        <div className="allwell">Nothing is waiting for you.</div>
-      ) : (
-        <div className="bands">
-          {pending.map((p) => (
-            <PendingPlan key={p.id} plan={p} onResolved={onResolved} />
-          ))}
-        </div>
-      )}
-
       {explained.length > 0 && (
-        <div className="bands" style={{ marginTop: "var(--space-8)" }}>
+        <div className="bands" style={{ marginBottom: "var(--space-6)" }}>
           {explained.map(({ plan, why }) => (
             <ProblemCard
               key={plan.id}
@@ -93,6 +112,7 @@ export function PlansView({
                   </span>
                 </>
               }
+              onDismiss={() => dismissals.dismiss(plan.id)}
             >
               {/* The reconciler's own words. It names what to do; the
                   console's job is to put them where the failure is,
@@ -103,59 +123,203 @@ export function PlansView({
         </div>
       )}
 
-      {resolved.length > 0 && (
-        <>
-          <div className="sect" style={{ marginTop: "var(--space-8)" }}>
-            <span className="eyebrow">Resolved</span>
-            <span className="muted">{resolved.length}</span>
-            <span className="fade" />
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>id</th>
-                <th>state</th>
-                <th>risk</th>
-                <th>summary</th>
-                <th>proposed by</th>
-                <th>resolved</th>
-              </tr>
-            </thead>
-            <tbody>
-              {resolved.map((p) => (
-                <tr key={p.id}>
-                  <td className="tnum">{p.id}</td>
-                  <td>
-                    <StatusPill kind={kindOf(p.state)}>{p.state}</StatusPill>
-                  </td>
-                  <td>
-                    <StatusPill kind={kindOf(p.risk)}>{p.risk}</StatusPill>
-                  </td>
-                  <td>{p.summary}</td>
-                  <td>
-                    {p.principal}
-                    {p.actingFor ? ` (for ${p.actingFor})` : ""}
-                  </td>
-                  {/* A plan resolved before the API recorded who and
-                      when has neither, and "never" would be a worse
-                      answer than saying nothing. */}
-                  <td title={when(p.resolvedAt)}>
-                    {[p.resolvedBy, p.resolvedAt && ago(p.resolvedAt)].filter(Boolean).join(" · ") || "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
+      {/* Always present, so the page reads the same whether or not
+          anything has been dismissed — and so "where did it go?" has an
+          answer on the screen rather than in someone's memory. */}
+      <div className="muted plans-note">
+        <Pulse size={14} />
+        {explained.length > 0
+          ? "Dismissing a failure keeps it in the history below and on the stream."
+          : "Every reconcile outcome is on the stream."}
+        {onNavigate && (
+          <button className="linklike" onClick={() => onNavigate("activity")}>
+            Open Activity
+          </button>
+        )}
+        {dismissals.ids.length > 0 && (
+          <button className="linklike" onClick={dismissals.restoreAll}>
+            Show dismissed ({dismissals.ids.length})
+          </button>
+        )}
+      </div>
+
+      <div className="sect">
+        <span className="eyebrow">Waiting for you</span>
+        <span className="muted tnum">{pending.length}</span>
+        <span className="fade" />
+      </div>
+
+      {pending.length === 0 ? (
+        <div className="allwell">Nothing is waiting for you.</div>
+      ) : (
+        <PendingBand plans={pending} onResolved={onResolved} />
       )}
+
+      {resolved.length > 0 && <ResolvedHistory plans={resolved} />}
     </>
   );
+}
+
+// The approval band: one row per waiting plan, one open at a time.
+//
+// Every pending plan used to be a full card with its own steps table,
+// so four proposals were four screens and the newest was the only one
+// anybody read. The row carries what triages — summary, risk, age — and
+// opening it is what commits you to reading the rest.
+export function PendingBand({ plans, onResolved }: { plans: PlanRecord[]; onResolved: () => void }) {
+  // The newest waiting plan opens by default; one at a time thereafter.
+  const [openID, setOpenID] = useState<string | null>(plans[0]?.id ?? null);
+  return (
+    <div className="rows">
+      {plans.map((p) => {
+        const open = openID === p.id;
+        const kind = kindOf(p.risk);
+        return (
+          <div className={open ? "prow on" : "prow"} key={p.id}>
+            <button
+              className="prow-head"
+              onClick={() => setOpenID(open ? null : p.id)}
+              aria-expanded={open}
+            >
+              <span className="acc" style={{ background: KIND_COLOR[kind] }} aria-hidden />
+              {open ? (
+                <CaretDown size={12} className="caret" />
+              ) : (
+                <CaretRight size={12} className="caret" />
+              )}
+              <SealCheck size={15} weight="fill" color={KIND_COLOR[kind]} />
+              <span className="prow-title">{p.summary}</span>
+              <StatusPill kind={kind}>{p.risk} risk</StatusPill>
+              <span className="muted tnum" title={when(p.createdAt)}>
+                {p.id} · {ago(p.createdAt)}
+              </span>
+            </button>
+            {open && (
+              <div className="prow-body">
+                {/* The row head already names the plan; `bare` is what
+                    keeps the summary from appearing twice. */}
+                <PendingPlan plan={p} onResolved={onResolved} bare />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// The resolved history: ten rows, then more on request. A table on a
+// desk and stacked rows on a phone — the same data either way, because
+// six columns at 390px is a horizontal scrollbar nobody uses.
+export function ResolvedHistory({ plans }: { plans: PlanRecord[] }) {
+  const [shown, setShown] = useState(PAGE);
+  // A poll can remove rows under you; clamping at render is what keeps
+  // "Showing 24 of 12" from ever being printed.
+  const count = Math.min(shown, plans.length);
+  const visible = plans.slice(0, count);
+  useEffect(() => {
+    if (plans.length <= PAGE) setShown(PAGE);
+  }, [plans.length]);
+
+  return (
+    <>
+      <div className="sect" style={{ marginTop: "var(--space-8)" }}>
+        <span className="eyebrow">Resolved</span>
+        <span className="muted tnum">{plans.length}</span>
+        <span className="fade" />
+      </div>
+
+      <table className="plans-table">
+        <thead>
+          <tr>
+            <th>id</th>
+            <th>state</th>
+            <th>risk</th>
+            <th>summary</th>
+            <th>proposed by</th>
+            <th>resolved</th>
+          </tr>
+        </thead>
+        <tbody>
+          {visible.map((p) => (
+            <tr key={p.id}>
+              <td className="tnum">{p.id}</td>
+              <td>
+                <StatusPill kind={kindOf(p.state)}>{p.state}</StatusPill>
+              </td>
+              <td>
+                <StatusPill kind={kindOf(p.risk)}>{p.risk}</StatusPill>
+              </td>
+              <td>{p.summary}</td>
+              <td>{proposedBy(p)}</td>
+              {/* A plan resolved before the API recorded who and when
+                  has neither, and "never" would be a worse answer than
+                  saying nothing. */}
+              <td title={when(p.resolvedAt)}>{resolvedBy(p)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div className="plans-cards">
+        {visible.map((p) => (
+          <div className="plan-row" key={p.id}>
+            <div className="plan-row-head">
+              <span>{p.summary}</span>
+              <StatusPill kind={kindOf(p.state)}>{p.state}</StatusPill>
+            </div>
+            <div className="plan-row-meta">
+              <span>{p.id}</span>
+              <span>·</span>
+              <span>{p.risk} risk</span>
+              <span>·</span>
+              <span>{proposedBy(p)}</span>
+              <span>·</span>
+              <span title={when(p.resolvedAt)}>{resolvedBy(p)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="plans-more">
+        {count < plans.length && (
+          <button className="btn btn-secondary" onClick={() => setShown((n) => n + PAGE)}>
+            Show more
+          </button>
+        )}
+        <span className="muted tnum">
+          Showing {count} of {plans.length}
+        </span>
+      </div>
+    </>
+  );
+}
+
+function proposedBy(p: PlanRecord): string {
+  return p.principal + (p.actingFor ? ` (for ${p.actingFor})` : "");
+}
+
+function resolvedBy(p: PlanRecord): string {
+  return [p.resolvedBy, p.resolvedAt && ago(p.resolvedAt)].filter(Boolean).join(" · ") || "—";
 }
 
 // One pending plan, with its decision on it. Approve and Reject share a
 // single useAction, so the two buttons, the pill and the explanation all
 // read from one state and cannot disagree about what happened.
-export function PendingPlan({ plan, onResolved }: { plan: PlanRecord; onResolved: () => void }) {
+//
+// `bare` drops the title and icon for the accordion row, whose head
+// already names the plan. Everything a decision needs — who proposed it,
+// the callout, the steps and the two buttons — is the same in both
+// placements, because it is the same component.
+export function PendingPlan({
+  plan,
+  onResolved,
+  bare,
+}: {
+  plan: PlanRecord;
+  onResolved: () => void;
+  bare?: boolean;
+}) {
   const act = useAction();
   // Narrowed rather than boolean, so the message and the phase cannot
   // drift apart: if it is done, it has a result to show.
@@ -177,18 +341,29 @@ export function PendingPlan({ plan, onResolved }: { plan: PlanRecord; onResolved
   return (
     <ProblemCard
       severity={done ? "ok" : kindOf(plan.risk)}
-      icon={<SealCheck size={16} weight="fill" color={done ? "var(--st-ok)" : "var(--st-warn)"} />}
-      title={plan.summary}
+      icon={
+        bare ? undefined : (
+          <SealCheck size={16} weight="fill" color={done ? "var(--st-ok)" : "var(--st-warn)"} />
+        )
+      }
+      title={bare ? null : plan.summary}
       meta={
-        <>
-          <StatusPill kind={done ? "ok" : kindOf(plan.state)}>
-            {done ? done.message : plan.state}
-          </StatusPill>
-          <StatusPill kind={kindOf(plan.risk)}>{plan.risk} risk</StatusPill>
-          <span className="muted tnum" title={when(plan.createdAt)}>
-            {plan.id} · {ago(plan.createdAt)}
-          </span>
-        </>
+        // Inside a row the head already carries the state, the risk and
+        // the id. What it cannot carry is the RESULT of a decision made
+        // just now, so that — and only that — is repeated here.
+        bare && !done ? undefined : (
+          <>
+            <StatusPill kind={done ? "ok" : kindOf(plan.state)}>
+              {done ? done.message : plan.state}
+            </StatusPill>
+            {!bare && <StatusPill kind={kindOf(plan.risk)}>{plan.risk} risk</StatusPill>}
+            {!bare && (
+              <span className="muted tnum" title={when(plan.createdAt)}>
+                {plan.id} · {ago(plan.createdAt)}
+              </span>
+            )}
+          </>
+        )
       }
       body={
         <>
@@ -217,6 +392,7 @@ export function PendingPlan({ plan, onResolved }: { plan: PlanRecord; onResolved
           {act.state.phase === "error" && <ErrorLine error={act.state.message} />}
         </>
       }
+      bare={bare}
     >
       {risky && (
         <div className="callout callout-bad">
@@ -248,34 +424,64 @@ export function PlanSteps({ plan }: { plan?: Plan }) {
     );
   }
   return (
-    <table style={{ margin: "var(--space-3) 0 0" }}>
-      <thead>
-        <tr>
-          <th>step</th>
-          <th>target</th>
-          <th>action</th>
-          <th>risk</th>
-          <th>blast radius</th>
-        </tr>
-      </thead>
-      <tbody>
+    <>
+      <table className="steps-table" style={{ margin: "var(--space-3) 0 0" }}>
+        <thead>
+          <tr>
+            <th>step</th>
+            <th>target</th>
+            <th>action</th>
+            <th>risk</th>
+            <th>blast radius</th>
+          </tr>
+        </thead>
+        <tbody>
+          {steps.map((s, i) => (
+            <tr key={i}>
+              <td>{s.description ?? ""}</td>
+              <td>{target(s)}</td>
+              <td>
+                {restoring(s) && (
+                  <ArrowCounterClockwise size={12} style={{ verticalAlign: "-1px", marginRight: 4 }} />
+                )}
+                {s.action ?? ""}
+              </td>
+              <td>{s.risk ? <StatusPill kind={kindOf(s.risk)}>{s.risk}</StatusPill> : ""}</td>
+              <td>{s.blastRadius ?? ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* The same steps at 390px, where five columns is a horizontal
+          scrollbar over the one thing you have to read before approving. */}
+      <div className="steps-cards">
         {steps.map((s, i) => (
-          <tr key={i}>
-            <td>{s.description ?? ""}</td>
-            <td>
-              {s.kind ?? ""}/{s.name ?? ""}
-            </td>
-            <td>
-              {(s.action ?? "").toLowerCase().includes("restore") && (
+          <div className="step-card" key={i}>
+            <div className="step-card-head">
+              <span>{s.description ?? ""}</span>
+              {s.risk && <StatusPill kind={kindOf(s.risk)}>{s.risk}</StatusPill>}
+            </div>
+            <div className="step-card-target">
+              {restoring(s) && (
                 <ArrowCounterClockwise size={12} style={{ verticalAlign: "-1px", marginRight: 4 }} />
               )}
-              {s.action ?? ""}
-            </td>
-            <td>{s.risk ? <StatusPill kind={kindOf(s.risk)}>{s.risk}</StatusPill> : ""}</td>
-            <td>{s.blastRadius ?? ""}</td>
-          </tr>
+              {target(s)} · {s.action ?? ""}
+            </div>
+            <div className="muted">{s.blastRadius ?? ""}</div>
+          </div>
         ))}
-      </tbody>
-    </table>
+      </div>
+    </>
   );
+}
+
+function target(s: { kind?: string; name?: string }): string {
+  return `${s.kind ?? ""}/${s.name ?? ""}`;
+}
+
+// A restore is the one action that can be taken a safer way, so it is
+// marked wherever a step is shown.
+function restoring(s: { action?: string }): boolean {
+  return (s.action ?? "").toLowerCase().includes("restore");
 }

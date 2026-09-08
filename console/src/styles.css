@@ -176,7 +176,10 @@ pre {
 
 /* --------------------------------------------------------------- shell */
 
-.shell { display: flex; min-height: 100vh; }
+/* The shell owns the viewport and never scrolls itself: a screen that
+   scrolls does it inside .screen, so a pinned composer or a fixed
+   thread header has something to be pinned to. */
+.shell { display: flex; height: 100vh; overflow: hidden; }
 
 .rail {
   width: 56px;
@@ -250,7 +253,7 @@ pre {
   font-weight: 600;
 }
 
-.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
 .topbar {
   display: flex;
@@ -268,7 +271,24 @@ pre {
   font-size: 12px;
   color: var(--muted);
 }
-.screen { padding: var(--space-6); max-width: 1180px; }
+.screen { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-6); max-width: 1180px; }
+
+/* One screen may own the pane: no padding, no cap, no page scroll. The
+   screen inside it does its own scrolling, in the band that should
+   scroll rather than in the whole column. */
+.screen-flush {
+  padding: 0;
+  max-width: none;
+  overflow: hidden;
+  display: flex;
+  /* Column, not row: the shell's error line is a sibling of the screen,
+     and in a row it becomes a second column that eats the pane. */
+  flex-direction: column;
+  min-height: 0;
+}
+.screen-flush > * { flex: 1; min-width: 0; min-height: 0; }
+/* An error is a line, not a band: it takes its own height and no more. */
+.screen-flush > .error { flex: none; margin: var(--space-3) var(--space-6); }
 
 .eyebrow {
   font-size: 11px;
@@ -308,8 +328,9 @@ pre {
   .rail .foot { margin-top: 0; flex-direction: row; padding-top: 0; padding-right: var(--space-2); }
   .ri { width: 36px; height: 36px; }
   .rail .divider { width: 1px; height: 22px; margin: 0 var(--space-2); }
-  .main { order: 1; }
+  .main { order: 1; min-height: 0; }
   .screen { padding: var(--space-4); }
+  .screen-flush { padding: 0; }
   .topbar { padding: var(--space-3) var(--space-4); }
 }
 
@@ -683,24 +704,150 @@ tr.clickable:hover { background: var(--faint); }
 
 /* -------------------------------------------------------- the Butler */
 
-.butler {
-  display: flex;
-  gap: var(--space-8);
-  align-items: flex-start;
-  margin-top: var(--space-4);
-}
-.thread { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.convos { width: 260px; flex: none; }
+/* The Butler is a conversation, so it is built like one: a fixed header,
+   a scrolling thread and a composer pinned under it. The composer is a
+   flex sibling of a min-height:0 scroller rather than position:sticky —
+   sticky inside a page-scrolling column is what made the old one drift
+   up the screen as the thread grew. */
 
-.messages {
+.butler { display: flex; flex: 1; min-height: 0; }
+
+/* The unconfigured card is the only Butler state that is a page rather
+   than a pane, and it still has to sit inside the flush screen. */
+.butler-setup { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-6); }
+.butler-setup > * { max-width: 640px; }
+
+.convos {
+  width: 268px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--color-text) 2%, transparent);
+}
+.convos-head {
+  flex: none;
+  padding: var(--space-4) var(--space-4) var(--space-3);
+  border-bottom: 1px solid var(--hair);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  min-height: 220px;
-  padding-bottom: var(--space-4);
 }
+.convos-list { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-3); }
+.convos-group { margin-bottom: var(--space-4); }
+.convos-group > .eyebrow { display: block; font-size: 10.5px; padding: 0 var(--space-2) var(--space-2); }
+
+/* Segmented surface switch. Selected reads as an accent tint, never as
+   a status colour: this is "which surface", not "what is wrong". */
+.seg {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-surface);
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-md);
+}
+.seg > button {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  border-radius: 6px;
+  padding: 5px 0;
+  font: 500 12.5px/1.2 var(--font-body);
+  color: var(--muted);
+  cursor: pointer;
+}
+.seg > button:hover { color: var(--color-text); }
+.seg > button.on { background: color-mix(in srgb, var(--color-accent) 22%, transparent); color: var(--mark); }
+
+.thread { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.thread-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-6);
+  border-bottom: 1px solid var(--hair);
+  position: relative;
+}
+.thread-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.thread-bar .icon { width: 30px; height: 30px; flex: none; padding: 0; display: grid; place-items: center; }
+.chip-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border-radius: 999px;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--color-text);
+}
+.chip-button:hover { background: var(--faint); }
+.chip-button .caret { color: var(--muted); }
+
+.popover {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: var(--space-6);
+  width: 380px;
+  max-width: calc(100vw - var(--space-8));
+  max-height: 70vh;
+  overflow-y: auto;
+  z-index: 30;
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-4) var(--space-6) var(--space-6);
+}
+/* Inside the popover the card is already framed by the popover. */
+.popover .card { background: none; box-shadow: none; padding: 0; margin: 0; }
+.popover .card + .popover-settings {
+  margin-top: var(--space-6);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--hair);
+}
+.popover .sub { margin-bottom: var(--space-4); }
+/* A form in a 380px panel wraps rather than reaching past its edge. */
+.popover .row { flex-wrap: wrap; }
+.popover .row > label { flex: 1 1 100%; }
+.popover select { flex: 1 1 100%; min-width: 0; max-width: 100%; }
+.popover input { flex: 1 1 55%; min-width: 0; max-width: 100%; }
+.popover-close { position: absolute; top: var(--space-3); right: var(--space-3); }
+
+.messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* The column is padding, not a max-width on every child: a child that
+     is meant to be narrower than the column — the operator's own bubble
+     — then measures against the column rather than the pane. */
+  padding: var(--space-8) max(var(--space-6), calc((100% - 640px) / 2)) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* The butler's turn is a row: mark, then text — no bubble. Only the
+   operator's own words keep a bubble, which is what makes the thread
+   scan as a conversation instead of two columns of cards. */
+.turn-butler { display: flex; gap: var(--space-4); align-items: flex-start; }
+.turn-mark {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--mark);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+.turn-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+
 .msg {
-  max-width: 78%;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-lg);
   font-size: 14px;
@@ -709,48 +856,81 @@ tr.clickable:hover { background: var(--faint); }
 }
 .msg-user {
   align-self: flex-end;
+  max-width: 78%;
   background: color-mix(in srgb, var(--color-text) 10%, transparent);
   border-bottom-right-radius: var(--radius-sm);
 }
-.msg-butler {
-  align-self: flex-start;
-  background: var(--color-surface);
-  border-bottom-left-radius: var(--radius-sm);
-  max-width: 84%;
-}
-.msg-butler.thinking { display: flex; align-items: center; gap: 8px; color: var(--muted); }
-.msg-note { font-size: 12px; color: var(--muted); max-width: 84%; }
+.msg-butler { padding: 0; background: none; line-height: 1.65; }
+.msg-butler.thinking { display: flex; align-items: center; gap: var(--space-3); color: var(--muted); }
+.msg-note { font-size: 12px; color: var(--muted); }
 
 /* The trace is a line you can open, not a panel you have to scroll past. */
-.trace { align-self: flex-start; max-width: 84%; }
 .trace .btn { font-size: 11.5px; color: var(--muted); padding-inline: 0; }
 .trace .btn:hover { color: var(--color-accent); background: none; }
-.trace pre { margin-top: var(--space-2); font-size: 11px; max-height: 260px; }
+.trace pre { margin-top: var(--space-2); font-size: 11px; max-height: 240px; }
 
 .proposal { align-self: stretch; }
 .proposal .problem { background: var(--color-surface); border-radius: var(--radius-md); padding: var(--space-4); }
 
-.composer { position: sticky; bottom: 0; background: var(--color-bg); padding-top: var(--space-3); }
-.asks { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
-.asks .btn { font-size: 12.5px; }
+.thread-error { flex: none; padding: 0 var(--space-6); }
+.thread-error > * { max-width: 640px; margin-inline: auto; }
+
+.composer { flex: none; padding: var(--space-3) var(--space-6) var(--space-6); }
+.composer > * { max-width: 640px; margin-inline: auto; }
 .composer-box {
   display: flex;
   gap: var(--space-2);
   align-items: flex-end;
   background: var(--color-surface);
   border: 1px solid var(--hair);
-  border-radius: var(--radius-md);
-  padding: var(--space-2);
+  border-radius: 12px;
+  padding: var(--space-3);
 }
 .composer-box textarea {
   border: 0;
   background: none;
-  min-height: 44px;
+  min-height: 48px;
   padding: 4px 6px;
+  resize: none;
 }
 .composer-box textarea:hover, .composer-box textarea:focus-visible { border: 0; outline: none; }
-.composer-box .btn { flex: none; width: 36px; height: 36px; padding: 0; }
-.composer .muted { margin-top: 6px; }
+.composer-box .btn { flex: none; width: 36px; height: 36px; padding: 0; border-radius: 999px; }
+.composer .muted { margin-top: 6px; text-align: center; }
+
+/* The empty state: the composer IS the screen, and the asks sit under
+   it. margin-block:auto on the inner block rather than justify-content
+   on the scroller — a centred flex overflow cannot be scrolled back
+   into view, which is how the opening clipped at 480px tall. */
+.opening {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-8) var(--space-6);
+}
+.opening-inner {
+  margin-block: auto;
+  width: 100%;
+  max-width: 640px;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+}
+.opening h2 { font-size: 24px; font-weight: 500; letter-spacing: -0.015em; margin: 0; }
+.opening .blurb { margin: 0; max-width: 56ch; text-align: center; font-size: 13.5px; line-height: 1.6; color: var(--muted); }
+.opening .composer-box { width: 100%; }
+.opening .turn-mark { width: 42px; height: 42px; }
+
+.asks { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.opening .asks { justify-content: center; }
+.asks .btn { font-size: 12.5px; border-radius: 999px; color: var(--muted); border-color: var(--hair); }
+.asks .btn:hover:not(:disabled) { color: var(--color-text); background: var(--faint); }
+
+/* The scrim exists only as the phone sheet's way out. */
+.convos-scrim { display: none; }
 
 .convo {
   display: flex;
@@ -776,10 +956,50 @@ tr.clickable:hover { background: var(--faint); }
   overflow: hidden;
 }
 
-@media (max-width: 900px) {
-  .butler { flex-direction: column; }
-  .convos { width: 100%; }
-  .msg, .msg-butler, .trace, .msg-note { max-width: 100%; }
+/* Phone: the conversation list is a bottom sheet over the thread, and
+   the popover stops floating — an absolutely positioned 380px panel on
+   a 390px screen is a panel with nowhere to go. */
+@media (max-width: 720px) {
+  .convos-scrim { display: block; position: fixed; inset: 0; z-index: 39; background: rgba(0, 0, 0, 0.42); border: 0; }
+  .convos {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 40;
+    width: 100%;
+    max-height: 82vh;
+    border-right: 0;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    background: var(--color-bg);
+    box-shadow: var(--shadow-lg);
+  }
+  .composer > *, .opening-inner { max-width: none; }
+  .messages { padding: var(--space-4) var(--space-4) var(--space-2); gap: var(--space-4); }
+  .composer { padding: var(--space-2) var(--space-4) var(--space-4); }
+  .thread-error { padding: 0 var(--space-4); }
+  .thread-error > * { max-width: none; }
+  .thread-bar { padding: var(--space-3) var(--space-4); }
+  .butler-setup { padding: var(--space-4); }
+  /* Static alone would leave the popover a flex item in the header,
+     squeezed beside the title. It has to WRAP: the bar wraps, and the
+     popover takes a whole line under the row it belongs to. */
+  .thread-bar { flex-wrap: wrap; }
+  .popover {
+    position: static;
+    flex: 1 0 100%;
+    width: auto;
+    max-width: none;
+    max-height: none;
+    margin: var(--space-3) 0 0;
+  }
+  .msg-user { max-width: 86%; }
+  .opening { padding: var(--space-6) var(--space-4); }
+  .opening h2 { font-size: 21px; text-align: center; }
+  .opening .asks { width: 100%; flex-direction: column; }
+  .opening .asks .btn { width: 100%; min-height: 44px; justify-content: center; }
+  .proposal .problem-actions .btn { flex: 1; min-height: 44px; justify-content: center; }
+  /* A scrollbar over a 390px thread costs more width than it gives. */
+  .messages, .opening, .convos-list { scrollbar-width: none; }
+  .messages::-webkit-scrollbar, .opening::-webkit-scrollbar, .convos-list::-webkit-scrollbar { display: none; }
 }
 
 /* --------------------------------------------- codes read out loud */
@@ -814,6 +1034,104 @@ details > pre { margin-top: var(--space-2); }
   white-space: pre-wrap;
   background: var(--st-bad-bg);
   box-shadow: none;
+}
+
+/* ------------------------------------------------------------- plans */
+
+/* A failure card can be cleared. The x sits with the meta rather than
+   with the actions, because dismissing is not a decision about the
+   plan — the plan stays in the history below either way. */
+.problem-dismiss { margin-left: auto; color: var(--muted); }
+.problem-dismiss:hover:not(:disabled) { color: var(--color-text); background: var(--faint); }
+
+.plans-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-6);
+}
+
+/* Waiting approvals are rows that open, not a stack of full cards: with
+   four proposals the page was four screens tall and the newest one was
+   the only one anybody read. One is open at a time. */
+.rows { display: flex; flex-direction: column; gap: var(--space-2); }
+.prow { border-radius: var(--radius-md); box-shadow: 0 0 0 1px var(--hair); overflow: hidden; }
+.prow.on { background: var(--color-surface); box-shadow: var(--shadow-sm); }
+.prow-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.prow-head:hover { background: var(--faint); }
+.prow-head .acc { min-height: 26px; }
+.prow-head .caret { color: var(--muted); flex: none; }
+.prow-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prow-body { padding: 0 var(--space-4) var(--space-4) 30px; }
+/* Inside an open row the card is already framed by the row. */
+.prow-body .problem { gap: 0; }
+
+/* The resolved history is a table on a desk and a stack of rows on a
+   phone: the same data, and neither shape is a scroll container the
+   page has to fight. */
+.plans-cards { display: none; }
+.plan-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) 2px;
+  border-bottom: 1px solid var(--faint);
+}
+.plan-row-head { display: flex; align-items: center; gap: var(--space-2); }
+.plan-row-head > span:first-child { flex: 1; min-width: 0; font-size: 13.5px; line-height: 1.4; }
+.plan-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.plans-more { display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-4); }
+
+/* Five columns of step detail do not survive 390px either. */
+.steps-cards { display: none; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
+.step-card {
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.step-card-head { display: flex; align-items: center; gap: var(--space-2); }
+.step-card-head > span:first-child { flex: 1; min-width: 0; font-size: 13px; }
+.step-card-target { font-family: var(--font-mono); font-size: 11.5px; }
+
+@media (max-width: 720px) {
+  /* The title needs two lines more than the row needs one line. */
+  .prow-head { min-height: 52px; flex-wrap: wrap; row-gap: var(--space-2); }
+  /* The title takes the row and the meta wraps under it: a summary
+     squeezed into a 90px column is three words a line. */
+  .prow-title { flex: 1 1 60%; white-space: normal; }
+  .prow-body { padding: 0 var(--space-3) var(--space-3) 23px; }
+  .prow-body .problem-actions .btn { flex: 1; min-height: 44px; justify-content: center; }
+  .plans-table, .steps-table { display: none; }
+  .plans-cards { display: flex; flex-direction: column; }
+  .steps-cards { display: flex; }
+  /* A long reconciler message must not own the screen. */
+  .failure { max-height: 150px; overflow: auto; }
+  .plans-more { flex-direction: column; align-items: stretch; text-align: center; }
+  .plans-more .btn { min-height: 44px; justify-content: center; }
 }
 /* A form needs more room than a detail panel. Still a drawer rather
    than a modal: the catalog behind it keeps its scroll position, so

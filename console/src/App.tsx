@@ -70,6 +70,11 @@ const TITLES: Record<View, [string, string]> = {
 
 const ICON = 19;
 
+// Screens that own the viewport instead of scrolling inside the padded,
+// capped .screen box. The Butler is a conversation: its header, thread
+// and composer are three fixed bands, and only the middle one scrolls.
+const FULL_BLEED: ReadonlySet<View> = new Set<View>(["butler"]);
+
 export function App() {
   const [authed, setAuthed] = useState(getToken() !== null);
 
@@ -124,6 +129,10 @@ export function Shell() {
   }, [snap]);
 
   const [eyebrow, title] = TITLES[view];
+  // A screen may override the eyebrow: the Butler's says which SURFACE
+  // is open, and a bar reading "OPERATOR" over the household butler
+  // would be teaching the wrong thing.
+  const [eyebrowOverride, setEyebrowOverride] = useState<string | null>(null);
 
   return (
     <div className="shell">
@@ -142,21 +151,21 @@ export function Shell() {
       />
       <main className="main">
         <div className="topbar">
-          <span className="eyebrow">{eyebrow}</span>
+          <span className="eyebrow">{(view === "butler" && eyebrowOverride) || eyebrow}</span>
           <span className="screen-title">{title}</span>
           <div className="meta">
             <Freshness />
           </div>
         </div>
-        <div className="screen">
+        <div className={FULL_BLEED.has(view) ? "screen screen-flush" : "screen"}>
           <ErrorLine error={error} />
           {view === "home" && <Home onNavigate={setView} />}
           {view === "services" && <Services />}
-          {view === "butler" && <Butler />}
+          {view === "butler" && <Butler onEyebrow={setEyebrowOverride} />}
           {view === "chat" && <Chat />}
           {view === "household" && <Household />}
           {view === "connect" && <ConnectChat />}
-          {view === "plans" && <Plans />}
+          {view === "plans" && <Plans onNavigate={setView} />}
           {view === "activity" && <Activity />}
           {view === "backups" && <Backups />}
           {view === "nodes" && <Nodes />}

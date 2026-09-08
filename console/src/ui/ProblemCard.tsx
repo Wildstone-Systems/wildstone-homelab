@@ -1,4 +1,5 @@
 import { ReactNode } from "react";
+import { X } from "@phosphor-icons/react";
 import { Kind, KIND_COLOR } from "./status";
 
 // One thing that needs a decision. The same card appears on Home, in
@@ -17,6 +18,8 @@ export function ProblemCard({
   actions,
   aside,
   compact,
+  onDismiss,
+  bare,
   children,
 }: {
   severity: Kind;
@@ -27,6 +30,12 @@ export function ProblemCard({
   actions?: ReactNode;
   aside?: ReactNode;
   compact?: boolean;
+  // A card that can be cleared says so with an x. Only the caller knows
+  // whether clearing it loses anything — here it is just a button.
+  onDismiss?: () => void;
+  // Inside a row that already names the thing: no accent bar, no icon,
+  // no title. Everything the decision needs stays.
+  bare?: boolean;
   // Detail that belongs to the decision — a plan's steps, a run's
   // history. It sits between the explanation and the buttons, because
   // it is what you read before you press one.
@@ -45,12 +54,24 @@ export function ProblemCard({
   }
   return (
     <div className="problem">
-      <span className="acc" style={{ background: KIND_COLOR[severity], minHeight: 44 }} aria-hidden />
+      {!bare && (
+        <span className="acc" style={{ background: KIND_COLOR[severity], minHeight: 44 }} aria-hidden />
+      )}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="problem-head">
           {icon}
-          <span className="problem-title">{title}</span>
+          {!bare && <span className="problem-title">{title}</span>}
           {meta}
+          {onDismiss && (
+            <button
+              className="btn btn-ghost problem-dismiss"
+              onClick={onDismiss}
+              title="Dismiss — it stays in the history below"
+              aria-label="Dismiss"
+            >
+              <X size={15} />
+            </button>
+          )}
         </div>
         {body && <p className="problem-body">{body}</p>}
         {children}
