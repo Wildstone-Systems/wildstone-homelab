@@ -37,3 +37,6 @@ tmp/
 # builder's home directory, and therefore their username, into every
 # clone. Build it with `go build -o wild ./cli/cmd/wild`.
 /wild
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
