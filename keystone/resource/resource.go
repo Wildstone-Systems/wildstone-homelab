@@ -94,6 +94,20 @@ type Metadata struct {
 	// Owner is the ownership chain: "capability/<name>" or "system".
 	// Nothing is orphaned (ADR-W004 A1).
 	Owner string `yaml:"owner"`
+	// Package is the package that produced this resource, when one did.
+	//
+	// Owner names the CAPABILITY, and several profiles of one capability
+	// share it — books-calibre-web and books-kavita both render resources
+	// owned by "capability/books". Without a finer key, "resources this
+	// capability has that the new rendering does not produce" reads a
+	// sibling profile's containers and routes as leftovers of an upgrade
+	// and proposes deleting them. Installing one book app therefore
+	// uninstalled the other, which nobody decided (ADR-W029 A7).
+	//
+	// Empty on resources written before this field existed, and on
+	// anything not produced by a package; readers must treat empty as
+	// "unknown" rather than "not mine".
+	Package string `yaml:"package,omitempty"`
 	// Node is the Wardstone node id this resource is applied to. Required
 	// for node-scoped kinds and rejected for the rest; the registry's
 	// nodeScoped flag is the single source of that split, and Validate
@@ -394,6 +408,20 @@ var secretKinds = map[string]bool{
 // secrets they name have to exist before the plan runs at all.
 type SecretSpec struct {
 	Name string `yaml:"name"`
+	// Purpose is one line saying what this secret is FOR, in words an
+	// operator who did not write the package can act on.
+	//
+	// The Secrets screen could show a name, a version and what would
+	// restart, and nothing about what any of it meant. A household
+	// admin looking at `davis-admin-password` had no way to learn that
+	// it is the calendar service's admin login, that the username
+	// beside it is `admin`, or that the generated value cannot be read
+	// back — so the one page it opens stayed shut, and the answer lived
+	// in a YAML comment in this repository.
+	//
+	// Optional: a secret whose name is self-evident to the person who
+	// will read it needs no sentence.
+	Purpose string `yaml:"purpose,omitempty"`
 	// Kind is one of secretKinds. Empty means "random", so a package
 	// that just needs a password says nothing.
 	Kind string `yaml:"kind,omitempty"`

@@ -24,6 +24,31 @@
 # check Roundcube makes. Nobody provisions people, and there is no second
 # password to reset.
 #
+# SIGNING IN, AND THE THING NOBODY IS TOLD. Both surfaces ask for a
+# username and a password, and NEITHER is a credential Wildstone
+# generates. It is the person's own mailbox: their email address, and
+# the password their provider checks. That is the whole design — no
+# account to provision, no second password to reset — and it is also a
+# question the household meets at a login box with no answer on it.
+#
+# For the big providers the answer is not their normal password:
+#
+#   Gmail / Google Workspace   an App Password (Google account -> Security
+#                              -> 2-Step Verification -> App passwords).
+#                              A normal password is refused outright:
+#                              "Application-specific password required".
+#   Outlook / Microsoft 365    an App Password, once 2-step is on.
+#   Yahoo, AOL                 an App Password.
+#   Fastmail, mailbox.org,     an app-specific password is recommended
+#   Migadu, Proton Bridge      and the account password usually works.
+#
+# This is not a limitation of this package and there is nothing here to
+# configure around it: those providers stopped accepting an account
+# password over IMAP. Roundcube can speak OAuth instead, but the image
+# wires only oauth_client_secret from the environment — the client id,
+# provider URI and scopes need a config override — so it is not a path
+# this package can offer without one.
+#
 # SIGN-IN POSTURE: the app's own login, auth: none on family_private —
 # the ntfy posture. Neither surface can be put behind Authelia. Roundcube's
 # login IS the IMAP credential (a portal in front of it would be two
@@ -73,7 +98,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: mail-roundcube
-  version: 1.0.0
+  version: 1.0.3
   capability: mail
   profile: roundcube
 requires:
@@ -85,15 +110,15 @@ params:
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
   # The provider's servers. Both containers are told the same IMAP
   # server, because the calendar service authenticates against it.
-  - { name: imap_host, required: true, description: "Your mail provider's IMAP server, e.g. imap.fastmail.com.", example: "imap.example.com" }
+  - { name: imap_host, required: true, validate: hostname, description: "Your mail provider's IMAP server, e.g. imap.fastmail.com. Everyone signs in to webmail and calendars with their own email address and the password this server checks — Wildstone generates no login. Gmail, Outlook and Yahoo refuse an account password here and need an App Password from the provider's security settings.", example: "imap.example.com" }
   - { name: imap_port, default: "993", description: "IMAP port. 993 for ssl, 143 for tls (STARTTLS)." }
   - { name: imap_encryption, default: ssl, description: "How the IMAP connection is encrypted: ssl (implicit TLS, port 993) or tls (STARTTLS, port 143)." }
-  - { name: smtp_host, required: true, description: "Your mail provider's SMTP server, e.g. smtp.fastmail.com.", example: "smtp.example.com" }
+  - { name: smtp_host, required: true, validate: hostname, description: "Your mail provider's SMTP server, e.g. smtp.fastmail.com. Sending uses the same address and password as receiving.", example: "smtp.example.com" }
   - { name: smtp_port, default: "587", description: "SMTP port. 587 for tls (STARTTLS), 465 for ssl." }
   - { name: smtp_encryption, default: tls, description: "How the SMTP connection is encrypted: tls (STARTTLS, port 587) or ssl (implicit TLS, port 465)." }
   - { name: username_domain, default: "", description: "Added to a bare username at sign-in, e.g. example.com lets someone type ada instead of ada@example.com. Leave empty if people sign in with a full address." }
-  - { name: calendar_admin_login, default: admin, description: "The username for the calendar service's own admin page. Its password is the generated secret davis-admin-password; set it with `wild secret set` when you want to open that page." }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: calendar_admin_login, default: admin, description: "The username for the calendar service's own admin page. Household members never need it — their calendars work from their mail password alone. Its password is generated and write-only, so nobody can read it back: to open that page, first give it a value you know with `wild secret set davis-admin-password -node <node>`." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
   - { name: upload_max_filesize, default: 25M, description: "Largest attachment someone can add to a message, e.g. 25M." }
 policies:
   classifications: [family_private]
@@ -110,13 +135,17 @@ templates:
     apiVersion: wildstone.dev/v1
     kind: Secret
     metadata: { name: roundcube-des-key, node: "{{ .Params.node }}" }
-    spec: { name: roundcube-des-key }
+    spec:
+      name: roundcube-des-key
+      purpose: "Encrypts the mail password held in a browser session. Nobody types this."
   # Symfony's APP_SECRET: signs Davis's session cookies and CSRF tokens.
   - |
     apiVersion: wildstone.dev/v1
     kind: Secret
     metadata: { name: davis-app-secret, node: "{{ .Params.node }}" }
-    spec: { name: davis-app-secret }
+    spec:
+      name: davis-app-secret
+      purpose: "Signs the calendar service's session cookies. Nobody types this."
   # The calendar service's admin page. Generated rather than `provided`
   # so that installing needs no human step: household members never see
   # this page — their calendars work from the moment they sign in — and
@@ -125,12 +154,16 @@ templates:
     apiVersion: wildstone.dev/v1
     kind: Secret
     metadata: { name: davis-admin-password, node: "{{ .Params.node }}" }
-    spec: { name: davis-admin-password }
+    spec:
+      name: davis-admin-password
+      purpose: "The calendar service's admin page, at the Calendars address — sign in as 'admin'. Generated, so it cannot be read back: set it here to a value you choose. Household members never need it; their calendars work from their mail password."
   - |
     apiVersion: wildstone.dev/v1
     kind: Secret
     metadata: { name: restic-mail, node: "{{ .Params.node }}" }
-    spec: { name: restic-mail }
+    spec:
+      name: restic-mail
+      purpose: "Encrypts the mail backup repository. Keep a copy somewhere else: without it a restore is impossible."
   # ---- Volumes.
   #
   # roundcube-www is the installed application: the image populates it on

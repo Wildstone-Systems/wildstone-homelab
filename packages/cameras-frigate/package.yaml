@@ -31,7 +31,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: cameras-frigate
-  version: 1.0.0
+  version: 1.0.1
   capability: cameras
   profile: frigate
 requires:
@@ -41,7 +41,7 @@ requires:
 params:
   - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
   - { name: camera_name, default: front_door, description: "A short name for your first camera, letters and underscores only, e.g. front_door." }
   - { name: camera_rtsp_url, required: true, example: "rtsp://192.168.1.50:554/stream1", description: "The RTSP stream address of your first camera, e.g. rtsp://192.168.1.50:554/stream1. If it needs a login, put it in the address (rtsp://user:pass@host/...) and add more cameras in the config file later." }
   - { name: mqtt_host, default: "", description: "Container name of an MQTT broker to publish events to, e.g. mosquitto. Leave empty for none." }

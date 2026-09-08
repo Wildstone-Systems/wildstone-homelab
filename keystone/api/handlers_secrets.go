@@ -14,6 +14,15 @@ package api
 // rotation is recorded as a system/secrets plan record driven straight
 // through the state machine (the backup-engine pattern; the reconcile
 // loop skips this principal), with the calling admin as acting-for.
+//
+// SETTING A VALUE DOES THE SAME, and for the same reason. It did not,
+// once: `wild secret set` wrote the value to the node and returned
+// success while every container that reads it went on holding the
+// previous one, because a container's environment is fixed when it is
+// created. An operator set the Davis admin password, was told it
+// worked, and still could not sign in. A new value nothing reads is not
+// a new value — so set propagates exactly as rotate does, and the two
+// differ only in where the value comes from.
 
 import (
 	"encoding/json"
@@ -130,15 +139,82 @@ func (s *Server) setSecret(r *http.Request, id principal.Identity) (any, int, er
 	}
 
 	out := map[string]any{"node": node, "name": name}
+	existed := false
 	switch {
 	case res.GetPutSecret() != nil:
 		out["version"] = res.GetPutSecret().GetVersion()
 	case res.GetEnsureSecret() != nil:
 		out["version"] = res.GetEnsureSecret().GetVersion()
-		out["existed"] = res.GetEnsureSecret().GetExisted()
+		existed = res.GetEnsureSecret().GetExisted()
+		out["existed"] = existed
 	}
 	s.appendEvent(event, node, name, id.Name)
+
+	// A new value nothing reads is not a new value. Docker fixes a
+	// container's environment at create time, so a container already
+	// holding the OLD value keeps serving it until it is re-created —
+	// which is exactly what this file's own header says about rotation
+	// ("A restart would NOT pick it up ... hence remove") and what
+	// recreateDependents exists to do.
+	//
+	// Rotation called it and set did not, so `wild secret set` wrote a
+	// password into the node's store and reported success while the
+	// service went on checking the previous one. The value was right,
+	// the report was right, and signing in still failed: the Davis admin
+	// page could not be opened with the password an operator had just
+	// set for it.
+	//
+	// Skipped when generating a value that already existed: `set` with
+	// no body is the install-time "make sure this exists" call, and a
+	// no-op there must not restart a running service.
+	if body.Value != "" || !existed {
+		if n, err := s.applyToDependents(r, node, name, id.Name, event); err != nil {
+			// The value IS set; only the propagation failed. Say both,
+			// because "try again" and "restart the container" are
+			// different instructions.
+			return nil, http.StatusBadGateway, fmt.Errorf(
+				"secret/%s was set on %s, but re-creating the containers that read it failed: %w", name, node, err)
+		} else if n > 0 {
+			out["recreated"] = n
+		}
+	}
 	return out, http.StatusOK, nil
+}
+
+// applyToDependents re-creates every container whose env references this
+// secret, recorded as a plan for the same reason rotation is: it stops
+// and removes running containers, which is a Medium-risk act an operator
+// should be able to find afterwards.
+func (s *Server) applyToDependents(r *http.Request, node, name, actor, event string) (int, error) {
+	dependents, err := s.secretDependents(node, name)
+	if err != nil {
+		return 0, err
+	}
+	if len(dependents) == 0 {
+		return 0, nil
+	}
+	summary := fmt.Sprintf("%s secret/%s on %s (%d dependent container(s) re-created)",
+		strings.TrimPrefix(event, "secret."), name, node, len(dependents))
+	stored, _ := json.Marshal(map[string]any{"summary": summary, "secret": name, "node": node, "dependents": dependents})
+	planID, err := s.DB.InsertPlan(secretsPrincipal, actor, summary, "medium", string(stored))
+	if err != nil {
+		return 0, err
+	}
+	for _, st := range []runtimedb.PlanState{runtimedb.PlanApproved, runtimedb.PlanApplying} {
+		if terr := s.DB.TransitionPlan(planID, st, actor); terr != nil {
+			return 0, terr
+		}
+	}
+	if err := s.recreateDependents(r, node, dependents); err != nil {
+		if terr := s.DB.TransitionPlan(planID, runtimedb.PlanFailed, actor); terr != nil {
+			s.Log.Error("secret plan transition", "plan", planID, "err", terr)
+		}
+		return 0, err
+	}
+	if terr := s.DB.TransitionPlan(planID, runtimedb.PlanApplied, actor); terr != nil {
+		s.Log.Error("secret plan transition", "plan", planID, "err", terr)
+	}
+	return len(dependents), nil
 }
 
 // rotateSecret implements ADR-W012 A5. The calling admin's explicit

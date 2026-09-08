@@ -3,11 +3,32 @@ package api
 import (
 	"testing"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
 func owned(kind resource.Kind, name, owner string) resource.Resource {
 	return resource.Resource{Kind: kind, Metadata: resource.Metadata{Name: name, Owner: owner, Node: "n1"}}
+}
+
+// byPkg is `owned` plus the provenance that tells sibling profiles apart.
+func byPkg(kind resource.Kind, name, owner, pkg string) resource.Resource {
+	r := owned(kind, name, owner)
+	r.Metadata.Package = pkg
+	return r
+}
+
+// testPkg declares no templates, so ContainerNames is empty and
+// packageIsTheInstalledOne answers true — which is what makes the
+// legacy, provenance-free cases below behave exactly as they used to.
+func testPkg(name, capability string) *pkgspec.Package {
+	return &pkgspec.Package{Metadata: pkgspec.Metadata{Name: name, Capability: capability}}
+}
+
+func exclusivePkg(name, capability string) *pkgspec.Package {
+	p := testPkg(name, capability)
+	p.Metadata.Exclusive = true
+	return p
 }
 
 // The live case. home-assistant 1.1.0 replaced a mounted ConfigFile with
@@ -23,7 +44,7 @@ func TestUpgradeDropsWhatTheNewVersionNoLongerDeclares(t *testing.T) {
 		owned(resource.KindContainer, "home-assistant", "capability/home-assistant"),
 		owned(resource.KindSeedFile, "home-assistant-configuration", "capability/home-assistant"),
 	}
-	got := droppedByUpgrade("home-assistant", current, rendered)
+	got := droppedByUpgrade(testPkg("home-assistant", "home-assistant"), current, rendered)
 	if len(got) != 1 {
 		t.Fatalf("want the dropped ConfigFile, got %v", got)
 	}
@@ -42,7 +63,7 @@ func TestUpgradeNeverProposesDeletingData(t *testing.T) {
 		owned(resource.KindRoute, "hass", "capability/home-assistant"),
 	}
 	// The new version declares none of them.
-	got := droppedByUpgrade("home-assistant", current, nil)
+	got := droppedByUpgrade(testPkg("home-assistant", "home-assistant"), current, nil)
 	for _, d := range got {
 		if d.Kind == "Volume" || d.Kind == "SeedFile" {
 			t.Errorf("data must never be proposed for deletion, got %+v", d)
@@ -59,7 +80,7 @@ func TestUpgradeLeavesOtherCapabilitiesAlone(t *testing.T) {
 		owned(resource.KindRoute, "photos", "capability/photos-immich"),
 		owned(resource.KindRoute, "hass", "capability/home-assistant"),
 	}
-	got := droppedByUpgrade("home-assistant", current, nil)
+	got := droppedByUpgrade(testPkg("home-assistant", "home-assistant"), current, nil)
 	if len(got) != 1 || got[0].Name != "hass" {
 		t.Fatalf("want only this capability's Route, got %v", got)
 	}
@@ -72,7 +93,7 @@ func TestReinstallingTheSameVersionDropsNothing(t *testing.T) {
 		owned(resource.KindContainer, "home-assistant", "capability/home-assistant"),
 		owned(resource.KindRoute, "hass", "capability/home-assistant"),
 	}
-	if got := droppedByUpgrade("home-assistant", same, same); len(got) != 0 {
+	if got := droppedByUpgrade(testPkg("home-assistant", "home-assistant"), same, same); len(got) != 0 {
 		t.Fatalf("want none, got %v", got)
 	}
 }
@@ -86,9 +107,9 @@ func TestDroppedResourcesAreOrdered(t *testing.T) {
 		owned(resource.KindRoute, "a", "capability/x"),
 		owned(resource.KindConfigFile, "c", "capability/x"),
 	}
-	first := droppedByUpgrade("x", current, nil)
+	first := droppedByUpgrade(testPkg("x", "x"), current, nil)
 	for i := 0; i < 20; i++ {
-		again := droppedByUpgrade("x", current, nil)
+		again := droppedByUpgrade(testPkg("x", "x"), current, nil)
 		for j := range first {
 			if first[j] != again[j] {
 				t.Fatalf("order is not stable: %v vs %v", first, again)
@@ -97,5 +118,59 @@ func TestDroppedResourcesAreOrdered(t *testing.T) {
 	}
 	if first[0].Kind != "ConfigFile" || first[1].Name != "a" {
 		t.Errorf("want kind then name order, got %v", first)
+	}
+}
+
+// The bug this scoping exists for. books-calibre-web and books-kavita
+// are two profiles of capability "books", so both render resources
+// owned by "capability/books". Keyed on owner alone, enabling one read
+// the other's container and Route as leftovers of an upgrade — so
+// installing one book app uninstalled the other, which nobody chose.
+func TestInstallingOneProfileLeavesItsSiblingRunning(t *testing.T) {
+	current := []resource.Resource{
+		byPkg(resource.KindContainer, "kavita", "capability/books", "books-kavita"),
+		byPkg(resource.KindRoute, "kavita", "capability/books", "books-kavita"),
+	}
+	rendered := []resource.Resource{
+		byPkg(resource.KindContainer, "calibre-web", "capability/books", "books-calibre-web"),
+		byPkg(resource.KindRoute, "books", "capability/books", "books-calibre-web"),
+	}
+	got := droppedByUpgrade(testPkg("books-calibre-web", "books"), current, rendered)
+	if len(got) != 0 {
+		t.Fatalf("a sibling profile must survive an install; proposed deleting %v", got)
+	}
+}
+
+// Upgrading a profile still converges to its own new definition — the
+// scoping narrows which resources are considered, not whether upgrade
+// pruning happens at all.
+func TestUpgradingAProfileStillDropsItsOwnLeftovers(t *testing.T) {
+	current := []resource.Resource{
+		byPkg(resource.KindContainer, "calibre-web", "capability/books", "books-calibre-web"),
+		byPkg(resource.KindConfigFile, "calibre-old", "capability/books", "books-calibre-web"),
+		byPkg(resource.KindContainer, "kavita", "capability/books", "books-kavita"),
+	}
+	rendered := []resource.Resource{
+		byPkg(resource.KindContainer, "calibre-web", "capability/books", "books-calibre-web"),
+	}
+	got := droppedByUpgrade(testPkg("books-calibre-web", "books"), current, rendered)
+	if len(got) != 1 || got[0].Name != "calibre-old" {
+		t.Fatalf("want only this package's dropped ConfigFile, got %v", got)
+	}
+}
+
+// An exclusive capability replaces its sibling, and the replacement is
+// in the plan to be read rather than a side effect of the install.
+func TestExclusiveCapabilityStillReplacesItsSibling(t *testing.T) {
+	current := []resource.Resource{
+		byPkg(resource.KindContainer, "pihole", "capability/dns", "dns-pihole"),
+		byPkg(resource.KindRoute, "pihole", "capability/dns", "dns-pihole"),
+	}
+	rendered := []resource.Resource{
+		byPkg(resource.KindContainer, "adguard", "capability/dns", "dns-adguard"),
+	}
+	got := droppedByUpgrade(exclusivePkg("dns-adguard", "dns"), current, rendered)
+	if len(got) != 2 {
+		t.Fatalf("an exclusive capability must propose replacing its sibling, got %v", got)
 	}
 }

@@ -35,9 +35,10 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: ingress
-  version: 1.0.0
+  version: 1.0.1
   capability: ingress
   profile: caddy-cloudflared
+  exclusive: true
 provides:
   - { trait: ingress, mode: public }
   - { trait: ingress, mode: private }

@@ -135,8 +135,14 @@ var homepageApps = map[string]homepageApp{
 	// Material Design icon in the shape of the thing it serves rather
 	// than a guess at a slug that would render as a broken image —
 	// the same reasoning as homepageFallbackIcon below.
-	"roundcube": {"Mail", "roundcube", "Your email, in a browser"},
-	"davis":     {"Calendars", "mdi-calendar-month", "Calendars and contacts, synced to every phone"},
+	// Both of these open on a login box, and the credential is the
+	// person's own mailbox rather than anything Wildstone made — so the
+	// description is where that gets said. Without it the household
+	// meets a username and password field with no answer anywhere on
+	// the page, tries their account password, and is told only
+	// "invalid credentials" (ADR-W029 A9).
+	"roundcube": {"Mail", "roundcube", "Your email — sign in with your address and your mail password"},
+	"davis":     {"Calendars", "mdi-calendar-month", "Calendars and contacts on every phone — same login as Mail"},
 }
 
 // homepageFallbackIcon is what an app with no row gets. A generic

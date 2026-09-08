@@ -31,3 +31,9 @@ tmp/
 /cli/wild
 /keystone/keystone
 /wardstone/wardstoned
+
+# A compiled binary at the repo root. It was tracked once, at 11MB, and a
+# Go binary embeds the build machine's module paths — so it carried the
+# builder's home directory, and therefore their username, into every
+# clone. Build it with `go build -o wild ./cli/cmd/wild`.
+/wild

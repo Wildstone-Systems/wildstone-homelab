@@ -21,8 +21,13 @@ type resourceView struct {
 	Kind  string `json:"kind"`
 	Name  string `json:"name"`
 	Owner string `json:"owner"`
-	Node  string `json:"node,omitempty"`
-	YAML  string `json:"yaml"`
+	// Package is which package produced this resource. Owner names the
+	// CAPABILITY, and two profiles of one capability share it, so this
+	// is what lets a caller act on one profile without touching its
+	// sibling. Empty on resources written before the field existed.
+	Package string `json:"package,omitempty"`
+	Node    string `json:"node,omitempty"`
+	YAML    string `json:"yaml"`
 }
 
 func viewOf(r resource.Resource) (resourceView, error) {
@@ -31,11 +36,12 @@ func viewOf(r resource.Resource) (resourceView, error) {
 		return resourceView{}, err
 	}
 	return resourceView{
-		Kind:  string(r.Kind),
-		Name:  r.Metadata.Name,
-		Owner: r.Metadata.Owner,
-		Node:  r.Metadata.Node,
-		YAML:  string(data),
+		Kind:    string(r.Kind),
+		Name:    r.Metadata.Name,
+		Owner:   r.Metadata.Owner,
+		Package: r.Metadata.Package,
+		Node:    r.Metadata.Node,
+		YAML:    string(data),
 	}, nil
 }
 

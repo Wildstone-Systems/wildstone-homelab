@@ -14,7 +14,7 @@ func TestResolveParamsFillsWhatTheDeploymentKnows(t *testing.T) {
 	facts := deploymentFacts{
 		nodes:            []string{"n1"},
 		domain:           "home.arpa",
-		keystoneURL:      "http://100.64.0.59:9441",
+		keystoneURL:      "http://100.64.0.1:9441",
 		chatAdapterImage: "reg:5000/chat-adapter@sha256:abc",
 	}
 	got := resolveParams([]pkgspec.ParamDecl{
@@ -36,7 +36,7 @@ func TestResolveParamsFillsWhatTheDeploymentKnows(t *testing.T) {
 	if by["public_domain"].Suggested != "home.arpa" {
 		t.Fatalf("domain = %+v", by["public_domain"])
 	}
-	if by["keystone_url"].Suggested != "http://100.64.0.59:9441" {
+	if by["keystone_url"].Suggested != "http://100.64.0.1:9441" {
 		t.Fatalf("keystone_url = %+v", by["keystone_url"])
 	}
 	if by["adapter_image"].Suggested != "reg:5000/chat-adapter@sha256:abc" {
@@ -75,6 +75,7 @@ func TestEveryDeclaredParamSourceIsResolved(t *testing.T) {
 		domain:           "home.arpa",
 		keystoneURL:      "http://n1:9441",
 		chatAdapterImage: "reg/img@sha256:abc",
+		timezone:         "Europe/London",
 	}
 	for source := range pkgspec.ParamSources {
 		got := resolveParams([]pkgspec.ParamDecl{{Name: "p", Source: source}}, facts, nil)

@@ -28,7 +28,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: media-plex
-  version: 1.0.1
+  version: 1.0.2
   capability: media
   profile: plex
 requires:
@@ -39,7 +39,7 @@ params:
   - { name: media_subdomain, default: plex, description: "The name this service appears under, e.g. plex." }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
   - { name: media_path, default: /srv/wildstone/media, description: "Folder on this machine holding your films and television.", source: directory }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
 policies:
   classifications: [family_private]
   dataSensitivity: medium
@@ -78,7 +78,7 @@ templates:
       env:
         TZ: "{{ .Params.timezone }}"
         PLEX_CLAIM: "secret/plex-claim"
-        ADVERTISE_IP: "https://{{ .Params.media_subdomain }}.{{ .Params.public_domain }}"
+        ADVERTISE_IP: '{{ origin (printf "%s.%s" .Params.media_subdomain .Params.public_domain) }}'
       mounts:
         - { source: plex-config, target: /config }
         - { source: plex-transcode, target: /transcode }
@@ -98,7 +98,7 @@ templates:
   - |
     apiVersion: wildstone.dev/v1
     kind: BackupPlan
-    metadata: { name: media, node: "{{ .Params.node }}" }
+    metadata: { name: media-plex, node: "{{ .Params.node }}" }
     spec:
       volumes: [plex-config]
       repository: media-backup-repo

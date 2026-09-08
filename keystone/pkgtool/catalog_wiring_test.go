@@ -558,3 +558,98 @@ func TestEveryPathParamOffersAPicker(t *testing.T) {
 		t.Fatal("no path params found at all — the walk is broken, not the packages")
 	}
 }
+
+// TestSiblingProfilesDoNotCollide: two packages providing the same
+// capability may now BOTH be installed (ADR-W029 A7), so any resource
+// name they share has to mean the same thing in both.
+//
+// Sharing a name is not itself wrong. books-calibre-web and books-kavita
+// both declare Secret/restic-books and Volume/books-backup-repo with
+// identical specs — one repository for the household's books, whichever
+// app is reading them — and installing both simply converges on the same
+// resource twice.
+//
+// Declaring the same name with a DIFFERENT spec is wrong, and was the
+// one real obstacle to running two profiles side by side: both book
+// packages declared BackupPlan/books, differing only in which config
+// volume they backed up, so whichever installed second silently redefined
+// the first one's backup. Same for media-jellyfin and media-plex.
+//
+// The fix is to name such a resource for the profile rather than the
+// capability. This test is what keeps the next author from reaching for
+// the capability name out of habit.
+func TestSiblingProfilesDoNotCollide(t *testing.T) {
+	byCapability := map[string]map[string]shipped{}
+	for name, sp := range walkShipped(t) {
+		cap := sp.pkg.Metadata.Capability
+		if byCapability[cap] == nil {
+			byCapability[cap] = map[string]shipped{}
+		}
+		byCapability[cap][name] = sp
+	}
+
+	type origin struct{ pkg, spec string }
+	compared := 0
+	for cap, siblings := range byCapability {
+		if len(siblings) < 2 {
+			continue
+		}
+		// An exclusive capability replaces its sibling rather than
+		// running beside it, so a shared name can never be live twice.
+		exclusive := false
+		for _, sp := range siblings {
+			if sp.pkg.Metadata.Exclusive {
+				exclusive = true
+			}
+		}
+		if exclusive {
+			continue
+		}
+		t.Run(cap, func(t *testing.T) {
+			compared++
+			seen := map[string]origin{}
+			for _, pkgName := range sortedNames(siblings) {
+				for _, r := range siblings[pkgName].rendered {
+					key := string(r.Kind) + "/" + r.Metadata.Name
+					// Compare the SPEC, not the whole resource: metadata
+					// carries the package name, which differs by
+					// construction and is not a disagreement.
+					body, err := resource.Marshal(resource.Resource{
+						ApiVersion: r.ApiVersion, Kind: r.Kind,
+						Metadata:  resource.Metadata{Name: r.Metadata.Name, Owner: r.Metadata.Owner, Node: r.Metadata.Node},
+						Container: r.Container, Route: r.Route, Volume: r.Volume, Secret: r.Secret,
+						ConfigFile: r.ConfigFile, BackupPlan: r.BackupPlan, OidcClient: r.OidcClient,
+						SeedFile: r.SeedFile, Job: r.Job, LdapGroup: r.LdapGroup, Ingress: r.Ingress,
+						DnsRecord: r.DnsRecord,
+					})
+					if err != nil {
+						t.Fatalf("%s: marshalling %s: %v", pkgName, key, err)
+					}
+					prev, clash := seen[key]
+					if clash && prev.spec != string(body) {
+						t.Errorf("%s and %s both declare %s with different specs.\n"+
+							"Two profiles of capability %q can now run side by side, so a shared name must mean "+
+							"the same thing in both. Name it for the profile instead (e.g. %s-<profile>).",
+							prev.pkg, pkgName, key, cap, cap)
+						continue
+					}
+					if !clash {
+						seen[key] = origin{pkg: pkgName, spec: string(body)}
+					}
+				}
+			}
+		})
+	}
+	if compared == 0 {
+		t.Fatal("no plural capability had two profiles to compare — this test walked nothing")
+	}
+}
+
+func sortedNames(m map[string]shipped) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}

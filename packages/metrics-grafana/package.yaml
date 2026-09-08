@@ -23,7 +23,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: metrics-grafana
-  version: 1.0.0
+  version: 1.0.1
   capability: metrics
   profile: grafana
 requires:
@@ -96,7 +96,7 @@ templates:
     spec:
       image: "grafana/grafana@sha256:f772d434e8fab0049deb2b1b30abd43342bcfca1537614aa8d36080232cf4283"
       env:
-        GF_SERVER_ROOT_URL: "https://grafana.{{ .Params.public_domain }}"
+        GF_SERVER_ROOT_URL: '{{ origin (printf "grafana.%s" .Params.public_domain) }}'
         GF_SECURITY_ADMIN_USER: admin
         GF_SECURITY_ADMIN_PASSWORD: "secret/grafana-admin-password"
         GF_USERS_ALLOW_SIGN_UP: "false"

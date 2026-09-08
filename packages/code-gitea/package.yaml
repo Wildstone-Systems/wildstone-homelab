@@ -29,7 +29,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: code-gitea
-  version: 1.0.0
+  version: 1.0.1
   capability: code
   profile: gitea
 requires:
@@ -37,7 +37,7 @@ requires:
 params:
   - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
   - { name: ssh_listen_addr, required: true, example: "100.64.0.1", description: "Which address on this machine accepts git-over-SSH, normally its tailnet address (tailscale ip -4). Use 0.0.0.0 to mean every interface." }
 policies:
   classifications: [admin_tailscale]
@@ -70,7 +70,7 @@ templates:
         USER_GID: "1000"
         GITEA__database__DB_TYPE: sqlite3
         GITEA__server__DOMAIN: "git.{{ .Params.admin_domain }}"
-        GITEA__server__ROOT_URL: "https://git.{{ .Params.admin_domain }}/"
+        GITEA__server__ROOT_URL: '{{ origin (printf "git.%s" .Params.admin_domain) }}/'
         GITEA__server__SSH_DOMAIN: "git.{{ .Params.admin_domain }}"
         GITEA__server__SSH_PORT: "2222"
         GITEA__service__DISABLE_REGISTRATION: "true"

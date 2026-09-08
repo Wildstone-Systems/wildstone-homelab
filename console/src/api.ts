@@ -228,6 +228,8 @@ export interface ServiceAddress {
 export interface ResourceRef {
   kind: string;
   name: string;
+  // A Secret's one-line explanation, when its package declares one.
+  purpose?: string;
 }
 
 export interface PackageView {

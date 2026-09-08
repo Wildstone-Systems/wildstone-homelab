@@ -19,9 +19,10 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: identity
-  version: 1.0.0
+  version: 1.0.1
   capability: identity
   profile: authelia-lldap
+  exclusive: true
 provides:
   # WHAT THIS PACKAGE HANDS TO ITS CONSUMERS (ADR-W025 A2). These three
   # values were computed inside the Capability Engine, from a hardcoded

@@ -28,7 +28,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: zigbee-zigbee2mqtt
-  version: 1.0.0
+  version: 1.0.1
   capability: zigbee
   profile: zigbee2mqtt
 requires:
@@ -37,7 +37,7 @@ requires:
 params:
   - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
   - { name: usb_device, default: "", example: "/dev/serial/by-id/usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_0001-if00-port0", description: "A USB Zigbee stick plugged into this machine, by its name under /dev/serial/by-id/. Leave empty to use a network coordinator instead." }
   - { name: coordinator_url, default: "tcp://192.168.1.60:6638", description: "Where a network Zigbee coordinator is, e.g. tcp://192.168.1.60:6638. Ignored when usb_device is set." }
   - { name: coordinator_adapter, default: zstack, description: "The coordinator's chip family: zstack, ember, deconz, zigate or zboss." }

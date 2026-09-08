@@ -14,12 +14,12 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: captcha-flaresolverr
-  version: 1.0.0
+  version: 1.0.1
   capability: captcha-solver
   profile: flaresolverr
 params:
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
 policies:
   classifications: [internal_only]
   dataSensitivity: low

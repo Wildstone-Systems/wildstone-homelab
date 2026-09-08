@@ -20,7 +20,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: ai-open-webui
-  version: 1.0.0
+  version: 1.0.1
   capability: ai-chat
   profile: open-webui
 requires:
@@ -63,7 +63,7 @@ templates:
       image: "ghcr.io/open-webui/open-webui@sha256:1a6399d237dc392a2313e0ca826020b3fd5d22536357840eb63393d18dc8b924"
       env:
         OLLAMA_BASE_URL: "{{ .Params.ollama_url }}"
-        WEBUI_URL: "https://{{ .Params.chat_subdomain }}.{{ .Params.public_domain }}"
+        WEBUI_URL: '{{ origin (printf "%s.%s" .Params.chat_subdomain .Params.public_domain) }}'
         WEBUI_SECRET_KEY: "secret/open-webui-secret-key"
         ENABLE_SIGNUP: "false"
         ENABLE_OAUTH_SIGNUP: "true"

@@ -85,6 +85,12 @@ type Server struct {
 	// suggesting an address nothing can reach.
 	APIURL string
 
+	// HouseholdTimezone is the IANA zone this deployment keeps, wired
+	// from -household-timezone. It is offered as the answer to any
+	// param declaring `source: timezone`, so a household states its
+	// clock once instead of on every install form.
+	HouseholdTimezone string
+
 	// ButlerHost hosts the Butler ask endpoint (ADR-W017 A2/A4) —
 	// cmd/keystone wires it from -butler-provider. nil leaves ask
 	// answering 503; session history stays readable.
@@ -173,6 +179,7 @@ func (s *Server) Handler() http.Handler {
 	// so the Console and wild reach it through the same one API.
 	mux.Handle("GET /api/v1/packages", s.handle(principal.VerbRead, s.listPackages))
 	mux.Handle("POST /api/v1/capabilities", s.handle(principal.VerbPropose, s.enableCapability))
+	mux.Handle("POST /api/v1/capabilities/disable", s.handle(principal.VerbPropose, s.disableCapability))
 	mux.Handle("POST /api/v1/plans/{id}/approve", s.handle(principal.VerbApprove, s.approvePlan))
 	mux.Handle("POST /api/v1/plans/{id}/reject", s.handle(principal.VerbApprove, s.rejectPlan))
 

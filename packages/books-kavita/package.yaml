@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: books-kavita
-  version: 1.0.1
+  version: 1.0.2
   capability: books
   profile: kavita
 requires:
@@ -30,7 +30,7 @@ params:
   - { name: books_subdomain, default: kavita, description: "The name this service appears under, e.g. kavita." }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
   - { name: books_path, default: /srv/wildstone/media/books, description: "Folder on this machine holding your books and comics.", source: directory }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
 policies:
   classifications: [family_private]
   dataSensitivity: low
@@ -74,7 +74,7 @@ templates:
   - |
     apiVersion: wildstone.dev/v1
     kind: BackupPlan
-    metadata: { name: books, node: "{{ .Params.node }}" }
+    metadata: { name: books-kavita, node: "{{ .Params.node }}" }
     spec:
       volumes: [kavita-config]
       repository: books-backup-repo

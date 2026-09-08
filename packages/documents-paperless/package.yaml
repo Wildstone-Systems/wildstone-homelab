@@ -22,7 +22,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: documents-paperless
-  version: 1.0.0
+  version: 1.0.1
   capability: documents
   profile: paperless
 requires:
@@ -38,7 +38,7 @@ params:
   # package's own node, which is right for a single-node homelab; set it
   # explicitly when identity runs elsewhere.
   - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
 policies:
   classifications: [family_public]
   dataSensitivity: high
@@ -169,7 +169,7 @@ templates:
         PAPERLESS_TIKA_ENABLED: "1"
         PAPERLESS_TIKA_GOTENBERG_ENDPOINT: "http://paperless-gotenberg:3000"
         PAPERLESS_TIKA_ENDPOINT: "http://paperless-tika:9998"
-        PAPERLESS_URL: "https://{{ .Params.docs_subdomain }}.{{ .Params.public_domain }}"
+        PAPERLESS_URL: '{{ origin (printf "%s.%s" .Params.docs_subdomain .Params.public_domain) }}'
         PAPERLESS_SECRET_KEY: "secret/paperless-secret-key"
         PAPERLESS_TIME_ZONE: "{{ .Params.timezone }}"
         PAPERLESS_ENABLE_OAUTH_USER_LOGIN: "true"

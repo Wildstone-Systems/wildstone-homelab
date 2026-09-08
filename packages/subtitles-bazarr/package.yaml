@@ -16,7 +16,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: subtitles-bazarr
-  version: 1.0.1
+  version: 1.0.2
   capability: subtitles
   profile: bazarr
 requires:
@@ -26,7 +26,7 @@ requires:
 params:
   - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
   - { name: media_path, default: /srv/wildstone/media, description: "Folder on this machine holding your library.", source: directory }
 policies:
   classifications: [admin_tailscale]

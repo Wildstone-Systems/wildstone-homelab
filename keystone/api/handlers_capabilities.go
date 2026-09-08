@@ -78,6 +78,10 @@ type deploymentFacts struct {
 	// renders as an ordinary blank rather than a guess.
 	keystoneURL      string
 	chatAdapterImage string
+	// timezone is the household's clock, as Keystone was started with.
+	// Empty when it is the default "Local", which is not a zone anybody
+	// means and not an answer worth suggesting.
+	timezone string
 }
 
 // gatherFacts reads what the deployment already knows.
@@ -106,6 +110,9 @@ func (s *Server) gatherFacts() deploymentFacts {
 		return f
 	}
 	f.keystoneURL = s.APIURL
+	if s.HouseholdTimezone != "Local" {
+		f.timezone = s.HouseholdTimezone
+	}
 
 	counts := map[string]int{}
 	// The adapter image an installed chat capability already runs. Two
@@ -155,6 +162,8 @@ func resolveParams(decls []pkgspec.ParamDecl, f deploymentFacts, installed map[s
 			v.Suggested = f.keystoneURL
 		case "chat_adapter_image":
 			v.Suggested = f.chatAdapterImage
+		case "timezone":
+			v.Suggested = f.timezone
 		}
 		out = append(out, v)
 	}
@@ -181,6 +190,11 @@ type serviceAddress struct {
 type resourceRef struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
+	// Purpose is a Secret's one-line explanation, carried here so the
+	// Secrets screen can say what a name means. Joined from the package
+	// rather than from the node: the node holds values and knows
+	// nothing about what they are for.
+	Purpose string `json:"purpose,omitempty"`
 }
 
 // capabilityDetail is what the Services page could not previously say
@@ -248,7 +262,11 @@ func (s *Server) describeCapability(pkg *pkgspec.Package, current []resource.Res
 		if r.Metadata.Owner != owner {
 			continue
 		}
-		d.Resources = append(d.Resources, resourceRef{Kind: string(r.Kind), Name: r.Metadata.Name})
+		ref := resourceRef{Kind: string(r.Kind), Name: r.Metadata.Name}
+		if r.Kind == resource.KindSecret && r.Secret != nil {
+			ref.Purpose = r.Secret.Purpose
+		}
+		d.Resources = append(d.Resources, ref)
 		if r.Kind != resource.KindRoute || r.Route == nil || r.Route.Host == "" {
 			continue
 		}
@@ -386,13 +404,35 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 // the whole plan every tick until F60 set it aside, taking the rest of
 // the upgrade with it. A package that stops declaring a volume leaves
 // the data exactly where it is.
-func droppedByUpgrade(capName string, current, rendered []resource.Resource) []plan.DeletionRef {
-	owner := "capability/" + capName
+//
+// NEITHER IS A SIBLING PROFILE'S. This is scoped to the package being
+// installed, not to its capability, and the difference is the whole
+// point of the Package field on a resource's metadata. Owner names the
+// CAPABILITY, so books-calibre-web and books-kavita both render
+// resources owned by "capability/books"; keyed on owner alone, enabling
+// one read the other's container and Route as leftovers of an upgrade
+// and proposed deleting them. Installing one book app uninstalled the
+// other, and a household that wanted to compare them, or simply wanted
+// both, had no way to say so (ADR-W029 A7).
+//
+// Replacing a sibling is now something a capability must ask for —
+// `exclusive: true`, for the ones where two really cannot coexist — and
+// when it does, the deletions are named in the plan rather than
+// happening as a side effect of an install nobody read as a removal.
+func droppedByUpgrade(pkg *pkgspec.Package, current, rendered []resource.Resource) []plan.DeletionRef {
+	owner := "capability/" + pkg.Metadata.Capability
 	type key struct{ kind, name string }
 	produced := map[key]bool{}
 	for _, r := range rendered {
 		produced[key{string(r.Kind), r.Metadata.Name}] = true
 	}
+	// Resources written before Metadata.Package existed carry no
+	// provenance. Attributing them to this package is right exactly when
+	// this package is the profile actually installed — the same question
+	// packageIsTheInstalledOne already answers for the Console, and the
+	// same heuristic, so a legacy deployment upgrades as it always did
+	// and a legacy SIBLING is still left alone.
+	legacyIsMine := packageIsTheInstalledOne(pkg, current)
 	var out []plan.DeletionRef
 	for _, r := range current {
 		if r.Metadata.Owner != owner {
@@ -400,6 +440,18 @@ func droppedByUpgrade(capName string, current, rendered []resource.Resource) []p
 		}
 		if r.Kind == resource.KindVolume || r.Kind == resource.KindSeedFile {
 			continue
+		}
+		switch r.Metadata.Package {
+		case pkg.Metadata.Name:
+			// Mine: an earlier version of this same package.
+		case "":
+			if !legacyIsMine {
+				continue
+			}
+		default:
+			if !pkg.Metadata.Exclusive {
+				continue // a sibling profile, and both may run
+			}
 		}
 		if produced[key{string(r.Kind), r.Metadata.Name}] {
 			continue
@@ -524,7 +576,7 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 		Summary: fmt.Sprintf("enable capability %s (package %s %s)",
 			pkg.Metadata.Capability, pkg.Metadata.Name, pkg.Metadata.Version),
 		Put:    docs,
-		Delete: droppedByUpgrade(pkg.Metadata.Capability, current, rendered),
+		Delete: droppedByUpgrade(pkg, current, rendered),
 	}, proposalOpts{
 		DryRun: req.DryRun,
 		Origin: &plan.CapabilityOrigin{
@@ -545,4 +597,210 @@ func (s *Server) withVersion(pkg *pkgspec.Package, d capabilityDetail, versions 
 	d.InstalledVersion = v
 	d.Stale = v != pkg.Metadata.Version
 	return d
+}
+
+type disableRequest struct {
+	Package string `json:"package"`
+	DryRun  bool   `json:"dryRun,omitempty"`
+}
+
+// disableCapability removes what ONE PACKAGE produced.
+//
+// It names a package rather than a capability, everywhere, including for
+// the capabilities that only ever have one profile. Two profiles can now
+// run side by side (ADR-W029 A7), which makes "disable books" a sentence
+// with three possible meanings — drop Calibre-Web, drop Kavita, drop
+// both — and the reading it used to take was the most destructive one.
+//
+// It lives here rather than in the CLI because answering it correctly
+// needs the catalog and the recorded install params, and the CLI has
+// neither. Computing it client-side from /api/v1/resources produced two
+// bugs in a row, and the second is the one that matters: both book
+// packages declare Secret/restic-books, the restic repository password.
+// Whichever installed last owns the stamp on it, so disabling that one
+// proposed deleting a secret the surviving app still needs — and losing
+// a repository password is not a broken backup, it is an unreadable one.
+//
+// So a resource a STILL-INSTALLED sibling would render is never deleted,
+// which is exactly the shared-name case the catalog blesses: identical
+// specs, one household repository, whichever app is reading the books.
+//
+// DATA IS NEVER PROPOSED FOR DELETION, the rule droppedByUpgrade has and
+// this never got. Volumes and SeedFiles belong to the household
+// (ADR-W004 A4), and the reconciler refuses a Volume Delete outright —
+// so proposing one never removed data, it only guaranteed the plan ended
+// in a failing step retried every tick until F60 set it aside. Removing
+// an app is not removing the library it was reading.
+func (s *Server) disableCapability(r *http.Request, id principal.Identity) (any, int, error) {
+	if s.Catalog == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("no catalog is configured (keystone -catalog-dir)")
+	}
+	var req disableRequest
+	if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxProposalBytes)).Decode(&req); err != nil {
+		return nil, http.StatusBadRequest, fmt.Errorf("parsing request: %w", err)
+	}
+	if req.Package == "" {
+		return nil, http.StatusBadRequest, fmt.Errorf("package required")
+	}
+	current, err := s.State.Load()
+	if err != nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("loading statefile: %w", err)
+	}
+
+	pkg, err := s.Catalog.Get(req.Package, "")
+	if err != nil {
+		// A capability name is the likely mistake, and it has a good
+		// answer: the packages actually installed under it.
+		if installed := packagesUnder(req.Package, current); len(installed) > 0 {
+			return nil, http.StatusBadRequest, fmt.Errorf(
+				"%q is a capability, not a package — installed under it: %s. Name the one to remove",
+				req.Package, strings.Join(installed, ", "))
+		}
+		return nil, http.StatusNotFound, err
+	}
+	owner := "capability/" + pkg.Metadata.Capability
+
+	// What a surviving sibling still needs. Expanded from its own
+	// recorded params, so this is what it WOULD render today, not what
+	// happened to be stamped with its name.
+	_, installedParams := s.installedFromPlans()
+	enabled, err := s.enabledCapabilities()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	survives := map[[2]string]bool{}
+	for _, sib := range s.Catalog.List() {
+		if sib.Metadata.Name == pkg.Metadata.Name || sib.Metadata.Capability != pkg.Metadata.Capability {
+			continue
+		}
+		if !packageIsInstalled(sib, current) {
+			continue
+		}
+		rendered, err := capability.NewEngine().Expand(sib, installedParams[sib.Metadata.Name],
+			capability.NewCatalog(append([]*pkgspec.Package{sib}, s.Catalog.ProvidersFor(enabled)...)...).WithCurrent(current))
+		if err != nil {
+			// A sibling that cannot be expanded is a sibling whose needs
+			// are unknown, and deleting what it might need on that basis
+			// is the wrong way to be wrong.
+			return nil, http.StatusConflict, fmt.Errorf(
+				"cannot determine what %s still needs (%v) — refusing to propose deletions that might belong to it",
+				sib.Metadata.Name, err)
+		}
+		for _, rr := range rendered {
+			survives[[2]string{string(rr.Kind), rr.Metadata.Name}] = true
+		}
+	}
+
+	deletes := deletesForDisable(pkg.Metadata.Name, owner, current, survives)
+	if len(deletes) == 0 {
+		return nil, http.StatusBadRequest, fmt.Errorf("package %q has nothing installed to remove", req.Package)
+	}
+
+	return s.submitProposalOpts(id, proposalRequest{
+		Summary: fmt.Sprintf("disable %s (%d resource(s) removed)", pkg.Metadata.Name, len(deletes)),
+		Delete:  deletes,
+	}, proposalOpts{DryRun: req.DryRun})
+}
+
+// packagesUnder lists the packages with resources under a capability.
+func packagesUnder(capName string, current []resource.Resource) []string {
+	owner := "capability/" + capName
+	set := map[string]bool{}
+	for _, r := range current {
+		if r.Metadata.Owner == owner && r.Metadata.Package != "" {
+			set[r.Metadata.Package] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// packageIsInstalled reports whether this package's own containers are
+// present — the same question packageIsTheInstalledOne answers, asked of
+// a sibling rather than of the package being acted on.
+func packageIsInstalled(pkg *pkgspec.Package, current []resource.Resource) bool {
+	for _, r := range current {
+		if r.Metadata.Package == pkg.Metadata.Name {
+			return true
+		}
+	}
+	names := pkgspec.ContainerNames(pkg)
+	if len(names) == 0 {
+		return false
+	}
+	present := map[string]bool{}
+	for _, r := range current {
+		if r.Kind == resource.KindContainer {
+			present[r.Metadata.Name] = true
+		}
+	}
+	for _, n := range names {
+		if present[n] {
+			return true
+		}
+	}
+	return false
+}
+
+// deletesForDisable picks the resources a disable may remove.
+//
+// Pure, and separate, because this is the part that was wrong twice.
+// Both mistakes were about BOUNDARIES rather than about the rule:
+//
+//   - Scoped per capability instead of to the named package's own
+//     capability, the legacy rule below applied to every capability with
+//     no stamped resources — so disabling one book app selected
+//     Authelia, LLDAP, Caddy, the dashboard and the chat adapters: 34
+//     resources, from a command naming one app.
+//   - Scoped correctly but with no notion of what a sibling still needs,
+//     it selected Secret/restic-books, the restic repository password
+//     that the SURVIVING book app also uses. A lost repository password
+//     is not a broken backup, it is an unreadable one.
+//
+// survives is keyed {kind, name} and holds what a still-installed
+// sibling would render today.
+func deletesForDisable(pkgName, owner string, current []resource.Resource, survives map[[2]string]bool) []deletionRef {
+	// A legacy resource carries no provenance, and belongs to this
+	// package only when nothing else has claimed the capability.
+	claimed := map[string]bool{}
+	for _, rr := range current {
+		if rr.Metadata.Owner == owner && rr.Metadata.Package != "" {
+			claimed[rr.Metadata.Package] = true
+		}
+	}
+	legacyIsMine := len(claimed) == 0 || (len(claimed) == 1 && claimed[pkgName])
+
+	var out []deletionRef
+	for _, rr := range current {
+		if rr.Metadata.Owner != owner {
+			continue // never another capability's, whatever its provenance
+		}
+		switch {
+		case rr.Metadata.Package == pkgName:
+		case rr.Metadata.Package == "":
+			if !legacyIsMine {
+				continue
+			}
+		default:
+			continue // a sibling profile's
+		}
+		if rr.Kind == resource.KindVolume || rr.Kind == resource.KindSeedFile {
+			continue // the household's data, never ours to propose removing
+		}
+		if survives[[2]string{string(rr.Kind), rr.Metadata.Name}] {
+			continue // a sibling still needs it
+		}
+		out = append(out, deletionRef{Kind: string(rr.Kind), Name: rr.Metadata.Name})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }
