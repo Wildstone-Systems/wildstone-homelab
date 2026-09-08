@@ -23,7 +23,7 @@ chat-telegram-admin 1.0.2 81fda57e489701e6
 chat-telegram-family 1.0.2 985c13742423aaf2
 code-gitea 1.0.1 44a8494cd02dee51
 dashboard 1.0.1 c0a5ca5341926568
-dashboard-homarr 1.0.1 2749995ac7e10227
+dashboard-homarr 1.0.2 f31d853c7a936b2d
 dns-adguard 1.0.1 64b38a3352ca358e
 dns-pihole 1.0.1 580d2adc5d34c138
 documents-paperless 1.0.2 a258d873b4e143bc
@@ -32,7 +32,7 @@ feeds-freshrss 1.0.1 8a75bb28ea9c6465
 files-filebrowser 1.0.1 39f776ac3cd55073
 home-assistant 1.1.1 61f41ec056cd74c0
 home-automation 1.0.3 08e9b3aa603b35a1
-identity 1.0.1 3ecb45775f22d3c4
+identity 1.0.3 ed4fba24115b43f9
 indexers-prowlarr 1.0.2 9dfa451d4d3ec5ba
 ingress 1.0.2 4bbd2bd5e6db1d92
 ingress-tailnet 1.0.1 59e7276e5bb0a51c
