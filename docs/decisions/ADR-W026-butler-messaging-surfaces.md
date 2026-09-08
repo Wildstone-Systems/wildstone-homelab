@@ -13,6 +13,33 @@
   binding. Part B is the build order; each package gets its own spec
   when it is scheduled.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. Household and
+Operator remain separate bot credentials, principals, endpoints, and
+structurally different gateways. Handoff is explicit every time and never
+executes the pending operation in the destination automatically. They present
+one assistant identity and may continue one of several shared conversations
+only after current identity, profile, person, and audience checks.
+
+Trusted admitted adults may read the household-shared timeline in direct
+sessions. Private sources retain narrower access, and group sessions keep the
+existing conservative member/audience filter. Previously built privileged
+model context is never reused across a surface change.
+
+A future Child bot is a third surface, not a mode switch: it requires separate
+credentials, role, endpoint, gateway, explicit child/guardian admission, and
+boundary tests. It is disabled until those checks and transport eligibility
+are complete.
+
+Chat may approve only an exact household-action proposal in an authenticated
+direct session, using a proposal ID/revision, intended approver, expiry, and
+single-use token. Group chat, silence, and ordinary recent-question replies do
+not approve. A Plan link may open authenticated Console review, but no chat
+callback approves infrastructure or standing authority. Proactive task and
+continuation notices follow quiet-hours, privacy, routing, and deduplication
+policy.
+
 ---
 
 ## The intent, in one sentence

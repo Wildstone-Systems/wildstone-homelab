@@ -13,6 +13,34 @@
   Part B is the build order. Not an implementation spec yet — each work
   package in Part B gets its own spec when it is scheduled.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. The deterministic
+household timeline remains authoritative for rule decisions and action
+outcomes. Durable task rows add agent steps, waits, attempts, and completion
+evidence linked by occurrence/action IDs; they do not duplicate deterministic
+truth. `automation.acted` remains a dispatch claim rather than proof that an
+external effect succeeded.
+
+The service-package integration lifecycle expands in two ways. A managed app
+keeps its package-owned adapter; a connection-only package manages a named
+connection to an externally hosted app without claiming ownership of that app.
+V1 adapters are package-managed containers on Wildstone nodes and exchange
+typed query/action work through the connection-bound adapter queue in W030.
+Event intake, live queries, and optional memory indexing remain separate.
+
+Native routines stay in the application that owns them and are declared and
+changed through Plans. Wildstone owns cross-application routines. Removing a
+connection never silently deletes a remote routine. Local disable immediately
+stops new Wildstone dispatch; stopping native execution requires an explicitly
+authorized adapter operation or a Plan.
+
+Publication declarations gain the audience policy specified by the W005
+amendment. Consequential household actions use exact, expiring, single-use
+proposals bound to an authenticated person. Infrastructure writes remain Plans
+and cannot be approved through chat. General durable agent steps run behind a
+distinct grant/context boundary and do not widen the restricted Phraser.
+
 ---
 
 ## The intent, in one sentence

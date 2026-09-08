@@ -5,6 +5,16 @@
   ADR-W006 A3 (the S4 spike rule this generalizes), ADR-W007 A6/K3
 - **Audience:** decision record AND implementation spec for E4.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. Plans that increase
+standing Butler authority, admit/link identities, or create/change routines
+pass through the same policy engine as other desired-state changes. Temporary
+task grants remain bounded human-approved runtime records and are checked at
+dispatch. Immediate disable/revocation is a negative control that cannot be
+auto-reversed by reconciliation or policy; a separate cleanup Plan brings
+desired state back into agreement.
+
 ---
 
 # Part A — Decisions (binding)

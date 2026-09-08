@@ -7,6 +7,22 @@
   the planning conversation. Parts A–B are binding; if a work package
   contradicts them, stop and report.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. The closed role
+table adds `integration-adapter`, limited to connection-bound
+`claim-integration-work` and `report-integration-result` verbs. It receives no
+general read, act, propose, approve, or manage authority. Typed integration
+work uses its own durable queue and claim/result endpoints behind the same
+public API; it does not reuse chat tables or the chat inbound path.
+
+The runtime database also becomes authoritative for task/step attempts,
+conversation turns, waiting reasons, temporary grants, immediate denials,
+identity-link projections, and delivery state. Schema migrations preserve
+correlation to the household timeline without making runtime projections a
+second authority for deterministic outcomes. All new Console, CLI, chat, and
+adapter behavior continues through the public API.
+
 ---
 
 # Part A — Decisions (binding)

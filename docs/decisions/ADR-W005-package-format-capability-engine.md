@@ -6,6 +6,23 @@
   implementation subagents execute Part C without the planning conversation.
   Part A/B binding; contradictions → stop and report.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. `agentTools` remains
+a declaration, never an executor or grant, but its validated metadata expands
+to include purpose, input schema, data/action scope, mutating behavior, and
+approval requirements. The manifest shown to a model is generated from the
+active gateway and resource-kind registry, narrowed by effective authority;
+tests pin both advertised coverage and exclusions so descriptions cannot drift
+from executable capability.
+
+`publishes` gains a validated audience policy. Declared household events
+default to household-shared unless the package declares a narrower audience;
+the resolved policy and provenance are stored at intake. Migration explicitly
+maps existing registered package events and trusted Keystone-owned automation
+and household-answer event paths. Unknown or invalid event types fail closed,
+and a caller-supplied internal source name never establishes trusted origin.
+
 ## Why S3 is the go/no-go gate
 
 S3 exists to answer one question with code: **can a package template the

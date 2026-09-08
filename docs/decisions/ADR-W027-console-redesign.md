@@ -9,6 +9,23 @@
 - **Audience:** decision record AND implementation spec for the
   redesign.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. A session remains a
+principal-bound conversation, while multiple conversations participate in one
+permission-filtered logical history across explicit Household/Operator
+handoffs. The current surface is derived from the destination endpoint and
+stored task/conversation state, never model-selected. Retrieval rechecks
+person, profile, audience, admission, and current denials before constructing
+each model context.
+
+Historical tool traffic still does not replay as fresh truth. Durable work
+resumes from its validated step ledger and refreshes stale observations.
+Console adds active-work states for waiting, stalled/resumable, partially
+complete, completed with an undelivered notice, and terminal failure. Plan
+cards and approval remain authenticated Console actions; chat deep links carry
+only a Plan identifier and destination.
+
 ---
 
 # Part A — Decisions (binding)

@@ -3,7 +3,7 @@
 - **Status:** proposed — draft for discussion; no implementation or permission changes authorized by this record while proposed.
 - **Relates to:** ADR-W004 (Plans), W005/W025 (packages and integrations), W006/W017 (Butler), W007 (Keystone), W009 (policy), W012 (secrets), W020 (identity), W024 (household automation), W026 (messaging), W027 (conversation UX), W028 (failure isolation).
 - **Source:** household-owner design discussion, consolidated in [the capability and design brief](../butler-capability-and-design-brief.md).
-- **Baseline:** main at `cfdf678736a57e18a1e88ef320c6409a8c424aad`.
+- **Baseline:** main at `4479a47ea7a09df0279b7a02a1417b9a58445605`.
 - **Audience:** architecture review. Part A becomes binding on acceptance; implementation details remain separate. Acceptance must include the paired amendments listed in B1 in the same accepting revision, including W027 A11. Proposed status authorizes no implementation or permission change.
 
 ## Intent and problem
@@ -188,18 +188,18 @@ Durable Butler runtime state becomes a fourth recovery category alongside the ex
 
 # Part B — Compatibility, review questions, and consequences
 
-## B1. Proposed amendments; existing records remain unchanged in this PR
+## B1. Companion amendments included in this PR
 
 | Existing contract | Proposed change or preserved constraint |
 |---|---|
 | W026 A1: two surfaces, separate histories/tool sets | A1/A2 propose shared filtered continuity, Operator's Household-plus-admin capability, and a Child profile. Add a separately secured third surface when Child ships and explicit gateway composition with narrowing-only runtime filters. Separate credentials, audience checks, and explicit handoffs remain. |
 | W026 A5: no infrastructure approval over chat | Preserved. A8 adds exact household-action approvals only; no Plan approval through Telegram. |
 | W024 A5/A6 and H6: narrow domestic execution and tool-free phrasing | Preserve the deterministic path and restricted Phraser. General durable agent steps need a distinct enforced grant/context boundary, not silent widening of H6. |
-| W024 A10: integration lifecycle belongs to the service package | Managed apps retain that lifecycle. Connection-only packages add an explicit lifecycle for external apps; removing a connection must not remove the external app. |
+| W024 A10 / W025: integration lifecycle belongs to the service package | Managed apps retain that lifecycle. Connection-only packages add an explicit lifecycle for external apps; removing a connection must not remove the external app. |
 | W006/W017: bounded provider loop and structural operator ceiling | Preserve no-approve/no-arbitrary-host-exec. Add runtime durability, discovery, grant checks, and request records outside the model. |
 | W004/W007/W009: public API, Plans, and policy | Preserve public API parity and host-state Plan mediation. A6/A7.1 distinguish Plan-mediated standing authority/routines/host state from bounded temporary grants, immediate persistent runtime denials, and explicitly authorized stop operations. |
 | Scope §7 and vision | Record the delivery pull-forward and explicit per-profile/data cloud opt-in in A9.1. |
-| W020 identity onboarding | Add principal/member links, Butler admission/disable, guardian mappings, and member-scoped credential onboarding; do not merge identity stores by name. |
+| W012 / W020 identity and secrets | Add principal/member links, Butler admission/disable, guardian mappings, and member-scoped credential onboarding while preserving the write-only node secret path; do not merge identity stores by name. |
 | W018 and docs/recovery.md | Add durable Butler runtime state, recovery-point limits, quarantine, and a restore/revocation exit drill. |
 | W005 tool declarations / W024 A10 publications | Expand registry-backed tool metadata and publication audience policy, including explicit legacy timeline mapping. Declarations are neither executors nor grants. |
 | W007 A2 closed roles | Add connection-bound integration-adapter claim/result verbs; preserve no general act/manage privilege. |
@@ -207,7 +207,7 @@ Durable Butler runtime state becomes a fourth recovery category alongside the ex
 | W003 / W006 Operator reads | Reuse existing ContainerLogs wire operation and bounds; expand only the Operator gateway/reader with redacted, scoped logs. No new protocol arm is proposed. |
 | W027 A11 conversation contract | Amend shared conversation continuity and permission-aware retrieval explicitly in the accepting revision. |
 
-Do not weaken existing structural tests to fit the proposal. Acceptance requires explicit amendments and replacement/expanded boundary tests where behavior changes. The tree currently contains two ADR-W029 filenames; this proposal references them by title/path if needed and does not renumber unrelated history.
+Each record named above now carries a conditional W030 amendment or an explicit preservation note. Those sections become binding only when W030 is accepted; until then the existing contracts remain authoritative. Do not weaken existing structural tests to fit the proposal. Implementation requires replacement/expanded boundary tests where behavior changes. The tree currently contains two ADR-W029 filenames; this proposal references them by title/path if needed and does not renumber unrelated history.
 
 ## B2. Remaining implementation questions
 
@@ -217,7 +217,7 @@ Do not weaken existing structural tests to fit the proposal. Acceptance requires
 - Local retrieval/index technology, compaction quality, and measured resource limits.
 - The smallest complete implementation slice and its acceptance evidence.
 
-These details cannot relax Part A. Acceptance is blocked until the paired B1 contracts are amended; implementation PRs must resolve their applicable schema and migration questions.
+These details cannot relax Part A. The paired B1 amendments are present for review; implementation PRs must resolve their applicable schema and migration questions.
 
 ## B3. Alternatives and consequences
 

@@ -9,6 +9,14 @@
   work package contradicts Part A or B, Part A/B wins — stop and report
   the conflict instead of improvising.
 
+## Preservation note for ADR-W030
+
+ADR-W030 does not add a Wardstone protocol operation. Its Operator-only log
+reader reuses the existing typed `ContainerLogs` arm, ownership checks, and
+1 MiB tail-biased bound. The Butler gateway and reader narrow and redact that
+result; Household receives no log tool. A later need that the current arm
+cannot satisfy still follows A1/A3's reviewed additive protocol process.
+
 ---
 
 # Part A — Decisions (binding, do not re-litigate)

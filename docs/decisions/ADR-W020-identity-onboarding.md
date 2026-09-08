@@ -7,6 +7,27 @@
 - **Audience:** decision record AND implementation spec for the identity
   work package's human half.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. Household identity
+requires an explicit principal-to-member link; equal names and LDAP group
+membership are not identity proof. An administrator creates or changes the
+link and Butler admission through a human-approved Plan in Console/CLI. The
+runtime projection carries a generation checked on every retrieval and
+dispatch. Unlink/disable immediately denies access, invalidates derived grants,
+and pauses affected work while preserving immutable historical attribution.
+
+A future Child surface adds explicit child classification and member-to-
+guardian mappings through the same Plan-mediated admission path. It is not
+inferred from an LDAP group.
+
+Personal CalDAV/IMAP connections use authenticated member-scoped secret input,
+following the existing claim/onboarding and node secret paths. Credentials are
+linked to member, connection, requesting principal, and revocation state;
+adapters receive scoped references/materialized values, while chat, model
+context, and work queues never receive the secret. Revocation immediately
+blocks future ingestion and dispatch.
+
 ---
 
 # Part A — Decisions (binding)

@@ -6,6 +6,17 @@
   scope E8
 - **Audience:** decision record AND implementation spec for E8.
 
+## Preservation note for ADR-W030
+
+ADR-W030's member-scoped application credentials keep this write-only value
+path. Keystone stores member, connection, purpose, node, reference, and
+revocation metadata, never the value; the authenticated secret-input request
+forwards the value to Wardstone exactly as A3 requires. A package-managed
+adapter receives it only through normal container materialization. Chat,
+models, integration work queues, events, memory, and audit never receive the
+value. Immediate connection revocation blocks use of the reference even before
+the associated desired-state cleanup Plan completes.
+
 ---
 
 # Part A — Decisions (binding)

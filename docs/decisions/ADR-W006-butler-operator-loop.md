@@ -6,6 +6,27 @@
 - **Audience:** decision record AND implementation spec for Spike S4. Part A/B
   binding; contradictions → stop and report.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. The operator loop's
+structural ceiling remains: Butler can propose Plans and cannot approve them,
+execute arbitrary shell, or bypass the typed gateway. Dispatch additionally
+intersects the surface ceiling, current identity/admission, connection access,
+tool switch, scoped grant, action approval, and selected model verdict in one
+effective-authority resolver.
+
+Agent work becomes restart-safe through a durable task/step ledger with
+checkpoints before and after each tool invocation. Per-surface model-round and
+tool-call limits are runtime configuration, snapshotted into tasks and bounded
+by aggregate task budgets. A capped, stalled, or provider-failed turn may wait
+and resume from the validated ledger; it does not replay raw tool transcripts,
+reset authority, or repeat verified effects.
+
+The effective tool manifest is available to the model through a read-only
+self-capability tool before it files a durable capability request. Operator may
+gain a scoped, redacted, bounded container-log reader using Wardstone's
+existing `ContainerLogs` operation. Household never receives that reader.
+
 ## What S4 proves
 
 That an LLM can operate Wildstone safely: it reads system state through tools,
