@@ -179,6 +179,17 @@ var ParamSources = map[string]bool{
 	// should not have to be told a digest the first one is already
 	// using.
 	"chat_adapter_image": true,
+	// Where household events are POSTed: the API's address plus the
+	// intake path, as something running ON A NODE reaches it.
+	//
+	// Distinct from keystone_url, which is the base. A package that
+	// hands the value straight to an external system — Home Assistant's
+	// rest_command, say — needs the whole endpoint, and making the
+	// operator append /api/v1/household/events is asking them to look up
+	// a path the control plane already knows. Sourcing only the base
+	// instead, and appending in the template, doubles the path for
+	// anyone who supplied the full URL under the old contract.
+	"household_intake_url": true,
 	// The household's time zone, which Keystone already keeps for the
 	// automation engine's timeOfDay rules.
 	//

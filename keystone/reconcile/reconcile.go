@@ -59,6 +59,7 @@
 package reconcile
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -1811,10 +1812,23 @@ func (r *Reconciler) applyRouteStep(ctx context.Context, nodeID string, step pla
 	}
 
 	if step.Action == plan.ActionDelete {
+		// Read back what a delete actually WRITES, which is the tombstone
+		// above and deliberately not empty bytes (F30). Asserting
+		// len == 0 here asserted the opposite of what the same function
+		// had just done twenty lines earlier, so the gate could never
+		// pass: every Route deletion was recorded as rolled back, the
+		// plan halted there, and the steps after it — the Container
+		// delete, every time — were never attempted.
+		//
+		// That is where removals left a container running with no route
+		// to it, and why "disable capability" reported failure while
+		// having plainly done something. The file is gone as far as
+		// Caddy is concerned either way; only the verdict was wrong.
 		checkRes, checkErr := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ReadManagedFile{
 			ReadManagedFile: &wsv1.ReadManagedFile{Path: path},
 		}})
-		sr.HealthOK = checkErr == nil && checkRes.GetError() == nil && len(checkRes.GetReadManagedFile().GetContent()) == 0
+		sr.HealthOK = checkErr == nil && checkRes.GetError() == nil &&
+			bytes.Equal(checkRes.GetReadManagedFile().GetContent(), content)
 		if sr.HealthOK {
 			r.markManaged(nodeID, key, false)
 		}

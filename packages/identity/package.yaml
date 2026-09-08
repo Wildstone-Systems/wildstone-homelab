@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: identity
-  version: 1.0.1
+  version: 1.0.3
   capability: identity
   profile: authelia-lldap
   exclusive: true
@@ -135,6 +135,21 @@ templates:
       image: "lldap/lldap@sha256:2a8454b668c1aba7157e832eab0e242e1e7eb5fb7591d7e7774ba05286511ca8"
       env:
         LLDAP_LDAP_BASE_DN: "{{ .Params.ldap_base_dn }}"
+        # LLDAP creates its bootstrap admin from these, and without an
+        # email it creates one that CANNOT SIGN IN TO ANYTHING.
+        #
+        # Authelia emits an email claim only when the directory has one,
+        # and an app that needs it rejects the login with no useful
+        # message. Three shipped apps do: Open WebUI answers "The email
+        # or password provided is incorrect", Homarr's Auth.js throws
+        # OAuthProfileParseError and bounces to ?error=Configuration, and
+        # Immich rejects it the same way. Each reads as a broken app,
+        # and each is one missing field on one account.
+        #
+        # It need not be deliverable — Authelia's notifier writes to a
+        # file (ADR-W020 A6), and this address is an identifier, not a
+        # mailbox.
+        LLDAP_LDAP_USER_EMAIL: "admin@{{ .Params.public_domain }}"
         LLDAP_LDAP_USER_PASS: "secret/lldap-admin-password"
         LLDAP_JWT_SECRET: "secret/lldap-jwt-secret"
       mounts:
@@ -172,6 +187,27 @@ templates:
       content: |
         # managed by wildstone — do not edit
         theme: light
+        # Authelia's read buffer, raised from its 4096-byte default.
+        #
+        # Under the tailnet posture every service is ONE HOSTNAME on a
+        # different port, and cookies ignore ports (RFC 6265 §8.5: "cookies
+        # do not provide isolation by port"). So every app on this
+        # deployment shares one cookie jar, and the browser sends all of
+        # them to Authelia on every forward-auth check and every visit to
+        # the portal. With nineteen services that header passed 4KB and
+        # Authelia answered 431 to requests that were otherwise fine:
+        #
+        #   Request from client exceeded the server read buffer.
+        #   Buffer size=4096 ... status_code=431
+        #
+        # 64KB is chosen against what the jar can plausibly reach rather
+        # than against what it holds today — the whole point is that it
+        # grows by one entry every time a household installs anything.
+        # It is a buffer size, not an allocation: fasthttp grows into it.
+        server:
+          buffers:
+            read: 65536
+            write: 65536
         log:
           level: info
 

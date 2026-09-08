@@ -114,7 +114,10 @@ var explainResourceSpec = provider.Tool{
 	InputSchema: map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"kind": map[string]any{"type": "string", "description": "Resource kind, e.g. Container, Route, OidcClient."},
+			// Generated too, and for a sharper reason: this is the tool
+			// the model is pointed at to LEARN a spec's shape, and it
+			// named three of fourteen kinds.
+			"kind": map[string]any{"type": "string", "description": kindDescription()},
 			"name": map[string]any{"type": "string", "description": "Resource name."},
 		},
 		"required": []string{"kind", "name"},

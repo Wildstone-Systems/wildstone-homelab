@@ -163,6 +163,67 @@ var inertEnv = []struct {
 	},
 }
 
+// requiredEnv is the mirror of inertEnv: env vars an image REFUSES TO
+// START without.
+//
+// The two tables are the same knowledge from opposite ends, and both
+// have to be written down for the same reason — nothing in a manifest
+// says which variables a binary reads, let alone which it insists on.
+// inertEnv catches configuring an app through a door it does not have;
+// this catches not configuring it through the door it requires.
+//
+// inventory-homebox is the first row and the reason the table exists. It
+// shipped without HBOX_AUTH_API_KEY_PEPPER, which Homebox panics on
+// before it opens its database:
+//
+//	panic: auth.api_key_pepper must be set to at least 32 bytes
+//
+// The Container reconciled, Docker reported it, the capability showed as
+// installed — and the app crash-looped 58 times behind a 502. A package
+// that cannot start the app it installs is the failure this whole ADR is
+// about, and it is trivially checkable once someone has read the app's
+// startup path and written the answer here.
+var requiredEnv = []struct {
+	image string
+	env   []string
+	why   string
+}{
+	{
+		image: "sysadminsmedia/homebox",
+		env:   []string{"HBOX_AUTH_API_KEY_PEPPER"},
+		why: "Homebox panics at startup without it — \"auth.api_key_pepper must be set to at least 32 bytes\" — " +
+			"before it opens its database. Declare a Secret with lengthBytes: 48 and reference it here",
+	},
+}
+
+// requiredEnvIssues reports env vars an image needs that a package does
+// not set.
+func requiredEnvIssues(r resource.Resource) []Issue {
+	if r.Kind != resource.KindContainer || r.Container == nil {
+		return nil
+	}
+	var issues []Issue
+	for _, rule := range requiredEnv {
+		if !strings.Contains(r.Container.Image, rule.image) {
+			continue
+		}
+		var missing []string
+		for _, name := range rule.env {
+			if _, ok := r.Container.Env[name]; !ok {
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		sort.Strings(missing)
+		issues = append(issues, Issue{Rule: "required-env", Msg: fmt.Sprintf(
+			"Container/%s does not set %s, which this image requires. %s",
+			r.Metadata.Name, strings.Join(missing, ", "), rule.why)})
+	}
+	return issues
+}
+
 // inertEnvIssues reports env vars a package sets on an image that does
 // not read them.
 func inertEnvIssues(r resource.Resource) []Issue {

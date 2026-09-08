@@ -15,7 +15,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: inventory-homebox
-  version: 1.0.1
+  version: 1.0.2
   capability: inventory
   profile: homebox
 requires:
@@ -34,6 +34,26 @@ templates:
     kind: Secret
     metadata: { name: restic-inventory, node: "{{ .Params.node }}" }
     spec: { name: restic-inventory }
+  # Homebox REFUSES TO START without this. Not a warning and not a
+  # generated default — it panics before it opens its database:
+  #
+  #   panic: auth.api_key_pepper must be set to at least 32 bytes
+  #
+  # The package shipped without it, so the container reconciled, Docker
+  # reported it, and it crash-looped 58 times behind a 502 while every
+  # Wildstone surface said the capability was installed and healthy.
+  #
+  # 48 bytes because that is what the app's own message tells an
+  # operator to generate; the node base64-encodes it, so what the
+  # process receives is comfortably past the 32-byte floor.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: homebox-api-key-pepper, node: "{{ .Params.node }}" }
+    spec:
+      name: homebox-api-key-pepper
+      lengthBytes: 48
+      purpose: "Signs Homebox's API keys. Nobody types it — but rotating it invalidates every API key already issued, so anything scanning labels through the API has to be re-authorised."
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
@@ -55,6 +75,7 @@ templates:
         HBOX_LOG_LEVEL: info
         HBOX_OPTIONS_ALLOW_REGISTRATION: "true"
         HBOX_OPTIONS_ALLOW_ANALYTICS: "false"
+        HBOX_AUTH_API_KEY_PEPPER: "secret/homebox-api-key-pepper"
       mounts:
         - { source: homebox-data, target: /data }
       restart: unless-stopped

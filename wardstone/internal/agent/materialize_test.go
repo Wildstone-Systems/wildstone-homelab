@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
@@ -373,5 +374,59 @@ func TestUnspecifiedKindIsStillRandom(t *testing.T) {
 	}
 	if strings.Contains(value, "BEGIN") || strings.Contains(value, "\n") {
 		t.Errorf("unspecified kind produced something other than a random token: %q", value)
+	}
+}
+
+// The mode a managed file lands with is a decision, not a leftover.
+//
+// MkdirAll and WriteFile both apply the process umask, and wardstoned
+// runs with UMask=0077 — so every mode this code chose was discarded on
+// the way to disk. A 0644 config carrying no secret landed 0600 inside a
+// 0700 directory, indistinguishable from the 0600 that secret-bearing
+// files are deliberately narrowed to.
+//
+// The cost was a container unable to read its own configuration:
+// Prometheus runs as nobody and Grafana as uid 472, both mount a managed
+// config with no secret in it, and both crash-looped on "permission
+// denied" while the capability reported itself installed.
+func TestManagedFileModeSurvivesTheUmask(t *testing.T) {
+	old := syscall.Umask(0o077) // what the service unit sets
+	defer syscall.Umask(old)
+
+	a := materializeAgent(t)
+	putSecret(t, a, "photos-oidc", "s3cret-value")
+
+	plain := filepath.Join(a.cfg.ManagedPrefixes[0], "metrics", "grafana.ini")
+	if _, oerr := a.writeManagedFile(writeFileOp(plain, "[server]\nhttp_port = 3000\n", false)); oerr != nil {
+		t.Fatalf("write plain: %v", oerr)
+	}
+	secret := filepath.Join(a.cfg.ManagedPrefixes[0], "photos", "immich.json")
+	if _, oerr := a.writeManagedFile(writeFileOp(secret, `{"s":"secret/photos-oidc"}`, true)); oerr != nil {
+		t.Fatalf("write secret: %v", oerr)
+	}
+
+	fi, err := os.Stat(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o644 {
+		t.Errorf("a config with no secret in it landed %04o, want 0644 — a non-root container cannot read it", got)
+	}
+	di, err := os.Stat(filepath.Dir(plain))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := di.Mode().Perm(); got != 0o755 {
+		t.Errorf("managed directory landed %04o, want 0755 — a non-root container cannot even traverse it", got)
+	}
+
+	// The narrowing for secret-bearing files still holds, and now means
+	// something: it differs from the default rather than matching it.
+	si, err := os.Stat(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := si.Mode().Perm(); got != 0o600 {
+		t.Errorf("a materialized file landed %04o, want 0600 — it holds live secrets", got)
 	}
 }

@@ -12,12 +12,38 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
+// kindDescription names every kind the gateway will accept, generated
+// from the registry that does the accepting.
+//
+// Hand-written, this said "e.g. Container, Volume, Route, DnsRecord,
+// OidcClient, LdapGroup" — six of fourteen. Asked what stopped it doing
+// its job, the operator Butler answered that it could deploy a container
+// and a volume but could not configure one, could not write to volumes,
+// and would need a new file-editing tool with its own diff, backup and
+// rollback story. All of that already exists: diffFromInput validates
+// against resource.KnownKind, so ConfigFile and SeedFile were accepted,
+// planned, policy-checked and git-rollback-able the whole time. The
+// schema was the only thing saying otherwise, and the model believed it.
+//
+// So the sentence is generated. A kind added to the registry appears
+// here without anyone remembering to say so, which is the only version
+// of this that stays true (issue #136).
+func kindDescription() string {
+	kinds := resource.KnownKinds()
+	names := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		names = append(names, string(k))
+	}
+	return "Resource kind. One of: " + strings.Join(names, ", ") +
+		". Use explain_resource on an existing resource of a kind to see the shape of its spec."
+}
+
 // specDiffSchema is the shared input schema for get_plan and
 // propose_change: a proposed resource envelope + kind-specific spec.
 var specDiffSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
-		"kind":  map[string]any{"type": "string", "description": "Resource kind, e.g. Container, Volume, Route, DnsRecord, OidcClient, LdapGroup."},
+		"kind":  map[string]any{"type": "string", "description": kindDescription()},
 		"name":  map[string]any{"type": "string", "description": "Resource name."},
 		"owner": map[string]any{"type": "string", "description": "Ownership chain, e.g. capability/photos or system."},
 		"node":  map[string]any{"type": "string", "description": "Wardstone node id, for node-scoped kinds."},
