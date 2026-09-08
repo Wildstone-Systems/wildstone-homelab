@@ -26,3 +26,8 @@ User and operator docs (E13, ADR-W018):
 The design brief (`00-design-brief-v0.1.md`) and architecture proposal
 (`01-architecture-proposal.md`) remain in the reference deployment repo:
 `chickenrat17/homelab-config` → `docs/architecture/wildstone/`.
+
+Proposed Butler architecture (discussion, not as-built documentation):
+
+- [ADR-W030](decisions/ADR-W030-butler-continuity-durable-work-and-scoped-integrations.md) — continuity, durable work, and scoped integrations.
+- [Capability and design brief](butler-capability-and-design-brief.md) — detailed product decisions, configurable policies, phased scope, and illustrative routines.
