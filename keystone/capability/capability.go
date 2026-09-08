@@ -154,10 +154,15 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 	wantOwner := "capability/" + pkg.Metadata.Capability
 
 	ctx := templateContext{Params: merged, Resolved: resolved}
+	var current []resource.Resource
+	if catalog != nil {
+		current = catalog.current
+	}
+	funcs := exportFuncs(ingressorigin.Of(current))
 
 	out := make([]resource.Resource, 0, len(pkg.Templates))
 	for i, tmplStr := range pkg.Templates {
-		rendered, err := renderTemplate(pkg.Metadata.Name, i, tmplStr, ctx)
+		rendered, err := renderTemplate(pkg.Metadata.Name, i, tmplStr, ctx, funcs)
 		if err != nil {
 			return nil, err
 		}
@@ -176,6 +181,13 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 				Err:     fmt.Errorf("resource %s/%s: owner %q does not match expected %q", res.Kind, res.Metadata.Name, res.Metadata.Owner, wantOwner),
 			}
 		}
+
+		// Provenance, so a later upgrade can tell this package's
+		// resources from a SIBLING PROFILE's. Stamped rather than
+		// declared: a package naming its own name in every template
+		// would be one more thing to get wrong, and it is not a
+		// statement an author should have to make.
+		res.Metadata.Package = pkg.Metadata.Name
 
 		if err := res.Validate(); err != nil {
 			return nil, &TemplateError{Package: pkg.Metadata.Name, Index: i, Err: fmt.Errorf("validating rendered resource: %w", err)}
@@ -224,7 +236,7 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 		out = append(out, resource.Resource{
 			ApiVersion: resource.ApiVersion,
 			Kind:       resource.KindSecret,
-			Metadata:   resource.Metadata{Name: name, Owner: wantOwner, Node: res.Metadata.Node},
+			Metadata:   resource.Metadata{Name: name, Owner: wantOwner, Package: pkg.Metadata.Name, Node: res.Metadata.Node},
 			Secret:     &resource.SecretSpec{Name: name},
 		})
 	}
@@ -250,7 +262,7 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 			out = append(out, resource.Resource{
 				ApiVersion: resource.ApiVersion,
 				Kind:       resource.KindSecret,
-				Metadata:   resource.Metadata{Name: name, Owner: wantOwner, Node: node},
+				Metadata:   resource.Metadata{Name: name, Owner: wantOwner, Package: pkg.Metadata.Name, Node: node},
 				Secret:     &resource.SecretSpec{Name: name, Provided: true},
 			})
 		}
@@ -327,6 +339,25 @@ func mergeParams(pkg *pkgspec.Package, params map[string]string) (map[string]str
 				Package: pkg.Metadata.Name,
 				Err: fmt.Errorf("param %q value contains a disallowed control character at offset %d "+
 					"(newlines/control chars are refused to prevent YAML structure injection)", name, i),
+			}
+		}
+	}
+
+	// The declared SHAPE of each value, checked here rather than in lint
+	// alone, because this is the only point every value passes through:
+	// a package's own Default, an operator's `-set`, and the install
+	// form's answer all arrive as `merged`.
+	//
+	// It refuses the install rather than reporting it, and that is the
+	// point. "CST" reached a container because nothing on the path from
+	// the form to the env var had an opinion about it, and the first
+	// thing that did was a Python traceback inside an image whose init
+	// kept reporting the container healthy.
+	for _, decl := range pkg.Params {
+		if err := pkgspec.ValidateParamValue(decl.Validate, merged[decl.Name]); err != nil {
+			return nil, &TemplateError{
+				Package: pkg.Metadata.Name,
+				Err:     fmt.Errorf("param %q: %w", decl.Name, err),
 			}
 		}
 	}
@@ -549,8 +580,20 @@ func sortedKeys(m map[string]string) []string {
 	return out
 }
 
-func renderTemplate(pkgName string, index int, tmplStr string, ctx templateContext) ([]byte, error) {
-	t, err := template.New(fmt.Sprintf("%s[%d]", pkgName, index)).Option("missingkey=error").Parse(tmplStr)
+// renderTemplate expands one of a package's templates.
+//
+// It is given the same origin/sessionDomain funcs as an export, and that
+// is a fix rather than a symmetry. packages/README.md told authors "use
+// `origin`, never string concatenation" because origin answers where a
+// host is actually SERVED — under the tailnet posture one certified name
+// and a port, not the host the Route declares. The func existed only
+// while rendering `provides.exports`, so an app package needing its own
+// browser-visible URL had no correct spelling available and every one of
+// them concatenated public_domain instead. That is how open-webui came
+// to hold WEBUI_URL=https://chat.wildstone.internal on a deployment
+// where nothing resolves that name.
+func renderTemplate(pkgName string, index int, tmplStr string, ctx templateContext, funcs template.FuncMap) ([]byte, error) {
+	t, err := template.New(fmt.Sprintf("%s[%d]", pkgName, index)).Funcs(funcs).Option("missingkey=error").Parse(tmplStr)
 	if err != nil {
 		return nil, &TemplateError{Package: pkgName, Index: index, Err: fmt.Errorf("parsing template: %w", err)}
 	}

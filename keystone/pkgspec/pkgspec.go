@@ -36,6 +36,21 @@ type Metadata struct {
 	Version    string `yaml:"version"`
 	Capability string `yaml:"capability"`
 	Profile    string `yaml:"profile"`
+	// Exclusive says that only one profile of this capability can run on
+	// a deployment, so installing this one REPLACES a sibling.
+	//
+	// Off by default, because most household capabilities are plural and
+	// were only ever singular by accident. A household comparing
+	// Calibre-Web against Kavita, or running Jellyfin beside Plex, is
+	// doing something ordinary; the engine used to uninstall one to
+	// install the other, and nobody chose that (ADR-W029 A7).
+	//
+	// On for the few where two genuinely cannot coexist: one identity
+	// provider, one reverse proxy owning the ports, one resolver on :53.
+	// Those replacements are real, and being declared they are also
+	// visible — the deletions appear in the plan, to be read before the
+	// install is approved.
+	Exclusive bool `yaml:"exclusive,omitempty"`
 }
 
 // Requirement is one entry of a package's `requires` list: a trait the
@@ -116,6 +131,22 @@ type ParamDecl struct {
 	// Never a real value: a param carrying secret material is refused by
 	// lint outright, and an example is written into the repository.
 	Example string `yaml:"example,omitempty" json:"example,omitempty"`
+	// Validate names the SHAPE this param's value must have, from the
+	// closed vocabulary in ParamShapes. Empty means the value is
+	// free-form and nothing checks it.
+	//
+	// It exists because Example and Source both describe the value to a
+	// HUMAN — a placeholder in the form, a picker instead of a blank box
+	// — and neither is consulted once a human has typed something else.
+	// A package that documents "Your timezone, e.g. Europe/London" and
+	// receives "CST" has been given a value its own description rules
+	// out, and the first thing to notice was the app's crash log.
+	//
+	// Checked in two places on purpose: lint checks the package's own
+	// Default and Example, and Expand checks the value a deployment
+	// actually supplies. The second is the one that matters — a bad
+	// value is almost never the author's.
+	Validate string `yaml:"validate,omitempty" json:"validate,omitempty"`
 }
 
 // ParamSources are the deployment facts a param may be sourced from.
@@ -148,6 +179,15 @@ var ParamSources = map[string]bool{
 	// should not have to be told a digest the first one is already
 	// using.
 	"chat_adapter_image": true,
+	// The household's time zone, which Keystone already keeps for the
+	// automation engine's timeOfDay rules.
+	//
+	// Twenty-four packages ask for this, and it is the same answer every
+	// time — a household has one clock. Asking each package separately
+	// is how one service ends up an hour off from the rest, and it is
+	// also twenty-four chances to type an abbreviation instead of a
+	// zone. The deployment knows this; it should not be a blank box.
+	"timezone": true,
 }
 
 // ParamSourcesSelectingAControl are the sources that tell the form which
@@ -402,6 +442,14 @@ func (p *Package) Validate() error {
 	for i, param := range p.Params {
 		if param.Name == "" {
 			return &ValidationError{Field: fmt.Sprintf("params[%d].name", i), Msg: "must not be empty"}
+		}
+		// The shape name itself, not the values — a package written
+		// against a vocabulary this binary does not have must still
+		// LOAD, so what a shape ACCEPTS is checked by lint and Expand.
+		if param.Validate != "" && ParamShapes[param.Validate] == nil {
+			return &ValidationError{Field: fmt.Sprintf("params[%d].validate", i),
+				Msg: fmt.Sprintf("%q is not a value shape (one of: %s)",
+					param.Validate, strings.Join(ParamShapeNames(), ", "))}
 		}
 	}
 

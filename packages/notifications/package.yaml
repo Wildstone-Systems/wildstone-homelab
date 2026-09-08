@@ -10,7 +10,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: notifications
-  version: 1.0.0
+  version: 1.0.1
   capability: notifications
   profile: ntfy
 params:
@@ -30,7 +30,7 @@ templates:
       image: "binwiederhier/ntfy@sha256:f2419f405127afa868f10985c1a41449e673477cee1eb19994339a5ae8b592e7"
       command: ["serve"]
       env:
-        NTFY_BASE_URL: "https://ntfy.{{ .Params.public_domain }}"
+        NTFY_BASE_URL: '{{ origin (printf "ntfy.%s" .Params.public_domain) }}'
         NTFY_CACHE_FILE: /var/cache/ntfy/cache.db
       mounts:
         - { source: ntfy-cache, target: /var/cache/ntfy }

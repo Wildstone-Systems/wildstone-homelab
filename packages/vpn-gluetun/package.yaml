@@ -40,12 +40,12 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: vpn-gluetun
-  version: 1.0.0
+  version: 1.0.1
   capability: vpn
   profile: gluetun
 params:
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
   - { name: vpn_provider, required: true, example: "mullvad", description: "Your VPN provider, as Gluetun names it: mullvad, protonvpn, airvpn, ivpn, surfshark, nordvpn, ..." }
   - { name: wireguard_addresses, required: true, example: "10.64.0.2/32", description: "The interface address from the WireGuard configuration your provider generated, e.g. 10.64.0.2/32." }
   - { name: server_countries, default: "Netherlands", description: "Which country to connect through, as the provider spells it. Several may be separated by commas." }

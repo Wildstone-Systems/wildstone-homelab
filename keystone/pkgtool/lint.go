@@ -75,17 +75,24 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 
 	params := map[string]string{}
 	for _, decl := range pkg.Params {
+		// A caller's -set is honoured for ANY param, required or not.
+		// Restricting it to required ones meant `wild pkg lint -set
+		// timezone=CST` reported the package clean: the filler was
+		// dropped, the default took its place, and the one value the
+		// operator wanted checked was the one value never checked.
+		if v, ok := opts.Fillers[decl.Name]; ok {
+			params[decl.Name] = v
+			continue
+		}
 		if !decl.Required {
 			continue
 		}
-		// Fillers first (the caller knows this run), then the package's own
+		// No filler for this required param, so: the package's own
 		// declared example (the author knows the shape), then the
 		// name-derived stand-in — which is adequate for a domain or an id
 		// and nonsense for anything with a shape, which is exactly why
 		// ParamDecl.Example exists.
-		if v, ok := opts.Fillers[decl.Name]; ok {
-			params[decl.Name] = v
-		} else if decl.Example != "" {
+		if decl.Example != "" {
 			params[decl.Name] = decl.Example
 		} else {
 			params[decl.Name] = "lint-" + sanitizeParam(decl.Name)
@@ -98,6 +105,12 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 	// requirement identiy:oidc" — true, vaguer, and the only thing the
 	// author would otherwise see, which is how the typo stays a typo.
 	issues := traitIssues(pkg)
+	// Before expansion, for the same reason traitIssues is: a param whose
+	// own default cannot satisfy the shape it declares makes Expand fail
+	// with a message about that value, which is true and says nothing
+	// about the package having contradicted itself.
+	issues = append(issues, paramShapeIssues(pkg)...)
+	issues = append(issues, selfURLFromDomain(pkg)...)
 
 	rendered, err := capability.NewEngine().Expand(pkg, params, catalog)
 	if err != nil {
@@ -141,6 +154,7 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 
 	for _, r := range rendered {
 		issues = append(issues, containerEnvIssues(r)...)
+		issues = append(issues, inertEnvIssues(r)...)
 	}
 	issues = append(issues, manualStepIssues(pkg, rendered)...)
 	issues = append(issues, seedIssues(rendered)...)

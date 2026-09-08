@@ -17,7 +17,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: photos-immich
-  version: 1.0.0
+  version: 1.0.1
   capability: photos
   profile: immich
 requires:
@@ -121,6 +121,49 @@ templates:
       mounts:
         - { source: immich-redis-data, target: /data }
       restart: unless-stopped
+  # ---- Immich's system config, as a file.
+  #
+  # OAuth is NOT configurable through the environment. Immich moved these
+  # settings into its system config years ago; OAUTH_ENABLED and the eight
+  # variables that used to sit beside it here reconciled cleanly, appeared
+  # in `docker inspect`, and did nothing at all. The way to see it is
+  # Immich's own startup log, which prints the config it actually holds:
+  # "oauth": false, on a deployment whose Authelia client was registered,
+  # reachable, and answering discovery. The login page simply had no
+  # button on it, and nothing anywhere reported a fault.
+  #
+  # A config FILE is Immich's supported answer, and it suits a managed
+  # deployment better than the admin UI does: the settings become
+  # Wildstone's to state, and the UI renders them read-only rather than
+  # offering an edit the next reconcile would revert.
+  #
+  # Only the keys named here are set — Immich merges this over its own
+  # defaults, so this is the OAuth block and nothing else.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: immich-config, node: "{{ .Params.node }}" }
+    spec:
+      filename: immich.json
+      content: |
+        {
+          "oauth": {
+            "enabled": true,
+            "issuerUrl": "{{ .Resolved.IssuerURL }}",
+            "clientId": "immich",
+            "clientSecret": "{{ .Resolved.OidcSecretRef }}",
+            "scope": "openid email profile",
+            "buttonText": "Login with Authelia",
+            "autoLaunch": false,
+            "autoRegister": true,
+            "mobileOverrideEnabled": true,
+            "mobileRedirectUri": "{{ origin (printf "%s.%s" .Params.photos_subdomain .Params.public_domain) }}/api/oauth/mobile-redirect",
+            "storageLabelClaim": "preferred_username"
+          },
+          "passwordLogin": {
+            "enabled": true
+          }
+        }
   # ---- Immich server + machine-learning workers.
   - |
     apiVersion: wildstone.dev/v1
@@ -138,17 +181,13 @@ templates:
         # lists, but it fails env validation before the server starts.
         DB_VECTOR_EXTENSION: vectorchord
         REDIS_HOSTNAME: immich-redis
-        PUBLIC_IMMICH_SERVER_URL: "https://{{ .Params.photos_subdomain }}.{{ .Params.public_domain }}"
-        OAUTH_ENABLED: "true"
-        OAUTH_ISSUER_URL: "{{ .Resolved.IssuerURL }}"
-        OAUTH_CLIENT_ID: immich
-        OAUTH_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
-        OAUTH_BUTTON_TEXT: "Login with Authelia"
-        OAUTH_AUTO_LAUNCH: "false"
-        OAUTH_SYNC_GROUPS: "true"
-        OAUTH_SIGNUP_ENABLED: "true"
+        PUBLIC_IMMICH_SERVER_URL: '{{ origin (printf "%s.%s" .Params.photos_subdomain .Params.public_domain) }}'
+        # The one OAuth-adjacent variable Immich DOES read: where its
+        # system config lives. Everything else is in that file.
+        IMMICH_CONFIG_FILE: /etc/wildstone/photos/immich.json
       mounts:
         - { source: immich-upload, target: /usr/src/app/upload }
+        - { source: /etc/wildstone/photos, target: /etc/wildstone/photos, readOnly: true }
       restart: unless-stopped
   - |
     apiVersion: wildstone.dev/v1

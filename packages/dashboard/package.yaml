@@ -10,9 +10,10 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: dashboard
-  version: 1.0.0
+  version: 1.0.1
   capability: dashboard
   profile: homepage
+  exclusive: true
 params:
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }

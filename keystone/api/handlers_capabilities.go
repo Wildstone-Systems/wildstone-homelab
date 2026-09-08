@@ -78,6 +78,10 @@ type deploymentFacts struct {
 	// renders as an ordinary blank rather than a guess.
 	keystoneURL      string
 	chatAdapterImage string
+	// timezone is the household's clock, as Keystone was started with.
+	// Empty when it is the default "Local", which is not a zone anybody
+	// means and not an answer worth suggesting.
+	timezone string
 }
 
 // gatherFacts reads what the deployment already knows.
@@ -106,6 +110,9 @@ func (s *Server) gatherFacts() deploymentFacts {
 		return f
 	}
 	f.keystoneURL = s.APIURL
+	if s.HouseholdTimezone != "Local" {
+		f.timezone = s.HouseholdTimezone
+	}
 
 	counts := map[string]int{}
 	// The adapter image an installed chat capability already runs. Two
@@ -155,6 +162,8 @@ func resolveParams(decls []pkgspec.ParamDecl, f deploymentFacts, installed map[s
 			v.Suggested = f.keystoneURL
 		case "chat_adapter_image":
 			v.Suggested = f.chatAdapterImage
+		case "timezone":
+			v.Suggested = f.timezone
 		}
 		out = append(out, v)
 	}
@@ -386,13 +395,35 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 // the whole plan every tick until F60 set it aside, taking the rest of
 // the upgrade with it. A package that stops declaring a volume leaves
 // the data exactly where it is.
-func droppedByUpgrade(capName string, current, rendered []resource.Resource) []plan.DeletionRef {
-	owner := "capability/" + capName
+//
+// NEITHER IS A SIBLING PROFILE'S. This is scoped to the package being
+// installed, not to its capability, and the difference is the whole
+// point of the Package field on a resource's metadata. Owner names the
+// CAPABILITY, so books-calibre-web and books-kavita both render
+// resources owned by "capability/books"; keyed on owner alone, enabling
+// one read the other's container and Route as leftovers of an upgrade
+// and proposed deleting them. Installing one book app uninstalled the
+// other, and a household that wanted to compare them, or simply wanted
+// both, had no way to say so (ADR-W029 A7).
+//
+// Replacing a sibling is now something a capability must ask for —
+// `exclusive: true`, for the ones where two really cannot coexist — and
+// when it does, the deletions are named in the plan rather than
+// happening as a side effect of an install nobody read as a removal.
+func droppedByUpgrade(pkg *pkgspec.Package, current, rendered []resource.Resource) []plan.DeletionRef {
+	owner := "capability/" + pkg.Metadata.Capability
 	type key struct{ kind, name string }
 	produced := map[key]bool{}
 	for _, r := range rendered {
 		produced[key{string(r.Kind), r.Metadata.Name}] = true
 	}
+	// Resources written before Metadata.Package existed carry no
+	// provenance. Attributing them to this package is right exactly when
+	// this package is the profile actually installed — the same question
+	// packageIsTheInstalledOne already answers for the Console, and the
+	// same heuristic, so a legacy deployment upgrades as it always did
+	// and a legacy SIBLING is still left alone.
+	legacyIsMine := packageIsTheInstalledOne(pkg, current)
 	var out []plan.DeletionRef
 	for _, r := range current {
 		if r.Metadata.Owner != owner {
@@ -400,6 +431,18 @@ func droppedByUpgrade(capName string, current, rendered []resource.Resource) []p
 		}
 		if r.Kind == resource.KindVolume || r.Kind == resource.KindSeedFile {
 			continue
+		}
+		switch r.Metadata.Package {
+		case pkg.Metadata.Name:
+			// Mine: an earlier version of this same package.
+		case "":
+			if !legacyIsMine {
+				continue
+			}
+		default:
+			if !pkg.Metadata.Exclusive {
+				continue // a sibling profile, and both may run
+			}
 		}
 		if produced[key{string(r.Kind), r.Metadata.Name}] {
 			continue
@@ -524,7 +567,7 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 		Summary: fmt.Sprintf("enable capability %s (package %s %s)",
 			pkg.Metadata.Capability, pkg.Metadata.Name, pkg.Metadata.Version),
 		Put:    docs,
-		Delete: droppedByUpgrade(pkg.Metadata.Capability, current, rendered),
+		Delete: droppedByUpgrade(pkg, current, rendered),
 	}, proposalOpts{
 		DryRun: req.DryRun,
 		Origin: &plan.CapabilityOrigin{

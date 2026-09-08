@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 	"os"
 	"path/filepath"
 	"strings"
@@ -234,8 +235,12 @@ func TestPublishResolveVerify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	if entry.Name != "identity" || entry.Version != "1.0.0" {
-		t.Fatalf("entry = %+v", entry)
+	// The version comes from the package rather than a literal: this
+	// test is about Publish/Resolve/Verify round-tripping, and pinning a
+	// number here makes every unrelated package edit fail it.
+	wantVersion := identityVersion(t)
+	if entry.Name != "identity" || entry.Version != wantVersion {
+		t.Fatalf("entry = %+v, want version %s", entry, wantVersion)
 	}
 
 	idx, err := ReadIndex(root)
@@ -324,4 +329,14 @@ func TestExtractRejectsEscapes(t *testing.T) {
 	if err := ExtractArchive(&buf, t.TempDir()); err == nil || !strings.Contains(err.Error(), "regular files") {
 		t.Fatalf("symlink member: err = %v, want type rejection", err)
 	}
+}
+
+// identityVersion reads the shipped identity package's declared version.
+func identityVersion(t *testing.T) string {
+	t.Helper()
+	pkg, err := pkgspec.Load(filepath.Join("../../packages/identity", "package.yaml"))
+	if err != nil {
+		t.Fatalf("loading identity package: %v", err)
+	}
+	return pkg.Metadata.Version
 }

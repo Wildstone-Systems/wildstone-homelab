@@ -20,9 +20,10 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: ingress-tailnet
-  version: 1.0.0
+  version: 1.0.1
   capability: ingress
   profile: caddy-tailnet
+  exclusive: true
 provides:
   # Private only, and that is the point: this profile has no public
   # path. A package wanting ingress:public expands anyway — ingress is a

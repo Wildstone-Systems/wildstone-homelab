@@ -21,7 +21,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: audiobooks-audiobookshelf
-  version: 1.0.1
+  version: 1.0.2
   capability: audiobooks
   profile: audiobookshelf
 requires:
@@ -32,7 +32,7 @@ params:
   - { name: audiobooks_subdomain, default: audiobooks, description: "The name this service appears under, e.g. audiobooks." }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
   - { name: audiobooks_path, default: /srv/wildstone/media/audiobooks, description: "Folder on this machine holding your audiobooks.", source: directory }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
 policies:
   classifications: [family_private]
   dataSensitivity: low

@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: feeds-freshrss
-  version: 1.0.0
+  version: 1.0.1
   capability: feeds
   profile: freshrss
 requires:
@@ -29,7 +29,7 @@ params:
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: feeds_subdomain, default: rss, description: "The name this service appears under, e.g. rss." }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
 policies:
   classifications: [family_public]
   dataSensitivity: low
@@ -68,7 +68,7 @@ templates:
       env:
         TZ: "{{ .Params.timezone }}"
         CRON_MIN: "13,43"
-        BASE_URL: "https://{{ .Params.feeds_subdomain }}.{{ .Params.public_domain }}"
+        BASE_URL: '{{ origin (printf "%s.%s" .Params.feeds_subdomain .Params.public_domain) }}'
         TRUSTED_PROXY: "172.16.0.0/12 10.0.0.0/8 192.168.0.0/16"
         OIDC_ENABLED: "1"
         OIDC_PROVIDER_METADATA_URL: "{{ .Resolved.IssuerURL }}/.well-known/openid-configuration"

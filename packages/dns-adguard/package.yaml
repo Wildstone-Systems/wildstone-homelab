@@ -22,9 +22,10 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: dns-adguard
-  version: 1.0.0
+  version: 1.0.1
   capability: dns
   profile: adguard-home
+  exclusive: true
 requires:
   - { trait: identity, mode: oidc }
   - { trait: ingress, mode: private }

@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: monitoring-beszel
-  version: 1.0.0
+  version: 1.0.1
   capability: host-monitoring
   profile: beszel
 requires:
@@ -54,7 +54,7 @@ templates:
     spec:
       image: "henrygd/beszel@sha256:fefb27166f5e1611ebf67f8697ea928a23f44efdb00af922e2ac3b5faa2efd5c"
       env:
-        APP_URL: "https://beszel.{{ .Params.admin_domain }}"
+        APP_URL: '{{ origin (printf "beszel.%s" .Params.admin_domain) }}'
       mounts:
         - { source: beszel-data, target: /beszel_data }
       restart: unless-stopped

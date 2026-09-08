@@ -25,7 +25,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: passwords-vaultwarden
-  version: 1.0.0
+  version: 1.0.1
   capability: passwords
   profile: vaultwarden
 requires:
@@ -66,7 +66,7 @@ templates:
     spec:
       image: "vaultwarden/server@sha256:094b5689ed81549bd293418395c7cf495ae9d960fc2d4928cef2083ef913d912"
       env:
-        DOMAIN: "https://{{ .Params.vault_subdomain }}.{{ .Params.public_domain }}"
+        DOMAIN: '{{ origin (printf "%s.%s" .Params.vault_subdomain .Params.public_domain) }}'
         SIGNUPS_ALLOWED: "false"
         INVITATIONS_ALLOWED: "true"
         ADMIN_TOKEN: "secret/vaultwarden-admin-token"

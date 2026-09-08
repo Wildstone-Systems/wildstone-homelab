@@ -21,16 +21,17 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: dns-pihole
-  version: 1.0.0
+  version: 1.0.1
   capability: dns
   profile: pihole
+  exclusive: true
 requires:
   - { trait: identity, mode: oidc }
   - { trait: ingress, mode: private }
 params:
   - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
   - { name: dns_listen_addr, default: "", example: "192.168.1.10", description: "Which address on this machine answers DNS, e.g. 192.168.1.10. Leave empty for every interface." }
   - { name: upstream_dns, default: "9.9.9.9;149.112.112.112", description: "Where Pi-hole sends lookups it cannot answer itself. Two addresses separated by a semicolon." }
 policies:

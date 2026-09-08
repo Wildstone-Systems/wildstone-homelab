@@ -1891,7 +1891,7 @@ func (r *Reconciler) probeRoute(ctx context.Context, nodeID string, spec *resour
 	// routing — one service's link reaching another, a second reaching
 	// nothing — for as long as nobody looked.
 	if host, port, ok := r.routeFrontDoor(spec); ok {
-		attempts, backoff := r.healthGateParams()
+		attempts, backoff := r.routeGateParams()
 		for i := 0; i < attempts; i++ {
 			res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ProbeTcp{
 				ProbeTcp: &wsv1.ProbeTcp{Host: host, Port: port},
@@ -1935,6 +1935,34 @@ func (r *Reconciler) probeRoute(ctx context.Context, nodeID string, spec *resour
 }
 
 // ---------------------------------------------------------------- retry/backoff
+
+// routeGateParams is the health-gate window for a Route's FRONT DOOR,
+// and it is deliberately wider than healthGateParams.
+//
+// Every other gate probes something the step just did synchronously: a
+// container the agent started, a file it wrote. A Route's front door is
+// not that. The step writes a fragment; the reverse proxy notices it on
+// its own schedule — ReloadFn is still a documented no-op, so Caddy is
+// running with --watch and picks the file up on a poll about a second
+// apart — and only then is the port bound.
+//
+// Gating that on five attempts 100ms apart asks whether Caddy has
+// reloaded within half a second, which it usually has not. The gate then
+// failed a Route that was about to work, rolled the fragment back to a
+// tombstone, and the next tick did the same thing: books.caddy and
+// kavita.caddy flapped between a real site and "Route was deleted" while
+// both containers sat there serving. Widening the window does not paper
+// over a fault; it stops asking the question before the answer can exist.
+//
+// Ten seconds is the ceiling, not the cost — the loop returns on the
+// first reachable probe, so a proxy that reloads in 900ms takes 900ms.
+func (r *Reconciler) routeGateParams() (attempts int, backoff time.Duration) {
+	if r.HealthGateAttempts > 0 || r.HealthGateBackoff > 0 {
+		// An explicit setting is the operator's, including in tests.
+		return r.healthGateParams()
+	}
+	return 20, 500 * time.Millisecond
+}
 
 func (r *Reconciler) healthGateParams() (attempts int, backoff time.Duration) {
 	attempts = r.HealthGateAttempts

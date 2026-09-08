@@ -15,7 +15,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: bookmarks-linkding
-  version: 1.0.0
+  version: 1.0.1
   capability: bookmarks
   profile: linkding
 requires:
@@ -55,7 +55,7 @@ templates:
         LD_SUPERUSER_NAME: "{{ .Params.ld_admin_user }}"
         LD_ENABLE_AUTH_PROXY: "True"
         LD_AUTH_PROXY_USERNAME_HEADER: HTTP_REMOTE_USER
-        LD_CSRF_TRUSTED_ORIGINS: "https://{{ .Params.bookmarks_subdomain }}.{{ .Params.public_domain }}"
+        LD_CSRF_TRUSTED_ORIGINS: '{{ origin (printf "%s.%s" .Params.bookmarks_subdomain .Params.public_domain) }}'
       mounts:
         - { source: linkding-data, target: /etc/linkding/data }
       restart: unless-stopped

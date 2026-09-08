@@ -94,6 +94,20 @@ type Metadata struct {
 	// Owner is the ownership chain: "capability/<name>" or "system".
 	// Nothing is orphaned (ADR-W004 A1).
 	Owner string `yaml:"owner"`
+	// Package is the package that produced this resource, when one did.
+	//
+	// Owner names the CAPABILITY, and several profiles of one capability
+	// share it — books-calibre-web and books-kavita both render resources
+	// owned by "capability/books". Without a finer key, "resources this
+	// capability has that the new rendering does not produce" reads a
+	// sibling profile's containers and routes as leftovers of an upgrade
+	// and proposes deleting them. Installing one book app therefore
+	// uninstalled the other, which nobody decided (ADR-W029 A7).
+	//
+	// Empty on resources written before this field existed, and on
+	// anything not produced by a package; readers must treat empty as
+	// "unknown" rather than "not mine".
+	Package string `yaml:"package,omitempty"`
 	// Node is the Wardstone node id this resource is applied to. Required
 	// for node-scoped kinds and rejected for the rest; the registry's
 	// nodeScoped flag is the single source of that split, and Validate

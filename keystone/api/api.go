@@ -85,6 +85,12 @@ type Server struct {
 	// suggesting an address nothing can reach.
 	APIURL string
 
+	// HouseholdTimezone is the IANA zone this deployment keeps, wired
+	// from -household-timezone. It is offered as the answer to any
+	// param declaring `source: timezone`, so a household states its
+	// clock once instead of on every install form.
+	HouseholdTimezone string
+
 	// ButlerHost hosts the Butler ask endpoint (ADR-W017 A2/A4) —
 	// cmd/keystone wires it from -butler-provider. nil leaves ask
 	// answering 503; session history stays readable.

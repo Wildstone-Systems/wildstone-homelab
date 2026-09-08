@@ -17,7 +17,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: recipes-mealie
-  version: 1.0.0
+  version: 1.0.1
   capability: recipes
   profile: mealie
 requires:
@@ -27,7 +27,7 @@ params:
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: recipes_subdomain, default: recipes, description: "The name this service appears under, e.g. recipes." }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
 policies:
   classifications: [family_public]
   dataSensitivity: low
@@ -55,7 +55,7 @@ templates:
       image: "ghcr.io/mealie-recipes/mealie@sha256:6066c29eca95a6cac640ecadf734799522f3b646ee4a714e0d13ce795d989ba2"
       env:
         TZ: "{{ .Params.timezone }}"
-        BASE_URL: "https://{{ .Params.recipes_subdomain }}.{{ .Params.public_domain }}"
+        BASE_URL: '{{ origin (printf "%s.%s" .Params.recipes_subdomain .Params.public_domain) }}'
         ALLOW_SIGNUP: "false"
         OIDC_AUTH_ENABLED: "true"
         OIDC_PROVIDER_NAME: Authelia

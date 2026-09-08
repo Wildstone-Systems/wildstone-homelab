@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: media-jellyfin
-  version: 1.0.1
+  version: 1.0.2
   capability: media
   profile: jellyfin
 requires:
@@ -38,7 +38,7 @@ params:
   # Host path of the media library; must resolve under a Wardstone
   # managed prefix (default prefixes: /etc/wildstone, /srv/wildstone).
   - { name: media_path, default: /srv/wildstone/media, description: "Folder on this machine holding your films and television.", source: directory }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
 policies:
   classifications: [family_public]
   dataSensitivity: medium
@@ -101,7 +101,7 @@ templates:
   - |
     apiVersion: wildstone.dev/v1
     kind: BackupPlan
-    metadata: { name: media, node: "{{ .Params.node }}" }
+    metadata: { name: media-jellyfin, node: "{{ .Params.node }}" }
     spec:
       volumes: [jellyfin-config]
       repository: media-backup-repo

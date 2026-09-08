@@ -717,6 +717,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv.CAFingerprint = gw.CA().Fingerprint()
 	apiSrv.GatewayAddr = advertisedGatewayAddr(hosts, lis.Addr().String())
 	apiSrv.APIURL = advertisedAPIURL(hosts, apiLis.Addr().String())
+	apiSrv.HouseholdTimezone = householdCfg.Timezone
 	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
 	apiSrv.BackupRestore = bak.RestoreAlongside
 

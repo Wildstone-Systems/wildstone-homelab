@@ -162,6 +162,156 @@ Every shape lints clean as written, with TODO markers everywhere a
 decision is yours. `wild pkg new` counts them and prints the exact
 commands to carry on with.
 
+## Checking the package against the app (ADR-W029)
+
+Everything else in this file is about the resource model, and the
+catalog's checks are good at it: secrets referenced are declared, mounts
+name declared volumes, a Route's upstream is a container the package
+runs. Those are all checks of a package against **itself**.
+
+Three launch services shipped with every one of them passing and none of
+them working:
+
+| what shipped | what happened | what nothing noticed |
+| --- | --- | --- |
+| `timezone: CST` on Calibre-Web | `CST` is an abbreviation, not a zone; the app died at startup | s6 held PID 1, so Docker said `Up` and the proxy said 502 |
+| nine `OAUTH_*` env vars on Immich | Immich reads OAuth from its system config, never from env | every variable was present in `docker inspect` and inert |
+| `WEBUI_URL=https://chat.<domain>` on Open WebUI | nothing resolves that name under a tailnet | the value rendered exactly as written |
+
+They share a shape. Each package made a claim **about the application** —
+that Immich reads `OAUTH_ENABLED`, that Calibre-Web accepts `CST`, that
+the app is reachable at the host its Route declares — and nothing
+compared that claim to the app.
+
+This is the part an AI-assisted session skips most easily, and it is
+worth being blunt about why. A model writing a package is fluent in this
+format and is pattern-matching on the packages already here. Both
+produce something that lints clean. Neither produces a check against the
+upstream app, because that means reading the app's current docs and
+comparing them to the template — a different activity, and the one most
+easily dropped when the output already looks right.
+
+Where the template and the app disagree, the app wins.
+
+### Answer these before writing the template
+
+Put the answers in the package header, where the next author finds them.
+
+1. **How is this app configured?** Environment, a config file, an API
+   call, a database row, or its own UI? If it is a file, that is a
+   `ConfigFile` — `photos-immich` and `cameras-frigate` are the worked
+   examples. Getting this wrong is invisible: an env var the app ignores
+   still reconciles, still appears in `docker inspect`, and still does
+   nothing.
+2. **Does the image declare a `HEALTHCHECK`?** `docker inspect` answers
+   it. Without one, "the container is running" is the strongest thing
+   Wildstone can say — and for an s6/linuxserver.io image that stays
+   true after the app inside has died. Say so in the header.
+3. **What does the app need to know about its own address?** If
+   anything, build it with `origin`, never concatenation — see below.
+4. **What claims does it need from the identity provider?** Open WebUI
+   refuses a login carrying no `email` claim. That is a fact about Open
+   WebUI *and* a constraint on how the directory is provisioned.
+
+### Two profiles of one capability can both be installed
+
+`books-calibre-web` and `books-kavita` are profiles of capability
+`books`, and both may run. Enabling one used to uninstall the other:
+resources are owned by `capability/books`, so the upgrade path read a
+sibling's Container and Route as leftovers and proposed deleting them
+(ADR-W029 A7).
+
+Two things follow for an author writing a profile:
+
+- **Name a resource for the profile when its spec differs between
+  siblings.** Sharing a name is fine when the thing is genuinely shared
+  — both book packages declare `Secret/restic-books` and
+  `Volume/books-backup-repo` identically. Both also declared
+  `BackupPlan/books` with *different* volume lists, so whichever
+  installed second redefined the first one's backup. That one is now
+  `BackupPlan/books-calibre-web` and `BackupPlan/books-kavita`, and
+  `TestSiblingProfilesDoNotCollide` fails if a future pair collides.
+- **Declare `exclusive: true` only when two really cannot coexist** —
+  one identity provider, one reverse proxy owning the ports, one
+  resolver on `:53`. It is off by default. Where it is on, installing a
+  sibling still replaces it, but the deletions are named in the plan.
+
+```yaml
+metadata:
+  name: dns-adguard
+  capability: dns
+  profile: adguard-home
+  exclusive: true      # pihole and adguard both want :53
+```
+
+### Declare the shape of a param, not just its description
+
+```yaml
+params:
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone,
+      description: "Your timezone, e.g. Europe/London." }
+```
+
+`validate:` names a shape from a closed vocabulary (`iana_timezone`,
+`url`, `hostname`, `email`, `port`, `duration`) and `capability.Expand`
+refuses a value that fails it — so the check runs against the value an
+operator actually supplied, not only the one you shipped.
+
+The description above was already there when a household typed `CST`. A
+description is addressed to a human who may not read it; a shape is
+addressed to the machine that must.
+
+`source:` is the other half. A fact the deployment already knows should
+be offered, not asked: twenty-four packages want a timezone and a
+household has one clock. `wild pkg traits` and `pkgspec.ParamSources`
+list what can be sourced.
+
+### Build a browser-visible URL with `origin`
+
+```yaml
+env:
+  WEBUI_URL: '{{ origin (printf "%s.%s" .Params.chat_subdomain .Params.public_domain) }}'   # right
+  WEBUI_URL: "https://{{ .Params.chat_subdomain }}.{{ .Params.public_domain }}"             # WRONG
+```
+
+A Route is not always served at the host it declares (ADR-W019 A10):
+under the tailnet posture every service shares one certified name and
+differs by port, so the concatenated form names a host nothing answers.
+The `self-url` lint rule refuses it.
+
+This applies to `env:` only. A Route's `host:` **should** be built by
+concatenation — it is the input `origin` resolves from — and an
+`OidcClient`'s `redirectUris` are compensated downstream by the
+reconciler.
+
+### Record what an image ignores
+
+`keystone/pkgtool.inertEnv` is a table of env vars a given image reads
+nothing from. Nothing in a manifest can tell you which variables a binary
+consults; the only source is the app's docs, read by whoever integrated
+it. Add a row when you find one — a wrong row costs a false positive
+someone can argue with, which is far cheaper than the silence.
+
+### Verify against the running thing
+
+A green plan is not a working service.
+
+```sh
+# The app answers on its own port — not "the container is Up".
+docker exec <proxy> wget -S -O /dev/null http://<container>:<port>/
+
+# The config the app HOLDS, which is not always the config you sent.
+docker logs <container> | head -50
+
+# The front door, which is what a person will actually use.
+curl -sk -o /dev/null -w '%{http_code}\n' <the URL the dashboard links to>
+```
+
+For an OIDC integration, follow the whole round trip. Discovery,
+authorization, consent, token and userinfo can each return 200 and the
+login still fail — Open WebUI's did, at the last step, on a claim that
+was absent rather than wrong.
+
 ## Traits: how packages find each other (ADR-W025)
 
 A package does not name another package. It names a **trait** — a

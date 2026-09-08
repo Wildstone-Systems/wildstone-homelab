@@ -66,7 +66,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: home-assistant
-  version: 1.1.0
+  version: 1.1.1
   capability: home-assistant
   profile: container
 requires:
@@ -75,7 +75,7 @@ params:
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: hass_subdomain, default: hass, description: "The name this service appears under, e.g. hass." }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
 policies:
   classifications: [family_private]
   dataSensitivity: high

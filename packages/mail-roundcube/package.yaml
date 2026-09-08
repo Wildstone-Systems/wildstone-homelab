@@ -73,7 +73,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: mail-roundcube
-  version: 1.0.0
+  version: 1.0.1
   capability: mail
   profile: roundcube
 requires:
@@ -93,7 +93,7 @@ params:
   - { name: smtp_encryption, default: tls, description: "How the SMTP connection is encrypted: tls (STARTTLS, port 587) or ssl (implicit TLS, port 465)." }
   - { name: username_domain, default: "", description: "Added to a bare username at sign-in, e.g. example.com lets someone type ada instead of ada@example.com. Leave empty if people sign in with a full address." }
   - { name: calendar_admin_login, default: admin, description: "The username for the calendar service's own admin page. Its password is the generated secret davis-admin-password; set it with `wild secret set` when you want to open that page." }
-  - { name: timezone, default: UTC, description: "Your timezone, e.g. Europe/London." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
   - { name: upload_max_filesize, default: 25M, description: "Largest attachment someone can add to a message, e.g. 25M." }
 policies:
   classifications: [family_private]

@@ -33,9 +33,10 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: ingress-tailnet-public
-  version: 1.0.0
+  version: 1.0.1
   capability: ingress
   profile: caddy-tailnet-public
+  exclusive: true
 provides:
   # Private, exactly as caddy-tailnet is. A publicly trusted certificate
   # is a statement about who signed it, NOT about who can reach the
