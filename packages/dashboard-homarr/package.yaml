@@ -17,13 +17,44 @@
 #
 #     openssl rand -hex 32 | wild secret set homarr-encryption-key -node <node>
 #
+# AUTH.JS IS CONFIGURED SEPARATELY FROM THE OIDC PROVIDER, and the three
+# variables below are the ones this package originally omitted (#139).
+# Homarr is a Next.js app running Auth.js v5, which fails closed:
+#
+#   - AUTH_SECRET encrypts Auth.js's OWN cookies — the session, and the
+#     state/nonce/PKCE cookies the callback verifies. SECRET_ENCRYPTION_KEY
+#     is NOT this key; it encrypts Homarr's stored integration
+#     credentials. With AUTH_SECRET unset Auth.js invents one per
+#     container start, so every re-create silently invalidated every
+#     cookie already in a browser — and Auth.js does not discard a cookie
+#     it cannot read, it fails the request with
+#     `ERR_JWE_DECRYPTION_FAILED`. The visible symptom is a permanent
+#     login loop back to /auth/login?error=Configuration, and it survives
+#     re-installing because the browser keeps re-presenting the old
+#     cookie. After deploying this, clear cookies for the host once.
+#   - AUTH_TRUST_HOST tells Auth.js to believe the X-Forwarded-* headers
+#     Caddy sets. Without it Auth.js refuses the request (UntrustedHost),
+#     which also renders as error=Configuration.
+#   - AUTH_URL is the browser-visible base URL it builds its callback and
+#     cookie origin from. It comes from `origin`, never from
+#     concatenating params: under the tailnet posture a Route is served
+#     at the node's one certified name plus a port, not at the host it
+#     declares (ADR-W019 A10).
+#
+# THE ID TOKEN MUST CARRY THE CLAIMS. Homarr maps its user profile from
+# the ID token unless AUTH_OIDC_FORCE_USERINFO is set, and Authelia
+# delivers scope claims at /userinfo by default — so `email` and `groups`
+# were requested, granted, and never seen, which Auth.js reports as
+# OAuthProfileParseError. `idTokenClaims` on the OidcClient is what turns
+# them into a claims policy.
+#
 # Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
 #   ghcr.io/homarr-labs/homarr:latest -> sha256:f23ad77a...175e
 apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: dashboard-homarr
-  version: 1.0.1
+  version: 1.1.0
   capability: homarr
   profile: homarr
   exclusive: true
@@ -45,6 +76,14 @@ templates:
     spec: { name: homarr-encryption-key, provided: true }
   - |
     apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: homarr-auth-secret, node: "{{ .Params.node }}" }
+    spec:
+      name: homarr-auth-secret
+      lengthBytes: 32
+      purpose: "Encrypts Homarr's own login cookies. Rotating it signs everyone out of Homarr; it is not the key that protects Homarr's stored integration credentials."
+  - |
+    apiVersion: wildstone.dev/v1
     kind: Volume
     metadata: { name: homarr-appdata, node: "{{ .Params.node }}" }
     spec: { name: homarr-appdata }
@@ -56,6 +95,9 @@ templates:
       image: "ghcr.io/homarr-labs/homarr@sha256:f23ad77a681b8a2d90a024a26699829176ff5c60bd54ecbc62d203ad4a2f175e"
       env:
         SECRET_ENCRYPTION_KEY: "secret/homarr-encryption-key"
+        AUTH_SECRET: "secret/homarr-auth-secret"
+        AUTH_URL: '{{ origin (printf "%s.%s" .Params.homarr_subdomain .Params.public_domain) }}'
+        AUTH_TRUST_HOST: "true"
         AUTH_PROVIDERS: oidc
         AUTH_OIDC_ISSUER: "{{ .Resolved.IssuerURL }}"
         AUTH_OIDC_CLIENT_ID: homarr
@@ -92,5 +134,6 @@ templates:
       redirectUris:
         - "https://{{ .Params.homarr_subdomain }}.{{ .Params.public_domain }}/api/auth/callback/oidc"
       scopes: [openid, profile, email, groups]
+      idTokenClaims: [email, email_verified, name, preferred_username, groups]
       authPolicy: two_factor
       secretRef: "{{ .Resolved.OidcSecretRef }}"
