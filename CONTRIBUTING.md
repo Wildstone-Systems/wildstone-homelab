@@ -42,6 +42,39 @@ that ambiguous questions resolve against. Until the alpha ships:
 - Match the surrounding code's style and comment discipline.
 - One concern per PR; reference the ADR your change touches.
 
+## Optional: the Graft code graph for AI agents
+
+[Graft](https://github.com/trailhq/Graft) builds a local index of this
+repo so a coding agent can answer "where does X happen?" from a graph
+instead of re-reading the tree every session. It is optional, local-only,
+and touches no committed source.
+
+```bash
+npm install -g @nanonets/graft
+graft telemetry disable          # or export DO_NOT_TRACK=1
+graft init --agents claude --no-global
+graft build                      # structural pass only: ~10s, no API key, no network
+```
+
+Rules for this repo:
+
+- **Structural pass only.** Run `graft build`, never `graft build --deep`.
+  The `--deep` flag sends source files to a third-party LLM for
+  summarisation; that is not a call any contributor makes unilaterally
+  here.
+- **Telemetry off.** Graft's usage stats are opt-in, but disable them
+  explicitly so a stray `graft init` cannot re-enable them.
+- **Nothing generated is committed.** `graft/` is git-ignored and
+  regenerable; `.ignore` keeps it out of ripgrep while leaving it
+  greppable on purpose. `.claude/` is git-ignored by this repo's own
+  policy, so each contributor runs `graft init` for their own machine.
+- `.mcp.json` is committed so the MCP server registration is shared. If
+  you do not have Graft installed, Claude Code logs a failed server and
+  carries on; nothing else breaks.
+
+Useful without an agent: `graft map` (repo orientation), `graft callers
+<symbol> --depth all` (blast radius), `graft ask "<question>"`.
+
 ## Licensing
 
 Contributions are accepted under the repository's license (AGPL-3.0).
