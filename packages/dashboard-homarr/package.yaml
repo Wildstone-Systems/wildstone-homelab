@@ -23,7 +23,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: dashboard-homarr
-  version: 1.0.1
+  version: 1.0.2
   capability: homarr
   profile: homarr
   exclusive: true
@@ -43,6 +43,25 @@ templates:
     kind: Secret
     metadata: { name: homarr-encryption-key, node: "{{ .Params.node }}" }
     spec: { name: homarr-encryption-key, provided: true }
+  # Auth.js encrypts its own cookies — session, state, PKCE — with a key
+  # derived from AUTH_SECRET. Homarr sets neither AUTH_SECRET nor
+  # NEXTAUTH_SECRET, so that key was not stable across a container being
+  # re-created, and every re-create left every browser holding cookies
+  # nothing could decrypt:
+  #
+  #   ERR_JWE_DECRYPTION_FAILED at Object.decode
+  #
+  # which Auth.js reports as OAuthProfileParseError and Homarr shows as
+  # ?error=Configuration — a login loop that blames the profile for a
+  # cookie problem. Generated, not provided: any stable random value
+  # works, and the household never types it.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: homarr-auth-secret, node: "{{ .Params.node }}" }
+    spec:
+      name: homarr-auth-secret
+      purpose: "Encrypts Homarr's own login cookies. Rotating it signs everyone out of Homarr; it is not the encryption key for stored data."
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
@@ -63,6 +82,23 @@ templates:
         AUTH_OIDC_CLIENT_NAME: Authelia
         AUTH_OIDC_SCOPE_OVERWRITE: "openid email profile groups"
         AUTH_OIDC_GROUPS_ATTRIBUTE: groups
+        # Homarr is Auth.js behind a reverse proxy, and Auth.js will not
+        # trust X-Forwarded-Host/Proto unless told to. Untrusted, it
+        # builds its callback and cookie origin from the raw request and
+        # then cannot read back the state it just set:
+        #
+        #   InvalidCheck: State could not be decoded
+        #   OAuthProfileParseError
+        #
+        # which presents as signing in at Authelia successfully and
+        # landing back on Homarr's login page, for ever.
+        #
+        # AUTH_URL is the origin a BROWSER uses, so it comes from origin
+        # rather than from the declared host — under the tailnet posture
+        # that is one certified name plus a port (ADR-W019 A10).
+        AUTH_SECRET: "secret/homarr-auth-secret"
+        AUTH_TRUST_HOST: "true"
+        AUTH_URL: '{{ origin (printf "%s.%s" .Params.homarr_subdomain .Params.public_domain) }}'
       mounts:
         - { source: homarr-appdata, target: /appdata }
       restart: unless-stopped
