@@ -76,6 +76,7 @@ func TestEveryDeclaredParamSourceIsResolved(t *testing.T) {
 		keystoneURL:      "http://n1:9441",
 		chatAdapterImage: "reg/img@sha256:abc",
 		timezone:         "Europe/London",
+		intakeURL:        "http://n1:9441/api/v1/household/events",
 	}
 	for source := range pkgspec.ParamSources {
 		got := resolveParams([]pkgspec.ParamDecl{{Name: "p", Source: source}}, facts, nil)

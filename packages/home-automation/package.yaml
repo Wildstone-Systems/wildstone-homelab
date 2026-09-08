@@ -46,7 +46,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: home-automation-hass
-  version: 1.0.2
+  version: 1.0.3
   capability: home-automation
   profile: home-assistant
 params:
@@ -56,12 +56,16 @@ params:
   # looking at "intake_url *" and a blank box, which is precisely the
   # unanswerable question ParamDecl.Description exists to prevent.
   - { name: node, required: true, source: node, description: "Which machine to install this on." }
-  # The BASE url, not the intake path: the deployment knows its own
-  # address and this package knows where its events go, so the template
-  # appends /api/v1/household/events rather than making an operator look
-  # it up. `source: keystone_url` fills it with the address the API
-  # actually advertises.
-  - { name: intake_url, required: true, source: keystone_url, validate: url, example: "http://100.64.0.1:9441", description: "The Wildstone API's address, as HOME ASSISTANT can reach it. The API binds loopback and the tailnet, so this is a tailnet or LAN address, never 127.0.0.1 — that would mean Home Assistant's own container. Just the address; the event path is added for you." }
+  # The WHOLE endpoint, filled in by the deployment. `source:
+  # household_intake_url` is the API's address plus the intake path,
+  # which the control plane knows and an operator would otherwise have
+  # to look up.
+  #
+  # Sourcing only the base and appending the path in the template below
+  # was the obvious alternative and it is wrong: this param has always
+  # meant the full URL, so anyone who supplied one would get
+  # /api/v1/household/events twice on their next reconcile.
+  - { name: intake_url, required: true, source: household_intake_url, validate: url, example: "http://100.64.0.1:9441/api/v1/household/events", description: "Where Home Assistant should POST household events. The Wildstone API binds loopback and the tailnet, so this is a tailnet or LAN address — never 127.0.0.1, which would mean Home Assistant's own container." }
   - { name: people, required: true, example: "person.ada, person.sam", description: "The people to watch for arriving home, as Home Assistant's own entity names, comma-separated — e.g. person.ada, person.sam. Find them in Home Assistant under Settings, People." }
 publishes:
   shape: config
@@ -118,8 +122,7 @@ templates:
 
         rest_command:
           wildstone_household_event:
-            # The path is the package's to know, not the operator's.
-            url: "{{ .Params.intake_url }}/api/v1/household/events"
+            url: "{{ .Params.intake_url }}"
             method: POST
             content_type: "application/json"
             headers:
