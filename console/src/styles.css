@@ -276,9 +276,18 @@ pre {
 /* One screen may own the pane: no padding, no cap, no page scroll. The
    screen inside it does its own scrolling, in the band that should
    scroll rather than in the whole column. */
-.screen-flush { padding: 0; max-width: none; overflow: hidden; display: flex; min-height: 0; }
+.screen-flush {
+  padding: 0;
+  max-width: none;
+  overflow: hidden;
+  display: flex;
+  /* Column, not row: the shell's error line is a sibling of the screen,
+     and in a row it becomes a second column that eats the pane. */
+  flex-direction: column;
+  min-height: 0;
+}
 .screen-flush > * { flex: 1; min-width: 0; min-height: 0; }
-/* An error is a line, not a column: it must not take half the pane. */
+/* An error is a line, not a band: it takes its own height and no more. */
 .screen-flush > .error { flex: none; margin: var(--space-3) var(--space-6); }
 
 .eyebrow {
@@ -970,12 +979,17 @@ tr.clickable:hover { background: var(--faint); }
   .thread-error > * { max-width: none; }
   .thread-bar { padding: var(--space-3) var(--space-4); }
   .butler-setup { padding: var(--space-4); }
+  /* Static alone would leave the popover a flex item in the header,
+     squeezed beside the title. It has to WRAP: the bar wraps, and the
+     popover takes a whole line under the row it belongs to. */
+  .thread-bar { flex-wrap: wrap; }
   .popover {
     position: static;
+    flex: 1 0 100%;
     width: auto;
     max-width: none;
     max-height: none;
-    margin: var(--space-3) var(--space-4) 0;
+    margin: var(--space-3) 0 0;
   }
   .msg-user { max-width: 86%; }
   .opening { padding: var(--space-6) var(--space-4); }

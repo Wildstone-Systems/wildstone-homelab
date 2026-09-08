@@ -236,12 +236,21 @@ export function Butler({ onEyebrow }: { onEyebrow?: (label: string | null) => vo
           }}
         />
 
+        {/* useLoad keeps the last good data, so a status reload that
+            fails after one has succeeded leaves `configured` true. The
+            error belongs here, above every branch, or the screen goes on
+            presenting a backend it can no longer reach. */}
+        {status.error && (
+          <div className="thread-error">
+            <ErrorLine error={status.error} />
+          </div>
+        )}
+
         {!configured ? (
           // A surface with no backend behind it says what to run. The
           // sidebar stays: the OTHER surface may well be configured,
           // and a screen you cannot switch away from is a dead end.
           <div className="butler-setup">
-            <ErrorLine error={status.error} />
             <StatusCard status={status.data} loading={status.loading} />
           </div>
         ) : thread === null && pending === null ? (
