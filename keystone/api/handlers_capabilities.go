@@ -55,6 +55,17 @@ type paramView struct {
 	// package's default is a property of the PACKAGE, and this is a
 	// property of the deployment.
 	Suggested string `json:"suggested,omitempty"`
+	// Installed is what this capability is ACTUALLY running with, read
+	// from the origin of the plan that installed it.
+	//
+	// It exists because reconfiguring silently reset every param the
+	// operator did not retype. Home Assistant was installed with
+	// timezone=CST; the package default is UTC; the form offered UTC
+	// because that is all it knew, and an upgrade would have moved a
+	// household's clock with nothing anywhere saying so. A default is
+	// what a package suggests to someone installing it for the first
+	// time, and it is the wrong answer for everyone else.
+	Installed string `json:"installed,omitempty"`
 }
 
 // deploymentFacts are the answers Keystone can supply for ParamSources.
@@ -126,10 +137,10 @@ func (s *Server) gatherFacts() deploymentFacts {
 	return f
 }
 
-func resolveParams(decls []pkgspec.ParamDecl, f deploymentFacts) []paramView {
+func resolveParams(decls []pkgspec.ParamDecl, f deploymentFacts, installed map[string]string) []paramView {
 	out := make([]paramView, 0, len(decls))
 	for _, d := range decls {
-		v := paramView{ParamDecl: d}
+		v := paramView{ParamDecl: d, Installed: installed[d.Name]}
 		switch d.Source {
 		case "node":
 			v.Options = f.nodes
@@ -265,10 +276,22 @@ func (s *Server) describeCapability(pkg *pkgspec.Package, current []resource.Res
 // resource records its owning CAPABILITY and never the package version
 // that produced it — so the plan is the only place the answer exists.
 func (s *Server) installedVersions() map[string]string {
-	out := map[string]string{}
+	versions, _ := s.installedFromPlans()
+	return versions
+}
+
+// installedFromPlans reads what each package was last APPLIED with: its
+// version, and the params it was given.
+//
+// The plan origin is the only record of either. Nothing else stores the
+// answers an operator typed, which is why reconfiguring used to lose
+// them: the form had the package's defaults and the deployment's facts,
+// and no memory of the install itself.
+func (s *Server) installedFromPlans() (versions map[string]string, params map[string]map[string]string) {
+	versions, params = map[string]string{}, map[string]map[string]string{}
 	recs, err := s.DB.ListPlans(200)
 	if err != nil {
-		return out
+		return versions, params
 	}
 	// Oldest first, so the newest install for a capability wins.
 	for i := len(recs) - 1; i >= 0; i-- {
@@ -279,9 +302,12 @@ func (s *Server) installedVersions() map[string]string {
 		if recs[i].State != runtimedb.PlanApplied {
 			continue
 		}
-		out[stored.Origin.Package] = stored.Origin.Version
+		versions[stored.Origin.Package] = stored.Origin.Version
+		if len(stored.Origin.Params) > 0 {
+			params[stored.Origin.Package] = stored.Origin.Params
+		}
 	}
-	return out
+	return versions, params
 }
 
 // capabilityBlockers are reasons this will not work HERE, as opposed to
@@ -315,7 +341,7 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 		return nil, http.StatusInternalServerError, err
 	}
 	facts := s.gatherFacts()
-	versions := s.installedVersions()
+	versions, installedParams := s.installedFromPlans()
 	current, _ := s.State.Load()
 	health := map[string]runtimedb.Observed{}
 	if obs, err := s.DB.ListObserved(); err == nil {
@@ -328,7 +354,7 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 		out = append(out, packageView{
 			Name: p.Metadata.Name, Version: p.Metadata.Version,
 			Capability: p.Metadata.Capability, Profile: p.Metadata.Profile,
-			Params: resolveParams(p.Params, facts), Provides: p.Provides, Requires: p.Requires,
+			Params: resolveParams(p.Params, facts, installedParams[p.Metadata.Name]), Provides: p.Provides, Requires: p.Requires,
 			Publishes:        p.Publishes,
 			ProvidedSecrets:  pkgspec.ProvidedSecrets(p),
 			Enabled:          enabled[p.Metadata.Capability],

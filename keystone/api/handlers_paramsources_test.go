@@ -23,7 +23,7 @@ func TestResolveParamsFillsWhatTheDeploymentKnows(t *testing.T) {
 		{Name: "keystone_url", Source: "keystone_url"},
 		{Name: "adapter_image", Source: "chat_adapter_image"},
 		{Name: "freeform"},
-	}, facts)
+	}, facts, nil)
 
 	by := map[string]paramView{}
 	for _, v := range got {
@@ -57,7 +57,7 @@ func TestResolveParamsSuggestsNothingItDoesNotKnow(t *testing.T) {
 		{Name: "keystone_url", Source: "keystone_url"},
 		{Name: "adapter_image", Source: "chat_adapter_image"},
 		{Name: "public_domain", Source: "domain"},
-	}, deploymentFacts{})
+	}, deploymentFacts{}, nil)
 	for _, v := range got {
 		if v.Suggested != "" {
 			t.Fatalf("%s suggested %q from an empty deployment", v.Name, v.Suggested)
@@ -65,9 +65,10 @@ func TestResolveParamsSuggestsNothingItDoesNotKnow(t *testing.T) {
 	}
 }
 
-// Every source a package may declare has to be one resolveParams
-// actually handles, or a package can name a source that silently does
-// nothing.
+// Every source a package may declare has to do SOMETHING: either
+// resolveParams supplies a value for it, or it is declared as one that
+// selects a control instead (pkgspec.ParamSourcesSelectingAControl).
+// Otherwise a package can name a source that silently does nothing.
 func TestEveryDeclaredParamSourceIsResolved(t *testing.T) {
 	facts := deploymentFacts{
 		nodes:            []string{"n1"},
@@ -76,12 +77,32 @@ func TestEveryDeclaredParamSourceIsResolved(t *testing.T) {
 		chatAdapterImage: "reg/img@sha256:abc",
 	}
 	for source := range pkgspec.ParamSources {
-		got := resolveParams([]pkgspec.ParamDecl{{Name: "p", Source: source}}, facts)
+		got := resolveParams([]pkgspec.ParamDecl{{Name: "p", Source: source}}, facts, nil)
 		if len(got) != 1 {
 			t.Fatalf("source %q: resolveParams returned %d params", source, len(got))
 		}
-		if got[0].Suggested == "" && len(got[0].Options) == 0 {
-			t.Fatalf("source %q is declared in ParamSources but resolves to nothing", source)
+		if pkgspec.ParamSourcesSelectingAControl[source] {
+			// It picks the form's control; there is no value to resolve.
+			continue
 		}
+		if got[0].Suggested == "" && len(got[0].Options) == 0 {
+			t.Fatalf("source %q is declared in ParamSources but resolves to nothing, and is not declared as one that selects a control", source)
+		}
+	}
+}
+
+// A control-selecting source must still be a KNOWN one. Declaring the
+// exemption by name is what keeps a typo failing: "directoy" resolves to
+// nothing and is not in the control set, so it is still a bug.
+func TestAnUnknownSourceStillResolvesToNothing(t *testing.T) {
+	got := resolveParams([]pkgspec.ParamDecl{{Name: "p", Source: "directoy"}}, deploymentFacts{}, nil)
+	if got[0].Suggested != "" || len(got[0].Options) != 0 {
+		t.Fatal("a misspelled source must not resolve to anything")
+	}
+	if pkgspec.ParamSourcesSelectingAControl["directoy"] {
+		t.Fatal("a misspelled source must not be treated as control-selecting")
+	}
+	if pkgspec.ParamSources["directoy"] {
+		t.Fatal("a misspelled source must not be in the closed vocabulary")
 	}
 }

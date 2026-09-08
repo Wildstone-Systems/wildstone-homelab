@@ -92,6 +92,8 @@ func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 			slog.String("volume", o.SeedVolumeFile.GetVolume()),
 			slog.String("path", o.SeedVolumeFile.GetPath()),
 		}
+	case *wsv1.Operation_ListDirectory:
+		return "ListDirectory", []slog.Attr{slog.String("path", o.ListDirectory.GetPath())}
 	case *wsv1.Operation_StatVolumeFile:
 		return "StatVolumeFile", []slog.Attr{
 			slog.String("volume", o.StatVolumeFile.GetVolume()),

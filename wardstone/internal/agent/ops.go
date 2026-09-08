@@ -127,6 +127,11 @@ func (a *Agent) dispatchOp(ctx context.Context, opID string, op *wsv1.Operation)
 		if r, oerr = a.statVolumeFile(ctx, o.StatVolumeFile); oerr == nil {
 			res.Result = r
 		}
+	case *wsv1.Operation_ListDirectory:
+		var r *wsv1.OpResult_ListDirectory
+		if r, oerr = a.listDirectory(ctx, o.ListDirectory); oerr == nil {
+			res.Result = r
+		}
 	case *wsv1.Operation_PruneImages:
 		var r *wsv1.OpResult_PruneImages
 		if r, oerr = a.pruneImages(ctx, o.PruneImages); oerr == nil {

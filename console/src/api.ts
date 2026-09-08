@@ -195,6 +195,16 @@ export interface ParamDecl {
   // it" — a fact about this deployment, not about the package.
   options?: string[];
   suggested?: string;
+  // Which deployment fact this param is sourced from, when it is one.
+  // "directory" makes the form offer a folder picker instead of a blank
+  // box (ADR-W021 A5).
+  source?: string;
+  // What this capability is ACTUALLY running with, when it is already
+  // installed. It wins over suggested and default, because those are
+  // answers for a FIRST install and this is the only one that is true of
+  // the running service. Without it, reconfiguring silently reset every
+  // param the operator did not retype.
+  installed?: string;
   // A syntactically valid value, written by the package author (ADR-W025
   // A4). It shows the SHAPE and nothing else — it is not a suggestion for
   // this deployment and never becomes the field's value, only its
@@ -431,6 +441,16 @@ export interface ButlerConfig {
   updatedBy?: string;
 }
 
+// DirectoryListing is what the folder picker browses. Roots are the only
+// places a service's data can live; a path outside them is refused by
+// the node at apply time, so the picker never offers one.
+export interface DirectoryListing {
+  path?: string;
+  parent?: string;
+  roots: string[];
+  directories: string[];
+}
+
 export const api = {
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
   butlerModels: (endpoint?: string) =>
@@ -441,6 +461,14 @@ export const api = {
   butlerConfig: () => call<{ stored: boolean; config: ButlerConfig }>("GET", "/api/v1/butler/config"),
   setButlerConfig: (c: { provider: string; model: string; endpoint: string }) =>
     call<{ stored: boolean; config: ButlerConfig }>("PUT", "/api/v1/butler/config", c),
+  // The install form's folder picker. Read-only, and the node answers
+  // only for the prefixes a bind mount may name — so what it offers is
+  // exactly what will actually work.
+  directories: (node: string, path?: string) =>
+    call<DirectoryListing>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/directories${path ? `?path=${encodeURIComponent(path)}` : ""}`,
+    ),
   identityCode: (node: string) =>
     call<IdentityNotification>("GET", `/api/v1/nodes/${encodeURIComponent(node)}/identity/code`),
   previewCapability: (pkg: string, params: Record<string, string>) =>

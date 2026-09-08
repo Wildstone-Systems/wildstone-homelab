@@ -134,12 +134,35 @@ var ParamSources = map[string]bool{
 	// discover that 127.0.0.1 means the container, not the host) is a
 	// question it can answer itself.
 	"keystone_url": true,
+	// A folder on the node, under the prefixes a bind mount may name.
+	// The form offers a picker rather than a blank box: a free-text path
+	// is the field that let a corrupted default through unnoticed — the
+	// operator was shown "/[REDACTED]", had nothing to compare it
+	// against, and accepted what they were shown. It also makes the real
+	// constraint visible, since a path outside those prefixes is refused
+	// at apply time and a picker simply never offers one.
+	"directory": true,
 	// The chat adapter image this deployment already runs, read from an
 	// installed chat capability's Container. Nothing publishes this
 	// image — the operator builds and pushes it — so the second adapter
 	// should not have to be told a digest the first one is already
 	// using.
 	"chat_adapter_image": true,
+}
+
+// ParamSourcesSelectingAControl are the sources that tell the form which
+// CONTROL to render rather than supplying a value to prefill.
+//
+// The distinction is real and worth stating once. "node" and "domain"
+// are answers — Keystone knows them and the form offers them.
+// "directory" is not an answer: only the operator knows which folder
+// they mean, and the deployment's contribution is that it can show them
+// the folders that exist. Conflating the two makes a source that
+// resolves to nothing look like a bug, which is exactly what the
+// completeness check should keep catching for every source that IS
+// supposed to resolve.
+var ParamSourcesSelectingAControl = map[string]bool{
+	"directory": true,
 }
 
 // Policies carries the mandatory policy inputs a package declares about the

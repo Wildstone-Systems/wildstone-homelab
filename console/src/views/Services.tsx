@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { DirectoryPicker } from "../ui/DirectoryPicker";
 import { ArrowSquareOut, Package, WarningCircle } from "@phosphor-icons/react";
 import { api, EnablePreview, PackageView, ResourceView } from "../api";
 import { ErrorLine, useAction, useLoad } from "../lib";
@@ -509,10 +510,15 @@ export function AvailableRow({ pkg, onInstall }: { pkg: PackageView; onInstall: 
 export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => void }) {
   const params = pkg.params ?? [];
   const [values, setValues] = useState<Record<string, string>>(() =>
-    // suggested before default: a package's default is a property of the
-    // PACKAGE, and suggested is a property of THIS deployment — which
-    // node exists, which domain everything else already uses.
-    Object.fromEntries(params.map((p) => [p.name, p.suggested ?? p.default ?? ""])),
+    // installed, then suggested, then default. A default is what the
+    // PACKAGE suggests to someone installing it for the first time, and
+    // suggested is what this DEPLOYMENT knows — but neither is true of a
+    // capability that is already running, and offering them is how a
+    // reconfigure quietly reverts what the operator chose. Home Assistant
+    // was installed with timezone=CST; the package default is UTC; the
+    // form offered UTC, and an upgrade would have moved a household's
+    // clock with nothing anywhere saying so.
+    Object.fromEntries(params.map((p) => [p.name, p.installed ?? p.suggested ?? p.default ?? ""])),
   );
   const [preview, setPreview] = useState<EnablePreview | null>(null);
   const [busy, setBusy] = useState(false);
@@ -540,7 +546,20 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
             {p.required ? " *" : ""}
             {p.description && <div className="muted">{p.description}</div>}
           </label>
-          {p.options && p.options.length > 0 ? (
+          {p.source === "directory" ? (
+            // A folder, chosen from the node rather than typed. The
+            // free-text version of this field is what let "/[REDACTED]"
+            // through: the operator was shown a corrupted default and had
+            // nothing to check it against.
+            <DirectoryPicker
+              value={values[p.name] ?? ""}
+              node={values["node"] ?? ""}
+              onChange={(v) => {
+                setValues({ ...values, [p.name]: v });
+                setPreview(null);
+              }}
+            />
+          ) : p.options && p.options.length > 0 ? (
             // A choice, not a blank box. The control plane knows the
             // answers; asking the operator to retype one is how a
             // capability ends up on a node that does not exist.
@@ -566,7 +585,7 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
               // above. suggested and default are answers; an example is
               // only the shape of one, and prefilling it would submit a
               // fabricated address as though the operator had chosen it.
-              placeholder={p.suggested ?? p.default ?? p.example ?? ""}
+              placeholder={p.installed ?? p.suggested ?? p.default ?? p.example ?? ""}
               onChange={(e) => {
                 setValues({ ...values, [p.name]: e.target.value });
                 setPreview(null);

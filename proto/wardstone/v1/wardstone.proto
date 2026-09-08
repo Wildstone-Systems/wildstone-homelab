@@ -134,6 +134,7 @@ message Operation {
     ListSecrets list_secrets = 29;
     SeedVolumeFile seed_volume_file = 30;
     StatVolumeFile stat_volume_file = 31;
+    ListDirectory list_directory = 32;
   }
 }
 
@@ -172,6 +173,7 @@ message OpResult {
     ListSecretsResult list_secrets = 31;
     SeedVolumeFileResult seed_volume_file = 32;
     StatVolumeFileResult stat_volume_file = 33;
+    ListDirectoryResult list_directory = 34;
   }
 }
 
@@ -510,6 +512,37 @@ message StatVolumeFile {
 
 message StatVolumeFileResult {
   bool exists = 1;
+}
+
+// ListDirectory lists the SUBDIRECTORIES of a managed path, so the
+// install form can offer a folder instead of a blank box (protocol minor
+// 15).
+//
+// It exists because a free-text path field is the field that let a
+// corrupted default through unnoticed: the operator was shown
+// "/[REDACTED]", had nothing to compare it against, and accepted it. A
+// control that can only offer directories that exist makes that class
+// unrepresentable rather than merely fixed.
+//
+// Directories ONLY, and names only. This is a read primitive over the
+// host filesystem, so it is kept as narrow as the question it answers:
+// "which folder do you mean". File names are not returned (nothing binds
+// a single file), sizes and modes are not returned, and the path is
+// confined to the managed prefixes by the same resolveManaged check every
+// other path-taking op uses — which is also the honest answer, because a
+// bind mount outside those prefixes is refused at apply time anyway. A
+// picker that browsed the whole host would offer folders that can never
+// work.
+message ListDirectory {
+  string path = 1; // must resolve under a managed prefix
+}
+
+message ListDirectoryResult {
+  // Immediate subdirectory names, sorted, without the parent path.
+  // Symlinks are not followed and not listed: a link is a second name for
+  // a directory that resolveManaged may or may not admit, and offering
+  // one in a picker is offering a path that fails later.
+  repeated string directories = 1;
 }
 
 message ReadManagedFile {
