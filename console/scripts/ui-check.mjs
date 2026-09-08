@@ -16,8 +16,13 @@
 import { chromium } from "playwright";
 import { readFileSync } from "fs";
 
-const TOKEN = readFileSync("/home/user/.wild_operator_token", "utf8").trim();
-const BASE = "http://192.168.1.52:9441/";
+// Whose deployment this runs against is the operator's to say, not this
+// script's: a hardcoded home directory and LAN address only ever matched
+// one machine, and put that machine's details in a public repository.
+const TOKEN_FILE = process.env.WILD_TOKEN_FILE
+  ?? `${process.env.HOME ?? "."}/.wild_operator_token`;
+const TOKEN = (process.env.WILD_TOKEN ?? readFileSync(TOKEN_FILE, "utf8")).trim();
+const BASE = process.env.WILD_API ?? "http://127.0.0.1:9441/";
 let failures = 0;
 const check = (label, cond, detail = "") => {
   if (!cond) { failures++; console.log("FAIL:", label, detail); }
@@ -66,7 +71,7 @@ check("default used as placeholder",
 const gated = await page.getByRole("button", { name: /fill in/ }).count();
 check("Preview gated until required filled", gated > 0);
 
-await page.locator(".panel input").nth(0).fill("192.168.1.52.nip.io");   // public_domain
+await page.locator(".panel input").nth(0).fill("192.168.1.10.nip.io");   // public_domain
 await page.locator(".panel input").nth(2).fill("wildstone-homelab");      // node
 await page.waitForTimeout(300);
 check("Preview enabled once filled", await page.getByRole("button", { name: "Preview" }).count() > 0);
@@ -82,7 +87,7 @@ check("tells you to supply them", /must supply/i.test(body));
 check("offers Propose plan", await page.getByRole("button", { name: "Propose plan" }).count() > 0);
 check("no uncaught page errors", consoleErrors.length === 0, consoleErrors.join("; "));
 
-await page.screenshot({ path: "/home/user/console-services.png", fullPage: true });
+await page.screenshot({ path: process.env.WILD_SHOT ?? "console-services.png", fullPage: true });
 await browser.close();
 console.log(failures === 0 ? "\nALL UI CHECKS PASSED" : `\n${failures} UI CHECK(S) FAILED`);
 process.exit(failures ? 1 : 0);

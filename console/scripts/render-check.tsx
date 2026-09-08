@@ -995,7 +995,7 @@ const sourced = renderToString(h(InstallStep, {
     params: [
       { name: "node", required: true },
       { name: "adapter_image", required: true, suggested: "reg:5000/chat-adapter@sha256:abc" },
-      { name: "keystone_url", required: true, suggested: "http://100.64.0.59:9441" },
+      { name: "keystone_url", required: true, suggested: "http://100.64.0.1:9441" },
       { name: "extra", required: true, options: ["one", "two"] },
     ],
   } as never,
@@ -1006,7 +1006,7 @@ check("the picker offers what the deployment knows", sourced.includes(">one<") &
 // A known answer must be IN the field, not grey placeholder text behind
 // it: that is how an operator ends up believing it is theirs to work out.
 check("a suggested answer is prefilled, not merely hinted",
-  sourced.includes('value="http://100.64.0.59:9441"'), sourced.slice(0, 900));
+  sourced.includes('value="http://100.64.0.1:9441"'), sourced.slice(0, 900));
 check("a suggested image is prefilled too",
   sourced.includes('value="reg:5000/chat-adapter@sha256:abc"'), sourced.slice(0, 900));
 // And with nothing suggested the field stays empty and gates the button.

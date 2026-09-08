@@ -36,7 +36,7 @@ func TestButlerConfigAbsentIsNotAnError(t *testing.T) {
 
 func TestButlerConfigRoundTrips(t *testing.T) {
 	db := testDB(t)
-	want := ButlerConfig{Provider: "ollama", Model: "qwen3.5:4b", Endpoint: "http://192.168.1.99:11434", UpdatedBy: "admin"}
+	want := ButlerConfig{Provider: "ollama", Model: "qwen3.5:4b", Endpoint: "http://192.168.1.20:11434", UpdatedBy: "admin"}
 	if err := db.SetButlerConfig(want); err != nil {
 		t.Fatal(err)
 	}
