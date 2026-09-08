@@ -174,3 +174,42 @@ func TestExclusiveCapabilityStillReplacesItsSibling(t *testing.T) {
 		t.Fatalf("an exclusive capability must propose replacing its sibling, got %v", got)
 	}
 }
+
+// An exclusive capability replaces a LEGACY sibling too.
+//
+// Scoping the unstamped case to packageIsTheInstalledOne alone was a
+// regression on the owner-keyed sweep it replaced: switching dns-pihole
+// to dns-adguard on a deployment written before provenance existed
+// skipped every unstamped container and route, so AdGuard installed
+// while Pi-hole kept running and the two fought over :53.
+func TestExclusiveReplacesAnUnstampedSibling(t *testing.T) {
+	current := []resource.Resource{
+		owned(resource.KindContainer, "pihole", "capability/dns"),
+		owned(resource.KindRoute, "pihole", "capability/dns"),
+	}
+	rendered := []resource.Resource{
+		byPkg(resource.KindContainer, "adguard", "capability/dns", "dns-adguard"),
+	}
+	got := droppedByUpgrade(exclusivePkg("dns-adguard", "dns"), current, rendered)
+	if len(got) != 2 {
+		t.Fatalf("an exclusive capability must replace an unstamped sibling, got %v", got)
+	}
+}
+
+// The same case on a PLURAL capability keeps both, which is the whole
+// point of the scoping — the two rules must not collapse into each other.
+func TestPluralDoesNotReplaceAnUnstampedSibling(t *testing.T) {
+	current := []resource.Resource{
+		owned(resource.KindContainer, "kavita", "capability/books"),
+	}
+	rendered := []resource.Resource{
+		byPkg(resource.KindContainer, "calibre-web", "capability/books", "books-calibre-web"),
+	}
+	// books-calibre-web declares a container that is not present, so it
+	// is not "the installed one" — exactly the shape that regressed.
+	pkg := testPkg("books-calibre-web", "books")
+	pkg.Templates = []string{"apiVersion: wildstone.dev/v1\nkind: Container\nmetadata: {name: calibre-web}\nspec: {image: x}\n"}
+	if got := droppedByUpgrade(pkg, current, rendered); len(got) != 0 {
+		t.Fatalf("a plural capability must keep an unstamped sibling, got %v", got)
+	}
+}

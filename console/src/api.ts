@@ -15,6 +15,11 @@ export interface ResourceView {
   kind: string;
   name: string;
   owner: string;
+  // Which package produced this. Owner names the CAPABILITY, and two
+  // profiles of one capability share it, so this is what tells a
+  // removal which resources are the named package's. Absent on
+  // resources written before the field existed.
+  package?: string;
   node?: string;
   yaml: string;
 }
@@ -496,11 +501,18 @@ export const api = {
   // not be one: a side door around the human gate is what ground rule 4
   // exists to prevent. `wild capability disable` builds this same body
   // from the same two calls.
-  disableCapability: (capability: string, owned: { kind: string; name: string }[]) =>
-    call<PlanRecord>("POST", "/api/v1/plans", {
-      summary: `disable capability ${capability} (${owned.length} resource(s) removed)`,
-      delete: owned.map((r) => ({ kind: r.kind, name: r.name })),
-    }),
+  // Removal names a PACKAGE and Keystone decides what that means.
+  //
+  // This used to build the delete list here, from every resource owned
+  // by `capability/<name>`. With two profiles of one capability
+  // installed that took the sibling's containers and routes with it —
+  // and `Secret/restic-books`, the repository password the surviving app
+  // still needs. Every protection added server-side was bypassed by the
+  // screen most people use. The catalog and the recorded install params
+  // are what answer "what would the sibling still need", and only the
+  // control plane has them.
+  disablePackage: (pkg: string) =>
+    call<PlanRecord>("POST", "/api/v1/capabilities/disable", { package: pkg }),
   plan: (id: string) => call<PlanRecord>("GET", `/api/v1/plans/${encodeURIComponent(id)}`),
   approvePlan: (id: string) =>
     call<unknown>("POST", `/api/v1/plans/${encodeURIComponent(id)}/approve`),

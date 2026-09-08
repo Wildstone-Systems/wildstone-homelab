@@ -355,10 +355,6 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 	if s.Catalog == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("no catalog is configured (keystone -catalog-dir)")
 	}
-	enabled, err := s.enabledCapabilities()
-	if err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
 	facts := s.gatherFacts()
 	versions, installedParams := s.installedFromPlans()
 	current, _ := s.State.Load()
@@ -374,9 +370,15 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 			Name: p.Metadata.Name, Version: p.Metadata.Version,
 			Capability: p.Metadata.Capability, Profile: p.Metadata.Profile,
 			Params: resolveParams(p.Params, facts, installedParams[p.Metadata.Name]), Provides: p.Provides, Requires: p.Requires,
-			Publishes:        p.Publishes,
-			ProvidedSecrets:  pkgspec.ProvidedSecrets(p),
-			Enabled:          enabled[p.Metadata.Capability],
+			Publishes:       p.Publishes,
+			ProvidedSecrets: pkgspec.ProvidedSecrets(p),
+			// Whether THIS PACKAGE is installed, not whether its
+			// capability is. Two profiles can run side by side now, and
+			// keyed on the capability both of them read as installed —
+			// so once Calibre-Web was in, Kavita showed as installed
+			// with no Install action and the side-by-side case could not
+			// be reached from the Console at all.
+			Enabled:          packageIsInstalled(p, current),
 			capabilityDetail: s.withVersion(p, s.describeCapability(p, current, health), versions),
 		})
 	}
@@ -445,7 +447,19 @@ func droppedByUpgrade(pkg *pkgspec.Package, current, rendered []resource.Resourc
 		case pkg.Metadata.Name:
 			// Mine: an earlier version of this same package.
 		case "":
-			if !legacyIsMine {
+			// An exclusive capability holds ONE profile, so an unstamped
+			// resource it owns belongs to the profile being replaced
+			// whether or not this package is the one already installed.
+			//
+			// Scoping this to legacyIsMine alone was a regression on the
+			// behaviour it replaced: switching dns-pihole to dns-adguard
+			// on a deployment written before provenance existed skipped
+			// every unstamped container and route, so AdGuard installed
+			// while Pi-hole kept running and the two fought over :53.
+			// The old owner-keyed sweep removed it; the new one has to
+			// as well, or "exclusive" means nothing where it matters
+			// most.
+			if !legacyIsMine && !pkg.Metadata.Exclusive {
 				continue
 			}
 		default:

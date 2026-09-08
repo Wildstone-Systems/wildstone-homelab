@@ -154,7 +154,12 @@ export function ServicesView({
         {removing && (
           <RemoveForm
             pkg={removing}
-            owned={resources.filter((r) => r.owner === `capability/${removing.capability}`)}
+            // This PACKAGE's resources. Filtering by capability showed a
+            // sibling profile's containers in the list of what a removal
+            // would delete — and then deleted them. Keystone recomputes
+            // this authoritatively when the plan is proposed; the same
+            // rule here is what makes the preview match.
+            owned={ownedByPackage(resources, removing)}
             // Every owner the statefile actually reported, so an empty
             // result can be read rather than guessed at.
             owners={ownerCounts(resources)}
@@ -303,6 +308,22 @@ export function ownerCounts(resources: ResourceView[]): [string, number][] {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
+// ownedByPackage is what a removal of THIS package would touch.
+//
+// It mirrors Keystone's rule, which is the authority: a resource stamped
+// with this package's name, or — on a deployment written before
+// provenance existed — an unstamped one, but only while no other package
+// has claimed the capability. Two profiles installed and an unstamped
+// resource between them is ambiguous, and deleting it on a guess is the
+// wrong way to be wrong.
+export function ownedByPackage(resources: ResourceView[], pkg: PackageView): ResourceView[] {
+  const owner = `capability/${pkg.capability}`;
+  const mine = resources.filter((r) => r.owner === owner);
+  const claimants = new Set(mine.map((r) => r.package).filter((p): p is string => !!p));
+  const legacyIsMine = claimants.size === 0 || (claimants.size === 1 && claimants.has(pkg.name));
+  return mine.filter((r) => (r.package ? r.package === pkg.name : legacyIsMine));
+}
+
 export function RemoveForm({
   pkg,
   owned,
@@ -353,8 +374,9 @@ export function RemoveForm({
   return (
     <>
       <p className="problem-body">
-        This proposes deleting everything <strong>{pkg.capability}</strong> owns. Nothing happens
-        until you approve the plan.
+        This proposes deleting what <strong>{pkg.name}</strong> installed. Another profile of the
+        same capability, if one is installed, keeps running — and anything it still needs is left
+        alone. Nothing happens until you approve the plan.
       </p>
       {/* Stored data is the part a plan cannot undo. Everything else this
           deletes can be reinstalled; what was stored cannot. */}
@@ -444,7 +466,7 @@ export function RemoveForm({
           disabled={remove.state.phase === "busy" || deletable.length === 0 || error !== null}
           onClick={() =>
             remove.run(
-              () => api.disableCapability(pkg.capability, deletable),
+              () => api.disablePackage(pkg.name),
               "removal proposed — approve it on Plans",
             )
           }

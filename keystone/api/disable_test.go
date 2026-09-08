@@ -121,3 +121,70 @@ func TestDisableLeavesAmbiguousLegacyResourcesAlone(t *testing.T) {
 		}
 	}
 }
+
+// A secret can be read from a managed FILE rather than from a
+// container's environment, and photos-immich is why: Immich does not
+// read OAuth from the environment, so its client secret lives only
+// inside immich.json. Scanning env found no dependent, so rotating it
+// rewrote nothing and reported success while Immich went on presenting
+// the previous client secret.
+func TestSecretReadersFindConfigFilesAndWhatMountsThem(t *testing.T) {
+	s := &Server{ManagedPrefix: "/etc/wildstone"}
+	desired := []resource.Resource{
+		{Kind: resource.KindConfigFile, Metadata: resource.Metadata{Name: "immich-config", Owner: "capability/photos", Node: "n1"},
+			ConfigFile: &resource.ConfigFileSpec{Filename: "immich.json",
+				Content: `{"oauth":{"clientSecret":"secret/photos-oidc"}}`}},
+		{Kind: resource.KindContainer, Metadata: resource.Metadata{Name: "immich-server", Owner: "capability/photos", Node: "n1"},
+			Container: &resource.ContainerSpec{Image: "x", Mounts: []resource.Mount{{Source: "/etc/wildstone/photos", Target: "/etc/wildstone/photos"}}}},
+		// Same node, reads neither.
+		{Kind: resource.KindContainer, Metadata: resource.Metadata{Name: "immich-redis", Owner: "capability/photos", Node: "n1"},
+			Container: &resource.ContainerSpec{Image: "x"}},
+	}
+	containers, files, err := s.secretReaders(desired, "n1", "photos-oidc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Metadata.Name != "immich-config" {
+		t.Fatalf("the ConfigFile holding the secret was not found: %v", files)
+	}
+	if len(containers) != 1 || containers[0] != "immich-server" {
+		t.Fatalf("containers = %v, want exactly [immich-server]", containers)
+	}
+}
+
+// Env references still work, and a container is never listed twice when
+// it both names the secret and mounts a file holding it.
+func TestSecretReadersDoNotDoubleCount(t *testing.T) {
+	s := &Server{ManagedPrefix: "/etc/wildstone"}
+	desired := []resource.Resource{
+		{Kind: resource.KindConfigFile, Metadata: resource.Metadata{Name: "cfg", Owner: "capability/photos", Node: "n1"},
+			ConfigFile: &resource.ConfigFileSpec{Filename: "a.json", Content: "secret/photos-oidc"}},
+		{Kind: resource.KindContainer, Metadata: resource.Metadata{Name: "immich-server", Owner: "capability/photos", Node: "n1"},
+			Container: &resource.ContainerSpec{Image: "x",
+				Env:    map[string]string{"OAUTH": "secret/photos-oidc"},
+				Mounts: []resource.Mount{{Source: "/etc/wildstone/photos", Target: "/x"}}}},
+	}
+	containers, _, err := s.secretReaders(desired, "n1", "photos-oidc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(containers) != 1 {
+		t.Fatalf("containers = %v, want one entry", containers)
+	}
+}
+
+// Another node's readers are not this node's.
+func TestSecretReadersAreNodeScoped(t *testing.T) {
+	s := &Server{ManagedPrefix: "/etc/wildstone"}
+	desired := []resource.Resource{
+		{Kind: resource.KindContainer, Metadata: resource.Metadata{Name: "elsewhere", Owner: "capability/photos", Node: "n2"},
+			Container: &resource.ContainerSpec{Image: "x", Env: map[string]string{"OAUTH": "secret/photos-oidc"}}},
+	}
+	containers, files, err := s.secretReaders(desired, "n1", "photos-oidc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(containers) != 0 || len(files) != 0 {
+		t.Fatalf("another node's readers leaked in: %v %v", containers, files)
+	}
+}

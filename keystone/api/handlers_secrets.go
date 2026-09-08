@@ -30,7 +30,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
@@ -186,8 +188,17 @@ func (s *Server) setSecret(r *http.Request, id principal.Identity) (any, int, er
 // and removes running containers, which is a Medium-risk act an operator
 // should be able to find afterwards.
 func (s *Server) applyToDependents(r *http.Request, node, name, actor, event string) (int, error) {
-	dependents, err := s.secretDependents(node, name)
+	desired, err := s.State.Load()
 	if err != nil {
+		return 0, fmt.Errorf("loading statefile: %w", err)
+	}
+	dependents, files, err := s.secretReaders(desired, node, name)
+	if err != nil {
+		return 0, err
+	}
+	// The files first: a container re-created before its config is
+	// rewritten would start against the old value and look correct.
+	if err := s.rewriteConfigFiles(r, node, files); err != nil {
 		return 0, err
 	}
 	if len(dependents) == 0 {
@@ -213,6 +224,13 @@ func (s *Server) applyToDependents(r *http.Request, node, name, actor, event str
 	}
 	if terr := s.DB.TransitionPlan(planID, runtimedb.PlanApplied, actor); terr != nil {
 		s.Log.Error("secret plan transition", "plan", planID, "err", terr)
+	}
+	// Poke the loop, exactly as rotation does. Without it the dependents
+	// are REMOVED and not yet re-created, so the endpoint returns success
+	// while the service is missing until the next reconcile interval —
+	// thirty seconds of "I just set the password and the page is gone".
+	if s.OnApproved != nil {
+		s.OnApproved()
 	}
 	return len(dependents), nil
 }
@@ -313,20 +331,114 @@ func (s *Server) secretDependents(node, name string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading statefile: %w", err)
 	}
+	containers, _, err := s.secretReaders(desired, node, name)
+	return containers, err
+}
+
+// secretReaders finds everything on a node that reads a secret: the
+// containers whose env names it, and the ConfigFiles whose CONTENT does
+// — plus the containers that mount those files.
+//
+// Env alone was the whole answer until a package moved a credential into
+// a managed file. photos-immich did exactly that: Immich does not read
+// OAuth from the environment, so its client secret now lives only inside
+// immich.json, materialized on the node at write time. Scanning env
+// found no dependent for it, so rotating that secret rewrote nothing,
+// re-created nothing, and reported success while Immich went on
+// presenting the previous client secret to Authelia.
+//
+// A rotation that reports success and changes nothing is worse than one
+// that fails: it is the state where an operator believes a credential
+// has been retired.
+func (s *Server) secretReaders(desired []resource.Resource, node, name string) (containers []string, files []resource.Resource, err error) {
 	ref := "secret/" + name
-	deps := []string{}
+	seen := map[string]bool{}
+	// Directories whose contents change when this secret does.
+	dirs := map[string]bool{}
+
 	for _, res := range desired {
-		if res.Kind != resource.KindContainer || res.Metadata.Node != node {
+		if res.Metadata.Node != node {
 			continue
 		}
-		for _, v := range res.Container.Env {
-			if strings.TrimSpace(v) == ref {
-				deps = append(deps, res.Metadata.Name)
+		switch {
+		case res.Kind == resource.KindContainer && res.Container != nil:
+			for _, v := range res.Container.Env {
+				if strings.TrimSpace(v) == ref {
+					if !seen[res.Metadata.Name] {
+						seen[res.Metadata.Name] = true
+						containers = append(containers, res.Metadata.Name)
+					}
+					break
+				}
+			}
+		case res.Kind == resource.KindConfigFile && res.ConfigFile != nil:
+			if !strings.Contains(res.ConfigFile.Content, ref) {
+				continue
+			}
+			files = append(files, res)
+			cap, ok := strings.CutPrefix(res.Metadata.Owner, "capability/")
+			if ok && cap != "" {
+				dirs[path.Join(s.managedPrefix(), cap)] = true
+			}
+		}
+	}
+
+	// A container reading one of those files has to be re-created too:
+	// the file is read at startup, so a rewritten file behind a running
+	// process is the same silence in a different place.
+	for _, res := range desired {
+		if res.Kind != resource.KindContainer || res.Container == nil || res.Metadata.Node != node {
+			continue
+		}
+		if seen[res.Metadata.Name] {
+			continue
+		}
+		for _, m := range res.Container.Mounts {
+			if dirs[m.Source] {
+				seen[res.Metadata.Name] = true
+				containers = append(containers, res.Metadata.Name)
 				break
 			}
 		}
 	}
-	return deps, nil
+	sort.Strings(containers)
+	return containers, files, nil
+}
+
+// managedPrefix is where ConfigFiles are rendered, matching the
+// reconciler's flag. Defaulted rather than required so an API server
+// built without it behaves as it always did.
+func (s *Server) managedPrefix() string {
+	if s.ManagedPrefix == "" {
+		return "/etc/wildstone"
+	}
+	return s.ManagedPrefix
+}
+
+// rewriteConfigFiles re-materializes each file so the agent substitutes
+// the secret's NEW value. The content is unchanged — it holds the
+// reference, not the value — so this is a write whose only purpose is
+// the substitution that happens during it.
+func (s *Server) rewriteConfigFiles(r *http.Request, node string, files []resource.Resource) error {
+	for _, f := range files {
+		cap, ok := strings.CutPrefix(f.Metadata.Owner, "capability/")
+		if !ok || cap == "" || f.ConfigFile == nil || f.ConfigFile.Filename == "" {
+			continue
+		}
+		p := path.Join(s.managedPrefix(), cap, f.ConfigFile.Filename)
+		res, err := s.Agents.Apply(r.Context(), node, &wsv1.Operation{Op: &wsv1.Operation_WriteManagedFile{
+			WriteManagedFile: &wsv1.WriteManagedFile{
+				Path: p, Content: []byte(f.ConfigFile.Content), MaterializeSecrets: true,
+			},
+		}})
+		if err != nil {
+			return fmt.Errorf("rewriting %s: %w", p, err)
+		}
+		if oe := res.GetError(); oe != nil {
+			return fmt.Errorf("rewriting %s: %s", p, oe.GetMessage())
+		}
+	}
+	return nil
 }
 
 func (s *Server) appendEvent(typ, node, name, who string) {

@@ -18,7 +18,7 @@ import { Butler, StatusCard, SURFACES, Thread, ToolTrace, Turn } from "../src/vi
 import { Chat, IssuedCode } from "../src/views/Chat";
 import { Freshness, Shell, TokenGate } from "../src/App";
 import { HomeView, buildProblems } from "../src/views/Home";
-import { ServicesView, InstalledTile, AvailableRow, matching, RemoveForm, ownerCounts } from "../src/views/Services";
+import { ServicesView, InstalledTile, AvailableRow, matching, RemoveForm, ownerCounts, ownedByPackage } from "../src/views/Services";
 import { groupServices, upstreamContainer , healthOf } from "../src/services";
 import { eventKind } from "../src/ui/HourChart";
 import type { ConsoleSnapshot } from "../src/state";
@@ -620,6 +620,33 @@ const OWNED: ResourceView[] = [
   { kind: "Volume", name: "chat-telegram-family-data", owner: "capability/chat-telegram-family", node: "n1", yaml: "" },
   { kind: "SeedFile", name: "chat-telegram-family-config", owner: "capability/chat-telegram-family", node: "n1", yaml: "" },
 ];
+// Removing one profile must not list — or delete — a sibling's
+// resources. Filtering by capability did both: it showed Kavita's
+// container in what removing Calibre-Web would delete, and then deleted
+// it, along with the repository password the survivor still needs.
+const BOOKS: ResourceView[] = [
+  { kind: "Container", name: "calibre-web", owner: "capability/books", package: "books-calibre-web", node: "n1", yaml: "" },
+  { kind: "Container", name: "kavita", owner: "capability/books", package: "books-kavita", node: "n1", yaml: "" },
+  { kind: "Secret", name: "restic-books", owner: "capability/books", package: "books-kavita", node: "n1", yaml: "" },
+];
+const cwOwned = ownedByPackage(BOOKS, { name: "books-calibre-web", version: "1.0.3", capability: "books", enabled: true });
+check("a removal lists only the named package's resources", cwOwned.length === 1 && cwOwned[0].name === "calibre-web", JSON.stringify(cwOwned));
+// A deployment written before provenance existed still removes cleanly,
+// as long as nothing else has claimed the capability.
+const legacy: ResourceView[] = [
+  { kind: "Container", name: "kavita", owner: "capability/books", node: "n1", yaml: "" },
+];
+check("an unstamped install is still removable",
+  ownedByPackage(legacy, { name: "books-kavita", version: "1.0.3", capability: "books", enabled: true }).length === 1);
+// ...but once a sibling HAS claimed it, an unstamped resource is
+// ambiguous and is left alone.
+const ambiguous: ResourceView[] = [
+  { kind: "Container", name: "calibre-web", owner: "capability/books", package: "books-calibre-web", node: "n1", yaml: "" },
+  { kind: "Secret", name: "restic-books", owner: "capability/books", node: "n1", yaml: "" },
+];
+check("an ambiguous unstamped resource is not claimed",
+  ownedByPackage(ambiguous, { name: "books-kavita", version: "1.0.3", capability: "books", enabled: true }).length === 0);
+
 const removeForm = renderToString(h(RemoveForm, {
   pkg: { name: "chat-telegram-family", version: "1.0.2", capability: "chat-telegram-family", enabled: true },
   owned: OWNED, onDone: () => {},
