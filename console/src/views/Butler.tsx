@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Eye, NotePencil, Sparkle, Wrench } from "@phosphor-icons/react";
+import {
+  ArrowUp,
+  CaretDown,
+  Eye,
+  NotePencil,
+  SidebarSimple,
+  Sparkle,
+  Wrench,
+  X,
+} from "@phosphor-icons/react";
 import {
   api,
   AskResponse,
@@ -19,10 +28,11 @@ import { ButlerSettings } from "./ButlerSettings";
 // described them identically would be teaching the wrong thing.
 export const SURFACES: Record<
   ButlerSurface,
-  { label: string; blurb: string; placeholder: string; asks: string[] }
+  { label: string; title: string; blurb: string; placeholder: string; asks: string[] }
 > = {
   admin: {
     label: "Operator",
+    title: "What do you need to know?",
     blurb:
       "Reads system state and can propose changes — every proposal lands on Plans as `proposed` and waits for your approval.",
     placeholder: "e.g. why is jellyfin unhealthy? or: expose grafana at grafana.home.arpa",
@@ -30,6 +40,7 @@ export const SURFACES: Record<
   },
   family: {
     label: "Household",
+    title: "What's happening at home?",
     blurb:
       "Reads the household timeline and can perform household actions. It has no access to the home lab itself — no containers, storage, accounts or access rules — and cannot propose changes.",
     placeholder: "e.g. did anyone log breakfast this morning? or: remind everyone about the bins",
@@ -37,8 +48,26 @@ export const SURFACES: Record<
   },
 };
 
+const NARROW = "(max-width: 720px)";
+
+// True on a phone. Guarded because the render check has no window at
+// all, and a screen that throws in Node is a screen nothing checks.
+function narrow(): boolean {
+  try {
+    return window.matchMedia(NARROW).matches;
+  } catch {
+    return false;
+  }
+}
+
 // Butler (ADR-W017 A2, ADR-W026 A1, ADR-W027): one screen, two surfaces,
 // and a conversation rather than a form.
+//
+// The screen owns the pane: the header is fixed, the thread scrolls and
+// the composer is pinned under it, which is what a chat window is. The
+// conversation list is a collapsible sidebar on the left and a bottom
+// sheet on a phone; the backend it runs on is a chip in the header, not
+// a form the thread has to be scrolled past.
 //
 // Asking is a read on both surfaces — the only thing an operator session
 // can write is a plan in state `proposed`, and a household session cannot
@@ -46,11 +75,15 @@ export const SURFACES: Record<
 // the thread as the SAME card the Plans screen shows, with the same
 // handlers, which is what keeps "the Butler proposes but never acts"
 // visible. The approve button is yours, in both places.
-export function Butler() {
+export function Butler({ onEyebrow }: { onEyebrow?: (label: string | null) => void }) {
   const [surface, setSurface] = useState<ButlerSurface>("admin");
   const status = useLoad<ButlerStatus>(() => api.butlerStatus(surface), [surface]);
   const sessions = useLoad<ButlerSession[]>(() => api.butlerSessions(20, surface), [surface]);
-  const [showSettings, setShowSettings] = useState(false);
+  // The list is a sidebar on a desk and a sheet over the thread on a
+  // phone, so it starts open on one and closed on the other.
+  const [railOpen, setRailOpen] = useState(() => !narrow());
+  const [statusOpen, setStatusOpen] = useState(false);
+  const chip = useRef<HTMLButtonElement>(null);
 
   // The open conversation. null is a new one, which is the state the
   // screen opens in — reading someone's last answer is not the same as
@@ -67,6 +100,14 @@ export function Butler() {
   const [proposals, setProposals] = useState<PlanRecord[]>([]);
 
   const configured = status.data?.configured === true;
+
+  // The top bar names the SURFACE, not the view: a bar reading
+  // "OPERATOR" over the household butler is the one mistake this screen
+  // can make that a person would act on.
+  useEffect(() => {
+    onEyebrow?.(SURFACES[surface].label);
+    return () => onEyebrow?.(null);
+  }, [surface, onEyebrow]);
 
   useEffect(() => {
     if (openID === null) {
@@ -133,53 +174,80 @@ export function Butler() {
     setThread(null);
     setProposals([]);
     setAskError(null);
+    setStatusOpen(false);
+    if (narrow()) setRailOpen(false);
+  };
+
+  // Closing the popover puts focus back where it came from: a dialog
+  // that drops focus on the body sends a keyboard back to the top of
+  // the screen.
+  const closeStatus = () => {
+    setStatusOpen(false);
+    chip.current?.focus();
   };
 
   return (
-    <>
-      <div className="row" style={{ marginTop: 0 }}>
-        {(Object.keys(SURFACES) as ButlerSurface[]).map((key) => (
+    <div className="butler">
+      {railOpen && (
+        <>
+          {/* The sheet needs something to close it on a phone. It is a
+              button rather than a div so a keyboard can reach it. */}
           <button
-            key={key}
-            className={"btn " + (surface === key ? "btn-primary" : "btn-secondary")}
-            onClick={() => {
-              if (surface === key) return;
-              setSurface(key);
+            type="button"
+            className="convos-scrim"
+            aria-label="Close conversations"
+            onClick={() => setRailOpen(false)}
+          />
+          <ConversationRail
+            surface={surface}
+            sessions={sessions}
+            openID={thread?.id ?? openID}
+            onPick={(id) => {
+              setAskError(null);
+              setOpenID(id);
+              setStatusOpen(false);
+              if (narrow()) setRailOpen(false);
+            }}
+            onSurface={(s) => {
+              if (s === surface) return;
+              setSurface(s);
               startNew();
             }}
-          >
-            {SURFACES[key].label}
-          </button>
-        ))}
-        <span className="fade" />
-        <button className="btn btn-secondary" onClick={() => setShowSettings((v) => !v)}>
-          {showSettings ? "Hide settings" : "Settings"}
-        </button>
-      </div>
-
-      {/* Behind a toggle on the same screen: asking a question should not
-          mean scrolling past a configuration form, and changing the model
-          should not mean finding another tab. The backend it configures is
-          shared — both surfaces run on it — so this sits above the surface
-          switch rather than inside either one. */}
-      {showSettings && (
-        <div className="card">
-          <ButlerSettings
-            onSaved={() => {
-              status.reload();
-              sessions.reload();
-            }}
+            onNew={startNew}
+            onClose={() => setRailOpen(false)}
           />
-        </div>
+        </>
       )}
 
-      <ErrorLine error={status.error} />
+      <section className="thread">
+        <ThreadBar
+          title={thread?.finalText || "New conversation"}
+          status={status.data}
+          configured={configured}
+          open={statusOpen}
+          chipRef={chip}
+          onToggle={() => setStatusOpen((v) => !v)}
+          onClose={closeStatus}
+          onOpenRail={railOpen ? undefined : () => setRailOpen(true)}
+          onNew={startNew}
+          onSaved={() => {
+            status.reload();
+            sessions.reload();
+          }}
+        />
 
-      {!configured ? (
-        <StatusCard status={status.data} loading={status.loading} />
-      ) : (
-        <div className="butler">
-          <div className="thread">
+        {!configured ? (
+          // A surface with no backend behind it says what to run. The
+          // sidebar stays: the OTHER surface may well be configured,
+          // and a screen you cannot switch away from is a dead end.
+          <div className="butler-setup">
+            <ErrorLine error={status.error} />
+            <StatusCard status={status.data} loading={status.loading} />
+          </div>
+        ) : thread === null && pending === null ? (
+          <EmptyState surface={surface} busy={busy} onSend={send} error={askError} />
+        ) : (
+          <>
             <Thread
               surface={surface}
               session={thread}
@@ -187,32 +255,82 @@ export function Butler() {
               proposals={proposals}
               onProposalResolved={refreshProposal}
             />
-            <ErrorLine error={askError} />
-            <Composer
-              surface={surface}
-              busy={busy}
-              onSend={send}
-              showAsks={thread === null}
-            />
-          </div>
+            {askError && (
+              <div className="thread-error">
+                <ErrorLine error={askError} />
+              </div>
+            )}
+            <Composer surface={surface} busy={busy} onSend={send} />
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
 
-          <aside className="convos">
-            <div className="sect">
-              <span className="eyebrow">Conversations</span>
-              <span className="fade" />
-              <button className="btn btn-ghost" onClick={startNew} title="Start a new conversation">
-                <NotePencil size={15} />
+// The conversation list: which surface, a way to start a new one, and
+// the history grouped by day. Its own scroller, so the thread beside it
+// never moves when the list grows.
+export function ConversationRail({
+  surface,
+  sessions,
+  openID,
+  onPick,
+  onSurface,
+  onNew,
+  onClose,
+}: {
+  surface: ButlerSurface;
+  sessions: { data: ButlerSession[] | null; error: string | null; loading: boolean };
+  openID: string | null;
+  onPick: (id: string) => void;
+  onSurface: (s: ButlerSurface) => void;
+  onNew: () => void;
+  onClose: () => void;
+}) {
+  const groups = bucket(sessions.data ?? []);
+  return (
+    <aside className="convos" aria-label="Conversations">
+      <div className="convos-head">
+        <div className="row" style={{ margin: 0 }}>
+          <div className="seg" role="tablist" aria-label="Butler surface">
+            {(Object.keys(SURFACES) as ButlerSurface[]).map((key) => (
+              <button
+                key={key}
+                role="tab"
+                aria-selected={surface === key}
+                className={surface === key ? "on" : ""}
+                onClick={() => onSurface(key)}
+              >
+                {SURFACES[key].label}
               </button>
-            </div>
-            <ErrorLine error={sessions.error} />
-            {(sessions.data ?? []).map((s) => (
+            ))}
+          </div>
+          <button
+            className="btn btn-ghost"
+            onClick={onClose}
+            title="Hide conversations"
+            aria-label="Hide conversations"
+          >
+            <SidebarSimple size={15} />
+          </button>
+        </div>
+        <button className="btn btn-secondary btn-block" onClick={onNew} style={{ marginTop: 0 }}>
+          <NotePencil size={15} />
+          New conversation
+        </button>
+      </div>
+
+      <div className="convos-list">
+        <ErrorLine error={sessions.error} />
+        {groups.map((g) => (
+          <div className="convos-group" key={g.label}>
+            <span className="eyebrow">{g.label}</span>
+            {g.items.map((s) => (
               <button
                 key={s.id}
-                className={"convo" + (thread?.id === s.id ? " on" : "")}
-                onClick={() => {
-                  setAskError(null);
-                  setOpenID(s.id);
-                }}
+                className={"convo" + (openID === s.id ? " on" : "")}
+                onClick={() => onPick(s.id)}
               >
                 <span className="convo-title">{s.finalText || s.id}</span>
                 <span className="muted" title={when(s.createdAt)}>
@@ -220,16 +338,190 @@ export function Butler() {
                 </span>
               </button>
             ))}
-            {!sessions.loading && (sessions.data ?? []).length === 0 && (
-              <div className="muted">
-                No {SURFACES[surface].label.toLowerCase()} conversations yet.
-              </div>
-            )}
-            <StatusCard status={status.data} loading={status.loading} />
-          </aside>
+          </div>
+        ))}
+        {!sessions.loading && (sessions.data ?? []).length === 0 && (
+          <div className="muted" style={{ padding: "var(--space-3)" }}>
+            No {SURFACES[surface].label.toLowerCase()} conversations yet.
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+export interface Bucket {
+  label: string;
+  items: ButlerSession[];
+}
+
+// Conversations grouped the way a person remembers them: today, then
+// yesterday, then the week, then everything else. Grouping is a
+// presentation concern, so it lives here rather than on the wire.
+export function bucket(sessions: ButlerSession[], now: Date = new Date()): Bucket[] {
+  const day = 86_400_000;
+  const midnight = new Date(now).setHours(0, 0, 0, 0);
+  const label = (iso?: string) => {
+    const t = iso ? new Date(iso).getTime() : NaN;
+    if (isNaN(t)) return "Earlier";
+    if (t >= midnight) return "Today";
+    if (t >= midnight - day) return "Yesterday";
+    if (t >= midnight - 7 * day) return "This week";
+    return "Earlier";
+  };
+  const order = ["Today", "Yesterday", "This week", "Earlier"];
+  const map = new Map<string, ButlerSession[]>();
+  for (const s of sessions) {
+    const k = label(s.createdAt);
+    map.set(k, [...(map.get(k) ?? []), s]);
+  }
+  return order.filter((k) => map.has(k)).map((k) => ({ label: k, items: map.get(k)! }));
+}
+
+// The header: what this conversation is, and what is answering it. The
+// backend lives behind a chip because it is worth being able to check
+// and not worth reading every time — and because a settings form above
+// the thread pushed the conversation down the screen every time it was
+// opened.
+export function ThreadBar({
+  title,
+  status,
+  configured,
+  open,
+  chipRef,
+  onToggle,
+  onClose,
+  onOpenRail,
+  onNew,
+  onSaved,
+}: {
+  title: string;
+  status: ButlerStatus | null;
+  configured: boolean;
+  open: boolean;
+  chipRef?: React.RefObject<HTMLButtonElement>;
+  onToggle: () => void;
+  onClose: () => void;
+  onOpenRail?: () => void;
+  onNew: () => void;
+  onSaved: () => void;
+}) {
+  const backend = configured
+    ? [status?.provider, status?.model].filter(Boolean).join(" · ") || "configured"
+    : "Not configured";
+  return (
+    <div className="thread-bar">
+      {onOpenRail && (
+        <button
+          className="btn btn-secondary icon"
+          onClick={onOpenRail}
+          title="Show conversations"
+          aria-label="Show conversations"
+        >
+          <SidebarSimple size={16} />
+        </button>
+      )}
+      <span className="thread-title">{title}</span>
+      <button
+        className="btn btn-ghost icon"
+        onClick={onNew}
+        title="Start a new conversation"
+        aria-label="Start a new conversation"
+      >
+        <NotePencil size={16} />
+      </button>
+      <button
+        ref={chipRef}
+        className="chip chip-button"
+        onClick={onToggle}
+        aria-expanded={open}
+        title="Which backend is answering"
+      >
+        <Sparkle size={13} color="var(--mark)" />
+        {backend}
+        <CaretDown size={10} className="caret" />
+      </button>
+      {open && (
+        <div className="popover" role="dialog" aria-label="Butler backend">
+          <button
+            className="btn btn-ghost popover-close"
+            onClick={onClose}
+            title="Close"
+            aria-label="Close"
+          >
+            <X size={15} />
+          </button>
+          {/* The unconfigured card is already the pane behind this
+              popover; showing it twice would say the same thing twice. */}
+          {configured && <StatusCard status={status} loading={false} />}
+          <div className="popover-settings">
+            <ButlerSettings onSaved={onSaved} />
+          </div>
         </div>
       )}
-    </>
+    </div>
+  );
+}
+
+// The opening: the composer IS the screen, and the asks sit under it as
+// chips. They belong here rather than above every composer — a suggested
+// question is a way to start, not a control you need mid-conversation.
+export function EmptyState({
+  surface,
+  busy,
+  onSend,
+  error,
+}: {
+  surface: ButlerSurface;
+  busy: boolean;
+  onSend: (text: string) => void;
+  error?: string | null;
+}) {
+  const [text, setText] = useState("");
+  const submit = () => {
+    onSend(text);
+    setText("");
+  };
+  return (
+    <div className="opening">
+      <div className="opening-inner">
+        <span className="turn-mark" aria-hidden>
+          <Sparkle size={21} weight="fill" />
+        </span>
+        <h2>{SURFACES[surface].title}</h2>
+        <p className="blurb">{SURFACES[surface].blurb}</p>
+        <div className="composer-box">
+          <textarea
+            rows={2}
+            placeholder={SURFACES[surface].placeholder}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
+            }}
+            disabled={busy}
+            aria-label="Ask the Butler"
+          />
+          <button
+            className="btn btn-primary"
+            disabled={busy || text.trim() === ""}
+            onClick={submit}
+            aria-label="Send"
+          >
+            {busy ? <Wrench size={15} /> : <ArrowUp size={15} />}
+          </button>
+        </div>
+        <div className="asks">
+          {SURFACES[surface].asks.map((a) => (
+            <button key={a} className="btn btn-secondary" disabled={busy} onClick={() => onSend(a)}>
+              {a}
+            </button>
+          ))}
+        </div>
+        <ErrorLine error={error ?? null} />
+        <div className="muted">⌘/Ctrl + Enter sends</div>
+      </div>
+    </div>
   );
 }
 
@@ -266,13 +558,29 @@ export function Thread({
       {pending !== null && (
         <>
           <div className="msg msg-user">{pending}</div>
-          <div className="msg msg-butler thinking">
-            <Sparkle size={14} />
-            Thinking…
-          </div>
+          <ButlerRow>
+            <div className="msg msg-butler thinking">
+              <Sparkle size={14} />
+              Thinking…
+            </div>
+          </ButlerRow>
         </>
       )}
       <div ref={end} />
+    </div>
+  );
+}
+
+// The butler's turn is a row — mark, then text — where the operator's
+// own words are a bubble. Two shapes rather than two columns of cards is
+// what makes the thread read as a conversation.
+function ButlerRow({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="turn-butler">
+      <span className="turn-mark" aria-hidden>
+        <Sparkle size={14} weight="fill" />
+      </span>
+      <div className="turn-body">{children}</div>
     </div>
   );
 }
@@ -291,7 +599,7 @@ export function Turn({
   }
   const made = proposals.filter((p) => (turn.planIds ?? []).includes(p.id));
   return (
-    <>
+    <ButlerRow>
       <div className="msg msg-butler">{turn.text || "(no answer text)"}</div>
       <ToolTrace turn={turn} />
       {turn.capped && (
@@ -313,7 +621,7 @@ export function Turn({
           Proposed {turn.planIds!.join(", ")} — open Plans to approve.
         </div>
       )}
-    </>
+    </ButlerRow>
   );
 }
 
@@ -359,16 +667,14 @@ function parseCalls(raw?: string): StoredCall[] {
   }
 }
 
-function Composer({
+export function Composer({
   surface,
   busy,
   onSend,
-  showAsks,
 }: {
   surface: ButlerSurface;
   busy: boolean;
   onSend: (text: string) => void;
-  showAsks: boolean;
 }) {
   const [text, setText] = useState("");
   const submit = () => {
@@ -377,15 +683,6 @@ function Composer({
   };
   return (
     <div className="composer">
-      {showAsks && (
-        <div className="asks">
-          {SURFACES[surface].asks.map((a) => (
-            <button key={a} className="btn btn-secondary" disabled={busy} onClick={() => onSend(a)}>
-              {a}
-            </button>
-          ))}
-        </div>
-      )}
       <div className="composer-box">
         <textarea
           rows={2}
@@ -441,7 +738,7 @@ export function StatusCard({ status, loading }: { status: ButlerStatus | null; l
   }
 
   return (
-    <div className="card" style={{ marginTop: "var(--space-6)" }}>
+    <div className="card">
       <h3>
         {status.provider} <StatusPill kind={status.mode === "qa-only" ? "warn" : "ok"}>{status.mode ?? ""}</StatusPill>
       </h3>

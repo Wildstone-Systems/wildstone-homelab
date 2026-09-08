@@ -14,7 +14,7 @@
 import { renderToString } from "react-dom/server";
 import { createElement as h } from "react";
 import { Services, InstallForm } from "../src/views/Services";
-import { Butler, StatusCard, SURFACES, Thread, ToolTrace, Turn } from "../src/views/Butler";
+import { Butler, bucket, ConversationRail, EmptyState, StatusCard, SURFACES, Thread, ThreadBar, ToolTrace, Turn } from "../src/views/Butler";
 import { Chat, IssuedCode } from "../src/views/Chat";
 import { Freshness, Shell, TokenGate } from "../src/App";
 import { HomeView, buildProblems } from "../src/views/Home";
@@ -22,8 +22,8 @@ import { ServicesView, InstalledTile, AvailableRow, matching, RemoveForm, ownerC
 import { groupServices, upstreamContainer , healthOf } from "../src/services";
 import { eventKind } from "../src/ui/HourChart";
 import type { ConsoleSnapshot } from "../src/state";
-import type { BackupRun, EventRow, Observed, PackageView, PlanRecord, ResourceView } from "../src/api";
-import { PlansView, PendingPlan, PlanSteps } from "../src/views/Plans";
+import type { BackupRun, ButlerSession, EventRow, Observed, PackageView, PlanRecord, ResourceView } from "../src/api";
+import { PlansView, PendingBand, PendingPlan, PlanSteps, ResolvedHistory } from "../src/views/Plans";
 import { ActivityView } from "../src/views/Activity";
 import { BackupsView, byPlan, explain } from "../src/views/Backups";
 import { SecretsView, usedBy, purposeOf } from "../src/views/Secrets";
@@ -266,11 +266,79 @@ check("an empty thread teaches the surface's ceiling", emptyThread.includes("no 
 // on both surfaces is how a person ends up asking the family butler to
 // restart a container and believing it might.
 check("butler screen offers both surfaces", butler.includes("Operator") && butler.includes("Household"));
+// The surface switch is a segmented control in the sidebar head since
+// the redesign; what has to stay true is which one is selected.
 check("butler screen defaults to the operator surface",
-  /class="btn btn-primary"[^>]*>Operator/.test(butler), butler.slice(0, 600));
+  /aria-selected="true"[^>]*>Operator/.test(butler), butler.slice(0, 900));
 // Before a status response arrives the screen shows the unconfigured
 // card, which is what a fresh install sees — never a blank thread.
 check("butler screen is never blank while it checks", butler.includes("Checking the Butler") || butler.includes("Not configured"), butler.slice(0, 400));
+// A surface with no backend must not take the surface switch away with
+// it: the OTHER surface may well be configured, and a screen you cannot
+// switch away from is a dead end.
+check("an unconfigured surface keeps the conversation rail", butler.includes('aria-label="Conversations"'), butler.slice(0, 400));
+
+// The conversation list groups by day, in a fixed order, and names only
+// the buckets it actually has.
+const NOW = new Date("2026-09-08T10:00:00Z");
+const session = (id: string, createdAt: string): ButlerSession => ({
+  seq: 1, id, createdAt, principal: "mika", actingFor: "", provider: "ollama",
+  mode: "full", surface: "admin", finalText: id + " answer", capped: false,
+});
+const buckets = bucket([
+  session("s-today", "2026-09-08T09:00:00Z"),
+  session("s-yesterday", "2026-09-07T09:00:00Z"),
+  session("s-week", "2026-09-04T09:00:00Z"),
+  session("s-old", "2026-06-01T09:00:00Z"),
+], NOW);
+check("conversations group newest bucket first",
+  buckets.map((b) => b.label).join(",") === "Today,Yesterday,This week,Earlier", JSON.stringify(buckets.map((b) => b.label)));
+check("an empty bucket is not named", bucket([session("s", "2026-09-08T09:00:00Z")], NOW).length === 1);
+// A session with no usable timestamp is still listed rather than lost.
+check("an undated conversation still lands somewhere",
+  bucket([session("s", "")], NOW)[0].label === "Earlier");
+
+const convoRail = renderToString(h(ConversationRail, {
+  surface: "admin", openID: "s-today",
+  sessions: { data: [session("s-today", "2026-09-08T09:00:00Z")], error: null, loading: false },
+  onPick: () => {}, onSurface: () => {}, onNew: () => {}, onClose: () => {},
+}));
+check("the rail heads each day group", convoRail.includes("Today"), convoRail.slice(0, 400));
+check("the rail marks the open conversation", convoRail.includes('class="convo on"'), convoRail);
+check("the rail offers a new conversation", convoRail.includes("New conversation"));
+const emptyRail = renderToString(h(ConversationRail, {
+  surface: "family", openID: null, sessions: { data: [], error: null, loading: false },
+  onPick: () => {}, onSurface: () => {}, onNew: () => {}, onClose: () => {},
+}));
+check("an empty rail names the surface it is empty for", text(emptyRail).includes("No household conversations yet"), text(emptyRail));
+
+// The header says what is answering. A popover that is shut must not
+// render the settings form: the whole point of moving it there was that
+// the thread stops moving when you open it.
+const bar = renderToString(h(ThreadBar, {
+  title: "why is jellyfin unhealthy?", configured: true, open: false,
+  status: { configured: true, provider: "ollama", model: "llama3.1" },
+  onToggle: () => {}, onClose: () => {}, onNew: () => {}, onSaved: () => {},
+}));
+check("the header names the backend answering", text(bar).includes("ollama · llama3.1"), text(bar));
+check("the header names the conversation", bar.includes("why is jellyfin unhealthy?"));
+check("a shut popover renders nothing", !bar.includes("Butler settings"), bar);
+const barOff = renderToString(h(ThreadBar, {
+  title: "New conversation", configured: false, open: false, status: null,
+  onToggle: () => {}, onClose: () => {}, onNew: () => {}, onSaved: () => {},
+}));
+check("an unconfigured backend says so in the header", barOff.includes("Not configured"), barOff);
+
+// The opening: the asks are here and nowhere else, so a suggested
+// question cannot be pressed halfway through a conversation.
+const opening = renderToString(h(EmptyState, { surface: "admin", busy: false, onSend: () => {} }));
+for (const ask of SURFACES.admin.asks) {
+  check(`the opening offers "${ask}"`, opening.includes(ask), opening.slice(0, 300));
+}
+check("the opening asks the surface's own question", opening.includes(SURFACES.admin.title));
+check("the opening carries the composer", opening.includes('aria-label="Ask the Butler"'));
+const family = renderToString(h(EmptyState, { surface: "family", busy: false, onSend: () => {} }));
+check("the household opening names its ceiling", family.includes("no access to the home lab"), family.slice(0, 400));
 const adminThread = renderToString(
   h(Thread, { surface: "admin", session: null, pending: null, proposals: [], onProposalResolved: () => {} }),
 );
@@ -799,8 +867,55 @@ check("a low-risk plan is not shouted at", !gentle.includes("High risk"));
 check("a plan with no steps says so", gentle.includes("carries no expanded steps"));
 
 const plans = renderToString(h(PlansView, { plans: [PENDING, RESOLVED], onResolved: () => {} }));
-check("pending plans are cards, resolved ones a table", plans.includes("Resolved") && plans.includes("plan-9b2d10"));
+check("pending plans are rows, resolved ones a table", plans.includes("Resolved") && plans.includes("plan-9b2d10"));
 check("a resolved plan records who resolved it", plans.includes("mika"));
+// The two bands are named and counted, so the page says how much is
+// waiting before you have read any of it.
+check("the bands are named and counted", text(plans).includes("Waiting for you") && text(plans).includes("Resolved"), text(plans).slice(0, 400));
+// Dismissing is safe because the plan is still in the history and still
+// on the stream — the line under the band is what says so.
+check("the page says where a dismissed failure goes", text(plans).includes("on the stream"), text(plans).slice(0, 600));
+
+// The approval band: one row open at a time, and the summary is not
+// printed twice inside the open one.
+const band = renderToString(h(PendingBand, {
+  plans: [PENDING, { ...PENDING, id: "plan-2", seq: 10, summary: "rotate the grafana admin secret" }],
+  onResolved: () => {},
+}));
+check("the newest waiting plan is open by default", band.includes('aria-expanded="true"') && band.includes('aria-expanded="false"'), band.slice(0, 400));
+check("only one approval row is expanded", (band.match(/aria-expanded="true"/g) ?? []).length === 1);
+check("the open row keeps the decision", band.includes("Approve") && band.includes("Reject"));
+check("the open row does not repeat the summary",
+  (text(band).match(/prune the jellyfin transcode cache/g) ?? []).length === 1, text(band).slice(0, 600));
+check("a collapsed row is still triageable",
+  text(band).includes("rotate the grafana admin secret") && text(band).includes("high risk"), text(band).slice(0, 600));
+
+// The history stops at ten rows. A household with a year of plans
+// behind it is still a page that opens.
+const many: PlanRecord[] = Array.from({ length: 34 }, (_, i) => ({
+  ...RESOLVED, seq: i, id: `plan-${i}`, summary: `plan number ${i}`,
+}));
+const history = renderToString(h(ResolvedHistory, { plans: many }));
+check("the history pages at ten", (history.match(/plan number /g) ?? []).length === 10 * 2, String((history.match(/plan number /g) ?? []).length));
+check("the history says how much it is showing", text(history).includes("Showing 10 of 34"), text(history).slice(-200));
+check("the history offers the rest", history.includes("Show more"));
+const short = renderToString(h(ResolvedHistory, { plans: [RESOLVED] }));
+check("a short history does not offer more", !short.includes("Show more"), short.slice(-200));
+check("a short history still counts itself", text(short).includes("Showing 1 of 1"));
+
+// A failure that has been dismissed keeps its plan in the history: the
+// card is quieter, the record is not gone.
+const FAILED: PlanRecord = {
+  ...RESOLVED, id: "plan-bad", state: "failed", summary: "install monitoring",
+};
+const FAIL_EVENT: EventRow[] = [{
+  seq: 1, time: "2026-09-06T22:05:00Z", type: "reconcile.failed",
+  message: "run `wild secret set grafana-admin` first", attrs: { plans: "plan-bad" },
+}];
+const withFailure = renderToString(h(PlansView, { plans: [FAILED], events: FAIL_EVENT, onResolved: () => {} }));
+check("an explained failure is raised out of the table", withFailure.includes("wild secret set grafana-admin"), text(withFailure).slice(0, 400));
+check("a raised failure can be dismissed", withFailure.includes('aria-label="Dismiss"'), withFailure.slice(0, 400));
+check("a raised failure is still in the history", (text(withFailure).match(/install monitoring/g) ?? []).length >= 2, text(withFailure));
 // "never" would be a worse answer than nothing for a plan resolved
 // before the API recorded who and when.
 const older = renderToString(h(PlansView, { plans: [{ ...RESOLVED, resolvedBy: undefined, resolvedAt: undefined }], onResolved: () => {} }));

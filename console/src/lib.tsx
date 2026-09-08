@@ -103,3 +103,52 @@ export function ago(at?: Date | string, now: Date = new Date()): string {
   if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
   return `${Math.round(secs / 86400)}d ago`;
 }
+
+// Dismissals, kept in this browser.
+//
+// A reconcile failure is an event, not a row with a read flag — the
+// console reads it out of the poll's kept window and the API has
+// nowhere to record "I have seen this". So the dismissal lives here,
+// keyed by plan id, and is honest about its scope: it clears the card
+// on this browser and nowhere else. The plan itself stays in the
+// resolved history and on the Activity stream either way, which is what
+// makes dismissing safe rather than destructive.
+const DISMISS_KEY = "wildstone.plans.dismissedFailures";
+
+export function useDismissals(storageKey: string = DISMISS_KEY) {
+  const [ids, setIds] = useState<string[]>(() => read(storageKey));
+
+  const write = useCallback(
+    (next: string[]) => {
+      setIds(next);
+      try {
+        // Only ever our own keys, and only the newest 200 of them: a
+        // household that never clears one should not grow a key without
+        // a ceiling.
+        localStorage.setItem(storageKey, JSON.stringify(next.slice(-200)));
+      } catch {
+        // Private mode, or storage disabled. The dismissal still holds
+        // for this page — it just does not survive a reload.
+      }
+    },
+    [storageKey],
+  );
+
+  return {
+    ids,
+    dismiss: (id: string) => write([...new Set([...ids, id])]),
+    restoreAll: () => write([]),
+  };
+}
+
+// Server-side rendering has no localStorage at all, and a browser can
+// have one that throws or holds something that is not our array. All
+// three read as "nothing dismissed".
+function read(storageKey: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(storageKey) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+}
