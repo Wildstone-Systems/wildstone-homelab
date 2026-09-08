@@ -118,6 +118,20 @@ type Outcome struct {
 	// that case nothing in Plan was applied at all.
 	PendingApproval bool
 
+	// AppHealth maps "Container/<name>" to the container's OWN
+	// healthcheck, verbatim from Docker, for the containers that declare
+	// one. Absent means the image declares no healthcheck, which is "no
+	// opinion" and never "unhealthy".
+	//
+	// Carried separately from everything else here because it answers a
+	// different question. The rest of this struct is about whether
+	// Wildstone got reality to match desired state; this is about whether
+	// the application inside is ready to serve anybody, and the two are
+	// genuinely independent — open-webui was converged and refusing
+	// connections at the same time, for several minutes, while every
+	// surface read 0 unhealthy.
+	AppHealth map[string]string
+
 	// Blocked lists resources set aside after repeated identical failure
 	// (F60). They are NOT in Plan.Steps: the rest of the plan proceeds
 	// without them, and the operator is told which resource is stuck and
@@ -482,7 +496,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 		return nil, fmt.Errorf("reconcile: %s", prereqErr)
 	}
 
-	observed, foreign, err := r.observe(ctx, nodeID, wsDesired)
+	observed, foreign, appHealth, err := r.observe(ctx, nodeID, wsDesired)
 	if err != nil {
 		return nil, fmt.Errorf("reconcile: observe: %w", err)
 	}
@@ -511,7 +525,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	p, awaitingNow := withoutAwaitingSecrets(p, desiredForBlock, awaiting)
 	blockedNow = append(blockedNow, awaitingNow...)
 
-	outcome := &Outcome{Plan: p, ForeignDrift: foreign, PrereqRepaired: prereqRepaired, Blocked: blockedNow}
+	outcome := &Outcome{Plan: p, ForeignDrift: foreign, PrereqRepaired: prereqRepaired, Blocked: blockedNow, AppHealth: appHealth}
 	if len(p.Steps) == 0 {
 		// Applied even with blocked resources: everything that COULD be
 		// done, was. Reporting failure here would make a control plane
@@ -648,7 +662,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 
 // ---------------------------------------------------------------- observe
 
-func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resource.Resource) (observed []resource.Resource, foreign []string, err error) {
+func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resource.Resource) (observed []resource.Resource, foreign []string, appHealth map[string]string, err error) {
+	appHealth = map[string]string{}
 	desiredByKey := make(map[resKey]resource.Resource, len(desired))
 	for _, res := range desired {
 		desiredByKey[resKey{res.Kind, res.Metadata.Name}] = res
@@ -686,7 +701,7 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 		case resource.KindJob:
 			obs, present, oerr := r.observeJob(ctx, nodeID, k, want, isDesired, cfgContents, hostAliases)
 			if oerr != nil {
-				return nil, nil, oerr
+				return nil, nil, nil, oerr
 			}
 			if present {
 				observed = append(observed, obs)
@@ -694,7 +709,7 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 		case resource.KindContainer:
 			res, obs, oerr := r.observeContainer(ctx, nodeID, k, want, isDesired, cfgContents, hostAliases)
 			if oerr != nil {
-				return nil, nil, oerr
+				return nil, nil, nil, oerr
 			}
 			if res == nil {
 				continue
@@ -702,6 +717,9 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 			if res.foreign {
 				foreign = append(foreign, k.Name)
 				continue
+			}
+			if res.appHealth != "" {
+				appHealth[string(resource.KindContainer)+"/"+k.Name] = res.appHealth
 			}
 			observed = append(observed, obs)
 		case resource.KindVolume:
@@ -716,7 +734,7 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 		case resource.KindRoute:
 			obs, present, oerr := r.observeRoute(ctx, nodeID, k, want, isDesired)
 			if oerr != nil {
-				return nil, nil, oerr
+				return nil, nil, nil, oerr
 			}
 			if present {
 				observed = append(observed, obs)
@@ -724,7 +742,7 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 		case resource.KindOidcClient:
 			obs, present, oerr := r.observeOidcClient(ctx, nodeID, k, want, isDesired)
 			if oerr != nil {
-				return nil, nil, oerr
+				return nil, nil, nil, oerr
 			}
 			if present {
 				observed = append(observed, obs)
@@ -732,7 +750,7 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 		case resource.KindConfigFile:
 			obs, present, oerr := r.observeConfigFile(ctx, nodeID, k, want, isDesired)
 			if oerr != nil {
-				return nil, nil, oerr
+				return nil, nil, nil, oerr
 			}
 			if present {
 				observed = append(observed, obs)
@@ -740,7 +758,7 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 		case resource.KindSeedFile:
 			obs, present, oerr := r.observeSeedFile(ctx, nodeID, k, want, isDesired)
 			if oerr != nil {
-				return nil, nil, oerr
+				return nil, nil, nil, oerr
 			}
 			if present {
 				observed = append(observed, obs)
@@ -761,14 +779,19 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 				observed = append(observed, placeholderResource(k.Kind, k.Name))
 			}
 		default:
-			return nil, nil, fmt.Errorf("observe: kind %s not handled by S2b/S3a (DnsRecord is S2c's Provider path)", k.Kind)
+			return nil, nil, nil, fmt.Errorf("observe: kind %s not handled by S2b/S3a (DnsRecord is S2c's Provider path)", k.Kind)
 		}
 	}
-	return observed, foreign, nil
+	return observed, foreign, appHealth, nil
 }
 
 type containerObserveResult struct {
 	foreign bool
+	// appHealth is the container's OWN healthcheck, verbatim from Docker,
+	// and empty when the image declares none. Collected here because
+	// observe is the pass that already inspects every container; asking
+	// again later would be a second round trip for a fact we just had.
+	appHealth string
 }
 
 // observeContainer implements the Container observe rule (ADR-W008 R2c
@@ -806,12 +829,16 @@ func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resK
 		return &containerObserveResult{}, placeholderResource(resource.KindContainer, k.Name), nil
 	}
 	inspect := res.GetInspectContainer()
+	// The container's own opinion, recorded whatever the convergence
+	// verdict turns out to be: a converged container whose app says
+	// "unhealthy" is exactly the case this exists to make visible.
+	appHealth := inspect.GetAppHealth()
 	if inspect.GetLabels()[specHashLabel] == specHash(want.Container, ContainerNetwork, configDigest(r.ManagedPrefix, want.Container, cfgContents), hostAliases) && inspect.GetRunning() {
-		return &containerObserveResult{}, want, nil
+		return &containerObserveResult{appHealth: appHealth}, want, nil
 	}
 	// Present but stale (spec drifted, or a pre-spec-hash container) or
 	// stopped: plan an Update.
-	return &containerObserveResult{}, placeholderResource(resource.KindContainer, k.Name), nil
+	return &containerObserveResult{appHealth: appHealth}, placeholderResource(resource.KindContainer, k.Name), nil
 }
 
 // observeContainerPresence is the pre-R2c presence-only observe, kept as

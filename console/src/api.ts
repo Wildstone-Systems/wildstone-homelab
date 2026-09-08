@@ -23,6 +23,10 @@ export interface Observed {
   // Not converged because a plan is waiting for a human, not because
   // anything failed. Rendered differently from a real problem.
   awaitingApproval?: boolean;
+  // The container's OWN healthcheck, verbatim from Docker ("starting",
+  // "healthy", "unhealthy"). Absent means the image declares none, which
+  // is no opinion — never a problem.
+  appHealth?: string;
   kind: string;
   name: string;
   node?: string;

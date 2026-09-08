@@ -380,6 +380,26 @@ message InspectContainerResult {
   // "no information" far more often than it is "succeeded".
   string status = 4;
   int32 exit_code = 5;
+
+  // The APPLICATION'S own opinion of itself: Docker's State.Health.Status
+  // verbatim — "starting", "healthy", "unhealthy" — and empty when the
+  // image declares no healthcheck (protocol minor 16).
+  //
+  // Distinct from `running` and `status` because it answers a different
+  // question. Those say whether Wildstone got the container into the
+  // shape desired state asked for; this says whether the thing inside it
+  // is ready to serve anybody. A container can be running, converged and
+  // reported healthy by every surface while the app inside is still
+  // building an index and refusing connections — which is exactly what
+  // open-webui did on its first boot, for several minutes, while the
+  // dashboard read 0 unhealthy.
+  //
+  // Verbatim rather than an enum, for the same reason `status` is: the
+  // engine owns this vocabulary, and a mapping kept in this repo is a
+  // mapping that goes stale. An agent older than minor 16 leaves it
+  // empty, which is indistinguishable from "no healthcheck defined" and
+  // must be read as "no opinion" either way.
+  string app_health = 6;
 }
 
 message PruneImages {}

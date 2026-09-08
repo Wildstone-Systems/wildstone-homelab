@@ -52,6 +52,14 @@ type containerInspect struct {
 		// died on its first line are both Running=false.
 		Status   string `json:"Status"`
 		ExitCode int32  `json:"ExitCode"`
+		// Health is the container's OWN healthcheck, absent from the
+		// document entirely when the image declares none — which is why
+		// it is a pointer: a missing block and a healthcheck reporting
+		// nothing are different facts, and only one of them is worth
+		// reporting.
+		Health *struct {
+			Status string `json:"Status"`
+		} `json:"Health,omitempty"`
 	} `json:"State"`
 	Config struct {
 		Image  string            `json:"Image"`

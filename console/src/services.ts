@@ -46,11 +46,33 @@ export function ownerLabel(owner: string): string {
 
 export function healthOf(o: Observed | undefined): { health: Kind; state: string; detail?: string } {
   if (!o) return { health: "mute", state: "unobserved" };
-  // Three states, not two (F75). Held back by a plan waiting for a
-  // human is amber; it is not a fault and must not read as one.
-  if (o.healthy) return { health: "ok", state: "healthy", detail: o.detail };
-  if (o.awaitingApproval) return { health: "warn", state: "waiting on a plan", detail: o.detail };
-  return { health: "bad", state: o.detail ? "unhealthy" : "unhealthy", detail: o.detail };
+  // Held back by a plan waiting for a human is amber; it is not a fault
+  // and must not read as one (F75).
+  if (o.awaitingApproval && !o.healthy) {
+    return { health: "warn", state: "waiting on a plan", detail: o.detail };
+  }
+  if (o.healthy) {
+    // Converged is not the same as serving. Wildstone's "healthy" means
+    // the container matches desired state — its own question, and the
+    // right one for it. Whether the thing inside can answer anybody is a
+    // different question, and only the app can answer it.
+    //
+    // open-webui was converged and refusing connections at the same
+    // time, for several minutes, while every surface read 0 unhealthy
+    // and the dashboard offered a link that would not load.
+    switch (o.appHealth) {
+      case "starting":
+        return { health: "warn", state: "starting up", detail: o.detail };
+      case "unhealthy":
+        return { health: "warn", state: "running, not ready", detail: o.detail };
+      // "healthy" and absent both mean nothing is wrong. Most images
+      // declare no healthcheck at all, and silence must never render as
+      // a problem.
+      default:
+        return { health: "ok", state: "healthy", detail: o.detail };
+    }
+  }
+  return { health: "bad", state: "unhealthy", detail: o.detail };
 }
 
 // A Route's spec names what it forwards to as "container/<name>:<port>"
