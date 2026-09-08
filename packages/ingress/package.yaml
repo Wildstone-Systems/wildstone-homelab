@@ -35,7 +35,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: ingress
-  version: 1.0.1
+  version: 1.0.2
   capability: ingress
   profile: caddy-cloudflared
   exclusive: true
@@ -48,12 +48,11 @@ params:
   # The Cloudflare tunnel UUID (from `cloudflared tunnel create`), used
   # for the wildcard CNAME target <tunnel_id>.cfargotunnel.com.
   - { name: tunnel_id, required: true, description: "The Cloudflare tunnel UUID from `cloudflared tunnel create`." }
-  # Host address the private admin listener binds. Required, and
-  # deliberately without a default: a "tailnet-only" surface that quietly
+  # Deliberately without a default: a "tailnet-only" surface that quietly
   # binds every interface is worse than one you had to think about (#41).
-  # Normally the node's tailnet address (`tailscale ip -4`); "0.0.0.0" is
-  # the explicit way to say you mean every interface.
-  - { name: admin_listen_addr, required: true, example: "127.0.0.1" }
+  # The reasoning stays here; what an operator needs in order to ANSWER
+  # is in the description, where the form can render it.
+  - { name: admin_listen_addr, required: true, example: "127.0.0.1", description: "Which address on this machine the private admin surface listens on. Normally this node's tailnet address — `tailscale ip -4` prints it — so the admin pages are reachable over the tailnet and nowhere else. Use 0.0.0.0 only if you mean every interface, including the public one." }
 templates:
   # ---- How this node's proxy is postured (ADR-W019 B5, F65).
   #

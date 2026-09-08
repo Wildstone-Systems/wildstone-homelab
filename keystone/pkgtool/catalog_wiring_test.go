@@ -714,3 +714,38 @@ func TestAPasswordSetOnADatabaseIsGivenToItsApp(t *testing.T) {
 		t.Fatal("no package created a database credential — this test walked nothing")
 	}
 }
+
+// TestEveryRequiredParamCanBeAnswered: a required param the operator
+// must invent needs a description, because the install form renders a
+// name and a description and cannot see this repository.
+//
+// ParamDecl.Description exists for exactly this — "admin_domain *" is an
+// unanswerable question, and the explanation was sitting three lines
+// away in a YAML comment. Two packages had drifted back: home-automation
+// asked for node, intake_url and people with no description on any of
+// them, and ingress asked which address its admin surface should bind
+// with the reasoning in a comment above.
+//
+// A param with a `source` is exempt: the deployment answers it, so the
+// form offers a value rather than an empty box.
+func TestEveryRequiredParamCanBeAnswered(t *testing.T) {
+	checked := 0
+	for name, sp := range walkShipped(t) {
+		t.Run(name, func(t *testing.T) {
+			for _, p := range sp.pkg.Params {
+				if !p.Required || p.Source != "" {
+					continue
+				}
+				checked++
+				if strings.TrimSpace(p.Description) == "" {
+					t.Errorf("required param %q has no description. The install form shows its NAME and "+
+						"nothing else, so an operator sees %q and an empty box; a comment above it in "+
+						"package.yaml is not something the form can read.", p.Name, p.Name+" *")
+				}
+			}
+		})
+	}
+	if checked == 0 {
+		t.Fatal("no required param needed a description — this test walked nothing")
+	}
+}

@@ -31,10 +31,10 @@ downloads-qbittorrent 1.0.2 663381e9d95edce0
 feeds-freshrss 1.0.1 8a75bb28ea9c6465
 files-filebrowser 1.0.1 39f776ac3cd55073
 home-assistant 1.1.1 61f41ec056cd74c0
-home-automation 1.0.0 582247e5446afba2
+home-automation 1.0.2 65ea8e0e7288ce8b
 identity 1.0.1 3ecb45775f22d3c4
 indexers-prowlarr 1.0.2 9dfa451d4d3ec5ba
-ingress 1.0.1 ab355e7bb4ab2f6d
+ingress 1.0.2 4bbd2bd5e6db1d92
 ingress-tailnet 1.0.1 59e7276e5bb0a51c
 ingress-tailnet-public 1.0.1 16dea82d8a073bdf
 ingress-tailnet-ts 1.1.1 61c1e5cfa0848b4b
