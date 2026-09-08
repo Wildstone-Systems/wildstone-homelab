@@ -85,6 +85,12 @@ type Server struct {
 	// suggesting an address nothing can reach.
 	APIURL string
 
+	// ManagedPrefix is where ConfigFiles are rendered on a node, wired
+	// from -managed-prefix. Needed here because a secret can be read
+	// from a managed file rather than from a container's environment,
+	// and propagating a new value means rewriting that file.
+	ManagedPrefix string
+
 	// HouseholdTimezone is the IANA zone this deployment keeps, wired
 	// from -household-timezone. It is offered as the answer to any
 	// param declaring `source: timezone`, so a household states its

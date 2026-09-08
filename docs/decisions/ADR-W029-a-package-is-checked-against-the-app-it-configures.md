@@ -295,6 +295,38 @@ household product asks them to do. Where a design forces a step —
 write-only forces "set, do not discover" — the surface has to say so at
 the point of the step, and the step has to work.
 
+### A11. A secret's readers include the files it is written into
+
+`secretDependents` scanned `Container.Env` and nothing else, which was
+the whole answer until a package moved a credential into a managed file.
+`photos-immich` did exactly that in this ADR's own A1 fix: Immich does
+not read OAuth from the environment, so its client secret now lives only
+inside `immich.json`. Rotating it therefore found no dependent, rewrote
+nothing, re-created nothing, and reported success while Immich went on
+presenting the previous client secret.
+
+A rotation that reports success and changes nothing is worse than one
+that fails: it is the state where an operator believes a credential has
+been retired.
+
+So a secret's readers are: the containers whose env names it, the
+ConfigFiles whose CONTENT names it, and the containers that MOUNT those
+files — the last because a file is read at startup, and a rewritten file
+behind a running process is the same silence in a different place. The
+files are rewritten before the containers are re-created, so a container
+never starts against the old value.
+
+**Known gap, not closed here.** An `OidcClient`'s secret reference lives
+in the merged Authelia clients file, which is rendered from desired
+state and compared by its PRE-materialization content. A rotation
+changes the value but not that content, so the comparison matches and
+the file is never rewritten — leaving the provider holding the old
+digest while the app holds the new secret, which is a login that fails
+with both halves internally consistent. This predates the change above
+and is not made worse by it, but `wild secret rotate <capability>-oidc`
+should be considered unsafe until the reconciler can be told that a
+secret version moved.
+
 ---
 
 # Part B — Guidance (not binding, but this is the shape of the work)

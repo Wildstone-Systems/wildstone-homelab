@@ -152,9 +152,12 @@ export function ServicesView({
           with every package added. */}
       <Drawer open={removing !== null} onClose={() => setRemoving(null)} title={removing?.name} wide>
         {removing && (
-          <RemoveForm
+          <RemoveFormLoader
             pkg={removing}
-            owned={resources.filter((r) => r.owner === `capability/${removing.capability}`)}
+            // This PACKAGE's resources. Filtering by capability showed a
+            // sibling profile's containers in the list of what a removal
+            // would delete — and then deleted them.
+            owned={ownedByPackage(resources, removing)}
             // Every owner the statefile actually reported, so an empty
             // result can be read rather than guessed at.
             owners={ownerCounts(resources)}
@@ -303,10 +306,63 @@ export function ownerCounts(resources: ResourceView[]): [string, number][] {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
+// RemoveFormLoader asks Keystone what the removal would actually do,
+// then shows it. The dry run is the same code path the real proposal
+// takes, so the preview cannot drift from the plan; a failure to reach
+// it falls back to the stamps rather than blocking the removal.
+function RemoveFormLoader(props: {
+  pkg: PackageView;
+  owned: ResourceView[];
+  owners?: [string, number][];
+  error?: string | null;
+  loading?: boolean;
+  onDone: () => void;
+}) {
+  const preview = useLoad(() => api.previewDisablePackage(props.pkg.name), [props.pkg.name]);
+  const steps = preview.data?.plan?.steps;
+  return (
+    <RemoveForm
+      {...props}
+      plannedDeletes={
+        steps
+          ? steps
+              .filter((st) => st.kind && st.name)
+              .map((st) => ({ kind: st.kind as string, name: st.name as string }))
+          : undefined
+      }
+      // Until the dry run answers there is no plan to preview, and the
+      // stamp fallback below is a DIFFERENT list — it cannot know what a
+      // surviving sibling needs. Passing `loading` alone left the propose
+      // button live during that window, so a quick click acted on a list
+      // that named Secret/restic-books and a plan that did not.
+      previewError={preview.error}
+      loading={props.loading || preview.loading}
+    />
+  );
+}
+
+// ownedByPackage is what a removal of THIS package would touch.
+//
+// It mirrors Keystone's rule, which is the authority: a resource stamped
+// with this package's name, or — on a deployment written before
+// provenance existed — an unstamped one, but only while no other package
+// has claimed the capability. Two profiles installed and an unstamped
+// resource between them is ambiguous, and deleting it on a guess is the
+// wrong way to be wrong.
+export function ownedByPackage(resources: ResourceView[], pkg: PackageView): ResourceView[] {
+  const owner = `capability/${pkg.capability}`;
+  const mine = resources.filter((r) => r.owner === owner);
+  const claimants = new Set(mine.map((r) => r.package).filter((p): p is string => !!p));
+  const legacyIsMine = claimants.size === 0 || (claimants.size === 1 && claimants.has(pkg.name));
+  return mine.filter((r) => (r.package ? r.package === pkg.name : legacyIsMine));
+}
+
 export function RemoveForm({
   pkg,
   owned,
   owners = [],
+  plannedDeletes,
+  previewError = null,
   error = null,
   loading = false,
   onDone,
@@ -314,6 +370,18 @@ export function RemoveForm({
   pkg: PackageView;
   owned: ResourceView[];
   owners?: [string, number][];
+  // What Keystone says it will delete, from the endpoint's own dry run.
+  // The stamps here cannot answer it alone: a resource a surviving
+  // sibling still needs is excluded server-side, so listing by stamp
+  // showed Secret/restic-books as deletable and then did not delete it —
+  // a destructive-action preview disagreeing with the plan being
+  // approved. Absent (no dry run yet, or an older server) falls back to
+  // the stamps, which is right whenever nothing is shared.
+  plannedDeletes?: { kind: string; name: string }[];
+  // Why there is no plan to show. Removal is blocked while this is set:
+  // the fallback list is not what would be deleted, and offering a
+  // destructive button over the wrong list is worse than offering none.
+  previewError?: string | null;
   // "I could not read the statefile" and "this owns nothing" look
   // identical from an empty list, and only one of them is safe to
   // believe.
@@ -333,7 +401,26 @@ export function RemoveForm({
   // the moment it landed, so it survives too. Listing either as
   // "deleted" would be telling the operator something untrue.
   const kept = owned.filter((r) => r.kind === "Volume" || r.kind === "SeedFile");
-  const deletable = owned.filter((r) => r.kind !== "Volume" && r.kind !== "SeedFile");
+  const planned = plannedDeletes
+    ? new Set(plannedDeletes.map((d) => `${d.kind}/${d.name}`))
+    : null;
+  const deletable = owned.filter(
+    (r) =>
+      r.kind !== "Volume" &&
+      r.kind !== "SeedFile" &&
+      (planned === null || planned.has(`${r.kind}/${r.name}`)),
+  );
+  // Shown as kept rather than dropped from the list: "this survives
+  // because something else needs it" is a fact worth reading before
+  // approving a removal.
+  const sharedKept = planned
+    ? owned.filter(
+        (r) =>
+          r.kind !== "Volume" &&
+          r.kind !== "SeedFile" &&
+          !planned.has(`${r.kind}/${r.name}`),
+      )
+    : [];
 
   if (done) {
     return (
@@ -353,8 +440,9 @@ export function RemoveForm({
   return (
     <>
       <p className="problem-body">
-        This proposes deleting everything <strong>{pkg.capability}</strong> owns. Nothing happens
-        until you approve the plan.
+        This proposes deleting what <strong>{pkg.name}</strong> installed. Another profile of the
+        same capability, if one is installed, keeps running — and anything it still needs is left
+        alone. Nothing happens until you approve the plan.
       </p>
       {/* Stored data is the part a plan cannot undo. Everything else this
           deletes can be reinstalled; what was stored cannot. */}
@@ -403,6 +491,31 @@ export function RemoveForm({
       {owned.length === 0 && error === null && loading && (
         <div className="muted">Reading the statefile…</div>
       )}
+      {previewError !== null && (
+        <div className="callout callout-bad">
+          <strong>Could not work out what removing this would delete.</strong>
+          <div>{previewError}</div>
+          <div>
+            The list below is this package's resources by name, which is not the same as the plan
+            — anything a surviving profile still needs is excluded server-side. Close and reopen
+            to try again.
+          </div>
+        </div>
+      )}
+      {sharedKept.length > 0 && (
+        <div className="callout callout-warn">
+          <strong>Another profile of this capability still needs these, so they stay:</strong>
+          <ul>
+            {sharedKept.map((r) => (
+              <li key={`${r.kind}/${r.name}`}>
+                <code>
+                  {r.kind}/{r.name}
+                </code>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {deletable.length === 0 && kept.length > 0 && error === null && !loading && (
         <div className="muted">
           This capability owns only stored data, which is never deleted. There is nothing to
@@ -441,10 +554,16 @@ export function RemoveForm({
       <div className="row">
         <button
           className="btn btn-danger"
-          disabled={remove.state.phase === "busy" || deletable.length === 0 || error !== null}
+          disabled={
+            remove.state.phase === "busy" ||
+            deletable.length === 0 ||
+            error !== null ||
+            loading ||
+            previewError !== null
+          }
           onClick={() =>
             remove.run(
-              () => api.disableCapability(pkg.capability, deletable),
+              () => api.disablePackage(pkg.name),
               "removal proposed — approve it on Plans",
             )
           }
