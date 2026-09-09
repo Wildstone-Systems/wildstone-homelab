@@ -367,6 +367,15 @@ func (db *DB) CorrectMemory(seq int64, replacement MemoryRecord, actor string) (
 		   AND forgotten_at = ''`, now(), actor, seq); err != nil {
 		return 0, fmt.Errorf("runtimedb: invalidating derivatives: %w", err)
 	}
+	// The old text stops being searchable now, not at the next
+	// compaction. A correction that leaves the wrong answer as a search
+	// hit has not corrected anything.
+	if _, err := tx.Exec(
+		`DELETE FROM butler_index WHERE memory = ?
+		    OR memory IN (SELECT derivative FROM butler_memory_derivations WHERE source = ?)`,
+		seq, seq); err != nil {
+		return 0, fmt.Errorf("runtimedb: removing corrected material from the index: %w", err)
+	}
 	if old.Audience == ButlerAudienceShared {
 		if err := digestTx(tx, newSeq, MemoryCorrected,
 			fmt.Sprintf("corrected %q to %q", old.Content, replacement.Content), actor,
@@ -420,6 +429,16 @@ func (db *DB) ForgetMemory(seq int64, actor string) error {
 		 WHERE seq IN (SELECT derivative FROM butler_memory_derivations WHERE source = ?)
 		   AND forgotten_at = ''`, stamp, actor, seq); err != nil {
 		return fmt.Errorf("runtimedb: invalidating derivatives: %w", err)
+	}
+	// And the searchable copies go in the SAME transaction. Leaving
+	// them for the next compaction would mean "I asked you to forget
+	// that" holds until a sweep runs — the record stops being
+	// retrievable while its text is still a search hit.
+	if _, err := tx.Exec(
+		`DELETE FROM butler_index WHERE memory = ?
+		    OR memory IN (SELECT derivative FROM butler_memory_derivations WHERE source = ?)`,
+		seq, seq); err != nil {
+		return fmt.Errorf("runtimedb: removing forgotten material from the index: %w", err)
 	}
 	if m.Audience == ButlerAudienceShared {
 		// A safety-relevant removal is immediate; everything else waits
@@ -578,8 +597,14 @@ func (db *DB) ExportMemoryFor(reader string) ([]MemoryRecord, error) {
 	if reader == "" {
 		return nil, fmt.Errorf("runtimedb: an export needs the person it is for")
 	}
+	// Their OWN forgotten records are theirs to have a copy of. Other
+	// people's are not: a shared record that was forgotten or corrected
+	// is not something an export may hand back in full, or "forget
+	// that" would mean "until somebody exports".
 	rows, err := db.sql.Query(
-		memoryColumns+` WHERE audience = 'shared' OR owner = ? ORDER BY seq`, reader)
+		memoryColumns+` WHERE owner = ?
+		     OR (audience = 'shared' AND forgotten_at = '' AND superseded_by IS NULL)
+		   ORDER BY seq`, reader)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: exporting memory: %w", err)
 	}

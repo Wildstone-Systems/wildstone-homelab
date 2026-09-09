@@ -323,6 +323,45 @@ func (db *DB) BeginPlacementRemoval(connection, node string) error {
 	return nil
 }
 
+// UnprovenRemovals lists the nodes whose removal was started and has not
+// been proven complete.
+//
+// It exists because "Ready" is a claim about the whole connection, not
+// about whichever node just took the lease. A failover that places the
+// adapter somewhere healthy while an old node is still holding a
+// credential nobody has revoked is not a ready connection — it is a
+// degraded one that happens to be answering. Anything about to report
+// Ready asks this first.
+func (db *DB) UnprovenRemovals(connection string) ([]string, error) {
+	placements, err := db.ListPlacements(connection)
+	if err != nil {
+		return nil, err
+	}
+	var nodes []string
+	for _, p := range placements {
+		if p.Removing {
+			nodes = append(nodes, p.Node)
+		}
+	}
+	return nodes, nil
+}
+
+// MarkReadyUnlessRemoving sets the connection Ready only when no removal
+// is still outstanding, and otherwise leaves it degraded with a reason
+// that names the nodes. It returns whether it reported Ready.
+func (db *DB) MarkReadyUnlessRemoving(connection string) (ready bool, err error) {
+	pending, err := db.UnprovenRemovals(connection)
+	if err != nil {
+		return false, err
+	}
+	if len(pending) > 0 {
+		return false, db.SetConnectionState(connection, ConnectionDegraded,
+			fmt.Sprintf("the adapter is placed, but removal on %s is not proven complete",
+				strings.Join(pending, ", ")))
+	}
+	return true, db.SetConnectionState(connection, ConnectionReady, "")
+}
+
 // ProvePlacementRemoval records what has actually been verified, and
 // finishes the removal only when all of it has.
 //
@@ -335,12 +374,25 @@ func (db *DB) ProvePlacementRemoval(connection, node string, containerRemoved, s
 	if err != nil {
 		return false, err
 	}
-	if _, err := db.sql.Exec(
+	// The proof only applies to a placement that is actually being
+	// removed. Without this guard a "proof" for a node that was never
+	// fenced would fall through to the DELETE below and drop a LIVE
+	// placement — no epoch bump, so the node it was running on is
+	// still holding a credential nothing has revoked, and the
+	// connection would be reported Ready.
+	res, err := db.sql.Exec(
 		`UPDATE integration_placements SET container_removed = ?, secret_erased = ?, credential_revoked = ?
 		 WHERE connection = ? AND node = ? AND removing_at <> ''`,
 		boolInt(containerRemoved), boolInt(secretErased), boolInt(credentialRevoked),
-		conn.Seq, node); err != nil {
+		conn.Seq, node)
+	if err != nil {
 		return false, fmt.Errorf("runtimedb: proving placement removal: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return false, err
+	} else if n == 0 {
+		return false, fmt.Errorf("%w: %q on %q is not being removed, so there is nothing to prove — fence it first",
+			ErrNotFound, connection, node)
 	}
 	if !containerRemoved || !secretErased || !credentialRevoked {
 		var missing []string
@@ -360,7 +412,8 @@ func (db *DB) ProvePlacementRemoval(connection, node string, containerRemoved, s
 		return false, nil
 	}
 	if _, err := db.sql.Exec(
-		`DELETE FROM integration_placements WHERE connection = ? AND node = ?`, conn.Seq, node); err != nil {
+		`DELETE FROM integration_placements WHERE connection = ? AND node = ? AND removing_at <> ''`,
+		conn.Seq, node); err != nil {
 		return false, fmt.Errorf("runtimedb: completing placement removal: %w", err)
 	}
 	// The removal is proven. The connection is healthy again only if
@@ -374,7 +427,10 @@ func (db *DB) ProvePlacementRemoval(connection, node string, containerRemoved, s
 		}
 		return true, err
 	}
-	return true, db.SetConnectionState(connection, ConnectionReady, "")
+	if _, err := db.MarkReadyUnlessRemoving(connection); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // ConnectionSecret is a reference to a credential, never the credential.

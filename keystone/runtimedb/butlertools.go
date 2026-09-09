@@ -312,6 +312,7 @@ func (db *DB) ResolveToolAuthority(q ToolQuery) (ToolAuthority, error) {
 
 	// 2. Disabled wins over everything, including a live grant.
 	var state, reason string
+	explicitlyEnabled := false
 	err := db.sql.QueryRow(
 		`SELECT state, reason FROM butler_tool_controls WHERE profile = ? AND tool = ?`,
 		q.Profile, q.Tool).Scan(&state, &reason)
@@ -328,9 +329,13 @@ func (db *DB) ResolveToolAuthority(q ToolQuery) (ToolAuthority, error) {
 		a.Requestable = true
 		return a, nil
 	case state == ToolEnabled:
-		a.Allowed = true
-		a.Source = "enabled"
-		return a, nil
+		// Explicitly on — but "on" means the tool is available on this
+		// surface, NOT that this piece of work may use it. A
+		// grant-required tool still needs its grant, so this falls
+		// through rather than returning: an administrator enabling a
+		// tool must not be a way around the per-work authorization
+		// that made it grant-required in the first place.
+		explicitlyEnabled = true
 	}
 
 	// 3. A tool that needs a grant needs a LIVE one bound to this work.
@@ -353,6 +358,9 @@ func (db *DB) ResolveToolAuthority(q ToolQuery) (ToolAuthority, error) {
 
 	a.Allowed = true
 	a.Source = "default"
+	if explicitlyEnabled {
+		a.Source = "enabled"
+	}
 	return a, nil
 }
 

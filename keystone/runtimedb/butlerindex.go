@@ -196,6 +196,12 @@ type IndexHit struct {
 // over its results. That ordering is the whole guarantee: at no point
 // does a row the reader may not see exist in this process on their
 // behalf.
+//
+// The forgotten/superseded exclusion is a BACKSTOP, not the mechanism.
+// ForgetMemory and CorrectMemory delete the chunks in their own
+// transaction; this clause is what holds if some other writer misses a
+// removal, because a correction that lives on as a search hit is the
+// same failure as never having corrected it.
 func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
 	if err := db.gate(GateRetrieval); err != nil {
 		return nil, err
@@ -221,6 +227,9 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
 		 JOIN butler_index i ON i.seq = butler_index_fts.rowid
 		 WHERE butler_index_fts MATCH ?
 		   AND (i.audience = 'shared' OR i.owner = ?)
+		   AND NOT EXISTS (
+		       SELECT 1 FROM butler_memory m WHERE m.seq = i.memory
+		         AND (m.forgotten_at <> '' OR m.superseded_by IS NOT NULL))
 		 ORDER BY bm25(butler_index_fts)
 		 LIMIT ?`, ftsQuery(q.Text), q.Reader, fetch)
 	if err != nil {

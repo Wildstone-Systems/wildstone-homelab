@@ -415,8 +415,12 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 				return tr, r.Ledger.Wait(taskID, LedgerWaitBudgetExhausted,
 					fmt.Sprintf("%d tool calls used", toolsUsed))
 			}
-			rec, content := r.toolCall(ctx, taskID, tc, verified)
-			if rec.Result != "" || rec.Error == "" {
+			rec, content, dispatched := r.toolCall(ctx, taskID, tc, verified)
+			// Only a call that actually went out spends budget. A
+			// result served from the ledger appended no step, so
+			// counting it here would disagree with countToolSteps on
+			// the next resume as well as overcharging this one.
+			if dispatched {
 				toolsUsed++
 			}
 			tr.Audit.Calls = append(tr.Audit.Calls, rec)
@@ -557,10 +561,15 @@ func (r *Runner) modelAttempt(ctx context.Context, p provider.Provider, taskID s
 
 // toolCall runs one tool call, serving it from the ledger when this
 // exact call is already verified.
+// toolCall runs one call and reports whether it actually DISPATCHED.
+// A call served from the ledger dispatched nothing — it appends no
+// step, spends no provider capacity, and must not spend budget either,
+// or a task that re-reads one established fact talks itself out of a
+// budget it never used.
 func (r *Runner) toolCall(ctx context.Context, taskID string, tc provider.ToolCall,
 	verified map[string]string,
-) (ToolCallRecord, string) {
-	rec := ToolCallRecord{Name: tc.Name, Input: tc.Input}
+) (rec ToolCallRecord, content string, dispatched bool) {
+	rec = ToolCallRecord{Name: tc.Name, Input: tc.Input}
 	fp := callFingerprint(tc.Name, tc.Input)
 
 	if content, ok := verified[fp]; ok && fp != "" {
@@ -573,22 +582,22 @@ func (r *Runner) toolCall(ctx context.Context, taskID string, tc provider.ToolCa
 			SourceIDs: []string{tc.Name},
 			Payload:   jsonPayload(map[string]any{"servedFromLedger": true}),
 		})
-		return rec, content
+		return rec, content, false
 	}
 
 	if err := r.Ledger.Fence(); err != nil {
 		rec.Error = err.Error()
-		return rec, fmt.Sprintf("error: %v", err)
+		return rec, fmt.Sprintf("error: %v", err), false
 	}
 	step, err := r.Ledger.AppendStep(taskID, LedgerStepTool, tc.Name, jsonPayload(tc.Input))
 	if err != nil {
 		rec.Error = err.Error()
-		return rec, fmt.Sprintf("error: %v", err)
+		return rec, fmt.Sprintf("error: %v", err), false
 	}
 	attempt, err := r.Ledger.StartAttempt(step)
 	if err != nil {
 		rec.Error = err.Error()
-		return rec, fmt.Sprintf("error: %v", err)
+		return rec, fmt.Sprintf("error: %v", err), true
 	}
 	r.trace(taskID, LedgerTraceEvent{
 		Type: TraceToolDispatched, Step: step, Attempt: attempt.Seq,
@@ -604,7 +613,7 @@ func (r *Runner) toolCall(ctx context.Context, taskID string, tc provider.ToolCa
 			Type: TraceToolResult, Step: step, Attempt: attempt.Seq,
 			Payload: jsonPayload(map[string]any{"error": true}),
 		})
-		return rec, fmt.Sprintf("error: %v", err)
+		return rec, fmt.Sprintf("error: %v", err), true
 	}
 
 	rec.Result = outcome.Content
@@ -630,7 +639,7 @@ func (r *Runner) toolCall(ctx context.Context, taskID string, tc provider.ToolCa
 		SourceIDs: []string{tc.Name},
 		Payload:   jsonPayload(map[string]any{"rejected": outcome.Rejected, "bytes": len(outcome.Content)}),
 	})
-	return rec, outcome.Content
+	return rec, outcome.Content, true
 }
 
 // complete finishes the task with evidence drawn from what the run

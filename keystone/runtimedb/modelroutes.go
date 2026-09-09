@@ -243,8 +243,20 @@ type RouteRequest struct {
 	Job string
 	// Holder identifies the caller for the capacity lease.
 	Holder string
-	// Attempt is which escalation this is: 0 is the first choice.
+	// Attempt is which escalation this is: 0 is the first choice. It
+	// bounds how far automatic fallback may go; it does not by itself
+	// say WHICH routes are out.
 	Attempt int
+	// Tried names the routes this piece of work has already been to
+	// and that did not answer. They are skipped.
+	//
+	// This is by name rather than by position because the eligible set
+	// moves between attempts — a route can go unavailable, or come
+	// back, in the seconds between a failure and its retry. "Skip the
+	// first N" would then skip the wrong ones, which is how an
+	// escalation lands back on the route that just failed. The caller
+	// knows what it tried; nothing else reliably does.
+	Tried []string
 	// MaxEscalations bounds automatic fallback. Zero uses the default.
 	MaxEscalations int
 }
@@ -299,6 +311,10 @@ func (db *DB) SelectModelRoute(req RouteRequest) (RouteSelection, error) {
 		return RouteSelection{}, err
 	}
 
+	tried := make(map[string]bool, len(req.Tried))
+	for _, name := range req.Tried {
+		tried[name] = true
+	}
 	for _, r := range routes {
 		if !r.Enabled || r.Readiness == RouteUnavailable {
 			continue
@@ -314,19 +330,22 @@ func (db *DB) SelectModelRoute(req RouteRequest) (RouteSelection, error) {
 		if req.Job == JobBackground && r.Kind != RouteLocal {
 			continue
 		}
-		// 2. Capacity.
-		inFlight, err := db.routeLeaseCount(r.Seq)
-		if err != nil {
-			return RouteSelection{}, err
-		}
-		if inFlight >= r.MaxConcurrency {
+		// 2. Escalation. A route this work already went to does not
+		//    get chosen again — without this, "escalate" re-picks the
+		//    route that just failed and the retry fails the same way.
+		if tried[r.Name] {
 			continue
 		}
-		leaseSeq, err := db.takeRouteLease(r.Seq, req.Holder, req.Job)
+		// 3. Capacity, claimed atomically — a route that is full is
+		//    walked past, not an error.
+		leaseSeq, taken, err := db.takeRouteLease(r.Seq, req.Holder, req.Job, r.MaxConcurrency)
 		if err != nil {
 			return RouteSelection{}, err
 		}
-		// 3. Authority. A route that has not passed its probe answers
+		if !taken {
+			continue
+		}
+		// 4. Authority. A route that has not passed its probe answers
 		//    questions and carries no action authority, and the caller
 		//    recomputes its manifest from this verdict.
 		sel := RouteSelection{
@@ -345,6 +364,9 @@ func (db *DB) SelectModelRoute(req RouteRequest) (RouteSelection, error) {
 	}
 
 	why := "every route is unavailable, disabled, or busy"
+	if len(req.Tried) > 0 {
+		why = "every remaining route is unavailable, disabled, or busy, and the ones already tried are not retried"
+	}
 	if req.Locality == DataLocalOnly {
 		why = "this material must not leave the house, and no local route is available"
 	} else if req.Job == JobBackground {
@@ -360,28 +382,41 @@ const (
 	VerdictQAOnlyConst = "qa-only"
 )
 
-func (db *DB) routeLeaseCount(route int64) (int, error) {
-	var n int
-	if err := db.sql.QueryRow(
-		`SELECT COUNT(*) FROM model_route_leases WHERE route = ? AND released_at = '' AND expires_at > ?`,
-		route, now()).Scan(&n); err != nil {
-		return 0, fmt.Errorf("runtimedb: counting route leases: %w", err)
-	}
-	return n, nil
-}
-
-func (db *DB) takeRouteLease(route int64, holder, job string) (int64, error) {
+// takeRouteLease claims a slot on a route, or reports that the route is
+// full. It returns taken = false rather than an error: a busy route is
+// the ordinary case the caller walks past on its way to the next one.
+//
+// The capacity test is INSIDE the insert on purpose. Counting first and
+// inserting second is two statements with a gap between them, and two
+// callers can both read "0 in flight" against a route whose
+// MaxConcurrency is 1 and both proceed — which is exactly the
+// oversubscription of a single local GPU that MaxConcurrency exists to
+// prevent. As one statement, SQLite's writer lock settles it.
+func (db *DB) takeRouteLease(route int64, holder, job string, maxConcurrency int) (seq int64, taken bool, err error) {
 	if holder == "" {
 		holder = "unnamed"
 	}
+	if maxConcurrency <= 0 {
+		return 0, false, nil
+	}
+	stamp := now()
 	res, err := db.sql.Exec(
 		`INSERT INTO model_route_leases (route, holder, job, taken_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		route, holder, job, now(), time.Now().UTC().Add(DefaultLeaseTTL).Format(time.RFC3339Nano))
+		 SELECT ?, ?, ?, ?, ?
+		 WHERE (SELECT COUNT(*) FROM model_route_leases
+		        WHERE route = ? AND released_at = '' AND expires_at > ?) < ?`,
+		route, holder, job, stamp, time.Now().UTC().Add(DefaultLeaseTTL).Format(time.RFC3339Nano),
+		route, stamp, maxConcurrency)
 	if err != nil {
-		return 0, fmt.Errorf("runtimedb: taking a route lease: %w", err)
+		return 0, false, fmt.Errorf("runtimedb: taking a route lease: %w", err)
 	}
-	return res.LastInsertId()
+	if n, err := res.RowsAffected(); err != nil {
+		return 0, false, err
+	} else if n == 0 {
+		return 0, false, nil
+	}
+	seq, err = res.LastInsertId()
+	return seq, err == nil, err
 }
 
 // sweepExpiredLeases releases slots whose holder went away. A crashed

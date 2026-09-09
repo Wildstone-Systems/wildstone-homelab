@@ -385,10 +385,21 @@ func (s *Server) placeAndReport(name string) (any, int, error) {
 		}
 		return nil, http.StatusInternalServerError, err
 	}
-	if err := s.DB.SetConnectionState(name, runtimedb.ConnectionReady, ""); err != nil {
+	// Placing the adapter somewhere healthy does not clear a removal
+	// that was never proven. Reporting Ready here would erase the one
+	// state that says a credential may still be sitting on a machine we
+	// have stopped watching.
+	ready, err := s.DB.MarkReadyUnlessRemoving(name)
+	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return map[string]any{"holder": placement.Node, "moved": moved}, http.StatusOK, nil
+	out := map[string]any{"holder": placement.Node, "moved": moved}
+	if !ready {
+		out["degraded"] = true
+		out["note"] = "the adapter is placed and answering, but a removal on another node " +
+			"is not proven complete, so this connection stays degraded"
+	}
+	return out, http.StatusOK, nil
 }
 
 // removeIntegrationPlacement fences a node now and starts the removal it

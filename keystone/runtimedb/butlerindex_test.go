@@ -168,17 +168,41 @@ func TestForgottenMemoryLeavesTheIndex(t *testing.T) {
 	if err := db.ForgetMemory(memSeq, "mika"); err != nil {
 		t.Fatal(err)
 	}
-	// The sweep is what removes it, and compaction runs it.
+	// Immediately, with no sweep in between. "I asked you to forget
+	// that" cannot mean "once a background job gets round to it".
+	hits, err := db.SearchIndex(IndexQuery{Reader: "household", Text: "spare key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("a forgotten record was still retrievable before any compaction: %+v", hits)
+	}
+	// The chunk is gone, not merely filtered — so there is nothing left
+	// for a later compaction to find.
 	pruned, _, err := db.CompactIndex(0)
 	if err != nil {
 		t.Fatalf("CompactIndex: %v", err)
 	}
-	if pruned != 1 {
-		t.Fatalf("compaction pruned %d entries, want the forgotten one", pruned)
+	if pruned != 0 {
+		t.Fatalf("compaction still found %d chunks to prune, so forgetting left them behind", pruned)
 	}
-	hits, _ := db.SearchIndex(IndexQuery{Reader: "household", Text: "spare key"})
-	if len(hits) != 0 {
-		t.Fatalf("a forgotten record is still retrievable from the index: %+v", hits)
+
+	// And the filter is a real backstop, not decoration: a chunk that
+	// some other writer puts back for a forgotten record is still not
+	// an answer, and the sweep is what finally removes it.
+	if _, err := db.ExecForTest(
+		`INSERT INTO butler_index (source_kind, source_id, memory, owner, audience,
+		     permission_label, content, observed_at, indexed_at, volatile, tokens)
+		 VALUES ('memory', 'stray', ?, 'household', 'shared', 'household',
+		     'the spare key is under the mat', '', ?, 0, 7)`,
+		memSeq, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if hits, _ := db.SearchIndex(IndexQuery{Reader: "household", Text: "spare key"}); len(hits) != 0 {
+		t.Fatalf("a stray chunk for a forgotten record was returned: %+v", hits)
+	}
+	if pruned, _, err := db.CompactIndex(0); err != nil || pruned != 1 {
+		t.Fatalf("compaction pruned %d stray chunks (err %v), want 1", pruned, err)
 	}
 }
 

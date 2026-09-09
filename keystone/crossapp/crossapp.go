@@ -203,6 +203,15 @@ func (r *Runner) Execute(ctx context.Context, routine Routine, trigger Trigger) 
 				Kind: step.Kind, Connection: step.Connection, Capability: step.Capability,
 				Skipped: true, Message: fmt.Sprintf("%s had nothing in it", step.When),
 			})
+			// A step that never ran produced nothing, and anything
+			// guarded on ITS name has to see that. Without this a chain
+			// breaks after one link: "if the calendar is empty skip the
+			// pantry read, and if the pantry read is empty skip the
+			// message" would skip the read and still send the message,
+			// about data nobody ever fetched.
+			if step.As != "" {
+				empties[step.As] = true
+			}
 			continue
 		}
 		switch step.Kind {
