@@ -7,6 +7,41 @@
   the planning conversation. Parts A–B are binding; if a work package
   contradicts them, stop and report.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. The closed role
+table adds `integration-adapter`, limited to connection-bound
+`claim-integration-work` and `report-integration-result` verbs. It receives no
+general read, act, propose, approve, or manage authority. Typed integration
+work uses its own durable queue and claim/result endpoints behind the same
+public API; it does not reuse chat tables or the chat inbound path.
+
+The table also adds a non-human `household-reviewer` service role for the
+Authelia-protected household review page. Household members receive no Keystone
+principal or token. The service acts for an explicitly linked, admitted adult
+and holds only `review-household-routine-plan`; Keystone rechecks the member,
+link generation, adult classification, and Plan revision. The route
+approves/rejects only a server-classified Plan whose every step is an approved
+household routine declaration/action at read or domestic tier. It refuses mixed
+Plans and all infrastructure, managed-file, connection/secret,
+identity/admission, tool/grant, and other standing-authority changes. It is not
+the existing general `approve` verb. Child admissions cannot be acted for on
+this route.
+
+The runtime database also becomes authoritative for task/step attempts,
+conversation turns, waiting reasons, temporary grants, immediate denials,
+identity-link projections, and delivery state. Schema migrations preserve
+correlation to the household timeline without making runtime projections a
+second authority for deterministic outcomes. All new Console, CLI, chat, and
+adapter behavior continues through the public API.
+
+V1 retains one active Keystone writer and task scheduler. A standby is a
+recovery target, not an active peer; promotion is explicit and fences the old
+coordinator before dispatch. The runtime DB adds append-only structured work
+trace events correlated to task, turn, tool attempt, policy/approval decision,
+and delivery. Trace access follows the underlying task/source permissions and
+the public API; there is no separate observability backdoor.
+
 ---
 
 # Part A — Decisions (binding)

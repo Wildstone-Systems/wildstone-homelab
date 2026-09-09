@@ -9,6 +9,38 @@
 - **Audience:** decision record AND implementation spec for the
   redesign.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. A session remains a
+principal-bound conversation, while multiple conversations participate in one
+permission-filtered logical history across explicit Household/Operator
+handoffs. The current surface is derived from the destination endpoint and
+stored task/conversation state, never model-selected. Retrieval rechecks
+person, profile, audience, admission, and current denials before constructing
+each model context.
+
+Historical tool traffic still does not replay as fresh truth. Durable work
+resumes from its validated step ledger and refreshes stale observations.
+Console adds active-work states for waiting, stalled/resumable, partially
+complete, completed with an undelivered notice, and terminal failure. Plan
+cards and approval remain authenticated Console actions; chat deep links carry
+only a Plan identifier and destination.
+
+The active-work detail renders W030's structured trace as a task timeline:
+steps, source freshness, tool attempts, waits/retries, approvals/denials,
+delivery, and completion evidence. Permission checks occur server-side before
+trace fields are returned. People may label an outcome for improvement and
+create a sanitized regression candidate; the screen never presents hidden
+chain-of-thought or raw unredacted provider/tool payloads.
+
+Console remains the administrative surface and does not issue a household
+member session. The household-routine review page is a separate
+Authelia-authenticated ingress surface; it renders only the routine preview,
+behavior diff, effects/audience, version, and approve/reject controls for a
+Plan already classified server-side as household-routine. Its service
+principal acts for the linked member and cannot reveal the general Plans
+screen, infrastructure state, credentials, or administrative navigation.
+
 ---
 
 # Part A — Decisions (binding)

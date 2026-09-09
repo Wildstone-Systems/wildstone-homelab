@@ -7,6 +7,33 @@
   the planning conversation. Part A/B are binding; if a work package
   contradicts them, stop and report.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. Butler admission,
+principal/member links, permanent profile tool enablement, standing routine
+authority, and native-routine declarations are intentional desired-state
+changes: represent them as typed resources and change them through Plans.
+Their exact resource schemas land with their implementation slices.
+
+Temporary task grants are bounded runtime control records rather than
+Statefile resources. A disable, unlink, or revocation is an immediate runtime
+denial and wins over older desired state. It also creates or links a Plan to
+remove the stale declaration; until that Plan completes, Console reports
+`revoked, declaration pending removal`. Reconciliation cannot lift the denial,
+and re-enabling requires a fresh approved Plan. Existing risk classification
+applies to the cleanup diff.
+
+An adapter connection's primary and ordered eligible fallback nodes are
+Plan-mediated desired state. Approval deploys and starts the adapter container
+and provisions its credential on every listed node before eligibility. During
+an outage Keystone moves only the active lease epoch among those prepared
+instances; it performs no container create/start write. The epoch fences
+concurrent work and late results. Adding a node is not complete until its
+container is running, its credential is provisioned, and readiness is verified;
+removing one immediately fences its lease, stops/removes its adapter container,
+and remains incomplete until local credential erasure and any required remote
+revocation are verified.
+
 ---
 
 # Part A — Decisions (binding)

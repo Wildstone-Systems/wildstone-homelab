@@ -5,6 +5,24 @@
   ADR-W006 A3 (the S4 spike rule this generalizes), ADR-W007 A6/K3
 - **Audience:** decision record AND implementation spec for E4.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. Plans that increase
+standing Butler authority, admit/link identities, or create/change routines
+pass through the same policy engine as other desired-state changes. Temporary
+task grants remain bounded human-approved runtime records and are checked at
+dispatch. Immediate disable/revocation is a negative control that cannot be
+auto-reversed by reconciliation or policy; a separate cleanup Plan brings
+desired state back into agreement.
+
+Policy derives a `household-routine` review class only when every Plan step is
+a routine declaration/action whose tier is read or domestic. The class is
+fail-closed: mixed or unknown steps, managed files, infrastructure, credentials
+or connections, identity/admission, tools/grants, and other standing authority
+require the existing Operator/Admin path. The `household-reviewer` service
+verb cannot override this classification or act without a currently linked,
+admitted adult identity from the trusted household ingress.
+
 ---
 
 # Part A — Decisions (binding)

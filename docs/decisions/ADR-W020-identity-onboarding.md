@@ -7,6 +7,50 @@
 - **Audience:** decision record AND implementation spec for the identity
   work package's human half.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. Household identity
+requires an explicit authenticated-surface-to-member link; API principals,
+chat bindings, and trusted-ingress identities are distinct link types, and
+equal names or LDAP group membership are not identity proof. An administrator
+creates or changes the link and Butler admission through a human-approved Plan
+in Console/CLI. The runtime projection carries a generation checked on every
+retrieval and dispatch. Unlink/disable immediately denies access, invalidates
+derived grants, and pauses affected work while preserving immutable historical
+attribution.
+
+Offboarding is one audited administrator operation whose runtime denial takes
+effect first: disable Butler admission, revoke bindings/sessions and temporary
+grants, fence connections, and stop retrieval/ingestion/delivery. Linked Plans
+then remove standing declarations. A sole guardian must be replaced or the
+Child admission disabled before offboarding completes. Shared records retain
+original authorship; personal records move to inaccessible retention quarantine.
+
+While still admitted, a person may export their own conversations, personal
+memory/preferences/procedures, and task history with provenance/permissions.
+The export follows current read policy and excludes credentials, hidden
+Operator context, and other people's private data.
+
+An admitted adult authenticates through Authelia to a narrow household-routine
+review page served by the household ingress, not Console. A dedicated
+`household-reviewer` service principal calls Keystone acting for the member
+identified by Authelia; the member receives no Keystone principal or token.
+Keystone rechecks the explicit trusted-ingress/member link, admission, adult
+classification, Plan revision, and W030's server-side household-routine
+classifier. The chat deep link contains no credential. Operator/Admin
+onboarding and approval remain separate.
+
+A future Child surface adds explicit child classification and member-to-
+guardian mappings through the same Plan-mediated admission path. It is not
+inferred from an LDAP group.
+
+Personal CalDAV/IMAP connections use authenticated member-scoped secret input,
+following the existing claim/onboarding and node secret paths. Credentials are
+linked to member, connection, requesting principal, and revocation state;
+adapters receive scoped references/materialized values, while chat, model
+context, and work queues never receive the secret. Revocation immediately
+blocks future ingestion and dispatch.
+
 ---
 
 # Part A — Decisions (binding)

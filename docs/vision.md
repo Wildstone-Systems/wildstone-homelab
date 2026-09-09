@@ -49,10 +49,12 @@ promise — it is construction:
   fully fooled model can leave nothing behind but a proposal waiting
   for your "no".
 - **Even the AI's own vendor is held at arm's length.** Every tool
-  result the model sees is redacted and bounded first; a cloud provider
-  sees operational text, never family data — and the provider seam
-  already supports fully local inference, which is where this road
-  ends.
+  result the model sees is redacted and bounded first. Local processing
+  is preferred and local-only data never follows a cloud fallback.
+  **Conditional on ADR-W030 acceptance,** an admitted adult profile may
+  explicitly opt into a cloud model only for data whose own policy permits
+  it; background jobs make the same decision independently. Fully local
+  inference remains a first-class path.
 
 ## The arc: two butlers
 

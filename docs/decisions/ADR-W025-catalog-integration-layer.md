@@ -13,6 +13,37 @@
   package author writes against. Part A is binding. Part B is the build
   order for the rest of the layer, and is not decided here.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. The catalog adds a
+connection-only integration shape for an application Wildstone does not own.
+Its package declares the application contract—events, queries, typed actions,
+and optional indexing—while an application-specific adapter implements it.
+One adapter implementation supports multiple named connections containing
+endpoint, secret references, identity mappings, declared scopes, and grants.
+Exact schemas land with the adapter implementation slice.
+
+Each named connection declares a primary node and an ordered set of eligible
+fallback nodes. Only those nodes receive its credentials. Keystone may move a
+single fenced adapter lease within the approved set after node failure and may
+fail back after a health stabilization period. With no eligible node, the
+connection is unavailable and work waits; discovery never expands placement.
+Adding/removing nodes follows the Plan, provisioning, erasure, and remote
+revocation gates in W030/W012.
+
+Individual connections default to personal, read-only, live-query-only, and
+local-processing-only. Connections explicitly created for household
+infrastructure default to household-shared and read-only. Selected indexing,
+cloud routing, mutating actions, and wider audiences require separate explicit
+choices; capability discovery never turns them on.
+
+V1 adapter runtimes are package-managed containers on Wildstone nodes. The
+connection owns their configuration and lifecycle, never the remote app's.
+Capability discovery verifies app version, configuration, and credential
+scope, but newly discovered capability remains unavailable until approved.
+Removing a connection removes Wildstone's adapter/configuration and does not
+delete or reconfigure the external application or its native routines.
+
 ---
 
 ## The intent, in one sentence

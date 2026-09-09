@@ -5,6 +5,33 @@
   ADR-W007 (one API), ADR-W009 (policy), implementation scope E12
 - **Audience:** decision record AND implementation spec for E12.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. A conversation turn
+may create or continue durable work whose task ledger survives provider errors,
+process restarts, and per-turn limits. Checkpoint each tool invocation before
+dispatch and after result. Resumption reconstructs context from current
+permissions plus the validated ledger; historical tool traffic is not replayed
+as fresh truth.
+
+Provider configuration adds per-surface iteration slices and stall deadlines,
+with initial evaluation defaults of 16 model rounds for Household and 24 for
+Operator; individual tool calls are counted separately. Tasks also persist
+aggregate model-call, tool-call, active-work, and absolute-deadline budgets.
+Automatic retry/fallback stays within those budgets. A task that still cannot
+proceed becomes `stalled, resumable`, appears in Console, and can issue one
+deduplicated task-bound continuation prompt on its originating surface.
+Continuation adds no authority and does not reset the aggregate budget.
+
+Every turn/task emits the structured work trace from W030 A11: selected model
+and verdict, prompt/config/tool/policy versions, permission-filtered context
+source references and freshness, redacted/bounded tool attempts/results,
+timings/retries/waits, approvals/denials, delivery, feedback, and completion
+evidence. It records no private chain-of-thought. Detailed debug capture is
+explicit, scoped, visibly active, and expires automatically. Butler can file an
+improvement request from a trace but cannot alter its own prompt, tools, policy,
+permissions, or evaluation suite.
+
 ---
 
 # Part A — Decisions (binding)

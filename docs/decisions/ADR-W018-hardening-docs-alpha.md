@@ -5,6 +5,28 @@
   ADR-W012 (secrets path), ADR-W014 (installer), implementation scope E13
 - **Audience:** decision record AND implementation spec for E13.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted and applies before
+durable Butler state ships. The exit drill expands from the three current
+off-host inputs to a fourth recoverable category: Butler tasks/steps,
+conversations and memory, bindings and identity links, grants and denials,
+routines/procedures, access policy, and delivery state. Replication lag is an
+explicit recovery-point limit rather than proof of zero loss.
+
+Structured work traces, feedback labels, evaluator/configuration versions, and
+sanitized regression fixtures are included under the same source-derived
+permissions and retention. The drill proves a restored trace cannot expose
+content whose source was later deleted or revoked.
+
+The expanded drill restores an older snapshot that predates a deletion and a
+revocation. Butler starts quarantined: retrieval, dispatch, ingestion, and
+proactive delivery remain blocked until later authority/deletion information is
+reconciled. Where current permission cannot be established, data stays
+unavailable and pending actions do not resume. The current three-input drill
+remains the as-built contract until this fourth category is implemented and
+the expanded drill passes.
+
 ---
 
 # Part A — Decisions (binding)

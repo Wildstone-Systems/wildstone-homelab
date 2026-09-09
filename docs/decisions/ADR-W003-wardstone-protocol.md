@@ -9,6 +9,27 @@
   work package contradicts Part A or B, Part A/B wins — stop and report
   the conflict instead of improvising.
 
+## Conditional amendment from ADR-W030
+
+This amendment becomes binding when ADR-W030 is accepted. ADR-W030's
+Operator-only log reader adds no protocol operation: it reuses the
+existing typed `ContainerLogs` arm, ownership checks, and 1 MiB tail-biased
+bound. The Butler gateway and reader narrow and redact that result; Household
+receives no log tool.
+
+Automatic adapter fallback does require verified removal of a connection
+secret from a node leaving the approved placement set. Before that feature
+ships, implementation must add one typed, idempotent, additive `RemoveSecret`
+arm carrying secret name and
+expected version and returning only whether that version existed/was removed.
+It never returns a value, refuses a version mismatch, remains admin/Plan
+mediated, and refuses while any managed container on the node still references
+that secret. Adapter placement cleanup fences the lease and
+stops/removes the container before erasure so it cannot retain or rematerialize
+the value. The operation follows A3's protocol-minor compatibility process. An
+equivalent typed erasure operation is acceptable only if it preserves those
+properties.
+
 ---
 
 # Part A — Decisions (binding, do not re-litigate)

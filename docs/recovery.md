@@ -4,7 +4,7 @@ This is the operator's copy of the recovery contract the weekly exit
 drill executes (`scripts/exit-drill.sh`, ADR-W018). If the drill is
 green, this document is known to work end-to-end.
 
-## The contract: three things must survive the host
+## The current contract: three things must survive the host
 
 Keep these off the host, always:
 
@@ -18,8 +18,41 @@ Keep these off the host, always:
    deliberately never stores a readable copy (ADR-W012: write-only
    path). If a value exists only on the node, it dies with the node.
 
-Everything else — the runtime DB, the CA and op-signing keys, node
-identities, containers, the data volumes themselves — is rebuilt.
+In the current release, everything else — including the runtime DB, the CA and
+op-signing keys, node identities, containers, and data volumes — is rebuilt.
+Durable Butler features from ADR-W030 must not ship under that three-input
+contract.
+
+### The fourth recovery input before durable Butler ships
+
+ADR-W030 adds recoverable Butler runtime state: task/step ledgers,
+conversations and selected memory, bindings and identity-link projections,
+temporary grants and immediate denials, routines/procedures, access settings,
+delivery state, structured work traces/feedback labels, and evaluator/config
+versions. Its encrypted off-host backup or replica must publish a
+measured recovery point; replication lag is possible data loss, not proof of
+zero loss. Secrets remain separately re-entered from the password manager.
+
+Restoring that state starts Butler in quarantine. No memory retrieval, task or
+routine dispatch, ingestion, or proactive delivery occurs until current
+authority and deletion/revocation information is reconciled. If an old backup
+cannot prove that access or retained content is still valid, the affected data
+stays unavailable and requires fresh authorization and, where appropriate,
+reindexing. Administrative acknowledgement alone cannot recreate missing
+deletions.
+
+The expanded exit drill must restore an older snapshot containing access and
+content that were revoked/deleted afterward, prove they remain unavailable,
+include an offboarded member with old bindings/connections/private indexes, and
+prove uncertain pending actions do not resume. When implemented, restore
+the Butler state after fresh Keystone starts and before any Butler-facing
+surface leaves quarantine. Until that drill passes, the steps below describe
+only the current three-input release contract.
+
+V1 has one active coordinator. A standby restore may be prepared, but promotion
+is an explicit fenced recovery action: verify the previous Keystone cannot
+dispatch, restore/reconcile authority state in quarantine, then release the new
+coordinator. Do not run both schedulers against replicated state.
 
 ## Declaring a BackupPlan
 

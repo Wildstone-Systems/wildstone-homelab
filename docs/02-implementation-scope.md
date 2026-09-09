@@ -314,14 +314,29 @@ artifact (E3) gate everything. Two practical rules fall out:
 | Console eats the schedule | E10 > 6 fw | It's off the critical path by design — hold the line on boring UI; the plan screen is the only screen that must be good |
 | Agent-generated code quality debt in security-critical paths | — | Standing rule: Wardstone internals, policy engine, secrets path get human-written tests and line-by-line review (▲); delegation lives in packages/Console/CLI (◆) |
 
-## 7. Concierge mode — v2 scope (ADR-W001)
+## 7. Butler and concierge mode — phased scope (ADR-W001, ADR-W030)
 
-Foundation lands in MVP (three small items folded into E2/E4/E5/E12 above,
-~1.5 fw total — cheap insurance against a later rebuild). The product itself
-is a v2 epic block, scheduled **after M5** (dogfood cutover) — the operator
-product must prove itself before the family-facing surface widens the blast
-radius. Not on the MVP cut line in either direction: don't pull it forward,
-don't spend more than the 1.5 fw foundation before M5.
+The W030 changes in this section are conditional and become authoritative only
+if ADR-W030 is accepted. Until then, the existing C1–C5 scope remains in force.
+
+If accepted, ADR-W030 will supersede the rule that the family-facing product
+ships only as one v2 block after M5. Its v1 pulls forward a narrow text-based
+path across the
+existing Household and Operator bots/Console: explicit identity linkage and
+handoff, durable tasks, scoped tools and grants, permission-aware continuity
+and selected-source memory, adapter connections, model routing, and restore
+quarantine. Each slice ships only with its own structural and recovery evidence;
+accepting W030 is not implementation authorization.
+
+V1 keeps one active Keystone/Butler coordinator. The reliability slice includes
+a permission-aware structured task trace and Console timeline so dogfooding can
+turn real failures into sanitized, version-pinned regression evaluations.
+
+The C1–C5 table remains a capability inventory and historical size estimate,
+not a requirement to deliver one 11.5-fw epic. ADR-W030 Part C and the
+non-normative design brief define the new sequence. Child, document/image
+intake, email-to-calendar writes, and voice remain later independently reviewed
+slices.
 
 | Epic | Content | Size |
 |---|---|---|
@@ -332,9 +347,9 @@ don't spend more than the 1.5 fw foundation before M5.
 | **C5 Safety + audit** ▲ | Cross-principal red-team (kid-vs-policy escalation attempts), per-member audit views, concierge-specific policy UX (group tool grants). Includes *knowledge* scoping, not just action scoping: non-admin principals' read tools redact policy configuration, so the Butler cannot helpfully explain to a kid how the parental controls work | 1.5 fw |
 | **Total** | | **~11.5 fw** |
 
-Voice remains unscoped: expected route is Home Assistant's voice pipeline
-front-ending the Butler via HA's own integration surface, not a
-Wildstone-built voice stack.
+Voice remains post-v1. Local transcription and Kokoro text-to-speech are the
+current preferences, using the same identity/conversation boundary; the exact
+transport and processing pipeline remain unscoped.
 
 ## 8. Immediate next actions (this month)
 
