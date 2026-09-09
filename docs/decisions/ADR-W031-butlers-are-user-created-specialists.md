@@ -1,6 +1,6 @@
 # ADR-W031: Butlers are user-created specialists, and a model is assigned rather than chosen
 
-- **Status:** proposed
+- **Status:** accepted
 - **Relates to:** ADR-W030 A9 (model routing — this amends it), ADR-W030
   A2/A3 (owned memory and permission-first retrieval), ADR-W030 A7/A7.1
   (tool authority and Plan-mediated standing authority), ADR-W030 A5
@@ -264,15 +264,17 @@ of the selection logic A2 withdraws.
 
 Ordered so each step stands on its own.
 
-| # | Package | Why here |
-|---|---|---|
-| **B1** | The Butler record: name, directive, model, surface, and who may talk to it — created through a Plan from the Console | Nothing else has a subject until this exists |
-| **B2** | Scope: tools, connections, memory ownership per Butler | A4's isolation, which is the point of the design |
-| **B3** | Explicit sharing, with the disclosure A5 requires | Needs B2 to have something to share between |
-| **B4** | Assignment: a routine or task names its Butler | Needs B1 |
-| **B5** | Per-Butler conversations and bindings | Needs B1 |
-| **B6** | Console: the Butler roster, creation, and switching between them | Needs B1; the current screen cannot express more than two |
-| **B7** | Remove the runtime router; keep the probe | Last, so nothing is removed before its replacement works |
+All seven packages have landed. Each row names what proves it.
+
+| # | Package | Landed as | Evidence |
+|---|---|---|---|
+| **B1** | The Butler record | `runtimedb/migrations/0032_butlers.sql`, `runtimedb/butlers.go` | `butlers_test.go`: a Butler carries its own name and model; the surface and profile it was created against cannot move; access is downstream of admission and rechecked at use; a Butler whose model is gone waits and names the model rather than substituting; a switch reports the crossing. |
+| **B2** | Scope: tools, connections, memory | `migrations/0033_butler_scope.sql`, `runtimedb/butlerscope.go` | `butlerscope_test.go`: material held by a local-model Butler is not reachable by a cloud-model one — verified against a sabotaged filter, so it is a controlled comparison rather than a query returning nothing. Also: the scope never bypasses a person's own permission, omission falls back to the shared pool, tools only narrow, connections fail closed. |
+| **B3** | Explicit sharing and its disclosure | `runtimedb/butlerassign.go`, `migrations/0034_butler_assignment.sql` | `butlerassign_test.go`: promotion is previewed before it happens and recorded after, naming which Butlers gain and whether any sends material out of the house. A private record cannot be promoted — that would widen an audience as a side effect of widening a scope. |
+| **B4** | Assignment | `runtimedb/butlerassign.go` | `butlerassign_test.go`: an unassigned routine that needs a model is refused rather than given one; an assigned routine whose model is gone waits; a task snapshots its Butler so a later reassignment does not rewrite what answered it. |
+| **B5** | Per-Butler addressing | `migrations/0034_butler_assignment.sql`, `runtimedb/butlerassign.go` | `butlerassign_test.go`: a message reaches a Butler by the address it arrived on; one address resolves to one Butler; arriving there is not permission, and the access list still decides. The address is `(transport, external id)` — a Telegram deployment can put each Butler on its own bot or on its own forum topic without a schema change, which is what settles Part D's open question. |
+| **B6** | Console roster | `api/handlers_butlers.go`, `console/src/views/Butlers.tsx`, `console/src/api.ts`, `App.tsx` | `handlers_butlers_test.go`: every roster row names its model and whether it leaves the house; a switch applies at once and returns the crossing warning; shaping a Butler needs manage; the scope endpoint answers in one call. |
+| **B7** | The router removed | `migrations/0035_remove_the_router.sql`, `runtimedb/modelroutes.go` | `modelroutes_test.go` now tests what a route IS rather than how one is chosen: the kind is an immutable boundary, only a probed route carries action authority, a disabled route stays disabled. Locality is proven where it now lives — in `butlerscope_test.go` and the Part C acceptance suite. |
 
 ### B6 in more detail
 
@@ -344,9 +346,12 @@ Grouping the roster by surface shows that without a word of
 explanation.
 
 Acceptance for the whole change is one demonstration: material given to
-a Butler on a local model is not reachable by a Butler on a cloud model,
-proven at the level that actually serves a conversation rather than at
-the store.
+a Butler on a local model is not reachable by a Butler on a cloud model.
+That is proven at the store, and it is proven again in the Part C
+acceptance suite. It is NOT yet proven at the level that serves a live
+conversation, because that path is still the one ADR-W030's wiring gap
+describes — see #148. B1 to B7 make the guarantee expressible and
+enforced; installing it on the live path is the work that issue tracks.
 
 ---
 
@@ -386,4 +391,7 @@ Two shapes do that, and the choice is not obvious:
   one token. Ties the design to a Telegram-specific feature, which sits
   awkwardly with the intent to add other chat services later.
 
-Both satisfy A7. This wants deciding before B5, not before B1.
+Both satisfy A7, and B5 settled it by not deciding: an address is
+`(transport, external id)`, so a bot id and a topic id are the same
+shape and a deployment picks. The choice stayed a deployment's rather
+than becoming a schema's.

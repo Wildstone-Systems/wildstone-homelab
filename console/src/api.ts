@@ -793,9 +793,54 @@ export interface ModelRoute {
   endpoint?: string;
   readiness: "unprobed" | "ready" | "qa-only" | "unavailable";
   readinessDetail?: string;
-  maxConcurrency: number;
-  priority: number;
   enabled: boolean;
+}
+
+// A Butler: a named specialist with one assigned model, its own
+// directive, and its own scope (ADR-W031 A1).
+//
+// The model is a property of the Butler rather than a per-call choice.
+// Which model saw a piece of material is therefore answerable by name,
+// which is the whole reason routing was removed (A2).
+export interface Butler {
+  name: string;
+  directive?: string;
+  surface: ButlerSurface;
+  profile: string;
+  route: string;
+  routeKind: "local" | "cloud";
+  model?: string;
+  provider?: string;
+  readiness: "unprobed" | "ready" | "qa-only" | "unavailable";
+  enabled: boolean;
+  createdAt: string;
+  createdBy: string;
+  retiredAt?: string;
+}
+
+// One roster row. leavesTheHouse is computed by the server rather than
+// derived here: it is the most consequential fact about a Butler, and a
+// client that derives it is one that can derive it wrongly.
+export interface ButlerRow {
+  butler: Butler;
+  leavesTheHouse: boolean;
+  carriesActions: boolean;
+  reachable: boolean;
+}
+
+export interface ButlerScope {
+  butler: string;
+  model: string;
+  routeKind: "local" | "cloud";
+  connections: string[] | null;
+  narrowedTools?: Record<string, string> | null;
+  memoryCount: number;
+}
+
+export interface ButlerAddress {
+  transport: string;
+  externalId: string;
+  label?: string;
 }
 
 // A routine the household wrote, native to an app or run by Wildstone.
@@ -830,6 +875,36 @@ export const api = {
       `/api/v1/butler/routes/${encodeURIComponent(name)}/enabled`,
       { enabled },
     ),
+  butlers: () => call<{ butlers: ButlerRow[] | null }>("GET", "/api/v1/butlers"),
+  createButler: (b: {
+    name: string;
+    directive?: string;
+    surface: string;
+    profile: string;
+    route: string;
+  }) => call<ButlerRow>("POST", "/api/v1/butlers", b),
+  butlerScope: (name: string) =>
+    call<{ scope: ButlerScope; people: string[] | null; addresses: ButlerAddress[] | null }>(
+      "GET",
+      `/api/v1/butlers/${encodeURIComponent(name)}/scope`,
+    ),
+  // Applies immediately (A8). crossesToCloud is set when this move
+  // sends an open conversation's history out of the house on the next
+  // message, and warning carries the sentence to show.
+  setButlerRoute: (name: string, route: string) =>
+    call<ButlerRow & { crossesToCloud?: boolean; warning?: string; previousModel?: string }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/route`,
+      { route },
+    ),
+  setButlerAccess: (name: string, member: string, allow: boolean) =>
+    call<{ people: string[] | null }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/access`,
+      { member, allow },
+    ),
+  retireButler: (name: string) =>
+    call<{ retired: string }>("DELETE", `/api/v1/butlers/${encodeURIComponent(name)}`),
   householdRoutines: () =>
     call<{ routines: HouseholdRoutine[] | null }>("GET", "/api/v1/household/routines"),
   setRoutineState: (name: string, state: string) =>

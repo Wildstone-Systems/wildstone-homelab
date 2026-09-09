@@ -26,6 +26,10 @@ func (s *Server) listModelRoutes(_ *http.Request, _ principal.Identity) (any, in
 	// Report the authority each route carries rather than making a
 	// reader derive it from readiness: "answers questions only" is the
 	// thing an operator actually wants to see.
+	//
+	// A route is now the model a Butler is ASSIGNED to (ADR-W031 A2),
+	// not one of several a router might pick between — so there is
+	// nothing here about capacity or priority, because nothing selects.
 	out := make([]map[string]any, 0, len(routes))
 	for _, r := range routes {
 		out = append(out, map[string]any{
@@ -42,14 +46,12 @@ func (s *Server) listModelRoutes(_ *http.Request, _ principal.Identity) (any, in
 // editable is which model to use, not the secret used to reach it.
 func (s *Server) upsertModelRoute(r *http.Request, id principal.Identity) (any, int, error) {
 	var req struct {
-		Name           string `json:"name"`
-		Kind           string `json:"kind"`
-		Provider       string `json:"provider"`
-		Model          string `json:"model"`
-		Endpoint       string `json:"endpoint"`
-		MaxConcurrency int    `json:"maxConcurrency"`
-		Priority       int    `json:"priority"`
-		Enabled        bool   `json:"enabled"`
+		Name     string `json:"name"`
+		Kind     string `json:"kind"`
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+		Endpoint string `json:"endpoint"`
+		Enabled  bool   `json:"enabled"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		if f, isCred := credentialField(err); isCred {
@@ -61,8 +63,7 @@ func (s *Server) upsertModelRoute(r *http.Request, id principal.Identity) (any, 
 	}
 	if err := s.DB.UpsertModelRoute(runtimedb.ModelRoute{
 		Name: req.Name, Kind: req.Kind, Provider: req.Provider, Model: req.Model,
-		Endpoint: req.Endpoint, MaxConcurrency: req.MaxConcurrency,
-		Priority: req.Priority, Enabled: req.Enabled,
+		Endpoint: req.Endpoint, Enabled: req.Enabled,
 	}, actingMember(id)); err != nil {
 		return nil, http.StatusBadRequest, err
 	}

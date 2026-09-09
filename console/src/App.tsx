@@ -35,6 +35,7 @@ import { IdentityView } from "./views/Identity";
 import { Memory } from "./views/Memory";
 import { Nodes } from "./views/Nodes";
 import { Plans } from "./views/Plans";
+import { Butlers } from "./views/Butlers";
 import { Routines } from "./views/Routines";
 import { Secrets } from "./views/Secrets";
 import { Work } from "./views/Work";
@@ -49,6 +50,7 @@ type View =
   | "memory"
   | "integrations"
   | "routines"
+  | "butlers"
   | "chat"
   | "household"
   | "connect"
@@ -75,6 +77,7 @@ const TITLES: Record<View, [string, string]> = {
   memory: ["Owned data", "Memory"],
   integrations: ["Connected apps", "Integrations"],
   routines: ["On its own", "Routines"],
+  butlers: ["Who answers", "Butlers"],
   chat: ["Access", "Chat"],
   household: ["People", "Household"],
   connect: ["Setup", "Connect chat"],
@@ -134,6 +137,7 @@ export function Shell() {
       { id: "home", label: "Home", icon: <House size={ICON} />, pip: homePip },
       { id: "services", label: "Services", icon: <SquaresFour size={ICON} /> },
       { id: "butler", label: "Butler", icon: <Sparkle size={ICON} /> },
+      { id: "butlers", label: "Butlers", icon: <UsersThree size={ICON} /> },
       { id: "work", label: "Work", icon: <ListChecks size={ICON} /> },
       { id: "authority", label: "Butler access", icon: <ShieldCheck size={ICON} /> },
       { id: "memory", label: "Memory", icon: <Brain size={ICON} /> },
@@ -190,6 +194,7 @@ export function Shell() {
           {view === "memory" && <Memory />}
           {view === "integrations" && <Integrations />}
           {view === "routines" && <Routines />}
+          {view === "butlers" && <Butlers />}
           {view === "chat" && <Chat />}
           {view === "household" && <Household />}
           {view === "connect" && <ConnectChat />}

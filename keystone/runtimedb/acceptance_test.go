@@ -308,15 +308,46 @@ func TestPartCAcceptance(t *testing.T) {
 		if d.Allowed {
 			t.Fatal("a control widened the household ceiling")
 		}
-		// Local-only material stays local.
-		if err := db.UpsertModelRoute(ModelRoute{
-			Name: "cloud", Kind: RouteCloud, Provider: "anthropic",
-			Readiness: RouteReady, MaxConcurrency: 4, Enabled: true,
-		}, "root-admin"); err != nil {
+		// Local-only material stays local. It is no longer a router
+		// refusing a request: a Butler is assigned a model, and
+		// material given to a local-model Butler is not reachable by a
+		// cloud-model one (ADR-W031 A2/A4).
+		for _, r := range []ModelRoute{
+			{Name: "kitchen-box", Kind: RouteLocal, Provider: "ollama", Readiness: RouteReady, Enabled: true},
+			{Name: "cloud", Kind: RouteCloud, Provider: "anthropic", Readiness: RouteReady, Enabled: true},
+		} {
+			if err := db.UpsertModelRoute(r, "root-admin"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, b := range []struct{ name, route string }{
+			{"in-house", "kitchen-box"}, {"outside", "cloud"},
+		} {
+			if _, err := db.CreateButler(Butler{
+				Name: b.name, Surface: ButlerSurfaceFamily, Profile: ProfileHousehold, Route: b.route,
+			}, admin); err != nil {
+				t.Fatal(err)
+			}
+		}
+		held, err := db.RecordButlerMemory("in-house", MemoryRecord{
+			Kind: MemoryFact, Subject: admin, Content: "material that must not leave",
+			Audience: ButlerAudienceShared, PermissionLabel: "household", Owner: "household",
+			Author: admin, SourceKind: "conversation", SourceID: "acc-local",
+		})
+		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.SelectModelRoute(RouteRequest{Locality: DataLocalOnly, Holder: "t"}); !errors.Is(err, ErrNoRoute) {
-			t.Fatal("local-only material reached a cloud route")
+		reached, err := db.RetrieveMemory(MemoryQuery{Reader: admin, Butler: "outside"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range reached {
+			if r.Seq == held {
+				t.Fatal("local-only material reached a cloud-model butler")
+			}
+		}
+		if own, _ := db.RetrieveMemory(MemoryQuery{Reader: admin, Butler: "in-house"}); len(own) == 0 {
+			t.Fatal("the butler holding the material could not read it, so the check above proves nothing")
 		}
 		// A task cannot complete without evidence.
 		bare := newAcceptanceTask(t, db, admin, ButlerAudiencePrivate, "nothing")

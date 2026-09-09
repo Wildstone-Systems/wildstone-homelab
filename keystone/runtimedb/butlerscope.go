@@ -320,18 +320,23 @@ func (db *DB) PromoteMemoryToSharedPool(seq int64, by string) (gains []Butler, l
 			"runtimedb: memory %d is private to %s — share it first if that is the intent; promoting a scope must not widen an audience (ADR-W031 A5)",
 			seq, m.Owner)
 	}
-	all, err := db.ListButlers()
+	// The disclosure is computed the same way the preview computes it,
+	// so what a person was shown before deciding and what is recorded
+	// afterwards cannot drift apart.
+	d, err := db.PreviewPoolPromotion(seq)
 	if err != nil {
 		return nil, false, err
 	}
-	for _, b := range all {
-		if !b.Live() {
-			continue
+	for _, name := range d.Butlers {
+		b, err := db.GetButler(name)
+		if err != nil {
+			return nil, false, err
 		}
 		gains = append(gains, b)
-		if b.RouteKind == RouteCloud {
-			leavesHouse = true
-		}
+	}
+	leavesHouse = d.LeavesHouse
+	if err := db.RecordPoolDisclosure(d, by); err != nil {
+		return nil, false, err
 	}
 	if _, err := db.sql.Exec(
 		`UPDATE butler_memory SET butler = '' WHERE seq = ?`, seq); err != nil {

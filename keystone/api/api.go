@@ -356,6 +356,21 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/notices/kinds", s.handle(principal.VerbManage, s.setNoticeKind))
 	mux.Handle("GET /api/v1/butler/routes", s.handle(principal.VerbRead, s.listModelRoutes))
 	mux.Handle("PUT /api/v1/butler/routes", s.handle(principal.VerbManage, s.upsertModelRoute))
+
+	// Butlers (ADR-W031). Reading the roster is a read; everything that
+	// shapes a Butler — its model, its people, its connections, its
+	// tools, where it answers — needs manage, because each is standing
+	// configuration the Console holder owns and a Butler must never
+	// reach (A8).
+	mux.Handle("GET /api/v1/butlers", s.handle(principal.VerbRead, s.listButlers))
+	mux.Handle("POST /api/v1/butlers", s.handle(principal.VerbManage, s.createButler))
+	mux.Handle("GET /api/v1/butlers/{name}/scope", s.handle(principal.VerbRead, s.butlerScope))
+	mux.Handle("PUT /api/v1/butlers/{name}/route", s.handle(principal.VerbManage, s.setButlerRoute))
+	mux.Handle("PUT /api/v1/butlers/{name}/access", s.handle(principal.VerbManage, s.setButlerAccess))
+	mux.Handle("PUT /api/v1/butlers/{name}/connection", s.handle(principal.VerbManage, s.setButlerConnection))
+	mux.Handle("PUT /api/v1/butlers/{name}/tool", s.handle(principal.VerbManage, s.setButlerTool))
+	mux.Handle("PUT /api/v1/butlers/{name}/address", s.handle(principal.VerbManage, s.setButlerAddress))
+	mux.Handle("DELETE /api/v1/butlers/{name}", s.handle(principal.VerbManage, s.retireButler))
 	mux.Handle("POST /api/v1/butler/routes/{name}/readiness", s.handle(principal.VerbManage, s.recordRouteReadiness))
 	mux.Handle("POST /api/v1/butler/routes/{name}/enabled", s.handle(principal.VerbManage, s.setModelRouteEnabled))
 	mux.Handle("GET /api/v1/butler/settings", s.handle(principal.VerbManage, s.getButlerSettings))

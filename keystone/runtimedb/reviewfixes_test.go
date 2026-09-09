@@ -7,7 +7,6 @@ package runtimedb
 import (
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -145,91 +144,12 @@ func TestPlacementDoesNotClearAnUnprovenRemoval(t *testing.T) {
 	}
 }
 
-// MaxConcurrency is what stops a single local GPU being oversubscribed.
-// Counting and then inserting is two statements with a gap; concurrent
-// callers must not both get the one slot.
-func TestRouteCapacityHoldsUnderConcurrentSelection(t *testing.T) {
-	db := butlerTestDB(t)
-	if err := db.UpsertModelRoute(ModelRoute{
-		Name: "kitchen-box", Kind: RouteLocal, Provider: "ollama", Model: "llama",
-		Readiness: RouteReady, MaxConcurrency: 1, Priority: 10, Enabled: true,
-	}, "root-admin"); err != nil {
-		t.Fatal(err)
-	}
-
-	const callers = 8
-	var wg sync.WaitGroup
-	got := make([]bool, callers)
-	wg.Add(callers)
-	for i := 0; i < callers; i++ {
-		go func(i int) {
-			defer wg.Done()
-			_, err := db.SelectModelRoute(RouteRequest{
-				Locality: DataLocalOnly, Holder: "task", Job: JobInteractive,
-			})
-			got[i] = err == nil
-		}(i)
-	}
-	wg.Wait()
-
-	won := 0
-	for _, ok := range got {
-		if ok {
-			won++
-		}
-	}
-	if won != 1 {
-		t.Fatalf("%d callers got the one slot on a MaxConcurrency=1 route", won)
-	}
-}
-
-// Escalation goes somewhere ELSE. A retry that lands back on the route
-// that just failed fails the same way.
-func TestEscalationDoesNotReturnToARouteAlreadyTried(t *testing.T) {
-	db := butlerTestDB(t)
-	for _, r := range []ModelRoute{
-		{Name: "kitchen-box", Kind: RouteLocal, Provider: "ollama", Model: "llama",
-			Readiness: RouteReady, MaxConcurrency: 4, Priority: 10, Enabled: true},
-		{Name: "cloud", Kind: RouteCloud, Provider: "anthropic", Model: "sonnet",
-			Readiness: RouteReady, MaxConcurrency: 4, Priority: 200, Enabled: true},
-	} {
-		if err := db.UpsertModelRoute(r, "root-admin"); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	first, err := db.SelectModelRoute(RouteRequest{
-		Locality: DataCloudAllowed, Holder: "task-1", Job: JobInteractive,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The call failed and the slot went back, so capacity alone would
-	// hand the same route straight back.
-	db.ReleaseModelRoute(first.LeaseSeq)
-
-	second, err := db.SelectModelRoute(RouteRequest{
-		Locality: DataCloudAllowed, Holder: "task-1", Job: JobInteractive,
-		Attempt: 1, Tried: []string{first.Route.Name},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if second.Route.Name == first.Route.Name {
-		t.Fatalf("the escalation went back to %s, which had just failed", first.Route.Name)
-	}
-	if !second.Escalated {
-		t.Fatal("an escalated selection did not report itself as one")
-	}
-
-	// With every route tried, it refuses rather than looping.
-	if _, err := db.SelectModelRoute(RouteRequest{
-		Locality: DataCloudAllowed, Holder: "task-1", Job: JobInteractive,
-		Attempt: 2, Tried: []string{"kitchen-box", "cloud"},
-	}); !errors.Is(err, ErrNoRoute) {
-		t.Fatalf("selection found a route after every one had been tried: %v", err)
-	}
-}
+// Two findings from that review are gone with the router they were
+// about (ADR-W031 A2, work package B7): route capacity counted and
+// then inserted, and escalation re-picked the route that had just
+// failed. Nothing selects a route any more — a Butler is assigned one
+// — so neither defect has anywhere left to occur. The claims that
+// replaced them are in butlers_test.go and butlerscope_test.go.
 
 // Turning a tool on says the tool EXISTS here. It does not say this
 // piece of work may use it: a grant-required tool still needs its

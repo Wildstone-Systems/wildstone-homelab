@@ -18,9 +18,9 @@ func butlerFixture(t *testing.T) *DB {
 	db := butlerTestDB(t)
 	for _, r := range []ModelRoute{
 		{Name: "kitchen-box", Kind: RouteLocal, Provider: "ollama", Model: "llama",
-			Readiness: RouteReady, MaxConcurrency: 2, Priority: 10, Enabled: true},
+			Readiness: RouteReady, Enabled: true},
 		{Name: "cloud", Kind: RouteCloud, Provider: "anthropic", Model: "sonnet",
-			Readiness: RouteReady, MaxConcurrency: 4, Priority: 200, Enabled: true},
+			Readiness: RouteReady, Enabled: true},
 	} {
 		if err := db.UpsertModelRoute(r, "root-admin"); err != nil {
 			t.Fatalf("UpsertModelRoute(%s): %v", r.Name, err)
@@ -305,7 +305,7 @@ func TestAButlerCannotBeAssignedADisabledRoute(t *testing.T) {
 	db := butlerFixture(t)
 	if err := db.UpsertModelRoute(ModelRoute{
 		Name: "retired-box", Kind: RouteLocal, Provider: "ollama", Model: "old",
-		Readiness: RouteReady, MaxConcurrency: 1, Priority: 50, Enabled: false,
+		Readiness: RouteReady, Enabled: false,
 	}, "root-admin"); err != nil {
 		t.Fatal(err)
 	}
