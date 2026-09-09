@@ -169,6 +169,14 @@ function ButlerCard({
           disabled={!!b.retiredAt || busy}
           onChange={(e) => switchModel(e.target.value)}
         >
+          {/* A Butler on a since-disabled route still has to render as
+              being on THAT route. Listing only enabled ones would make
+              the select fall back to its first option and show a model
+              this Butler is not on — the one lie this screen must not
+              tell. */}
+          {!routes.some((r) => r.name === b.route) && (
+            <option value={b.route}>{b.route} — turned off</option>
+          )}
           {routes.map((r) => (
             <option key={r.name} value={r.name}>
               {r.name} — {r.kind === "cloud" ? "outside the house" : "on your hardware"}

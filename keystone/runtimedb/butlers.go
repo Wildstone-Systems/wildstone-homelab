@@ -58,19 +58,24 @@ type Butler struct {
 	// Route is the assigned model, by name. RouteKind is "local" or
 	// "cloud" — the data boundary, and what a local-to-cloud warning
 	// keys off.
-	Route     string    `json:"route"`
-	RouteSeq  int64     `json:"routeSeq"`
-	RouteKind string    `json:"routeKind"`
-	Model     string    `json:"model,omitempty"`
-	Provider  string    `json:"provider,omitempty"`
-	Readiness string    `json:"readiness"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"createdAt"`
-	CreatedBy string    `json:"createdBy"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	UpdatedBy string    `json:"updatedBy,omitempty"`
-	RetiredAt time.Time `json:"retiredAt,omitzero"`
-	RetiredBy string    `json:"retiredBy,omitempty"`
+	Route     string `json:"route"`
+	RouteSeq  int64  `json:"routeSeq"`
+	RouteKind string `json:"routeKind"`
+	Model     string `json:"model,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+	Readiness string `json:"readiness"`
+	// RouteEnabled is the ROUTE's switch, not the Butler's. Disabling a
+	// route has to stop the Butlers already assigned to it: the 0032
+	// triggers only fire when a butler's route is written, so without
+	// this a route turned off yesterday still answers today.
+	RouteEnabled bool      `json:"routeEnabled"`
+	Enabled      bool      `json:"enabled"`
+	CreatedAt    time.Time `json:"createdAt"`
+	CreatedBy    string    `json:"createdBy"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+	UpdatedBy    string    `json:"updatedBy,omitempty"`
+	RetiredAt    time.Time `json:"retiredAt,omitzero"`
+	RetiredBy    string    `json:"retiredBy,omitempty"`
 }
 
 // Live reports whether this Butler is available to be talked to at all.
@@ -84,7 +89,7 @@ func (b Butler) Live() bool { return b.Enabled && b.RetiredAt.IsZero() }
 // what a session may DO (ADR-W017 A4) and do not mean the model is
 // missing, which is a different failure with a different remedy.
 func (b Butler) Reachable() bool {
-	return b.Live() && b.Readiness != RouteUnavailable
+	return b.Live() && b.RouteEnabled && b.Readiness != RouteUnavailable
 }
 
 // CarriesActionAuthority reports whether a session with this Butler may
@@ -98,7 +103,7 @@ func (b Butler) CarriesActionAuthority() bool {
 // look up separately is one a caller will eventually forget to look up.
 const butlerColumns = `
 	SELECT b.seq, b.name, b.directive, b.surface, b.profile,
-	       r.name, r.seq, r.kind, r.model, r.provider, r.readiness,
+	       r.name, r.seq, r.kind, r.model, r.provider, r.readiness, r.enabled,
 	       b.enabled, b.created_at, b.created_by, b.updated_at, b.updated_by,
 	       b.retired_at, b.retired_by
 	  FROM butlers b JOIN model_routes r ON r.seq = b.route`
@@ -106,16 +111,16 @@ const butlerColumns = `
 func scanButler(s interface{ Scan(...any) error }) (Butler, error) {
 	var b Butler
 	var surface string
-	var enabled int
+	var enabled, routeEnabled int
 	var created, updated, retired string
 	if err := s.Scan(&b.Seq, &b.Name, &b.Directive, &surface, &b.Profile,
-		&b.Route, &b.RouteSeq, &b.RouteKind, &b.Model, &b.Provider, &b.Readiness,
+		&b.Route, &b.RouteSeq, &b.RouteKind, &b.Model, &b.Provider, &b.Readiness, &routeEnabled,
 		&enabled, &created, &b.CreatedBy, &updated, &b.UpdatedBy,
 		&retired, &b.RetiredBy); err != nil {
 		return Butler{}, err
 	}
 	b.Surface = ButlerSurface(surface)
-	b.Enabled = enabled != 0
+	b.Enabled, b.RouteEnabled = enabled != 0, routeEnabled != 0
 	for _, f := range []struct {
 		text string
 		into *time.Time
@@ -139,6 +144,11 @@ func scanButler(s interface{ Scan(...any) error }) (Butler, error) {
 func (db *DB) CreateButler(b Butler, by string) (int64, error) {
 	name := strings.TrimSpace(b.Name)
 	switch {
+	case name == AllButlers:
+		// AllButlers is the Console holder's scope sentinel. A Butler
+		// literally named "*" would match it in every scope filter and
+		// read every other Butler's material — A4 defeated by a name.
+		return 0, fmt.Errorf("runtimedb: %q is reserved: it is the scope that means every butler, so a butler cannot be called it (ADR-W031 A4)", AllButlers)
 	case name == "":
 		return 0, fmt.Errorf("runtimedb: a butler needs a name — it is what a person says and what a routine is assigned to (ADR-W031 A11)")
 	case by == "":
@@ -421,8 +431,12 @@ func (db *DB) ResolveButlerFor(butler, member string) (Butler, error) {
 		// A6: the work waits and says why. It does not move to another
 		// Butler's model, because that substitution is the disclosure
 		// this whole design exists to prevent.
-		return Butler{}, fmt.Errorf("%w: %s runs on %s, which is unavailable — this waits rather than moving to another model (ADR-W031 A6)",
-			ErrButlerUnreachable, b.Name, b.Route)
+		why := "unavailable"
+		if !b.RouteEnabled {
+			why = "turned off"
+		}
+		return Butler{}, fmt.Errorf("%w: %s runs on %s, which is %s — this waits rather than moving to another model (ADR-W031 A6)",
+			ErrButlerUnreachable, b.Name, b.Route, why)
 	}
 	return b, nil
 }

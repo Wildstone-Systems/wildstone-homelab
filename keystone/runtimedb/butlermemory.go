@@ -73,17 +73,28 @@ type MemoryRecord struct {
 	Audience        ButlerTaskAudience `json:"audience"`
 	PermissionLabel string             `json:"permissionLabel"`
 	Owner           string             `json:"owner"`
-	SourceKind      string             `json:"sourceKind"`
-	SourceID        string             `json:"sourceId"`
-	ObservedAt      time.Time          `json:"observedAt,omitzero"`
-	Confidence      string             `json:"confidence"`
-	SafetyRelevant  bool               `json:"safetyRelevant,omitempty"`
-	CreatedAt       time.Time          `json:"createdAt"`
-	Author          string             `json:"author"`
-	SupersededBy    int64              `json:"supersededBy,omitempty"`
-	ForgottenAt     time.Time          `json:"forgottenAt,omitzero"`
-	ForgottenBy     string             `json:"forgottenBy,omitempty"`
-	EnvelopeVersion int                `json:"envelopeVersion"`
+	// Butler is which Butler holds this record (ADR-W031 A4). It is a
+	// scope ON TOP OF Owner, never instead of it: the record still
+	// belongs to a person, and Butler decides which conversations it
+	// can come back out of. Empty is the shared pool.
+	//
+	// It lives on the record rather than being applied afterwards
+	// because every path that derives or replaces a record has to carry
+	// it, exactly as they already carry Owner and PermissionLabel — and
+	// a field that is set by a separate UPDATE is a field those paths
+	// will keep forgetting.
+	Butler          string    `json:"butler,omitempty"`
+	SourceKind      string    `json:"sourceKind"`
+	SourceID        string    `json:"sourceId"`
+	ObservedAt      time.Time `json:"observedAt,omitzero"`
+	Confidence      string    `json:"confidence"`
+	SafetyRelevant  bool      `json:"safetyRelevant,omitempty"`
+	CreatedAt       time.Time `json:"createdAt"`
+	Author          string    `json:"author"`
+	SupersededBy    int64     `json:"supersededBy,omitempty"`
+	ForgottenAt     time.Time `json:"forgottenAt,omitzero"`
+	ForgottenBy     string    `json:"forgottenBy,omitempty"`
+	EnvelopeVersion int       `json:"envelopeVersion"`
 }
 
 // Eligible reports whether this record may be retrieved: not corrected
@@ -187,11 +198,11 @@ func insertMemoryTx(tx *sql.Tx, m MemoryRecord) (int64, error) {
 	res, err := tx.Exec(
 		`INSERT INTO butler_memory (kind, subject, content, audience, permission_label, owner,
 		     source_kind, source_id, observed_at, confidence, safety_relevant, created_at, author,
-		     envelope_version)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		     envelope_version, butler)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.Kind, m.Subject, m.Content, string(m.Audience), m.PermissionLabel, m.Owner,
 		m.SourceKind, m.SourceID, timeText(m.ObservedAt), m.Confidence,
-		boolInt(m.SafetyRelevant), now(), m.Author, TaskEnvelopeVersion)
+		boolInt(m.SafetyRelevant), now(), m.Author, TaskEnvelopeVersion, m.Butler)
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: inserting memory: %w", err)
 	}
@@ -226,10 +237,25 @@ func (db *DB) DeriveMemory(m MemoryRecord, sources []int64) (int64, error) {
 	strictest := ButlerAudienceShared
 	label := m.PermissionLabel
 	owner := ""
+	butler := ""
 	for _, src := range sources {
 		s, err := db.GetMemory(src)
 		if err != nil {
 			return 0, fmt.Errorf("runtimedb: deriving from memory %d: %w", src, err)
+		}
+		// The Butler scope travels regardless of audience, and this
+		// check has to sit ABOVE the private-only branch below: a
+		// SHARED record held by the health Butler is still that
+		// Butler's, and a summary of it landing in the pool is that
+		// material reaching every other Butler's model (ADR-W031 A4).
+		if s.Butler != "" {
+			if butler == "" {
+				butler = s.Butler
+			} else if s.Butler != butler {
+				return 0, fmt.Errorf(
+					"runtimedb: refusing to derive from material held by two different butlers (%s and %s) — there is no scope the result could correctly have (ADR-W031 A4)",
+					butler, s.Butler)
+			}
 		}
 		if s.Audience != ButlerAudiencePrivate {
 			continue
@@ -260,6 +286,7 @@ func (db *DB) DeriveMemory(m MemoryRecord, sources []int64) (int64, error) {
 		m.Owner = owner
 	}
 	m.PermissionLabel = label
+	m.Butler = butler
 	if err := validateMemory(m); err != nil {
 		return 0, err
 	}
@@ -327,6 +354,11 @@ func (db *DB) CorrectMemory(seq int64, replacement MemoryRecord, actor string) (
 	if replacement.Owner == "" {
 		replacement.Owner = old.Owner
 	}
+	// A correction stays in the scope it corrects. Without this
+	// "actually, it is X" moves a scoped record into the shared pool,
+	// which is the same publication A4 forbids, arriving through the
+	// edit path rather than the read path.
+	replacement.Butler = old.Butler
 	if replacement.Kind == "" {
 		replacement.Kind = old.Kind
 	}
@@ -494,7 +526,7 @@ func (db *DB) GetMemory(seq int64) (MemoryRecord, error) {
 
 const memoryColumns = `SELECT seq, kind, subject, content, audience, permission_label, owner,
 	 source_kind, source_id, observed_at, confidence, safety_relevant, created_at, author,
-	 COALESCE(superseded_by, 0), forgotten_at, forgotten_by, envelope_version
+	 COALESCE(superseded_by, 0), forgotten_at, forgotten_by, envelope_version, butler
 	 FROM butler_memory`
 
 func scanMemory(row rowScanner) (MemoryRecord, error) {
@@ -503,7 +535,7 @@ func scanMemory(row rowScanner) (MemoryRecord, error) {
 	var safety int
 	err := row.Scan(&m.Seq, &m.Kind, &m.Subject, &m.Content, &audience, &m.PermissionLabel,
 		&m.Owner, &m.SourceKind, &m.SourceID, &observed, &m.Confidence, &safety, &created,
-		&m.Author, &m.SupersededBy, &forgotten, &m.ForgottenBy, &m.EnvelopeVersion)
+		&m.Author, &m.SupersededBy, &forgotten, &m.ForgottenBy, &m.EnvelopeVersion, &m.Butler)
 	if errors.Is(err, sql.ErrNoRows) {
 		return MemoryRecord{}, ErrNotFound
 	}

@@ -25,6 +25,7 @@ package runtimedb
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -285,14 +286,12 @@ func (db *DB) RecordButlerMemory(butler string, m MemoryRecord) (int64, error) {
 			return 0, err
 		}
 	}
-	seq, err := db.RecordMemory(m)
-	if err != nil {
-		return 0, err
-	}
-	if _, err := db.sql.Exec(`UPDATE butler_memory SET butler = ? WHERE seq = ?`, butler, seq); err != nil {
-		return 0, fmt.Errorf("runtimedb: scoping a memory record to a butler: %w", err)
-	}
-	return seq, nil
+	// Set on the record rather than applied afterwards. A second,
+	// untransacted UPDATE would leave a failed call having committed
+	// the record into the SHARED POOL while returning an error — the
+	// leak arriving through the error path.
+	m.Butler = butler
+	return db.RecordMemory(m)
 }
 
 // PromoteMemoryToSharedPool moves a record into the pool every Butler
@@ -335,16 +334,38 @@ func (db *DB) PromoteMemoryToSharedPool(seq int64, by string) (gains []Butler, l
 		gains = append(gains, b)
 	}
 	leavesHouse = d.LeavesHouse
-	if err := db.RecordPoolDisclosure(d, by); err != nil {
-		return nil, false, err
-	}
-	if _, err := db.sql.Exec(
-		`UPDATE butler_memory SET butler = '' WHERE seq = ?`, seq); err != nil {
+
+	// The promotion and its record are one transaction. Recording first
+	// and updating after left a disclosure describing a promotion that
+	// might not have happened; updating first and recording after would
+	// leave the opposite. Either way the audit stops matching the data,
+	// which is the one thing an audit cannot do.
+	tx, err := db.sql.Begin()
+	if err != nil {
 		return nil, false, fmt.Errorf("runtimedb: promoting memory to the shared pool: %w", err)
 	}
-	if _, err := db.sql.Exec(
-		`UPDATE butler_index SET butler = '' WHERE memory = ?`, seq); err != nil {
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`UPDATE butler_memory SET butler = '' WHERE seq = ?`, seq); err != nil {
+		return nil, false, fmt.Errorf("runtimedb: promoting memory to the shared pool: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE butler_index SET butler = '' WHERE memory = ?`, seq); err != nil {
 		return nil, false, fmt.Errorf("runtimedb: promoting indexed memory to the shared pool: %w", err)
+	}
+	names, err := json.Marshal(struct {
+		Butlers []string `json:"butlers"`
+		Cloud   []string `json:"cloud"`
+	}{d.Butlers, d.CloudButlers})
+	if err != nil {
+		return nil, false, err
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO butler_pool_disclosures (memory, butlers, left_house, promoted_at, promoted_by)
+		 VALUES (?, ?, ?, ?, ?)`,
+		d.Memory, string(names), boolInt(d.LeavesHouse), now(), by); err != nil {
+		return nil, false, fmt.Errorf("runtimedb: recording a pool disclosure: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, false, fmt.Errorf("runtimedb: promoting memory to the shared pool: %w", err)
 	}
 	return gains, leavesHouse, nil
 }

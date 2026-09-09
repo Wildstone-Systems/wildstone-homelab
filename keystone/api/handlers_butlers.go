@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -73,21 +74,23 @@ func (s *Server) createButler(r *http.Request, id principal.Identity) (any, int,
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
 	}
-	seq, err := s.DB.CreateButler(runtimedb.Butler{
-		Name: req.Name, Directive: req.Directive,
+	// CreateButler trims the name, so the read-back has to use the
+	// trimmed one. Re-reading what the caller sent returns 500 for a
+	// Butler that was in fact created.
+	name := strings.TrimSpace(req.Name)
+	if _, err := s.DB.CreateButler(runtimedb.Butler{
+		Name: name, Directive: req.Directive,
 		Surface: runtimedb.ButlerSurface(req.Surface), Profile: req.Profile, Route: req.Route,
-	}, actingMember(id))
-	if errors.Is(err, runtimedb.ErrNotFound) {
-		return nil, http.StatusNotFound, err
-	}
-	if err != nil {
+	}, actingMember(id)); err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return nil, http.StatusNotFound, err
+		}
 		return nil, http.StatusBadRequest, err
 	}
-	b, err := s.DB.GetButler(req.Name)
+	b, err := s.DB.GetButler(name)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	_ = seq
 	return butlerView(b), http.StatusCreated, nil
 }
 
@@ -276,7 +279,12 @@ func (s *Server) setButlerAddress(r *http.Request, id principal.Identity) (any, 
 	if req.Allow {
 		_, err = s.DB.AddButlerAddress(name, req.Transport, req.ExternalID, req.Label, actingMember(id))
 	} else {
-		err = s.DB.RevokeButlerAddress(req.Transport, req.ExternalID, actingMember(id))
+		// Scoped to the named Butler. Revoking by (transport, id) alone
+		// would let a request naming one Butler revoke a DIFFERENT
+		// one's address and then report the named Butler's list back
+		// unchanged — a revocation that appears not to have happened,
+		// on a Butler nobody was editing.
+		err = s.DB.RevokeButlerAddressFor(name, req.Transport, req.ExternalID, actingMember(id))
 	}
 	if errors.Is(err, runtimedb.ErrNotFound) {
 		return nil, http.StatusNotFound, err

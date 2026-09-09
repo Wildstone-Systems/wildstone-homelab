@@ -360,3 +360,111 @@ func TestButlerScopeSummarisesTheReach(t *testing.T) {
 		t.Fatalf("scope memory count = %d, want 1", s.MemoryCount)
 	}
 }
+
+// Found in review of B1–B7: the Butler scope was carried by a separate
+// UPDATE rather than by the record, so every path that DERIVES or
+// REPLACES a record dropped it into the shared pool — the same leak A4
+// forbids, arriving through the edit path instead of the read path.
+//
+// This is the third time this shape of bug has appeared: P8 had a
+// derivative inherit the wrong owner, and these two had it inherit no
+// butler. Hence the test covers both edit paths rather than the one
+// that was reported.
+func TestEditingAScopedRecordKeepsItScoped(t *testing.T) {
+	db := butlerFixture(t)
+	newButler(t, db, "health", "kitchen-box")
+	newButler(t, db, "nutrition", "cloud")
+
+	held, err := db.RecordButlerMemory("health", MemoryRecord{
+		Kind: MemoryFact, Subject: "sam", Content: "sam's knee gives out on stairs",
+		Audience: ButlerAudienceShared, PermissionLabel: "household", Owner: "household",
+		Author: "sam", SourceKind: "conversation", SourceID: "e-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A correction stays in the scope it corrects.
+	corrected, err := db.CorrectMemory(held, MemoryRecord{
+		Content: "sam's knee gives out on stairs and hills",
+	}, "sam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := db.GetMemory(corrected); m.Butler != "health" {
+		t.Fatalf("a correction moved the record to butler %q — the shared pool is every model", m.Butler)
+	}
+	if got, _ := db.RetrieveMemory(MemoryQuery{Reader: "sam", Butler: "nutrition"}); len(got) != 0 {
+		t.Fatalf("a correction published scoped material to another butler: %+v", got)
+	}
+
+	// So does a derivative, whatever its audience.
+	derived, err := db.DeriveMemory(MemoryRecord{
+		Kind: MemoryInference, Subject: "sam", Content: "sam should avoid stairs",
+		Audience: ButlerAudienceShared, PermissionLabel: "household", Owner: "household",
+		Author: "butler", SourceKind: "derivation", SourceID: "e-2",
+	}, []int64{corrected})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := db.GetMemory(derived); m.Butler != "health" {
+		t.Fatalf("a derivative landed in butler %q rather than its source's scope", m.Butler)
+	}
+	if got, _ := db.RetrieveMemory(MemoryQuery{Reader: "sam", Butler: "nutrition"}); len(got) != 0 {
+		t.Fatalf("a summary published scoped material to another butler: %+v", got)
+	}
+
+	// Two Butlers' material has no correct scope for a derivative, so
+	// the derivation is refused rather than guessed.
+	other, err := db.RecordButlerMemory("nutrition", MemoryRecord{
+		Kind: MemoryFact, Subject: "sam", Content: "sam eats late",
+		Audience: ButlerAudienceShared, PermissionLabel: "household", Owner: "household",
+		Author: "sam", SourceKind: "conversation", SourceID: "e-3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DeriveMemory(MemoryRecord{
+		Kind: MemoryInference, Subject: "sam", Content: "a summary of both",
+		Audience: ButlerAudienceShared, PermissionLabel: "household", Owner: "household",
+		Author: "butler", SourceKind: "derivation", SourceID: "e-4",
+	}, []int64{corrected, other}); err == nil {
+		t.Fatal("a derivative mixed two butlers' material and was given one of their scopes")
+	}
+}
+
+// A Butler literally named "*" would match the AllButlers sentinel in
+// every scope filter — A4 defeated by a name.
+func TestAButlerCannotBeNamedTheEveryButlerSentinel(t *testing.T) {
+	db := butlerFixture(t)
+	if _, err := db.CreateButler(Butler{
+		Name: AllButlers, Surface: ButlerSurfaceFamily, Profile: ProfileHousehold,
+		Route: "kitchen-box",
+	}, "mika"); err == nil {
+		t.Fatal("a butler was created with the name that means every butler")
+	}
+}
+
+// Disabling a route has to stop the Butlers already assigned to it. The
+// 0032 triggers only fire when a butler's route is WRITTEN, so a route
+// turned off afterwards would otherwise keep answering.
+func TestDisablingARouteStopsTheButlersAlreadyOnIt(t *testing.T) {
+	db := butlerFixture(t)
+	newButler(t, db, "health", "kitchen-box")
+	if err := db.GrantButlerAccess("health", "sam", "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ResolveButlerFor("health", "sam"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetModelRouteEnabled("kitchen-box", false, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := db.ResolveButlerFor("health", "sam")
+	if !errors.Is(err, ErrButlerUnreachable) {
+		t.Fatalf("a butler on a disabled route still answered: %v", err)
+	}
+	if !strings.Contains(err.Error(), "turned off") {
+		t.Fatalf("the refusal does not say the model was turned off: %v", err)
+	}
+}

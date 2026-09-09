@@ -14,6 +14,7 @@ package runtimedb
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -191,7 +192,37 @@ func (db *DB) AddButlerAddress(butler, transport, externalID, label, by string) 
 	return res.LastInsertId()
 }
 
-// RevokeButlerAddress stops a Butler answering there.
+// RevokeButlerAddressFor stops ONE named Butler answering at an
+// address.
+//
+// The name is part of the match rather than decoration: an address is
+// unique across Butlers, so revoking by (transport, id) alone succeeds
+// against whichever Butler happens to hold it — which is the wrong one
+// whenever the caller named a different Butler.
+func (db *DB) RevokeButlerAddressFor(butler, transport, externalID, by string) error {
+	if by == "" {
+		return fmt.Errorf("runtimedb: revoking a butler address needs who revoked it")
+	}
+	b, err := db.GetButler(butler)
+	if err != nil {
+		return err
+	}
+	res, err := db.sql.Exec(
+		`UPDATE butler_addresses SET revoked_at = ?, revoked_by = ?
+		 WHERE butler = ? AND transport = ? AND external_id = ? AND revoked_at = ''`,
+		now(), by, b.Seq, transport, externalID)
+	if err != nil {
+		return fmt.Errorf("runtimedb: revoking a butler address: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// RevokeButlerAddress stops whichever Butler answers at an address.
+//
+// Prefer RevokeButlerAddressFor where the caller knows the Butler.
 func (db *DB) RevokeButlerAddress(transport, externalID, by string) error {
 	if by == "" {
 		return fmt.Errorf("runtimedb: revoking a butler address needs who revoked it")
@@ -315,10 +346,20 @@ func (db *DB) RecordPoolDisclosure(d PoolDisclosure, by string) error {
 	if by == "" {
 		return fmt.Errorf("runtimedb: recording a disclosure needs who made it")
 	}
-	_, err := db.sql.Exec(
+	// JSON rather than a joined string. A comma in a Butler's name
+	// would split one name into two fabricated ones on read-back, and
+	// an audit record that invents names is worse than none.
+	names, err := json.Marshal(struct {
+		Butlers []string `json:"butlers"`
+		Cloud   []string `json:"cloud"`
+	}{d.Butlers, d.CloudButlers})
+	if err != nil {
+		return err
+	}
+	_, err = db.sql.Exec(
 		`INSERT INTO butler_pool_disclosures (memory, butlers, left_house, promoted_at, promoted_by)
 		 VALUES (?, ?, ?, ?, ?)`,
-		d.Memory, strings.Join(d.Butlers, ", "), boolInt(d.LeavesHouse), now(), by)
+		d.Memory, string(names), boolInt(d.LeavesHouse), now(), by)
 	if err != nil {
 		return fmt.Errorf("runtimedb: recording a pool disclosure: %w", err)
 	}
@@ -344,7 +385,14 @@ func (db *DB) PoolDisclosuresFor(memory int64) ([]PoolDisclosure, error) {
 			return nil, err
 		}
 		if butlers != "" {
-			d.Butlers = strings.Split(butlers, ", ")
+			var stored struct {
+				Butlers []string `json:"butlers"`
+				Cloud   []string `json:"cloud"`
+			}
+			if err := json.Unmarshal([]byte(butlers), &stored); err != nil {
+				return nil, fmt.Errorf("runtimedb: bad disclosure record for memory %d: %w", d.Memory, err)
+			}
+			d.Butlers, d.CloudButlers = stored.Butlers, stored.Cloud
 		}
 		d.LeavesHouse = left != 0
 		out = append(out, d)
