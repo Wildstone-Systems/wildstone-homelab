@@ -23,6 +23,14 @@ remove the stale declaration; until that Plan completes, Console reports
 and re-enabling requires a fresh approved Plan. Existing risk classification
 applies to the cleanup diff.
 
+An adapter connection's primary and ordered eligible fallback nodes are
+Plan-mediated desired state. Approval authorizes deterministic runtime
+placement on any listed node without a new outage-time Plan. A single lease
+epoch fences concurrent instances and late results. Adding a node is not
+complete until its credential is provisioned; removing one immediately denies
+new work and remains incomplete until local credential erasure and any required
+remote revocation are verified.
+
 ---
 
 # Part A — Decisions (binding)

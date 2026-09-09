@@ -23,6 +23,14 @@ One adapter implementation supports multiple named connections containing
 endpoint, secret references, identity mappings, declared scopes, and grants.
 Exact schemas land with the adapter implementation slice.
 
+Each named connection declares a primary node and an ordered set of eligible
+fallback nodes. Only those nodes receive its credentials. Keystone may move a
+single fenced adapter lease within the approved set after node failure and may
+fail back after a health stabilization period. With no eligible node, the
+connection is unavailable and work waits; discovery never expands placement.
+Adding/removing nodes follows the Plan, provisioning, erasure, and remote
+revocation gates in W030/W012.
+
 Individual connections default to personal, read-only, live-query-only, and
 local-processing-only. Connections explicitly created for household
 infrastructure default to household-shared and read-only. Selected indexing,

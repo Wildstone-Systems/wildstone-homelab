@@ -9,13 +9,22 @@
   work package contradicts Part A or B, Part A/B wins — stop and report
   the conflict instead of improvising.
 
-## Preservation note for ADR-W030
+## Conditional amendment from ADR-W030
 
-ADR-W030 does not add a Wardstone protocol operation. Its Operator-only log
-reader reuses the existing typed `ContainerLogs` arm, ownership checks, and
-1 MiB tail-biased bound. The Butler gateway and reader narrow and redact that
-result; Household receives no log tool. A later need that the current arm
-cannot satisfy still follows A1/A3's reviewed additive protocol process.
+This amendment becomes binding when ADR-W030 is accepted. ADR-W030's
+Operator-only log reader adds no protocol operation: it reuses the
+existing typed `ContainerLogs` arm, ownership checks, and 1 MiB tail-biased
+bound. The Butler gateway and reader narrow and redact that result; Household
+receives no log tool.
+
+Automatic adapter fallback does require verified removal of a connection
+secret from a node leaving the approved placement set. Before that feature
+ships, implementation must add one typed, idempotent, additive `RemoveSecret`
+arm carrying secret name and
+expected version and returning only whether that version existed/was removed.
+It never returns a value, refuses a version mismatch, remains admin/Plan
+mediated, and follows A3's protocol-minor compatibility process. An equivalent
+typed erasure operation is acceptable only if it preserves those properties.
 
 ---
 

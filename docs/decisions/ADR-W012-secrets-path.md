@@ -6,16 +6,26 @@
   scope E8
 - **Audience:** decision record AND implementation spec for E8.
 
-## Preservation note for ADR-W030
+## Conditional amendment from ADR-W030
 
-ADR-W030's member-scoped application credentials keep this write-only value
-path. Keystone stores member, connection, purpose, node, reference, and
-revocation metadata, never the value; the authenticated secret-input request
-forwards the value to Wardstone exactly as A3 requires. A package-managed
-adapter receives it only through normal container materialization. Chat,
-models, integration work queues, events, memory, and audit never receive the
-value. Immediate connection revocation blocks use of the reference even before
-the associated desired-state cleanup Plan completes.
+This amendment becomes binding when ADR-W030 is accepted. ADR-W030's
+member-scoped application credentials keep this write-only value
+path, with one narrow change to A1: one connection credential may exist in the
+encrypted Wardstone stores of its explicitly approved primary and fallback
+nodes. It exists nowhere else at rest. Keystone stores member, connection,
+purpose, eligible nodes, reference/version, and revocation metadata, never the
+value. The authenticated setup request may fan the value directly over mTLS to
+those nodes without persistence. A package-managed adapter receives it only
+through normal container materialization. Chat, models, integration work
+queues, events, memory, and audit never receive the value.
+
+Adding an eligible node requires an approved placement Plan and successful
+secret provisioning. Removing one immediately fences adapter work and uses the
+typed, version-matched erasure operation permitted by the W003 amendment. When
+the remote service supports per-client credentials, revoke that node's remote
+credential too. Until local erasure and required remote revocation are proven,
+the desired-state removal remains incomplete and visible as degraded. Immediate
+connection revocation blocks all copies even before cleanup completes.
 
 ---
 

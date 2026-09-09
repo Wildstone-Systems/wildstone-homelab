@@ -60,6 +60,8 @@ Butler may draft and preview a shared routine in Telegram, then provide a direct
 
 Personal service connections start personal, read-only, live-query-only, and local-processing-only. Explicit household-service connections start household-shared and read-only. Indexing, cloud use, and actions are clear setup choices rather than side effects of connecting an account.
 
+For homes spread across several machines, a connection chooses a primary adapter node and approved fallbacks. Wildstone can fail over automatically only within that list. Credentials are placed on those nodes in advance and nowhere else; if all are unavailable, Butler waits and reports the outage. Removing a fallback is complete only after its local credential is erased and any node-specific remote credential is revoked.
+
 ## Delivery sequence
 
 1. Fix current-agent reliability on the existing surfaces: effective/self-capability inventory, configurable iteration slices, durable single-conversation progress, automatic bounded retry, stalled/resumable state, and a task-bound continue flow. Use current tools only and prove an eight-plus-read diagnosis and provider-failure resume without repeated verified work.
