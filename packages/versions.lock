@@ -38,7 +38,7 @@ ingress 1.0.2 4bbd2bd5e6db1d92
 ingress-tailnet 1.0.1 59e7276e5bb0a51c
 ingress-tailnet-public 1.0.1 16dea82d8a073bdf
 ingress-tailnet-ts 1.1.1 61c1e5cfa0848b4b
-inventory-homebox 1.0.2 0895c8362291f964
+inventory-homebox 1.1.0 d1e66d5bca1ebdb5
 mail-roundcube 1.0.3 263209fecaf58b8d
 media-jellyfin 1.0.2 b1a5557b5043f296
 media-plex 1.0.2 5b792e3919a95d8a
