@@ -267,6 +267,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/butler/models", s.handle(principal.VerbManage, s.listButlerModels))
 	mux.Handle("GET /api/v1/butler/config", s.handle(principal.VerbManage, s.getButlerConfig))
 	mux.Handle("PUT /api/v1/butler/config", s.handle(principal.VerbManage, s.setButlerConfig))
+	mux.Handle("GET /api/v1/butler/index/measurements", s.handle(principal.VerbRead, s.listIndexMeasurements))
+	mux.Handle("POST /api/v1/butler/index/compact", s.handle(principal.VerbManage, s.compactButlerIndex))
 	mux.Handle("GET /api/v1/butler/memory", s.handle(principal.VerbRead, s.retrieveButlerMemory))
 	mux.Handle("GET /api/v1/butler/memory/export", s.handle(principal.VerbRead, s.exportButlerMemory))
 	mux.Handle("POST /api/v1/butler/memory/correct", s.handle(principal.VerbRead, s.correctButlerMemory))

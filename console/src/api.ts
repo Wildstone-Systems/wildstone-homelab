@@ -706,12 +706,36 @@ export interface MemoryDigestEntry {
   immediate: boolean;
 }
 
+
+// One recorded retrieval fixture run (ADR-W030 P9). The implementation
+// choice is measured rather than asserted, and this is the measurement.
+export interface IndexMeasurement {
+  seq: number;
+  at: string;
+  fixture: string;
+  strategy: "keyword" | "vector" | "hybrid";
+  queries: number;
+  hits: number;
+  recallPct: number;
+  p95Micros: number;
+  indexBytes: number;
+  note?: string;
+}
+
 export const api = {
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
   butlerModels: (endpoint?: string) =>
     call<{ endpoint: string; models: ButlerModel[] }>(
       "GET",
       `/api/v1/butler/models${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ""}`,
+    ),
+  indexMeasurements: () =>
+    call<{ measurements: IndexMeasurement[] | null }>("GET", "/api/v1/butler/index/measurements"),
+  compactButlerIndex: (maxAgeDays: number) =>
+    call<{ prunedForgotten: number; agedOut: number; note: string }>(
+      "POST",
+      "/api/v1/butler/index/compact",
+      { maxAgeDays },
     ),
   butlerMemory: (subject?: string) =>
     call<{ records: MemoryRecord[] | null }>(

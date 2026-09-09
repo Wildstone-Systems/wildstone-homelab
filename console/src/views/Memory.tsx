@@ -70,6 +70,8 @@ export function Memory() {
         </ul>
       </section>
 
+      <Retrieval />
+
       <section className="work-section">
         <h3>Shared changes</h3>
         {entries.length === 0 && !digest.loading && (
@@ -150,5 +152,62 @@ function Record({ record, onChanged }: { record: MemoryRecord; onChanged: () => 
       {note && <span className="timeline-src">{note}</span>}
       {action.state.phase === "error" && <ErrorLine error={action.state.message} />}
     </li>
+  );
+}
+
+// What retrieval actually costs, and how well it works.
+//
+// The implementation choice — SQLite full-text search with bm25, plus an
+// optional local embedding — was made by measuring it, and this is the
+// measurement. A claim about recall with no number behind it is a
+// preference.
+function Retrieval() {
+  const measurements = useLoad(() => api.indexMeasurements());
+  const action = useAction();
+  const [note, setNote] = useState<string | null>(null);
+  const rows = measurements.data?.measurements ?? [];
+  return (
+    <section className="work-section">
+      <h3>Finding things</h3>
+      {rows.length === 0 && !measurements.loading && (
+        <div className="muted">
+          No retrieval fixtures have been run on this deployment yet.
+        </div>
+      )}
+      <ul className="work-evidence">
+        {rows.map((m) => (
+          <li key={m.seq}>
+            <strong>{m.strategy}</strong>
+            <span>
+              found the right thing first {m.recallPct}% of the time over {m.queries} questions
+            </span>
+            <span className="timeline-src">{(m.p95Micros / 1000).toFixed(1)} ms at the 95th percentile</span>
+            <span className="timeline-src">{m.fixture}</span>
+          </li>
+        ))}
+      </ul>
+      <div className="work-form">
+        <button
+          className="btn btn-ghost"
+          disabled={action.state.phase === "busy"}
+          onClick={() =>
+            action.run(async () => {
+              const res = await api.compactButlerIndex(0);
+              setNote(
+                res.prunedForgotten > 0
+                  ? `${res.prunedForgotten} forgotten or corrected ${
+                      res.prunedForgotten === 1 ? "record was" : "records were"
+                    } still searchable and have been removed.`
+                  : "Nothing forgotten was still searchable.",
+              );
+            }, "Compacted.")
+          }
+        >
+          Tidy the index
+        </button>
+      </div>
+      {note && <div className="msg-note">{note}</div>}
+      {action.state.phase === "error" && <ErrorLine error={action.state.message} />}
+    </section>
   );
 }
