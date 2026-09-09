@@ -151,3 +151,11 @@ func (db *DB) AppliedMigrations() ([]string, error) {
 func now() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
 }
+
+// ExecForTest runs a raw statement. It exists so tests in other
+// packages can prove a schema constraint holds against a writer that
+// bypasses this package's own methods — which is the only interesting
+// way to test a trigger. Nothing in production calls it.
+func (db *DB) ExecForTest(query string, args ...any) (sql.Result, error) {
+	return db.sql.Exec(query, args...)
+}

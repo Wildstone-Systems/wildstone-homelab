@@ -10,6 +10,7 @@ import {
   ListChecks,
   PlugsConnected,
   Pulse,
+  Repeat,
   SealCheck,
   ShieldCheck,
   Sparkle,
@@ -34,6 +35,7 @@ import { IdentityView } from "./views/Identity";
 import { Memory } from "./views/Memory";
 import { Nodes } from "./views/Nodes";
 import { Plans } from "./views/Plans";
+import { Routines } from "./views/Routines";
 import { Secrets } from "./views/Secrets";
 import { Work } from "./views/Work";
 import { Services } from "./views/Services";
@@ -46,6 +48,7 @@ type View =
   | "authority"
   | "memory"
   | "integrations"
+  | "routines"
   | "chat"
   | "household"
   | "connect"
@@ -71,6 +74,7 @@ const TITLES: Record<View, [string, string]> = {
   authority: ["Admission", "Butler access"],
   memory: ["Owned data", "Memory"],
   integrations: ["Connected apps", "Integrations"],
+  routines: ["On its own", "Routines"],
   chat: ["Access", "Chat"],
   household: ["People", "Household"],
   connect: ["Setup", "Connect chat"],
@@ -134,6 +138,7 @@ export function Shell() {
       { id: "authority", label: "Butler access", icon: <ShieldCheck size={ICON} /> },
       { id: "memory", label: "Memory", icon: <Brain size={ICON} /> },
       { id: "integrations", label: "Integrations", icon: <PlugsConnected size={ICON} /> },
+      { id: "routines", label: "Routines", icon: <Repeat size={ICON} /> },
       { id: "chat", label: "Chat", icon: <ChatsCircle size={ICON} /> },
       { id: "household", label: "Household", icon: <UsersThree size={ICON} /> },
       { id: "connect", label: "Connect chat", icon: <PlugsConnected size={ICON} /> },
@@ -184,6 +189,7 @@ export function Shell() {
           {view === "authority" && <ButlerAuthority />}
           {view === "memory" && <Memory />}
           {view === "integrations" && <Integrations />}
+          {view === "routines" && <Routines />}
           {view === "chat" && <Chat />}
           {view === "household" && <Household />}
           {view === "connect" && <ConnectChat />}

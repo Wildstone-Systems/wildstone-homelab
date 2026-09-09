@@ -779,12 +779,64 @@ export interface ConnectionSecret {
   revokedAt?: string;
 }
 
+
+// ---------------------------------------------------------------- model routes
+
+// Where a question may be sent (ADR-W030 A9). A route's kind is the data
+// boundary: cloud means material sent to it leaves the house, and a
+// route cannot change kind.
+export interface ModelRoute {
+  name: string;
+  kind: "local" | "cloud";
+  provider: string;
+  model?: string;
+  endpoint?: string;
+  readiness: "unprobed" | "ready" | "qa-only" | "unavailable";
+  readinessDetail?: string;
+  maxConcurrency: number;
+  priority: number;
+  enabled: boolean;
+}
+
+// A routine the household wrote, native to an app or run by Wildstone.
+export interface HouseholdRoutine {
+  name: string;
+  ownership: "native" | "wildstone";
+  externalId?: string;
+  connection?: string;
+  author: string;
+  revision: number;
+  state: "draft" | "trial" | "enabled" | "disabled";
+  document: string;
+  disabledAt?: string;
+  disabledBy?: string;
+}
+
 export const api = {
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
   butlerModels: (endpoint?: string) =>
     call<{ endpoint: string; models: ButlerModel[] }>(
       "GET",
       `/api/v1/butler/models${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ""}`,
+    ),
+  modelRoutes: () =>
+    call<{ routes: { route: ModelRoute; carriesActions: boolean; leavesTheHouse: boolean }[] | null }>(
+      "GET",
+      "/api/v1/butler/routes",
+    ),
+  setModelRouteEnabled: (name: string, enabled: boolean) =>
+    call<{ enabled: boolean }>(
+      "POST",
+      `/api/v1/butler/routes/${encodeURIComponent(name)}/enabled`,
+      { enabled },
+    ),
+  householdRoutines: () =>
+    call<{ routines: HouseholdRoutine[] | null }>("GET", "/api/v1/household/routines"),
+  setRoutineState: (name: string, state: string) =>
+    call<{ routine: HouseholdRoutine; performsActions: boolean }>(
+      "POST",
+      `/api/v1/household/routines/${encodeURIComponent(name)}/state`,
+      { state },
     ),
   integrations: () =>
     call<{

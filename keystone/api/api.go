@@ -38,6 +38,14 @@ type Server struct {
 	State   *statefile.Store
 	Log     *slog.Logger
 
+	// TrustedIngress is the exact set of remote addresses the identity
+	// proxy speaks from (ADR-W030 A8.1). It gates the household review
+	// route, which trusts an identity header — and a header anyone can
+	// set is not an authentication. Empty means the household review
+	// path is unavailable rather than open: an unconfigured trust
+	// boundary must fail closed.
+	TrustedIngress []string
+
 	// OnApproved, when set, is called (non-blocking contract: keep it
 	// cheap) after a plan approval commits — cmd/keystone wires it to the
 	// reconcile service's Poke so convergence starts immediately instead
@@ -295,6 +303,20 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/butler/memory/correct", s.handle(principal.VerbRead, s.correctButlerMemory))
 	mux.Handle("POST /api/v1/butler/memory/forget", s.handle(principal.VerbRead, s.forgetButlerMemory))
 	mux.Handle("GET /api/v1/butler/memory/digest", s.handle(principal.VerbRead, s.listMemoryDigest))
+	mux.Handle("GET /api/v1/household/routines", s.handle(principal.VerbRead, s.listHouseholdRoutines))
+	mux.Handle("POST /api/v1/household/routines", s.handle(principal.VerbPropose, s.createHouseholdRoutine))
+	mux.Handle("POST /api/v1/household/routines/{name}/edit", s.handle(principal.VerbPropose, s.editHouseholdRoutine))
+	mux.Handle("POST /api/v1/household/routines/{name}/state", s.handle(principal.VerbPropose, s.setHouseholdRoutineState))
+	mux.Handle("POST /api/v1/household/review/token", s.handle(principal.VerbApprove, s.issueHouseholdReviewToken))
+	// The narrow acting-for service route (ADR-W030 A8.1). It carries no
+	// API verb: identity comes from the trusted ingress in front of it,
+	// and authority comes entirely from a single-use, proposal-bound
+	// token. A request without both gets nothing.
+	mux.HandleFunc("POST /api/v1/household/review", s.householdReview)
+	// The chat callback path. It needs `converse` — the adapter's only
+	// verb — because the adapter relays a tap; the identity comes from
+	// the binding a human redeemed, and the authority from the token.
+	mux.Handle("POST /api/v1/household/review/callback", s.handle(principal.VerbConverse, s.householdReviewCallback))
 	mux.Handle("GET /api/v1/butler/tools", s.handle(principal.VerbRead, s.listButlerToolControls))
 	mux.Handle("PUT /api/v1/butler/tools", s.handle(principal.VerbManage, s.setButlerToolControl))
 	mux.Handle("GET /api/v1/butler/grants", s.handle(principal.VerbRead, s.listButlerGrants))
@@ -322,6 +344,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/butler/tasks/{id}/debug", s.handle(principal.VerbManage, s.enableButlerDebugCapture))
 	mux.Handle("GET /api/v1/butler/evaluations", s.handle(principal.VerbRead, s.listButlerEvaluations))
 	mux.Handle("GET /api/v1/butler/debug", s.handle(principal.VerbRead, s.listButlerDebugCaptures))
+	mux.Handle("GET /api/v1/butler/routes", s.handle(principal.VerbRead, s.listModelRoutes))
+	mux.Handle("PUT /api/v1/butler/routes", s.handle(principal.VerbManage, s.upsertModelRoute))
+	mux.Handle("POST /api/v1/butler/routes/{name}/readiness", s.handle(principal.VerbManage, s.recordRouteReadiness))
+	mux.Handle("POST /api/v1/butler/routes/{name}/enabled", s.handle(principal.VerbManage, s.setModelRouteEnabled))
 	mux.Handle("GET /api/v1/butler/settings", s.handle(principal.VerbManage, s.getButlerSettings))
 	mux.Handle("PUT /api/v1/butler/settings", s.handle(principal.VerbManage, s.setButlerSettings))
 	mux.Handle("POST /api/v1/butler/ask", s.handle(principal.VerbRead, s.askButler))
@@ -463,7 +489,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 		return
 	}
 	switch body.(type) {
-	case mintResponse, joinTokenResponse:
+	case mintResponse, joinTokenResponse, reviewTokenResponse:
 		// The two deliberate carve-outs (ADR-W007 A3, ADR-W014 A3): a
 		// newly minted API token and a newly minted join token, each in
 		// the only moment it ever exists in a response.
