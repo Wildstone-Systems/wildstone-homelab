@@ -151,17 +151,35 @@ message, for A2's reason: a dispatcher must read the message to route
 it, so the material reaches a model before the routing that was supposed
 to protect it.
 
-### A8. Creating or changing a Butler is a human-approved Plan
+### A8. A Butler cannot create or change a Butler. A person at the Console can
 
-Creating a Butler grants standing authority: a model, a set of tools, a
-set of connections, and a memory scope. Changing one can widen any of
-those.
+The rule that matters is about the actor, not the ceremony.
 
-So it is Plan-mediated, like every other standing authority increase
-(ADR-W030 A7.1), and **a Butler cannot create or modify a Butler**.
-Without that, self-escalation has an obvious route: a Butler creates a
-cloud-model Butler, assigns it the material it holds, and A4 is bypassed
-without a single rule being broken.
+**A Butler cannot create or modify a Butler**, and that is
+Plan-mediated like every other standing authority increase (ADR-W030
+A7.1). Without it self-escalation has an obvious route: a Butler
+creates a cloud-model Butler, assigns it the material it holds, and A4
+is bypassed without a single rule being broken.
+
+**A person acting at the Console does not need a Plan to change a
+Butler they already own.** A10 gives the Console holder every Butler.
+Asking them to raise a proposal and then approve it is self-approval
+with extra steps: the click *is* the consent, and a ceremony that
+cannot be refused by anyone teaches people that approvals are
+paperwork.
+
+So a direct Console change — the backend chip being the live case —
+applies immediately. What it produces instead is **an activity-log
+event**: which Butler, which model before, which model after, who, and
+when. That is the property a Plan was standing in for. The record is
+what makes a swap answerable afterwards; the approval step was adding
+nothing, because the person approving was the person asking.
+
+The line held here is between **who acts**, not between which field
+changed. Tools, connections and memory scope stay Plan-mediated when a
+Butler proposes touching them, for the reason in the first paragraph —
+and are equally direct when the Console holder sets them on a Butler
+they own.
 
 ### A9. A directive instructs; it does not authorise
 
@@ -272,21 +290,34 @@ that the health Butler is pointed somewhere it should not be. That is
 verification, not protection, and it must not be mistaken for the thing
 the header is already doing.
 
-**Changing a Butler's model stops being immediate.** The chip is a
-selector today: its popover switches the backend and the change applies
-at once. Under A8 a Butler's model is part of its standing
-configuration, so changing it becomes a proposal that lands on Plans
-and waits. The chip keeps displaying; what it no longer does is switch.
-This is the one behavioural regression in B6, and it is deliberate — a
-model swap that took effect while a conversation was open would move
-material to a different model with nothing recording that it happened.
+**The chip keeps switching the model, and it keeps doing it
+immediately.** Its popover changes the backend today and that behaviour
+stays. Per A8 the person at the Console owns every Butler, so a
+proposal they would then approve themselves is ceremony with no
+refusing party — and a change that takes three steps instead of one
+teaches people that approvals are paperwork rather than decisions.
 
-**Create is a proposal, not a creation.** A8 makes creating a Butler a
-human-approved Plan, so the button drafts one and it lands on Plans as
-`proposed` — the same card, with the same approve handler, that a
-Butler's own proposals already use on this screen. The label should say
-so; a button that reads "Create" and produces a pending plan teaches
-the wrong thing about what just happened.
+What the chip gains is an **activity-log event** on each switch:
+Butler, model before, model after, who, when. That is what a Plan would
+have been standing in for. A swap needs to be *answerable* afterwards,
+which is a record; it does not need to be *permitted*, which is what
+the owner clicking it already is.
+
+One mechanical detail this raises, and it is code rather than
+governance: a session in flight already finishes on the provider it
+started with, so a swap cannot split one answer across two models. The
+*next* turn in that same conversation is the live question, because it
+would carry the earlier history to the new model. Either the swap
+starts a new conversation or the history does not travel; B6 has to
+pick one deliberately rather than inherit whichever falls out.
+
+**Create is a proposal, not a creation.** Creating a Butler is where a
+Plan still earns its place — it is not a change to something that
+already exists but the granting of a new scope, and it is the act A8
+must keep a Butler out of. The button drafts one and it lands on Plans
+as `proposed`, the same card and approve handler this screen already
+uses. The label should say so; a button reading "Create" that produces
+a pending plan teaches the wrong thing about what just happened.
 
 The surface does not disappear from the screen. A Butler is created
 against one (A3), and the difference is worth seeing: an operator-surface
