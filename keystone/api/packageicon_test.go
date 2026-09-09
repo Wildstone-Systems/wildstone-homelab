@@ -33,6 +33,44 @@ func TestPackageWithNoRouteGetsTheFallback(t *testing.T) {
 	}
 }
 
+// Flow syntax is ordinary YAML and a package is free to use it. The
+// first cut regexed the raw template text for a line beginning
+// `upstream:`, so this silently fell back to the generic icon.
+func TestFlowStyleRouteStillResolvesItsIcon(t *testing.T) {
+	pkg := &pkgspec.Package{Templates: []string{
+		"apiVersion: wildstone.dev/v1\nkind: Route\nmetadata: {name: media}\nspec: {host: a, upstream: \"container/jellyfin:8096\"}\n",
+	}}
+	if got := packageIcon(pkg); got != "jellyfin" {
+		t.Fatalf("packageIcon = %q, want %q — flow syntax is still a Route", got, "jellyfin")
+	}
+}
+
+// An upstream built from a param resolves through the param's default,
+// which is what pkgspec.Routes already does for every other reader.
+func TestTemplatedUpstreamResolvesThroughDefaults(t *testing.T) {
+	pkg := &pkgspec.Package{
+		Params: []pkgspec.ParamDecl{{Name: "app", Default: "jellyfin"}},
+		Templates: []string{
+			"apiVersion: wildstone.dev/v1\nkind: Route\nmetadata:\n  name: media\nspec:\n  upstream: \"container/{{ .Params.app }}:8096\"\n",
+		},
+	}
+	if got := packageIcon(pkg); got != "jellyfin" {
+		t.Fatalf("packageIcon = %q, want %q", got, "jellyfin")
+	}
+}
+
+// A package serving several routes takes the one whose container is an
+// app somebody would recognise, not simply the first.
+func TestTheRecognisableRouteWins(t *testing.T) {
+	pkg := &pkgspec.Package{Templates: []string{
+		"apiVersion: wildstone.dev/v1\nkind: Route\nmetadata: {name: api}\nspec: {upstream: \"container/photos-sidecar:3001\"}\n",
+		"apiVersion: wildstone.dev/v1\nkind: Route\nmetadata: {name: web}\nspec: {upstream: \"container/immich-server:2283\"}\n",
+	}}
+	if got := packageIcon(pkg); got != "immich" {
+		t.Fatalf("packageIcon = %q, want %q", got, "immich")
+	}
+}
+
 // An upstream that is not a container — a Route pointing at an ip:port —
 // is not an app with a logo either.
 func TestNonContainerUpstreamGetsTheFallback(t *testing.T) {

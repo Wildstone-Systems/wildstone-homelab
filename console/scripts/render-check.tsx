@@ -786,6 +786,16 @@ const noneInstalled = renderToString(h(ServicesView, { pkgs: GROUPED, onInstalle
 check("nothing installed points at the catalog", noneInstalled.includes("Nothing is installed yet"), noneInstalled.slice(-500));
 const noCatalog = renderToString(h(ServicesView, { pkgs: [], onInstalled: () => {} }));
 check("an empty catalog is a deployment fact, not a filter miss", noCatalog.includes("-catalog-dir"), noCatalog.slice(-400));
+// Nothing LEFT to install is a third sentence again: a Clear button
+// here cannot change the result, so offering one reads as a broken
+// screen rather than as a finished one.
+const allInstalled = renderToString(h(ServicesView, {
+  pkgs: PACKAGES.map((p) => ({ ...p, enabled: true })), initialTab: "catalog", onInstalled: () => {},
+}));
+check("an exhausted catalog says so rather than blaming the filters",
+  allInstalled.includes("Everything in the catalog is already installed"), allInstalled.slice(-500));
+check("an exhausted catalog offers no Clear it cannot honour",
+  !allInstalled.includes(">Clear<"), allInstalled.slice(-500));
 
 // Forty-six available packages is a scroll, and the catalog only
 // grows. Search filters on name AND capability, because which one you

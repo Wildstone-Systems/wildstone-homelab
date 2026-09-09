@@ -6,7 +6,6 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"net/http"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -18,23 +17,28 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
-// upstreamInTemplate finds a Route's upstream in a package's raw
-// templates. Every shipped package writes it as a literal
-// ("container/jellyfin:8096") rather than interpolating it, so the slug
-// can be resolved without rendering the package — which would need
-// params this handler is not being asked for.
-var upstreamInTemplate = regexp.MustCompile(`(?m)^\s*upstream:\s*["']?(container/[A-Za-z0-9_.-]+(?::[0-9]+)?)`)
-
 // packageIcon is the app's own logo slug, or the generic fallback for a
 // package that serves no Route (an adapter, a model runner) and for one
 // whose container has no row in the dashboard's table.
+//
+// pkgspec.Routes parses the templates as YAML with the params' defaults
+// substituted, so this reads the upstream STRUCTURALLY. A regex over the
+// raw text was the first cut and was wrong twice over: it required
+// `upstream:` to begin a line, so an equally valid `spec: {upstream:
+// "container/x:80"}` silently fell back to the generic icon, and a
+// templated upstream never matched at all.
+//
+// The first route whose container has a row wins, rather than simply the
+// first route: photos-immich serves both photos and photos-api, and only
+// one of the two is the app you would recognise.
 func packageIcon(pkg *pkgspec.Package) string {
-	for _, t := range pkg.Templates {
-		if m := upstreamInTemplate.FindStringSubmatch(t); m != nil {
-			return reconcile.IconForUpstream(m[1])
+	fallback := reconcile.IconFor("")
+	for _, r := range pkgspec.Routes(pkg) {
+		if icon := reconcile.IconForUpstream(r.Upstream); icon != fallback {
+			return icon
 		}
 	}
-	return reconcile.IconFor("")
+	return fallback
 }
 
 // packageView is what the Console browses. Params travel with their

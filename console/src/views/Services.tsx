@@ -253,6 +253,12 @@ export function ServicesView({
             </>
           )}
         </div>
+      ) : tab === "catalog" && catalogPkgs.length === 0 ? (
+        // Nothing LEFT to install is not a filter that matched nothing:
+        // offering Clear here is offering a button that cannot change
+        // the result, which is how a person concludes the screen is
+        // broken rather than that they are finished.
+        <div className="muted">Everything in the catalog is already installed.</div>
       ) : tab === "catalog" && catalog.length === 0 ? (
         <div className="muted">
           Nothing in the catalog matches these filters.{" "}
