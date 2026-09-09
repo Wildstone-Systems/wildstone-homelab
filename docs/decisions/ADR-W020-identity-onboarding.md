@@ -17,6 +17,18 @@ runtime projection carries a generation checked on every retrieval and
 dispatch. Unlink/disable immediately denies access, invalidates derived grants,
 and pauses affected work while preserving immutable historical attribution.
 
+Offboarding is one audited administrator operation whose runtime denial takes
+effect first: disable Butler admission, revoke bindings/sessions and temporary
+grants, fence connections, and stop retrieval/ingestion/delivery. Linked Plans
+then remove standing declarations. A sole guardian must be replaced or the
+Child admission disabled before offboarding completes. Shared records retain
+original authorship; personal records move to inaccessible retention quarantine.
+
+While still admitted, a person may export their own conversations, personal
+memory/preferences/procedures, and task history with provenance/permissions.
+The export follows current read policy and excludes credentials, hidden
+Operator context, and other people's private data.
+
 An admitted adult may authenticate to a narrow household-routine review view
 in Console with a `household-member` session. This is not access to the admin
 plane: it exposes only household-scoped context and Plans accepted by W030's

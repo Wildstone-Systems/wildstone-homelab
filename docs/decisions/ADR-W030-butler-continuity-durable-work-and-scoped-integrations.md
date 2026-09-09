@@ -46,6 +46,8 @@ Maintain an explicit runtime link between an authenticated API/chat principal an
 
 New Butler admission and authority-increasing guardian/classification changes likewise require a human-approved Plan. An unlinked principal has no household-person access. Butler admission and disabled status are runtime membership controls, separate from LDAP account deletion or group membership. Check current membership and link generation at every retrieval and dispatch. Unlink or disable revokes derived grants and pauses affected tasks immediately; relinking requires fresh authorization. Household admission does not grant Operator access.
 
+Offboarding starts with one audited administrator action that immediately disables Butler admission, revokes chat bindings/sessions and temporary grants, fences the member's connections, and prevents new retrieval, dispatch, ingestion, and proactive delivery. Desired-state cleanup follows through linked Plans; failed cleanup never restores access. A sole guardian cannot be removed while a Child admission remains active: assign another guardian or disable the Child admission first.
+
 Trusted admitted adults retain shared household timeline access in direct messages, including other adults' household events. Explicitly private sources remain restricted. Preserve W026's conservative group/member filtering; a group audience does not inherit the sender's full direct-message access.
 
 For the existing household timeline, registered legacy event types retain their household-shared audience under an explicit migration mapping; no blanket historical relabeling is required. That mapping also explicitly includes Keystone-owned automation lifecycle events and household-answer events from the existing chat/notification paths, which are not package-declared. Recognize trusted producer paths and event types together; a caller-supplied internal source name is not proof of origin. Extend package `publishes` declarations with audience policy: household-shared by default for declared household events, or a narrower validated audience. Persist the resolved policy/provenance at intake and preserve subsequent access revocations. Unknown event types, invalid audience declarations, imported personal sources, and missing derivative permission metadata fail closed. Derivatives of legacy events inherit the mapped audience. The timeline is not a general exemption from permission checks.
@@ -62,6 +64,8 @@ Offer configurable daily/weekly learning digests and inspect/correct/forget cont
 
 Deletion removes retrieval access and solely dependent derivatives; forgetting prevents relearning from the same historical material. Original records survive compaction unless separately deleted. The restore quarantine in A10 is required; an independent deletion/revocation journal is a follow-up implementation option.
 
+While admitted, a person can export their own conversations, personal memory, preference/procedure records, and task history in documented machine-readable form. The export includes provenance and permissions but no other person's private data, credentials, hidden Operator context, or shared data the requester cannot currently read. On offboarding, personal conversations and memory become inaccessible rather than becoming household-shared. They remain quarantined until the configured retention period expires or an authorized deletion request completes; without an explicit period, the existing manual-deletion default applies. Shared household facts remain with original attribution.
+
 ### A3.1 Memory acceptance boundaries
 
 Use the shared redaction path before persistent memory storage, including exclusion of credentials and password-reset material. Source restrictions apply before extraction and persist on every derivative. When sources have different restrictions, a derivative must satisfy all of them; missing permission metadata fails closed.
@@ -75,6 +79,8 @@ Use one execution foundation in Keystone for conversational tasks and Wildstone-
 Recommended starting point: runtime-DB task/run rows, step/attempt rows, and transition history. Record owner, conversation, profile, objective, completion criteria, grants, deadline, next wakeup, results, and uncertainty. Exact schemas, claim/lease design, and migration are deferred to an implementation specification.
 
 Replies, approvals, schedules, and unavailable models are saved waiting reasons. Cancellation stops new actions and attempts to interrupt in-flight work. Refinements preserve task history; separate objectives create separate tasks. Independent work may run together; incompatible shared changes pause for clarification rather than assigning one adult priority.
+
+Offboarding moves unfinished personal tasks to `paused-offboarded`; they perform no retries, notices, or model calls. Shared tasks created by that member transfer operational ownership to the configured homelab administrator, preserve original authorship, and pause for grant/connection review before resuming. Task retention then follows the same configured offboarding policy as its conversation.
 
 Resume relevant authorized work after restart. Do not blindly retry actions whose outcomes are unknown. Use destination verification or supported idempotency mechanisms; otherwise pause. Preserve partial successes and report remaining work. Completion requires evidence appropriate to the objective, not merely a model saying done. Notification delivery is separate from task completion.
 
@@ -111,6 +117,8 @@ V1 adapters execute as package-managed containers on Wildstone nodes that can re
 The existing home-automation emitter is not a Home Assistant query/action adapter. Add that capability explicitly in an adapter with declared permissions, independently of whether Wildstone hosts Home Assistant.
 
 Personal CalDAV/IMAP access requires member-scoped credential onboarding through an authenticated secret-input surface, following W020's claim/onboarding pattern and W012's secret handling. Store credentials through the node secret path; adapters receive scoped references, never model-visible values. Keep member, connection, requesting principal, and revocation linkage. Do not collect passwords through chat. Revocation invalidates future dispatch and ingestion. Where a provider cannot issue read-only credentials, enforce read-only adapter operations and disclose the credential's wider upstream power. Personal CalDAV rollout depends on this onboarding; fixtures can precede it.
+
+Offboarding disables every personal connection and starts verified credential erasure/revocation on all eligible nodes. A household-shared connection whose credential belongs to the departing member also pauses: ownership may transfer to the configured administrator, but it cannot resume until a current authorized owner supplies or reauthorizes the credential. Connection and routine history retain the departing member's original attribution.
 
 ## A6. Native automation where appropriate, Wildstone for cross-app coordination
 
@@ -194,6 +202,8 @@ Task updates go to the owner, private messages stay private, and unassigned noti
 
 Back up tasks, conversations, memories, grants, mappings, routines, procedures, and access settings. Reconcile restored actions against external state before resuming. Restore into quarantine: no Butler retrieval, task dispatch, ingestion, or proactive delivery until an administrator reconciles authority and deletion state. Reapply available later deletions/revocations; an old backup cannot supply missing later decisions. Where reconciliation cannot establish current permission or deletion status, keep affected content unavailable and require fresh authorization and, where appropriate, reindex from current permitted sources. Administrative acknowledgement alone is not evidence that missing deletions were recovered. Conversation/task-summary retention defaults to manual deletion with configurable cleanup.
 
+Offboarding records and deletion/retention deadlines are part of the authority state restored before exposure. A restored member, binding, grant, connection, or private-memory index remains quarantined when a later offboarding record may be missing. Export is a read governed by current permissions and never bypasses restore quarantine.
+
 ### A10.1 Undelivered notices and recovery evidence
 
 Track delivery acknowledgement separately from a human response. A completed task whose notice expires remains completed, with the notice marked expired/undelivered and visible in Console; it must not become an unanswered approval wait. Waiting-for-human tasks remain waiting under their own deadline policy. No expired notice or silence approves work.
@@ -267,5 +277,6 @@ Implementation PRs should prove:
 - Memory correction/deletion propagated to retrieval and derived content, including restoration behavior.
 - Adapter behavior against fakes and a limited real deployment, not merely a declaration that lints.
 - Adapter failover only among approved nodes, single-epoch fencing against duplicate work/late results, waiting with no eligible node, and verified credential erasure/revocation when a fallback is removed.
+- Offboarding immediately denies access across surfaces and nodes, pauses personal work, transfers shared ownership without rewriting authorship, quarantines private data through retention/deletion, and survives restoration of an older snapshot.
 
 The accompanying brief provides non-normative rationale, deployment examples, and delivery sequencing. This ADR alone defines the proposed architectural contract.

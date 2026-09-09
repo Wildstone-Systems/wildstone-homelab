@@ -27,6 +27,11 @@ credential too. Until local erasure and required remote revocation are proven,
 the desired-state removal remains incomplete and visible as degraded. Immediate
 connection revocation blocks all copies even before cleanup completes.
 
+Member offboarding applies that connection revocation and erasure workflow to
+every eligible node before any personal connection can be considered removed.
+A household-shared connection that used the member's credential remains fenced
+until a current owner supplies or reauthorizes replacement credentials.
+
 ---
 
 # Part A — Decisions (binding)

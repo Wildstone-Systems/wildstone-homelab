@@ -41,6 +41,12 @@ version, and audit history; notify the routine owner of another adult's
 behavioral change. Normal Plan/exact-action review still applies, and concurrent
 edits require a fresh preview against the current version.
 
+Offboarding does not delete shared routines or household facts. Original
+authorship remains immutable, while operational ownership transfers to the
+configured homelab administrator. Shared tasks/routines pause when they depend
+on the departing member's credential or grant and resume only after review and
+reauthorization.
+
 An admitted adult can approve/reject a server-classified household-routine Plan
 through the authenticated Console view and narrow `household-member` verb in
 W030; this grants no general Plan or infrastructure authority. Household chat

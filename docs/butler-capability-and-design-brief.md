@@ -62,6 +62,8 @@ Personal service connections start personal, read-only, live-query-only, and loc
 
 For homes spread across several machines, a connection chooses a primary adapter node and approved fallbacks. Wildstone can fail over automatically only within that list. Credentials are placed on those nodes in advance and nowhere else; if all are unavailable, Butler waits and reports the outage. Removing a fallback is complete only after its local credential is erased and any node-specific remote credential is revoked.
 
+When a member leaves, access, bindings, grants, connections, ingestion, and messages stop immediately. Personal unfinished work pauses and private history becomes inaccessible until its retention period or an authorized deletion; shared facts and routines remain, keep the original author, and transfer operational ownership to the homelab administrator. A person can export their own Butler data while still admitted. Any shared connection using that person's credential stays paused until a current owner reauthorizes it.
+
 ## Delivery sequence
 
 1. Fix current-agent reliability on the existing surfaces: effective/self-capability inventory, configurable iteration slices, durable single-conversation progress, automatic bounded retry, stalled/resumable state, and a task-bound continue flow. Use current tools only and prove an eight-plus-read diagnosis and provider-failure resume without repeated verified work.

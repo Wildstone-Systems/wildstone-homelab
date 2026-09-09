@@ -40,6 +40,11 @@ callback approves infrastructure or standing authority. Proactive task and
 continuation notices follow quiet-hours, privacy, routing, and deduplication
 policy.
 
+Offboarding revokes every binding and active session for the member before any
+cleanup Plan runs. Queued replies/proactive notices addressed to that member
+expire without delivery, and no conversation context becomes visible to the
+remaining household merely because its owner was removed.
+
 A routine draft or behavioral edit may include a deep link to the authenticated
 Console household-routine review view. The link carries only validated routing
 parts and a Plan ID. An admitted adult authenticates there and may approve only

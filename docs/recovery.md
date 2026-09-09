@@ -42,7 +42,8 @@ deletions.
 
 The expanded exit drill must restore an older snapshot containing access and
 content that were revoked/deleted afterward, prove they remain unavailable,
-and prove uncertain pending actions do not resume. When implemented, restore
+include an offboarded member with old bindings/connections/private indexes, and
+prove uncertain pending actions do not resume. When implemented, restore
 the Butler state after fresh Keystone starts and before any Butler-facing
 surface leaves quarantine. Until that drill passes, the steps below describe
 only the current three-input release contract.
