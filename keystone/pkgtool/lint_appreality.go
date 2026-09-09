@@ -27,6 +27,12 @@ import (
 //     button on it.
 //   - open-webui got WEBUI_URL=https://chat.wildstone.internal, a name
 //     that resolves nowhere on a tailnet deployment.
+//   - homarr got nine AUTH_OIDC_* vars and none of the three Auth.js core
+//     vars underneath them. The provider was configured correctly and the
+//     framework in front of it was not configured at all, so every login
+//     returned to ?error=Configuration and the cookies it wrote could
+//     never be read back. Fixed by hand once the logs were read; the
+//     requiredEnv row below is what would have said it at lint (#139).
 //
 // None is a malformed package. Each is a package that was never compared
 // against the thing it configures.
@@ -193,6 +199,21 @@ var requiredEnv = []struct {
 		env:   []string{"HBOX_AUTH_API_KEY_PEPPER"},
 		why: "Homebox panics at startup without it — \"auth.api_key_pepper must be set to at least 32 bytes\" — " +
 			"before it opens its database. Declare a Secret with lengthBytes: 48 and reference it here",
+	},
+	{
+		image: "homarr-labs/homarr",
+		env:   []string{"AUTH_SECRET", "AUTH_TRUST_HOST", "AUTH_URL"},
+		why: "Homarr runs Auth.js v5, which is configured separately from the OIDC provider and fails " +
+			"closed on all three. SECRET_ENCRYPTION_KEY is not AUTH_SECRET: it encrypts stored " +
+			"integration credentials, while AUTH_SECRET encrypts Auth.js's own session, state, nonce " +
+			"and PKCE cookies. Unset, Auth.js invents one per container start, so every re-create " +
+			"invalidates cookies already in a browser — and it fails the request " +
+			"(ERR_JWE_DECRYPTION_FAILED) rather than discarding them, which reads as a permanent login " +
+			"loop to /auth/login?error=Configuration. AUTH_TRUST_HOST is what makes it believe the " +
+			"proxy's X-Forwarded-* headers (UntrustedHost is also error=Configuration), and AUTH_URL " +
+			"is the browser-visible base URL it builds its callback and cookie origin from — take that " +
+			"from `origin`, never from concatenated params. Declare a Secret with lengthBytes: 32 for " +
+			"AUTH_SECRET and reference it here",
 	},
 }
 

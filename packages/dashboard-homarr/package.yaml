@@ -23,7 +23,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: dashboard-homarr
-  version: 1.0.2
+  version: 1.0.3
   capability: homarr
   profile: homarr
   exclusive: true
@@ -128,5 +128,13 @@ templates:
       redirectUris:
         - "https://{{ .Params.homarr_subdomain }}.{{ .Params.public_domain }}/api/auth/callback/oidc"
       scopes: [openid, profile, email, groups]
+      # Requesting the scopes is not enough. Authelia delivers a scope's
+      # claims at /userinfo, and Homarr maps its user profile from the ID
+      # TOKEN unless AUTH_OIDC_FORCE_USERINFO is set — so `email` and
+      # `groups` were asked for, granted, and never seen, which Auth.js
+      # reports as OAuthProfileParseError against a profile that was
+      # never the problem. Naming them here is what makes the renderer
+      # emit a claims_policy putting them in the token Homarr reads.
+      idTokenClaims: [email, name, preferred_username, groups]
       authPolicy: two_factor
       secretRef: "{{ .Resolved.OidcSecretRef }}"
