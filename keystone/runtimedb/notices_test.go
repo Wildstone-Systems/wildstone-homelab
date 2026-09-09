@@ -233,8 +233,11 @@ func TestNoticeStateSurvivesRestart(t *testing.T) {
 	if again.Sent || again.Seq != first.Seq {
 		t.Fatalf("a repeated notice was raised again after a restart: %+v", again)
 	}
-	// And due in the morning.
-	morning := time.Date(2026, 9, 9, 8, 0, 0, 0, time.UTC)
+	// And due in the morning. Derived from the same anchor as night(),
+	// not a literal date: DueNotices compares the hold against the time
+	// it is GIVEN, so a morning on a different day than the night is a
+	// morning before the hold rather than after it.
+	morning := atHour(8)
 	due, err = reopened.DueNotices(morning)
 	if err != nil {
 		t.Fatal(err)
