@@ -54,13 +54,18 @@ Both adult profiles may need local and cloud models. Local processing is attract
 
 Shared adult household access avoids a complex adult role hierarchy. It does not erase private-source restrictions or the stronger tool boundary around Operator.
 
+Trusted adults can correct shared household memory and change or disable shared routines without asking the original author. Butler keeps the author/editor history and tells the owner when another adult changes routine behavior. A person and the configured homelab administrator control that person's private memory. Safety information such as an allergy keeps visible source/scope and an auditable removal.
+
+Personal service connections start personal, read-only, live-query-only, and local-processing-only. Explicit household-service connections start household-shared and read-only. Indexing, cloud use, and actions are clear setup choices rather than side effects of connecting an account.
+
 ## Delivery sequence
 
-1. Establish the smallest complete text-based path across bots/Console: identity linkage, a durable task, scoped tools, and permission-aware continuity. Prove restart, disable, and restore behavior.
-2. Add selected-source memory and a cross-app path using Home Assistant and read-only CalDAV, with credential onboarding. Exercise PantryOS against fixtures until its API is ready.
-3. Add selected IMAP monitoring and review-first calendar writes, plus a dedicated receipt/screenshot/document intake pipeline shortly after v1. Evaluate extraction quality before relying on model image interpretation.
-4. Add voice later. Local transcription is preferred; Kokoro is the owner's initial text-to-speech preference. Voice uses the same identities, conversations, and tool boundaries.
-5. Consider the Child surface only after its separate transport, admission, guardian, and boundary checks are designed and verified.
+1. Fix current-agent reliability on the existing surfaces: effective/self-capability inventory, configurable iteration slices, durable single-conversation progress, automatic bounded retry, stalled/resumable state, and a task-bound continue flow. Use current tools only and prove an eight-plus-read diagnosis and provider-failure resume without repeated verified work.
+2. Add explicit identity linkage, permission-aware shared history, and the cross-bot handoff while preserving the first slice's attribution.
+3. Add selected-source memory and a cross-app path using Home Assistant and read-only CalDAV, with credential onboarding. Exercise PantryOS against fixtures until its API is ready.
+4. Add selected IMAP monitoring and review-first calendar writes, plus a dedicated receipt/screenshot/document intake pipeline shortly after v1. Evaluate extraction quality before relying on model image interpretation.
+5. Add voice later. Local transcription is preferred; Kokoro is the owner's initial text-to-speech preference. Voice uses the same identities, conversations, and tool boundaries.
+6. Consider the Child surface only after its separate transport, admission, guardian, and boundary checks are designed and verified.
 
 After ADR acceptance, revise this sequence into implementation-sized work packages mapped to its sections and B1 amendments: identity/admission, task ledger, adapter queue/roles, credential onboarding, approval transport, recovery quarantine, and related boundaries. Each package should carry its applicable Part C acceptance evidence. That decomposition is follow-up work, not an implementation expansion in this PR.
 

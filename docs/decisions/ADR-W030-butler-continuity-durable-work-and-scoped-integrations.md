@@ -28,6 +28,8 @@ Household, Operator, and a future Child profile share the assistant identity but
 
 Homepage or app access does not grant Butler membership. Adults admitted to Household have equal shared-memory standing; personal privacy, operator authority, and guardian relationships remain separate concerns. Do not build a general adult role hierarchy for v1.
 
+Equal adult standing includes creating, changing, and disabling shared household routines and correcting or forgetting household-shared memory without approval from the original author. Preserve author, last editor, version, and audit history, and notify the routine owner of another adult's behavioral change. Personal/private memory remains controllable by the person it describes and the configured homelab administrator; ordinary adult trust does not silently widen a private source. Safety-relevant records such as allergies show their source and scope, and their removal is audited and surfaced rather than disappearing silently.
+
 The current bot sets the execution boundary. Household cannot invoke Operator tools in the background, even for an operator. Handoff is explicit and continues context in the destination after identity and profile checks; it does not execute the pending operation automatically.
 
 ## A2. Shared history does not mean shared disclosure
@@ -92,6 +94,8 @@ Application-specific code belongs in adapters outside Keystone; native publisher
 
 An adapter implementation supports multiple named connections, each with endpoint, credential references, identity mapping, and grants. Credentials follow the secret path and never enter model context.
 
+Connection defaults follow ownership. An individual account starts personal, read-only, live-query-only, and local-processing-only until its owner explicitly widens indexing, audience, actions, or cloud use. A service explicitly connected as household infrastructure starts household-shared and read-only; selected RAG indexing is an explicit setup choice, and cloud routing still requires the data policy opt-in from A9. Discovered actions remain disabled until separately enabled and granted.
+
 Verify available capabilities against app version, configuration, and granted access. Discovery does not authorize newly available permissions. Outages mark capabilities unavailable and dependent work waiting.
 
 Keep event intake, on-demand queries, and optional RAG indexing distinct. Preserve the canonical household timeline and SQLite bus decision in W024. No new broker or log-parsing contract is selected.
@@ -115,6 +119,8 @@ The platform supplies schedules/events, conditions, uncertainty handling, repeat
 Preview without side effects where historical evidence permits; disclose unavailable historical context. Native routine creation, behavioral edits, and deletion use Plan-mediated declarations that record the connection, external ID, ownership, and approved behavior. Removing a connection or declaration does not silently delete an external routine. Wildstone-owned routines retain approved Automation resources.
 
 Local disable immediately blocks further Wildstone dispatch. It cannot by itself stop a routine running inside another application. A native stop requires a supported, explicitly preauthorized stop operation or a new Plan; show pending/failed remote stops honestly. A routine's activation approval can include a narrowly scoped stop operation, never an implicit delete or edit permission.
+
+Any trusted admitted adult may propose, change, disable, or request deletion of a shared household routine without the creator's permission. The normal Plan or exact-action approval boundary still applies; adult trust removes an extra owner veto, not the platform's review, version, and safety checks. Concurrent edits use the routine version and require a fresh preview when another change has landed.
 
 ## A7. Admin-controlled tools and requests for missing capabilities
 
@@ -149,6 +155,8 @@ Chat can show a Plan ID and a validated deep link to its Console approval page. 
 ## A8. Tool access and action approval are separate
 
 A clear request can authorize a permitted low-impact household action. Consequential operations require approval of the exact proposal. Household Telegram approvals are bound to the approving identity and proposal version, expire, and cannot execute twice from duplicate clicks. Personal changes require the person; shared changes allow an authorized adult; restricted child requests require a guardian.
+
+The default classification is criteria-based. A low-impact action is narrow, reversible, requested by the affected person, and has no financial, external-communication, access/security, physical-safety, destructive-data, or shared-schedule effect. An action is consequential when it spends or commits money, communicates externally as a person, changes access/security or a physical safety state, deletes non-reconstructable data, or changes a shared calendar/routine with effects on others. Infrastructure and permanent authority changes remain Plans in Console/CLI. Adapter metadata proposes a class, but platform policy validates it and an administrator may make it stricter, never silently weaker.
 
 Infrastructure approval remains in Console/CLI. Enabling a tool, receiving a document, or accepting a learned procedure does not approve an action. Retrieved content is untrusted input, including email instructions and event payloads.
 
@@ -236,6 +244,8 @@ The costs are durable-state complexity, permission-aware retrieval, app-specific
 # Part C — Delivery and acceptance direction
 
 V1 targets text via existing bots/Console, shared filtered continuity, selected-source memory, durable work, scoped integrations/grants, capability requests, and configurable model routing. Home Assistant and read-only CalDAV are an initial cross-app path; PantryOS's forthcoming API can be tested with a fake until available. Child behavior is specified but must not be enabled until its own checks pass.
+
+The first implementation slice addresses current-agent reliability before RAG or new application actions. On the existing Operator and Household surfaces, deliver the registry-backed effective/self-capability manifest, configurable per-surface iteration slices, a durable single-conversation task/step ledger, checkpointed retry/fallback/stall handling, and task-bound continuation. It uses only current surface tools and introduces no new write authority. Prove that an eight-plus-read diagnosis can complete or pause/resume without repeating verified reads, that a provider failure preserves progress, and that disable/revocation is rechecked before continuation. Design task ownership so the following identity-link slice can migrate it without rewriting attribution.
 
 Follow-up work: dedicated receipt/screenshot/PDF intake, and selected read-only IMAP monitoring with review-first calendar writes. Calendar invitations/RSVPs remain separately controlled.
 

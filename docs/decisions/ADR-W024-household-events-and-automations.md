@@ -35,11 +35,19 @@ connection never silently deletes a remote routine. Local disable immediately
 stops new Wildstone dispatch; stopping native execution requires an explicitly
 authorized adapter operation or a Plan.
 
+Any trusted admitted adult may create, change, disable, or request deletion of
+a shared household routine without an owner veto. Preserve author, last editor,
+version, and audit history; notify the routine owner of another adult's
+behavioral change. Normal Plan/exact-action review still applies, and concurrent
+edits require a fresh preview against the current version.
+
 Publication declarations gain the audience policy specified by the W005
 amendment. Consequential household actions use exact, expiring, single-use
 proposals bound to an authenticated person. Infrastructure writes remain Plans
 and cannot be approved through chat. General durable agent steps run behind a
 distinct grant/context boundary and do not widen the restricted Phraser.
+Low-impact versus consequential actions follow W030 A8's criteria; adapters
+cannot declare a weaker class than platform policy allows.
 
 ---
 

@@ -23,6 +23,12 @@ One adapter implementation supports multiple named connections containing
 endpoint, secret references, identity mappings, declared scopes, and grants.
 Exact schemas land with the adapter implementation slice.
 
+Individual connections default to personal, read-only, live-query-only, and
+local-processing-only. Connections explicitly created for household
+infrastructure default to household-shared and read-only. Selected indexing,
+cloud routing, mutating actions, and wider audiences require separate explicit
+choices; capability discovery never turns them on.
+
 V1 adapter runtimes are package-managed containers on Wildstone nodes. The
 connection owns their configuration and lifecycle, never the remote app's.
 Capability discovery verifies app version, configuration, and credential
