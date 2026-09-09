@@ -1,0 +1,223 @@
+# ADR-W031: Butlers are user-created specialists, and a model is assigned rather than chosen
+
+- **Status:** proposed
+- **Relates to:** ADR-W030 A9 (model routing — this amends it), ADR-W030
+  A2/A3 (owned memory and permission-first retrieval), ADR-W030 A7/A7.1
+  (tool authority and Plan-mediated standing authority), ADR-W030 A5
+  (connection scoping), ADR-W017 A4 (the startup probe and the QA-only
+  verdict), ADR-W026 A1 (family and admin surfaces)
+- **Audience:** decision record.
+
+---
+
+# Part A — Decisions (binding)
+
+### A1. A Butler is a user-created, named specialist
+
+There is not one Butler. There are as many as the household creates, and
+the household creates them: a health Butler, a nutrition Butler, an
+accounting Butler, a household Butler.
+
+Each one carries, as its own configuration:
+
+- a **name**, chosen by the person who made it
+- a **directive** — what it is for, in that person's words
+- exactly one **model**
+- a **surface** it lives on (family or admin)
+- the **tools** it may use
+- the **connections** it may read
+- its **own memory**
+- the **routines and tasks** assigned to it
+
+The alternative is one Butler that does everything, and the problem with
+that one is not that it is inelegant. It is that it must hold every tool,
+reach every connection, and carry one enormous instruction trying to
+cover cooking, finances, health and the heating. Every failure it has is
+a failure with the whole house in scope. A nutrition Butler that
+misbehaves cannot unlock a door, because it was never given the tool —
+not because a rule caught it in time.
+
+Specialisation is therefore a containment decision before it is an
+organisational one.
+
+### A2. A Butler's model is assigned, not chosen at run time
+
+This amends ADR-W030 A9. That decision had a router pick a model per
+call from locality, readiness and capacity. It is withdrawn.
+
+The reason is not that routing was complicated, though it was. It is
+that **routing cannot deliver the guarantee it exists to provide**.
+Anything that decides which model should handle a message must first
+read the message in order to decide. So the sensitive material reaches a
+model before anything has routed it, and the routing step is itself the
+disclosure it was meant to prevent.
+
+An assignment has no such step. The health Butler runs on the local
+model because that is what it was created with, and nothing inspects
+anything to work that out.
+
+It is also the difference between an answer and a shrug. Asked which
+model saw a given piece of material, an assignment answers by name. A
+router answers "whichever was free at the time", which is not a property
+anyone can rely on.
+
+What this removes: locality classification at selection time, capacity
+counting, escalation to a next-choice model, and the lease table those
+required.
+
+What survives: the startup probe and its verdict. A Butler whose model
+has not passed its probe answers questions and performs no actions
+(ADR-W017 A4). That was never about which model to pick; it is about
+what a model that failed a check is trusted to do.
+
+### A3. A Butler narrows a surface. It can never widen one
+
+A Butler is created against a surface and inherits that surface's
+structural ceiling.
+
+A family-surface Butler cannot be given an admin tool, because the family
+gateway does not contain one — there is nothing for configuration to
+switch on. Creating a Butler selects from what the ceiling already
+allows. It cannot add to it, and no directive, model or assignment
+changes that.
+
+This is stated because a system of user-created agents is exactly where
+a ceiling would erode: it would be easy, and wrong, to let "create a
+Butler" become the way to assemble a capability the surface was built to
+withhold.
+
+### A4. One Butler's material does not reach another Butler's model
+
+This is what the design is for.
+
+Memory recorded by a Butler is owned by that Butler. Retrieval filters
+on that owner in SQL, before any content loads — the same
+permission-first mechanism ADR-W030 A3 already applies to people, for
+the same reason: material a reader may not see should never exist in the
+process on their behalf.
+
+There is no implicit sharing between Butlers, at any point, for any
+reason. The health Butler's material does not reach the nutrition
+Butler's cloud model, and the isolation is structural rather than a
+filter that has to be remembered.
+
+### A5. Sharing is explicit, and it names the models that gain access
+
+Some things are genuinely common. "We are vegetarian" is useful to the
+nutrition Butler and the household Butler both, and a design with no
+shared pool at all would force the household to tell each Butler
+everything separately.
+
+So a shared pool exists. But a shared item is readable by every Butler
+permitted to read it, and some of those Butlers run on cloud models.
+Promoting an item to shared is therefore a disclosure decision, and it
+is presented as one: the act names the Butlers that would gain access
+and the models behind them.
+
+Silent promotion to a shared pool would undo A4 quietly, which is the
+worst way for a guarantee to fail — the property still looks true, and
+the material has already left.
+
+### A6. A Butler that cannot reach its model waits
+
+It does not fall back to another Butler, or another model.
+
+That fallback is precisely the disclosure A4 forbids: "the local one was
+down, so the cloud one took it" is the exact sentence this design exists
+to make impossible. A Butler whose model is unavailable reports the
+outage and its work waits.
+
+This is the behaviour ADR-W030 A5 already established for connections —
+no eligible node means dependent work waits and nothing improvises a
+substitute. The same reasoning applies with more force here, because the
+substitute would be a different model seeing material chosen for this
+one.
+
+### A7. Each Butler is addressed directly
+
+A Butler has its own conversation. You talk to the gym Butler in the gym
+Butler's thread.
+
+There is no dispatcher deciding which Butler should handle an incoming
+message, for A2's reason: a dispatcher must read the message to route
+it, so the material reaches a model before the routing that was supposed
+to protect it.
+
+### A8. Creating or changing a Butler is a human-approved Plan
+
+Creating a Butler grants standing authority: a model, a set of tools, a
+set of connections, and a memory scope. Changing one can widen any of
+those.
+
+So it is Plan-mediated, like every other standing authority increase
+(ADR-W030 A7.1), and **a Butler cannot create or modify a Butler**.
+Without that, self-escalation has an obvious route: a Butler creates a
+cloud-model Butler, assigns it the material it holds, and A4 is bypassed
+without a single rule being broken.
+
+### A9. A directive instructs; it does not authorise
+
+A Butler's directive says what it is for and shapes how it talks. It
+grants nothing.
+
+Tools, connections and memory scope are separate, explicit and
+Plan-mediated. Otherwise "you are the accounting Butler and may read
+whatever you need" becomes an authority grant written in prose — a
+grant no classifier reviewed, no Plan approved, and no one can audit.
+
+---
+
+# Part B — What this changes in ADR-W030
+
+| W030 | Change |
+|---|---|
+| **A9** model routing | **Amended.** Runtime selection by locality, capacity and escalation is withdrawn. A model is a Butler's assigned property. The probe verdict survives unchanged. |
+| **A2/A3** owned memory | **Extended.** A Butler is an owner, alongside a person. Retrieval filters on it the same way. |
+| **A7** tool authority | **Extended.** Tool permissions are already stored per profile; a Butler becomes the thing they are stored against. |
+| **A5** connections | **Extended.** A connection is scoped to the Butlers that may read it. |
+| **A8.1** chat | **Extended.** A binding addresses one Butler. |
+| Everything else | **Unchanged.** Durable work, traces, identity, admission, notices, offboarding and restore are unaffected. |
+
+The code follows the same shape. `model_routes` already stores a name, a
+provider, a model, an endpoint and a readiness verdict — most of a
+Butler's model binding exists. Tool controls are already keyed on a
+profile. Tasks already record the profile they ran under. This is
+mostly a generalisation of structures that are in place, plus deletion
+of the selection logic A2 withdraws.
+
+---
+
+# Part C — Implementation
+
+Ordered so each step stands on its own.
+
+| # | Package | Why here |
+|---|---|---|
+| **B1** | The Butler record: name, directive, model, surface, created through a Plan | Nothing else has a subject until this exists |
+| **B2** | Scope: tools, connections, memory ownership per Butler | A4's isolation, which is the point of the design |
+| **B3** | Explicit sharing, with the disclosure A5 requires | Needs B2 to have something to share between |
+| **B4** | Assignment: a routine or task names its Butler | Needs B1 |
+| **B5** | Per-Butler conversations and bindings | Needs B1 |
+| **B6** | Remove the runtime router; keep the probe | Last, so nothing is removed before its replacement works |
+
+Acceptance for the whole change is one demonstration: material given to
+a Butler on a local model is not reachable by a Butler on a cloud model,
+proven at the level that actually serves a conversation rather than at
+the store.
+
+---
+
+# Part D — Open questions
+
+Not settled here, and each wants an answer before B1.
+
+- **Ownership.** Is a Butler household-level, or can a person own one
+  ("my accounting Butler")? This decides what offboarding does to it.
+- **Child surface.** Does creating a Butler that a child can address
+  need guardian review at creation, on top of the Plan?
+- **Migration.** Do the existing household and operator profiles become
+  two default Butlers, or does the household create its own from
+  nothing on first run?
+- **Naming.** "Butler" now means an instance, and it previously meant
+  the whole facility. The documentation needs one word for each, or
+  every sentence about either becomes ambiguous.
