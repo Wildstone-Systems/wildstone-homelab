@@ -38,7 +38,100 @@ export interface ServiceGroup {
   catalogVersion?: string;
 }
 
-const RANK: Record<Kind, number> = { bad: 0, warn: 1, mute: 2, ok: 3 };
+// Worst first, everywhere. Exported because the Services board sorts by
+// the same order the Home groups do, and two copies of "which is worse"
+// is how two screens start disagreeing about it.
+export const RANK: Record<Kind, number> = { bad: 0, warn: 1, mute: 2, ok: 3 };
+
+// The catalog is 48 capabilities. A chip per capability is the same
+// crowding as the table it replaces, so they collapse into eight
+// families — the way a household would say what it is looking for.
+export const GROUPS = ["Media", "Home", "Documents", "Network", "Ops", "Identity", "Chat", "AI"] as const;
+export type Group = (typeof GROUPS)[number];
+
+// Every capability shipped in packages/ has an explicit row. An
+// unmapped one still appears — under Ops — rather than vanishing from
+// the catalog, and services.test asserts the map covers the catalog so
+// a new package cannot file itself there silently.
+const GROUP_OF: Record<string, Group> = {
+  media: "Media",
+  "movie-automation": "Media",
+  "tv-automation": "Media",
+  music: "Media",
+  "music-automation": "Media",
+  subtitles: "Media",
+  requests: "Media",
+  indexers: "Media",
+  downloads: "Media",
+  audiobooks: "Media",
+  books: "Media",
+  photos: "Media",
+
+  "home-assistant": "Home",
+  "home-automation": "Home",
+  cameras: "Home",
+  zigbee: "Home",
+  mqtt: "Home",
+  inventory: "Home",
+  recipes: "Home",
+  budget: "Home",
+
+  documents: "Documents",
+  "pdf-tools": "Documents",
+  files: "Documents",
+  "file-sync": "Documents",
+  bookmarks: "Documents",
+  feeds: "Documents",
+
+  ingress: "Network",
+  dns: "Network",
+  vpn: "Network",
+  "captcha-solver": "Network",
+
+  monitoring: "Ops",
+  "host-monitoring": "Ops",
+  metrics: "Ops",
+  timeseries: "Ops",
+  notifications: "Ops",
+  dashboard: "Ops",
+  homarr: "Ops",
+  code: "Ops",
+  utilities: "Ops",
+
+  identity: "Identity",
+  passwords: "Identity",
+  mail: "Identity",
+
+  "chat-matrix-admin": "Chat",
+  "chat-matrix-family": "Chat",
+  "chat-telegram-admin": "Chat",
+  "chat-telegram-family": "Chat",
+
+  "ai-chat": "AI",
+  "language-models": "AI",
+};
+
+export function groupOf(pkg: { capability: string }): Group {
+  return GROUP_OF[pkg.capability] ?? "Ops";
+}
+
+// The capabilities the group map claims to cover, for the test that
+// compares it against the shipped catalog.
+export function mappedCapabilities(): string[] {
+  return Object.keys(GROUP_OF).sort();
+}
+
+// The host an address is at. A card has room for "jellyfin.home.arpa"
+// and not for the scheme and path around it, and the full URL stays in
+// the title. Lives here rather than in ServiceTile because the Services
+// board and the Home tile now both ask the question.
+export function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
 
 export function ownerLabel(owner: string): string {
   return owner.startsWith("capability/") ? owner.slice("capability/".length) : owner;

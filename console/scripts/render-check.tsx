@@ -11,6 +11,8 @@
 // useEffect does not run under renderToString, so the data-loading half
 // is not covered here. The generated form is, and it is where the logic
 // lives. Run with: npm run render-check
+import { existsSync, readdirSync, readFileSync } from "fs";
+import { join } from "path";
 import { renderToString } from "react-dom/server";
 import { createElement as h } from "react";
 import { Services, InstallForm } from "../src/views/Services";
@@ -18,8 +20,8 @@ import { Butler, bucket, ConversationRail, EmptyState, StatusCard, SURFACES, Thr
 import { Chat, IssuedCode } from "../src/views/Chat";
 import { Freshness, Shell, TokenGate } from "../src/App";
 import { HomeView, buildProblems } from "../src/views/Home";
-import { ServicesView, InstalledTile, AvailableRow, matching, RemoveForm, ownerCounts, ownedByPackage } from "../src/views/Services";
-import { groupServices, upstreamContainer , healthOf } from "../src/services";
+import { ServicesView, InstalledTile, CatalogCard, InstalledDetail, AppLogo, tileKind, matching, RemoveForm, ownerCounts, ownedByPackage } from "../src/views/Services";
+import { groupServices, upstreamContainer , healthOf, GROUPS, groupOf, mappedCapabilities } from "../src/services";
 import { eventKind } from "../src/ui/HourChart";
 import type { ConsoleSnapshot } from "../src/state";
 import type { BackupRun, ButlerSession, EventRow, Observed, PackageView, PlanRecord, ResourceView } from "../src/api";
@@ -280,27 +282,34 @@ check("an unconfigured surface keeps the conversation rail", butler.includes('ar
 
 // The conversation list groups by day, in a fixed order, and names only
 // the buckets it actually has.
+// Anchored to NOW rather than to absolute dates: written with literal
+// timestamps, this passed on the day it was written and called "today"
+// yesterday every day after.
 const NOW = new Date("2026-09-08T10:00:00Z");
+const before = (ms: number) => new Date(NOW.getTime() - ms).toISOString();
 const session = (id: string, createdAt: string): ButlerSession => ({
   seq: 1, id, createdAt, principal: "mika", actingFor: "", provider: "ollama",
   mode: "full", surface: "admin", finalText: id + " answer", capped: false,
 });
 const buckets = bucket([
-  session("s-today", "2026-09-08T09:00:00Z"),
-  session("s-yesterday", "2026-09-07T09:00:00Z"),
-  session("s-week", "2026-09-04T09:00:00Z"),
-  session("s-old", "2026-06-01T09:00:00Z"),
+  session("s-today", before(3600_000)),
+  session("s-yesterday", before(26 * 3600_000)),
+  session("s-week", before(4 * 86400_000)),
+  session("s-old", before(99 * 86400_000)),
 ], NOW);
 check("conversations group newest bucket first",
   buckets.map((b) => b.label).join(",") === "Today,Yesterday,This week,Earlier", JSON.stringify(buckets.map((b) => b.label)));
-check("an empty bucket is not named", bucket([session("s", "2026-09-08T09:00:00Z")], NOW).length === 1);
+check("an empty bucket is not named", bucket([session("s", before(3600_000))], NOW).length === 1);
 // A session with no usable timestamp is still listed rather than lost.
 check("an undated conversation still lands somewhere",
   bucket([session("s", "")], NOW)[0].label === "Earlier");
 
 const convoRail = renderToString(h(ConversationRail, {
   surface: "admin", openID: "s-today",
-  sessions: { data: [session("s-today", "2026-09-08T09:00:00Z")], error: null, loading: false },
+  // Dated against the REAL clock: ConversationRail buckets with its own
+  // default `now`, so a fixture timestamp would name a different group
+  // every day after the one it was written on.
+  sessions: { data: [session("s-today", new Date(Date.now() - 3600_000).toISOString())], error: null, loading: false },
   onPick: () => {}, onSurface: () => {}, onNew: () => {}, onClose: () => {},
 }));
 check("the rail heads each day group", convoRail.includes("Today"), convoRail.slice(0, 400));
@@ -641,21 +650,152 @@ const empty = renderToString(h(HomeView, {
 check("an empty statefile points at Services", empty.includes("enable a capability"), empty.slice(0, 300));
 
 // ------------------------------------------------------------ Services
-const catalog = renderToString(h(ServicesView, { pkgs: PACKAGES, onInstalled: () => {} }));
-check("catalog separates installed from available", catalog.includes("Installed") && catalog.includes("Available"));
-check("an installed capability shows where it answers", catalog.includes("https://auth.home.arpa"));
-check("an address that does not answer says so", catalog.includes("not answering"));
-check("a stale install offers the newer version", text(catalog).includes("update to 1.2.0"), text(catalog).slice(0, 600));
-// What stands in the way is stated before Install is pressed, not
-// after a plan is approved.
-check("a blocker is stated on the row", catalog.includes("Zigbee coordinator"));
-check("a blocked package cannot be installed", /Zigbee[\s\S]*?<\/tr>/.test(catalog) && catalog.includes("disabled"), "");
-check("required params are named before the form opens", text(catalog).includes("public_domain, node"));
+// Two questions, so two tabs. Installed is a status board; the catalog
+// is a decision list, and a card that will not work here says so before
+// Install is pressed rather than after a plan is approved.
+const installedTab = renderToString(h(ServicesView, { pkgs: PACKAGES, onInstalled: () => {} }));
+check("the board opens on what is installed", /aria-selected="true"[^>]*>Installed/.test(installedTab), installedTab.slice(0, 700));
+check("both tabs are counted",
+  /Installed <span class="tab-count">2<\/span>/.test(installedTab) && /Catalog <span class="tab-count">2<\/span>/.test(installedTab),
+  installedTab.slice(0, 400));
+// The tile is two lines: name, status, one muted meta line. Everything
+// else moved behind it.
+check("an installed tile carries its status", installedTab.includes("not answering") === false && installedTab.includes("answering"), installedTab.slice(0, 900));
+check("an installed tile is the affordance, not a button on it",
+  installedTab.includes('role="button"') && !installedTab.includes("Reconfigure"), installedTab.slice(0, 900));
+check("an installed tile names its host, version and size", text(installedTab).includes("jellyfin.home.arpa · 1.1.0 · 0 resources"), text(installedTab).slice(0, 900));
+// Worst first: media is 0-of-1 answering, identity is healthy.
+check("the worst installed capability leads",
+  installedTab.indexOf("media-jellyfin") < installedTab.indexOf("identity"), "");
 
-const blockedRow = renderToString(h("table", null, h("tbody", null, h(AvailableRow, { pkg: PACKAGES[3], onInstall: () => {} }))));
-check("the blocked row's Install is disabled", blockedRow.includes("disabled"), blockedRow);
-const openRow = renderToString(h("table", null, h("tbody", null, h(AvailableRow, { pkg: PACKAGES[2], onInstall: () => {} }))));
-check("an unblocked row's Install is not", !openRow.includes("disabled"), openRow);
+const catalogTab = renderToString(h(ServicesView, { pkgs: PACKAGES, initialTab: "catalog", onInstalled: () => {} }));
+check("the catalog tab lists what could be installed", catalogTab.includes("photos-immich"), catalogTab.slice(0, 600));
+check("the catalog tab does not list what already is", !catalogTab.includes("media-jellyfin"), catalogTab.slice(0, 600));
+// What stands in the way is stated on the card, not after a plan is
+// approved — and the button is genuinely disabled, so a keyboard cannot
+// reach the dead end either.
+check("a blocker is stated on the card", catalogTab.includes("Zigbee coordinator"));
+check("a blocked package cannot be installed", catalogTab.includes("disabled") && catalogTab.includes("Can’t install"), catalogTab.slice(-900));
+check("required params are named before the form opens", text(catalogTab).includes("needs public_domain, node"), text(catalogTab).slice(0, 900));
+check("a package needing no setup says so", text(catalogTab).includes("no setup"), text(catalogTab).slice(0, 900));
+// Blocked sorts last, so the things you can act on are the things you
+// read first.
+check("blocked packages sort last",
+  catalogTab.indexOf("photos-immich") < catalogTab.indexOf("home-automation"), "");
+
+const blocked = renderToString(h(CatalogCard, { pkg: PACKAGES[3], onInstall: () => {} }));
+check("the blocked card's Install is disabled", blocked.includes("disabled"), blocked);
+const open_ = renderToString(h(CatalogCard, { pkg: PACKAGES[2], onInstall: () => {} }));
+check("an unblocked card's Install is not", !open_.includes("disabled"), open_);
+// Two profiles of one capability can run side by side, and whether that
+// is what you meant is worth being asked before rather than after.
+const sibling = renderToString(h(CatalogCard, {
+  pkg: { name: "media-plex", version: "1.0.0", capability: "media", profile: "plex", enabled: false },
+  siblingNote: "media is already installed as jellyfin — installing this runs both.",
+  onInstall: () => {},
+}));
+check("a sibling profile says the capability is already held", text(sibling).includes("already installed as jellyfin"), text(sibling));
+
+// Group chips, not capability chips: forty capability chips is the same
+// crowding as the fifty table rows this replaces.
+const GROUPED: PackageView[] = [
+  { name: "media-jellyfin", version: "1.0.0", capability: "media", profile: "jellyfin", enabled: false },
+  { name: "photos-immich", version: "1.0.0", capability: "photos", enabled: false },
+  { name: "dns-adguard", version: "1.0.0", capability: "dns", enabled: false },
+  { name: "zigbee2mqtt", version: "1.0.0", capability: "zigbee", enabled: false, blockers: ["no coordinator"] },
+];
+check("every group in the map is one of the eight families",
+  mappedCapabilities().every((c) => (GROUPS as readonly string[]).includes(groupOf({ capability: c }))));
+check("an unmapped capability lands in Ops rather than vanishing", groupOf({ capability: "not-a-capability" }) === "Ops");
+
+// The group map must cover the catalog this repository actually ships.
+// Without this a new package files itself under Ops by default and
+// nobody finds out — the chip row keeps working, the package is just
+// filed somewhere nobody would look for it. Read from packages/ rather
+// than from a fixture, so adding a package is what fails the build.
+const shippedCapabilities = (() => {
+  const root = join(process.cwd(), "..", "packages");
+  const caps = new Set<string>();
+  for (const dir of readdirSync(root, { withFileTypes: true })) {
+    if (!dir.isDirectory()) continue;
+    const yaml = join(root, dir.name, "package.yaml");
+    if (!existsSync(yaml)) continue;
+    const m = /^\s*capability:\s*["']?([A-Za-z0-9_.-]+)/m.exec(readFileSync(yaml, "utf8"));
+    if (m) caps.add(m[1]);
+  }
+  return [...caps].sort();
+})();
+check("the catalog was actually read", shippedCapabilities.length > 20, String(shippedCapabilities.length));
+const unmapped = shippedCapabilities.filter((c) => !mappedCapabilities().includes(c));
+check("every shipped capability has an explicit group",
+  unmapped.length === 0, `unmapped: ${unmapped.join(", ")} — add them to GROUP_OF in src/services.ts`);
+// And the other way: a row for a capability nothing ships is a row that
+// outlived its package.
+const stale_ = mappedCapabilities().filter((c) => !shippedCapabilities.includes(c));
+check("the group map names no capability the catalog dropped",
+  stale_.length === 0, `no longer shipped: ${stale_.join(", ")}`);
+for (const [cap, want] of [["media", "Media"], ["photos", "Media"], ["dns", "Network"], ["zigbee", "Home"],
+                           ["identity", "Identity"], ["ai-chat", "AI"], ["chat-matrix-family", "Chat"],
+                           ["documents", "Documents"], ["monitoring", "Ops"]] as const) {
+  check(`${cap} files under ${want}`, groupOf({ capability: cap }) === want);
+}
+const mediaOnly = renderToString(h(ServicesView, { pkgs: GROUPED, initialTab: "catalog", initialGroup: "Media", onInstalled: () => {} }));
+check("a group filters the catalog to its own family",
+  mediaOnly.includes("media-jellyfin") && mediaOnly.includes("photos-immich") && !mediaOnly.includes("dns-adguard"), mediaOnly.slice(0, 700));
+const emptyGroup = renderToString(h(ServicesView, { pkgs: GROUPED, initialTab: "catalog", initialGroup: "Identity", onInstalled: () => {} }));
+check("a group that matches nothing says so, and offers a way back",
+  emptyGroup.includes("matches these filters") && emptyGroup.includes("Clear"), emptyGroup.slice(-500));
+// Counting the whole catalog while hiding blocked cards gives a chip
+// that reads 1 and shows nothing.
+const hidden = renderToString(h(ServicesView, { pkgs: GROUPED, initialTab: "catalog", initialHideBlocked: true, onInstalled: () => {} }));
+check("hiding blocked packages drops them from the grid", !hidden.includes("zigbee2mqtt"), hidden.slice(0, 700));
+check("a group whose only members are blocked leaves the chip row", !hidden.includes(">Home <"), hidden.slice(0, 900));
+check("the remaining chip counts still add up",
+  /All <span class="chip-count">3<\/span>/.test(text(hidden)), text(hidden).slice(0, 900));
+
+// The detail drawer is where everything the tile used to carry went.
+const detail = renderToString(h(InstalledDetail, { pkg: PACKAGES[0], onReconfigure: () => {}, onRemove: () => {} }));
+check("the detail drawer shows where it answers", detail.includes("https://jellyfin.home.arpa"));
+check("the detail drawer keeps the per-address failure detail", text(detail).includes("not answering: health 500"), text(detail));
+check("the detail drawer carries the decisions", detail.includes("Reconfigure") && detail.includes("Remove"));
+check("a stale install is explained, not just marked", text(detail).includes("Running 1.1.0, the catalog has 1.2.0"), text(detail).slice(0, 600));
+const noAddrDetail = renderToString(h(InstalledDetail, {
+  pkg: { name: "monitoring", version: "0.4.0", capability: "monitoring", enabled: true },
+  onReconfigure: () => {},
+}));
+check("no address is a fact about the capability, not a gap", noAddrDetail.includes("only from inside the household network"), noAddrDetail.slice(0, 500));
+check("a capability with nothing removable offers no Remove", !noAddrDetail.includes("Remove"), noAddrDetail);
+
+// tileKind is what both the sort and the pill read, so they cannot
+// disagree about whether something is well.
+check("a blocked capability reads as bad", tileKind({ ...PACKAGES[1], blockers: ["x"] }) === "bad");
+check("no address is neither well nor unwell", tileKind({ name: "x", version: "1", capability: "x", enabled: true }) === "mute");
+check("every address answering is well", tileKind(PACKAGES[1]) === "ok");
+check("one address not answering is not", tileKind(PACKAGES[0]) === "bad");
+
+// A logo is never an error state: the monogram is underneath, so a
+// household with no route to the CDN sees letters rather than a broken
+// image.
+const noIcon = renderToString(h(AppLogo, { pkg: { name: "media-jellyfin", version: "1", capability: "media", profile: "jellyfin", enabled: false } }));
+check("a package with no icon shows a monogram", noIcon.includes(">je<") && !noIcon.includes("<img"), noIcon);
+const withIcon = renderToString(h(AppLogo, { pkg: { name: "media-jellyfin", version: "1", capability: "media", profile: "jellyfin", enabled: false, icon: "jellyfin" } }));
+check("a package with an icon renders it over the monogram", withIcon.includes("jellyfin.svg") && withIcon.includes(">je<"), withIcon);
+check("the logo is never announced; the name beside it carries that", withIcon.includes('aria-hidden="true"') && withIcon.includes('alt=""'));
+
+const noneInstalled = renderToString(h(ServicesView, { pkgs: GROUPED, onInstalled: () => {} }));
+check("nothing installed points at the catalog", noneInstalled.includes("Nothing is installed yet"), noneInstalled.slice(-500));
+const noCatalog = renderToString(h(ServicesView, { pkgs: [], onInstalled: () => {} }));
+check("an empty catalog is a deployment fact, not a filter miss", noCatalog.includes("-catalog-dir"), noCatalog.slice(-400));
+// Nothing LEFT to install is a third sentence again: a Clear button
+// here cannot change the result, so offering one reads as a broken
+// screen rather than as a finished one.
+const allInstalled = renderToString(h(ServicesView, {
+  pkgs: PACKAGES.map((p) => ({ ...p, enabled: true })), initialTab: "catalog", onInstalled: () => {},
+}));
+check("an exhausted catalog says so rather than blaming the filters",
+  allInstalled.includes("Everything in the catalog is already installed"), allInstalled.slice(-500));
+check("an exhausted catalog offers no Clear it cannot honour",
+  !allInstalled.includes(">Clear<"), allInstalled.slice(-500));
 
 // Forty-six available packages is a scroll, and the catalog only
 // grows. Search filters on name AND capability, because which one you
@@ -672,8 +812,12 @@ check("search is case-insensitive and substring", matching(CATALOG, "KAVI").leng
 check("an empty query is not a filter", matching(CATALOG, "   ").length === 3);
 check("a query that matches nothing returns nothing", matching(CATALOG, "zzz").length === 0);
 
-const searched = renderToString(h(ServicesView, { pkgs: CATALOG, onInstalled: () => {} }));
+const searched = renderToString(h(ServicesView, { pkgs: CATALOG, initialTab: "catalog", onInstalled: () => {} }));
+// The placeholder names WHICH half it filters: a search typed against
+// Installed means nothing against the catalog.
 check("the catalog offers a search box", searched.includes('aria-label="search the catalog"'), searched.slice(0, 400));
+const searchInstalled = renderToString(h(ServicesView, { pkgs: PACKAGES, onInstalled: () => {} }));
+check("the search box names the half it filters", searchInstalled.includes('aria-label="search installed"'), searchInstalled.slice(0, 500));
 // The install form opens beside the catalog, not under it: inline at
 // the bottom meant scrolling past every row to reach it.
 check("the install form is not rendered inline", !searched.includes("Propose plan"), searched.slice(0, 300));
@@ -831,7 +975,7 @@ const stillLoading = renderToString(h(RemoveForm, {
 }));
 check("a list still loading is not reported as empty", !stillLoading.includes("nothing to remove"), stillLoading.slice(0, 300));
 
-const noAddr = renderToString(h(InstalledTile, { pkg: { name: "monitoring", version: "0.4.0", capability: "monitoring", enabled: true }, onReconfigure: () => {} }));
+const noAddr = renderToString(h(InstalledTile, { pkg: { name: "monitoring", version: "0.4.0", capability: "monitoring", enabled: true }, onOpen: () => {} }));
 check("an installed capability with no address says so", noAddr.includes("no address"), noAddr);
 
 // ------------------------------------------------------------- Plans

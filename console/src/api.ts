@@ -248,6 +248,11 @@ export interface PackageView {
   // adapter reads <capability>-bot and the Matrix one <capability>-token
   // — so a form that collects one must ask for these names.
   providedSecrets?: string[];
+  // The app's own logo, as a dashboard-icons slug. Resolved by Keystone
+  // from the table the household dashboard renders from, so the Console
+  // never keeps its own name-to-slug map — a second copy of that table
+  // is a copy that drifts.
+  icon?: string;
   provides?: { trait: string; mode?: string }[];
   requires?: { trait: string; mode?: string }[];
   enabled: boolean;
