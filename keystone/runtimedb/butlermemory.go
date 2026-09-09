@@ -138,6 +138,9 @@ func validateMemory(m MemoryRecord) error {
 // session transcript does — so this function's job is provenance and
 // permission, not sanitization.
 func (db *DB) RecordMemory(m MemoryRecord) (int64, error) {
+	if err := db.gate(GateIngestion); err != nil {
+		return 0, err
+	}
 	if err := validateMemory(m); err != nil {
 		return 0, err
 	}
@@ -214,6 +217,9 @@ func digestTx(tx *sql.Tx, memory int64, change, summary, actor string, immediate
 // becoming shared by being summarised: a derivative of anything private
 // is private, however much shared material it also drew on.
 func (db *DB) DeriveMemory(m MemoryRecord, sources []int64) (int64, error) {
+	if err := db.gate(GateIngestion); err != nil {
+		return 0, err
+	}
 	if len(sources) == 0 {
 		return 0, fmt.Errorf("runtimedb: a derivative needs the records it was derived from")
 	}
@@ -519,6 +525,9 @@ type MemoryQuery struct {
 
 // RetrieveMemory returns eligible records for a reader, newest first.
 func (db *DB) RetrieveMemory(q MemoryQuery) ([]MemoryRecord, error) {
+	if err := db.gate(GateRetrieval); err != nil {
+		return nil, err
+	}
 	if q.Reader == "" {
 		return nil, fmt.Errorf("runtimedb: memory retrieval needs a reader (ADR-W030 A2)")
 	}
@@ -561,6 +570,11 @@ func (db *DB) RetrieveMemory(q MemoryQuery) ([]MemoryRecord, error) {
 // material the reader could not retrieve is material the export does not
 // contain (A10).
 func (db *DB) ExportMemoryFor(reader string) ([]MemoryRecord, error) {
+	// An export is a read governed by current permissions and never a
+	// bypass of quarantine (ADR-W030 A10).
+	if err := db.gate(GateRetrieval); err != nil {
+		return nil, err
+	}
 	if reader == "" {
 		return nil, fmt.Errorf("runtimedb: an export needs the person it is for")
 	}

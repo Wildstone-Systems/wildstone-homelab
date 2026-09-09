@@ -36,6 +36,9 @@ type HouseholdEvent struct {
 // is keystone/household's job; this only insists on the columns the
 // schema cannot default.
 func (db *DB) AppendHouseholdEvent(e HouseholdEvent) (seq int64, duplicate bool, err error) {
+	if err := db.gate(GateIngestion); err != nil {
+		return 0, false, err
+	}
 	switch {
 	case e.EventID == "":
 		return 0, false, fmt.Errorf("runtimedb: household event id required")

@@ -221,6 +221,9 @@ type NoticeDecision struct {
 // repeated notice collapses onto the one already waiting for morning
 // rather than queueing a second alongside it.
 func (db *DB) RaiseNotice(req NoticeRequest, householdQuiet ButlerSettings, at time.Time) (NoticeDecision, error) {
+	if err := db.gate(GateDelivery); err != nil {
+		return NoticeDecision{}, err
+	}
 	if req.Kind == "" || req.DedupeKey == "" {
 		return NoticeDecision{}, fmt.Errorf("runtimedb: a notice needs a kind and a dedupe key")
 	}

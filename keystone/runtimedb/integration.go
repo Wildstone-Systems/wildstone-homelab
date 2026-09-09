@@ -431,6 +431,13 @@ func (db *DB) EnqueueIntegrationWork(connection string, w IntegrationWork, deadl
 // to and nothing else, so a compromised adapter cannot reach another
 // connection's work by asking for it.
 func (db *DB) ClaimIntegrationWork(principal string) (IntegrationWork, bool, error) {
+	// An adapter claiming work is dispatch to an application, so it
+	// waits out quarantine like everything else. An empty answer would
+	// be wrong here: the adapter should learn that the control plane is
+	// holding, not conclude the queue is quiet.
+	if err := db.gate(GateDispatch); err != nil {
+		return IntegrationWork{}, false, err
+	}
 	if principal == "" {
 		return IntegrationWork{}, false, ErrNotClaimable
 	}

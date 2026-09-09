@@ -99,6 +99,17 @@ func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
 	if m.Kind == "" {
 		m.Kind = "reply"
 	}
+	// Only pushes are gated. A push is proactive delivery and waits out
+	// quarantine; a reply is an answer to something a person just asked,
+	// and refusing to finish a conversation somebody is in the middle of
+	// would be a worse failure than the one quarantine is preventing.
+	// In practice a reply cannot say much anyway — retrieval and
+	// dispatch are both held — but it can still say why.
+	if m.Kind == "push" {
+		if err := db.gate(GateDelivery); err != nil {
+			return 0, err
+		}
+	}
 	if m.ExpiresAt.IsZero() {
 		m.ExpiresAt = time.Now().Add(DefaultChatOutboundTTL)
 	}

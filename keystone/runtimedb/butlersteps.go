@@ -216,6 +216,12 @@ func (db *DB) ListButlerTaskSteps(taskID string) ([]ButlerTaskStep, error) {
 // "dispatched" — an outcome that is unknown, which the resume path must
 // treat as uncertain rather than retry (ADR-W030 A4).
 func (db *DB) StartButlerAttempt(stepSeq int64) (ButlerTaskAttempt, error) {
+	// This is the dispatch: a call is about to go out. Gating here
+	// rather than at the task transition catches every model and tool
+	// call, whichever caller drove it.
+	if err := db.gate(GateDispatch); err != nil {
+		return ButlerTaskAttempt{}, err
+	}
 	tx, err := db.sql.Begin()
 	if err != nil {
 		return ButlerTaskAttempt{}, fmt.Errorf("runtimedb: starting butler attempt: %w", err)

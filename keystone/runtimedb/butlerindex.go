@@ -86,6 +86,9 @@ type IndexDocument struct {
 // IndexDocumentInto stores one chunk, refusing anything without the
 // permission metadata retrieval needs.
 func (db *DB) IndexDocumentInto(d IndexDocument) (int64, error) {
+	if err := db.gate(GateIngestion); err != nil {
+		return 0, err
+	}
 	if d.Content == "" || d.SourceKind == "" || d.SourceID == "" {
 		return 0, fmt.Errorf("runtimedb: an indexed chunk needs content and provenance")
 	}
@@ -194,6 +197,9 @@ type IndexHit struct {
 // does a row the reader may not see exist in this process on their
 // behalf.
 func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
+	if err := db.gate(GateRetrieval); err != nil {
+		return nil, err
+	}
 	if q.Reader == "" {
 		return nil, fmt.Errorf("runtimedb: index retrieval needs a reader (ADR-W030 A3)")
 	}

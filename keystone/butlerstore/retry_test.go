@@ -219,8 +219,17 @@ func TestStallNoticeDeduplicatesAndWaitsForQuietHours(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SetButlerSettings: %v", err)
 	}
-	// 03:00 UTC: inside the window.
-	night := time.Date(2026, 9, 9, 3, 0, 0, 0, time.UTC)
+	// 03:00 UTC, anchored to TOMORROW rather than to a fixed date.
+	//
+	// The notifier's clock is injected, but the outbound queue compares
+	// hold_until against the real one — it is a database read, not a
+	// caller's opinion about the time. A literal date here made the hold
+	// end at 07:00 on that date, which is in the past for most of any
+	// real day, so the test passed before 07:00 UTC and failed after it.
+	// Anchoring to tomorrow keeps the computed hold ahead of the real
+	// clock whenever this runs.
+	tomorrow := time.Now().UTC().AddDate(0, 0, 1)
+	night := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 3, 0, 0, 0, time.UTC)
 	ledger.Now = func() time.Time { return night }
 
 	n := &Notifier{Ledger: ledger, Binding: func(string) (runtimedb.ChatOutbound, bool, error) {
@@ -258,13 +267,15 @@ func TestStallNoticeDeduplicatesAndWaitsForQuietHours(t *testing.T) {
 	if held[0].DedupeKey != "butler-task-stalled:"+id {
 		t.Fatalf("dedupe key = %q", held[0].DedupeKey)
 	}
-	wantHold := time.Date(2026, 9, 9, 7, 0, 0, 0, time.UTC)
+	wantHold := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 7, 0, 0, 0, time.UTC)
 	if !held[0].HoldUntil.Equal(wantHold) {
 		t.Fatalf("hold_until = %s, want the end of quiet hours (%s)", held[0].HoldUntil, wantHold)
 	}
 
 	// Outside the window the same notice would go straight out.
-	ledger.Now = func() time.Time { return time.Date(2026, 9, 9, 9, 0, 0, 0, time.UTC) }
+	ledger.Now = func() time.Time {
+		return time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 9, 0, 0, 0, time.UTC)
+	}
 	other := newTask(t, db)
 	if err := n.NotifyStalled(other, "again"); err != nil {
 		t.Fatal(err)

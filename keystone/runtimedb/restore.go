@@ -121,6 +121,46 @@ func (db *DB) CheckQuarantine() error {
 	return nil
 }
 
+// The four things quarantine holds (ADR-W030 A10). They are named
+// constants because each gate reports which category refused it, and a
+// person reading "Butler retrieval is held" learns more than one reading
+// "quarantined".
+const (
+	GateRetrieval = "Butler retrieval"
+	GateDispatch  = "task dispatch"
+	GateIngestion = "ingestion"
+	GateDelivery  = "proactive delivery"
+)
+
+// gate is what every Butler-facing chokepoint calls.
+//
+// The gates live on the STORE rather than on the HTTP routes, and that
+// is the whole design decision. Route middleware only catches callers
+// that arrive over HTTP, so a background loop, a chat adapter, or a
+// route somebody adds next month would walk straight past it. Putting
+// the check where the work actually happens means a new caller is
+// covered the day it is written rather than the day somebody remembers
+// to add it to a list.
+//
+// It costs one indexed single-row read per call, against operations
+// that are already doing real queries. That is the right trade: a
+// cached answer is exactly how a quarantined database ends up
+// dispatching anyway.
+func (db *DB) gate(what string) error {
+	s, err := db.GetRestoreState()
+	if err != nil {
+		// A store that cannot say whether it is quarantined has not said
+		// no. Fail closed: this is the one place where being unable to
+		// check must not read as permission.
+		return fmt.Errorf("%w: could not check restore state before %s: %v", ErrQuarantined, what, err)
+	}
+	if !s.Quarantined {
+		return nil
+	}
+	return fmt.Errorf("%w: %s is held until the restore is reconciled (restored %s: %s)",
+		ErrQuarantined, what, s.EnteredAt.Format(time.RFC3339), s.Reason)
+}
+
 // AssertJournalCurrent records an administrator's statement that the
 // deletion journal has been brought up to date from a source newer than
 // the snapshot.
