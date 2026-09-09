@@ -141,7 +141,7 @@ substitute. The same reasoning applies with more force here, because the
 substitute would be a different model seeing material chosen for this
 one.
 
-### A7. Each Butler is addressed directly
+### A7. Each Butler is addressed directly, and on chat that means its own bot
 
 A Butler has its own conversation. You talk to the gym Butler in the gym
 Butler's thread.
@@ -150,6 +150,33 @@ There is no dispatcher deciding which Butler should handle an incoming
 message, for A2's reason: a dispatcher must read the message to route
 it, so the material reaches a model before the routing that was supposed
 to protect it.
+
+On Telegram, and on any chat transport with the same shape, that means
+**one bot per Butler, with its own token**. Butlers do not share one.
+
+This is not a new pattern here. Chat adapters are already one bot per
+thing: the capability naming (`chat-<transport>-<surface>`) gives a
+deployment a family bot and an admin bot today, each with its own vendor
+token and its own Keystone principal. Per-Butler is the same mechanism
+at finer grain.
+
+What it buys is more than tidiness. **The adapter's Keystone token
+carries the role**, so a nutrition Butler's bot physically holds a
+credential that cannot approve anything — A3's ceiling enforced at the
+credential rather than checked in code downstream of it. And the bot
+token *is* the address: there is no field to mistype, no topic id to
+reuse, and nothing that could deliver one Butler's message to another.
+
+The cost is real and worth stating: a household with six Butlers
+registers six bots, manages six tokens as secrets, and has six contacts
+in its phone. That is the price of the isolation, and it is the right
+trade for material that must not cross — but it is a reason to make
+Butlers per JOB rather than per whim.
+
+The stored address is still `(transport, external id)` rather than
+"bot": the schema does not encode this decision, so a transport whose
+natural unit is something else — a channel, a room — needs a row, not a
+migration.
 
 ### A8. A Butler cannot create or change a Butler. A person at the Console can
 
@@ -374,7 +401,7 @@ rather than skipped.
   preserving a shape this record replaces.
 - **Naming** → A11. "Butler" is the role; each has its own name.
 
-### Still open: how Telegram addresses more than one Butler
+### Settled: how Telegram addresses more than one Butler
 
 A7 says each Butler is addressed directly, and A10 says household
 members reach them over Telegram. Telegram then has to make "which
@@ -391,7 +418,8 @@ Two shapes do that, and the choice is not obvious:
   one token. Ties the design to a Telegram-specific feature, which sits
   awkwardly with the intent to add other chat services later.
 
-Both satisfy A7, and B5 settled it by not deciding: an address is
-`(transport, external id)`, so a bot id and a topic id are the same
-shape and a deployment picks. The choice stayed a deployment's rather
-than becoming a schema's.
+**Decided: one bot per Butler**, per A7. The schema still stores
+`(transport, external id)` and does not encode the choice, so a
+transport whose natural unit is a channel or a room needs a row rather
+than a migration — but the deployment shape for Telegram is settled,
+and it is the one where the token itself carries the Butler's ceiling.
