@@ -164,6 +164,11 @@ type householdEntry struct {
 	Untrusted bool
 	Mutating  bool
 	Handler   householdHandler
+	// Describe is the self-capability variant (ADR-W030 P2): the one
+	// tool whose answer depends on the session's own constraints, kept
+	// out of the ordinary handler signature for the reason the operator
+	// gateway states.
+	Describe func(gw *HouseholdGateway, readOnly bool) ToolOutcome
 }
 
 // HouseholdGateway is the family surface's tool gateway (ADR-W026 A1).
@@ -210,6 +215,10 @@ func NewHouseholdGateway(member string, seams HouseholdSeams) *HouseholdGateway 
 		"get_household_events":   {Spec: householdEventsSpec, Untrusted: true, Handler: handleHouseholdEvents},
 		"list_household_actions": {Spec: householdActionsSpec, Handler: handleListHouseholdActions},
 		"do_household_action":    {Spec: householdDoSpec, Mutating: true, Handler: handleDoHouseholdAction},
+		// The same self-capability tool the operator surface has, over
+		// THIS surface's manifest. It can only ever describe the three
+		// household tools above, because that is the whole map it reads.
+		"describe_capabilities": {Spec: describeCapabilitiesSpec, Describe: describeHouseholdCapabilities},
 	}
 	return gw
 }
@@ -302,6 +311,10 @@ func (gw *HouseholdGateway) wired(name string) bool {
 		return gw.seams.Events != nil
 	case "list_household_actions", "do_household_action":
 		return gw.seams.Actions != nil || gw.seams.Vocabulary != nil
+	case "describe_capabilities":
+		// Reads only what the gateway already holds, so it is wired
+		// wherever the surface is.
+		return true
 	}
 	return false
 }
@@ -341,7 +354,7 @@ func (gw *HouseholdGateway) Execute(ctx context.Context, name string, input map[
 			}, nil
 		}
 	}
-	return gw.Dispatch(ctx, name, input)
+	return gw.dispatch(ctx, name, input, readOnly)
 }
 
 // Dispatch executes one tool and returns the fully processed outcome.
@@ -351,9 +364,18 @@ func (gw *HouseholdGateway) Execute(ctx context.Context, name string, input map[
 // the shared finishOutcome helper, so the two surfaces cannot drift
 // apart on the thing that matters most.
 func (gw *HouseholdGateway) Dispatch(ctx context.Context, name string, input map[string]any) (ToolOutcome, error) {
+	return gw.dispatch(ctx, name, input, false)
+}
+
+// dispatch is Dispatch with the session's read-only constraint made
+// explicit, so the self-capability tool reports the session it is in.
+func (gw *HouseholdGateway) dispatch(ctx context.Context, name string, input map[string]any, readOnly bool) (ToolOutcome, error) {
 	entry, ok := gw.tools[name]
 	if !ok {
 		return ToolOutcome{}, fmt.Errorf("butler: unknown household tool %q", name)
+	}
+	if entry.Describe != nil {
+		return finishOutcome(entry.Describe(gw, readOnly), entry.Untrusted, gw.seams.MaxContentBytes), nil
 	}
 	if !gw.wired(name) {
 		return ToolOutcome{
