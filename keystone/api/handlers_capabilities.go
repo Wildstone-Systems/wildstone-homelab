@@ -13,8 +13,33 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
+
+// packageIcon is the app's own logo slug, or the generic fallback for a
+// package that serves no Route (an adapter, a model runner) and for one
+// whose container has no row in the dashboard's table.
+//
+// pkgspec.Routes parses the templates as YAML with the params' defaults
+// substituted, so this reads the upstream STRUCTURALLY. A regex over the
+// raw text was the first cut and was wrong twice over: it required
+// `upstream:` to begin a line, so an equally valid `spec: {upstream:
+// "container/x:80"}` silently fell back to the generic icon, and a
+// templated upstream never matched at all.
+//
+// The first route whose container has a row wins, rather than simply the
+// first route: photos-immich serves both photos and photos-api, and only
+// one of the two is the app you would recognise.
+func packageIcon(pkg *pkgspec.Package) string {
+	fallback := reconcile.IconFor("")
+	for _, r := range pkgspec.Routes(pkg) {
+		if icon := reconcile.IconForUpstream(r.Upstream); icon != fallback {
+			return icon
+		}
+	}
+	return fallback
+}
 
 // packageView is what the Console browses. Params travel with their
 // required/default, because that is the install form (ADR-W021 A5).
@@ -34,6 +59,12 @@ type packageView struct {
 	// access token) and a guessed name writes into a secret nothing
 	// reads.
 	ProvidedSecrets []string `json:"providedSecrets,omitempty"`
+	// Icon is the dashboard-icons slug for this app's own logo, resolved
+	// from the SAME table the household dashboard renders from
+	// (reconcile.IconFor). The Console shows a logo beside every package
+	// name; without this it would need its own container-name-to-slug
+	// map, which is a second copy of that table and a copy that drifts.
+	Icon string `json:"icon,omitempty"`
 	capabilityDetail
 }
 
@@ -387,6 +418,7 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 			Params: resolveParams(p.Params, facts, installedParams[p.Metadata.Name]), Provides: p.Provides, Requires: p.Requires,
 			Publishes:       p.Publishes,
 			ProvidedSecrets: pkgspec.ProvidedSecrets(p),
+			Icon:            packageIcon(p),
 			// Whether THIS PACKAGE is installed, not whether its
 			// capability is. Two profiles can run side by side now, and
 			// keyed on the capability both of them read as installed —
