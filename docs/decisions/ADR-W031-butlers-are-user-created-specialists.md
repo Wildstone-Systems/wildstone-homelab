@@ -181,6 +181,14 @@ Butler proposes touching them, for the reason in the first paragraph —
 and are equally direct when the Console holder sets them on a Butler
 they own.
 
+The general form, because it decides more than this one control: where
+the owner is acting directly, the system's job is to make the
+consequence **visible**, not to withhold the control or soften what it
+does. A warning that says what is about to happen respects a decision.
+Blocking it, or quietly doing something narrower than what was asked,
+substitutes the system's judgement for the owner's and leaves them
+surprised by their own action.
+
 ### A9. A directive instructs; it does not authorise
 
 A Butler's directive says what it is for and shapes how it talks. It
@@ -303,13 +311,23 @@ have been standing in for. A swap needs to be *answerable* afterwards,
 which is a record; it does not need to be *permitted*, which is what
 the owner clicking it already is.
 
-One mechanical detail this raises, and it is code rather than
-governance: a session in flight already finishes on the provider it
-started with, so a swap cannot split one answer across two models. The
-*next* turn in that same conversation is the live question, because it
-would carry the earlier history to the new model. Either the swap
-starts a new conversation or the history does not travel; B6 has to
-pick one deliberately rather than inherit whichever falls out.
+**Switching mid-thread carries the history, and says so.** A session in
+flight already finishes on the provider it started with, so a swap
+cannot split one answer across two models. The next turn does go to the
+new model with the conversation so far, and that is correct: a person
+who switched Alfred from local to cloud mid-thread decided that, and
+the consequence is theirs.
+
+What the screen owes them is the consequence stated at the moment of
+the decision — a warning on a **local-to-cloud switch with an open
+thread**, naming what happens: this conversation's history goes to that
+model with the next message. Not a confirmation dialog standing between
+them and a control they own; a sentence telling them what the click
+does.
+
+Only that direction warns. Cloud to local narrows where material can
+go, and warning about it would train people to click through the
+warning that matters.
 
 **Create is a proposal, not a creation.** Creating a Butler is where a
 Plan still earns its place — it is not a change to something that
