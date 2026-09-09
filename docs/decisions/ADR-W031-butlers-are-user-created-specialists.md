@@ -245,7 +245,42 @@ Ordered so each step stands on its own.
 | **B3** | Explicit sharing, with the disclosure A5 requires | Needs B2 to have something to share between |
 | **B4** | Assignment: a routine or task names its Butler | Needs B1 |
 | **B5** | Per-Butler conversations and bindings | Needs B1 |
-| **B6** | Remove the runtime router; keep the probe | Last, so nothing is removed before its replacement works |
+| **B6** | Console: the Butler roster, creation, and switching between them | Needs B1; the current screen cannot express more than two |
+| **B7** | Remove the runtime router; keep the probe | Last, so nothing is removed before its replacement works |
+
+### B6 in more detail
+
+Today the Butler screen has a two-tab segmented control — Operator,
+Household — and a conversation list under it. That control is a
+*surface* switch and it works because there are exactly two surfaces.
+It cannot become a Butler switch: eight named Butlers are not tabs.
+
+What replaces it is a **roster** at the top of the existing sidebar,
+with the conversations for the selected Butler below it, and a create
+action on the roster.
+
+Two things about that screen are load-bearing rather than cosmetic.
+
+**Every Butler shows its model, always — in the roster and in the
+header of the conversation you are in.** This is the entire point of
+A2 and A4 made visible. A person choosing to tell a Butler something
+sensitive is relying on which model sits behind it, and a screen that
+makes them click twice to find out has broken the guarantee at the only
+moment it mattered. Nobody should be typing into a Butler without
+seeing where the words go.
+
+**Create is a proposal, not a creation.** A8 makes creating a Butler a
+human-approved Plan, so the button drafts one and it lands on Plans as
+`proposed` — the same card, with the same approve handler, that a
+Butler's own proposals already use on this screen. The label should say
+so; a button that reads "Create" and produces a pending plan teaches
+the wrong thing about what just happened.
+
+The surface does not disappear from the screen. A Butler is created
+against one (A3), and the difference is worth seeing: an operator-surface
+Butler can propose changes to the home lab and a household one cannot.
+Grouping the roster by surface shows that without a word of
+explanation.
 
 Acceptance for the whole change is one demonstration: material given to
 a Butler on a local model is not reachable by a Butler on a cloud model,
