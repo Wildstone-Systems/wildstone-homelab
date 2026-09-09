@@ -195,6 +195,13 @@ type HouseholdGateway struct {
 	SessionTask string
 }
 
+// SetAuthorizer binds the effective-authority resolver for one session.
+// See the ToolGateway method of the same name for why it is a method.
+func (gw *HouseholdGateway) SetAuthorizer(a ToolAuthorizer) { gw.Authorizer = a }
+
+// SetSessionTask scopes work-bound grants to one task.
+func (gw *HouseholdGateway) SetSessionTask(id string) { gw.SessionTask = id }
+
 // NewHouseholdGroupGateway builds a family gateway for a session whose
 // audience is a GROUP (ADR-W026 A7).
 //

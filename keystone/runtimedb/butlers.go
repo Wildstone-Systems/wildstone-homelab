@@ -63,6 +63,13 @@ type Butler struct {
 	RouteKind string `json:"routeKind"`
 	Model     string `json:"model,omitempty"`
 	Provider  string `json:"provider,omitempty"`
+	// Endpoint is the route's base URL, carried because a Butler that
+	// cannot be TALKED to is not a Butler. Without it the assignment
+	// names a provider and a model and still needs a second lookup to
+	// reach either, and the caller that forgets the lookup falls back to
+	// whatever the process was started with — which is the substitution
+	// A6 exists to forbid, arrived at by omission.
+	Endpoint  string `json:"endpoint,omitempty"`
 	Readiness string `json:"readiness"`
 	// RouteEnabled is the ROUTE's switch, not the Butler's. Disabling a
 	// route has to stop the Butlers already assigned to it: the 0032
@@ -103,7 +110,7 @@ func (b Butler) CarriesActionAuthority() bool {
 // look up separately is one a caller will eventually forget to look up.
 const butlerColumns = `
 	SELECT b.seq, b.name, b.directive, b.surface, b.profile,
-	       r.name, r.seq, r.kind, r.model, r.provider, r.readiness, r.enabled,
+	       r.name, r.seq, r.kind, r.model, r.provider, r.endpoint, r.readiness, r.enabled,
 	       b.enabled, b.created_at, b.created_by, b.updated_at, b.updated_by,
 	       b.retired_at, b.retired_by
 	  FROM butlers b JOIN model_routes r ON r.seq = b.route`
@@ -114,7 +121,7 @@ func scanButler(s interface{ Scan(...any) error }) (Butler, error) {
 	var enabled, routeEnabled int
 	var created, updated, retired string
 	if err := s.Scan(&b.Seq, &b.Name, &b.Directive, &surface, &b.Profile,
-		&b.Route, &b.RouteSeq, &b.RouteKind, &b.Model, &b.Provider, &b.Readiness, &routeEnabled,
+		&b.Route, &b.RouteSeq, &b.RouteKind, &b.Model, &b.Provider, &b.Endpoint, &b.Readiness, &routeEnabled,
 		&enabled, &created, &b.CreatedBy, &updated, &b.UpdatedBy,
 		&retired, &b.RetiredBy); err != nil {
 		return Butler{}, err
@@ -202,6 +209,25 @@ func (db *DB) GetButler(name string) (Butler, error) {
 		return Butler{}, fmt.Errorf("runtimedb: reading butler %q: %w", name, err)
 	}
 	return b, nil
+}
+
+// AnyButlers reports whether this deployment has created a Butler.
+//
+// It exists separately from ListButlers because it is asked on the
+// per-message path — every inbound chat message needs to know whether
+// this deployment is on the named-Butler path or the legacy one — and
+// loading every Butler and its joined route to answer "is there at
+// least one" is work done once per message for a boolean.
+func (db *DB) AnyButlers() (bool, error) {
+	var one int
+	err := db.sql.QueryRow(`SELECT 1 FROM butlers LIMIT 1`).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("runtimedb: checking for butlers: %w", err)
+	}
+	return true, nil
 }
 
 // ListButlers returns every Butler, retired ones included, ordered by

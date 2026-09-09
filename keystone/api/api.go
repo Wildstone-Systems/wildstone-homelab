@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/catalog"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
@@ -105,6 +106,21 @@ type Server struct {
 	// clock once instead of on every install form.
 	HouseholdTimezone string
 
+	// Butlers serves conversations as named specialists (ADR-W031) —
+	// cmd/keystone wires it over butlerlive, butlerstore and the
+	// durable runner. nil leaves every conversation on the single
+	// -butler-provider path, which is what a deployment that has
+	// created no Butlers keeps running.
+	Butlers ButlerConversations
+
+	// CoordinatorHolder is THIS process's identity for the runtime
+	// database's single-coordinator lease (ADR-W030 A11) — cmd/keystone
+	// wires it. Empty leaves the coordinator routes answering 503: a
+	// process that cannot name itself must not be able to promote
+	// itself, because the id it promoted to would be one nothing can
+	// re-acquire on the next restart.
+	CoordinatorHolder string
+
 	// ButlerHost hosts the Butler ask endpoint (ADR-W017 A2/A4) —
 	// cmd/keystone wires it from -butler-provider. nil leaves ask
 	// answering 503; session history stays readable.
@@ -144,6 +160,26 @@ type Server struct {
 	BackupRestore func(ctx context.Context, plan string) error
 
 	limiter *limiter
+}
+
+// ButlerConversations is the named-Butler seam (ADR-W031). It is an
+// interface rather than the concrete type so that a deployment with no
+// durable wiring — and a test that wants one turn without a runtime
+// database — can be the nil case honestly rather than by constructing
+// something half-real.
+type ButlerConversations interface {
+	// Any reports whether this deployment has created any Butler. It is
+	// the only question whose answer may route a conversation onto the
+	// legacy provider, and it reads deployment state rather than the
+	// message.
+	Any() (bool, error)
+	// Serve runs one turn as whichever Butler the turn's address or
+	// name resolves to.
+	Serve(ctx context.Context, t butlerlive.Turn) (butlerlive.Answer, error)
+	// Sole names the only Butler a person may talk to on a surface, for
+	// the Console path where there is no bot to address. It refuses
+	// rather than picks when there is more than one.
+	Sole(surface runtimedb.ButlerSurface, member string) (runtimedb.Butler, error)
 }
 
 // New wires a Server. The rate limits are per ADR-W007 A5: a generous
@@ -377,6 +413,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/butler/settings", s.handle(principal.VerbManage, s.setButlerSettings))
 	mux.Handle("POST /api/v1/butler/ask", s.handle(principal.VerbRead, s.askButler))
 	mux.Handle("GET /api/v1/butler/sessions", s.handle(principal.VerbRead, s.listButlerSessions))
+	// The coordinator lease (ADR-W030 A11). Reading it is `read`
+	// because an operator diagnosing a Butler that has gone quiet needs
+	// to know which process owns the database; promoting is `manage`
+	// because it decides that ownership, and it fences whatever the
+	// previous holder still believed it was doing.
+	mux.Handle("GET /api/v1/coordinator", s.handle(principal.VerbRead, s.getCoordinator))
+	mux.Handle("POST /api/v1/coordinator/promote", s.handle(principal.VerbManage, s.promoteCoordinator))
+
 	mux.Handle("GET /api/v1/butler/sessions/{id}", s.handle(principal.VerbRead, s.getButlerSession))
 	// A follow-up carries the read verb like the first question does:
 	// conversing is not a write. The surface it runs on comes from the

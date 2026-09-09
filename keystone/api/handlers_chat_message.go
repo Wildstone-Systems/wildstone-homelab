@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/household"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
@@ -70,6 +71,12 @@ type inboundMessage struct {
 	// with the Console or wild, testing the contract). An adapter's
 	// surface comes from its role and naming a different one is refused.
 	Surface string `json:"surface,omitempty"`
+	// Butler may likewise be named ONLY by a read-holding human, and for
+	// the same reason: they have no bot to arrive through, so there is
+	// no address to resolve one from. An adapter that sets it is
+	// refused — its own credential IS the address (ADR-W031 A7), and a
+	// bot that could name a Butler could name somebody else's.
+	Butler string `json:"butler,omitempty"`
 }
 
 // inboundResponse tells the adapter what happened without telling it
@@ -276,7 +283,35 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		out any
 		st  int
 	)
-	if surface == runtimedb.ButlerSurfaceFamily {
+	// Which Butler answers is decided HERE, from the address the message
+	// arrived at, and the legacy single-provider path is taken only when
+	// this deployment has created no Butlers at all (ADR-W031 A2).
+	//
+	// The fallback reads deployment state and never the message. That
+	// distinction is the whole of A2: a per-message fallback would have
+	// to look at something about the message to decide, and the looking
+	// is the disclosure. "Has anyone made a Butler yet" is answerable
+	// before a single byte of what was said is examined.
+	if s.butlersConfigured() {
+		address, named, terr := butlerTargetFor(id, strings.TrimSpace(msg.Butler))
+		if terr != nil {
+			return nil, http.StatusForbidden, terr
+		}
+		turn := butlerlive.Turn{
+			Transport:      transport,
+			Address:        address,
+			Butler:         named,
+			Member:         binding.Identity,
+			Text:           text,
+			Group:          msg.Group,
+			SystemExtra:    systemExtra,
+			RequireSurface: surface,
+		}
+		if prior != nil {
+			turn.SessionID, turn.History = prior.SessionID, prior.History
+		}
+		out, st, err = s.runNamedButlerSession(r.Context(), turn, prior)
+	} else if surface == runtimedb.ButlerSurfaceFamily {
 		out, st, err = s.runFamilySession(r.Context(), text, binding.Identity, systemExtra, msg.Group, prior)
 	} else {
 		out, st, err = s.runAdminButlerSession(r.Context(), text, binding.Identity, prior)

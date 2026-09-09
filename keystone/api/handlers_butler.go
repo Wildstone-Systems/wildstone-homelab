@@ -8,10 +8,12 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -140,6 +142,14 @@ func (s *Server) getButlerStatus(_ *http.Request, _ principal.Identity) (any, in
 
 type askRequest struct {
 	Message string `json:"message"`
+	// Butler names which specialist to ask (ADR-W031 A11). The Console
+	// holder owns every Butler (A10), so naming one is a choice they
+	// already hold rather than an escalation.
+	//
+	// Empty is answered by the ONLY Butler this caller may talk to on
+	// this surface, and refused when there is more than one. Picking for
+	// them would be picking which model sees what they typed.
+	Butler string `json:"butler,omitempty"`
 }
 
 // askResponse is what one completed ask returns: the session id (its
@@ -181,15 +191,50 @@ type storedTranscript struct {
 // entered through the same submitProposal pipeline as the HTTP propose
 // endpoint, as principal "butler" acting-for the caller.
 func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, error) {
-	message, st, err := readAskMessage(r)
+	message, named, st, err := readAskMessage(r)
 	if err != nil {
 		return nil, st, err
+	}
+	if s.butlersConfigured() {
+		return s.askNamedButler(r.Context(), message, named, id.Name, nil)
 	}
 	// The unconfigured check lives in the session runner, with the one
 	// snapshot it takes — checking here as well would read the backend
 	// twice for one request, which is the thing ADR-W017 A9's snapshot
 	// exists to prevent.
 	return s.runAdminButlerSession(r.Context(), message, id.Name, nil)
+}
+
+// askNamedButler answers on the operator surface as a named Butler,
+// resolving the name when the caller left it out.
+func (s *Server) askNamedButler(ctx context.Context, message, named, member string, prior *turnContext) (any, int, error) {
+	if named == "" {
+		b, err := s.Butlers.Sole(runtimedb.ButlerSurfaceAdmin, member)
+		if err != nil {
+			// Ambiguity is a 400 and lists the names: the caller can fix
+			// it, and telling them how is the difference between a
+			// usable endpoint and one they have to read the source of.
+			if errors.Is(err, butlerlive.ErrAmbiguousButler) {
+				return nil, http.StatusBadRequest, err
+			}
+			return nil, http.StatusNotFound, fmt.Errorf("no butler answers to you here")
+		}
+		named = b.Name
+	}
+	turn := butlerlive.Turn{
+		Butler: named,
+		Member: member,
+		Text:   message,
+		// The operator surface's ceiling. A Console caller holds both
+		// surfaces, but this ENDPOINT is the operator one, and an
+		// endpoint that would answer as a family Butler is an endpoint
+		// that merges the two surfaces ADR-W026 A1 separated.
+		RequireSurface: runtimedb.ButlerSurfaceAdmin,
+	}
+	if prior != nil {
+		turn.SessionID, turn.History = prior.SessionID, prior.History
+	}
+	return s.runNamedButlerSession(ctx, turn, prior)
 }
 
 // turnContext carries an existing conversation into a session run
@@ -227,7 +272,7 @@ func historyFrom(turns []runtimedb.ButlerTurn) []provider.Message {
 // for — but reading a conversation and speaking into it are different
 // acts, and the second one is not an audit.
 func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (any, int, error) {
-	message, st, err := readAskMessage(r)
+	message, named, st, err := readAskMessage(r)
 	if err != nil {
 		return nil, st, err
 	}
@@ -243,6 +288,18 @@ func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (
 			fmt.Errorf("session %s belongs to %s; a conversation can only be continued by the person it was recorded for", sess.ID, sess.ActingFor)
 	}
 	prior := &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}
+	if s.butlersConfigured() {
+		// A follow-up cannot move to a different Butler. butlerlive
+		// refuses it at the task, which is where the guarantee belongs —
+		// the task snapshotted which Butler it runs as, and honouring a
+		// new name here would put one Butler's model in front of
+		// material another gathered (ADR-W031 A4). Naming the same one
+		// is harmless and left to that check rather than duplicated.
+		if sess.Surface == runtimedb.ButlerSurfaceFamily {
+			return s.askNamedFamilyButler(r.Context(), message, named, sess.ActingFor, "", false, prior)
+		}
+		return s.askNamedButler(r.Context(), message, named, sess.ActingFor, prior)
+	}
 	if sess.Surface == runtimedb.ButlerSurfaceFamily {
 		return s.runFamilySession(r.Context(), message, sess.ActingFor, "", false, prior)
 	}
@@ -287,27 +344,7 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor s
 	// runs again here with the real engine — the session's own gate is a
 	// pre-check, not the authority.
 	butlerID := principal.Identity{Name: butlerPrincipal, Role: runtimedb.RoleButler, ActingFor: actingFor}
-	var planIDs, proposalErrs []string
-	for _, call := range tr.Audit.Calls {
-		if call.ResourceYAML == "" || call.Rejected {
-			continue
-		}
-		summary := "butler proposal"
-		if call.Plan != nil && call.Plan.Summary != "" {
-			summary = "butler: " + call.Plan.Summary
-		}
-		body, st, err := s.submitProposal(butlerID, proposalRequest{
-			Summary: summary,
-			Put:     []string{call.ResourceYAML},
-		})
-		if err != nil {
-			proposalErrs = append(proposalErrs, fmt.Sprintf("%d: %v", st, err))
-			continue
-		}
-		if rec, ok := body.(planView); ok {
-			planIDs = append(planIDs, rec.ID)
-		}
-	}
+	planIDs, proposalErrs := s.submitSessionProposals(butlerID, tr.Audit.Calls)
 
 	// Persist the session (ADR-W017 A1): principal-bound, transcript
 	// included. Everything in the transcript is post-Dispatch content, and
@@ -371,6 +408,44 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor s
 // the household's butler been asked to do" is a different question from
 // "what has the operator's", and one list that cannot tell them apart
 // answers neither (ADR-W026 A1).
+// submitSessionProposals puts every accepted proposal a session
+// produced through the ONE proposal pipeline (ADR-W017 A3), and returns
+// the plan ids alongside the refusals.
+//
+// Refusals are returned rather than swallowed. A session that tried to
+// propose something and was blocked by standing policy is a different
+// event from one that proposed nothing, and reporting them identically
+// hides the case worth looking at.
+//
+// It is shared by the legacy single-provider path and the named-Butler
+// one so that "what a conversation is allowed to cause" is one
+// implementation. The Butler a session ran as does not appear here: it
+// scopes the WORK, and the RBAC row that bounds a Butler proposal —
+// read and propose, never approve — is the same one either way.
+func (s *Server) submitSessionProposals(butlerID principal.Identity, calls []butler.ToolCallRecord) (planIDs, proposalErrs []string) {
+	for _, call := range calls {
+		if call.ResourceYAML == "" || call.Rejected {
+			continue
+		}
+		summary := "butler proposal"
+		if call.Plan != nil && call.Plan.Summary != "" {
+			summary = "butler: " + call.Plan.Summary
+		}
+		body, st, err := s.submitProposal(butlerID, proposalRequest{
+			Summary: summary,
+			Put:     []string{call.ResourceYAML},
+		})
+		if err != nil {
+			proposalErrs = append(proposalErrs, fmt.Sprintf("%d: %v", st, err))
+			continue
+		}
+		if rec, ok := body.(planView); ok {
+			planIDs = append(planIDs, rec.ID)
+		}
+	}
+	return planIDs, proposalErrs
+}
+
 // recordTurn opens a new session or appends to the one prior names,
 // and returns the session id either way. Both surfaces persist through
 // here so that "a follow-up lands in the conversation it answers" is one
@@ -415,20 +490,20 @@ func (s *Server) getButlerSession(r *http.Request, _ principal.Identity) (any, i
 // readAskMessage reads and bounds one ask body, shared by both surfaces
 // (ADR-W026 A6: inbound text is bounded before anything else looks at
 // it, on the family surface exactly as on the operator's).
-func readAskMessage(r *http.Request) (string, int, error) {
+func readAskMessage(r *http.Request) (message, butlerName string, status int, err error) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxAskBytes+1))
 	if err != nil {
-		return "", http.StatusBadRequest, fmt.Errorf("reading body: %w", err)
+		return "", "", http.StatusBadRequest, fmt.Errorf("reading body: %w", err)
 	}
 	if len(body) > maxAskBytes {
-		return "", http.StatusRequestEntityTooLarge, fmt.Errorf("message exceeds %d bytes", maxAskBytes)
+		return "", "", http.StatusRequestEntityTooLarge, fmt.Errorf("message exceeds %d bytes", maxAskBytes)
 	}
 	var req askRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		return "", http.StatusBadRequest, fmt.Errorf("parsing ask: %w", err)
+		return "", "", http.StatusBadRequest, fmt.Errorf("parsing ask: %w", err)
 	}
 	if req.Message == "" {
-		return "", http.StatusBadRequest, fmt.Errorf("message required")
+		return "", "", http.StatusBadRequest, fmt.Errorf("message required")
 	}
-	return req.Message, http.StatusOK, nil
+	return req.Message, strings.TrimSpace(req.Butler), http.StatusOK, nil
 }

@@ -18,11 +18,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"unicode/utf8"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -118,16 +120,54 @@ func (s *Server) getHouseholdButlerStatus(_ *http.Request, id principal.Identity
 // checks, which are the same ones an approved household rule passes
 // through (ADR-W024 A5).
 func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any, int, error) {
+	message, named, st, err := readAskMessage(r)
+	if err != nil {
+		return nil, st, err
+	}
+	// A deployment with Butlers answers as one, and the household
+	// provider check below does not apply to it: a family Butler runs on
+	// the model it was ASSIGNED, not on whatever -butler-provider names
+	// (ADR-W031 A2). Checking the legacy host first would refuse a
+	// perfectly reachable Butler because a flag the deployment no longer
+	// uses was left at "off".
+	if s.butlersConfigured() {
+		return s.askNamedFamilyButler(r.Context(), message, named, id.Name, "", false, nil)
+	}
 	host := s.ButlerHost
 	if !host.householdConfigured() {
 		return nil, http.StatusServiceUnavailable,
 			fmt.Errorf("household butler not configured (needs -butler-provider and a household surface)")
 	}
-	message, st, err := readAskMessage(r)
-	if err != nil {
-		return nil, st, err
-	}
 	return s.runFamilyButlerSession(r.Context(), message, id.Name, "")
+}
+
+// askNamedFamilyButler answers on the family surface as a named Butler.
+// It is the operator path's sibling and differs only in the ceiling it
+// requires, which is the difference ADR-W026 A1 draws between the two
+// surfaces and the one thing that must not be shared between them.
+func (s *Server) askNamedFamilyButler(ctx context.Context, message, named, member, systemExtra string, group bool, prior *turnContext) (any, int, error) {
+	if named == "" {
+		b, err := s.Butlers.Sole(runtimedb.ButlerSurfaceFamily, member)
+		if err != nil {
+			if errors.Is(err, butlerlive.ErrAmbiguousButler) {
+				return nil, http.StatusBadRequest, err
+			}
+			return nil, http.StatusNotFound, fmt.Errorf("no butler answers to you here")
+		}
+		named = b.Name
+	}
+	turn := butlerlive.Turn{
+		Butler:         named,
+		Member:         member,
+		Text:           message,
+		Group:          group,
+		SystemExtra:    systemExtra,
+		RequireSurface: runtimedb.ButlerSurfaceFamily,
+	}
+	if prior != nil {
+		turn.SessionID, turn.History = prior.SessionID, prior.History
+	}
+	return s.runNamedButlerSession(ctx, turn, prior)
 }
 
 // runFamilyButlerSession runs one family-surface session for member and

@@ -220,6 +220,17 @@ type Runner struct {
 	// Notifier sends the one stalled-task notice. nil records the stall
 	// without messaging anyone.
 	Notifier StallNotifier
+	// History is the conversation this slice continues (ADR-W027 A11):
+	// the user and assistant TEXT of earlier turns, exactly what
+	// Session.History carries and for the same reason.
+	//
+	// It is not in tension with A4's "replays nothing". What a resume
+	// must not replay is a saved MODEL/TOOL transcript, because that
+	// would reconstruct context from decisions taken under permissions
+	// that may since have changed. Earlier turns of a conversation are
+	// not that: they are what the person said, and dropping them makes
+	// "why?" reach a model that never heard the question it answers.
+	History []provider.Message
 	// Now is the runner clock; nil means time.Now.
 	Now func() time.Time
 }
@@ -371,7 +382,9 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 		Payload:         jsonPayload(map[string]any{"resumed": resumed, "verifiedResults": len(verified)}),
 	})
 
-	messages := []provider.Message{{Role: "user", Text: userMessage}}
+	messages := make([]provider.Message, 0, len(r.History)+1)
+	messages = append(messages, r.History...)
+	messages = append(messages, provider.Message{Role: "user", Text: userMessage})
 	specs := r.Gateway.OfferedSpecs(r.ReadOnly)
 
 	for round := 0; round < r.sliceRounds(); round++ {

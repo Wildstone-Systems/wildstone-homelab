@@ -269,6 +269,71 @@ func (db *DB) GetButlerTask(id string) (ButlerTask, error) {
 	return scanButlerTask(db.sql.QueryRow(butlerTaskColumns+` WHERE seq = ?`, seq))
 }
 
+// SetButlerTaskSession points a task at the conversation it belongs to.
+//
+// It exists because of an ordering that cannot be avoided: a session id
+// is only known once a turn has been recorded, and a turn cannot be
+// recorded until the work has run — but the work needs a task before it
+// starts. So the task is opened first and linked afterwards.
+//
+// The link is written ONCE and never moved. Re-pointing a task at a
+// different conversation would let one thread inherit another's step
+// ledger, and a resume would then serve tool results gathered for a
+// different question. A task that already names a session keeps it.
+func (db *DB) SetButlerTaskSession(taskID, sessionID string) error {
+	seq, err := parseButlerTaskID(taskID)
+	if err != nil {
+		return err
+	}
+	var sessionSeq int64
+	if _, err := fmt.Sscanf(sessionID, "bs-%d", &sessionSeq); err != nil {
+		return fmt.Errorf("runtimedb: malformed butler session id %q", sessionID)
+	}
+	res, err := db.sql.Exec(
+		`UPDATE butler_tasks SET session = ?, updated_at = ?
+		 WHERE seq = ? AND session IS NULL`, sessionSeq, now(), seq)
+	if err != nil {
+		return fmt.Errorf("runtimedb: linking a butler task to its session: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// Either the task is gone, or it is already linked. Both are
+		// answered by reading it back: an idempotent re-link of the same
+		// session is not an error, and a DIFFERENT one must be.
+		t, gerr := db.GetButlerTask(taskID)
+		if gerr != nil {
+			return gerr
+		}
+		if t.SessionID != sessionID {
+			return fmt.Errorf("runtimedb: task %s already belongs to conversation %s (ADR-W031 A4)",
+				taskID, t.SessionID)
+		}
+	}
+	return nil
+}
+
+// ButlerTaskForSession returns the conversation task a Butler session is
+// being driven by, or ErrNotFound.
+//
+// This is what makes a conversation RESUMABLE rather than merely
+// durable. A restart loses everything in memory, and the only handle a
+// chat thread still holds afterwards is the session it was pointed at;
+// without a way back from that to the task, the next message opens a
+// second task and re-dispatches work the first one had already verified
+// — which is the repeated dispatch the step ledger exists to prevent.
+//
+// The newest task wins. A session that somehow carries more than one is
+// a bug rather than a shape to support, and answering with the newest
+// keeps the conversation moving instead of failing on ambiguity a
+// person cannot resolve.
+func (db *DB) ButlerTaskForSession(sessionID string) (ButlerTask, error) {
+	var seq int64
+	if _, err := fmt.Sscanf(sessionID, "bs-%d", &seq); err != nil {
+		return ButlerTask{}, fmt.Errorf("runtimedb: malformed butler session id %q", sessionID)
+	}
+	return scanButlerTask(db.sql.QueryRow(
+		butlerTaskColumns+` WHERE session = ? ORDER BY seq DESC LIMIT 1`, seq))
+}
+
 const butlerTaskColumns = `SELECT seq, created_at, updated_at, kind, state, author, owner,
 	 surface, profile, audience, session, origin_turn, correlation_id, objective,
 	 completion_criteria, grants_json, budget_json, deadline_at, next_wakeup_at,

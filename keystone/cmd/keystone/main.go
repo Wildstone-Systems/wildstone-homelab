@@ -28,6 +28,8 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/backup"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
 	"github.com/chickenrat17/wildstone-homelab/keystone/catalog"
 	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/gateway"
@@ -68,9 +70,9 @@ func main() {
 	resticImage := flag.String("restic-image", defaultResticImage, "digest-pinned restic image every backup run uses")
 	catalogDir := flag.String("catalog-dir", "", "directory of packages this control plane can install (ADR-W021 A3); empty leaves the package/capability endpoints answering 503")
 	consoleDir := flag.String("console-dir", "", "directory of built Console static files to serve beside /api (ADR-W016 A5); empty serves the API only")
-	butlerProvider := flag.String("butler-provider", "off", "Butler LLM provider: off|anthropic|openai|ollama (ADR-W017 A4); API keys come ONLY from ANTHROPIC_API_KEY/OPENAI_API_KEY env vars, never a flag")
-	butlerModel := flag.String("butler-model", "", "Butler model name; empty uses the provider's default")
-	butlerEndpoint := flag.String("butler-endpoint", "", "Butler provider base URL (openai-compatible gateways, ollama host); empty uses the provider's default")
+	butlerProvider := flag.String("butler-provider", "off", "legacy single-provider Butler: off|anthropic|openai|ollama (ADR-W017 A4). Used ONLY while this deployment has created no Butlers; once one exists, each Butler answers on the model it was assigned (ADR-W031 A2). API keys come ONLY from ANTHROPIC_API_KEY/OPENAI_API_KEY env vars, never a flag")
+	butlerModel := flag.String("butler-model", "", "model name for the legacy single-provider Butler; empty uses the provider's default. A named Butler's model comes from its assigned route, not from here")
+	butlerEndpoint := flag.String("butler-endpoint", "", "base URL for the legacy single-provider Butler (openai-compatible gateways, ollama host); empty uses the provider's default. A named Butler's endpoint comes from its assigned route")
 	automationEvery := flag.Duration("automation-interval", 15*time.Second, "how often the household automation engine ticks between event pokes (ADR-W024 H3)")
 	householdTZ := flag.String("household-timezone", "Local", "IANA time zone the household's rules keep (timeOfDay/weekday conditions), e.g. Europe/London")
 	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W024 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
@@ -153,6 +155,36 @@ func claimCode(args []string) error {
 	fmt.Printf("admin token for %q written to %s (mode 0600)\n", *name, dest)
 	fmt.Println("read it once, use it, then delete the file.")
 	return nil
+}
+
+// coordinatorHolder identifies THIS deployment for the runtime
+// database's single-coordinator lease (ADR-W030 A11).
+//
+// Two properties are required of it, and both are easy to get wrong.
+//
+// It must be STABLE across restarts, because AcquireCoordinator treats
+// re-acquiring your own lease as a normal restart and keeps the epoch.
+// A holder built from a pid, a boot id or a random value would make
+// every restart look like a second coordinator arriving, and recovering
+// from an ordinary crash would need an administrative promotion.
+//
+// It must be DISTINCT per host, because two machines pointed at one
+// data directory is precisely the situation the lease exists to refuse.
+// A holder that ignored the host would let both believe they held it,
+// which is the racing-schedulers failure with the safeguard switched on.
+func coordinatorHolder(dataDir string) string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		// A host that cannot name itself still needs one id rather than
+		// a different one each boot; the data directory keeps it
+		// distinct from another deployment on the same machine.
+		host = "unknown-host"
+	}
+	abs, err := filepath.Abs(dataDir)
+	if err != nil {
+		abs = dataDir
+	}
+	return host + ":" + abs
 }
 
 func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir string, butlerCfg butlerConfig, householdCfg householdConfig, log *slog.Logger) error {
@@ -413,6 +445,40 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		return err
 	}
 	defer db.Close()
+
+	// The single active coordinator lease (ADR-W030 A11), taken before
+	// anything can dispatch: durable work is only ever written by the
+	// process that owns this database.
+	//
+	// Finding another holder is deliberately NOT fatal. Refusing to
+	// start would make the situation unrecoverable — promotion is an API
+	// call, and an API that will not come up cannot serve it. So this
+	// process runs, serves every read path, and wires no durable Butler
+	// work. That is the store's own rule ("a second process that finds
+	// another holder refuses to dispatch and says so") applied where
+	// dispatch actually happens, rather than one step earlier where it
+	// would take the recovery route down with it.
+	//
+	// Nothing releases the lease. There is no Release call and there is
+	// deliberately no timeout takeover: a crash mid-call leaves the lease
+	// held by this same holder id, and the restart re-acquires it at the
+	// same epoch, which is what lets the runner resume a task from its
+	// checkpoints instead of finding the work orphaned. Handing it to a
+	// different host is PromoteCoordinator, an explicit act that fences
+	// the old epoch.
+	lease, leaseErr := db.AcquireCoordinator(coordinatorHolder(dataDir))
+	coordinating := leaseErr == nil
+	switch {
+	case coordinating:
+		log.Info("coordinator lease held", "holder", lease.Holder, "epoch", lease.Epoch,
+			"acquiredAt", lease.AcquiredAt.Format(time.RFC3339))
+	case errors.Is(leaseErr, runtimedb.ErrCoordinatorHeld):
+		log.Error("another coordinator holds this runtime database; no durable Butler work is wired in this process. "+
+			"Stop the other process and restart, or POST /api/v1/coordinator/promote to take it over deliberately",
+			"err", leaseErr)
+	default:
+		return fmt.Errorf("taking the coordinator lease: %w", leaseErr)
+	}
 
 	// Node inventory (#30): the gateway keeps no database dependency, so
 	// it reports node lifecycle through this hook and Keystone persists
@@ -734,6 +800,10 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv.APIURL = advertisedAPIURL(hosts, apiLis.Addr().String())
 	apiSrv.HouseholdTimezone = householdCfg.Timezone
 	apiSrv.ManagedPrefix = managedPrefix
+	// The coordinator routes need this process's own lease identity, so
+	// a promotion writes the id THIS deployment will re-acquire at its
+	// next restart rather than one nobody holds.
+	apiSrv.CoordinatorHolder = coordinatorHolder(dataDir)
 	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
 	apiSrv.BackupRestore = bak.RestoreAlongside
 
@@ -919,6 +989,86 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				"endpoint", backend.Endpoint, "mode", string(mode))
 		} else {
 			log.Info("butler not configured; it can be enabled from the Console (ADR-W017 A9)")
+		}
+
+		// Named Butlers on the live conversational path (ADR-W031),
+		// over the durable runner and the fenced ledger (ADR-W030 P3).
+		//
+		// Wired only while this process holds the coordinator lease.
+		// Durable work writes steps, attempts and traces, and a second
+		// process writing them under a lease it does not hold is the
+		// racing-schedulers failure the lease exists to refuse. Without
+		// the lease this deployment keeps serving every read path and
+		// answers conversations on the legacy provider, which is
+		// degraded but honest.
+		if coordinating {
+			ledger := butlerstore.New(db, lease)
+			// Admission is wired explicitly rather than defaulted: "no
+			// admission records exist yet" and "this person is not
+			// admitted" must not be the same answer, so turning it on
+			// is an act (ADR-W030 A2.1).
+			ledger.OwnerActive = ledger.AdmissionCheck()
+			butlers := &butlerlive.Butlers{
+				DB:     db,
+				Ledger: ledger,
+				Log:    log,
+				// The provider is built from the ROUTE the Butler was
+				// assigned, and from nothing else. There is no argument
+				// here that could come from a message: this function is
+				// handed a Butler and reads what its route says.
+				Providers: func(b runtimedb.Butler) (provider.Provider, error) {
+					p, _, perr := newButlerProvider(butlerConfig{
+						Provider: b.Provider, Model: b.Model, Endpoint: b.Endpoint,
+					})
+					return p, perr
+				},
+				Gateways: butlerlive.GatewayFunc(func(b runtimedb.Butler, t butlerlive.Turn) (butler.Toolset, error) {
+					switch b.Surface {
+					case runtimedb.ButlerSurfaceFamily:
+						if household.Events == nil && household.Actions == nil {
+							return nil, fmt.Errorf("this deployment has no household surface wired")
+						}
+						// The audience decides which CAPABILITIES the
+						// session has, not merely what its prompt asks
+						// for (ADR-W026 A7) — so a room gets the
+						// narrowed gateway, built fresh and bound to the
+						// member.
+						if t.Group {
+							return butler.NewHouseholdGroupGateway(t.Member, household), nil
+						}
+						return butler.NewHouseholdGateway(t.Member, household), nil
+					case runtimedb.ButlerSurfaceAdmin:
+						// A copy per session, because butlerlive sets
+						// this Butler's authorizer and task on it. A
+						// shared instance would leak one Butler's scope
+						// into another's session, which is exactly the
+						// isolation A4 is about. The tool map is built
+						// once and never written, so sharing it is safe.
+						perSession := *bgw
+						return &perSession, nil
+					default:
+						return nil, fmt.Errorf("unknown butler surface %q", b.Surface)
+					}
+				}),
+			}
+			// The stalled-task notice goes to the direct surface the
+			// task's owner was already talking on (ADR-W030 A4/P4).
+			butlers.Notifier = &butlerstore.Notifier{Ledger: ledger}
+			apiSrv.Butlers = butlers
+
+			named, lerr := db.ListButlers()
+			switch {
+			case lerr != nil:
+				log.Error("listing butlers", "err", lerr)
+			case len(named) == 0:
+				log.Info("no butlers created yet; conversations answer on the legacy provider until one is (ADR-W031)")
+			default:
+				for _, nb := range named {
+					log.Info("butler on the live path", "butler", nb.Name, "surface", nb.Surface,
+						"route", nb.Route, "kind", nb.RouteKind, "model", nb.Model,
+						"readiness", nb.Readiness)
+				}
+			}
 		}
 
 		// Runtime reconfiguration (ADR-W017 A9). Rebuilds the provider
