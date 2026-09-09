@@ -725,7 +725,11 @@ tr.clickable:hover { background: var(--faint); }
 
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  /* Four across at the .screen cap of 1180px, and fewer as it narrows.
+     A 250px floor is what puts four in that width; the meta line still
+     has room for a host, a version and a resource count before it
+     ellipses, which is why it is not lower. */
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
   gap: var(--space-3);
 }
 
