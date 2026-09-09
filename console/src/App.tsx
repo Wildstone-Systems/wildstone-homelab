@@ -29,6 +29,7 @@ import { Chat } from "./views/Chat";
 import { ConnectChat } from "./views/ConnectChat";
 import { Home } from "./views/Home";
 import { Household } from "./views/Household";
+import { Integrations } from "./views/Integrations";
 import { IdentityView } from "./views/Identity";
 import { Memory } from "./views/Memory";
 import { Nodes } from "./views/Nodes";
@@ -44,6 +45,7 @@ type View =
   | "work"
   | "authority"
   | "memory"
+  | "integrations"
   | "chat"
   | "household"
   | "connect"
@@ -68,6 +70,7 @@ const TITLES: Record<View, [string, string]> = {
   work: ["Durable", "Work"],
   authority: ["Admission", "Butler access"],
   memory: ["Owned data", "Memory"],
+  integrations: ["Connected apps", "Integrations"],
   chat: ["Access", "Chat"],
   household: ["People", "Household"],
   connect: ["Setup", "Connect chat"],
@@ -130,6 +133,7 @@ export function Shell() {
       { id: "work", label: "Work", icon: <ListChecks size={ICON} /> },
       { id: "authority", label: "Butler access", icon: <ShieldCheck size={ICON} /> },
       { id: "memory", label: "Memory", icon: <Brain size={ICON} /> },
+      { id: "integrations", label: "Integrations", icon: <PlugsConnected size={ICON} /> },
       { id: "chat", label: "Chat", icon: <ChatsCircle size={ICON} /> },
       { id: "household", label: "Household", icon: <UsersThree size={ICON} /> },
       { id: "connect", label: "Connect chat", icon: <PlugsConnected size={ICON} /> },
@@ -179,6 +183,7 @@ export function Shell() {
           {view === "work" && <Work />}
           {view === "authority" && <ButlerAuthority />}
           {view === "memory" && <Memory />}
+          {view === "integrations" && <Integrations />}
           {view === "chat" && <Chat />}
           {view === "household" && <Household />}
           {view === "connect" && <ConnectChat />}

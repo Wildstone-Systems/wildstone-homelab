@@ -267,6 +267,27 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/butler/models", s.handle(principal.VerbManage, s.listButlerModels))
 	mux.Handle("GET /api/v1/butler/config", s.handle(principal.VerbManage, s.getButlerConfig))
 	mux.Handle("PUT /api/v1/butler/config", s.handle(principal.VerbManage, s.setButlerConfig))
+	// The administrator's side of integrations. Every one needs manage.
+	mux.Handle("GET /api/v1/integrations", s.handle(principal.VerbRead, s.listIntegrationConnections))
+	mux.Handle("POST /api/v1/integrations", s.handle(principal.VerbManage, s.createIntegrationConnection))
+	mux.Handle("POST /api/v1/integrations/{name}/widen", s.handle(principal.VerbManage, s.widenIntegrationConnection))
+	mux.Handle("POST /api/v1/integrations/{name}/adapter", s.handle(principal.VerbManage, s.bindIntegrationAdapter))
+	mux.Handle("POST /api/v1/integrations/{name}/capabilities", s.handle(principal.VerbManage, s.recordIntegrationCapability))
+	mux.Handle("POST /api/v1/integrations/{name}/work", s.handle(principal.VerbManage, s.queueIntegrationWork))
+	// Work items live at their own path rather than under a connection:
+	// they are addressed by id, and nesting them would collide with the
+	// connection sub-resources below.
+	mux.Handle("GET /api/v1/integration-work/{seq}", s.handle(principal.VerbRead, s.getIntegrationWork))
+	mux.Handle("GET /api/v1/integrations/{name}/placement", s.handle(principal.VerbRead, s.listIntegrationPlacements))
+	mux.Handle("POST /api/v1/integrations/{name}/placement", s.handle(principal.VerbManage, s.addIntegrationPlacement))
+	mux.Handle("POST /api/v1/integrations/{name}/placement/ready", s.handle(principal.VerbManage, s.markIntegrationPlacementReady))
+	mux.Handle("POST /api/v1/integrations/{name}/placement/place", s.handle(principal.VerbManage, s.placeIntegrationConnection))
+	mux.Handle("POST /api/v1/integrations/{name}/placement/remove", s.handle(principal.VerbManage, s.removeIntegrationPlacement))
+	mux.Handle("POST /api/v1/integrations/{name}/placement/proof", s.handle(principal.VerbManage, s.proveIntegrationPlacementRemoval))
+	mux.Handle("POST /api/v1/integrations/{name}/secrets", s.handle(principal.VerbManage, s.onboardIntegrationSecret))
+	// The adapter's side: claim and answer, and nothing else.
+	mux.Handle("POST /api/v1/integration-work/claim", s.handle(principal.VerbClaimIntegrationWork, s.claimIntegrationWork))
+	mux.Handle("POST /api/v1/integration-work/result", s.handle(principal.VerbReportIntegrationResult, s.reportIntegrationResult))
 	mux.Handle("GET /api/v1/butler/index/measurements", s.handle(principal.VerbRead, s.listIndexMeasurements))
 	mux.Handle("POST /api/v1/butler/index/compact", s.handle(principal.VerbManage, s.compactButlerIndex))
 	mux.Handle("GET /api/v1/butler/memory", s.handle(principal.VerbRead, s.retrieveButlerMemory))

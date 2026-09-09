@@ -27,6 +27,16 @@ const (
 	// of Keystone state: an adapter relays a conversation, it does not
 	// have one.
 	VerbConverse Verb = "converse"
+	// VerbClaimIntegrationWork covers an adapter long-polling for the
+	// work assigned to the connections its credential is bound to
+	// (ADR-W030 A5.1). It names no connection: Keystone decides which
+	// work an adapter may see, so a compromised adapter cannot reach
+	// another connection's work by asking for it.
+	VerbClaimIntegrationWork Verb = "claim-integration-work"
+	// VerbReportIntegrationResult covers answering work this adapter
+	// claimed. It cannot answer work it did not claim, and it cannot
+	// answer work whose connection lease has moved on.
+	VerbReportIntegrationResult Verb = "report-integration-result"
 )
 
 // roleVerbs is the closed RBAC table (ADR-W007 A2). The butler row is the
@@ -69,6 +79,15 @@ var roleVerbs = map[runtimedb.Role]map[Verb]bool{
 	// touch the Statefile.
 	runtimedb.RolePublisher: {
 		VerbEmit: true,
+	},
+	// An adapter claims and answers, and that is the whole of it: not
+	// read, not emit, not converse, not propose (ADR-W030 A5.1). The
+	// two verbs it holds do not widen `emit` or `converse`, and there is
+	// deliberately no inbound administration surface an adapter can
+	// reach — Keystone needs none, and one would be the natural place
+	// for a compromised adapter to start.
+	runtimedb.RoleIntegrationAdapter: {
+		VerbClaimIntegrationWork: true, VerbReportIntegrationResult: true,
 	},
 }
 

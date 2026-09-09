@@ -722,6 +722,63 @@ export interface IndexMeasurement {
   note?: string;
 }
 
+
+// ---------------------------------------------------------------- integrations
+
+// One named connection to an application (ADR-W030 A5). Keystone holds
+// the contract and the leases; the application-specific half lives in an
+// adapter outside it.
+export interface IntegrationConnection {
+  seq: number;
+  name: string;
+  adapter: string;
+  endpoint?: string;
+  ownership: "personal" | "household";
+  owner: string;
+  audience: "private" | "shared";
+  actionsEnabled: boolean;
+  indexingEnabled: boolean;
+  cloudAllowed: boolean;
+  state: "configured" | "ready" | "degraded" | "unavailable";
+  leaseEpoch: number;
+  degradedReason?: string;
+}
+
+export interface IntegrationCapability {
+  kind: "event" | "query" | "action";
+  name: string;
+  version?: string;
+  available: boolean;
+  detail?: string;
+}
+
+// Where an adapter may run. A node is eligible only once all three
+// facts hold — the container is running, the secret is provisioned, and
+// readiness was verified — because each fails separately.
+export interface Placement {
+  node: string;
+  role: "primary" | "fallback";
+  rank: number;
+  containerRunning: boolean;
+  secretProvisioned: boolean;
+  readinessVerified: boolean;
+  holder: boolean;
+  removing?: boolean;
+  containerRemoved?: boolean;
+  secretErased?: boolean;
+  credentialRevoked?: boolean;
+}
+
+// A reference to a credential, never the credential.
+export interface ConnectionSecret {
+  seq: number;
+  member?: string;
+  secretRef: string;
+  upstreamReadOnly: boolean;
+  disclosure?: string;
+  revokedAt?: string;
+}
+
 export const api = {
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
   butlerModels: (endpoint?: string) =>
@@ -729,6 +786,23 @@ export const api = {
       "GET",
       `/api/v1/butler/models${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ""}`,
     ),
+  integrations: () =>
+    call<{
+      connections: { connection: IntegrationConnection; capabilities: IntegrationCapability[] | null }[] | null;
+    }>("GET", "/api/v1/integrations"),
+  integrationPlacement: (name: string) =>
+    call<{ placements: Placement[] | null; secrets: ConnectionSecret[] | null }>(
+      "GET",
+      `/api/v1/integrations/${encodeURIComponent(name)}/placement`,
+    ),
+  placeIntegration: (name: string) =>
+    call<{ holder: string | null; moved?: boolean; waiting?: boolean; note?: string }>(
+      "POST",
+      `/api/v1/integrations/${encodeURIComponent(name)}/placement/place`,
+      {},
+    ),
+  widenIntegration: (name: string, w: { actions: boolean; indexing: boolean; cloud: boolean }) =>
+    call<{ widened: string }>("POST", `/api/v1/integrations/${encodeURIComponent(name)}/widen`, w),
   indexMeasurements: () =>
     call<{ measurements: IndexMeasurement[] | null }>("GET", "/api/v1/butler/index/measurements"),
   compactButlerIndex: (maxAgeDays: number) =>
