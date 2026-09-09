@@ -3,7 +3,7 @@
 - **Status:** proposed — draft for discussion; no implementation or permission changes authorized by this record while proposed.
 - **Relates to:** ADR-W004 (Plans), W005/W025 (packages and integrations), W006/W017 (Butler), W007 (Keystone), W009 (policy), W012 (secrets), W020 (identity), W024 (household automation), W026 (messaging), W027 (conversation UX), W028 (failure isolation).
 - **Source:** household-owner design discussion, consolidated in [the capability and design brief](../butler-capability-and-design-brief.md).
-- **Baseline:** main at `4479a47ea7a09df0279b7a02a1417b9a58445605`.
+- **Baseline:** main at `a3362c9881cdf6d652b5e0cb9086597e36347d28`.
 - **Audience:** architecture review. Part A becomes binding on acceptance; implementation details remain separate. Acceptance must include the paired amendments listed in B1 in the same accepting revision, including W027 A11. Proposed status authorizes no implementation or permission change.
 
 ## Intent and problem
