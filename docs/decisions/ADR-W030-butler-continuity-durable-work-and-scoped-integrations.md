@@ -302,6 +302,13 @@ P1 → P2 → P3 → P4 → P5 is the first reliability slice. It uses the curre
 
 Each implementation PR updates its package here with an implemented-by link, the evidence run, and any accepted deviation. Later packages start from the accepted main branch and the recorded results, not from this proposal branch.
 
+### Implementation status
+
+| # | Landed | Implemented by | Evidence run | Accepted deviations |
+|---|---|---|---|---|
+| **P1** | Durable work and trace schema | `keystone/runtimedb/migrations/0017_butler_tasks.sql`, `keystone/runtimedb/butlertasks.go`, `butlersteps.go`, `butlertrace.go` | `go test -race ./...` in `keystone/`; `keystone/runtimedb/butlertasks_test.go` carries the three required proofs — a pre-0017 conversation reads back unchanged, illegal transitions and evidence/trace rows missing permission metadata are refused, and an interruption between evidence and completion leaves resumable running work rather than a completed task. | Completion is refused twice over: `TransitionButlerTask` cannot reach `completed` at all, and a SQLite trigger refuses the state change when no evidence row exists, so the invariant survives any writer. Trace, transition and evidence rows are immutable but deletable, because retention and offboarding (P16) must be able to remove them. |
+
+
 The v1 release gate is P16, not the first successful cross-app demo. A partial deployment may dogfood P1–P5 on the existing surfaces, but memory, new connections, and new write paths remain disabled until their own package evidence and the applicable offboarding/recovery paths pass.
 
 Follow-up work: dedicated receipt/screenshot/PDF intake, and selected read-only IMAP monitoring with review-first calendar writes. Calendar invitations/RSVPs remain separately controlled.
