@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Archive,
+  Brain,
   ChatsCircle,
   Cpu,
   House,
@@ -29,6 +30,7 @@ import { ConnectChat } from "./views/ConnectChat";
 import { Home } from "./views/Home";
 import { Household } from "./views/Household";
 import { IdentityView } from "./views/Identity";
+import { Memory } from "./views/Memory";
 import { Nodes } from "./views/Nodes";
 import { Plans } from "./views/Plans";
 import { Secrets } from "./views/Secrets";
@@ -41,6 +43,7 @@ type View =
   | "butler"
   | "work"
   | "authority"
+  | "memory"
   | "chat"
   | "household"
   | "connect"
@@ -64,6 +67,7 @@ const TITLES: Record<View, [string, string]> = {
   butler: ["Operator", "Butler"],
   work: ["Durable", "Work"],
   authority: ["Admission", "Butler access"],
+  memory: ["Owned data", "Memory"],
   chat: ["Access", "Chat"],
   household: ["People", "Household"],
   connect: ["Setup", "Connect chat"],
@@ -125,6 +129,7 @@ export function Shell() {
       { id: "butler", label: "Butler", icon: <Sparkle size={ICON} /> },
       { id: "work", label: "Work", icon: <ListChecks size={ICON} /> },
       { id: "authority", label: "Butler access", icon: <ShieldCheck size={ICON} /> },
+      { id: "memory", label: "Memory", icon: <Brain size={ICON} /> },
       { id: "chat", label: "Chat", icon: <ChatsCircle size={ICON} /> },
       { id: "household", label: "Household", icon: <UsersThree size={ICON} /> },
       { id: "connect", label: "Connect chat", icon: <PlugsConnected size={ICON} /> },
@@ -173,6 +178,7 @@ export function Shell() {
           {view === "butler" && <Butler onEyebrow={setEyebrowOverride} />}
           {view === "work" && <Work />}
           {view === "authority" && <ButlerAuthority />}
+          {view === "memory" && <Memory />}
           {view === "chat" && <Chat />}
           {view === "household" && <Household />}
           {view === "connect" && <ConnectChat />}

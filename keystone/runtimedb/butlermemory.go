@@ -219,22 +219,40 @@ func (db *DB) DeriveMemory(m MemoryRecord, sources []int64) (int64, error) {
 	}
 	strictest := ButlerAudienceShared
 	label := m.PermissionLabel
+	owner := ""
 	for _, src := range sources {
 		s, err := db.GetMemory(src)
 		if err != nil {
 			return 0, fmt.Errorf("runtimedb: deriving from memory %d: %w", src, err)
 		}
-		if s.Audience == ButlerAudiencePrivate {
-			strictest = ButlerAudiencePrivate
+		if s.Audience != ButlerAudiencePrivate {
+			continue
 		}
+		strictest = ButlerAudiencePrivate
+		// The OWNER travels with the audience, and this is the half that
+		// actually closes the leak. "Private, owned by the household" is
+		// not private at all: retrieval treats an owner match as
+		// permission, so every adult would read it. A derivative of
+		// someone's private material belongs to that person.
+		if owner != "" && owner != s.Owner {
+			// Two people's private material in one summary has no
+			// correct owner and therefore no correct audience. Refusing
+			// is the only answer that does not leak one of them to the
+			// other.
+			return 0, fmt.Errorf(
+				"runtimedb: refusing to derive one record from the private material of both %s and %s — it would have no correct audience (ADR-W030 A2/A3)",
+				owner, s.Owner)
+		}
+		owner = s.Owner
 		// The label travels too: a derivative readable under a broader
 		// label than one of its sources is the same leak by another
 		// route.
-		if label == "" {
-			label = s.PermissionLabel
-		}
+		label = s.PermissionLabel
 	}
 	m.Audience = strictest
+	if owner != "" {
+		m.Owner = owner
+	}
 	m.PermissionLabel = label
 	if err := validateMemory(m); err != nil {
 		return 0, err
@@ -293,6 +311,9 @@ func (db *DB) CorrectMemory(seq int64, replacement MemoryRecord, actor string) (
 	// would make "actually, it is X" a way to publish a private record.
 	if old.Audience == ButlerAudiencePrivate {
 		replacement.Audience = ButlerAudiencePrivate
+	}
+	if replacement.Audience == "" {
+		replacement.Audience = old.Audience
 	}
 	if replacement.PermissionLabel == "" {
 		replacement.PermissionLabel = old.PermissionLabel

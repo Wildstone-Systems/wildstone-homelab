@@ -673,6 +673,39 @@ export interface ButlerIdentityLink {
   revokedAt?: string;
 }
 
+
+// ---------------------------------------------------------------- memory
+
+// What the Butler remembers, as owned data with provenance (ADR-W030
+// A3). Every record says where it came from, so it can be corrected at
+// its source and invalidated when that source is deleted.
+export interface MemoryRecord {
+  seq: number;
+  kind: "fact" | "preference" | "inference" | "procedure";
+  subject?: string;
+  content: string;
+  audience: "private" | "shared";
+  owner: string;
+  sourceKind: string;
+  sourceId: string;
+  confidence: string;
+  safetyRelevant?: boolean;
+  createdAt: string;
+  author: string;
+  supersededBy?: number;
+  forgottenAt?: string;
+}
+
+export interface MemoryDigestEntry {
+  seq: number;
+  memory: number;
+  change: "recorded" | "corrected" | "forgotten";
+  summary: string;
+  actor: string;
+  at: string;
+  immediate: boolean;
+}
+
 export const api = {
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
   butlerModels: (endpoint?: string) =>
@@ -680,6 +713,21 @@ export const api = {
       "GET",
       `/api/v1/butler/models${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ""}`,
     ),
+  butlerMemory: (subject?: string) =>
+    call<{ records: MemoryRecord[] | null }>(
+      "GET",
+      `/api/v1/butler/memory${subject ? `?subject=${encodeURIComponent(subject)}` : ""}`,
+    ),
+  correctButlerMemory: (seq: number, content: string) =>
+    call<{ seq: number }>("POST", "/api/v1/butler/memory/correct", {
+      seq,
+      content,
+      confidence: "stated",
+    }),
+  forgetButlerMemory: (seq: number) =>
+    call<{ note: string }>("POST", "/api/v1/butler/memory/forget", { seq }),
+  memoryDigest: () =>
+    call<{ entries: MemoryDigestEntry[] | null }>("GET", "/api/v1/butler/memory/digest"),
   butlerToolControls: (profile?: string) =>
     call<{ controls: ToolControl[] | null }>(
       "GET",
