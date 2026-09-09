@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
@@ -118,6 +119,11 @@ func runner(ts *countingToolset, l *Ledger) *butler.Runner {
 	return &butler.Runner{
 		Gateway: ts, Ledger: l, MaxSliceRounds: 12,
 		PermissionLabel: "operator", Audience: "private", Actor: "butler",
+		// Long enough that nothing in these tests goes stale, so a
+		// repeated dispatch means the ledger failed rather than that a
+		// reading aged out. TestStaleObservationsAreRefreshed sets it
+		// the other way on purpose.
+		ObservationTTL: time.Hour,
 	}
 }
 

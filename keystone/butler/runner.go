@@ -31,9 +31,11 @@ package butler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 )
@@ -60,6 +62,7 @@ const (
 	TraceToolResult     = "tool.result"
 	TraceDenial         = "denial"
 	TraceWaitOpened     = "wait.opened"
+	TraceAttemptFenced  = "attempt.fenced"
 	TraceOutcome        = "outcome"
 )
 
@@ -82,6 +85,12 @@ type LedgerStep struct {
 	State   string
 	Params  string
 	Result  string
+	// VerifiedAt is when the step's last successful attempt closed. A
+	// resume reuses a verified result only while it is still fresh; past
+	// that the reading is taken again, because "do not repeat verified
+	// effects" and "refresh stale observations" are both A4 and this is
+	// where they meet.
+	VerifiedAt time.Time
 }
 
 // LedgerAttempt is one checkpointed try, carrying the lease epoch it was
@@ -146,6 +155,27 @@ type TaskLedger interface {
 	Fail(taskID, reason string) error
 	// Running moves a pending or waiting task to running.
 	Running(taskID, reason string) error
+	// Authorize reports why this task may not continue right now — it
+	// was cancelled, its owner was offboarded or disabled, or its
+	// deadline has passed. It is checked at the start of every slice and
+	// again before each dispatch, because authority that was valid when
+	// the work started is not evidence that it still is (ADR-W030 A2.1,
+	// A4).
+	Authorize(taskID string) error
+	// FenceAttempts bumps the task's lease epoch and marks every
+	// in-flight attempt fenced, returning the new epoch. A result from
+	// the abandoned attempt is refused afterwards.
+	FenceAttempts(taskID string) (int64, error)
+}
+
+// StallNotifier delivers the single deduplicated notice a stalled task
+// sends its owner (ADR-W030 A4's P4 minimum: the owner's originating
+// direct surface, the existing outbound dedupe key, held through the
+// household's quiet hours). keystone/butlerstore implements it; a nil
+// Notifier means the deployment has no outbound surface and the stall is
+// recorded without a message rather than failing the task.
+type StallNotifier interface {
+	NotifyStalled(taskID, text string) error
 }
 
 // Runner drives a Toolset through a provider against a durable task.
@@ -175,6 +205,30 @@ type Runner struct {
 	Audience        string
 	// Actor names who the work is attributed to in the trace.
 	Actor string
+	// StallTimeout bounds one model call. A provider that has stopped
+	// answering is fenced and retried rather than hung on; <= 0 means no
+	// deadline, which is only right in tests.
+	StallTimeout time.Duration
+	// RetryLimit is how many times one stalled or failed model call is
+	// retried inside the remaining budget before a person is told. 0
+	// means tell them the first time.
+	RetryLimit int
+	// ObservationTTL is how long a verified read may be reused on a
+	// resume before it is taken again. 0 means never reuse — every
+	// resume re-reads, which is safe and slow.
+	ObservationTTL time.Duration
+	// Notifier sends the one stalled-task notice. nil records the stall
+	// without messaging anyone.
+	Notifier StallNotifier
+	// Now is the runner clock; nil means time.Now.
+	Now func() time.Time
+}
+
+func (r *Runner) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }
 
 func (r *Runner) sliceRounds() int {
@@ -229,10 +283,17 @@ func callFingerprint(name string, input map[string]any) string {
 
 // verifiedResults reads the ledger and returns, per fingerprint, the
 // recorded result of every tool step that reached verified.
-func verifiedResults(steps []LedgerStep) map[string]string {
+func verifiedResults(steps []LedgerStep, now time.Time, ttl time.Duration) map[string]string {
 	out := map[string]string{}
 	for _, s := range steps {
 		if s.Kind != LedgerStepTool || s.State != LedgerStepVerified {
+			continue
+		}
+		// A reading taken long enough ago is not evidence about now. It
+		// stays in the ledger — it is what the earlier part of the task
+		// was built on — but the resume takes it again rather than
+		// answering today's question from yesterday's observation.
+		if ttl <= 0 || s.VerifiedAt.IsZero() || now.Sub(s.VerifiedAt) > ttl {
 			continue
 		}
 		var rec toolStepResult
@@ -279,6 +340,16 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 	if err := r.Ledger.Fence(); err != nil {
 		return tr, fmt.Errorf("butler runner: %w", err)
 	}
+	// Authority is rechecked before the task is even moved to running:
+	// a task cancelled, offboarded or expired while it waited must not
+	// take another step, and finding that out after the first model call
+	// has already cost a provider round (ADR-W030 A2.1, A4).
+	if err := r.Ledger.Authorize(taskID); err != nil {
+		r.trace(taskID, LedgerTraceEvent{
+			Type: TraceDenial, Payload: jsonPayload(map[string]any{"authority": "refused"}),
+		})
+		return tr, fmt.Errorf("butler runner: %w", err)
+	}
 	if err := r.Ledger.Running(taskID, "slice started"); err != nil {
 		return tr, fmt.Errorf("butler runner: %w", err)
 	}
@@ -287,7 +358,7 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 	if err != nil {
 		return tr, fmt.Errorf("butler runner: reading the step ledger: %w", err)
 	}
-	verified := verifiedResults(steps)
+	verified := verifiedResults(steps, r.now(), r.ObservationTTL)
 	toolsUsed := countToolSteps(steps)
 	resumed := len(steps) > 0
 
@@ -305,6 +376,14 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 
 	for round := 0; round < r.sliceRounds(); round++ {
 		if err := r.Ledger.Fence(); err != nil {
+			return tr, fmt.Errorf("butler runner: %w", err)
+		}
+		if err := r.Ledger.Authorize(taskID); err != nil {
+			// Cancellation stops new actions mid-run, not only between
+			// slices (A4).
+			r.trace(taskID, LedgerTraceEvent{
+				Type: TraceDenial, Payload: jsonPayload(map[string]any{"authority": "withdrawn mid-slice"}),
+			})
 			return tr, fmt.Errorf("butler runner: %w", err)
 		}
 		answer, err := r.modelRound(ctx, p, taskID, manifest, messages, specs)
@@ -350,7 +429,7 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 
 		if fresh, err := r.Ledger.Steps(taskID); err == nil {
 			steps = fresh
-			verified = verifiedResults(steps)
+			verified = verifiedResults(steps, r.now(), r.ObservationTTL)
 		}
 	}
 
@@ -366,9 +445,60 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 	return tr, r.Ledger.Wait(taskID, LedgerWaitReply, "turn tool-call limit reached; awaiting continue")
 }
 
-// modelRound checkpoints one model call: a step and an attempt before
-// the call, the attempt closed after it.
+// modelRound checkpoints one model call and retries a stalled or failed
+// provider inside the remaining budget before involving a person.
+//
+// A stall is a deadline, not a hang. When StallTimeout expires the
+// attempt is FENCED — the task's lease epoch moves — so if the abandoned
+// provider ever answers, that result is refused rather than applied over
+// whatever the retry established (ADR-W030 A4).
+//
+// Only when the retries are spent does anyone get told, and then once:
+// a single deduplicated notice on the owner's originating surface,
+// held through quiet hours, with the ledger untouched so a continue
+// picks up every verified read (A4's P4 minimum).
 func (r *Runner) modelRound(ctx context.Context, p provider.Provider, taskID string,
+	manifest CapabilityManifest, messages []provider.Message, specs []provider.Tool,
+) (*provider.ChatResponse, error) {
+	var lastErr error
+	for try := 0; try <= r.RetryLimit; try++ {
+		resp, err := r.modelAttempt(ctx, p, taskID, manifest, messages, specs)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if errors.Is(err, context.Canceled) {
+			break
+		}
+		// Fence before retrying so a late answer from the abandoned
+		// attempt cannot be accepted.
+		if epoch, ferr := r.Ledger.FenceAttempts(taskID); ferr == nil {
+			r.trace(taskID, LedgerTraceEvent{
+				Type:    TraceAttemptFenced,
+				Payload: jsonPayload(map[string]any{"epoch": epoch, "try": try + 1}),
+			})
+		}
+	}
+
+	// The provider is unavailable, not wrong. The task waits with every
+	// verified read intact, which is the whole reason the ledger exists.
+	_ = r.Ledger.Wait(taskID, LedgerWaitModelUnavailable, "provider call failed")
+	r.trace(taskID, LedgerTraceEvent{
+		Type:    TraceWaitOpened,
+		Payload: jsonPayload(map[string]any{"reason": LedgerWaitModelUnavailable, "tries": r.RetryLimit + 1}),
+	})
+	if r.Notifier != nil {
+		// One notice, deduplicated on the task. A stalled task that is
+		// retried and stalls again must not send a second message.
+		_ = r.Notifier.NotifyStalled(taskID,
+			"I could not reach the model to finish this. Nothing is lost — say continue and I will pick up where I left off.")
+	}
+	return nil, fmt.Errorf("butler runner: chat: %w", lastErr)
+}
+
+// modelAttempt is one checkpointed model call: a step and an attempt
+// before the call, the attempt closed after it.
+func (r *Runner) modelAttempt(ctx context.Context, p provider.Provider, taskID string,
 	manifest CapabilityManifest, messages []provider.Message, specs []provider.Tool,
 ) (*provider.ChatResponse, error) {
 	step, err := r.Ledger.AppendStep(taskID, LedgerStepModel, p.Name(),
@@ -386,21 +516,27 @@ func (r *Runner) modelRound(ctx context.Context, p provider.Provider, taskID str
 		ManifestVersion: manifest.Fingerprint(),
 	})
 
-	resp, err := p.Chat(ctx, provider.ChatRequest{
+	callCtx := ctx
+	if r.StallTimeout > 0 {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithTimeout(ctx, r.StallTimeout)
+		defer cancel()
+	}
+	resp, err := p.Chat(callCtx, provider.ChatRequest{
 		System: r.Gateway.SystemPrompt(), Messages: messages, Tools: specs,
 	})
 	if err != nil {
+		stalled := errors.Is(callCtx.Err(), context.DeadlineExceeded)
 		_ = r.Ledger.FinishAttempt(attempt.Seq, false, "", err.Error())
 		_ = r.Ledger.SetStepState(step, LedgerStepFailed)
 		r.trace(taskID, LedgerTraceEvent{
 			Type: TraceOutcome, Step: step, Attempt: attempt.Seq,
-			Payload: jsonPayload(map[string]any{"providerError": true}),
+			Payload: jsonPayload(map[string]any{"providerError": true, "stalled": stalled}),
 		})
-		// The provider is unavailable, not wrong. The task waits with
-		// every verified read intact, which is the whole reason the
-		// ledger exists (A4).
-		_ = r.Ledger.Wait(taskID, LedgerWaitModelUnavailable, "provider call failed")
-		return nil, fmt.Errorf("butler runner: chat: %w", err)
+		if stalled {
+			return nil, fmt.Errorf("provider stalled after %s: %w", r.StallTimeout, err)
+		}
+		return nil, err
 	}
 	if err := r.Ledger.FinishAttempt(attempt.Seq, true,
 		jsonPayload(map[string]any{"toolCalls": len(resp.ToolCalls)}), ""); err != nil {

@@ -15,7 +15,9 @@
 package butlerstore
 
 import (
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -29,11 +31,72 @@ type Ledger struct {
 	// dispatch.
 	holder string
 	epoch  int64
+	// OwnerActive, when set, reports whether a task's owner may still
+	// have work done on their behalf. It is a seam because Butler
+	// admission and identity links are P6's subject; until then a
+	// deployment wires whatever it has, and nil means "no admission
+	// check is configured", which is the current behaviour rather than a
+	// silent grant.
+	OwnerActive func(owner string) error
+	// Now is the ledger clock; nil means time.Now.
+	Now func() time.Time
 }
 
 // New builds a ledger for the coordinator identified by lease.
 func New(db *runtimedb.DB, lease runtimedb.CoordinatorLease) *Ledger {
 	return &Ledger{db: db, holder: lease.Holder, epoch: lease.Epoch}
+}
+
+func (l *Ledger) now() time.Time {
+	if l.Now != nil {
+		return l.Now()
+	}
+	return time.Now()
+}
+
+// ErrAuthorityWithdrawn reports that a task may no longer proceed. It is
+// deliberately one error for four situations — cancelled, offboarded,
+// expired, owner disabled — because the runner's response to all four is
+// the same: stop now, change nothing.
+var ErrAuthorityWithdrawn = errors.New("butlerstore: this task may no longer continue")
+
+// Authorize implements butler.TaskLedger. It is the recheck that runs
+// before every slice and every model round (ADR-W030 A2.1: "check
+// current membership and link generation at every retrieval and
+// dispatch").
+func (l *Ledger) Authorize(taskID string) error {
+	task, err := l.db.GetButlerTask(taskID)
+	if err != nil {
+		return err
+	}
+	switch task.State {
+	case runtimedb.ButlerTaskCancelled:
+		return fmt.Errorf("%w: it was cancelled", ErrAuthorityWithdrawn)
+	case runtimedb.ButlerTaskCompleted, runtimedb.ButlerTaskFailed:
+		return fmt.Errorf("%w: it already finished as %s", ErrAuthorityWithdrawn, task.State)
+	case runtimedb.ButlerTaskPausedOffboarded:
+		// Offboarded work performs no retries, notices, or model calls
+		// until an administrator reviews it (A4). Resuming it is a
+		// deliberate act elsewhere, not something a slice does.
+		return fmt.Errorf("%w: its owner was offboarded and it is paused for review", ErrAuthorityWithdrawn)
+	}
+	// The absolute deadline expires even while waiting: waiting does not
+	// consume active-work budget, and it does not extend the clock (A4).
+	if !task.DeadlineAt.IsZero() && l.now().After(task.DeadlineAt) {
+		return fmt.Errorf("%w: its deadline passed at %s", ErrAuthorityWithdrawn,
+			task.DeadlineAt.Format(time.RFC3339))
+	}
+	if l.OwnerActive != nil {
+		if err := l.OwnerActive(task.Owner); err != nil {
+			return fmt.Errorf("%w: %v", ErrAuthorityWithdrawn, err)
+		}
+	}
+	return nil
+}
+
+// FenceAttempts implements butler.TaskLedger.
+func (l *Ledger) FenceAttempts(taskID string) (int64, error) {
+	return l.db.FenceButlerTaskAttempts(taskID)
 }
 
 // Fence reports whether this coordinator still holds the database.
@@ -58,21 +121,27 @@ func (l *Ledger) Steps(taskID string) ([]butler.LedgerStep, error) {
 	// Last success wins: attempts come back oldest first, so a later
 	// successful retry overwrites an earlier one.
 	results := map[int64]string{}
+	verifiedAt := map[int64]time.Time{}
 	for _, a := range attempts {
 		if a.State == runtimedb.ButlerAttemptSucceeded {
 			results[a.Step] = a.ResultJSON
+			// EndedAt is when the reading was actually taken, which is
+			// what freshness is measured from — not when the step row
+			// was created, which can predate a long call.
+			verifiedAt[a.Step] = a.EndedAt
 		}
 	}
 	out := make([]butler.LedgerStep, 0, len(steps))
 	for _, s := range steps {
 		out = append(out, butler.LedgerStep{
-			Seq:     s.Seq,
-			Ordinal: s.Ordinal,
-			Kind:    string(s.Kind),
-			Name:    s.Name,
-			State:   string(s.State),
-			Params:  s.ParamsJSON,
-			Result:  results[s.Seq],
+			Seq:        s.Seq,
+			Ordinal:    s.Ordinal,
+			Kind:       string(s.Kind),
+			Name:       s.Name,
+			State:      string(s.State),
+			Params:     s.ParamsJSON,
+			Result:     results[s.Seq],
+			VerifiedAt: verifiedAt[s.Seq],
 		})
 	}
 	return out, nil
