@@ -102,3 +102,143 @@ func TestMemoryDigestNeverCarriesPrivateChanges(t *testing.T) {
 		t.Fatalf("the digest dropped a shared change:\n%s", body)
 	}
 }
+
+// Found by Codex: both memory mutation routes need only VerbRead, which
+// the Butler SERVICE principal holds, and mayChangeMemory waved through
+// every shared record. So a Butler token could correct or forget the
+// household's shared memory directly rather than proposing it.
+//
+// A1's "any admitted adult" is a statement about people. The Butler is
+// not one.
+func TestAServicePrincipalCannotRewriteHouseholdMemory(t *testing.T) {
+	h := newHarness(t)
+	seq, err := h.s.DB.RecordMemory(runtimedb.MemoryRecord{
+		Kind: runtimedb.MemoryFact, Subject: "household",
+		Content:  "the spare key is under the mat",
+		Audience: runtimedb.ButlerAudienceShared, PermissionLabel: "household",
+		Owner: "household", Author: "mika", SourceKind: "conversation", SourceID: "m-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The Butler holds read, so it reaches the handler — and is refused
+	// there.
+	for _, c := range []struct {
+		path string
+		body map[string]any
+	}{
+		{"/api/v1/butler/memory/forget", map[string]any{"seq": seq}},
+		{"/api/v1/butler/memory/correct", map[string]any{
+			"seq": seq, "content": "the spare key is with the neighbour"}},
+	} {
+		res := h.do(runtimedb.RoleButler, http.MethodPost, c.path, c.body, nil)
+		if res.StatusCode == http.StatusOK {
+			t.Fatalf("%s: the butler rewrote household memory itself", c.path)
+		}
+	}
+	// It really is untouched.
+	m, err := h.s.DB.GetMemory(seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.ForgottenAt.IsZero() || m.SupersededBy != 0 {
+		t.Fatalf("the record was changed by a service principal: %+v", m)
+	}
+
+	// An admin still can — the fix must not lock out the people who are
+	// meant to manage shared records.
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/memory/forget",
+		map[string]any{"seq": seq}, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("an admin could not forget a shared record: %d", res.StatusCode)
+	}
+}
+
+// Found by Codex: a routine could be created already enabled through a
+// route that needs only propose — which the Butler holds — skipping the
+// review its activation requires.
+func TestARoutineCannotBeCreatedAlreadyRunning(t *testing.T) {
+	h := newHarness(t)
+	res := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/household/routines",
+		map[string]any{
+			"name": "self-starter", "ownership": "wildstone",
+			"document": `{"name":"self-starter"}`, "state": "enabled",
+		}, nil)
+	if res.StatusCode == http.StatusOK {
+		t.Fatal("a routine was created already enabled, skipping review")
+	}
+	if _, err := h.s.DB.GetHouseholdRoutine("self-starter"); err == nil {
+		t.Fatal("the refused routine was created anyway")
+	}
+
+	// Creating it as a draft works, and it is a draft.
+	if res := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/household/routines",
+		map[string]any{
+			"name": "proper", "ownership": "wildstone", "document": `{"name":"proper"}`,
+		}, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("creating a draft routine = %d", res.StatusCode)
+	}
+	r, err := h.s.DB.GetHouseholdRoutine("proper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.State != runtimedb.RoutineDraft || r.PerformsActions() {
+		t.Fatalf("a new routine is %q and performsActions=%v", r.State, r.PerformsActions())
+	}
+}
+
+// Found by Codex: after W031 A4 an empty MemoryQuery.Butler selects the
+// shared pool alone, and this endpoint supplied none — so every record
+// held by a named Butler vanished from the only screen that can correct
+// or forget it. A regression introduced by the scoping work itself.
+func TestTheMemoryViewShowsNamedButlerRecords(t *testing.T) {
+	h := newHarness(t)
+	if err := h.s.DB.UpsertModelRoute(runtimedb.ModelRoute{
+		Name: "kitchen-box", Kind: runtimedb.RouteLocal, Provider: "ollama",
+		Readiness: runtimedb.RouteReady, Enabled: true,
+	}, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.DB.CreateButler(runtimedb.Butler{
+		Name: "health", Surface: runtimedb.ButlerSurfaceFamily,
+		Profile: runtimedb.ProfileHousehold, Route: "kitchen-box",
+	}, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	held, err := h.s.DB.RecordButlerMemory("health", runtimedb.MemoryRecord{
+		Kind: runtimedb.MemoryFact, Subject: "household", Content: "held by a butler",
+		Audience: runtimedb.ButlerAudienceShared, PermissionLabel: "household",
+		Owner: "household", Author: "mika", SourceKind: "conversation", SourceID: "v-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out struct {
+		Records []runtimedb.MemoryRecord `json:"records"`
+	}
+	if res := h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/butler/memory", nil, &out); res.StatusCode != http.StatusOK {
+		t.Fatalf("retrieving memory = %d", res.StatusCode)
+	}
+	var found bool
+	for _, r := range out.Records {
+		if r.Seq == held {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("a record held by a named butler is invisible in the only view that can act on it")
+	}
+
+	// And it can still be narrowed to one Butler on request.
+	var scoped struct {
+		Records []runtimedb.MemoryRecord `json:"records"`
+	}
+	if res := h.do(runtimedb.RoleAdmin, http.MethodGet,
+		"/api/v1/butler/memory?butler=health", nil, &scoped); res.StatusCode != http.StatusOK {
+		t.Fatalf("scoped retrieval = %d", res.StatusCode)
+	}
+	if len(scoped.Records) != 1 || scoped.Records[0].Seq != held {
+		t.Fatalf("scoping to one butler returned %+v", scoped.Records)
+	}
+}

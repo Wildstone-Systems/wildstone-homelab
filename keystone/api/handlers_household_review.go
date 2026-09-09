@@ -64,9 +64,27 @@ func (s *Server) createHouseholdRoutine(r *http.Request, id principal.Identity) 
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
 	}
+	// A routine is born a DRAFT, whatever the caller asked for.
+	//
+	// This route needs only propose, which the Butler service principal
+	// holds — so accepting a state verbatim let a compromised Butler
+	// credential create an action-capable routine and skip the review
+	// its activation is supposed to require (ADR-W030 A6/A7.1).
+	// Activation goes through SetHouseholdRoutineState and the Plan
+	// boundary, which is where a human is.
+	//
+	// Refused rather than silently downgraded: a caller that asked for
+	// enabled and got a draft with a cheerful note has been told
+	// something untrue about what it just did.
+	if req.State != "" && req.State != runtimedb.RoutineDraft {
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"a routine is created as a draft and activated separately, so it cannot be created %q — put it in trial or enable it once someone has reviewed it (ADR-W030 A6)",
+			req.State)
+	}
 	seq, err := s.DB.CreateHouseholdRoutine(runtimedb.HouseholdRoutine{
 		Name: req.Name, Ownership: req.Ownership, ExternalID: req.ExternalID,
-		Connection: req.Connection, Document: req.Document, State: req.State,
+		Connection: req.Connection, Document: req.Document,
+		State:  runtimedb.RoutineDraft,
 		Author: actingMember(id),
 	})
 	if err != nil {

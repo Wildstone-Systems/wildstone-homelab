@@ -444,3 +444,68 @@ func TestRunProducesAnExplanatoryTrace(t *testing.T) {
 		t.Fatal("no model-call event records the endpoint and manifest version")
 	}
 }
+
+// Found by Codex: the fence before a dispatch proves this coordinator
+// held the database when the call went out, and a model call takes
+// seconds. A promotion during one changes the COORDINATOR lease, not
+// the task's attempt epoch — so FinishAttempt's own epoch check does
+// not see it, and a superseded coordinator could finish its attempt and
+// complete work its replacement had already taken over.
+func TestASupersededCoordinatorCannotFinishOrComplete(t *testing.T) {
+	db, ledger := testLedger(t, filepath.Join(t.TempDir(), "keystone.db"))
+	defer db.Close()
+	ts := newCountingToolset()
+
+	id := newTask(t, db)
+	r := runner(ts, ledger)
+	// An answer with NO tool calls, which is the case Codex named: it
+	// passes no later dispatch fence, so it goes straight to
+	// completion. A response WITH tool calls is caught by the next
+	// round's pre-dispatch fence and would prove nothing about this.
+	p := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{{Text: "the answer"}}}
+
+	// The promotion happens DURING the model call, which is the race
+	// this guards. Promoting before it would be caught by the
+	// pre-dispatch fence that already existed, and would prove nothing
+	// about the new one.
+	promoting := &promotingProvider{inner: p, db: db}
+
+	_, err := r.Run(context.Background(), promoting, id, "diagnose")
+	if err == nil {
+		t.Fatal("a superseded coordinator ran to completion")
+	}
+	if !strings.Contains(err.Error(), "superseded") {
+		t.Fatalf("the refusal does not say why: %v", err)
+	}
+	// And the work is NOT marked complete, which is the thing that
+	// would have stopped its replacement resuming it.
+	task, err := db.GetButlerTask(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State == runtimedb.ButlerTaskCompleted {
+		t.Fatal("a superseded coordinator completed the task anyway")
+	}
+}
+
+// promotingProvider hands the database to another coordinator while the
+// model call is in flight — the window between the fence before a
+// dispatch and the acceptance of its result.
+type promotingProvider struct {
+	inner *scriptedProvider
+	db    *runtimedb.DB
+	done  bool
+}
+
+func (p *promotingProvider) Name() string { return "promoting" }
+
+func (p *promotingProvider) Chat(ctx context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+	resp, err := p.inner.Chat(ctx, req)
+	if !p.done {
+		p.done = true
+		if _, perr := p.db.PromoteCoordinator("keystone-b"); perr != nil {
+			return nil, perr
+		}
+	}
+	return resp, err
+}

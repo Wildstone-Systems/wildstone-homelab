@@ -140,11 +140,34 @@ func (db *DB) ChatOutboundAfter(surface ButlerSurface, transport string, after i
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
+	// Quarantine is checked on the READ, not only on the write.
+	//
+	// Gating EnqueueChatOutbound stops new pushes. It does nothing about
+	// pushes that were ALREADY QUEUED when the snapshot was taken and
+	// came back with it: those rows are unexpired, unheld and
+	// undelivered, so the adapter's next poll would carry them out
+	// before any deletion or authority reconciliation had run — the
+	// proactive delivery A10 holds, arriving through the restore itself.
+	//
+	// Replies stay deliverable, exactly as they stay enqueueable: a
+	// person waiting on an answer is owed one.
+	quarantined := false
+	if s, err := db.GetRestoreState(); err != nil {
+		// Cannot tell: withhold pushes. Failing open here would mean a
+		// database that cannot describe itself still broadcasting.
+		quarantined = true
+	} else {
+		quarantined = s.Quarantined
+	}
+
 	stamp := now()
 	// A held message stays queued and deduplicated; it is simply not
 	// offered to the adapter until its hold expires (ADR-W030 A10).
 	args := []any{string(surface), after, stamp, stamp}
 	where := `surface = ? AND seq > ? AND delivered_at = '' AND expires_at > ? AND (hold_until = '' OR hold_until <= ?)`
+	if quarantined {
+		where += ` AND kind <> 'push'`
+	}
 	if transport != "" {
 		where += " AND transport = ?"
 		args = append(args, transport)

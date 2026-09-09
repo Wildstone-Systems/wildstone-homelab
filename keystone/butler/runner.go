@@ -542,6 +542,24 @@ func (r *Runner) modelAttempt(ctx context.Context, p provider.Provider, taskID s
 		}
 		return nil, err
 	}
+	// The coordinator is rechecked AFTER the call, before its result is
+	// accepted.
+	//
+	// The fence before dispatch proves this coordinator held the
+	// database when the call went out, and a model call takes seconds.
+	// A promotion during one changes the COORDINATOR lease rather than
+	// the task's attempt epoch, so FinishAttempt's own epoch check does
+	// not see it. When the answer carries tool calls the next dispatch
+	// fences anyway — but an answer with NO tool calls goes straight to
+	// completion, and a superseded coordinator would close work its
+	// replacement had already taken over.
+	if err := r.Ledger.Fence(); err != nil {
+		r.trace(taskID, LedgerTraceEvent{
+			Type: TraceDenial, Step: step, Attempt: attempt.Seq,
+			Payload: jsonPayload(map[string]any{"reason": "coordinator changed during the model call"}),
+		})
+		return nil, fmt.Errorf("butler runner: a model answer arrived after this coordinator was superseded: %w", err)
+	}
 	if err := r.Ledger.FinishAttempt(attempt.Seq, true,
 		jsonPayload(map[string]any{"toolCalls": len(resp.ToolCalls)}), ""); err != nil {
 		return nil, fmt.Errorf("butler runner: closing a model checkpoint: %w", err)
@@ -648,6 +666,13 @@ func (r *Runner) toolCall(ctx context.Context, taskID string, tc provider.ToolCa
 // delivery alone, which is honest for a question that needed no reads
 // and refused for anything else by the store's own check.
 func (r *Runner) complete(taskID string, tr *Transcript, steps []LedgerStep, finalText string) error {
+	// Completion is the last thing a superseded coordinator could still
+	// do, and the most consequential: a completed task is one nothing
+	// resumes. This is the backstop for the answer that carried no tool
+	// calls and so passed no other fence on its way here.
+	if err := r.Ledger.Fence(); err != nil {
+		return fmt.Errorf("butler runner: refusing to complete work after this coordinator was superseded: %w", err)
+	}
 	fresh, err := r.Ledger.Steps(taskID)
 	if err == nil {
 		steps = fresh

@@ -28,8 +28,27 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
+// serviceRoles are principals that are not a person.
+//
+// A1's "any admitted adult" is a statement about PEOPLE. The Butler
+// holds read and propose so it can learn and suggest; correcting or
+// forgetting household memory is an adult's act, and a role that is not
+// an adult performing it is the Butler editing the household's record
+// of itself with nobody having decided anything.
+var serviceRoles = map[runtimedb.Role]bool{
+	runtimedb.RoleButler:    true,
+	runtimedb.RolePublisher: true,
+	runtimedb.RoleConcierge: true,
+}
+
 // mayChangeMemory reports whether id may correct or forget this record.
 func mayChangeMemory(m runtimedb.MemoryRecord, id principal.Identity) bool {
+	// Checked FIRST, and before the audience: a shared record is the
+	// broadest case, so an audience test that returns true early is
+	// exactly where a service principal slips through.
+	if serviceRoles[id.Role] {
+		return false
+	}
 	if m.Audience == runtimedb.ButlerAudienceShared {
 		// Equal adult standing: any admitted adult, no approval from the
 		// original author (ADR-W030 A1).
@@ -39,8 +58,23 @@ func mayChangeMemory(m runtimedb.MemoryRecord, id principal.Identity) bool {
 }
 
 func (s *Server) retrieveButlerMemory(r *http.Request, id principal.Identity) (any, int, error) {
+	// The Butler scope defaults to EVERY Butler here, not to the shared
+	// pool. This endpoint is how a person finds their own material in
+	// order to correct or forget it (ADR-W030 A3), and after W031 A4
+	// most of it is held by a named Butler — so a pool-only default
+	// would hide nearly everything from the only screen that can act on
+	// it, while the reader's own permission filter still decides what
+	// they may see.
+	//
+	// ?butler=<name> narrows to one, for a Console showing a single
+	// Butler's material.
+	butler := r.URL.Query().Get("butler")
+	if butler == "" {
+		butler = runtimedb.AllButlers
+	}
 	records, err := s.DB.RetrieveMemory(runtimedb.MemoryQuery{
 		Reader:  actingMember(id),
+		Butler:  butler,
 		Subject: r.URL.Query().Get("subject"),
 		Kind:    r.URL.Query().Get("kind"),
 	})
