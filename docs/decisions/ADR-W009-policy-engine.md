@@ -19,8 +19,9 @@ Policy derives a `household-routine` review class only when every Plan step is
 a routine declaration/action whose tier is read or domestic. The class is
 fail-closed: mixed or unknown steps, managed files, infrastructure, credentials
 or connections, identity/admission, tools/grants, and other standing authority
-require the existing Operator/Admin path. The `household-member` review verb
-cannot override this classification.
+require the existing Operator/Admin path. The `household-reviewer` service
+verb cannot override this classification or act without a currently linked,
+admitted adult identity from the trusted household ingress.
 
 ---
 

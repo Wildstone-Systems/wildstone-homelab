@@ -20,12 +20,15 @@ through normal container materialization. Chat, models, integration work
 queues, events, memory, and audit never receive the value.
 
 Adding an eligible node requires an approved placement Plan and successful
-secret provisioning. Removing one immediately fences adapter work and uses the
-typed, version-matched erasure operation permitted by the W003 amendment. When
-the remote service supports per-client credentials, revoke that node's remote
-credential too. Until local erasure and required remote revocation are proven,
-the desired-state removal remains incomplete and visible as degraded. Immediate
-connection revocation blocks all copies even before cleanup completes.
+adapter deployment/readiness and secret provisioning. Removing one immediately
+fences adapter work, stops/removes the adapter container, and then uses the
+typed, version-matched erasure operation permitted by the W003 amendment. That
+operation refuses while any managed container still references the secret.
+When the remote service supports per-client credentials, revoke that node's
+remote credential too. Until container removal, local erasure, and required
+remote revocation are proven, the desired-state removal remains incomplete and
+visible as degraded. Immediate connection revocation blocks all copies even
+before cleanup completes.
 
 Member offboarding applies that connection revocation and erasure workflow to
 every eligible node before any personal connection can be considered removed.

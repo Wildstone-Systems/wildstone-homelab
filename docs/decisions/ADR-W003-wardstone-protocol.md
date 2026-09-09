@@ -23,8 +23,12 @@ ships, implementation must add one typed, idempotent, additive `RemoveSecret`
 arm carrying secret name and
 expected version and returning only whether that version existed/was removed.
 It never returns a value, refuses a version mismatch, remains admin/Plan
-mediated, and follows A3's protocol-minor compatibility process. An equivalent
-typed erasure operation is acceptable only if it preserves those properties.
+mediated, and refuses while any managed container on the node still references
+that secret. Adapter placement cleanup fences the lease and
+stops/removes the container before erasure so it cannot retain or rematerialize
+the value. The operation follows A3's protocol-minor compatibility process. An
+equivalent typed erasure operation is acceptable only if it preserves those
+properties.
 
 ---
 

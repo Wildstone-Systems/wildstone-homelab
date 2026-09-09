@@ -48,10 +48,12 @@ on the departing member's credential or grant and resume only after review and
 reauthorization.
 
 An admitted adult can approve/reject a server-classified household-routine Plan
-through the authenticated Console view and narrow `household-member` verb in
-W030; this grants no general Plan or infrastructure authority. Household chat
-may immediately disable an exact routine/version as a runtime denial, but chat
-cannot activate, edit, delete, or approve its Plan.
+through W030's Authelia-authenticated household ingress page. Its dedicated
+service principal acts for the linked member and receives only the narrow
+review verb; the person receives no Console credential or general Plan or
+infrastructure authority. Household chat may immediately disable an exact
+routine/version as a runtime denial, but chat cannot activate, edit, delete, or
+approve its Plan.
 
 Publication declarations gain the audience policy specified by the W005
 amendment. Consequential household actions use exact, expiring, single-use

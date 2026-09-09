@@ -24,12 +24,15 @@ and re-enabling requires a fresh approved Plan. Existing risk classification
 applies to the cleanup diff.
 
 An adapter connection's primary and ordered eligible fallback nodes are
-Plan-mediated desired state. Approval authorizes deterministic runtime
-placement on any listed node without a new outage-time Plan. A single lease
-epoch fences concurrent instances and late results. Adding a node is not
-complete until its credential is provisioned; removing one immediately denies
-new work and remains incomplete until local credential erasure and any required
-remote revocation are verified.
+Plan-mediated desired state. Approval deploys and starts the adapter container
+and provisions its credential on every listed node before eligibility. During
+an outage Keystone moves only the active lease epoch among those prepared
+instances; it performs no container create/start write. The epoch fences
+concurrent work and late results. Adding a node is not complete until its
+container is running, its credential is provisioned, and readiness is verified;
+removing one immediately fences its lease, stops/removes its adapter container,
+and remains incomplete until local credential erasure and any required remote
+revocation are verified.
 
 ---
 

@@ -35,23 +35,26 @@ are complete.
 Chat may approve only an exact household-action proposal in an authenticated
 direct session, using a proposal ID/revision, intended approver, expiry, and
 single-use token. Group chat, silence, and ordinary recent-question replies do
-not approve. A Plan link may open authenticated Console review, but no chat
-callback approves infrastructure or standing authority. Proactive task and
-continuation notices follow quiet-hours, privacy, routing, and deduplication
-policy.
+not approve. A Plan link opens either the Authelia-authenticated household
+review page for a classified household routine or authenticated Console review
+for an administrator; no chat callback approves infrastructure or standing
+authority. Proactive task and continuation notices follow quiet-hours,
+privacy, routing, and deduplication policy.
 
 Offboarding revokes every binding and active session for the member before any
 cleanup Plan runs. Queued replies/proactive notices addressed to that member
 expire without delivery, and no conversation context becomes visible to the
 remaining household merely because its owner was removed.
 
-A routine draft or behavioral edit may include a deep link to the authenticated
-Console household-routine review view. The link carries only validated routing
-parts and a Plan ID. An admitted adult authenticates there and may approve only
-the server-classified household-routine Plan; no approval returns through the
-chat adapter. An authenticated direct Household control may immediately disable
-an exact routine/version, while activation, editing, deletion, and Plan approval
-remain unavailable to chat.
+A routine draft or behavioral edit may include a deep link to the
+Authelia-authenticated household-routine review page at the household ingress.
+The link carries only validated routing parts and a Plan ID. The review service
+acts for the explicitly linked, admitted adult and may approve only the
+server-classified household-routine Plan; the member receives no Console
+credential and no approval returns through the chat adapter. An authenticated
+direct Household control may immediately disable an exact routine/version,
+while activation, editing, deletion, and Plan approval remain unavailable to
+chat.
 
 ---
 

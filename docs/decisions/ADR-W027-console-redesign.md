@@ -33,11 +33,13 @@ trace fields are returned. People may label an outcome for improvement and
 create a sanitized regression candidate; the screen never presents hidden
 chain-of-thought or raw unredacted provider/tool payloads.
 
-Console adds a narrow household-routine review route for an admitted adult's
-`household-member` session. It renders only the routine preview, behavior diff,
-effects/audience, version, and approve/reject controls for a Plan already
-classified server-side as household-routine. It does not reveal the general
-Plans screen, infrastructure state, credentials, or administrative navigation.
+Console remains the administrative surface and does not issue a household
+member session. The household-routine review page is a separate
+Authelia-authenticated ingress surface; it renders only the routine preview,
+behavior diff, effects/audience, version, and approve/reject controls for a
+Plan already classified server-side as household-routine. Its service
+principal acts for the linked member and cannot reveal the general Plans
+screen, infrastructure state, credentials, or administrative navigation.
 
 ---
 

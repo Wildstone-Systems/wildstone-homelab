@@ -10,12 +10,14 @@
 ## Conditional amendment from ADR-W030
 
 This amendment becomes binding when ADR-W030 is accepted. Household identity
-requires an explicit principal-to-member link; equal names and LDAP group
-membership are not identity proof. An administrator creates or changes the
-link and Butler admission through a human-approved Plan in Console/CLI. The
-runtime projection carries a generation checked on every retrieval and
-dispatch. Unlink/disable immediately denies access, invalidates derived grants,
-and pauses affected work while preserving immutable historical attribution.
+requires an explicit authenticated-surface-to-member link; API principals,
+chat bindings, and trusted-ingress identities are distinct link types, and
+equal names or LDAP group membership are not identity proof. An administrator
+creates or changes the link and Butler admission through a human-approved Plan
+in Console/CLI. The runtime projection carries a generation checked on every
+retrieval and dispatch. Unlink/disable immediately denies access, invalidates
+derived grants, and pauses affected work while preserving immutable historical
+attribution.
 
 Offboarding is one audited administrator operation whose runtime denial takes
 effect first: disable Butler admission, revoke bindings/sessions and temporary
@@ -29,11 +31,14 @@ memory/preferences/procedures, and task history with provenance/permissions.
 The export follows current read policy and excludes credentials, hidden
 Operator context, and other people's private data.
 
-An admitted adult may authenticate to a narrow household-routine review view
-in Console with a `household-member` session. This is not access to the admin
-plane: it exposes only household-scoped context and Plans accepted by W030's
-server-side household-routine classifier. The chat deep link contains no
-credential. Operator/Admin onboarding and approval remain separate.
+An admitted adult authenticates through Authelia to a narrow household-routine
+review page served by the household ingress, not Console. A dedicated
+`household-reviewer` service principal calls Keystone acting for the member
+identified by Authelia; the member receives no Keystone principal or token.
+Keystone rechecks the explicit trusted-ingress/member link, admission, adult
+classification, Plan revision, and W030's server-side household-routine
+classifier. The chat deep link contains no credential. Operator/Admin
+onboarding and approval remain separate.
 
 A future Child surface adds explicit child classification and member-to-
 guardian mappings through the same Plan-mediated admission path. It is not

@@ -50,11 +50,11 @@ promise — it is construction:
   for your "no".
 - **Even the AI's own vendor is held at arm's length.** Every tool
   result the model sees is redacted and bounded first. Local processing
-  is preferred and local-only data never follows a cloud fallback. Per
-  ADR-W030, an admitted adult profile may explicitly opt into a cloud
-  model only for data whose own policy permits it; background jobs make
-  the same decision independently. Fully local inference remains a
-  first-class path.
+  is preferred and local-only data never follows a cloud fallback.
+  **Conditional on ADR-W030 acceptance,** an admitted adult profile may
+  explicitly opt into a cloud model only for data whose own policy permits
+  it; background jobs make the same decision independently. Fully local
+  inference remains a first-class path.
 
 ## The arc: two butlers
 

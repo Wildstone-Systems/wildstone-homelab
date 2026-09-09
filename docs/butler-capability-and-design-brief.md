@@ -54,9 +54,9 @@ Both adult profiles may need local and cloud models. Local processing is attract
 
 Shared adult household access avoids a complex adult role hierarchy. It does not erase private-source restrictions or the stronger tool boundary around Operator.
 
-Trusted adults can correct shared household memory and change or disable shared routines without asking the original author. Butler keeps the author/editor history and tells the owner when another adult changes routine behavior. A person and the configured homelab administrator control that person's private memory. Safety information such as an allergy keeps visible source/scope and an auditable removal.
+Trusted adults can correct shared household memory and change or disable shared routines without asking the original author. Butler keeps the author/editor history, tells the owner when another adult changes routine behavior, and includes another adult's shared-memory correction or forget action in the next learning digest. Removal of safety information such as an allergy is auditable and surfaced immediately; the record keeps visible source and scope. A person and the configured homelab administrator control that person's private memory.
 
-Butler may draft and preview a shared routine in Telegram, then provide a direct link to its authenticated Console review. Any admitted adult can approve that narrowly classified household-routine Plan there without gaining access to infrastructure Plans. Telegram cannot approve activation or edits, but an authenticated adult can immediately disable an exact routine because that only removes future authority.
+Butler may draft and preview a shared routine in Telegram, then provide a direct link to an Authelia-authenticated household review page. Any admitted adult can approve that narrowly classified household-routine Plan there without receiving an admin Console credential or gaining access to infrastructure Plans. Telegram cannot approve activation or edits, but an authenticated adult can immediately disable an exact routine because that only removes future authority.
 
 Personal service connections start personal, read-only, live-query-only, and local-processing-only. Explicit household-service connections start household-shared and read-only. Indexing, cloud use, and actions are clear setup choices rather than side effects of connecting an account.
 
@@ -70,7 +70,7 @@ Butler's work should be inspectable. Each task keeps a permission-filtered timel
 
 ## Delivery sequence
 
-1. Fix current-agent reliability on the existing surfaces: effective/self-capability inventory, configurable iteration slices, durable single-conversation progress, automatic bounded retry, stalled/resumable state, a task-bound continue flow, and a structured Console work trace. Use current tools only and prove an eight-plus-read diagnosis and provider-failure resume without repeated verified work; turn one sanitized failure into a version-pinned regression evaluation.
+1. Fix current-agent reliability on the existing surfaces: effective/self-capability inventory, configurable iteration slices, durable single-conversation progress, automatic bounded retry, stalled/resumable state, a task-bound continue flow, and a structured Console work trace. Use current executors plus the self-capability read and bounded Operator log read defined by P2; add no new application write authority. Prove an eight-plus-read diagnosis and provider-failure resume without repeated verified work, and turn one sanitized failure into a version-pinned regression evaluation.
 2. Add explicit identity linkage, permission-aware shared history, and the cross-bot handoff while preserving the first slice's attribution.
 3. Add selected-source memory and a cross-app path using Home Assistant and read-only CalDAV, with credential onboarding. Exercise PantryOS against fixtures until its API is ready.
 4. Add selected IMAP monitoring and review-first calendar writes, plus a dedicated receipt/screenshot/document intake pipeline shortly after v1. Evaluate extraction quality before relying on model image interpretation.
