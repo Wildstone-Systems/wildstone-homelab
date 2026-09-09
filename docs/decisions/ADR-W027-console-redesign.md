@@ -26,6 +26,12 @@ complete, completed with an undelivered notice, and terminal failure. Plan
 cards and approval remain authenticated Console actions; chat deep links carry
 only a Plan identifier and destination.
 
+Console adds a narrow household-routine review route for an admitted adult's
+`household-member` session. It renders only the routine preview, behavior diff,
+effects/audience, version, and approve/reject controls for a Plan already
+classified server-side as household-routine. It does not reveal the general
+Plans screen, infrastructure state, credentials, or administrative navigation.
+
 ---
 
 # Part A — Decisions (binding)

@@ -17,6 +17,12 @@ runtime projection carries a generation checked on every retrieval and
 dispatch. Unlink/disable immediately denies access, invalidates derived grants,
 and pauses affected work while preserving immutable historical attribution.
 
+An admitted adult may authenticate to a narrow household-routine review view
+in Console with a `household-member` session. This is not access to the admin
+plane: it exposes only household-scoped context and Plans accepted by W030's
+server-side household-routine classifier. The chat deep link contains no
+credential. Operator/Admin onboarding and approval remain separate.
+
 A future Child surface adds explicit child classification and member-to-
 guardian mappings through the same Plan-mediated admission path. It is not
 inferred from an LDAP group.

@@ -56,6 +56,8 @@ Shared adult household access avoids a complex adult role hierarchy. It does not
 
 Trusted adults can correct shared household memory and change or disable shared routines without asking the original author. Butler keeps the author/editor history and tells the owner when another adult changes routine behavior. A person and the configured homelab administrator control that person's private memory. Safety information such as an allergy keeps visible source/scope and an auditable removal.
 
+Butler may draft and preview a shared routine in Telegram, then provide a direct link to its authenticated Console review. Any admitted adult can approve that narrowly classified household-routine Plan there without gaining access to infrastructure Plans. Telegram cannot approve activation or edits, but an authenticated adult can immediately disable an exact routine because that only removes future authority.
+
 Personal service connections start personal, read-only, live-query-only, and local-processing-only. Explicit household-service connections start household-shared and read-only. Indexing, cloud use, and actions are clear setup choices rather than side effects of connecting an account.
 
 ## Delivery sequence

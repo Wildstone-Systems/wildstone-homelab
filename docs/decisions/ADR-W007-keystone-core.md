@@ -16,6 +16,15 @@ general read, act, propose, approve, or manage authority. Typed integration
 work uses its own durable queue and claim/result endpoints behind the same
 public API; it does not reuse chat tables or the chat inbound path.
 
+The table also adds `household-member`, limited to its own admission/session,
+the exact household-routine Plan preview, and one
+`review-household-routine-plan` verb for an explicitly admitted adult. The
+route approves/rejects only a server-classified Plan whose every step is an
+approved household routine declaration/action at read or domestic tier. It
+refuses mixed Plans and all infrastructure, managed-file, connection/secret,
+identity/admission, tool/grant, and other standing-authority changes. It is not
+the existing general `approve` verb. Child admissions never receive it.
+
 The runtime database also becomes authoritative for task/step attempts,
 conversation turns, waiting reasons, temporary grants, immediate denials,
 identity-link projections, and delivery state. Schema migrations preserve

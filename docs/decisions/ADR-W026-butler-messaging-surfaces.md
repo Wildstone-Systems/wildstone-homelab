@@ -40,6 +40,14 @@ callback approves infrastructure or standing authority. Proactive task and
 continuation notices follow quiet-hours, privacy, routing, and deduplication
 policy.
 
+A routine draft or behavioral edit may include a deep link to the authenticated
+Console household-routine review view. The link carries only validated routing
+parts and a Plan ID. An admitted adult authenticates there and may approve only
+the server-classified household-routine Plan; no approval returns through the
+chat adapter. An authenticated direct Household control may immediately disable
+an exact routine/version, while activation, editing, deletion, and Plan approval
+remain unavailable to chat.
+
 ---
 
 ## The intent, in one sentence

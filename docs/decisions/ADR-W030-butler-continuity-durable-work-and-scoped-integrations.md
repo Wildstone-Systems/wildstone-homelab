@@ -122,6 +122,10 @@ Local disable immediately blocks further Wildstone dispatch. It cannot by itself
 
 Any trusted admitted adult may propose, change, disable, or request deletion of a shared household routine without the creator's permission. The normal Plan or exact-action approval boundary still applies; adult trust removes an extra owner veto, not the platform's review, version, and safety checks. Concurrent edits use the routine version and require a fresh preview when another change has landed.
 
+Activation, behavioral changes, and deletion are reviewed in an authenticated Console household-routine view reached directly or through a chat deep link. An admitted adult receives a narrow `household-member` role and `review-household-routine-plan` verb. Server-side policy permits that verb only when every Plan step is an approved household routine declaration/action at read or domestic tier; it excludes infrastructure, ConfigFile/SeedFile, connections or credentials, identity/admission, tool enablement/grants, and other standing authority. A mixed Plan is not split or partially approved. The URL carries no credential or approval token. Any trusted adult may approve this limited Plan; Operator/Admin retain their existing broader review authority.
+
+An authenticated direct Household chat control may immediately disable a specific routine/version because it only removes effective authority. That runtime denial also creates or links the declaration-removal Plan from A7.1. Chat cannot activate, edit, delete, or approve a routine Plan.
+
 ## A7. Admin-controlled tools and requests for missing capabilities
 
 Provide an admin-only Console tool surface for each profile, grouped by named connection. Show tool purpose, data access, mutating behavior, approval requirements, availability, grants, and dependencies.
@@ -150,7 +154,7 @@ Add an Operator-only bounded container-log tool using the existing Wardstone `Co
 
 Permanent profile enablement, identity links, and Butler admission are Plan-mediated standing authority increases, with runtime projections checked at use. Butler can propose only changes permitted by its own gateway and can otherwise file a request; it cannot approve them. Temporary bounded task grants remain audited runtime records approved by an authenticated human with manage authority. All disables/revocations are immediate runtime denials, including unlink, and override desired-state reconciliation: a previously approved declaration cannot silently re-enable revoked access. Re-enabling requires a fresh explicit Plan. Revoking a declared standing permission also creates or links a proposal to remove that declaration; Console shows “revoked, declaration pending removal” until the human-approved cleanup completes. Failed or rejected cleanup never lifts the runtime denial. Apply normal Plan risk classification to the actual diff rather than automatically assigning every cleanup Low risk. Host state and standing routine declarations remain Plan-mediated; routine grants remain subordinate to current denials.
 
-Chat can show a Plan ID and a validated deep link to its Console approval page. The link carries no approval authority or bearer credential; Wildstone authentication and current Plan review are still required. No chat callback approves a Plan or grants administrative access.
+Chat can show a Plan ID and a validated deep link to its Console approval page. The link carries no approval authority or bearer credential; Wildstone authentication and current Plan review are still required. No chat callback approves a Plan or grants administrative access. An admitted adult's Console session may hold only the narrow household-routine review authority described in A6; it does not expose general Plans or infrastructure administration.
 
 ## A8. Tool access and action approval are separate
 
@@ -210,7 +214,7 @@ Durable Butler runtime state becomes a fourth recovery category alongside the ex
 | W012 / W020 identity and secrets | Add principal/member links, Butler admission/disable, guardian mappings, and member-scoped credential onboarding while preserving the write-only node secret path; do not merge identity stores by name. |
 | W018 and docs/recovery.md | Add durable Butler runtime state, recovery-point limits, quarantine, and a restore/revocation exit drill. |
 | W005 tool declarations / W024 A10 publications | Expand registry-backed tool metadata and publication audience policy, including explicit legacy timeline mapping. Declarations are neither executors nor grants. |
-| W007 A2 closed roles | Add connection-bound integration-adapter claim/result verbs; preserve no general act/manage privilege. |
+| W007 A2 closed roles | Add connection-bound integration-adapter claim/result verbs and a household-member role limited to server-classified household-routine Plan review; preserve no general act/manage/approve privilege. |
 | W017 A9 / W006 bounded loop | Add per-surface runtime iteration limits, persisted budgets, provider-stall recovery and task-bound continuation. |
 | W003 / W006 Operator reads | Reuse existing ContainerLogs wire operation and bounds; expand only the Operator gateway/reader with redacted, scoped logs. No new protocol arm is proposed. |
 | W027 A11 conversation contract | Amend shared conversation continuity and permission-aware retrieval explicitly in the accepting revision. |
@@ -256,6 +260,7 @@ Implementation PRs should prove:
 - Temporary grant expiry, tool disable, and identity revocation at dispatch, including paused/restarted work.
 - A deterministic cross-app run with the model off, an unavailable source, duplicate events, and an uncertain action outcome.
 - Review-bound household writes distinct from infrastructure Plan approval.
+- An admitted adult can review a pure household-routine Plan in Console, while mixed/infrastructure/authority Plans and all chat approval attempts are refused; exact chat disable takes effect immediately.
 - Memory correction/deletion propagated to retrieval and derived content, including restoration behavior.
 - Adapter behavior against fakes and a limited real deployment, not merely a declaration that lints.
 

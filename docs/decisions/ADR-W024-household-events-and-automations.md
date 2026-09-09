@@ -41,6 +41,12 @@ version, and audit history; notify the routine owner of another adult's
 behavioral change. Normal Plan/exact-action review still applies, and concurrent
 edits require a fresh preview against the current version.
 
+An admitted adult can approve/reject a server-classified household-routine Plan
+through the authenticated Console view and narrow `household-member` verb in
+W030; this grants no general Plan or infrastructure authority. Household chat
+may immediately disable an exact routine/version as a runtime denial, but chat
+cannot activate, edit, delete, or approve its Plan.
+
 Publication declarations gain the audience policy specified by the W005
 amendment. Consequential household actions use exact, expiring, single-use
 proposals bound to an authenticated person. Infrastructure writes remain Plans
