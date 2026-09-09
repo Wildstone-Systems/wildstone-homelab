@@ -259,15 +259,27 @@ What replaces it is a **roster** at the top of the existing sidebar,
 with the conversations for the selected Butler below it, and a create
 action on the roster.
 
-Two things about that screen are load-bearing rather than cosmetic.
+Three things about that screen are load-bearing rather than cosmetic.
 
-**Every Butler shows its model, always — in the roster and in the
-header of the conversation you are in.** This is the entire point of
-A2 and A4 made visible. A person choosing to tell a Butler something
-sensitive is relying on which model sits behind it, and a screen that
-makes them click twice to find out has broken the guarantee at the only
-moment it mattered. Nobody should be typing into a Butler without
-seeing where the words go.
+**The model is already shown, and stays shown.** `ThreadBar` renders a
+`provider · model` chip in the conversation header today, in plain
+sight rather than behind a click. That is A2 and A4 already visible at
+the moment that matters — nobody is typing into a Butler without seeing
+where the words go — and it needs no change beyond becoming per-Butler.
+Adding the model to each roster row is worth doing for a different and
+weaker reason: comparing Butlers side by side is how a person notices
+that the health Butler is pointed somewhere it should not be. That is
+verification, not protection, and it must not be mistaken for the thing
+the header is already doing.
+
+**Changing a Butler's model stops being immediate.** The chip is a
+selector today: its popover switches the backend and the change applies
+at once. Under A8 a Butler's model is part of its standing
+configuration, so changing it becomes a proposal that lands on Plans
+and waits. The chip keeps displaying; what it no longer does is switch.
+This is the one behavioural regression in B6, and it is deliberate — a
+model swap that took effect while a conversation was open would move
+material to a different model with nothing recording that it happened.
 
 **Create is a proposal, not a creation.** A8 makes creating a Butler a
 human-approved Plan, so the button drafts one and it lands on Plans as
