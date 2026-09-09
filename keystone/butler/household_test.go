@@ -92,20 +92,36 @@ func TestHouseholdGatewayHoldsNoInfrastructure(t *testing.T) {
 	}
 }
 
-// The two surfaces offer disjoint tool sets, and neither one's
+// The two surfaces share no tool that reaches state, and neither one's
 // vocabulary leaks into the other's prompt.
+//
+// The claim used to be that they share NO tool. P2's self-capability
+// tool is deliberately on both (ADR-W030), so the test states the
+// boundary it was actually protecting: a shared tool must read nothing
+// but the gateway it was called on, so it can carry nothing between
+// them. describe_capabilities is the only name allowed through, and
+// TestHouseholdCannotDiscoverOperatorTools proves what it reports.
 func TestSurfacesAreDisjoint(t *testing.T) {
 	seams, _ := householdSeams(t)
 	family := NewHouseholdGateway("mika", seams)
 	admin := NewToolGateway(nil, nil)
 
+	sharedByDesign := map[string]bool{"describe_capabilities": true}
 	adminNames := map[string]bool{}
 	for _, spec := range admin.ToolSpecs() {
 		adminNames[spec.Name] = true
 	}
 	for _, spec := range family.Specs() {
-		if adminNames[spec.Name] {
+		if adminNames[spec.Name] && !sharedByDesign[spec.Name] {
 			t.Fatalf("tool %q is offered on both surfaces", spec.Name)
+		}
+	}
+	// And a tool shared by design must be non-mutating on both, or
+	// "shared" would mean a family session can act through an operator
+	// tool's handler.
+	for name := range sharedByDesign {
+		if admin.tools[name].Mutating || family.tools[name].Mutating {
+			t.Fatalf("tool %q is shared across surfaces and mutating", name)
 		}
 	}
 	if family.SystemPrompt() == admin.SystemPrompt() {
@@ -256,10 +272,29 @@ func TestHouseholdLookupIsNarrowedAndBounded(t *testing.T) {
 
 // An unwired seam is a working configuration: the tool is withheld and
 // refused, and nothing pretends it exists.
+//
+// One tool survives a deployment with nothing wired — describe_
+// capabilities, which reads only the gateway itself. That is the point
+// of it: a model offered no tools at all has nothing to check itself
+// against and answers from the prompt, whereas one that can ask gets
+// told, in words, that this house has wired nothing up (ADR-W030 P2).
 func TestHouseholdUnwiredSeamsAreHonest(t *testing.T) {
 	gw := NewHouseholdGateway("mika", HouseholdSeams{})
-	if specs := gw.Specs(); len(specs) != 0 {
-		t.Fatalf("specs = %+v, want none on a deployment with no household seams", specs)
+	specs := gw.Specs()
+	if len(specs) != 1 || specs[0].Name != "describe_capabilities" {
+		t.Fatalf("specs = %+v, want only describe_capabilities on a deployment with no household seams", specs)
+	}
+	m := gw.Capabilities(false)
+	for _, tool := range m.Tools {
+		if tool.Name == "describe_capabilities" {
+			continue
+		}
+		if tool.Available {
+			t.Fatalf("tool %q reports available on a deployment with no seams", tool.Name)
+		}
+		if tool.Reason == "" {
+			t.Fatalf("tool %q is unavailable with no reason given", tool.Name)
+		}
 	}
 	out, err := gw.Dispatch(context.Background(), "get_household_events", nil)
 	if err != nil {

@@ -467,6 +467,396 @@ export interface DirectoryListing {
   directories: string[];
 }
 
+
+// ---------------------------------------------------------------- durable work
+
+// A Butler task is one unit of durable work: a conversational request,
+// or one occurrence of a routine (ADR-W030 A4). Unlike a session, it
+// survives a restart, so the Console can show what is still running,
+// what is waiting and on what, and what was interrupted.
+export interface ButlerTask {
+  id: string;
+  kind: "conversation" | "routine";
+  state:
+    | "pending"
+    | "running"
+    | "waiting"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "paused-offboarded";
+  author: string;
+  owner: string;
+  surface: string;
+  profile: string;
+  audience: "private" | "shared";
+  objective: string;
+  completionCriteria: string;
+  resultSummary?: string;
+  uncertainty?: string;
+  sessionId?: string;
+  createdAt: string;
+  updatedAt: string;
+  deadlineAt?: string;
+  nextWakeupAt?: string;
+  leaseEpoch: number;
+}
+
+// One row of the work trace as the API renders it (ADR-W030 A11).
+// Detail carries counts and flags — never what a source SAID, which
+// belongs to the source and is read from there.
+export interface TimelineEntry {
+  at: string;
+  type: string;
+  step?: number;
+  attempt?: number;
+  actor?: string;
+  sources?: string[];
+  modelEndpoint?: string;
+  manifestVersion?: string;
+  promptVersion?: string;
+  policyVersion?: string;
+  detail?: Record<string, unknown>;
+  traceSeq: number;
+}
+
+export interface TaskStep {
+  seq: number;
+  ordinal: number;
+  kind: string;
+  name: string;
+  state: string;
+}
+
+export interface TaskWait {
+  seq: number;
+  createdAt: string;
+  reason: string;
+  detail?: string;
+  resumeAt?: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+}
+
+export interface TaskEvidence {
+  seq: number;
+  recordedAt: string;
+  kind: string;
+  description: string;
+  sourceId?: string;
+  audience: string;
+}
+
+export interface TaskTransition {
+  at: string;
+  fromState: string;
+  toState: string;
+  reason?: string;
+  actor?: string;
+}
+
+// The labels a person may put on a task. Closed, and the same set the
+// store enforces — the value of a label is that it can be counted.
+export const FEEDBACK_LABELS = [
+  "wrong-answer",
+  "stale-read",
+  "repeated-work",
+  "inappropriate-tool",
+  "permission-refusal",
+  "excessive-interruption",
+  "useful-completion",
+] as const;
+export type FeedbackLabel = (typeof FEEDBACK_LABELS)[number];
+
+export interface TaskFeedback {
+  seq: number;
+  createdAt: string;
+  author: string;
+  label: FeedbackLabel;
+  note?: string;
+  traceSeq?: number;
+}
+
+export interface TaskDetail {
+  task: ButlerTask;
+  timeline: TimelineEntry[];
+  steps: TaskStep[];
+  waits: TaskWait[];
+  evidence: TaskEvidence[];
+  transitions: TaskTransition[];
+  feedback: TaskFeedback[];
+  // How many entries this reader is not shown. Reported rather than
+  // silently dropped: an incomplete story presented as complete is
+  // worse than one that says what is missing.
+  withheld: number;
+  debugActive: boolean;
+}
+
+export interface ButlerEvaluation {
+  seq: number;
+  createdAt: string;
+  author: string;
+  name: string;
+  sourceTaskId?: string;
+  summary: string;
+  expected: string;
+  promptVersion?: string;
+  policyVersion?: string;
+  manifestVersion?: string;
+  modelEndpoint?: string;
+  evaluatorVersion?: string;
+  fixtureJson?: string;
+}
+
+export interface ButlerSettingsView {
+  householdRounds: number;
+  operatorRounds: number;
+  maxToolCalls: number;
+  stallSeconds: number;
+  retryLimit: number;
+  observationTtlSeconds: number;
+  quietStartMin: number;
+  quietEndMin: number;
+  timezone: string;
+  updatedBy?: string;
+}
+
+
+// ---------------------------------------------------------------- tool authority
+
+// An administrator's switch for one profile and tool (ADR-W030 A7). A
+// control can turn an existing capability off and on; it can never add
+// one, because the surface's tool map is the structural ceiling.
+export interface ToolControl {
+  profile: string;
+  tool: string;
+  state: "enabled" | "disabled";
+  updatedAt: string;
+  updatedBy: string;
+  reason?: string;
+}
+
+// The Butler asking for something it does not have. A request grants
+// nothing: approving it records a decision, and enabling the tool is a
+// separate act on purpose.
+export interface CapabilityRequest {
+  seq: number;
+  kind: "supported-tool" | "development";
+  requestedBy: string;
+  profile: string;
+  tool?: string;
+  description: string;
+  state: "open" | "approved" | "declined" | "implemented";
+  createdAt: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  decisionNote?: string;
+}
+
+// Butler admission, which is runtime state and not LDAP membership.
+export interface ButlerMemberRecord {
+  member: string;
+  profile: string;
+  admitted: boolean;
+  generation: number;
+  guardian?: string;
+  disabledAt?: string;
+  offboardedAt?: string;
+}
+
+export interface ButlerIdentityLink {
+  seq: number;
+  linkType: string;
+  externalId: string;
+  member: string;
+  createdBy: string;
+  revokedAt?: string;
+}
+
+
+// ---------------------------------------------------------------- memory
+
+// What the Butler remembers, as owned data with provenance (ADR-W030
+// A3). Every record says where it came from, so it can be corrected at
+// its source and invalidated when that source is deleted.
+export interface MemoryRecord {
+  seq: number;
+  kind: "fact" | "preference" | "inference" | "procedure";
+  subject?: string;
+  content: string;
+  audience: "private" | "shared";
+  owner: string;
+  sourceKind: string;
+  sourceId: string;
+  confidence: string;
+  safetyRelevant?: boolean;
+  createdAt: string;
+  author: string;
+  supersededBy?: number;
+  forgottenAt?: string;
+}
+
+export interface MemoryDigestEntry {
+  seq: number;
+  memory: number;
+  change: "recorded" | "corrected" | "forgotten";
+  summary: string;
+  actor: string;
+  at: string;
+  immediate: boolean;
+}
+
+
+// One recorded retrieval fixture run (ADR-W030 P9). The implementation
+// choice is measured rather than asserted, and this is the measurement.
+export interface IndexMeasurement {
+  seq: number;
+  at: string;
+  fixture: string;
+  strategy: "keyword" | "vector" | "hybrid";
+  queries: number;
+  hits: number;
+  recallPct: number;
+  p95Micros: number;
+  indexBytes: number;
+  note?: string;
+}
+
+
+// ---------------------------------------------------------------- integrations
+
+// One named connection to an application (ADR-W030 A5). Keystone holds
+// the contract and the leases; the application-specific half lives in an
+// adapter outside it.
+export interface IntegrationConnection {
+  seq: number;
+  name: string;
+  adapter: string;
+  endpoint?: string;
+  ownership: "personal" | "household";
+  owner: string;
+  audience: "private" | "shared";
+  actionsEnabled: boolean;
+  indexingEnabled: boolean;
+  cloudAllowed: boolean;
+  state: "configured" | "ready" | "degraded" | "unavailable";
+  leaseEpoch: number;
+  degradedReason?: string;
+}
+
+export interface IntegrationCapability {
+  kind: "event" | "query" | "action";
+  name: string;
+  version?: string;
+  available: boolean;
+  detail?: string;
+}
+
+// Where an adapter may run. A node is eligible only once all three
+// facts hold — the container is running, the secret is provisioned, and
+// readiness was verified — because each fails separately.
+export interface Placement {
+  node: string;
+  role: "primary" | "fallback";
+  rank: number;
+  containerRunning: boolean;
+  secretProvisioned: boolean;
+  readinessVerified: boolean;
+  holder: boolean;
+  removing?: boolean;
+  containerRemoved?: boolean;
+  secretErased?: boolean;
+  credentialRevoked?: boolean;
+}
+
+// A reference to a credential, never the credential.
+export interface ConnectionSecret {
+  seq: number;
+  member?: string;
+  secretRef: string;
+  upstreamReadOnly: boolean;
+  disclosure?: string;
+  revokedAt?: string;
+}
+
+
+// ---------------------------------------------------------------- model routes
+
+// Where a question may be sent (ADR-W030 A9). A route's kind is the data
+// boundary: cloud means material sent to it leaves the house, and a
+// route cannot change kind.
+export interface ModelRoute {
+  name: string;
+  kind: "local" | "cloud";
+  provider: string;
+  model?: string;
+  endpoint?: string;
+  readiness: "unprobed" | "ready" | "qa-only" | "unavailable";
+  readinessDetail?: string;
+  enabled: boolean;
+}
+
+// A Butler: a named specialist with one assigned model, its own
+// directive, and its own scope (ADR-W031 A1).
+//
+// The model is a property of the Butler rather than a per-call choice.
+// Which model saw a piece of material is therefore answerable by name,
+// which is the whole reason routing was removed (A2).
+export interface Butler {
+  name: string;
+  directive?: string;
+  surface: ButlerSurface;
+  profile: string;
+  route: string;
+  routeKind: "local" | "cloud";
+  model?: string;
+  provider?: string;
+  readiness: "unprobed" | "ready" | "qa-only" | "unavailable";
+  enabled: boolean;
+  createdAt: string;
+  createdBy: string;
+  retiredAt?: string;
+}
+
+// One roster row. leavesTheHouse is computed by the server rather than
+// derived here: it is the most consequential fact about a Butler, and a
+// client that derives it is one that can derive it wrongly.
+export interface ButlerRow {
+  butler: Butler;
+  leavesTheHouse: boolean;
+  carriesActions: boolean;
+  reachable: boolean;
+}
+
+export interface ButlerScope {
+  butler: string;
+  model: string;
+  routeKind: "local" | "cloud";
+  connections: string[] | null;
+  narrowedTools?: Record<string, string> | null;
+  memoryCount: number;
+}
+
+export interface ButlerAddress {
+  transport: string;
+  externalId: string;
+  label?: string;
+}
+
+// A routine the household wrote, native to an app or run by Wildstone.
+export interface HouseholdRoutine {
+  name: string;
+  ownership: "native" | "wildstone";
+  externalId?: string;
+  connection?: string;
+  author: string;
+  revision: number;
+  state: "draft" | "trial" | "enabled" | "disabled";
+  document: string;
+  disabledAt?: string;
+  disabledBy?: string;
+}
+
 export const api = {
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
   butlerModels: (endpoint?: string) =>
@@ -474,7 +864,149 @@ export const api = {
       "GET",
       `/api/v1/butler/models${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ""}`,
     ),
+  modelRoutes: () =>
+    call<{ routes: { route: ModelRoute; carriesActions: boolean; leavesTheHouse: boolean }[] | null }>(
+      "GET",
+      "/api/v1/butler/routes",
+    ),
+  setModelRouteEnabled: (name: string, enabled: boolean) =>
+    call<{ enabled: boolean }>(
+      "POST",
+      `/api/v1/butler/routes/${encodeURIComponent(name)}/enabled`,
+      { enabled },
+    ),
+  butlers: () => call<{ butlers: ButlerRow[] | null }>("GET", "/api/v1/butlers"),
+  createButler: (b: {
+    name: string;
+    directive?: string;
+    surface: string;
+    profile: string;
+    route: string;
+  }) => call<ButlerRow>("POST", "/api/v1/butlers", b),
+  butlerScope: (name: string) =>
+    call<{ scope: ButlerScope; people: string[] | null; addresses: ButlerAddress[] | null }>(
+      "GET",
+      `/api/v1/butlers/${encodeURIComponent(name)}/scope`,
+    ),
+  // Applies immediately (A8). crossesToCloud is set when this move
+  // sends an open conversation's history out of the house on the next
+  // message, and warning carries the sentence to show.
+  setButlerRoute: (name: string, route: string) =>
+    call<ButlerRow & { crossesToCloud?: boolean; warning?: string; previousModel?: string }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/route`,
+      { route },
+    ),
+  setButlerAccess: (name: string, member: string, allow: boolean) =>
+    call<{ people: string[] | null }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/access`,
+      { member, allow },
+    ),
+  retireButler: (name: string) =>
+    call<{ retired: string }>("DELETE", `/api/v1/butlers/${encodeURIComponent(name)}`),
+  householdRoutines: () =>
+    call<{ routines: HouseholdRoutine[] | null }>("GET", "/api/v1/household/routines"),
+  setRoutineState: (name: string, state: string) =>
+    call<{ routine: HouseholdRoutine; performsActions: boolean }>(
+      "POST",
+      `/api/v1/household/routines/${encodeURIComponent(name)}/state`,
+      { state },
+    ),
+  integrations: () =>
+    call<{
+      connections: { connection: IntegrationConnection; capabilities: IntegrationCapability[] | null }[] | null;
+    }>("GET", "/api/v1/integrations"),
+  integrationPlacement: (name: string) =>
+    call<{ placements: Placement[] | null; secrets: ConnectionSecret[] | null }>(
+      "GET",
+      `/api/v1/integrations/${encodeURIComponent(name)}/placement`,
+    ),
+  placeIntegration: (name: string) =>
+    call<{ holder: string | null; moved?: boolean; waiting?: boolean; note?: string }>(
+      "POST",
+      `/api/v1/integrations/${encodeURIComponent(name)}/placement/place`,
+      {},
+    ),
+  widenIntegration: (name: string, w: { actions: boolean; indexing: boolean; cloud: boolean }) =>
+    call<{ widened: string }>("POST", `/api/v1/integrations/${encodeURIComponent(name)}/widen`, w),
+  indexMeasurements: () =>
+    call<{ measurements: IndexMeasurement[] | null }>("GET", "/api/v1/butler/index/measurements"),
+  compactButlerIndex: (maxAgeDays: number) =>
+    call<{ prunedForgotten: number; agedOut: number; note: string }>(
+      "POST",
+      "/api/v1/butler/index/compact",
+      { maxAgeDays },
+    ),
+  butlerMemory: (subject?: string) =>
+    call<{ records: MemoryRecord[] | null }>(
+      "GET",
+      `/api/v1/butler/memory${subject ? `?subject=${encodeURIComponent(subject)}` : ""}`,
+    ),
+  correctButlerMemory: (seq: number, content: string) =>
+    call<{ seq: number }>("POST", "/api/v1/butler/memory/correct", {
+      seq,
+      content,
+      confidence: "stated",
+    }),
+  forgetButlerMemory: (seq: number) =>
+    call<{ note: string }>("POST", "/api/v1/butler/memory/forget", { seq }),
+  memoryDigest: () =>
+    call<{ entries: MemoryDigestEntry[] | null }>("GET", "/api/v1/butler/memory/digest"),
+  butlerToolControls: (profile?: string) =>
+    call<{ controls: ToolControl[] | null }>(
+      "GET",
+      `/api/v1/butler/tools${profile ? `?profile=${encodeURIComponent(profile)}` : ""}`,
+    ),
+  setButlerToolControl: (c: { profile: string; tool: string; state: string; reason: string }) =>
+    call<{ note?: string }>("PUT", "/api/v1/butler/tools", c),
+  capabilityRequests: (state?: string) =>
+    call<{ requests: CapabilityRequest[] | null }>(
+      "GET",
+      `/api/v1/butler/requests${state ? `?state=${encodeURIComponent(state)}` : ""}`,
+    ),
+  decideCapabilityRequest: (seq: number, state: string, note: string) =>
+    call<{ note: string }>("POST", "/api/v1/butler/requests/decide", { seq, state, note }),
+  butlerMembers: () =>
+    call<{ members: { member: ButlerMemberRecord; links: ButlerIdentityLink[] | null; active: boolean }[] | null }>(
+      "GET",
+      "/api/v1/butler/members",
+    ),
+  admitButlerMember: (member: string) =>
+    call<unknown>("POST", `/api/v1/butler/members/${encodeURIComponent(member)}/admit`, {}),
+  disableButlerMember: (member: string) =>
+    call<unknown>("POST", `/api/v1/butler/members/${encodeURIComponent(member)}/disable`, {}),
+  offboardButlerMember: (member: string) =>
+    call<{ pausedTasks: number }>(
+      "POST",
+      `/api/v1/butler/members/${encodeURIComponent(member)}/offboard`,
+      {},
+    ),
   butlerConfig: () => call<{ stored: boolean; config: ButlerConfig }>("GET", "/api/v1/butler/config"),
+  butlerSettings: () =>
+    call<{ stored: boolean; settings: ButlerSettingsView }>("GET", "/api/v1/butler/settings"),
+  setButlerSettings: (s: Partial<ButlerSettingsView>) =>
+    call<{ stored: boolean; settings: ButlerSettingsView }>("PUT", "/api/v1/butler/settings", s),
+  butlerTasks: () => call<{ tasks: ButlerTask[] | null }>("GET", "/api/v1/butler/tasks"),
+  butlerTask: (id: string) =>
+    call<TaskDetail>("GET", `/api/v1/butler/tasks/${encodeURIComponent(id)}`),
+  labelButlerTask: (id: string, label: FeedbackLabel, note: string, traceSeq?: number) =>
+    call<{ recorded: boolean }>("POST", `/api/v1/butler/tasks/${encodeURIComponent(id)}/feedback`, {
+      label,
+      note,
+      traceSeq: traceSeq ?? 0,
+    }),
+  exportButlerEvaluation: (
+    id: string,
+    body: { name: string; expected: string; summary: string; evaluatorVersion: string },
+  ) =>
+    call<{ seq: number; name: string }>(
+      "POST",
+      `/api/v1/butler/tasks/${encodeURIComponent(id)}/evaluation`,
+      body,
+    ),
+  butlerEvaluations: () =>
+    call<{ evaluations: ButlerEvaluation[] | null }>("GET", "/api/v1/butler/evaluations"),
   setButlerConfig: (c: { provider: string; model: string; endpoint: string }) =>
     call<{ stored: boolean; config: ButlerConfig }>("PUT", "/api/v1/butler/config", c),
   // The install form's folder picker. Read-only, and the node answers

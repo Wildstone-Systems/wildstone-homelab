@@ -33,12 +33,25 @@ const (
 	// there would hand each of them the operator's private chat queue —
 	// a capability appearing on credentials minted before it existed.
 	RoleValet Role = "valet"
+	// RoleIntegrationAdapter is an application adapter (ADR-W030 A5.1):
+	// it holds claim-integration-work and report-integration-result and
+	// nothing else.
+	//
+	// Its authority is not merely narrow, it is CONNECTION-BOUND. The
+	// two verbs let it ask for the work assigned to the connections its
+	// credential is bound to and answer that work; they carry no read of
+	// Keystone state, no query, no act, and no manage. A compromised
+	// adapter can lie about one application's answers — which is the
+	// irreducible risk of connecting to that application at all — and
+	// cannot reach another connection or the general API.
+	RoleIntegrationAdapter Role = "integration-adapter"
 )
 
 // ValidRole reports whether r is one of the closed role set.
 func ValidRole(r Role) bool {
 	return r == RoleAdmin || r == RoleOperator || r == RoleButler ||
-		r == RolePublisher || r == RoleConcierge || r == RoleValet
+		r == RolePublisher || r == RoleConcierge || r == RoleValet ||
+		r == RoleIntegrationAdapter
 }
 
 // Principal is who calls the public API. ActingFor is the ADR-W001

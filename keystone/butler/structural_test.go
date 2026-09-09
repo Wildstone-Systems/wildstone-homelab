@@ -21,7 +21,12 @@ func TestPackageNeverImportsReconcile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
-	const forbidden = `keystone/reconcile"`
+	// runtimedb joined the list with the durable runner (ADR-W030 P3).
+	// The Butler checkpoints through the TaskLedger interface it
+	// defines, implemented in keystone/butlerstore — so it holds a
+	// checkpoint seam, not a database handle, and cannot reach the
+	// store's full API by following a field.
+	forbidden := []string{`keystone/reconcile"`, `keystone/runtimedb"`}
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -34,8 +39,11 @@ func TestPackageNeverImportsReconcile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadFile %s: %v", name, err)
 		}
-		if strings.Contains(string(data), forbidden) {
-			t.Fatalf("%s imports keystone/reconcile — the Butler must never hold an apply-capable dependency (ADR-W006 A1)", name)
+		for _, imp := range forbidden {
+			if strings.Contains(string(data), imp) {
+				t.Fatalf("%s imports %s — the Butler must hold neither an apply-capable dependency (ADR-W006 A1) nor the runtime database itself (ADR-W030 P3)",
+					name, strings.TrimSuffix(imp, `"`))
+			}
 		}
 	}
 }

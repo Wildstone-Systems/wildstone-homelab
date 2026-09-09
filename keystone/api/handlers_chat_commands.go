@@ -83,6 +83,14 @@ func init() {
 		{Name: "backups", Help: "the last run of each backup plan", Surfaces: adminOnly, Run: (*Server).chatBackups},
 		{Name: "services", Help: "what is installed, and what is healthy", Surfaces: adminOnly, Run: (*Server).chatServices},
 
+		// /approve exists in order to REFUSE, on both surfaces
+		// (ADR-W030 A8.1). Without it a person typing "approve plan-12"
+		// gets "I don't know /approve", learns nothing, and tries
+		// phrasing it differently. With it they are told why chat cannot
+		// approve and where it can be done instead, which is the whole
+		// content of the decision.
+		{Name: "approve", Arg: "<id>", Help: "why approving happens elsewhere", Surfaces: bothSurfaces, Run: (*Server).chatApprove},
+
 		{Name: "today", Help: "what has happened in the house today", Surfaces: familyOnly, Run: (*Server).chatToday},
 		{Name: "actions", Help: "what I can do here", Surfaces: familyOnly, Run: (*Server).chatActions},
 	}
@@ -625,4 +633,28 @@ func roughly(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%dd %dh", int(d.Hours())/24, int(d.Hours())%24)
 	}
+}
+
+// chatApprove refuses, and says why.
+//
+// Chat cannot approve, and the reason is not that chat is insecure — it
+// is that a message does not establish who typed it or what they read.
+// A group thread makes agreement and silence look identical, and a
+// forwarded message makes anyone's words look like the author's. So
+// approval happens where an identity was established: the Console for
+// infrastructure, and the Authelia-authenticated household page for a
+// pure routine change.
+//
+// The reply is different per surface because the alternative is
+// different: an operator has a Console and a CLI, and a household member
+// has a link somebody sends them.
+func (s *Server) chatApprove(c chatCommandCtx) (string, error) {
+	if c.Surface == runtimedb.ButlerSurfaceFamily {
+		return "I can't take an approval here — a message doesn't show who typed it or what they read, " +
+			"and in a group chat agreement and silence look the same. If this is a change to one of " +
+			"the house's routines, ask for a review link: it opens a page that signs you in, shows " +
+			"you exactly what changes, and works once.", nil
+	}
+	return "I can't approve anything, and neither can you from here. Approve it in the Console, or " +
+		"with `wild plan approve`. Both establish who you are first; a chat message doesn't.", nil
 }

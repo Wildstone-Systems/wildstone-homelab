@@ -44,10 +44,39 @@ deletions.
 The expanded exit drill must restore an older snapshot containing access and
 content that were revoked/deleted afterward, prove they remain unavailable,
 include an offboarded member with old bindings/connections/private indexes, and
-prove uncertain pending actions do not resume. When implemented, restore
-the Butler state after fresh Keystone starts and before any Butler-facing
-surface leaves quarantine. Until that drill passes, the steps below describe
-only the current three-input release contract.
+prove uncertain pending actions do not resume. Restore the Butler state after
+fresh Keystone starts and before any Butler-facing surface leaves quarantine.
+
+### How the quarantine is actually released
+
+Restoring a Butler-state backup puts the runtime database in quarantine. That
+is the default, not something an operator switches on: nothing Butler-facing
+runs — no retrieval, no task dispatch, no ingestion, no proactive delivery —
+until reconciliation has happened.
+
+Releasing it takes two things, and the order is the point.
+
+1. **Assert the deletion journal is current.** Deletions and revocations are
+   journalled separately from the data they concern, so they can be replayed
+   over restored state. A journal restored from the same old snapshot is
+   itself incomplete, so somebody has to state that it has been brought up to
+   date from a source newer than the snapshot. This is a precondition.
+2. **Replay it.** Every journalled deletion and revocation is re-applied: a
+   forgotten memory stays forgotten, an offboarded member stays denied, a
+   revoked link stays revoked, a de-indexed source stays unsearchable. This is
+   the evidence.
+
+An administrative acknowledgement alone is not evidence that missing deletions
+were recovered, and the schema refuses a release that has only the assertion.
+Work whose outcome was unknown when the snapshot was taken stays paused: a
+restored coordinator that resumes it would be retrying an action that may
+already have happened.
+
+    wild restore status                 # is this database quarantined
+    wild restore reconcile --release    # assert, replay, and release
+
+Until that drill passes, the steps below describe only the current three-input
+release contract.
 
 V1 has one active coordinator. A standby restore may be prepared, but promotion
 is an explicit fenced recovery action: verify the previous Keystone cannot

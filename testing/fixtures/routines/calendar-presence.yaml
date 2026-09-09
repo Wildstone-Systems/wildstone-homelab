@@ -1,0 +1,26 @@
+# The second fixture scenario (ADR-W030 A6, P12): who is in, and what is
+# on.
+#
+# It exists to exercise the read-only half of the contract across two
+# applications at once — Home Assistant for presence, CalDAV for the
+# day — with no action anywhere in it. A routine that only reads is the
+# common case in a household, and it is the one where an outage most
+# easily gets reported as "nothing on today".
+name: calendar-presence
+trigger: household.morning
+
+dedupeWindow: 1h
+
+steps:
+  - kind: query
+    connection: home
+    capability: ha.presence
+    as: presence
+
+  - kind: query
+    connection: family-calendar
+    capability: caldav.today
+    as: today
+
+  - kind: notify
+    text: "Here's who's in and what's on today."

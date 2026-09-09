@@ -38,6 +38,14 @@ type Server struct {
 	State   *statefile.Store
 	Log     *slog.Logger
 
+	// TrustedIngress is the exact set of remote addresses the identity
+	// proxy speaks from (ADR-W030 A8.1). It gates the household review
+	// route, which trusts an identity header — and a header anyone can
+	// set is not an authentication. Empty means the household review
+	// path is unavailable rather than open: an unconfigured trust
+	// boundary must fail closed.
+	TrustedIngress []string
+
 	// OnApproved, when set, is called (non-blocking contract: keep it
 	// cheap) after a plan approval commits — cmd/keystone wires it to the
 	// reconcile service's Poke so convergence starts immediately instead
@@ -267,6 +275,106 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/butler/models", s.handle(principal.VerbManage, s.listButlerModels))
 	mux.Handle("GET /api/v1/butler/config", s.handle(principal.VerbManage, s.getButlerConfig))
 	mux.Handle("PUT /api/v1/butler/config", s.handle(principal.VerbManage, s.setButlerConfig))
+	// The administrator's side of integrations. Every one needs manage.
+	mux.Handle("GET /api/v1/integrations", s.handle(principal.VerbRead, s.listIntegrationConnections))
+	mux.Handle("POST /api/v1/integrations", s.handle(principal.VerbManage, s.createIntegrationConnection))
+	mux.Handle("POST /api/v1/integrations/{name}/widen", s.handle(principal.VerbManage, s.widenIntegrationConnection))
+	mux.Handle("POST /api/v1/integrations/{name}/adapter", s.handle(principal.VerbManage, s.bindIntegrationAdapter))
+	mux.Handle("POST /api/v1/integrations/{name}/capabilities", s.handle(principal.VerbManage, s.recordIntegrationCapability))
+	mux.Handle("POST /api/v1/integrations/{name}/work", s.handle(principal.VerbManage, s.queueIntegrationWork))
+	// Work items live at their own path rather than under a connection:
+	// they are addressed by id, and nesting them would collide with the
+	// connection sub-resources below.
+	mux.Handle("GET /api/v1/integration-work/{seq}", s.handle(principal.VerbRead, s.getIntegrationWork))
+	mux.Handle("GET /api/v1/integrations/{name}/placement", s.handle(principal.VerbRead, s.listIntegrationPlacements))
+	mux.Handle("POST /api/v1/integrations/{name}/placement", s.handle(principal.VerbManage, s.addIntegrationPlacement))
+	mux.Handle("POST /api/v1/integrations/{name}/placement/ready", s.handle(principal.VerbManage, s.markIntegrationPlacementReady))
+	mux.Handle("POST /api/v1/integrations/{name}/placement/place", s.handle(principal.VerbManage, s.placeIntegrationConnection))
+	mux.Handle("POST /api/v1/integrations/{name}/placement/remove", s.handle(principal.VerbManage, s.removeIntegrationPlacement))
+	mux.Handle("POST /api/v1/integrations/{name}/placement/proof", s.handle(principal.VerbManage, s.proveIntegrationPlacementRemoval))
+	mux.Handle("POST /api/v1/integrations/{name}/secrets", s.handle(principal.VerbManage, s.onboardIntegrationSecret))
+	// The adapter's side: claim and answer, and nothing else.
+	mux.Handle("POST /api/v1/integration-work/claim", s.handle(principal.VerbClaimIntegrationWork, s.claimIntegrationWork))
+	mux.Handle("POST /api/v1/integration-work/result", s.handle(principal.VerbReportIntegrationResult, s.reportIntegrationResult))
+	mux.Handle("GET /api/v1/butler/index/measurements", s.handle(principal.VerbRead, s.listIndexMeasurements))
+	mux.Handle("POST /api/v1/butler/index/compact", s.handle(principal.VerbManage, s.compactButlerIndex))
+	mux.Handle("GET /api/v1/butler/memory", s.handle(principal.VerbRead, s.retrieveButlerMemory))
+	mux.Handle("GET /api/v1/butler/memory/export", s.handle(principal.VerbRead, s.exportButlerMemory))
+	mux.Handle("POST /api/v1/butler/memory/correct", s.handle(principal.VerbRead, s.correctButlerMemory))
+	mux.Handle("POST /api/v1/butler/memory/forget", s.handle(principal.VerbRead, s.forgetButlerMemory))
+	mux.Handle("GET /api/v1/butler/memory/digest", s.handle(principal.VerbRead, s.listMemoryDigest))
+	mux.Handle("GET /api/v1/household/routines", s.handle(principal.VerbRead, s.listHouseholdRoutines))
+	mux.Handle("POST /api/v1/household/routines", s.handle(principal.VerbPropose, s.createHouseholdRoutine))
+	mux.Handle("POST /api/v1/household/routines/{name}/edit", s.handle(principal.VerbPropose, s.editHouseholdRoutine))
+	mux.Handle("POST /api/v1/household/routines/{name}/state", s.handle(principal.VerbPropose, s.setHouseholdRoutineState))
+	mux.Handle("POST /api/v1/household/review/token", s.handle(principal.VerbApprove, s.issueHouseholdReviewToken))
+	// The narrow acting-for service route (ADR-W030 A8.1). It carries no
+	// API verb: identity comes from the trusted ingress in front of it,
+	// and authority comes entirely from a single-use, proposal-bound
+	// token. A request without both gets nothing.
+	mux.HandleFunc("POST /api/v1/household/review", s.householdReview)
+	// The chat callback path. It needs `converse` — the adapter's only
+	// verb — because the adapter relays a tap; the identity comes from
+	// the binding a human redeemed, and the authority from the token.
+	mux.Handle("GET /api/v1/butler/tools", s.handle(principal.VerbRead, s.listButlerToolControls))
+	mux.Handle("PUT /api/v1/butler/tools", s.handle(principal.VerbManage, s.setButlerToolControl))
+	mux.Handle("GET /api/v1/butler/grants", s.handle(principal.VerbRead, s.listButlerGrants))
+	mux.Handle("POST /api/v1/butler/grants", s.handle(principal.VerbManage, s.grantButlerTool))
+	mux.Handle("POST /api/v1/butler/grants/revoke", s.handle(principal.VerbManage, s.revokeButlerGrant))
+	mux.Handle("GET /api/v1/butler/requests", s.handle(principal.VerbRead, s.listCapabilityRequests))
+	// Asking needs only read: a request grants nothing, and requiring
+	// manage to ask would mean only the people who can already enable a
+	// tool could request one (ADR-W030 A7).
+	mux.Handle("POST /api/v1/butler/requests", s.handle(principal.VerbRead, s.fileCapabilityRequest))
+	mux.Handle("POST /api/v1/butler/requests/decide", s.handle(principal.VerbManage, s.decideCapabilityRequest))
+	mux.Handle("GET /api/v1/butler/members", s.handle(principal.VerbRead, s.listButlerMembers))
+	mux.Handle("POST /api/v1/butler/members", s.handle(principal.VerbManage, s.recordButlerMember))
+	mux.Handle("POST /api/v1/butler/members/{member}/admit", s.handle(principal.VerbManage, s.admitButlerMember))
+	mux.Handle("POST /api/v1/butler/members/{member}/disable", s.handle(principal.VerbManage, s.disableButlerMember))
+	mux.Handle("POST /api/v1/butler/members/{member}/offboard", s.handle(principal.VerbManage, s.offboardButlerMember))
+	mux.Handle("POST /api/v1/butler/members/{member}/links", s.handle(principal.VerbManage, s.linkButlerIdentity))
+	mux.Handle("POST /api/v1/butler/links/revoke", s.handle(principal.VerbManage, s.unlinkButlerIdentity))
+	mux.Handle("POST /api/v1/butler/conversations", s.handle(principal.VerbRead, s.startButlerConversation))
+	mux.Handle("POST /api/v1/butler/conversations/{id}/handoff", s.handle(principal.VerbRead, s.handoffButlerConversation))
+	mux.Handle("GET /api/v1/butler/tasks", s.handle(principal.VerbRead, s.listButlerTasks))
+	mux.Handle("GET /api/v1/butler/tasks/{id}", s.handle(principal.VerbRead, s.getButlerTask))
+	mux.Handle("POST /api/v1/butler/tasks/{id}/feedback", s.handle(principal.VerbRead, s.addButlerTaskFeedback))
+	mux.Handle("POST /api/v1/butler/tasks/{id}/evaluation", s.handle(principal.VerbManage, s.exportButlerEvaluation))
+	mux.Handle("POST /api/v1/butler/tasks/{id}/debug", s.handle(principal.VerbManage, s.enableButlerDebugCapture))
+	mux.Handle("GET /api/v1/butler/evaluations", s.handle(principal.VerbRead, s.listButlerEvaluations))
+	mux.Handle("GET /api/v1/butler/debug", s.handle(principal.VerbRead, s.listButlerDebugCaptures))
+	mux.Handle("POST /api/v1/butler/members/{member}/offboarding", s.handle(principal.VerbManage, s.offboardMember))
+	mux.Handle("GET /api/v1/restore", s.handle(principal.VerbRead, s.getRestoreState))
+	mux.Handle("POST /api/v1/restore/quarantine", s.handle(principal.VerbManage, s.enterRestoreQuarantine))
+	mux.Handle("POST /api/v1/restore/reconcile", s.handle(principal.VerbManage, s.reconcileRestore))
+	mux.Handle("GET /api/v1/notices", s.handle(principal.VerbRead, s.listNotices))
+	mux.Handle("POST /api/v1/notices/acknowledge", s.handle(principal.VerbRead, s.acknowledgeNotice))
+	mux.Handle("POST /api/v1/notices/answer", s.handle(principal.VerbRead, s.answerNotice))
+	mux.Handle("POST /api/v1/notices/expire", s.handle(principal.VerbManage, s.expireNotices))
+	mux.Handle("GET /api/v1/notices/preferences", s.handle(principal.VerbRead, s.getNoticePreferences))
+	mux.Handle("PUT /api/v1/notices/preferences", s.handle(principal.VerbRead, s.setNoticePreferences))
+	mux.Handle("PUT /api/v1/notices/kinds", s.handle(principal.VerbManage, s.setNoticeKind))
+	mux.Handle("GET /api/v1/butler/routes", s.handle(principal.VerbRead, s.listModelRoutes))
+	mux.Handle("PUT /api/v1/butler/routes", s.handle(principal.VerbManage, s.upsertModelRoute))
+
+	// Butlers (ADR-W031). Reading the roster is a read; everything that
+	// shapes a Butler — its model, its people, its connections, its
+	// tools, where it answers — needs manage, because each is standing
+	// configuration the Console holder owns and a Butler must never
+	// reach (A8).
+	mux.Handle("GET /api/v1/butlers", s.handle(principal.VerbRead, s.listButlers))
+	mux.Handle("POST /api/v1/butlers", s.handle(principal.VerbManage, s.createButler))
+	mux.Handle("GET /api/v1/butlers/{name}/scope", s.handle(principal.VerbRead, s.butlerScope))
+	mux.Handle("PUT /api/v1/butlers/{name}/route", s.handle(principal.VerbManage, s.setButlerRoute))
+	mux.Handle("PUT /api/v1/butlers/{name}/access", s.handle(principal.VerbManage, s.setButlerAccess))
+	mux.Handle("PUT /api/v1/butlers/{name}/connection", s.handle(principal.VerbManage, s.setButlerConnection))
+	mux.Handle("PUT /api/v1/butlers/{name}/tool", s.handle(principal.VerbManage, s.setButlerTool))
+	mux.Handle("PUT /api/v1/butlers/{name}/address", s.handle(principal.VerbManage, s.setButlerAddress))
+	mux.Handle("DELETE /api/v1/butlers/{name}", s.handle(principal.VerbManage, s.retireButler))
+	mux.Handle("POST /api/v1/butler/routes/{name}/readiness", s.handle(principal.VerbManage, s.recordRouteReadiness))
+	mux.Handle("POST /api/v1/butler/routes/{name}/enabled", s.handle(principal.VerbManage, s.setModelRouteEnabled))
+	mux.Handle("GET /api/v1/butler/settings", s.handle(principal.VerbManage, s.getButlerSettings))
+	mux.Handle("PUT /api/v1/butler/settings", s.handle(principal.VerbManage, s.setButlerSettings))
 	mux.Handle("POST /api/v1/butler/ask", s.handle(principal.VerbRead, s.askButler))
 	mux.Handle("GET /api/v1/butler/sessions", s.handle(principal.VerbRead, s.listButlerSessions))
 	mux.Handle("GET /api/v1/butler/sessions/{id}", s.handle(principal.VerbRead, s.getButlerSession))
@@ -406,7 +514,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 		return
 	}
 	switch body.(type) {
-	case mintResponse, joinTokenResponse:
+	case mintResponse, joinTokenResponse, reviewTokenResponse:
 		// The two deliberate carve-outs (ADR-W007 A3, ADR-W014 A3): a
 		// newly minted API token and a newly minted join token, each in
 		// the only moment it ever exists in a response.

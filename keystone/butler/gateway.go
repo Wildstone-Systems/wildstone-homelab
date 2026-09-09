@@ -53,6 +53,19 @@ type toolEntry struct {
 	// anyway cannot reach the handler (ADR-W006 A4).
 	Mutating bool
 	Handler  toolHandler
+	// GrantRequired marks a tool that needs an explicit, work-bound
+	// grant even when it is registered here and not disabled (ADR-W030
+	// A8: tool access and action approval are separate). No v1 tool sets
+	// it; the field exists so the resolver has something to read when
+	// P12's and P13's write paths arrive, rather than being retrofitted
+	// through every call site then.
+	GrantRequired bool
+	// Describe is the variant for the self-capability tool, which is the
+	// one tool whose answer depends on the session's own constraints
+	// (ADR-W030 P2). Giving it a separate shape keeps readOnly out of
+	// the other handlers' signatures, where it would be an ignored
+	// parameter that a future handler might start trusting.
+	Describe func(gw *ToolGateway, readOnly bool) ToolOutcome
 }
 
 // ToolGateway is the Butler's tool gateway (ADR-W006 A3, B1): the read
@@ -87,6 +100,14 @@ type ToolGateway struct {
 	// MaxContentBytes bounds a single tool result's size before it's
 	// handed back to the model. <= 0 uses defaultMaxContentBytes.
 	MaxContentBytes int
+	// Authorizer is the effective-authority seam (ADR-W030 P7). nil
+	// means no administrative controls are configured and structural
+	// presence decides, which is what this gateway did before P7.
+	Authorizer ToolAuthorizer
+	// SessionTask scopes work-bound grants to the task this session is
+	// driving. Empty means no grant can apply, which is right for a
+	// one-shot question that is not durable work.
+	SessionTask string
 
 	tools map[string]toolEntry
 }
@@ -108,6 +129,13 @@ func NewToolGateway(store *statefile.Store, reader *AgentReader) *ToolGateway {
 		// its result is attacker-influenceable like a health detail is.
 		"dry_run_automation": {Spec: dryRunAutomationSpec, Untrusted: true, Handler: handleDryRunAutomation},
 		"propose_change":     {Spec: proposeChangeSpec, Mutating: true, Handler: handleProposeChange},
+		// The self-capability tool is read-only and available on both
+		// surfaces; each reports only its own (ADR-W030 P2).
+		"describe_capabilities": {Spec: describeCapabilitiesSpec, Describe: describeCapabilities},
+		// Container logs are operator-only and go through the existing
+		// read-only Wardstone operation. The family surface has no
+		// AgentReader at all, so this tool cannot exist there.
+		"get_container_logs": {Spec: containerLogsSpec, Untrusted: true, Handler: handleGetContainerLogs},
 	}
 	return gw
 }
@@ -125,7 +153,7 @@ func (gw *ToolGateway) DispatchReadOnly(ctx context.Context, name string, input 
 			Rejected: true,
 		}, nil
 	}
-	return gw.Dispatch(ctx, name, input)
+	return gw.dispatch(ctx, name, input, true)
 }
 
 // ToolSpecs returns the provider-neutral Tool declarations for every
@@ -166,9 +194,29 @@ func (gw *ToolGateway) ReadOnlyToolSpecs() []provider.Tool {
 // by which a tool result reaches a model; there is no way to hand a
 // handler's raw output to a Provider.
 func (gw *ToolGateway) Dispatch(ctx context.Context, name string, input map[string]any) (ToolOutcome, error) {
+	return gw.dispatch(ctx, name, input, false)
+}
+
+// dispatch is Dispatch with the session's read-only constraint made
+// explicit, so the self-capability tool can report the session it is
+// actually in.
+func (gw *ToolGateway) dispatch(ctx context.Context, name string, input map[string]any, readOnly bool) (ToolOutcome, error) {
 	entry, ok := gw.tools[name]
 	if !ok {
+		// Structurally absent. The resolver would say the same thing,
+		// and saying it here keeps an unknown tool an unknown tool
+		// rather than a database round trip.
 		return ToolOutcome{}, fmt.Errorf("butler: unknown tool %q", name)
+	}
+	// Administrative authority is checked before the handler runs, so a
+	// disabled tool is refused even when a saved task or a cached
+	// manifest still lists it (ADR-W030 A7).
+	if d := authorize(gw.Authorizer, string(ProfileOperator), name, true,
+		entry.GrantRequired, gw.SessionTask, ""); !d.Allowed {
+		return finishOutcome(refusal(name, d), false, gw.MaxContentBytes), nil
+	}
+	if entry.Describe != nil {
+		return finishOutcome(entry.Describe(gw, readOnly), entry.Untrusted, gw.MaxContentBytes), nil
 	}
 	outcome, err := entry.Handler(ctx, gw, input)
 	if err != nil {

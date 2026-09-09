@@ -1,0 +1,45 @@
+# A household routine, written by the household (ADR-W030 A6, P12).
+#
+# "When someone leaves in the morning, see what's on today, check what
+# we're out of, and put it on the list." Nothing in Wildstone knows what
+# breakfast is: this file is the whole of the behaviour, and it is a
+# fixture precisely so the scenario tests exercise a document a person
+# could have written rather than code somebody shipped.
+#
+# Every step is deterministic. The model, when there is one, may reword
+# the message at the end; with no model the household gets the text
+# below, and the routine runs identically either way.
+name: departure-breakfast
+trigger: person.left_home
+
+# A phone reports leaving three times in a minute. That is one
+# departure, and a shopping list with milk on it three times is the
+# failure this window prevents.
+dedupeWindow: 10m
+
+steps:
+  # What is on today. Optional: if the calendar cannot be reached the
+  # routine still does the useful half rather than stopping.
+  - kind: query
+    connection: family-calendar
+    capability: caldav.today
+    as: today
+    optional: true
+
+  # What we are actually out of.
+  - kind: query
+    connection: pantry
+    capability: pantry.inventory
+    as: inventory
+
+  # Put the staple on the list. An action, so it only runs at all once
+  # the connection's actions switch is on and a grant covers it.
+  - kind: act
+    connection: pantry
+    capability: pantry.add
+    request: '{"list":"groceries","item":"milk"}'
+    when: inventory
+    as: added
+
+  - kind: notify
+    text: "Someone's off. I've checked today's calendar and added milk to the shopping list."

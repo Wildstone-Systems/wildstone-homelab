@@ -13,6 +13,7 @@ package runtimedb
 // minutes of conversation, not to yesterday's.
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -67,9 +68,14 @@ type ChatOutbound struct {
 	BindingID     int64         `json:"bindingId,omitempty"`
 	CorrelationID string        `json:"correlationId,omitempty"`
 	DedupeKey     string        `json:"dedupeKey"`
-	CreatedAt     time.Time     `json:"createdAt"`
-	ExpiresAt     time.Time     `json:"expiresAt"`
-	DeliveredAt   time.Time     `json:"deliveredAt,omitempty"`
+	// HoldUntil defers delivery without dropping the message: a
+	// non-urgent notice raised during the household's quiet hours is
+	// queued now and becomes visible to the adapter when the quiet
+	// window ends (ADR-W030 A10). Zero means deliverable immediately.
+	HoldUntil   time.Time `json:"holdUntil,omitzero"`
+	CreatedAt   time.Time `json:"createdAt"`
+	ExpiresAt   time.Time `json:"expiresAt"`
+	DeliveredAt time.Time `json:"deliveredAt,omitempty"`
 }
 
 // ErrDuplicateOutbound reports that this dedupe key is already queued or
@@ -93,15 +99,26 @@ func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
 	if m.Kind == "" {
 		m.Kind = "reply"
 	}
+	// Only pushes are gated. A push is proactive delivery and waits out
+	// quarantine; a reply is an answer to something a person just asked,
+	// and refusing to finish a conversation somebody is in the middle of
+	// would be a worse failure than the one quarantine is preventing.
+	// In practice a reply cannot say much anyway — retrieval and
+	// dispatch are both held — but it can still say why.
+	if m.Kind == "push" {
+		if err := db.gate(GateDelivery); err != nil {
+			return 0, err
+		}
+	}
 	if m.ExpiresAt.IsZero() {
 		m.ExpiresAt = time.Now().Add(DefaultChatOutboundTTL)
 	}
 	db.pruneChatOutbound()
 	res, err := db.sql.Exec(
-		`INSERT INTO chat_outbound (surface, transport, target, body, kind, binding_id, correlation_id, dedupe_key, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO chat_outbound (surface, transport, target, body, kind, binding_id, correlation_id, dedupe_key, created_at, expires_at, hold_until)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		string(m.Surface), m.Transport, m.Target, m.Body, m.Kind, m.BindingID, m.CorrelationID,
-		m.DedupeKey, now(), m.ExpiresAt.UTC().Format(time.RFC3339Nano))
+		m.DedupeKey, now(), m.ExpiresAt.UTC().Format(time.RFC3339Nano), timeText(m.HoldUntil))
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			var seq int64
@@ -123,39 +140,97 @@ func (db *DB) ChatOutboundAfter(surface ButlerSurface, transport string, after i
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
-	args := []any{string(surface), after, now()}
-	where := `surface = ? AND seq > ? AND delivered_at = '' AND expires_at > ?`
+	// Quarantine is checked on the READ, not only on the write.
+	//
+	// Gating EnqueueChatOutbound stops new pushes. It does nothing about
+	// pushes that were ALREADY QUEUED when the snapshot was taken and
+	// came back with it: those rows are unexpired, unheld and
+	// undelivered, so the adapter's next poll would carry them out
+	// before any deletion or authority reconciliation had run — the
+	// proactive delivery A10 holds, arriving through the restore itself.
+	//
+	// Replies stay deliverable, exactly as they stay enqueueable: a
+	// person waiting on an answer is owed one.
+	quarantined := false
+	if s, err := db.GetRestoreState(); err != nil {
+		// Cannot tell: withhold pushes. Failing open here would mean a
+		// database that cannot describe itself still broadcasting.
+		quarantined = true
+	} else {
+		quarantined = s.Quarantined
+	}
+
+	stamp := now()
+	// A held message stays queued and deduplicated; it is simply not
+	// offered to the adapter until its hold expires (ADR-W030 A10).
+	args := []any{string(surface), after, stamp, stamp}
+	where := `surface = ? AND seq > ? AND delivered_at = '' AND expires_at > ? AND (hold_until = '' OR hold_until <= ?)`
+	if quarantined {
+		where += ` AND kind <> 'push'`
+	}
 	if transport != "" {
 		where += " AND transport = ?"
 		args = append(args, transport)
 	}
 	args = append(args, limit)
 	rows, err := db.sql.Query(
-		`SELECT seq, surface, transport, target, body, kind, binding_id, correlation_id, dedupe_key, created_at, expires_at, delivered_at
+		`SELECT seq, surface, transport, target, body, kind, binding_id, correlation_id, dedupe_key, created_at, expires_at, delivered_at, hold_until
 		 FROM chat_outbound WHERE `+where+` ORDER BY seq ASC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: reading chat outbound: %w", err)
 	}
 	defer rows.Close()
+	return scanChatOutbound(rows)
+}
+
+// scanChatOutbound reads the shared column list both queue reads select.
+func scanChatOutbound(rows *sql.Rows) ([]ChatOutbound, error) {
 	var out []ChatOutbound
 	for rows.Next() {
 		var m ChatOutbound
-		var surfaceStr, created, expires, delivered string
+		var surfaceStr, created, expires, delivered, hold string
 		if err := rows.Scan(&m.Seq, &surfaceStr, &m.Transport, &m.Target, &m.Body, &m.Kind,
-			&m.BindingID, &m.CorrelationID, &m.DedupeKey, &created, &expires, &delivered); err != nil {
+			&m.BindingID, &m.CorrelationID, &m.DedupeKey, &created, &expires, &delivered, &hold); err != nil {
 			return nil, err
 		}
 		m.Surface = ButlerSurface(surfaceStr)
-		var perr error
-		if m.CreatedAt, perr = time.Parse(time.RFC3339Nano, created); perr != nil {
-			return nil, perr
+		var err error
+		if m.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
+			return nil, fmt.Errorf("runtimedb: bad chat created_at %q: %w", created, err)
 		}
-		if m.ExpiresAt, perr = time.Parse(time.RFC3339Nano, expires); perr != nil {
-			return nil, perr
+		if m.ExpiresAt, err = time.Parse(time.RFC3339Nano, expires); err != nil {
+			return nil, fmt.Errorf("runtimedb: bad chat expires_at %q: %w", expires, err)
+		}
+		if hold != "" {
+			if m.HoldUntil, err = time.Parse(time.RFC3339Nano, hold); err != nil {
+				return nil, fmt.Errorf("runtimedb: bad chat hold_until %q: %w", hold, err)
+			}
 		}
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// ChatOutboundHeld returns queued, undelivered messages whose quiet-
+// hours hold has not yet expired — what ChatOutboundAfter deliberately
+// will not show an adapter.
+//
+// It exists so that "held until morning" is visible rather than
+// indistinguishable from "never queued". A notice nobody can see is
+// operationally the same as a notice that was dropped, and the whole
+// point of holding rather than dropping is that it will arrive.
+func (db *DB) ChatOutboundHeld(surface ButlerSurface) ([]ChatOutbound, error) {
+	stamp := now()
+	rows, err := db.sql.Query(
+		`SELECT seq, surface, transport, target, body, kind, binding_id, correlation_id, dedupe_key, created_at, expires_at, delivered_at, hold_until
+		 FROM chat_outbound
+		 WHERE surface = ? AND delivered_at = '' AND expires_at > ? AND hold_until > ?
+		 ORDER BY seq ASC`, string(surface), stamp, stamp)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: reading held chat outbound: %w", err)
+	}
+	defer rows.Close()
+	return scanChatOutbound(rows)
 }
 
 // AckChatOutbound marks one message delivered. Acking a message that is

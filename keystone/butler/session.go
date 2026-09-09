@@ -72,6 +72,12 @@ type Toolset interface {
 	Execute(ctx context.Context, name string, input map[string]any, readOnly bool) (ToolOutcome, error)
 	// SystemPrompt is this surface's instruction hierarchy.
 	SystemPrompt() string
+	// Capabilities is this surface's effective inventory for a session
+	// with the given constraint (ADR-W030 P2). It is on the interface
+	// rather than beside it so a surface cannot ship tools it cannot
+	// describe, and so a work trace can record which manifest a run was
+	// offered without knowing which gateway answered.
+	Capabilities(readOnly bool) CapabilityManifest
 }
 
 // Session drives a Provider through one of the Butler's tool gateways

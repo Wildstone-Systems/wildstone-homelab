@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Archive,
+  Brain,
   ChatsCircle,
   Cpu,
   House,
   IdentificationCard,
   Key,
+  ListChecks,
   PlugsConnected,
   Pulse,
+  Repeat,
   SealCheck,
   ShieldCheck,
   Sparkle,
@@ -22,20 +25,32 @@ import { Rail, RailItem } from "./ui/Rail";
 import { Activity } from "./views/Activity";
 import { Backups } from "./views/Backups";
 import { Butler } from "./views/Butler";
+import { ButlerAuthority } from "./views/ButlerAuthority";
 import { Chat } from "./views/Chat";
 import { ConnectChat } from "./views/ConnectChat";
 import { Home } from "./views/Home";
 import { Household } from "./views/Household";
+import { Integrations } from "./views/Integrations";
 import { IdentityView } from "./views/Identity";
+import { Memory } from "./views/Memory";
 import { Nodes } from "./views/Nodes";
 import { Plans } from "./views/Plans";
+import { Butlers } from "./views/Butlers";
+import { Routines } from "./views/Routines";
 import { Secrets } from "./views/Secrets";
+import { Work } from "./views/Work";
 import { Services } from "./views/Services";
 
 type View =
   | "home"
   | "services"
   | "butler"
+  | "work"
+  | "authority"
+  | "memory"
+  | "integrations"
+  | "routines"
+  | "butlers"
   | "chat"
   | "household"
   | "connect"
@@ -57,6 +72,12 @@ const TITLES: Record<View, [string, string]> = {
   home: ["Overview", "Home"],
   services: ["Catalog", "Services"],
   butler: ["Operator", "Butler"],
+  work: ["Durable", "Work"],
+  authority: ["Admission", "Butler access"],
+  memory: ["Owned data", "Memory"],
+  integrations: ["Connected apps", "Integrations"],
+  routines: ["On its own", "Routines"],
+  butlers: ["Who answers", "Butlers"],
   chat: ["Access", "Chat"],
   household: ["People", "Household"],
   connect: ["Setup", "Connect chat"],
@@ -116,6 +137,12 @@ export function Shell() {
       { id: "home", label: "Home", icon: <House size={ICON} />, pip: homePip },
       { id: "services", label: "Services", icon: <SquaresFour size={ICON} /> },
       { id: "butler", label: "Butler", icon: <Sparkle size={ICON} /> },
+      { id: "butlers", label: "Butlers", icon: <UsersThree size={ICON} /> },
+      { id: "work", label: "Work", icon: <ListChecks size={ICON} /> },
+      { id: "authority", label: "Butler access", icon: <ShieldCheck size={ICON} /> },
+      { id: "memory", label: "Memory", icon: <Brain size={ICON} /> },
+      { id: "integrations", label: "Integrations", icon: <PlugsConnected size={ICON} /> },
+      { id: "routines", label: "Routines", icon: <Repeat size={ICON} /> },
       { id: "chat", label: "Chat", icon: <ChatsCircle size={ICON} /> },
       { id: "household", label: "Household", icon: <UsersThree size={ICON} /> },
       { id: "connect", label: "Connect chat", icon: <PlugsConnected size={ICON} /> },
@@ -162,6 +189,12 @@ export function Shell() {
           {view === "home" && <Home onNavigate={setView} />}
           {view === "services" && <Services />}
           {view === "butler" && <Butler onEyebrow={setEyebrowOverride} />}
+          {view === "work" && <Work />}
+          {view === "authority" && <ButlerAuthority />}
+          {view === "memory" && <Memory />}
+          {view === "integrations" && <Integrations />}
+          {view === "routines" && <Routines />}
+          {view === "butlers" && <Butlers />}
           {view === "chat" && <Chat />}
           {view === "household" && <Household />}
           {view === "connect" && <ConnectChat />}
