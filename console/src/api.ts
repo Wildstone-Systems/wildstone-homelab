@@ -621,12 +621,93 @@ export interface ButlerSettingsView {
   updatedBy?: string;
 }
 
+
+// ---------------------------------------------------------------- tool authority
+
+// An administrator's switch for one profile and tool (ADR-W030 A7). A
+// control can turn an existing capability off and on; it can never add
+// one, because the surface's tool map is the structural ceiling.
+export interface ToolControl {
+  profile: string;
+  tool: string;
+  state: "enabled" | "disabled";
+  updatedAt: string;
+  updatedBy: string;
+  reason?: string;
+}
+
+// The Butler asking for something it does not have. A request grants
+// nothing: approving it records a decision, and enabling the tool is a
+// separate act on purpose.
+export interface CapabilityRequest {
+  seq: number;
+  kind: "supported-tool" | "development";
+  requestedBy: string;
+  profile: string;
+  tool?: string;
+  description: string;
+  state: "open" | "approved" | "declined" | "implemented";
+  createdAt: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  decisionNote?: string;
+}
+
+// Butler admission, which is runtime state and not LDAP membership.
+export interface ButlerMemberRecord {
+  member: string;
+  profile: string;
+  admitted: boolean;
+  generation: number;
+  guardian?: string;
+  disabledAt?: string;
+  offboardedAt?: string;
+}
+
+export interface ButlerIdentityLink {
+  seq: number;
+  linkType: string;
+  externalId: string;
+  member: string;
+  createdBy: string;
+  revokedAt?: string;
+}
+
 export const api = {
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
   butlerModels: (endpoint?: string) =>
     call<{ endpoint: string; models: ButlerModel[] }>(
       "GET",
       `/api/v1/butler/models${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ""}`,
+    ),
+  butlerToolControls: (profile?: string) =>
+    call<{ controls: ToolControl[] | null }>(
+      "GET",
+      `/api/v1/butler/tools${profile ? `?profile=${encodeURIComponent(profile)}` : ""}`,
+    ),
+  setButlerToolControl: (c: { profile: string; tool: string; state: string; reason: string }) =>
+    call<{ note?: string }>("PUT", "/api/v1/butler/tools", c),
+  capabilityRequests: (state?: string) =>
+    call<{ requests: CapabilityRequest[] | null }>(
+      "GET",
+      `/api/v1/butler/requests${state ? `?state=${encodeURIComponent(state)}` : ""}`,
+    ),
+  decideCapabilityRequest: (seq: number, state: string, note: string) =>
+    call<{ note: string }>("POST", "/api/v1/butler/requests/decide", { seq, state, note }),
+  butlerMembers: () =>
+    call<{ members: { member: ButlerMemberRecord; links: ButlerIdentityLink[] | null; active: boolean }[] | null }>(
+      "GET",
+      "/api/v1/butler/members",
+    ),
+  admitButlerMember: (member: string) =>
+    call<unknown>("POST", `/api/v1/butler/members/${encodeURIComponent(member)}/admit`, {}),
+  disableButlerMember: (member: string) =>
+    call<unknown>("POST", `/api/v1/butler/members/${encodeURIComponent(member)}/disable`, {}),
+  offboardButlerMember: (member: string) =>
+    call<{ pausedTasks: number }>(
+      "POST",
+      `/api/v1/butler/members/${encodeURIComponent(member)}/offboard`,
+      {},
     ),
   butlerConfig: () => call<{ stored: boolean; config: ButlerConfig }>("GET", "/api/v1/butler/config"),
   butlerSettings: () =>

@@ -164,6 +164,8 @@ type householdEntry struct {
 	Untrusted bool
 	Mutating  bool
 	Handler   householdHandler
+	// GrantRequired: see toolEntry. No household tool sets it in v1.
+	GrantRequired bool
 	// Describe is the self-capability variant (ADR-W030 P2): the one
 	// tool whose answer depends on the session's own constraints, kept
 	// out of the ordinary handler signature for the reason the operator
@@ -182,6 +184,15 @@ type HouseholdGateway struct {
 	// structurally — see NewHouseholdGroupGateway.
 	group bool
 	tools map[string]householdEntry
+	// Authorizer is the effective-authority seam (ADR-W030 P7). It sits
+	// on the gateway rather than in HouseholdSeams because it is not a
+	// capability this surface gains — it can only ever NARROW the tool
+	// map above, which is the structural ceiling, and no control or
+	// grant reaches past it. nil means no administrative controls are
+	// configured, which is what this gateway did before P7.
+	Authorizer ToolAuthorizer
+	// SessionTask scopes work-bound grants to this session's task.
+	SessionTask string
 }
 
 // NewHouseholdGroupGateway builds a family gateway for a session whose
@@ -373,6 +384,15 @@ func (gw *HouseholdGateway) dispatch(ctx context.Context, name string, input map
 	entry, ok := gw.tools[name]
 	if !ok {
 		return ToolOutcome{}, fmt.Errorf("butler: unknown household tool %q", name)
+	}
+	// The structural ceiling is the tool map above, and it is passed as
+	// the `structural` fact rather than assumed: an operator tool name
+	// arriving here is not in the map, so it never reaches this line —
+	// and a control row for one could not switch it on if it did
+	// (ADR-W030 A7).
+	if d := authorize(gw.Authorizer, string(ProfileHousehold), name, true,
+		entry.GrantRequired, gw.SessionTask, ""); !d.Allowed {
+		return finishOutcome(refusal(name, d), false, gw.seams.MaxContentBytes), nil
 	}
 	if entry.Describe != nil {
 		return finishOutcome(entry.Describe(gw, readOnly), entry.Untrusted, gw.seams.MaxContentBytes), nil

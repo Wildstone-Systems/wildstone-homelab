@@ -23,6 +23,7 @@ import { Rail, RailItem } from "./ui/Rail";
 import { Activity } from "./views/Activity";
 import { Backups } from "./views/Backups";
 import { Butler } from "./views/Butler";
+import { ButlerAuthority } from "./views/ButlerAuthority";
 import { Chat } from "./views/Chat";
 import { ConnectChat } from "./views/ConnectChat";
 import { Home } from "./views/Home";
@@ -39,6 +40,7 @@ type View =
   | "services"
   | "butler"
   | "work"
+  | "authority"
   | "chat"
   | "household"
   | "connect"
@@ -61,6 +63,7 @@ const TITLES: Record<View, [string, string]> = {
   services: ["Catalog", "Services"],
   butler: ["Operator", "Butler"],
   work: ["Durable", "Work"],
+  authority: ["Admission", "Butler access"],
   chat: ["Access", "Chat"],
   household: ["People", "Household"],
   connect: ["Setup", "Connect chat"],
@@ -121,6 +124,7 @@ export function Shell() {
       { id: "services", label: "Services", icon: <SquaresFour size={ICON} /> },
       { id: "butler", label: "Butler", icon: <Sparkle size={ICON} /> },
       { id: "work", label: "Work", icon: <ListChecks size={ICON} /> },
+      { id: "authority", label: "Butler access", icon: <ShieldCheck size={ICON} /> },
       { id: "chat", label: "Chat", icon: <ChatsCircle size={ICON} /> },
       { id: "household", label: "Household", icon: <UsersThree size={ICON} /> },
       { id: "connect", label: "Connect chat", icon: <PlugsConnected size={ICON} /> },
@@ -168,6 +172,7 @@ export function Shell() {
           {view === "services" && <Services />}
           {view === "butler" && <Butler onEyebrow={setEyebrowOverride} />}
           {view === "work" && <Work />}
+          {view === "authority" && <ButlerAuthority />}
           {view === "chat" && <Chat />}
           {view === "household" && <Household />}
           {view === "connect" && <ConnectChat />}

@@ -267,6 +267,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/butler/models", s.handle(principal.VerbManage, s.listButlerModels))
 	mux.Handle("GET /api/v1/butler/config", s.handle(principal.VerbManage, s.getButlerConfig))
 	mux.Handle("PUT /api/v1/butler/config", s.handle(principal.VerbManage, s.setButlerConfig))
+	mux.Handle("GET /api/v1/butler/tools", s.handle(principal.VerbRead, s.listButlerToolControls))
+	mux.Handle("PUT /api/v1/butler/tools", s.handle(principal.VerbManage, s.setButlerToolControl))
+	mux.Handle("GET /api/v1/butler/grants", s.handle(principal.VerbRead, s.listButlerGrants))
+	mux.Handle("POST /api/v1/butler/grants", s.handle(principal.VerbManage, s.grantButlerTool))
+	mux.Handle("POST /api/v1/butler/grants/revoke", s.handle(principal.VerbManage, s.revokeButlerGrant))
+	mux.Handle("GET /api/v1/butler/requests", s.handle(principal.VerbRead, s.listCapabilityRequests))
+	// Asking needs only read: a request grants nothing, and requiring
+	// manage to ask would mean only the people who can already enable a
+	// tool could request one (ADR-W030 A7).
+	mux.Handle("POST /api/v1/butler/requests", s.handle(principal.VerbRead, s.fileCapabilityRequest))
+	mux.Handle("POST /api/v1/butler/requests/decide", s.handle(principal.VerbManage, s.decideCapabilityRequest))
 	mux.Handle("GET /api/v1/butler/members", s.handle(principal.VerbRead, s.listButlerMembers))
 	mux.Handle("POST /api/v1/butler/members", s.handle(principal.VerbManage, s.recordButlerMember))
 	mux.Handle("POST /api/v1/butler/members/{member}/admit", s.handle(principal.VerbManage, s.admitButlerMember))

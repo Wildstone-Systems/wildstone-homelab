@@ -58,12 +58,15 @@ const (
 // set that up" are different answers and a person asking what the Butler
 // can do deserves the second one.
 type CapabilityTool struct {
-	Name      string `json:"name"`
-	Summary   string `json:"summary"`
-	Mutating  bool   `json:"mutating,omitempty"`
-	Untrusted bool   `json:"untrusted,omitempty"`
-	Available bool   `json:"available"`
-	Reason    string `json:"reason,omitempty"`
+	Name     string `json:"name"`
+	Summary  string `json:"summary"`
+	Mutating bool   `json:"mutating,omitempty"`
+	// GrantRequired marks a tool that needs a work-bound grant even when
+	// it is present and not disabled (ADR-W030 A8).
+	GrantRequired bool   `json:"grantRequired,omitempty"`
+	Untrusted     bool   `json:"untrusted,omitempty"`
+	Available     bool   `json:"available"`
+	Reason        string `json:"reason,omitempty"`
 }
 
 // CapabilityAction is one executor this deployment wired — a domestic
@@ -208,11 +211,12 @@ func (gw *ToolGateway) Capabilities(readOnly bool) CapabilityManifest {
 	for _, name := range names {
 		entry := gw.tools[name]
 		tool := CapabilityTool{
-			Name:      name,
-			Summary:   firstSentence(entry.Spec.Description),
-			Mutating:  entry.Mutating,
-			Untrusted: entry.Untrusted,
-			Available: true,
+			Name:          name,
+			Summary:       firstSentence(entry.Spec.Description),
+			Mutating:      entry.Mutating,
+			Untrusted:     entry.Untrusted,
+			GrantRequired: entry.GrantRequired,
+			Available:     true,
 		}
 		switch {
 		case readOnly && entry.Mutating:
@@ -221,6 +225,15 @@ func (gw *ToolGateway) Capabilities(readOnly bool) CapabilityManifest {
 		case !gw.operatorWired(name):
 			tool.Available = false
 			tool.Reason = "this deployment has not wired the source behind it"
+		default:
+			// The manifest reports what the resolver would actually
+			// allow, so a description and an enforcement point cannot
+			// disagree about the same tool (ADR-W030 P7).
+			if d := authorize(gw.Authorizer, string(ProfileOperator), name, true,
+				entry.GrantRequired, gw.SessionTask, ""); !d.Allowed {
+				tool.Available = false
+				tool.Reason = d.Reason
+			}
 		}
 		if !tool.Available {
 			m.Unavailable = append(m.Unavailable,
@@ -275,11 +288,12 @@ func (gw *HouseholdGateway) Capabilities(readOnly bool) CapabilityManifest {
 	for _, name := range names {
 		entry := gw.tools[name]
 		tool := CapabilityTool{
-			Name:      name,
-			Summary:   firstSentence(entry.Spec.Description),
-			Mutating:  entry.Mutating,
-			Untrusted: entry.Untrusted,
-			Available: true,
+			Name:          name,
+			Summary:       firstSentence(entry.Spec.Description),
+			Mutating:      entry.Mutating,
+			Untrusted:     entry.Untrusted,
+			GrantRequired: entry.GrantRequired,
+			Available:     true,
 		}
 		switch {
 		case readOnly && entry.Mutating:
@@ -288,6 +302,12 @@ func (gw *HouseholdGateway) Capabilities(readOnly bool) CapabilityManifest {
 		case !gw.wired(name):
 			tool.Available = false
 			tool.Reason = "this deployment has not wired the source behind it"
+		default:
+			if d := authorize(gw.Authorizer, string(ProfileHousehold), name, true,
+				entry.GrantRequired, gw.SessionTask, ""); !d.Allowed {
+				tool.Available = false
+				tool.Reason = d.Reason
+			}
 		}
 		if !tool.Available {
 			m.Unavailable = append(m.Unavailable,
