@@ -467,6 +467,160 @@ export interface DirectoryListing {
   directories: string[];
 }
 
+
+// ---------------------------------------------------------------- durable work
+
+// A Butler task is one unit of durable work: a conversational request,
+// or one occurrence of a routine (ADR-W030 A4). Unlike a session, it
+// survives a restart, so the Console can show what is still running,
+// what is waiting and on what, and what was interrupted.
+export interface ButlerTask {
+  id: string;
+  kind: "conversation" | "routine";
+  state:
+    | "pending"
+    | "running"
+    | "waiting"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "paused-offboarded";
+  author: string;
+  owner: string;
+  surface: string;
+  profile: string;
+  audience: "private" | "shared";
+  objective: string;
+  completionCriteria: string;
+  resultSummary?: string;
+  uncertainty?: string;
+  sessionId?: string;
+  createdAt: string;
+  updatedAt: string;
+  deadlineAt?: string;
+  nextWakeupAt?: string;
+  leaseEpoch: number;
+}
+
+// One row of the work trace as the API renders it (ADR-W030 A11).
+// Detail carries counts and flags — never what a source SAID, which
+// belongs to the source and is read from there.
+export interface TimelineEntry {
+  at: string;
+  type: string;
+  step?: number;
+  attempt?: number;
+  actor?: string;
+  sources?: string[];
+  modelEndpoint?: string;
+  manifestVersion?: string;
+  promptVersion?: string;
+  policyVersion?: string;
+  detail?: Record<string, unknown>;
+  traceSeq: number;
+}
+
+export interface TaskStep {
+  seq: number;
+  ordinal: number;
+  kind: string;
+  name: string;
+  state: string;
+}
+
+export interface TaskWait {
+  seq: number;
+  createdAt: string;
+  reason: string;
+  detail?: string;
+  resumeAt?: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+}
+
+export interface TaskEvidence {
+  seq: number;
+  recordedAt: string;
+  kind: string;
+  description: string;
+  sourceId?: string;
+  audience: string;
+}
+
+export interface TaskTransition {
+  at: string;
+  fromState: string;
+  toState: string;
+  reason?: string;
+  actor?: string;
+}
+
+// The labels a person may put on a task. Closed, and the same set the
+// store enforces — the value of a label is that it can be counted.
+export const FEEDBACK_LABELS = [
+  "wrong-answer",
+  "stale-read",
+  "repeated-work",
+  "inappropriate-tool",
+  "permission-refusal",
+  "excessive-interruption",
+  "useful-completion",
+] as const;
+export type FeedbackLabel = (typeof FEEDBACK_LABELS)[number];
+
+export interface TaskFeedback {
+  seq: number;
+  createdAt: string;
+  author: string;
+  label: FeedbackLabel;
+  note?: string;
+  traceSeq?: number;
+}
+
+export interface TaskDetail {
+  task: ButlerTask;
+  timeline: TimelineEntry[];
+  steps: TaskStep[];
+  waits: TaskWait[];
+  evidence: TaskEvidence[];
+  transitions: TaskTransition[];
+  feedback: TaskFeedback[];
+  // How many entries this reader is not shown. Reported rather than
+  // silently dropped: an incomplete story presented as complete is
+  // worse than one that says what is missing.
+  withheld: number;
+  debugActive: boolean;
+}
+
+export interface ButlerEvaluation {
+  seq: number;
+  createdAt: string;
+  author: string;
+  name: string;
+  sourceTaskId?: string;
+  summary: string;
+  expected: string;
+  promptVersion?: string;
+  policyVersion?: string;
+  manifestVersion?: string;
+  modelEndpoint?: string;
+  evaluatorVersion?: string;
+  fixtureJson?: string;
+}
+
+export interface ButlerSettingsView {
+  householdRounds: number;
+  operatorRounds: number;
+  maxToolCalls: number;
+  stallSeconds: number;
+  retryLimit: number;
+  observationTtlSeconds: number;
+  quietStartMin: number;
+  quietEndMin: number;
+  timezone: string;
+  updatedBy?: string;
+}
+
 export const api = {
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
   butlerModels: (endpoint?: string) =>
@@ -475,6 +629,30 @@ export const api = {
       `/api/v1/butler/models${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ""}`,
     ),
   butlerConfig: () => call<{ stored: boolean; config: ButlerConfig }>("GET", "/api/v1/butler/config"),
+  butlerSettings: () =>
+    call<{ stored: boolean; settings: ButlerSettingsView }>("GET", "/api/v1/butler/settings"),
+  setButlerSettings: (s: Partial<ButlerSettingsView>) =>
+    call<{ stored: boolean; settings: ButlerSettingsView }>("PUT", "/api/v1/butler/settings", s),
+  butlerTasks: () => call<{ tasks: ButlerTask[] | null }>("GET", "/api/v1/butler/tasks"),
+  butlerTask: (id: string) =>
+    call<TaskDetail>("GET", `/api/v1/butler/tasks/${encodeURIComponent(id)}`),
+  labelButlerTask: (id: string, label: FeedbackLabel, note: string, traceSeq?: number) =>
+    call<{ recorded: boolean }>("POST", `/api/v1/butler/tasks/${encodeURIComponent(id)}/feedback`, {
+      label,
+      note,
+      traceSeq: traceSeq ?? 0,
+    }),
+  exportButlerEvaluation: (
+    id: string,
+    body: { name: string; expected: string; summary: string; evaluatorVersion: string },
+  ) =>
+    call<{ seq: number; name: string }>(
+      "POST",
+      `/api/v1/butler/tasks/${encodeURIComponent(id)}/evaluation`,
+      body,
+    ),
+  butlerEvaluations: () =>
+    call<{ evaluations: ButlerEvaluation[] | null }>("GET", "/api/v1/butler/evaluations"),
   setButlerConfig: (c: { provider: string; model: string; endpoint: string }) =>
     call<{ stored: boolean; config: ButlerConfig }>("PUT", "/api/v1/butler/config", c),
   // The install form's folder picker. Read-only, and the node answers

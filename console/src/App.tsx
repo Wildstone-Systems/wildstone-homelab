@@ -6,6 +6,7 @@ import {
   House,
   IdentificationCard,
   Key,
+  ListChecks,
   PlugsConnected,
   Pulse,
   SealCheck,
@@ -30,12 +31,14 @@ import { IdentityView } from "./views/Identity";
 import { Nodes } from "./views/Nodes";
 import { Plans } from "./views/Plans";
 import { Secrets } from "./views/Secrets";
+import { Work } from "./views/Work";
 import { Services } from "./views/Services";
 
 type View =
   | "home"
   | "services"
   | "butler"
+  | "work"
   | "chat"
   | "household"
   | "connect"
@@ -57,6 +60,7 @@ const TITLES: Record<View, [string, string]> = {
   home: ["Overview", "Home"],
   services: ["Catalog", "Services"],
   butler: ["Operator", "Butler"],
+  work: ["Durable", "Work"],
   chat: ["Access", "Chat"],
   household: ["People", "Household"],
   connect: ["Setup", "Connect chat"],
@@ -116,6 +120,7 @@ export function Shell() {
       { id: "home", label: "Home", icon: <House size={ICON} />, pip: homePip },
       { id: "services", label: "Services", icon: <SquaresFour size={ICON} /> },
       { id: "butler", label: "Butler", icon: <Sparkle size={ICON} /> },
+      { id: "work", label: "Work", icon: <ListChecks size={ICON} /> },
       { id: "chat", label: "Chat", icon: <ChatsCircle size={ICON} /> },
       { id: "household", label: "Household", icon: <UsersThree size={ICON} /> },
       { id: "connect", label: "Connect chat", icon: <PlugsConnected size={ICON} /> },
@@ -162,6 +167,7 @@ export function Shell() {
           {view === "home" && <Home onNavigate={setView} />}
           {view === "services" && <Services />}
           {view === "butler" && <Butler onEyebrow={setEyebrowOverride} />}
+          {view === "work" && <Work />}
           {view === "chat" && <Chat />}
           {view === "household" && <Household />}
           {view === "connect" && <ConnectChat />}
