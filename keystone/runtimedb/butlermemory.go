@@ -540,6 +540,14 @@ type MemoryQuery struct {
 	Subject string
 	Kind    string
 	Limit   int
+	// Butler is the scope: which Butler is asking. It narrows ON TOP OF
+	// the reader's permission and never instead of it — a Butler is not
+	// a way to read somebody else's private material (ADR-W031 A4).
+	//
+	// Empty means the shared pool alone, so a caller that forgets to
+	// name a Butler sees household facts and nothing specialised.
+	// AllButlers is the Console holder's view (A10).
+	Butler string
 }
 
 // RetrieveMemory returns eligible records for a reader, newest first.
@@ -556,6 +564,13 @@ func (db *DB) RetrieveMemory(q MemoryQuery) ([]MemoryRecord, error) {
 	where := ` WHERE forgotten_at = '' AND superseded_by IS NULL
 	           AND (audience = 'shared' OR owner = ?)`
 	args := []any{q.Reader}
+	// The Butler's scope is ANDed onto the reader's, in SQL, before any
+	// content loads. Both have to hold: this person may see it AND this
+	// Butler holds it.
+	if clause, scopeArgs := scopeClause("butler", q.Butler); clause != "" {
+		where += clause
+		args = append(args, scopeArgs...)
+	}
 	if q.Subject != "" {
 		where += " AND subject = ?"
 		args = append(args, q.Subject)

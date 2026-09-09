@@ -74,6 +74,9 @@ type IndexDocument struct {
 	Content         string             `json:"content"`
 	ObservedAt      time.Time          `json:"observedAt,omitzero"`
 	IndexedAt       time.Time          `json:"indexedAt,omitzero"`
+	// Butler scopes this chunk to one Butler (ADR-W031 A4). Empty is
+	// the shared pool every Butler may read.
+	Butler string `json:"butler,omitempty"`
 	// Volatile marks a source whose current state cannot be answered
 	// from an index. See MustVerifyLive on the result.
 	Volatile bool `json:"volatile,omitempty"`
@@ -104,11 +107,11 @@ func (db *DB) IndexDocumentInto(d IndexDocument) (int64, error) {
 	}
 	res, err := db.sql.Exec(
 		`INSERT INTO butler_index (source_kind, source_id, memory, owner, audience,
-		     permission_label, content, observed_at, indexed_at, volatile, embedding, tokens)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		     permission_label, content, observed_at, indexed_at, volatile, embedding, tokens, butler)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.SourceKind, d.SourceID, memory, d.Owner, string(d.Audience), d.PermissionLabel,
 		d.Content, timeText(d.ObservedAt), now(), boolInt(d.Volatile),
-		encodeEmbedding(d.Embedding), d.Tokens)
+		encodeEmbedding(d.Embedding), d.Tokens, d.Butler)
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: indexing document: %w", err)
 	}
@@ -173,6 +176,10 @@ type IndexQuery struct {
 	// this — the caller's freshness requirement, which the index cannot
 	// guess.
 	MaxAge time.Duration
+	// Butler is the scope, ANDed onto the reader's permission and never
+	// replacing it (ADR-W031 A4). Empty is the shared pool alone, so an
+	// omission fails closed; AllButlers is the Console holder's view.
+	Butler string
 }
 
 // IndexHit is one result.
@@ -219,8 +226,8 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
 		fetch = q.Limit * 4
 	}
 
-	rows, err := db.sql.Query(
-		`SELECT i.seq, i.source_kind, i.source_id, COALESCE(i.memory, 0), i.owner, i.audience,
+	scope, scopeArgs := scopeClause("i.butler", q.Butler)
+	query := `SELECT i.seq, i.source_kind, i.source_id, COALESCE(i.memory, 0), i.owner, i.audience,
 		        i.permission_label, i.content, i.observed_at, i.indexed_at, i.volatile,
 		        i.embedding, i.tokens, bm25(butler_index_fts)
 		 FROM butler_index_fts
@@ -229,9 +236,13 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
 		   AND (i.audience = 'shared' OR i.owner = ?)
 		   AND NOT EXISTS (
 		       SELECT 1 FROM butler_memory m WHERE m.seq = i.memory
-		         AND (m.forgotten_at <> '' OR m.superseded_by IS NOT NULL))
+		         AND (m.forgotten_at <> '' OR m.superseded_by IS NOT NULL))` +
+		scope + `
 		 ORDER BY bm25(butler_index_fts)
-		 LIMIT ?`, ftsQuery(q.Text), q.Reader, fetch)
+		 LIMIT ?`
+	args := append([]any{ftsQuery(q.Text), q.Reader}, scopeArgs...)
+	args = append(args, fetch)
+	rows, err := db.sql.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: searching index: %w", err)
 	}
