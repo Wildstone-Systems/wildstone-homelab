@@ -32,11 +32,10 @@ type Ledger struct {
 	holder string
 	epoch  int64
 	// OwnerActive, when set, reports whether a task's owner may still
-	// have work done on their behalf. It is a seam because Butler
-	// admission and identity links are P6's subject; until then a
-	// deployment wires whatever it has, and nil means "no admission
-	// check is configured", which is the current behaviour rather than a
-	// silent grant.
+	// have work done on their behalf. AdmissionCheck wires it to the
+	// Butler admission records (P6); it stays a seam so a deployment
+	// mid-migration, or a test, can supply its own without this package
+	// deciding what admission means.
 	OwnerActive func(owner string) error
 	// Now is the ledger clock; nil means time.Now.
 	Now func() time.Time
@@ -92,6 +91,29 @@ func (l *Ledger) Authorize(taskID string) error {
 		}
 	}
 	return nil
+}
+
+// AdmissionCheck wires OwnerActive to Butler admission (ADR-W030 A2.1).
+//
+// It is a constructor rather than the default because "no admission
+// records exist yet" and "this person is not admitted" must not be the
+// same answer: a deployment that has not run P6's admission flow would
+// otherwise find every task refused. Wiring it is the act that turns
+// admission on.
+func (l *Ledger) AdmissionCheck() func(string) error {
+	return func(owner string) error {
+		m, err := l.db.GetButlerMember(owner)
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return fmt.Errorf("%s has no Butler admission record", owner)
+		}
+		if err != nil {
+			return err
+		}
+		if !m.Active() {
+			return fmt.Errorf("%s is no longer admitted to the Butler", owner)
+		}
+		return nil
+	}
 }
 
 // FenceAttempts implements butler.TaskLedger.
