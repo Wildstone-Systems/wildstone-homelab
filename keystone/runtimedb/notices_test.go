@@ -18,8 +18,27 @@ func household() ButlerSettings {
 	return s
 }
 
-func night() time.Time  { return time.Date(2026, 9, 9, 3, 0, 0, 0, time.UTC) }
-func midday() time.Time { return time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC) }
+// The clocks these tests raise notices on, anchored to TOMORROW rather
+// than to a fixed date.
+//
+// A notice's quiet-hours decision uses the time it was raised — which
+// these supply — but its EXPIRY is compared against the real clock,
+// because that is a database read rather than a caller's opinion about
+// the time. A literal date therefore made a notice raised at "midday"
+// expire six hours later on that date, so every test answering one
+// passed before 18:00 UTC and failed after it. This suite was green all
+// morning and red at teatime, on the same commit.
+//
+// Anchoring to tomorrow keeps the expiry ahead of the real clock
+// whenever this runs, while leaving the TIME OF DAY — which is the only
+// thing the quiet-hours logic reads — exactly as it was.
+func atHour(h int) time.Time {
+	d := time.Now().UTC().AddDate(0, 0, 1)
+	return time.Date(d.Year(), d.Month(), d.Day(), h, 0, 0, 0, time.UTC)
+}
+
+func night() time.Time  { return atHour(3) }
+func midday() time.Time { return atHour(12) }
 
 // A person's own window overrides the household's; without one they
 // follow the household.
