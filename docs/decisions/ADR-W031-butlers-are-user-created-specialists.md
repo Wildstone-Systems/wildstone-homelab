@@ -63,7 +63,15 @@ anyone can rely on.
 
 What this removes: locality classification at selection time, capacity
 counting, escalation to a next-choice model, and the lease table those
-required.
+required. The router is deleted rather than disabled, because a
+selection path that exists and is not used is a selection path someone
+re-enables.
+
+What is deferred rather than forbidden: an orchestrating Butler that
+delegates to others. It may turn out to be worth having. It is not
+worth having *first* — it reintroduces a component that decides, and
+therefore reads, before anything else runs, and a house with four
+specialists does not need a manager to find them.
 
 What survives: the startup probe and its verdict. A Butler whose model
 has not passed its probe answers questions and performs no actions
@@ -165,6 +173,45 @@ Plan-mediated. Otherwise "you are the accounting Butler and may read
 whatever you need" becomes an authority grant written in prose — a
 grant no classifier reviewed, no Plan approved, and no one can audit.
 
+### A10. Butlers belong to the Console; everyone else meets them in chat
+
+There is one place Butlers are made and one place they are used, and
+they are different places.
+
+**The Console holder owns every Butler.** They create them, assign the
+model, the directive, the tools and the connections, and they decide
+which household members may talk to which Butler. There is no personal
+ownership below that: a Butler is not "Sam's", even when Sam is the
+only person who talks to it.
+
+**Everyone else meets a Butler through a chat conversation** — Telegram
+first, other services later as integrations. A household member needs
+no Console account, no Keystone credential and no admin surface. They
+have a conversation.
+
+This is the split ADR-W030 A6 already drew for household routine review
+— an admitted adult acts without receiving Console credentials — applied
+to the Butlers themselves. It also decides what a per-Butler access list
+is for: it is the Console holder's answer to "who may talk to Alfred",
+and it is the thing that stops Sam reaching the accounting Butler at
+all, rather than reaching it and being refused per tool.
+
+### A11. A Butler is the role. The name is the Butler's own
+
+"Butler" names the kind of thing: a bot with a model, a directive and a
+scope. It is not a proper noun and there is no longer a singular "the
+Butler".
+
+Each one is given a name when it is created — Alfred, Robert — and that
+is what a person says and what a routine is assigned to. A household
+has Butlers, plural, the way it has people.
+
+This is recorded as a decision because the alternative is ambiguity in
+every sentence written afterwards: "ask the Butler" stops meaning
+anything once there are four, and documentation that says "the Butler
+retrieves memory" leaves the reader unable to tell whether it means one
+bot or the facility.
+
 ---
 
 # Part B — What this changes in ADR-W030
@@ -193,7 +240,7 @@ Ordered so each step stands on its own.
 
 | # | Package | Why here |
 |---|---|---|
-| **B1** | The Butler record: name, directive, model, surface, created through a Plan | Nothing else has a subject until this exists |
+| **B1** | The Butler record: name, directive, model, surface, and who may talk to it — created through a Plan from the Console | Nothing else has a subject until this exists |
 | **B2** | Scope: tools, connections, memory ownership per Butler | A4's isolation, which is the point of the design |
 | **B3** | Explicit sharing, with the disclosure A5 requires | Needs B2 to have something to share between |
 | **B4** | Assignment: a routine or task names its Butler | Needs B1 |
@@ -207,17 +254,40 @@ the store.
 
 ---
 
-# Part D — Open questions
+# Part D — Settled, and the one thing left
 
-Not settled here, and each wants an answer before B1.
+Four questions were open in the first draft of this record. They are
+answered above and noted here so a later reader can see they were asked
+rather than skipped.
 
-- **Ownership.** Is a Butler household-level, or can a person own one
-  ("my accounting Butler")? This decides what offboarding does to it.
-- **Child surface.** Does creating a Butler that a child can address
-  need guardian review at creation, on top of the Plan?
-- **Migration.** Do the existing household and operator profiles become
-  two default Butlers, or does the household create its own from
-  nothing on first run?
-- **Naming.** "Butler" now means an instance, and it previously meant
-  the whole facility. The documentation needs one word for each, or
-  every sentence about either becomes ambiguous.
+- **Ownership** → A10. The Console holder owns every Butler and grants
+  access to them. No personal ownership. Offboarding a member therefore
+  removes their access to Butlers; it never deletes one.
+- **Child surface** → unchanged. ADR-W030's guardian review and the
+  child profile's structural ceiling apply to a Butler on that surface
+  exactly as they applied before.
+- **Migration** → none required. The deployment is pre-release, so the
+  existing household and operator profiles are updated in place or
+  removed. Whichever survives becomes the instance's first Butler.
+  Writing a migration for state nobody depends on would be work spent
+  preserving a shape this record replaces.
+- **Naming** → A11. "Butler" is the role; each has its own name.
+
+### Still open: how Telegram addresses more than one Butler
+
+A7 says each Butler is addressed directly, and A10 says household
+members reach them over Telegram. Telegram then has to make "which
+Butler is this for" answerable **without reading the message**, because
+reading to decide is the disclosure A2 removed.
+
+Two shapes do that, and the choice is not obvious:
+
+- **One Telegram bot per Butler.** Cleanest — the bot token *is* the
+  address, and isolation is total. Costs a bot registration and a token
+  per Butler, and a household with six Butlers has six contacts.
+- **One bot, one forum topic per Butler.** The topic ID identifies the
+  Butler structurally, so it still involves no reading. One contact,
+  one token. Ties the design to a Telegram-specific feature, which sits
+  awkwardly with the intent to add other chat services later.
+
+Both satisfy A7. This wants deciding before B5, not before B1.
