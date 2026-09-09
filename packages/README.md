@@ -12,7 +12,7 @@ deployment — see `testing/fixtures/`.
 
 ## The catalog
 
-Fifty-four packages. Every one lints clean against the rest of the
+Fifty-five packages. Every one lints clean against the rest of the
 catalog, pins real image digests, has a row on the dashboard, a pinned
 tailnet port, and passes the cross-resource checks in
 `keystone/pkgtool/catalog_wiring_test.go` (secrets referenced are
@@ -56,6 +56,7 @@ about the app, recorded in each package's header:
 | `documents-paperless` | documents | Paperless-ngx | app OIDC |
 | `music-navidrome` | music | Navidrome, Subsonic-compatible | own |
 | `audiobooks-audiobookshelf` | audiobooks | Audiobookshelf | own |
+| `podcasts-podgrab` | podcasts | Podgrab, which downloads each episode as it appears | own |
 | `books-calibre-web`, `books-kavita` | books | Calibre-Web (a Calibre library) or Kavita (plain folders) | own |
 | `downloads-qbittorrent` | downloads | qBittorrent | proxy |
 | `movies-radarr`, `tv-sonarr`, `music-lidarr` | movie/tv/music-automation | the *arr set, sharing `/data/{media,downloads}` | proxy |

@@ -146,6 +146,7 @@ var wellKnown = map[string]int{
 	"git":        44443, // code-gitea
 	"mail":       45443, // mail-roundcube, via mail_subdomain
 	"calendar":   46443, // mail-roundcube's calendar surface, via calendar_subdomain
+	"podcasts":   47443, // podcasts-podgrab, via podcasts_subdomain
 }
 
 // Of derives the addressing posture from desired state.

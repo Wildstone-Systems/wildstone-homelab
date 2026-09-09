@@ -389,6 +389,8 @@ func TestCatalogShipsTheLaunchServiceSet(t *testing.T) {
 		"monitoring-beszel", "books-calibre-web", "books-kavita",
 		// unblocked by protocol minor 12 (F98)
 		"vpn-gluetun",
+		// asked for after the expansion
+		"podcasts-podgrab",
 	} {
 		if !have[want] {
 			t.Errorf("packages/%s is missing from the catalog", want)

@@ -1,0 +1,148 @@
+# Podcasts capability, profile "podgrab": subscribes to podcast feeds and
+# downloads each episode as soon as it appears, so the household owns the
+# audio rather than streaming it from whoever still hosts it. It has a
+# player in the browser and re-publishes what it has collected as RSS.
+#
+# HOW IT IS CONFIGURED: environment only. Podgrab reads CONFIG, DATA,
+# CHECK_FREQUENCY, PASSWORD, PUID and PGID from the environment and has
+# no config file at all; subscriptions, episode state and settings live
+# in a SQLite database under /config. There is nothing here for a
+# ConfigFile to render.
+#
+# WHAT IT REFUSES TO START WITHOUT: nothing. CONFIG=/config and
+# DATA=/assets are baked into the image, so it comes up with no
+# environment at all. CHECK_FREQUENCY is the one to watch: it is parsed
+# with strconv.Atoi and a value that does not parse falls back to 30
+# minutes with an error in the log rather than failing — quiet, and four
+# times more polling than intended, which is why it is pinned here
+# rather than offered as a param. There is no `validate:` shape for a
+# bare integer, and an unvalidated knob whose wrong value is silent is
+# worse than no knob. 240 is the interval upstream's own compose file
+# ships. Episodes are checked every four hours.
+#
+# HEALTHCHECK: the image declares NONE (its Dockerfile ends at
+# ENTRYPOINT ["./app"]). "The container is running" is the strongest
+# thing Wildstone can say about it — good enough here, because podgrab
+# is a single Go binary as PID 1, so the process dying is the container
+# dying rather than an s6 supervisor holding the door open.
+#
+# ITS OWN ADDRESS: it needs to know nothing. Podgrab builds every link
+# it serves relative to the request, so there is no self-referential
+# URL to get wrong under the tailnet posture (ADR-W019 A10).
+#
+# IDENTITY CLAIMS: none — podgrab speaks no OIDC and reads no proxy
+# header. See the Route note below.
+#
+# THE LIBRARY is a read-write host-path mount under the managed prefix,
+# defaulting to a folder inside the same media root the other media
+# packages use — so Audiobookshelf, Jellyfin or Plex can serve the same
+# episodes podgrab collected. It is not in the BackupPlan: bulk content
+# stays on the storage layer (ADR-W013 A4). The /config volume, which
+# holds every subscription and what has already been fetched, is backed
+# up daily.
+#
+# THE ROUTE. Podgrab has exactly one form of authentication — HTTP Basic
+# Auth, username `podgrab`, enabled by setting PASSWORD to a non-empty
+# value — and it applies to every route including /rss and the static
+# /assets the episodes are served from. That is the point: a podcast app
+# on a phone subscribes to those feed URLs and cannot follow an Authelia
+# login redirect, so the proxy passes through (auth: none) on the
+# family_private class — the ntfy posture — and podgrab's own Basic Auth
+# is what stands in front of it. Setting PASSWORD is not optional here:
+# left unset the app has no authentication whatsoever.
+#
+# The password is a PROVIDED secret, not a generated one. A generated
+# value cannot be read back (ADR-W012 W2), and this is a credential a
+# person types into a browser and pastes into a podcast app — so
+# Wildstone must refuse to start the container until a human has
+# supplied one, rather than start one nobody can sign in to:
+#
+#   printf '%s' '<password>' | wild secret set podgrab-password -node <node-id>
+#
+# Image digest is REAL, resolved 2026-09-09 via the OCI registry API:
+#   akhilrex/podgrab:latest -> sha256:bce133f3...2b87
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: podcasts-podgrab
+  version: 1.0.0
+  capability: podcasts
+  profile: podgrab
+requires:
+  - { trait: ingress, mode: private }
+  - { trait: storage, class: bulk }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: podcasts_subdomain, default: podcasts, description: "The name this service appears under, e.g. podcasts." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: podcasts_path, default: /srv/wildstone/media/podcasts, description: "Folder on this machine to download podcast episodes into.", source: directory }
+policies:
+  classifications: [family_private]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-podcasts, node: "{{ .Params.node }}" }
+    spec: { name: restic-podcasts }
+  # The only credential in front of podgrab. Provided rather than
+  # generated: the household types it at a browser prompt and pastes it
+  # into a podcast app, and a generated secret cannot be read back.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: podgrab-password, node: "{{ .Params.node }}" }
+    spec:
+      name: podgrab-password
+      provided: true
+      purpose: "The password for podgrab's web page and its RSS feeds. The username beside it is `podgrab`. Supply it yourself — podgrab has no other sign-in, and left unset the app is open to anyone who can reach it."
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: podgrab-config, node: "{{ .Params.node }}" }
+    spec: { name: podgrab-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: podcasts-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: podcasts-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: podgrab, node: "{{ .Params.node }}" }
+    spec:
+      image: "akhilrex/podgrab@sha256:bce133f3f5111381f63d9341313fa7ce7e16209068e8a06e6db2c4ed33972b87"
+      env:
+        # Basic Auth, username `podgrab`. Non-empty is what turns it on.
+        PASSWORD: "secret/podgrab-password"
+        # Minutes between feed checks. Pinned rather than parameterised —
+        # see the header.
+        CHECK_FREQUENCY: "240"
+        # Podgrab chowns each downloaded file to these, so episodes land
+        # owned the same way the *arr set's media is. It reads PUID and
+        # PGID; the UID and PID the image sets are read by nothing.
+        PUID: "1000"
+        PGID: "1000"
+      mounts:
+        - { source: podgrab-config, target: /config }
+        - { source: "{{ .Params.podcasts_path }}", target: /assets }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: podcasts, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.podcasts_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/podgrab:8080"
+      auth: none
+      classification: family_private
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: podcasts, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [podgrab-config]
+      repository: podcasts-backup-repo
+      passwordSecret: secret/restic-podcasts
+      schedule: daily
+      retention: { keepDaily: 7, keepWeekly: 4 }
