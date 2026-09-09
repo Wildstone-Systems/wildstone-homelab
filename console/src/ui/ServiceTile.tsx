@@ -1,5 +1,5 @@
 import { ArrowSquareOut } from "@phosphor-icons/react";
-import { Service } from "../services";
+import { hostOf, Service } from "../services";
 import { Kind } from "./status";
 import { StatusPill, Dot } from "./status";
 import { Sparkline } from "./Sparkline";
@@ -58,12 +58,4 @@ export function ServiceTile({
       {samples && <Sparkline samples={samples} height={12} />}
     </div>
   );
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
 }

@@ -1,9 +1,16 @@
 import { useState } from "react";
 import { DirectoryPicker } from "../ui/DirectoryPicker";
-import { ArrowSquareOut, Package, WarningCircle } from "@phosphor-icons/react";
+import {
+  ArrowCircleUp,
+  ArrowSquareOut,
+  CaretRight,
+  Info,
+  WarningCircle,
+} from "@phosphor-icons/react";
 import { api, EnablePreview, PackageView, ResourceView } from "../api";
 import { ErrorLine, useAction, useLoad } from "../lib";
-import { StatusPill } from "../ui/status";
+import { Group, GROUPS, groupOf, hostOf, RANK } from "../services";
+import { Dot, Kind, StatusPill } from "../ui/status";
 import { Drawer } from "../ui/Drawer";
 
 // Services (ADR-W021 A5, ADR-W027): the catalog, and installing from it.
@@ -49,102 +56,211 @@ export function Services() {
 // Separated from its fetch so the render check can put the catalog in a
 // state: installed and available together, nothing installed yet, and a
 // package that will not work here.
+// Separated from its fetch so the render check can put the catalog in a
+// state: installed and available together, nothing installed yet, a
+// package that will not work here, and each group filter.
 export function ServicesView({
   pkgs,
   resources = [],
   resourcesError = null,
   resourcesLoading = false,
+  // Where the screen opens. Only the render check passes these: the tab
+  // and the chips are internal state, and a check that cannot click has
+  // no other way to put the board in the state it is asserting about.
+  initialTab = "installed",
+  initialGroup = "All",
+  initialHideBlocked = false,
   onInstalled,
 }: {
   pkgs: PackageView[];
   resources?: ResourceView[];
   resourcesError?: string | null;
   resourcesLoading?: boolean;
+  initialTab?: "installed" | "catalog";
+  initialGroup?: Group | "All";
+  initialHideBlocked?: boolean;
   onInstalled: () => void;
 }) {
-  const [chosen, setChosen] = useState<PackageView | null>(null);
-  const [removing, setRemoving] = useState<PackageView | null>(null);
+  const [tab, setTab] = useState<"installed" | "catalog">(initialTab);
   const [query, setQuery] = useState("");
-  const installed = pkgs.filter((p) => p.enabled);
-  const all = pkgs.filter((p) => !p.enabled);
-  // Name and capability, because people look for both — "jellyfin" is
-  // a package and "media" is what it does, and which one you remember
-  // depends on why you are looking.
-  const available = matching(all, query);
+  const [group, setGroup] = useState<Group | "All">(initialGroup);
+  const [hideBlocked, setHideBlocked] = useState(initialHideBlocked);
+  const [chosen, setChosen] = useState<PackageView | null>(null);
+  const [detail, setDetail] = useState<PackageView | null>(null);
+  const [removing, setRemoving] = useState<PackageView | null>(null);
+
+  // Split on `enabled`, never on name: files-filebrowser is both an
+  // installed capability and a catalog entry, and splitting by name
+  // makes it vanish from one of them.
+  const installedPkgs = pkgs.filter((p) => p.enabled);
+  const catalogPkgs = pkgs.filter((p) => !p.enabled);
+
+  // Worst first, then the ones asking to be updated, then by name — the
+  // reason to open this tab is to find what is wrong.
+  const installed = matching(installedPkgs, query).sort(
+    (a, b) =>
+      RANK[tileKind(a)] - RANK[tileKind(b)] ||
+      Number(!!b.stale) - Number(!!a.stale) ||
+      a.name.localeCompare(b.name),
+  );
+
+  const catalog = matching(
+    catalogPkgs
+      .filter((p) => group === "All" || groupOf(p) === group)
+      .filter((p) => !(hideBlocked && p.blockers?.length)),
+    query,
+  ).sort(
+    (a, b) =>
+      Number(!!a.blockers?.length) - Number(!!b.blockers?.length) || a.name.localeCompare(b.name),
+  );
+
+  // Counted from the SAME pool the cards come from, minus the group
+  // filter itself. Counting the whole catalog while hiding blocked
+  // cards gives a chip that reads 12 and shows 11.
+  const pool = hideBlocked ? catalogPkgs.filter((p) => !p.blockers?.length) : catalogPkgs;
+  const chips = [
+    { label: "All" as const, count: pool.length },
+    ...GROUPS.map((g) => ({ label: g, count: pool.filter((p) => groupOf(p) === g).length })),
+  ].filter((c) => c.count > 0);
+
+  // Which profile already holds each capability, so a sibling can say
+  // so before it is installed alongside one.
+  const installedBy = new Map(installedPkgs.map((p) => [p.capability, p.profile ?? p.name]));
+
+  const clearAll = () => {
+    setQuery("");
+    setGroup("All");
+    setHideBlocked(false);
+  };
 
   return (
     <>
-      <div className="sub">
-        What this control plane can install. Installing proposes a plan — a human still
-        approves it.
+      {/* Below the page header and ABOVE the intro paragraph. The other
+          way round, the paragraph scrolls under the bar and the first
+          row of cards is clipped by it. */}
+      <div className="filterbar">
+        <div className="filterbar-inner">
+          <div className="tabs" role="tablist" aria-label="Services">
+            <button
+              role="tab"
+              aria-selected={tab === "installed"}
+              className="tab"
+              onClick={() => {
+                setTab("installed");
+                setQuery("");
+              }}
+            >
+              Installed <span className="tab-count">{installedPkgs.length}</span>
+            </button>
+            <button
+              role="tab"
+              aria-selected={tab === "catalog"}
+              className="tab"
+              onClick={() => {
+                setTab("catalog");
+                setQuery("");
+              }}
+            >
+              Catalog <span className="tab-count">{catalogPkgs.length}</span>
+            </button>
+          </div>
+          <div className="filterbar-right">
+            {tab === "catalog" && (
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={hideBlocked}
+                  onChange={(e) => setHideBlocked(e.target.checked)}
+                />
+                Hide what won’t work here
+              </label>
+            )}
+            {/* A search typed against Installed means nothing against the
+                catalog, so the placeholder names which half it filters
+                and switching tabs clears it. */}
+            <input
+              type="text"
+              className="search"
+              aria-label={tab === "installed" ? "search installed" : "search the catalog"}
+              placeholder={tab === "installed" ? "search installed…" : "search the catalog…"}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+        </div>
       </div>
 
-      {installed.length > 0 && (
-        <>
-          <div className="sect">
-            <span className="eyebrow">Installed</span>
-            <span className="muted">{installed.length}</span>
-            <span className="fade" />
-          </div>
-          <div className="tiles" style={{ marginBottom: "var(--space-8)" }}>
-            {installed.map((p) => (
-              <InstalledTile
-                key={`${p.name}@${p.version}`}
-                pkg={p}
-                onReconfigure={() => setChosen(p)}
-                onRemove={() => setRemoving(p)}
-              />
-            ))}
-          </div>
-        </>
+      <div className="sub">
+        {tab === "installed"
+          ? "What is running in this household — where each capability answers, and whether it does. Worst first."
+          : "What this control plane can install. Installing proposes a plan — a human still approves it."}
+      </div>
+
+      {tab === "catalog" && chips.length > 1 && (
+        <div className="chips group-chips">
+          {chips.map((c) => (
+            <button
+              key={c.label}
+              className="chip"
+              aria-pressed={group === c.label}
+              onClick={() => setGroup(c.label)}
+            >
+              {c.label} <span className="chip-count">{c.count}</span>
+            </button>
+          ))}
+        </div>
       )}
 
-      <div className="sect">
-        <span className="eyebrow">Available</span>
-        <span className="muted">
-          {query ? `${available.length} of ${all.length}` : all.length}
-        </span>
-        <span className="fade" />
-        <input
-          type="text"
-          className="search"
-          aria-label="search the catalog"
-          placeholder="search…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+      <div className="card-grid">
+        {tab === "installed"
+          ? installed.map((p) => (
+              <InstalledTile key={`${p.name}@${p.version}`} pkg={p} onOpen={() => setDetail(p)} />
+            ))
+          : catalog.map((p) => (
+              <CatalogCard
+                key={`${p.name}@${p.version}`}
+                pkg={p}
+                // Only worth saying when it could actually be installed;
+                // a blocked card already has a louder thing to read.
+                siblingNote={
+                  !p.blockers?.length && installedBy.has(p.capability)
+                    ? `${p.capability} is already installed as ${installedBy.get(p.capability)} — installing this runs both.`
+                    : undefined
+                }
+                onInstall={() => setChosen(p)}
+              />
+            ))}
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Package</th>
-            <th>Capability</th>
-            <th>Version</th>
-            <th>Needs</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {available.map((p) => (
-            <AvailableRow key={`${p.name}@${p.version}`} pkg={p} onInstall={() => setChosen(p)} />
-          ))}
-        </tbody>
-      </table>
 
-      {query !== "" && available.length === 0 && (
+      {/* Three different misses, and they are three different
+          sentences: an empty catalog is a deployment fact, not a
+          filter that matched nothing. */}
+      {pkgs.length === 0 ? (
+        <div className="sub">
+          The catalog is empty. Keystone was started without <code>-catalog-dir</code>, or this
+          release shipped no packages.
+        </div>
+      ) : tab === "installed" && installed.length === 0 ? (
         <div className="muted">
-          Nothing in the catalog matches “{query}”.{" "}
-          <button className="btn btn-ghost" onClick={() => setQuery("")}>
+          {query === "" ? (
+            "Nothing is installed yet — the Catalog tab is what this control plane can install."
+          ) : (
+            <>
+              Nothing installed matches “{query}”.{" "}
+              <button className="btn btn-ghost" onClick={() => setQuery("")}>
+                Clear
+              </button>
+            </>
+          )}
+        </div>
+      ) : tab === "catalog" && catalog.length === 0 ? (
+        <div className="muted">
+          Nothing in the catalog matches these filters.{" "}
+          <button className="btn btn-ghost" onClick={clearAll}>
             Clear
           </button>
         </div>
-      )}
-      {pkgs.length === 0 && (
-        <div className="sub">
-          The catalog is empty. Keystone was started without <code>-catalog-dir</code>, or
-          this release shipped no packages.
-        </div>
-      )}
+      ) : null}
 
       {/* The form opens beside the catalog rather than under it. Inline
           at the bottom meant scrolling past every row to reach it, and
@@ -182,8 +298,66 @@ export function ServicesView({
           />
         )}
       </Drawer>
+
+      <Drawer open={detail !== null} onClose={() => setDetail(null)} title={detail?.name} wide>
+        {detail && (
+          <InstalledDetail
+            pkg={detail}
+            onReconfigure={() => {
+              setChosen(detail);
+              setDetail(null);
+            }}
+            onRemove={() => {
+              setRemoving(detail);
+              setDetail(null);
+            }}
+          />
+        )}
+      </Drawer>
     </>
   );
+}
+
+// The app's own logo, over a monogram.
+//
+// The monogram is UNDERNEATH rather than a fallback branch, so a
+// household with no route to the CDN sees two letters instead of a
+// broken image — the caveat packages/dashboard/README.md records under
+// "Icons come from a CDN", inherited here. aria-hidden because the name
+// is right beside it, and a missing logo is never an error state.
+//
+// The slug comes from Keystone, which resolves it from the same table
+// the household dashboard renders from. There is deliberately no
+// name-to-slug map in the console: that would be a second copy of it.
+const ICON_CDN = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/";
+
+export function AppLogo({ pkg, size = 28 }: { pkg: PackageView; size?: number }) {
+  const mono = (pkg.profile ?? pkg.name).replace(/[^a-z]/gi, "").slice(0, 2).toLowerCase();
+  return (
+    <span className="card-logo" style={{ width: size, height: size }} aria-hidden="true">
+      <span>{mono}</span>
+      {pkg.icon && (
+        <img
+          src={`${ICON_CDN}${pkg.icon}.svg`}
+          alt=""
+          loading="lazy"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.display = "none";
+          }}
+        />
+      )}
+    </span>
+  );
+}
+
+// How well an installed capability is doing, in the one place both the
+// sort and the pill read it from.
+export function tileKind(pkg: PackageView): Kind {
+  const total = pkg.addresses?.length ?? 0;
+  const answering = pkg.addresses?.filter((a) => a.healthy).length ?? 0;
+  if (pkg.blockers?.length) return "bad";
+  if (total === 0) return "mute";
+  return answering === total ? "ok" : "bad";
 }
 
 // matching filters the catalog on name and capability. Case-insensitive
@@ -200,11 +374,135 @@ export function matching(pkgs: PackageView[], query: string): PackageView[] {
   );
 }
 
-// An installed capability, as a status board rather than a table row:
-// where it answers, whether it does, and what it is made of. This is
-// the answer to "which port is this on", which before the addresses
-// endpoint existed only in <prefix>/routes/ on the node.
-export function InstalledTile({
+
+// An installed capability, as two fixed lines: what it is, whether it
+// answers, and one muted line of detail. Everything else — the address
+// list, what it owns, Reconfigure and Remove — is behind the card,
+// which is the same contract ServiceTile already has on Home.
+//
+// It used to carry all of that on its face: a row per address, a
+// version, a resource count, an optional stale pill, blocker blocks and
+// two buttons. Ten installed capabilities was a ragged grid and about
+// twenty-four buttons.
+export function InstalledTile({ pkg, onOpen }: { pkg: PackageView; onOpen: () => void }) {
+  const kind = tileKind(pkg);
+  const total = pkg.addresses?.length ?? 0;
+  const answering = pkg.addresses?.filter((a) => a.healthy).length ?? 0;
+  const state =
+    total === 0 ? "no address" : answering === total ? "answering" : `${answering} of ${total} answering`;
+  // A phone has no room for "1 of 2 answering" beside a name.
+  const shortState = total === 0 ? "internal" : answering === total ? "answering" : `${answering} of ${total}`;
+  const addrLine =
+    total === 0 ? "internal only" : total === 1 ? hostOf(pkg.addresses![0].url) : `${total} addresses`;
+  const metaLine = [
+    addrLine,
+    pkg.installedVersion ?? pkg.version,
+    `${pkg.resources?.length ?? 0} resources`,
+  ].join(" · ");
+  return (
+    <div
+      className="card"
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      aria-label={`${pkg.name} — ${state}`}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <div className="card-head">
+        <AppLogo pkg={pkg} />
+        <span className="card-name">{pkg.name}</span>
+        {/* An upgrade changes the catalog and leaves installed
+            capabilities alone, so without this an operator sees no
+            change and cannot tell "already current" from "needs
+            re-installing" from "the upgrade failed" (F91). The words
+            move into the tooltip and the drawer; the arrow is what has
+            to survive at this size. */}
+        {pkg.stale && (
+          <span
+            className="card-stale"
+            title={`running ${pkg.installedVersion}, catalog has ${pkg.version} — reconfigure to update`}
+          >
+            <ArrowCircleUp size={14} weight="fill" />
+          </span>
+        )}
+        <StatusPill kind={kind}>
+          <span className="wide-only">{state}</span>
+          <span className="narrow-only">{shortState}</span>
+        </StatusPill>
+        <CaretRight size={12} className="muted" />
+      </div>
+      <div className="card-meta" title={metaLine}>
+        {metaLine}
+      </div>
+    </div>
+  );
+}
+
+// One thing this control plane could install. What stands in the way is
+// stated on the card, before Install is pressed: a blocker cannot be
+// answered by filling in a field, so offering the form for one is
+// offering a dead end.
+export function CatalogCard({
+  pkg,
+  siblingNote,
+  onInstall,
+}: {
+  pkg: PackageView;
+  siblingNote?: string;
+  onInstall: () => void;
+}) {
+  const blocked = (pkg.blockers?.length ?? 0) > 0;
+  const required = (pkg.params ?? []).filter((p) => p.required).map((p) => p.name);
+  const cap = pkg.capability + (pkg.profile ? ` (${pkg.profile})` : "");
+  // What the old table's Needs column said, as the third clause of one
+  // line. The generated form is one click away and is where the detail
+  // of a param belongs.
+  const metaLine = [cap, pkg.version, required.length ? `needs ${required.join(", ")}` : "no setup"].join(
+    " · ",
+  );
+  return (
+    <div className={blocked ? "card card-blocked" : "card"}>
+      <div className="card-head">
+        <AppLogo pkg={pkg} />
+        <span className="card-name">{pkg.name}</span>
+        <button className="btn btn-secondary btn-sm" disabled={blocked} onClick={onInstall}>
+          {blocked ? "Can’t install" : "Install"}
+        </button>
+      </div>
+      <div className="card-meta" title={metaLine}>
+        {metaLine}
+      </div>
+      {/* Two profiles of one capability can run side by side, and
+          whether that is what you meant is worth being asked before
+          rather than discovered after. */}
+      {siblingNote && (
+        <div className="card-note">
+          <Info size={13} />
+          <span>{siblingNote}</span>
+        </div>
+      )}
+      {pkg.blockers?.map((b) => (
+        <div className="card-blocker" key={b}>
+          <WarningCircle size={14} weight="fill" />
+          <span>
+            <strong>Won’t work here.</strong> {b}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Everything the installed tile used to carry on its face, in the panel
+// the tile opens. This is the answer to "which port is this on", which
+// before the addresses endpoint existed only in <prefix>/routes/ on the
+// node.
+export function InstalledDetail({
   pkg,
   onReconfigure,
   onRemove,
@@ -213,57 +511,23 @@ export function InstalledTile({
   onReconfigure: () => void;
   onRemove?: () => void;
 }) {
-  const answering = pkg.addresses?.filter((a) => a.healthy).length ?? 0;
   const total = pkg.addresses?.length ?? 0;
   return (
-    <div className="tile" style={{ cursor: "default" }}>
-      <div className="tile-head">
-        <Package size={16} />
-        <span className="tile-name">{pkg.name}</span>
+    <>
+      <div className="drawer-head">
+        <AppLogo pkg={pkg} size={26} />
+        <h3>{pkg.name}</h3>
+        <span className="muted tnum">{pkg.installedVersion ?? pkg.version}</span>
       </div>
-      <div className="tile-what">
+      <div className="muted" style={{ marginBottom: "var(--space-4)" }}>
         {pkg.capability}
         {pkg.profile ? ` (${pkg.profile})` : ""}
       </div>
 
-      <div className="tile-foot">
-        <StatusPill kind={total === 0 ? "mute" : answering === total ? "ok" : "bad"}>
-          {total === 0 ? "no address" : answering === total ? "answering" : `${answering} of ${total} answering`}
-        </StatusPill>
-      </div>
-
-      {pkg.addresses?.map((a) => (
-        <div key={a.route} className="tile-host">
-          <a href={a.url} target="_blank" rel="noreferrer">
-            {a.url}
-          </a>
-          <ArrowSquareOut size={11} style={{ marginLeft: 4, verticalAlign: "-1px" }} />
-          {!a.healthy && (
-            <div className="danger-line">not answering{a.detail ? `: ${a.detail}` : ""}</div>
-          )}
-        </div>
-      ))}
-
-      <div className="tile-meta">
-        <span className="tnum">{pkg.installedVersion ?? pkg.version}</span>
-        {pkg.resources?.length ? (
-          <span>
-            {pkg.resources.length} {pkg.resources.length === 1 ? "resource" : "resources"}
-          </span>
-        ) : null}
-      </div>
-
-      {/* An upgrade changes the catalog and leaves installed capabilities
-          alone, so without this an operator sees no change and cannot
-          tell "already current" from "needs re-installing" from "the
-          upgrade failed" (F91). */}
       {pkg.stale && (
-        <StatusPill
-          kind="warn"
-          title={`running ${pkg.installedVersion}, catalog has ${pkg.version} — reconfigure to update`}
-        >
-          update to {pkg.version}
-        </StatusPill>
+        <div className="callout callout-warn">
+          Running {pkg.installedVersion}, the catalog has {pkg.version}. Reconfigure to update.
+        </div>
       )}
       {pkg.blockers?.map((b) => (
         <div className="blocker" key={b}>
@@ -271,15 +535,58 @@ export function InstalledTile({
         </div>
       ))}
 
-      <button className="btn btn-secondary btn-block" onClick={onReconfigure}>
-        Reconfigure
-      </button>
-      {onRemove && (
-        <button className="btn btn-ghost" onClick={onRemove}>
-          Remove…
-        </button>
+      <div className="sect" style={{ marginTop: "var(--space-6)" }}>
+        <span className="eyebrow">Where it answers</span>
+        <span className="fade" />
+      </div>
+      {total === 0 ? (
+        <div className="muted">
+          No address. This capability is reachable only from inside the household network, which is
+          a fact about it and not a gap in what we know.
+        </div>
+      ) : (
+        pkg.addresses!.map((a) => (
+          <div key={a.route} className="addr">
+            <Dot kind={a.healthy ? "ok" : "bad"} />
+            <a href={a.url} target="_blank" rel="noreferrer">
+              {a.url}
+            </a>
+            <ArrowSquareOut size={11} />
+            {!a.healthy && (
+              <div className="danger-line">not answering{a.detail ? `: ${a.detail}` : ""}</div>
+            )}
+          </div>
+        ))
       )}
-    </div>
+
+      <div className="sect" style={{ marginTop: "var(--space-6)" }}>
+        <span className="eyebrow">What it owns</span>
+        <span className="muted">{pkg.resources?.length ?? 0}</span>
+        <span className="fade" />
+      </div>
+      {pkg.resources?.length ? (
+        <div className="chips">
+          {pkg.resources.map((r) => (
+            <span className="chip tnum" key={`${r.kind}/${r.name}`}>
+              {r.kind}/{r.name}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className="muted">Nothing is recorded as owned by this package.</div>
+      )}
+
+      <div className="row" style={{ marginTop: "var(--space-8)" }}>
+        <button className="btn btn-secondary" onClick={onReconfigure}>
+          Reconfigure
+        </button>
+        {onRemove && (
+          <button className="btn btn-ghost" onClick={onRemove}>
+            Remove…
+          </button>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -584,42 +891,6 @@ export function RemoveForm({
 function resourceCount(owners: [string, number][]): string {
   const n = owners.reduce((sum, [, c]) => sum + c, 0);
   return `${n} ${n === 1 ? "resource" : "resources"}`;
-}
-
-// What stands in the way is stated on the row, before Install is
-// pressed. A blocker cannot be answered by filling in a field, so
-// offering the form for one is offering a dead end.
-export function AvailableRow({ pkg, onInstall }: { pkg: PackageView; onInstall: () => void }) {
-  const required = (pkg.params ?? []).filter((p) => p.required).map((p) => p.name);
-  const blocked = (pkg.blockers?.length ?? 0) > 0;
-  return (
-    <>
-      <tr>
-        <td>{pkg.name}</td>
-        <td>
-          {pkg.capability}
-          {pkg.profile ? ` (${pkg.profile})` : ""}
-        </td>
-        <td className="tnum">{pkg.version}</td>
-        <td className="muted">{required.length > 0 ? required.join(", ") : "nothing"}</td>
-        <td>
-          <button className="btn btn-secondary" disabled={blocked} onClick={onInstall}>
-            Install
-          </button>
-        </td>
-      </tr>
-      {pkg.blockers?.map((b) => (
-        <tr key={b}>
-          <td colSpan={5}>
-            <div className="blocker">
-              <WarningCircle size={14} weight="fill" style={{ verticalAlign: "-2px", marginRight: 6 }} />
-              <strong>Will not work here.</strong> {b}
-            </div>
-          </td>
-        </tr>
-      ))}
-    </>
-  );
 }
 
 // Exported for the render check in scripts/: a generated form is the

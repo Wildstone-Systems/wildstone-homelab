@@ -511,3 +511,32 @@ func homepageGroupUsed(entries []homepageEntry, group string) bool {
 	}
 	return false
 }
+
+// IconFor is the dashboard-icons slug for an app, by the name of the
+// container it runs in — the same lookup the dashboard renders from, so
+// the Console cannot disagree with the tablet on the wall about what an
+// app's logo is.
+//
+// It exists because the alternative is a second name-to-slug table in
+// the Console, and a second copy of this map is a copy that drifts. The
+// Go one is already covered: homepagecatalog_test fails the build when a
+// shipped Route has no row here.
+//
+// An unknown container gets the same generic fallback the dashboard
+// gives it, never a guess at a slug: a guessed slug is right often
+// enough to be tempting and wrong silently.
+func IconFor(container string) string {
+	if container == "" {
+		return homepageFallbackIcon
+	}
+	if app, known := homepageApps[container]; known {
+		return app.icon
+	}
+	return homepageFallbackIcon
+}
+
+// IconForUpstream is IconFor for a Route's `upstream` field, which is
+// where the container name actually lives ("container/<name>:<port>").
+func IconForUpstream(upstream string) string {
+	return IconFor(upstreamContainerName(upstream))
+}
