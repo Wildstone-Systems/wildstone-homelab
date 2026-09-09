@@ -1,0 +1,302 @@
+package runtimedb
+
+// Restore quarantine and reconciliation (ADR-W030 A10/A10.1, P16).
+//
+// An old backup does not contain later decisions. "We restored last
+// week's database" must not mean "the thing you asked us to forget is
+// back", and it must not mean "the person you offboarded on Tuesday can
+// talk to the Butler again".
+//
+// So a restored database starts QUARANTINED, and quarantine is the
+// default rather than something an operator remembers to switch on.
+// Nothing Butler-facing runs while it holds: no retrieval, no task
+// dispatch, no ingestion, no proactive delivery. Release takes two
+// things, and the ordering is deliberate:
+//
+//   An administrator asserts the deletion journal has been brought up to
+//   date from a source newer than the snapshot. This is a precondition.
+//
+//   The journal is then REPLAYED over the restored state. This is the
+//   evidence. A10 says administrative acknowledgement alone is not
+//   evidence that missing deletions were recovered, and the schema
+//   refuses a release where only the assertion happened.
+//
+// Work whose outcome was uncertain when the snapshot was taken is still
+// uncertain, so it stays paused rather than being resumed by a
+// coordinator that has just come up feeling optimistic.
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+)
+
+// ErrQuarantined is returned by anything Butler-facing while a restored
+// database has not been reconciled.
+var ErrQuarantined = errors.New("runtimedb: this database is in restore quarantine and has not been reconciled")
+
+// RestoreState is where a restored database is in its reconciliation.
+type RestoreState struct {
+	Quarantined       bool      `json:"quarantined"`
+	EnteredAt         time.Time `json:"enteredAt,omitzero"`
+	Reason            string    `json:"reason,omitempty"`
+	SnapshotAt        time.Time `json:"snapshotAt,omitzero"`
+	JournalCurrent    bool      `json:"journalCurrent"`
+	JournalAssertedBy string    `json:"journalAssertedBy,omitempty"`
+	ReplayedAt        time.Time `json:"replayedAt,omitzero"`
+	ReplayedCount     int       `json:"replayedCount"`
+	ReleasedAt        time.Time `json:"releasedAt,omitzero"`
+	ReleasedBy        string    `json:"releasedBy,omitempty"`
+}
+
+// EnterRestoreQuarantine marks this database as restored and holds
+// everything Butler-facing.
+func (db *DB) EnterRestoreQuarantine(reason string, snapshotAt time.Time) error {
+	if reason == "" {
+		return fmt.Errorf("runtimedb: entering quarantine needs a reason — an operator reading this later has to know what was restored")
+	}
+	_, err := db.sql.Exec(
+		`INSERT INTO restore_state (id, quarantined, entered_at, reason, snapshot_at)
+		 VALUES (1, 1, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET quarantined = 1, entered_at = excluded.entered_at,
+		   reason = excluded.reason, snapshot_at = excluded.snapshot_at,
+		   journal_current = 0, journal_asserted_by = '', replayed_at = '', replayed_count = 0,
+		   released_at = '', released_by = ''`,
+		now(), reason, timeText(snapshotAt))
+	if err != nil {
+		return fmt.Errorf("runtimedb: entering restore quarantine: %w", err)
+	}
+	return nil
+}
+
+// GetRestoreState returns where reconciliation has got to.
+func (db *DB) GetRestoreState() (RestoreState, error) {
+	var s RestoreState
+	var quarantined, journalCurrent int
+	var entered, snapshot, replayed, released string
+	err := db.sql.QueryRow(
+		`SELECT quarantined, entered_at, reason, snapshot_at, journal_current,
+		        journal_asserted_by, replayed_at, replayed_count, released_at, released_by
+		 FROM restore_state WHERE id = 1`).
+		Scan(&quarantined, &entered, &s.Reason, &snapshot, &journalCurrent,
+			&s.JournalAssertedBy, &replayed, &s.ReplayedCount, &released, &s.ReleasedBy)
+	if errors.Is(err, sql.ErrNoRows) {
+		// A database that was never restored is not quarantined. This is
+		// the ordinary case and must not read as an error.
+		return RestoreState{}, nil
+	}
+	if err != nil {
+		return RestoreState{}, fmt.Errorf("runtimedb: reading restore state: %w", err)
+	}
+	s.Quarantined, s.JournalCurrent = quarantined != 0, journalCurrent != 0
+	for _, f := range []struct {
+		text string
+		into *time.Time
+	}{{entered, &s.EnteredAt}, {snapshot, &s.SnapshotAt}, {replayed, &s.ReplayedAt}, {released, &s.ReleasedAt}} {
+		if f.text == "" {
+			continue
+		}
+		parsed, perr := time.Parse(time.RFC3339Nano, f.text)
+		if perr != nil {
+			return RestoreState{}, fmt.Errorf("runtimedb: bad restore timestamp %q: %w", f.text, perr)
+		}
+		*f.into = parsed
+	}
+	return s, nil
+}
+
+// CheckQuarantine is what every Butler-facing path calls before doing
+// anything. It is cheap and it is meant to be called every time: a
+// cached answer is how a quarantined database ends up dispatching.
+func (db *DB) CheckQuarantine() error {
+	s, err := db.GetRestoreState()
+	if err != nil {
+		return err
+	}
+	if s.Quarantined {
+		return fmt.Errorf("%w (restored %s: %s)", ErrQuarantined,
+			s.EnteredAt.Format(time.RFC3339), s.Reason)
+	}
+	return nil
+}
+
+// AssertJournalCurrent records an administrator's statement that the
+// deletion journal has been brought up to date from a source newer than
+// the snapshot.
+//
+// It is a precondition and not evidence. The schema refuses a release
+// that has only this, because A10 says acknowledgement alone does not
+// recover missing deletions — somebody has to actually replay them.
+func (db *DB) AssertJournalCurrent(by string) error {
+	if by == "" {
+		return fmt.Errorf("runtimedb: asserting the journal is current needs who asserted it")
+	}
+	res, err := db.sql.Exec(
+		`UPDATE restore_state SET journal_current = 1, journal_asserted_by = ? WHERE id = 1`, by)
+	if err != nil {
+		return fmt.Errorf("runtimedb: asserting the journal is current: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ReconcileRestore replays the deletion journal over restored state.
+//
+// This is the evidence half. Every journalled deletion and revocation is
+// re-applied, so content the snapshot still contains and that was
+// removed afterwards is removed again — a forgotten memory stays
+// forgotten, an offboarded member stays denied, a revoked link stays
+// revoked.
+//
+// It returns how many entries it applied, because "reconciliation ran"
+// with no number behind it is indistinguishable from reconciliation that
+// found nothing to do.
+func (db *DB) ReconcileRestore() (applied int, err error) {
+	rows, err := db.sql.Query(
+		`SELECT subject_kind, subject_id, action, actor FROM deletion_journal ORDER BY seq`)
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: reading the deletion journal: %w", err)
+	}
+	type entry struct{ kind, id, action, actor string }
+	var entries []entry
+	for rows.Next() {
+		var e entry
+		if err := rows.Scan(&e.kind, &e.id, &e.action, &e.actor); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		entries = append(entries, e)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	for _, e := range entries {
+		switch e.kind {
+		case "member":
+			// Re-deny. A member offboarded after the snapshot is still
+			// offboarded, whatever the restored admission row says.
+			if m, err := db.GetButlerMember(e.id); err == nil && m.Active() {
+				if err := db.OffboardButlerMember(e.id, e.actor); err != nil {
+					return applied, err
+				}
+			}
+		case "link":
+			// Re-revoke. The id is "<type>:<external>".
+			for i := range e.id {
+				if e.id[i] == ':' {
+					_ = db.RevokeSurfaceLink(e.id[:i], e.id[i+1:], e.actor)
+					break
+				}
+			}
+		case "memory":
+			var seq int64
+			if _, err := fmt.Sscanf(e.id, "%d", &seq); err == nil {
+				if m, err := db.GetMemory(seq); err == nil && m.ForgottenAt.IsZero() {
+					if err := db.ForgetMemory(seq, e.actor); err != nil {
+						return applied, err
+					}
+				}
+				if _, err := db.RemoveIndexForMemory(seq); err != nil {
+					return applied, err
+				}
+			}
+		case "index-source":
+			// A source whose indexing was revoked must not be
+			// searchable again.
+			for i := range e.id {
+				if e.id[i] == ':' {
+					if _, err := db.RemoveIndexForSource(e.id[:i], e.id[i+1:]); err != nil {
+						return applied, err
+					}
+					break
+				}
+			}
+		case "connection":
+			if _, err := db.GetConnection(e.id); err == nil {
+				if _, err := db.BumpConnectionEpoch(e.id); err != nil {
+					return applied, err
+				}
+				if err := db.SetConnectionState(e.id, ConnectionUnavailable,
+					"revoked after the restored snapshot was taken"); err != nil {
+					return applied, err
+				}
+			}
+		case "routine":
+			if r, err := db.GetHouseholdRoutine(e.id); err == nil && r.DisabledAt.IsZero() {
+				if err := db.DisableHouseholdRoutine(e.id, e.actor); err != nil {
+					return applied, err
+				}
+			}
+		case "binding":
+			var id int64
+			if _, err := fmt.Sscanf(e.id, "%d", &id); err == nil {
+				_ = db.RevokeChatBinding(id)
+			}
+		case "secret":
+			// Secrets are revoked per connection; the journal records
+			// the reference, and the sweep below finds it wherever it
+			// still lives.
+			connections, err := db.ListConnections()
+			if err != nil {
+				return applied, err
+			}
+			for _, c := range connections {
+				secrets, err := db.ListConnectionSecrets(c.Name)
+				if err != nil {
+					return applied, err
+				}
+				for _, s := range secrets {
+					if s.SecretRef == e.id && s.RevokedAt.IsZero() {
+						_ = db.RevokeConnectionSecret(c.Name, s.Seq)
+					}
+				}
+			}
+		}
+		applied++
+	}
+
+	// Work whose outcome was unknown stays paused. A restored
+	// coordinator that resumes it is doing the one thing A4 forbids:
+	// retrying an action that may already have happened.
+	if _, err := db.sql.Exec(
+		`UPDATE butler_tasks SET state = ?, updated_at = ?
+		 WHERE state IN (?, ?) AND (uncertainty <> '' OR seq IN (
+		     SELECT DISTINCT task FROM butler_task_attempts WHERE state = ?))`,
+		ButlerTaskPausedOffboarded, now(), ButlerTaskRunning, ButlerTaskWaiting,
+		ButlerAttemptDispatched); err != nil {
+		return applied, fmt.Errorf("runtimedb: pausing uncertain work after a restore: %w", err)
+	}
+
+	if _, err := db.sql.Exec(
+		`UPDATE restore_state SET replayed_at = ?, replayed_count = ? WHERE id = 1`,
+		now(), applied); err != nil {
+		return applied, fmt.Errorf("runtimedb: recording the replay: %w", err)
+	}
+	return applied, nil
+}
+
+// ReleaseRestoreQuarantine lets the Butler run again.
+//
+// It succeeds only when the journal has been asserted current AND
+// replayed. The schema enforces the same thing, so a writer that goes
+// around this function still cannot release on an assertion alone.
+func (db *DB) ReleaseRestoreQuarantine(by string) error {
+	if by == "" {
+		return fmt.Errorf("runtimedb: releasing quarantine needs who released it")
+	}
+	res, err := db.sql.Exec(
+		`UPDATE restore_state SET quarantined = 0, released_at = ?, released_by = ? WHERE id = 1`,
+		now(), by)
+	if err != nil {
+		return fmt.Errorf("runtimedb: releasing restore quarantine: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

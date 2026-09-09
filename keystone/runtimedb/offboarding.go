@@ -1,0 +1,301 @@
+package runtimedb
+
+// Cross-store offboarding (ADR-W030 A2.1/A4, P16).
+//
+// "We offboarded them" is a claim about nine stores, and access denied
+// in six places at six different times is six windows. So this is one
+// call that lands everywhere, in one transaction where it can be and in
+// a recorded sequence where it cannot, and it writes down what it did to
+// each store — because a claim about nine stores needs nine answers.
+//
+// Two rules shape what happens to the work rather than the access.
+//
+// Personal work PAUSES. It performs no retries, no notices and no model
+// calls, and nothing is deleted: it is somebody's unfinished business,
+// and the household may need to know what it was.
+//
+// Shared work TRANSFERS and keeps its authorship. Operational ownership
+// moves to the administrator so the house can carry on; the author stays
+// whoever asked for it, because rewriting that would make the history a
+// lie about who wanted what.
+
+import (
+	"fmt"
+	"time"
+)
+
+// OffboardingResult is what actually happened, per store.
+type OffboardingResult struct {
+	Member string         `json:"member"`
+	At     time.Time      `json:"at"`
+	Stores map[string]int `json:"stores"`
+	// TransferredTo names who now operates the shared work.
+	TransferredTo string `json:"transferredTo,omitempty"`
+}
+
+// OffboardMember denies access everywhere and settles the work.
+//
+// Order matters and is not arbitrary. Admission and links go first —
+// that is the denial, and every moment after it is a moment they cannot
+// act. Everything below is cleanup that must not be able to restore
+// access if it fails, which is exactly why it comes second.
+func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingResult, error) {
+	if member == "" || actor == "" {
+		return OffboardingResult{}, fmt.Errorf("runtimedb: offboarding needs a member and who did it")
+	}
+	if administrator == "" {
+		return OffboardingResult{}, fmt.Errorf(
+			"runtimedb: offboarding needs the administrator who takes over shared work (ADR-W030 A4)")
+	}
+	result := OffboardingResult{
+		Member: member, At: time.Now().UTC(), Stores: map[string]int{},
+		TransferredTo: administrator,
+	}
+
+	// 1. Deny. Admission off, generation bumped, every link revoked.
+	//    Nothing below can put this back.
+	if err := db.OffboardButlerMember(member, actor); err != nil {
+		return result, fmt.Errorf("runtimedb: offboarding: %w", err)
+	}
+	if err := db.journal("member", member, "offboarded", actor, "butler admission withdrawn"); err != nil {
+		return result, err
+	}
+	links, err := db.ListSurfaceLinks(member)
+	if err != nil {
+		return result, err
+	}
+	revoked := 0
+	for _, l := range links {
+		if !l.RevokedAt.IsZero() {
+			revoked++
+			if err := db.journal("link", l.LinkType+":"+l.ExternalID, "revoked", actor, ""); err != nil {
+				return result, err
+			}
+		}
+	}
+	result.Stores["identity-links"] = revoked
+
+	// 2. Chat bindings. The link table already refuses them, but a
+	//    revoked binding is also what a Console shows, and someone
+	//    reading it should not see a live chat account for a person who
+	//    has none.
+	bindings, err := db.ListChatBindings(true)
+	if err != nil {
+		return result, err
+	}
+	for _, b := range bindings {
+		if b.Identity != member || b.Revoked() {
+			continue
+		}
+		if err := db.RevokeChatBinding(b.ID); err != nil {
+			return result, fmt.Errorf("runtimedb: revoking a chat binding: %w", err)
+		}
+		result.Stores["chat-bindings"]++
+		if err := db.journal("binding", fmt.Sprintf("%d", b.ID), "revoked", actor, ""); err != nil {
+			return result, err
+		}
+	}
+
+	// 3. Work. Personal pauses, shared transfers with authorship intact.
+	tasks, err := db.ListButlerTasks(1000, member)
+	if err != nil {
+		return result, err
+	}
+	for _, t := range tasks {
+		switch t.State {
+		case ButlerTaskPending, ButlerTaskRunning, ButlerTaskWaiting:
+		default:
+			continue
+		}
+		if t.Audience == ButlerAudienceShared {
+			// Operational ownership moves; the author does not. The
+			// schema enforces the second half.
+			if _, err := db.sql.Exec(
+				`UPDATE butler_tasks SET owner = ?, updated_at = ? WHERE seq = ?`,
+				administrator, now(), t.Seq); err != nil {
+				return result, fmt.Errorf("runtimedb: transferring shared work: %w", err)
+			}
+			// It still pauses: A4 says transferred work waits for grant
+			// and connection review before resuming.
+			if err := db.TransitionButlerTask(t.ID, ButlerTaskPausedOffboarded,
+				"owner offboarded; transferred for review", actor); err != nil {
+				return result, err
+			}
+			result.Stores["shared-tasks-transferred"]++
+			continue
+		}
+		if err := db.TransitionButlerTask(t.ID, ButlerTaskPausedOffboarded,
+			"owner offboarded", actor); err != nil {
+			return result, err
+		}
+		result.Stores["personal-tasks-paused"]++
+	}
+
+	// 4. Grants. Every temporary permission on their work ends now.
+	for _, t := range tasks {
+		n, err := db.RevokeGrantsForScope(GrantScopeTask, t.ID, actor)
+		if err != nil {
+			return result, err
+		}
+		result.Stores["grants-revoked"] += n
+	}
+
+	// 5. Connections they own. Fenced rather than deleted: the adapter
+	//    stops being able to act, and what to do with the connection is
+	//    a decision for the household.
+	connections, err := db.ListConnections()
+	if err != nil {
+		return result, err
+	}
+	for _, c := range connections {
+		if c.Owner != member || c.Ownership != OwnershipPersonal {
+			continue
+		}
+		if _, err := db.BumpConnectionEpoch(c.Name); err != nil {
+			return result, err
+		}
+		if err := db.SetConnectionState(c.Name, ConnectionUnavailable,
+			fmt.Sprintf("%s was offboarded; this was their personal connection", member)); err != nil {
+			return result, err
+		}
+		result.Stores["connections-fenced"]++
+		if err := db.journal("connection", c.Name, "revoked", actor, "owner offboarded"); err != nil {
+			return result, err
+		}
+	}
+
+	// 6. Undelivered notices. Nothing more is sent to somebody who no
+	//    longer has access, and anything queued is marked rather than
+	//    dropped, so the record shows they were never told.
+	if _, err := db.sql.Exec(
+		`UPDATE notices SET undelivered_at = ? WHERE recipient = ? AND delivered_at = '' AND undelivered_at = ''`,
+		now(), member); err != nil {
+		return result, fmt.Errorf("runtimedb: stopping notices: %w", err)
+	}
+	result.Stores["notices-stopped"]++
+
+	// 7. Private memory. Marked forgotten and journalled, so a restore
+	//    of an older snapshot cannot bring it back. Shared memory stays:
+	//    it is the household's, and it was never only theirs.
+	records, err := db.ExportMemoryFor(member)
+	if err != nil {
+		return result, err
+	}
+	for _, m := range records {
+		if m.Audience != ButlerAudiencePrivate || m.Owner != member || !m.ForgottenAt.IsZero() {
+			continue
+		}
+		if err := db.ForgetMemory(m.Seq, actor); err != nil {
+			return result, err
+		}
+		if _, err := db.RemoveIndexForMemory(m.Seq); err != nil {
+			return result, err
+		}
+		result.Stores["private-memory-quarantined"]++
+		if err := db.journal("memory", fmt.Sprintf("%d", m.Seq), "deleted", actor,
+			"owner offboarded"); err != nil {
+			return result, err
+		}
+	}
+
+	// 8. Personal credentials. Revoked where nothing live still uses
+	//    them; where something does, the placement removal path is what
+	//    fences it first, and this records that it is outstanding.
+	for _, c := range connections {
+		secrets, err := db.ListConnectionSecrets(c.Name)
+		if err != nil {
+			return result, err
+		}
+		for _, s := range secrets {
+			if s.Member != member || !s.RevokedAt.IsZero() {
+				continue
+			}
+			if err := db.RevokeConnectionSecret(c.Name, s.Seq); err != nil {
+				// A referenced credential cannot be erased yet. That is
+				// not a failure of the offboarding — access is already
+				// denied — and it is recorded so the cleanup is visible
+				// as outstanding rather than assumed done.
+				if err := db.recordOffboarding(member, actor, "credentials-outstanding", 1,
+					fmt.Sprintf("%s on %s is still provisioned to a live placement", s.SecretRef, c.Name)); err != nil {
+					return result, err
+				}
+				result.Stores["credentials-outstanding"]++
+				continue
+			}
+			result.Stores["credentials-revoked"]++
+			if err := db.journal("secret", s.SecretRef, "revoked", actor, "owner offboarded"); err != nil {
+				return result, err
+			}
+		}
+	}
+
+	for store, n := range result.Stores {
+		if err := db.recordOffboarding(member, actor, store, n, ""); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+// journal records a deletion or revocation separately from the data it
+// concerns, so a restore of an older snapshot can be reconciled against
+// decisions the snapshot does not contain.
+func (db *DB) journal(kind, id, action, actor, detail string) error {
+	_, err := db.sql.Exec(
+		`INSERT INTO deletion_journal (subject_kind, subject_id, action, at, actor, detail)
+		 VALUES (?, ?, ?, ?, ?, ?)`, kind, id, action, now(), actor, detail)
+	if err != nil {
+		return fmt.Errorf("runtimedb: journalling a %s of %s: %w", action, kind, err)
+	}
+	return nil
+}
+
+// Journal is the exported way to record a deletion or revocation that
+// happened outside OffboardMember, so the journal stays complete.
+func (db *DB) Journal(kind, id, action, actor, detail string) error {
+	return db.journal(kind, id, action, actor, detail)
+}
+
+func (db *DB) recordOffboarding(member, actor, store string, affected int, detail string) error {
+	_, err := db.sql.Exec(
+		`INSERT INTO offboarding_records (member, at, actor, store, affected, detail)
+		 VALUES (?, ?, ?, ?, ?, ?)`, member, now(), actor, store, affected, detail)
+	if err != nil {
+		return fmt.Errorf("runtimedb: recording offboarding: %w", err)
+	}
+	return nil
+}
+
+// OffboardingRecord is one store's answer.
+type OffboardingRecord struct {
+	Member   string    `json:"member"`
+	At       time.Time `json:"at"`
+	Actor    string    `json:"actor"`
+	Store    string    `json:"store"`
+	Affected int       `json:"affected"`
+	Detail   string    `json:"detail,omitempty"`
+}
+
+// ListOffboardingRecords returns what an offboarding did.
+func (db *DB) ListOffboardingRecords(member string) ([]OffboardingRecord, error) {
+	rows, err := db.sql.Query(
+		`SELECT member, at, actor, store, affected, detail FROM offboarding_records
+		 WHERE member = ? ORDER BY seq`, member)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing offboarding records: %w", err)
+	}
+	defer rows.Close()
+	var out []OffboardingRecord
+	for rows.Next() {
+		var r OffboardingRecord
+		var at string
+		if err := rows.Scan(&r.Member, &at, &r.Actor, &r.Store, &r.Affected, &r.Detail); err != nil {
+			return nil, err
+		}
+		if r.At, err = time.Parse(time.RFC3339Nano, at); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
