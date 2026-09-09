@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // An export is a read governed by current permissions (A3/A10). Your
@@ -264,5 +265,114 @@ func TestEnablingAToolDoesNotBypassARequiredGrant(t *testing.T) {
 	}
 	if !b.Allowed || b.Source != "enabled" {
 		t.Fatalf("an enabled tool that needs no grant was refused: %+v", b)
+	}
+}
+
+// A notice names its intended approver, and only that person may
+// answer it (A8). Without the check anyone reaching the endpoint could
+// walk the sequence numbers, answer somebody else's question under
+// their own name, and — because a notice is answerable once — lock the
+// intended recipient out of their own decision permanently.
+func TestOnlyTheRecipientCanAnswerANotice(t *testing.T) {
+	db := butlerTestDB(t)
+	decision, err := db.RaiseNotice(NoticeRequest{
+		Kind: "approval", Recipient: "sam", DedupeKey: "a-1",
+		Asks: true, Body: "shall I cancel the delivery?",
+	}, household(), midday())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Somebody else answering finds nothing — not "forbidden", which
+	// would confirm the notice exists and whose it is.
+	if _, err := db.AnswerNotice(decision.Seq, "yes", "mika"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a notice addressed to sam was answered by mika: %v", err)
+	}
+	// And it is still answerable by the person it was asked of.
+	approved, err := db.AnswerNotice(decision.Seq, "yes", "sam")
+	if err != nil {
+		t.Fatalf("the recipient could not answer their own notice: %v", err)
+	}
+	if !approved {
+		t.Fatal("a yes from the recipient did not read as approval")
+	}
+}
+
+// A replay that swallows a failure and still reports success is the
+// hole quarantine exists to close: the journal says a credential was
+// revoked, the release says the journal was replayed, and the
+// credential is still live.
+//
+// A restored snapshot can contain a placement that still has the secret
+// provisioned — the placement predates the revocation. Reconciliation
+// fences that placement rather than giving up on the revocation, and
+// leaves the removal unproven, because nobody has been to that machine.
+func TestReconciliationRevokesACredentialARestoredPlacementStillHolds(t *testing.T) {
+	db := butlerTestDB(t)
+	if _, err := db.CreateConnection(IntegrationConnection{
+		Name: "house-calendar", Adapter: "caldav", Ownership: OwnershipHousehold,
+		Owner: "household", CreatedBy: "root-admin",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AddPlacement("house-calendar", "node-a", PlacementPrimary, 1, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkPlacementPrepared("house-calendar", "node-a", true, true, true); err != nil {
+		t.Fatal(err)
+	}
+	secret, err := db.RecordConnectionSecret(ConnectionSecret{
+		Connection: "house-calendar", SecretRef: "vault://cal", CreatedBy: "root-admin",
+		UpstreamReadOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = secret
+
+	// The journal says this credential was revoked after the snapshot.
+	if _, err := db.ExecForTest(
+		`INSERT INTO deletion_journal (subject_kind, subject_id, action, actor, at)
+		 VALUES ('secret', 'vault://cal', 'revoked', 'root-admin', ?)`,
+		time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.EnterRestoreQuarantine("restored from a snapshot older than the revocation",
+		time.Now().Add(-24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AssertJournalCurrent("root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := db.ReconcileRestore()
+	if err != nil {
+		t.Fatalf("ReconcileRestore: %v", err)
+	}
+	if applied == 0 {
+		t.Fatal("reconciliation applied nothing")
+	}
+
+	secrets, err := db.ListConnectionSecrets("house-calendar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets) != 1 {
+		t.Fatalf("secrets = %+v", secrets)
+	}
+	if secrets[0].RevokedAt.IsZero() {
+		t.Fatal("reconciliation reported success while the credential the journal revoked was still live")
+	}
+	// The placement holding it was fenced, and its removal is NOT
+	// proven: nobody has been to that machine.
+	pending, err := db.UnprovenRemovals("house-calendar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0] != "node-a" {
+		t.Fatalf("unproven removals = %v, want node-a fenced and unproven", pending)
+	}
+	if err := db.ReleaseRestoreQuarantine("root-admin"); err != nil {
+		t.Fatal(err)
 	}
 }

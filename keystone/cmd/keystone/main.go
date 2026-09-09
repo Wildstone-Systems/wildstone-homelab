@@ -76,6 +76,7 @@ func main() {
 	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W024 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
 	replyURL := flag.String("household-reply-url", "", "household event intake URL a notification's reply buttons post to, as a PHONE can reach it (not Keystone's loopback address); empty means notifications carry no reply buttons and a rule that asks for them fails loudly")
 	replyTTL := flag.Duration("household-reply-ttl", 12*time.Hour, "how long a notification's reply token stays valid")
+	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia) that fronts the household review page (ADR-W030 A8.1). Empty leaves /api/v1/household/review unavailable rather than open: an unconfigured trust boundary fails closed, so a household routine approval can only be done from the Console until this is set")
 	flag.Parse()
 
 	if *showVersion {
@@ -88,6 +89,7 @@ func main() {
 	householdCfg := householdConfig{
 		Interval: *automationEvery, Timezone: *householdTZ,
 		NtfyURL: *ntfyURL, ReplyURL: *replyURL, ReplyTTL: *replyTTL,
+		Ingress: splitNonEmpty(*householdIngress),
 	}
 	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, butlerCfg, householdCfg, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
@@ -181,6 +183,10 @@ type householdConfig struct {
 	ReplyURL string
 	// ReplyTTL bounds a reply token's life.
 	ReplyTTL time.Duration
+	// Ingress is the exact set of remote addresses the identity proxy
+	// speaks from. Empty leaves the household review page unavailable
+	// rather than open (ADR-W030 A8.1).
+	Ingress []string
 }
 
 // butlerSessionPrincipal is the acting principal on every Butler session
@@ -664,6 +670,15 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// new household event pokes the automation engine.
 	apiSrv := api.New(principals, db, state, log)
 	apiSrv.HouseholdLoc = householdLoc
+	// The household review page is reachable only from the identity
+	// proxy. Exact addresses, not a CIDR or a hostname: the proxy is
+	// one container on one network, and an exact match cannot be
+	// widened by a DNS answer (ADR-W030 A8.1).
+	apiSrv.TrustedIngress = householdCfg.Ingress
+	if len(apiSrv.TrustedIngress) == 0 {
+		log.Info("household review page unavailable: -household-ingress is not set, " +
+			"so routine approvals happen in the Console until it is")
+	}
 	apiSrv.Automation = auto
 	apiSrv.OnHouseholdEvent = auto.Poke
 	apiSrv.Catalog = cat

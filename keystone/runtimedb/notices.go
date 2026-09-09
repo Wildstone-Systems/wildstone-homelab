@@ -393,15 +393,31 @@ func (db *DB) AnswerNotice(seq int64, answer, by string) (approved bool, err err
 	defer func() { _ = tx.Rollback() }()
 
 	var asks int
-	var undelivered, answered, expires string
+	var recipient, undelivered, answered, expires string
 	err = tx.QueryRow(
-		`SELECT asks, undelivered_at, answered_at, expires_at FROM notices WHERE seq = ?`, seq).
-		Scan(&asks, &undelivered, &answered, &expires)
+		`SELECT recipient, asks, undelivered_at, answered_at, expires_at FROM notices WHERE seq = ?`, seq).
+		Scan(&recipient, &asks, &undelivered, &answered, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrNotFound
 	}
 	if err != nil {
 		return false, fmt.Errorf("runtimedb: answering a notice: %w", err)
+	}
+	// Only the person it was ASKED of may answer it (A8: a proposal
+	// names its intended approver, and consent is bound to that
+	// identity).
+	//
+	// Without this, anyone who can reach the endpoint could walk the
+	// sequence numbers, answer somebody else's question, record the
+	// approval under their own name, and — because an answered notice
+	// cannot be answered twice — permanently lock the person it was
+	// meant for out of their own decision.
+	//
+	// A wrong answerer reads as not-found rather than forbidden, for
+	// the same reason the review token does: "that is not yours"
+	// confirms it exists and who it belongs to.
+	if recipient != by {
+		return false, ErrNotFound
 	}
 	switch {
 	case asks == 0:

@@ -316,7 +316,6 @@ func (s *Server) Handler() http.Handler {
 	// The chat callback path. It needs `converse` — the adapter's only
 	// verb — because the adapter relays a tap; the identity comes from
 	// the binding a human redeemed, and the authority from the token.
-	mux.Handle("POST /api/v1/household/review/callback", s.handle(principal.VerbConverse, s.householdReviewCallback))
 	mux.Handle("GET /api/v1/butler/tools", s.handle(principal.VerbRead, s.listButlerToolControls))
 	mux.Handle("PUT /api/v1/butler/tools", s.handle(principal.VerbManage, s.setButlerToolControl))
 	mux.Handle("GET /api/v1/butler/grants", s.handle(principal.VerbRead, s.listButlerGrants))

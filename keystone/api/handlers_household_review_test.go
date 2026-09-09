@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -321,7 +320,7 @@ func TestTrialRunsAndDisableIsExact(t *testing.T) {
 // Chat cannot approve by typing, and the refusal explains where it can
 // be done instead. A proposal-bound callback can, with every narrowing
 // the review page has.
-func TestChatApprovalRefusedButCallbackWorks(t *testing.T) {
+func TestChatCannotApproveAPlanByAnyRoute(t *testing.T) {
 	h := reviewHarness(t)
 	planID := storePlan(t, h, resource.KindAutomation)
 
@@ -348,51 +347,47 @@ func TestChatApprovalRefusedButCallbackWorks(t *testing.T) {
 		}
 	})
 
-	t.Run("a bound callback approves", func(t *testing.T) {
-		// A human redeems a claim code; the binding is what says this
-		// chat account is sam.
-		hash := "hash-for-test"
-		if err := h.s.DB.InsertChatClaimCode(hash, runtimedb.ChatClaimCode{
-			Surface: runtimedb.ButlerSurfaceFamily, Identity: "sam",
-			CreatedBy: "root-admin", ExpiresAt: timeSoon(),
-		}); err != nil {
-			t.Fatal(err)
-		}
-		binding, err := h.s.DB.RedeemChatClaimCode(hash, "telegram", "tg-1", "Sam", "tg-1",
-			runtimedb.ButlerSurfaceFamily)
-		if err != nil {
-			t.Fatalf("RedeemChatClaimCode: %v", err)
-		}
-		if err := h.s.DB.LinkSurfaceIdentity(runtimedb.LinkChatBinding,
-			strconv.FormatInt(binding.ID, 10), "sam", "root-admin"); err != nil {
-			t.Fatal(err)
-		}
-
+	// A8.1 draws the line here and draws it three times: the link
+	// carries no approval authority, no chat callback approves a Plan,
+	// and no Plan approval happens through Telegram. There is
+	// therefore no callback ROUTE to approve one — chat gets a deep
+	// link to the authenticated page and nothing else.
+	//
+	// This is the shape of the mistake it prevents: a chat adapter
+	// holds converse and nothing more, so an endpoint that took a
+	// token from it and transitioned a Plan would let anything that
+	// could relay a token approve without a human ever loading the
+	// page, seeing what they were approving, or authenticating to it.
+	t.Run("there is no chat callback that approves a plan", func(t *testing.T) {
 		token, _ := issueToken(t, h, planID, "sam", "")
-		var out struct {
-			State string `json:"state"`
-			By    string `json:"by"`
+		for _, path := range []string{
+			"/api/v1/household/review/callback",
+			"/api/v1/household/review/chat",
+		} {
+			res := h.do(runtimedb.RoleConcierge, http.MethodPost, path,
+				map[string]any{"bindingId": 1, "token": token, "approve": true}, nil)
+			if res.StatusCode != http.StatusNotFound {
+				t.Fatalf("%s answered %d; a chat route that approves a plan must not exist", path, res.StatusCode)
+			}
 		}
-		res := h.do(runtimedb.RoleConcierge, http.MethodPost, "/api/v1/household/review/callback",
-			map[string]any{"bindingId": binding.ID, "token": token, "approve": true}, &out)
-		if res.StatusCode != http.StatusOK {
-			t.Fatalf("a bound callback = %d", res.StatusCode)
+		record, err := h.s.DB.GetPlan(planID)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if out.By != "sam" || out.State != string(runtimedb.PlanApproved) {
-			t.Fatalf("callback result = %+v", out)
+		if record.State != runtimedb.PlanProposed {
+			t.Fatalf("a plan reached %q without anyone loading the review page", record.State)
 		}
-		// Single-use holds here too.
-		if res := h.do(runtimedb.RoleConcierge, http.MethodPost, "/api/v1/household/review/callback",
-			map[string]any{"bindingId": binding.ID, "token": token, "approve": true}, nil,
-		); res.StatusCode != http.StatusForbidden {
-			t.Fatalf("a used callback token worked again: %d", res.StatusCode)
+		// The token still works where it is supposed to: through the
+		// identity proxy, as the person it was issued to.
+		if res := h.review(t, "sam@example.com", token, true); res.StatusCode != http.StatusOK {
+			t.Fatalf("the authenticated review page = %d", res.StatusCode)
 		}
-		// An unlinked chat account approves nothing, whatever token it
-		// presents.
-		if res := h.do(runtimedb.RoleConcierge, http.MethodPost, "/api/v1/household/review/callback",
-			map[string]any{"bindingId": 9999, "token": token, "approve": true}, nil,
-		); res.StatusCode != http.StatusForbidden {
-			t.Fatalf("an unlinked chat account approved: %d", res.StatusCode)
+		after, err := h.s.DB.GetPlan(planID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.State != runtimedb.PlanApproved {
+			t.Fatalf("plan state after the authenticated review = %q", after.State)
 		}
 	})
 }

@@ -183,6 +183,25 @@ func (db *DB) AssertJournalCurrent(by string) error {
 	return nil
 }
 
+// replayed narrows a replay result to the errors that actually matter.
+//
+// Replaying a deletion journal over restored state re-applies things
+// that in many cases are already applied — the snapshot may postdate
+// some of them. ErrNotFound is what "already done" looks like from
+// every revoke in this package, and treating it as a failure would
+// make an ordinary reconciliation refuse to finish.
+//
+// Everything else propagates. A replay that swallows a real failure
+// and still reports success is precisely the hole quarantine exists to
+// close: the journal says this was revoked, the release says the
+// journal was replayed, and the credential is still live.
+func replayed(err error) error {
+	if err == nil || errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
 // ReconcileRestore replays the deletion journal over restored state.
 //
 // This is the evidence half. Every journalled deletion and revocation is
@@ -229,7 +248,9 @@ func (db *DB) ReconcileRestore() (applied int, err error) {
 			// Re-revoke. The id is "<type>:<external>".
 			for i := range e.id {
 				if e.id[i] == ':' {
-					_ = db.RevokeSurfaceLink(e.id[:i], e.id[i+1:], e.actor)
+					if err := replayed(db.RevokeSurfaceLink(e.id[:i], e.id[i+1:], e.actor)); err != nil {
+						return applied, err
+					}
 					break
 				}
 			}
@@ -275,7 +296,9 @@ func (db *DB) ReconcileRestore() (applied int, err error) {
 		case "binding":
 			var id int64
 			if _, err := fmt.Sscanf(e.id, "%d", &id); err == nil {
-				_ = db.RevokeChatBinding(id)
+				if err := replayed(db.RevokeChatBinding(id)); err != nil {
+					return applied, err
+				}
 			}
 		case "secret":
 			// Secrets are revoked per connection; the journal records
@@ -291,8 +314,40 @@ func (db *DB) ReconcileRestore() (applied int, err error) {
 					return applied, err
 				}
 				for _, s := range secrets {
-					if s.SecretRef == e.id && s.RevokedAt.IsZero() {
-						_ = db.RevokeConnectionSecret(c.Name, s.Seq)
+					if s.SecretRef != e.id || !s.RevokedAt.IsZero() {
+						continue
+					}
+					err := db.RevokeConnectionSecret(c.Name, s.Seq)
+					if errors.Is(err, ErrSecretReferenced) {
+						// The snapshot still shows a live placement
+						// holding a credential the journal says was
+						// revoked. A restored placement row is not a
+						// reason to leave it live, so the placements
+						// are fenced into removal first — which bumps
+						// the epoch, stopping the old container's work
+						// — and then the revocation goes through.
+						//
+						// Their removal is deliberately left UNPROVEN.
+						// Nobody has been to those machines, so the
+						// connection stays degraded and says so, which
+						// is the true statement about a credential
+						// that may still be sitting on one.
+						placements, perr := db.ListPlacements(c.Name)
+						if perr != nil {
+							return applied, perr
+						}
+						for _, p := range placements {
+							if !p.SecretProvisioned || p.Removing {
+								continue
+							}
+							if rerr := replayed(db.BeginPlacementRemoval(c.Name, p.Node)); rerr != nil {
+								return applied, rerr
+							}
+						}
+						err = db.RevokeConnectionSecret(c.Name, s.Seq)
+					}
+					if err := replayed(err); err != nil {
+						return applied, err
 					}
 				}
 			}
