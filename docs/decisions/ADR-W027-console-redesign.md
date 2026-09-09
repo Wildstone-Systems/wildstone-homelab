@@ -26,6 +26,13 @@ complete, completed with an undelivered notice, and terminal failure. Plan
 cards and approval remain authenticated Console actions; chat deep links carry
 only a Plan identifier and destination.
 
+The active-work detail renders W030's structured trace as a task timeline:
+steps, source freshness, tool attempts, waits/retries, approvals/denials,
+delivery, and completion evidence. Permission checks occur server-side before
+trace fields are returned. People may label an outcome for improvement and
+create a sanitized regression candidate; the screen never presents hidden
+chain-of-thought or raw unredacted provider/tool payloads.
+
 Console adds a narrow household-routine review route for an admitted adult's
 `household-member` session. It renders only the routine preview, behavior diff,
 effects/audience, version, and approve/reject controls for a Plan already

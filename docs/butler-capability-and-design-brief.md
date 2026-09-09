@@ -64,9 +64,13 @@ For homes spread across several machines, a connection chooses a primary adapter
 
 When a member leaves, access, bindings, grants, connections, ingestion, and messages stop immediately. Personal unfinished work pauses and private history becomes inaccessible until its retention period or an authorized deletion; shared facts and routines remain, keep the original author, and transfer operational ownership to the homelab administrator. A person can export their own Butler data while still admitted. Any shared connection using that person's credential stays paused until a current owner reauthorizes it.
 
+V1 uses one active Keystone/Butler coordinator. Cross-application work waits if it is unavailable, while routines hosted inside Home Assistant or another app follow that app's availability. A standby is for explicit recovery, not a second active scheduler.
+
+Butler's work should be inspectable. Each task keeps a permission-filtered timeline of context sources and freshness, steps, tool attempts and redacted results, retries, waits, approvals, messages, and completion evidence, together with the prompt/model/tool/policy versions used. People can label problems and turn a reviewed, sanitized failure into a regression test. This captures observable behavior rather than private chain-of-thought, and Butler cannot change its own prompts, tools, policies, or tests.
+
 ## Delivery sequence
 
-1. Fix current-agent reliability on the existing surfaces: effective/self-capability inventory, configurable iteration slices, durable single-conversation progress, automatic bounded retry, stalled/resumable state, and a task-bound continue flow. Use current tools only and prove an eight-plus-read diagnosis and provider-failure resume without repeated verified work.
+1. Fix current-agent reliability on the existing surfaces: effective/self-capability inventory, configurable iteration slices, durable single-conversation progress, automatic bounded retry, stalled/resumable state, a task-bound continue flow, and a structured Console work trace. Use current tools only and prove an eight-plus-read diagnosis and provider-failure resume without repeated verified work; turn one sanitized failure into a version-pinned regression evaluation.
 2. Add explicit identity linkage, permission-aware shared history, and the cross-bot handoff while preserving the first slice's attribution.
 3. Add selected-source memory and a cross-app path using Home Assistant and read-only CalDAV, with credential onboarding. Exercise PantryOS against fixtures until its API is ready.
 4. Add selected IMAP monitoring and review-first calendar writes, plus a dedicated receipt/screenshot/document intake pipeline shortly after v1. Evaluate extraction quality before relying on model image interpretation.

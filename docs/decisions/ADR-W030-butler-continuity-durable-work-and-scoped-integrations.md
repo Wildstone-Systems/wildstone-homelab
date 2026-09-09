@@ -210,6 +210,21 @@ Track delivery acknowledgement separately from a human response. A completed tas
 
 Durable Butler runtime state becomes a fourth recovery category alongside the existing recovery inputs; it is no longer wholly rebuildable. Amend W018 and the recovery guide to cover task ledgers, conversation/memory data, bindings, grants, and access controls. Replication lag is a recovery-point limit, not proof of zero loss. The recovery drill must restore an older snapshot containing subsequently revoked access/deleted content, demonstrate quarantine, and prove uncertain content and pending actions remain blocked until reconciliation.
 
+## A11. One active coordinator, observable work
+
+V1 runs one active Keystone/Butler coordinator and one authoritative runtime database. Do not add active-active writers, automatic leader election, or concurrent task schedulers. Recovery may prepare a standby copy, but promotion is explicit and fenced so the prior coordinator cannot continue dispatching. Adapter placement may fail over as described in A5 because adapters claim work from the active coordinator; when the coordinator is unavailable, Wildstone-owned cross-application work waits. Routines running natively in an application continue under that application's own availability.
+
+Every Butler task produces a structured, append-only work trace that records what the system can actually observe:
+
+- task/conversation/person/profile IDs; model endpoint and capability verdict; prompt, policy, tool-manifest, and configuration versions;
+- context-source IDs, audience/permission labels, freshness, and retrieval scores without duplicating source content by default;
+- proposed steps, tool calls, redacted/bounded inputs and results, attempt/lease epochs, timing, retries, fallback, stalls, waits, approvals, denials, and completion evidence;
+- delivery state, user corrections, explicit feedback, cancellation, and final outcome.
+
+Do not request or persist private chain-of-thought. A short rationale included in a user-visible proposal or answer may be stored as model-authored explanation, not as authoritative reasoning. Trace payloads pass the same redaction and permission checks as their sources; structural metadata may live with task history, while captured content inherits the strictest source retention/deletion policy. Temporary debug capture is explicit, scoped, visibly enabled, and automatically expires. Provider-reported token counts and latency may be recorded for capacity analysis but do not establish cost or remaining account allowance.
+
+Console exposes the trace as a task timeline and supports human labels such as wrong answer, stale read, repeated work, inappropriate tool, permission refusal, excessive interruption, and useful completion. A reviewed incident can produce a sanitized regression fixture/evaluation with expected behavior. Prompt, model routing, tool metadata, policy, and evaluator versions are recorded so before/after results can be compared. Butler may recommend an improvement or file a capability request; it cannot rewrite its prompts, tools, permissions, policies, or evaluations automatically.
+
 # Part B — Compatibility, review questions, and consequences
 
 ## B1. Companion amendments included in this PR
@@ -231,6 +246,7 @@ Durable Butler runtime state becomes a fourth recovery category alongside the ex
 | W017 A9 / W006 bounded loop | Add per-surface runtime iteration limits, persisted budgets, provider-stall recovery and task-bound continuation. |
 | W003 / W006 Operator reads | Reuse existing ContainerLogs wire operation and bounds; expand only the Operator gateway/reader with redacted, scoped logs. No new protocol arm is proposed. |
 | W027 A11 conversation contract | Amend shared conversation continuity and permission-aware retrieval explicitly in the accepting revision. |
+| W007/W017/W027 runtime and audit views | Keep one active coordinator in v1 and add permission-aware structured work traces, task timelines, feedback labels, and versioned regression evidence without chain-of-thought capture or self-modification. |
 
 Each record named above now carries a conditional W030 amendment or an explicit preservation note. Those sections become binding only when W030 is accepted; until then the existing contracts remain authoritative. Do not weaken existing structural tests to fit the proposal. Implementation requires replacement/expanded boundary tests where behavior changes. The tree currently contains two ADR-W029 filenames; this proposal references them by title/path if needed and does not renumber unrelated history.
 
@@ -240,7 +256,7 @@ Each record named above now carries a conditional W030 amendment or an explicit 
 - Versioned adapter endpoints, result schemas, cancellation, and bounded query latency under load.
 - Permission-label representation, derivative invalidation, and independent deletion/revocation journal design. Restore quarantine is required regardless of journal choice.
 - Local retrieval/index technology, compaction quality, and measured resource limits.
-- The smallest complete implementation slice and its acceptance evidence.
+- Implementation-sized decomposition and acceptance evidence beyond the decided first reliability slice.
 
 These details cannot relax Part A. The paired B1 amendments are present for review; implementation PRs must resolve their applicable schema and migration questions.
 
@@ -262,7 +278,7 @@ The costs are durable-state complexity, permission-aware retrieval, app-specific
 
 V1 targets text via existing bots/Console, shared filtered continuity, selected-source memory, durable work, scoped integrations/grants, capability requests, and configurable model routing. Home Assistant and read-only CalDAV are an initial cross-app path; PantryOS's forthcoming API can be tested with a fake until available. Child behavior is specified but must not be enabled until its own checks pass.
 
-The first implementation slice addresses current-agent reliability before RAG or new application actions. On the existing Operator and Household surfaces, deliver the registry-backed effective/self-capability manifest, configurable per-surface iteration slices, a durable single-conversation task/step ledger, checkpointed retry/fallback/stall handling, and task-bound continuation. It uses only current surface tools and introduces no new write authority. Prove that an eight-plus-read diagnosis can complete or pause/resume without repeating verified reads, that a provider failure preserves progress, and that disable/revocation is rechecked before continuation. Design task ownership so the following identity-link slice can migrate it without rewriting attribution.
+The first implementation slice addresses current-agent reliability before RAG or new application actions. On the existing Operator and Household surfaces, deliver the registry-backed effective/self-capability manifest, configurable per-surface iteration slices, a durable single-conversation task/step ledger, checkpointed retry/fallback/stall handling, task-bound continuation, and the permission-aware structured trace and Console timeline from A11. It uses only current surface tools and introduces no new write authority. Prove that an eight-plus-read diagnosis can complete or pause/resume without repeating verified reads, that a provider failure preserves progress, that disable/revocation is rechecked before continuation, and that one sanitized failure can become a version-pinned regression evaluation. Design task ownership so the following identity-link slice can migrate it without rewriting attribution.
 
 Follow-up work: dedicated receipt/screenshot/PDF intake, and selected read-only IMAP monitoring with review-first calendar writes. Calendar invitations/RSVPs remain separately controlled.
 
@@ -278,5 +294,7 @@ Implementation PRs should prove:
 - Adapter behavior against fakes and a limited real deployment, not merely a declaration that lints.
 - Adapter failover only among approved nodes, single-epoch fencing against duplicate work/late results, waiting with no eligible node, and verified credential erasure/revocation when a fallback is removed.
 - Offboarding immediately denies access across surfaces and nodes, pauses personal work, transfers shared ownership without rewriting authorship, quarantines private data through retention/deletion, and survives restoration of an older snapshot.
+- A trace can explain a resumed or failed task from request through retrievals, tool attempts, policy decisions, approvals, delivery, and evidence without exposing secrets, unauthorized content, or private chain-of-thought; a sanitized failure becomes a version-pinned regression evaluation.
+- Starting a second coordinator cannot dispatch concurrently; explicit standby promotion fences the previous coordinator, and cross-app work waits safely during coordinator unavailability.
 
 The accompanying brief provides non-normative rationale, deployment examples, and delivery sequencing. This ADR alone defines the proposed architectural contract.

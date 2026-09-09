@@ -28,7 +28,8 @@ contract.
 ADR-W030 adds recoverable Butler runtime state: task/step ledgers,
 conversations and selected memory, bindings and identity-link projections,
 temporary grants and immediate denials, routines/procedures, access settings,
-and delivery state. Its encrypted off-host backup or replica must publish a
+delivery state, structured work traces/feedback labels, and evaluator/config
+versions. Its encrypted off-host backup or replica must publish a
 measured recovery point; replication lag is possible data loss, not proof of
 zero loss. Secrets remain separately re-entered from the password manager.
 
@@ -47,6 +48,11 @@ prove uncertain pending actions do not resume. When implemented, restore
 the Butler state after fresh Keystone starts and before any Butler-facing
 surface leaves quarantine. Until that drill passes, the steps below describe
 only the current three-input release contract.
+
+V1 has one active coordinator. A standby restore may be prepared, but promotion
+is an explicit fenced recovery action: verify the previous Keystone cannot
+dispatch, restore/reconcile authority state in quarantine, then release the new
+coordinator. Do not run both schedulers against replicated state.
 
 ## Declaring a BackupPlan
 

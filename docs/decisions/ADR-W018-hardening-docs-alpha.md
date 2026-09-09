@@ -14,6 +14,11 @@ conversations and memory, bindings and identity links, grants and denials,
 routines/procedures, access policy, and delivery state. Replication lag is an
 explicit recovery-point limit rather than proof of zero loss.
 
+Structured work traces, feedback labels, evaluator/configuration versions, and
+sanitized regression fixtures are included under the same source-derived
+permissions and retention. The drill proves a restored trace cannot expose
+content whose source was later deleted or revoked.
+
 The expanded drill restores an older snapshot that predates a deletion and a
 revocation. Butler starts quarantined: retrieval, dispatch, ingestion, and
 proactive delivery remain blocked until later authority/deletion information is

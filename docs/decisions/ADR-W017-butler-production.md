@@ -23,6 +23,15 @@ proceed becomes `stalled, resumable`, appears in Console, and can issue one
 deduplicated task-bound continuation prompt on its originating surface.
 Continuation adds no authority and does not reset the aggregate budget.
 
+Every turn/task emits the structured work trace from W030 A11: selected model
+and verdict, prompt/config/tool/policy versions, permission-filtered context
+source references and freshness, redacted/bounded tool attempts/results,
+timings/retries/waits, approvals/denials, delivery, feedback, and completion
+evidence. It records no private chain-of-thought. Detailed debug capture is
+explicit, scoped, visibly active, and expires automatically. Butler can file an
+improvement request from a trace but cannot alter its own prompt, tools, policy,
+permissions, or evaluation suite.
+
 ---
 
 # Part A — Decisions (binding)

@@ -32,6 +32,13 @@ correlation to the household timeline without making runtime projections a
 second authority for deterministic outcomes. All new Console, CLI, chat, and
 adapter behavior continues through the public API.
 
+V1 retains one active Keystone writer and task scheduler. A standby is a
+recovery target, not an active peer; promotion is explicit and fences the old
+coordinator before dispatch. The runtime DB adds append-only structured work
+trace events correlated to task, turn, tool attempt, policy/approval decision,
+and delivery. Trace access follows the underlying task/source permissions and
+the public API; there is no separate observability backdoor.
+
 ---
 
 # Part A — Decisions (binding)

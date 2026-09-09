@@ -324,6 +324,10 @@ and selected-source memory, adapter connections, model routing, and restore
 quarantine. Each slice ships only with its own structural and recovery evidence;
 accepting W030 is not implementation authorization.
 
+V1 keeps one active Keystone/Butler coordinator. The reliability slice includes
+a permission-aware structured task trace and Console timeline so dogfooding can
+turn real failures into sanitized, version-pinned regression evaluations.
+
 The C1–C5 table remains a capability inventory and historical size estimate,
 not a requirement to deliver one 11.5-fw epic. ADR-W030 Part C and the
 non-normative design brief define the new sequence. Child, document/image
