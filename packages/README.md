@@ -27,8 +27,51 @@ about the app, recorded in each package's header:
 | posture | Route `auth` | when |
 | --- | --- | --- |
 | Household SSO, the app does it | `app_oidc` + an `OidcClient` | the app speaks OpenID Connect itself |
-| Household SSO, the proxy does it | `authelia_oidc` | browser-only apps with no login worth keeping |
+| Household directory, the app does it | `app_ldap` | the app binds against LLDAP (media-jellyfin) |
+| Household SSO, the proxy does it | `authelia_oidc` | apps served **only** to a browser |
 | The app's own login | `none` on `family_private` / `admin_tailscale` | phone apps or APIs that cannot follow a login redirect (the ntfy posture) |
+
+**"Only to a browser" is a hard test, not a preference.** `authelia_oidc`
+is the one value that emits `forward_auth` at the proxy; `app_oidc` and
+`app_ldap` pass through. And `Route.auth` is per-host with **no path
+matching**, so forward-auth gates an app's feeds and APIs along with its
+web page. An app with any non-browser path — an OPDS feed, a Subsonic
+endpoint, `git push` over HTTPS, a phone client that syncs, a public
+share link — must therefore use `app_oidc` or `app_ldap`, never
+`authelia_oidc`, however well it handles the header.
+
+Five packages were surveyed as forward-auth candidates on the strength
+of their header support alone and every one of them failed this test
+(#149). Checking that an app *accepts* a proxy header is not the same
+question as checking what else it serves, and it is the easier one to
+stop at.
+
+### Where the sign-in postures are going
+
+The end state is one credential store: a person exists once in LLDAP,
+and every service authenticates against it. Today fifteen packages still
+run their own login, which means an administrator creates each person by
+hand in each service and has to remember which ones read the directory
+when a password changes. #149 tracks the move and carries the per-app
+survey; the shape of the answer is:
+
+- **Most browser access can become one sign-in** — `app_oidc` where the
+  app speaks OIDC, `app_ldap` where it binds against the directory.
+- **Native clients that bind against the directory come along for free.**
+  `app_ldap` is the only posture that helps them: a phone app sends a
+  username and password, so the directory can answer. media-jellyfin
+  already works this way, and its phone app takes the household password.
+- **A few credentials cannot be absorbed and should stop being treated as
+  unfinished.** Subsonic needs a password the server can recover
+  (`music-navidrome`), ntfy has its own tokens, Roundcube needs the
+  mailbox password rather than an identity, Plex authenticates against
+  plex.tv, and `podcasts-podgrab` has no user model at all.
+
+The gate on several of the remaining packages is not their app: it is
+that Wildstone has no way for a package to set up an app's auth inside a
+database or config file the app owns. `books-calibre-web`, `code-gitea`,
+`books-kavita` and `audiobooks-audiobookshelf` are all blocked on that
+one mechanism, which is worth deciding before any of them individually.
 
 | package | capability | what the household gets | sign-in |
 | --- | --- | --- | --- |
@@ -71,7 +114,7 @@ about the app, recorded in each package's header:
 | `sync-syncthing` | file-sync | Syncthing | proxy |
 | `files-filebrowser` | files | File Browser | own |
 | `code-gitea` | code | Gitea | own |
-| `inventory-homebox` | inventory | Homebox | own |
+| `inventory-homebox` | inventory | Homebox | app OIDC |
 | `budget-actual` | budget | Actual Budget | own |
 | `pdf-stirling` | pdf-tools | Stirling PDF | proxy |
 | `tools-it-tools` | utilities | IT-Tools | proxy |
