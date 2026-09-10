@@ -341,3 +341,31 @@ func TestButlerToolsAreTheSurfacesOwn(t *testing.T) {
 		t.Fatalf("an operator Butler was offered the family surface's reads: %v", operator)
 	}
 }
+
+// A model in use cannot be deleted, and a retired Butler counts as use.
+//
+// Its conversations are still evidence, and the question they exist to
+// answer is "which model saw this" — so the row they name has to
+// outlive them. Deleting it would turn an answer into a dangling id.
+func TestAModelInUseCannotBeDeleted(t *testing.T) {
+	h := butlerConsole(t)
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
+		"name": "health", "surface": "family", "profile": "household", "model": "kitchen-box",
+	}, nil); res.StatusCode != http.StatusCreated {
+		t.Fatalf("create = %d", res.StatusCode)
+	}
+	if res := h.do(runtimedb.RoleAdmin, http.MethodDelete, "/api/v1/butler/models/kitchen-box", nil, nil); res.StatusCode != http.StatusConflict {
+		t.Fatalf("deleting a model in use = %d, want 409", res.StatusCode)
+	}
+	// Retiring the Butler does not release it.
+	if res := h.do(runtimedb.RoleAdmin, http.MethodDelete, "/api/v1/butlers/health", nil, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("retire = %d", res.StatusCode)
+	}
+	if res := h.do(runtimedb.RoleAdmin, http.MethodDelete, "/api/v1/butler/models/kitchen-box", nil, nil); res.StatusCode != http.StatusConflict {
+		t.Fatalf("deleting a retired butler's model = %d, want 409 — its sessions still name it", res.StatusCode)
+	}
+	// One nothing was ever assigned to goes.
+	if res := h.do(runtimedb.RoleAdmin, http.MethodDelete, "/api/v1/butler/models/cloud", nil, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("deleting an unused model = %d", res.StatusCode)
+	}
+}

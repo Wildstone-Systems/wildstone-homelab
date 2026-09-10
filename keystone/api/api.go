@@ -442,6 +442,7 @@ func (s *Server) Handler() http.Handler {
 	// Probing is manage because it writes the verdict that decides
 	// whether a model may operate tools at all.
 	mux.Handle("POST /api/v1/butler/models/{name}/probe", s.handle(principal.VerbManage, s.probeModel))
+	mux.Handle("DELETE /api/v1/butler/models/{name}", s.handle(principal.VerbManage, s.deleteModel))
 	mux.Handle("POST /api/v1/butler/models/{name}/enabled", s.handle(principal.VerbManage, s.setModelEnabled))
 	mux.Handle("GET /api/v1/butler/settings", s.handle(principal.VerbManage, s.getButlerSettings))
 	mux.Handle("PUT /api/v1/butler/settings", s.handle(principal.VerbManage, s.setButlerSettings))

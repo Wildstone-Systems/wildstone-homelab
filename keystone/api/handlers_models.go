@@ -110,3 +110,19 @@ func (s *Server) setModelEnabled(r *http.Request, id principal.Identity) (any, i
 	}
 	return map[string]any{"name": name, "enabled": req.Enabled}, http.StatusOK, nil
 }
+
+// deleteModel removes a configured model nothing is assigned to.
+//
+// It exists because the Model tab configures a row the first time
+// anybody picks a model, so trying three and keeping one leaves two
+// behind — and until now there was no way to say so.
+func (s *Server) deleteModel(r *http.Request, _ principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	if err := s.DB.DeleteModel(name); err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return nil, http.StatusNotFound, fmt.Errorf("no model named %q", name)
+		}
+		return nil, http.StatusConflict, err
+	}
+	return map[string]any{"deleted": name}, http.StatusOK, nil
+}

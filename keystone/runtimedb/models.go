@@ -206,3 +206,36 @@ func (db *DB) GetModel(name string) (Model, error) {
 	}
 	return Model{}, ErrNotFound
 }
+
+// DeleteModel removes a configured model.
+//
+// It refuses while any Butler is assigned to it, INCLUDING a retired
+// one. A retired Butler's conversations are still evidence, and the
+// question they have to keep answering is "which model saw this" — so
+// the row it names has to survive it. Deleting a model out from under
+// that would turn an answer into a dangling id.
+//
+// Turning a model off is the reversible thing and the usual one; this
+// is for a row that was never used, which is what accumulates when a
+// household tries several and keeps one.
+func (db *DB) DeleteModel(name string) error {
+	var used int
+	if err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM butlers b JOIN models m ON m.seq = b.model WHERE m.name = ?`,
+		name).Scan(&used); err != nil {
+		return fmt.Errorf("runtimedb: checking whether a model is in use: %w", err)
+	}
+	if used > 0 {
+		return fmt.Errorf(
+			"runtimedb: %d butler(s) are assigned to %q — reassign or retire them first, or turn the model off instead of deleting it",
+			used, name)
+	}
+	res, err := db.sql.Exec(`DELETE FROM models WHERE name = ?`, name)
+	if err != nil {
+		return fmt.Errorf("runtimedb: deleting a model: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
