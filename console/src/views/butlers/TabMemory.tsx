@@ -15,7 +15,11 @@ import { Say } from "./ButlerDrawer";
 // offboarding's job and a different act with different consequences.
 export function TabMemory({ row, say }: { row: ButlerRow; say: Say }) {
   const b = row.butler;
-  const memory = useLoad(() => api.butlerMemory(), []);
+  // This Butler's material, not every Butler's. The drawer says "what
+  // {name} remembers" and a record another Butler holds is not that —
+  // and after ADR-W031 A4 the scope is what decides which model ever
+  // sees it, so showing them together would misdescribe both.
+  const memory = useLoad(() => api.butlerMemory({ butler: b.name }), [b.name]);
   const [correcting, setCorrecting] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -132,5 +136,10 @@ export function provenanceOf(m: MemoryRecord): string {
   const at = when(m.createdAt);
   if (m.supersededBy) return `corrected · ${at}`;
   if (m.sourceKind === "correction") return `corrected by ${m.author} · ${at}`;
+  // A group conversation says so, because "you said this in front of
+  // people" is the difference ADR-W030 A3.1 records and the one a
+  // person is most likely to want back.
+  if (m.sourceKind === "group-conversation") return `told in a group · ${at}`;
+  if (m.sourceKind === "conversation") return `told by ${m.author} · ${at}`;
   return `learned from ${m.sourceKind || "chat"} · ${at}`;
 }

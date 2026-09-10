@@ -1137,11 +1137,18 @@ export const api = {
       "/api/v1/butler/index/compact",
       { maxAgeDays },
     ),
-  butlerMemory: (subject?: string) =>
-    call<{ records: MemoryRecord[] | null }>(
+  // butler narrows to one Butler's material; omitting it is every
+  // Butler the reader may see, which is what the endpoint defaults to.
+  butlerMemory: (q?: { subject?: string; butler?: string }) => {
+    const params = new URLSearchParams();
+    if (q?.subject) params.set("subject", q.subject);
+    if (q?.butler) params.set("butler", q.butler);
+    const qs = params.toString();
+    return call<{ records: MemoryRecord[] | null }>(
       "GET",
-      `/api/v1/butler/memory${subject ? `?subject=${encodeURIComponent(subject)}` : ""}`,
-    ),
+      `/api/v1/butler/memory${qs ? `?${qs}` : ""}`,
+    );
+  },
   correctButlerMemory: (seq: number, content: string) =>
     call<{ seq: number }>("POST", "/api/v1/butler/memory/correct", {
       seq,

@@ -258,6 +258,25 @@ func NewHouseholdGateway(member string, seams HouseholdSeams) *HouseholdGateway 
 			},
 		}
 	}
+	if seams.Memory.Remember != nil {
+		gw.tools["remember"] = householdEntry{
+			Spec: rememberSpec,
+			// Mutating, and the choice is not obvious: nothing outside
+			// this house changes when a note is kept. What it writes is
+			// durable and it shapes every later session, and a Butler
+			// on an unprobed or QA-only route is one whose model the
+			// household has not been shown to work (ADR-W017 A4). A
+			// session that may not act on the house may not leave
+			// standing notes for the sessions that can.
+			Mutating: true,
+			// The gateway is read at DISPATCH rather than closed over
+			// here: the conversation is stamped on afterwards, and the
+			// group flag is a property of the constructor that ran.
+			Handler: func(ctx context.Context, gw *HouseholdGateway, input map[string]any) (ToolOutcome, error) {
+				return handleRemember(ctx, gw.seams.Memory, gw.memorySession(), input), nil
+			},
+		}
+	}
 	return gw
 }
 
@@ -352,6 +371,8 @@ func (gw *HouseholdGateway) wired(name string) bool {
 		return gw.seams.Actions != nil || gw.seams.Vocabulary != nil
 	case "recall":
 		return gw.seams.Memory.Recall != nil
+	case "remember":
+		return gw.seams.Memory.Remember != nil
 	case "describe_capabilities":
 		// Reads only what the gateway already holds, so it is wired
 		// wherever the surface is.
@@ -657,7 +678,12 @@ route. If a fact you can see says something about a person that they
 have not evidently shared with this room, leave it out and offer to send
 it to them directly. When in doubt, treat it as private: the cost of
 being discreet is one extra message, and the cost of the alternative is
-a household member learning something about another from a bot.`
+a household member learning something about another from a bot.
+
+Anything you are asked to remember here belongs to the person who said
+it, not to the room. Do not offer to remember something on the
+household's behalf, and do not repeat back what you already hold about
+somebody else.`
 
 // HouseholdSystemPrompt is the family surface's system prompt. It is
 // deliberately not SystemPrompt: that one describes an operator
@@ -685,6 +711,23 @@ What you can do, and it is the whole list:
   - do_household_action performs one of those actions. It happens
     immediately and someone sees the result, so do it when you have been
     asked to, not to find out what it does.
+  - remember keeps one thing somebody asks you to remember, and recall
+    looks it back up in a later conversation. Both are offered only where
+    this household has turned memory on. Keep what a person actually
+    said, not what you concluded, and never a password or a key. What you
+    keep is theirs, not the household's, and it grants you nothing.
+
+Not knowing something takes TWO lookups, not one. The timeline is what the
+house recorded; recall is what a person told you, and the two hold
+different things. An empty timeline is not an answer to "who serviced the
+boiler" or "when did I say I would do that" — somebody may simply have
+told you, and told you is never on the timeline.
+
+So when a household lookup comes back empty, call recall in the same turn,
+before you reply. Do not announce that you are about to check, and never
+ask the person whether they told you something: they told you so that they
+would not have to remember, and a question hands it straight back to them.
+Ask only after both lookups have come back with nothing.
 
 What you cannot do, at all:
   - You have no access to the home lab's infrastructure. Containers,

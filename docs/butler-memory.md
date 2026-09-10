@@ -1,6 +1,8 @@
 # Butler memory: what exists, and the four seams that would finish it
 
-- **Status:** plan. Nothing here is built.
+- **Status:** steps 1 and 2 are built — retrieval reaches a session, and
+  a person can ask a Butler to keep something. Steps 3 to 7 are still
+  plan.
 - **Specifies:** ADR-W030 A2 (permission-first retrieval), A3 (owned data
   with derived retrieval indexes), A3.1 (acceptance boundaries), A6
   (freshness); ADR-W031 A4 (a Butler's scope), A5 (the shared pool).
@@ -37,19 +39,21 @@ source, observed-at, confidence, safety-relevance and supersession.
 and whether any of them runs on a cloud model — the disclosure sentence
 A5 asks for is a return value waiting for a screen.
 
-**And none of it runs.** Outside `runtimedb`:
+**And none of it ran.** Outside `runtimedb`, when this was written —
+with what steps 1 and 2 changed:
 
-| Function | Callers |
-|---|---|
-| `RetrieveMemory` | the Console's Memory tab, and nothing else |
-| `RecordMemory` | none |
-| `IndexDocumentInto` | none |
-| `SearchIndex` | none |
-| `ClaimIndexJob` | none |
+| Function | Callers then | Callers now |
+|---|---|---|
+| `RetrieveMemory` | the Console's Memory tab | and the injected preamble |
+| `RecordMemory` | none | the `remember` tool |
+| `IndexDocumentInto` | none | the `remember` tool, inline |
+| `SearchIndex` | none | the `recall` tool |
+| `ClaimIndexJob` | none | none — step 3 |
 
-Zero records are stored on the live deployment. The household gateway's
-system prompt says, in as many words, *"you have no memory between
-conversations"* — which is true, and is the thing a person hits first.
+Zero records were stored on the live deployment, and the household
+gateway's system prompt said, in as many words, *"you have no memory
+between conversations"* — which was true, and was the thing a person hit
+first.
 
 ---
 
@@ -158,14 +162,42 @@ an opinion.
 
 ## Order of work
 
-1. **Retrieval, keyword-only, read-only.** Wire the `recall` tool and
-   the injected preference block against records that do not yet exist.
-   It sounds backwards and is not: it proves the permission filter and
-   the budget with nothing at stake, and every later step writes into a
-   path already known to be safe.
-2. **Explicit capture.** The `remember` tool, redaction, fail-closed
-   metadata. Memory works end to end at this point, for anything a
-   person asks it to hold.
+1. **Retrieval, keyword-only, read-only.** *Done.* The `recall` tool and
+   the injected preference block, wired against records that did not yet
+   exist. It sounds backwards and is not: it proved the permission
+   filter and the budget with nothing at stake, and every later step
+   writes into a path already known to be safe.
+2. **Explicit capture.** *Done.* The `remember` tool, redaction,
+   fail-closed metadata. Memory works end to end at this point, for
+   anything a person asks it to hold. Three things the plan did not
+   anticipate:
+   - The shared redaction path does not catch a credential named in
+     prose. Its rules are about shape, and "the router password is
+     hunter2" has none — a short ordinary word, and "is" is not a
+     key/value separator. A3.1 asks for exclusion of credentials *on top
+     of* the redaction path, so `redact.NamesACredential` is a predicate
+     and the tool refuses rather than storing the wrong half.
+   - A note is indexed inline rather than queued. Step 3's queue is for
+     documents, where the slow part is the embedding; a note is one row
+     and there is no embedder, so queueing it would mean telling
+     somebody it is remembered while `recall` cannot find it.
+   - The seams moved from `cmd/keystone` to `butlerstore`, beside the
+     ledger. The read path could live in a closure in a main function;
+     the write path makes claims — the speaker owns a statement made in
+     a room, the scope is the Butler and never the pool — and a claim
+     that is not tested is a comment.
+
+   The live run found the thing the unit tests could not. Asked "who
+   serviced the boiler", the Butler looked at the timeline, found
+   nothing, and said so — it never reached for `recall`, because a
+   boiler service *sounds* like a household event. Forcing the tool by
+   name returned the note immediately, so the write and the index were
+   right and the prompt was wrong. Two rounds to fix it: saying the two
+   lookups are different only made it announce that it should check and
+   then ask the person instead. What worked was making the rule about
+   the ACT — call recall in the same turn, do not say you are about to,
+   and never ask whether somebody told you something, because they told
+   you so they would not have to remember.
 3. **The job runner and indexing**, coordinator-gated.
 4. **Inference capture**, with A3.1's five rules as five tests written
    first.
@@ -183,9 +215,11 @@ an opinion.
   memory between conversations. True today. It becomes a lie the moment
   step 1 lands, and a model told it cannot remember will contradict
   material sitting in its own context.
-- The Console's Memory tab currently shows an empty cabinet with no
-  explanation. Until step 2 it should say why it is empty rather than
-  implying nothing has been learned.
+- ~~The Console's Memory tab currently shows an empty cabinet with no
+  explanation.~~ Records exist now, so "has not been told anything worth
+  remembering yet" is true when it says it. The tab was also asking for
+  every Butler's material while claiming to show one Butler's; it now
+  asks for the one it names.
 
 ## What is most likely to go wrong
 
