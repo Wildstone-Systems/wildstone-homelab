@@ -117,6 +117,7 @@ function ButlerCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
   const b = row.butler;
 
   // The response is kept rather than discarded, because the crossing
@@ -191,13 +192,337 @@ function ButlerCard({
         </div>
       )}
       <ErrorLine error={error} />
+
+      {!b.retiredAt && (
+        <div className="row" style={{ gap: 8, marginTop: 6 }}>
+          <button className="btn btn-secondary" onClick={() => setOpen((v) => !v)}>
+            {open ? "Done" : "Edit"}
+          </button>
+        </div>
+      )}
+
+      {open && !b.retiredAt && (
+        <ButlerDetail name={b.name} directive={b.directive ?? ""} onChanged={onChanged} />
+      )}
     </li>
   );
 }
 
-// Creating a Butler grants a new scope rather than changing an existing
-// one, which is why it is the one act here that is not a live control.
-function NewButler({ routes, onDone }: { routes: ModelRoute[]; onDone: () => void }) {
+// The rest of a Butler: what it is for, who may talk to it, where it
+// answers, and how to retire it.
+//
+// It is behind an Edit button rather than always open because the
+// roster's job is to let somebody see at a glance where each Butler's
+// words go, and four editors per row buries that. Opening one is a
+// deliberate act on ONE Butler, which is also the right shape for
+// controls that change who can hear what.
+function ButlerDetail({
+  name,
+  directive,
+  onChanged,
+}: {
+  name: string;
+  directive: string;
+  onChanged: () => void;
+}) {
+  const scope = useLoad(() => api.butlerScope(name));
+  const members = useLoad(() => api.butlerMembers());
+  const [error, setError] = useState<string | null>(null);
+
+  async function run(fn: () => Promise<unknown>) {
+    setError(null);
+    try {
+      await fn();
+      scope.reload();
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 10, paddingLeft: 12, borderLeft: "2px solid var(--line, #333)" }}>
+      <ErrorLine error={error} />
+      <ErrorLine error={scope.error} />
+
+      <Directive name={name} initial={directive} onSaved={onChanged} />
+
+      <People
+        people={scope.data?.people ?? []}
+        members={(members.data?.members ?? []).filter((m) => m.active).map((m) => m.member.member)}
+        onSet={(member, allow) => run(() => api.setButlerAccess(name, member, allow))}
+      />
+
+      <Addresses
+        addresses={scope.data?.addresses ?? []}
+        onSet={(a) => run(() => api.setButlerAddress(name, a))}
+      />
+
+      <Retire name={name} onRetired={onChanged} />
+    </div>
+  );
+}
+
+// A directive says what a Butler is for, in its owner's words. It
+// shapes how the Butler talks and grants it nothing (A9) — worth saying
+// on the screen, because a box of free text next to a list of tools
+// invites the belief that writing "you may read the calendar" in it
+// does something.
+function Directive({
+  name,
+  initial,
+  onSaved,
+}: {
+  name: string;
+  initial: string;
+  onSaved: () => void;
+}) {
+  const [text, setText] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const dirty = text !== initial;
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setButlerDirective(name, text);
+      setSaved(true);
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <label className="muted" htmlFor={`directive-${name}`}>
+        What this Butler is for
+      </label>
+      <textarea
+        id={`directive-${name}`}
+        rows={3}
+        style={{ width: "100%", marginTop: 4 }}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          setSaved(false);
+        }}
+      />
+      <div className="muted" style={{ fontSize: "0.9em" }}>
+        This shapes how it talks. It grants nothing — tools, connections and memory are set
+        separately.
+      </div>
+      <div className="row" style={{ gap: 8, marginTop: 4, alignItems: "center" }}>
+        <button className="btn btn-secondary" disabled={!dirty || busy} onClick={save}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+        {saved && !dirty && <span className="muted">saved</span>}
+      </div>
+      <ErrorLine error={error} />
+    </div>
+  );
+}
+
+// Who may talk to this Butler (A10). The Console holder decides, and
+// this is where "Sam cannot reach the accounting Butler at all" is set
+// — refused before a conversation starts rather than per tool.
+function People({
+  people,
+  members,
+  onSet,
+}: {
+  people: string[];
+  members: string[];
+  onSet: (member: string, allow: boolean) => void;
+}) {
+  const canAdd = members.filter((m) => !people.includes(m));
+  const [pick, setPick] = useState("");
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="muted">Who may talk to it</div>
+      {people.length === 0 && <div className="muted">Nobody yet — only you, from here.</div>}
+      <ul className="work-evidence">
+        {people.map((m) => (
+          <li key={m} className="row" style={{ justifyContent: "space-between" }}>
+            <span>{m}</span>
+            <button className="btn btn-secondary" onClick={() => onSet(m, false)}>
+              Remove
+            </button>
+          </li>
+        ))}
+      </ul>
+      {canAdd.length > 0 && (
+        <div className="row" style={{ gap: 8, marginTop: 4 }}>
+          <select value={pick} onChange={(e) => setPick(e.target.value)}>
+            <option value="">Add someone…</option>
+            {canAdd.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+          <button
+            className="btn btn-secondary"
+            disabled={!pick}
+            onClick={() => {
+              onSet(pick, true);
+              setPick("");
+            }}
+          >
+            Add
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Where this Butler answers.
+//
+// This is the control that decides which Butler replies to an incoming
+// message (A7), so the screen says so plainly. On chat the address is
+// the BOT — one bot per Butler, its own token — and two Butlers cannot
+// share one: the store refuses, and the error it returns is shown
+// rather than swallowed, because "that address already answers for
+// somebody else" is the useful half of the failure.
+function Addresses({
+  addresses,
+  onSet,
+}: {
+  addresses: { transport: string; externalId: string; label?: string }[];
+  onSet: (a: { transport: string; externalId: string; label?: string; allow: boolean }) => void;
+}) {
+  const [transport, setTransport] = useState("telegram");
+  const [externalId, setExternalId] = useState("");
+  const [label, setLabel] = useState("");
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="muted">Where it answers</div>
+      <div className="muted" style={{ fontSize: "0.9em" }}>
+        A message arriving here is answered by this Butler, whatever it says. One address, one
+        Butler.
+      </div>
+      {addresses.length === 0 && (
+        <div className="muted">No address yet — it can only be reached from the Console.</div>
+      )}
+      <ul className="work-evidence">
+        {addresses.map((a) => (
+          <li
+            key={`${a.transport}/${a.externalId}`}
+            className="row"
+            style={{ justifyContent: "space-between" }}
+          >
+            <span>
+              {a.transport} / <code>{a.externalId}</code>
+              {a.label ? ` — ${a.label}` : ""}
+            </span>
+            <button
+              className="btn btn-secondary"
+              onClick={() => onSet({ transport: a.transport, externalId: a.externalId, allow: false })}
+            >
+              Remove
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="row" style={{ gap: 8, marginTop: 4 }}>
+        <input
+          aria-label="transport"
+          style={{ width: 110 }}
+          value={transport}
+          onChange={(e) => setTransport(e.target.value)}
+        />
+        <input
+          aria-label="address"
+          placeholder="the bot's capability"
+          value={externalId}
+          onChange={(e) => setExternalId(e.target.value)}
+        />
+        <input
+          aria-label="label"
+          placeholder="label (optional)"
+          style={{ width: 140 }}
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+        />
+        <button
+          className="btn btn-secondary"
+          disabled={!transport.trim() || !externalId.trim()}
+          onClick={() => {
+            onSet({
+              transport: transport.trim(),
+              externalId: externalId.trim(),
+              label: label.trim() || undefined,
+              allow: true,
+            });
+            setExternalId("");
+            setLabel("");
+          }}
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Retiring is not deleting, and the button says which one it is.
+//
+// A Butler's conversations, its memory and its work stay recorded —
+// removing the row would take the answer to "which model saw this" with
+// it, which is the question the whole design exists to be able to
+// answer. What retiring does is stop it answering.
+function Retire({ name, onRetired }: { name: string; onRetired: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function retire() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.retireButler(name);
+      onRetired();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      {!confirming ? (
+        <button className="btn btn-secondary" onClick={() => setConfirming(true)}>
+          Retire this Butler
+        </button>
+      ) : (
+        <div>
+          <div className="muted">
+            {name} stops answering, on every address. Its conversations, memory and work stay
+            recorded — retiring is not deleting, because "which model saw this" has to stay
+            answerable afterwards.
+          </div>
+          <div className="row" style={{ gap: 8, marginTop: 6 }}>
+            <button className="btn btn-secondary" disabled={busy} onClick={retire}>
+              {busy ? "Retiring…" : `Retire ${name}`}
+            </button>
+            <button className="btn btn-secondary" disabled={busy} onClick={() => setConfirming(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      <ErrorLine error={error} />
+    </div>
+  );
+}function NewButler({ routes, onDone }: { routes: ModelRoute[]; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");

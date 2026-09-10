@@ -30,6 +30,73 @@ export function ButlerAuthority() {
   );
 }
 
+// Recording a person.
+//
+// The panel could admit, disable and offboard people and had no way to
+// record one, so a fresh deployment showed "nobody is recorded yet" and
+// offered nothing to do about it. Without this the whole chain below is
+// unreachable from the Console: no member means no one to grant a
+// Butler to, which means no one who can talk to it.
+//
+// A child is recorded and never admitted — the store refuses and so
+// does the schema — so the profile is offered rather than assumed, and
+// picking child asks for the guardian it requires.
+function RecordMember({ onRecorded }: { onRecorded: () => void }) {
+  const [name, setName] = useState("");
+  const [profile, setProfile] = useState("household");
+  const [guardian, setGuardian] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function record() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.recordButlerMember(name.trim(), profile, guardian.trim() || undefined);
+      setName("");
+      setGuardian("");
+      onRecorded();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="row" style={{ gap: 8, alignItems: "center" }}>
+        <input
+          aria-label="person"
+          placeholder="who"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <select value={profile} onChange={(e) => setProfile(e.target.value)}>
+          <option value="household">household</option>
+          <option value="operator">operator</option>
+          <option value="child">child</option>
+        </select>
+        {profile === "child" && (
+          <input
+            aria-label="guardian"
+            placeholder="guardian"
+            value={guardian}
+            onChange={(e) => setGuardian(e.target.value)}
+          />
+        )}
+        <button className="btn btn-secondary" disabled={!name.trim() || busy} onClick={record}>
+          {busy ? "Recording…" : "Record"}
+        </button>
+      </div>
+      <div className="muted" style={{ fontSize: "0.9em", marginTop: 2 }}>
+        Recording does not admit. Admit them below once they should be able to use the Butler.
+      </div>
+      <ErrorLine error={error} />
+    </div>
+  );
+}
+
 function Members() {
   const members = useLoad(() => api.butlerMembers());
   const action = useAction();
@@ -44,6 +111,7 @@ function Members() {
           and being allowed to use the Butler are different facts.
         </div>
       )}
+      <RecordMember onRecorded={() => members.reload()} />
       <ul className="work-evidence">
         {rows.map((row) => (
           <li key={row.member.member}>

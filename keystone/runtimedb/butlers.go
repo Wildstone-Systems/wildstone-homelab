@@ -323,6 +323,35 @@ func (db *DB) RetireButler(name, by string) error {
 	return nil
 }
 
+// SetButlerDirective rewrites what a Butler is for, in its owner's
+// words.
+//
+// A directive instructs and authorises nothing (ADR-W031 A9), which is
+// why this is a plain edit rather than a Plan: rewriting it cannot widen
+// a tool, reach a connection, or change a memory scope, so there is
+// nothing here for an approval to protect. What it CAN do is change how
+// a Butler talks and what it believes it is for, and that is worth
+// recording — the caller is named, and the change stamps updated_by.
+//
+// A retired Butler is refused. Editing the purpose of something that no
+// longer answers reads as reviving it, and it does not.
+func (db *DB) SetButlerDirective(name, directive, by string) (Butler, error) {
+	if by == "" {
+		return Butler{}, fmt.Errorf("runtimedb: changing a butler's directive needs who changed it")
+	}
+	res, err := db.sql.Exec(
+		`UPDATE butlers SET directive = ?, updated_at = ?, updated_by = ?
+		 WHERE name = ? AND retired_at = ''`,
+		strings.TrimSpace(directive), now(), by, name)
+	if err != nil {
+		return Butler{}, fmt.Errorf("runtimedb: setting a butler's directive: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Butler{}, ErrNotFound
+	}
+	return db.GetButler(name)
+}
+
 // GrantButlerAccess lets one person talk to one Butler.
 //
 // A repeated grant is not an error: the state the caller asked for

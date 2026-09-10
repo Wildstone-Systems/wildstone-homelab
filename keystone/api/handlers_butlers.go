@@ -139,6 +139,33 @@ func (s *Server) retireButler(r *http.Request, id principal.Identity) (any, int,
 	return map[string]any{"retired": name}, http.StatusOK, nil
 }
 
+// setButlerDirective rewrites a Butler's purpose.
+//
+// It carries `manage` like every other Butler edit, and applies at once
+// rather than through a Plan (A8): the Console holder owns every
+// Butler, so asking them to propose a change and then approve it is
+// self-approval with extra steps. A directive grants nothing (A9), so
+// there is no authority here for an approval to be protecting.
+func (s *Server) setButlerDirective(r *http.Request, id principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	var req struct {
+		Directive string `json:"directive"`
+	}
+	if code, err := decodeStrict(r, &req); err != nil {
+		return nil, code, err
+	}
+	b, err := s.DB.SetButlerDirective(name, req.Directive, actingMember(id))
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, http.StatusNotFound, fmt.Errorf("no butler named %q, or it is retired", name)
+	}
+	if err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	// The activity record A8 asks for: who changed what, and when.
+	s.event("butler.directive", "", id, fmt.Sprintf("directive rewritten for butler %s", name))
+	return butlerView(b), http.StatusOK, nil
+}
+
 // butlerScope answers "what does this Butler see" in one call, so a
 // person does not assemble it from three screens.
 func (s *Server) butlerScope(r *http.Request, _ principal.Identity) (any, int, error) {

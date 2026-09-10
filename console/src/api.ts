@@ -903,6 +903,22 @@ export const api = {
       `/api/v1/butlers/${encodeURIComponent(name)}/access`,
       { member, allow },
     ),
+  // A directive instructs and authorises nothing (A9), so rewriting one
+  // is a plain edit rather than a proposal.
+  setButlerDirective: (name: string, directive: string) =>
+    call<ButlerRow>("PUT", `/api/v1/butlers/${encodeURIComponent(name)}/directive`, { directive }),
+  // Where a Butler answers. On chat this is the bot that receives the
+  // message, and it is what decides which Butler replies (A7) — so it
+  // is the one field on this screen that changes who hears what.
+  setButlerAddress: (
+    name: string,
+    a: { transport: string; externalId: string; label?: string; allow: boolean },
+  ) =>
+    call<{ addresses: ButlerAddress[] | null }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/address`,
+      a,
+    ),
   retireButler: (name: string) =>
     call<{ retired: string }>("DELETE", `/api/v1/butlers/${encodeURIComponent(name)}`),
   householdRoutines: () =>
@@ -972,6 +988,15 @@ export const api = {
       "GET",
       "/api/v1/butler/members",
     ),
+  // Recording and admitting are separate acts on purpose: existing and
+  // being allowed to use the Butler are different facts, and the panel
+  // says so. This is the first half, which had no control at all.
+  recordButlerMember: (member: string, profile: string, guardian?: string) =>
+    call<{ recorded: string }>("POST", "/api/v1/butler/members", {
+      member,
+      profile,
+      guardian: guardian ?? "",
+    }),
   admitButlerMember: (member: string) =>
     call<unknown>("POST", `/api/v1/butler/members/${encodeURIComponent(member)}/admit`, {}),
   disableButlerMember: (member: string) =>
