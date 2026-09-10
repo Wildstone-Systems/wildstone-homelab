@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Warning } from "@phosphor-icons/react";
 import { api, modelLabel, type AskResponse, type ButlerRow, type Model, type OfferedModel } from "../../api";
-import { ErrorLine, useLoad } from "../../lib";
+import { ago, ErrorLine, useLoad } from "../../lib";
 import { Confirm } from "../../ui/Confirm";
 import { Dot, Kind } from "../../ui/status";
 import { Say } from "./ButlerDrawer";
@@ -62,6 +62,7 @@ export function TabModel({
   // The provider serving the endpoint being listed. The Butler's own is
   // the right answer while it is on that endpoint; a configured model
   // naming the same endpoint answers for the others.
+  const here = configured.find((m) => m.name === b.model);
   const providerOf =
     (endpoint === b.endpoint ? b.provider : undefined) ??
     configured.find((m) => m.endpoint === endpoint)?.provider ??
@@ -165,7 +166,17 @@ export function TabModel({
         </div>
         <div className="row on-now-foot">
           <span className="muted tnum">
-            {[b.provider, b.endpoint].filter(Boolean).join(" · ")}
+            {[
+              b.provider,
+              b.endpoint,
+              // Said only when something actually checked. "probed
+              // never" would be a freshness claim about an event that
+              // did not happen; the readiness line already says
+              // unprobed.
+              here?.probedAt ? `probed ${ago(here.probedAt)}` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           </span>
           <button
             className="btn btn-secondary btn-small"

@@ -805,6 +805,9 @@ export interface Model {
   endpoint?: string;
   readiness: "unprobed" | "ready" | "qa-only" | "unavailable";
   readinessDetail?: string;
+  // When something last asked this model to operate a tool. Absent
+  // means nobody ever has, which is not the same as it having failed.
+  probedAt?: string;
   enabled: boolean;
 }
 

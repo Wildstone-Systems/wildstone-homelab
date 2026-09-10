@@ -158,14 +158,6 @@ const DEPARTURES = [
     gone: "propose.plan",
     why: "Same. The roster's '· may propose plans' suffix went with it — propose_change's availability is already in the tool counts the server sends, and a second derived claim about it is a second thing to get wrong.",
   },
-  {
-    gone: "probed 2m ago",
-    why: "There is no probe timestamp on the wire. Model carries readiness and readinessDetail; nothing records when it was last checked, and POST /butler/routes/{name}/probe does not exist — the nearest endpoint records a verdict a caller supplies. Inventing a freshness claim is worse than omitting one, so the ON NOW card shows the provider and endpoint instead.",
-  },
-  {
-    gone: "Re-check",
-    why: "Same reason: a button whose endpoint does not exist. Left out rather than stubbed.",
-  },
 
   {
     gone: "92x / 7d",
