@@ -192,3 +192,17 @@ func (db *DB) ListModels() ([]Model, error) {
 	}
 	return out, rows.Err()
 }
+
+// GetModel reads one configured model by name.
+func (db *DB) GetModel(name string) (Model, error) {
+	models, err := db.ListModels()
+	if err != nil {
+		return Model{}, err
+	}
+	for _, m := range models {
+		if m.Name == name {
+			return m, nil
+		}
+	}
+	return Model{}, ErrNotFound
+}

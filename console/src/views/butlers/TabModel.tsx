@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Warning } from "@phosphor-icons/react";
-import { api, type AskResponse, type ButlerRow, type Model, type OfferedModel } from "../../api";
+import { api, modelLabel, type AskResponse, type ButlerRow, type Model, type OfferedModel } from "../../api";
 import { ErrorLine, useLoad } from "../../lib";
 import { Confirm } from "../../ui/Confirm";
 import { Dot, Kind } from "../../ui/status";
@@ -59,7 +59,15 @@ export function TabModel({
   // which is what the list below is in. Its configured NAME may be
   // something else entirely.
   const current = b.providerModel ?? "";
+  // The provider serving the endpoint being listed. The Butler's own is
+  // the right answer while it is on that endpoint; a configured model
+  // naming the same endpoint answers for the others.
+  const providerOf =
+    (endpoint === b.endpoint ? b.provider : undefined) ??
+    configured.find((m) => m.endpoint === endpoint)?.provider ??
+    "";
   const [busy, setBusy] = useState(false);
+  const [probing, setProbing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
@@ -99,10 +107,33 @@ export function TabModel({
     }
   }
 
+  // Re-check asks the model to operate a tool and restates the verdict.
+  // It is the answer to "why is this Butler suddenly questions-only":
+  // usually nobody has asked the model yet, and this is the asking.
+  async function recheck() {
+    setProbing(true);
+    setError(null);
+    try {
+      const res = await api.probeModel(b.model);
+      const m = res.model;
+      say(
+        m.readiness === "ready"
+          ? `${modelLabel(b)} passed its tool check`
+          : `${modelLabel(b)}: ${m.readinessDetail || m.readiness}`,
+        m.readiness === "ready" ? "ok" : "warn",
+      );
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setProbing(false);
+    }
+  }
+
   async function ask() {
     if (!question.trim()) return;
     if (!row.reachable) {
-      say(`${b.name} cannot reach ${b.model} right now`, "bad");
+      say(`${b.name} cannot reach ${modelLabel(b)} right now`, "bad");
       return;
     }
     setAsking(true);
@@ -126,15 +157,23 @@ export function TabModel({
       <div className="card">
         <div className="eyebrow">ON NOW</div>
         <div className="row on-now">
-          <strong className="on-now-route">{b.providerModel || b.model}</strong>
+          <strong className="on-now-route">{modelLabel(b)}</strong>
           <span className="row">
             <Dot kind={health.kind} />
             <span className={health.kind === "ok" ? "" : `ink-${health.kind}`}>{health.long}</span>
           </span>
         </div>
-        <div className="muted tnum">
-          {[b.provider, b.endpoint].filter(Boolean).join(" · ")}
-          {b.providerModel && b.providerModel !== b.model && ` · configured as ${b.model}`}
+        <div className="row on-now-foot">
+          <span className="muted tnum">
+            {[b.provider, b.endpoint].filter(Boolean).join(" · ")}
+          </span>
+          <button
+            className="btn btn-secondary btn-small"
+            disabled={probing}
+            onClick={() => void recheck()}
+          >
+            {probing ? "checking…" : "Re-check"}
+          </button>
         </div>
       </div>
 
@@ -161,6 +200,7 @@ export function TabModel({
       <ModelList
         title="ON YOUR HARDWARE"
         models={(offered.data?.models ?? []).filter((m) => m.local)}
+        provider={providerOf}
         current={current}
         busy={busy}
         onPick={pick}
@@ -168,6 +208,7 @@ export function TabModel({
       <ModelList
         title="OUTSIDE THE HOUSE"
         models={(offered.data?.models ?? []).filter((m) => !m.local)}
+        provider={providerOf}
         current={current}
         busy={busy}
         onPick={pick}
@@ -198,7 +239,7 @@ export function TabModel({
           <div className="card answer-card">
             <div>{answer.finalText}</div>
             <div className="muted tnum">
-              {b.model} · {row.leavesTheHouse ? "left the house" : "stayed in the house"} · session{" "}
+              {modelLabel(b)} · {row.leavesTheHouse ? "left the house" : "stayed in the house"} · session{" "}
               {answer.sessionId}
               {answer.mode === "qa-only" && " · questions only, so it looked nothing up"}
             </div>
@@ -219,7 +260,7 @@ export function TabModel({
             "Activity will record the crossing, with your name on it",
           ]}
           confirmLabel="Yes, switch it"
-          cancelLabel={`Keep ${b.providerModel || b.model}`}
+          cancelLabel={`Keep ${modelLabel(b)}`}
           busy={busy}
           onCancel={() => setConfirm(null)}
           onConfirm={() => void apply(confirm)}
@@ -238,12 +279,18 @@ export function TabModel({
 export function ModelList({
   title,
   models,
+  provider,
   current,
   busy,
   onPick,
 }: {
   title: string;
   models: OfferedModel[];
+  // Which provider serves these. Shown on every row rather than once
+  // above the list, because two providers can offer a model of the same
+  // name and the row is where somebody decides — a heading they scrolled
+  // past is not where the ambiguity gets resolved.
+  provider: string;
   current: string;
   busy: boolean;
   onPick: (m: OfferedModel) => void;
@@ -266,7 +313,13 @@ export function ModelList({
               onClick={() => onPick(m)}
             >
               <span className="radio" aria-hidden />
-              <span className="ellip">{m.name}</span>
+              {/* Name and provider are one unit so they truncate
+                  together and the row stays a single line at any width;
+                  the note is flex-none so it is never what gets cut. */}
+              <span className="ellip route-name">
+                {m.name}
+                {provider && <span className="muted"> · {provider}</span>}
+              </span>
               <span className={`route-note tnum ${m.local ? "ink-ok" : "ink-warn"}`}>
                 {m.local
                   ? m.parameters

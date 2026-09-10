@@ -772,6 +772,35 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			"addresses", apiSrv.TrustedIngress,
 			"gates", "household review page, and Console sign-in for members of "+api.ConsoleGroup)
 	}
+	// Probing one model, for the Console's assignment and Re-check.
+	//
+	// It builds a provider for THAT model rather than reusing the
+	// running one: the whole point is to check a model this deployment
+	// may never have talked to, and asking the configured backend
+	// whether a different model works would answer about the wrong one.
+	apiSrv.ProbeModel = func(ctx context.Context, providerName, model, endpoint string) (string, string) {
+		p, _, err := newButlerProvider(butlerConfig{Provider: providerName, Model: model, Endpoint: endpoint})
+		if err != nil || p == nil {
+			detail := "this deployment cannot build a client for that provider"
+			if err != nil {
+				detail = err.Error()
+			}
+			return runtimedb.ModelUnavailable, detail
+		}
+		mode, detail := probeButler(ctx, p, log)
+		if mode == runtimedb.ButlerModeFull {
+			return runtimedb.ModelReady, "probe passed: it called the tool it was asked to"
+		}
+		// A model that answered but would not call a tool is qa-only; one
+		// that did not answer at all is unavailable, and the difference
+		// is what a person needs to know before assigning it.
+		if strings.Contains(strings.ToLower(detail), "deadline") ||
+			strings.Contains(strings.ToLower(detail), "connection") ||
+			strings.Contains(strings.ToLower(detail), "refused") {
+			return runtimedb.ModelUnavailable, detail
+		}
+		return runtimedb.ModelQAOnly, detail
+	}
 	apiSrv.Automation = auto
 	apiSrv.OnHouseholdEvent = auto.Poke
 	apiSrv.Catalog = cat

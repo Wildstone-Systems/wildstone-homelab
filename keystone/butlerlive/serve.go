@@ -122,7 +122,7 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 		// Which model saw this, by name. A2's promise is only worth
 		// something if it is written down somewhere a person can read.
 		bs.Log.Info("butler answered", "butler", b.Name, "model", b.Model,
-			"model", b.Model, "kind", b.ModelKind, "task", task.ID,
+			"answers_as", b.ProviderModel, "kind", b.ModelKind, "task", task.ID,
 			"member", t.Member, "resumed", resumed)
 	}
 	return answer, nil

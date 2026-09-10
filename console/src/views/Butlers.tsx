@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { CaretRight, Plus } from "@phosphor-icons/react";
-import { api, type ButlerRow, type ButlerSurface, type Model } from "../api";
+import { api, modelLabel, type ButlerRow, type ButlerSurface, type Model } from "../api";
 import { ErrorLine, useLoad, when } from "../lib";
 import { Dot, healthOf, StatusPill } from "../ui/status";
 import { Toast, useToast } from "../ui/Toast";
@@ -362,7 +362,7 @@ export function RosterRow({
       </div>
       <div className="cell">
         <div className="ellip">
-          {b.model} · {b.provider ?? "?"}
+          {modelLabel(b)} · {b.provider ?? "?"}
         </div>
         <StatusPill kind={row.leavesTheHouse ? "warn" : "ok"} icon={<Dot kind={row.leavesTheHouse ? "warn" : "ok"} />}>
           {row.leavesTheHouse ? "leaves the house" : "stays in the house"}

@@ -205,6 +205,44 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 	return s.runAdminButlerSession(r.Context(), message, id.Name, nil)
 }
 
+// askOneButler answers as ONE named Butler, on whichever surface that
+// Butler lives.
+//
+// It exists because the two ask endpoints are doors, and a door sets a
+// ceiling: /butler/ask pins RequireSurface to admin and
+// /household/butler/ask to family, so asking a household Butler through
+// the operator's door is refused — deliberately shaped as "no butler
+// answers there for you" so a family adapter cannot map the operator's
+// roster by probing names.
+//
+// That shaping is right for a credential pinned to a surface and wrong
+// for the Console holder, who holds both (A10) and is naming a Butler
+// rather than arriving through a bot. So this route names the Butler in
+// the path and leaves RequireSurface empty: the ceiling comes from the
+// Butler's own record, which is where it was always decided.
+func (s *Server) askOneButler(r *http.Request, id principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	var req struct {
+		Message string `json:"message"`
+	}
+	if code, err := decodeStrict(r, &req); err != nil {
+		return nil, code, err
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		return nil, http.StatusBadRequest, fmt.Errorf("a question needs a message")
+	}
+	if !s.butlersConfigured() {
+		return nil, http.StatusServiceUnavailable,
+			fmt.Errorf("no butler is configured on this deployment")
+	}
+	return s.runNamedButlerSession(r.Context(), butlerlive.Turn{
+		Butler:  name,
+		Member:  id.Name,
+		Text:    req.Message,
+		AsOwner: actingAsOwner(id),
+	}, nil)
+}
+
 // askNamedButler answers on the operator surface as a named Butler,
 // resolving the name when the caller left it out.
 func (s *Server) askNamedButler(ctx context.Context, message, named, member string, asOwner bool, prior *turnContext) (any, int, error) {

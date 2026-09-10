@@ -218,6 +218,7 @@ export function NewButlerDialog({
             <ModelList
               title="ON YOUR HARDWARE"
               models={(offered.data?.models ?? []).filter((m) => m.local)}
+              provider={provider}
               current={draft.model}
               busy={busy}
               onPick={(m: OfferedModel) => setDraft({ ...draft, model: m.name })}
@@ -225,6 +226,7 @@ export function NewButlerDialog({
             <ModelList
               title="OUTSIDE THE HOUSE"
               models={(offered.data?.models ?? []).filter((m) => !m.local)}
+              provider={provider}
               current={draft.model}
               busy={busy}
               onPick={(m: OfferedModel) => setDraft({ ...draft, model: m.name })}

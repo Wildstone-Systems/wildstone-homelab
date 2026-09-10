@@ -605,3 +605,41 @@ func TestAnAddressedMessageNeverTakesTheOwnerPath(t *testing.T) {
 		t.Fatal("a message addressed to a bot reached a model without an access check")
 	}
 }
+
+// The Console holder can reach a Butler on either surface.
+//
+// A caller pinned to a surface is constrained by it — the test above
+// pins that. This is the other half: an UNPINNED caller is not, and
+// leaving RequireSurface empty is how the Console holder asks a Butler
+// by name (ADR-W031 A10 gives them every Butler).
+//
+// It exists because the Console did not do this. It asked through
+// /butler/ask, which is the operator DOOR and pins the ceiling to admin,
+// so naming a household Butler came back "no butler answers there for
+// you" — the refusal shaped to stop a family adapter mapping the
+// operator's roster, delivered to the person who owns both.
+func TestAnUnpinnedCallerReachesEitherSurface(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.db.CreateButler(runtimedb.Butler{
+		Name: "sandy", Directive: "look after the household things",
+		Surface: runtimedb.ButlerSurfaceFamily, Profile: runtimedb.ProfileHousehold,
+		Model: "kitchen-box",
+	}, "mika"); err != nil {
+		t.Fatalf("CreateButler(sandy): %v", err)
+	}
+	if err := f.db.GrantButlerAccess("sandy", "mika", "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.AddButlerAddress("sandy", "telegram", "chat-telegram-sandy", "", "mika"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The admin-surface Butler, unpinned.
+	if _, err := f.butlers.Serve(context.Background(), f.turn("alfred", "what is unhealthy?")); err != nil {
+		t.Fatalf("an unpinned caller was refused the admin butler: %v", err)
+	}
+	// And the family one, with the same caller and no surface named.
+	if _, err := f.butlers.Serve(context.Background(), f.turn("sandy", "how did I sleep?")); err != nil {
+		t.Fatalf("an unpinned caller was refused the family butler: %v", err)
+	}
+}

@@ -839,6 +839,18 @@ export interface Butler {
   retiredAt?: string;
 }
 
+// The model as a person would name it.
+//
+// A Butler's configured model has a NAME that is a stable key and a
+// providerModel that is what the provider calls it. For anything new
+// they are the same string, because the model's own name is used. They
+// differ on rows configured before that — "kitchen-box" pointing at
+// qwen3.5:4b — and everywhere a screen shows a model to a person it
+// should say the model, not the key.
+export function modelLabel(b: Butler): string {
+  return b.providerModel || b.model;
+}
+
 // One roster row. leavesTheHouse is computed by the server rather than
 // derived here: it is the most consequential fact about a Butler, and a
 // client that derives it is one that can derive it wrongly.
@@ -1028,6 +1040,15 @@ export const api = {
     ),
   butlerImpact: (name: string) =>
     call<ButlerImpact>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/impact`),
+  // Asks a model whether it can actually operate a tool, and stores the
+  // verdict. This is how a model earns the authority to do things — an
+  // unprobed one answers questions and nothing more.
+  probeModel: (name: string) =>
+    call<{ model: Model }>(
+      "POST",
+      `/api/v1/butler/models/${encodeURIComponent(name)}/probe`,
+      {},
+    ),
   butlerTools: (name: string) =>
     call<ButlerTools>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/tools`),
   // Narrowing only, and the API says so in both directions: allow:false
@@ -1245,11 +1266,16 @@ export const api = {
       surface === "family" ? "/api/v1/household/butler/ask" : "/api/v1/butler/ask",
       { message },
     ),
-  // Asks ONE named Butler. The surface comes from the Butler's own
-  // record, so this is deliberately not a variant of askButler with a
-  // surface argument — naming a Butler is the whole request.
+  // Asks ONE named Butler, on whichever surface it lives.
+  //
+  // Deliberately its own route rather than askButler with a butler
+  // field: the surface endpoints are doors that pin a ceiling, so
+  // /butler/ask refuses a household Butler and says "no butler answers
+  // there for you". This one takes the ceiling from the Butler's own
+  // record, which is the only correct answer for a caller who holds
+  // both surfaces (ADR-W031 A10).
   askOneButler: (name: string, message: string) =>
-    call<AskResponse>("POST", "/api/v1/butler/ask", { message, butler: name }),
+    call<AskResponse>("POST", `/api/v1/butlers/${encodeURIComponent(name)}/ask`, { message }),
   butlerSessions: (limit = 20, surface?: ButlerSurface, butler?: string) =>
     call<ButlerSession[]>(
       "GET",

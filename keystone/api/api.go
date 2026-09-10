@@ -47,6 +47,19 @@ type Server struct {
 	// boundary must fail closed.
 	TrustedIngress []string
 
+	// ProbeModel asks one model whether it can actually operate a tool,
+	// and is how a model earns the authority to do things (ADR-W017 A4).
+	//
+	// It is a seam rather than an implementation because building a
+	// provider means knowing about API keys in the environment, which
+	// cmd/keystone already knows and this package deliberately does not.
+	//
+	// nil leaves a newly assigned model UNPROBED rather than assuming
+	// it works: unprobed answers questions and carries no authority to
+	// use tools that do things, which is the safe reading of "nobody
+	// has checked".
+	ProbeModel func(ctx context.Context, provider, model, endpoint string) (readiness, detail string)
+
 	// OnApproved, when set, is called (non-blocking contract: keep it
 	// cheap) after a plan approval commits — cmd/keystone wires it to the
 	// reconcile service's Poke so convergence starts immediately instead
@@ -420,7 +433,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/butlers/{name}/restore", s.handle(principal.VerbManage, s.restoreButler))
 	mux.Handle("POST /api/v1/butlers/{name}/duplicate", s.handle(principal.VerbManage, s.duplicateButler))
 	mux.Handle("GET /api/v1/butlers/{name}/impact", s.handle(principal.VerbRead, s.butlerImpact))
+	// Talking is a read, like the other ask routes. What differs is the
+	// ceiling: this one takes it from the named Butler rather than from
+	// the door, which is the only correct answer for a caller who holds
+	// both surfaces.
+	mux.Handle("POST /api/v1/butlers/{name}/ask", s.handle(principal.VerbRead, s.askOneButler))
 	mux.Handle("POST /api/v1/butler/models/{name}/readiness", s.handle(principal.VerbManage, s.recordModelReadiness))
+	// Probing is manage because it writes the verdict that decides
+	// whether a model may operate tools at all.
+	mux.Handle("POST /api/v1/butler/models/{name}/probe", s.handle(principal.VerbManage, s.probeModel))
 	mux.Handle("POST /api/v1/butler/models/{name}/enabled", s.handle(principal.VerbManage, s.setModelEnabled))
 	mux.Handle("GET /api/v1/butler/settings", s.handle(principal.VerbManage, s.getButlerSettings))
 	mux.Handle("PUT /api/v1/butler/settings", s.handle(principal.VerbManage, s.setButlerSettings))

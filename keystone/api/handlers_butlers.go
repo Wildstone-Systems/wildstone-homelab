@@ -274,6 +274,20 @@ func (s *Server) ensureModel(ctx context.Context, providerModel, provider, endpo
 			if !m.Enabled {
 				return "", fmt.Errorf("%s is turned off; turn it back on before assigning a Butler to it", m.Name)
 			}
+			// Probe it if nobody ever has. A model configured but never
+			// checked carries no authority to use tools that do things,
+			// so a Butler moved onto one silently drops to answering
+			// questions — and the person doing the moving reads that as
+			// the model being poor rather than as nobody having asked
+			// it yet. Assignment is the moment to find out.
+			//
+			// An already-probed model is left alone: re-checking on
+			// every assignment would put a minute of provider latency
+			// in front of a click, to re-answer a question that has an
+			// answer. Re-check is a button for when it is stale.
+			if m.Readiness == runtimedb.ModelUnprobed {
+				s.probeAndRecord(ctx, m.Name)
+			}
 			return m.Name, nil
 		}
 	}
@@ -314,7 +328,54 @@ func (s *Server) ensureModel(ctx context.Context, providerModel, provider, endpo
 	}, "console"); err != nil {
 		return "", err
 	}
+	// Probe it now rather than leaving it unprobed.
+	//
+	// Unprobed is the safe default and the wrong outcome here: a Butler
+	// moved onto a model nobody has checked loses the authority to use
+	// tools that do anything (ADR-W017 A4), so it would silently drop to
+	// answering questions only — which reads as the model being bad
+	// rather than as nobody having asked it yet. The person assigning it
+	// is standing right there; this is the moment to find out.
+	s.probeAndRecord(ctx, providerModel)
 	return providerModel, nil
+}
+
+// probeAndRecord asks a model whether it can operate a tool and stores
+// the verdict. Failure to probe is recorded, never fatal: a model that
+// could not be checked is left unprobed, which is what it is.
+func (s *Server) probeAndRecord(ctx context.Context, name string) {
+	if s.ProbeModel == nil {
+		return
+	}
+	m, err := s.DB.GetModel(name)
+	if err != nil {
+		return
+	}
+	readiness, detail := s.ProbeModel(ctx, m.Provider, m.ProviderModel, m.Endpoint)
+	if readiness == "" {
+		return
+	}
+	if err := s.DB.RecordModelReadiness(name, readiness, detail); err != nil {
+		s.Log.Warn("recording a model probe failed", "model", name, "err", err)
+	}
+}
+
+// probeModel re-checks one model on demand — the Console's Re-check.
+func (s *Server) probeModel(r *http.Request, _ principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	if _, err := s.DB.GetModel(name); err != nil {
+		return nil, http.StatusNotFound, fmt.Errorf("no model named %q", name)
+	}
+	if s.ProbeModel == nil {
+		return nil, http.StatusServiceUnavailable,
+			fmt.Errorf("this deployment cannot probe a model from here")
+	}
+	s.probeAndRecord(r.Context(), name)
+	m, err := s.DB.GetModel(name)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return map[string]any{"model": m}, http.StatusOK, nil
 }
 
 func (s *Server) retireButler(r *http.Request, id principal.Identity) (any, int, error) {
