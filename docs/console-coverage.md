@@ -54,6 +54,34 @@ looks good.
   retiring. Editing a directive needed an endpoint that did not exist
   (`PUT /api/v1/butlers/{name}/directive`); it applies at once and
   records an activity event, per ADR-W031 A8.
+- **Butler scope** — `PUT /butlers/{name}/connection` and
+  `PUT /butlers/{name}/tool`, which was the most load-bearing gap on
+  this list: the difference between a nutrition Butler that *was not
+  given* a door lock and one that merely has not been asked to use it.
+  Reaching them needed a third endpoint that did not exist. A screen
+  cannot draw a tool list without knowing which tools a surface has, and
+  the two ways to find out from the client are both wrong — a list
+  written in TypeScript is a second copy of the gateway's registry and
+  drifts the first time a tool is added or dropped, and deriving whether
+  each one is on means re-implementing the effective-authority order
+  (structural, disabled, enabled, grant, default) in a screen, where
+  getting it wrong shows a tool as on that a dispatch would refuse. So
+  `GET /api/v1/butlers/{name}/tools` answers with the gateway's own
+  manifest, resolved through that Butler's authority, and each
+  unavailable tool carries the resolver's words rather than a sentence
+  the Console made up.
+- **The rest of the Butlers screen** — `POST /butlers/{name}/restore`
+  and `POST /butlers/{name}/duplicate`, because "retiring is not
+  deleting" was a sentence with no button behind it and a client-side
+  duplicate is six calls that can half-fail on the narrowing, leaving a
+  copy quietly wider than its original. `GET /butlers/{name}/impact`
+  counts what retiring would break, so the confirmation states a
+  consequence instead of asking whether somebody is sure. And
+  `butler_sessions` gained a `butler` stamp (migration 0036) with a
+  `?butler=` filter: a Sessions tab that filtered by SURFACE would list
+  every household Butler's conversations under whichever name the
+  drawer was showing, which is the one lie the named-Butler design
+  exists to make impossible.
 - **Household members** — recording a person. The authority screen could
   admit, disable and offboard people and had no way to record one, so
   every step after it was unreachable on a fresh deployment.
@@ -71,13 +99,6 @@ Ordered roughly by how badly the absence bites.
 All five. A notice can be raised and a person cannot set quiet hours or
 answer one from the Console at all, which leaves ADR-W030 P15's whole
 policy configurable only over HTTP.
-
-**Butler scope** — `PUT /butlers/{name}/connection` and
-`PUT /butlers/{name}/tool`. A Butler's tools and connections can be seen
-and not set, so ADR-W031 A4's containment is configured nowhere. This is
-the most load-bearing of the remaining gaps: it is the difference
-between a nutrition Butler that *was not given* a door lock and one that
-merely has not been asked to use it.
 
 **Identity** — principal `enable`/`disable`/`tokens`, member `links`,
 `offboarding`. Token minting in particular: a deployment whose operator

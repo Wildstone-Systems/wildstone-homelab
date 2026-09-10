@@ -312,6 +312,10 @@ export interface ButlerSession {
   // Which butler answered (ADR-W026 A1). Stamped by the endpoint the
   // session arrived on, never by the caller.
   surface: ButlerSurface;
+  // Which named Butler held the conversation (ADR-W031 A1). Empty on a
+  // session that ran before Butlers existed, or one the engine phrased
+  // for itself — a real value, not a gap to fill in.
+  butler?: string;
   // The LAST turn's answer and transcript, kept for every reader that
   // predates turns. A session is a conversation now (ADR-W027).
   finalText: string;
@@ -811,10 +815,16 @@ export interface Butler {
   routeKind: "local" | "cloud";
   model?: string;
   provider?: string;
+  endpoint?: string;
   readiness: "unprobed" | "ready" | "qa-only" | "unavailable";
+  // The ROUTE's switch, not the Butler's: turning a route off has to
+  // stop the Butlers already assigned to it.
+  routeEnabled: boolean;
   enabled: boolean;
   createdAt: string;
   createdBy: string;
+  updatedAt: string;
+  updatedBy?: string;
   retiredAt?: string;
 }
 
@@ -826,6 +836,18 @@ export interface ButlerRow {
   leavesTheHouse: boolean;
   carriesActions: boolean;
   reachable: boolean;
+  // How far it reaches, counted by the server. The roster shows one
+  // line per Butler saying who can talk to it and what it may do, and a
+  // client assembling that would make three calls per row — with
+  // nothing to stop one failing and a row quietly reading "no people"
+  // for a Butler two people message.
+  people: number;
+  connections: number;
+  // toolsAvailable is what this deployment actually wired for the
+  // profile, NOT the whole ceiling: "5 of 6" is what this Butler can do
+  // here, where "5 of 13" would count tools nobody ever set up.
+  toolsAllowed: number;
+  toolsAvailable: number;
 }
 
 export interface ButlerScope {
@@ -835,6 +857,52 @@ export interface ButlerScope {
   connections: string[] | null;
   narrowedTools?: Record<string, string> | null;
   memoryCount: number;
+}
+
+// What retiring a Butler would break (ADR-W031 A8). Every number is
+// counted by the server, because the dialog that shows it is asking
+// somebody to accept a consequence — "some routines may fail" moves the
+// work of finding out back onto the person it was meant to inform.
+export interface ButlerImpact {
+  butler: string;
+  people: string[] | null;
+  routines: { name: string; state: string }[] | null;
+  sessions: number;
+  memoryCount: number;
+  // Other live Butlers on the same surface: what a routine could be
+  // pointed at instead.
+  successors: string[] | null;
+}
+
+// One tool as the gateway reports it (ADR-W030 P2).
+//
+// available is separate from presence on purpose, and the reason is
+// the useful half: a tool this deployment never wired, and one this
+// Butler has been narrowed out of, are both unavailable and only the
+// second is something the screen can undo.
+export interface CapabilityTool {
+  name: string;
+  summary: string;
+  mutating?: boolean;
+  grantRequired?: boolean;
+  untrusted?: boolean;
+  available: boolean;
+  reason?: string;
+}
+
+// What one Butler may do, as the engine resolves it. The console does
+// not derive any of this: the tool list is the gateway's registry and
+// availability is the effective-authority resolver's answer, so a
+// screen cannot show a tool as on that a dispatch would refuse.
+export interface ButlerTools {
+  butler: string;
+  profile: string;
+  surface: ButlerSurface;
+  modelVerdict: string;
+  tools: CapabilityTool[] | null;
+  actions: { tool: string; tier: string }[] | null;
+  // Tool name to the reason it was narrowed, "" when none was given.
+  narrowedTools: Record<string, string> | null;
 }
 
 export interface ButlerAddress {
@@ -921,6 +989,37 @@ export const api = {
     ),
   retireButler: (name: string) =>
     call<{ retired: string }>("DELETE", `/api/v1/butlers/${encodeURIComponent(name)}`),
+  restoreButler: (name: string) =>
+    call<ButlerRow>("POST", `/api/v1/butlers/${encodeURIComponent(name)}/restore`, {}),
+  // One call, not six. Creating then granting each connection then
+  // re-narrowing each tool can half-fail, and the half that fails is
+  // the narrowing — leaving a copy quietly wider than its original.
+  duplicateButler: (name: string, copyName?: string) =>
+    call<ButlerRow & { note?: string }>(
+      "POST",
+      `/api/v1/butlers/${encodeURIComponent(name)}/duplicate`,
+      copyName ? { name: copyName } : {},
+    ),
+  butlerImpact: (name: string) =>
+    call<ButlerImpact>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/impact`),
+  butlerTools: (name: string) =>
+    call<ButlerTools>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/tools`),
+  // Narrowing only, and the API says so in both directions: allow:false
+  // takes a tool away from this Butler, allow:true gives it back to
+  // whatever its profile allows. Neither can widen past the surface's
+  // ceiling, which is why this is not a state field.
+  setButlerTool: (name: string, tool: string, allow: boolean, reason = "") =>
+    call<{ butler: string; narrowedTools: Record<string, string> | null; note?: string }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/tool`,
+      { tool, allow, reason },
+    ),
+  setButlerConnection: (name: string, connection: string, allow: boolean) =>
+    call<{ butler: string; connections: string[] | null }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/connection`,
+      { connection, allow },
+    ),
   householdRoutines: () =>
     call<{ routines: HouseholdRoutine[] | null }>("GET", "/api/v1/household/routines"),
   // A routine is born a DRAFT whatever is asked for: activation goes
@@ -1120,10 +1219,16 @@ export const api = {
       surface === "family" ? "/api/v1/household/butler/ask" : "/api/v1/butler/ask",
       { message },
     ),
-  butlerSessions: (limit = 20, surface?: ButlerSurface) =>
+  // Asks ONE named Butler. The surface comes from the Butler's own
+  // record, so this is deliberately not a variant of askButler with a
+  // surface argument — naming a Butler is the whole request.
+  askOneButler: (name: string, message: string) =>
+    call<AskResponse>("POST", "/api/v1/butler/ask", { message, butler: name }),
+  butlerSessions: (limit = 20, surface?: ButlerSurface, butler?: string) =>
     call<ButlerSession[]>(
       "GET",
-      `/api/v1/butler/sessions?limit=${limit}${surface ? `&surface=${surface}` : ""}`,
+      `/api/v1/butler/sessions?limit=${limit}${surface ? `&surface=${surface}` : ""}` +
+        (butler ? `&butler=${encodeURIComponent(butler)}` : ""),
     ),
   butlerSession: (id: string) =>
     call<ButlerSession>("GET", `/api/v1/butler/sessions/${encodeURIComponent(id)}`),
