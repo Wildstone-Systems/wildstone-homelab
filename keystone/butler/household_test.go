@@ -80,13 +80,20 @@ func TestHouseholdGatewayHoldsNoInfrastructure(t *testing.T) {
 			}
 		}
 	}
-	// And the seam set is exactly the three the ADR names.
+	// And the seam set is exactly the ones the ADRs name.
+	//
+	// Memory was added deliberately (ADR-W030 A3): recall across
+	// conversations is a capability this surface did not have, and the
+	// decision is recorded in docs/butler-memory.md. It is a seam like
+	// the others — this package holds no store — and it reads only what
+	// the reader and this Butler are permitted, ANDed in the SQL that
+	// finds candidates rather than filtered afterwards.
 	seamType := reflect.TypeOf(HouseholdSeams{})
 	var seams []string
 	for i := 0; i < seamType.NumField(); i++ {
 		seams = append(seams, seamType.Field(i).Name)
 	}
-	want := []string{"Events", "Actions", "Vocabulary", "MaxContentBytes"}
+	want := []string{"Events", "Actions", "Vocabulary", "Memory", "MaxContentBytes"}
 	if !reflect.DeepEqual(seams, want) {
 		t.Fatalf("HouseholdSeams fields = %v, want %v — a new seam is a new capability and needs its own decision", seams, want)
 	}

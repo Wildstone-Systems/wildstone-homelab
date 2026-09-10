@@ -346,6 +346,59 @@ func probeButler(ctx context.Context, p provider.Provider, log *slog.Logger) (ru
 	return runtimedb.ButlerModeFull, "probe passed: full mode"
 }
 
+// memorySeamsFor binds recall to one reader and one Butler.
+//
+// Both are captured here and neither is a parameter of anything the
+// model can reach. runtimedb ANDs them into the SQL that finds
+// candidates, so a widened scope is not something this closure could
+// pass on even if it wanted to.
+//
+// A preference is injected and an episode is searched, because they are
+// different questions: a preference only shapes an answer if it is
+// there before the model speaks, and an episode has to be asked for.
+func memorySeamsFor(db *runtimedb.DB, butlerName, member string) butler.MemorySeams {
+	return butler.MemorySeams{
+		Preamble: func(context.Context) ([]butler.MemoryHit, error) {
+			var out []butler.MemoryHit
+			// Preferences and procedures only. Facts and inferences are
+			// searched rather than injected: the first two shape how a
+			// Butler behaves, and the rest are answers to questions
+			// nobody has asked yet.
+			for _, kind := range []string{"preference", "procedure"} {
+				records, err := db.RetrieveMemory(runtimedb.MemoryQuery{
+					Reader: member, Butler: butlerName, Kind: kind, Limit: 25,
+				})
+				if err != nil {
+					return nil, err
+				}
+				for _, r := range records {
+					out = append(out, butler.MemoryHit{
+						Content: r.Content, Kind: r.Kind, Subject: r.Subject,
+						Source: r.SourceKind, Age: time.Since(r.ObservedAt),
+					})
+				}
+			}
+			return out, nil
+		},
+		Recall: func(_ context.Context, text string, limit int) ([]butler.MemoryHit, error) {
+			hits, err := db.SearchIndex(runtimedb.IndexQuery{
+				Reader: member, Butler: butlerName, Text: text, Limit: limit,
+			})
+			if err != nil {
+				return nil, err
+			}
+			out := make([]butler.MemoryHit, 0, len(hits))
+			for _, h := range hits {
+				out = append(out, butler.MemoryHit{
+					Content: h.Content, Source: h.SourceKind, Age: h.Age,
+					MustVerifyLive: h.MustVerifyLive,
+				})
+			}
+			return out, nil
+		},
+	}
+}
+
 // butlerProviderFor builds the client for ONE Butler, from its own
 // assignment and from nothing else. There is no argument here that
 // could come from a message: it is handed a Butler and reads what its
@@ -1110,10 +1163,17 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 						// for (ADR-W026 A7) — so a room gets the
 						// narrowed gateway, built fresh and bound to the
 						// member.
+						// Memory is bound to THIS session: the reader
+						// and the Butler are closed over here, from the
+						// turn and the Butler record, so nothing a model
+						// types can name a different one. That is what
+						// makes recall safe to offer as a tool at all.
+						mine := household
+						mine.Memory = memorySeamsFor(db, b.Name, t.Member)
 						if t.Group {
-							return butler.NewHouseholdGroupGateway(t.Member, household), nil
+							return butler.NewHouseholdGroupGateway(t.Member, mine), nil
 						}
-						return butler.NewHouseholdGateway(t.Member, household), nil
+						return butler.NewHouseholdGateway(t.Member, mine), nil
 					case runtimedb.ButlerSurfaceAdmin:
 						// A copy per session, because butlerlive sets
 						// this Butler's authorizer and task on it. A

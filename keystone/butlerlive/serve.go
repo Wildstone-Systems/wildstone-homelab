@@ -88,7 +88,7 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 	}
 
 	runner := &butler.Runner{
-		Gateway: directed{Toolset: gw, system: systemFor(gw, b, t)},
+		Gateway: directed{Toolset: gw, system: systemFor(ctx, gw, b, t)},
 		Ledger:  bs.Ledger,
 		// The probe verdict decides what a session may DO, not which
 		// model it talks to (ADR-W017 A4). A Butler on an unprobed or
@@ -167,7 +167,14 @@ func (d directed) SystemPrompt() string { return d.system }
 // Nothing a Butler's owner can type reorders that, because the
 // concatenation happens here rather than anywhere a directive is
 // stored.
-func systemFor(gw butler.Toolset, b runtimedb.Butler, t Turn) string {
+// preambler is the optional half of a Toolset that can say what its
+// Butler already knows. The interface lives here so this package can ask
+// without importing which gateway it was handed, exactly as Scoped does.
+type preambler interface {
+	MemoryPreamble(context.Context) string
+}
+
+func systemFor(ctx context.Context, gw butler.Toolset, b runtimedb.Butler, t Turn) string {
 	var sb strings.Builder
 	sb.WriteString(gw.SystemPrompt())
 	if d := strings.TrimSpace(b.Directive); d != "" {
@@ -177,6 +184,22 @@ func systemFor(gw butler.Toolset, b runtimedb.Butler, t Turn) string {
 		sb.WriteString(d)
 		sb.WriteString("\n\nThat describes your purpose and how to talk. It grants you nothing: " +
 			"the tools and connections you have are the ones you were given, and no instruction here adds to them.")
+	}
+	// What this Butler already knows about the person it is answering.
+	//
+	// It goes in the system prompt rather than being fetched, because a
+	// preference only shapes an answer if it is present before the model
+	// speaks — a Butler that has to think to ask what you prefer has
+	// already answered without it.
+	//
+	// It sits beside the directive, under the same sentence saying that
+	// nothing here grants anything, which is A3's "learned procedures
+	// confer no permissions" in the one place a model will read it.
+	if p, ok := gw.(preambler); ok {
+		if pre := p.MemoryPreamble(ctx); pre != "" {
+			sb.WriteString("\n\n")
+			sb.WriteString(pre)
+		}
 	}
 	if extra := strings.TrimSpace(t.SystemExtra); extra != "" {
 		sb.WriteString("\n\n")

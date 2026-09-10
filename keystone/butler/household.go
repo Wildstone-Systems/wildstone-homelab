@@ -152,6 +152,10 @@ type HouseholdSeams struct {
 	// here so the family surface and the rule author cannot disagree
 	// about which actions exist.
 	Vocabulary func() (HouseholdVocabulary, error)
+	// Memory is recall across conversations (ADR-W030 A3). A zero value
+	// is a working configuration: the surface then answers from the
+	// conversation alone, which is what it did before memory existed.
+	Memory MemorySeams
 	// MaxContentBytes bounds one tool result. <= 0 uses the package
 	// default.
 	MaxContentBytes int
@@ -238,6 +242,22 @@ func NewHouseholdGateway(member string, seams HouseholdSeams) *HouseholdGateway 
 		// household tools above, because that is the whole map it reads.
 		"describe_capabilities": {Spec: describeCapabilitiesSpec, Describe: describeHouseholdCapabilities},
 	}
+	// Registered only when the seam is wired. A tool that always answers
+	// "memory is not turned on" is one the manifest should not advertise
+	// and a model should not spend a turn discovering.
+	if seams.Memory.Recall != nil {
+		spec, handler := recallEntryFor(seams.Memory)
+		gw.tools["recall"] = householdEntry{
+			Spec: spec,
+			// What comes back was written by people and by inference
+			// over what people said, so it carries the untrusted
+			// envelope exactly as timeline events do.
+			Untrusted: true,
+			Handler: func(ctx context.Context, _ *HouseholdGateway, input map[string]any) (ToolOutcome, error) {
+				return handler(ctx, input), nil
+			},
+		}
+	}
 	return gw
 }
 
@@ -250,7 +270,8 @@ var householdEventsSpec = provider.Tool{
 	Description: "Look up recent facts on the household timeline — what a person or device did, " +
 		"what an app recorded. Narrow the lookup: name the event type you care about, and the " +
 		"person or device if the question is about one. Returns the newest first. This is the " +
-		"only way to find out what happened; you have no memory between conversations.",
+		"only way to find out what HAPPENED — what was recorded by the house. It is not the " +
+		"same as what you were told: use recall for that, when it is offered.",
 	InputSchema: map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -329,6 +350,8 @@ func (gw *HouseholdGateway) wired(name string) bool {
 		return gw.seams.Events != nil
 	case "list_household_actions", "do_household_action":
 		return gw.seams.Actions != nil || gw.seams.Vocabulary != nil
+	case "recall":
+		return gw.seams.Memory.Recall != nil
 	case "describe_capabilities":
 		// Reads only what the gateway already holds, so it is wired
 		// wherever the surface is.
@@ -655,8 +678,9 @@ Instruction hierarchy, strict:
 
 What you can do, and it is the whole list:
   - get_household_events looks up what has happened — narrow it to the
-    event type and person you need. You have no memory between
-    conversations, so look things up rather than assuming.
+    event type and person you need. Look things up rather than assuming.
+    What the house RECORDED and what you were TOLD are different: this
+    tool is the first, and recall, when you have it, is the second.
   - list_household_actions tells you what this household has wired up.
   - do_household_action performs one of those actions. It happens
     immediately and someone sees the result, so do it when you have been
