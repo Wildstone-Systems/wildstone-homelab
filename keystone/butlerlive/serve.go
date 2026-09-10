@@ -190,8 +190,11 @@ func systemFor(gw butler.Toolset, b runtimedb.Butler, t Turn) string {
 // says which Butler refused and on which model.
 func (bs *Butlers) blank(b runtimedb.Butler) Answer {
 	return Answer{
-		Butler:    b.Name,
-		Model:     b.Model,
+		Butler: b.Name,
+		// What actually answered, in the provider's own words. The
+		// assignment's name is a key; this is the model, and "which
+		// model saw this" is the question A2 exists to answer.
+		Model:     b.ProviderModel,
 		ModelKind: b.ModelKind,
 		Provider:  b.Provider,
 		Surface:   b.Surface,

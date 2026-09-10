@@ -346,6 +346,25 @@ func probeButler(ctx context.Context, p provider.Provider, log *slog.Logger) (ru
 	return runtimedb.ButlerModeFull, "probe passed: full mode"
 }
 
+// butlerProviderFor builds the client for ONE Butler, from its own
+// assignment and from nothing else. There is no argument here that
+// could come from a message: it is handed a Butler and reads what its
+// assignment says.
+//
+// It is a named function rather than a closure because it is the one
+// place a Butler's assignment becomes a provider call, and it had a bug
+// nothing could see: it passed Model where ProviderModel belonged.
+// Those are the same string for anything configured from the provider's
+// list and differ for a row named before that, so a Butler on
+// "ollama-cloud" asked Ollama for a model by that name and got a 404
+// naming something the person had never typed.
+func butlerProviderFor(b runtimedb.Butler) (provider.Provider, error) {
+	p, _, err := newButlerProvider(butlerConfig{
+		Provider: b.Provider, Model: b.ProviderModel, Endpoint: b.Endpoint,
+	})
+	return p, err
+}
+
 // newButlerProvider builds the configured Butler provider, or a nil
 // provider when the Butler is off. API keys come ONLY from the provider's
 // environment variable (ADR-W017 A4) — there is deliberately no key flag.
@@ -1068,16 +1087,18 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				DB:     db,
 				Ledger: ledger,
 				Log:    log,
-				// The provider is built from the ROUTE the Butler was
+				// The provider is built from the MODEL the Butler was
 				// assigned, and from nothing else. There is no argument
 				// here that could come from a message: this function is
-				// handed a Butler and reads what its route says.
-				Providers: func(b runtimedb.Butler) (provider.Provider, error) {
-					p, _, perr := newButlerProvider(butlerConfig{
-						Provider: b.Provider, Model: b.Model, Endpoint: b.Endpoint,
-					})
-					return p, perr
-				},
+				// handed a Butler and reads what its assignment says.
+				//
+				// ProviderModel, not Model. Model is the assignment's
+				// own name — which for anything configured from the
+				// provider's list is the same string, and is not for a
+				// row named before that. Sending the name to Ollama
+				// asks it for a model called "ollama-cloud" and gets a
+				// 404 naming something the person never typed.
+				Providers: butlerProviderFor,
 				Gateways: butlerlive.GatewayFunc(func(b runtimedb.Butler, t butlerlive.Turn) (butler.Toolset, error) {
 					switch b.Surface {
 					case runtimedb.ButlerSurfaceFamily:
