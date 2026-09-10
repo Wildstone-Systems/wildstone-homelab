@@ -245,7 +245,8 @@ in the comment and different objects in the code.
 
 ### F-158-07 — no runtime, deadline or cost budget exists; the two columns for them are written by nothing
 - **Status:** missing
-- **Evidence:** §16 requires "finite retry, duration, step, and spending limits; exact values must be explicit configuration rather than unlimited defaults", and §7 lists "execution budgets" as per-Butler configuration.
+- **Requires:** §16 requires "finite retry, duration, step, and spending limits; exact values must be explicit configuration rather than unlimited defaults", and §7 lists "execution budgets" as per-Butler configuration.
+- **Evidence:** code as cited below — `keystone/butlerlive/serve.go:96-107`, `keystone/butlerstore/butlerstore.go:88-92`, `keystone/butlerstore/retry_test.go:138`; test `TestWithdrawnAuthorityBlocksContinuation`.
 
 What exists: rounds per turn (8), tool calls per task (64), one model
 call bounded at 2 minutes, one retry
@@ -329,7 +330,8 @@ control. See **Design gaps**.
 
 ### F-158-10 — retiring a Butler does not pause the routines that call it; it breaks them
 - **Status:** missing
-- **Evidence:** §16: "Deleting an agent preserves person- and household-owned memory and pauses its routines pending reassignment."
+- **Requires:** §16: "Deleting an agent preserves person- and household-owned memory and pauses its routines pending reassignment."
+- **Evidence:** code as cited below — `keystone/runtimedb/butlers.go:312-326`, `keystone/runtimedb/butlerassign.go:52`, `keystone/runtimedb/butlers.go:632`.
 
 `RetireButler` (`keystone/runtimedb/butlers.go:312-326`) executes one
 statement, against the `butlers` row. It does not touch
@@ -350,7 +352,8 @@ routine while it waits for one.
 
 ### F-158-11 — there is no pause; retire is the only agent-level lever, and it does not stop active work either
 - **Status:** partial
-- **Evidence:** §16 asks for two separate controls: "Pause stops new runs and notifications; expose separate cancellation for active work."
+- **Requires:** §16 asks for two separate controls: "Pause stops new runs and notifications; expose separate cancellation for active work."
+- **Evidence:** code as cited below — `keystone/api/api.go:434`, `keystone/runtimedb/butlers.go:463-512`, `keystone/butlerstore/butlerstore.go:64-96`; test `TestWithdrawnAuthorityBlocksContinuation`.
 
 The Butler has one control, `DELETE /api/v1/butlers/{name}` →
 `RetireButler` (`keystone/api/api.go:434`). It does stop new
@@ -401,7 +404,8 @@ defect. See **Design gaps**.
 
 ### F-158-13 — the household-wide stop control exists as restore quarantine, and its release path belongs to a different incident
 - **Status:** partial
-- **Evidence:** §16: "Provide a household-wide stop control and targeted connection revocation." The revocation half is implemented (requirement 23 above).
+- **Requires:** §16: "Provide a household-wide stop control and targeted connection revocation." The revocation half is implemented (requirement 23 above).
+- **Evidence:** code as cited below — `keystone/api/api.go:402`, `keystone/runtimedb/restore.go:124-162`, `keystone/runtimedb/butlersteps.go:220-225`.
 
 The stop half exists in substance. `POST /api/v1/restore/quarantine`
 (`keystone/api/api.go:402`) sets a flag that `db.gate` checks at the
@@ -463,7 +467,8 @@ shape built into it with nothing on the other end.
 
 ### F-158-15 — no conflict detection between agents, handlers and application rules
 - **Status:** missing
-- **Evidence:** §16: "Coordinate writes to the same resource and detect recurring conflicts between agents, handlers, and application rules. Pause and surface conflicting routines rather than allowing repeated opposing commands."
+- **Requires:** §16: "Coordinate writes to the same resource and detect recurring conflicts between agents, handlers, and application rules. Pause and surface conflicting routines rather than allowing repeated opposing commands."
+- **Evidence:** code as cited below — `keystone/api/handlers_plans.go:307`, `keystone/automation/automation.go:93-110`.
 
 `grep -rni conflict keystone/ | grep -v "ON CONFLICT"` returns HTTP 409
 responses and one desired-state check. The one real mechanism is plan
@@ -481,7 +486,8 @@ engine's own event — one hop, and only within the handler engine.
 
 ### F-158-16 — there is no context compaction, and history is replayed whole every turn
 - **Status:** missing
-- **Evidence:** §7: "Context compaction must retain task state without widening memory visibility or restoring secrets into prompts."
+- **Requires:** §7: "Context compaction must retain task state without widening memory visibility or restoring secrets into prompts."
+- **Evidence:** code as cited below — `keystone/api/handlers_butler.go:290-299`, `keystone/butler/runner.go:331-334`, `keystone/api/handlers_butler.go:301-312`.
 
 No compaction exists. `historyFrom`
 (`keystone/api/handlers_butler.go:290-299`) turns every stored turn of a
@@ -552,7 +558,8 @@ made correctly.
 
 ### F-158-19 — evidence is mandatory, but the runner writes its own receipt
 - **Status:** partial
-- **Evidence:** §7: "The agent must not claim completion without a successful tool or scheduler receipt."
+- **Requires:** §7: "The agent must not claim completion without a successful tool or scheduler receipt."
+- **Evidence:** code as cited below — `keystone/runtimedb/butlertasks.go:432-437`, `keystone/runtimedb/butlersteps.go:680-731`, `keystone/runtimedb/butlertasks_test.go:209`; tests `TestButlerTaskCompletionIsRefusedBySchemaWithoutEvidence`, `TestButlerTaskInterruptedBetweenEvidenceAndCompletion`.
 
 Three independent layers. `TransitionButlerTask` refuses to reach
 `completed` at all (`keystone/runtimedb/butlertasks.go:432-437`).

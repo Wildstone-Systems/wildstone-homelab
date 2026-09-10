@@ -61,8 +61,11 @@ var (
 	statusLineRe = regexp.MustCompile(`(?m)^- \*\*Status:\*\* (.+?)\s*$`)
 	findingRe    = regexp.MustCompile(`(?m)^### ~?~?(F-(\d+)-(\d+))~?~? — (.+?)\s*$`)
 	// Within a finding, its own status and evidence lines.
-	inlineStatusRe   = regexp.MustCompile(`(?m)^- \*\*Status:\*\* (.+?)\s*$`)
-	inlineEvidenceRe = regexp.MustCompile(`(?m)^- \*\*Evidence:\*\* (.+?)\s*$`)
+	inlineStatusRe = regexp.MustCompile(`(?m)^- \*\*Status:\*\* (.+?)\s*$`)
+	// Evidence values wrap. Capturing only the first line truncated one
+	// mid-citation — "…; `GET" — and reported a well-evidenced finding
+	// as unsupported, so continuation lines are part of the value.
+	inlineEvidenceRe = regexp.MustCompile(`(?m)^- \*\*Evidence:\*\* (.*(?:\n[ \t]+\S.*)*)`)
 )
 
 func TestAuditRegister(t *testing.T) {
@@ -142,6 +145,32 @@ func problemsIn(name, body string) []string {
 	return append(bad, findingProblems(body, fileIssue)...)
 }
 
+// evidential reports whether an evidence line points at something a
+// reader could go and check. Deliberately loose: it is looking for the
+// SHAPE of a citation, not judging whether the citation is any good.
+// A path, a test name, an HTTP call, or a statement that something was
+// run all pass; a sentence with none of those does not.
+func evidential(s string) bool {
+	// Evidence values wrap, and a citation can straddle the break —
+	// "`GET" ending one line and "/api/v1/..." starting the next. Match
+	// against the value as one line, or the wrap decides the verdict.
+	s = strings.Join(strings.Fields(s), " ")
+	for _, re := range evidenceShapes {
+		if re.MatchString(s) {
+			return true
+		}
+	}
+	return false
+}
+
+var evidenceShapes = []*regexp.Regexp{
+	regexp.MustCompile(`\.(go|sql|ts|tsx|yaml|yml|md)\b`),     // a file
+	regexp.MustCompile(`\bTest[A-Z]\w+`),                      // a test
+	regexp.MustCompile(`(?i)\b(GET|POST|PUT|DELETE|PATCH) /`), // an endpoint
+	regexp.MustCompile("(?i)\\b(ran|run|runtime|executed|observed|reproduced|returned|curl|go test|grep|no callers|zero callers)\\b"),
+	regexp.MustCompile(`(?i)\bmigration \d`), // a migration
+}
+
 func findingProblems(body, fileIssue string) []string {
 	var bad []string
 	heads := findingRe.FindAllStringSubmatchIndex(body, -1)
@@ -196,8 +225,19 @@ func findingProblems(body, fileIssue string) []string {
 		}
 		if em := inlineEvidenceRe.FindStringSubmatch(section); em == nil {
 			bad = append(bad, fmt.Sprintf("%s: no \"- **Evidence:** ...\" line — a claim without evidence is an opinion", id))
-		} else if strings.TrimSpace(em[1]) == "" {
+		} else if e := strings.TrimSpace(em[1]); e == "" {
 			bad = append(bad, fmt.Sprintf("%s: empty evidence line", id))
+		} else if !evidential(e) {
+			// The first round produced one of these: an evidence line
+			// quoting the baseline sentence the finding was about. The
+			// body underneath carried three test names and the wiring,
+			// so nothing was actually unsupported — but a reader
+			// skimming evidence lines would have seen a requirement
+			// restated as its own proof, which is the shape of a
+			// finding with nothing behind it.
+			bad = append(bad, fmt.Sprintf(
+				"%s: evidence line cites nothing checkable (%.60q) — name a file, a test, a command or a run; "+
+					"quoting the baseline restates the requirement as its own proof", id, e))
 		}
 	}
 

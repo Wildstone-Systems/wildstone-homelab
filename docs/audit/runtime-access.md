@@ -1,16 +1,86 @@
-# Reaching the live deployment
+# Reaching a runtime
 
 Runtime evidence is what §17 asks for, and an audit that marks
 everything `unverified` because it could not find the API has answered
-a different question than the one it was given. This is how to reach
-the running system.
+a different question than the one it was given.
+
+## Read this first: which runtime you can reach
+
+**A cloud session cannot reach the household deployment.** All six
+slices of the first audit round ran in isolated containers with no
+route to it, and this file used to assume otherwise. Symptoms are
+unambiguous: `systemctl` reports the system was not booted with systemd,
+`/etc/wildstone/` and `/usr/local/bin/keystone` do not exist, and
+`curl http://127.0.0.1:9441/api/v1/butlers` returns `000`.
+
+That is not a dead end. Three of those six slices got genuine runtime
+evidence anyway by **building the audited commit and running it against
+a scratch data directory** — see below. It is real evidence about *this
+code*, which is what most findings are about. What it cannot tell you
+is how the household's own deployment is configured; record that as
+`unverified` and say what would settle it.
+
+| You are on | Use |
+|---|---|
+| A cloud/container session | A scratch instance. The live deployment is unreachable. |
+| The homelab host | A scratch instance for anything that **writes**, and the live deployment **read-only** for configuration questions. |
+
+**Do not run mutating tests against the household deployment.**
+Creating admissions, revoking grants, or storing memory on the running
+system disrupts a household and is hard to unwind. A scratch instance
+on the host can point at the *real* model endpoints, which gives the
+genuine cloud path without any of that.
 
 **No credential values in this file, ever** — paths and procedures
 only. The same goes for anything you write into a report or an issue.
 
 ---
 
-## What is running
+## A scratch instance
+
+Build the commit under audit and run it beside everything else. It has
+its own data directory, its own port and its own admin token, and it
+shares nothing with the household.
+
+```bash
+cd keystone && go build -o /tmp/ks ./cmd/keystone
+mkdir -p /tmp/ksdata
+
+# One-time: mint an admin token into the scratch data directory.
+/tmp/ks claim-code -data-dir /tmp/ksdata -out /tmp/ks.token
+
+/tmp/ks -data-dir /tmp/ksdata \
+        -api-listen 127.0.0.1:19441 \
+        -hosts localhost,127.0.0.1 \
+        -butler-provider ollama \
+        -butler-endpoint http://192.168.1.99:11434 \
+        -butler-model qwen3.5:4b &
+
+export WILD_TOKEN=$(cat /tmp/ks.token | tr -d '\n')
+wild butler status -surface family -api http://127.0.0.1:19441
+```
+
+Notes that matter:
+
+- **`-butler-endpoint` is the real Ollama** when you are on the host,
+  and unreachable from a container. Point it at a stub when it is, and
+  say so in the report — a stub proves routing and cannot prove what
+  left the house.
+- Migrations run on start, so the scratch database is the schema of the
+  commit under audit. That makes it the right place to answer schema
+  questions and the wrong place to answer "what does the household's
+  database actually contain".
+- **Delete it afterwards** — the data directory, the token file and the
+  process. Say in the report that you did.
+
+---
+
+## The household deployment
+
+Read-only, and only from the host. Everything in this section describes
+the household's running system; nothing here should be written to.
+
+### What is running
 
 `keystone.service`, a systemd unit on this host.
 
@@ -34,7 +104,7 @@ The node also runs `wardstoned.service`, the agent.
 
 ---
 
-## Authenticating
+### Authenticating
 
 The API takes `Authorization: Bearer <token>`, and the CLI reads
 `WILD_TOKEN`.
@@ -67,7 +137,7 @@ exercised from `127.0.0.1`, so anything that depends on it is
 
 ---
 
-## The Butlers on this deployment
+### The Butlers on this deployment
 
 As of 2026-09-10. Confirm rather than assume — `GET /api/v1/butlers`.
 
@@ -88,7 +158,7 @@ model did not do this today" is the whole job on this deployment.
 
 ---
 
-## Exercising it
+### Exercising it
 
 The CLI is the shortest path to a real turn:
 
@@ -123,7 +193,7 @@ data being absent — worth knowing before you record it as a finding.
 
 ---
 
-## Reading the database directly
+### Reading the database directly
 
 `/var/lib/wildstone/keystone/keystone.db` is SQLite, root-only, and
 **open by the running service**. Do not write to it. If you need to
