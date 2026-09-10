@@ -78,6 +78,23 @@ func butlerTargetFor(id principal.Identity, requested string) (address, named st
 	return "", requested, nil
 }
 
+// actingAsOwner reports whether this caller is the Console holder
+// acting on Butlers they own (ADR-W031 A10).
+//
+// The test is the MANAGE verb, not the endpoint. Manage is what creates
+// a Butler, assigns its model and edits its access list, so a caller
+// holding it can put themselves on any access list in one call — the
+// exemption therefore grants no authority that was being withheld, it
+// removes a step that could only ever be performed and never refused.
+//
+// A chat adapter can never satisfy it. Concierge and valet hold
+// converse, deliberately and structurally (ADR-W026 A8), so a household
+// member's message keeps going through the access list exactly as
+// before. That is the half of this that must not move.
+func actingAsOwner(id principal.Identity) bool {
+	return principal.Allowed(id.Role, principal.VerbManage)
+}
+
 // butlersConfigured reports whether this deployment has any Butler.
 //
 // It is the ONE question whose answer may send a conversation down the

@@ -196,7 +196,7 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 		return nil, st, err
 	}
 	if s.butlersConfigured() {
-		return s.askNamedButler(r.Context(), message, named, id.Name, nil)
+		return s.askNamedButler(r.Context(), message, named, id.Name, actingAsOwner(id), nil)
 	}
 	// The unconfigured check lives in the session runner, with the one
 	// snapshot it takes — checking here as well would read the backend
@@ -207,9 +207,9 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 
 // askNamedButler answers on the operator surface as a named Butler,
 // resolving the name when the caller left it out.
-func (s *Server) askNamedButler(ctx context.Context, message, named, member string, prior *turnContext) (any, int, error) {
+func (s *Server) askNamedButler(ctx context.Context, message, named, member string, asOwner bool, prior *turnContext) (any, int, error) {
 	if named == "" {
-		b, err := s.Butlers.Sole(runtimedb.ButlerSurfaceAdmin, member)
+		b, err := s.Butlers.Sole(runtimedb.ButlerSurfaceAdmin, member, asOwner)
 		if err != nil {
 			// Ambiguity is a 400 and lists the names: the caller can fix
 			// it, and telling them how is the difference between a
@@ -222,9 +222,10 @@ func (s *Server) askNamedButler(ctx context.Context, message, named, member stri
 		named = b.Name
 	}
 	turn := butlerlive.Turn{
-		Butler: named,
-		Member: member,
-		Text:   message,
+		Butler:  named,
+		Member:  member,
+		Text:    message,
+		AsOwner: asOwner,
 		// The operator surface's ceiling. A Console caller holds both
 		// surfaces, but this ENDPOINT is the operator one, and an
 		// endpoint that would answer as a family Butler is an endpoint
@@ -296,9 +297,9 @@ func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (
 		// material another gathered (ADR-W031 A4). Naming the same one
 		// is harmless and left to that check rather than duplicated.
 		if sess.Surface == runtimedb.ButlerSurfaceFamily {
-			return s.askNamedFamilyButler(r.Context(), message, named, sess.ActingFor, "", false, prior)
+			return s.askNamedFamilyButler(r.Context(), message, named, sess.ActingFor, "", false, actingAsOwner(id), prior)
 		}
-		return s.askNamedButler(r.Context(), message, named, sess.ActingFor, prior)
+		return s.askNamedButler(r.Context(), message, named, sess.ActingFor, actingAsOwner(id), prior)
 	}
 	if sess.Surface == runtimedb.ButlerSurfaceFamily {
 		return s.runFamilySession(r.Context(), message, sess.ActingFor, "", false, prior)

@@ -82,6 +82,29 @@ type Turn struct {
 	// assistant text only.
 	History []provider.Message
 
+	// AsOwner marks the Console holder acting on a Butler they own
+	// (ADR-W031 A10).
+	//
+	// A10 gives them every Butler: they create them, assign the models,
+	// and decide which household members may talk to which. The access
+	// list is that decision — it is the answer to "who may talk to
+	// Alfred", asked about other people. Holding the owner to it makes
+	// them add themselves to a list they alone maintain, which protects
+	// nothing: the same credential grants that access in one call. A8
+	// already names this shape and rejects it — a ceremony nobody can
+	// refuse teaches people that approvals are paperwork.
+	//
+	// It removes the ACCESS and ADMISSION checks and nothing else. The
+	// surface ceiling still holds, a retired Butler is still retired,
+	// and an unreachable model still waits: those are not permissions
+	// the owner has, they are facts about the Butler.
+	//
+	// The caller sets this only for a principal that holds manage. A
+	// chat adapter never can — a concierge or valet credential has no
+	// spelling for it — so the path a household member's message takes
+	// is untouched.
+	AsOwner bool
+
 	// RequireSurface is the structural ceiling the caller arrived
 	// through, and a Butler on any other surface is refused.
 	//
@@ -221,6 +244,8 @@ func (bs *Butlers) Resolve(t Turn) (runtimedb.Butler, error) {
 		err error
 	)
 	switch {
+	case t.Butler != "" && t.AsOwner:
+		b, err = bs.ownedButler(t.Butler)
 	case t.Butler != "":
 		b, err = bs.DB.ResolveButlerFor(t.Butler, t.Member)
 	case t.Transport != "" && t.Address != "":
@@ -251,6 +276,38 @@ func (bs *Butlers) Resolve(t Turn) (runtimedb.Butler, error) {
 // swallowing a real read failure.
 func errorsIsNotFound(err error) bool { return errors.Is(err, runtimedb.ErrNotFound) }
 
+// ownedButler resolves a Butler for its owner, skipping the access list
+// and the admission record and nothing else.
+//
+// The refusals it keeps are the ones that are not about permission. A
+// retired Butler does not answer anybody, its owner included; a Butler
+// whose model is unreachable waits (A6) rather than being answered by
+// something else. Reproducing those here rather than reusing
+// ResolveButlerFor is deliberate: that function's job is to decide
+// whether a PERSON may talk to a Butler, and an owner path that called
+// it with a flag would put the exemption inside the check everyone else
+// depends on.
+func (bs *Butlers) ownedButler(name string) (runtimedb.Butler, error) {
+	b, err := bs.DB.GetButler(name)
+	if err != nil {
+		return runtimedb.Butler{}, err
+	}
+	if !b.Live() {
+		return runtimedb.Butler{}, fmt.Errorf("%w: %s has been retired or disabled",
+			runtimedb.ErrButlerUnreachable, b.Name)
+	}
+	if !b.Reachable() {
+		why := "unavailable"
+		if !b.RouteEnabled {
+			why = "turned off"
+		}
+		return runtimedb.Butler{}, fmt.Errorf(
+			"%w: %s runs on %s, which is %s — this waits rather than moving to another model (ADR-W031 A6)",
+			runtimedb.ErrButlerUnreachable, b.Name, b.Route, why)
+	}
+	return b, nil
+}
+
 // ErrAmbiguousButler reports that a caller with no address must name
 // which Butler they mean.
 var ErrAmbiguousButler = errors.New("butlerlive: name which butler you mean")
@@ -273,7 +330,7 @@ var ErrAmbiguousButler = errors.New("butlerlive: name which butler you mean")
 // without a bot in between. A household with one Butler should not have
 // to name it on every question; a household with four must, because
 // picking one for them is picking which model sees what they typed.
-func (bs *Butlers) Sole(surface runtimedb.ButlerSurface, member string) (runtimedb.Butler, error) {
+func (bs *Butlers) Sole(surface runtimedb.ButlerSurface, member string, asOwner bool) (runtimedb.Butler, error) {
 	all, err := bs.DB.ListButlers()
 	if err != nil {
 		return runtimedb.Butler{}, err
@@ -284,6 +341,12 @@ func (bs *Butlers) Sole(surface runtimedb.ButlerSurface, member string) (runtime
 			continue
 		}
 		if !b.Live() {
+			continue
+		}
+		if asOwner {
+			// The owner has every Butler on this surface (A10), so the
+			// question here is only "is there exactly one".
+			eligible = append(eligible, b)
 			continue
 		}
 		// Access is the store's answer, not a field read here: a

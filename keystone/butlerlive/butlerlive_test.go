@@ -530,3 +530,78 @@ func TestAConversationSurvivesARestartWithoutRepeatingADispatch(t *testing.T) {
 		t.Fatalf("task state = %q after the resume, want completed", final.State)
 	}
 }
+
+// A10: the Console holder owns every Butler, so they reach one they own
+// without appearing on its access list.
+//
+// Nobody is granted anything in this fixture, which is the point: the
+// same call fails for a household member and succeeds for the owner.
+func TestTheOwnerReachesAButlerWithoutBeingOnItsAccessList(t *testing.T) {
+	f := newFixture(t)
+
+	// A person, refused — the access list is doing its job.
+	member := Turn{Butler: "alfred", Member: "sam", Text: "hello"}
+	if _, err := f.butlers.Serve(context.Background(), member); !errors.Is(err, runtimedb.ErrNoButlerAccess) {
+		t.Fatalf("member err = %v, want ErrNoButlerAccess", err)
+	}
+
+	// The owner, through.
+	owner := Turn{Butler: "alfred", Member: "mika", Text: "hello", AsOwner: true}
+	ans, err := f.butlers.Serve(context.Background(), owner)
+	if err != nil {
+		t.Fatalf("owner Serve: %v", err)
+	}
+	if ans.Butler != "alfred" {
+		t.Fatalf("answered as %s, want alfred", ans.Butler)
+	}
+}
+
+// The exemption removes access and admission, and NOTHING else. A6 and
+// A3 are facts about the Butler rather than permissions the owner
+// holds, so they still refuse the owner.
+func TestOwnerIsStillRefusedByTheThingsThatAreNotPermissions(t *testing.T) {
+	f := newFixture(t)
+
+	// A3: the surface ceiling.
+	crossed := Turn{
+		Butler: "alfred", Member: "mika", Text: "hello",
+		AsOwner: true, RequireSurface: runtimedb.ButlerSurfaceFamily,
+	}
+	if _, err := f.butlers.Serve(context.Background(), crossed); !errors.Is(err, runtimedb.ErrNoButlerAccess) {
+		t.Fatalf("surface err = %v, want ErrNoButlerAccess", err)
+	}
+
+	// A6: a model that is not there.
+	if err := f.db.SetModelRouteEnabled("kitchen-box", false, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	down := Turn{Butler: "alfred", Member: "mika", Text: "hello", AsOwner: true}
+	if _, err := f.butlers.Serve(context.Background(), down); !errors.Is(err, runtimedb.ErrButlerUnreachable) {
+		t.Fatalf("unreachable err = %v, want ErrButlerUnreachable", err)
+	}
+	if f.cloud.sawAnything() {
+		t.Fatal("the owner's request fell back to another model")
+	}
+}
+
+// The half that must not move: an ADDRESSED message never takes the
+// owner path, whatever it carries.
+//
+// A chat adapter cannot set AsOwner — it holds converse and the API
+// gates the flag on manage — but the check that matters here is
+// structural rather than about who called: an address resolves through
+// the access list even when the flag is somehow set, because the two
+// are different branches and only the named-Butler one is exempt.
+func TestAnAddressedMessageNeverTakesTheOwnerPath(t *testing.T) {
+	f := newFixture(t)
+	turn := f.turn("alfred", "hello")
+	turn.Member = "sam" // admitted, not granted alfred
+	turn.AsOwner = true // as if an adapter had somehow claimed it
+
+	if _, err := f.butlers.Serve(context.Background(), turn); !errors.Is(err, runtimedb.ErrNoButlerAccess) {
+		t.Fatalf("err = %v, want ErrNoButlerAccess — an address must go through the access list", err)
+	}
+	if f.local.sawAnything() {
+		t.Fatal("a message addressed to a bot reached a model without an access check")
+	}
+}

@@ -179,7 +179,7 @@ type ButlerConversations interface {
 	// Sole names the only Butler a person may talk to on a surface, for
 	// the Console path where there is no bot to address. It refuses
 	// rather than picks when there is more than one.
-	Sole(surface runtimedb.ButlerSurface, member string) (runtimedb.Butler, error)
+	Sole(surface runtimedb.ButlerSurface, member string, asOwner bool) (runtimedb.Butler, error)
 }
 
 // New wires a Server. The rate limits are per ADR-W007 A5: a generous

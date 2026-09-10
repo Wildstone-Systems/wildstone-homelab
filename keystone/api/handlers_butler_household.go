@@ -131,7 +131,7 @@ func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any
 	// perfectly reachable Butler because a flag the deployment no longer
 	// uses was left at "off".
 	if s.butlersConfigured() {
-		return s.askNamedFamilyButler(r.Context(), message, named, id.Name, "", false, nil)
+		return s.askNamedFamilyButler(r.Context(), message, named, id.Name, "", false, actingAsOwner(id), nil)
 	}
 	host := s.ButlerHost
 	if !host.householdConfigured() {
@@ -145,9 +145,9 @@ func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any
 // It is the operator path's sibling and differs only in the ceiling it
 // requires, which is the difference ADR-W026 A1 draws between the two
 // surfaces and the one thing that must not be shared between them.
-func (s *Server) askNamedFamilyButler(ctx context.Context, message, named, member, systemExtra string, group bool, prior *turnContext) (any, int, error) {
+func (s *Server) askNamedFamilyButler(ctx context.Context, message, named, member, systemExtra string, group, asOwner bool, prior *turnContext) (any, int, error) {
 	if named == "" {
-		b, err := s.Butlers.Sole(runtimedb.ButlerSurfaceFamily, member)
+		b, err := s.Butlers.Sole(runtimedb.ButlerSurfaceFamily, member, asOwner)
 		if err != nil {
 			if errors.Is(err, butlerlive.ErrAmbiguousButler) {
 				return nil, http.StatusBadRequest, err
@@ -162,6 +162,7 @@ func (s *Server) askNamedFamilyButler(ctx context.Context, message, named, membe
 		Text:           message,
 		Group:          group,
 		SystemExtra:    systemExtra,
+		AsOwner:        asOwner,
 		RequireSurface: runtimedb.ButlerSurfaceFamily,
 	}
 	if prior != nil {
