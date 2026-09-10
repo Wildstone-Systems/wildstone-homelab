@@ -146,6 +146,12 @@ var wellKnown = map[string]int{
 	"git":        44443, // code-gitea
 	"mail":       45443, // mail-roundcube, via mail_subdomain
 	"calendar":   46443, // mail-roundcube's calendar surface, via calendar_subdomain
+
+	// The Console's own origin. It is pinned like every other surface
+	// and for a sharper reason: this is the address a browser is sent
+	// to after signing in, and a port that moved when a neighbour was
+	// installed would send somebody to whatever now answers there.
+	"console": 47443, // wildstone-console
 }
 
 // Of derives the addressing posture from desired state.

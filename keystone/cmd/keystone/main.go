@@ -78,7 +78,7 @@ func main() {
 	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W024 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
 	replyURL := flag.String("household-reply-url", "", "household event intake URL a notification's reply buttons post to, as a PHONE can reach it (not Keystone's loopback address); empty means notifications carry no reply buttons and a rule that asks for them fails loudly")
 	replyTTL := flag.Duration("household-reply-ttl", 12*time.Hour, "how long a notification's reply token stays valid")
-	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia) that fronts the household review page (ADR-W030 A8.1). Empty leaves /api/v1/household/review unavailable rather than open: an unconfigured trust boundary fails closed, so a household routine approval can only be done from the Console until this is set")
+	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia). Empty fails closed. This names ONE trust boundary and it now gates TWO things: the household review page (ADR-W030 A8.1), and Console sign-in by forwarded identity (ADR-W032) — a request from one of these addresses carrying Remote-User and a Remote-Groups list containing console_users is authenticated as that person, with admin authority. Setting this does not by itself grant anyone the Console: they must also be in the console_users directory group, which packages/wildstone-console declares")
 	flag.Parse()
 
 	if *showVersion {
@@ -760,8 +760,17 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// widened by a DNS answer (ADR-W030 A8.1).
 	apiSrv.TrustedIngress = householdCfg.Ingress
 	if len(apiSrv.TrustedIngress) == 0 {
-		log.Info("household review page unavailable: -household-ingress is not set, " +
-			"so routine approvals happen in the Console until it is")
+		log.Info("household review page unavailable, and Console sign-in by forwarded " +
+			"identity is off: -household-ingress is not set, so routine approvals happen " +
+			"in the Console and the Console itself needs a bearer token")
+	} else {
+		// Said out loud because this address list is now the boundary
+		// for an ADMIN identity, not only for a household member's
+		// routine approval. An operator who set it for the review page
+		// should learn here that it does more.
+		log.Info("trusted identity proxy configured",
+			"addresses", apiSrv.TrustedIngress,
+			"gates", "household review page, and Console sign-in for members of "+api.ConsoleGroup)
 	}
 	apiSrv.Automation = auto
 	apiSrv.OnHouseholdEvent = auto.Poke

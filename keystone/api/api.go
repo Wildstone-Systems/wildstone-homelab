@@ -547,14 +547,18 @@ func (s *Server) handle(verb principal.Verb, h handlerFunc) http.Handler {
 func (s *Server) authenticate(r *http.Request) (principal.Identity, bool) {
 	auth := r.Header.Get("Authorization")
 	const scheme = "Bearer "
-	if !strings.HasPrefix(auth, scheme) {
-		return principal.Identity{}, false
+	if strings.HasPrefix(auth, scheme) {
+		// A token always decides when one is offered, even a bad one.
+		// Falling through to the proxy path on a failed token would let
+		// a stale or revoked credential quietly become whatever the
+		// headers claim, which is an escalation dressed as a fallback.
+		id, err := s.Principals.Authenticate(strings.TrimSpace(strings.TrimPrefix(auth, scheme)))
+		if err != nil {
+			return principal.Identity{}, false
+		}
+		return id, true
 	}
-	id, err := s.Principals.Authenticate(strings.TrimSpace(strings.TrimPrefix(auth, scheme)))
-	if err != nil {
-		return principal.Identity{}, false
-	}
-	return id, true
+	return s.consoleForwardAuth(r)
 }
 
 // writeJSON is the ONLY response encoder on the public plane: it redacts
