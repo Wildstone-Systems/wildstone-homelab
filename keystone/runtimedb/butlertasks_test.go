@@ -564,19 +564,10 @@ func TestMigration0017LeavesExistingConversationsReadable(t *testing.T) {
 	if err := db.migrateThrough("migrations/0016_observed_app_health.sql"); err != nil {
 		t.Fatalf("migrating through 0016: %v", err)
 	}
-	id, err := db.InsertButlerSession(ButlerSession{
-		Principal: "butler", ActingFor: "mika", Provider: "ollama",
-		Mode: ButlerModeFull, Surface: ButlerSurfaceAdmin,
-		FinalText:      "n2 has been offline since 14:04.",
-		TranscriptJSON: `{"provider":"ollama"}`,
-		Turns: []ButlerTurn{
-			{Role: ButlerRoleUser, Text: "why is n2 offline?"},
-			{Role: ButlerRoleAssistant, Text: "n2 has been offline since 14:04."},
-		},
+	id := insertSessionAtSchema(t, db, "n2 has been offline since 14:04.", []ButlerTurn{
+		{Role: ButlerRoleUser, Text: "why is n2 offline?"},
+		{Role: ButlerRoleAssistant, Text: "n2 has been offline since 14:04."},
 	})
-	if err != nil {
-		t.Fatalf("inserting a pre-0017 session: %v", err)
-	}
 	db.Close()
 
 	db2, err := Open(path)

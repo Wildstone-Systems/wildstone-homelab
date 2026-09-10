@@ -176,11 +176,16 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 		mode = runtimedb.ButlerModeQAOnly
 	}
 	sessionID, err := s.recordTurn(prior, runtimedb.ButlerSession{
-		Principal:      butlerPrincipal,
-		ActingFor:      turn.Member,
-		Provider:       ans.Provider,
-		Mode:           mode,
-		Surface:        ans.Surface,
+		Principal: butlerPrincipal,
+		ActingFor: turn.Member,
+		Provider:  ans.Provider,
+		Mode:      mode,
+		Surface:   ans.Surface,
+		// The RESOLVED Butler, not the requested one. The turn may name
+		// none at all (the chat path lets the address decide), and a
+		// session filed under a name the caller supplied would be a
+		// conversation attributed to a Butler that did not hold it.
+		Butler:         ans.Butler,
 		FinalText:      finalText,
 		Capped:         ans.Capped,
 		TranscriptJSON: redact.String(string(transcriptJSON)),

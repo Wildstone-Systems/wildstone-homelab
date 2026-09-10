@@ -495,3 +495,169 @@ func (db *DB) ResolveButlerFor(butler, member string) (Butler, error) {
 	}
 	return b, nil
 }
+
+// RestoreButler brings a retired Butler back.
+//
+// It is a separate verb from creation, and the difference is the whole
+// point of retiring rather than deleting: the same row comes back, with
+// the same seq, so its scope, its narrowings, its memory and its
+// conversations are still its own. A household that retired a Butler by
+// mistake gets the Butler back, not a namesake.
+//
+// The route is checked again on the way in. A Butler retired six weeks
+// ago may have been assigned to a model somebody has since turned off,
+// and bringing it back onto nowhere would produce exactly the silent
+// non-answering A6 says must be a stated wait instead.
+func (db *DB) RestoreButler(name, by string) error {
+	if by == "" {
+		return fmt.Errorf("runtimedb: restoring a butler needs who restored it")
+	}
+	b, err := db.GetButler(name)
+	if err != nil {
+		return err
+	}
+	if b.RetiredAt.IsZero() {
+		return fmt.Errorf("runtimedb: %s is not retired", name)
+	}
+	if !b.RouteEnabled {
+		return fmt.Errorf(
+			"runtimedb: %s is assigned to %q, which is turned off — turn the route back on, or assign another, before bringing the butler back (ADR-W031 A6)",
+			name, b.Route)
+	}
+	res, err := db.sql.Exec(
+		`UPDATE butlers SET retired_at = '', retired_by = '', enabled = 1, updated_at = ?, updated_by = ?
+		 WHERE name = ? AND retired_at <> ''`, now(), by, name)
+	if err != nil {
+		return fmt.Errorf("runtimedb: restoring a butler: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DuplicateButler copies a Butler's SHAPE and none of its history.
+//
+// What is copied is what somebody making a second Butler like this one
+// would otherwise retype: the directive, the surface and profile, the
+// route, the connections it may read, and the tools it has been
+// narrowed out of. What is deliberately NOT copied is everything that
+// names a person — who may talk to it, what it remembers, what it has
+// been asked. A copy that inherited an access list would silently grant
+// a new Butler to people who agreed to the old one, and a copy that
+// inherited memory would move somebody's notes into a scope they never
+// chose (ADR-W031 A4/A5).
+//
+// It is one transaction because a half-copied Butler is worse than no
+// copy: a Butler with a route and no narrowings is one that has been
+// quietly widened.
+func (db *DB) DuplicateButler(name, newName, by string) (int64, error) {
+	src, err := db.GetButler(name)
+	if err != nil {
+		return 0, err
+	}
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return 0, fmt.Errorf("runtimedb: a copy needs a name of its own")
+	}
+	seq, err := db.CreateButler(Butler{
+		Name: newName, Directive: src.Directive, Surface: src.Surface,
+		Profile: src.Profile, Route: src.Route,
+	}, by)
+	if err != nil {
+		return 0, err
+	}
+	conns, err := db.ButlerConnections(name)
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range conns {
+		if err := db.GrantButlerConnection(newName, c, by); err != nil {
+			return 0, fmt.Errorf("runtimedb: copying %s's connections: %w", name, err)
+		}
+	}
+	narrowed, err := db.ButlerToolNarrowings(name)
+	if err != nil {
+		return 0, err
+	}
+	for tool, reason := range narrowed {
+		if err := db.NarrowButlerTool(newName, tool, reason, by); err != nil {
+			return 0, fmt.Errorf("runtimedb: copying %s's tool narrowings: %w", name, err)
+		}
+	}
+	return seq, nil
+}
+
+// ButlerImpact is what stops working if a Butler is retired.
+//
+// Every number here is counted rather than estimated, because the
+// screen that shows it is asking somebody to make a decision they
+// cannot see the consequences of otherwise. "2 routines call it" is
+// only worth printing if it is two.
+type ButlerImpact struct {
+	Butler string `json:"butler"`
+	// People who message it and would lose it.
+	People []string `json:"people"`
+	// Routines assigned to it. Each names its own state, because a
+	// disabled routine breaking is not news.
+	Routines []ButlerRoutineRef `json:"routines"`
+	// Sessions and MemoryCount are kept, not deleted — they are said
+	// so that retiring reads as the reversible thing it is.
+	Sessions    int `json:"sessions"`
+	MemoryCount int `json:"memoryCount"`
+	// Successors are the other live Butlers on the same surface, which
+	// is what a routine could be pointed at instead.
+	Successors []string `json:"successors"`
+}
+
+// ButlerRoutineRef is one routine that calls a Butler.
+type ButlerRoutineRef struct {
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+// ButlerImpactOf counts what retiring this Butler would break.
+func (db *DB) ButlerImpactOf(name string) (ButlerImpact, error) {
+	b, err := db.GetButler(name)
+	if err != nil {
+		return ButlerImpact{}, err
+	}
+	out := ButlerImpact{Butler: b.Name, People: []string{}, Routines: []ButlerRoutineRef{}, Successors: []string{}}
+	if out.People, err = db.ListButlerAccess(name); err != nil {
+		return ButlerImpact{}, err
+	}
+	rows, err := db.sql.Query(
+		`SELECT name, state FROM household_routines WHERE butler = ? ORDER BY name`, name)
+	if err != nil {
+		return ButlerImpact{}, fmt.Errorf("runtimedb: counting a butler's routines: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r ButlerRoutineRef
+		if err := rows.Scan(&r.Name, &r.State); err != nil {
+			return ButlerImpact{}, err
+		}
+		out.Routines = append(out.Routines, r)
+	}
+	if err := rows.Err(); err != nil {
+		return ButlerImpact{}, err
+	}
+	if err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM butler_sessions WHERE butler = ?`, name).Scan(&out.Sessions); err != nil {
+		return ButlerImpact{}, fmt.Errorf("runtimedb: counting a butler's sessions: %w", err)
+	}
+	if err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM butler_memory WHERE butler = ?`, name).Scan(&out.MemoryCount); err != nil {
+		return ButlerImpact{}, fmt.Errorf("runtimedb: counting a butler's memory: %w", err)
+	}
+	all, err := db.ListButlers()
+	if err != nil {
+		return ButlerImpact{}, err
+	}
+	for _, other := range all {
+		if other.Name != b.Name && other.Surface == b.Surface && other.RetiredAt.IsZero() {
+			out.Successors = append(out.Successors, other.Name)
+		}
+	}
+	return out, nil
+}

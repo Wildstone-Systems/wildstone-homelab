@@ -56,6 +56,20 @@ func (h *ButlerHost) householdWired() bool {
 	return h.Household.Events != nil || h.Household.Actions != nil
 }
 
+// householdSeams is the deployment's family wiring, for a caller that
+// wants to REPORT the surface rather than run on it.
+//
+// It reads the same field householdGateway passes, so a capability
+// listing and a live session cannot disagree about which tools this
+// house has a source behind. A nil host answers with the zero value,
+// which is the honest one: nothing is wired.
+func (h *ButlerHost) householdSeams() butler.HouseholdSeams {
+	if h == nil {
+		return butler.HouseholdSeams{}
+	}
+	return h.Household
+}
+
 // householdGateway builds the per-session family gateway for member.
 // Per-session rather than shared because the gateway is BOUND to the
 // member (ADR-W026 A1/A4): the member it acts for is a construction

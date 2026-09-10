@@ -467,7 +467,11 @@ func (s *Server) listButlerSessions(r *http.Request, _ principal.Identity) (any,
 	if surface != "" && !runtimedb.ValidButlerSurface(surface) {
 		return nil, http.StatusBadRequest, fmt.Errorf("unknown surface %q (admin|family)", surface)
 	}
-	sessions, err := s.DB.ListButlerSessions(limit, surface)
+	// A Butler filter narrows to the sessions stamped with that name.
+	// It is not defaulted from the surface: showing every household
+	// Butler's conversations under one Butler's name is the one thing
+	// this list must not do.
+	sessions, err := s.DB.ListButlerSessions(limit, surface, r.URL.Query().Get("butler"))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}

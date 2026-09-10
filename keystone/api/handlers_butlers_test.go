@@ -205,3 +205,139 @@ func TestButlerScopeAnswersInOneCall(t *testing.T) {
 		t.Fatalf("scope addresses = %+v", out.Addresses)
 	}
 }
+
+// The tools endpoint answers with the gateway's own registry, resolved
+// through this Butler's authority.
+//
+// The Console cannot assemble either half. A tool list written in the
+// client is a second copy of the registry that drifts the first time a
+// gateway changes, and deriving availability means re-implementing the
+// effective-authority order in TypeScript — where getting it wrong
+// shows a tool as on that a dispatch would refuse.
+func TestButlerToolsComeFromTheGatewayNotTheClient(t *testing.T) {
+	h := butlerConsole(t)
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
+		"name": "health", "surface": "family", "profile": "household", "route": "kitchen-box",
+	}, nil); res.StatusCode != http.StatusCreated {
+		t.Fatalf("create = %d", res.StatusCode)
+	}
+
+	type toolsView struct {
+		Butler  string `json:"butler"`
+		Profile string `json:"profile"`
+		Surface string `json:"surface"`
+		Verdict string `json:"modelVerdict"`
+		Tools   []struct {
+			Name      string `json:"name"`
+			Summary   string `json:"summary"`
+			Available bool   `json:"available"`
+			Reason    string `json:"reason"`
+		} `json:"tools"`
+		Narrowed map[string]string `json:"narrowedTools"`
+	}
+	read := func() toolsView {
+		t.Helper()
+		var out toolsView
+		if res := h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/butlers/health/tools", nil, &out); res.StatusCode != http.StatusOK {
+			t.Fatalf("reading the tools = %d", res.StatusCode)
+		}
+		return out
+	}
+
+	before := read()
+	if before.Profile != runtimedb.ProfileHousehold || before.Surface != string(runtimedb.ButlerSurfaceFamily) {
+		t.Fatalf("tools view = %+v", before)
+	}
+	// The family gateway's own registry, not a list this package keeps.
+	// A tool added or removed there must show up here without anybody
+	// editing a second copy.
+	want := map[string]bool{"get_household_events": false, "do_household_action": false}
+	for _, tool := range before.Tools {
+		if _, ok := want[tool.Name]; ok {
+			want[tool.Name] = true
+			if tool.Summary == "" {
+				t.Fatalf("%s came back with no summary, so the screen has nothing to render", tool.Name)
+			}
+		}
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Fatalf("the household surface's %s is missing from the manifest: %+v", name, before.Tools)
+		}
+	}
+
+	// Narrowing is reported as a narrowing, separately from the tool
+	// being unavailable. Only the first is something a screen can undo,
+	// and a client that cannot tell them apart offers a button that
+	// does nothing.
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/tool",
+		map[string]any{"tool": "do_household_action", "allow": false, "reason": "it only reads"}, nil,
+	); res.StatusCode != http.StatusOK {
+		t.Fatalf("narrowing = %d", res.StatusCode)
+	}
+	narrowed := read()
+	if narrowed.Narrowed["do_household_action"] != "it only reads" {
+		t.Fatalf("the narrowing reason did not survive: %+v", narrowed.Narrowed)
+	}
+	for _, tool := range narrowed.Tools {
+		if tool.Name == "do_household_action" && tool.Available {
+			t.Fatalf("a narrowed tool is still reported available: %+v", tool)
+		}
+	}
+
+	// Giving it back returns it to whatever the profile allows, and the
+	// narrowing stops being reported at all.
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/tool",
+		map[string]any{"tool": "do_household_action", "allow": true}, nil,
+	); res.StatusCode != http.StatusOK {
+		t.Fatalf("widening = %d", res.StatusCode)
+	}
+	if back := read(); back.Narrowed["do_household_action"] != "" {
+		t.Fatalf("the narrowing outlived its removal: %+v", back.Narrowed)
+	}
+}
+
+// An operator Butler is answered with the operator surface's tools, and
+// a household one is not. The ceiling is what the Butler was created
+// against (A3), so this endpoint must never let a screen render the
+// wrong surface's list beside the right surface's name.
+func TestButlerToolsAreTheSurfacesOwn(t *testing.T) {
+	h := butlerConsole(t)
+	for _, b := range []map[string]any{
+		{"name": "health", "surface": "family", "profile": "household", "route": "kitchen-box"},
+		{"name": "ops", "surface": "admin", "profile": "operator", "route": "kitchen-box"},
+	} {
+		if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", b, nil); res.StatusCode != http.StatusCreated {
+			t.Fatalf("create %v = %d", b["name"], res.StatusCode)
+		}
+	}
+	names := func(butler string) map[string]bool {
+		t.Helper()
+		var out struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		}
+		if res := h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/butlers/"+butler+"/tools", nil, &out); res.StatusCode != http.StatusOK {
+			t.Fatalf("reading %s's tools = %d", butler, res.StatusCode)
+		}
+		set := map[string]bool{}
+		for _, tool := range out.Tools {
+			set[tool.Name] = true
+		}
+		return set
+	}
+	household, operator := names("health"), names("ops")
+	if !operator["propose_change"] {
+		t.Fatalf("the operator surface lost propose_change: %v", operator)
+	}
+	if household["propose_change"] {
+		t.Fatalf("a household Butler was offered propose_change, which its gateway does not contain: %v", household)
+	}
+	if !household["get_household_events"] {
+		t.Fatalf("the household surface lost get_household_events: %v", household)
+	}
+	if operator["get_household_events"] {
+		t.Fatalf("an operator Butler was offered the family surface's reads: %v", operator)
+	}
+}

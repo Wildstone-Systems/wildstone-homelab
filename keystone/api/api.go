@@ -401,6 +401,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/butlers", s.handle(principal.VerbRead, s.listButlers))
 	mux.Handle("POST /api/v1/butlers", s.handle(principal.VerbManage, s.createButler))
 	mux.Handle("GET /api/v1/butlers/{name}/scope", s.handle(principal.VerbRead, s.butlerScope))
+	// Reading what a Butler may do is a read, and it is deliberately
+	// its own route rather than a field on the scope: the answer comes
+	// from the gateway and the authority resolver, not from the scope
+	// tables, and folding it in would make one endpoint's cost depend
+	// on wiring the other knows nothing about.
+	mux.Handle("GET /api/v1/butlers/{name}/tools", s.handle(principal.VerbRead, s.butlerTools))
 	mux.Handle("PUT /api/v1/butlers/{name}/route", s.handle(principal.VerbManage, s.setButlerRoute))
 	mux.Handle("PUT /api/v1/butlers/{name}/directive", s.handle(principal.VerbManage, s.setButlerDirective))
 	mux.Handle("PUT /api/v1/butlers/{name}/access", s.handle(principal.VerbManage, s.setButlerAccess))
@@ -408,6 +414,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/butlers/{name}/tool", s.handle(principal.VerbManage, s.setButlerTool))
 	mux.Handle("PUT /api/v1/butlers/{name}/address", s.handle(principal.VerbManage, s.setButlerAddress))
 	mux.Handle("DELETE /api/v1/butlers/{name}", s.handle(principal.VerbManage, s.retireButler))
+	// Restore and duplicate are manage for the same reason retiring is:
+	// each decides standing configuration. Impact is a read, and it is
+	// the one a retire dialog needs BEFORE anybody has decided.
+	mux.Handle("POST /api/v1/butlers/{name}/restore", s.handle(principal.VerbManage, s.restoreButler))
+	mux.Handle("POST /api/v1/butlers/{name}/duplicate", s.handle(principal.VerbManage, s.duplicateButler))
+	mux.Handle("GET /api/v1/butlers/{name}/impact", s.handle(principal.VerbRead, s.butlerImpact))
 	mux.Handle("POST /api/v1/butler/routes/{name}/readiness", s.handle(principal.VerbManage, s.recordRouteReadiness))
 	mux.Handle("POST /api/v1/butler/routes/{name}/enabled", s.handle(principal.VerbManage, s.setModelRouteEnabled))
 	mux.Handle("GET /api/v1/butler/settings", s.handle(principal.VerbManage, s.getButlerSettings))

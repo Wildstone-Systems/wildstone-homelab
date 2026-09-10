@@ -27,6 +27,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
@@ -46,16 +48,97 @@ func butlerView(b runtimedb.Butler) map[string]any {
 	}
 }
 
+// listButlers serves the roster, with each Butler's reach counted.
+//
+// The counts are here rather than in the client because the roster
+// shows one line per Butler saying who can reach it and what it may do,
+// and a Console assembling that would be making three calls per row —
+// thirty on a household of ten, every time the screen reloads, with
+// nothing to stop one of them failing and a row silently reading "no
+// people" for a Butler two people talk to.
+//
+// The tool ceiling is resolved ONCE per (profile, verdict) pair rather
+// than once per Butler. Every Butler on a profile has the same
+// structural ceiling and the same deployment wiring; what differs is
+// its own narrowings, which is a single cheap read. Building a gateway
+// per row would be the same answer computed ten times.
 func (s *Server) listButlers(_ *http.Request, _ principal.Identity) (any, int, error) {
 	all, err := s.DB.ListButlers()
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	available := map[string]map[string]bool{}
 	out := make([]map[string]any, 0, len(all))
 	for _, b := range all {
-		out = append(out, butlerView(b))
+		view := butlerView(b)
+
+		people, err := s.DB.ListButlerAccess(b.Name)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		conns, err := s.DB.ButlerConnections(b.Name)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		narrowed, err := s.DB.ButlerToolNarrowings(b.Name)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		view["people"] = len(people)
+		view["connections"] = len(conns)
+
+		readOnly := !b.CarriesActionAuthority()
+		key := fmt.Sprintf("%s/%t", b.Profile, readOnly)
+		set, ok := available[key]
+		if !ok {
+			set = s.availableTools(b.Profile, readOnly)
+			available[key] = set
+		}
+		// Allowed is available minus this Butler's own narrowings, and
+		// the denominator is AVAILABLE rather than the whole ceiling.
+		// "5 of 6" is a sentence about what this Butler can do here;
+		// "5 of 13" counts tools no deployment ever wired and reads as
+		// somebody having switched eight things off.
+		allowed := 0
+		for tool := range set {
+			if _, off := narrowed[tool]; !off {
+				allowed++
+			}
+		}
+		view["toolsAllowed"] = allowed
+		view["toolsAvailable"] = len(set)
+		out = append(out, view)
 	}
 	return map[string]any{"butlers": out}, http.StatusOK, nil
+}
+
+// availableTools is the set of tool names a profile can actually use on
+// this deployment, before any one Butler's narrowings.
+//
+// It asks the gateway rather than a list, with no Butler authority
+// bound — the per-Butler half is subtracted by the caller, from a read
+// it already has.
+func (s *Server) availableTools(profile string, readOnly bool) map[string]bool {
+	var manifest butler.CapabilityManifest
+	switch profile {
+	case runtimedb.ProfileHousehold:
+		manifest = butler.NewHouseholdGateway("", s.ButlerHost.householdSeams()).Capabilities(readOnly)
+	case runtimedb.ProfileOperator:
+		_, live, _, _, _ := s.ButlerHost.Current()
+		if live == nil {
+			live = butler.NewToolGateway(nil, nil)
+		}
+		manifest = live.Scoped(nil).Capabilities(readOnly)
+	default:
+		return map[string]bool{}
+	}
+	set := map[string]bool{}
+	for _, tool := range manifest.Tools {
+		if tool.Available {
+			set[tool.Name] = true
+		}
+	}
+	return set
 }
 
 // createButler makes a new Butler.
@@ -287,6 +370,168 @@ func (s *Server) setButlerTool(r *http.Request, id principal.Identity) (any, int
 	return map[string]any{
 		"butler": name, "narrowedTools": narrowed,
 		"note": "removing a narrowing returns the tool to what this butler's profile allows — it never widens past it",
+	}, http.StatusOK, nil
+}
+
+// restoreButler brings a retired Butler back.
+//
+// Retiring is reversible by design — the whole reason it is not a
+// delete — and until this existed the Console could do the one half of
+// that and not the other, which made "you can bring it back" a sentence
+// with no button behind it.
+func (s *Server) restoreButler(r *http.Request, id principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	if err := s.DB.RestoreButler(name, actingMember(id)); err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return nil, http.StatusNotFound, fmt.Errorf("no butler named %q", name)
+		}
+		return nil, http.StatusBadRequest, err
+	}
+	b, err := s.DB.GetButler(name)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	s.event("butler.restored", "", id, fmt.Sprintf("butler %s brought back", name))
+	return butlerView(b), http.StatusOK, nil
+}
+
+// duplicateButler copies a Butler's shape onto a new name.
+//
+// It is one call rather than six from the client for a reason the
+// client cannot fix: creating, then granting each connection, then
+// re-narrowing each tool is a sequence that can half-fail, and the
+// half that fails is the narrowing — leaving a new Butler with its
+// model, its connections, and every tool the profile allows. A copy
+// that is quietly wider than its original is the worst possible
+// outcome of a button labelled "Duplicate".
+func (s *Server) duplicateButler(r *http.Request, id principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	var req struct {
+		Name string `json:"name"`
+	}
+	if code, err := decodeStrict(r, &req); err != nil {
+		return nil, code, err
+	}
+	copyName := strings.TrimSpace(req.Name)
+	if copyName == "" {
+		// The server picks, so the Console does not have to invent a
+		// naming rule the CLI would then invent differently.
+		copyName = name + " copy"
+		for n := 2; ; n++ {
+			if _, err := s.DB.GetButler(copyName); errors.Is(err, runtimedb.ErrNotFound) {
+				break
+			} else if err != nil {
+				return nil, http.StatusInternalServerError, err
+			}
+			copyName = fmt.Sprintf("%s copy %d", name, n)
+		}
+	}
+	if _, err := s.DB.DuplicateButler(name, copyName, actingMember(id)); err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return nil, http.StatusNotFound, err
+		}
+		return nil, http.StatusBadRequest, err
+	}
+	b, err := s.DB.GetButler(copyName)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	s.event("butler.duplicated", "", id, fmt.Sprintf("butler %s copied from %s", copyName, name))
+	out := butlerView(b)
+	out["note"] = "the copy has its model, connections and tool narrowings. Nobody can talk to it, it remembers nothing, and it has no conversations — those belong to " + name + "."
+	return out, http.StatusCreated, nil
+}
+
+// butlerImpact counts what retiring this Butler would break.
+//
+// The counts are read rather than guessed because the dialog they feed
+// is asking somebody to accept a consequence. "2 routines call it" is
+// worth showing exactly when it is two; a screen that rounds, or that
+// says "some routines may fail", has moved the work of finding out back
+// onto the person it was supposed to inform.
+func (s *Server) butlerImpact(r *http.Request, _ principal.Identity) (any, int, error) {
+	impact, err := s.DB.ButlerImpactOf(r.PathValue("name"))
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, http.StatusNotFound, fmt.Errorf("no butler named %q", r.PathValue("name"))
+	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return impact, http.StatusOK, nil
+}
+
+// butlerTools is what ONE Butler may actually do, answered by the same
+// resolver a dispatch would consult.
+//
+// The Console cannot work this out for itself, and the attempts it
+// would have to make are both wrong. A tool list written in the client
+// is a second copy of the registry, and it drifts the first time a
+// gateway gains or loses a tool — the screen then offers a switch for
+// something that does not exist, or hides one that does. Deriving
+// availability is worse: it means re-implementing the effective
+// authority order (structural, disabled, enabled, grant, default) in
+// TypeScript, and a screen that gets that order wrong shows a tool as
+// on that the engine refuses, which is the one lie this surface must
+// not tell.
+//
+// So the answer comes from the gateway itself, bound to this Butler's
+// authority, and each unavailable tool carries the resolver's own
+// words rather than a sentence a screen invented.
+func (s *Server) butlerTools(r *http.Request, _ principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	b, err := s.DB.GetButler(name)
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, http.StatusNotFound, fmt.Errorf("no butler named %q", name)
+	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	// A Butler whose route failed its tool probe is handed the
+	// read-only set (ADR-W017 A4), and the screen has to show THAT set
+	// rather than the one it would have on a working model. Otherwise
+	// somebody looks at a Butler that answers questions only and sees a
+	// list of things it will refuse.
+	readOnly := !b.CarriesActionAuthority()
+	authority := &butlerstore.Authority{DB: s.DB, Butler: b.Name}
+
+	var manifest butler.CapabilityManifest
+	switch b.Profile {
+	case runtimedb.ProfileHousehold:
+		gw := butler.NewHouseholdGateway("", s.ButlerHost.householdSeams())
+		gw.SetAuthorizer(authority)
+		manifest = gw.Capabilities(readOnly)
+	case runtimedb.ProfileOperator:
+		// The host's gateway, because its seams are what this
+		// deployment actually wired — a bare one would report every
+		// tool as unavailable and call it structure. Scoped, never
+		// mutated: it is shared with every session in flight.
+		_, live, _, _, _ := s.ButlerHost.Current()
+		if live == nil {
+			live = butler.NewToolGateway(nil, nil)
+		}
+		manifest = live.Scoped(authority).Capabilities(readOnly)
+	default:
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"%s runs on the %s profile, which has no tool surface", b.Name, b.Profile)
+	}
+
+	// The narrowings come back alongside the manifest rather than being
+	// inferred from it. "Unavailable because this Butler is narrowed out
+	// of it" and "unavailable because nothing here provides it" are
+	// different facts, and only the first is something a person can
+	// undo from this screen.
+	narrowed, err := s.DB.ButlerToolNarrowings(b.Name)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return map[string]any{
+		"butler":        b.Name,
+		"profile":       b.Profile,
+		"surface":       b.Surface,
+		"modelVerdict":  manifest.ModelVerdict,
+		"tools":         manifest.Tools,
+		"actions":       manifest.Actions,
+		"narrowedTools": narrowed,
 	}, http.StatusOK, nil
 }
 
