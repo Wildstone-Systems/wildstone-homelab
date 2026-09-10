@@ -407,10 +407,28 @@ func withConsole(apiHandler http.Handler, dir string) http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(path.Clean(r.URL.Path), "/")))); err == nil {
+				// Everything under /assets carries a content hash in its
+				// filename, so a given URL's bytes never change. Those
+				// can be cached hard and forever; a new build produces
+				// new names rather than new content at old names.
+				if strings.HasPrefix(r.URL.Path, "/assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				}
 				fileServer.ServeHTTP(w, r)
 				return
 			}
 		}
+		// index.html is the one file whose URL stays the same while its
+		// content changes, because it names the hashed bundle. Serving
+		// it with no cache directive left browsers free to reuse an old
+		// copy on their own judgement — which points at an asset the
+		// deploy has since deleted, so an upgraded Console renders as
+		// the version before it, or as nothing at all.
+		//
+		// no-cache is not "do not store": it stores and REVALIDATES, so
+		// the usual response is a 304 and the cost is one conditional
+		// request per load.
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
 	})
 	return mux
