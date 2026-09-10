@@ -282,6 +282,8 @@ export interface EnablePreview {
 // a reason, so the surface can teach rather than just fail.
 export interface ButlerStatus {
   configured: boolean;
+  // Set on a per-Butler status: which Butler this describes.
+  butler?: string;
   provider?: string;
   model?: string;
   endpoint?: string;
@@ -1051,6 +1053,17 @@ export const api = {
       "POST",
       `/api/v1/butler/models/${encodeURIComponent(name)}/probe`,
       {},
+    ),
+  // What is answering for ONE Butler, and what it may do. The
+  // deployment-wide status was one provider, one model, one tool list —
+  // true while there was one Butler, and another Butler's answer the
+  // moment there were several.
+  oneButlerStatus: (name: string) =>
+    call<ButlerStatus>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/status`),
+  butlerSessionsFor: (name: string, limit = 20) =>
+    call<ButlerSession[]>(
+      "GET",
+      `/api/v1/butler/sessions?butler=${encodeURIComponent(name)}&limit=${limit}`,
     ),
   butlerTools: (name: string) =>
     call<ButlerTools>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/tools`),

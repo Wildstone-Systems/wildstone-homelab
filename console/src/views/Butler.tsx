@@ -11,7 +11,9 @@ import {
 } from "@phosphor-icons/react";
 import {
   api,
+  modelLabel,
   AskResponse,
+  ButlerRow,
   ButlerSession,
   ButlerStatus,
   ButlerSurface,
@@ -19,9 +21,9 @@ import {
   PlanRecord,
 } from "../api";
 import { ago, ErrorLine, useLoad, when } from "../lib";
-import { StatusPill } from "../ui/status";
+import { Dot, StatusPill } from "../ui/status";
 import { PendingPlan } from "./Plans";
-import { ButlerSettings } from "./ButlerSettings";
+import { ButlerPicker, openingFor, preferred, SURFACE_LABEL } from "./butler/picker";
 
 // The two surfaces, as the operator picks between them (ADR-W026 A1).
 // The copy differs because the ceilings differ, and a screen that
@@ -75,10 +77,35 @@ function narrow(): boolean {
 // the thread as the SAME card the Plans screen shows, with the same
 // handlers, which is what keeps "the Butler proposes but never acts"
 // visible. The approve button is yours, in both places.
-export function Butler({ onEyebrow }: { onEyebrow?: (label: string | null) => void }) {
-  const [surface, setSurface] = useState<ButlerSurface>("admin");
-  const status = useLoad<ButlerStatus>(() => api.butlerStatus(surface), [surface]);
-  const sessions = useLoad<ButlerSession[]>(() => api.butlerSessions(20, surface), [surface]);
+export function Butler({
+  onEyebrow,
+  onNavigate,
+}: {
+  onEyebrow?: (label: string | null) => void;
+  // Both places that link out of this screen go to Butlers: the
+  // picker's footer and the read-only backend popover. A Butler's
+  // model, reach and tools are edited there and nowhere else.
+  onNavigate?: (view: "butlers") => void;
+}) {
+  // The selected Butler is a NAME, and everything else on the screen is
+  // derived from it. It replaced a surface toggle, which was a control
+  // for choosing a correspondent that could not name one: a household
+  // with three household Butlers had a button meaning "one of these".
+  const roster = useLoad(() => api.butlers());
+  const rows = roster.data?.butlers ?? [];
+  const [name, setName] = useState<string | null>(null);
+  const current = rows.find((r) => r.butler.name === name && !r.butler.retiredAt) ?? preferred(rows);
+  const butlerName = current?.butler.name;
+  const surface: ButlerSurface = current?.butler.surface ?? "admin";
+
+  const status = useLoad<ButlerStatus | null>(
+    () => (butlerName ? api.oneButlerStatus(butlerName) : Promise.resolve(null)),
+    [butlerName],
+  );
+  const sessions = useLoad<ButlerSession[]>(
+    () => (butlerName ? api.butlerSessionsFor(butlerName) : Promise.resolve([])),
+    [butlerName],
+  );
   // The list is a sidebar on a desk and a sheet over the thread on a
   // phone, so it starts open on one and closed on the other.
   const [railOpen, setRailOpen] = useState(() => !narrow());
@@ -101,13 +128,14 @@ export function Butler({ onEyebrow }: { onEyebrow?: (label: string | null) => vo
 
   const configured = status.data?.configured === true;
 
-  // The top bar names the SURFACE, not the view: a bar reading
-  // "OPERATOR" over the household butler is the one mistake this screen
-  // can make that a person would act on.
+  // The top bar names the SURFACE, and now takes it from the selected
+  // Butler rather than from a toggle. It is the one thing here that must
+  // never lag the selection: a bar reading OPERATOR over a household
+  // Butler is the mistake on this screen a person would act on.
   useEffect(() => {
-    onEyebrow?.(SURFACES[surface].label);
+    onEyebrow?.(current ? SURFACE_LABEL[current.butler.surface] : null);
     return () => onEyebrow?.(null);
-  }, [surface, onEyebrow]);
+  }, [current?.butler.surface, current, onEyebrow]);
 
   useEffect(() => {
     if (openID === null) {
@@ -138,11 +166,21 @@ export function Butler({ onEyebrow }: { onEyebrow?: (label: string | null) => vo
   const send = (text: string) => {
     const message = text.trim();
     if (!message) return;
+    // A Butler whose model is not answering refuses here as well as in
+    // the disabled button, because a keyboard shortcut does not read a
+    // disabled attribute. The blocked strip is the explanation; this is
+    // the refusal.
+    if (!current || !current.reachable) return;
     setBusy(true);
     setAskError(null);
     setPending(message);
     const call: Promise<AskResponse> =
-      thread === null ? api.askButler(message, surface) : api.continueButlerSession(thread.id, message);
+      thread === null
+        ? // The Butler by NAME. Asking a surface was the ambiguity this
+          // screen removed, and asking through the surface endpoint
+          // would also refuse a household Butler outright.
+          api.askOneButler(current.butler.name, message)
+        : api.continueButlerSession(thread.id, message);
     call
       // Re-opening the session is what loads the new turns AND the
       // plans they proposed; the effect above does both, so there is
@@ -199,7 +237,6 @@ export function Butler({ onEyebrow }: { onEyebrow?: (label: string | null) => vo
             onClick={() => setRailOpen(false)}
           />
           <ConversationRail
-            surface={surface}
             sessions={sessions}
             openID={thread?.id ?? openID}
             onPick={(id) => {
@@ -208,11 +245,18 @@ export function Butler({ onEyebrow }: { onEyebrow?: (label: string | null) => vo
               setStatusOpen(false);
               if (narrow()) setRailOpen(false);
             }}
-            onSurface={(s) => {
-              if (s === surface) return;
-              setSurface(s);
+            rows={rows}
+            current={current}
+            onPickButler={(next) => {
+              if (next === current?.butler.name) return;
+              setName(next);
+              // A thread belongs to the Butler that answered it, and a
+              // draft belongs to the one you were writing to. Carrying
+              // either across would put words meant for one Butler in
+              // front of another's model.
               startNew();
             }}
+            onManage={() => onNavigate?.("butlers")}
             onNew={startNew}
             onClose={() => setRailOpen(false)}
           />
@@ -230,11 +274,12 @@ export function Butler({ onEyebrow }: { onEyebrow?: (label: string | null) => vo
           onClose={closeStatus}
           onOpenRail={railOpen ? undefined : () => setRailOpen(true)}
           onNew={startNew}
-          onSaved={() => {
-            status.reload();
-            sessions.reload();
-          }}
+          onManage={() => onNavigate?.("butlers")}
         />
+
+        {current && !current.reachable && (
+          <BlockedStrip row={current} onManage={() => onNavigate?.("butlers")} />
+        )}
 
         {/* useLoad keeps the last good data, so a status reload that
             fails after one has succeeded leaves `configured` true. The
@@ -254,7 +299,7 @@ export function Butler({ onEyebrow }: { onEyebrow?: (label: string | null) => vo
             <StatusCard status={status.data} loading={status.loading} />
           </div>
         ) : thread === null && pending === null ? (
-          <EmptyState surface={surface} busy={busy} onSend={send} error={askError} />
+          <EmptyState row={current} busy={busy} onSend={send} error={askError} />
         ) : (
           <>
             <Thread
@@ -281,19 +326,23 @@ export function Butler({ onEyebrow }: { onEyebrow?: (label: string | null) => vo
 // the history grouped by day. Its own scroller, so the thread beside it
 // never moves when the list grows.
 export function ConversationRail({
-  surface,
+  rows,
+  current,
   sessions,
   openID,
   onPick,
-  onSurface,
+  onPickButler,
+  onManage,
   onNew,
   onClose,
 }: {
-  surface: ButlerSurface;
+  rows: ButlerRow[];
+  current?: ButlerRow;
   sessions: { data: ButlerSession[] | null; error: string | null; loading: boolean };
   openID: string | null;
   onPick: (id: string) => void;
-  onSurface: (s: ButlerSurface) => void;
+  onPickButler: (name: string) => void;
+  onManage: () => void;
   onNew: () => void;
   onClose: () => void;
 }) {
@@ -302,19 +351,7 @@ export function ConversationRail({
     <aside className="convos" aria-label="Conversations">
       <div className="convos-head">
         <div className="row" style={{ margin: 0 }}>
-          <div className="seg" role="tablist" aria-label="Butler surface">
-            {(Object.keys(SURFACES) as ButlerSurface[]).map((key) => (
-              <button
-                key={key}
-                role="tab"
-                aria-selected={surface === key}
-                className={surface === key ? "on" : ""}
-                onClick={() => onSurface(key)}
-              >
-                {SURFACES[key].label}
-              </button>
-            ))}
-          </div>
+          <ButlerPicker rows={rows} current={current} onPick={onPickButler} onManage={onManage} />
           <button
             className="btn btn-ghost"
             onClick={onClose}
@@ -351,7 +388,7 @@ export function ConversationRail({
         ))}
         {!sessions.loading && (sessions.data ?? []).length === 0 && (
           <div className="muted" style={{ padding: "var(--space-3)" }}>
-            No {SURFACES[surface].label.toLowerCase()} conversations yet.
+            No conversations with {current?.butler.name ?? "this Butler"} yet.
           </div>
         )}
       </div>
@@ -402,7 +439,7 @@ export function ThreadBar({
   onClose,
   onOpenRail,
   onNew,
-  onSaved,
+  onManage,
 }: {
   title: string;
   status: ButlerStatus | null;
@@ -413,7 +450,7 @@ export function ThreadBar({
   onClose: () => void;
   onOpenRail?: () => void;
   onNew: () => void;
-  onSaved: () => void;
+  onManage: () => void;
 }) {
   const backend = configured
     ? [status?.provider, status?.model].filter(Boolean).join(" · ") || "configured"
@@ -463,11 +500,47 @@ export function ThreadBar({
           {/* The unconfigured card is already the pane behind this
               popover; showing it twice would say the same thing twice. */}
           {configured && <StatusCard status={status} loading={false} />}
-          <div className="popover-settings">
-            <ButlerSettings onSaved={onSaved} />
+          {/* Read-only, and ButlerSettings is gone from this screen.
+              It writes the DEPLOYMENT's provider, model and endpoint,
+              which is the pre-W031 shape: one model for everything.
+              Editing it from a conversation with ONE Butler would have
+              changed what answers for all of them, from a popover
+              labelled with one Butler's name. Model, reach and tools
+              are properties of a Butler and are set on its own screen. */}
+          <div className="muted popover-foot">
+            The model, reach and tools of a Butler are set on its own screen — one Butler, one
+            model.{" "}
+            <button className="btn btn-ghost btn-small" onClick={onManage}>
+              Open {status?.butler ?? "it"} in Butlers →
+            </button>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// A Butler that cannot answer says so, above the composer.
+//
+// It is a strip rather than a toast because it is not an event: it is
+// the state the screen is in until somebody changes the model, and a
+// message that faded would leave a composer that silently refuses. The
+// send button goes dead alongside it, so the explanation and the
+// refusal are never separated.
+export function BlockedStrip({ row, onManage }: { row: ButlerRow; onManage: () => void }) {
+  const b = row.butler;
+  const why = !b.modelEnabled
+    ? `${modelLabel(b)} is turned off`
+    : `${modelLabel(b)} is not answering`;
+  return (
+    <div className="blocked-strip">
+      <Dot kind="bad" />
+      <span>
+        {b.name} cannot answer: {why}.
+      </span>
+      <button className="btn btn-ghost btn-small" onClick={onManage}>
+        Change its model →
+      </button>
     </div>
   );
 }
@@ -476,17 +549,24 @@ export function ThreadBar({
 // chips. They belong here rather than above every composer — a suggested
 // question is a way to start, not a control you need mid-conversation.
 export function EmptyState({
-  surface,
+  row,
   busy,
   onSend,
   error,
 }: {
-  surface: ButlerSurface;
+  row?: ButlerRow;
   busy: boolean;
   onSend: (text: string) => void;
   error?: string | null;
 }) {
   const [text, setText] = useState("");
+  // Every string on this screen is the selected Butler's, derived from
+  // its own record. There is a fallback for the moment before the
+  // roster has loaded, and it says nothing it cannot know.
+  const opening = row
+    ? openingFor(row)
+    : { title: "Which Butler?", blurb: "Pick one to start a conversation.", placeholder: "Ask…" };
+  const blocked = !!row && !row.reachable;
   const submit = () => {
     onSend(text);
     setText("");
@@ -497,12 +577,12 @@ export function EmptyState({
         <span className="turn-mark" aria-hidden>
           <Sparkle size={21} weight="fill" />
         </span>
-        <h2>{SURFACES[surface].title}</h2>
-        <p className="blurb">{SURFACES[surface].blurb}</p>
+        <h2>{opening.title}</h2>
+        <p className="blurb">{opening.blurb}</p>
         <div className="composer-box">
           <textarea
             rows={2}
-            placeholder={SURFACES[surface].placeholder}
+            placeholder={opening.placeholder}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
@@ -513,15 +593,21 @@ export function EmptyState({
           />
           <button
             className="btn btn-primary"
-            disabled={busy || text.trim() === ""}
+            disabled={busy || blocked || text.trim() === ""}
             onClick={submit}
             aria-label="Send"
           >
             {busy ? <Wrench size={15} /> : <ArrowUp size={15} />}
           </button>
         </div>
+        {/* Suggested asks are the SURFACE's, because that is what they
+            actually describe: what a household Butler can be asked about
+            differs from what an operator one can, and neither depends on
+            which Butler on that surface you picked. A per-Butler table
+            would be inventing questions for a Butler somebody just
+            made. */}
         <div className="asks">
-          {SURFACES[surface].asks.map((a) => (
+          {(row ? SURFACES[row.butler.surface].asks : []).map((a) => (
             <button key={a} className="btn btn-secondary" disabled={busy} onClick={() => onSend(a)}>
               {a}
             </button>
@@ -567,12 +653,12 @@ export function Thread({
       {pending !== null && (
         <>
           <div className="msg msg-user">{pending}</div>
-          <ButlerRow>
+          <TurnRow>
             <div className="msg msg-butler thinking">
               <Sparkle size={14} />
               Thinking…
             </div>
-          </ButlerRow>
+          </TurnRow>
         </>
       )}
       <div ref={end} />
@@ -583,7 +669,7 @@ export function Thread({
 // The butler's turn is a row — mark, then text — where the operator's
 // own words are a bubble. Two shapes rather than two columns of cards is
 // what makes the thread read as a conversation.
-function ButlerRow({ children }: { children: React.ReactNode }) {
+function TurnRow({ children }: { children: React.ReactNode }) {
   return (
     <div className="turn-butler">
       <span className="turn-mark" aria-hidden>
@@ -608,7 +694,7 @@ export function Turn({
   }
   const made = proposals.filter((p) => (turn.planIds ?? []).includes(p.id));
   return (
-    <ButlerRow>
+    <TurnRow>
       <div className="msg msg-butler">{turn.text || "(no answer text)"}</div>
       <ToolTrace turn={turn} />
       {turn.capped && (
@@ -630,7 +716,7 @@ export function Turn({
           Proposed {turn.planIds!.join(", ")} — open Plans to approve.
         </div>
       )}
-    </ButlerRow>
+    </TurnRow>
   );
 }
 

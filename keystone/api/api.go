@@ -438,6 +438,7 @@ func (s *Server) Handler() http.Handler {
 	// the door, which is the only correct answer for a caller who holds
 	// both surfaces.
 	mux.Handle("POST /api/v1/butlers/{name}/ask", s.handle(principal.VerbRead, s.askOneButler))
+	mux.Handle("GET /api/v1/butlers/{name}/status", s.handle(principal.VerbRead, s.butlerStatus))
 	mux.Handle("POST /api/v1/butler/models/{name}/readiness", s.handle(principal.VerbManage, s.recordModelReadiness))
 	// Probing is manage because it writes the verdict that decides
 	// whether a model may operate tools at all.

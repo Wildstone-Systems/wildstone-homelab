@@ -58,6 +58,8 @@ import { Prerequisites } from "../src/views/Chat";
 import { Household, AddMember } from "../src/views/Household";
 import { AttentionBanner, Butlers, NoButlers, NoMatches, RosterRow, needsAttention, reachLine, select, toolLine } from "../src/views/Butlers";
 import { Tool } from "../src/views/butlers/TabTools";
+import { ButlerPicker, matches, openingFor, preferred } from "../src/views/butler/picker";
+import { BlockedStrip } from "../src/views/Butler";
 import { withheldFrom } from "../src/views/butlers/TabReach";
 import { retireLines } from "../src/views/butlers/ButlerDrawer";
 import { NewButlerDialog } from "../src/views/butlers/NewButlerDialog";
@@ -277,11 +279,15 @@ check("an empty thread teaches the surface's ceiling", emptyThread.includes("no 
 // what that butler CANNOT do, because "ask the butler" reading the same
 // on both surfaces is how a person ends up asking the family butler to
 // restart a container and believing it might.
-check("butler screen offers both surfaces", butler.includes("Operator") && butler.includes("Household"));
-// The surface switch is a segmented control in the sidebar head since
-// the redesign; what has to stay true is which one is selected.
-check("butler screen defaults to the operator surface",
-  /aria-selected="true"[^>]*>Operator/.test(butler), butler.slice(0, 900));
+// The surface toggle is gone. It was a control for choosing a
+// correspondent that could not name one: a household with three
+// household Butlers had a button meaning "one of these", and sending to
+// it either picked for you or implied all three answered.
+check("the surface toggle is gone", !butler.includes('role="tablist" aria-label="Butler surface"'), butler.slice(0, 900));
+check("a Butler selector stands where it was", butler.includes("picker-wrap"), butler.slice(0, 900));
+// Nothing is selected before the roster loads, and the screen says so
+// rather than naming a Butler it has not read.
+check("with no roster yet it names no Butler", text(butler).includes("No Butler yet"), text(butler).slice(0, 600));
 // Before a status response arrives the screen shows the unconfigured
 // card, which is what a fresh install sees — never a blank thread.
 check("butler screen is never blank while it checks", butler.includes("Checking the Butler") || butler.includes("Not configured"), butler.slice(0, 400));
@@ -314,22 +320,46 @@ check("an empty bucket is not named", bucket([session("s", before(3600_000))], N
 check("an undated conversation still lands somewhere",
   bucket([session("s", "")], NOW)[0].label === "Earlier");
 
+// A Butler for the chat screen's fixtures. The selector replaced a
+// surface toggle, so everything here is now per-Butler. It is its own
+// literal rather than borrowing the roster's builder, which is declared
+// further down this file.
+const chatRow = (
+  over: Partial<ButlerRosterRow["butler"]> = {},
+  row: Partial<ButlerRosterRow> = {},
+): ButlerRosterRow => ({
+  butler: {
+    name: "health", directive: "keeps track of training and sleep", surface: "family",
+    profile: "household", model: "qwen3.5:4b", modelKind: "local", providerModel: "qwen3.5:4b",
+    provider: "ollama", readiness: "ready", modelEnabled: true, enabled: true,
+    createdAt: "2026-03-14T09:00:00Z", createdBy: "tom", updatedAt: "2026-09-09T09:00:00Z",
+    ...over,
+  },
+  leavesTheHouse: false, carriesActions: true, reachable: true,
+  people: 2, connections: 1, toolsAllowed: 3, toolsAvailable: 4, ...row,
+});
+
 const convoRail = renderToString(h(ConversationRail, {
-  surface: "admin", openID: "s-today",
+  rows: [chatRow()], current: chatRow(), onPickButler: () => {}, onManage: () => {},
+  openID: "s-today",
   // Dated against the REAL clock: ConversationRail buckets with its own
   // default `now`, so a fixture timestamp would name a different group
   // every day after the one it was written on.
   sessions: { data: [session("s-today", new Date(Date.now() - 3600_000).toISOString())], error: null, loading: false },
-  onPick: () => {}, onSurface: () => {}, onNew: () => {}, onClose: () => {},
+  onPick: () => {}, onNew: () => {}, onClose: () => {},
 }));
 check("the rail heads each day group", convoRail.includes("Today"), convoRail.slice(0, 400));
 check("the rail marks the open conversation", convoRail.includes('class="convo on"'), convoRail);
 check("the rail offers a new conversation", convoRail.includes("New conversation"));
 const emptyRail = renderToString(h(ConversationRail, {
-  surface: "family", openID: null, sessions: { data: [], error: null, loading: false },
-  onPick: () => {}, onSurface: () => {}, onNew: () => {}, onClose: () => {},
+  rows: [chatRow()], current: chatRow(), onPickButler: () => {}, onManage: () => {},
+  openID: null, sessions: { data: [], error: null, loading: false },
+  onPick: () => {}, onNew: () => {}, onClose: () => {},
 }));
-check("an empty rail names the surface it is empty for", text(emptyRail).includes("No household conversations yet"), text(emptyRail));
+// It names the BUTLER it is empty for, not the surface: "no household
+// conversations" was true of three Butlers at once.
+check("an empty rail names the Butler it is empty for", text(emptyRail).includes("No conversations with health yet"), text(emptyRail));
+check("the rail carries the Butler selector", emptyRail.includes("Which Butler?") || emptyRail.includes("picker"), emptyRail.slice(0, 400));
 
 // The header says what is answering. A popover that is shut must not
 // render the settings form: the whole point of moving it there was that
@@ -337,27 +367,36 @@ check("an empty rail names the surface it is empty for", text(emptyRail).include
 const bar = renderToString(h(ThreadBar, {
   title: "why is jellyfin unhealthy?", configured: true, open: false,
   status: { configured: true, provider: "ollama", model: "llama3.1" },
-  onToggle: () => {}, onClose: () => {}, onNew: () => {}, onSaved: () => {},
+  onToggle: () => {}, onClose: () => {}, onNew: () => {}, onManage: () => {},
 }));
 check("the header names the backend answering", text(bar).includes("ollama · llama3.1"), text(bar));
 check("the header names the conversation", bar.includes("why is jellyfin unhealthy?"));
 check("a shut popover renders nothing", !bar.includes("Butler settings"), bar);
 const barOff = renderToString(h(ThreadBar, {
   title: "New conversation", configured: false, open: false, status: null,
-  onToggle: () => {}, onClose: () => {}, onNew: () => {}, onSaved: () => {},
+  onToggle: () => {}, onClose: () => {}, onNew: () => {}, onManage: () => {},
 }));
 check("an unconfigured backend says so in the header", barOff.includes("Not configured"), barOff);
 
 // The opening: the asks are here and nowhere else, so a suggested
 // question cannot be pressed halfway through a conversation.
-const opening = renderToString(h(EmptyState, { surface: "admin", busy: false, onSend: () => {} }));
+const opsRow = chatRow({ name: "ops", surface: "admin", profile: "operator" });
+const opening = renderToString(h(EmptyState, { row: opsRow, busy: false, onSend: () => {} }));
 for (const ask of SURFACES.admin.asks) {
   check(`the opening offers "${ask}"`, opening.includes(ask), opening.slice(0, 300));
 }
-check("the opening asks the surface's own question", opening.includes(SURFACES.admin.title));
+// The opening is the BUTLER's now, derived from its own record — a
+// table keyed by name would greet the fourth Butler a household made
+// with a blank.
+check("the opening names the Butler, not the surface", opening.includes("What should ops look into?"), opening.slice(0, 400));
 check("the opening carries the composer", opening.includes('aria-label="Ask the Butler"'));
-const family = renderToString(h(EmptyState, { surface: "family", busy: false, onSend: () => {} }));
-check("the household opening names its ceiling", family.includes("no access to the home lab"), family.slice(0, 400));
+const family = renderToString(h(EmptyState, { row: chatRow(), busy: false, onSend: () => {} }));
+check("a household opening names its ceiling", text(family).includes("cannot touch the home lab"), text(family).slice(0, 400));
+check("a local Butler says its words stay home", text(family).includes("on your own hardware"), text(family).slice(0, 400));
+const cloudOpening = renderToString(h(EmptyState, {
+  row: chatRow({ provider: "anthropic" }, { leavesTheHouse: true }), busy: false, onSend: () => {},
+}));
+check("a cloud Butler says where its words go, first", text(cloudOpening).includes("outside the house: anything you tell it goes to anthropic"), text(cloudOpening).slice(0, 400));
 const adminThread = renderToString(
   h(Thread, { surface: "admin", session: null, pending: null, proposals: [], onProposalResolved: () => {} }),
 );
@@ -1602,6 +1641,61 @@ check("with a route the empty state offers to make one", !ready.includes("A Butl
 const screen = renderToString(h(Butlers));
 check("the Butlers screen renders without throwing", screen.length > 0);
 check("it states the model rule before any data arrives", screen.includes("sends what it is told outside the house"), screen.slice(0, 600));
+
+// ------------------------------------------------ Butler selector
+//
+// The selector's job is to make "who am I talking to" unambiguous, so
+// these checks are about what it refuses to blur.
+
+const pickerRows = [
+  chatRow(),
+  chatRow({ name: "kitchen", directive: "timers and the freezer" }),
+  chatRow({ name: "ops", surface: "admin", profile: "operator" }),
+  chatRow({ name: "old", retiredAt: "2026-08-12T00:00:00Z" }),
+];
+const picker = renderToString(h(ButlerPicker, {
+  rows: pickerRows, current: pickerRows[0], onPick: () => {}, onManage: () => {},
+}));
+check("the picker names the selected Butler", picker.includes("health"), picker.slice(0, 400));
+check("and where its words go, without opening it", text(picker).includes("stays in the house"), text(picker));
+// Closed, it is one Butler and not a list.
+check("a shut picker lists nobody else", !picker.includes("kitchen"), picker.slice(0, 600));
+
+// preferred(): never opens on a Butler that cannot answer.
+check("it opens on a ready operator Butler",
+  preferred(pickerRows)?.butler.name === "ops");
+check("it skips one that cannot answer",
+  preferred([chatRow({ name: "broken", surface: "admin" }, { reachable: false }), chatRow({ name: "fine" })])?.butler.name === "fine");
+check("a retired Butler is never opened on",
+  preferred([chatRow({ name: "old", retiredAt: "2026-08-12T00:00:00Z" }), chatRow({ name: "live" })])?.butler.name === "live");
+check("with everything unwell it still opens on one", !!preferred([chatRow({}, { reachable: false })]));
+
+// The filter reads the directive too, which is how you find the Butler
+// whose job you remember and whose name you do not.
+check("the filter matches a name", matches(chatRow(), "heal"));
+check("the filter matches a directive", matches(chatRow({ name: "kitchen", directive: "timers and the freezer" }), "freezer"));
+check("the filter rejects a miss", !matches(chatRow(), "nutrition"));
+
+// openingFor(): derived from the record, never a table keyed by name.
+const localOpen = openingFor(chatRow());
+check("the opening names the Butler", localOpen.title.includes("health"));
+check("it repeats the directive its owner wrote", localOpen.blurb.includes("keeps track of training and sleep"));
+check("a household Butler states its ceiling", localOpen.blurb.includes("cannot touch the home lab"));
+const opsOpen = openingFor(chatRow({ name: "ops", surface: "admin" }));
+check("an operator Butler states a different one", opsOpen.blurb.includes("waits for your approval"));
+check("the placeholder names the Butler", opsOpen.placeholder.includes("ops"));
+
+// The blocked strip explains a Butler that cannot answer, and names the
+// reason rather than saying "unavailable".
+const blockedOff = renderToString(h(BlockedStrip, {
+  row: chatRow({ modelEnabled: false }, { reachable: false }), onManage: () => {},
+}));
+check("a turned-off model says it is turned off", text(blockedOff).includes("qwen3.5:4b is turned off"), text(blockedOff));
+check("and offers the way to fix it", blockedOff.includes("Change its model"), blockedOff);
+const blockedDown = renderToString(h(BlockedStrip, {
+  row: chatRow({}, { reachable: false }), onManage: () => {},
+}));
+check("a model that is not answering says that instead", text(blockedDown).includes("is not answering"), text(blockedDown));
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

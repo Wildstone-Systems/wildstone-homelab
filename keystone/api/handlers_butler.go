@@ -332,8 +332,27 @@ func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (
 		// refuses it at the task, which is where the guarantee belongs —
 		// the task snapshotted which Butler it runs as, and honouring a
 		// new name here would put one Butler's model in front of
-		// material another gathered (ADR-W031 A4). Naming the same one
-		// is harmless and left to that check rather than duplicated.
+		// material another gathered (ADR-W031 A4).
+		//
+		// The session's OWN stamp decides which Butler continues it.
+		// Before the stamp existed the name had to come from the caller
+		// or be resolved from the surface, and resolving it stopped
+		// working the moment a surface had two Butlers: Sole() answers
+		// ambiguous, and a conversation somebody was in the middle of
+		// fails with a message about there being more than one. The
+		// session already knows; ask it.
+		//
+		// A caller naming a DIFFERENT Butler is refused here rather than
+		// quietly ignored, because "I sent this to nutrition" and "this
+		// went to health" must not both be true of one message.
+		if sess.Butler != "" {
+			if named != "" && named != sess.Butler {
+				return nil, http.StatusConflict, fmt.Errorf(
+					"session %s belongs to %s, so it cannot be continued as %s — start a new conversation with %s instead",
+					sess.ID, sess.Butler, named, named)
+			}
+			named = sess.Butler
+		}
 		if sess.Surface == runtimedb.ButlerSurfaceFamily {
 			return s.askNamedFamilyButler(r.Context(), message, named, sess.ActingFor, "", false, actingAsOwner(id), prior)
 		}

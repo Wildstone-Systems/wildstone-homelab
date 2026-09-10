@@ -188,7 +188,7 @@ export function Shell() {
           <ErrorLine error={error} />
           {view === "home" && <Home onNavigate={setView} />}
           {view === "services" && <Services />}
-          {view === "butler" && <Butler onEyebrow={setEyebrowOverride} />}
+          {view === "butler" && <Butler onEyebrow={setEyebrowOverride} onNavigate={setView} />}
           {view === "work" && <Work />}
           {view === "authority" && <ButlerAuthority />}
           {view === "memory" && <Memory />}

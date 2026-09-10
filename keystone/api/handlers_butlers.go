@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
@@ -625,6 +626,67 @@ func (s *Server) butlerImpact(r *http.Request, _ principal.Identity) (any, int, 
 		return nil, http.StatusInternalServerError, err
 	}
 	return impact, http.StatusOK, nil
+}
+
+// butlerStatus answers "what is answering, and what may it do" for one
+// named Butler.
+//
+// The Butler screen's backend chip used to read the DEPLOYMENT's status
+// — one provider, one model, one tool list — which was true while there
+// was one Butler and became a different Butler's answer the moment
+// there were several. This is that question asked of a Butler.
+//
+// Mode is the route's probe verdict rather than a second opinion about
+// it, and the tools are the ones this Butler would actually be offered:
+// the same manifest the Tools tab renders, so a person cannot be told
+// two things about one session.
+func (s *Server) butlerStatus(r *http.Request, _ principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	b, err := s.DB.GetButler(name)
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, http.StatusNotFound, fmt.Errorf("no butler named %q", name)
+	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	mode := string(runtimedb.ButlerModeFull)
+	if !b.CarriesActionAuthority() {
+		mode = string(runtimedb.ButlerModeQAOnly)
+	}
+	out := map[string]any{
+		"configured": true,
+		"butler":     b.Name,
+		"provider":   b.Provider,
+		"model":      b.ProviderModel,
+		"endpoint":   b.Endpoint,
+		"mode":       mode,
+	}
+	// A Butler that cannot answer says why, and says it from the model's
+	// own readiness rather than from a sentence this handler invented.
+	if !b.Reachable() {
+		out["configured"] = false
+		// The detail belongs to the MODEL, not the Butler: three
+		// Butlers on one unreachable model fail for one reason, and it
+		// is the model that knows what the provider said.
+		why := ""
+		if m, err := s.DB.GetModel(b.Model); err == nil {
+			why = m.ReadinessDetail
+		}
+		if !b.ModelEnabled {
+			why = fmt.Sprintf("%s is turned off", b.Model)
+		}
+		if why == "" {
+			why = fmt.Sprintf("%s is not answering", b.Model)
+		}
+		out["reason"] = why
+	}
+	tools := []string{}
+	for name := range s.availableTools(b.Profile, !b.CarriesActionAuthority()) {
+		tools = append(tools, name)
+	}
+	sort.Strings(tools)
+	out["tools"] = tools
+	return out, http.StatusOK, nil
 }
 
 // butlerTools is what ONE Butler may actually do, answered by the same
