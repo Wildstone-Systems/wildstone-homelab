@@ -1,112 +1,70 @@
-# Gap report: repository against the architecture baseline
+# Gap register: repository against the architecture baseline
 
 Tracked by [#151](https://github.com/chickenrat17/wildstone-homelab/issues/151).
-Written one section at a time by the audit slices; see
-[`README.md`](README.md) for how to run one.
+See [`README.md`](README.md) for how to run a slice.
 
-**Fill your section. Do not restructure the file.** Sections are
-written in parallel and this has to merge.
+**One file per slice, and no session writes into another's.** The
+slices run in parallel from independent sessions, so a single shared
+document would conflict on every merge — not because the sections
+overlap but because the file does. This page is an index and holds no
+findings of its own.
 
-Every claim carries evidence. Status is one of **implemented**,
-**partial**, **missing**, **unverified** — and `implemented` means
-something calls it, not that the code exists.
+| Slice | Issue | Findings |
+|---|---|---|
+| Bot routing and per-Butler chat connections | [#153](https://github.com/chickenrat17/wildstone-homelab/issues/153) | [`findings/153-bot-routing.md`](findings/153-bot-routing.md) |
+| Routine authoring, execution, approval integrity | [#154](https://github.com/chickenrat17/wildstone-homelab/issues/154) | [`findings/154-routines.md`](findings/154-routines.md) |
+| Identity and authorization | [#155](https://github.com/chickenrat17/wildstone-homelab/issues/155) | [`findings/155-identity.md`](findings/155-identity.md) |
+| Shared memory, audiences, semantic recall | [#156](https://github.com/chickenrat17/wildstone-homelab/issues/156) | [`findings/156-memory.md`](findings/156-memory.md) |
+| Secrets and privacy gateway | [#157](https://github.com/chickenrat17/wildstone-homelab/issues/157) | [`findings/157-secrets.md`](findings/157-secrets.md) |
+| Durable execution, delegation, lifecycle | [#158](https://github.com/chickenrat17/wildstone-homelab/issues/158) | [`findings/158-execution.md`](findings/158-execution.md) |
 
----
-
-## Status
-
-| Slice | Issue | Status | Audited |
-|---|---|---|---|
-| Bot routing and per-Butler chat connections | [#153](https://github.com/chickenrat17/wildstone-homelab/issues/153) | not started | — |
-| Routine authoring, execution, approval integrity | [#154](https://github.com/chickenrat17/wildstone-homelab/issues/154) | not started | — |
-| Identity and authorization | [#155](https://github.com/chickenrat17/wildstone-homelab/issues/155) | not started | — |
-| Shared memory, audiences, semantic recall | [#156](https://github.com/chickenrat17/wildstone-homelab/issues/156) | not started | — |
-| Secrets and privacy gateway | [#157](https://github.com/chickenrat17/wildstone-homelab/issues/157) | not started | — |
-| Durable execution, delegation, lifecycle | [#158](https://github.com/chickenrat17/wildstone-homelab/issues/158) | not started | — |
+Each file carries its own status in its header, so progress is read
+from the files rather than from a table six sessions would all want to
+edit at once.
 
 ---
 
-## How to write a section
+## Finding identifiers
 
-Copy this shape. A requirements table first, so the coverage is
-countable; then the findings that need more than a row.
+`F-<issue>-<nn>` — `F-153-01`, `F-156-07`. The issue number namespaces
+them, so two slices cannot collide however they are scheduled, and one
+session owning one file means no collision inside it either. Numbering
+is a property of the layout rather than a convention anyone has to
+remember.
 
-    ### <slice name>
+**Never renumber.** A remediation issue may already cite an id, and a
+citation that silently comes to mean a different finding is worse than
+a gap in the sequence. Numbers increase; gaps are fine; withdrawn
+findings are struck through in place with a line saying why.
 
-    Audited <date> at <commit>. Issue #NNN.
+## What the lint checks
 
-    #### Requirements
+`testing/e2e/auditregister_test.go`, which CI runs:
 
-    | # | Baseline | Requirement | Status | Evidence |
-    |---|---|---|---|---|
-    | 1 | §7 | One bot identity per Butler per platform | missing | `keystone/api/handlers_chat_message.go:300` — the address resolves to a Butler, but no binding stores which bot belongs to which |
+- every findings file declares an issue number matching its filename,
+  and a status from the closed set
+- finding ids are well formed, match their file's issue, are unique,
+  and only ever increase
+- every finding carries a status from
+  *implemented / partial / missing / unverified* and a non-empty
+  evidence line
+- this index links every findings file, and every findings file is
+  linked from this index
 
-    #### Acceptance criteria
+It deliberately does not check prose, table contents, or whether a
+finding is any good. It checks the things that break silently when six
+sessions write in parallel.
 
-    | AC | Result | Evidence |
-    |---|---|---|
-    | AC08 | fails | Ran two Butlers against one Telegram account; replies went out as … |
+Run it before committing:
 
-    #### Findings
-
-    **F-NNN-01 — <one line saying what is wrong>**
-    *Status* · *Baseline reference*
-    What the baseline requires, what the code does, how you established
-    it, and what it costs in practice. One or two paragraphs.
-
-    #### Design gaps
-
-    Where the code does something coherent that is not what was wanted.
-    Decisions for the owner, not defects.
-
-    #### Cross-slice
-
-    Findings that belong to another slice. Note and point; do not chase.
-
-    #### ADR amendments required
-
-    Where the baseline supersedes an ADR and the ADR still says
-    otherwise.
-
-Finding IDs are `F-<issue>-<n>` — `F-153-01` — so a remediation issue
-can cite one without ambiguity.
-
----
-
-## Sections
-
-### Bot routing and per-Butler chat connections
-
-*Reserved for [#153](https://github.com/chickenrat17/wildstone-homelab/issues/153). Not yet audited.*
-
-### Routine authoring, execution and approval integrity
-
-*Reserved for [#154](https://github.com/chickenrat17/wildstone-homelab/issues/154). Not yet audited.*
-
-### Identity and authorization
-
-*Reserved for [#155](https://github.com/chickenrat17/wildstone-homelab/issues/155). Not yet audited.*
-
-### Shared memory, audiences and semantic recall
-
-*Reserved for [#156](https://github.com/chickenrat17/wildstone-homelab/issues/156). Not yet audited.*
-
-Findings 1–4 on #151 were established on 2026-09-10 and are inputs to
-this slice, not conclusions of it. Confirm them with evidence in the
-table above rather than restating them.
-
-### Secrets, privacy gateway and external processing
-
-*Reserved for [#157](https://github.com/chickenrat17/wildstone-homelab/issues/157). Not yet audited.*
-
-### Durable execution, recovery, delegation and lifecycle
-
-*Reserved for [#158](https://github.com/chickenrat17/wildstone-homelab/issues/158). Not yet audited.*
+```bash
+cd testing/e2e && go test -run TestAuditRegister ./...
+```
 
 ---
 
 ## Summary
 
-*Written once every slice is in, as the input to remediation planning.
-Counts by state, the findings that block others, and the decisions
+*Written once every slice is in, as the input to remediation planning:
+counts by state, the findings that block others, and the decisions
 needed before any of them can be scheduled.*

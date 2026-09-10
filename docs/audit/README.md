@@ -103,10 +103,27 @@ is a decision to put to the owner, not a defect to file.
 
 ## The deliverable
 
-One section of [`gap-report.md`](gap-report.md), which already has a
-heading reserved for your slice. **Fill your section; do not restructure
-the file.** Several slices are written in parallel and the file has to
-merge.
+**Your own file: `findings/<issue>-<slug>.md`.** It already exists with
+the right header and headings. No other session writes into it, and you
+write into no other — that is what lets six slices run at once without
+a merge conflict on every one of them.
+[`gap-report.md`](gap-report.md) is an index and holds no findings.
+
+Finding ids are `F-<issue>-<nn>`, numbered from 01 and **only ever
+increasing**. Never renumber, even to close a gap: a remediation issue
+may already cite an id, and a citation that quietly comes to mean a
+different finding is worse than a missing number. Withdraw one by
+striking it through in place with a line saying why.
+
+`testing/e2e` lints the shape of all this and CI runs it. Before you
+commit:
+
+```bash
+cd testing/e2e && go test -run TestAuditRegister ./...
+```
+
+It checks ids, statuses, evidence lines and the index — not prose, and
+not whether a finding is any good.
 
 Then comment on your issue with a summary — counts by state, the two or
 three findings that matter most, and anything that needs a decision
