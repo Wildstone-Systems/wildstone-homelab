@@ -204,10 +204,26 @@ func (bs *Butlers) blank(b runtimedb.Butler) Answer {
 
 // task finds the durable task this turn belongs to, or opens one.
 //
-// A follow-up resumes the SAME task. That is what makes a conversation
-// survive a restart without repeating work: the step ledger belongs to
-// the task, so a resumed turn serves an already-verified tool result
-// from the ledger instead of dispatching it a second time.
+// A turn that is still in flight resumes its own task. That is what
+// makes one survive a restart without repeating work: the step ledger
+// belongs to the task, so a resumed turn serves an already-verified
+// tool result from the ledger instead of dispatching it a second time.
+//
+// A FOLLOW-UP opens a new one, and that is the correction. Every turn
+// ends by completing its task — an answer was produced and delivered,
+// which is exactly the evidence completion requires — and completed is
+// terminal by design. So a conversation whose second message tried to
+// resume the first message's task was asking a finished task to carry
+// on, and got told it had finished. One message per conversation, every
+// time.
+//
+// It is also the right answer rather than only the working one. Turn
+// two must not serve turn one's tool results out of the ledger: the
+// house has moved on between them, and "what is unhealthy now" asked
+// twice should not answer twice from one reading.
+//
+// The conversation is the SESSION. The task is one turn's durable work,
+// and its evidence is about that turn.
 func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool, error) {
 	if t.SessionID != "" {
 		existing, err := bs.DB.ButlerTaskForSession(t.SessionID)
@@ -227,7 +243,20 @@ func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool,
 					"butlerlive: conversation %s belongs to %s and cannot be continued by %s (ADR-W031 A4)",
 					t.SessionID, was, b.Name)
 			}
-			return existing, true, nil
+			// Only a task still in flight is resumed. A finished one
+			// belongs to the turn that finished it; this is a new turn
+			// and gets its own, in the same session.
+			//
+			// Cancelled and paused are returned as they are, so the
+			// ledger's own refusal is what the caller sees — "it was
+			// cancelled" is the true answer to a follow-up on a
+			// conversation somebody stopped, and inventing a fresh task
+			// would quietly restart work that was deliberately halted.
+			switch existing.State {
+			case runtimedb.ButlerTaskCompleted, runtimedb.ButlerTaskFailed:
+			default:
+				return existing, true, nil
+			}
 		case errorsIsNotFound(err):
 			// A conversation that predates this wiring, or one whose
 			// task was reaped. Opening a new task is right: it starts an

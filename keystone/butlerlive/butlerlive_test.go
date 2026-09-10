@@ -643,3 +643,52 @@ func TestAnUnpinnedCallerReachesEitherSurface(t *testing.T) {
 		t.Fatalf("an unpinned caller was refused the family butler: %v", err)
 	}
 }
+
+// A conversation can have more than one message.
+//
+// Every turn ends by completing its task — an answer was produced and
+// delivered, which is the evidence completion requires — and completed
+// is terminal by design. A follow-up that resumed the first turn's task
+// was asking a finished task to carry on, so every conversation was one
+// message long and the second got "it already finished as completed".
+//
+// The conversation is the SESSION. A task is one turn's durable work.
+func TestAConversationCanHaveASecondMessage(t *testing.T) {
+	f := newFixture(t)
+
+	first, err := f.butlers.Serve(context.Background(), f.turn("alfred", "what is unhealthy?"))
+	if err != nil {
+		t.Fatalf("first message: %v", err)
+	}
+	if first.TaskID == "" {
+		t.Fatal("the first turn recorded no task")
+	}
+
+	// The API records the session after the answer and points the task
+	// at it, which is the order production runs in.
+	sessionID, err := f.db.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "butler", ActingFor: "mika", Provider: "ollama",
+		Mode: runtimedb.ButlerModeFull, Surface: runtimedb.ButlerSurfaceAdmin,
+		Butler: "alfred", FinalText: first.FinalText,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.SetButlerTaskSession(first.TaskID, sessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	follow := f.turn("alfred", "and why?")
+	follow.SessionID = sessionID
+	follow.History = []provider.Message{{Role: "user", Text: "what is unhealthy?"}}
+	second, err := f.butlers.Serve(context.Background(), follow)
+	if err != nil {
+		t.Fatalf("follow-up refused: %v", err)
+	}
+	// A new turn, its own task: turn two must not serve turn one's tool
+	// results out of the ledger, because the house moved on between
+	// them.
+	if second.TaskID == first.TaskID {
+		t.Fatalf("the follow-up resumed the finished task %s", first.TaskID)
+	}
+}
