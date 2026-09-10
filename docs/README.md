@@ -27,7 +27,22 @@ The design brief (`00-design-brief-v0.1.md`) and architecture proposal
 (`01-architecture-proposal.md`) remain in the reference deployment repo:
 `chickenrat17/homelab-config` → `docs/architecture/wildstone/`.
 
-Proposed Butler architecture (discussion, not as-built documentation):
+Agent / Butler architecture. **Start with the baseline** — it is the
+accepted statement of intent and supersedes conflicting ADR language:
 
-- [ADR-W030](decisions/ADR-W030-butler-continuity-durable-work-and-scoped-integrations.md) — continuity, durable work, and scoped integrations.
+- [Agent architecture baseline](agent-architecture-baseline.md) — accepted
+  2026-09-10. What a Butler is, shared memory with audiences, secrets and
+  the privacy gateway, routines, and the AC01–AC16 acceptance criteria.
+  Generated from a `.docx` original; regenerate with
+  `scripts/docx-to-md.py`. Tracked by
+  [#151](https://github.com/chickenrat17/wildstone-homelab/issues/151).
+
+Supporting, and older than the baseline:
+
+- [ADR-W030](decisions/ADR-W030-butler-continuity-durable-work-and-scoped-integrations.md) — continuity, durable work, and scoped integrations. A3's deferral of vector retrieval and W031 A4's per-Butler memory scope are both superseded by the baseline.
+- [ADR-W031](decisions/ADR-W031-butlers-are-user-created-specialists.md) — Butlers as user-created specialists.
 - [Capability and design brief](butler-capability-and-design-brief.md) — non-normative rationale, deployment examples, and delivery sequencing behind the ADR.
+- `butler-memory.md` — **notes, not a source.** Generated on 2026-09-10 by
+  reading existing code; its step ordering was invented and is what
+  deferred semantic recall. Kept for its accurate inventory of what
+  `runtimedb` already contains.

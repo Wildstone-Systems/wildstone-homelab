@@ -1,11 +1,29 @@
 # Butler memory: what exists, and the four seams that would finish it
 
-- **Status:** steps 1 and 2 are built — retrieval reaches a session, and
-  a person can ask a Butler to keep something. Steps 3 to 7 are still
-  plan.
-- **Specifies:** ADR-W030 A2 (permission-first retrieval), A3 (owned data
+> **Notes, not a source.** This file was generated on 2026-09-10 by
+> reading the existing code. It is an accurate inventory of what
+> `keystone/runtimedb` already contains, and that part is still useful.
+>
+> Its "order of work" is not. That ordering was invented here, not
+> derived from any accepted design, and it is what pushed semantic
+> recall to step 6 — leaving a memory feature that cannot answer the
+> design brief's own cilantro example. It also encoded a per-Butler
+> memory scope that the baseline explicitly rejects.
+>
+> The accepted statement of intent is
+> [the agent architecture baseline](agent-architecture-baseline.md).
+> Read that first, and treat anything below as observation about the
+> code rather than as a plan. Remaining work is tracked from
+> [#151](https://github.com/chickenrat17/wildstone-homelab/issues/151).
+
+- **Status:** steps 1 and 2 of the ordering below were built and
+  deployed. Step 3 was started and parked. Steps 4 to 7 are superseded
+  by the baseline audit.
+- **Describes:** ADR-W030 A2 (permission-first retrieval), A3 (owned data
   with derived retrieval indexes), A3.1 (acceptance boundaries), A6
   (freshness); ADR-W031 A4 (a Butler's scope), A5 (the shared pool).
+  A3's deferral of vector retrieval and W031 A4's scope are both
+  superseded by baseline §6/§7.
 
 ---
 
