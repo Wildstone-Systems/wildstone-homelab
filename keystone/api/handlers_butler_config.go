@@ -37,13 +37,13 @@ type butlerModel struct {
 	Local      bool   `json:"local"`
 }
 
-// listButlerModels asks a backend what it can actually run.
+// listOfferedModels asks a backend what it can actually run.
 //
 // The endpoint is a query parameter rather than the configured one, so
 // an operator can see a candidate's models BEFORE committing to it —
 // choosing a model you cannot see is how a typo becomes a support
 // question.
-func (s *Server) listButlerModels(r *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) listOfferedModels(r *http.Request, _ principal.Identity) (any, int, error) {
 	endpoint := r.URL.Query().Get("endpoint")
 	if endpoint == "" && s.ButlerHost != nil {
 		endpoint = s.ButlerHost.Endpoint

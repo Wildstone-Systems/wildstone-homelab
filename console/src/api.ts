@@ -441,7 +441,7 @@ export interface IdentityNotification {
   note: string;
 }
 
-export interface ButlerModel {
+export interface OfferedModel {
   name: string;
   sizeBytes?: number;
   parameters?: string;
@@ -789,11 +789,19 @@ export interface ConnectionSecret {
 // Where a question may be sent (ADR-W030 A9). A route's kind is the data
 // boundary: cloud means material sent to it leaves the house, and a
 // route cannot change kind.
-export interface ModelRoute {
+// One named model a Butler can be assigned to: which model, where it
+// runs, and whether asking it something leaves the house.
+//
+// The bundle exists rather than a bare model string on the Butler
+// because none of its parts implies the others. One Ollama endpoint
+// serves gemma4:e4b off local disk and gemma4:31b-cloud from Ollama's
+// own infrastructure, so neither the endpoint nor the provider says
+// where the material goes — kind does.
+export interface Model {
   name: string;
   kind: "local" | "cloud";
   provider: string;
-  model?: string;
+  providerModel?: string;
   endpoint?: string;
   readiness: "unprobed" | "ready" | "qa-only" | "unavailable";
   readinessDetail?: string;
@@ -811,15 +819,18 @@ export interface Butler {
   directive?: string;
   surface: ButlerSurface;
   profile: string;
-  route: string;
-  routeKind: "local" | "cloud";
-  model?: string;
+  // model is the assigned model, by name. providerModel is what the
+  // provider itself calls it, which is a different and often more
+  // specific string: assigned "kitchen-box", answered by "qwen3.5:4b".
+  model: string;
+  modelKind: "local" | "cloud";
+  providerModel?: string;
   provider?: string;
   endpoint?: string;
   readiness: "unprobed" | "ready" | "qa-only" | "unavailable";
-  // The ROUTE's switch, not the Butler's: turning a route off has to
+  // The MODEL's switch, not the Butler's: turning a model off has to
   // stop the Butlers already assigned to it.
-  routeEnabled: boolean;
+  modelEnabled: boolean;
   enabled: boolean;
   createdAt: string;
   createdBy: string;
@@ -853,7 +864,7 @@ export interface ButlerRow {
 export interface ButlerScope {
   butler: string;
   model: string;
-  routeKind: "local" | "cloud";
+  modelKind: "local" | "cloud";
   connections: string[] | null;
   narrowedTools?: Record<string, string> | null;
   memoryCount: number;
@@ -927,20 +938,20 @@ export interface HouseholdRoutine {
 
 export const api = {
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
-  butlerModels: (endpoint?: string) =>
-    call<{ endpoint: string; models: ButlerModel[] }>(
+  offeredModels: (endpoint?: string) =>
+    call<{ endpoint: string; models: OfferedModel[] }>(
       "GET",
       `/api/v1/butler/models${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ""}`,
     ),
-  modelRoutes: () =>
-    call<{ routes: { route: ModelRoute; carriesActions: boolean; leavesTheHouse: boolean }[] | null }>(
+  models: () =>
+    call<{ models: { model: Model; carriesActions: boolean; leavesTheHouse: boolean }[] | null }>(
       "GET",
-      "/api/v1/butler/routes",
+      "/api/v1/butler/models",
     ),
-  setModelRouteEnabled: (name: string, enabled: boolean) =>
+  setModelEnabled: (name: string, enabled: boolean) =>
     call<{ enabled: boolean }>(
       "POST",
-      `/api/v1/butler/routes/${encodeURIComponent(name)}/enabled`,
+      `/api/v1/butler/models/${encodeURIComponent(name)}/enabled`,
       { enabled },
     ),
   butlers: () => call<{ butlers: ButlerRow[] | null }>("GET", "/api/v1/butlers"),
@@ -949,7 +960,7 @@ export const api = {
     directive?: string;
     surface: string;
     profile: string;
-    route: string;
+    model: string;
   }) => call<ButlerRow>("POST", "/api/v1/butlers", b),
   butlerScope: (name: string) =>
     call<{ scope: ButlerScope; people: string[] | null; addresses: ButlerAddress[] | null }>(
@@ -959,11 +970,11 @@ export const api = {
   // Applies immediately (A8). crossesToCloud is set when this move
   // sends an open conversation's history out of the house on the next
   // message, and warning carries the sentence to show.
-  setButlerRoute: (name: string, route: string) =>
+  setButlerModel: (name: string, model: string) =>
     call<ButlerRow & { crossesToCloud?: boolean; warning?: string; previousModel?: string }>(
       "PUT",
-      `/api/v1/butlers/${encodeURIComponent(name)}/route`,
-      { route },
+      `/api/v1/butlers/${encodeURIComponent(name)}/model`,
+      { model },
     ),
   setButlerAccess: (name: string, member: string, allow: boolean) =>
     call<{ people: string[] | null }>(

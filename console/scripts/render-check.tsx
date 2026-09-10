@@ -64,7 +64,7 @@ import { NewButlerDialog } from "../src/views/butlers/NewButlerDialog";
 import { RouteList } from "../src/views/butlers/TabModel";
 import { Confirm } from "../src/ui/Confirm";
 import { Tabs } from "../src/ui/Tabs";
-import type { ButlerRow as ButlerRosterRow, ModelRoute } from "../src/api";
+import type { ButlerRow as ButlerRosterRow, Model } from "../src/api";
 import { ConnectChat, InstallStep, InviteStep, surfaceOf, vendorSecret } from "../src/views/ConnectChat";
 
 // Exactly what GET /api/v1/packages serves, copied from the live VM.
@@ -1404,19 +1404,19 @@ check("the raw code is not shown beside it", !linked.includes(">K7QP-3XMR-9TWD<"
 // seeing where its words go, so these checks are mostly about the row
 // and the drawer telling the truth rather than about them rendering.
 
-const route = (over: Partial<ModelRoute> = {}): ModelRoute => ({
+const localModel = (over: Partial<Model> = {}): Model => ({
   name: "llama3.1:8b", kind: "local", provider: "ollama", endpoint: "http://studio:11434",
   readiness: "ready", enabled: true, ...over,
 });
-const CLOUD = route({ name: "claude-sonnet", kind: "cloud", provider: "anthropic" });
-const QA = route({ name: "gemma2:27b", readiness: "qa-only", readinessDetail: "failed tool check" });
-const OFF = route({ name: "gpt-4o", kind: "cloud", provider: "openai", enabled: false });
+const CLOUD = localModel({ name: "claude-sonnet", kind: "cloud", provider: "anthropic" });
+const QA = localModel({ name: "gemma2:27b", readiness: "qa-only", readinessDetail: "failed tool check" });
+const OFF = localModel({ name: "gpt-4o", kind: "cloud", provider: "openai", enabled: false });
 
 const bRow = (over: Partial<ButlerRosterRow["butler"]> = {}, row: Partial<ButlerRosterRow> = {}): ButlerRosterRow => ({
   butler: {
     name: "health", directive: "keeps track of training and sleep", surface: "family",
-    profile: "household", route: "llama3.1:8b", routeKind: "local", provider: "ollama",
-    readiness: "ready", routeEnabled: true, enabled: true,
+    profile: "household", model: "llama3.1:8b", modelKind: "local", provider: "ollama",
+    readiness: "ready", modelEnabled: true, enabled: true,
     createdAt: "2026-03-14T09:00:00Z", createdBy: "tom", updatedAt: "2026-09-09T09:00:00Z",
     ...over,
   },
@@ -1426,11 +1426,11 @@ const bRow = (over: Partial<ButlerRosterRow["butler"]> = {}, row: Partial<Butler
 
 // The destination is in the row, not one click away. This is A2 and A4
 // rendered, and it is the single thing this screen exists to get right.
-const localRow = renderToString(h(RosterRow, { row: bRow(), selected: false, onOpen: () => {}, route: route() }));
+const localRow = renderToString(h(RosterRow, { row: bRow(), selected: false, onOpen: () => {}, model: localModel() }));
 check("a local Butler's row says its words stay in the house", localRow.includes("stays in the house"), localRow);
 const cloudRow = renderToString(h(RosterRow, {
-  row: bRow({ name: "nutrition", route: "claude-sonnet", routeKind: "cloud", provider: "anthropic" }, { leavesTheHouse: true }),
-  selected: false, onOpen: () => {}, route: CLOUD,
+  row: bRow({ name: "nutrition", model: "claude-sonnet", modelKind: "cloud", provider: "anthropic" }, { leavesTheHouse: true }),
+  selected: false, onOpen: () => {}, model: CLOUD,
 }));
 check("a cloud Butler's row says so without opening it", cloudRow.includes("leaves the house"), cloudRow);
 
@@ -1440,37 +1440,37 @@ check("a cloud Butler's row says so without opening it", cloudRow.includes("leav
 // flag says otherwise must follow the flag — and be a server bug, not a
 // screen that quietly disagrees with the API.
 const disagreeing = renderToString(h(RosterRow, {
-  row: bRow({ route: "claude-sonnet", routeKind: "cloud" }, { leavesTheHouse: false }),
-  selected: false, onOpen: () => {}, route: CLOUD,
+  row: bRow({ model: "claude-sonnet", modelKind: "cloud" }, { leavesTheHouse: false }),
+  selected: false, onOpen: () => {}, model: CLOUD,
 }));
 check("the destination pill follows leavesTheHouse, not the route kind", disagreeing.includes("stays in the house"), disagreeing);
 
 // A Butler nobody can reach is flagged in the roster, because a Butler
 // that answers nobody looks exactly like a working one otherwise.
-const unreachable = renderToString(h(RosterRow, { row: bRow({}, { people: 0 }), selected: false, onOpen: () => {}, route: route() }));
+const unreachable = renderToString(h(RosterRow, { row: bRow({}, { people: 0 }), selected: false, onOpen: () => {}, model: localModel() }));
 check("a Butler with nobody ticked says so on the row", unreachable.includes("nobody can talk to it"), unreachable);
 
 const retiredRow = renderToString(h(RosterRow, {
-  row: bRow({ retiredAt: "2026-08-12T00:00:00Z" }), selected: false, onOpen: () => {}, route: route(),
+  row: bRow({ retiredAt: "2026-08-12T00:00:00Z" }), selected: false, onOpen: () => {}, model: localModel(),
 }));
 check("a retired Butler reads as kept, not deleted", retiredRow.includes("kept, not deleted"), retiredRow);
 
 // healthOf is the one place readiness becomes words.
-check("a working Butler is ready", butlerHealthOf(bRow(), route()).label === "ready");
+check("a working Butler is ready", butlerHealthOf(bRow(), localModel()).label === "ready");
 check("a Butler that failed its tool probe answers questions only",
   butlerHealthOf(bRow({}, { carriesActions: false }), QA).label === "questions only");
 check("the failure detail comes from the route, not invented",
   butlerHealthOf(bRow({}, { carriesActions: false }), QA).detail === "failed tool check");
 check("a Butler on a disabled route names the route, not a generic outage",
-  butlerHealthOf(bRow({ routeEnabled: false }, { reachable: false }), OFF).detail.includes("turned off in Model routes"));
+  butlerHealthOf(bRow({ modelEnabled: false }, { reachable: false }), OFF).detail.includes("turned off in Model routes"));
 check("retired outranks unreachable — it is not answering on purpose",
-  butlerHealthOf(bRow({ retiredAt: "2026-08-12T00:00:00Z" }, { reachable: false }), route()).kind === "mute");
+  butlerHealthOf(bRow({ retiredAt: "2026-08-12T00:00:00Z" }, { reachable: false }), localModel()).kind === "mute");
 
 // The filters. Retired is the only one that inverts the predicate, and
 // it is the one worth pinning: every other filter narrows the LIVE set.
 const roster = [
   bRow(),
-  bRow({ name: "nutrition", directive: "meal planning", route: "claude-sonnet", routeKind: "cloud" }, { leavesTheHouse: true, reachable: false }),
+  bRow({ name: "nutrition", directive: "meal planning", model: "claude-sonnet", modelKind: "cloud" }, { leavesTheHouse: true, reachable: false }),
   bRow({ name: "ops", directive: "diagnoses services", surface: "admin", profile: "operator" }, { carriesActions: false }),
   bRow({ name: "old", directive: "retired job", retiredAt: "2026-08-12T00:00:00Z" }),
 ];
@@ -1494,7 +1494,7 @@ check("the tool denominator is what is available here", toolLine(bRow({}, { tool
 
 // The banner names the Butlers and what is wrong with each.
 const banner = renderToString(h(AttentionBanner, {
-  rows: [roster[1], roster[2]], routes: [route(), CLOUD, QA], onShow: () => {},
+  rows: [roster[1], roster[2]], routes: [localModel(), CLOUD, QA], onShow: () => {},
 }));
 check("the banner names each Butler and its fault", banner.includes("nutrition can&#x27;t reach its model") && banner.includes("ops answers questions only"), banner);
 
@@ -1557,7 +1557,7 @@ check("the crossing confirmation names the provider", cloudConfirm.includes("goe
 check("cancel names what is kept, not the word Cancel", cloudConfirm.includes("Keep llama3.1:8b") && !cloudConfirm.includes(">Cancel<"), cloudConfirm);
 
 // The route lists put the boundary in a heading, not a suffix.
-const local = renderToString(h(RouteList, { title: "ON YOUR HARDWARE", routes: [route(), QA], current: "llama3.1:8b", busy: false, onPick: () => {} }));
+const local = renderToString(h(RouteList, { title: "ON YOUR HARDWARE", routes: [localModel(), QA], current: "llama3.1:8b", busy: false, onPick: () => {} }));
 check("the selected route is the checked radio", local.includes('aria-checked="true"'), local);
 check("a qa-only route says questions only", local.includes("questions only"), local);
 const cloudList = renderToString(h(RouteList, { title: "OUTSIDE THE HOUSE", routes: [CLOUD, OFF], current: "claude-sonnet", busy: false, onPick: () => {} }));
@@ -1571,7 +1571,7 @@ check("a Butler stranded on a disabled route still shows that route as its own",
 
 // The create dialog restates the whole choice as a sentence.
 const dialog = renderToString(h(NewButlerDialog, {
-  routes: [route(), CLOUD], existing: ["health"], say: () => {}, onClose: () => {}, onCreated: () => {},
+  routes: [localModel(), CLOUD], existing: ["health"], say: () => {}, onClose: () => {}, onCreated: () => {},
 }));
 check("the create dialog summarises what is being made", dialog.includes("YOU ARE MAKING"), dialog);
 check("it says nobody can talk to it yet", dialog.includes("Nobody can talk to it until you give it an address"), dialog);
@@ -1595,7 +1595,7 @@ check("the retired filter says nothing has been retired", noneRetired.includes("
 const noRoutes = renderToString(h(NoButlers, { routes: [], onNew: () => {} }));
 check("with no model routes the empty state says a Butler needs a model", noRoutes.includes("A Butler needs a model to be anything"), noRoutes);
 check("and the button is disabled until there is one", noRoutes.includes("disabled"), noRoutes);
-const ready = renderToString(h(NoButlers, { routes: [route()], onNew: () => {} }));
+const ready = renderToString(h(NoButlers, { routes: [localModel()], onNew: () => {} }));
 check("with a route the empty state offers to make one", !ready.includes("A Butler needs a model to be anything"), ready);
 
 // The screen itself, which must never render blank while it loads.

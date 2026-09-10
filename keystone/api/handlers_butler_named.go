@@ -221,7 +221,7 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 	// one anybody can ask later.
 	s.event("butler.session", "", principal.Identity{Name: butlerPrincipal, ActingFor: turn.Member},
 		fmt.Sprintf("session %s as %s on %s (%s): %d tool calls, %d proposals, task %s",
-			sessionID, ans.Butler, ans.Model, ans.RouteKind, len(ans.Calls), len(planIDs), ans.TaskID))
+			sessionID, ans.Butler, ans.Model, ans.ModelKind, len(ans.Calls), len(planIDs), ans.TaskID))
 
 	return askResponse{
 		SessionID:      sessionID,

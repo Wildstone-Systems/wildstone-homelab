@@ -308,7 +308,7 @@ func (s *Server) Handler() http.Handler {
 	// Admin-only: it reaches out to an operator-supplied address from
 	// inside the control plane, which is not a read a viewer should be
 	// able to make.
-	mux.Handle("GET /api/v1/butler/models", s.handle(principal.VerbManage, s.listButlerModels))
+	mux.Handle("GET /api/v1/butler/models/offered", s.handle(principal.VerbManage, s.listOfferedModels))
 	mux.Handle("GET /api/v1/butler/config", s.handle(principal.VerbManage, s.getButlerConfig))
 	mux.Handle("PUT /api/v1/butler/config", s.handle(principal.VerbManage, s.setButlerConfig))
 	// The administrator's side of integrations. Every one needs manage.
@@ -390,8 +390,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/notices/preferences", s.handle(principal.VerbRead, s.getNoticePreferences))
 	mux.Handle("PUT /api/v1/notices/preferences", s.handle(principal.VerbRead, s.setNoticePreferences))
 	mux.Handle("PUT /api/v1/notices/kinds", s.handle(principal.VerbManage, s.setNoticeKind))
-	mux.Handle("GET /api/v1/butler/routes", s.handle(principal.VerbRead, s.listModelRoutes))
-	mux.Handle("PUT /api/v1/butler/routes", s.handle(principal.VerbManage, s.upsertModelRoute))
+	mux.Handle("GET /api/v1/butler/models", s.handle(principal.VerbRead, s.listModels))
+	mux.Handle("PUT /api/v1/butler/models", s.handle(principal.VerbManage, s.upsertModel))
 
 	// Butlers (ADR-W031). Reading the roster is a read; everything that
 	// shapes a Butler — its model, its people, its connections, its
@@ -407,7 +407,7 @@ func (s *Server) Handler() http.Handler {
 	// tables, and folding it in would make one endpoint's cost depend
 	// on wiring the other knows nothing about.
 	mux.Handle("GET /api/v1/butlers/{name}/tools", s.handle(principal.VerbRead, s.butlerTools))
-	mux.Handle("PUT /api/v1/butlers/{name}/route", s.handle(principal.VerbManage, s.setButlerRoute))
+	mux.Handle("PUT /api/v1/butlers/{name}/model", s.handle(principal.VerbManage, s.setButlerModel))
 	mux.Handle("PUT /api/v1/butlers/{name}/directive", s.handle(principal.VerbManage, s.setButlerDirective))
 	mux.Handle("PUT /api/v1/butlers/{name}/access", s.handle(principal.VerbManage, s.setButlerAccess))
 	mux.Handle("PUT /api/v1/butlers/{name}/connection", s.handle(principal.VerbManage, s.setButlerConnection))
@@ -420,8 +420,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/butlers/{name}/restore", s.handle(principal.VerbManage, s.restoreButler))
 	mux.Handle("POST /api/v1/butlers/{name}/duplicate", s.handle(principal.VerbManage, s.duplicateButler))
 	mux.Handle("GET /api/v1/butlers/{name}/impact", s.handle(principal.VerbRead, s.butlerImpact))
-	mux.Handle("POST /api/v1/butler/routes/{name}/readiness", s.handle(principal.VerbManage, s.recordRouteReadiness))
-	mux.Handle("POST /api/v1/butler/routes/{name}/enabled", s.handle(principal.VerbManage, s.setModelRouteEnabled))
+	mux.Handle("POST /api/v1/butler/models/{name}/readiness", s.handle(principal.VerbManage, s.recordModelReadiness))
+	mux.Handle("POST /api/v1/butler/models/{name}/enabled", s.handle(principal.VerbManage, s.setModelEnabled))
 	mux.Handle("GET /api/v1/butler/settings", s.handle(principal.VerbManage, s.getButlerSettings))
 	mux.Handle("PUT /api/v1/butler/settings", s.handle(principal.VerbManage, s.setButlerSettings))
 	mux.Handle("POST /api/v1/butler/ask", s.handle(principal.VerbRead, s.askButler))

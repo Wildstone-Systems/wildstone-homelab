@@ -173,14 +173,14 @@ func newFixture(t *testing.T) *fixture {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	for _, r := range []runtimedb.ModelRoute{
-		{Name: "kitchen-box", Kind: runtimedb.RouteLocal, Provider: "ollama", Model: "llama",
-			Endpoint: "http://kitchen:11434", Readiness: runtimedb.RouteReady, Enabled: true},
-		{Name: "cloud", Kind: runtimedb.RouteCloud, Provider: "anthropic", Model: "sonnet",
-			Readiness: runtimedb.RouteReady, Enabled: true},
+	for _, r := range []runtimedb.Model{
+		{Name: "kitchen-box", Kind: runtimedb.ModelLocal, Provider: "ollama", ProviderModel: "llama",
+			Endpoint: "http://kitchen:11434", Readiness: runtimedb.ModelReady, Enabled: true},
+		{Name: "cloud", Kind: runtimedb.ModelCloud, Provider: "anthropic", ProviderModel: "sonnet",
+			Readiness: runtimedb.ModelReady, Enabled: true},
 	} {
-		if err := db.UpsertModelRoute(r, "root-admin"); err != nil {
-			t.Fatalf("UpsertModelRoute(%s): %v", r.Name, err)
+		if err := db.UpsertModel(r, "root-admin"); err != nil {
+			t.Fatalf("UpsertModel(%s): %v", r.Name, err)
 		}
 	}
 	for _, m := range []struct{ name, profile string }{
@@ -199,7 +199,7 @@ func newFixture(t *testing.T) *fixture {
 		if _, err := db.CreateButler(runtimedb.Butler{
 			Name: b.name, Directive: "look after the " + b.name + " things",
 			Surface: runtimedb.ButlerSurfaceAdmin, Profile: runtimedb.ProfileOperator,
-			Route: b.route,
+			Model: b.route,
 		}, "mika"); err != nil {
 			t.Fatalf("CreateButler(%s): %v", b.name, err)
 		}
@@ -226,8 +226,8 @@ func newFixture(t *testing.T) *fixture {
 		DB:     db,
 		Ledger: butlerstore.New(db, lease),
 		Providers: func(b runtimedb.Butler) (provider.Provider, error) {
-			switch b.RouteKind {
-			case runtimedb.RouteLocal:
+			switch b.ModelKind {
+			case runtimedb.ModelLocal:
 				return f.local, nil
 			default:
 				return f.cloud, nil
@@ -277,8 +277,8 @@ func TestLocalButlerMaterialNeverReachesTheCloudModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Serve: %v", err)
 	}
-	if ans.Butler != "alfred" || ans.RouteKind != runtimedb.RouteLocal {
-		t.Fatalf("answered as %s on a %s route, want alfred/local", ans.Butler, ans.RouteKind)
+	if ans.Butler != "alfred" || ans.ModelKind != runtimedb.ModelLocal {
+		t.Fatalf("answered as %s on a %s route, want alfred/local", ans.Butler, ans.ModelKind)
 	}
 	if !f.local.sawText(secret) {
 		t.Fatalf("the local model never received the message it was addressed")
@@ -313,7 +313,7 @@ func TestLocalButlerMaterialNeverReachesTheCloudModel(t *testing.T) {
 // cloud model would satisfy an error-only assertion.
 func TestAnUnreachableButlerWaitsAndCallsNoOtherModel(t *testing.T) {
 	f := newFixture(t)
-	if err := f.db.SetModelRouteEnabled("kitchen-box", false, "mika"); err != nil {
+	if err := f.db.SetModelEnabled("kitchen-box", false, "mika"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -572,7 +572,7 @@ func TestOwnerIsStillRefusedByTheThingsThatAreNotPermissions(t *testing.T) {
 	}
 
 	// A6: a model that is not there.
-	if err := f.db.SetModelRouteEnabled("kitchen-box", false, "mika"); err != nil {
+	if err := f.db.SetModelEnabled("kitchen-box", false, "mika"); err != nil {
 		t.Fatal(err)
 	}
 	down := Turn{Butler: "alfred", Member: "mika", Text: "hello", AsOwner: true}

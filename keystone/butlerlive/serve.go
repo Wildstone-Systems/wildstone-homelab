@@ -59,7 +59,7 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 		// to reach it, and gets the same answer for the same reason.
 		return bs.blank(b),
 			fmt.Errorf("%w: %s runs on %s, which could not be reached: %v (ADR-W031 A6)",
-				runtimedb.ErrButlerUnreachable, b.Name, b.Route, err)
+				runtimedb.ErrButlerUnreachable, b.Name, b.Model, err)
 	}
 
 	task, resumed, err := bs.task(b, t)
@@ -122,7 +122,7 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 		// Which model saw this, by name. A2's promise is only worth
 		// something if it is written down somewhere a person can read.
 		bs.Log.Info("butler answered", "butler", b.Name, "model", b.Model,
-			"route", b.Route, "kind", b.RouteKind, "task", task.ID,
+			"model", b.Model, "kind", b.ModelKind, "task", task.ID,
 			"member", t.Member, "resumed", resumed)
 	}
 	return answer, nil
@@ -192,7 +192,7 @@ func (bs *Butlers) blank(b runtimedb.Butler) Answer {
 	return Answer{
 		Butler:    b.Name,
 		Model:     b.Model,
-		RouteKind: b.RouteKind,
+		ModelKind: b.ModelKind,
 		Provider:  b.Provider,
 		Surface:   b.Surface,
 		ReadOnly:  !b.CarriesActionAuthority(),
@@ -303,7 +303,7 @@ func (bs *Butlers) providerFor(b runtimedb.Butler) (provider.Provider, error) {
 	if bs.Providers == nil {
 		return nil, fmt.Errorf("no provider factory is wired")
 	}
-	key := fmt.Sprintf("%d\x00%s\x00%s\x00%s", b.RouteSeq, b.Provider, b.Model, b.Endpoint)
+	key := fmt.Sprintf("%d\x00%s\x00%s\x00%s", b.ModelSeq, b.Provider, b.Model, b.Endpoint)
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	if p, ok := bs.clients[key]; ok {
@@ -314,7 +314,7 @@ func (bs *Butlers) providerFor(b runtimedb.Butler) (provider.Provider, error) {
 		return nil, err
 	}
 	if p == nil {
-		return nil, fmt.Errorf("route %s (%s) built no client", b.Route, b.Provider)
+		return nil, fmt.Errorf("route %s (%s) built no client", b.Model, b.Provider)
 	}
 	if bs.clients == nil {
 		bs.clients = map[string]provider.Provider{}

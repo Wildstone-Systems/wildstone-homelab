@@ -160,7 +160,7 @@ const DEPARTURES = [
   },
   {
     gone: "probed 2m ago",
-    why: "There is no probe timestamp on the wire. ModelRoute carries readiness and readinessDetail; nothing records when it was last checked, and POST /butler/routes/{name}/probe does not exist — the nearest endpoint records a verdict a caller supplies. Inventing a freshness claim is worse than omitting one, so the ON NOW card shows the provider and endpoint instead.",
+    why: "There is no probe timestamp on the wire. Model carries readiness and readinessDetail; nothing records when it was last checked, and POST /butler/routes/{name}/probe does not exist — the nearest endpoint records a verdict a caller supplies. Inventing a freshness claim is worse than omitting one, so the ON NOW card shows the provider and endpoint instead.",
   },
   {
     gone: "Re-check",

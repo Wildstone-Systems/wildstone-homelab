@@ -14,13 +14,13 @@ import (
 func butlerConsole(t *testing.T) *harness {
 	t.Helper()
 	h := newHarness(t)
-	for _, r := range []runtimedb.ModelRoute{
-		{Name: "kitchen-box", Kind: runtimedb.RouteLocal, Provider: "ollama", Model: "llama",
-			Readiness: runtimedb.RouteReady, Enabled: true},
-		{Name: "cloud", Kind: runtimedb.RouteCloud, Provider: "anthropic", Model: "sonnet",
-			Readiness: runtimedb.RouteReady, Enabled: true},
+	for _, r := range []runtimedb.Model{
+		{Name: "kitchen-box", Kind: runtimedb.ModelLocal, Provider: "ollama", ProviderModel: "llama",
+			Readiness: runtimedb.ModelReady, Enabled: true},
+		{Name: "cloud", Kind: runtimedb.ModelCloud, Provider: "anthropic", ProviderModel: "sonnet",
+			Readiness: runtimedb.ModelReady, Enabled: true},
 	} {
-		if err := h.s.DB.UpsertModelRoute(r, "root-admin"); err != nil {
+		if err := h.s.DB.UpsertModel(r, "root-admin"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -43,7 +43,7 @@ func TestTheRosterSaysWhereEachButlersWordsGo(t *testing.T) {
 	var created map[string]any
 	res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
 		"name": "health", "directive": "look after the gym and sleep logs",
-		"surface": "family", "profile": "household", "route": "kitchen-box",
+		"surface": "family", "profile": "household", "model": "kitchen-box",
 	}, &created)
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("creating a butler = %d", res.StatusCode)
@@ -53,7 +53,7 @@ func TestTheRosterSaysWhereEachButlersWordsGo(t *testing.T) {
 	}
 
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
-		"name": "nutrition", "surface": "family", "profile": "household", "route": "cloud",
+		"name": "nutrition", "surface": "family", "profile": "household", "model": "cloud",
 	}, nil); res.StatusCode != http.StatusCreated {
 		t.Fatalf("creating the cloud butler = %d", res.StatusCode)
 	}
@@ -72,12 +72,12 @@ func TestTheRosterSaysWhereEachButlersWordsGo(t *testing.T) {
 		t.Fatalf("roster has %d butlers, want 2", len(list.Butlers))
 	}
 	for _, b := range list.Butlers {
-		if b.Butler.Route == "" || b.Butler.RouteKind == "" {
+		if b.Butler.Model == "" || b.Butler.ModelKind == "" {
 			t.Fatalf("a roster row does not name its model: %+v", b)
 		}
-		want := b.Butler.RouteKind == runtimedb.RouteCloud
+		want := b.Butler.ModelKind == runtimedb.ModelCloud
 		if b.LeavesTheHouse != want {
-			t.Fatalf("%s: leavesTheHouse=%v on a %s route", b.Butler.Name, b.LeavesTheHouse, b.Butler.RouteKind)
+			t.Fatalf("%s: leavesTheHouse=%v on a %s route", b.Butler.Name, b.LeavesTheHouse, b.Butler.ModelKind)
 		}
 	}
 }
@@ -87,20 +87,20 @@ func TestTheRosterSaysWhereEachButlersWordsGo(t *testing.T) {
 func TestSwitchingAModelAppliesAtOnceAndWarnsOnTheCrossing(t *testing.T) {
 	h := butlerConsole(t)
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
-		"name": "health", "surface": "family", "profile": "household", "route": "kitchen-box",
+		"name": "health", "surface": "family", "profile": "household", "model": "kitchen-box",
 	}, nil); res.StatusCode != http.StatusCreated {
 		t.Fatalf("create = %d", res.StatusCode)
 	}
 
 	var out map[string]any
-	res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/route",
-		map[string]any{"route": "cloud"}, &out)
+	res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/model",
+		map[string]any{"model": "cloud"}, &out)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("switching the model = %d", res.StatusCode)
 	}
 	// It applied. No proposal, no pending anything.
-	if b, _ := h.s.DB.GetButler("health"); b.Route != "cloud" {
-		t.Fatalf("the switch did not apply: %q", b.Route)
+	if b, _ := h.s.DB.GetButler("health"); b.Model != "cloud" {
+		t.Fatalf("the switch did not apply: %q", b.Model)
 	}
 	if out["crossesToCloud"] != true {
 		t.Fatal("a local-to-cloud switch did not report the crossing, so nothing could warn")
@@ -117,8 +117,8 @@ func TestSwitchingAModelAppliesAtOnceAndWarnsOnTheCrossing(t *testing.T) {
 	// warn — warning on it would train people through the one that
 	// matters.
 	var back map[string]any
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/route",
-		map[string]any{"route": "kitchen-box"}, &back); res.StatusCode != http.StatusOK {
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/model",
+		map[string]any{"model": "kitchen-box"}, &back); res.StatusCode != http.StatusOK {
 		t.Fatalf("switching back = %d", res.StatusCode)
 	}
 	if _, warned := back["crossesToCloud"]; warned {
@@ -131,7 +131,7 @@ func TestSwitchingAModelAppliesAtOnceAndWarnsOnTheCrossing(t *testing.T) {
 func TestShapingAButlerNeedsManage(t *testing.T) {
 	h := butlerConsole(t)
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
-		"name": "health", "surface": "family", "profile": "household", "route": "kitchen-box",
+		"name": "health", "surface": "family", "profile": "household", "model": "kitchen-box",
 	}, nil); res.StatusCode != http.StatusCreated {
 		t.Fatalf("create = %d", res.StatusCode)
 	}
@@ -140,8 +140,8 @@ func TestShapingAButlerNeedsManage(t *testing.T) {
 		body         any
 	}{
 		{http.MethodPost, "/api/v1/butlers", map[string]any{
-			"name": "other", "surface": "family", "profile": "household", "route": "cloud"}},
-		{http.MethodPut, "/api/v1/butlers/health/route", map[string]any{"route": "cloud"}},
+			"name": "other", "surface": "family", "profile": "household", "model": "cloud"}},
+		{http.MethodPut, "/api/v1/butlers/health/model", map[string]any{"model": "cloud"}},
 		{http.MethodPut, "/api/v1/butlers/health/access", map[string]any{"member": "sam", "allow": true}},
 		{http.MethodPut, "/api/v1/butlers/health/tool", map[string]any{"tool": "send_message", "allow": false}},
 		{http.MethodDelete, "/api/v1/butlers/health", nil},
@@ -158,7 +158,7 @@ func TestShapingAButlerNeedsManage(t *testing.T) {
 func TestButlerScopeAnswersInOneCall(t *testing.T) {
 	h := butlerConsole(t)
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
-		"name": "health", "surface": "family", "profile": "household", "route": "kitchen-box",
+		"name": "health", "surface": "family", "profile": "household", "model": "kitchen-box",
 	}, nil); res.StatusCode != http.StatusCreated {
 		t.Fatalf("create = %d", res.StatusCode)
 	}
@@ -180,7 +180,7 @@ func TestButlerScopeAnswersInOneCall(t *testing.T) {
 	var out struct {
 		Scope struct {
 			Model     string            `json:"model"`
-			RouteKind string            `json:"routeKind"`
+			ModelKind string            `json:"modelKind"`
 			Narrowed  map[string]string `json:"narrowedTools"`
 		} `json:"scope"`
 		People    []string `json:"people"`
@@ -192,8 +192,8 @@ func TestButlerScopeAnswersInOneCall(t *testing.T) {
 	if res := h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/butlers/health/scope", nil, &out); res.StatusCode != http.StatusOK {
 		t.Fatalf("reading the scope = %d", res.StatusCode)
 	}
-	if out.Scope.Model != "kitchen-box" || out.Scope.RouteKind != runtimedb.RouteLocal {
-		t.Fatalf("scope model = %q (%s)", out.Scope.Model, out.Scope.RouteKind)
+	if out.Scope.Model != "kitchen-box" || out.Scope.ModelKind != runtimedb.ModelLocal {
+		t.Fatalf("scope model = %q (%s)", out.Scope.Model, out.Scope.ModelKind)
 	}
 	if len(out.People) != 1 || out.People[0] != "sam" {
 		t.Fatalf("scope people = %v", out.People)
@@ -217,7 +217,7 @@ func TestButlerScopeAnswersInOneCall(t *testing.T) {
 func TestButlerToolsComeFromTheGatewayNotTheClient(t *testing.T) {
 	h := butlerConsole(t)
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
-		"name": "health", "surface": "family", "profile": "household", "route": "kitchen-box",
+		"name": "health", "surface": "family", "profile": "household", "model": "kitchen-box",
 	}, nil); res.StatusCode != http.StatusCreated {
 		t.Fatalf("create = %d", res.StatusCode)
 	}
@@ -304,8 +304,8 @@ func TestButlerToolsComeFromTheGatewayNotTheClient(t *testing.T) {
 func TestButlerToolsAreTheSurfacesOwn(t *testing.T) {
 	h := butlerConsole(t)
 	for _, b := range []map[string]any{
-		{"name": "health", "surface": "family", "profile": "household", "route": "kitchen-box"},
-		{"name": "ops", "surface": "admin", "profile": "operator", "route": "kitchen-box"},
+		{"name": "health", "surface": "family", "profile": "household", "model": "kitchen-box"},
+		{"name": "ops", "surface": "admin", "profile": "operator", "model": "kitchen-box"},
 	} {
 		if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", b, nil); res.StatusCode != http.StatusCreated {
 			t.Fatalf("create %v = %d", b["name"], res.StatusCode)

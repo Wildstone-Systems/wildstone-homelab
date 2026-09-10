@@ -21,14 +21,14 @@ import (
 
 func routes(t *testing.T, db *DB) {
 	t.Helper()
-	for _, r := range []ModelRoute{
-		{Name: "kitchen-box", Kind: RouteLocal, Provider: "ollama", Model: "llama",
-			Readiness: RouteReady, Enabled: true},
-		{Name: "anthropic", Kind: RouteCloud, Provider: "anthropic", Model: "sonnet",
-			Readiness: RouteReady, Enabled: true},
+	for _, r := range []Model{
+		{Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", ProviderModel: "llama",
+			Readiness: ModelReady, Enabled: true},
+		{Name: "anthropic", Kind: ModelCloud, Provider: "anthropic", ProviderModel: "sonnet",
+			Readiness: ModelReady, Enabled: true},
 	} {
-		if err := db.UpsertModelRoute(r, "root-admin"); err != nil {
-			t.Fatalf("UpsertModelRoute(%s): %v", r.Name, err)
+		if err := db.UpsertModel(r, "root-admin"); err != nil {
+			t.Fatalf("UpsertModel(%s): %v", r.Name, err)
 		}
 	}
 }
@@ -40,7 +40,7 @@ func TestRouteKindIsImmutable(t *testing.T) {
 	db := butlerTestDB(t)
 	routes(t, db)
 	if _, err := db.ExecForTest(
-		`UPDATE model_routes SET kind = 'local' WHERE name = 'anthropic'`); err == nil {
+		`UPDATE models SET kind = 'local' WHERE name = 'anthropic'`); err == nil {
 		t.Fatal("a cloud route became a local one, moving the data boundary silently")
 	}
 }
@@ -53,13 +53,13 @@ func TestOnlyAProbedRouteCarriesActionAuthority(t *testing.T) {
 
 	// Unprobed is not ready. It has not been checked, which is
 	// different from having been checked and passed.
-	if err := db.UpsertModelRoute(ModelRoute{
-		Name: "new-box", Kind: RouteLocal, Provider: "ollama", Enabled: true,
-		Readiness: RouteUnprobed,
+	if err := db.UpsertModel(Model{
+		Name: "new-box", Kind: ModelLocal, Provider: "ollama", Enabled: true,
+		Readiness: ModelUnprobed,
 	}, "root-admin"); err != nil {
 		t.Fatal(err)
 	}
-	fresh, err := db.ListModelRoutes()
+	fresh, err := db.ListModels()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,10 +71,10 @@ func TestOnlyAProbedRouteCarriesActionAuthority(t *testing.T) {
 
 	// QA-only has been checked and found wanting: it answers questions
 	// and performs nothing.
-	if err := db.RecordRouteReadiness("new-box", RouteQAOnly, "it invented a tool name"); err != nil {
+	if err := db.RecordModelReadiness("new-box", ModelQAOnly, "it invented a tool name"); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := db.ListModelRoutes()
+	after, _ := db.ListModels()
 	for _, r := range after {
 		if r.Name != "new-box" {
 			continue
@@ -89,15 +89,15 @@ func TestOnlyAProbedRouteCarriesActionAuthority(t *testing.T) {
 
 	// A route reported anything but ready has to say why, or an
 	// operator reads "unavailable" with nothing to act on.
-	if err := db.RecordRouteReadiness("new-box", RouteUnavailable, ""); err == nil {
+	if err := db.RecordModelReadiness("new-box", ModelUnavailable, ""); err == nil {
 		t.Fatal("a route was reported unavailable with no reason")
 	}
 
 	// And a ready one does carry it.
-	if err := db.RecordRouteReadiness("new-box", RouteReady, ""); err != nil {
+	if err := db.RecordModelReadiness("new-box", ModelReady, ""); err != nil {
 		t.Fatal(err)
 	}
-	ready, _ := db.ListModelRoutes()
+	ready, _ := db.ListModels()
 	for _, r := range ready {
 		if r.Name == "new-box" && !r.CarriesActionAuthority() {
 			t.Fatal("a probed, ready route carries no action authority")
@@ -111,10 +111,10 @@ func TestOnlyAProbedRouteCarriesActionAuthority(t *testing.T) {
 func TestADisabledRouteStaysDisabled(t *testing.T) {
 	db := butlerTestDB(t)
 	routes(t, db)
-	if err := db.SetModelRouteEnabled("anthropic", false, "root-admin"); err != nil {
+	if err := db.SetModelEnabled("anthropic", false, "root-admin"); err != nil {
 		t.Fatal(err)
 	}
-	all, err := db.ListModelRoutes()
+	all, err := db.ListModels()
 	if err != nil {
 		t.Fatal(err)
 	}

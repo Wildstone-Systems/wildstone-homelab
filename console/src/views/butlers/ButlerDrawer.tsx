@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Archive, ArrowClockwise, Warning, X } from "@phosphor-icons/react";
-import { api, type ButlerRow, type ModelRoute } from "../../api";
+import { api, type ButlerRow, type Model } from "../../api";
 import { ErrorLine, useLoad, when } from "../../lib";
 import { Confirm } from "../../ui/Confirm";
 import { Dot, healthOf, Kind, StatusPill } from "../../ui/status";
@@ -36,7 +36,7 @@ export function ButlerDrawer({
 }: {
   name: string;
   rows: ButlerRow[];
-  routes: ModelRoute[];
+  routes: Model[];
   initialTab?: string;
   say: Say;
   onClose: () => void;
@@ -56,7 +56,7 @@ export function ButlerDrawer({
 
   if (!row) return null;
   const b = row.butler;
-  const route = routes.find((r) => r.name === b.route);
+  const route = routes.find((r) => r.name === b.model);
   const h = healthOf(row, route);
   const memoryCount = scope.data?.scope.memoryCount ?? 0;
 

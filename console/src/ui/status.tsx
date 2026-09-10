@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import type { ButlerRow, ModelRoute } from "../api";
+import type { ButlerRow, Model } from "../api";
 import { when } from "../lib";
 
 // The status vocabulary. Four kinds, and ONE place that decides what a
@@ -90,20 +90,20 @@ export function Dot({ kind, pulse }: { kind: Kind; pulse?: boolean }) {
 // survives all three is ready.
 export function healthOf(
   row: ButlerRow,
-  route?: ModelRoute,
+  model?: Model,
 ): { kind: Kind; label: string; detail: string; long: string } {
   const b = row.butler;
-  // The failure detail belongs to the ROUTE, not the Butler: three
+  // The failure detail belongs to the MODEL, not the Butler: three
   // Butlers on one unreachable model all fail for the same reason, and
-  // it is the route that knows what the provider said.
-  const why = route?.readinessDetail;
+  // it is the model that knows what the provider said.
+  const why = model?.readinessDetail;
   if (b.retiredAt) {
     const on = when(b.retiredAt);
     return { kind: "mute", label: `retired ${on}`, detail: "kept, not deleted", long: `retired ${on}` };
   }
   if (!row.reachable) {
-    const detail = !b.routeEnabled
-      ? `${b.route} is turned off in Model routes`
+    const detail = !b.modelEnabled
+      ? `${b.model} is turned off in Model routes`
       : why || "its model is not answering";
     return { kind: "bad", label: "unavailable", detail, long: `unavailable — ${detail}` };
   }
@@ -114,7 +114,7 @@ export function healthOf(
   return {
     kind: "ok",
     label: "ready",
-    detail: `${b.route} · ${b.provider ?? "?"}`,
+    detail: `${b.model} · ${b.provider ?? "?"}`,
     long: "ready · tool check passed",
   };
 }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, type HouseholdRoutine, type ModelRoute } from "../api";
+import { api, type HouseholdRoutine, type Model } from "../api";
 import { ErrorLine, useAction, useLoad } from "../lib";
 import { Kind, StatusPill } from "../ui/status";
 
@@ -141,7 +141,7 @@ function RoutineList() {
   );
 }
 
-const READINESS_MEANING: Record<ModelRoute["readiness"], string> = {
+const READINESS_MEANING: Record<Model["readiness"], string> = {
   unprobed: "not checked yet, so it answers questions and uses no tools that do things",
   ready: "checked and trusted with tools",
   "qa-only": "checked and found wanting, so it answers questions only",
@@ -301,47 +301,47 @@ function RoutineEditor({
 }
 
 function RouteList() {
-  const routes = useLoad(() => api.modelRoutes());
+  const models = useLoad(() => api.models());
   const action = useAction();
-  const rows = routes.data?.routes ?? [];
+  const rows = models.data?.models ?? [];
   return (
     <section className="work-section">
       <h3>Which model answers</h3>
-      <ErrorLine error={routes.error} />
-      {rows.length === 0 && !routes.loading && (
+      <ErrorLine error={models.error} />
+      {rows.length === 0 && !models.loading && (
         <div className="muted">
-          No routes configured. The Butler is running on whatever it was started with.
+          No models configured. A Butler has nowhere to be assigned until there is one.
         </div>
       )}
       <ul className="work-evidence">
-        {rows.map(({ route, carriesActions, leavesTheHouse }) => (
-          <li key={route.name}>
-            <StatusPill kind={route.readiness === "ready" ? "ok" : route.readiness === "unavailable" ? "bad" : "warn"}>
-              {route.readiness}
+        {rows.map(({ model, carriesActions, leavesTheHouse }) => (
+          <li key={model.name}>
+            <StatusPill kind={model.readiness === "ready" ? "ok" : model.readiness === "unavailable" ? "bad" : "warn"}>
+              {model.readiness}
             </StatusPill>
-            <strong>{route.name}</strong>
+            <strong>{model.name}</strong>
             {/* The one thing that has to be unmissable. */}
             <StatusPill kind={leavesTheHouse ? "warn" : "ok"}>
               {leavesTheHouse ? "leaves the house" : "stays in the house"}
             </StatusPill>
             <span className="timeline-src">
-              {route.provider}
-              {route.model && ` · ${route.model}`}
+              {model.provider}
+              {model.providerModel && ` · ${model.providerModel}`}
             </span>
-            <span className="timeline-src">{READINESS_MEANING[route.readiness]}</span>
-            {!carriesActions && route.readiness !== "unavailable" && (
+            <span className="timeline-src">{READINESS_MEANING[model.readiness]}</span>
+            {!carriesActions && model.readiness !== "unavailable" && (
               <span className="timeline-src">answers only</span>
             )}
             <button
               className="btn btn-ghost"
               onClick={() =>
                 action.run(async () => {
-                  await api.setModelRouteEnabled(route.name, !route.enabled);
-                  routes.reload();
-                }, route.enabled ? "Turned off." : "Turned on.")
+                  await api.setModelEnabled(model.name, !model.enabled);
+                  models.reload();
+                }, model.enabled ? "Turned off." : "Turned on.")
               }
             >
-              {route.enabled ? "Turn off" : "Turn on"}
+              {model.enabled ? "Turn off" : "Turn on"}
             </button>
           </li>
         ))}

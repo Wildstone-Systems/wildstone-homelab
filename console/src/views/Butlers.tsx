@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { CaretRight, Plus } from "@phosphor-icons/react";
-import { api, type ButlerRow, type ButlerSurface, type ModelRoute } from "../api";
+import { api, type ButlerRow, type ButlerSurface, type Model } from "../api";
 import { ErrorLine, useLoad, when } from "../lib";
 import { Dot, healthOf, StatusPill } from "../ui/status";
 import { Toast, useToast } from "../ui/Toast";
@@ -94,7 +94,7 @@ export function toolLine(row: ButlerRow): string {
 
 export function Butlers() {
   const butlers = useLoad(() => api.butlers());
-  const routes = useLoad(() => api.modelRoutes());
+  const models = useLoad(() => api.models());
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>("active");
@@ -104,7 +104,7 @@ export function Butlers() {
   const { toast, say } = useToast();
 
   const rows = butlers.data?.butlers ?? [];
-  const routeRows = (routes.data?.routes ?? []).map((r) => r.route);
+  const modelRows = (models.data?.models ?? []).map((r) => r.model);
   const attention = rows.filter(needsAttention);
   const shown = useMemo(() => select(rows, { filter, query, sort }), [rows, filter, query, sort]);
   const groups = SURFACES.map((g) => ({
@@ -130,10 +130,10 @@ export function Butlers() {
       </div>
 
       <ErrorLine error={butlers.error} />
-      <ErrorLine error={routes.error} />
+      <ErrorLine error={models.error} />
 
       {attention.length > 0 && filter !== "attention" && (
-        <AttentionBanner rows={attention} routes={routeRows} onShow={() => setFilter("attention")} />
+        <AttentionBanner rows={attention} routes={modelRows} onShow={() => setFilter("attention")} />
       )}
 
       <RosterFilters
@@ -169,7 +169,7 @@ export function Butlers() {
             <RosterRow
               key={r.butler.name}
               row={r}
-              route={routeRows.find((x) => x.name === r.butler.route)}
+              model={modelRows.find((x) => x.name === r.butler.model)}
               selected={open === r.butler.name}
               onOpen={() => {
                 setOpen(r.butler.name);
@@ -191,14 +191,14 @@ export function Butlers() {
       )}
 
       {rows.length === 0 && !butlers.loading && (
-        <NoButlers routes={routeRows} onNew={() => setCreating(true)} />
+        <NoButlers routes={modelRows} onNew={() => setCreating(true)} />
       )}
 
       {open && (
         <ButlerDrawer
           name={open}
           rows={rows}
-          routes={routeRows}
+          routes={modelRows}
           initialTab={openTab}
           say={say}
           onClose={() => setOpen(null)}
@@ -209,7 +209,7 @@ export function Butlers() {
 
       {creating && (
         <NewButlerDialog
-          routes={routeRows}
+          routes={modelRows}
           existing={rows.map((r) => r.butler.name)}
           say={say}
           onClose={() => setCreating(false)}
@@ -241,12 +241,12 @@ export function AttentionBanner({
   onShow,
 }: {
   rows: ButlerRow[];
-  routes: ModelRoute[];
+  routes: Model[];
   onShow: () => void;
 }) {
   const what = rows
     .map((r) => {
-      const h = healthOf(r, routes.find((x) => x.name === r.butler.route));
+      const h = healthOf(r, routes.find((x) => x.name === r.butler.model));
       return `${r.butler.name} ${h.kind === "bad" ? "can't reach its model" : "answers questions only"}`;
     })
     .join(", ");
@@ -333,17 +333,17 @@ function RosterFilters({
 // div is not.
 export function RosterRow({
   row,
-  route,
+  model,
   selected,
   onOpen,
 }: {
   row: ButlerRow;
-  route?: ModelRoute;
+  model?: Model;
   selected: boolean;
   onOpen: () => void;
 }) {
   const b = row.butler;
-  const h = healthOf(row, route);
+  const h = healthOf(row, model);
   const classes = ["rowcard"];
   if (selected) classes.push("on");
   else if (needsAttention(row)) classes.push("attn");
@@ -362,7 +362,7 @@ export function RosterRow({
       </div>
       <div className="cell">
         <div className="ellip">
-          {b.route} · {b.provider ?? "?"}
+          {b.model} · {b.provider ?? "?"}
         </div>
         <StatusPill kind={row.leavesTheHouse ? "warn" : "ok"} icon={<Dot kind={row.leavesTheHouse ? "warn" : "ok"} />}>
           {row.leavesTheHouse ? "leaves the house" : "stays in the house"}
@@ -404,7 +404,7 @@ export function NoMatches({ filter, onClear }: { filter: Filter; onClear: () => 
 // The first-run state. It explains the unit before offering the button,
 // because "New Butler" means nothing to somebody who has not yet been
 // told that a Butler is one job with one model behind it.
-export function NoButlers({ routes, onNew }: { routes: ModelRoute[]; onNew: () => void }) {
+export function NoButlers({ routes, onNew }: { routes: Model[]; onNew: () => void }) {
   const usable = routes.filter((r) => r.enabled);
   return (
     <div className="card roster-empty">
@@ -418,7 +418,7 @@ export function NoButlers({ routes, onNew }: { routes: ModelRoute[]; onNew: () =
         <div className="attention-banner">
           <Dot kind="warn" />
           <div>
-            A Butler needs a model to be anything. Add a model route first — there is nowhere for a
+            A Butler needs a model to be anything. Add one first — there is nowhere for a
             Butler's questions to go.
           </div>
         </div>

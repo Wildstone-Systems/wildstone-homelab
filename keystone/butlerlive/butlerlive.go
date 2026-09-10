@@ -135,7 +135,7 @@ type Answer struct {
 	// one a person can rely on.
 	Butler    string
 	Model     string
-	RouteKind string
+	ModelKind string
 	// Provider names the client kind the route resolved to, for the
 	// session's audit row.
 	Provider string
@@ -298,12 +298,12 @@ func (bs *Butlers) ownedButler(name string) (runtimedb.Butler, error) {
 	}
 	if !b.Reachable() {
 		why := "unavailable"
-		if !b.RouteEnabled {
+		if !b.ModelEnabled {
 			why = "turned off"
 		}
 		return runtimedb.Butler{}, fmt.Errorf(
 			"%w: %s runs on %s, which is %s — this waits rather than moving to another model (ADR-W031 A6)",
-			runtimedb.ErrButlerUnreachable, b.Name, b.Route, why)
+			runtimedb.ErrButlerUnreachable, b.Name, b.Model, why)
 	}
 	return b, nil
 }

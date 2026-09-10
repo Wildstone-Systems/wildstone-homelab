@@ -1092,7 +1092,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			default:
 				for _, nb := range named {
 					log.Info("butler on the live path", "butler", nb.Name, "surface", nb.Surface,
-						"route", nb.Route, "kind", nb.RouteKind, "model", nb.Model,
+						"route", nb.Model, "kind", nb.ModelKind, "model", nb.Model,
 						"readiness", nb.Readiness)
 				}
 			}

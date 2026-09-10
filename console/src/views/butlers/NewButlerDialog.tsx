@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { X } from "@phosphor-icons/react";
-import { api, type ButlerSurface, type ModelRoute } from "../../api";
+import { api, type ButlerSurface, type Model } from "../../api";
 import { ErrorLine } from "../../lib";
 import { Dot } from "../../ui/status";
 import { RouteList } from "./TabModel";
@@ -10,7 +10,7 @@ interface Draft {
   name: string;
   directive: string;
   surface: ButlerSurface;
-  route: string;
+  model: string;
 }
 
 // Making a Butler.
@@ -32,7 +32,7 @@ export function NewButlerDialog({
   onClose,
   onCreated,
 }: {
-  routes: ModelRoute[];
+  routes: Model[];
   existing: string[];
   say: Say;
   onClose: () => void;
@@ -43,27 +43,27 @@ export function NewButlerDialog({
     name: "",
     directive: "",
     surface: "family",
-    route: usable[0]?.name ?? "",
+    model: usable[0]?.name ?? "",
   });
   const [template, setTemplate] = useState("blank");
   const [nameError, setNameError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const chosen = routes.find((r) => r.name === draft.route);
+  const chosen = routes.find((r) => r.name === draft.model);
   const cloud = chosen?.kind === "cloud";
 
   function applyTemplate(key: string) {
     setTemplate(key);
     setNameError(null);
-    const local = usable.find((r) => r.kind === "local")?.name ?? draft.route;
+    const local = usable.find((r) => r.kind === "local")?.name ?? draft.model;
     const T: Record<string, Partial<Draft>> = {
       blank: { name: "", directive: "", surface: "family" },
       health: { name: "health", directive: "keeps track of training and sleep", surface: "family" },
       kitchen: { name: "kitchen", directive: "timers, recipes, what's in the freezer", surface: "family" },
       operator: { name: "ops", directive: "diagnoses services, drafts plans", surface: "admin" },
     };
-    setDraft((d) => ({ ...d, route: local, ...T[key] } as Draft));
+    setDraft((d) => ({ ...d, model: local, ...T[key] } as Draft));
   }
 
   async function create(openReach: boolean) {
@@ -84,7 +84,7 @@ export function NewButlerDialog({
         directive: draft.directive.trim(),
         surface: draft.surface,
         profile: draft.surface === "admin" ? "operator" : "household",
-        route: draft.route,
+        model: draft.model,
       });
       say(`${name} made — give it an address so somebody can talk to it`, "warn");
       onCreated(name, openReach ? "reach" : undefined);
@@ -189,11 +189,11 @@ export function NewButlerDialog({
           <RouteList
             title="MODEL"
             routes={routes}
-            current={draft.route}
+            current={draft.model}
             busy={busy}
             onPick={(r) =>
               r.enabled
-                ? setDraft({ ...draft, route: r.name })
+                ? setDraft({ ...draft, model: r.name })
                 : say(`${r.name} is turned off in Model routes`, "warn")
             }
           />
@@ -202,7 +202,7 @@ export function NewButlerDialog({
             <div className="eyebrow">YOU ARE MAKING</div>
             <div>
               {cloud && <Dot kind="warn" />} a {draft.surface === "admin" ? "operator" : "household"}{" "}
-              Butler called {draft.name.trim() || "—"} on {draft.route || "no model"}, which{" "}
+              Butler called {draft.name.trim() || "—"} on {draft.model || "no model"}, which{" "}
               {cloud ? "sends what it is told outside the house" : "stays in the house"}. Nobody can
               talk to it until you give it an address.
             </div>
@@ -212,10 +212,10 @@ export function NewButlerDialog({
         </div>
 
         <div className="modal-foot">
-          <button className="btn btn-primary" disabled={busy || !draft.route} onClick={() => void create(false)}>
+          <button className="btn btn-primary" disabled={busy || !draft.model} onClick={() => void create(false)}>
             {busy ? "Making…" : "Create"}
           </button>
-          <button className="btn btn-secondary" disabled={busy || !draft.route} onClick={() => void create(true)}>
+          <button className="btn btn-secondary" disabled={busy || !draft.model} onClick={() => void create(true)}>
             Create and open Reach
           </button>
           <button className="btn btn-ghost drawer-foot-end" disabled={busy} onClick={onClose}>

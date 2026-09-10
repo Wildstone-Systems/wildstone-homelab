@@ -267,6 +267,32 @@ bot or the facility.
 
 ---
 
+### A2.1. The word "route" goes with the router (2026-09-10)
+
+Migration 0035 removed the router and deliberately kept the rows,
+noting "what a route is FOR now: the model a Butler is assigned to". It
+did not rename them, and the leftover word earned its confusion:
+nothing routes, so a log line reading `route=cloud-witness
+model=witness-1` looks like two competing answers to "which model".
+
+`Route` was also already taken — `resource.KindRoute` is the
+reverse-proxy route, and a codebase with two unrelated Routes makes
+every conversation about either of them start with which one.
+
+Migration 0037 renames the table to `models`, `butlers.route` to
+`butlers.model`, and the API paths from `/butler/routes` to
+`/butler/models`. The endpoint-discovery call that held that path moves
+to `/butler/models/offered`, which is the more accurate name for it
+anyway: it lists what a given endpoint could give you, not what this
+house has configured.
+
+The bundle survives, because a bare model string on the Butler cannot
+carry the data boundary. One Ollama endpoint serves `gemma4:e4b` off
+local disk and `gemma4:31b-cloud` from Ollama's own infrastructure — so
+neither the endpoint nor the provider says where the material goes. Only
+`kind` does, and it is a property of the pairing rather than of either
+half.
+
 # Part B — What this changes in ADR-W030
 
 | W030 | Change |

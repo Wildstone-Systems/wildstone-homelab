@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Warning } from "@phosphor-icons/react";
-import { api, type AskResponse, type ButlerRow, type ModelRoute } from "../../api";
+import { api, type AskResponse, type ButlerRow, type Model } from "../../api";
 import { ErrorLine } from "../../lib";
 import { Confirm } from "../../ui/Confirm";
 import { Dot, Kind } from "../../ui/status";
@@ -26,7 +26,7 @@ export function TabModel({
   onChanged,
 }: {
   row: ButlerRow;
-  routes: ModelRoute[];
+  routes: Model[];
   health: { kind: Kind; long: string };
   say: Say;
   onChanged: () => void;
@@ -40,13 +40,13 @@ export function TabModel({
   const [asking, setAsking] = useState(false);
   const [answer, setAnswer] = useState<AskResponse | null>(null);
 
-  function pick(r: ModelRoute) {
-    if (r.name === b.route) return;
+  function pick(r: Model) {
+    if (r.name === b.model) return;
     if (!r.enabled) {
       say(`${r.name} is turned off in Model routes`, "warn");
       return;
     }
-    if (r.kind === "cloud" && b.routeKind === "local") {
+    if (r.kind === "cloud" && b.modelKind === "local") {
       setConfirm(r.name);
       return;
     }
@@ -61,7 +61,7 @@ export function TabModel({
     setBusy(true);
     setError(null);
     try {
-      const res = await api.setButlerRoute(b.name, name);
+      const res = await api.setButlerModel(b.name, name);
       setWarning(res.warning ?? null);
       setConfirm(null);
       say(
@@ -79,7 +79,7 @@ export function TabModel({
   async function ask() {
     if (!question.trim()) return;
     if (!row.reachable) {
-      say(`${b.name} cannot reach ${b.route} right now`, "bad");
+      say(`${b.name} cannot reach ${b.model} right now`, "bad");
       return;
     }
     setAsking(true);
@@ -100,7 +100,7 @@ export function TabModel({
       <div className="card">
         <div className="eyebrow">ON NOW</div>
         <div className="row on-now">
-          <strong className="on-now-route">{b.route}</strong>
+          <strong className="on-now-route">{b.model}</strong>
           <span className="row">
             <Dot kind={health.kind} />
             <span className={health.kind === "ok" ? "" : `ink-${health.kind}`}>{health.long}</span>
@@ -114,14 +114,14 @@ export function TabModel({
       <RouteList
         title="ON YOUR HARDWARE"
         routes={routes.filter((r) => r.kind === "local")}
-        current={b.route}
+        current={b.model}
         busy={busy}
         onPick={pick}
       />
       <RouteList
         title="OUTSIDE THE HOUSE"
         routes={routes.filter((r) => r.kind === "cloud")}
-        current={b.route}
+        current={b.model}
         busy={busy}
         onPick={pick}
       />
@@ -151,7 +151,7 @@ export function TabModel({
           <div className="card answer-card">
             <div>{answer.finalText}</div>
             <div className="muted tnum">
-              {b.route} · {row.leavesTheHouse ? "left the house" : "stayed in the house"} · session{" "}
+              {b.model} · {row.leavesTheHouse ? "left the house" : "stayed in the house"} · session{" "}
               {answer.sessionId}
               {answer.mode === "qa-only" && " · questions only, so it looked nothing up"}
             </div>
@@ -172,7 +172,7 @@ export function TabModel({
             "Activity will record the crossing, with your name on it",
           ]}
           confirmLabel="Yes, switch it"
-          cancelLabel={`Keep ${b.route}`}
+          cancelLabel={`Keep ${b.model}`}
           busy={busy}
           onCancel={() => setConfirm(null)}
           onConfirm={() => void apply(confirm)}
@@ -197,10 +197,10 @@ export function RouteList({
   onPick,
 }: {
   title: string;
-  routes: ModelRoute[];
+  routes: Model[];
   current: string;
   busy: boolean;
-  onPick: (r: ModelRoute) => void;
+  onPick: (r: Model) => void;
 }) {
   if (routes.length === 0) return null;
   return (

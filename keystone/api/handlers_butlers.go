@@ -42,7 +42,7 @@ import (
 func butlerView(b runtimedb.Butler) map[string]any {
 	return map[string]any{
 		"butler":         b,
-		"leavesTheHouse": b.RouteKind == runtimedb.RouteCloud,
+		"leavesTheHouse": b.ModelKind == runtimedb.ModelCloud,
 		"carriesActions": b.CarriesActionAuthority(),
 		"reachable":      b.Reachable(),
 	}
@@ -152,7 +152,7 @@ func (s *Server) createButler(r *http.Request, id principal.Identity) (any, int,
 		Directive string `json:"directive"`
 		Surface   string `json:"surface"`
 		Profile   string `json:"profile"`
-		Route     string `json:"route"`
+		Model     string `json:"model"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
@@ -163,7 +163,7 @@ func (s *Server) createButler(r *http.Request, id principal.Identity) (any, int,
 	name := strings.TrimSpace(req.Name)
 	if _, err := s.DB.CreateButler(runtimedb.Butler{
 		Name: name, Directive: req.Directive,
-		Surface: runtimedb.ButlerSurface(req.Surface), Profile: req.Profile, Route: req.Route,
+		Surface: runtimedb.ButlerSurface(req.Surface), Profile: req.Profile, Model: req.Model,
 	}, actingMember(id)); err != nil {
 		if errors.Is(err, runtimedb.ErrNotFound) {
 			return nil, http.StatusNotFound, err
@@ -177,7 +177,7 @@ func (s *Server) createButler(r *http.Request, id principal.Identity) (any, int,
 	return butlerView(b), http.StatusCreated, nil
 }
 
-// setButlerRoute changes which model a Butler runs on, immediately.
+// setButlerModel changes which model a Butler runs on, immediately.
 //
 // The response carries the crossing rather than a confirmation prompt.
 // A local-to-cloud move with a conversation already open sends that
@@ -185,15 +185,15 @@ func (s *Server) createButler(r *http.Request, id principal.Identity) (any, int,
 // person making the choice is owed that fact in the moment they make
 // it — as a statement of what happens, not a dialog standing between
 // them and a control they own.
-func (s *Server) setButlerRoute(r *http.Request, id principal.Identity) (any, int, error) {
+func (s *Server) setButlerModel(r *http.Request, id principal.Identity) (any, int, error) {
 	name := r.PathValue("name")
 	var req struct {
-		Route string `json:"route"`
+		Model string `json:"model"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
 	}
-	from, to, err := s.DB.SetButlerRoute(name, req.Route, actingMember(id))
+	from, to, err := s.DB.SetButlerRoute(name, req.Model, actingMember(id))
 	if errors.Is(err, runtimedb.ErrNotFound) {
 		return nil, http.StatusNotFound, err
 	}
@@ -201,12 +201,12 @@ func (s *Server) setButlerRoute(r *http.Request, id principal.Identity) (any, in
 		return nil, http.StatusBadRequest, err
 	}
 	out := butlerView(to)
-	out["previousModel"] = from.Route
+	out["previousModel"] = from.Model
 	if runtimedb.CrossesToCloud(from, to) {
 		out["crossesToCloud"] = true
 		out["warning"] = fmt.Sprintf(
 			"%s now runs on %s, which is outside the house. An open conversation's history goes to it with the next message.",
-			to.Name, to.Route)
+			to.Name, to.Model)
 	}
 	return out, http.StatusOK, nil
 }
