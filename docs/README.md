@@ -37,6 +37,11 @@ accepted statement of intent and supersedes conflicting ADR language:
   `scripts/docx-to-md.py`. Tracked by
   [#151](https://github.com/chickenrat17/wildstone-homelab/issues/151).
 
+- [`audit/`](audit/) — the running audit of the repository against the
+  baseline: [how to run a slice](audit/README.md),
+  [reaching the live deployment](audit/runtime-access.md), and the
+  [gap report](audit/gap-report.md) the slices write into.
+
 Supporting, and older than the baseline:
 
 - [ADR-W030](decisions/ADR-W030-butler-continuity-durable-work-and-scoped-integrations.md) — continuity, durable work, and scoped integrations. A3's deferral of vector retrieval and W031 A4's per-Butler memory scope are both superseded by the baseline.
