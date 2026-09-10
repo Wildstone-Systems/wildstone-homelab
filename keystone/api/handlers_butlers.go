@@ -22,6 +22,7 @@ package api
 // is already open.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -153,9 +154,22 @@ func (s *Server) createButler(r *http.Request, id principal.Identity) (any, int,
 		Surface   string `json:"surface"`
 		Profile   string `json:"profile"`
 		Model     string `json:"model"`
+		// The same pair the assignment path takes, for the same reason:
+		// a person making a Butler picks from what the provider has, not
+		// from what somebody configured here first.
+		ProviderModel string `json:"providerModel"`
+		Endpoint      string `json:"endpoint"`
+		Provider      string `json:"provider"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
+	}
+	if req.Model == "" && req.ProviderModel != "" {
+		configured, err := s.ensureModel(r.Context(), req.ProviderModel, req.Provider, req.Endpoint)
+		if err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		req.Model = configured
 	}
 	// CreateButler trims the name, so the read-back has to use the
 	// trimmed one. Re-reading what the caller sent returns 500 for a
@@ -188,10 +202,30 @@ func (s *Server) createButler(r *http.Request, id principal.Identity) (any, int,
 func (s *Server) setButlerModel(r *http.Request, id principal.Identity) (any, int, error) {
 	name := r.PathValue("name")
 	var req struct {
+		// Model names an already-configured model.
 		Model string `json:"model"`
+		// ProviderModel names one the provider offers, whether or not
+		// this house has configured it yet — which is what the Console's
+		// Model tab sends, because a person picking a model is picking
+		// from what the provider actually has rather than from a list
+		// somebody remembered to curate first.
+		ProviderModel string `json:"providerModel"`
+		Endpoint      string `json:"endpoint"`
+		Provider      string `json:"provider"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
+	}
+	if req.Model == "" && req.ProviderModel != "" {
+		// Find or create, here rather than in the client. Two calls —
+		// configure the model, then assign it — can half-fail, and the
+		// half that fails leaves a model row nothing is assigned to, or
+		// worse, an assignment to a row whose kind was never checked.
+		configured, err := s.ensureModel(r.Context(), req.ProviderModel, req.Provider, req.Endpoint)
+		if err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		req.Model = configured
 	}
 	from, to, err := s.DB.SetButlerRoute(name, req.Model, actingMember(id))
 	if errors.Is(err, runtimedb.ErrNotFound) {
@@ -209,6 +243,78 @@ func (s *Server) setButlerModel(r *http.Request, id principal.Identity) (any, in
 			to.Name, to.Model)
 	}
 	return out, http.StatusOK, nil
+}
+
+// ensureModel returns the configured model for a provider's model,
+// creating it if this house has not used it before.
+//
+// The kind is decided HERE and never taken from the caller. It is the
+// data boundary — the one fact this whole design exists to keep
+// answerable — and a client that could name it is a client that could
+// name it wrongly, or maliciously. looksLocal draws it from the
+// provider's own listing and is deliberately wrong in the safe
+// direction: an unrecognised naming scheme reports as NOT local, so
+// somebody is warned about a model that turns out to stay home rather
+// than reassured about one that does not.
+//
+// An existing row is returned untouched. Its kind is immutable at the
+// schema level anyway, but the reason matters more than the mechanism:
+// Butlers were assigned to it on the strength of where its words go.
+func (s *Server) ensureModel(ctx context.Context, providerModel, provider, endpoint string) (string, error) {
+	providerModel = strings.TrimSpace(providerModel)
+	if providerModel == "" {
+		return "", fmt.Errorf("naming a provider model needs the model")
+	}
+	existing, err := s.DB.ListModels()
+	if err != nil {
+		return "", err
+	}
+	for _, m := range existing {
+		if m.ProviderModel == providerModel && (endpoint == "" || m.Endpoint == endpoint) {
+			if !m.Enabled {
+				return "", fmt.Errorf("%s is turned off; turn it back on before assigning a Butler to it", m.Name)
+			}
+			return m.Name, nil
+		}
+	}
+	if endpoint == "" || provider == "" {
+		return "", fmt.Errorf(
+			"%s is not configured here yet, so assigning it needs the provider and endpoint it comes from", providerModel)
+	}
+	// The kind comes from the provider's own listing, with the real
+	// size, never from the caller and never from the name alone. If the
+	// endpoint cannot be reached, nothing is created: a model whose
+	// destination could not be established is not one to assign a
+	// Butler to on a guess.
+	offered, _, _, err := offeredModels(ctx, endpoint)
+	if err != nil {
+		return "", fmt.Errorf("could not ask %s what it serves, so %s cannot be assigned yet: %w",
+			endpoint, providerModel, err)
+	}
+	kind := ""
+	for _, m := range offered {
+		if m.Name == providerModel {
+			kind = runtimedb.ModelCloud
+			if m.Local {
+				kind = runtimedb.ModelLocal
+			}
+			break
+		}
+	}
+	if kind == "" {
+		return "", fmt.Errorf("%s does not serve a model called %s", endpoint, providerModel)
+	}
+	// The model's own name IS the configured name. The alternative is a
+	// separate label, and a household that has to invent one ends up
+	// with "kitchen-box" pointing at qwen3.5:4b — a screen that answers
+	// "which model saw this" with a place.
+	if err := s.DB.UpsertModel(runtimedb.Model{
+		Name: providerModel, Kind: kind, Provider: provider,
+		ProviderModel: providerModel, Endpoint: endpoint, Enabled: true,
+	}, "console"); err != nil {
+		return "", err
+	}
+	return providerModel, nil
 }
 
 func (s *Server) retireButler(r *http.Request, id principal.Identity) (any, int, error) {

@@ -500,9 +500,14 @@ tr.clickable:hover { background: var(--faint); }
 .main h2 { font-size: 20px; margin: 0 0 var(--space-1); }
 
 .chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+/* A chip is a pill, like every other pill in the set (ADR-W027): --st-
+   badges are 999px and the token note says --radius-sm is for a chip's
+   INNER corners, not its outline. This was 4px, which read as a small
+   square and made a filter row look like a set of buttons rather than
+   a set of choices. */
 .chip {
   border: 1px solid var(--hair);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   padding: 2px 8px;
   font-size: 12px;
   background: var(--faint);
@@ -1555,7 +1560,7 @@ details > pre { margin-top: var(--space-2); }
 .btn-small { font-size: 11.5px; padding: 3px var(--space-3); }
 
 .roster-filters { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
-.roster-filters .chip { cursor: pointer; }
+.roster-filters .chip { cursor: pointer; padding: 3px var(--space-4); font-weight: 500; }
 .roster-filters .chip.on { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 16%, transparent); color: var(--mark); }
 .roster-search { margin-left: auto; display: flex; gap: var(--space-3); align-items: center; }
 .roster-search input { min-width: 200px; }

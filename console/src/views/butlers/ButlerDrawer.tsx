@@ -136,7 +136,7 @@ export function ButlerDrawer({
             <ErrorLine error={scope.error} />
             {tab === "identity" && <TabIdentity row={row} say={say} onChanged={onChanged} />}
             {tab === "model" && (
-              <TabModel row={row} routes={routes} health={h} say={say} onChanged={onChanged} />
+              <TabModel row={row} configured={routes} health={h} say={say} onChanged={onChanged} />
             )}
             {tab === "reach" && (
               <TabReach row={row} scope={scope.data} say={say} onChanged={reloadAll} />

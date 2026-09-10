@@ -941,7 +941,7 @@ export const api = {
   offeredModels: (endpoint?: string) =>
     call<{ endpoint: string; models: OfferedModel[] }>(
       "GET",
-      `/api/v1/butler/models${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ""}`,
+      `/api/v1/butler/models/offered${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ""}`,
     ),
   models: () =>
     call<{ models: { model: Model; carriesActions: boolean; leavesTheHouse: boolean }[] | null }>(
@@ -960,7 +960,12 @@ export const api = {
     directive?: string;
     surface: string;
     profile: string;
-    model: string;
+    // Either an already-configured model by name, or one the provider
+    // offers plus where it comes from. The server decides the kind.
+    model?: string;
+    providerModel?: string;
+    provider?: string;
+    endpoint?: string;
   }) => call<ButlerRow>("POST", "/api/v1/butlers", b),
   butlerScope: (name: string) =>
     call<{ scope: ButlerScope; people: string[] | null; addresses: ButlerAddress[] | null }>(
@@ -970,6 +975,16 @@ export const api = {
   // Applies immediately (A8). crossesToCloud is set when this move
   // sends an open conversation's history out of the house on the next
   // message, and warning carries the sentence to show.
+  // Assigns a model the provider offers, configuring it here if this
+  // house has not used it before. The kind — whether asking it leaves
+  // the house — is decided by the server from the provider's own
+  // listing, never sent from here.
+  assignProviderModel: (name: string, providerModel: string, provider: string, endpoint: string) =>
+    call<ButlerRow & { crossesToCloud?: boolean; warning?: string; previousModel?: string }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/model`,
+      { providerModel, provider, endpoint },
+    ),
   setButlerModel: (name: string, model: string) =>
     call<ButlerRow & { crossesToCloud?: boolean; warning?: string; previousModel?: string }>(
       "PUT",

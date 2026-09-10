@@ -1,37 +1,64 @@
 import { useState } from "react";
 import { Warning } from "@phosphor-icons/react";
-import { api, type AskResponse, type ButlerRow, type Model } from "../../api";
-import { ErrorLine } from "../../lib";
+import { api, type AskResponse, type ButlerRow, type Model, type OfferedModel } from "../../api";
+import { ErrorLine, useLoad } from "../../lib";
 import { Confirm } from "../../ui/Confirm";
 import { Dot, Kind } from "../../ui/status";
 import { Say } from "./ButlerDrawer";
 
 // Which model answers, and what that means for the material.
 //
-// This tab replaces a `<select>`, and the reason it is bigger than one
-// is that a select makes every option look alike. The routes are in two
-// labelled lists — ON YOUR HARDWARE and OUTSIDE THE HOUSE — because
-// that boundary is the most consequential thing about the choice, and a
-// dropdown renders it as a suffix somebody scrolls past.
+// The list is what the PROVIDER actually serves, not what this house
+// has configured. Those were the same thing while a deployment had two
+// models set up by hand, and the difference showed the moment it did
+// not: a tab offering "kitchen-box" and "ollama-cloud" is naming
+// places, and the person choosing wants to see gemma4:e4b and
+// qwen3.5:9b — the models. A configured entry is created behind this
+// when one is chosen for the first time.
+//
+// Two labelled lists rather than a select, because ON YOUR HARDWARE and
+// OUTSIDE THE HOUSE is the most consequential thing about the choice
+// and a dropdown renders it as a suffix somebody scrolls past. Whether
+// a model is local is the SERVER's verdict, drawn from the provider's
+// own listing: Ollama does not say outright, so it is inferred from the
+// naming and a size no real weights file could be, and it is
+// deliberately wrong in the safe direction — an unrecognised scheme
+// reads as leaving the house.
 //
 // Switching applies at once (A8). The only friction is local-to-cloud,
-// which gets a confirmation, and a disabled route, which gets a toast
-// saying where to turn it back on. Cloud-to-local needs neither: it is
-// strictly a narrowing.
+// which gets a confirmation. Cloud-to-local needs none: it is strictly
+// a narrowing.
 export function TabModel({
   row,
-  routes,
+  configured,
   health,
   say,
   onChanged,
 }: {
   row: ButlerRow;
-  routes: Model[];
+  // Only used to discover which provider endpoints this house knows
+  // about. The list a person picks from comes from the provider.
+  configured: Model[];
   health: { kind: Kind; long: string };
   say: Say;
   onChanged: () => void;
 }) {
   const b = row.butler;
+  // The endpoints this house knows about, newest choice first: the one
+  // this Butler is on, then any other a configured model names. A
+  // household with one Ollama sees one list and never thinks about it.
+  const endpoints = Array.from(
+    new Set([b.endpoint, ...configured.map((m) => m.endpoint)].filter(Boolean) as string[]),
+  );
+  const [endpoint, setEndpoint] = useState(endpoints[0] ?? "");
+  const offered = useLoad(
+    () => (endpoint ? api.offeredModels(endpoint) : Promise.resolve(null)),
+    [endpoint],
+  );
+  // What this Butler answers on, in the provider's own vocabulary —
+  // which is what the list below is in. Its configured NAME may be
+  // something else entirely.
+  const current = b.providerModel ?? "";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
@@ -40,17 +67,13 @@ export function TabModel({
   const [asking, setAsking] = useState(false);
   const [answer, setAnswer] = useState<AskResponse | null>(null);
 
-  function pick(r: Model) {
-    if (r.name === b.model) return;
-    if (!r.enabled) {
-      say(`${r.name} is turned off in Model routes`, "warn");
+  function pick(m: OfferedModel) {
+    if (m.name === current) return;
+    if (!m.local && b.modelKind === "local") {
+      setConfirm(m.name);
       return;
     }
-    if (r.kind === "cloud" && b.modelKind === "local") {
-      setConfirm(r.name);
-      return;
-    }
-    void apply(r.name);
+    void apply(m.name);
   }
 
   // The response is kept rather than discarded, because the crossing
@@ -61,7 +84,7 @@ export function TabModel({
     setBusy(true);
     setError(null);
     try {
-      const res = await api.setButlerModel(b.name, name);
+      const res = await api.assignProviderModel(b.name, name, b.provider ?? "", endpoint);
       setWarning(res.warning ?? null);
       setConfirm(null);
       say(
@@ -93,14 +116,17 @@ export function TabModel({
     }
   }
 
-  const to = routes.find((r) => r.name === confirm);
+  // The crossing dialog names the provider it is about to send to, so
+  // it is answered from the offered list the person just picked from
+  // rather than from what happens to be configured.
+  const to = (offered.data?.models ?? []).find((m) => m.name === confirm);
 
   return (
     <div className="tab-stack">
       <div className="card">
         <div className="eyebrow">ON NOW</div>
         <div className="row on-now">
-          <strong className="on-now-route">{b.model}</strong>
+          <strong className="on-now-route">{b.providerModel || b.model}</strong>
           <span className="row">
             <Dot kind={health.kind} />
             <span className={health.kind === "ok" ? "" : `ink-${health.kind}`}>{health.long}</span>
@@ -108,20 +134,41 @@ export function TabModel({
         </div>
         <div className="muted tnum">
           {[b.provider, b.endpoint].filter(Boolean).join(" · ")}
+          {b.providerModel && b.providerModel !== b.model && ` · configured as ${b.model}`}
         </div>
       </div>
 
-      <RouteList
+      {endpoints.length > 1 && (
+        <div>
+          <div className="eyebrow">FROM</div>
+          <select
+            aria-label="Provider endpoint"
+            value={endpoint}
+            onChange={(e) => setEndpoint(e.target.value)}
+          >
+            {endpoints.map((e) => (
+              <option key={e} value={e}>
+                {e}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      <ErrorLine error={offered.error} />
+      {offered.loading && <div className="muted">Asking {endpoint} what it serves…</div>}
+
+      <ModelList
         title="ON YOUR HARDWARE"
-        routes={routes.filter((r) => r.kind === "local")}
-        current={b.model}
+        models={(offered.data?.models ?? []).filter((m) => m.local)}
+        current={current}
         busy={busy}
         onPick={pick}
       />
-      <RouteList
+      <ModelList
         title="OUTSIDE THE HOUSE"
-        routes={routes.filter((r) => r.kind === "cloud")}
-        current={b.model}
+        models={(offered.data?.models ?? []).filter((m) => !m.local)}
+        current={current}
         busy={busy}
         onPick={pick}
       />
@@ -164,7 +211,7 @@ export function TabModel({
           kind="warn"
           icon={<Warning size={15} />}
           title={`This sends ${b.name}'s material outside the house`}
-          body={`Everything anyone tells ${b.name} from now on goes to ${to.provider}. What it already remembers stays where it is.`}
+          body={`Everything anyone tells ${b.name} from now on goes to ${confirm}, which runs outside the house. What it already remembers stays where it is.`}
           listTitle="WHAT CHANGES"
           lines={[
             "the conversation open right now carries over on its next message",
@@ -172,12 +219,65 @@ export function TabModel({
             "Activity will record the crossing, with your name on it",
           ]}
           confirmLabel="Yes, switch it"
-          cancelLabel={`Keep ${b.model}`}
+          cancelLabel={`Keep ${b.providerModel || b.model}`}
           busy={busy}
           onCancel={() => setConfirm(null)}
           onConfirm={() => void apply(confirm)}
         />
       )}
+    </div>
+  );
+}
+
+// One labelled list of models the provider serves.
+//
+// A model already in use shows as selected even if the provider has
+// since stopped listing it — the Butler is still ON it, and a list that
+// quietly showed nothing selected would be the one lie this screen must
+// not tell. It is drawn as unavailable rather than hidden.
+export function ModelList({
+  title,
+  models,
+  current,
+  busy,
+  onPick,
+}: {
+  title: string;
+  models: OfferedModel[];
+  current: string;
+  busy: boolean;
+  onPick: (m: OfferedModel) => void;
+}) {
+  if (models.length === 0) return null;
+  return (
+    <div>
+      <div className="eyebrow">{title}</div>
+      <div className="route-list">
+        {models.map((m) => {
+          const on = m.name === current;
+          return (
+            <button
+              key={m.name}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              disabled={busy}
+              className={`route-row${on ? " on" : ""}`}
+              onClick={() => onPick(m)}
+            >
+              <span className="radio" aria-hidden />
+              <span className="ellip">{m.name}</span>
+              <span className={`route-note tnum ${m.local ? "ink-ok" : "ink-warn"}`}>
+                {m.local
+                  ? m.parameters
+                    ? `${m.parameters} · on your hardware`
+                    : "on your hardware"
+                  : "leaves the house"}
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

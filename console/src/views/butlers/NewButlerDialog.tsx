@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { X } from "@phosphor-icons/react";
-import { api, type ButlerSurface, type Model } from "../../api";
-import { ErrorLine } from "../../lib";
+import { api, type ButlerSurface, type Model, type OfferedModel } from "../../api";
+import { ErrorLine, useLoad } from "../../lib";
 import { Dot } from "../../ui/status";
-import { RouteList } from "./TabModel";
+import { ModelList } from "./TabModel";
 import { Say } from "./ButlerDrawer";
 
 interface Draft {
@@ -38,25 +38,36 @@ export function NewButlerDialog({
   onClose: () => void;
   onCreated: (name: string, tab?: string) => void;
 }) {
-  const usable = routes.filter((r) => r.enabled);
+  // The endpoints this house knows about; the models come from
+  // whichever is picked, not from what has been configured here.
+  const endpoints = Array.from(new Set(routes.map((r) => r.endpoint).filter(Boolean) as string[]));
+  const [endpoint, setEndpoint] = useState(endpoints[0] ?? "");
+  const provider = routes.find((r) => r.endpoint === endpoint)?.provider ?? "";
+  const offered = useLoad(
+    () => (endpoint ? api.offeredModels(endpoint) : Promise.resolve(null)),
+    [endpoint],
+  );
   const [draft, setDraft] = useState<Draft>({
     name: "",
     directive: "",
     surface: "family",
-    model: usable[0]?.name ?? "",
+    model: "",
   });
   const [template, setTemplate] = useState("blank");
   const [nameError, setNameError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const chosen = routes.find((r) => r.name === draft.model);
-  const cloud = chosen?.kind === "cloud";
+  const chosen = (offered.data?.models ?? []).find((m) => m.name === draft.model);
+  const cloud = chosen ? !chosen.local : false;
 
   function applyTemplate(key: string) {
     setTemplate(key);
     setNameError(null);
-    const local = usable.find((r) => r.kind === "local")?.name ?? draft.model;
+    // A template preselects a model that stays in the house. It is a
+    // starting point, not a decision: the person still sees both lists
+    // and the summary card restates whichever they end on.
+    const local = (offered.data?.models ?? []).find((m) => m.local)?.name ?? draft.model;
     const T: Record<string, Partial<Draft>> = {
       blank: { name: "", directive: "", surface: "family" },
       health: { name: "health", directive: "keeps track of training and sleep", surface: "family" },
@@ -84,7 +95,9 @@ export function NewButlerDialog({
         directive: draft.directive.trim(),
         surface: draft.surface,
         profile: draft.surface === "admin" ? "operator" : "household",
-        model: draft.model,
+        providerModel: draft.model,
+        provider,
+        endpoint,
       });
       say(`${name} made — give it an address so somebody can talk to it`, "warn");
       onCreated(name, openReach ? "reach" : undefined);
@@ -186,17 +199,37 @@ export function NewButlerDialog({
             </div>
           </div>
 
-          <RouteList
-            title="MODEL"
-            routes={routes}
-            current={draft.model}
-            busy={busy}
-            onPick={(r) =>
-              r.enabled
-                ? setDraft({ ...draft, model: r.name })
-                : say(`${r.name} is turned off in Model routes`, "warn")
-            }
-          />
+          <div>
+            {endpoints.length > 1 && (
+              <select
+                aria-label="Provider endpoint"
+                value={endpoint}
+                onChange={(e) => setEndpoint(e.target.value)}
+              >
+                {endpoints.map((e) => (
+                  <option key={e} value={e}>
+                    {e}
+                  </option>
+                ))}
+              </select>
+            )}
+            <ErrorLine error={offered.error} />
+            {offered.loading && <div className="muted">Asking {endpoint} what it serves…</div>}
+            <ModelList
+              title="ON YOUR HARDWARE"
+              models={(offered.data?.models ?? []).filter((m) => m.local)}
+              current={draft.model}
+              busy={busy}
+              onPick={(m: OfferedModel) => setDraft({ ...draft, model: m.name })}
+            />
+            <ModelList
+              title="OUTSIDE THE HOUSE"
+              models={(offered.data?.models ?? []).filter((m) => !m.local)}
+              current={draft.model}
+              busy={busy}
+              onPick={(m: OfferedModel) => setDraft({ ...draft, model: m.name })}
+            />
+          </div>
 
           <div className={`card summary-card${cloud ? " summary-cloud" : ""}`}>
             <div className="eyebrow">YOU ARE MAKING</div>
