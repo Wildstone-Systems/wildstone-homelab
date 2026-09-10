@@ -1337,6 +1337,14 @@ export const api = {
     groups: string[];
     node?: string;
   }) => call<PlanRecord>("POST", "/api/v1/household/members", m),
+  // Editing is a proposal like adding is: the account list belongs in
+  // state, in plans, in approval and in audit. Groups may only be ADDED
+  // — the provisioning job never removes a membership, so a plan that
+  // dropped one would apply and change nothing in the directory.
+  updateHouseholdMember: (
+    username: string,
+    m: { displayName?: string; email?: string; groups: string[] },
+  ) => call<PlanRecord>("PUT", `/api/v1/household/members/${encodeURIComponent(username)}`, m),
   backups: () => call<{ runs: BackupRun[] }>("GET", "/api/v1/backups"),
   runBackup: (plan: string) =>
     call<unknown>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/run`),

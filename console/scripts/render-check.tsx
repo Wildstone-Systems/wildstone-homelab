@@ -55,7 +55,7 @@ const store = new Map<string, string>();
   length: 0,
 } as Storage;
 import { Prerequisites } from "../src/views/Chat";
-import { Household, AddMember } from "../src/views/Household";
+import { Household, AddMember, EditMember } from "../src/views/Household";
 import { AttentionBanner, Butlers, NoButlers, NoMatches, RosterRow, needsAttention, reachLine, select, toolLine } from "../src/views/Butlers";
 import { Tool } from "../src/views/butlers/TabTools";
 import { ButlerPicker, matches, openingFor, preferred } from "../src/views/butler/picker";
@@ -1696,6 +1696,36 @@ const blockedDown = renderToString(h(BlockedStrip, {
   row: chatRow({}, { reachable: false }), onManage: () => {},
 }));
 check("a model that is not answering says that instead", text(blockedDown).includes("is not answering"), text(blockedDown));
+
+// ------------------------------------------------ member editing
+//
+// The drawer's job is to be honest about what it can and cannot do.
+const memberRow = {
+  username: "giulia", displayName: "Giulia", email: "g@example.com",
+  groups: ["media_users"], owner: "system", node: "wildstone-homelab",
+};
+const editing = renderToString(h(EditMember, {
+  member: memberRow,
+  groups: [
+    { name: "media_users", owner: "capability/media", node: "wildstone-homelab" },
+    { name: "console_users", owner: "capability/console", node: "wildstone-homelab" },
+  ],
+  onClose: () => {}, onDone: () => {},
+}));
+check("a group they are in is shown as already theirs", text(editing).includes("already in it"), text(editing));
+// The additive rule, said where the control is rather than discovered
+// from an app that still opens.
+check("it says a group cannot be taken away here", text(editing).includes("never removes one"), text(editing));
+check("a group they are already in cannot be unticked", editing.includes("disabled"), editing.slice(0, 900));
+// A group declared on another node is not offered: a membership is only
+// real on the directory the group is declared against.
+const otherNode = renderToString(h(EditMember, {
+  member: memberRow,
+  groups: [{ name: "elsewhere_users", owner: "capability/x", node: "other-node" }],
+  onClose: () => {}, onDone: () => {},
+}));
+check("a group on another directory is not offered", !otherNode.includes("elsewhere_users"), otherNode.slice(0, 600));
+check("and it says why there is nothing to pick", text(otherNode).includes("No groups are declared"), text(otherNode));
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

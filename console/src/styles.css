@@ -1824,6 +1824,13 @@ details > pre { margin-top: var(--space-2); }
    readiness" onto one line without cutting the two that decide whether
    you should be talking to this Butler at all. */
 
+/* A table row that opens something. The whole row is the target, and it
+   is reachable by keyboard — a clickable <tr> with no tabindex is a
+   control only a mouse can find. */
+.row-clickable { cursor: pointer; }
+.row-clickable:hover td { background: var(--faint); }
+.row-clickable:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+
 .picker-wrap { position: relative; flex: 1; min-width: 0; }
 .picker {
   display: flex; align-items: center; gap: var(--space-3); width: 100%;

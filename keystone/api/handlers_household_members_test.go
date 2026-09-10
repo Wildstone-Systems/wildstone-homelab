@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
@@ -193,5 +194,50 @@ func TestAddHouseholdMemberRefusals(t *testing.T) {
 		"username": "kim", "email": "kim@example.com",
 	}, nil); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("concierge add: status = %d, want 403", resp.StatusCode)
+	}
+}
+
+// Editing a member cannot take a group away.
+//
+// The provisioning job is additive in both directions: it adds a
+// membership it is missing and never removes one. So a plan that
+// dropped a group would apply cleanly and leave the person in the
+// group — the screen saying "removed" while the app still opens for
+// them. Refusing names the group and says where it can be done.
+func TestEditingAMemberCannotRemoveAGroup(t *testing.T) {
+	h := newHarness(t)
+	seedDirectory(t, h)
+
+	var p planView
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/members", map[string]any{
+		"username": "kim", "displayName": "Kim", "email": "kim@example.com", "groups": []string{"photos_users"},
+	}, &p); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("adding = %d", resp.StatusCode)
+	}
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/plans/"+p.ID+"/approve", nil, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("approve = %d", resp.StatusCode)
+	}
+
+	// A name change is fine, and is a proposal like everything else.
+	var edit planView
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/household/members/kim", map[string]any{
+		"displayName": "Kim H", "groups": []string{"photos_users"},
+	}, &edit); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("editing = %d", resp.StatusCode)
+	}
+	if edit.State != runtimedb.PlanProposed {
+		t.Fatalf("an edit applied without approval: %q", edit.State)
+	}
+
+	// Dropping a group is refused, by name.
+	var body map[string]any
+	resp := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/household/members/kim", map[string]any{
+		"groups": []string{},
+	}, &body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("dropping a group = %d, want 400", resp.StatusCode)
+	}
+	if msg, _ := body["error"].(string); !strings.Contains(msg, "photos_users") {
+		t.Fatalf("the refusal did not name the group: %v", body)
 	}
 }

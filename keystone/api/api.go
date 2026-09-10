@@ -311,6 +311,10 @@ func (s *Server) Handler() http.Handler {
 	// approves the plan.
 	mux.Handle("GET /api/v1/household/members", s.handle(principal.VerbRead, s.listHouseholdMembers))
 	mux.Handle("POST /api/v1/household/members", s.handle(principal.VerbPropose, s.addHouseholdMember))
+	// Editing somebody is a proposal like adding one, and for the same
+	// reason: the account list belongs in state, in plans, in approval
+	// and in audit.
+	mux.Handle("PUT /api/v1/household/members/{username}", s.handle(principal.VerbPropose, s.updateHouseholdMember))
 	mux.Handle("GET /api/v1/household/groups", s.handle(principal.VerbRead, s.listHouseholdGroups))
 
 	// Butler (ADR-W017 A2): ask carries the read verb — conversing is not
@@ -390,6 +394,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/butler/tasks/{id}/feedback", s.handle(principal.VerbRead, s.addButlerTaskFeedback))
 	mux.Handle("POST /api/v1/butler/tasks/{id}/evaluation", s.handle(principal.VerbManage, s.exportButlerEvaluation))
 	mux.Handle("POST /api/v1/butler/tasks/{id}/debug", s.handle(principal.VerbManage, s.enableButlerDebugCapture))
+	mux.Handle("POST /api/v1/butler/tasks/{id}/cancel", s.handle(principal.VerbManage, s.cancelButlerTask))
 	mux.Handle("GET /api/v1/butler/evaluations", s.handle(principal.VerbRead, s.listButlerEvaluations))
 	mux.Handle("GET /api/v1/butler/debug", s.handle(principal.VerbRead, s.listButlerDebugCaptures))
 	mux.Handle("POST /api/v1/butler/members/{member}/offboarding", s.handle(principal.VerbManage, s.offboardMember))
