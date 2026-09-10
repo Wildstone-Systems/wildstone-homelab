@@ -923,6 +923,27 @@ export const api = {
     call<{ retired: string }>("DELETE", `/api/v1/butlers/${encodeURIComponent(name)}`),
   householdRoutines: () =>
     call<{ routines: HouseholdRoutine[] | null }>("GET", "/api/v1/household/routines"),
+  // A routine is born a DRAFT whatever is asked for: activation goes
+  // through the state endpoint and the Plan boundary, which is where a
+  // human is. The form says so rather than letting the server refuse.
+  createHouseholdRoutine: (r: { name: string; document: string; ownership?: string }) =>
+    call<{ name: string; seq: number }>("POST", "/api/v1/household/routines", {
+      name: r.name,
+      document: r.document,
+      ownership: r.ownership ?? "wildstone",
+      externalId: "",
+      connection: "",
+      state: "",
+    }),
+  // Editing bumps the revision, and any review link issued for the old
+  // one stops approving anything. The note comes back from the server
+  // and is shown rather than swallowed.
+  editHouseholdRoutine: (name: string, document: string, note: string) =>
+    call<{ revision: number; note?: string }>(
+      "POST",
+      `/api/v1/household/routines/${encodeURIComponent(name)}/edit`,
+      { document, note },
+    ),
   setRoutineState: (name: string, state: string) =>
     call<{ routine: HouseholdRoutine; performsActions: boolean }>(
       "POST",
