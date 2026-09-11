@@ -36,6 +36,29 @@ only. The same goes for anything you write into a report or an issue.
 
 ---
 
+## One working tree each
+
+**Two sessions in one clone will silently overwrite each other.** It
+happened: both host-round sessions checked out through
+`/home/user/wildstone-homelab` fifteen seconds apart, and either
+one's next `git checkout` would have swapped the files out from under
+the other mid-edit.
+
+If another session is already working in the clone, take your own tree:
+
+```bash
+cd /home/user/wildstone-homelab
+git worktree add ../ws-<issue> <your branch>
+cd ../ws-<issue>
+```
+
+Same repository and history, separate checkout, and git refuses to have
+one branch checked out in two trees — which is the guard you want.
+`git worktree remove ../ws-<issue>` when you are done.
+
+Pick your own port and data directory for the scratch instance too. Two
+of them on `:19441` is the same collision by another route.
+
 ## A scratch instance
 
 Build the commit under audit and run it beside everything else. It has
@@ -215,11 +238,23 @@ runtime behaviour.
 interrupts the household and anyone else reading it. Recorded here
 because a remediation issue will need it.
 
+**Commit before you build.** Go stamps the build with the revision it
+came from and marks `vcs.modified=true` when the tree was dirty, and a
+binary built from a dirty tree is one no commit describes. The
+household is running one right now (F-157-22): answering "is the
+deployment the code we audited" took string-matching a wordlist out of
+the binary, and the assumption was one keystroke from being wrong.
+
 ```bash
+git status --short                      # must be empty
 cd keystone && go build -o /tmp/keystone ./cmd/keystone
+go version -m /tmp/keystone | grep vcs  # vcs.modified must be false
 sudo install -m0755 /tmp/keystone /usr/local/bin/keystone
 sudo systemctl restart keystone
 ```
+
+Afterwards, `go version -m /usr/local/bin/keystone` names the commit
+that is running. That is the whole point of the extra line.
 
 Migrations in `keystone/runtimedb/migrations/` run on start. They are
 append-only history: once one has applied, undoing it means writing
