@@ -110,6 +110,27 @@ for (const [theme, t] of [["dark", dark], ["light", light]]) {
   // The sparkline's ok bar is a 62% mix of the accent tint on the
   // surface it sits on. It is a mark, not text, so 3:1 is the bar.
   check(theme, "sparkline ok bar on surface", mix(hex(t["--mark"]), 0.62, surface), surface, AA_LARGE);
+
+  // Three states the Routines and Activity work introduced.
+  //
+  // An unmapped subject is st-warn as ordinary 13px table text on the
+  // page ground, not pill text on a tint — so it answers to full AA
+  // rather than to the pill floor above. It is the cell that explains
+  // why a routine never fired; it has to be readable.
+  check(theme, "unmapped subject on bg", hex(t["--st-warn"]), bg);
+
+  // A correlated row on the household stream fills with --faint, and
+  // the text over it was designed against the plain ground. Both the
+  // ink and the muted text have to survive the tint.
+  const faintPct = pct(t["--faint"], theme, "--faint");
+  const correlatedGround = mix(ink, faintPct, bg);
+  check(theme, "text on a correlated row", ink, correlatedGround);
+  check(theme, "muted text on a correlated row", mix(ink, mutedMix(t, theme), correlatedGround), correlatedGround);
+
+  // A .mono chip sits on --faint over the surface: the trigger and the
+  // tier on a routine card, read character by character.
+  const chipGround = mix(ink, faintPct, surface);
+  check(theme, "chip text on its faint fill", ink, chipGround);
 }
 
 console.log(failures === 0 ? "\nALL CONTRAST CHECKS PASSED" : `\n${failures} CONTRAST FAILURE(S)`);

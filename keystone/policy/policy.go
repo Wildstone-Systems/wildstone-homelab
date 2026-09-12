@@ -33,6 +33,19 @@ const (
 // belong to plans; a rule cannot restart a container, whoever wrote it.
 var automationTiers = map[string]bool{"read": true, "domestic": true}
 
+// AutomationTiers is that set, in a stable order, exported so anything
+// that OFFERS a tier to someone — the Console's routine form, the
+// Butler's authoring tool — offers only tiers this rule accepts.
+// Offering a tier policy will refuse is offering a rejection.
+func AutomationTiers() []string {
+	out := make([]string, 0, len(automationTiers))
+	for t := range automationTiers {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Classifications is the closed vocabulary, adopted unchanged from the
 // reference deployment (ADR-W009 A2 / scope Appendix B).
 var Classifications = map[string]bool{

@@ -3,6 +3,8 @@
 // pin them server-side). Resource specs come typed from the generated
 // schema (ADR-W007 A7).
 
+import type { AutomationSpec } from "./generated/resources";
+
 // ---------------------------------------------------------------- wire shapes
 
 export interface Identity {
@@ -853,8 +855,105 @@ export interface HouseholdRoutine {
   revision: number;
   state: "draft" | "trial" | "enabled" | "disabled";
   document: string;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: string;
   disabledAt?: string;
   disabledBy?: string;
+}
+
+// One recorded edit to a routine. The document is not carried: a
+// listing of every past version is a lot of bytes for a card that shows
+// three lines each.
+export interface RoutineRevision {
+  revision: number;
+  author: string;
+  at: string;
+  note: string;
+}
+
+// One event on the household stream (ADR-W024 A2). A second stream with
+// its own envelope and its own cursor — not the operational one.
+export interface HouseholdEvent {
+  seq: number;
+  eventId: string;
+  occurredAt: string;
+  recordedAt: string;
+  // Absent is valid: an unmapped subject is a real event that simply
+  // cannot fire a per-member rule (A8).
+  subject?: string;
+  // Stamped from the publisher token, never read off the payload (A10).
+  source: string;
+  type: string;
+  entity?: string;
+  payload?: Record<string, unknown>;
+  correlationId?: string;
+  schemaVersion: number;
+}
+
+// One routine, with what it does and what it has been doing.
+export interface RoutineDetail {
+  routine: HouseholdRoutine;
+  // The name the ENGINE knows this routine by — the document's
+  // metadata.name, which need not be the name it is filed under.
+  rule: string;
+  // The document parsed server-side, by the same path the engine uses.
+  // Null when it will not parse, which is not an error worth hiding —
+  // see specError.
+  spec: AutomationSpec | null;
+  specError?: string;
+  revisions: RoutineRevision[];
+  // The engine's own records for this rule over the last 7 days:
+  // automation.fired / suppressed / acted / action_failed. Not butler
+  // tasks — nothing produces a task of kind "routine".
+  runs: HouseholdEvent[];
+}
+
+// The closed grammar a routine may be written in (ADR-W024 A5), served
+// so a form cannot offer a value the validator or the policy engine will
+// then refuse. Offering free text here would be worse than offering
+// nothing: a routine triggering on an event nothing emits never fires,
+// and nothing tells its author why.
+export interface AutomationGrammar {
+  eventTypes: { type: string; package: string; capability?: string; subject?: string; description?: string }[];
+  actions: { tool: string; tier: string; package: string; capability?: string }[];
+  conditionKinds: string[];
+  contextKinds: string[];
+  tiers: string[];
+  weekdays: string[];
+}
+
+// One rule's verdict on one event, from the side-effect-free replay
+// (ADR-W024 A7/H3) — the same code path `wild automation replay` and the
+// Butler's dry_run_automation tool use.
+export interface ReplayDecision {
+  rule: string;
+  eventSeq: number;
+  eventId: string;
+  eventType: string;
+  subject?: string;
+  at: string;
+  fired: boolean;
+  // Why a suppressed decision stopped, naming the condition; for a fired
+  // one, "all conditions held".
+  reason: string;
+  action?: string;
+  tier?: string;
+  escalates?: boolean;
+}
+
+export interface ReplayResult {
+  rule: string;
+  from: string;
+  to: string;
+  draft: boolean;
+  enabled: boolean;
+  fired: number;
+  evaluated: number;
+  decisions: ReplayDecision[] | null;
+  // What a PROPOSAL of this rule would be refused for. Informational: a
+  // replay is not a proposal.
+  violations?: { rule?: string; message?: string; resource?: string }[] | null;
 }
 
 export const api = {
@@ -906,7 +1005,40 @@ export const api = {
   retireButler: (name: string) =>
     call<{ retired: string }>("DELETE", `/api/v1/butlers/${encodeURIComponent(name)}`),
   householdRoutines: () =>
-    call<{ routines: HouseholdRoutine[] | null }>("GET", "/api/v1/household/routines"),
+    call<{ routines: HouseholdRoutine[] | null; specs?: Record<string, AutomationSpec> }>(
+      "GET",
+      "/api/v1/household/routines",
+    ),
+  householdRoutine: (name: string) =>
+    call<RoutineDetail>("GET", `/api/v1/household/routines/${encodeURIComponent(name)}`),
+  // The household stream (ADR-W024 A2). Its own cursor, and the handler
+  // normalises an empty stream to [] rather than null.
+  householdEvents: (after: number, limit = 100) =>
+    call<HouseholdEvent[]>(
+      "GET",
+      `/api/v1/household/events?after=${after}&limit=${limit}`,
+    ),
+  automationGrammar: () =>
+    call<AutomationGrammar>("GET", "/api/v1/household/automations/grammar"),
+  // Exactly one of: name (an approved rule), rule (a draft document), or
+  // routine+spec (a draft held as a parsed spec, which is what the form
+  // has).
+  replayAutomation: (req: {
+    name?: string;
+    rule?: string;
+    routine?: string;
+    spec?: AutomationSpec;
+    limit?: number;
+  }) => call<ReplayResult>("POST", "/api/v1/household/automations/replay", req),
+  // The spec goes back as the structured form the detail read served,
+  // because the browser has no YAML writer and should not grow one: the
+  // server owns this grammar in both directions.
+  editRoutine: (name: string, spec: AutomationSpec, note: string, basedOnRevision: number) =>
+    call<{ revision: number; state: string; note: string }>(
+      "POST",
+      `/api/v1/household/routines/${encodeURIComponent(name)}/edit`,
+      { spec, note, basedOnRevision },
+    ),
   setRoutineState: (name: string, state: string) =>
     call<{ routine: HouseholdRoutine; performsActions: boolean }>(
       "POST",

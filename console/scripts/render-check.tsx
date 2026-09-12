@@ -26,7 +26,17 @@ import { eventKind } from "../src/ui/HourChart";
 import type { ConsoleSnapshot } from "../src/state";
 import type { BackupRun, ButlerSession, EventRow, Observed, PackageView, PlanRecord, ResourceView } from "../src/api";
 import { PlansView, PendingBand, PendingPlan, PlanSteps, ResolvedHistory } from "../src/views/Plans";
-import { ActivityView } from "../src/views/Activity";
+import { Activity, ActivityView } from "../src/views/Activity";
+import { RoutineList, ROUTINE_MEANING } from "../src/views/Routines";
+import { occurrences, Revisions, Runs, WhatItDoes } from "../src/views/RoutineDetail";
+import { changeWarning, EditForm } from "../src/views/RoutineEdit";
+import { diffReplays, summarise } from "../src/views/RoutineDryRun";
+import { correlated, Envelope, HouseholdStreamView, matchingEvents, routineOf, setOff } from "../src/views/HouseholdStream";
+import type { ReplayDecision, ReplayResult } from "../src/api";
+import type { AutomationGrammar, RoutineDetail } from "../src/api";
+import type { HouseholdEvent } from "../src/api";
+import type { HouseholdRoutine } from "../src/api";
+import type { AutomationSpec } from "../src/generated/resources";
 import { BackupsView, byPlan, explain } from "../src/views/Backups";
 import { SecretsView, usedBy, purposeOf } from "../src/views/Secrets";
 import { ChatView } from "../src/views/Chat";
@@ -1387,6 +1397,586 @@ const linked = renderToString(
 );
 check("the link is what is shown", linked.includes("t.me/wildstone_house_bot?start=K7QP-3XMR-9TWD"));
 check("the raw code is not shown beside it", !linked.includes(">K7QP-3XMR-9TWD<"));
+
+// ---------------------------------------------------------- Routines
+//
+// The list's job is two distinctions: what state a routine is in, and
+// whether Wildstone runs it at all.
+
+function routine(over: Partial<HouseholdRoutine>): HouseholdRoutine {
+  return {
+    name: "evening-mail", ownership: "wildstone", author: "sam", revision: 3,
+    state: "trial", document: "kind: Automation",
+    createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-07T00:00:00Z", updatedBy: "sam",
+    ...over,
+  };
+}
+
+const MAIL_SPEC = {
+  description: "Ask whether the mail was collected",
+  trigger: { eventType: "person.arrived_home" },
+  action: { tool: "notifications.notify", tier: "domestic" },
+} as unknown as AutomationSpec;
+
+function routineList(
+  routines: HouseholdRoutine[],
+  specs: Record<string, AutomationSpec> = {},
+  loading = false,
+) {
+  return renderToString(
+    h(RoutineList, {
+      load: { data: { routines, specs }, error: null, loading, reload: () => {} } as never,
+      onMode: () => {},
+    }),
+  );
+}
+
+const ROUTINES: HouseholdRoutine[] = [
+  routine({ name: "evening-mail", state: "trial" }),
+  routine({ name: "morning-lights", state: "enabled" }),
+  routine({ name: "bin-night", state: "draft" }),
+  routine({ name: "old-thing", state: "disabled", disabledBy: "alex" }),
+  routine({
+    name: "ha-porch-light", ownership: "native", state: "enabled",
+    externalId: "automation.porch", connection: "home-assistant",
+  }),
+];
+
+const rlist = routineList(ROUTINES, { "evening-mail": MAIL_SPEC });
+// Every state carries its meaning: the sentence is what tells a
+// household what trial actually costs them.
+for (const state of ["draft", "trial", "enabled", "disabled"] as const) {
+  check(`the list explains ${state}`, text(rlist).includes(ROUTINE_MEANING[state]));
+}
+check("the ownership split is structural", rlist.includes("Run by Wildstone") && rlist.includes("Native to an app"));
+check("a native routine says where it really lives", text(rlist).includes("runs inside home-assistant"));
+// Offering to edit something Wildstone cannot is worse than not showing
+// it, so a native card is not a button.
+const nativeCard = rlist.slice(rlist.indexOf("Native to an app"));
+check("a native routine does not open", !nativeCard.includes('role="button"'), nativeCard.slice(0, 200));
+// The trigger and the tier come parsed from the server; the browser has
+// no YAML parser and must not need one.
+check("a parsed spec becomes chips", rlist.includes("person.arrived_home") && text(rlist).includes("tier: domestic"));
+// A document the server could not parse costs its chips, not its row.
+check("a routine with no parsed spec still renders", rlist.includes("morning-lights"));
+
+const emptyList = routineList([]);
+check("an empty list still says so", text(emptyList).includes("No routines yet."));
+check("an empty list is not a failed one", !text(emptyList).includes("Nothing matches"));
+const loadingList = routineList([], {}, true);
+check("a list that has not loaded does not claim to be empty", !text(loadingList).includes("No routines yet."));
+
+// ------------------------------------------------- routine occurrences
+//
+// The stream records a decision and its consequences as separate events
+// sharing a correlation id. What a household asks is "what happened on
+// Tuesday", which is the group, not the events.
+
+function ev(over: Partial<HouseholdEvent>): HouseholdEvent {
+  return {
+    seq: 1, eventId: "e1", occurredAt: "2026-09-07T18:00:00Z",
+    recordedAt: "2026-09-07T18:00:00Z", source: "system/automation",
+    type: "automation.fired", entity: "mail-check", schemaVersion: 1,
+    ...over,
+  };
+}
+
+// A firing that went on to act is one row, not two.
+const acted = occurrences([
+  ev({ seq: 1, eventId: "a", correlationId: "c1", type: "automation.fired", subject: "sam" }),
+  ev({ seq: 2, eventId: "b", correlationId: "c1", type: "automation.acted", subject: "sam" }),
+]);
+check("a firing and its outcome are one occurrence", acted.length === 1, JSON.stringify(acted));
+check("an occurrence that acted says so", acted[0]?.acted === true && acted[0]?.outcome === "acted");
+
+// A trial routine fires and does not act. That is the whole point of
+// trial, and the table has to be able to show it.
+const watched = occurrences([
+  ev({ seq: 3, eventId: "c", correlationId: "c2", type: "automation.fired" }),
+]);
+check("a firing that never acted is not marked acted", watched[0]?.acted === false);
+check("a firing with no action reads as fired", watched[0]?.outcome === "fired");
+
+// A failure outranks everything else in the group.
+const failed = occurrences([
+  ev({ seq: 4, eventId: "d", correlationId: "c3", type: "automation.fired" }),
+  ev({ seq: 5, eventId: "e", correlationId: "c3", type: "automation.action_failed" }),
+]);
+check("a failed action is a failed occurrence", failed[0]?.outcome === "failed" && failed[0]?.tone === "bad");
+
+// A failed escalation is NOT a failed action. ADR-W024 A6: the Butler
+// did not answer, so the rule acted with its author's wording. Calling
+// that red reports a routine as broken on the one occasion the
+// deterministic backbone did exactly its job.
+const fellBack = occurrences([
+  ev({ seq: 10, eventId: "j", correlationId: "c5", type: "automation.fired" }),
+  ev({ seq: 11, eventId: "k", correlationId: "c5", type: "automation.escalation_failed" }),
+  ev({ seq: 12, eventId: "l", correlationId: "c5", type: "automation.acted" }),
+]);
+check("a failed escalation that still acted is not a failure", fellBack[0]?.tone === "ok", fellBack[0]?.outcome);
+check("the fallback wording is still reported", fellBack[0]?.outcome === "acted · own wording");
+check("a fallback occurrence counts as acted", fellBack[0]?.acted === true);
+// Skipped is the same story: no escalator configured, rule acts anyway.
+const skipped = occurrences([
+  ev({ seq: 13, eventId: "m", correlationId: "c6", type: "automation.escalation_skipped" }),
+  ev({ seq: 14, eventId: "n", correlationId: "c6", type: "automation.acted" }),
+]);
+check("a skipped escalation that still acted is not a failure", skipped[0]?.tone === "ok", skipped[0]?.outcome);
+// The Butler answered and its wording went out: no "own wording" note.
+const escalated = occurrences([
+  ev({ seq: 15, eventId: "o", correlationId: "c7", type: "automation.escalated" }),
+  ev({ seq: 16, eventId: "p", correlationId: "c7", type: "automation.acted" }),
+]);
+check("an answered escalation reads as a plain act", escalated[0]?.outcome === "acted");
+
+// Uncorrelated events are separate stories. Grouping them under the
+// empty string would collapse a week into one row.
+const loose = occurrences([
+  ev({ seq: 6, eventId: "f", type: "automation.suppressed" }),
+  ev({ seq: 7, eventId: "g", type: "automation.suppressed" }),
+]);
+check("events with no correlation id do not merge", loose.length === 2, JSON.stringify(loose));
+check("a suppressed decision is not an event worth alarm", loose[0]?.tone === "mute");
+
+// The earliest event in a group dates it: an occurrence happened when it
+// started, not when its last consequence landed.
+const ordered = occurrences([
+  ev({ seq: 8, eventId: "h", correlationId: "c4", type: "automation.acted", occurredAt: "2026-09-07T18:00:05Z" }),
+  ev({ seq: 9, eventId: "i", correlationId: "c4", type: "automation.fired", occurredAt: "2026-09-07T18:00:00Z" }),
+]);
+check("an occurrence is dated by its first event", ordered[0]?.at === "2026-09-07T18:00:00Z", ordered[0]?.at);
+
+// ------------------------------------------------------ routine detail
+
+const FULL_SPEC = {
+  description: "Ask whether the mail was collected on arriving home",
+  trigger: { eventType: "person.arrived_home" },
+  conditions: [{ kind: "timeOfDay", after: "12:00" }, { kind: "cooldown", window: "20h" }],
+  context: [{ kind: "recent", eventType: "pantry.meal_logged", limit: 3 }],
+  escalation: { prompt: "Is anyone still out?", into: "family" },
+  action: { tool: "notifications.notify", tier: "domestic" },
+} as unknown as AutomationSpec;
+
+const does = renderToString(h(WhatItDoes, { spec: FULL_SPEC, document: "" }));
+// The schema's own field names. A household that reads "when" here and
+// "trigger" in the document, the CLI and every engine error is reading
+// two vocabularies for one thing.
+for (const label of ["trigger", "conditions", "context", "escalation", "action"]) {
+  check(`the spec is labelled ${label}`, text(does).includes(label));
+}
+check("a condition keeps its window", text(does).includes("window 20h"));
+check("the action names its tier", text(does).includes("tier domestic"));
+// The tier says how much authority the action has; the params say what
+// actually gets sent. This screen is where someone presses "Let it act",
+// so showing the first without the second asks for a decision on a
+// summary.
+const withParams = renderToString(
+  h(WhatItDoes, {
+    spec: {
+      ...FULL_SPEC,
+      action: {
+        tool: "notifications.notify",
+        tier: "domestic",
+        params: { message: "Did you get the mail?", to: "sam" },
+      },
+    } as unknown as AutomationSpec,
+    document: "",
+  }),
+);
+check("the action shows what it will send", text(withParams).includes("Did you get the mail?"));
+check("the action shows who it will reach", text(withParams).includes("sam"));
+
+// A routine whose document will not parse is exactly the one someone
+// needs to look at.
+const broken = renderToString(
+  h(WhatItDoes, { spec: null, specError: "parsing rule: bad yaml", document: "not: [yaml" }),
+);
+check("an unreadable spec explains itself", text(broken).includes("does not parse"));
+check("an unreadable spec still shows the document", text(broken).includes("not: [yaml"));
+
+// The acted column is what makes trial legible.
+const trialRuns = renderToString(
+  h(Runs, {
+    runs: [ev({ seq: 1, eventId: "a", correlationId: "c1", type: "automation.fired", subject: "sam" })],
+    routine: routine({ state: "trial" }),
+  }),
+);
+check("a trial run says it did not act, and why", text(trialRuns).includes("no · trial"));
+const liveRuns = renderToString(
+  h(Runs, {
+    runs: [
+      ev({ seq: 1, eventId: "a", correlationId: "c1", type: "automation.fired", subject: "sam" }),
+      ev({ seq: 2, eventId: "b", correlationId: "c1", type: "automation.acted", subject: "sam" }),
+    ],
+    routine: routine({ state: "enabled" }),
+  }),
+);
+check("a run that acted says yes", text(liveRuns).includes(">yes<"));
+// An event with no subject is a real event that cannot fire a
+// per-member rule (ADR-W024 A8), not a blank cell.
+const unmappedRun = renderToString(
+  h(Runs, {
+    runs: [ev({ seq: 1, eventId: "a", type: "automation.suppressed" })],
+    routine: routine({ state: "enabled" }),
+  }),
+);
+check("a run with no subject reads as unmapped", text(unmappedRun).includes("unmapped"));
+// An empty table and a routine that has never run are different facts.
+const noRuns = renderToString(h(Runs, { runs: [], routine: routine({ state: "trial" }) }));
+check("no runs says nothing triggered it", text(noRuns).includes("Nothing has triggered it"));
+const stoppedRuns = renderToString(h(Runs, { runs: [], routine: routine({ state: "disabled" }) }));
+check("a stopped routine says it has not been running", text(stoppedRuns).includes("has not been running"));
+
+const revs = renderToString(
+  h(Revisions, {
+    revisions: [
+      { revision: 2, author: "alex", at: "2026-09-07T00:00:00Z", note: "narrowed the window" },
+      { revision: 1, author: "sam", at: "2026-09-01T00:00:00Z", note: "created" },
+    ],
+  }),
+);
+check("a revision names who changed it and why", text(revs).includes("alex") && text(revs).includes("narrowed the window"));
+const noRevs = renderToString(h(Revisions, { revisions: [] }));
+check("no history says so rather than rendering nothing", text(noRevs).includes("No recorded history"));
+
+// -------------------------------------------------------- routine edit
+//
+// Every control is a choice from a closed vocabulary. A form that offers
+// an event nothing publishes, or a tier policy refuses, is offering a
+// rejection.
+
+const GRAMMAR: AutomationGrammar = {
+  eventTypes: [
+    { type: "person.arrived_home", package: "home-automation", description: "Someone got home." },
+    { type: "person.left_home", package: "home-automation" },
+  ],
+  actions: [
+    { tool: "notifications.notify", tier: "domestic", package: "notifications" },
+    { tool: "notifications.peek", tier: "read", package: "notifications" },
+  ],
+  conditionKinds: ["cooldown", "timeOfDay"],
+  contextKinds: ["recentEvents"],
+  tiers: ["domestic", "read"],
+  weekdays: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+};
+
+function detailFor(over: Partial<HouseholdRoutine>, spec: AutomationSpec | null = MAIL_SPEC): RoutineDetail {
+  return {
+    routine: routine(over),
+    rule: "mail-check",
+    spec,
+    revisions: [{ revision: 1, author: "sam", at: "2026-09-01T00:00:00Z", note: "created" }],
+    runs: [],
+  };
+}
+
+function editForm(over: Partial<HouseholdRoutine>, spec: AutomationSpec | null = MAIL_SPEC) {
+  return renderToString(
+    h(EditForm, {
+      name: "evening-mail",
+      detail: detailFor(over, spec),
+      grammar: GRAMMAR,
+      onMode: () => {},
+      onSaved: () => {},
+    }),
+  );
+}
+
+const edit = editForm({ state: "trial" });
+check("the trigger offers what packages publish", edit.includes("person.left_home"));
+check("an event's description helps the choice", text(edit).includes("Someone got home."));
+// A tool's declared risk IS the tier, so the form shows them together
+// rather than letting someone invent a combination policy refuses.
+check("an action is offered with its tier", text(edit).includes("notifications.notify · tier domestic"));
+// The only free-text input is the change note. A trigger or a tool typed
+// by hand is a rule that never fires or an action policy refuses.
+check("the only typed field is the note", (edit.match(/type="text"/g) ?? []).length === 1);
+
+// A rule pointing at something no installed package provides keeps its
+// value visible. Silently re-pointing it at a different event would
+// change what the routine does without anyone asking.
+const orphaned = editForm(
+  { state: "trial" },
+  { ...MAIL_SPEC, trigger: { eventType: "pantry.meal_logged" } } as unknown as AutomationSpec,
+);
+check("an unpublished trigger is still shown", text(orphaned).includes("pantry.meal_logged"));
+check("and it says nothing publishes it", text(orphaned).includes("nothing installed publishes this"));
+
+// The warning that matters: editing a routine that is ACTING takes it
+// out of action, and the form has to say so before the save rather than
+// after. There is no approval step on this path, so this sentence is
+// what keeps ADR-W024's "watched before it acts".
+check("nothing is said before anything changes", changeWarning(false, true, 3) === null);
+const actingWarning = changeWarning(true, true, 3) ?? "";
+check("a change names the revision it becomes", actingWarning.includes("rev 4"));
+check("an acting routine is told it goes back to trial", actingWarning.includes("back in trial"));
+check("and what that costs it", actingWarning.includes("watch and report"));
+// A routine that is not acting has nothing taken away, so it is not
+// warned about something that will not happen.
+const quietWarning = changeWarning(true, false, 3) ?? "";
+check("a routine that is not acting is not warned about trial", !quietWarning.includes("trial"));
+check("but still learns the revision moves", quietWarning.includes("rev 4"));
+
+// A document that will not parse cannot be edited as a form, and the
+// screen says which screen to use instead.
+const unparseable = editForm({ state: "trial" }, null);
+check("an unparseable document refuses the form", text(unparseable).includes("does not parse"));
+check("and points somewhere useful", text(unparseable).includes("detail screen"));
+
+// ------------------------------------------------------ routine dry-run
+//
+// Two replays, diffed. The summary is computed, never editorialised.
+
+function dec(over: Partial<ReplayDecision>): ReplayDecision {
+  return {
+    rule: "mail-check", eventSeq: 1, eventId: "e1", eventType: "person.arrived_home",
+    at: "2026-09-07T18:00:00Z", fired: true, reason: "all conditions held",
+    ...over,
+  };
+}
+
+function replay(decisions: ReplayDecision[]): ReplayResult {
+  return {
+    rule: "mail-check", from: "2026-09-01T00:00:00Z", to: "2026-09-07T00:00:00Z",
+    draft: false, enabled: true, fired: decisions.filter((d) => d.fired).length,
+    evaluated: decisions.length, decisions,
+  };
+}
+
+// Identical replays: the summary must not read as a bug.
+const same = diffReplays(
+  replay([dec({ eventId: "a" }), dec({ eventId: "b", fired: false })]),
+  replay([dec({ eventId: "a" }), dec({ eventId: "b", fired: false })]),
+);
+check("identical replays produce no differences", same.every((r) => !r.changed));
+check("nothing differing says so in words", summarise(same).startsWith("Nothing differs."));
+check("and never as a count of zero", !summarise(same).includes("0 of"));
+
+// A window that held nothing is not agreement.
+check(
+  "an empty window says there was nothing to compare",
+  summarise(diffReplays(replay([]), replay([]))).includes("nothing to compare"),
+);
+
+// A case the draft no longer catches, counted.
+const lost = diffReplays(
+  replay([dec({ eventId: "a" }), dec({ eventId: "b" })]),
+  replay([dec({ eventId: "a" }), dec({ eventId: "b", fired: false })]),
+);
+check("a changed verdict is a difference", lost.filter((r) => r.changed).length === 1);
+check("the summary counts what changed", summarise(lost).startsWith("1 of 2 differ."));
+check("and says which direction", summarise(lost).includes("no longer catches"));
+
+const gained = diffReplays(
+  replay([dec({ eventId: "a", fired: false })]),
+  replay([dec({ eventId: "a" })]),
+);
+check("a newly caught case is counted too", summarise(gained).includes("newly catches"));
+
+// A changed trigger means the two rules are not asked the same
+// questions. An event only one of them ever saw is a difference.
+const moved = diffReplays(
+  replay([dec({ eventId: "a" })]),
+  replay([dec({ eventId: "z", eventType: "person.left_home" })]),
+);
+check("an event only one version saw is a difference", moved.length === 2 && moved.every((r) => r.changed));
+check("a row missing a side keeps the other", moved.some((r) => r.current && !r.draft));
+
+// With no current revision there is still a draft column.
+const draftOnly = diffReplays(null, replay([dec({ eventId: "a" })]));
+check("a draft with no running revision still has rows", draftOnly.length === 1);
+check("and the missing side is absent, not false", draftOnly[0]?.current === undefined);
+
+// Newest first, like every other table on this screen.
+const replayOrder = diffReplays(
+  null,
+  replay([
+    dec({ eventId: "old", at: "2026-09-01T00:00:00Z" }),
+    dec({ eventId: "new", at: "2026-09-07T00:00:00Z" }),
+  ]),
+);
+check("replay rows are newest first", replayOrder[0]?.eventId === "new");
+
+// --------------------------------------------------- household stream
+
+// The household stream's verbs, which the operational classifier had
+// never seen. The failure suffix is the one that matters: the engine
+// writes automation.action_failed with an UNDERSCORE, and the rule only
+// matched a hyphen, so a routine whose action failed rendered grey —
+// the one row on this screen that has to be red.
+check("a failed action is a failure", eventKind("automation.action_failed") === "bad");
+check("a failed escalation is a failure", eventKind("automation.escalation_failed") === "bad");
+check("the hyphenated operational form still works", eventKind("secret.rotate-failed") === "bad");
+check("a rule that acted went well", eventKind("automation.acted") === "ok");
+check("an answered question went well", eventKind("chat.answered") === "ok");
+check("a pending escalation wants a person", eventKind("automation.escalation_pending") === "warn");
+// A rule deciding there is nothing to do is the common case, not an
+// event worth colouring.
+check("a suppressed decision is quiet", eventKind("automation.suppressed") === "mute");
+
+function hev(over: Partial<HouseholdEvent>): HouseholdEvent {
+  return {
+    seq: 1, eventId: "h1", occurredAt: "2026-09-07T18:00:00Z",
+    recordedAt: "2026-09-07T18:00:01Z", source: "home-automation",
+    type: "person.arrived_home", subject: "sam", schemaVersion: 1,
+    ...over,
+  };
+}
+
+const HOUSEHOLD: HouseholdEvent[] = [
+  hev({ seq: 1, eventId: "a", subject: "sam" }),
+  hev({ seq: 2, eventId: "b", subject: undefined, type: "person.left_home" }),
+  hev({ seq: 3, eventId: "c", type: "automation.fired", source: "system/automation", entity: "mail-check" }),
+  hev({ seq: 4, eventId: "d", type: "pantry.meal_logged", source: "pantry", subject: "alex" }),
+];
+
+const everything = matchingEvents(HOUSEHOLD, { filter: "all", subject: "", type: "", source: "" });
+check("the household stream is newest first", everything[0]?.eventId === "d");
+check("nothing is dropped by default", everything.length === 4);
+
+// An unmapped subject is a real event that cannot fire a per-member rule
+// (A8). Hiding it hides the answer to "why did my routine never run".
+const unmappedRows = matchingEvents(HOUSEHOLD, { filter: "unmapped", subject: "", type: "", source: "" });
+check("unmapped subjects have a filter of their own", unmappedRows.length === 1 && unmappedRows[0].eventId === "b");
+const byPerson = matchingEvents(HOUSEHOLD, { filter: "person", subject: "", type: "", source: "" });
+check("by person excludes the ones with no person", byPerson.every((e) => !!e.subject));
+check("and keeps the rest", byPerson.length === 3);
+
+const routines = matchingEvents(HOUSEHOLD, { filter: "routines", subject: "", type: "", source: "" });
+check("routine outcomes are the automation verbs", routines.length === 1 && routines[0].eventId === "c");
+const bySource = matchingEvents(HOUSEHOLD, { filter: "source", subject: "", type: "", source: "pantry" });
+check("by source narrows to one publisher", bySource.length === 1 && bySource[0].eventId === "d");
+
+const stream = renderToString(
+  h(HouseholdStreamView, { events: HOUSEHOLD, error: null, loading: false, now: new Date("2026-09-07T18:05:00Z") }),
+);
+check("an event with no subject renders unmapped", text(stream).includes("unmapped"));
+// The household table carries a source column — who published this —
+// which the operational one has no equivalent for.
+check("the household table names the publisher", text(stream).includes("home-automation"));
+// The payload is untrusted input and does not belong in a table cell.
+check("payloads are not rendered in the table", !stream.includes("payload"));
+
+const emptyStream = renderToString(
+  h(HouseholdStreamView, { events: [], error: null, loading: false }),
+);
+check("an empty household stream says so", text(emptyStream).includes("Nothing has been published"));
+const loadingStream = renderToString(
+  h(HouseholdStreamView, { events: [], error: null, loading: true }),
+);
+check("a stream still loading does not claim to be empty", !text(loadingStream).includes("Nothing has been published"));
+
+// ------------------------------------------- correlation and envelope
+
+const STORY: HouseholdEvent[] = [
+  hev({ seq: 10, eventId: "s1", correlationId: "c1", type: "person.arrived_home" }),
+  hev({ seq: 11, eventId: "s2", correlationId: "c1", type: "automation.fired", source: "system/automation", entity: "mail-check" }),
+  hev({ seq: 12, eventId: "s3", correlationId: "c1", type: "automation.acted", source: "system/automation", entity: "mail-check" }),
+  hev({ seq: 13, eventId: "s4", type: "person.left_home" }),
+  hev({ seq: 14, eventId: "s5", type: "pantry.meal_logged" }),
+];
+
+// Selecting a row lights up its story and nothing else.
+check("a correlated row is highlighted", correlated(STORY[1], STORY[0]));
+check("an unrelated row is not", !correlated(STORY[3], STORY[0]));
+// Grouping on the empty string would light up every uncorrelated event
+// on the stream at once — the exact opposite of the point.
+check("rows with no correlation id do not correlate", !correlated(STORY[4], STORY[3]));
+check("and selecting nothing highlights nothing", !correlated(STORY[0], null));
+
+// What an event set off: the engine's records, in order.
+const chain = setOff(STORY[0], STORY);
+check("the chain is what followed", chain.length === 2);
+check("the chain is in order", chain[0]?.eventId === "s2" && chain[1]?.eventId === "s3");
+check("the event itself is not in its own chain", !chain.some((e) => e.eventId === "s1"));
+check("an uncorrelated event set nothing off", setOff(STORY[3], STORY).length === 0);
+
+check("the chain names the routine to open", routineOf(chain) === "mail-check");
+// Nothing to point at means no button rather than a button pointing
+// nowhere.
+check("a chain naming no routine offers none", routineOf([hev({ entity: undefined })]) === undefined);
+
+// The envelope drawer, rendered directly: under renderToString the
+// drawer is closed, so asserting against the table would assert nothing.
+const envelope = renderToString(
+  h(Envelope, { event: STORY[0], events: STORY, onOpenRoutine: () => {} }),
+);
+// Both timestamps, both labelled. When a publisher batches or retries
+// they differ, and that difference is why something fired late.
+check("the envelope dates when it happened", envelope.includes("occurred_at"));
+check("and when we heard about it", envelope.includes("recorded_at"));
+for (const field of ["event_id", "subject", "source", "correlation", "schema"]) {
+  check(`the envelope carries ${field}`, envelope.includes(field));
+}
+// ADR-W024 A4, and not decoration: the screen that shows payloads is
+// where a household learns what they are.
+check("the untrusted-input warning is present", text(envelope).includes("Payload text is untrusted input"));
+check("the source is described as stamped, not claimed", text(envelope).includes("never read off the payload"));
+check("the chain is shown", text(envelope).includes("automation.acted"));
+check("and the routine can be opened", text(envelope).includes("Open routine"));
+
+// A payload is JSON from outside the house. It renders as text: no
+// markup, no auto-linking. A payload that renders as a clickable link is
+// a phishing surface on the one screen whose job is to say otherwise.
+const hostile = renderToString(
+  h(Envelope, {
+    event: hev({
+      seq: 20, eventId: "x1",
+      payload: { note: "<script>alert(1)</script>", link: "http://evil.example/steal" },
+    }),
+    events: [],
+    onOpenRoutine: () => {},
+  }),
+);
+check("a payload's markup is escaped", !hostile.includes("<script>alert(1)</script>"));
+check("but its text is still shown", hostile.includes("&lt;script&gt;"));
+check("a payload's url is not a link", !hostile.includes('href="http://evil.example/steal"'));
+check("but the url is still readable", text(hostile).includes("http://evil.example/steal"));
+// Nothing followed, so nothing is claimed to have.
+check("an event that set nothing off says so", text(hostile).includes("Nothing followed"));
+check("and offers no routine to open", !text(hostile).includes("Open routine"));
+
+// ------------------------------------------------------ keyboard reach
+//
+// Asserted against the rendered markup, which is where these properties
+// actually live. A control that answers only to a click is a control a
+// keyboard cannot reach.
+
+// Every column of every new table is scoped. A five-column stream with
+// no scopes reads to a screen reader as a wall of cells.
+for (const [label, html] of [
+  ["the household stream", stream],
+  ["the runs table", trialRuns],
+] as const) {
+  // `<th[ >]` rather than `<th`, which also matches <thead>.
+  const headers = (html.match(/<th[ >]/g) ?? []).length;
+  const scoped = (html.match(/<th scope="col"/g) ?? []).length;
+  check(`${label} scopes every header`, headers > 0 && headers === scoped, `${scoped}/${headers}`);
+}
+
+// A card that opens something is reachable and operable.
+check("a routine card is in the tab order", rlist.includes('role="button"') && rlist.includes('tabindex="0"'));
+
+// A stream row selects with the keyboard, and says whether it is the
+// selected one.
+check("a stream row is in the tab order", stream.includes('tabindex="0"'));
+check("a stream row reports its selection", stream.includes('aria-pressed='));
+
+// The tab bar is a real tablist: one tab in the tab order, the arrow
+// keys moving within the set.
+const activityTabs = renderToString(
+  h(ConsoleStateContext.Provider, {
+    value: { error: null, snap: null },
+  }, h(Activity, {})),
+);
+check("the activity tabs are a tablist", activityTabs.includes('role="tablist"'));
+check("each tab reports selection", (activityTabs.match(/aria-selected/g) ?? []).length === 2);
+// Roving tabindex: exactly one tab is tabbable.
+check(
+  "only the selected tab is in the tab order",
+  (activityTabs.match(/tabindex="0"/g) ?? []).length === 1,
+);
+check("and the other is not", activityTabs.includes('tabindex="-1"'));
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

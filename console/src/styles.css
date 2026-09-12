@@ -1520,3 +1520,63 @@ details > pre { margin-top: var(--space-2); }
   color: var(--color-text);
   font: inherit;
 }
+
+/* A spec field, an event type, a resource ref: identifiers that are read
+   character by character rather than as words. */
+.mono { font-family: var(--font-mono); font-size: 12px; }
+
+/* The envelope and the spec are label/value pairs, not tables: one
+   column of fixed-width labels keeps the values on a single left edge. */
+.deflist { font-family: var(--font-mono); font-size: 12px; line-height: 1.8; }
+.deflist > div > span:first-child {
+  display: inline-block;
+  width: 104px;
+  color: var(--muted);
+}
+
+/* Correlated rows on the household stream: a firing and its outcome are
+   one story, and this is the whole reason correlation_id is on the
+   envelope. */
+tr.correlated { background: var(--faint); }
+
+/* One routine: the spec and its runs get the width, the history and the
+   settings sit beside them. Collapses at the same breakpoint everything
+   else does — a two-column detail on a phone is two narrow columns. */
+.routine-detail {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: var(--space-6);
+  align-items: start;
+}
+.routine-detail > div { display: flex; flex-direction: column; gap: var(--space-4); }
+@media (max-width: 720px) {
+  .routine-detail { grid-template-columns: 1fr; }
+}
+
+/* A table wider than its column scrolls itself rather than pushing the
+   page sideways. */
+.table-scroll { overflow-x: auto; }
+
+/* A document Wildstone could not parse, shown as written. */
+.doc { white-space: pre-wrap; word-break: break-word; margin: var(--space-3) 0 0; }
+
+/* Narrow screens (#175).
+   A phone is the household audience's screen: an adult checking what the
+   house is doing is the reader most likely to be on one. */
+@media (max-width: 720px) {
+  /* The stream's source column folds into the detail cell rather than
+     pushing a five-column table past the viewport. */
+  .col-source { display: none; }
+  /* Every control in a card or a row is a touch target. */
+  .card .btn, .row .btn { min-height: 44px; }
+}
+
+/* Shown only where the column it replaces is hidden. */
+.only-narrow { display: none; }
+@media (max-width: 720px) {
+  .only-narrow { display: inline; }
+}
+
+/* A selected row on the household stream. Distinct from .correlated:
+   one row is the one you picked, the others are its story. */
+tr[aria-pressed="true"] { box-shadow: inset 2px 0 0 var(--color-accent); }

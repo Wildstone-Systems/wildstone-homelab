@@ -116,6 +116,10 @@ export function App() {
 export function Shell() {
   const [who, setWho] = useState<Identity | null>(null);
   const [view, setView] = useState<View>("home");
+  // Which routine another screen asked to open. Held here because the
+  // Routines screen keeps its own mode and cannot be told from outside
+  // once it is mounted.
+  const [openRoutine, setOpenRoutine] = useState<string | undefined>();
   const { snap, error } = useConsoleState();
 
   useEffect(() => {
@@ -166,7 +170,12 @@ export function Shell() {
       <Rail
         items={items}
         current={view}
-        onSelect={setView}
+        // Choosing Routines from the rail means the list, even if
+        // something else asked to open one routine a moment ago.
+        onSelect={(to) => {
+          setOpenRoutine(undefined);
+          setView(to);
+        }}
         mark={<ShieldCheck size={22} weight="fill" />}
         footer={
           who && (
@@ -193,13 +202,20 @@ export function Shell() {
           {view === "authority" && <ButlerAuthority />}
           {view === "memory" && <Memory />}
           {view === "integrations" && <Integrations />}
-          {view === "routines" && <Routines />}
+          {view === "routines" && <Routines key={openRoutine ?? "list"} openRoutine={openRoutine} />}
           {view === "butlers" && <Butlers />}
           {view === "chat" && <Chat />}
           {view === "household" && <Household />}
           {view === "connect" && <ConnectChat />}
           {view === "plans" && <Plans onNavigate={setView} />}
-          {view === "activity" && <Activity />}
+          {view === "activity" && (
+            <Activity
+              onOpenRoutine={(name) => {
+                setOpenRoutine(name);
+                setView("routines");
+              }}
+            />
+          )}
           {view === "backups" && <Backups />}
           {view === "nodes" && <Nodes />}
           {view === "secrets" && <Secrets />}

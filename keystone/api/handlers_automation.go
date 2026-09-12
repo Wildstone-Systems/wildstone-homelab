@@ -6,6 +6,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
 // maxReplayEvents bounds one replay's read of the stream.
@@ -25,6 +27,16 @@ type replayRequest struct {
 	// Rule replays a draft: one Automation YAML document, validated and
 	// policy-checked but never stored.
 	Rule string `json:"rule,omitempty"`
+	// Routine and Spec replay a draft held as a parsed spec rather than
+	// as a document: the named household routine supplies the envelope —
+	// the rule's name and owner — and Spec replaces what it does.
+	//
+	// This is the same bargain the edit route makes. A caller holding a
+	// structured spec and no YAML writer would otherwise have to grow
+	// one, and a second writer of this grammar is a second thing that can
+	// disagree with the engine about what a rule means.
+	Routine string                   `json:"routine,omitempty"`
+	Spec    *resource.AutomationSpec `json:"spec,omitempty"`
 	// From/To bound the events read (occurred_at). To defaults to now;
 	// From to 7 days before To.
 	From time.Time `json:"from,omitzero"`
@@ -58,8 +70,20 @@ func (s *Server) replayAutomation(r *http.Request, id principal.Identity) (any, 
 	if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxProposalBytes)).Decode(&req); err != nil {
 		return nil, http.StatusBadRequest, fmt.Errorf("parsing request: %w", err)
 	}
-	if (req.Name == "") == (req.Rule == "") {
-		return nil, http.StatusBadRequest, fmt.Errorf("exactly one of name (an approved rule) or rule (a draft YAML document) is required")
+	// Exactly one way of naming what to replay.
+	ways := 0
+	for _, given := range []bool{req.Name != "", req.Rule != "", req.Routine != "" || req.Spec != nil} {
+		if given {
+			ways++
+		}
+	}
+	if ways != 1 {
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"exactly one of name (an approved rule), rule (a draft YAML document), or routine+spec (a draft held as a parsed spec) is required")
+	}
+	if (req.Routine == "") != (req.Spec == nil) {
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"routine and spec go together: the routine supplies the rule's envelope and the spec replaces what it does")
 	}
 
 	current, err := s.State.Load()
@@ -67,14 +91,42 @@ func (s *Server) replayAutomation(r *http.Request, id principal.Identity) (any, 
 		return nil, http.StatusInternalServerError, err
 	}
 	var rule resource.Resource
-	draft := req.Rule != ""
-	if draft {
+	draft := req.Rule != "" || req.Spec != nil
+	switch {
+	case req.Rule != "":
 		parsed, perr := automation.ParseDraft(req.Rule)
 		if perr != nil {
 			return nil, http.StatusBadRequest, perr
 		}
 		rule = parsed
-	} else {
+	case req.Spec != nil:
+		routine, rerr := s.DB.GetHouseholdRoutine(req.Routine)
+		if rerr != nil {
+			if errors.Is(rerr, runtimedb.ErrNotFound) {
+				return nil, http.StatusNotFound, fmt.Errorf("no routine named %q", req.Routine)
+			}
+			return nil, http.StatusInternalServerError, rerr
+		}
+		envelope, perr := automation.ParseDraft(routine.Document)
+		if perr != nil {
+			return nil, http.StatusBadRequest, fmt.Errorf(
+				"this routine's current document does not parse, so a spec has no envelope to go in: %w", perr)
+		}
+		envelope.Automation = req.Spec
+		// Round-tripped rather than used directly: a spec that will not
+		// survive being written and read back is not a rule, and finding
+		// that out here is better than replaying something the engine
+		// would refuse.
+		out, merr := resource.Marshal(envelope)
+		if merr != nil {
+			return nil, http.StatusBadRequest, fmt.Errorf("writing the rule: %w", merr)
+		}
+		parsed, perr := automation.ParseDraft(string(out))
+		if perr != nil {
+			return nil, http.StatusBadRequest, perr
+		}
+		rule = parsed
+	default:
 		found := false
 		for _, res := range current {
 			if res.Kind == resource.KindAutomation && res.Metadata.Name == req.Name {

@@ -292,6 +292,101 @@ func (db *DB) ListHouseholdRoutines() ([]HouseholdRoutine, error) {
 	return out, rows.Err()
 }
 
+// RoutineRevision is one recorded edit to a routine.
+//
+// Document is omitted from a listing: every past document on the detail
+// path is a lot of bytes for a card that shows three lines each. The
+// field is here so a future single-revision fetch does not have to
+// change the shape.
+type RoutineRevision struct {
+	Revision int       `json:"revision"`
+	Author   string    `json:"author"`
+	At       time.Time `json:"at"`
+	Note     string    `json:"note"`
+	Document string    `json:"document,omitempty"`
+}
+
+// ListHouseholdRoutineRevisions returns a routine's edit history, newest
+// first.
+//
+// The table has been written since migration 0028 and read by nothing,
+// so "what did it do last week, and who changed it" was answerable from
+// the database and from no API. The migration's own comment states the
+// intent; this is the half that was missing.
+//
+// Revisions key on the routine's seq rather than its name, so an unknown
+// name is ErrNotFound rather than an empty history — the two are
+// different answers and a caller cannot tell them apart from [].
+func (db *DB) ListHouseholdRoutineRevisions(name string) ([]RoutineRevision, error) {
+	var seq int64
+	err := db.sql.QueryRow(`SELECT seq FROM household_routines WHERE name = ?`, name).Scan(&seq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing routine revisions: %w", err)
+	}
+	rows, err := db.sql.Query(
+		`SELECT revision, author, created_at, note FROM household_routine_revisions
+		 WHERE routine = ? ORDER BY revision DESC`, seq)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing routine revisions: %w", err)
+	}
+	defer rows.Close()
+	var out []RoutineRevision
+	for rows.Next() {
+		var rev RoutineRevision
+		var created string
+		if err := rows.Scan(&rev.Revision, &rev.Author, &created, &rev.Note); err != nil {
+			return nil, fmt.Errorf("runtimedb: scanning routine revision: %w", err)
+		}
+		if created != "" {
+			at, err := time.Parse(time.RFC3339Nano, created)
+			if err != nil {
+				return nil, fmt.Errorf("runtimedb: bad revision timestamp %q: %w", created, err)
+			}
+			rev.At = at
+		}
+		out = append(out, rev)
+	}
+	return out, rows.Err()
+}
+
+// HouseholdRoutineRevisionDocuments returns every recorded document for
+// a routine, newest first.
+//
+// Separate from ListHouseholdRoutineRevisions because the documents are
+// the expensive half and almost no caller wants them. The one that does
+// needs them server-side only: the rule name an event was recorded
+// against is the document's metadata.name at the time it fired, and an
+// edit may change it, so finding a routine's whole history means
+// knowing every name it has been known by.
+func (db *DB) HouseholdRoutineRevisionDocuments(name string) ([]string, error) {
+	var seq int64
+	err := db.sql.QueryRow(`SELECT seq FROM household_routines WHERE name = ?`, name).Scan(&seq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing routine documents: %w", err)
+	}
+	rows, err := db.sql.Query(
+		`SELECT document FROM household_routine_revisions WHERE routine = ? ORDER BY revision DESC`, seq)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing routine documents: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var doc string
+		if err := rows.Scan(&doc); err != nil {
+			return nil, fmt.Errorf("runtimedb: scanning routine document: %w", err)
+		}
+		out = append(out, doc)
+	}
+	return out, rows.Err()
+}
+
 // IssueHouseholdReviewToken mints a single-use, proposal-bound approval
 // capability and returns the secret ONCE.
 //
