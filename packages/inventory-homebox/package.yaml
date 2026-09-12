@@ -2,10 +2,30 @@
 # where it is, what it cost, when the warranty ends — with labels you
 # can print and scan.
 #
-# THE ROUTE. Homebox runs its own login, so the proxy passes through
-# (auth: none) on the family_private class — the ntfy posture.
-# Registration is open until the first account exists: register once,
-# then it stays open only for invites from inside the app.
+# SINGLE SIGN-ON. Homebox speaks OpenID Connect itself, so the Route is
+# app_oidc with an OidcClient registration and the household account
+# signs in here. app_oidc rather than authelia_oidc deliberately: the
+# proxy PASSES THROUGH for app_oidc (only authelia_oidc emits
+# forward_auth), so Homebox's API — which label scanning and any
+# integration use with an API key, not a browser session — keeps
+# working. A Route's auth is per-host with no path matching, so
+# forward-auth here would gate the API along with the web UI.
+#
+# HOW IT IS CONFIGURED: environment. Homebox parses its whole config
+# with ardanlabs/conf under the prefix HBOX, so OIDC is HBOX_OIDC_*
+# — the same door HBOX_AUTH_API_KEY_PEPPER already comes through.
+# This is worth stating because it is NOT the common case: the apps
+# checked alongside it (Audiobookshelf, Kavita) keep OIDC settings in a
+# database or a config file and ignore the environment entirely.
+#
+# Homebox builds its own redirect URL from the incoming request rather
+# than from a configured base URL, so there is no self-referential URL
+# to get wrong under the tailnet posture (ADR-W019 A10).
+#
+# HBOX_OPTIONS_ALLOW_REGISTRATION is left as it was. Whether Homebox
+# gates OIDC account provisioning on it was not established, and
+# closing registration on an unverified guess would lock the household
+# out of the login this change exists to enable.
 #
 # Everything is one volume, backed up daily.
 #
@@ -15,10 +35,11 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: inventory-homebox
-  version: 1.0.2
+  version: 1.1.0
   capability: inventory
   profile: homebox
 requires:
+  - { trait: identity, mode: oidc }
   - { trait: ingress, mode: private }
 params:
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
@@ -76,6 +97,15 @@ templates:
         HBOX_OPTIONS_ALLOW_REGISTRATION: "true"
         HBOX_OPTIONS_ALLOW_ANALYTICS: "false"
         HBOX_AUTH_API_KEY_PEPPER: "secret/homebox-api-key-pepper"
+        HBOX_OIDC_ENABLED: "true"
+        HBOX_OIDC_ISSUER_URL: "{{ .Resolved.IssuerURL }}"
+        HBOX_OIDC_CLIENT_ID: homebox
+        HBOX_OIDC_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
+        HBOX_OIDC_BUTTON_TEXT: "Sign in with your household account"
+        # Off so the app's own login stays reachable. An operator locked
+        # out by a provider misconfiguration needs a way back in that
+        # does not go through the provider.
+        HBOX_OIDC_AUTO_REDIRECT: "false"
       mounts:
         - { source: homebox-data, target: /data }
       restart: unless-stopped
@@ -86,8 +116,29 @@ templates:
     spec:
       host: "{{ .Params.inventory_subdomain }}.{{ .Params.public_domain }}"
       upstream: "container/homebox:7745"
-      auth: none
+      auth: app_oidc
       classification: family_private
+  # The OidcClient lives on THIS package's node, not on a separate
+  # identity node: the engine synthesises the client secret on the
+  # OidcClient's node and the container reads the same reference on its
+  # own node, and secrets are node-local.
+  #
+  # The redirect URI is Homebox's dedicated OIDC callback, not its login
+  # page — GET /api/v1/users/login/oidc/callback. Built by concatenation
+  # on purpose: redirectUris are compensated downstream by the
+  # reconciler, unlike an env value, which would need `origin`.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: homebox, node: "{{ .Params.node }}" }
+    spec:
+      clientId: homebox
+      clientName: Homebox
+      redirectUris:
+        - "https://{{ .Params.inventory_subdomain }}.{{ .Params.public_domain }}/api/v1/users/login/oidc/callback"
+      scopes: [openid, profile, email, groups]
+      authPolicy: two_factor
+      secretRef: "{{ .Resolved.OidcSecretRef }}"
   - |
     apiVersion: wildstone.dev/v1
     kind: BackupPlan

@@ -30,6 +30,10 @@ jobs:
           cache: npm
           cache-dependency-path: console/package-lock.json
       - name: build console
+        # Same reason as ci.yml: the release build has no use for the
+        # browser `playwright` would otherwise fetch on install.
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: |
           set -euo pipefail
           cd console && npm ci && npm run build

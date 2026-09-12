@@ -16,7 +16,12 @@ import { Kind, KIND_COLOR } from "./status";
 export function eventKind(type: string): Kind {
   const verb = type.slice(type.lastIndexOf(".") + 1);
   // Something went wrong on its own.
-  if (/^(failed|blocked|invalid)$/.test(verb) || verb.endsWith("-failed")) return "bad";
+  // The suffix is matched on both separators on purpose. The operational
+  // stream hyphenates (secret.rotate-failed); the household stream's
+  // engine does not (automation.action_failed, escalation_failed). With
+  // only the hyphen, a routine whose action failed rendered grey — the
+  // one row on the screen that had to be red.
+  if (/^(failed|blocked|invalid)$/.test(verb) || /[-_]failed$/.test(verb)) return "bad";
   // Something is waiting on a person, or went a way they should know
   // about. A plan someone rejected is a decision, not a fault.
   if (/^(proposed|pending-approval|skipped-offline|superseded|rejected|foreign|exempted|oob-reverted)$/.test(verb))
@@ -24,6 +29,13 @@ export function eventKind(type: string): Kind {
   // Something finished, and finished properly.
   if (/^(applied|approved|repaired|completed|started|minted|rotated|bound|adopted|created|oob-accepted)$/.test(verb))
     return "ok";
+  // The household stream's verbs (ADR-W024). A rule that acted, a
+  // question that got an answer, a meal that got written down.
+  if (/^(acted|answered|logged|escalated)$/.test(verb)) return "ok";
+  // Waiting on a person, or a rule that could not decide.
+  if (/^(escalation_pending|unsure)$/.test(verb)) return "warn";
+  // `suppressed` deliberately falls through to mute: a rule deciding
+  // there is nothing to do is the common case, not an event.
   return "mute";
 }
 

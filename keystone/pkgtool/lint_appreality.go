@@ -167,6 +167,16 @@ var inertEnv = []struct {
 			"\"oauth\": false and the login page has no button. Render a ConfigFile and point " +
 			"IMMICH_CONFIG_FILE at it",
 	},
+	{
+		image:  "akhilrex/podgrab",
+		prefix: []string{"UID", "PID", "TZ"},
+		why: "Podgrab's own Dockerfile sets UID=998 and PID=100, and nothing in the binary reads either — " +
+			"the ownership it applies to downloaded files comes from PUID and PGID (service/fileService.go's " +
+			"changeOwnership), so the image's own defaults are a trap for anyone copying the linuxserver " +
+			"convention. TZ is inert for a different reason: the image is alpine plus ca-certificates with no " +
+			"tzdata package, and the binary does not import time/tzdata, so there is no zone database to load " +
+			"and the process stays on UTC whatever TZ says. Set PUID and PGID; leave TZ off",
+	},
 }
 
 // requiredEnv is the mirror of inertEnv: env vars an image REFUSES TO

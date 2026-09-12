@@ -152,6 +152,12 @@ var wellKnown = map[string]int{
 	// to after signing in, and a port that moved when a neighbour was
 	// installed would send somebody to whatever now answers there.
 	"console": 47443, // wildstone-console
+
+	// podcasts-podgrab landed on main while the Console was taking
+	// 47443 here, so it continues from the Console rather than
+	// colliding with it. A pin is a preference the assigner honours
+	// first, not a claim two hosts can share.
+	"podcasts": 48443, // podcasts-podgrab, via podcasts_subdomain
 }
 
 // Of derives the addressing posture from desired state.

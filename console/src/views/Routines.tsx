@@ -1,152 +1,220 @@
 import { useState } from "react";
-import { api, type HouseholdRoutine, type Model } from "../api";
-import { ErrorLine, useAction, useLoad } from "../lib";
+import { LockSimple, Plus } from "@phosphor-icons/react";
+import { api, type HouseholdRoutine } from "../api";
+import type { AutomationSpec } from "../generated/resources";
+import { ago, ErrorLine, useLoad } from "../lib";
+import { useConsoleState } from "../state";
 import { Kind, StatusPill } from "../ui/status";
+import { RoutineDetail } from "./RoutineDetail";
+import { RoutineDryRun } from "./RoutineDryRun";
+import { RoutineEdit } from "./RoutineEdit";
 
-// The household's routines, and where questions get sent (ADR-W030
-// A6/A9, P13/P14).
+// What the house does on its own (ADR-W024, ADR-W030 A6).
 //
-// Two lists that belong together because they answer one question a
-// household actually asks: what does this house do on its own, and who
-// is it asking.
+// The list works hard on two distinctions. Native versus Wildstone — one
+// runs inside an application and Wildstone only knows about it, the
+// other Wildstone runs — because offering to edit something you cannot
+// is worse than not showing it. That distinction used to be a sentence
+// per row and is now structural: two sections, and only one of them
+// opens.
 //
-// The routine list works hard on two distinctions. Native versus
-// Wildstone — one runs inside an application and Wildstone only knows
-// about it, the other Wildstone runs — because offering to edit
-// something you cannot is worse than not showing it. And trial versus
-// enabled: a trial routine does everything except act, which is the
-// whole point of watching one for a week before letting it loose.
+// And trial versus enabled: a trial routine does everything except act,
+// which is the whole point of watching one for a week before letting it
+// loose.
 //
-// The route list makes one thing unmissable: whether a route leaves the
-// house.
+// Model routes used to live on this screen. They are a property of a
+// Butler (ADR-W031 A1/A2) and `views/Butlers.tsx` renders them, so they
+// are gone from here.
 
-const ROUTINE_TONE: Record<HouseholdRoutine["state"], Kind> = {
+export const ROUTINE_TONE: Record<HouseholdRoutine["state"], Kind> = {
   draft: "mute",
   trial: "warn",
   enabled: "ok",
   disabled: "bad",
 };
 
-const ROUTINE_MEANING: Record<HouseholdRoutine["state"], string> = {
+export const ROUTINE_MEANING: Record<HouseholdRoutine["state"], string> = {
   draft: "written, not running",
   trial: "running and watching — it does everything except act",
   enabled: "running, and it acts",
   disabled: "stopped",
 };
 
-export function Routines() {
+// The screen is a small state machine rather than a route. The shell has
+// no router and one screen should not introduce one.
+export type Mode =
+  | { kind: "list" }
+  | { kind: "detail"; name: string }
+  | { kind: "edit"; name: string }
+  // A dry-run needs the draft to replay and the name the engine knows
+  // the rule by. A null spec means "replay what is stored" — the detail
+  // screen's button, which has changed nothing.
+  | { kind: "dryrun"; name: string; spec: AutomationSpec | null; rule: string };
+
+type StateFilter = "all" | HouseholdRoutine["state"];
+type Audience = "admin" | "household";
+
+const STATES: HouseholdRoutine["state"][] = ["draft", "trial", "enabled", "disabled"];
+
+// openRoutine lets another screen land on one routine rather than on the
+// list — the household stream's "Open routine", which would otherwise
+// drop someone on a list and make them find it again.
+export function Routines({ openRoutine }: { openRoutine?: string }) {
+  const [mode, setMode] = useState<Mode>(
+    openRoutine ? { kind: "detail", name: openRoutine } : { kind: "list" },
+  );
+  const routines = useLoad(() => api.householdRoutines());
+
+  switch (mode.kind) {
+    case "detail":
+      return <RoutineDetail name={mode.name} onMode={setMode} onChanged={routines.reload} />;
+    case "edit":
+      return <RoutineEdit name={mode.name} onMode={setMode} onSaved={routines.reload} />;
+    case "dryrun":
+      return <RoutineDryRun name={mode.name} spec={mode.spec} rule={mode.rule} onMode={setMode} />;
+    default:
+      return <RoutineList load={routines} onMode={setMode} />;
+  }
+}
+
+export function RoutineList({
+  load,
+  onMode,
+}: {
+  load: ReturnType<typeof useLoad<{ routines: HouseholdRoutine[] | null; specs?: Record<string, AutomationSpec> }>>;
+  onMode: (m: Mode) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [state, setState] = useState<StateFilter>("all");
+  const [audience, setAudience] = useState<Audience>("admin");
+  const [writing, setWriting] = useState(false);
+
+  const rows = load.data?.routines ?? [];
+  const specs = load.data?.specs ?? {};
+  const isAdmin = audience === "admin";
+
+  // Filtering client-side over the loaded array. It is a household's
+  // worth of rows, and a ?state= parameter would be a second place the
+  // filter lives.
+  const shown = rows
+    .filter((r) => (state === "all" ? true : r.state === state))
+    .filter((r) => (q === "" ? true : r.name.toLowerCase().includes(q.toLowerCase())));
+
+  const wildstone = shown.filter((r) => r.ownership === "wildstone");
+  const native = shown.filter((r) => r.ownership === "native");
+
   return (
     <>
       <div className="sub">
-        What the house does on its own, and which model it asks. A routine in trial does everything
-        except act, so you can watch it for a week before letting it loose.
+        What the house does on its own. A routine in trial does everything except act, so you can
+        watch it for a week before letting it loose.
       </div>
-      <RoutineList />
-      <RouteList />
-    </>
-  );
-}
 
-function RoutineList() {
-  const routines = useLoad(() => api.householdRoutines());
-  const action = useAction();
-  const [writing, setWriting] = useState(false);
-  const rows = routines.data?.routines ?? [];
-  return (
-    <section className="work-section">
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-        <h3 style={{ margin: 0 }}>Routines</h3>
-        <button className="btn btn-secondary" onClick={() => setWriting((v) => !v)}>
-          {writing ? "Cancel" : "New routine"}
-        </button>
+      <div className="row">
+        <div className="seg" role="tablist" aria-label="Who this is for">
+          {(["admin", "household"] as Audience[]).map((a) => (
+            <button
+              key={a}
+              role="tab"
+              aria-selected={audience === a}
+              className={audience === a ? "on" : ""}
+              onClick={() => setAudience(a)}
+            >
+              {a === "admin" ? "Admin view" : "Household view"}
+            </button>
+          ))}
+        </div>
+        <input
+          className="search"
+          type="text"
+          placeholder="Search routines…"
+          aria-label="Search routines"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <div className="chips group-chips" style={{ marginBottom: 0 }}>
+          {(["all", ...STATES] as StateFilter[]).map((s) => (
+            <button
+              key={s}
+              className="chip"
+              aria-pressed={state === s}
+              onClick={() => setState(s)}
+            >
+              {s === "all" ? "All" : s}{" "}
+              <span className="chip-count">
+                {s === "all" ? rows.length : rows.filter((r) => r.state === s).length}
+              </span>
+            </button>
+          ))}
+        </div>
+        {isAdmin && (
+          <button
+            className="btn btn-primary"
+            style={{ marginLeft: "auto" }}
+            onClick={() => setWriting((v) => !v)}
+          >
+            <Plus size={15} /> {writing ? "Cancel" : "New routine"}
+          </button>
+        )}
       </div>
-      <ErrorLine error={routines.error} />
+
       {writing && (
         <NewRoutine
           onDone={() => {
             setWriting(false);
-            routines.reload();
+            load.reload();
           }}
         />
       )}
-      {rows.length === 0 && !routines.loading && !writing && (
-        <div className="muted">
-          No routines yet. A routine is a document the household writes — what to do, and when.
+
+      <ErrorLine error={load.error} />
+      {rows.length === 0 && !load.loading && <div className="muted">No routines yet.</div>}
+      {rows.length > 0 && shown.length === 0 && (
+        <div className="muted">Nothing matches that.</div>
+      )}
+
+      {isAdmin && wildstone.length > 0 && (
+        <div className="sect">
+          <span className="eyebrow">Run by Wildstone</span>
+          <span className="tab-count">{wildstone.length}</span>
+          <span className="fade" />
         </div>
       )}
-      <ul className="work-evidence">
-        {rows.map((r) => (
-          <li key={r.name}>
-            <StatusPill kind={ROUTINE_TONE[r.state]}>{r.state}</StatusPill>
-            <strong>{r.name}</strong>
-            <span className="timeline-src">{ROUTINE_MEANING[r.state]}</span>
-            {r.ownership === "native" ? (
-              <span className="timeline-src">
-                runs inside {r.connection} — Wildstone only knows about it
-              </span>
-            ) : (
-              <span className="timeline-src">run by Wildstone · revision {r.revision}</span>
-            )}
-            {r.disabledBy && <span className="timeline-src">stopped by {r.disabledBy}</span>}
-            {r.ownership === "wildstone" && (
-              <span className="work-form">
-                {r.state !== "trial" && (
-                  <button
-                    className="btn btn-ghost"
-                    onClick={() =>
-                      action.run(async () => {
-                        await api.setRoutineState(r.name, "trial");
-                        routines.reload();
-                      }, "Watching without acting.")
-                    }
-                  >
-                    Watch only
-                  </button>
-                )}
-                {r.state !== "enabled" && (
-                  <button
-                    className="btn btn-ghost"
-                    onClick={() =>
-                      action.run(async () => {
-                        await api.setRoutineState(r.name, "enabled");
-                        routines.reload();
-                      }, "Running.")
-                    }
-                  >
-                    Let it act
-                  </button>
-                )}
-                {r.state !== "disabled" && (
-                  <button
-                    className="btn btn-ghost"
-                    onClick={() =>
-                      action.run(async () => {
-                        await api.setRoutineState(r.name, "disabled");
-                        routines.reload();
-                      }, "Stopped. It stays here, stopped, so what it did is still readable.")
-                    }
-                  >
-                    Stop it
-                  </button>
-                )}
-                <RoutineEditor routine={r} onSaved={() => routines.reload()} />
-              </span>
-            )}
-          </li>
+      <div className="card-grid">
+        {wildstone.map((r) => (
+          <WildstoneCard
+            key={r.name}
+            routine={r}
+            spec={specs[r.name]}
+            detailed={isAdmin}
+            onOpen={() => onMode({ kind: "detail", name: r.name })}
+          />
         ))}
-      </ul>
-      {action.state.phase === "error" && <ErrorLine error={action.state.message} />}
-      {action.state.phase === "done" && <div className="msg-note">{action.state.message}</div>}
-    </section>
+      </div>
+
+      {/* A household audience gets the Wildstone routines and nothing
+          else: a native routine is not something anyone in this house
+          can act on from here, and the operator detail is noise. */}
+      {isAdmin && native.length > 0 && (
+        <>
+          <div className="sect" style={{ marginTop: "var(--space-6)" }}>
+            <span className="eyebrow">Native to an app</span>
+            <span className="tab-count">{native.length}</span>
+            <span className="muted">Wildstone only knows about these</span>
+            <span className="fade" />
+          </div>
+          <div className="card-grid">
+            {native.map((r) => (
+              <NativeCard key={r.name} routine={r} />
+            ))}
+          </div>
+        </>
+      )}
+
+      <PendingRoutinePlans />
+    </>
   );
 }
-
-const READINESS_MEANING: Record<Model["readiness"], string> = {
-  unprobed: "not checked yet, so it answers questions and uses no tools that do things",
-  ready: "checked and trusted with tools",
-  "qa-only": "checked and found wanting, so it answers questions only",
-  unavailable: "not answering",
-};
 
 // Writing a routine.
 //
@@ -159,7 +227,11 @@ const READINESS_MEANING: Record<Model["readiness"], string> = {
 // It is created as a draft and says so. The server refuses any other
 // state on this route, because the endpoint needs only `propose` — a
 // credential that could create an enabled routine could skip the review
-// activation is supposed to require.
+// activation is supposed to require (ADR-W030 A6/A7.1).
+//
+// Editing an existing routine is the spec editor on RoutineEdit, which
+// round-trips the parsed grammar. This one writes the document, because
+// a routine that does not exist yet has no spec to serve.
 function NewRoutine({ onDone }: { onDone: () => void }) {
   const [name, setName] = useState("");
   const [document, setDocument] = useState(TEMPLATE);
@@ -220,133 +292,96 @@ steps:
     message: someone left
 `;
 
-// Editing an existing routine's document.
-//
-// Only Wildstone-owned routines are editable, and the caller already
-// checks that — a native routine runs inside another application and
-// Wildstone only knows about it, so offering to edit one would be
-// offering something that cannot work.
-//
-// The server's note is shown rather than swallowed. Editing bumps the
-// revision and any review link issued for the previous one stops
-// approving anything, which is a consequence the person editing should
-// see at the moment they cause it.
-function RoutineEditor({
-  routine,
-  onSaved,
+function WildstoneCard({
+  routine: r,
+  spec,
+  detailed,
+  onOpen,
 }: {
   routine: HouseholdRoutine;
-  onSaved: () => void;
+  spec?: AutomationSpec;
+  detailed: boolean;
+  onOpen: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [document, setDocument] = useState(routine.document);
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<string | null>(null);
-
-  async function save() {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await api.editHouseholdRoutine(routine.name, document, note.trim());
-      setResult(res.note ?? `saved as revision ${res.revision}`);
-      onSaved();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (!open) {
-    return (
-      <button className="btn btn-ghost" onClick={() => setOpen(true)}>
-        Edit
-      </button>
-    );
-  }
   return (
-    <div style={{ display: "block", width: "100%", marginTop: 6 }}>
-      <textarea
-        aria-label={`${routine.name} document`}
-        rows={14}
-        spellCheck={false}
-        style={{ width: "100%", fontFamily: "ui-monospace, monospace" }}
-        value={document}
-        onChange={(e) => setDocument(e.target.value)}
-      />
-      <div className="row" style={{ gap: 8, marginTop: 4, alignItems: "center" }}>
-        <input
-          aria-label="what changed"
-          placeholder="what changed (optional)"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-        />
-        <button
-          className="btn btn-secondary"
-          disabled={busy || document === routine.document}
-          onClick={save}
-        >
-          {busy ? "Saving…" : "Save revision"}
-        </button>
-        <button className="btn btn-ghost" onClick={() => setOpen(false)}>
-          Close
-        </button>
+    <div
+      className="card"
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      // A role="button" with a click handler and no key handler is a
+      // control a keyboard cannot reach.
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <div className="card-head">
+        <StatusPill kind={ROUTINE_TONE[r.state]}>{r.state}</StatusPill>
+        <span className="card-name">{r.name}</span>
+        {detailed && <span className="muted tnum">rev {r.revision}</span>}
       </div>
-      {result && <div className="msg-note">{result}</div>}
-      <ErrorLine error={error} />
+      <div className="muted">{ROUTINE_MEANING[r.state]}</div>
+      {/* Operator detail. An adult can still open a routine and stop it
+          — the ADR-W030 A8 amendment gives any trusted adult that
+          authority — but the tier and the revision are not their
+          question. */}
+      {detailed && spec && (
+        <div className="chips">
+          <span className="chip mono">{spec.trigger.eventType}</span>
+          <span className="chip mono">tier: {spec.action.tier}</span>
+        </div>
+      )}
+      {detailed && (
+        <div className="card-meta">
+          <span>{r.author}</span>
+          <span>changed {ago(r.updatedAt)}</span>
+          {r.disabledBy && <span>stopped by {r.disabledBy}</span>}
+        </div>
+      )}
     </div>
   );
 }
 
-function RouteList() {
-  const models = useLoad(() => api.models());
-  const action = useAction();
-  const rows = models.data?.models ?? [];
+// Same card without the affordance: there is nothing Wildstone can show
+// about a spec it does not hold, so opening one would open an empty
+// screen.
+function NativeCard({ routine: r }: { routine: HouseholdRoutine }) {
   return (
-    <section className="work-section">
-      <h3>Which model answers</h3>
-      <ErrorLine error={models.error} />
-      {rows.length === 0 && !models.loading && (
-        <div className="muted">
-          No models configured. A Butler has nowhere to be assigned until there is one.
-        </div>
-      )}
-      <ul className="work-evidence">
-        {rows.map(({ model, carriesActions, leavesTheHouse }) => (
-          <li key={model.name}>
-            <StatusPill kind={model.readiness === "ready" ? "ok" : model.readiness === "unavailable" ? "bad" : "warn"}>
-              {model.readiness}
-            </StatusPill>
-            <strong>{model.name}</strong>
-            {/* The one thing that has to be unmissable. */}
-            <StatusPill kind={leavesTheHouse ? "warn" : "ok"}>
-              {leavesTheHouse ? "leaves the house" : "stays in the house"}
-            </StatusPill>
-            <span className="timeline-src">
-              {model.provider}
-              {model.providerModel && ` · ${model.providerModel}`}
-            </span>
-            <span className="timeline-src">{READINESS_MEANING[model.readiness]}</span>
-            {!carriesActions && model.readiness !== "unavailable" && (
-              <span className="timeline-src">answers only</span>
-            )}
-            <button
-              className="btn btn-ghost"
-              onClick={() =>
-                action.run(async () => {
-                  await api.setModelEnabled(model.name, !model.enabled);
-                  models.reload();
-                }, model.enabled ? "Turned off." : "Turned on.")
-              }
-            >
-              {model.enabled ? "Turn off" : "Turn on"}
-            </button>
-          </li>
-        ))}
-      </ul>
-      {action.state.phase === "error" && <ErrorLine error={action.state.message} />}
-    </section>
+    <div className="card">
+      <div className="card-head">
+        <StatusPill kind={ROUTINE_TONE[r.state]}>{r.state}</StatusPill>
+        <span className="card-name">{r.name}</span>
+        <LockSimple size={14} className="card-stale" />
+      </div>
+      <div className="muted">{ROUTINE_MEANING[r.state]}</div>
+      <div className="card-meta">
+        <span>runs inside {r.connection} — Wildstone only knows about it</span>
+      </div>
+    </div>
+  );
+}
+
+// A routine plan waiting on a human, read off the shell's existing poll
+// rather than a second load of the same list.
+//
+// It points at Plans rather than approving here: a household-routine
+// plan is reviewed where every other plan is reviewed, and a second
+// approval surface is a second place the rules can differ.
+function PendingRoutinePlans() {
+  const { snap } = useConsoleState();
+  const waiting = (snap?.pending ?? []).filter((p) =>
+    (p.plan?.steps ?? []).some((s) => s.kind === "Automation"),
+  );
+  if (waiting.length === 0) return null;
+  return (
+    <div className="callout callout-warn" style={{ marginTop: "var(--space-6)" }}>
+      {waiting.length === 1
+        ? "1 routine plan waits for a human."
+        : `${waiting.length} routine plans wait for a human.`}{" "}
+      Review them on Plans.
+    </div>
   );
 }

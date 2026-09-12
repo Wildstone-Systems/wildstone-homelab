@@ -68,6 +68,12 @@ jobs:
   console:
     name: console (typecheck + build + checks, ADR-W016/W027)
     runs-on: ubuntu-latest
+    # `playwright` is a devDependency for scripts/ui-check.mjs, which is an
+    # operator's check against their own control plane and never runs here.
+    # Without this, every install in this job downloads a browser nothing
+    # in it will open.
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

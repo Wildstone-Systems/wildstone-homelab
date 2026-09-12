@@ -129,6 +129,7 @@ var homepageApps = map[string]homepageApp{
 	"gitea":          {"Gitea", "gitea", "The household's code and dotfiles"},
 	"homebox":        {"Inventory", "homebox", "What we own and where it is"},
 	"actual":         {"Budget", "actual-budget", "The household budget"},
+	"podgrab":        {"Podcasts", "podgrab", "Podcasts, downloaded as they appear"},
 
 	// The mail capability presents two surfaces, so it has two rows.
 	// Davis has no dashboard-icons slug of its own, so it takes a

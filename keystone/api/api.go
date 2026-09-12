@@ -303,6 +303,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/household/publishers/{capability}", s.handle(principal.VerbManage, s.mintPublisher))
 	// Replay is a read: it evaluates and returns, writes nothing.
 	mux.Handle("POST /api/v1/household/automations/replay", s.handle(principal.VerbRead, s.replayAutomation))
+	mux.Handle("GET /api/v1/household/automations/grammar", s.handle(principal.VerbRead, s.automationGrammar))
 
 	// Household members (ADR-W020 A3, ADR-W023 A7): the household's
 	// account list IS the LdapUser resources in the Statefile. Reading
@@ -357,6 +358,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/butler/memory/forget", s.handle(principal.VerbRead, s.forgetButlerMemory))
 	mux.Handle("GET /api/v1/butler/memory/digest", s.handle(principal.VerbRead, s.listMemoryDigest))
 	mux.Handle("GET /api/v1/household/routines", s.handle(principal.VerbRead, s.listHouseholdRoutines))
+	mux.Handle("GET /api/v1/household/routines/{name}", s.handle(principal.VerbRead, s.getHouseholdRoutine))
 	mux.Handle("POST /api/v1/household/routines", s.handle(principal.VerbPropose, s.createHouseholdRoutine))
 	mux.Handle("POST /api/v1/household/routines/{name}/edit", s.handle(principal.VerbPropose, s.editHouseholdRoutine))
 	mux.Handle("POST /api/v1/household/routines/{name}/state", s.handle(principal.VerbPropose, s.setHouseholdRoutineState))

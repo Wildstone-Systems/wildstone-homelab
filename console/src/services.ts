@@ -64,6 +64,7 @@ const GROUP_OF: Record<string, Group> = {
   indexers: "Media",
   downloads: "Media",
   audiobooks: "Media",
+  podcasts: "Media",
   books: "Media",
   photos: "Media",
 

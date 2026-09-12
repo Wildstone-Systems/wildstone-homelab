@@ -13,20 +13,71 @@ import { ago, ErrorLine, when } from "../lib";
 import { KEEP, POLL_MS, useConsoleState } from "../state";
 import { eventKind, HourChart } from "../ui/HourChart";
 import { Dot } from "../ui/status";
+import { HouseholdStream } from "./HouseholdStream";
 
 // Activity (ADR-W016 A4, ADR-W027): the operational stream, newest
 // first, live off the shell's one poll rather than a second timer of
 // its own. Events was the old name; the stream carries plans, backups
 // and node sessions too, and "Events" undersold it.
-export function Activity() {
+// Two streams, and they are not the same stream. The control plane's is
+// what this screen has always shown; the household's (ADR-W024 A2) is
+// what the HOUSE did, and until now the Console could not show it at
+// all.
+type Stream = "control" | "household";
+
+export function Activity({ onOpenRoutine }: { onOpenRoutine?: (name: string) => void }) {
   const { snap, error } = useConsoleState();
+  // Defaulting to the control plane: it is what this screen is today,
+  // and an operator opening Activity during an incident should not land
+  // on a different stream than they did last release.
+  const [stream, setStream] = useState<Stream>("control");
   return (
-    <ActivityView
-      events={snap?.events ?? []}
-      now={snap?.lastPollAt ?? new Date()}
-      error={snap ? error : null}
-      loading={!snap}
-    />
+    <>
+      <div
+        className="tabs"
+        role="tablist"
+        aria-label="Activity"
+        // Arrow keys move between tabs, which is what a tablist is for.
+        onKeyDown={(e) => {
+          if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+            e.preventDefault();
+            setStream(stream === "control" ? "household" : "control");
+          }
+        }}
+      >
+        <button
+          role="tab"
+          aria-selected={stream === "control"}
+          // Only the selected tab is in the tab order; the arrow keys
+          // move within the set. That is the roving-tabindex the role
+          // implies.
+          tabIndex={stream === "control" ? 0 : -1}
+          className="tab"
+          onClick={() => setStream("control")}
+        >
+          Control plane <span className="tab-count">{snap?.events.length ?? 0}</span>
+        </button>
+        <button
+          role="tab"
+          aria-selected={stream === "household"}
+          tabIndex={stream === "household" ? 0 : -1}
+          className="tab"
+          onClick={() => setStream("household")}
+        >
+          Household
+        </button>
+      </div>
+      {stream === "household" ? (
+        <HouseholdStream onOpenRoutine={onOpenRoutine} />
+      ) : (
+        <ActivityView
+          events={snap?.events ?? []}
+          now={snap?.lastPollAt ?? new Date()}
+          error={snap ? error : null}
+          loading={!snap}
+        />
+      )}
+    </>
   );
 }
 
@@ -108,10 +159,10 @@ export function ActivityView({
       <table>
         <thead>
           <tr>
-            <th>when</th>
-            <th>what</th>
-            <th>node</th>
-            <th>detail</th>
+            <th scope="col">when</th>
+            <th scope="col">what</th>
+            <th scope="col">node</th>
+            <th scope="col">detail</th>
           </tr>
         </thead>
         <tbody>

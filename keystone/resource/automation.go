@@ -30,34 +30,34 @@ import (
 type AutomationSpec struct {
 	// Description is the human sentence for the plan review and the
 	// Console: what this rule is for.
-	Description string `yaml:"description"`
+	Description string `yaml:"description" json:"description"`
 	// Disabled pauses the rule without deleting it. The zero value is
 	// enabled, so a rule that says nothing runs.
-	Disabled bool `yaml:"disabled,omitempty"`
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 	// Trigger names the household event that starts an evaluation.
-	Trigger AutomationTrigger `yaml:"trigger"`
+	Trigger AutomationTrigger `yaml:"trigger" json:"trigger"`
 	// Conditions must ALL hold for the rule to proceed. Most evaluations
 	// stop here, cheaply, with an automation.suppressed event.
-	Conditions []AutomationCondition `yaml:"conditions,omitempty"`
+	Conditions []AutomationCondition `yaml:"conditions,omitempty" json:"conditions,omitempty"`
 	// Context names what the escalation packet may contain — small,
 	// targeted retrievals, never a history dump (ADR-W024 A6).
-	Context []AutomationContext `yaml:"context,omitempty"`
+	Context []AutomationContext `yaml:"context,omitempty" json:"context,omitempty"`
 	// Escalation, when present, opens a Butler session with the trigger
 	// event and the Context results; the Butler's output is routed to
 	// Action. Absent, Action runs with its fixed Params.
-	Escalation *AutomationEscalation `yaml:"escalation,omitempty"`
+	Escalation *AutomationEscalation `yaml:"escalation,omitempty" json:"escalation,omitempty"`
 	// Action is the typed operation that runs, through the domestic
 	// gateway (ADR-W024 A5).
-	Action AutomationAction `yaml:"action"`
+	Action AutomationAction `yaml:"action" json:"action"`
 }
 
 // AutomationTrigger matches an incoming household event.
 type AutomationTrigger struct {
 	// EventType is the canonical type, e.g. person.left_home.
-	EventType string `yaml:"eventType"`
+	EventType string `yaml:"eventType" json:"eventType"`
 	// Subject, when set, restricts the trigger to events about this
 	// member/device/household id. Empty matches any subject.
-	Subject string `yaml:"subject,omitempty"`
+	Subject string `yaml:"subject,omitempty" json:"subject,omitempty"`
 }
 
 // AutomationCondition is one deterministic check. Kind selects which
@@ -65,35 +65,35 @@ type AutomationTrigger struct {
 type AutomationCondition struct {
 	// Kind is one of: eventAbsent, eventPresent, timeOfDay, weekday,
 	// cooldown.
-	Kind string `yaml:"kind"`
+	Kind string `yaml:"kind" json:"kind"`
 	// EventType (eventAbsent, eventPresent): the household event type
 	// looked for.
-	EventType string `yaml:"eventType,omitempty"`
+	EventType string `yaml:"eventType,omitempty" json:"eventType,omitempty"`
 	// Window (eventAbsent, eventPresent, cooldown): how far back from the
 	// trigger's occurred_at to look, as a Go duration ("6h", "20h",
 	// "72h"). At most MaxAutomationWindow.
-	Window string `yaml:"window,omitempty"`
+	Window string `yaml:"window,omitempty" json:"window,omitempty"`
 	// SameSubject (eventAbsent, eventPresent): only count events about
 	// the trigger's subject.
-	SameSubject bool `yaml:"sameSubject,omitempty"`
+	SameSubject bool `yaml:"sameSubject,omitempty" json:"sameSubject,omitempty"`
 	// After / Before (timeOfDay): local wall-clock bounds as "HH:MM". At
 	// least one is required; both may be set.
-	After  string `yaml:"after,omitempty"`
-	Before string `yaml:"before,omitempty"`
+	After  string `yaml:"after,omitempty" json:"after,omitempty"`
+	Before string `yaml:"before,omitempty" json:"before,omitempty"`
 	// Days (weekday): the days the rule may fire, from mon..sun.
-	Days []string `yaml:"days,omitempty"`
+	Days []string `yaml:"days,omitempty" json:"days,omitempty"`
 }
 
 // AutomationContext is one targeted retrieval for the escalation packet.
 type AutomationContext struct {
 	// Kind is one of: recentEvents.
-	Kind string `yaml:"kind"`
+	Kind string `yaml:"kind" json:"kind"`
 	// EventType (recentEvents): the household event type to fetch.
-	EventType string `yaml:"eventType,omitempty"`
+	EventType string `yaml:"eventType,omitempty" json:"eventType,omitempty"`
 	// SameSubject (recentEvents): only events about the trigger's subject.
-	SameSubject bool `yaml:"sameSubject,omitempty"`
+	SameSubject bool `yaml:"sameSubject,omitempty" json:"sameSubject,omitempty"`
 	// Limit (recentEvents): how many, newest first. 1..MaxAutomationContextLimit.
-	Limit int `yaml:"limit,omitempty"`
+	Limit int `yaml:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // AutomationEscalation asks the Butler to phrase one of the action's
@@ -110,28 +110,28 @@ type AutomationContext struct {
 type AutomationEscalation struct {
 	// Prompt is the instruction the Butler receives alongside the packet.
 	// Bounded; it is authored text, not a place for a document.
-	Prompt string `yaml:"prompt"`
+	Prompt string `yaml:"prompt" json:"prompt"`
 	// Into names the action param the Butler's answer replaces. Empty
 	// means "message". The named param must exist and be non-empty: it
 	// is both the reviewer's view of what will be said and the fallback
 	// when no model answers.
-	Into string `yaml:"into,omitempty"`
+	Into string `yaml:"into,omitempty" json:"into,omitempty"`
 }
 
 // AutomationAction is the typed operation the rule performs.
 type AutomationAction struct {
 	// Tool is "<capability>.<tool>", an agentTool a package declares
 	// (ADR-W005 A1), e.g. notifications.notify.
-	Tool string `yaml:"tool"`
+	Tool string `yaml:"tool" json:"tool"`
 	// Tier is the action's risk tier in the shared vocabulary (read, low,
 	// medium, high, domestic). The schema accepts the vocabulary; policy
 	// decides which tiers a household rule may carry (ADR-W024 A5).
-	Tier string `yaml:"tier"`
+	Tier string `yaml:"tier" json:"tier"`
 	// Params are the tool's inputs. Values may reference the trigger's
 	// fields with {{ .Subject }} and friends; the engine renders them.
 	// Never a secret value: policy holds these to the same rule as a
 	// container's env.
-	Params map[string]string `yaml:"params,omitempty"`
+	Params map[string]string `yaml:"params,omitempty" json:"params,omitempty"`
 }
 
 const (
