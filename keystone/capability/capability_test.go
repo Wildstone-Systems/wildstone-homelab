@@ -460,3 +460,56 @@ spec: { image: "ghcr.io/example/widget@sha256:1111111111111111111111111111111111
 		}
 	}
 }
+
+// A template that renders to nothing produces no resource, which is how
+// a package makes ONE resource conditional on a param (budget-actual's
+// OidcClient is the first user). Pinned here because it used to be an
+// error, and because "the package silently produced less than it says"
+// is the kind of behaviour that should have to be deleted deliberately.
+func TestExpandSkipsTemplateThatRendersToNothing(t *testing.T) {
+	pkg := simplePackage()
+	pkg.Params = append(pkg.Params, pkgspec.ParamDecl{Name: "extra"})
+	pkg.Templates = append(pkg.Templates, `{{- if .Params.extra }}
+apiVersion: wildstone.dev/v1
+kind: Volume
+metadata: { name: widget-data, node: "{{ .Params.node }}" }
+spec: { name: widget-data }
+{{- end }}
+`)
+
+	off, err := (&Engine{}).Expand(pkg, map[string]string{"node": "node-a"}, NewCatalog())
+	if err != nil {
+		t.Fatalf("Expand with the conditional off: %v", err)
+	}
+	for _, r := range off {
+		if r.Kind == resource.KindVolume {
+			t.Fatalf("the conditional was off and a Volume was produced anyway")
+		}
+	}
+	if len(off) != 1 {
+		t.Fatalf("got %d resources with the conditional off, want 1 — only the empty template should drop", len(off))
+	}
+
+	on, err := (&Engine{}).Expand(pkg, map[string]string{"node": "node-a", "extra": "yes"}, NewCatalog())
+	if err != nil {
+		t.Fatalf("Expand with the conditional on: %v", err)
+	}
+	if len(on) != 2 {
+		t.Fatalf("got %d resources with the conditional on, want 2", len(on))
+	}
+}
+
+// The other half of that trade. Emptiness has to be WRITTEN — an entry
+// with no content at all produces nothing for any params, and is the
+// typo the old "rendered to empty document" error was aimed at. It is
+// refused at load, before a package can ship declaring a resource it
+// never renders.
+func TestBlankTemplateIsRefusedAtValidation(t *testing.T) {
+	pkg := simplePackage()
+	pkg.Templates = append(pkg.Templates, "   \n\t\n")
+	if err := pkg.Validate(); err == nil {
+		t.Fatal("a blank template entry validated; nothing else will ever report it")
+	} else if !strings.Contains(err.Error(), "templates[1]") {
+		t.Errorf("error does not name the offending entry: %v", err)
+	}
+}

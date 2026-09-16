@@ -538,6 +538,22 @@ func (p *Package) Validate() error {
 		seenExternal[ec.Filename] = true
 	}
 
+	// A BLANK template entry is a mistake every time. It matters more
+	// than it reads: capability.Expand treats a template that RENDERS to
+	// nothing as a resource the package declined to produce for these
+	// params, which is what makes a conditional resource expressible.
+	// That reading is only safe while emptiness has to be written as an
+	// action — text with nothing in it at all is the typo the old
+	// "rendered to empty document" error was really aimed at, and this
+	// is where it is still caught.
+	for i, t := range p.Templates {
+		if strings.TrimSpace(t) == "" {
+			return &ValidationError{Field: fmt.Sprintf("templates[%d]", i),
+				Msg: "is blank. A template that renders to nothing for SOME params is how a resource is made " +
+					"conditional, but one with no content at all produces nothing for any of them"}
+		}
+	}
+
 	// A package that declares no templates, no lifecycle hooks, no
 	// agentTools, and no provides is producing nothing — reject it as
 	// malformed rather than silently accepting a no-op package.

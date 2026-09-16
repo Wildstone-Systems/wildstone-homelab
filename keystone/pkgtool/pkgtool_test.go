@@ -78,6 +78,42 @@ func TestLintShippedPackages(t *testing.T) {
 	}
 }
 
+// TestLintBudgetActualInOidcMode lints the one shipped branch the walk
+// above cannot reach. TestLintShippedPackages fills required params and
+// takes the DEFAULT for everything else, so budget-actual is linted only
+// in its password posture — the OpenID env block it renders under
+// budget_login=oidc is text no lint rule has ever been shown.
+//
+// Only this package needs the extra run today: it is the only one whose
+// param switches which resources and env vars exist. A second such param
+// should come back here rather than be left uncovered.
+func TestLintBudgetActualInOidcMode(t *testing.T) {
+	root, err := filepath.Abs("../../packages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalog []string
+	for _, e := range entries {
+		if e.IsDir() && e.Name() != "budget-actual" {
+			catalog = append(catalog, filepath.Join(root, e.Name()))
+		}
+	}
+	issues, err := Lint(filepath.Join(root, "budget-actual"), LintOptions{
+		Fillers:     map[string]string{"public_domain": "example.internal", "node": "n1", "budget_login": "oidc"},
+		CatalogDirs: catalog,
+	})
+	if err != nil {
+		t.Fatalf("Lint(budget-actual, oidc): %v", err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("budget-actual lints clean on its default but not with budget_login=oidc: %v", issues)
+	}
+}
+
 func writePackage(t *testing.T, yaml string) string {
 	t.Helper()
 	dir := t.TempDir()
