@@ -1,8 +1,11 @@
 # ADR-WXXX (DRAFT): Commitments and meters — the household keeps track of what it owes itself
 
-- **Status:** draft. Not proposed, not accepted. Work package K3 is
-  prototyped in `keystone/commitment`; nothing else is built, and nothing
-  reads it yet.
+- **Status:** draft, and **paused** by decision rather than stalled. Work
+  package K3 is prototyped in `keystone/commitment`; nothing else is
+  built, and nothing reads it. K1 is deliberately not started: the vertical
+  (which surface, whose authority, Owner or Member) decides its schema, and
+  that vertical depends on the agent rework and the family homepage, both
+  in flight. Resuming is tracked in the follow-up issue.
 - **Number:** deliberately `WXXX`. W032 (*Who may open the Console*) and
   W033 (*The Wildstone agent system*) are taken on branches that have not
   landed; this file is numbered on merge, most likely W034. See
@@ -92,10 +95,29 @@ A meter reading may therefore be written four ways, all equal:
 
 | Door | Requires an installed capability? |
 |---|---|
-| Console — a field on the commitment's card | no |
-| `wild meter read f150-odometer 84210` | no |
-| Household chat — "truck's at 84,210" | no |
+| Console — a field on the commitment's card | no, but Console is Owner-only |
+| `wild meter read f150-odometer 84210` | no, but it is an operator tool |
+| Household chat — "truck's at 84,210" | **yes** — a chat capability |
+| A family-facing web surface | **yes** today — see the correction below |
 | A household event from a publisher | **yes — and this is the optional one** |
+
+**Correction, recorded rather than quietly fixed.** An earlier version of
+this table claimed the first three doors were free. Reviewing it against
+the surfaces actually being built showed otherwise: chat is a capability,
+and the family dashboard is a capability, so today a household **Member**
+has no capability-free way to write a reading at all. A4's promise holds
+for the Owner and fails for the family, which is the half that matters.
+
+The fix is available and is not a change to A4 — it is what A4 requires.
+`keystone/portal` (the Files and Assistant surfaces) is Wildstone serving
+small household surfaces of its own, behind a door that produces an
+identity holding no RBAC verb. Commitments need one of those as a **core**
+surface, gated on the default household group rather than declared by a
+package. Ingress is not optional for any web UI, so depending on ingress
+does not violate A4; depending on the `dashboard` package does. Settling
+this is the first thing to do when this ADR resumes.
+
+
 
 The engine does not care which door a reading came through. It records
 the value, the meter, when it was taken, and the principal that wrote it,
