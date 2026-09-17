@@ -228,6 +228,9 @@ type homeSummaryResponse struct {
 	Member    string    `json:"member"`
 	Household string    `json:"household"`
 	AccentHue int       `json:"accentHue"`
+	// Banner is the household's own picture and how it is framed, or
+	// the zero value when they have not chosen one.
+	Banner bannerView `json:"banner"`
 	// SignOut is the identity provider's logout URL, or empty when this
 	// deployment has no login page — in which case the page hides the
 	// control rather than offering one that does nothing.
@@ -277,6 +280,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 		Household: name,
 		AccentHue: hue,
 		SignOut:   signOutURL(desired),
+		Banner:    s.bannerFor(),
 		Surfaces: map[string]bool{
 			// Asked of desired state, not of configuration: a surface
 			// exists exactly while its capability declares a group,
@@ -284,7 +288,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 			"files":     portalSurfaceInstalled(desired, surfaceFiles),
 			"assistant": portalSurfaceInstalled(desired, surfaceAssistant),
 		},
-		Groups: reconcile.Groups(),
+		Groups: householdGroups(),
 	}
 	resp.NeedsYou = s.homeNeedsYou(member, now)
 	resp.Activity = s.homeActivity(member, now)
@@ -629,7 +633,18 @@ func upstreamContainer(upstream string) string {
 // than a container, or a container nothing has observed, is UNKNOWN. §7
 // forbids rendering that as down.
 func (s *Server) homeApps(desired []resource.Resource) ([]reconcile.App, map[string]string, bool) {
-	apps := reconcile.Apps(desired)
+	// The household's own surfaces are the two widgets at the top of
+	// this page, so their launcher cards are dropped rather than shown
+	// a second time — from the LIST as well as from the group order,
+	// or search would still find a card that opens the card above it.
+	all := reconcile.Apps(desired)
+	apps := make([]reconcile.App, 0, len(all))
+	for _, a := range all {
+		if a.Group == reconcile.PortalGroup {
+			continue
+		}
+		apps = append(apps, a)
+	}
 	status := map[string]string{}
 	observed, err := s.DB.ListObserved()
 	if err != nil {
@@ -863,4 +878,27 @@ func signOutURL(desired []resource.Resource) string {
 		return "https://" + posture.SiteAddress(r.Route.Host) + "/logout"
 	}
 	return ""
+}
+
+// householdGroups is the launcher's group order on THIS dashboard,
+// which is the renderer's minus the household surfaces' own group.
+//
+// "Quick actions" exists because the Homepage profile can only present
+// links: Files and Assistant reach it as cards that open a Wildstone
+// page. Here they are the two widgets at the top of the screen, so the
+// group underneath is the same two things a second time — a member
+// scrolling past their own upload card to find a card that opens it.
+//
+// Filtered here rather than removed from reconcile.Groups, because the
+// Homepage profile still needs it: one renderer, two presentations.
+func householdGroups() []string {
+	all := reconcile.Groups()
+	out := make([]string, 0, len(all))
+	for _, g := range all {
+		if g == reconcile.PortalGroup {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out
 }

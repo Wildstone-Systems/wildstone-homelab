@@ -186,3 +186,49 @@ func TestThePagesFetchNothingFromElsewhere(t *testing.T) {
 		}
 	}
 }
+
+// An uploaded banner's media type is read from its own bytes, never
+// from what the upload claimed.
+//
+// This surface serves the picture back from the same origin as the
+// pages that hold everybody's session, so a caller who uploads an HTML
+// file labelled image/png is describing a stored cross-site scripting
+// bug. The only reliable answer is not to believe them.
+func TestTheBannerTypeIsReadFromTheBytes(t *testing.T) {
+	cases := []struct {
+		name string
+		body []byte
+		want string
+	}{
+		{"jpeg", []byte{0xFF, 0xD8, 0xFF, 0xE0, 0, 0}, "image/jpeg"},
+		{"png", append([]byte("\x89PNG\r\n\x1a\n"), 0, 0), "image/png"},
+		{"gif87", []byte("GIF87a....."), "image/gif"},
+		{"gif89", []byte("GIF89a....."), "image/gif"},
+		{"webp", append([]byte("RIFF\x00\x00\x00\x00WEBP"), 0), "image/webp"},
+	}
+	for _, c := range cases {
+		got, ok := ImageType(c.body)
+		if !ok || got != c.want {
+			t.Errorf("%s: got %q ok=%v, want %q", c.name, got, ok, c.want)
+		}
+	}
+
+	// Everything that is not a picture is refused, and the html case is
+	// the one that matters: net/http's sniffer would call it text/html
+	// and a "serve what it guessed" implementation would then serve it.
+	for _, c := range []struct {
+		name string
+		body []byte
+	}{
+		{"html", []byte("<!doctype html><script>alert(1)</script>")},
+		{"svg", []byte("<svg xmlns='http://www.w3.org/2000/svg'><script/></svg>")},
+		{"empty", nil},
+		{"short", []byte{0xFF}},
+		{"webp without riff", append([]byte("XXXX\x00\x00\x00\x00WEBP"), 0)},
+		{"png suffix only", []byte("....\x89PNG\r\n\x1a\n")},
+	} {
+		if got, ok := ImageType(c.body); ok {
+			t.Errorf("%s was accepted as %q", c.name, got)
+		}
+	}
+}

@@ -549,6 +549,14 @@ func (s *Server) Handler() http.Handler {
 	// reach the caller's own notifications.
 	mux.Handle("POST /api/v1/home/notices/clear", s.portal(surfaceHome, s.homeClearNotices))
 
+	// The household's banner photo. Setting it and framing it are
+	// separate writes: the framing is chosen once the picture is on
+	// screen, where a person can see what they are choosing.
+	mux.Handle("GET /api/v1/home/banner", s.portal(surfaceHome, s.homeBannerImage))
+	mux.Handle("POST /api/v1/home/banner", s.portal(surfaceHome, s.homeBannerSet))
+	mux.Handle("POST /api/v1/home/banner/frame", s.portal(surfaceHome, s.homeBannerFrame))
+	mux.Handle("POST /api/v1/home/banner/clear", s.portal(surfaceHome, s.homeBannerClear))
+
 	// Activity: the household record, on the same surface as the front
 	// page because it is the same projection over a longer window.
 	mux.Handle("GET /activity/{$}", s.portal(surfaceHome, s.portalPage("activity")))

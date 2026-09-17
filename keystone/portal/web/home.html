@@ -85,6 +85,27 @@
   .secthead { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); }
   .secthead h2 { font-size: 17px; margin: 0; }
   .plate { padding: var(--space-4) var(--space-6); display: flex; flex-direction: column; gap: var(--space-3); }
+  /* The banner's own controls, which stay out of the way until the
+     band is hovered or something in it has focus — a picture with a
+     toolbar permanently across it is not a banner. */
+  .bannertools { position: absolute; top: var(--space-3); right: var(--space-3); z-index: 3;
+                 display: flex; gap: var(--space-2); opacity: 0; transition: opacity .12s; }
+  .bannerwrap:hover .bannertools, .bannerwrap:focus-within .bannertools { opacity: 1; }
+  .bannertools .hbtn { background: color-mix(in srgb, var(--color-bg) 72%, transparent);
+                       box-shadow: inset 0 0 0 1px var(--hair); backdrop-filter: blur(10px);
+                       font-size: 12.5px; }
+  /* While framing, the scrim and the type step back so the whole
+     photograph is visible — a person choosing a crop needs to see what
+     they are cropping, not the dashboard on top of it. */
+  .bannerwrap.framing .scrim { opacity: .25; }
+  .bannerwrap.framing .title, .bannerwrap.framing .clockplate { opacity: .25; }
+  .bannerwrap.framing .photo { cursor: grab; }
+  .bannerwrap.framing .photo:active { cursor: grabbing; }
+  .framehint { position: absolute; left: 50%; bottom: var(--space-4); transform: translateX(-50%);
+               z-index: 3; padding: var(--space-2) var(--space-4); border-radius: 999px;
+               background: color-mix(in srgb, var(--color-bg) 82%, transparent);
+               box-shadow: inset 0 0 0 1px var(--hair); backdrop-filter: blur(10px);
+               font-size: 12.5px; white-space: nowrap; }
   @media (max-width: 980px) { .bannerwrap { min-height: 140px; } }
 </style>
 
@@ -93,6 +114,19 @@
   <header class="surface banner bannerwrap">
     <div class="photo" id="photo"></div>
     <div class="scrim"></div>
+    <div class="bannertools">
+      <button class="hbtn" id="banner-pick" type="button" title="Use a different picture">
+        <i class="ph ph-image-square" aria-hidden="true"></i> Picture
+      </button>
+      <button class="hbtn" id="banner-frame" type="button" title="Drag the picture to choose what the band shows" hidden>
+        <i class="ph ph-arrows-out-cardinal" aria-hidden="true"></i> Reframe
+      </button>
+      <button class="hbtn" id="banner-reset" type="button" title="Put the default picture back" hidden>
+        <i class="ph ph-arrow-clockwise" aria-hidden="true"></i>
+      </button>
+    </div>
+    <input id="banner-input" type="file" accept="image/*" hidden>
+    <div class="framehint" id="framehint" hidden>Drag the picture to frame it · <b id="framedone">Done</b></div>
     <div class="title">
       <h1 id="household">&nbsp;</h1>
       <div class="sub">Everything this household runs</div>
@@ -116,6 +150,9 @@
       <input id="search" type="search" placeholder="Find an app">
       <span class="muted">⌘K</span>
     </div>
+    <span class="themebits" style="width: 1px; height: 22px; background: var(--hair); flex: none" aria-hidden="true"></span>
+    <span class="eyebrow themebits">Theme</span>
+    <div class="themebits" id="hues" style="display: flex; align-items: center; gap: var(--space-3)"></div>
   </div>
 
   <!-- The greeting band. On a good day it collapses to this one line and
@@ -413,7 +450,16 @@
   function render(d) {
     asOf = d.as ? new Date(d.as) : new Date();
     member = d.member || "";
-    document.documentElement.style.setProperty("--hue", String(d.accentHue));
+    // The household's hue comes from desired state; a viewer may be
+    // previewing another. The preview wins for this browser only.
+    serverHue = d.accentHue;
+    var hue = serverHue;
+    try {
+      var saved = localStorage.getItem("home.hue");
+      if (saved !== null && !isNaN(parseInt(saved, 10))) { hue = parseInt(saved, 10); }
+    } catch (e) {}
+    document.documentElement.style.setProperty("--hue", String(hue));
+    paintHues(hue);
     text("household", d.household || "Home");
     text("initials", initialsOf(member));
     el("initials").title = member + " — signed in";
@@ -429,7 +475,7 @@
     }
     text("greeting", greetingFor(asOf.getHours()) + (member ? ", " + member : ""));
     document.title = d.household || "Home";
-    el("photo").style.backgroundImage = "url('/portal/assets/banner-default.webp')";
+    paintBanner(d.banner || {});
 
     renderNeeds(d.needsYou);
     renderCalendar(d.calendar);
@@ -1095,6 +1141,167 @@
   el("ask").addEventListener("keydown", function (e) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
+
+  // ---- the palette. A PREVIEW, per viewer, and it says so: the
+  // household's real hue is desired state, rendered by Keystone from the
+  // capability's settings. A picker that quietly rewrote that would be
+  // the browser-local theme §9 rejects; one that did nothing would be a
+  // control that lies. This is the third thing — a way to see the
+  // palette move before asking the owner to set it.
+  var HUES = [[289, "Blurple"], [218, "Tide"], [152, "Moss"], [32, "Ember"], [332, "Orchid"]];
+  var serverHue = 267;
+
+  function paintHues(active) {
+    var box = el("hues");
+    if (!box) { return; }
+    clear(box);
+    var all = HUES.slice();
+    // The household's own colour is always offered, even when it is not
+    // one of the five: otherwise the swatch showing what is actually
+    // configured is the one a member cannot pick.
+    if (!all.some(function (h) { return h[0] === serverHue; })) {
+      all.unshift([serverHue, "The household's colour"]);
+    }
+    all.forEach(function (h) {
+      var b = make("button", "sw" + (h[0] === active ? " on" : ""));
+      b.type = "button";
+      b.style.background = "oklch(0.734 0.125 " + h[0] + ")";
+      b.title = h[1] + (h[0] === serverHue
+        ? " — the household's colour"
+        : " — a preview in this browser only");
+      b.setAttribute("aria-label", h[1]);
+      b.addEventListener("click", function () {
+        document.documentElement.style.setProperty("--hue", String(h[0]));
+        try {
+          if (h[0] === serverHue) { localStorage.removeItem("home.hue"); }
+          else { localStorage.setItem("home.hue", String(h[0])); }
+        } catch (e) {}
+        paintHues(h[0]);
+      });
+      box.appendChild(b);
+    });
+  }
+
+  // ---- the banner picture.
+  var banner = { custom: false, positionX: 50, positionY: 50 };
+
+  function paintBanner(b) {
+    banner = {
+      custom: !!b.custom,
+      positionX: typeof b.positionX === "number" ? b.positionX : 50,
+      positionY: typeof b.positionY === "number" ? b.positionY : 50
+    };
+    var photo = el("photo");
+    // The version busts the browser's copy: same URL, new bytes.
+    photo.style.backgroundImage = banner.custom
+      ? "url('/api/v1/home/banner?v=" + encodeURIComponent(b.version || 0) + "')"
+      : "url('/portal/assets/banner-default.webp')";
+    photo.style.backgroundPosition = banner.positionX + "% " + banner.positionY + "%";
+    // Reframing and resetting only mean something once the household
+    // has a picture of its own.
+    el("banner-frame").hidden = !banner.custom;
+    el("banner-reset").hidden = !banner.custom;
+  }
+
+  el("banner-pick").addEventListener("click", function () { el("banner-input").click(); });
+  el("banner-input").addEventListener("change", function () {
+    var file = el("banner-input").files && el("banner-input").files[0];
+    el("banner-input").value = "";
+    if (!file) { return; }
+    var btn = el("banner-pick");
+    btn.disabled = true;
+    fetch("/api/v1/home/banner", {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: file
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "that picture didn't save"); }
+        // Straight into framing: a new photograph is centred, which is a
+        // guess, and this is the moment a person can see what to fix.
+        paintBanner({ custom: true, positionX: 50, positionY: 50, version: Date.now() });
+        startFraming();
+      })
+      .catch(function (err) {
+        var n = note(el("needs-body"), "bad", String(err.message || err));
+        setTimeout(function () { if (n && n.parentNode) { n.remove(); } }, 6000);
+      })
+      .then(function () { btn.disabled = false; });
+  });
+
+  el("banner-reset").addEventListener("click", function () {
+    fetch("/api/v1/home/banner/clear", { method: "POST" })
+      .then(function () { stopFraming(); paintBanner({}); });
+  });
+
+  // ---- framing: drag the picture to choose what the band shows.
+  //
+  // Dragging the PICTURE rather than two sliders, because the thing
+  // being chosen is visual and a number is a poor handle on it. The
+  // drag moves object-position, so what a person sees while dragging is
+  // exactly what the band will show.
+  var framing = false, dragging = false, startPt = null, startPos = null;
+
+  function startFraming() {
+    framing = true;
+    document.querySelector(".bannerwrap").classList.add("framing");
+    el("framehint").hidden = false;
+  }
+  function stopFraming() {
+    framing = false;
+    dragging = false;
+    document.querySelector(".bannerwrap").classList.remove("framing");
+    el("framehint").hidden = true;
+  }
+
+  el("banner-frame").addEventListener("click", function () {
+    if (framing) { saveFrame(); } else { startFraming(); }
+  });
+  el("framedone").addEventListener("click", saveFrame);
+
+  function saveFrame() {
+    stopFraming();
+    fetch("/api/v1/home/banner/frame?x=" + encodeURIComponent(banner.positionX.toFixed(1)) +
+          "&y=" + encodeURIComponent(banner.positionY.toFixed(1)), { method: "POST" })
+      .catch(function () {});
+  }
+
+  (function () {
+    var photo = el("photo");
+    function point(e) {
+      var t = e.touches && e.touches[0];
+      return { x: t ? t.clientX : e.clientX, y: t ? t.clientY : e.clientY };
+    }
+    function down(e) {
+      if (!framing) { return; }
+      e.preventDefault();
+      dragging = true;
+      startPt = point(e);
+      startPos = { x: banner.positionX, y: banner.positionY };
+    }
+    function move(e) {
+      if (!framing || !dragging) { return; }
+      e.preventDefault();
+      var p = point(e), box = photo.getBoundingClientRect();
+      // Dragging right should move the picture right, which means
+      // showing more of its LEFT — hence the subtraction. The band is
+      // short and wide, so a vertical drag is scaled against its own
+      // height or the picture would fly past.
+      var nx = startPos.x - ((p.x - startPt.x) / Math.max(box.width, 1)) * 100;
+      var ny = startPos.y - ((p.y - startPt.y) / Math.max(box.height, 1)) * 100;
+      banner.positionX = Math.max(0, Math.min(100, nx));
+      banner.positionY = Math.max(0, Math.min(100, ny));
+      photo.style.backgroundPosition = banner.positionX + "% " + banner.positionY + "%";
+    }
+    function up() { dragging = false; }
+    photo.addEventListener("mousedown", down);
+    photo.addEventListener("touchstart", down, { passive: false });
+    window.addEventListener("mousemove", move);
+    window.addEventListener("touchmove", move, { passive: false });
+    window.addEventListener("mouseup", up);
+    window.addEventListener("touchend", up);
+  })();
 
   fold("needs", el("needs-fold"), el("needs-body"), el("needs-caret"), true);
   fold("cal", el("cal-fold"), el("cal-body"), el("cal-caret"), false);

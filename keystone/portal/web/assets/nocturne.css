@@ -496,3 +496,6 @@ a:hover { color: var(--color-accent-200); text-decoration: underline; }
 .ph-fill.ph-x-circle:before {
   content: "\e4f8";
 }
+.ph-arrows-out-cardinal:before {
+  content: "\e0a4";
+}

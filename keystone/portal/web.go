@@ -155,3 +155,50 @@ func WriteAsset(w http.ResponseWriter, body []byte, contentType string) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
 }
+
+// imageMagic are the file signatures this surface will accept as a
+// picture, and the media type each one is served back as.
+//
+// SNIFFED, NEVER TRUSTED. A household banner is bytes a member chose,
+// served from the same origin as the pages that hold everybody's
+// session — so a caller that uploads an HTML file labelled image/png is
+// describing a stored cross-site scripting bug, and the only reliable
+// answer is to read the bytes. net/http's DetectContentType would do
+// most of this, but it also returns text/html for anything it does not
+// recognise, and "serve what it guessed" is the behaviour being avoided.
+var imageMagic = []struct {
+	prefix []byte
+	// at is where the signature sits, for the formats that do not lead
+	// with theirs.
+	at    int
+	media string
+}{
+	{prefix: []byte{0xFF, 0xD8, 0xFF}, media: "image/jpeg"},
+	{prefix: []byte("\x89PNG\r\n\x1a\n"), media: "image/png"},
+	{prefix: []byte("GIF87a"), media: "image/gif"},
+	{prefix: []byte("GIF89a"), media: "image/gif"},
+	// WebP is "RIFF????WEBP": the size is in between, so the second half
+	// is checked at its own offset.
+	{prefix: []byte("WEBP"), at: 8, media: "image/webp"},
+}
+
+// ImageType reports the media type of an uploaded picture, read from its
+// own bytes, and ok=false for anything this surface will not serve back.
+func ImageType(body []byte) (string, bool) {
+	for _, sig := range imageMagic {
+		end := sig.at + len(sig.prefix)
+		if len(body) < end {
+			continue
+		}
+		if string(body[sig.at:end]) != string(sig.prefix) {
+			continue
+		}
+		// WebP's signature is split; the container has to be RIFF too,
+		// or "WEBP" eight bytes into something else would pass.
+		if sig.media == "image/webp" && (len(body) < 4 || string(body[:4]) != "RIFF") {
+			continue
+		}
+		return sig.media, true
+	}
+	return "", false
+}

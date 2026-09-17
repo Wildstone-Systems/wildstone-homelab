@@ -13,6 +13,7 @@ package api
 // printed as machine text.
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -541,5 +542,98 @@ func TestSignOutPointsAtTheIdentityProvider(t *testing.T) {
 	// And it must not be a path on this surface, which is the whole bug.
 	if strings.Contains(got.SignOut, "/home/") || got.SignOut == "/logout" {
 		t.Errorf("signOut = %q, which is this surface rather than the provider", got.SignOut)
+	}
+}
+
+// The household's own surfaces are the widgets at the top of this page,
+// so their launcher group is not shown underneath them as well.
+//
+// Under the Homepage profile "Quick actions" is how Files and Assistant
+// are reachable at all — it can only present links. Here they are live
+// cards, and the group beneath was the same two things a second time:
+// a member scrolling past their upload card to find a card that opens
+// it.
+func TestTheHouseholdSurfacesAreNotAlsoLauncherCards(t *testing.T) {
+	h := homeHarness(t)
+	got := h.summary(t, "sandy")
+	for _, g := range got.Groups {
+		if g == reconcile.PortalGroup {
+			t.Errorf("group %q is in the launcher order alongside the widgets", g)
+		}
+	}
+	// And out of the list too, or search would still find them.
+	for _, a := range got.Apps {
+		if a.Group == reconcile.PortalGroup {
+			t.Errorf("%q is still a launcher card", a.Title)
+		}
+	}
+	// The ordinary groups survive: this filters one group, it does not
+	// empty the launcher.
+	var household bool
+	for _, g := range got.Groups {
+		if g == "Household" {
+			household = true
+		}
+	}
+	if !household {
+		t.Errorf("groups = %v, want Household among them", got.Groups)
+	}
+}
+
+// The banner reports itself as the default until a household sets one.
+func TestTheBannerDefaultsUntilAHouseholdChoosesOne(t *testing.T) {
+	h := homeHarness(t)
+	got := h.summary(t, "sandy")
+	if got.Banner.Custom {
+		t.Error("the banner claims a household picture with none set")
+	}
+	if got.Banner.PositionX != 50 || got.Banner.PositionY != 50 {
+		t.Errorf("framing = %v/%v, want centred", got.Banner.PositionX, got.Banner.PositionY)
+	}
+
+	// A picture, and the framing it starts at.
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...)
+	res := h.member(http.MethodPost, "/api/v1/home/banner", "sandy", "homepage_users",
+		bytes.NewReader(png), "application/octet-stream")
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("setting the banner: status %d", res.StatusCode)
+	}
+	got = h.summary(t, "sandy")
+	if !got.Banner.Custom {
+		t.Fatal("the banner is not reported as the household's own")
+	}
+	if got.Banner.Version == 0 {
+		t.Error("no version on the banner; a browser would keep the old picture")
+	}
+
+	// Framing it moves only the framing.
+	res = h.member(http.MethodPost, "/api/v1/home/banner/frame?x=20&y=80", "sandy", "homepage_users", nil, "")
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("framing: status %d", res.StatusCode)
+	}
+	if got = h.summary(t, "sandy"); got.Banner.PositionX != 20 || got.Banner.PositionY != 80 {
+		t.Errorf("framing = %v/%v, want 20/80", got.Banner.PositionX, got.Banner.PositionY)
+	}
+
+	// Anything that is not a picture is refused, whatever it says it is.
+	res = h.member(http.MethodPost, "/api/v1/home/banner", "sandy", "homepage_users",
+		strings.NewReader("<!doctype html><script>alert(1)</script>"), "image/png")
+	res.Body.Close()
+	if res.StatusCode != http.StatusUnsupportedMediaType {
+		t.Errorf("an HTML upload labelled image/png: status %d, want 415", res.StatusCode)
+	}
+
+	// And putting it back is not an error the second time.
+	for i := 0; i < 2; i++ {
+		res = h.member(http.MethodPost, "/api/v1/home/banner/clear", "sandy", "homepage_users", nil, "")
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("clear %d: status %d", i, res.StatusCode)
+		}
+	}
+	if got = h.summary(t, "sandy"); got.Banner.Custom {
+		t.Error("the banner is still the household's own after clearing")
 	}
 }

@@ -115,3 +115,12 @@ func DescribeProfile(profile string) (title, desc string, ok bool) {
 	}
 	return app.title, app.description, true
 }
+
+// PortalGroup is the launcher group the household's own surfaces land
+// in under the Homepage profile.
+//
+// Exported so a dashboard that renders those surfaces natively can leave
+// the group out rather than showing every one of them twice — and so
+// that "which group is that" is one string rather than two that have to
+// stay equal by hand.
+const PortalGroup = portalGroupName
