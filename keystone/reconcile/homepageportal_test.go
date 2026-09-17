@@ -77,6 +77,23 @@ func TestTheFrameIsToldTheDashboardsTheme(t *testing.T) {
 	}
 }
 
+// The palette switcher belongs to the household.
+//
+// Homepage disables it whenever settings.yaml pins a `color`, and the
+// colour it was pinned to — slate — is the one Homepage already
+// defaults to. So the key's only effect was removing a control, which
+// is what it did the first time a container picked the rendered file
+// up. The theme is the deliberate exception: the frames are told it.
+func TestTheRenderedSettingsLeaveThePaletteToTheHousehold(t *testing.T) {
+	got := string(renderHomepageSettings(portalDesired()))
+	if strings.Contains(got, "\ncolor:") {
+		t.Errorf("settings.yaml pins a colour, which disables Homepage's palette switcher:\n%s", got)
+	}
+	if !strings.Contains(got, "theme: "+homepageTheme) {
+		t.Errorf("the theme must stay pinned — the household surfaces are told it:\n%s", got)
+	}
+}
+
 // A household surface is not an application, and must not be listed as
 // one: a second plain card for the same Route would mean two Files on
 // the dashboard, one of which does nothing.

@@ -78,8 +78,18 @@ const homepageColumns = 3
 //     services draws an empty heading.
 //   - statusStyle dot: the siteMonitor result as a colored dot next to
 //     the name, rather than a line of HTTP status text under every card.
-//   - headerStyle boxed + theme/color: a deliberate look instead of
+//   - headerStyle boxed + theme: a deliberate look instead of
 //     Homepage's untouched default, which reads as unconfigured.
+//   - NO `color` key, deliberately. Pinning one disables Homepage's
+//     palette switcher — the household loses a control it had, to be
+//     given slate, which is the colour Homepage already defaults to.
+//     That is a setting whose only effect is the thing it takes away,
+//     and a family that wants a green dashboard should have one. The
+//     theme stays pinned, because something else now reads it: the
+//     household surfaces are iframes and are TOLD the palette they are
+//     being drawn into (homepageTheme), and a switcher would let a
+//     person change the page underneath them with no way to tell the
+//     frames.
 //   - hideVersion: a family dashboard should not advertise the version
 //     of the software serving it, to the family or to anyone else.
 //   - quicklaunch: typing filters the household's own services; the
@@ -93,7 +103,6 @@ func renderHomepageSettings(desired []resource.Resource) []byte {
 	b.WriteString("title: " + yamlQuote(dashboardTitle(desired)) + "\n")
 	b.WriteString("description: Everything this household runs\n")
 	b.WriteString("theme: " + homepageTheme + "\n")
-	b.WriteString("color: slate\n")
 	b.WriteString("headerStyle: boxed\n")
 	b.WriteString("statusStyle: dot\n")
 	b.WriteString("hideVersion: true\n")
