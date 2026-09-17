@@ -66,8 +66,16 @@ var (
 	// a 404: an uninstalled capability should look absent, not forbidden.
 	errPortalNotInstalled = errors.New("not installed")
 	// errPortalDenied covers every other refusal — untrusted peer, no
-	// forwarded user, not in the group. One error for all three, because
-	// the differences between them are exactly what a prober wants.
+	// forwarded user, not in the group. The CALLER is told one thing for
+	// all three, because the differences between them are exactly what a
+	// prober wants.
+	//
+	// The OPERATOR is told which, in the log, and that is not a
+	// contradiction: the first thing this door did on a live household
+	// was refuse the person it was installed for, and the audit row said
+	// only "403, anonymous". Three conditions and one indistinguishable
+	// refusal is right at the boundary and useless behind it. Every
+	// refusal below wraps this with the reason.
 	errPortalDenied = errors.New("denied")
 )
 
@@ -113,14 +121,24 @@ func (s *Server) portalMember(r *http.Request, surface portalSurface) (string, [
 	// The peer test first, so that an attempt from anywhere but the
 	// proxy is refused before any header is read at all.
 	if !s.peerIsTrustedIngress(r) {
-		return "", nil, errPortalDenied
+		return "", nil, fmt.Errorf("%w: the request did not arrive from the identity proxy (peer %s, trusted %v)",
+			errPortalDenied, remoteHost(r), s.TrustedIngress)
 	}
 	member := strings.TrimSpace(r.Header.Get(TrustedIngressHeader))
 	if member == "" {
-		return "", nil, errPortalDenied
+		return "", nil, fmt.Errorf("%w: the proxy forwarded no %s header",
+			errPortalDenied, TrustedIngressHeader)
 	}
-	if !hasGroup(r.Header.Get(ConsoleGroupsHeader), group) {
-		return "", nil, errPortalDenied
+	forwarded := strings.TrimSpace(r.Header.Get(ConsoleGroupsHeader))
+	if !hasGroup(forwarded, group) {
+		// The member is returned WITH the refusal so the audit row names
+		// the person who was turned away rather than "anonymous", and
+		// the groups they arrived with are in the message: a household
+		// member added to a group after they signed in arrives with the
+		// list their session was built from, and this line is the
+		// difference between seeing that and guessing at it.
+		return member, nil, fmt.Errorf("%w: %s is in [%s], which does not include %s",
+			errPortalDenied, member, forwarded, group)
 	}
 	return member, desired, nil
 }
@@ -170,6 +188,10 @@ func (s *Server) portal(surface portalSurface, h portalFunc) http.Handler {
 				return
 			}
 			s.audit(r, member, status)
+			// The reason goes to the operator's log, never to the
+			// caller: msg is the same sentence for all three.
+			s.Log.Info("portal refused", "surface", surface.capability,
+				"path", r.URL.Path, "status", status, "reason", err.Error())
 			s.writeError(w, status, msg)
 			return
 		}

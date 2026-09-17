@@ -2,41 +2,66 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Files</title>
+<script>
+  // The palette comes from the URL, not from prefers-color-scheme.
+  //
+  // Homepage frames a widget inside a container it marks scheme-light,
+  // so an embedded page that asks the browser which scheme it is in is
+  // told "light" while it is drawn on a dark card — dark text on a dark
+  // panel, which is how this first went out. Keystone knows the
+  // dashboard's theme (it writes settings.yaml) and puts it in the src.
+  //
+  // Inline and first, so the attribute is set before anything paints.
+  (() => {
+    const asked = new URLSearchParams(location.search).get("theme");
+    document.documentElement.dataset.theme = asked === "light" ? "light" : "dark";
+  })();
+</script>
 <style>
-  :root {
-    color-scheme: dark light;
-    --ink: #e2e8f0; --dim: #94a3b8; --line: rgba(148,163,184,.25);
-    --accent: #38bdf8; --bad: #f87171; --good: #4ade80;
+  /* Two palettes, chosen by the data-theme the script above sets. No
+     media query anywhere: what this page sits on is decided by the
+     dashboard, and the browser's own preference is not that. */
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ink: #f8fafc; --dim: #cbd5e1; --line: rgba(226,232,240,.28);
+    --surface: rgba(15,23,42,.55); --control: rgba(226,232,240,.14);
+    --accent: #7dd3fc; --bad: #fca5a5; --good: #86efac; --me: rgba(125,211,252,.22);
   }
-  @media (prefers-color-scheme: light) {
-    :root { --ink: #1e293b; --dim: #64748b; --line: rgba(51,65,85,.2); --accent: #0284c7; }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --ink: #0f172a; --dim: #475569; --line: rgba(15,23,42,.22);
+    --surface: rgba(255,255,255,.7); --control: rgba(15,23,42,.07);
+    --accent: #0369a1; --bad: #b91c1c; --good: #15803d; --me: rgba(3,105,161,.14);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body {
-    background: transparent; color: var(--ink); padding: 10px 12px;
-    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    display: flex; flex-direction: column; gap: 8px;
+    /* A surface of its own rather than transparency. Homepage's card is
+       translucent over whatever the page background is, and text laid
+       straight onto that had no contrast to rely on. */
+    background: var(--surface); color: var(--ink); padding: 11px 13px;
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; gap: 9px; text-align: left;
   }
   header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-  h1 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: .02em; }
+  h1 { font-size: 14px; font-weight: 700; margin: 0; letter-spacing: .01em; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   #drop {
-    border: 1px dashed var(--line); border-radius: 8px; padding: 12px 10px;
+    border: 1.5px dashed var(--line); border-radius: 9px; padding: 13px 10px;
     text-align: center; display: flex; flex-direction: column; gap: 8px; align-items: center;
     transition: border-color .12s, background .12s;
   }
-  #drop.over { border-color: var(--accent); background: rgba(56,189,248,.08); }
+  #drop.over { border-color: var(--accent); background: var(--me); }
   #hint { color: var(--dim); }
   .row { display: flex; gap: 6px; align-items: center; }
   button, select {
-    font: inherit; color: var(--ink); background: rgba(148,163,184,.14);
-    border: 1px solid var(--line); border-radius: 6px; padding: 5px 12px; cursor: pointer;
+    font: inherit; color: var(--ink); background: var(--control);
+    border: 1px solid var(--line); border-radius: 7px; padding: 6px 13px; cursor: pointer;
   }
   button:hover, select:hover { border-color: var(--accent); }
   button[disabled] { opacity: .55; cursor: default; }
-  h2 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em;
+  h2 { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
        color: var(--dim); margin: 2px 0 0; }
   ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px;
        overflow-y: auto; }

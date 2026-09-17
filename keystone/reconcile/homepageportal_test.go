@@ -45,10 +45,10 @@ func TestTheHouseholdSurfacesRenderAsFramedCards(t *testing.T) {
 		"- Quick actions:",
 		"    - Assistant:",
 		"        href: https://wildstone.tailnet.ts.net:50443/assistant/",
-		"          src: https://wildstone.tailnet.ts.net:50443/assistant/widget",
+		"          src: https://wildstone.tailnet.ts.net:50443/assistant/widget?theme=dark",
 		"    - Files:",
 		"        href: https://wildstone.tailnet.ts.net:49443/filedrop/",
-		"          src: https://wildstone.tailnet.ts.net:49443/filedrop/widget",
+		"          src: https://wildstone.tailnet.ts.net:49443/filedrop/widget?theme=dark",
 		"          type: iframe",
 	} {
 		if !strings.Contains(got, want) {
@@ -60,6 +60,20 @@ func TestTheHouseholdSurfacesRenderAsFramedCards(t *testing.T) {
 	// renders as an empty box with no error anywhere.
 	if strings.Count(got, "https://wildstone.tailnet.ts.net:49443/") != 2 {
 		t.Errorf("the Files card and its frame disagree about where the surface is:\n%s", got)
+	}
+}
+
+// The frame is told which palette it is being drawn into. It cannot
+// work that out for itself: Homepage marks the container it frames a
+// widget in as scheme-light, so a page keying off prefers-color-scheme
+// renders dark text on Homepage's dark card.
+func TestTheFrameIsToldTheDashboardsTheme(t *testing.T) {
+	got := string(renderHomepageServices(portalDesired()))
+	if !strings.Contains(got, "/filedrop/widget?theme="+homepageTheme) {
+		t.Errorf("the frame's address does not carry the dashboard's theme:\n%s", got)
+	}
+	if !strings.Contains(string(renderHomepageSettings(portalDesired())), "theme: "+homepageTheme) {
+		t.Errorf("the settings and the frame disagree about the theme")
 	}
 }
 

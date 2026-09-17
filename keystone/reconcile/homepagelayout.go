@@ -42,6 +42,20 @@ func homepageBookmarksPath(managedPrefix string) string {
 	return path.Join(managedPrefix, "dashboard", "bookmarks.yaml")
 }
 
+// homepageTheme is the dashboard's palette, and it is named rather than
+// written twice because a second reader appeared: the household
+// surfaces are iframes, and an embedded page cannot ask Homepage what
+// theme it is being drawn into.
+//
+// It cannot work it out for itself either. Homepage puts `scheme-light`
+// on the container it frames a widget in, so an embedded page keying
+// off prefers-color-scheme is told "light" while it sits on a dark
+// card — which renders dark text on a dark panel, and is exactly how
+// the first live dashboard came out. So the theme is passed to the
+// widget in its own URL (see widgetSrc) from this constant, and the
+// page obeys it instead of guessing.
+const homepageTheme = "dark"
+
 // homepageColumns is how many service cards sit across one row.
 //
 // This is the actual fix for "everything is in one column": Homepage's
@@ -78,7 +92,7 @@ func renderHomepageSettings(desired []resource.Resource) []byte {
 	b.WriteString("# managed by wildstone-keystone — do not edit\n")
 	b.WriteString("title: " + yamlQuote(dashboardTitle(desired)) + "\n")
 	b.WriteString("description: Everything this household runs\n")
-	b.WriteString("theme: dark\n")
+	b.WriteString("theme: " + homepageTheme + "\n")
 	b.WriteString("color: slate\n")
 	b.WriteString("headerStyle: boxed\n")
 	b.WriteString("statusStyle: dot\n")

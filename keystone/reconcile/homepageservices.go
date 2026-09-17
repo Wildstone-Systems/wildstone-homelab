@@ -370,7 +370,10 @@ func (e homepageEntry) widgetSrc() string {
 	if e.widget == nil {
 		return ""
 	}
-	return strings.TrimSuffix(e.href, e.widget.page) + e.widget.widget
+	// The theme rides in the URL: the frame is drawn inside Homepage's
+	// card and has no other way to learn which palette it is landing
+	// in (homepageTheme says why it cannot be inferred).
+	return strings.TrimSuffix(e.href, e.widget.page) + e.widget.widget + "?theme=" + homepageTheme
 }
 
 // renderHomepageServices builds Homepage's services.yaml from the Routes.

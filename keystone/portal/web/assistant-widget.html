@@ -2,49 +2,73 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Assistant</title>
+<script>
+  // The palette comes from the URL, not from prefers-color-scheme.
+  //
+  // Homepage frames a widget inside a container it marks scheme-light,
+  // so an embedded page that asks the browser which scheme it is in is
+  // told "light" while it is drawn on a dark card — dark text on a dark
+  // panel, which is how this first went out. Keystone knows the
+  // dashboard's theme (it writes settings.yaml) and puts it in the src.
+  //
+  // Inline and first, so the attribute is set before anything paints.
+  (() => {
+    const asked = new URLSearchParams(location.search).get("theme");
+    document.documentElement.dataset.theme = asked === "light" ? "light" : "dark";
+  })();
+</script>
 <style>
-  :root {
-    color-scheme: dark light;
-    --ink: #e2e8f0; --dim: #94a3b8; --line: rgba(148,163,184,.25);
-    --accent: #38bdf8; --bad: #f87171; --bubble: rgba(148,163,184,.14);
+  /* Two palettes, chosen by the data-theme the script above sets. No
+     media query anywhere: what this page sits on is decided by the
+     dashboard, and the browser's own preference is not that. */
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ink: #f8fafc; --dim: #cbd5e1; --line: rgba(226,232,240,.28);
+    --surface: rgba(15,23,42,.55); --control: rgba(226,232,240,.14);
+    --accent: #7dd3fc; --bad: #fca5a5; --good: #86efac; --me: rgba(125,211,252,.22);
   }
-  @media (prefers-color-scheme: light) {
-    :root { --ink: #1e293b; --dim: #64748b; --line: rgba(51,65,85,.2); --accent: #0284c7;
-            --bubble: rgba(51,65,85,.08); }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --ink: #0f172a; --dim: #475569; --line: rgba(15,23,42,.22);
+    --surface: rgba(255,255,255,.7); --control: rgba(15,23,42,.07);
+    --accent: #0369a1; --bad: #b91c1c; --good: #15803d; --me: rgba(3,105,161,.14);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body {
-    background: transparent; color: var(--ink); padding: 10px 12px;
-    font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    display: flex; flex-direction: column; gap: 8px;
+    /* See the Files widget: an own surface, because Homepage's card is
+       translucent and gave the text nothing to sit on. */
+    background: var(--surface); color: var(--ink); padding: 11px 13px;
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; gap: 9px; text-align: left;
   }
   header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  h1 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: .02em; }
+  h1 { font-size: 14px; font-weight: 700; margin: 0; letter-spacing: .01em; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   select, button, input {
-    font: inherit; color: var(--ink); background: rgba(148,163,184,.14);
-    border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px;
+    font: inherit; color: var(--ink); background: var(--control);
+    border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px;
   }
   select { max-width: 45%; cursor: pointer; }
   button { cursor: pointer; padding: 5px 12px; }
   button:hover, select:hover { border-color: var(--accent); }
   button[disabled], input[disabled] { opacity: .55; cursor: default; }
   #log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; min-height: 40px; }
-  .msg { padding: 6px 9px; border-radius: 8px; background: var(--bubble); white-space: pre-wrap;
+  .msg { padding: 7px 10px; border-radius: 9px; background: var(--control); white-space: pre-wrap;
          overflow-wrap: anywhere; max-width: 92%; }
-  .msg.me { align-self: flex-end; background: rgba(56,189,248,.16); }
+  .msg.me { align-self: flex-end; background: var(--me); }
   .msg.pending { color: var(--dim); font-style: italic; }
   #prompt { color: var(--dim); }
   form { display: flex; gap: 6px; }
   #text { flex: 1; min-width: 0; }
   #suggestions { display: flex; flex-wrap: wrap; gap: 5px; }
   #suggestions button { background: none; border: 1px solid var(--line); color: var(--dim);
-                        border-radius: 999px; padding: 3px 9px; font-size: 12px; }
+                        border-radius: 999px; padding: 4px 10px; font-size: 12px; }
   #suggestions button:hover { color: var(--ink); border-color: var(--accent); }
   footer { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
   #note { color: var(--dim); font-size: 12px; }
+  ::placeholder { color: var(--dim); opacity: 1; }
   #note.bad { color: var(--bad); }
   .cloud { color: var(--dim); font-size: 11px; }
   [hidden] { display: none !important; }
