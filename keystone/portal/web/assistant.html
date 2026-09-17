@@ -1,0 +1,156 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assistant</title>
+<style>
+  :root {
+    color-scheme: dark light;
+    --bg: #0f172a; --ink: #e2e8f0; --dim: #94a3b8; --line: rgba(148,163,184,.25);
+    --accent: #38bdf8; --bad: #f87171; --bubble: rgba(148,163,184,.12);
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f8fafc; --ink: #1e293b; --dim: #64748b; --line: rgba(51,65,85,.18);
+            --accent: #0284c7; --bubble: rgba(51,65,85,.06); }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink); display: flex; flex-direction: column;
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header, footer { max-width: 780px; width: 100%; margin: 0 auto; padding: 14px 18px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+           border-bottom: 1px solid var(--line); }
+  h1 { font-size: 18px; margin: 0; }
+  main { flex: 1; overflow-y: auto; }
+  #log { max-width: 780px; margin: 0 auto; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { padding: 10px 13px; border-radius: 12px; background: var(--bubble); white-space: pre-wrap;
+         overflow-wrap: anywhere; max-width: 80%; }
+  .msg.me { align-self: flex-end; background: rgba(56,189,248,.16); }
+  .msg.pending { color: var(--dim); font-style: italic; }
+  #empty { color: var(--dim); text-align: center; padding: 40px 18px; }
+  footer { border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+  form { display: flex; gap: 8px; }
+  select, button, input {
+    font: inherit; color: var(--ink); background: rgba(148,163,184,.14);
+    border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px;
+  }
+  select, button { cursor: pointer; }
+  button:hover, select:hover { border-color: var(--accent); }
+  button[disabled], input[disabled] { opacity: .55; cursor: default; }
+  #text { flex: 1; min-width: 0; }
+  #note { color: var(--dim); font-size: 13px; min-height: 18px; }
+  #note.bad { color: var(--bad); }
+  .who { color: var(--dim); font-size: 13px; }
+</style>
+
+<header>
+  <h1>Assistant</h1>
+  <div class="row">
+    <select id="agent" aria-label="Which assistant"></select>
+  </div>
+</header>
+
+<main><div id="log"><div id="empty">What can I help with?</div></div></main>
+
+<footer>
+  <form id="ask">
+    <input id="text" placeholder="Ask something…" autocomplete="off" maxlength="4000">
+    <button id="send" type="submit">Send</button>
+  </form>
+  <div id="note"></div>
+</footer>
+
+<script>
+(() => {
+  const el = (id) => document.getElementById(id);
+  const log = el("log"), note = el("note");
+  let session = "", agents = [];
+
+  const say = (text, bad) => { note.textContent = text || ""; note.className = bad ? "bad" : ""; };
+
+  const add = (role, text, pending) => {
+    const empty = el("empty");
+    if (empty) empty.remove();
+    const div = document.createElement("div");
+    div.className = "msg" + (role === "user" ? " me" : "") + (pending ? " pending" : "");
+    div.textContent = text;
+    log.append(div);
+    div.scrollIntoView({ block: "end" });
+    return div;
+  };
+
+  const describe = (a) => {
+    if (!a) return "";
+    if (!a.reachable) return a.name + " is not answering right now";
+    if (a.leavesTheHouse) return "This assistant runs on a model outside the house";
+    return a.directive || "This assistant runs on a model in the house";
+  };
+
+  const load = async () => {
+    const r = await fetch("/api/v1/assistant/agents", { headers: { accept: "application/json" } });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+    const body = await r.json();
+    agents = body.agents || [];
+    const select = el("agent");
+    select.replaceChildren();
+    for (const a of agents) {
+      const option = document.createElement("option");
+      option.value = a.name;
+      option.textContent = a.leavesTheHouse ? a.name + " · cloud" : a.name;
+      select.append(option);
+    }
+    if (!agents.length) {
+      el("text").disabled = el("send").disabled = true;
+      say("No assistant has been shared with you yet", true);
+      return;
+    }
+    say(describe(agents[0]), !agents[0].reachable);
+  };
+
+  el("agent").onchange = () => {
+    session = "";
+    log.replaceChildren();
+    const chosen = agents.find((a) => a.name === el("agent").value);
+    say(describe(chosen), chosen && !chosen.reachable);
+  };
+
+  el("ask").onsubmit = async (e) => {
+    e.preventDefault();
+    const text = el("text").value.trim();
+    if (!text) return;
+    el("text").value = "";
+    add("user", text);
+    const waiting = add("assistant", "thinking…", true);
+    el("send").disabled = true;
+    say("");
+    try {
+      const r = await fetch("/api/v1/assistant/ask", {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ agent: el("agent").value, session, text }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || r.statusText);
+      session = body.session || session;
+      waiting.classList.remove("pending");
+      waiting.textContent = body.reply || "(no answer)";
+      if (body.proposals) {
+        say(body.proposals + " change" + (body.proposals === 1 ? "" : "s") +
+            " proposed — somebody with the Console has to approve them");
+      }
+    } catch (err) {
+      waiting.remove();
+      say(String(err.message || err), true);
+    } finally {
+      el("send").disabled = false;
+      el("text").focus();
+    }
+  };
+
+  load().catch((e) => {
+    el("text").disabled = el("send").disabled = true;
+    say(String(e.message || e), true);
+  });
+})();
+</script>

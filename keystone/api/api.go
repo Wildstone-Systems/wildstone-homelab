@@ -504,6 +504,33 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/chat/outbound/{seq}/ack", s.handle(principal.VerbConverse, s.ackChatOutbound))
 	mux.Handle("POST /api/v1/chat/bindings/{id}/revoke", s.handle(principal.VerbManage, s.revokeChatBinding))
 
+	// The household portal (#197, #198): the two surfaces a family
+	// member uses directly, rather than an application they are sent to.
+	//
+	// Every one of these goes through s.portal, not s.handle. They are
+	// on the same listener as the Console's API and they are the only
+	// routes on it a household member can reach: the identity s.portal
+	// produces holds no RBAC verb at all, so a member whose browser
+	// wanders to /api/v1/resources is refused there exactly as an
+	// anonymous caller would be.
+	//
+	// Paths are named for the CAPABILITY that declares each surface,
+	// because that capability's install is what makes them answer: with
+	// it absent, s.portal refuses with 404 and nothing here is live.
+	mux.Handle("GET /filedrop/{$}", s.portal(surfaceFiles, s.portalPage("files")))
+	mux.Handle("GET /filedrop/widget", s.portal(surfaceFiles, s.portalPage("files-widget")))
+	mux.Handle("GET /api/v1/filedrop/capabilities", s.portal(surfaceFiles, s.filedropCapabilities))
+	mux.Handle("GET /api/v1/filedrop/recent", s.portal(surfaceFiles, s.filedropRecent))
+	mux.Handle("GET /api/v1/filedrop/list", s.portal(surfaceFiles, s.filedropList))
+	mux.Handle("GET /api/v1/filedrop/file", s.portal(surfaceFiles, s.filedropFile))
+	mux.Handle("POST /api/v1/filedrop/upload", s.portal(surfaceFiles, s.filedropUpload))
+
+	mux.Handle("GET /assistant/{$}", s.portal(surfaceAssistant, s.portalPage("assistant")))
+	mux.Handle("GET /assistant/widget", s.portal(surfaceAssistant, s.portalPage("assistant-widget")))
+	mux.Handle("GET /api/v1/assistant/agents", s.portal(surfaceAssistant, s.assistantAgents))
+	mux.Handle("POST /api/v1/assistant/ask", s.portal(surfaceAssistant, s.assistantAsk))
+	mux.Handle("GET /api/v1/assistant/conversations/{id}", s.portal(surfaceAssistant, s.assistantConversation))
+
 	mux.Handle("GET /api/v1/household/butler", s.handle(principal.VerbRead, s.getHouseholdButlerStatus))
 	mux.Handle("POST /api/v1/household/butler/ask", s.handle(principal.VerbRead, s.askHouseholdButler))
 

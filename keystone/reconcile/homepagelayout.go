@@ -106,9 +106,22 @@ func renderHomepageSettings(desired []resource.Resource) []byte {
 	for _, g := range used {
 		b.WriteString("  " + g + ":\n")
 		b.WriteString("    style: row\n")
-		b.WriteString("    columns: " + strconv.Itoa(homepageColumns) + "\n")
+		b.WriteString("    columns: " + strconv.Itoa(columnsFor(g)) + "\n")
 	}
 	return []byte(b.String())
+}
+
+// columnsFor is how many cards sit across one row of a group.
+//
+// One exception to homepageColumns, and it is the household surfaces:
+// those cards hold a live frame with a text box in it, and a third of a
+// tablet's width is not something a person can type into or drop a file
+// on. Two across gives each frame half the page.
+func columnsFor(group string) int {
+	if group == portalGroupName {
+		return portalColumns
+	}
+	return homepageColumns
 }
 
 // renderHomepageWidgets builds Homepage's widgets.yaml — the INFO

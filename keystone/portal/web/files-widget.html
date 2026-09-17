@@ -1,0 +1,216 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Files</title>
+<style>
+  :root {
+    color-scheme: dark light;
+    --ink: #e2e8f0; --dim: #94a3b8; --line: rgba(148,163,184,.25);
+    --accent: #38bdf8; --bad: #f87171; --good: #4ade80;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --ink: #1e293b; --dim: #64748b; --line: rgba(51,65,85,.2); --accent: #0284c7; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: transparent; color: var(--ink); padding: 10px 12px;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  h1 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: .02em; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  #drop {
+    border: 1px dashed var(--line); border-radius: 8px; padding: 12px 10px;
+    text-align: center; display: flex; flex-direction: column; gap: 8px; align-items: center;
+    transition: border-color .12s, background .12s;
+  }
+  #drop.over { border-color: var(--accent); background: rgba(56,189,248,.08); }
+  #hint { color: var(--dim); }
+  .row { display: flex; gap: 6px; align-items: center; }
+  button, select {
+    font: inherit; color: var(--ink); background: rgba(148,163,184,.14);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 12px; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: var(--accent); }
+  button[disabled] { opacity: .55; cursor: default; }
+  h2 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em;
+       color: var(--dim); margin: 2px 0 0; }
+  ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px;
+       overflow-y: auto; }
+  li { display: flex; justify-content: space-between; gap: 10px; }
+  li .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  li .when { color: var(--dim); flex: none; }
+  #status { min-height: 16px; color: var(--dim); }
+  #status.bad { color: var(--bad); }
+  #status.good { color: var(--good); }
+  progress { width: 100%; height: 4px; accent-color: var(--accent); }
+  [hidden] { display: none !important; }
+</style>
+
+<header>
+  <h1>Files</h1>
+  <a id="browse" href="/filedrop/" target="_blank" rel="noreferrer">Browse</a>
+</header>
+
+<div id="drop">
+  <span id="hint">Drop files or photos here</span>
+  <div class="row">
+    <select id="namespace" aria-label="Where to put it"></select>
+    <button id="pick">Upload</button>
+  </div>
+  <input id="file" type="file" multiple hidden>
+</div>
+
+<progress id="bar" max="100" value="0" hidden></progress>
+<div id="status" role="status"></div>
+
+<h2>Recent</h2>
+<ul id="recent"></ul>
+
+<script>
+(() => {
+  const el = (id) => document.getElementById(id);
+  const status = el("status"), bar = el("bar"), drop = el("drop");
+  let limit = 0;
+
+  const say = (text, kind) => { status.textContent = text; status.className = kind || ""; };
+
+  const ago = (iso) => {
+    const secs = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (secs < 60) return "just now";
+    const mins = secs / 60;
+    if (mins < 60) return Math.round(mins) + "m ago";
+    const hours = mins / 60;
+    if (hours < 24) return Math.round(hours) + "h ago";
+    return Math.round(hours / 24) + "d ago";
+  };
+
+  const size = (bytes) => {
+    const units = ["B", "KB", "MB", "GB"];
+    let n = bytes, i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return (i === 0 ? n : n.toFixed(1)) + " " + units[i];
+  };
+
+  // textContent everywhere: a filename is somebody else's text, and it
+  // is rendered as text.
+  const recent = async () => {
+    const list = el("recent");
+    try {
+      const r = await fetch("/api/v1/filedrop/recent?limit=4", { headers: { accept: "application/json" } });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+      const items = (await r.json()).items || [];
+      list.replaceChildren();
+      if (!items.length) {
+        const li = document.createElement("li");
+        li.className = "when";
+        li.textContent = "Nothing yet";
+        list.append(li);
+        return;
+      }
+      for (const item of items) {
+        const li = document.createElement("li");
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = item.name;
+        name.title = item.namespace + " · " + size(item.size);
+        const when = document.createElement("span");
+        when.className = "when";
+        when.textContent = ago(item.modTime);
+        li.append(name, when);
+        list.append(li);
+      }
+    } catch (e) {
+      list.replaceChildren();
+      say(String(e.message || e), "bad");
+    }
+  };
+
+  const capabilities = async () => {
+    const r = await fetch("/api/v1/filedrop/capabilities", { headers: { accept: "application/json" } });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+    const caps = await r.json();
+    limit = caps.maxUploadBytes || 0;
+    const select = el("namespace");
+    select.replaceChildren();
+    for (const ns of caps.namespaces || []) {
+      const option = document.createElement("option");
+      option.value = ns.key;
+      option.textContent = ns.title;
+      select.append(option);
+    }
+    if (caps.browse) el("browse").href = caps.browse;
+    if (!caps.ready) {
+      say(caps.reason || "No storage is configured", "bad");
+      el("pick").disabled = true;
+    }
+  };
+
+  const send = (file) => new Promise((resolve, reject) => {
+    const url = "/api/v1/filedrop/upload?namespace=" + encodeURIComponent(el("namespace").value) +
+                "&name=" + encodeURIComponent(file.name);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("content-type", file.type || "application/octet-stream");
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      bar.hidden = false;
+      bar.value = (e.loaded / e.total) * 100;
+    };
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || ("upload failed: " + xhr.status)));
+    };
+    xhr.onerror = () => reject(new Error("the connection dropped"));
+    xhr.send(file);
+  });
+
+  const upload = async (files) => {
+    if (!files || !files.length) return;
+    el("pick").disabled = true;
+    try {
+      let done = 0;
+      for (const file of files) {
+        if (limit && file.size > limit) {
+          throw new Error(file.name + " is larger than this household allows (" + size(limit) + ")");
+        }
+        say("Uploading " + file.name + "…");
+        const stored = await send(file);
+        done++;
+        if (stored.renamed) say("Saved as " + stored.name + " — a file of that name was already there", "good");
+        else say("Saved " + stored.name, "good");
+      }
+      if (done > 1) say("Saved " + done + " files", "good");
+      await recent();
+    } catch (e) {
+      say(String(e.message || e), "bad");
+    } finally {
+      bar.hidden = true;
+      bar.value = 0;
+      el("pick").disabled = false;
+      el("file").value = "";
+    }
+  };
+
+  el("pick").onclick = () => el("file").click();
+  el("file").onchange = (e) => upload(e.target.files);
+  for (const name of ["dragenter", "dragover"]) {
+    drop.addEventListener(name, (e) => { e.preventDefault(); drop.classList.add("over"); });
+  }
+  for (const name of ["dragleave", "dragend", "drop"]) {
+    drop.addEventListener(name, () => drop.classList.remove("over"));
+  }
+  drop.addEventListener("drop", (e) => { e.preventDefault(); upload(e.dataTransfer.files); });
+  // A file dropped anywhere but the box would otherwise navigate the
+  // frame to it, which silently replaces the widget with a photo.
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("drop", (e) => e.preventDefault());
+
+  capabilities().catch((e) => say(String(e.message || e), "bad")).finally(recent);
+})();
+</script>

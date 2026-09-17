@@ -1,0 +1,230 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Files</title>
+<style>
+  :root {
+    color-scheme: dark light;
+    --bg: #0f172a; --card: rgba(148,163,184,.08); --ink: #e2e8f0; --dim: #94a3b8;
+    --line: rgba(148,163,184,.25); --accent: #38bdf8; --bad: #f87171; --good: #4ade80;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f8fafc; --card: #fff; --ink: #1e293b; --dim: #64748b;
+            --line: rgba(51,65,85,.18); --accent: #0284c7; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink); min-height: 100vh;
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 880px; margin: 0 auto; padding: 28px 18px 64px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--dim); font-size: 13px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  #drop {
+    margin: 22px 0 10px; border: 1px dashed var(--line); border-radius: 12px; background: var(--card);
+    padding: 26px 18px; text-align: center; display: flex; flex-direction: column; gap: 12px; align-items: center;
+    transition: border-color .12s, background .12s;
+  }
+  #drop.over { border-color: var(--accent); background: rgba(56,189,248,.1); }
+  #hint { color: var(--dim); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  button, select {
+    font: inherit; color: var(--ink); background: rgba(148,163,184,.16);
+    border: 1px solid var(--line); border-radius: 8px; padding: 7px 16px; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: var(--accent); }
+  button[disabled] { opacity: .55; cursor: default; }
+  progress { width: 100%; height: 5px; accent-color: var(--accent); }
+  #status { min-height: 20px; color: var(--dim); font-size: 13px; }
+  #status.bad { color: var(--bad); }
+  #status.good { color: var(--good); }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--dim);
+       margin: 28px 0 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: baseline; }
+  td.meta { color: var(--dim); font-size: 13px; text-align: right; white-space: nowrap; }
+  td.name { overflow-wrap: anywhere; }
+  .empty { color: var(--dim); font-size: 13px; padding: 8px 6px; }
+  footer { color: var(--dim); font-size: 12px; margin-top: 40px; border-top: 1px solid var(--line); padding-top: 12px; }
+</style>
+
+<main>
+  <header>
+    <div>
+      <h1>Files</h1>
+      <div class="sub" id="who"></div>
+    </div>
+    <div class="sub" id="limit"></div>
+  </header>
+
+  <div id="drop">
+    <span id="hint">Drop files or photos here</span>
+    <div class="row">
+      <select id="namespace" aria-label="Where to put it"></select>
+      <button id="pick">Upload</button>
+    </div>
+    <input id="file" type="file" multiple hidden>
+    <progress id="bar" max="100" value="0" hidden></progress>
+  </div>
+  <div id="status" role="status"></div>
+
+  <div id="lists"></div>
+
+  <footer>
+    Everything here is on the household's own storage. What you upload is visible to everyone
+    who can reach this page.
+  </footer>
+</main>
+
+<script>
+(() => {
+  const el = (id) => document.getElementById(id);
+  const status = el("status"), bar = el("bar"), drop = el("drop");
+  let namespaces = [], limit = 0;
+
+  const say = (text, kind) => { status.textContent = text; status.className = kind || ""; };
+
+  const size = (bytes) => {
+    const units = ["B", "KB", "MB", "GB"];
+    let n = bytes, i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return (i === 0 ? n : n.toFixed(1)) + " " + units[i];
+  };
+
+  const when = (iso) => new Date(iso).toLocaleString();
+
+  const listing = async (ns) => {
+    const section = document.createElement("section");
+    const heading = document.createElement("h2");
+    heading.textContent = ns.title;
+    section.append(heading);
+    const r = await fetch("/api/v1/filedrop/list?namespace=" + encodeURIComponent(ns.key),
+                          { headers: { accept: "application/json" } });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+    const items = (await r.json()).items || [];
+    if (!items.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "Nothing here yet";
+      section.append(empty);
+      return section;
+    }
+    const table = document.createElement("table");
+    for (const item of items) {
+      const tr = document.createElement("tr");
+      const name = document.createElement("td");
+      name.className = "name";
+      const link = document.createElement("a");
+      // A download rather than a view: what comes back is served as an
+      // attachment whatever it is, so a file somebody uploaded cannot
+      // run as a page on this origin.
+      link.href = "/api/v1/filedrop/file?namespace=" + encodeURIComponent(item.namespace) +
+                  "&name=" + encodeURIComponent(item.name);
+      link.textContent = item.name;
+      name.append(link);
+      const meta = document.createElement("td");
+      meta.className = "meta";
+      meta.textContent = size(item.size) + " · " + when(item.modTime);
+      tr.append(name, meta);
+      table.append(tr);
+    }
+    section.append(table);
+    return section;
+  };
+
+  const refresh = async () => {
+    const lists = el("lists");
+    try {
+      const sections = await Promise.all(namespaces.map(listing));
+      lists.replaceChildren(...sections);
+    } catch (e) {
+      say(String(e.message || e), "bad");
+    }
+  };
+
+  const send = (file) => new Promise((resolve, reject) => {
+    const url = "/api/v1/filedrop/upload?namespace=" + encodeURIComponent(el("namespace").value) +
+                "&name=" + encodeURIComponent(file.name);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("content-type", file.type || "application/octet-stream");
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      bar.hidden = false;
+      bar.value = (e.loaded / e.total) * 100;
+    };
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || ("upload failed: " + xhr.status)));
+    };
+    xhr.onerror = () => reject(new Error("the connection dropped"));
+    xhr.send(file);
+  });
+
+  const upload = async (files) => {
+    if (!files || !files.length) return;
+    el("pick").disabled = true;
+    try {
+      for (const file of files) {
+        if (limit && file.size > limit) {
+          throw new Error(file.name + " is larger than this household allows (" + size(limit) + ")");
+        }
+        say("Uploading " + file.name + "…");
+        const stored = await send(file);
+        say(stored.renamed ? "Saved as " + stored.name + " — a file of that name was already there"
+                           : "Saved " + stored.name, "good");
+      }
+      await refresh();
+    } catch (e) {
+      say(String(e.message || e), "bad");
+    } finally {
+      bar.hidden = true; bar.value = 0;
+      el("pick").disabled = false;
+      el("file").value = "";
+    }
+  };
+
+  const start = async () => {
+    const r = await fetch("/api/v1/filedrop/capabilities", { headers: { accept: "application/json" } });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+    const caps = await r.json();
+    namespaces = caps.namespaces || [];
+    limit = caps.maxUploadBytes || 0;
+    el("who").textContent = caps.member ? "Signed in as " + caps.member : "";
+    el("limit").textContent = limit ? "Up to " + size(limit) + " per file" : "";
+    const select = el("namespace");
+    select.replaceChildren();
+    for (const ns of namespaces) {
+      const option = document.createElement("option");
+      option.value = ns.key;
+      option.textContent = ns.title;
+      select.append(option);
+    }
+    if (!caps.ready) {
+      say(caps.reason || "No storage is configured", "bad");
+      el("pick").disabled = true;
+      return;
+    }
+    await refresh();
+  };
+
+  el("pick").onclick = () => el("file").click();
+  el("file").onchange = (e) => upload(e.target.files);
+  for (const name of ["dragenter", "dragover"]) {
+    drop.addEventListener(name, (e) => { e.preventDefault(); drop.classList.add("over"); });
+  }
+  for (const name of ["dragleave", "dragend", "drop"]) {
+    drop.addEventListener(name, () => drop.classList.remove("over"));
+  }
+  drop.addEventListener("drop", (e) => { e.preventDefault(); upload(e.dataTransfer.files); });
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("drop", (e) => e.preventDefault());
+
+  start().catch((e) => say(String(e.message || e), "bad"));
+})();
+</script>
