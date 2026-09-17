@@ -281,7 +281,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 		Groups: reconcile.Groups(),
 	}
 	resp.NeedsYou = s.homeNeedsYou(member, now)
-	resp.Activity = s.homeActivity(now)
+	resp.Activity = s.homeActivity(member, now)
 	resp.Notifications = s.homeNotifications(member)
 	resp.Calendar = s.homeCalendar(desired)
 	resp.Apps, resp.AppStatus, resp.StatusKnown = s.homeApps(desired)
@@ -428,7 +428,7 @@ const maxActivity = 6
 // control plane that thinks it is in UTC would otherwise show a family
 // in Chicago the wrong six hours of their own evening — and this card is
 // specifically the answer to "what did the house do while I was out".
-func (s *Server) homeActivity(now time.Time) activityCard {
+func (s *Server) homeActivity(member string, now time.Time) activityCard {
 	card := activityCard{Rows: []activityRow{}}
 	loc := s.HouseholdLoc
 	if loc == nil {
@@ -445,12 +445,21 @@ func (s *Server) homeActivity(now time.Time) activityCard {
 	card.Available = true
 	var rows []activityRow
 	for _, e := range events {
-		// The audience test first: an event about one person is not
-		// every member's to read. A nil MemberScoped withholds every
-		// attributed fact, which is the safe direction — the same
-		// default the household Butler takes.
-		if s.MemberScoped != nil && s.MemberScoped(e.Type) && e.Subject != "" {
-			continue
+		// The audience test first: an event about one PERSON is not
+		// every member's to read. A child's movements are not their
+		// siblings' business, so a member-scoped event is withheld —
+		// unless its subject is the member reading it, because "Mika
+		// got home" is precisely the row Mika is looking for, and
+		// withholding it made the card omit the arrival that had just
+		// happened while still showing the routine it triggered.
+		//
+		// A nil MemberScoped withholds every attributed fact but the
+		// reader's own, which is the safe direction — the same default
+		// the household Butler takes.
+		if e.Subject != "" && !strings.EqualFold(e.Subject, member) {
+			if s.MemberScoped == nil || s.MemberScoped(e.Type) {
+				continue
+			}
 		}
 		sentence, tone, ok := portal.Sentence(e.Type, e.Subject)
 		if !ok {

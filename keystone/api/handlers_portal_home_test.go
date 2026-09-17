@@ -16,9 +16,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
@@ -352,5 +354,65 @@ func TestTheCalendarIsFoundByTheServerThatSpeaksCaldav(t *testing.T) {
 	}
 	if got.Calendar.Problem != "Can't reach the calendars right now" {
 		t.Errorf("problem = %q, want the unreachable copy — the household HAS a calendar server", got.Calendar.Problem)
+	}
+}
+
+// A member's own movements are theirs to read; somebody else's are not.
+//
+// The first version of this filter withheld every member-scoped event
+// from everybody, so the card omitted the arrival that had just
+// happened while still showing the routine it triggered — the reader
+// was the one person hidden from their own page.
+func TestAMemberSeesTheirOwnMovementsAndNotAnotherPersons(t *testing.T) {
+	h := homeHarness(t)
+	// Presence is about a person, so it is member-scoped.
+	h.s.MemberScoped = func(eventType string) bool { return strings.HasPrefix(eventType, "person.") }
+	for _, e := range []runtimedb.HouseholdEvent{
+		// Cased differently on purpose: a directory name and a display
+		// name are not the same string.
+		{EventID: "a1", Source: "home", Type: "person.arrived_home", Subject: "Mika", OccurredAt: time.Now(), SchemaVersion: 1},
+		{EventID: "a2", Source: "home", Type: "person.left_home", Subject: "Giulia", OccurredAt: time.Now(), SchemaVersion: 1},
+		// Not about a person: the whole house may read it.
+		{EventID: "a3", Source: "automation", Type: "automation.acted", Subject: "Evening lock-up", OccurredAt: time.Now(), SchemaVersion: 1},
+	} {
+		if _, _, err := h.s.DB.AppendHouseholdEvent(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := h.summary(t, "mika")
+	var seen []string
+	for _, r := range got.Activity.Rows {
+		seen = append(seen, r.Sentence)
+	}
+	joined := strings.Join(seen, " | ")
+	if !strings.Contains(joined, "Mika got home") {
+		t.Errorf("mika cannot see his own arrival: %s", joined)
+	}
+	if strings.Contains(joined, "Giulia") {
+		t.Errorf("giulia's movements reached mika's page: %s", joined)
+	}
+	if !strings.Contains(joined, "Evening lock-up ran on its own") {
+		t.Errorf("a household-wide event was withheld: %s", joined)
+	}
+}
+
+// The group order is a copy, not the renderer's own slice.
+//
+// Handing callers the backing array let the first one that appended to
+// it rewrite the order for everybody, which is how "Quick actions" came
+// back twice on the first page this served.
+func TestTheGroupOrderCannotBeRewrittenByACaller(t *testing.T) {
+	first := reconcile.Groups()
+	_ = append(reconcile.Groups(), "Mine")
+	second := reconcile.Groups()
+	if len(first) != len(second) {
+		t.Fatalf("group count changed from %d to %d", len(first), len(second))
+	}
+	seen := map[string]bool{}
+	for _, g := range second {
+		if seen[g] {
+			t.Errorf("%q appears twice in %v", g, second)
+		}
+		seen[g] = true
 	}
 }

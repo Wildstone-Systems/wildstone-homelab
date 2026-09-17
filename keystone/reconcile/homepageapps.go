@@ -53,15 +53,20 @@ type App struct {
 	Route string `json:"route,omitempty"`
 }
 
-// Groups is the group order a dashboard should present, Household first
-// because it is what the family opens the page for.
+// Groups is the group order a dashboard should present: the household's
+// own acting surfaces, then its applications, then the operator's.
 //
 // Exported from here rather than restated in the page for the same
 // reason the cards are: the group names are strings two renderers would
 // otherwise have to agree on by hand, and a layout naming a group the
 // service list does not have is the specific bug homepageEntries'
 // comment warns about.
-func Groups() []string { return append([]string{portalGroupName}, homepageGroups...) }
+//
+// A COPY, not the slice itself. Handing callers the package's own
+// backing array let the first one that appended to it rewrite the group
+// order for everybody — which is how "Quick actions" came back twice on
+// the first page this served.
+func Groups() []string { return append([]string(nil), homepageGroups...) }
 
 // Apps resolves desired state into the launcher's cards.
 //
