@@ -110,6 +110,7 @@ var assetTypes = map[string]string{
 	".css":   "text/css; charset=utf-8",
 	".woff2": "font/woff2",
 	".svg":   "image/svg+xml",
+	".webp":  "image/webp",
 }
 
 // Asset returns one static design file — a stylesheet, a font, or an app

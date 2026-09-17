@@ -26,6 +26,7 @@
 -->
 <style>
   .daygroup { margin-bottom: var(--space-8); }
+  .daybody { padding: var(--space-4) var(--space-6); }
   .dayhead { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-3); }
   .arow { display: flex; gap: var(--space-4); align-items: baseline; padding: var(--space-3) 0;
           border-bottom: 1px solid var(--faint); }
@@ -185,7 +186,6 @@
         head.appendChild(make("span", "muted", n === 1 ? "1 thing" : n + " things"));
         sec.appendChild(head);
         body = make("div", "daybody surface");
-        body.style.padding = "var(--space-4) var(--space-6)";
         sec.appendChild(body);
         list.appendChild(sec);
       }

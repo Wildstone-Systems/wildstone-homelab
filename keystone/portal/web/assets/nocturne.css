@@ -18,9 +18,10 @@
  * page follows; change nothing else.
  */
 
-/* Inter, subset to latin, and the Phosphor glyph font. Both are files in
- * the binary. A `font-display: swap` on Inter so a slow first paint
- * shows system text rather than nothing. */
+/* Inter subset to latin, and the two Phosphor glyph families. All three
+ * are files in the binary. font-display: swap on Inter so a slow first
+ * paint shows system text rather than nothing; block on the icon fonts,
+ * because a glyph that arrives late arrives as a visible box. */
 @font-face {
   font-family: 'Inter';
   font-style: normal;
@@ -34,6 +35,13 @@
   font-weight: normal;
   font-display: block;
   src: url("/portal/assets/phosphor.woff2") format('woff2');
+}
+@font-face {
+  font-family: 'Phosphor-Fill';
+  font-style: normal;
+  font-weight: normal;
+  font-display: block;
+  src: url("/portal/assets/phosphor-fill.woff2") format('woff2');
 }
 
 :root {
@@ -90,8 +98,8 @@
   --shadow-lg: 0 0 0 1px #9397ab, 0 16px 40px rgba(0,0,0,0.65);
 }
 
-/* The household's colour, derived. These four override the fixed values
- * in the token block above whenever --hue is set. */
+/* The household's colour, derived. These override the fixed values in
+ * the token block above whenever --hue is set. */
 :root {
   --hue: 267;
   --color-accent: oklch(0.734 0.125 var(--hue));
@@ -274,7 +282,16 @@ a:hover { color: var(--color-accent-200); text-decoration: underline; }
 }
 @media (prefers-reduced-motion: reduce) { .sk { animation: none } }
 
-/* ---- Phosphor, subset to the glyphs these pages use ---- */
+/* Phosphor, subset from 1530 glyphs in each family to the ones these
+ * pages actually use. Two families: the regular outline and the fill,
+ * which the design uses for anything that is a STATE rather than an
+ * action — a filled shield for 'backed up', a filled question for
+ * 'this is waiting on you'.
+ *
+ * The fill family's rules are scoped to .ph-fill, because upstream
+ * keys both families on the same .ph-<name> selectors and the later
+ * file would otherwise repoint every regular glyph at the fill font.
+ */
 .ph {
   font-family: "Phosphor" !important;
   speak: never;
@@ -431,4 +448,51 @@ a:hover { color: var(--color-accent-200); text-decoration: underline; }
 }
 .ph-x:before {
   content: "\e4f6";
+}
+
+.ph-fill {
+  font-family: "Phosphor-Fill" !important;
+  speak: never;
+  font-style: normal;
+  font-weight: normal;
+  font-variant: normal;
+  text-transform: none;
+  line-height: 1;
+  letter-spacing: 0;
+  -webkit-font-feature-settings: "liga";
+  -moz-font-feature-settings: "liga=1";
+  -moz-font-feature-settings: "liga";
+  -ms-font-feature-settings: "liga" 1;
+  font-feature-settings: "liga";
+  -webkit-font-variant-ligatures: discretionary-ligatures;
+  font-variant-ligatures: discretionary-ligatures;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+.ph-fill.ph-check:before {
+  content: "\e182";
+}
+.ph-fill.ph-check-circle:before {
+  content: "\e184";
+}
+.ph-fill.ph-folder:before {
+  content: "\e24a";
+}
+.ph-fill.ph-prohibit:before {
+  content: "\e3de";
+}
+.ph-fill.ph-question:before {
+  content: "\e3e8";
+}
+.ph-fill.ph-shield-check:before {
+  content: "\e40c";
+}
+.ph-fill.ph-sparkle:before {
+  content: "\e6a2";
+}
+.ph-fill.ph-warning-circle:before {
+  content: "\e4e2";
+}
+.ph-fill.ph-x-circle:before {
+  content: "\e4f8";
 }
