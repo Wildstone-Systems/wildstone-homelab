@@ -154,7 +154,25 @@ func (s *FileStore) open(ns Namespace) (*os.Root, error) {
 	// file browser installed later — read this tree as their own user,
 	// and a destination only root can list is a destination whose whole
 	// point (the file shows up in the Files app) does not happen.
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	//
+	// THE CHMOD IS NOT REDUNDANT. MkdirAll's mode is masked by the
+	// process umask, and Keystone's own systemd unit sets UMask=0077 —
+	// correct for a control plane whose data directory holds a CA key,
+	// and exactly wrong for the one directory it creates on the
+	// household's behalf. The first live upload landed in a 0700
+	// directory: the file was there, and nothing but root could see it.
+	//
+	// Only on creation. An operator who has deliberately tightened an
+	// existing destination should not have it widened again on the next
+	// upload.
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("portal: preparing %s: %w", ns.Title, err)
+		}
+		if err := os.Chmod(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("portal: preparing %s: %w", ns.Title, err)
+		}
+	} else if err != nil {
 		return nil, fmt.Errorf("portal: preparing %s: %w", ns.Title, err)
 	}
 	return os.OpenRoot(dir)
@@ -232,7 +250,9 @@ func (s *FileStore) Save(nsKey, offered string, body io.Reader) (Stored, error) 
 		return Stored{}, fmt.Errorf("portal: storing %s: %w", final, err)
 	}
 	committed = true
-	// 0o644 for the reason the directory is 0o755.
+	// 0o644 for the reason the directory is 0o755, and it is a chmod
+	// rather than a create mode for the same one: the umask would
+	// otherwise make every uploaded file root-only.
 	_ = root.Chmod(final, 0o644)
 
 	info, err := root.Stat(final)

@@ -322,6 +322,24 @@ func TestAPortalPageMayOnlyBeFramedByTheDashboard(t *testing.T) {
 	if !strings.Contains(csp, "frame-ancestors 'self' https://home.example.com") {
 		t.Errorf("frame-ancestors does not name the dashboard: %q", csp)
 	}
+	// Under the tailnet posture the dashboard is served on 443 and a
+	// browser framing from it sends an origin with no port at all, so
+	// both forms have to be named.
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: "wildstone.dev/v1", Kind: resource.KindIngress,
+		Metadata: resource.Metadata{Name: "ingress", Owner: "capability/ingress", Node: "n1"},
+		Ingress:  &resource.IngressSpec{TLS: "tailscale", TailnetName: "house.tailnet.ts.net"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res2 := h.member(http.MethodGet, "/filedrop/widget", "sam", "filedrop_users", nil, "")
+	defer res2.Body.Close()
+	csp = res2.Header.Get("Content-Security-Policy")
+	for _, want := range []string{"https://house.tailnet.ts.net:443", "https://house.tailnet.ts.net "} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("frame-ancestors is missing %q: %q", want, csp)
+		}
+	}
 	if !strings.Contains(csp, "default-src 'none'") {
 		t.Errorf("the page may fetch from anywhere: %q", csp)
 	}

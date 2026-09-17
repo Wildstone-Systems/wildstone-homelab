@@ -53,10 +53,20 @@ func frameAncestors(desired []resource.Resource) []string {
 		if !dashboardCapabilities[strings.TrimPrefix(r.Metadata.Owner, "capability/")] {
 			continue
 		}
-		origin := "https://" + posture.SiteAddress(r.Route.Host)
-		if !seen[origin] {
-			seen[origin] = true
-			out = append(out, origin)
+		served := posture.SiteAddress(r.Route.Host)
+		// Both forms of a default-port origin. The dashboard is on 443
+		// under the tailnet posture, and a browser framing from it sends
+		// an origin with NO port in it — so a source expression carrying
+		// :443 is relying on the user agent applying the default-port
+		// equivalence rule. Most do; the cost of one of them not doing
+		// so is a blank frame on the family's dashboard with nothing
+		// anywhere saying why, which is too quiet a failure to gamble on
+		// for the sake of one string.
+		for _, origin := range []string{"https://" + served, "https://" + strings.TrimSuffix(served, ":443")} {
+			if !seen[origin] {
+				seen[origin] = true
+				out = append(out, origin)
+			}
 		}
 	}
 	sort.Strings(out)

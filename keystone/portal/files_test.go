@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -308,5 +309,36 @@ func stamp(t *testing.T, s *FileStore, dir, name string, secondsAgo int) {
 	when := info.ModTime().Add(time.Duration(secondsAgo) * time.Second)
 	if err := os.Chtimes(path, when, when); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The regression the first live upload found: Keystone's systemd unit
+// sets UMask=0077, which is right for a process whose data directory
+// holds a CA key and wrong for the one directory it creates on the
+// household's behalf. The photo landed, and nothing but root could see
+// it — so the Files application the whole feature exists to feed showed
+// an empty folder.
+//
+// Not parallel, and restored on the way out: the umask is process-wide.
+func TestAnUploadIsVisibleToTheApplicationsThatShareTheRoot(t *testing.T) {
+	old := syscall.Umask(0o077)
+	t.Cleanup(func() { syscall.Umask(old) })
+
+	s := store(t)
+	got := save(t, s, "shared", "IMG_4821.jpg", "pretend-jpeg")
+
+	dir, err := os.Stat(filepath.Join(s.Root, "Shared"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir.Mode().Perm()&0o055 != 0o055 {
+		t.Errorf("the destination is %v: a media server running as its own user cannot list it", dir.Mode().Perm())
+	}
+	file, err := os.Stat(filepath.Join(s.Root, "Shared", got.Name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Mode().Perm()&0o044 != 0o044 {
+		t.Errorf("the uploaded file is %v: only root can read it", file.Mode().Perm())
 	}
 }
