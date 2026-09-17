@@ -354,7 +354,7 @@ func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (
 			named = sess.Butler
 		}
 		if sess.Surface == runtimedb.ButlerSurfaceFamily {
-			return s.askNamedFamilyButler(r.Context(), message, named, sess.ActingFor, "", false, actingAsOwner(id), prior)
+			return s.askNamedFamilyButler(r.Context(), message, named, sess.ActingFor, "", false, actingAsOwner(id), prior, butlerlive.ConnectionScope{})
 		}
 		return s.askNamedButler(r.Context(), message, named, sess.ActingFor, actingAsOwner(id), prior)
 	}

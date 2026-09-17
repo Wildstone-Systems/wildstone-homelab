@@ -2,155 +2,456 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Assistant</title>
+<link rel="stylesheet" href="/portal/assets/nocturne.css">
+<!--
+  The full conversation: what the front page's Assistant card is a
+  window onto, in the same session.
+
+  IT ADDS THE THINGS THE CARD CANNOT HOLD. History down the left, the
+  agent picker with what it is for, and — the one that earns the page —
+  "What it may do", which is where the intersection model becomes
+  legible to a household. A member can read that this dashboard will
+  refuse an operator capability before they discover it by being
+  refused, and read it in the same words the server uses when it
+  refuses: both come from the connection profile, so the page and the
+  ceiling cannot drift.
+
+  TWO OF THE DESIGN'S PANELS ARE NOT HERE, and both say so on the page
+  rather than being quietly missing.
+
+  Action receipts — who it acted as, through which connection, the exact
+  call, the result and the duration. The data exists: tool traffic is
+  recorded inside the assistant turn that produced it, in its
+  transcript. But the transcript goes through the redacting encoder on
+  its way out, and turning it into per-action receipts means a parser
+  and a shape to parse into. A receipt that quietly omitted an action
+  would be worse than none, because the panel's whole promise is that a
+  member can always see what was done in their name.
+
+  Memory — what the assistant has learned, and Forget. That endpoint is
+  the Console's today and carries no member scoping; exposing it here
+  would hand one member the household's shared memory and everybody
+  else's items with it.
+
+  AGENT OUTPUT IS UNTRUSTED DISPLAY CONTENT. Rendered as text, never as
+  markup, on every path below.
+-->
 <style>
-  :root {
-    color-scheme: dark light;
-    --bg: #0f172a; --ink: #e2e8f0; --dim: #94a3b8; --line: rgba(148,163,184,.25);
-    --accent: #38bdf8; --bad: #f87171; --bubble: rgba(148,163,184,.12);
+  .cols { display: grid; grid-template-columns: 232px minmax(0, 1fr) 268px; gap: var(--space-6); align-items: start; }
+  .convo {
+    display: block; width: 100%; text-align: left; border: 0; cursor: pointer;
+    background: none; color: inherit; font: inherit;
+    padding: var(--space-3); border-radius: var(--radius-md);
   }
-  @media (prefers-color-scheme: light) {
-    :root { --bg: #f8fafc; --ink: #1e293b; --dim: #64748b; --line: rgba(51,65,85,.18);
-            --accent: #0284c7; --bubble: rgba(51,65,85,.06); }
+  .convo:hover { background: var(--faint); }
+  .convo.on { background: color-mix(in srgb, var(--color-accent) 16%, transparent); }
+  .convo .t { font-size: 13px; }
+  .thread {
+    display: flex; flex-direction: column; gap: var(--space-4);
+    min-height: 220px; max-height: 58vh; overflow-y: auto; padding-right: var(--space-2);
   }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
-  body {
-    background: var(--bg); color: var(--ink); display: flex; flex-direction: column;
-    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  .caps { display: flex; flex-direction: column; gap: var(--space-3); }
+  .cap { display: flex; gap: var(--space-3); align-items: flex-start; font-size: 12.5px; }
+  .cap .mark { flex: none; margin-top: 2px; }
+  .cap .q { color: var(--muted); }
+  /* On a phone the thread and composer come first; the two panels
+     become disclosures rather than two full-length columns pushing the
+     conversation off screen. */
+  @media (max-width: 860px) {
+    .cols { grid-template-columns: minmax(0, 1fr); }
+    .cols > .first { order: -1; }
+    details.panel > summary { cursor: pointer; padding: var(--space-3) 0; }
   }
-  header, footer { max-width: 780px; width: 100%; margin: 0 auto; padding: 14px 18px; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-           border-bottom: 1px solid var(--line); }
-  h1 { font-size: 18px; margin: 0; }
-  main { flex: 1; overflow-y: auto; }
-  #log { max-width: 780px; margin: 0 auto; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
-  .msg { padding: 10px 13px; border-radius: 12px; background: var(--bubble); white-space: pre-wrap;
-         overflow-wrap: anywhere; max-width: 80%; }
-  .msg.me { align-self: flex-end; background: rgba(56,189,248,.16); }
-  .msg.pending { color: var(--dim); font-style: italic; }
-  #empty { color: var(--dim); text-align: center; padding: 40px 18px; }
-  footer { border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
-  form { display: flex; gap: 8px; }
-  select, button, input {
-    font: inherit; color: var(--ink); background: rgba(148,163,184,.14);
-    border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px;
-  }
-  select, button { cursor: pointer; }
-  button:hover, select:hover { border-color: var(--accent); }
-  button[disabled], input[disabled] { opacity: .55; cursor: default; }
-  #text { flex: 1; min-width: 0; }
-  #note { color: var(--dim); font-size: 13px; min-height: 18px; }
-  #note.bad { color: var(--bad); }
-  .who { color: var(--dim); font-size: 13px; }
+  details.panel > summary { list-style: none; }
+  details.panel > summary::-webkit-details-marker { display: none; }
 </style>
 
-<header>
-  <h1>Assistant</h1>
-  <div class="row">
-    <select id="agent" aria-label="Which assistant"></select>
+<main class="page">
+  <div class="spread" style="margin-bottom: var(--space-6)">
+    <a class="hbtn hbtn-ghost" href="/home/"><i class="ph ph-arrow-left" aria-hidden="true"></i> Home</a>
+    <span class="fade" aria-hidden="true"></span>
+    <span class="muted" id="member"></span>
   </div>
-</header>
 
-<main><div id="log"><div id="empty">What can I help with?</div></div></main>
+  <div class="row-between" style="margin-bottom: var(--space-6)">
+    <div>
+      <h1>Assistant</h1>
+      <div class="muted" id="subtitle">Ask the house for something</div>
+    </div>
+    <span class="pill pill-mute" id="scope-pill" title="Loading what this surface allows">household scope</span>
+  </div>
 
-<footer>
-  <form id="ask">
-    <input id="text" placeholder="Ask something…" autocomplete="off" maxlength="4000">
-    <button id="send" type="submit">Send</button>
-  </form>
-  <div id="note"></div>
-</footer>
+  <div class="cols">
+
+    <!-- Conversations. Only this member's own: a household assistant
+         never exposes one member's conversations to another. -->
+    <section class="wid">
+      <div class="wid-head">
+        <span class="eyebrow grow">Conversations</span>
+      </div>
+      <button class="hbtn hbtn-secondary" id="new" type="button" style="width: 100%">
+        <i class="ph ph-plus" aria-hidden="true"></i> New conversation
+      </button>
+      <div id="convos"></div>
+    </section>
+
+    <!-- The thread. -->
+    <section class="wid first" style="min-height: 340px; justify-content: space-between">
+      <div class="wid-head">
+        <span class="eyebrow grow" id="thread-title">New conversation</span>
+        <span class="muted" id="agent-label"></span>
+        <select id="agent-select" class="hbtn hbtn-secondary" hidden aria-label="Which assistant"></select>
+      </div>
+      <div id="note"></div>
+      <div class="thread" id="thread"></div>
+      <div class="asks" id="asks">
+        <button class="hbtn" type="button">What's for dinner tomorrow?</button>
+        <button class="hbtn" type="button">Add milk to the shopping list</button>
+        <button class="hbtn" type="button">What did the house do today?</button>
+      </div>
+      <div class="stack" style="gap: var(--space-2)">
+        <div class="composer">
+          <label class="sr" for="ask">Ask the assistant</label>
+          <textarea id="ask" rows="2" placeholder="Ask the house for something"></textarea>
+          <button class="hbtn hbtn-primary send" id="send" type="button" aria-label="Send">
+            <i class="ph ph-paper-plane-tilt" aria-hidden="true"></i>
+          </button>
+        </div>
+        <div class="muted tnum" id="session-id"></div>
+      </div>
+    </section>
+
+    <!-- What it may do, and what it remembers. -->
+    <div class="stack">
+      <section class="wid">
+        <details class="panel" open>
+          <summary class="wid-head">
+            <span class="eyebrow grow" id="caps-head">What it may do</span>
+            <i class="ph ph-caret-down" aria-hidden="true"></i>
+          </summary>
+          <div class="caps" id="caps"></div>
+          <p class="muted" id="caps-note" style="margin-top: var(--space-4)"></p>
+        </details>
+      </section>
+
+      <section class="wid">
+        <details class="panel">
+          <summary class="wid-head">
+            <span class="eyebrow grow">What it remembers</span>
+            <i class="ph ph-caret-down" aria-hidden="true"></i>
+          </summary>
+          <!-- Stated, not stubbed. See the file comment. -->
+          <p class="muted">
+            Not on this page yet. What the assistant has learned, and being able to
+            make it forget something about you, needs a memory list scoped to one
+            person — today that list is the owner's and it carries the whole
+            household's, so showing it here would show you everybody else's.
+          </p>
+        </details>
+      </section>
+
+      <section class="wid">
+        <details class="panel">
+          <summary class="wid-head">
+            <span class="eyebrow grow">What was done in your name</span>
+            <i class="ph ph-caret-down" aria-hidden="true"></i>
+          </summary>
+          <p class="muted">
+            Not on this page yet. Every action the assistant takes is recorded
+            against you, and an approval it needs shows up on the front page under
+            "Needs you" — but the per-action receipts, with the exact call and its
+            result, are not rendered here. A receipt that quietly left an action out
+            would be worse than none.
+          </p>
+          <a class="hbtn hbtn-ghost" href="/activity/">See what the house did</a>
+        </details>
+      </section>
+    </div>
+
+  </div>
+</main>
 
 <script>
-(() => {
-  const el = (id) => document.getElementById(id);
-  const log = el("log"), note = el("note");
-  let session = "", agents = [];
+(function () {
+  "use strict";
 
-  const say = (text, bad) => { note.textContent = text || ""; note.className = bad ? "bad" : ""; };
-
-  const add = (role, text, pending) => {
-    const empty = el("empty");
-    if (empty) empty.remove();
-    const div = document.createElement("div");
-    div.className = "msg" + (role === "user" ? " me" : "") + (pending ? " pending" : "");
-    div.textContent = text;
-    log.append(div);
-    div.scrollIntoView({ block: "end" });
-    return div;
-  };
-
-  const describe = (a) => {
-    if (!a) return "";
-    if (!a.reachable) return a.name + " is not answering right now";
-    if (a.leavesTheHouse) return "This assistant runs on a model outside the house";
-    return a.directive || "This assistant runs on a model in the house";
-  };
-
-  const load = async () => {
-    const r = await fetch("/api/v1/assistant/agents", { headers: { accept: "application/json" } });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
-    const body = await r.json();
-    agents = body.agents || [];
-    const select = el("agent");
-    select.replaceChildren();
-    for (const a of agents) {
-      const option = document.createElement("option");
-      option.value = a.name;
-      option.textContent = a.leavesTheHouse ? a.name + " · cloud" : a.name;
-      select.append(option);
+  function el(id) { return document.getElementById(id); }
+  function text(id, v) { var n = el(id); if (n) { n.textContent = v; } }
+  function clear(n) { while (n && n.firstChild) { n.removeChild(n.firstChild); } }
+  function make(tag, cls, content) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (content !== undefined && content !== null) { n.textContent = String(content); }
+    return n;
+  }
+  function icon(name) {
+    var i = make("i", "ph ph-" + name);
+    i.setAttribute("aria-hidden", "true");
+    return i;
+  }
+  function note(cls, message, retry) {
+    var box = el("note");
+    clear(box);
+    var n = make("div", "note " + cls);
+    n.appendChild(icon(cls === "note-bad" ? "warning-circle" : "warning"));
+    n.appendChild(make("span", "grow", message));
+    if (retry) {
+      var b = make("button", "hbtn hbtn-ghost", "Try again");
+      b.type = "button";
+      b.addEventListener("click", function () { clear(box); retry(); });
+      n.appendChild(b);
     }
-    if (!agents.length) {
-      el("text").disabled = el("send").disabled = true;
-      say("No assistant has been shared with you yet", true);
-      return;
+    box.appendChild(n);
+  }
+  function whenish(iso) {
+    var d = new Date(iso), now = new Date();
+    if (d.toDateString() === now.toDateString()) {
+      return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     }
-    say(describe(agents[0]), !agents[0].reachable);
-  };
+    return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  }
 
-  el("agent").onchange = () => {
-    session = "";
-    log.replaceChildren();
-    const chosen = agents.find((a) => a.name === el("agent").value);
-    say(describe(chosen), chosen && !chosen.reachable);
-  };
+  var member = "", agents = [], agent = "", session = "";
 
-  el("ask").onsubmit = async (e) => {
-    e.preventDefault();
-    const text = el("text").value.trim();
-    if (!text) return;
-    el("text").value = "";
-    add("user", text);
-    const waiting = add("assistant", "thinking…", true);
-    el("send").disabled = true;
-    say("");
-    try {
-      const r = await fetch("/api/v1/assistant/ask", {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ agent: el("agent").value, session, text }),
+  // The session can be handed over from the front page's card, which is
+  // what "Open conversation hands the same session to the full agent
+  // surface" means.
+  try {
+    var asked = new URLSearchParams(location.search).get("session");
+    if (asked) { session = asked; }
+  } catch (e) {}
+
+  function start() {
+    loadScope();
+    fetch("/api/v1/assistant/agents", { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "no assistant is set up yet"); }
+        member = res.j.member || "";
+        text("member", member);
+        text("caps-head", member ? "What it may do as " + member : "What it may do");
+        agents = res.j.agents || [];
+        if (!agents.length) {
+          el("ask").disabled = true;
+          el("send").disabled = true;
+          el("asks").hidden = true;
+          el("thread").appendChild(make("p", "muted",
+            "No assistant is set up yet. The owner turns one on, chooses what it may do, " +
+            "and it appears here."));
+          return;
+        }
+        agent = agents[0].name;
+        if (agents.length === 1) {
+          text("agent-label", agent);
+          if (agents[0].directive) { text("subtitle", agents[0].directive); }
+        } else {
+          var sel = el("agent-select");
+          sel.hidden = false;
+          agents.forEach(function (a) {
+            var o = document.createElement("option");
+            o.value = a.name;
+            o.textContent = a.name;
+            o.title = a.directive || "";
+            sel.appendChild(o);
+          });
+          sel.addEventListener("change", function () {
+            // Switching agent starts a new conversation and cannot
+            // raise authority above what the member and the surface
+            // already hold.
+            agent = sel.value;
+            newConversation();
+          });
+        }
+        if (agents.every(function (a) { return !a.reachable; })) {
+          note("note-warn", "It can still take a question, but the model it uses isn't answering right now.");
+        }
+        loadConversations();
+        if (session) { openConversation(session); }
+      })
+      .catch(function (err) {
+        el("ask").disabled = true;
+        el("send").disabled = true;
+        note("note-bad", String(err.message || err));
       });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(body.error || r.statusText);
-      session = body.session || session;
-      waiting.classList.remove("pending");
-      waiting.textContent = body.reply || "(no answer)";
-      if (body.proposals) {
-        say(body.proposals + " change" + (body.proposals === 1 ? "" : "s") +
-            " proposed — somebody with the Console has to approve them");
-      }
-    } catch (err) {
-      waiting.remove();
-      say(String(err.message || err), true);
-    } finally {
-      el("send").disabled = false;
-      el("text").focus();
-    }
-  };
+  }
 
-  load().catch((e) => {
-    el("text").disabled = el("send").disabled = true;
-    say(String(e.message || e), true);
+  // ---- what this surface allows, from the connection profile itself.
+  function loadScope() {
+    fetch("/api/v1/assistant/scope", { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { return; }
+        var box = el("caps");
+        clear(box);
+        el("scope-pill").title =
+          "This dashboard refuses the machines, apps, accounts, secrets and the control " +
+          "plane's own records, whatever the assistant is allowed elsewhere.";
+        (res.j.allowed || []).forEach(function (c) { box.appendChild(capRow(c, true)); });
+        (res.j.denied || []).forEach(function (c) { box.appendChild(capRow(c, false)); });
+        text("caps-note", res.j.note || "");
+      })
+      .catch(function () { /* the panel is informational; the ceiling is not */ });
+  }
+
+  function capRow(c, allowed) {
+    var row = make("div", "cap");
+    var mark = icon(allowed ? "seal-check" : "x");
+    mark.className += " mark";
+    mark.style.color = allowed ? "var(--st-ok)" : "var(--muted)";
+    row.appendChild(mark);
+    var body = make("div", "grow");
+    body.appendChild(make("div", null, c.what));
+    var q = make("div", "q");
+    q.appendChild(make("span", null, c.name));
+    if (c.qualified) { q.appendChild(make("span", null, " · " + c.qualified)); }
+    body.appendChild(q);
+    row.appendChild(body);
+    return row;
+  }
+
+  // ---- conversations.
+  function loadConversations() {
+    fetch("/api/v1/assistant/conversations", { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        var box = el("convos");
+        clear(box);
+        if (!res.ok) {
+          box.appendChild(make("p", "muted", "Can't load your conversations."));
+          return;
+        }
+        var items = res.j.conversations || [];
+        if (!items.length) {
+          box.appendChild(make("p", "muted", "No conversations yet."));
+          return;
+        }
+        var groups = { Today: [], Earlier: [] };
+        var today = new Date().toDateString();
+        items.forEach(function (c) {
+          groups[new Date(c.at).toDateString() === today ? "Today" : "Earlier"].push(c);
+        });
+        ["Today", "Earlier"].forEach(function (g) {
+          if (!groups[g].length) { return; }
+          box.appendChild(make("div", "eyebrow", g));
+          groups[g].forEach(function (c) {
+            var b = make("button", "convo" + (c.id === session ? " on" : ""));
+            b.type = "button";
+            b.appendChild(make("div", "t", c.title));
+            b.appendChild(make("div", "muted", whenish(c.at) + (c.agent ? " · " + c.agent : "")));
+            b.addEventListener("click", function () { openConversation(c.id); });
+            box.appendChild(b);
+          });
+        });
+      })
+      .catch(function () {});
+  }
+
+  function newConversation() {
+    session = "";
+    clear(el("thread"));
+    clear(el("note"));
+    text("thread-title", "New conversation");
+    text("session-id", "");
+    el("asks").hidden = false;
+    loadConversations();
+    el("ask").focus();
+  }
+  el("new").addEventListener("click", newConversation);
+
+  function openConversation(id) {
+    fetch("/api/v1/assistant/conversations/" + encodeURIComponent(id),
+          { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "that conversation is not here any more"); }
+        session = res.j.session || id;
+        if (res.j.agent) {
+          agent = res.j.agent;
+          if (el("agent-select").hidden) { text("agent-label", agent); }
+          else { el("agent-select").value = agent; }
+        }
+        var thread = el("thread");
+        clear(thread);
+        clear(el("note"));
+        (res.j.messages || []).forEach(function (m) { thread.appendChild(turn(m.role, m.text)); });
+        el("asks").hidden = (res.j.messages || []).length > 0;
+        text("session-id", session);
+        text("thread-title", "Conversation");
+        thread.scrollTop = thread.scrollHeight;
+        loadConversations();
+      })
+      .catch(function (err) { note("note-bad", String(err.message || err)); });
+  }
+
+  function turn(role, body) {
+    if (role === "user") { return make("div", "msg-user", body); }
+    var wrap = make("div", "turn");
+    var mark = make("span", "turn-mark");
+    mark.appendChild(icon("sparkle"));
+    wrap.appendChild(mark);
+    // Model output as text, never markup.
+    wrap.appendChild(make("div", "grow", body));
+    return wrap;
+  }
+
+  Array.prototype.forEach.call(el("asks").querySelectorAll("button"), function (b) {
+    b.addEventListener("click", function () { el("ask").value = b.textContent; el("ask").focus(); });
   });
+
+  function send() {
+    var box = el("ask"), body = box.value.trim();
+    if (!body || !agent) { return; }
+    var thread = el("thread");
+    el("asks").hidden = true;
+    var mine = turn("user", body);
+    mine.style.opacity = "0.6";
+    thread.appendChild(mine);
+    var working = turn("assistant", "Thinking…");
+    working.style.opacity = "0.7";
+    thread.appendChild(working);
+    thread.scrollTop = thread.scrollHeight;
+    box.disabled = true;
+    el("send").disabled = true;
+
+    fetch("/api/v1/assistant/ask", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent: agent, session: session, text: body })
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        thread.removeChild(working);
+        mine.style.opacity = "";
+        if (!res.ok) { throw new Error(res.j.error || "I couldn't answer that one"); }
+        session = res.j.session || session;
+        text("session-id", session);
+        thread.appendChild(turn("assistant", res.j.reply || ""));
+        if (res.j.proposals) {
+          thread.appendChild(make("div", "pill pill-warn",
+            res.j.proposals === 1 ? "1 thing needs the owner's approval"
+                                  : res.j.proposals + " things need the owner's approval"));
+        }
+        box.value = "";
+        loadConversations();
+      })
+      .catch(function (err) {
+        // A failed send keeps the typed text, and Try again resends it.
+        mine.style.opacity = "";
+        note("note-bad", String(err.message || err), send);
+      })
+      .then(function () {
+        box.disabled = false;
+        el("send").disabled = false;
+        thread.scrollTop = thread.scrollHeight;
+        box.focus();
+      });
+  }
+
+  el("send").addEventListener("click", send);
+  el("ask").addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+
+  start();
 })();
 </script>

@@ -35,7 +35,10 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
+	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
@@ -200,7 +203,14 @@ func (s *Server) assistantAsk(_ http.ResponseWriter, r *http.Request, member str
 	// asOwner is false, always. Everything else — tools, memory scope,
 	// authority, the model — comes from the Butler and the member, in
 	// the one place that decides it for every surface.
-	body, status, err := s.askNamedFamilyButler(r.Context(), text, agent, member, "", false, false, prior)
+	// THE CONNECTION CEILING, and this is the line that makes the
+	// implementation package's acceptance criterion true: an operator
+	// action is denied even with a hand-altered request, and even if an
+	// owner-capable assistant is exposed here by mistake. It rides on
+	// the turn rather than being checked here, so it reaches the tool
+	// dispatch itself — one level below anything this handler can see.
+	body, status, err := s.askNamedFamilyButler(r.Context(), text, agent, member, "", false, false, prior,
+		butlerlive.ConnectionScope{Name: portal.Connection, Permits: portal.Permits})
 	if err != nil {
 		return nil, status, err
 	}
@@ -242,4 +252,109 @@ func (s *Server) assistantConversation(_ http.ResponseWriter, r *http.Request, m
 		messages = append(messages, map[string]string{"role": t.Role, "text": t.Text})
 	}
 	return map[string]any{"session": sess.ID, "agent": sess.Butler, "messages": messages}, http.StatusOK, nil
+}
+
+// assistantScope is what this surface may and may not do, for the panel
+// that tells a member so before they discover it by being refused.
+//
+// Served from the connection profile itself rather than restated here,
+// so the page and the ceiling cannot drift: the same portal.Permits
+// that refuses a tool at dispatch is what these two lists come from.
+//
+// Headed "as <member>", because authority is per person and not per
+// assistant. A list titled with the agent's name would read as a
+// description of the agent, and the member's own permissions are half
+// of the intersection.
+func (s *Server) assistantScope(_ http.ResponseWriter, _ *http.Request, member string, _ []resource.Resource) (any, int, error) {
+	return map[string]any{
+		"as":         member,
+		"connection": portal.Connection,
+		"allowed":    portal.Allows(),
+		"denied":     portal.Denies(),
+		// The sentence the design asks for beneath the list. It is the
+		// whole intersection model in one line, and it is here rather
+		// than in the page so every surface that shows this says it.
+		"note": "The server decides this list, and the denials hold even if a request is altered by hand. " +
+			"What you can actually do is the narrowest of: your own permissions, what this assistant was " +
+			"given, and what this dashboard allows.",
+	}, http.StatusOK, nil
+}
+
+// assistantConversations lists this member's own conversations, newest
+// first, for the full page's left-hand column.
+//
+// SCOPED IN THE HANDLER RATHER THAN THE QUERY, and it is worth being
+// plain about that. ListButlerSessions filters by surface and by
+// Butler, not by person, so the member test is the loop below. The
+// member it tests against comes from the forwarded identity the ingress
+// proved, never from the request — so the filter cannot be aimed, and a
+// household assistant never exposes one member's conversations to
+// another.
+//
+// The surface filter is not redundant with it. A member may also have
+// talked to an operator-surface Butler if they hold the Console, and
+// those conversations are not this page's to show.
+func (s *Server) assistantConversations(_ http.ResponseWriter, r *http.Request, member string, _ []resource.Resource) (any, int, error) {
+	if s.DB == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("no assistant is configured on this deployment")
+	}
+	// Read more than are shown, because the member filter runs after
+	// the query: a household where one person talks a lot would
+	// otherwise push everybody else off their own list.
+	sessions, err := s.DB.ListButlerSessions(200, runtimedb.ButlerSurfaceFamily, "")
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	type conversation struct {
+		ID    string    `json:"id"`
+		Agent string    `json:"agent,omitempty"`
+		At    time.Time `json:"at"`
+		// Title is generated from the conversation rather than typed:
+		// the first thing the member said, trimmed. A household member
+		// does not name a chat before having it.
+		Title string `json:"title"`
+	}
+	out := make([]conversation, 0, 24)
+	for _, sess := range sessions {
+		if sess.ActingFor != member {
+			continue
+		}
+		if len(out) >= 24 {
+			break
+		}
+		out = append(out, conversation{
+			ID:    sess.ID,
+			Agent: sess.Butler,
+			At:    sess.CreatedAt,
+			Title: conversationTitle(sess.FinalText),
+		})
+	}
+	return map[string]any{"conversations": out, "member": member}, http.StatusOK, nil
+}
+
+// maxConversationTitle is how much of a conversation becomes its name in
+// the list.
+const maxConversationTitle = 60
+
+// conversationTitle turns a conversation into a line for the list.
+//
+// From the session's own recorded text, and it is deliberately not
+// empty-tolerant in a silent way: a session with nothing in it is
+// called "Nothing said yet" rather than rendering as a blank row a
+// member cannot tell apart from a broken one.
+func conversationTitle(text string) string {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return "Nothing said yet"
+	}
+	// One line: a model's answer may carry newlines and a list row may
+	// not grow to fit them.
+	if i := strings.IndexAny(t, "\r\n"); i > 0 {
+		t = strings.TrimSpace(t[:i])
+	}
+	runes := []rune(t)
+	if len(runes) > maxConversationTitle {
+		return strings.TrimSpace(string(runes[:maxConversationTitle])) + "\u2026"
+	}
+	return t
 }
