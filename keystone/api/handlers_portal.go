@@ -24,7 +24,7 @@ import (
 // in front of this handler and has to know which paths are not the
 // Console's. Without it the dashboard's iframe renders the Console's
 // index.html, which is a blank screen and a very confusing bug report.
-var PortalPrefixes = []string{"/filedrop/", "/assistant/", "/home/", "/portal/"}
+var PortalPrefixes = []string{"/filedrop/", "/assistant/", "/home/", "/portal/", "/activity/"}
 
 // dashboardCapabilities are the capabilities whose Routes serve a
 // household dashboard — the pages entitled to frame a portal surface.

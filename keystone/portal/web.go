@@ -19,14 +19,14 @@ import (
 var web embed.FS
 
 // Page returns one embedded page by name ("files-widget", "files",
-// "assistant-widget", "assistant", "home"), or ok=false for anything
-// else. A
+// "assistant-widget", "assistant", "home", "activity"), or ok=false for
+// anything else. A
 // closed set rather than a directory walk: the URL space this serves is
 // four pages, and a handler that maps a path segment onto a filename is
 // a handler somebody will later point at "../".
 func Page(name string) ([]byte, bool) {
 	switch name {
-	case "files-widget", "files", "assistant-widget", "assistant", "home":
+	case "files-widget", "files", "assistant-widget", "assistant", "home", "activity":
 	default:
 		return nil, false
 	}

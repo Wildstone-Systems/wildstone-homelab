@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -109,6 +110,36 @@ func (db *DB) HouseholdEventsAfter(after int64, limit int) ([]HouseholdEvent, er
 	rows, err := db.sql.Query(
 		`SELECT seq, event_id, occurred_at, recorded_at, subject, source, type, entity, payload, correlation_id, schema_version
 		 FROM household_events WHERE seq > ? ORDER BY seq LIMIT ?`, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing household events: %w", err)
+	}
+	defer rows.Close()
+	return scanHouseholdEvents(rows)
+}
+
+// HouseholdEventsBefore returns up to limit household events with a
+// sequence number BELOW before, newest first — the window a paged
+// history reads backwards through. A before of zero starts at the
+// newest event, which is what an unpositioned first page wants.
+//
+// By sequence rather than by timestamp, and newest-first rather than
+// oldest-first, which is the pair of choices that makes paging correct:
+// two events can share a second, so a timestamp cursor either skips one
+// or repeats it forever, and a reader walking backwards needs the rows
+// adjacent to where it stopped rather than the oldest in the range.
+func (db *DB) HouseholdEventsBefore(before int64, limit int) ([]HouseholdEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	// A zero cursor means "from the newest", expressed as an upper bound
+	// nothing can exceed rather than as a branch with a second query to
+	// keep in step with this one.
+	if before <= 0 {
+		before = math.MaxInt64
+	}
+	rows, err := db.sql.Query(
+		`SELECT seq, event_id, occurred_at, recorded_at, subject, source, type, entity, payload, correlation_id, schema_version
+		 FROM household_events WHERE seq < ? ORDER BY seq DESC LIMIT ?`, before, limit)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing household events: %w", err)
 	}

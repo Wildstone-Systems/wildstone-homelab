@@ -126,3 +126,67 @@ func Says(eventType string) bool {
 	_, known := lines[eventType]
 	return known
 }
+
+// Filter is one of the Activity page's tabs.
+//
+// THE FILTERS PARTITION THE SET EXACTLY, which the design asks for in
+// as many words: every row belongs to exactly one of Home, Files and
+// The assistant, and "Asked for a decision" cuts across them by TONE
+// rather than by subject. A set of filters that overlapped would make
+// the counts beside them lies, and a row in none of them would be a row
+// a member can only find by turning every filter off.
+type Filter string
+
+const (
+	FilterEverything Filter = ""
+	FilterWaiting    Filter = "waiting"
+	FilterHome       Filter = "home"
+	FilterFiles      Filter = "files"
+	FilterAssistant  Filter = "assistant"
+)
+
+// families maps each subject filter to the verb prefixes it owns. One
+// prefix appears under exactly one filter, which is what makes the
+// partition true rather than intended.
+var families = map[Filter][]string{
+	FilterHome:      {"person.", "presence.", "bins.", "calendar.", "automation.", "pantry.", "report."},
+	FilterFiles:     {"filedrop."},
+	FilterAssistant: {"butler.", "domestic.", "tool."},
+}
+
+// Subject reports which subject filter a verb belongs to, for a verb
+// this surface has a sentence for.
+//
+// An unmapped verb has no subject, and neither does a verb whose family
+// nobody has assigned: both are dropped by the caller, which is the
+// same treatment Sentence gives them and for the same reason.
+func Subject(eventType string) (Filter, bool) {
+	if !Says(eventType) {
+		return "", false
+	}
+	for f, prefixes := range families {
+		for _, p := range prefixes {
+			if strings.HasPrefix(eventType, p) {
+				return f, true
+			}
+		}
+	}
+	// A verb with a sentence but no family is a gap in this table
+	// rather than in the vocabulary. Reported as unassigned so it can be
+	// counted, not silently filed under something it is not.
+	return "", false
+}
+
+// Matches reports whether one row belongs under a filter.
+func Matches(f Filter, eventType string, tone Tone) bool {
+	switch f {
+	case FilterEverything:
+		return true
+	case FilterWaiting:
+		// By tone, not by subject: "something is waiting" is a state a
+		// row is in, and it cuts across all three subjects.
+		return tone == ToneWaiting
+	}
+	subject, ok := Subject(eventType)
+	return ok && subject == f
+}
