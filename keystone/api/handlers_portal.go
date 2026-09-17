@@ -24,7 +24,7 @@ import (
 // in front of this handler and has to know which paths are not the
 // Console's. Without it the dashboard's iframe renders the Console's
 // index.html, which is a blank screen and a very confusing bug report.
-var PortalPrefixes = []string{"/filedrop/", "/assistant/", "/home/"}
+var PortalPrefixes = []string{"/filedrop/", "/assistant/", "/home/", "/portal/"}
 
 // dashboardCapabilities are the capabilities whose Routes serve a
 // household dashboard — the pages entitled to frame a portal surface.
@@ -83,4 +83,20 @@ func (s *Server) portalPage(name string) portalFunc {
 		portal.WritePage(w, body, frameAncestors(desired))
 		return nil, http.StatusOK, nil
 	}
+}
+
+// portalAssetFile serves one static design file by "<dir>/<name>".
+//
+// The path comes from two separate wildcards rather than one catch-all,
+// so a request can express exactly two segments and nothing deeper.
+// portal.Asset checks them again against its own closed sets: this is a
+// URL space of one stylesheet, two fonts and forty icons, and it should
+// not be possible to say anything else in it.
+func (s *Server) portalAssetFile(w http.ResponseWriter, r *http.Request, _ string, _ []resource.Resource) (any, int, error) {
+	body, ctype, ok := portal.Asset(r.PathValue("dir") + "/" + r.PathValue("name"))
+	if !ok {
+		return nil, http.StatusNotFound, fmt.Errorf("no such file")
+	}
+	portal.WriteAsset(w, body, ctype)
+	return nil, http.StatusOK, nil
 }

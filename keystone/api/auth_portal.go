@@ -259,3 +259,81 @@ func (s *Server) audit(r *http.Request, member string, status int) {
 // allowed to do" disagree. It is the same split the Butler's own
 // records use (butlerPrincipal, acting for the person who asked).
 const portalPrincipal = "portal"
+
+// portalSurfaces is every household surface this file knows about, which
+// is what lets a shared resource ask "is this person entitled to ANY of
+// them" without naming one.
+var portalSurfaces = []portalSurface{surfaceHome, surfaceFiles, surfaceAssistant}
+
+// portalAsset builds the chain for the portal's static design files —
+// the stylesheet, the two fonts, and the app icon set.
+//
+// WHY THESE ARE GATED AT ALL. They carry no household data: an icon set
+// and a font say nothing about who lives here. But Keystone's public
+// listener is reachable on the LAN without going through the identity
+// proxy, and "nothing on this listener answers to an unauthenticated
+// caller except healthz" is a property worth keeping whole rather than
+// worth one exception. The cost is one forward-auth check on files the
+// browser then caches for a year.
+//
+// WHY ANY SURFACE RATHER THAN A NAMED ONE. The same stylesheet dresses
+// the front page, the Files manager and the Assistant, and a household
+// may have installed any subset of them. Gating on one would mean a
+// household with filedrop but no dashboard got an unstyled Files page,
+// and gating each surface's own copy would mean three routes serving
+// identical bytes under three cache keys.
+func (s *Server) portalAsset(h portalFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var member string
+		var desired []resource.Resource
+		var lastErr error
+		for _, surface := range portalSurfaces {
+			m, d, err := s.portalMember(r, surface)
+			if err == nil {
+				member, desired = m, d
+				lastErr = nil
+				break
+			}
+			// Remember a refusal that names a person over one that does
+			// not: "not installed" from a surface this household never
+			// had says less than "you are not in that group".
+			if lastErr == nil || errors.Is(lastErr, errPortalNotInstalled) {
+				lastErr = err
+			}
+			if m != "" {
+				member = m
+			}
+		}
+		if lastErr != nil {
+			if !s.limiter.allow(anonBucket) {
+				s.writeError(w, http.StatusTooManyRequests, "rate limited")
+				return
+			}
+			status := http.StatusForbidden
+			if errors.Is(lastErr, errPortalNotInstalled) {
+				status = http.StatusNotFound
+			}
+			s.audit(r, member, status)
+			s.Log.Info("portal asset refused", "path", r.URL.Path, "status", status, "reason", lastErr.Error())
+			s.writeError(w, status, "not available to you")
+			return
+		}
+		if !s.limiter.allow("portal:" + member) {
+			s.audit(r, member, http.StatusTooManyRequests)
+			s.writeError(w, http.StatusTooManyRequests, "rate limited")
+			return
+		}
+		// Deliberately NOT audited on success. Every page load fetches a
+		// stylesheet, two fonts and a dozen icons; auditing them would
+		// bury the rows that say what a person actually did under
+		// fifteen that say their browser fetched a picture.
+		body, status, err := h(w, r, member, desired)
+		if err != nil {
+			s.writeError(w, status, err.Error())
+			return
+		}
+		if body != nil {
+			s.writeJSON(w, status, body)
+		}
+	})
+}

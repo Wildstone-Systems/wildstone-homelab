@@ -545,6 +545,12 @@ func (s *Server) Handler() http.Handler {
 	// reach the caller's own notifications.
 	mux.Handle("POST /api/v1/home/notices/clear", s.portal(surfaceHome, s.homeClearNotices))
 
+	// The portal's static design files: the stylesheet, Inter, the
+	// Phosphor glyph font and the app icon set. Shared by every
+	// household surface, so the door accepts membership of any of them
+	// rather than naming one (portalAsset).
+	mux.Handle("GET /portal/{dir}/{name}", s.portalAsset(s.portalAssetFile))
+
 	mux.Handle("GET /api/v1/household/butler", s.handle(principal.VerbRead, s.getHouseholdButlerStatus))
 	mux.Handle("POST /api/v1/household/butler/ask", s.handle(principal.VerbRead, s.askHouseholdButler))
 

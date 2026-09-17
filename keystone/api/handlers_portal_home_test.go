@@ -14,6 +14,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -414,5 +415,99 @@ func TestTheGroupOrderCannotBeRewrittenByACaller(t *testing.T) {
 			t.Errorf("%q appears twice in %v", g, second)
 		}
 		seen[g] = true
+	}
+}
+
+// The design files serve to any household member, and to nobody else.
+//
+// They carry no household data — a font and an icon set say nothing
+// about who lives here — but Keystone's listener is reachable on the LAN
+// without the identity proxy, and "nothing on this listener answers an
+// unauthenticated caller but healthz" is worth keeping whole.
+func TestTheDesignFilesServeToMembersOnly(t *testing.T) {
+	h := homeHarness(t)
+	for _, path := range []string{
+		"/portal/assets/nocturne.css",
+		"/portal/assets/inter-latin.woff2",
+		"/portal/icons/jellyfin.svg",
+	} {
+		res := h.member(http.MethodGet, path, "sandy", "homepage_users", nil, "")
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Errorf("%s as a member: status %d, want 200", path, res.StatusCode)
+			continue
+		}
+		if len(body) == 0 {
+			t.Errorf("%s served empty", path)
+		}
+		// Cached hard, which is safe for an asset and is not for a page:
+		// an asset's bytes never change under its name.
+		if cc := res.Header.Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+			t.Errorf("%s Cache-Control = %q, want immutable", path, cc)
+		}
+	}
+
+	// A member of ANY portal surface's group gets them, because one
+	// stylesheet dresses all three surfaces.
+	res := h.member(http.MethodGet, "/portal/assets/nocturne.css", "sandy", "filedrop_users", nil, "")
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("a filedrop-only member: status %d, want 200 — the stylesheet dresses that surface too", res.StatusCode)
+	}
+
+	// Nobody outside the household.
+	res = h.member(http.MethodGet, "/portal/assets/nocturne.css", "sandy", "some_other_group", nil, "")
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Errorf("a non-member: status %d, want 403", res.StatusCode)
+	}
+}
+
+// The asset URL space is one stylesheet, two fonts and forty icons, and
+// it must not be possible to say anything else in it.
+func TestTheAssetPathCannotEscapeItsDirectories(t *testing.T) {
+	h := homeHarness(t)
+	for _, path := range []string{
+		"/portal/assets/..%2f..%2fweb.go",
+		"/portal/web/home.html",
+		"/portal/assets/home.html",
+		"/portal/icons/nocturne.css",
+		"/portal/assets/",
+	} {
+		res := h.member(http.MethodGet, path, "sandy", "homepage_users", nil, "")
+		res.Body.Close()
+		if res.StatusCode == http.StatusOK {
+			t.Errorf("%s served 200; the asset space is a closed set", path)
+		}
+	}
+}
+
+// The page must actually reference the stylesheet, or the whole asset
+// pipeline is dead weight and the page silently renders unstyled.
+func TestTheFrontPageLinksTheDesignSystem(t *testing.T) {
+	h := homeHarness(t)
+	res := h.member(http.MethodGet, "/home/", "sandy", "homepage_users", nil, "")
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+	page := string(body)
+	if !strings.Contains(page, "/portal/assets/nocturne.css") {
+		t.Error("the page does not link the design system")
+	}
+	// And the policy it is served with has to permit that link, plus the
+	// fonts the stylesheet pulls.
+	csp := res.Header.Get("Content-Security-Policy")
+	for _, need := range []string{"style-src 'self'", "font-src 'self'", "img-src 'self'"} {
+		if !strings.Contains(csp, need) {
+			t.Errorf("CSP %q is missing %q — the stylesheet or its fonts would be blocked", csp, need)
+		}
+	}
+	// Still no external script, which is the one thing that would make
+	// "read the file to know what the surface does" false.
+	if strings.Contains(csp, "script-src 'self'") {
+		t.Error("script-src gained 'self'; a portal page's behaviour belongs in the page")
 	}
 }
