@@ -1,6 +1,8 @@
 # ADR-WXXX (DRAFT): Commitments and meters — the household keeps track of what it owes itself
 
-- **Status:** draft. Not proposed, not accepted, not built.
+- **Status:** draft. Not proposed, not accepted. Work package K3 is
+  prototyped in `keystone/commitment`; nothing else is built, and nothing
+  reads it yet.
 - **Number:** deliberately `WXXX`. W032 (*Who may open the Console*) and
   W033 (*The Wildstone agent system*) are taken on branches that have not
   landed; this file is numbered on merge, most likely W034. See
@@ -351,7 +353,7 @@ W024's `H` packages and W030's `P` packages.
 |---|---|---|
 | **K1** | `Meter` resource kind + readings store: schema, validation, plan integration, the built-in `clock` meter, `POST /api/v1/household/meters/{name}/readings` under an ordinary authenticated write, `wild meter read\|list\|history` | A number can be recorded and read back by a household with nothing installed (A2, A3) |
 | **K2** | `Commitment` resource kind: schema, validation, plan integration, risk grading, the `commitment-*` policy rules, household plan classification | A commitment is a plan, approved once, policy-checked like any resource (A1, A16) |
-| **K3** | The due-ness function: pure evaluation over (commitment, readings, completions) → occurrence state, multi-meter earliest-wins, both rollover modes, staleness. Unit-tested against a table of fixtures. No storage, no timer | The hard logic is correct and provable in isolation (A5, A9, A10, A11) |
+| **K3** | The due-ness function: pure evaluation over (commitment, readings, completions) → occurrence state, multi-meter earliest-wins, both rollover modes, staleness. Unit-tested against a table of fixtures. No storage, no timer. **Built — `keystone/commitment`** | The hard logic is correct and provable in isolation (A5, A9, A10, A11) |
 | **K4** | Occurrence ledger + the daily pass: `runtimedb` tables, state transitions, the timer, `commitment.*` events onto the household timeline, completion-with-evidence in one transaction | The state machine survives a restart and the timeline records why (A6, A8, A12, A15) |
 | **K5** | The answering paths: completion and reading via Console, via `wild`, and via a reply to a notification (reusing H4's reply tokens) | A person can answer from wherever they are, with nothing installed (A3) |
 | **K6** | Console: the commitment list, an occurrence's history, a reading field that is one tap from the notification, projection shown as projection | The household can see what it owes and answer in one place (A11) |
@@ -465,6 +467,71 @@ difficulty here is the durable occurrence — the thing that remembers a
 checkup is due and *still has no appointment*. That state has to live
 somewhere, and scattering it across rule firings is how it gets lost.
 Automations remain the nagging layer (A12).
+
+---
+
+## What the K3 prototype settled
+
+The due-ness function is built, in `keystone/commitment` — a leaf package
+on the standard library alone, no storage, no clock of its own. 41 tests,
+91.8% statement coverage, and every one of 18 deliberate mutations to the
+logic is caught by at least one of them.
+
+Building it answered seven things Part A left open. They are refinements
+to the decisions above, not departures from them, and they belong in the
+ADR because each one is a place where the obvious implementation is
+wrong.
+
+1. **Staleness undermines only the negative conclusion.** A11 says a
+   stale reading cannot support "not due yet". It does not follow that a
+   stale reading proves nothing: a reading of 84,900 against a threshold
+   of 84,300 is past due whether it was taken this morning or in June.
+   So a crossed threshold is definitive regardless of age, and staleness
+   blocks only the conclusion that something is *not* due.
+
+2. **Comparing a month against a mile needs a common scale.** A10 says
+   "earliest wins" without saying how to compare units. The prototype
+   uses progress as a fraction of each rule's own interval, so a rule 96%
+   through five thousand miles and one 96.2% through six months are
+   directly comparable, and the answer does not depend on the order the
+   rules were written in.
+
+3. **A missed appointment returns to overdue.** A7 gave `scheduled` as a
+   state; it did not say what happens when the appointment date passes
+   with nothing recorded. Staying `scheduled` would reproduce exactly the
+   failure the state exists to catch, so a booking in the past with no
+   completion is `overdue` again.
+
+4. **`fromSchedule` must skip to the next future slot.** A9 says the
+   schedule ignores when the work was done. Taken literally, a checkup
+   done fourteen months late would compute a next occurrence already in
+   the past. The schedule advances to the first slot after the
+   completion — which is what "it stays in September" has to mean in a
+   year it slipped.
+
+5. **A rebase needs a prior value, and will not guess one.** A11's
+   coordinate reset can only be translated if something records what the
+   meter read before it was replaced. The reading before the rebase
+   serves, or the rebase carries the old number explicitly; with neither,
+   the rule reports itself unresolved rather than inventing a threshold.
+
+6. **A calendar month is not `AddDate`.** Go's `time.Time.AddDate`
+   normalises 31 February forward to 3 March. A filter changed on the
+   31st is due at the end of February, so calendar steps clamp to the
+   last day of the target month. Related: an interval of `6mo` and one of
+   `180d` are genuinely different across daylight saving, and the parser
+   keeps them apart — `m` is minutes, and a month is `mo`, because that
+   ambiguity is the one way to write an interval that parses and is wrong
+   by a factor of forty-three thousand.
+
+7. **A completion is recorded, then the day is evaluated.** The cycle a
+   completion closes is already closed by the time anything asks where
+   things stand. Stated because the opposite order is the natural one to
+   write and produces a commitment that reports itself overdue on the
+   day it was done.
+
+None of this needed storage, an API, a resource kind or a model to
+settle, which is the argument for having built K3 first.
 
 ---
 
