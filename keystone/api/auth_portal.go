@@ -59,6 +59,17 @@ type portalSurface struct {
 var (
 	surfaceFiles     = portalSurface{capability: "filedrop", title: "Files"}
 	surfaceAssistant = portalSurface{capability: "assistant", title: "Assistant"}
+	// The household's own front page. Its capability is `dashboard` —
+	// the same capability the Homepage profile installs — because it IS
+	// the dashboard, done by Wildstone instead of by a container.
+	//
+	// That sharing is what makes the surface appear and disappear
+	// correctly with no extra rule. Only the wildstone profile declares
+	// an LdapGroup, so portalGroup finds one exactly when this profile
+	// is the installed one; a household running the Homepage profile has
+	// no group for `dashboard`, and these routes are 404 rather than a
+	// second front door answering beside the first.
+	surfaceHome = portalSurface{capability: "dashboard", title: "Home"}
 )
 
 var (

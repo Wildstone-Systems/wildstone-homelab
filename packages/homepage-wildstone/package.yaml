@@ -1,0 +1,135 @@
+# The dashboard capability, profile "wildstone": the household's own
+# homepage, served by Keystone (#197, #198 — the standalone surface).
+#
+# WHY IT IS A SECOND PROFILE OF `dashboard` RATHER THAN A NEW
+# CAPABILITY. A household has one front door. profile "homepage" is
+# gethomepage with Wildstone's service list rendered into it; this is
+# the same job done by Wildstone itself, and the two want the same
+# address. Declaring them as profiles of one exclusive capability is
+# what makes "you may have either, not both" true by construction
+# rather than by two Routes racing for `home.`.
+#
+# WHAT IT BUYS OVER THE HOMEPAGE PROFILE. Homepage presents, and that
+# is the whole of it: the two acting surfaces (#197 filedrop, #198
+# assistant) reach it only as iframes, the household's own state —
+# what needs a decision, what the house did — has nowhere to go, and
+# the palette is a container's setting rather than the household's.
+# Served by Keystone, all three are ordinary reads of state Wildstone
+# already holds.
+#
+# IT INSTALLS NOTHING. There is no Container and no Volume: the surface
+# is served by Keystone itself, from the same listener as the Console,
+# which is why the Route's upstream is an address rather than a
+# container.
+#
+# THE GROUP IS ENFORCED BY KEYSTONE, NOT BY AUTHELIA, for the reason
+# packages/wildstone-console gives at length: under the tailnet posture
+# every Route shares one hostname and differs by port, so Authelia's
+# per-hostname rules cannot tell this surface from any other. The proxy
+# answers "who is this"; Keystone answers "and what may they see".
+#
+# NOTHING OWNER-LEVEL REACHES IT. The page is a presentation adapter
+# over reads a member is entitled to. It holds no storage credential,
+# no model key, no tool credential, no Docker socket and no host path,
+# and the identity it is reached with carries no API verb at all
+# (keystone/api/auth_portal.go). A member drafts; the Console's Plans
+# page approves.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: homepage-wildstone
+  version: 1.0.0
+  capability: dashboard
+  profile: wildstone
+  exclusive: true
+requires:
+  # The group is created by the identity capability's provisioning job,
+  # and the Route is only worth rendering if something enforces auth in
+  # front of it.
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine runs the control plane.", source: node }
+  - { name: keystone_addr, required: true, example: "192.168.1.10:9441", description: "Where Keystone's API answers, as address:port. This is what the proxy forwards to." }
+  # What the family calls this place. Same param, same default and same
+  # meaning as the homepage profile's, so switching profiles does not
+  # rename the household.
+  - { name: household_name, default: "Household", description: "What to call this household on the dashboard, e.g. The Reed Family." }
+  # THE HOUSEHOLD'S COLOUR, as a hue in degrees. One number rather than
+  # a palette because the design system turns it through OKLCH at its
+  # own accent lightness and chroma, so no choice a household makes can
+  # put a pair below the contrast floor. 267 is the system's own violet.
+  - { name: accent_hue, default: "267", description: "The household's colour, as a hue from 0 to 360. 267 is the default violet." }
+  # Node running the identity provider, whose managed config the
+  # LdapGroup is rendered into. Defaults to this package's own node,
+  # which is right for a single-node homelab.
+  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
+policies:
+  # The family's front door, on the family's hostname. It carries what
+  # the household shares with itself and nothing of the operator's.
+  classifications: [family_public]
+  dataSensitivity: medium
+externalConfig:
+  - filename: settings.yaml
+    consumer: Keystone
+    reason: >-
+      This capability installs no container, because the surface is
+      served by the control plane itself — so there is nothing in this
+      package for the file to be mounted into. Keystone reads the
+      ConfigFile RESOURCE out of desired state rather than the copy the
+      node holds, which is why the rendered file is a readable record of
+      the settings rather than the mechanism. It is written to the node
+      all the same: an operator asking what the family's page is called
+      and what colour it is should be able to answer it by reading a
+      file.
+templates:
+  # The group that grants a person the household's homepage.
+  #
+  # Membership is the whole permission, and it is checked on every
+  # request rather than at sign-in: removing somebody from the group
+  # stops their next page load.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: LdapGroup
+    metadata: { name: homepage-users, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      name: homepage_users
+  # The household's presentation, as desired state.
+  #
+  # A ConfigFile because this package installs no container, and a
+  # containerless package has no other carrier: a param is known only
+  # while the package is being expanded, and the page load that uses it
+  # arrives weeks later. Keystone reads this back out of desired state —
+  # the resource, not the copy on the node's disk.
+  #
+  # This is where §9's "the theme lives in desired state" lands. The
+  # household's name and hue are household STATE: not a hand-edited file
+  # in a config volume, and not browser-local storage, either of which
+  # would be lost the moment a container or a device was replaced.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: homepage-settings, node: "{{ .Params.node }}" }
+    spec:
+      filename: settings.yaml
+      content: |
+        # managed by wildstone-keystone — do not edit
+        householdName: |-
+          {{ .Params.household_name }}
+        accentHue: {{ .Params.accent_hue }}
+  # The route.
+  #
+  # auth: authelia_oidc is what makes the proxy emit forward_auth and
+  # copy Remote-User and Remote-Groups. Those headers are the only thing
+  # that carries an identity here, which is why Keystone refuses them
+  # from anywhere but the proxy.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: home, node: "{{ .Params.node }}" }
+    spec:
+      host: "home.{{ .Params.public_domain }}"
+      upstream: "{{ .Params.keystone_addr }}"
+      auth: authelia_oidc
+      classification: family_public

@@ -531,6 +531,20 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/assistant/ask", s.portal(surfaceAssistant, s.assistantAsk))
 	mux.Handle("GET /api/v1/assistant/conversations/{id}", s.portal(surfaceAssistant, s.assistantConversation))
 
+	// The household's own front page (the dashboard capability's
+	// wildstone profile). One read answers every card on it, for the
+	// reason handlers_portal_home.go opens with: nine reads of a moving
+	// database is how two cards end up telling different stories about
+	// one event.
+	mux.Handle("GET /home/{$}", s.portal(surfaceHome, s.portalPage("home")))
+	mux.Handle("GET /api/v1/home/summary", s.portal(surfaceHome, s.homeSummary))
+	// The one write the page has: a member answering the question they
+	// were asked. Whose question it is, is settled in the database.
+	mux.Handle("POST /api/v1/home/notices/answer", s.portal(surfaceHome, s.homeAnswerNotice))
+	// Clearing takes no seq: see homeClearNotices. It can only ever
+	// reach the caller's own notifications.
+	mux.Handle("POST /api/v1/home/notices/clear", s.portal(surfaceHome, s.homeClearNotices))
+
 	mux.Handle("GET /api/v1/household/butler", s.handle(principal.VerbRead, s.getHouseholdButlerStatus))
 	mux.Handle("POST /api/v1/household/butler/ask", s.handle(principal.VerbRead, s.askHouseholdButler))
 

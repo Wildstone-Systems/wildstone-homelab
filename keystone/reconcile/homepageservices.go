@@ -357,6 +357,15 @@ type homepageEntry struct {
 	// name is the Route's resource name, kept only to disambiguate two
 	// services that resolve to the same title.
 	name string
+	// container and node are what the Route points at, and they are here
+	// for the Wildstone dashboard profile rather than for the rendered
+	// YAML: Homepage discovers whether an app answers by dialling it
+	// itself (siteMonitor), and a page served by Keystone has to join the
+	// observation Keystone already holds instead. An empty container
+	// means the Route names an address rather than a container, which is
+	// a service with no observation to join.
+	container string
+	node      string
 	// widget is the live frame a household surface renders instead of
 	// being only a link (#197, #198). Empty on every ordinary service,
 	// which is all of them but two.
@@ -490,6 +499,7 @@ func homepageEntries(desired []resource.Resource) []homepageEntry {
 		if home != "" && r.Metadata.Node == home {
 			e.monitor = homepageMonitor(r.Route.Upstream)
 		}
+		e.container, e.node = upstreamContainerName(r.Route.Upstream), r.Metadata.Node
 		entries = append(entries, e)
 	}
 

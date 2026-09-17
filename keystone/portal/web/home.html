@@ -1,0 +1,683 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home</title>
+<!--
+  The household's front page, served by Keystone.
+
+  READING ORDER IS THE DESIGN. Who you are, then what needs you, then
+  what you can do quickly, then what the house did, then the apps, and
+  last the machines. Two things sit lower than an operator would put
+  them: the app launcher, because it is the part a household member
+  already knows how to find, and machine health, because CPU and disk
+  are an owner's concern and a family reads a graph of them as a problem
+  they cannot fix.
+
+  NO EXTERNAL RESOURCE, BECAUSE THE CSP FORBIDS ALL OF THEM. The header
+  this is served with is default-src 'none' with inline style and script
+  only (keystone/portal/web.go), so there is no web font, no icon CDN and
+  no fetch to anywhere but this origin. That is why app cards carry a
+  letter rather than a logo: dashboard-icons is a remote image, and a
+  card with a broken image on it looks worse than a card with a letter.
+
+  EVERY VALUE IS WRITTEN WITH textContent. Filenames, member names,
+  notice titles and household sentences all come from data, some of it
+  ultimately typed by a person, and none of it is ever concatenated into
+  markup. The one place the page builds HTML from a string is its own
+  static skeleton below.
+-->
+<style>
+  /* Nocturne, the same token set the Console uses, so the tablet on the
+     wall and the operator's screen cannot disagree about what an accent
+     or a status colour means. Depth is an edge plus ambient darkness,
+     never a heavy shadow. */
+  :root {
+    --color-bg: #161826;
+    --color-surface: #232532;
+    --color-text: #e9e9ed;
+    --color-accent: #9184d9;
+    --color-accent-300: #d2cefd;
+    --st-ok: #5fae86;
+    --st-warn: #d9a24b;
+    --st-bad: #d9736f;
+    --hair: color-mix(in srgb, var(--color-text) 11%, transparent);
+    --faint: color-mix(in srgb, var(--color-text) 7%, transparent);
+    --muted: color-mix(in srgb, var(--color-text) 58%, transparent);
+    --radius-md: 8px;
+    --radius-lg: 14px;
+    --space-2: 6px;
+    --space-3: 8px;
+    --space-4: 11px;
+    --space-6: 17px;
+    --space-8: 22px;
+    color-scheme: dark;
+  }
+  /* The household's own colour. One hue in degrees, turned through OKLCH
+     at the design system's accent lightness and chroma, so no choice a
+     household can make puts a pair below its contrast floor. The script
+     sets --hue from desired state; these four follow it. */
+  :root {
+    --hue: 267;
+    --color-accent: oklch(0.734 0.125 var(--hue));
+    --color-accent-300: oklch(0.862 0.075 var(--hue));
+    --color-bg: oklch(0.225 0.022 var(--hue));
+    --color-surface: oklch(0.278 0.022 var(--hue));
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    color: var(--color-text);
+    font: 14px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background:
+      radial-gradient(1100px 520px at 8% -12%, oklch(0.45 0.09 var(--hue) / 0.30), transparent 68%),
+      var(--color-bg);
+    background-attachment: fixed;
+  }
+  main { max-width: 1120px; margin: 0 auto; padding: var(--space-6) var(--space-6) 64px; }
+  a { color: var(--color-accent-300); text-decoration: none; text-underline-offset: 3px; }
+  a:hover { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+
+  /* The banner. The only card that is decorative as well as
+     informational, and the only one that never carries status: a
+     coloured banner would be read as "the house is broken". */
+  .banner {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--space-6);
+    flex-wrap: wrap;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 12%, transparent), transparent), var(--color-surface);
+    border: 1px solid var(--hair); border-radius: var(--radius-lg);
+    padding: var(--space-6) var(--space-8); margin-bottom: var(--space-4);
+  }
+  .banner h1 { font-size: 26px; margin: 0; letter-spacing: -0.015em; font-weight: 500; }
+  .banner .clock { font-size: 30px; font-weight: 500; letter-spacing: -0.02em; }
+  .whoami { display: flex; align-items: center; gap: var(--space-3); }
+  .avatar {
+    width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+    background: color-mix(in srgb, var(--color-accent) 30%, var(--color-surface));
+    border: 1px solid var(--hair); font-size: 12px; letter-spacing: .04em;
+  }
+
+  .searchrow { display: flex; gap: var(--space-3); margin: 0 0 var(--space-4); }
+  .searchrow input {
+    flex: 1; font: inherit; color: var(--color-text); background: var(--faint);
+    border: 1px solid var(--hair); border-radius: var(--radius-md); padding: 9px 12px;
+  }
+  .searchrow input::placeholder { color: var(--muted); }
+
+  /* Cards. An edge and ambient darkness. */
+  .card {
+    background: var(--color-surface); border: 1px solid var(--hair);
+    border-radius: var(--radius-lg); padding: var(--space-6);
+  }
+  .grid { display: grid; gap: var(--space-4); grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: var(--space-4); }
+  .grid.one { grid-template-columns: minmax(0, 1fr); }
+  h2.hd {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+    margin: 0 0 var(--space-3); font-weight: 600;
+  }
+  /* A collapsible card's header IS the control, and the summary line
+     stays visible when it is shut — collapsing must never hide the fact
+     that something is waiting. */
+  .foldhd {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+    width: 100%; background: none; border: 0; padding: 0; margin: 0 0 var(--space-3);
+    color: inherit; font: inherit; cursor: pointer; text-align: left;
+  }
+  .foldhd .caret { color: var(--muted); font-size: 11px; }
+  .sum { color: var(--muted); font-size: 13px; }
+
+  /* Needs you. Colour is never the only signal: every item says in
+     words who it waits on. */
+  .item { display: flex; gap: var(--space-4); padding: var(--space-3) 0; border-top: 1px solid var(--faint); }
+  .item:first-child { border-top: 0; }
+  .edge { width: 3px; border-radius: 2px; flex: none; background: var(--muted); }
+  .edge.waiting { background: var(--st-warn); }
+  .edge.failed { background: var(--st-bad); }
+  .edge.refused { background: var(--muted); }
+  .item .body { flex: 1; min-width: 0; }
+  .item .who { color: var(--muted); font-size: 12.5px; }
+  .btnrow { display: flex; gap: var(--space-2); margin-top: var(--space-3); flex-wrap: wrap; }
+  button.act {
+    font: inherit; font-size: 13px; color: var(--color-text); background: var(--faint);
+    border: 1px solid var(--hair); border-radius: var(--radius-md); padding: 6px 13px; cursor: pointer;
+  }
+  button.act:hover { border-color: var(--color-accent); }
+  button.act[disabled] { opacity: .55; cursor: default; }
+
+  /* The two acting surfaces, as frames of the pages that own them. */
+  .frame { width: 100%; border: 0; display: block; border-radius: var(--radius-md); background: var(--faint); }
+
+  /* Rows: activity and notifications. */
+  .row { display: flex; gap: var(--space-3); align-items: baseline; padding: var(--space-2) 0; border-top: 1px solid var(--faint); }
+  .row:first-child { border-top: 0; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--st-ok); transform: translateY(-1px); }
+  .dot.waiting { background: var(--st-warn); }
+  .dot.failed { background: var(--st-bad); }
+  .dot.refused { background: var(--muted); }
+  .dot.unknown { background: var(--muted); }
+  .row .when { margin-left: auto; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+  .row .src { color: var(--muted); font-size: 12.5px; }
+
+  /* The launcher: as many across as the width allows. */
+  .apps { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(216px, 1fr)); }
+  .app {
+    display: flex; gap: var(--space-3); align-items: center; padding: var(--space-3) var(--space-4);
+    background: var(--color-surface); border: 1px solid var(--hair); border-radius: var(--radius-md);
+    color: inherit;
+  }
+  .app:hover { border-color: var(--color-accent); text-decoration: none; }
+  .app .mono {
+    width: 30px; height: 30px; flex: none; border-radius: var(--radius-md); display: grid; place-items: center;
+    background: var(--faint); border: 1px solid var(--hair); font-size: 13px; text-transform: uppercase;
+  }
+  .app .t { min-width: 0; flex: 1; }
+  .app .t b { font-weight: 500; display: block; }
+  .app .t span { color: var(--muted); font-size: 12.5px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .empty { color: var(--muted); font-size: 13px; }
+  /* A read that failed is never styled as an empty list. */
+  .problem { color: var(--st-warn); font-size: 13px; }
+  .bad { color: var(--st-bad); }
+
+  /* The phone. The four widgets that have pages of their own collapse to
+     tappable rows carrying one useful fact each, because a condensed
+     widget on a phone is worse than a door to the real page. */
+  @media (max-width: 720px) {
+    main { padding: var(--space-4) var(--space-4) 48px; }
+    .grid { grid-template-columns: minmax(0, 1fr); }
+    .banner { padding: var(--space-4); }
+    .banner .clock { font-size: 24px; }
+    .apps { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>
+
+<main>
+  <section class="banner">
+    <div>
+      <h1 id="household">&nbsp;</h1>
+      <div class="muted tnum" id="date"></div>
+    </div>
+    <div class="clock tnum" id="clock"></div>
+    <div class="whoami">
+      <div class="avatar" id="initials"></div>
+      <div>
+        <div id="member"></div>
+        <a href="/logout" id="signout" class="muted" style="font-size:12.5px">Sign out</a>
+      </div>
+    </div>
+  </section>
+
+  <div class="searchrow">
+    <input id="search" type="search" placeholder="Find an app" aria-label="Find an app">
+  </div>
+
+  <section class="card" id="needs-card" style="margin-bottom:var(--space-4)">
+    <button class="foldhd" id="needs-fold" aria-expanded="true" aria-controls="needs-body">
+      <h2 class="hd" style="margin:0">Needs you</h2>
+      <span class="sum" id="needs-sum"></span>
+      <span class="caret" id="needs-caret" aria-hidden="true">▾</span>
+    </button>
+    <div id="needs-body"></div>
+  </section>
+
+  <div class="grid" id="surfaces">
+    <section class="card" id="files-card" hidden>
+      <h2 class="hd">Files</h2>
+      <iframe class="frame" id="files-frame" title="Files" height="300" loading="lazy"></iframe>
+      <div style="margin-top:var(--space-3)"><a href="/filedrop/">Open Files</a></div>
+    </section>
+    <section class="card" id="assistant-card" hidden>
+      <h2 class="hd">Assistant</h2>
+      <iframe class="frame" id="assistant-frame" title="Assistant" height="300" loading="lazy"></iframe>
+      <div style="margin-top:var(--space-3)"><a href="/assistant/">Open conversation</a></div>
+    </section>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <button class="foldhd" id="cal-fold" aria-expanded="false" aria-controls="cal-body">
+        <h2 class="hd" style="margin:0">Calendar</h2>
+        <span class="sum" id="cal-sum"></span>
+        <span class="caret" id="cal-caret" aria-hidden="true">▸</span>
+      </button>
+      <div id="cal-body" hidden></div>
+    </section>
+    <section class="card">
+      <h2 class="hd">Today at home</h2>
+      <div id="activity"></div>
+      <div style="margin-top:var(--space-3)"><a href="/home/#activity" id="all-activity" class="muted" style="font-size:12.5px">All activity</a></div>
+    </section>
+  </div>
+
+  <section class="card" style="margin-bottom:var(--space-4)">
+    <button class="foldhd" id="notif-fold" aria-expanded="true" aria-controls="notif-body">
+      <h2 class="hd" style="margin:0">Notifications</h2>
+      <span class="sum" id="notif-sum"></span>
+      <span class="caret" id="notif-caret" aria-hidden="true">▾</span>
+    </button>
+    <div id="notif-body"></div>
+  </section>
+
+  <div id="launcher"></div>
+
+  <section style="margin-top:var(--space-8)">
+    <h2 class="hd">The machines</h2>
+    <div class="grid" id="machines"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- the clock. Client-side, and the one thing on the page that
+  // cannot fail: nothing is fetched to render it.
+  function tick() {
+    var now = new Date();
+    text("clock", now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
+    text("date", now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" }));
+  }
+  tick();
+  setInterval(tick, 10000);
+
+  function el(id) { return document.getElementById(id); }
+  function text(id, v) { var n = el(id); if (n) { n.textContent = v; } }
+  // Every node this page creates goes through here, so no value from the
+  // API is ever parsed as markup.
+  function make(tag, cls, content) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (content !== undefined && content !== null) { n.textContent = String(content); }
+    return n;
+  }
+  function clear(node) { while (node.firstChild) { node.removeChild(node.firstChild); } }
+
+  // ---- collapsible cards, remembered per browser.
+  //
+  // localStorage rather than a server preference, deliberately for now:
+  // it is a per-viewer convenience, not household state, and it must
+  // survive being unavailable — a private window or blocked site data
+  // throws on access, and the page has to render anyway.
+  function fold(key, btn, body, caret, openByDefault) {
+    var open = openByDefault;
+    try {
+      var saved = localStorage.getItem("home.fold." + key);
+      if (saved !== null) { open = saved === "1"; }
+    } catch (e) { /* no storage: the default stands */ }
+    function paint() {
+      body.hidden = !open;
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+      caret.textContent = open ? "▾" : "▸";
+    }
+    btn.addEventListener("click", function () {
+      open = !open;
+      try { localStorage.setItem("home.fold." + key, open ? "1" : "0"); } catch (e) {}
+      paint();
+    });
+    paint();
+  }
+
+  // ---- relative time, rendered against the SERVER's instant.
+  //
+  // `as` is the one timestamp every section was built against. Using it
+  // rather than the browser's clock is what makes an event read the same
+  // here as it does on the page the card links to, even on a tablet
+  // whose clock has drifted.
+  var asOf = new Date();
+  function ago(iso) {
+    if (!iso) { return ""; }
+    var d = (asOf - new Date(iso)) / 1000;
+    if (d < 60) { return "just now"; }
+    if (d < 3600) { var m = Math.round(d / 60); return m + (m === 1 ? " min ago" : " mins ago"); }
+    if (d < 86400) { var h = Math.round(d / 3600); return h + (h === 1 ? " hour ago" : " hours ago"); }
+    var y = Math.round(d / 86400); return y + (y === 1 ? " day ago" : " days ago");
+  }
+  function when(iso) {
+    if (!iso) { return ""; }
+    return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+
+  // ---- the one read.
+  function load() {
+    fetch("/api/v1/home/summary", { headers: { accept: "application/json" } })
+      .then(function (r) {
+        if (!r.ok) { throw new Error("http " + r.status); }
+        return r.json();
+      })
+      .then(render)
+      .catch(function (err) {
+        // The whole page failed, which is the one case where a single
+        // sentence is the right answer. It says what is not known
+        // rather than showing empty cards that would read as a quiet
+        // house.
+        var m = document.querySelector("main");
+        clear(m);
+        m.appendChild(make("p", "problem", "Can't reach Wildstone right now, so this page can't tell you what's happening at home."));
+        m.appendChild(make("p", "muted", String(err.message || err)));
+      });
+  }
+
+  function render(d) {
+    asOf = d.as ? new Date(d.as) : new Date();
+    document.documentElement.style.setProperty("--hue", String(d.accentHue));
+    text("household", d.household || "Home");
+    text("member", d.member || "");
+    text("initials", initialsOf(d.member));
+    document.title = d.household || "Home";
+
+    renderNeeds(d.needsYou);
+    renderSurfaces(d.surfaces);
+    renderCalendar(d.calendar);
+    renderActivity(d.activity);
+    renderNotifications(d.notifications);
+    renderLauncher(d);
+    renderMachines(d.machines);
+  }
+
+  function initialsOf(name) {
+    if (!name) { return "?"; }
+    var parts = String(name).trim().split(/[\s._-]+/).filter(Boolean);
+    if (!parts.length) { return "?"; }
+    if (parts.length === 1) { return parts[0].slice(0, 2).toUpperCase(); }
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+
+  // ---- Needs you.
+  function renderNeeds(c) {
+    var body = el("needs-body");
+    clear(body);
+    if (!c.available) {
+      // Never "nothing to do": silence and all-clear must not look the
+      // same.
+      text("needs-sum", "");
+      body.appendChild(make("p", "problem", c.problem || "Can't tell whether anything needs you."));
+      return;
+    }
+    if (!c.items.length) {
+      // The good day. The summary line carries it so the card reads as
+      // one line rather than as an empty box.
+      text("needs-sum", "Nothing needs you right now.");
+      return;
+    }
+    var mine = c.items.filter(function (i) { return i.decidable; }).length;
+    text("needs-sum", mine ? (mine === 1 ? "1 thing for you" : mine + " things for you")
+                           : "waiting on somebody else");
+    c.items.forEach(function (i) {
+      var wrap = make("div", "item");
+      wrap.appendChild(make("div", "edge " + (i.tone || "")));
+      var b = make("div", "body");
+      b.appendChild(make("div", null, i.summary));
+      var who = "waiting on " + i.waitingOn;
+      if (i.waited) { who += " · " + i.waited; }
+      if (!i.decidable) { who += " · the owner decides"; }
+      b.appendChild(make("div", "who", who));
+      if (i.consequence) { b.appendChild(make("div", "who", i.consequence)); }
+      // No card shows an action a member lacks authority for: the
+      // affordance is absent, never present-and-refused.
+      if (i.decidable && i.seq) {
+        var row = make("div", "btnrow");
+        row.appendChild(decideBtn(i.seq, "yes", "Yes"));
+        row.appendChild(decideBtn(i.seq, "no", "No"));
+        b.appendChild(row);
+      }
+      wrap.appendChild(b);
+      body.appendChild(wrap);
+    });
+    if (c.more) {
+      body.appendChild(make("div", "muted", "and " + c.more + " more"));
+    }
+  }
+
+  function decideBtn(seq, answer, label) {
+    var b = make("button", "act", label);
+    b.addEventListener("click", function () {
+      b.disabled = true;
+      fetch("/api/v1/home/notices/answer?seq=" + encodeURIComponent(seq) +
+            "&answer=" + encodeURIComponent(answer), { method: "POST" })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (!res.ok) { throw new Error(res.j && res.j.error ? res.j.error : "that didn't go through"); }
+          load();
+        })
+        .catch(function (err) {
+          b.disabled = false;
+          var p = make("div", "problem", String(err.message || err));
+          b.parentNode.appendChild(p);
+        });
+    });
+    return b;
+  }
+
+  // ---- the two acting surfaces. Absent capabilities draw no card at
+  // all: an empty frame on the family's dashboard with nothing saying
+  // why is the specific bug this avoids.
+  function renderSurfaces(s) {
+    s = s || {};
+    if (s.files) {
+      el("files-card").hidden = false;
+      el("files-frame").src = "/filedrop/widget?theme=dark";
+    }
+    if (s.assistant) {
+      el("assistant-card").hidden = false;
+      el("assistant-frame").src = "/assistant/widget?theme=dark";
+    }
+    var g = el("surfaces");
+    if (!s.files && !s.assistant) { g.hidden = true; }
+    else if (!s.files || !s.assistant) { g.className = "grid one"; }
+  }
+
+  // ---- Calendar. Read-only, and honest when there is nothing behind
+  // it: a calendar card showing invented events on a wall tablet is
+  // worse than one that says it cannot read the calendar.
+  function renderCalendar(c) {
+    var body = el("cal-body");
+    clear(body);
+    if (c.available) {
+      text("cal-sum", "");
+      body.appendChild(make("p", "empty", "Nothing in the next three days."));
+    } else {
+      text("cal-sum", c.problem || "nothing upcoming");
+      body.appendChild(make("p", "problem", c.problem || "Can't reach the calendars right now"));
+    }
+  }
+
+  // ---- Today at home.
+  function renderActivity(c) {
+    var box = el("activity");
+    clear(box);
+    if (!c.available) {
+      box.appendChild(make("p", "problem", c.problem || "Can't load today's activity."));
+      return;
+    }
+    if (!c.rows.length) {
+      box.appendChild(make("p", "empty", "Nothing yet today."));
+      return;
+    }
+    c.rows.forEach(function (r) {
+      var row = make("div", "row");
+      row.appendChild(make("span", "dot " + (r.tone || "")));
+      row.appendChild(make("span", null, r.sentence));
+      row.appendChild(make("span", "when tnum", when(r.at)));
+      box.appendChild(row);
+    });
+  }
+
+  // ---- Notifications. Two rows at a time, so the card's height is
+  // fixed whatever the backlog.
+  function renderNotifications(c) {
+    var body = el("notif-body");
+    clear(body);
+    if (!c.available) {
+      text("notif-sum", "");
+      body.appendChild(make("p", "problem", c.problem || "Can't reach notifications"));
+      return;
+    }
+    text("notif-sum", c.unread ? c.unread + " unread" : "Nothing new.");
+    if (!c.items.length) {
+      body.appendChild(make("p", "empty", "Nothing new."));
+      return;
+    }
+    var shown = c.items.slice(0, 2), rest = c.items.slice(2);
+    shown.forEach(function (n) { body.appendChild(notifRow(n)); });
+    if (rest.length) {
+      var more = make("button", "act", rest.length + " more");
+      more.addEventListener("click", function () {
+        more.remove();
+        rest.forEach(function (n) { body.appendChild(notifRow(n)); });
+        body.appendChild(clearBtn());
+      });
+      body.appendChild(make("div", "btnrow")).appendChild(more);
+    } else {
+      body.appendChild(clearBtn());
+    }
+  }
+
+  function notifRow(n) {
+    var row = make("div", "row");
+    row.appendChild(make("span", "dot " + (n.unread ? "" : "unknown")));
+    var t = make("span", null, n.title);
+    if (!n.unread) { t.className = "muted"; }
+    row.appendChild(t);
+    row.appendChild(make("span", "src", n.source));
+    row.appendChild(make("span", "when tnum", ago(n.at)));
+    return row;
+  }
+
+  // Clear marks this member's own notifications read, and nobody
+  // else's: clearing on the wall tablet must not clear anyone else's
+  // phone.
+  function clearBtn() {
+    var wrap = make("div", "btnrow");
+    var b = make("button", "act", "Clear");
+    b.addEventListener("click", function () {
+      b.disabled = true;
+      fetch("/api/v1/home/notices/clear", { method: "POST" })
+        .then(function () { load(); })
+        .catch(function () { b.disabled = false; });
+    });
+    wrap.appendChild(b);
+    return wrap;
+  }
+
+  // ---- the launcher, and the search that filters it.
+  var allApps = [], appStatus = {}, statusKnown = true, groupOrder = [];
+  function renderLauncher(d) {
+    allApps = d.apps || [];
+    appStatus = d.appStatus || {};
+    statusKnown = !!d.statusKnown;
+    groupOrder = d.groups || [];
+    paintLauncher("");
+  }
+
+  function paintLauncher(term) {
+    var box = el("launcher");
+    clear(box);
+    term = term.trim().toLowerCase();
+    var apps = allApps.filter(function (a) {
+      if (!term) { return true; }
+      return (a.title + " " + (a.desc || "")).toLowerCase().indexOf(term) >= 0;
+    });
+    if (!apps.length) {
+      // It does not offer a web search. This box searches the
+      // household, and silently becoming an internet search box would
+      // be a privacy surprise.
+      box.appendChild(make("p", "empty", "Nothing here matches " + term));
+      return;
+    }
+    if (!statusKnown) {
+      // Not a grid of red dots, which would read as a total outage.
+      box.appendChild(make("p", "muted", "Can't check which apps are up"));
+    }
+    groupOrder.forEach(function (group) {
+      var inGroup = apps.filter(function (a) { return a.group === group; });
+      // A group with no services is omitted, not shown empty.
+      if (!inGroup.length) { return; }
+      var sec = make("section");
+      sec.style.marginBottom = "var(--space-6)";
+      sec.appendChild(make("h2", "hd", group));
+      var grid = make("div", "apps");
+      inGroup.forEach(function (a) { grid.appendChild(appCard(a)); });
+      sec.appendChild(grid);
+      box.appendChild(sec);
+    });
+  }
+
+  function appCard(a) {
+    var card = make("a", "app");
+    card.href = a.href || "#";
+    card.appendChild(make("div", "mono", (a.title || "?").slice(0, 1)));
+    var t = make("div", "t");
+    t.appendChild(make("b", null, a.title));
+    var st = statusKnown ? (appStatus[a.route] || "unknown") : "unknown";
+    // When red, the description is replaced by the reason: a red dot
+    // alone tells a family nothing actionable.
+    var line = st === "bad" ? "Not answering" : (a.desc || "");
+    var sub = make("span", null, line);
+    if (st === "bad") { sub.className = "bad"; }
+    t.appendChild(sub);
+    card.appendChild(t);
+    card.appendChild(make("span", "dot " + (st === "ok" ? "" : st === "bad" ? "failed" : "unknown")));
+    return card;
+  }
+
+  var search = el("search");
+  search.addEventListener("input", function () { paintLauncher(search.value); });
+  search.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { search.value = ""; paintLauncher(""); }
+    if (e.key === "Enter") {
+      var first = document.querySelector("#launcher .app");
+      if (first) { window.location.href = first.href; }
+    }
+  });
+  document.addEventListener("keydown", function (e) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      search.focus();
+    }
+  });
+
+  // ---- the machines. Read-only by design.
+  function renderMachines(m) {
+    var box = el("machines");
+    clear(box);
+
+    var safe = make("section", "card");
+    safe.appendChild(make("h2", "hd", "Safe to lose a machine"));
+    if (!m.available) {
+      safe.appendChild(make("p", "problem", m.problem || "Can't tell when the last backup was."));
+    } else {
+      safe.appendChild(make("div", null, m.lastBackup
+        ? "Last backup finished " + ago(m.lastBackup)
+        : "No backup recorded yet"));
+      // "No restore proved yet" rather than a reassuring blank.
+      var drill = !m.lastDrill ? make("div", "muted", "No restore proved yet")
+        : make("div", m.drillOk ? "muted" : "problem",
+            m.drillOk ? "A restore was proved " + ago(m.lastDrill)
+                      : "The last restore drill failed, " + ago(m.lastDrill));
+      safe.appendChild(drill);
+    }
+    box.appendChild(safe);
+
+    var machine = make("section", "card");
+    // Single-node install: the heading reads "This machine" rather than
+    // naming a node, and this card carries no hostnames or addresses.
+    machine.appendChild(make("h2", "hd", m.nodes > 1 ? "The machines" : "This machine"));
+    if (m.metrics && m.metrics.available === false) {
+      // Never a bar at zero, which reads as an idle machine rather than
+      // a missing reading.
+      machine.appendChild(make("p", "problem", m.metrics.problem || "Can't read machine stats"));
+    }
+    if (m.nodes) {
+      machine.appendChild(make("div", "muted", m.nodes === 1 ? "1 machine" : m.nodes + " machines"));
+    }
+    box.appendChild(machine);
+  }
+
+  fold("needs", el("needs-fold"), el("needs-body"), el("needs-caret"), true);
+  fold("cal", el("cal-fold"), el("cal-body"), el("cal-caret"), false);
+  fold("notif", el("notif-fold"), el("notif-body"), el("notif-caret"), true);
+  load();
+})();
+</script>

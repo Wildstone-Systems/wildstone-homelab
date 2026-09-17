@@ -18,12 +18,14 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
 // filedropSettingsFile is the file the filedrop capability renders, and
@@ -171,12 +173,45 @@ func (s *Server) filedropUpload(_ http.ResponseWriter, r *http.Request, member s
 	if err != nil {
 		return nil, filedropStatus(err), err
 	}
-	// The household's own event stream, not just the audit log: an
-	// upload is a thing that happened in the house, and a routine or a
-	// morning report should be able to see it. Failure to record does
-	// not fail the upload — the file is already stored.
+	// TWO STREAMS, because they answer different questions, and the
+	// upload belongs in both.
+	//
+	// The control-plane stream is the operator's record: who wrote
+	// what, where, and how big, in the same log as every other thing
+	// Wildstone did. It names the file and the namespace because an
+	// operator investigating storage needs exactly that.
 	s.event("filedrop.upload", "", principal.Identity{Name: portalPrincipal, ActingFor: member},
 		fmt.Sprintf("%s uploaded %s to %s (%d bytes)", member, stored.Name, stored.Namespace, stored.Size))
+	// The HOUSEHOLD stream is what the family reads, and it is what
+	// makes "Today at home" show an upload at all — #197's audit record
+	// "is also what feeds Today at home", and until this append existed
+	// it fed only the operator's log. The family surface renders it
+	// through portal.Sentence, so what a member sees is "Sandy added a
+	// file" rather than any of the detail above.
+	//
+	// DELIBERATELY WITHOUT THE FILENAME. A household event is read by
+	// routines, by the morning report and by every member whose
+	// audience scope includes it; the operator's line above is the one
+	// that names the file. A photo called something private should not
+	// become a sentence on a wall tablet because somebody uploaded it.
+	if _, _, err := s.DB.AppendHouseholdEvent(runtimedb.HouseholdEvent{
+		// Addressed by the member and the stored name so a retried
+		// upload of the same file collapses onto one event rather than
+		// reporting the same thing twice.
+		EventID:       "filedrop:" + member + ":" + stored.Namespace + ":" + stored.Name,
+		Source:        "filedrop",
+		Type:          "filedrop.uploaded",
+		Subject:       member,
+		Entity:        stored.Namespace,
+		OccurredAt:    time.Now(),
+		SchemaVersion: 1,
+	}); err != nil {
+		// Failure to record does not fail the upload: the file is
+		// already stored, and a household member holding a phone should
+		// not be told their photo did not arrive because a log write
+		// did not.
+		s.Log.Error("household event append failed", "type", "filedrop.uploaded", "err", err)
+	}
 	return stored, http.StatusCreated, nil
 }
 
