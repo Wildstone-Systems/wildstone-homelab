@@ -37,6 +37,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
 	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
@@ -227,6 +228,10 @@ type homeSummaryResponse struct {
 	Member    string    `json:"member"`
 	Household string    `json:"household"`
 	AccentHue int       `json:"accentHue"`
+	// SignOut is the identity provider's logout URL, or empty when this
+	// deployment has no login page — in which case the page hides the
+	// control rather than offering one that does nothing.
+	SignOut string `json:"signOut,omitempty"`
 	// Surfaces names which household surfaces are installed, so the
 	// page knows whether to draw the Files and Assistant cards at all.
 	// An absent capability must not leave an empty frame on the page.
@@ -271,6 +276,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 		Member:    member,
 		Household: name,
 		AccentHue: hue,
+		SignOut:   signOutURL(desired),
 		Surfaces: map[string]bool{
 			// Asked of desired state, not of configuration: a surface
 			// exists exactly while its capability declares a group,
@@ -823,4 +829,38 @@ func (s *Server) homeClearNotices(_ http.ResponseWriter, _ *http.Request, member
 		cleared++
 	}
 	return map[string]any{"cleared": cleared}, http.StatusOK, nil
+}
+
+// signOutURL is where the Sign out control sends a member, derived from
+// the identity provider's own Route.
+//
+// IT IS NOT A PATH ON THIS SURFACE, which is the bug it fixes. The
+// control was pointing at /logout, and Keystone has no such route — so
+// the one control in the banner answered 404. Ending a session is the
+// identity provider's job: it owns the cookie, and a household surface
+// clearing its own idea of the session would leave the member signed in
+// at the proxy and looking at a page that had forgotten them.
+//
+// Found by the Route whose auth is "portal" — the login page, which is
+// the one Route the proxy serves itself rather than guarding. Under the
+// tailnet posture that address is the node's certified name and this
+// Route's port, which is why it goes through the same posture helper
+// every other link on the page does.
+//
+// An empty answer means this deployment has no login page in desired
+// state, and the page HIDES the control rather than rendering a dead
+// one. A sign-out button that does nothing is worse than none: somebody
+// on a shared tablet will press it and walk away.
+func signOutURL(desired []resource.Resource) string {
+	posture := ingressorigin.Of(desired)
+	for _, r := range desired {
+		if r.Kind != resource.KindRoute || r.Route == nil || r.Route.Host == "" {
+			continue
+		}
+		if r.Route.Auth != "portal" {
+			continue
+		}
+		return "https://" + posture.SiteAddress(r.Route.Host) + "/logout"
+	}
+	return ""
 }

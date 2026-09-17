@@ -511,3 +511,35 @@ func TestTheFrontPageLinksTheDesignSystem(t *testing.T) {
 		t.Error("script-src gained 'self'; a portal page's behaviour belongs in the page")
 	}
 }
+
+// Sign out goes to the identity provider, not to a path on this
+// surface. It used to point at /logout here, which Keystone has no
+// route for, so the one control in the banner answered 404.
+func TestSignOutPointsAtTheIdentityProvider(t *testing.T) {
+	h := homeHarness(t)
+	// No login page in desired state yet: the page must be told to hide
+	// the control rather than render a dead one.
+	if got := h.summary(t, "sandy"); got.SignOut != "" {
+		t.Fatalf("signOut = %q with no login page declared", got.SignOut)
+	}
+	// The login page is the Route the proxy serves itself rather than
+	// guarding — auth: portal.
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: "wildstone.dev/v1", Kind: resource.KindRoute,
+		Metadata: resource.Metadata{Name: "auth", Owner: "capability/identity", Package: "identity", Node: "n1"},
+		Route: &resource.RouteSpec{
+			Host: "auth.example.com", Upstream: "container/authelia:9091",
+			Auth: "portal", Classification: "family_public",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := h.summary(t, "sandy")
+	if !strings.HasPrefix(got.SignOut, "https://") || !strings.HasSuffix(got.SignOut, "/logout") {
+		t.Fatalf("signOut = %q, want an https URL ending in /logout", got.SignOut)
+	}
+	// And it must not be a path on this surface, which is the whole bug.
+	if strings.Contains(got.SignOut, "/home/") || got.SignOut == "/logout" {
+		t.Errorf("signOut = %q, which is this surface rather than the provider", got.SignOut)
+	}
+}

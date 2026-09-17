@@ -92,3 +92,26 @@ func Apps(desired []resource.Resource) []App {
 	}
 	return apps
 }
+
+// DescribeProfile returns the household-language title and one-line
+// description for a package profile, from the same table the launcher
+// renders from.
+//
+// Exported so the Catalog can show a member what a package IS without a
+// second set of prose to keep in step. The table is keyed by CONTAINER
+// name and a profile is usually the same word — "jellyfin", "navidrome",
+// "linkding" — which covers thirty-nine of the fifty-nine packages and
+// almost every one a household could request. The misses are mostly
+// operator-class packages a household surface does not offer at all.
+//
+// ok=false means nothing describes this profile, and a caller must say
+// so rather than invent a sentence: a catalog card that made up what an
+// app does would be the one thing a person deciding whether to ask for
+// it cannot afford.
+func DescribeProfile(profile string) (title, desc string, ok bool) {
+	app, known := homepageApps[profile]
+	if !known {
+		return "", "", false
+	}
+	return app.title, app.description, true
+}

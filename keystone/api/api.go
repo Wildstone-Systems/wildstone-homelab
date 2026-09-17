@@ -554,6 +554,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /activity/{$}", s.portal(surfaceHome, s.portalPage("activity")))
 	mux.Handle("GET /api/v1/activity", s.portal(surfaceHome, s.activityHistory))
 
+	// The Catalog: request, don't install. Sending files a household
+	// event for the owner to act on and proposes no plan — the one
+	// field a plan needs is the machine, and that is the owner's call.
+	mux.Handle("GET /catalog/{$}", s.portal(surfaceHome, s.portalPage("catalog")))
+	mux.Handle("GET /api/v1/catalog", s.portal(surfaceHome, s.catalogList))
+	mux.Handle("GET /api/v1/catalog/requests", s.portal(surfaceHome, s.catalogRequests))
+	mux.Handle("POST /api/v1/catalog/requests", s.portal(surfaceHome, s.catalogRequest))
+
 	// The portal's static design files: the stylesheet, Inter, the
 	// Phosphor glyph font and the app icon set. Shared by every
 	// household surface, so the door accepts membership of any of them

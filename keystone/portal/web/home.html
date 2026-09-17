@@ -104,7 +104,7 @@
       </div>
       <div class="spread">
         <div class="avatar" id="initials" title="Signed in"></div>
-        <a class="hbtn hbtn-ghost" href="/logout" style="font-size: 12.5px">Sign out</a>
+        <a class="hbtn hbtn-ghost" id="signout" href="#" style="font-size: 12.5px" hidden>Sign out</a>
       </div>
     </div>
   </header>
@@ -417,6 +417,16 @@
     text("household", d.household || "Home");
     text("initials", initialsOf(member));
     el("initials").title = member + " — signed in";
+    // Sign out goes to the identity provider, which owns the session.
+    // It was pointing at /logout on this surface, which Keystone has no
+    // route for — so the one control in the banner answered 404.
+    // Hidden when desired state has no login page: a control that does
+    // nothing is worse than none, because somebody on a shared tablet
+    // will press it and walk away believing they are signed out.
+    if (d.signOut) {
+      el("signout").href = d.signOut;
+      el("signout").hidden = false;
+    }
     text("greeting", greetingFor(asOf.getHours()) + (member ? ", " + member : ""));
     document.title = d.household || "Home";
     el("photo").style.backgroundImage = "url('/portal/assets/banner-default.webp')";
