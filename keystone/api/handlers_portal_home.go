@@ -555,15 +555,54 @@ func (s *Server) homeNotifications(member string) notificationsCard {
 // invented events on a family's wall tablet is worse than one that says
 // it cannot read the calendar: somebody will believe it.
 func (s *Server) homeCalendar(desired []resource.Resource) homeCard {
+	if calendarServer(desired) {
+		return homeCard{Problem: "Can't reach the calendars right now"}
+	}
+	return homeCard{Problem: "No calendar is set up yet."}
+}
+
+// calendarServer reports whether this household runs a CalDAV server.
+//
+// Found by the CONTAINER rather than by the capability, which looks
+// wrong until you check a real install: davis ships inside the mail
+// capability's roundcube package, so the Route that serves the
+// household's calendars is owned by capability/mail. A check for
+// capability "calendar" reads better and answers no on a household that
+// demonstrably has one.
+//
+// The container name is the honest key here because it is what actually
+// speaks CalDAV. If a future profile serves calendars from something
+// else, this list is the one place that has to learn its name — and
+// until it does, the card says "no calendar is set up yet", which is
+// wrong in the safe direction: it promises nothing it cannot show.
+func calendarServer(desired []resource.Resource) bool {
 	for _, r := range desired {
 		if r.Kind != resource.KindRoute || r.Route == nil {
 			continue
 		}
-		if strings.TrimPrefix(r.Metadata.Owner, "capability/") == "calendar" {
-			return homeCard{Problem: "Can't reach the calendars right now"}
+		switch upstreamContainer(r.Route.Upstream) {
+		case "davis", "radicale", "baikal":
+			return true
 		}
 	}
-	return homeCard{Problem: "No calendar is set up yet."}
+	return false
+}
+
+// upstreamContainer is the container half of "container/<name>:<port>",
+// or "" for a Route that names an address.
+//
+// A local copy of reconcile's unexported helper rather than an export of
+// it: this is three lines, and widening that package's API so one
+// household card can ask a question about a string is the wrong trade.
+func upstreamContainer(upstream string) string {
+	if !strings.HasPrefix(upstream, "container/") {
+		return ""
+	}
+	addr := strings.TrimPrefix(upstream, "container/")
+	if i := strings.IndexByte(addr, ':'); i >= 0 {
+		return addr[:i]
+	}
+	return addr
 }
 
 // homeApps is the launcher, joined to what Keystone has observed.

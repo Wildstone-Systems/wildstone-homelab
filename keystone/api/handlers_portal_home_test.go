@@ -323,3 +323,34 @@ func TestTheMachinesCardSaysWhatItCannotRead(t *testing.T) {
 		t.Error("a restore is claimed proved with no drill in the ledger")
 	}
 }
+
+// The household's calendar server is found by the container that speaks
+// CalDAV, not by a capability called "calendar".
+//
+// This is a real install's shape: davis ships inside the mail
+// capability's roundcube package, so a check for capability/calendar
+// answers "no calendar" on a household that has one in front of it.
+func TestTheCalendarIsFoundByTheServerThatSpeaksCaldav(t *testing.T) {
+	h := homeHarness(t)
+	if got := h.summary(t, "sandy"); got.Calendar.Problem != "No calendar is set up yet." {
+		t.Fatalf("with no calendar: problem = %q", got.Calendar.Problem)
+	}
+	// davis, owned by the MAIL capability, which is where it really lives.
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: "wildstone.dev/v1", Kind: resource.KindRoute,
+		Metadata: resource.Metadata{Name: "calendar", Owner: "capability/mail", Package: "mail-roundcube", Node: "n1"},
+		Route: &resource.RouteSpec{
+			Host: "calendar.example.com", Upstream: "container/davis:9000",
+			Auth: "none", Classification: "family_private",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := h.summary(t, "sandy")
+	if got.Calendar.Available {
+		t.Error("the card claims to have read a calendar it cannot read yet")
+	}
+	if got.Calendar.Problem != "Can't reach the calendars right now" {
+		t.Errorf("problem = %q, want the unreachable copy — the household HAS a calendar server", got.Calendar.Problem)
+	}
+}
