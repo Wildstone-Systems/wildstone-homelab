@@ -485,3 +485,122 @@ func (s *FileStore) Open(nsKey, name string) (*os.File, os.FileInfo, error) {
 	}
 	return f, info, nil
 }
+
+// Delete removes one file from a namespace.
+//
+// IT IS IMMEDIATE, AND THAT IS WHY THE PAGE SAYS SO. The design's
+// delete dialog offers "items are kept 30 days before the storage is
+// reclaimed", which is a good promise and a different feature: it needs
+// a trash directory, a sweeper with a clock, and a restore path, none
+// of which exist here. Shipping that sentence over this function would
+// be telling a household their photos are recoverable when they are
+// not — the one class of lie a confirmation dialog must never tell. The
+// page states the truth instead, and the promise stays on the list.
+//
+// A directory is refused rather than removed. The namespaces are flat
+// today, so any directory in one was put there by something other than
+// this surface, and RemoveAll on a caller-named path is not a power a
+// household dashboard should hold.
+func (s *FileStore) Delete(nsKey, name string) error {
+	ns, err := NamespaceFor(nsKey)
+	if err != nil {
+		return err
+	}
+	// The same test Open makes: a name that is not already its own safe
+	// form is not a name this surface wrote, and it is not resolved.
+	if name == "" || SafeName(name) != name {
+		return ErrNotFound
+	}
+	root, err := s.open(ns)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	info, err := root.Lstat(name)
+	if err != nil {
+		return ErrNotFound
+	}
+	// Lstat, not Stat, so a symlink is judged as a symlink: one pointing
+	// at a directory outside the namespace would otherwise look like a
+	// regular file's sibling and be removed on its behalf.
+	if !info.Mode().IsRegular() {
+		return ErrNotFound
+	}
+	if err := root.Remove(name); err != nil {
+		return fmt.Errorf("portal: deleting %s: %w", name, err)
+	}
+	return nil
+}
+
+// Rename changes one file's name within its namespace.
+//
+// WITHIN, and there is no argument for the destination namespace: a
+// rename that could also move something is two operations wearing one
+// name, and the one that crosses a boundary is the one that wants its
+// own thought about authority. The design's Move control is absent from
+// the page for the same reason it is absent here — better three fewer
+// letters than a control that half-works.
+//
+// The new name goes through SafeName like an upload's does, and the
+// result is reported, because a person who typed "holiday/2026.jpg" and
+// got "holiday_2026.jpg" should see that rather than wonder.
+func (s *FileStore) Rename(nsKey, from, to string) (string, error) {
+	ns, err := NamespaceFor(nsKey)
+	if err != nil {
+		return "", err
+	}
+	if from == "" || SafeName(from) != from {
+		return "", ErrNotFound
+	}
+	// SafeName's last resort is the literal "upload", which is the right
+	// answer for an upload — the bytes have arrived and must land
+	// somewhere — and the wrong one here. A person who cleared the box
+	// and pressed Rename would have their file renamed to "upload"; the
+	// honest response to "no name" is to ask again.
+	if !hasSubstance(to) {
+		return "", fmt.Errorf("portal: a file needs a name with at least one letter or number in it")
+	}
+	safe := SafeName(to)
+	root, err := s.open(ns)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+
+	info, err := root.Lstat(from)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", ErrNotFound
+	}
+	if safe == from {
+		return safe, nil
+	}
+	// Refused rather than overwriting, and refused rather than
+	// silently suffixed: an upload collision is somebody adding a
+	// second thing and freeName is right there, but a RENAME collision
+	// is somebody about to lose a file they did not name in this
+	// request.
+	if _, err := root.Lstat(safe); err == nil {
+		return "", fmt.Errorf("portal: %s is already there", safe)
+	}
+	if err := root.Rename(from, safe); err != nil {
+		return "", fmt.Errorf("portal: renaming %s: %w", from, err)
+	}
+	return safe, nil
+}
+
+// hasSubstance reports whether an offered name contains anything a
+// person would recognise as a name, rather than only spaces, dots and
+// punctuation that normalisation would throw away.
+//
+// It exists because SafeName is deliberately total — every input maps to
+// some usable filename — and a rename needs the one question SafeName
+// does not answer: was there a name here at all.
+func hasSubstance(offered string) bool {
+	for _, r := range offered {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
+}

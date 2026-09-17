@@ -434,3 +434,90 @@ func TestTheAssistantSurfaceIsHouseholdOnly(t *testing.T) {
 		t.Errorf("a member granted nothing sees %+v", roster.Agents)
 	}
 }
+
+// The manager's two writes, through the door.
+func TestTheFilesManagerDeletesAndRenamesThroughTheDoor(t *testing.T) {
+	h, root := portalHarness(t)
+	if _, got := h.upload("sandy", "shared", "holiday.jpg", "bytes"); got == nil {
+		t.Fatal("upload failed")
+	}
+
+	// Rename, and the normalised result comes back.
+	res := h.member(http.MethodPost,
+		"/api/v1/filedrop/rename?namespace=shared&name=holiday.jpg&to="+url.QueryEscape("../summer trip.jpg"),
+		"sandy", "filedrop_users", nil, "")
+	var renamed struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&renamed); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if strings.ContainsAny(renamed.Name, "/\\") {
+		t.Fatalf("renamed to %q, which is a path", renamed.Name)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Shared", renamed.Name)); err != nil {
+		t.Fatalf("%q is not in the namespace: %v", renamed.Name, err)
+	}
+
+	// A member not in the group cannot delete, and this is the
+	// acceptance criterion #197 states: not by altering the request.
+	res = h.member(http.MethodPost,
+		"/api/v1/filedrop/delete?namespace=shared&name="+url.QueryEscape(renamed.Name),
+		"sandy", "media_users", nil, "")
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Errorf("delete without the group: status %d, want 403", res.StatusCode)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Shared", renamed.Name)); err != nil {
+		t.Errorf("the file was deleted by a refused request: %v", err)
+	}
+
+	// And with it, it goes.
+	res = h.member(http.MethodPost,
+		"/api/v1/filedrop/delete?namespace=shared&name="+url.QueryEscape(renamed.Name),
+		"sandy", "filedrop_users", nil, "")
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("delete: status %d", res.StatusCode)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Shared", renamed.Name)); !os.IsNotExist(err) {
+		t.Errorf("still on disk: %v", err)
+	}
+}
+
+// Deleting is a thing that happened in the house; renaming is a thing
+// that happened to a filename. Only one belongs in "Today at home".
+func TestOnlyTheConsequentialFileWritesReachTheHouseholdStream(t *testing.T) {
+	h, _ := portalHarness(t)
+	h.upload("sandy", "shared", "receipt.pdf", "bytes")
+	h.member(http.MethodPost, "/api/v1/filedrop/rename?namespace=shared&name=receipt.pdf&to=invoice.pdf",
+		"sandy", "filedrop_users", nil, "").Body.Close()
+	h.member(http.MethodPost, "/api/v1/filedrop/delete?namespace=shared&name=invoice.pdf",
+		"sandy", "filedrop_users", nil, "").Body.Close()
+
+	events, err := h.s.DB.HouseholdEventsAfter(0, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var types []string
+	for _, e := range events {
+		types = append(types, e.Type)
+	}
+	joined := strings.Join(types, ",")
+	for _, want := range []string{"filedrop.uploaded", "filedrop.deleted"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("%s is not in the household stream: %v", want, types)
+		}
+	}
+	if strings.Contains(joined, "filedrop.renamed") {
+		t.Errorf("a rename reached the household stream: %v", types)
+	}
+	// And no event carries the filename: the operator's log is the one
+	// that names the file.
+	for _, e := range events {
+		if strings.Contains(string(e.Payload), "invoice") || strings.Contains(e.Entity, "invoice") {
+			t.Errorf("a household event carries the filename: %s %s", e.Type, e.Entity)
+		}
+	}
+}

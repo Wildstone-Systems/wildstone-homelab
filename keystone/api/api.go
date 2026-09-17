@@ -524,6 +524,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/filedrop/list", s.portal(surfaceFiles, s.filedropList))
 	mux.Handle("GET /api/v1/filedrop/file", s.portal(surfaceFiles, s.filedropFile))
 	mux.Handle("POST /api/v1/filedrop/upload", s.portal(surfaceFiles, s.filedropUpload))
+	mux.Handle("POST /api/v1/filedrop/delete", s.portal(surfaceFiles, s.filedropDelete))
+	mux.Handle("POST /api/v1/filedrop/rename", s.portal(surfaceFiles, s.filedropRename))
 
 	mux.Handle("GET /assistant/{$}", s.portal(surfaceAssistant, s.portalPage("assistant")))
 	mux.Handle("GET /assistant/widget", s.portal(surfaceAssistant, s.portalPage("assistant-widget")))

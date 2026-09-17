@@ -342,3 +342,116 @@ func TestAnUploadIsVisibleToTheApplicationsThatShareTheRoot(t *testing.T) {
 		t.Errorf("the uploaded file is %v: only root can read it", file.Mode().Perm())
 	}
 }
+
+// Delete removes a file, and refuses anything that is not one.
+func TestDeleteRemovesAFileAndRefusesTheRest(t *testing.T) {
+	root := t.TempDir()
+	s := &FileStore{Root: root}
+	if _, err := s.Save("shared", "note.txt", strings.NewReader("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete("shared", "note.txt"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if items, _ := s.List("shared"); len(items) != 0 {
+		t.Fatalf("still listed: %v", items)
+	}
+	// Gone is not found, not an error about it being gone.
+	if err := s.Delete("shared", "note.txt"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second delete: %v, want ErrNotFound", err)
+	}
+	// A destination that is not in the table is refused, never coerced.
+	if err := s.Delete("etc", "note.txt"); !errors.Is(err, ErrNamespace) {
+		t.Errorf("bad namespace: %v, want ErrNamespace", err)
+	}
+	// Nothing a caller can write in the name field leaves the namespace.
+	for _, name := range []string{"../escape", "/etc/passwd", "..", ".", "", "sub/file"} {
+		if err := s.Delete("shared", name); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Delete(%q) = %v, want ErrNotFound", name, err)
+		}
+	}
+}
+
+// A directory is not a file, and this surface does not remove trees.
+func TestDeleteRefusesADirectory(t *testing.T) {
+	root := t.TempDir()
+	s := &FileStore{Root: root}
+	// Force the namespace into existence, then put a directory in it.
+	if _, err := s.Save("shared", "seed.txt", strings.NewReader("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "Shared", "holiday"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete("shared", "holiday"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Delete(directory) = %v, want ErrNotFound", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Shared", "holiday")); err != nil {
+		t.Errorf("the directory was removed anyway: %v", err)
+	}
+}
+
+// A symlink planted in the tree is judged as a symlink, so deleting it
+// cannot be made to reach what it points at.
+func TestDeleteWillNotFollowASymlinkOut(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "precious.txt")
+	if err := os.WriteFile(outside, []byte("keep me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &FileStore{Root: root}
+	if _, err := s.Save("shared", "seed.txt", strings.NewReader("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "Shared", "link.txt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := s.Delete("shared", "link.txt"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Delete(symlink) = %v, want ErrNotFound", err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("the file outside the namespace is gone: %v", err)
+	}
+}
+
+// Rename normalises the new name, stays inside the namespace, and
+// refuses to overwrite.
+func TestRenameNormalisesAndRefusesToOverwrite(t *testing.T) {
+	root := t.TempDir()
+	s := &FileStore{Root: root}
+	for _, n := range []string{"one.txt", "two.txt"} {
+		if _, err := s.Save("shared", n, strings.NewReader("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A name carrying a path is normalised to a name, not honoured as a
+	// path: this is the whole reason a caller never names a location.
+	got, err := s.Rename("shared", "one.txt", "../../escaped.txt")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if strings.ContainsAny(got, "/\\") || got == "../../escaped.txt" {
+		t.Fatalf("rename produced %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Shared", got)); err != nil {
+		t.Errorf("%q is not in the namespace: %v", got, err)
+	}
+
+	// Renaming onto something that exists is refused rather than
+	// overwriting: a collision here is somebody about to lose a file
+	// they did not name in the request.
+	if _, err := s.Rename("shared", got, "two.txt"); err == nil {
+		t.Error("rename onto an existing file was allowed")
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "Shared", "two.txt")); string(b) != "x" {
+		t.Error("two.txt was overwritten")
+	}
+	// A source that is not there, or is not a name this surface wrote.
+	if _, err := s.Rename("shared", "../two.txt", "three.txt"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("traversal source: %v, want ErrNotFound", err)
+	}
+	// An empty new name is not a name.
+	if _, err := s.Rename("shared", "two.txt", "   "); err == nil {
+		t.Error("blank rename was allowed")
+	}
+}

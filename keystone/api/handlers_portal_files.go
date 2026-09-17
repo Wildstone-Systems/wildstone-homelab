@@ -266,3 +266,65 @@ func filedropStatus(err error) int {
 		return http.StatusInternalServerError
 	}
 }
+
+// filedropDelete removes one file.
+//
+// A POST rather than a DELETE, matching every other write on this
+// surface: the portal's pages are plain documents with no XHR helper
+// library, and one verb across the whole surface is one fewer thing for
+// a reviewer to check when asking "can this be triggered by a link".
+// A GET could be; a POST from another origin cannot read the reply, and
+// the CSP here sets form-action 'none' so the page's own markup cannot
+// post anywhere either.
+func (s *Server) filedropDelete(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
+	store := filedropStore(desired)
+	if !store.Ready() {
+		return nil, http.StatusServiceUnavailable,
+			fmt.Errorf("no storage root is configured for this household's files")
+	}
+	ns := r.URL.Query().Get("namespace")
+	name := r.URL.Query().Get("name")
+	if err := store.Delete(ns, name); err != nil {
+		return nil, filedropStatus(err), err
+	}
+	// The operator's record names the file; the household's does not.
+	s.event("filedrop.delete", "", principal.Identity{Name: portalPrincipal, ActingFor: member},
+		fmt.Sprintf("%s deleted %s from %s", member, name, ns))
+	if _, _, err := s.DB.AppendHouseholdEvent(runtimedb.HouseholdEvent{
+		// Not deduplicated on the name: deleting, re-uploading and
+		// deleting again is three things that happened, not one.
+		EventID:       fmt.Sprintf("filedrop-del:%s:%s:%d", member, ns, time.Now().UnixNano()),
+		Source:        "filedrop",
+		Type:          "filedrop.deleted",
+		Subject:       member,
+		Entity:        ns,
+		OccurredAt:    time.Now(),
+		SchemaVersion: 1,
+	}); err != nil {
+		s.Log.Error("household event append failed", "type", "filedrop.deleted", "err", err)
+	}
+	return map[string]any{"deleted": name, "namespace": ns}, http.StatusOK, nil
+}
+
+// filedropRename changes one file's name inside its namespace.
+func (s *Server) filedropRename(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
+	store := filedropStore(desired)
+	if !store.Ready() {
+		return nil, http.StatusServiceUnavailable,
+			fmt.Errorf("no storage root is configured for this household's files")
+	}
+	ns := r.URL.Query().Get("namespace")
+	from := r.URL.Query().Get("name")
+	to := r.URL.Query().Get("to")
+	final, err := store.Rename(ns, from, to)
+	if err != nil {
+		return nil, filedropStatus(err), err
+	}
+	s.event("filedrop.rename", "", principal.Identity{Name: portalPrincipal, ActingFor: member},
+		fmt.Sprintf("%s renamed %s to %s in %s", member, from, final, ns))
+	// No household event: a rename is not a thing that happened in the
+	// house, it is a thing that happened to a filename. "Today at home"
+	// carrying it would push out an arrival or a routine for a row
+	// nobody in the family is served by.
+	return map[string]any{"name": final, "namespace": ns, "renamed": final != to}, http.StatusOK, nil
+}
