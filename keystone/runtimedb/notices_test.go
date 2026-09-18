@@ -43,7 +43,7 @@ func midday() time.Time { return atHour(12) }
 // A person's own window overrides the household's; without one they
 // follow the household.
 func TestPerPersonQuietHoursOverride(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "sam", "mika")
 
 	// Sam follows the household: 3am is quiet.
 	held, err := db.RaiseNotice(NoticeRequest{
@@ -86,7 +86,7 @@ func TestPerPersonQuietHoursOverride(t *testing.T) {
 // An urgent exception is administrator-declared and can be refused by
 // the person it would wake.
 func TestUrgentExceptionIsDeclaredNotClaimed(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "sam")
 
 	// An undeclared kind is not urgent, however it is named.
 	held, err := db.RaiseNotice(NoticeRequest{
@@ -169,7 +169,7 @@ func TestRelevanceThreshold(t *testing.T) {
 
 // An unassigned notice goes to the configured administrator.
 func TestUnassignedNoticeRoutesToTheAdmin(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	got, err := db.RaiseNotice(NoticeRequest{
 		Kind: "drift", DedupeKey: "n1", AdminFallback: "mika",
 	}, household(), midday())
@@ -198,6 +198,9 @@ func TestNoticeStateSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Reopened by path rather than through openWith, so the cast is
+	// recorded here.
+	record(t, db, "sam", "mika")
 	first, err := db.RaiseNotice(NoticeRequest{
 		Kind: "task-stalled", Recipient: "sam", DedupeKey: "task:bt-1",
 	}, household(), night())
@@ -249,7 +252,7 @@ func TestNoticeStateSurvivesRestart(t *testing.T) {
 
 // Delivered, acknowledged and answered are three different facts.
 func TestDeliveryAcknowledgementAndAnswerAreDistinct(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "sam")
 	got, err := db.RaiseNotice(NoticeRequest{
 		Kind: "approval", Recipient: "sam", DedupeKey: "n1", Asks: true,
 	}, household(), midday())
@@ -281,7 +284,7 @@ func TestDeliveryAcknowledgementAndAnswerAreDistinct(t *testing.T) {
 
 // Ambiguity is not consent, and an expired question authorizes nothing.
 func TestAmbiguousAndExpiredRepliesAuthorizeNothing(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "sam")
 
 	t.Run("ambiguous", func(t *testing.T) {
 		got, err := db.RaiseNotice(NoticeRequest{
@@ -352,7 +355,7 @@ func TestAmbiguousAndExpiredRepliesAuthorizeNothing(t *testing.T) {
 // visible as undelivered and does not become an approval the task is
 // waiting on.
 func TestExpiredNoticeDoesNotReopenACompletedTask(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "sam")
 	taskID, err := db.InsertButlerTask(ButlerTask{
 		Kind: ButlerTaskConversation, Author: "sam", Owner: "sam",
 		Surface: ButlerSurfaceFamily, Profile: ProfileHousehold,

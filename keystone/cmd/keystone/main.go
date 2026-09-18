@@ -1000,14 +1000,25 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			// (ADR-W026 A8).
 			Enabled: func() (bool, error) { return apiSrv.CapabilityEnabled(capName) },
 			Lookup: func(_ context.Context, member string) (domestic.ChatRecipient, error) {
-				target, bindingID, lerr := apiSrv.ChatRecipientFor(transport, member)
+				target, bindingID, connection, lerr := apiSrv.ChatRecipientFor(transport, member)
 				if lerr != nil {
 					return domestic.ChatRecipient{}, lerr
 				}
-				return domestic.ChatRecipient{Transport: transport, Target: target, BindingID: bindingID}, nil
+				return domestic.ChatRecipient{
+					Transport: transport, Target: target,
+					BindingID: bindingID, Connection: connection,
+				}, nil
 			},
 			Ask: func(ctx context.Context, r domestic.ChatRecipient, body, correlationID, rule, subject string) (int64, error) {
-				return apiSrv.AskOverChat(ctx, r.Transport, r.Target, r.BindingID, body, correlationID, rule, subject)
+				// The Connection the recipient was found on: a rule's
+				// message leaves by the same Agent's bot the person is
+				// admitted to, rather than by whichever bot serves the
+				// transport (ADR-W033 B7).
+				at, aerr := db.ChatConnectionBySeq(r.Connection)
+				if aerr != nil {
+					return 0, aerr
+				}
+				return apiSrv.AskOverChat(ctx, at, r.Target, r.BindingID, body, correlationID, rule, subject)
 			},
 		})
 	}

@@ -25,6 +25,12 @@ import (
 func TestQuarantineHoldsEveryButlerFacingPath(t *testing.T) {
 	db := open(t)
 	const admin = "mika"
+	if err := db.UpsertModel(Model{
+		Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", ProviderModel: "llama",
+		Readiness: ModelReady, Enabled: true,
+	}, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, m := range []struct{ name, role string }{
 		{admin, RoleOwner}, {"sam", RoleMember},
@@ -39,6 +45,7 @@ func TestQuarantineHoldsEveryButlerFacingPath(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	conn := connect(t, db, "sandy", "telegram", ButlerSurfaceFamily)
 
 	// State laid down BEFORE the restore, so the gated calls below have
 	// something real to act on and are refused for being gated rather
@@ -147,7 +154,7 @@ func TestQuarantineHoldsEveryButlerFacingPath(t *testing.T) {
 		}},
 		{"EnqueueChatOutbound(push)", GateDelivery, func() error {
 			_, err := db.EnqueueChatOutbound(ChatOutbound{
-				Surface: ButlerSurfaceFamily, Transport: "telegram", Target: "sam",
+				Connection: conn.Seq, Target: "sam",
 				Body: "the bins are due", Kind: "push", DedupeKey: "q-o-1",
 			})
 			return err
@@ -167,7 +174,7 @@ func TestQuarantineHoldsEveryButlerFacingPath(t *testing.T) {
 	// worse failure than the one quarantine is preventing, and it tells
 	// them nothing about why.
 	if _, err := db.EnqueueChatOutbound(ChatOutbound{
-		Surface: ButlerSurfaceFamily, Transport: "telegram", Target: "sam",
+		Connection: conn.Seq, Target: "sam",
 		Body: "the database was restored and is being reconciled", Kind: "reply",
 		DedupeKey: "q-o-2",
 	}); err != nil {
@@ -235,7 +242,7 @@ func TestQuarantineHoldsEveryButlerFacingPath(t *testing.T) {
 		}},
 		{"EnqueueChatOutbound(push)", func() error {
 			_, err := db.EnqueueChatOutbound(ChatOutbound{
-				Surface: ButlerSurfaceFamily, Transport: "telegram", Target: admin,
+				Connection: conn.Seq, Target: admin,
 				Body: "the bins are due", Kind: "push", DedupeKey: "q-o-3",
 			})
 			return err

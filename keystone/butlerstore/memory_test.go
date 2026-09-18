@@ -23,6 +23,7 @@ func memoryDB(t *testing.T) *runtimedb.DB {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	record(t, db, "mika", "sam", "tom")
 	return db
 }
 

@@ -402,7 +402,7 @@ func TestEditingAScopedRecordKeepsItScoped(t *testing.T) {
 	derived, err := db.DeriveMemory(MemoryRecord{
 		Kind: MemoryInference, Subject: "sam", Content: "sam should avoid stairs",
 		Audience: ButlerAudienceShared, PermissionLabel: "household", Owner: "household",
-		Author: "butler", SourceKind: "derivation", SourceID: "e-2",
+		Author: "sam", SourceKind: "derivation", SourceID: "e-2",
 	}, []int64{corrected})
 	if err != nil {
 		t.Fatal(err)

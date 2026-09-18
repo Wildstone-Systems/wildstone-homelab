@@ -101,6 +101,20 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 	if err != nil {
 		return result, err
 	}
+	// Ownership moves to a Person, so the administrator taking it on
+	// has to be one. Resolved once, before any transfer, so a bad
+	// administrator fails before half the work has moved — and resolved
+	// only when there IS shared work, because an offboarding with
+	// nothing to hand over does not need somebody to hand it to. A
+	// household whose operator is not itself a declared person can
+	// still offboard a member who owns nothing shared.
+	adminPerson := ""
+	if anySharedWork(tasks) {
+		var err error
+		if adminPerson, err = resolvePersonID(db.sql, administrator); err != nil {
+			return result, fmt.Errorf("runtimedb: transferring shared work: the administrator %w", err)
+		}
+	}
 	for _, t := range tasks {
 		switch t.State {
 		case ButlerTaskPending, ButlerTaskRunning, ButlerTaskWaiting:
@@ -111,8 +125,8 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 			// Operational ownership moves; the author does not. The
 			// schema enforces the second half.
 			if _, err := db.sql.Exec(
-				`UPDATE butler_tasks SET owner = ?, updated_at = ? WHERE seq = ?`,
-				administrator, now(), t.Seq); err != nil {
+				`UPDATE butler_tasks SET owner_person_id = ?, updated_at = ? WHERE seq = ?`,
+				adminPerson, now(), t.Seq); err != nil {
 				return result, fmt.Errorf("runtimedb: transferring shared work: %w", err)
 			}
 			// It still pauses: A4 says transferred work waits for grant
@@ -168,7 +182,9 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 	//    longer has access, and anything queued is marked rather than
 	//    dropped, so the record shows they were never told.
 	if _, err := db.sql.Exec(
-		`UPDATE notices SET undelivered_at = ? WHERE recipient = ? AND delivered_at = '' AND undelivered_at = ''`,
+		`UPDATE notices SET undelivered_at = ?
+		 WHERE recipient_person_id = (SELECT person_id FROM butler_members WHERE member = ?)
+		   AND delivered_at = '' AND undelivered_at = ''`,
 		now(), member); err != nil {
 		return result, fmt.Errorf("runtimedb: stopping notices: %w", err)
 	}
@@ -257,9 +273,13 @@ func (db *DB) Journal(kind, id, action, actor, detail string) error {
 }
 
 func (db *DB) recordOffboarding(member, actor, store string, affected int, detail string) error {
-	_, err := db.sql.Exec(
-		`INSERT INTO offboarding_records (member, at, actor, store, affected, detail)
-		 VALUES (?, ?, ?, ?, ?, ?)`, member, now(), actor, store, affected, detail)
+	person, err := resolvePersonID(db.sql, member)
+	if err != nil {
+		return fmt.Errorf("runtimedb: recording offboarding: %w", err)
+	}
+	_, err = db.sql.Exec(
+		`INSERT INTO offboarding_records (person_id, at, actor, store, affected, detail)
+		 VALUES (?, ?, ?, ?, ?, ?)`, person, now(), actor, store, affected, detail)
 	if err != nil {
 		return fmt.Errorf("runtimedb: recording offboarding: %w", err)
 	}
@@ -279,8 +299,9 @@ type OffboardingRecord struct {
 // ListOffboardingRecords returns what an offboarding did.
 func (db *DB) ListOffboardingRecords(member string) ([]OffboardingRecord, error) {
 	rows, err := db.sql.Query(
-		`SELECT member, at, actor, store, affected, detail FROM offboarding_records
-		 WHERE member = ? ORDER BY seq`, member)
+		`SELECT p.member, o.at, o.actor, o.store, o.affected, o.detail
+		 FROM offboarding_records o JOIN butler_members p ON p.person_id = o.person_id
+		 WHERE p.member = ? ORDER BY o.seq`, member)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing offboarding records: %w", err)
 	}
@@ -298,4 +319,26 @@ func (db *DB) ListOffboardingRecords(member string) ([]OffboardingRecord, error)
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// anySharedWork reports whether any of these tasks is shared work still
+// in flight — the only kind an offboarding transfers.
+//
+// It repeats the loop's own two conditions rather than being folded
+// into it, because the administrator has to resolve BEFORE the first
+// transfer: discovering a bad one partway through would leave some work
+// moved and the rest not, which is the state this function exists to
+// avoid.
+func anySharedWork(tasks []ButlerTask) bool {
+	for _, t := range tasks {
+		switch t.State {
+		case ButlerTaskPending, ButlerTaskRunning, ButlerTaskWaiting:
+		default:
+			continue
+		}
+		if t.Audience == ButlerAudienceShared {
+			return true
+		}
+	}
+	return false
 }

@@ -50,6 +50,42 @@ func (h *harness) ensureChatPrereqs(t *testing.T, surface, identity, transport s
 		}
 		changed = true
 	}
+	// The Person the Connection admits (ADR-W033 B9, design §8.3). An
+	// admin-surface Connection is an Owner Agent's reach, so the Person
+	// it admits is an Owner; a family one is an ordinary Member.
+	//
+	// This is the fixture the slice changed. It used to name a Keystone
+	// principal on the admin surface — `op`, `root-admin` — because
+	// chatclaim.go required one. A credential is not a Person, and a
+	// chat account reaching an Owner Agent as one had nobody behind it.
+	role := runtimedb.RoleMember
+	if surface == "admin" {
+		role = runtimedb.RoleOwner
+	}
+	m, err := h.s.DB.GetButlerMember(identity)
+	if err != nil {
+		if err := h.s.DB.RecordButlerMember(identity, role, "", ""); err != nil {
+			t.Fatalf("recording %q: %v", identity, err)
+		}
+		m, err = h.s.DB.GetButlerMember(identity)
+		if err != nil {
+			t.Fatalf("reading %q back: %v", identity, err)
+		}
+	}
+	// RecordButlerMember never changes a role — crossing the Owner
+	// boundary is its own audited act — so an existing Member named for
+	// an admin-surface Connection is promoted through the path that
+	// records it.
+	if role == runtimedb.RoleOwner && m.Role != runtimedb.RoleOwner {
+		if err := h.s.DB.SetButlerMemberRole(identity, runtimedb.RoleOwner, "root-admin"); err != nil {
+			t.Fatalf("promoting %q: %v", identity, err)
+		}
+	}
+	if !m.Active() {
+		if err := h.s.DB.AdmitButlerMember(identity, "root-admin"); err != nil {
+			t.Fatalf("admitting %q: %v", identity, err)
+		}
+	}
 	if surface == "family" && !haveMember {
 		if err := h.s.State.Put(resource.Resource{
 			ApiVersion: resource.ApiVersion, Kind: resource.KindLdapUser,
@@ -67,6 +103,58 @@ func (h *harness) ensureChatPrereqs(t *testing.T, surface, identity, transport s
 			t.Fatal(err)
 		}
 	}
+	h.agentAt(t, surface, transport)
+}
+
+// agentFor names the Agent these fixtures give each surface a bot on.
+//
+// Since ADR-W033 B7 a Connection belongs to one Agent, so a fixture
+// cannot bind "the admin surface" any more — there has to be an Agent
+// answering there. The catalog ships one bot per (transport, surface),
+// so one Agent per surface is what a real deployment can have today.
+func agentFor(surface string) string {
+	if surface == "admin" {
+		return "alfred"
+	}
+	return "sandy"
+}
+
+// agentAt gives that Agent its bot, and returns the Connection.
+func (h *harness) agentAt(t *testing.T, surface, transport string) runtimedb.Connection {
+	t.Helper()
+	if transport == "" {
+		transport = "telegram"
+	}
+	butler := agentFor(surface)
+	capability := chatCapabilityPrefix + transport + "-" + surface
+	if _, err := h.s.DB.GetButler(butler); err != nil {
+		if err := h.s.DB.UpsertModel(runtimedb.Model{
+			Name: "kitchen-box", Kind: runtimedb.ModelLocal, Provider: "ollama",
+			ProviderModel: "llama", Readiness: runtimedb.ModelReady, Enabled: true,
+		}, "root-admin"); err != nil {
+			t.Fatal(err)
+		}
+		profile := runtimedb.ProfileHousehold
+		if surface == "admin" {
+			profile = runtimedb.ProfileOperator
+		}
+		if _, err := h.s.DB.CreateButler(runtimedb.Butler{
+			Name: butler, Directive: "look after the house",
+			Surface: runtimedb.ButlerSurface(surface), Profile: profile, Model: "kitchen-box",
+		}, "root-admin"); err != nil {
+			t.Fatalf("CreateButler(%s): %v", butler, err)
+		}
+	}
+	if _, err := h.s.DB.ChatConnectionAt(transport, capability); err != nil {
+		if _, err := h.s.DB.AddButlerAddress(butler, transport, capability, "", "root-admin"); err != nil {
+			t.Fatalf("addressing %s at %s: %v", butler, capability, err)
+		}
+	}
+	at, err := h.s.DB.ChatConnectionAt(transport, capability)
+	if err != nil {
+		t.Fatalf("resolving the connection at %s: %v", capability, err)
+	}
+	return at
 }
 
 // issueClaim mints a code through the API as an admin, the way an
@@ -75,8 +163,11 @@ func (h *harness) issueClaim(t *testing.T, surface, identity, transport string) 
 	t.Helper()
 	h.ensureChatPrereqs(t, surface, identity, transport)
 	var out claimResponse
+	if transport == "" {
+		transport = "telegram"
+	}
 	resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/claims", map[string]any{
-		"surface": surface, "identity": identity, "transport": transport,
+		"butler": agentFor(surface), "identity": identity, "transport": transport,
 	}, &out)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("issue claim: status = %d, want 201", resp.StatusCode)
@@ -100,7 +191,7 @@ func TestChatClaimRedeemBinds(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("redeem: status = %d, want 201", resp.StatusCode)
 	}
-	if binding.Identity != "sam" || binding.Surface != runtimedb.ButlerSurfaceFamily {
+	if binding.Identity != "sam" || binding.Butler != agentFor("family") {
 		t.Fatalf("binding = %+v, want sam on the family surface", binding)
 	}
 	if binding.CreatedBy != "root-admin" {
@@ -128,27 +219,30 @@ func TestChatClaimCannotBeRedirected(t *testing.T) {
 		"code": claim.Code, "transport": "telegram", "account": "12345",
 		// Everything below is ignored: the redeem request has no field
 		// for a surface or an identity, and these are simply unknown.
-		"surface": "admin", "identity": "root-admin",
+		"identity": "root-admin",
 	}, &binding)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("redeem: status = %d", resp.StatusCode)
 	}
-	if binding.Surface != runtimedb.ButlerSurfaceFamily || binding.Identity != "sam" {
+	if binding.Butler != agentFor("family") || binding.Identity != "sam" {
 		t.Fatalf("binding = %+v, want the code's own surface and identity", binding)
 	}
 }
 
-// A code issued for one transport does not work on another, and an
-// unknown code fails the same way a spent one does.
+// A code issued for one Agent does not work at another's bot, and an
+// unknown code fails the same way. One refusal for every reason: a bot
+// relaying codes for strangers must not be able to tell them apart.
 func TestChatClaimRefusalsAreIndistinguishable(t *testing.T) {
 	h := newHarness(t)
-	claim := h.issueClaim(t, "family", "sam", "telegram")
+	h.agentAt(t, "family", "telegram")
+	// A code for the OTHER Agent, presented at this one's bot.
+	claim := h.issueClaim(t, "admin", "mika", "telegram")
 
 	wrong := h.do(runtimedb.RoleConcierge, "POST", "/api/v1/chat/bindings/redeem", map[string]any{
-		"code": claim.Code, "transport": "discord", "account": "12345",
+		"code": claim.Code, "account": "12345",
 	}, nil)
 	unknown := h.do(runtimedb.RoleConcierge, "POST", "/api/v1/chat/bindings/redeem", map[string]any{
-		"code": "ZZZZ-ZZZZ-ZZZZ", "transport": "telegram", "account": "12345",
+		"code": "ZZZZ-ZZZZ-ZZZZ", "account": "12345",
 	}, nil)
 	if wrong.StatusCode != http.StatusForbidden || unknown.StatusCode != http.StatusForbidden {
 		t.Fatalf("statuses = %d and %d, want both 403", wrong.StatusCode, unknown.StatusCode)
@@ -161,7 +255,7 @@ func TestChatClaimRefusalsAreIndistinguishable(t *testing.T) {
 func TestChatClaimAdminSurfaceRequiresPrincipal(t *testing.T) {
 	h := newHarness(t)
 	resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/claims", map[string]any{
-		"surface": "admin", "identity": "no-such-principal",
+		"identity": "no-such-principal",
 	}, nil)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
@@ -174,7 +268,7 @@ func TestChatClaimIssuingRequiresManage(t *testing.T) {
 	h := newHarness(t)
 	for _, role := range []runtimedb.Role{runtimedb.RoleOperator, runtimedb.RoleButler, runtimedb.RoleValet} {
 		resp := h.do(role, "POST", "/api/v1/chat/claims", map[string]any{
-			"surface": "family", "identity": "sam",
+			"identity": "sam",
 		}, nil)
 		if resp.StatusCode != http.StatusForbidden {
 			t.Fatalf("%s issuing a claim: status = %d, want 403", role, resp.StatusCode)
@@ -192,14 +286,14 @@ func TestChatBindingRevokeAndRebind(t *testing.T) {
 		"code": claim.Code, "transport": "telegram", "account": "12345",
 	}, &binding)
 
-	if _, err := h.s.DB.LookupChatBinding("telegram", "12345", runtimedb.ButlerSurfaceFamily); err != nil {
+	if _, err := h.s.DB.LookupChatBinding(h.agentAt(t, "family", "telegram"), "12345"); err != nil {
 		t.Fatalf("lookup before revoke: %v", err)
 	}
 	resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/bindings/"+itoa(binding.ID)+"/revoke", nil, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("revoke: status = %d", resp.StatusCode)
 	}
-	if _, err := h.s.DB.LookupChatBinding("telegram", "12345", runtimedb.ButlerSurfaceFamily); err == nil {
+	if _, err := h.s.DB.LookupChatBinding(h.agentAt(t, "family", "telegram"), "12345"); err == nil {
 		t.Fatalf("a revoked binding still resolves")
 	}
 	// Revoking twice is a 404, not a silent success.
@@ -298,14 +392,16 @@ func TestButlerRoleCannotReachTheChatPlane(t *testing.T) {
 	}
 }
 
-// A claim code for the other surface is refused WITHOUT being burned: a
-// household code sent to the operator's bot by mistake stays usable on
-// the right one (ADR-W026 A4).
+// A claim code for another Agent is refused WITHOUT being burned: a
+// code meant for one bot sent to another by mistake stays usable on the
+// right one (ADR-W026 A4, ADR-W033 B7).
 func TestClaimOnTheWrongBotIsRefusedNotBurned(t *testing.T) {
 	h := newHarness(t)
 	claim := h.issueClaim(t, "family", "sam", "telegram")
+	// The other Agent's bot has to exist for it to be the wrong one.
+	h.agentAt(t, "admin", "telegram")
 
-	// The admin bot (valet) sees a family code.
+	// The other Agent's bot sees the code.
 	resp := h.do(runtimedb.RoleValet, "POST", "/api/v1/chat/bindings/redeem", map[string]any{
 		"code": claim.Code, "transport": "telegram", "account": "12345",
 	}, nil)
@@ -323,30 +419,161 @@ func TestClaimOnTheWrongBotIsRefusedNotBurned(t *testing.T) {
 	}, &binding); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("redeem on the right bot: status = %d, want 201 — the code was burned by the wrong one", resp.StatusCode)
 	}
-	if binding.Identity != "sam" || binding.Surface != runtimedb.ButlerSurfaceFamily {
+	if binding.Identity != "sam" || binding.Butler != agentFor("family") {
 		t.Fatalf("binding = %+v", binding)
 	}
 }
 
-// A human redeeming through the Console or `wild` is pinned to no
-// surface: they can redeem on behalf of whoever is standing next to
-// them, which is what a claim code is for.
-func TestHumanRedeemIsNotSurfacePinned(t *testing.T) {
+// A human redeeming through the Console or `wild` is pinned to no bot:
+// they can redeem on behalf of whoever is standing next to them, for
+// whichever Agent the code was issued against, which is what a claim
+// code is for.
+func TestHumanRedeemIsNotPinnedToABot(t *testing.T) {
 	h := newHarness(t)
 	for _, surface := range []string{"family", "admin"} {
 		identity := "sam"
 		if surface == "admin" {
-			identity = "root-admin"
+			identity = "mika"
 		}
 		claim := h.issueClaim(t, surface, identity, "telegram")
 		var binding runtimedb.ChatBinding
+		// The human names the Agent, because they have no bot to arrive
+		// through — which is the whole of what "not pinned" means now.
 		if resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/bindings/redeem", map[string]any{
-			"code": claim.Code, "transport": "telegram", "account": "acct-" + surface,
+			"code": claim.Code, "butler": agentFor(surface),
+			"transport": "telegram", "account": "acct-" + surface,
 		}, &binding); resp.StatusCode != http.StatusCreated {
 			t.Fatalf("%s: human redeem status = %d, want 201", surface, resp.StatusCode)
 		}
-		if string(binding.Surface) != surface {
-			t.Fatalf("binding surface = %q, want %q", binding.Surface, surface)
+		if binding.Butler != agentFor(surface) {
+			t.Fatalf("binding butler = %q, want %q", binding.Butler, agentFor(surface))
 		}
+	}
+}
+
+// An Agent with two bots on one transport can be invited to either.
+//
+// B7 allows exactly this, and until the request carried a way to say
+// which, allowing it made BOTH unreachable: every claim for that Agent
+// and transport was ambiguous, and the refusal named no way forward, so
+// giving an Owner Agent a second Telegram bot silently ended invites to
+// its first one.
+func TestAnAgentWithTwoBotsOnOneTransportIsInvitedToOne(t *testing.T) {
+	h := newHarness(t)
+	h.ensureChatPrereqs(t, "admin", "mika", "telegram")
+	first := h.agentAt(t, "admin", "telegram")
+	// A second bot for the same Agent, which is what B7 permits. It is
+	// installed and credentialed like the first, because a code may
+	// only name a bot that exists and can actually redeem it.
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindVolume,
+		Metadata: resource.Metadata{
+			Name: "chat-telegram-spare-state", Owner: "capability/chat-telegram-spare", Node: "n1",
+		},
+		Volume: &resource.VolumeSpec{Name: "chat-telegram-spare-state"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.DB.AddButlerAddress(first.Butler, "telegram", "chat-telegram-spare", "", "root-admin"); err != nil {
+		t.Fatalf("second address: %v", err)
+	}
+	h.adapterToken(t, "chat-telegram-spare")
+
+	// Without a selector it is refused — and the refusal says which
+	// ids would work, because a caller who cannot see them cannot
+	// answer it.
+	var refused struct {
+		Error string `json:"error"`
+	}
+	resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/claims", map[string]any{
+		"butler": first.Butler, "identity": "mika", "transport": "telegram",
+	}, &refused)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("ambiguous claim: status = %d, want 400", resp.StatusCode)
+	}
+	for _, want := range []string{first.ExternalID, "chat-telegram-spare"} {
+		if !strings.Contains(refused.Error, want) {
+			t.Fatalf("the refusal does not name %q: %s", want, refused.Error)
+		}
+	}
+
+	// Naming one issues the code for that bot and no other.
+	var out claimResponse
+	resp = h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/claims", map[string]any{
+		"butler": first.Butler, "identity": "mika", "transport": "telegram",
+		"connection": "chat-telegram-spare",
+	}, &out)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("named claim: status = %d, want 201", resp.StatusCode)
+	}
+	if out.Code == "" {
+		t.Fatal("no code came back")
+	}
+
+	// And a bot that is not that Agent's is refused rather than
+	// quietly deciding the operator meant its owner. The refusal has to
+	// SAY that is why: this request is refusable on several grounds at
+	// once — a family bot does not admit an owner-only identity either
+	// — and a status code alone cannot tell which one answered.
+	other := h.agentAt(t, "family", "telegram")
+	resp = h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/claims", map[string]any{
+		"butler": first.Butler, "identity": "mika", "transport": "telegram",
+		"connection": other.ExternalID,
+	}, &refused)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("another agent's bot: status = %d, want 400", resp.StatusCode)
+	}
+	if want := other.ExternalID + " is not one of " + first.Butler + "'s bots"; refused.Error != want {
+		t.Fatalf("refused with %q, want %q", refused.Error, want)
+	}
+}
+
+// A code is refused for a bot whose capability is no longer installed.
+//
+// Both halves of "this bot can take a code" are separately reachable and
+// the check needs both. An address is not revoked when its capability is
+// removed, and the adapter's principal is not deleted either — so a
+// credential check on its own calls a bot that is not running ready, and
+// the operator hands somebody an invite that can never be redeemed. That
+// is the failure this check exists to prevent: it does not look like a
+// failure, it looks like the person ignoring you.
+func TestACodeIsRefusedForAnUninstalledBot(t *testing.T) {
+	h := newHarness(t)
+	h.ensureChatPrereqs(t, "family", "sam", "telegram")
+	at := h.agentAt(t, "family", "telegram")
+
+	// It works while the capability is installed.
+	var out claimResponse
+	if resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/claims", map[string]any{
+		"butler": at.Butler, "identity": "sam", "transport": "telegram",
+	}, &out); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+
+	// Remove the capability, leaving the address and the credential —
+	// which is what removing one actually does.
+	current, err := h.s.State.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range current {
+		if r.Metadata.Owner == "capability/"+at.ExternalID {
+			if err := h.s.State.Delete(r.Kind, r.Metadata.Name); err != nil {
+				t.Fatalf("removing %s: %v", r.Metadata.Name, err)
+			}
+		}
+	}
+
+	var refused struct {
+		Error string `json:"error"`
+	}
+	resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/claims", map[string]any{
+		"butler": at.Butler, "identity": "sam", "transport": "telegram",
+	}, &refused)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	if !strings.Contains(refused.Error, "is not installed") {
+		t.Fatalf("refused with %q, want it to say the bot is not installed", refused.Error)
 	}
 }

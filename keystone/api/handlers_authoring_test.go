@@ -66,6 +66,8 @@ func authoringTurns() []*provider.ChatResponse {
 
 func TestButlerAuthorsARuleTheEngineThenRuns(t *testing.T) {
 	h := newHarness(t)
+	// A butler turn is had by a person, so the caller acts for one.
+	asksAsRoleOperator := h.console(runtimedb.RoleOperator, "mika")
 	h.addPublisher("publisher-home")
 
 	// A real domestic gateway over a fake ntfy, so the rule the model
@@ -127,7 +129,7 @@ func TestButlerAuthorsARuleTheEngineThenRuns(t *testing.T) {
 		Session string   `json:"sessionId"`
 		Plans   []string `json:"planIds"`
 	}
-	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/butler/ask",
+	if resp := h.doToken(asksAsRoleOperator, "POST", "/api/v1/butler/ask",
 		map[string]string{"message": "Whenever I get home, ask whether I got the mail."}, &ask); resp.StatusCode != http.StatusOK {
 		t.Fatalf("ask = %d", resp.StatusCode)
 	}
@@ -145,7 +147,7 @@ func TestButlerAuthorsARuleTheEngineThenRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.State != runtimedb.PlanProposed || rec.Principal != "butler" || rec.ActingFor != "op" {
+	if rec.State != runtimedb.PlanProposed || rec.Principal != "butler" || rec.ActingFor != "mika" {
 		t.Fatalf("plan = %+v", rec)
 	}
 	if resp := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); resp.StatusCode != http.StatusForbidden {

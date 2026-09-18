@@ -149,7 +149,6 @@ var dismissed = map[string]string{
 	"payload":             "a serialized blob",
 	"payload_json":        "a serialized blob",
 	"permission_label":    "an enum or classification, not a party",
-	"person_id":           "an identifier for a non-person entity",
 	"plan_id":             "an identifier for a non-person entity",
 	"plan_ids":            "an identifier for a non-person entity",
 	"plan_json":           "a serialized blob",
@@ -347,14 +346,30 @@ func TestNoVerdictOutlivesItsColumn(t *testing.T) {
 // instead of re-deriving the classification, and what tells a later
 // reader whether a changed write path has invalidated it.
 func TestEveryVerdictCarriesItsEvidence(t *testing.T) {
-	for _, c := range personref.Columns {
+	for _, c := range append(append([]personref.Column{}, personref.Columns...), personref.LegacyColumns...) {
 		if strings.TrimSpace(c.Why) == "" {
 			t.Errorf("%s.%s is classified %s with no evidence", c.Table, c.Column, c.Kind)
 		}
 		switch c.Kind {
-		case personref.Human, personref.Actor, personref.Scoped, personref.NotAPerson:
+		case personref.Human, personref.Actor, personref.Scoped, personref.NotAPerson, personref.PersonID:
 		default:
 			t.Errorf("%s.%s has kind %q, which is not a recognised verdict", c.Table, c.Column, c.Kind)
+		}
+	}
+}
+
+// Every legacy verdict names a column migration 0043 actually removed.
+//
+// Without this the legacy table becomes a place stale entries accumulate
+// unnoticed: Survey skips whatever the schema does not have, so a column
+// listed here that still exists would be surveyed TWICE — once as free
+// text and once under its person_id verdict — and one that was never
+// removed would sit here forever claiming to describe the past.
+func TestEveryLegacyVerdictNamesAColumnThatIsGone(t *testing.T) {
+	live := liveColumns(t)
+	for _, c := range personref.LegacyColumns {
+		if _, ok := live[c.Table+"."+c.Column]; ok {
+			t.Errorf("%s.%s is listed as pre-0043 but is still in the schema", c.Table, c.Column)
 		}
 	}
 }
@@ -367,5 +382,53 @@ func TestNoColumnIsClassifiedTwice(t *testing.T) {
 			t.Errorf("%s has two verdicts; the later one silently wins", key)
 		}
 		seen[key] = true
+	}
+}
+
+// The Connection identity columns name a Person, and the writer does
+// not get a vote.
+//
+// This is the correction slice 2b had to make, and it is worth pinning
+// because the wrong answer was reached by following this package's own
+// rule. chat_bindings.identity carries a comment from ADR-W026 A3 —
+// "principal (admin) or household member (family)" — and
+// principal/chatclaim.go enforces it, requiring a machine principal for
+// an admin-surface claim. Classified by its writer, the column is
+// polymorphic. Classified by ADR-W033 B9 and design §8.3, which say a
+// Connection admits a Person or a Group, it is a person reference and
+// the writer is the defect.
+//
+// An ADR that names the subject outranks both the schema comment and
+// the code. The evidence check is half the test: a later reader must
+// not be able to demote these again without arguing with the ADR,
+// because the demotion would look perfectly reasonable from the writer.
+func TestConnectionIdentityColumnsNameAPerson(t *testing.T) {
+	want := map[string]bool{
+		"chat_bindings.identity":    true,
+		"chat_threads.identity":     true,
+		"chat_claim_codes.identity": true,
+	}
+	// The legacy table, because 0044 repointed all three in the same
+	// slice that corrected them. The verdict is what made the repoint
+	// right, and it has to stay readable for a database that has not
+	// run 0044 yet — which is precisely a deployment still admitting a
+	// principal to an Owner Agent.
+	for _, c := range personref.LegacyColumns {
+		key := c.Table + "." + c.Column
+		if !want[key] {
+			continue
+		}
+		if c.Kind != personref.Human {
+			t.Errorf("%s is classified %s; ADR-W033 B9 admits a Person to a Connection, "+
+				"and the principal its writer stores is the model W033 superseded", key, c.Kind)
+		}
+		if !strings.Contains(c.Why, "W033") {
+			t.Errorf("%s does not cite the ADR that decides it, so the next reader "+
+				"has only the writer to go on: %q", key, c.Why)
+		}
+		delete(want, key)
+	}
+	for key := range want {
+		t.Errorf("%s has no verdict at all", key)
 	}
 }

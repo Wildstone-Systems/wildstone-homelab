@@ -53,7 +53,7 @@ func TestIndexNeedsPermissionMetadata(t *testing.T) {
 
 // Permissions filter in the candidate query, not over its results.
 func TestRetrievalFiltersBeforeRanking(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "sam")
 	indexed(t, db, "dinner is at seven on Thursday", "household", ButlerAudienceShared)
 	indexed(t, db, "sam has a hospital appointment on Thursday", "sam", ButlerAudiencePrivate)
 
@@ -149,7 +149,7 @@ func TestDeletionRemovesEntriesAndSearchableText(t *testing.T) {
 // Forgetting a memory record takes its index entries and its summaries
 // with it.
 func TestForgottenMemoryLeavesTheIndex(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	memSeq, err := db.RecordMemory(MemoryRecord{
 		Kind: MemoryFact, Content: "the spare key is under the mat", Subject: "household",
 		Audience: ButlerAudienceShared, PermissionLabel: "household", Owner: "household",
@@ -191,9 +191,9 @@ func TestForgottenMemoryLeavesTheIndex(t *testing.T) {
 	// some other writer puts back for a forgotten record is still not
 	// an answer, and the sweep is what finally removes it.
 	if _, err := db.ExecForTest(
-		`INSERT INTO butler_index (source_kind, source_id, memory, owner, audience,
+		`INSERT INTO butler_index (source_kind, source_id, memory, owner_person_id, audience,
 		     permission_label, content, observed_at, indexed_at, volatile, tokens)
-		 VALUES ('memory', 'stray', ?, 'household', 'shared', 'household',
+		 VALUES ('memory', 'stray', ?, NULL, 'shared', 'household',
 		     'the spare key is under the mat', '', ?, 0, 7)`,
 		memSeq, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)

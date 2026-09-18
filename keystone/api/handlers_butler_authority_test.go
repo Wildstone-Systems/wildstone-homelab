@@ -81,6 +81,7 @@ func TestCapabilityRequestPermissionsAndSeparation(t *testing.T) {
 // A grant is a manage act, bound to real work, and revocable.
 func TestGrantEndpointsAreBoundAndRevocable(t *testing.T) {
 	h := newHarness(t)
+	h.person("root-admin")
 	taskID, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: "root-admin", Owner: "root-admin",
 		Surface: runtimedb.ButlerSurfaceAdmin, Profile: "operator",

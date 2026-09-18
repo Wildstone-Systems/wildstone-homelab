@@ -105,13 +105,13 @@ func TestButlerAskJoinsUnquotedWords(t *testing.T) {
 }
 
 // The documented install command — `wild chat adapter <capability>
-// -node <node> -surface family` — has to actually mint the credential
+// -node <node> -butler <agent>` — has to actually mint the credential
 // rather than print usage. It is in install.md and in all four chat
 // packages.
 func TestChatAdapterParsesTheDocumentedCommand(t *testing.T) {
 	rec := &recorder{}
 	srv := rec.start(t)
-	code := runChat([]string{"adapter", "chat-telegram-family", "-node", "n1", "-surface", "family", "-api", srv.URL})
+	code := runChat([]string{"adapter", "chat-telegram-family", "-node", "n1", "-butler", "hobson", "-api", srv.URL})
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0", code)
 	}
@@ -120,19 +120,22 @@ func TestChatAdapterParsesTheDocumentedCommand(t *testing.T) {
 	if len(rec.paths) != 1 || rec.paths[0] != "/api/v1/chat/adapters/chat-telegram-family" {
 		t.Fatalf("posted to %v", rec.paths)
 	}
-	if !strings.Contains(rec.bodies[0], `"surface":"family"`) || !strings.Contains(rec.bodies[0], `"node":"n1"`) {
+	if !strings.Contains(rec.bodies[0], `"butler":"hobson"`) || !strings.Contains(rec.bodies[0], `"node":"n1"`) {
 		t.Fatalf("body = %s, want the parsed flags", rec.bodies[0])
 	}
 }
 
-// A missing or misspelled surface is refused before anything is sent.
-func TestChatAdapterRefusesAnUnknownSurface(t *testing.T) {
+// An incomplete command is refused before anything is sent. A bot
+// belongs to exactly one Agent (ADR-W033 B7), so a credential minted
+// without one would leave the bot answering for nobody — which reads as
+// working right up until somebody messages it.
+func TestChatAdapterRefusesAnIncompleteCommand(t *testing.T) {
 	rec := &recorder{}
 	srv := rec.start(t)
 	for _, args := range [][]string{
-		{"adapter", "chat-telegram-family", "-node", "n1", "-surface", "household", "-api", srv.URL},
-		{"adapter", "chat-telegram-family", "-surface", "family", "-api", srv.URL}, // no node
-		{"adapter", "-node", "n1", "-surface", "family", "-api", srv.URL},          // no capability
+		{"adapter", "chat-telegram-family", "-node", "n1", "-api", srv.URL},       // no butler
+		{"adapter", "chat-telegram-family", "-butler", "hobson", "-api", srv.URL}, // no node
+		{"adapter", "-node", "n1", "-butler", "hobson", "-api", srv.URL},          // no capability
 	} {
 		if code := runChat(args); code != 2 {
 			t.Fatalf("%v: exit = %d, want 2", args, code)
