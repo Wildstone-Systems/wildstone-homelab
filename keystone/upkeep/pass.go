@@ -270,7 +270,28 @@ func (e *Engine) harvest() error {
 		if err != nil {
 			return err
 		}
-		if closedForGood(st) {
+		// ALREADY ANSWERED IS ALREADY ANSWERED, whichever door it came
+		// through. A cycle holding a completion at or after the moment
+		// it opened has been closed; harvesting into it would close it
+		// twice.
+		//
+		// This is the rule that stops two doors recording one visit as
+		// two. A parent taps Done at 14:00, the clinic's publisher emits
+		// the same fact at 14:05, and the completion that closed cycle 1
+		// also OPENED cycle 2 at 14:00 — so the event landed inside the
+		// new cycle's window and closed that too. One checkup, two
+		// completions, and the commitment skipped a year. It would have
+		// happened on every visit in any household using both doors.
+		//
+		// No grace window, because there is no honest number for one:
+		// two timestamps cannot say whether they describe the same
+		// visit. The completion that opened a cycle is the evidence that
+		// the cycle's own question was already answered.
+		answered, err := e.answeredIn(res.Metadata.Name, st.Occurrence.OpenedAt)
+		if err != nil {
+			return err
+		}
+		if answered {
 			continue
 		}
 		events, err := e.DB.QueryHouseholdEvents(runtimedb.HouseholdQuery{
@@ -322,12 +343,26 @@ func (e *Engine) harvest() error {
 	return nil
 }
 
-// closedForGood reports a one-off that has already been answered. Its
-// cycle never reopens, so an event arriving afterwards has nothing to
-// close and must not record a second completion against it.
-func closedForGood(st Standing) bool {
-	if st.Rollover != resource.RolloverOnce {
-		return false
+// answeredIn reports whether a completion already sits at or after the
+// moment the open cycle began.
+//
+// `at or after` rather than `after`: a fromCompletion cycle OPENS at the
+// position its predecessor's completion recorded, so that completion's
+// own timestamp is the cycle's opening moment. Excluding it would leave
+// every freshly opened cycle looking unanswered to the very event that
+// answered the one before.
+//
+// It also covers the one-off, whose cycle never reopens: an event
+// arriving after the dentist has been to has nothing left to close.
+func (e *Engine) answeredIn(name string, openedAt time.Time) (bool, error) {
+	done, err := e.DB.ListCommitmentCompletions(name)
+	if err != nil {
+		return false, fmt.Errorf("upkeep: commitment %q completions: %w", name, err)
 	}
-	return st.Occurrence.State == commitment.StateSatisfied || st.Occurrence.State == commitment.StateWaived
+	for _, c := range done {
+		if !c.At.Before(openedAt) {
+			return true, nil
+		}
+	}
+	return false, nil
 }

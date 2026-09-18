@@ -541,6 +541,12 @@ func TestTheNeedsCardCanAnswerACommitmentAndNotOnlyANotice(t *testing.T) {
 		{"/api/v1/home/commitments/", "the card cannot reach the commitment answer path"},
 		{"/api/v1/home/meters/", "the card cannot record the number it is asking for"},
 		{"encodeURIComponent(ask.verb)", "the page names the answers itself instead of using the server's"},
+		{"i.needs", "the card does not collect the numbers the server said it needs"},
+		// A date is a day, and a day is not over at midnight. Building
+		// the instant from parts is what keeps an appointment made for
+		// today from being announced as already missed.
+		{"function endOfDay(", "a bare date is being turned into an instant some other way"},
+		{"new Date(+p[0], +p[1] - 1, +p[2], 23, 59, 59)", "the appointment day ends somewhere other than where the household is"},
 	} {
 		if !strings.Contains(page, want.frag) {
 			t.Errorf("home is missing %q: %s", want.frag, want.why)
@@ -552,5 +558,117 @@ func TestTheNeedsCardCanAnswerACommitmentAndNotOnlyANotice(t *testing.T) {
 	// its place would leave them tapping a button that keeps failing.
 	if !strings.Contains(page, "res.j.error") {
 		t.Error("home does not surface the server's own refusal sentence")
+	}
+}
+
+// browserGlobals are the things a page may call without defining: the
+// platform. Everything else a page calls, it must define.
+//
+// Deliberately short and deliberately explicit. A page reaching for
+// something not on this list is either a typo or a new dependency on
+// the browser, and both are worth a line of review.
+var browserGlobals = map[string]bool{
+	"Date": true, "Error": true, "String": true, "Number": true, "Boolean": true,
+	"Array": true, "Object": true, "JSON": true, "Math": true, "Promise": true,
+	"URL": true, "URLSearchParams": true, "XMLHttpRequest": true, "FormData": true,
+	"fetch": true, "encodeURIComponent": true, "decodeURIComponent": true,
+	"setTimeout": true, "clearTimeout": true, "setInterval": true, "clearInterval": true,
+	"parseInt": true, "parseFloat": true, "isNaN": true, "isFinite": true,
+	"requestAnimationFrame": true, "queueMicrotask": true, "structuredClone": true,
+	"alert": true, "confirm": true, "prompt": true,
+}
+
+var (
+	jsBlockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	jsLineComment  = regexp.MustCompile(`(?m)//.*$`)
+	jsDoubleQuoted = regexp.MustCompile(`"(?:\\.|[^"\\])*"`)
+	jsSingleQuoted = regexp.MustCompile(`'(?:\\.|[^'\\])*'`)
+	jsTemplate     = regexp.MustCompile("`(?:\\\\.|[^`\\\\])*`")
+	jsScript       = regexp.MustCompile(`(?s)<script>(.*?)</script>`)
+	jsFuncDecl     = regexp.MustCompile(`\bfunction\s+([A-Za-z_$][\w$]*)`)
+	jsVarDecl      = regexp.MustCompile(`\b(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*[=,;]`)
+	jsFuncParams   = regexp.MustCompile(`\bfunction[^(]*\(([^)]*)\)`)
+	// Arrow parameters too: `(resolve, reject) =>` binds names the same
+	// way `function (resolve, reject)` does.
+	jsArrowParams = regexp.MustCompile(`\(([^()]*)\)\s*=>`)
+	jsArrowOne    = regexp.MustCompile(`(^|[^.\w$])([A-Za-z_$][\w$]*)\s*=>`)
+	// A call to a bare identifier: not a method, not a property.
+	jsCall = regexp.MustCompile(`(^|[^.\w$])([A-Za-z_$][\w$]*)\s*\(`)
+)
+
+var jsKeywords = map[string]bool{
+	"if": true, "for": true, "while": true, "switch": true, "catch": true,
+	"function": true, "return": true, "typeof": true, "new": true, "do": true,
+	"else": true, "try": true, "case": true, "delete": true, "void": true,
+	"in": true, "of": true, "instanceof": true, "await": true, "async": true,
+	"throw": true,
+}
+
+// TestEveryHelperThePagesCallIsDefined is the behavioural twin of the
+// class audit, and it exists because a string-matching test is not one.
+//
+// A commitment's answer buttons shipped calling `answer(...)` when the
+// helper had been renamed to `postAnswer` — so Done, Skip it and Booked
+// it every one threw a ReferenceError and left the button permanently
+// disabled. The test that was supposed to cover it grepped the page for
+// `/api/v1/home/commitments/`, which was present, INSIDE the broken
+// call. It passed on a feature that did not work at all.
+//
+// A page's own helpers are the thing worth auditing here, because they
+// are the part that gets renamed. The browser's globals are a short
+// allowlist above; anything else a page calls, the page must define.
+//
+// It is a static check and cannot see scope, which is exactly why the
+// page no longer has a parameter named after a helper: that shadowing
+// is what hid the bug from this check when it was first written.
+func TestEveryHelperThePagesCallIsDefined(t *testing.T) {
+	for _, name := range pages {
+		body, found := Page(name)
+		if !found {
+			t.Errorf("%s is not served", name)
+			continue
+		}
+		var js strings.Builder
+		for _, m := range jsScript.FindAllStringSubmatch(string(body), -1) {
+			js.WriteString(m[1])
+			js.WriteString("\n")
+		}
+		// Comments and string literals hold prose and CSS that look
+		// exactly like calls.
+		src := js.String()
+		for _, re := range []*regexp.Regexp{jsBlockComment, jsLineComment, jsDoubleQuoted, jsSingleQuoted, jsTemplate} {
+			src = re.ReplaceAllString(src, " ")
+		}
+
+		defined := map[string]bool{}
+		for _, re := range []*regexp.Regexp{jsFuncDecl, jsVarDecl} {
+			for _, m := range re.FindAllStringSubmatch(src, -1) {
+				defined[m[1]] = true
+			}
+		}
+		// Parameters, so a callback passed by name is not reported.
+		for _, re := range []*regexp.Regexp{jsFuncParams, jsArrowParams} {
+			for _, m := range re.FindAllStringSubmatch(src, -1) {
+				for _, p := range strings.Split(m[1], ",") {
+					if p = strings.TrimSpace(p); p != "" {
+						defined[p] = true
+					}
+				}
+			}
+		}
+		for _, m := range jsArrowOne.FindAllStringSubmatch(src, -1) {
+			defined[m[2]] = true
+		}
+
+		reported := map[string]bool{}
+		for _, m := range jsCall.FindAllStringSubmatch(src, -1) {
+			called := m[2]
+			if defined[called] || browserGlobals[called] || jsKeywords[called] || reported[called] {
+				continue
+			}
+			reported[called] = true
+			t.Errorf("%s calls %s(), which the page does not define and which is not a browser global — "+
+				"a renamed helper with a call site left behind throws at the click, not at the build", name, called)
+		}
 	}
 }

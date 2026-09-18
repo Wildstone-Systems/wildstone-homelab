@@ -522,13 +522,137 @@ func TestAnUnresolvedCommitmentAsksForTheNumberFirst(t *testing.T) {
 	if !ok {
 		t.Fatal("a commitment nobody can conclude is not asking for anything")
 	}
-	if len(item.Asks) != 1 {
-		t.Fatalf("asks = %+v, want exactly the reading", item.Asks)
+	// The reading comes first, and a way to close the cycle is still
+	// offered: a card that asks and cannot be answered is the fault
+	// this pair of tests exists for.
+	if len(item.Asks) < 2 {
+		t.Fatalf("asks = %+v, want the reading and a way to close it", item.Asks)
 	}
-	if item.Asks[0].Verb != "reading" || item.Asks[0].Meter != "f150-odometer" {
-		t.Errorf("ask = %+v, want the odometer read", item.Asks[0])
+	if item.Asks[0].Verb != "reading" {
+		t.Errorf("ask = %+v, want the reading offered first", item.Asks[0])
 	}
-	if item.Asks[0].Unit != "miles" {
-		t.Errorf("unit = %q, want the declared unit so the box says what to type", item.Asks[0].Unit)
+	if len(item.Needs) != 1 || item.Needs[0].Meter != "f150-odometer" {
+		t.Fatalf("needs = %+v, want the odometer", item.Needs)
+	}
+	if item.Needs[0].Unit != "miles" {
+		t.Errorf("unit = %q, want the declared unit so the box says what to type", item.Needs[0].Unit)
+	}
+}
+
+// The card must not offer an answer the write path will refuse.
+//
+// Two ways it did. Both are the same fault as the group check: two
+// places deciding one question and disagreeing.
+//
+// (1) A counter rule that is stale AND already crossed is `overdue`
+// with a trigger, not `unresolved` — so the card took the ordinary
+// branch and offered Done, while `Evidence` refused it for being
+// stale. Every tap returned 400.
+func TestAStaleButOverdueCommitmentAsksForTheNumberItWillDemand(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles", StaleAfter: "168h"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+	// Read long ago, and already well past the threshold: stale, but
+	// crossed, so the engine can still say it is overdue.
+	if _, _, err := h.s.DB.AppendMeterReading(runtimedb.MeterReading{
+		Meter: "f150-odometer", Value: 90000, At: time.Now().AddDate(0, -3, 0),
+		RecordedBy: "mika", Source: runtimedb.ReadingByPerson}); err != nil {
+		t.Fatalf("AppendMeterReading: %v", err)
+	}
+
+	item, ok := commitmentItem(h.needsYou(t, "mika"), "f150-oil")
+	if !ok {
+		t.Fatal("an overdue oil change is not on the card")
+	}
+	assertAsksAreAnswerable(t, h, "f150-oil", item)
+}
+
+// (2) When the reason a rule cannot be concluded is that the LAST
+// COMPLETION recorded no reading, a fresh meter reading does not fix
+// it — only a new completion carrying the number does. The card
+// offered the reading box alone, so the household had no way out at
+// all.
+func TestACommitmentWedgedByAnOldCompletionCanStillBeAnswered(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+	// The shape every pre-0042 completion has: closed, with no number.
+	if _, _, err := h.s.DB.RecordCommitmentCompletion(runtimedb.CommitmentCompletion{
+		Commitment: "f150-oil", At: time.Now().AddDate(0, -6, 0), RecordedBy: "mika",
+	}); err != nil {
+		t.Fatalf("RecordCommitmentCompletion: %v", err)
+	}
+	if _, _, err := h.s.DB.AppendMeterReading(runtimedb.MeterReading{
+		Meter: "f150-odometer", Value: 84210, At: time.Now(),
+		RecordedBy: "mika", Source: runtimedb.ReadingByPerson}); err != nil {
+		t.Fatalf("AppendMeterReading: %v", err)
+	}
+
+	item, ok := commitmentItem(h.needsYou(t, "mika"), "f150-oil")
+	if !ok {
+		t.Fatal("a wedged commitment is not asking for anything")
+	}
+	assertAsksAreAnswerable(t, h, "f150-oil", item)
+}
+
+// assertAsksAreAnswerable is the property both cases are about: every
+// answer the card offers must be one the write path accepts, and the
+// card must offer at least one way forward.
+func assertAsksAreAnswerable(t *testing.T, h *harness, name string, item needsYouItem) {
+	t.Helper()
+	if len(item.Asks) == 0 {
+		t.Fatal("the card asks for something and offers no way to answer it")
+	}
+	// Whatever the card asks the household to type, typed once.
+	typed := map[string]any{}
+	for _, n := range item.Needs {
+		typed[n.Meter] = 99999.0
+	}
+	var closable bool
+	for _, a := range item.Asks {
+		switch a.Verb {
+		case "reading":
+			for _, n := range item.Needs {
+				if got := h.memberJSON(t, http.MethodPost,
+					"/api/v1/home/meters/"+n.Meter+"/readings", "mika",
+					map[string]any{"value": 99999}); got != http.StatusCreated {
+					t.Errorf("the card offered %q for %s and the write path gave %d", a.Label, n.Meter, got)
+				}
+			}
+		case "done", "waived":
+			closable = true
+			body := map[string]any{}
+			if len(typed) > 0 {
+				body["meters"] = typed
+			}
+			if got := h.memberJSON(t, http.MethodPost,
+				"/api/v1/home/commitments/"+name+"/"+a.Verb, "mika", body); got != http.StatusCreated {
+				t.Errorf("the card offered %q and the write path gave %d — "+
+					"an affordance the engine refuses is worse than none", a.Label, got)
+			}
+		}
+	}
+	if !closable {
+		t.Error("the card offers no way to close the cycle, so the household cannot get unstuck")
 	}
 }

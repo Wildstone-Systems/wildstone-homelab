@@ -709,10 +709,20 @@
         row.appendChild(decideBtn(i.seq, "no", "No", "hbtn hbtn-secondary"));
       } else if (i.decidable && i.ref && i.asks && i.asks.length) {
         row = make("div", "asks indent");
+        // The numbers first, ONCE, whatever the household then does with
+        // them. Typing the odometer to record it and typing it again to
+        // close the cycle is the same question asked twice.
+        var boxes = {};
+        (i.needs || []).forEach(function (n) {
+          row.appendChild(make("span", "muted nowrap", "What does " + n.meter + " say?"));
+          boxes[n.meter] = numberBox(n);
+          row.appendChild(boxes[n.meter]);
+        });
+        var when = wantsBooking(i.asks) ? dateBox() : null;
+        if (when) { row.appendChild(when); }
         i.asks.forEach(function (a, n) {
-          row.appendChild(a.verb === "reading"
-            ? readingAsk(a)
-            : answerBtn(i.ref, a, n === 0 ? "hbtn hbtn-primary" : "hbtn hbtn-secondary"));
+          row.appendChild(answerBtn(i.ref, a, boxes, when,
+            n === 0 ? "hbtn hbtn-primary" : "hbtn hbtn-secondary"));
         });
       }
       if (row) {
@@ -734,63 +744,85 @@
     if (c.more) { box.appendChild(make("div", "muted", "and " + c.more + " more")); }
   }
 
-  // answerBtn records one answer to a commitment: done, waived or
-  // booked. The verb IS the route's last segment, so the page never
-  // holds a second list of what the answers are called.
-  //
-  // "Booked it" asks when, because an appointment nobody named a date
-  // for is the same not-knowing the commitment already had.
-  function answerBtn(ref, ask, cls) {
-    var b = make("button", cls, ask.label);
-    b.type = "button";
-    b.addEventListener("click", function () {
-      var body = {};
-      if (ask.verb === "booked") {
-        var when = window.prompt("When is the appointment? (for example 2026-10-14)");
-        if (!when) { return; }
-        var parsed = new Date(when);
-        if (isNaN(parsed.getTime())) {
-          answerFailed(b, "that is not a date this understands");
-          return;
-        }
-        body.at = parsed.toISOString();
-      }
-      b.disabled = true;
-      answer("/api/v1/home/commitments/" + encodeURIComponent(ref) + "/" +
-             encodeURIComponent(ask.verb), body, b);
-    });
-    return b;
+  function wantsBooking(asks) {
+    for (var i = 0; i < asks.length; i++) {
+      if (asks[i].verb === "booked") { return true; }
+    }
+    return false;
   }
 
-  // readingAsk is the one ask that takes a value rather than a tap.
-  //
-  // It comes first and alone when a meter cannot be concluded from,
-  // because "Done" on a card that cannot say whether the thing is due
-  // is an answer to a question nobody asked. The number is the answer.
-  function readingAsk(ask) {
-    var wrap = make("span", "asks");
+  function numberBox(need) {
     var box = make("input", "hinput");
     box.type = "number";
     box.step = "any";
     box.min = "0";
-    box.placeholder = ask.unit || "number";
-    box.setAttribute("aria-label", ask.label);
+    box.placeholder = need.unit || "number";
+    box.setAttribute("aria-label", "What does " + need.meter + " say, in " + (need.unit || "numbers"));
     box.style.maxWidth = "9rem";
-    var b = make("button", "hbtn hbtn-primary", "Save");
+    return box;
+  }
+
+  function dateBox() {
+    var box = make("input", "hinput");
+    box.type = "date";
+    box.setAttribute("aria-label", "When is the appointment");
+    return box;
+  }
+
+  // A DATE IS A DAY, AND A DAY IS NOT OVER AT MIDNIGHT. `new Date("2026-10-14")`
+  // is midnight UTC, which the engine reads as an appointment that has
+  // already been and gone — so a booking made for today was announced as
+  // missed the moment it was made, and west of UTC it was missed the
+  // evening before. An appointment somebody named only a day for has not
+  // gone until that day has, where they live.
+  function endOfDay(ymd) {
+    var p = String(ymd || "").split("-");
+    if (p.length !== 3) { return null; }
+    var d = new Date(+p[0], +p[1] - 1, +p[2], 23, 59, 59);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  }
+
+  // answerBtn records one answer to a commitment: the numbers on their
+  // own, or a completion, a waive, or an appointment. The verb IS the
+  // route's last segment, so the page never holds a second list of what
+  // the answers are called.
+  function answerBtn(ref, ask, boxes, when, cls) {
+    var b = make("button", cls, ask.label);
     b.type = "button";
     b.addEventListener("click", function () {
-      var v = parseFloat(box.value);
-      if (isNaN(v) || v < 0) {
-        answerFailed(b, "a meter counts up from zero");
+      var meters = {}, missing = [];
+      Object.keys(boxes).forEach(function (meter) {
+        var v = parseFloat(boxes[meter].value);
+        if (isNaN(v) || v < 0) { missing.push(meter); return; }
+        meters[meter] = v;
+      });
+      if (missing.length) {
+        answerFailed(b, "what does " + missing.join(" and ") + " say?");
         return;
       }
+      if (ask.verb === "reading") {
+        b.disabled = true;
+        Object.keys(meters).forEach(function (meter) {
+          postAnswer("/api/v1/home/meters/" + encodeURIComponent(meter) + "/readings",
+                     { value: meters[meter] }, b);
+        });
+        return;
+      }
+      var body = {};
+      if (Object.keys(meters).length) { body.meters = meters; }
+      if (ask.verb === "booked") {
+        var at = endOfDay(when && when.value);
+        if (!at) {
+          answerFailed(b, "when is the appointment?");
+          return;
+        }
+        body.at = at;
+      }
       b.disabled = true;
-      postAnswer("/api/v1/home/meters/" + encodeURIComponent(ask.meter) + "/readings", { value: v }, b);
+      postAnswer("/api/v1/home/commitments/" + encodeURIComponent(ref) + "/" +
+                 encodeURIComponent(ask.verb), body, b);
     });
-    wrap.appendChild(make("span", "muted nowrap", ask.label));
-    wrap.appendChild(box);
-    wrap.appendChild(b);
-    return wrap;
+    return b;
   }
 
   // answer posts one and reloads the card, or says why it did not go
@@ -822,13 +854,16 @@
     said.textContent = why;
   }
 
-  function decideBtn(seq, answer, label, cls) {
+  // `verdict` rather than `answer`: a parameter shadowing a helper of the
+  // same name is how a call to the WRONG `answer` compiled, passed a
+  // string-matching test, and shipped a card whose buttons all threw.
+  function decideBtn(seq, verdict, label, cls) {
     var b = make("button", cls, label);
     b.type = "button";
     b.addEventListener("click", function () {
       b.disabled = true;
       fetch("/api/v1/home/notices/answer?seq=" + encodeURIComponent(seq) +
-            "&answer=" + encodeURIComponent(answer), { method: "POST" })
+            "&answer=" + encodeURIComponent(verdict), { method: "POST" })
         .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
         .then(function (res) {
           if (!res.ok) { throw new Error(res.j.error || "that didn't go through"); }

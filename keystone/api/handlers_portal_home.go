@@ -168,6 +168,18 @@ type needsYouItem struct {
 	// that out for itself would be a second implementation of the
 	// state machine — drifting from the one that will refuse the write.
 	Asks []needsYouAsk `json:"asks,omitempty"`
+	// Needs are the numbers this item cannot be answered without. The
+	// card renders a box for each, ONCE, and every answer it offers
+	// carries whatever was typed — so the household types the odometer
+	// a single time whether they are recording it, closing the cycle or
+	// skipping it.
+	Needs []needsYouMeter `json:"needs,omitempty"`
+}
+
+// needsYouMeter is one number an item is waiting on.
+type needsYouMeter struct {
+	Meter string `json:"meter"`
+	Unit  string `json:"unit,omitempty"`
 }
 
 // needsYouAsk is one answer a member can give from the card.
@@ -176,10 +188,6 @@ type needsYouAsk struct {
 	// records it.
 	Verb  string `json:"verb"`
 	Label string `json:"label"`
-	// Meter is which number is being asked for, for the one ask that
-	// takes a value rather than a tap.
-	Meter string `json:"meter,omitempty"`
-	Unit  string `json:"unit,omitempty"`
 }
 
 type needsYouCard struct {

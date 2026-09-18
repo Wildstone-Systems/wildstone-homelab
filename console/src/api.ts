@@ -1095,6 +1095,8 @@ export interface CommitmentStanding {
   mayComplete?: string[];
   notify?: string[];
   disabled?: boolean;
+  rollover?: string;
+  requiresBooking?: boolean;
   occurrence: CommitmentOccurrence;
   booking?: CommitmentBooking;
 }
@@ -1108,6 +1110,9 @@ export interface CommitmentCompletion {
   waived?: boolean;
   reason?: string;
   positions?: Record<string, number>;
+  // The household event that closed this cycle, for a commitment that
+  // declares satisfiedBy. Absent for an answer a person gave.
+  externalId?: string;
 }
 
 export interface MeterReading {

@@ -22,6 +22,7 @@ package upkeep
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -335,6 +336,31 @@ func (e *Engine) input(res resource.Resource, meters map[string]commitment.Meter
 // `satisfiedBy`. The same rule has to govern both, and the version of
 // this that lived in the handler would have governed only the tap.
 func Evidence(st Standing, given map[string]float64) (map[string]float64, error) {
+	positions, missing := evidence(st, given)
+	if len(missing) > 0 {
+		return nil, fmt.Errorf(
+			"what did %s say? closing this without the number would leave the next one unmeasurable",
+			strings.Join(missing, " and "))
+	}
+	return positions, nil
+}
+
+// Missing names the meters a completion would need a number for and
+// cannot supply itself.
+//
+// IT EXISTS SO THAT A SURFACE CAN ASK THE SAME QUESTION THE WRITE PATH
+// WILL. A card that worked out for itself whether a number was wanted
+// got it wrong twice over: it offered Done on a commitment whose stale
+// odometer `Evidence` would refuse, so every tap returned 400; and on
+// one wedged by a pre-0042 completion it offered only a reading, which
+// cannot clear that rule, so there was no way forward at all. Both are
+// the group-membership fault again — two places deciding one question.
+func Missing(st Standing, given map[string]float64) []string {
+	_, missing := evidence(st, given)
+	return missing
+}
+
+func evidence(st Standing, given map[string]float64) (map[string]float64, []string) {
 	positions := map[string]float64{}
 	for k, v := range given {
 		positions[k] = v
@@ -356,12 +382,9 @@ func Evidence(st Standing, given map[string]float64) (map[string]float64, error)
 			positions[rule.Meter] = rule.Position
 			continue
 		}
-		missing = append(missing, rule.Meter)
+		if !slices.Contains(missing, rule.Meter) {
+			missing = append(missing, rule.Meter)
+		}
 	}
-	if len(missing) > 0 {
-		return nil, fmt.Errorf(
-			"what did %s say? closing this without the number would leave the next one unmeasurable",
-			strings.Join(missing, " and "))
-	}
-	return positions, nil
+	return positions, missing
 }

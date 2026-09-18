@@ -586,3 +586,44 @@ func (f *fixture) eventFor(eventType, subject string, when time.Time) {
 		f.t.Fatalf("AppendHouseholdEvent: %v", err)
 	}
 }
+
+// An event must not close the cycle that the work it describes OPENED.
+//
+// The harvest window ran from the open cycle's OpenedAt, which for a
+// fromCompletion or fromSchedule cycle IS the moment the last
+// completion landed. So a member who taps Done and a publisher who
+// emits `health.visit_completed` minutes later — the same visit,
+// recorded twice by two different doors — closed two cycles, and the
+// commitment skipped a year.
+func TestAnEventDoesNotCloseTheCycleItsOwnWorkOpened(t *testing.T) {
+	f := newFixture(t)
+	spec := checkup()
+	spec.SatisfiedBy = &resource.CommitmentSatisfiedBy{EventType: "health.visit_completed", Subject: "kai"}
+	f.commitment("kai-checkup", spec)
+
+	f.at(at(2026, time.September, 20))
+	f.tick()
+	before := f.standings()["kai-checkup"].Occurrence.Cycle
+
+	// The visit happens. A parent taps Done, and the clinic's publisher
+	// emits the same fact a few minutes later.
+	done := at(2026, time.September, 21)
+	if _, _, err := f.db.RecordCommitmentCompletion(runtimedb.CommitmentCompletion{
+		Commitment: "kai-checkup", At: done, RecordedBy: "mika"}); err != nil {
+		t.Fatal(err)
+	}
+	f.eventFor("health.visit_completed", "kai", done.Add(5*time.Minute))
+	f.at(at(2026, time.September, 22))
+	f.tick()
+
+	if got := f.completions("kai-checkup"); len(got) != 1 {
+		t.Errorf("completions = %d, want 1: the visit was recorded twice by two doors "+
+			"and closed two cycles", len(got))
+		for _, c := range got {
+			t.Logf("  %+v", c)
+		}
+	}
+	if got := f.standings()["kai-checkup"].Occurrence.Cycle; got != before+1 {
+		t.Errorf("cycle = %d, want %d: one visit advanced the commitment more than one cycle", got, before+1)
+	}
+}

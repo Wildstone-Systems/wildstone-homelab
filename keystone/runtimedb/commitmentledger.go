@@ -42,9 +42,7 @@ type CommitmentCompletion struct {
 
 // RecordCommitmentCompletion closes a cycle, with its evidence, in one
 // statement — so a crash cannot leave a cycle closed and the readings it
-// was closed at missing.
-// RecordCommitmentCompletion writes a closed cycle, and reports whether
-// it was already written.
+// was closed at missing — and reports whether it was already closed.
 //
 // `duplicate` is the same shape AppendMeterReading uses, and it exists
 // for the same reason: the caller has to be able to tell "recorded" from
