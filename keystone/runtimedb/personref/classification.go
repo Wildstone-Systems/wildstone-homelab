@@ -142,6 +142,8 @@ var Columns = []Column{
 
 	{"notices", "recipient", Human,
 		"schema: `recipient is the member`. Runtime filters, authorizes replies and offboards by it. Missed by the first name heuristic (#239 review)"},
+	{"household_banner", "set_by", Human,
+		"SetHouseholdBanner(image, mediaType, by) and SetHouseholdBannerPosition(x, y, by); both call sites pass the portal's `member`, which the door has already resolved to the household's own spelling. A `_by` name that is NOT the actor family: the banner has no machine writer — the portal is the only surface that sets it, and a household member is the only caller it admits (#238)"},
 	// ---- Actor: person OR machine principal; left as recorded text ----
 	{"chat_claim_codes", "identity", Actor,
 		"the identity a claim code was minted for; principal or member, as chat_bindings.identity"},
