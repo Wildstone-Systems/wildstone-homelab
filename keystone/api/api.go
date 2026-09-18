@@ -778,6 +778,23 @@ func (s *Server) authenticate(r *http.Request) (principal.Identity, bool) {
 // Console, and a concierge acting for a Member must keep working while
 // they are active — that is what a family Butler is.
 func (s *Server) actingPersonMayStillHold(id principal.Identity) bool {
+	// ActingFor, not actingMember(id), and the difference is a real gap
+	// that belongs to another slice.
+	//
+	// actingMember falls back to the principal's own NAME when a token
+	// acts for nobody, so a machine principal named after a person's
+	// handle writes their memory and their work under them. Checking
+	// that name here would revoke such a credential — but it would do it
+	// by treating a `principals` row and a `butler_members` row as the
+	// same person because they share a string, which merges the two
+	// registries decision 6 of #201 keeps apart. `root-admin` the
+	// credential and `root-admin` the household member are not the same
+	// subject, and a name collision must not make them one.
+	//
+	// The real defect is the fallback itself: a machine principal's name
+	// is not a person handle, and every actingMember call site inherits
+	// that. Narrowing the legacy machine axis is #210, which is where it
+	// can be fixed once rather than papered over here.
 	if id.ActingFor == "" {
 		return true
 	}
@@ -792,6 +809,14 @@ func (s *Server) actingPersonMayStillHold(id principal.Identity) bool {
 		return false
 	}
 	if len(people) == 0 {
+		// No Person of that name, so there is no lifecycle to check.
+		// This is the ordinary case for a machine credential —
+		// root-admin, an adapter, the node agent — and it must stay
+		// permissive: resolving "names nobody" to "refused" would fail
+		// the whole control plane closed. It is NOT the Console door's
+		// rule, which refuses an unknown name once the household has an
+		// Owner; a forwarded human identity and a machine credential are
+		// different questions.
 		return true
 	}
 	console := id.Role == runtimedb.RoleAdmin

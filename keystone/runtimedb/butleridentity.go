@@ -726,6 +726,24 @@ func (db *DB) ListSurfaceLinks(member string) ([]ButlerIdentityLink, error) {
 // exact match — a person the household has disabled cannot slip past a
 // lifecycle check by being spelled with a different capital letter.
 //
+// COLLATE NOCASE is ASCII-only, which is what handles are here.
+func (db *DB) ButlerMembersByHandleFold(handle string) ([]ButlerMember, error) {
+	rows, err := db.sql.Query(memberColumns+` WHERE b.member = ? COLLATE NOCASE ORDER BY b.member`, handle)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: matching butler members by handle: %w", err)
+	}
+	defer rows.Close()
+	var out []ButlerMember
+	for rows.Next() {
+		m, err := scanMember(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // HouseholdHasAnOwner reports whether any active Owner is on record.
 //
 // It answers one question: has this household been provisioned at all?
@@ -748,22 +766,4 @@ func (db *DB) HouseholdHasAnOwner() (bool, error) {
 		return false, fmt.Errorf("runtimedb: counting active owners: %w", err)
 	}
 	return n > 0, nil
-}
-
-// COLLATE NOCASE is ASCII-only, which is what handles are here.
-func (db *DB) ButlerMembersByHandleFold(handle string) ([]ButlerMember, error) {
-	rows, err := db.sql.Query(memberColumns+` WHERE b.member = ? COLLATE NOCASE ORDER BY b.member`, handle)
-	if err != nil {
-		return nil, fmt.Errorf("runtimedb: matching butler members by handle: %w", err)
-	}
-	defer rows.Close()
-	var out []ButlerMember
-	for rows.Next() {
-		m, err := scanMember(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
 }

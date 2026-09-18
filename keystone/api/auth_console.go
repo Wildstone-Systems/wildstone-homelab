@@ -170,7 +170,21 @@ func (s *Server) forwardedUserMayHoldConsole(user string) bool {
 			// A lookup that failed is not a lookup that passed.
 			return false
 		}
-		return !provisioned
+		if provisioned {
+			// Said out loud, because this refusal is the one an operator
+			// cannot diagnose from the outside: the directory still says
+			// they may, the Console just stops. It is also the one that
+			// arrives on UPGRADE — a deployment whose forwarded name
+			// never exactly matched a recorded handle was admitted
+			// before and is not now — so the log line has to name the
+			// handle and the fix, or the first anybody knows is a blank
+			// screen.
+			s.Log.Warn("console refused: no household record for that name",
+				"user", user,
+				"fix", "add them on the Household screen, or `wild household members add`")
+			return false
+		}
+		return true
 	}
 	// Every match must qualify. With two records differing only by case
 	// there is no way to tell which one the proxy meant, and an
