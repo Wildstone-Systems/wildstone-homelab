@@ -235,6 +235,9 @@ func (s *Server) portal(surface portalSurface, h portalFunc) http.Handler {
 // accepting photos because a log write failed is a worse outcome than
 // an upload with no row. That is the same trade the admin chain makes.
 func (s *Server) audit(r *http.Request, member string, status int) {
+	if !auditWorthy(r, status) {
+		return
+	}
 	if member == "" {
 		member = "anonymous"
 	}
@@ -336,4 +339,37 @@ func (s *Server) portalAsset(h portalFunc) http.Handler {
 			s.writeJSON(w, status, body)
 		}
 	})
+}
+
+// polledPaths are the read-only projections a page refreshes on a
+// timer. A closed set, and deliberately a short one.
+var polledPaths = map[string]bool{
+	"/api/v1/home/summary": true,
+}
+
+// auditWorthy reports whether one portal request earns an audit row.
+//
+// Everything does, except a SUCCESSFUL GET of a projection a page polls.
+//
+// The household's front page refreshes every twenty seconds so the
+// machine card and the activity list are current rather than frozen at
+// whenever somebody last pressed reload. A wall tablet left on all day
+// is four thousand of those, nothing in this database prunes the audit
+// table, and four thousand rows a day saying "a dashboard refreshed
+// itself" would bury the rows that say a person answered a question or
+// deleted a file at about a hundred to one.
+//
+// It is the same trade portalAsset already makes for the stylesheet and
+// the icons. What is NOT traded away is everything that matters: every
+// refusal is still recorded — somebody outside the group hammering this
+// endpoint is exactly the case the log is for — and every write still
+// is, because the set above is read-only projections and nothing else.
+func auditWorthy(r *http.Request, status int) bool {
+	if r.Method != http.MethodGet {
+		return true
+	}
+	if status < 200 || status >= 300 {
+		return true
+	}
+	return !polledPaths[r.URL.Path]
 }

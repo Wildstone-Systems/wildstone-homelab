@@ -697,3 +697,85 @@ func TestNoCalendarServerOffersNoHandOff(t *testing.T) {
 		t.Errorf("problem = %q", got.Problem)
 	}
 }
+
+// A polled read writes no audit row; everything else still does.
+//
+// The front page refreshes every twenty seconds, nothing prunes the
+// audit table, and four thousand rows a day saying a dashboard
+// refreshed itself would bury the rows that say a person did something.
+// What must NOT be traded away is the refusals and the writes.
+func TestAPolledReadIsNotAuditedButEverythingElseIs(t *testing.T) {
+	h := homeHarness(t)
+
+	countRows := func() int {
+		rows, err := h.s.DB.ListAudit(500)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, r := range rows {
+			if r.Principal == portalPrincipal {
+				n++
+			}
+		}
+		return n
+	}
+
+	before := countRows()
+
+	// Four successful polls: no rows.
+	for i := 0; i < 4; i++ {
+		h.summary(t, "sandy")
+	}
+	if got := countRows(); got != before {
+		t.Errorf("a successful poll wrote %d audit rows", got-before)
+	}
+
+	// A refusal on the same path still writes one — somebody outside
+	// the group hammering this endpoint is what the log is for.
+	res := h.member(http.MethodGet, "/api/v1/home/summary", "stranger", "some_other_group", nil, "")
+	res.Body.Close()
+	if got := countRows(); got != before+1 {
+		t.Errorf("a refused poll wrote %d rows, want 1", got-before)
+	}
+
+	// And a write is always recorded, even on the polled surface.
+	before = countRows()
+	res = h.member(http.MethodPost, "/api/v1/home/notices/clear", "sandy", "homepage_users", nil, "")
+	res.Body.Close()
+	if got := countRows(); got <= before {
+		t.Error("a write on the portal was not audited")
+	}
+}
+
+// The suppression is a closed set, not a rule about GETs.
+func TestOnlyTheNamedProjectionsGoUnaudited(t *testing.T) {
+	get := func(path string) *http.Request {
+		r, err := http.NewRequest(http.MethodGet, path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	// The one that polls.
+	if auditWorthy(get("/api/v1/home/summary"), 200) {
+		t.Error("the polled summary is audited on success")
+	}
+	// Everything else a member can read is not in the set.
+	for _, path := range []string{
+		"/api/v1/activity", "/api/v1/filedrop/list", "/api/v1/filedrop/file",
+		"/api/v1/assistant/memory", "/api/v1/assistant/conversations",
+	} {
+		if !auditWorthy(get(path), 200) {
+			t.Errorf("%s went unaudited; the set is meant to be short", path)
+		}
+	}
+	// A refusal and a write on the polled path are still worthy.
+	if !auditWorthy(get("/api/v1/home/summary"), 403) {
+		t.Error("a refused poll is not audited")
+	}
+	post, _ := http.NewRequest(http.MethodPost, "/api/v1/home/summary", nil)
+	if !auditWorthy(post, 200) {
+		t.Error("a POST went unaudited because its path is in the polled set")
+	}
+}

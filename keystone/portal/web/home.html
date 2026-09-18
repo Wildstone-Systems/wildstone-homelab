@@ -435,20 +435,67 @@
   skeletons(el("activity"), 4);
   skeletons(el("notif-body"), 3);
 
-  function load() {
+  // ---- keeping the page current.
+  //
+  // WHY IT POLLS AT ALL. This is a page that lives on a wall tablet. The
+  // clock ticked and nothing else did, so "this machine" showed whatever
+  // the disk was doing when somebody last pressed reload — which for a
+  // card whose entire job is telling a household the machine is fine is
+  // worse than showing nothing.
+  //
+  // WHY 20 SECONDS. The readings are cached server-side for 15, so
+  // anything faster asks the agent for a number it has already decided
+  // not to re-measure. Slower and the card stops feeling like it is
+  // watching anything.
+  //
+  // WHY IT PAUSES WHEN HIDDEN. A tablet by the door is on all day with
+  // the page in front of it. A phone in a pocket is not, and a
+  // background tab polling a household's control plane all night is
+  // rude. It catches up the moment the tab is looked at again, because
+  // somebody who wakes a tablet wants the state now, not in twenty
+  // seconds.
+  var refreshEvery = 20000, refreshTimer = null;
+
+  function startRefreshing() {
+    stopRefreshing();
+    refreshTimer = setInterval(function () { load(true); }, refreshEvery);
+  }
+  function stopRefreshing() {
+    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) { stopRefreshing(); return; }
+    load(true);
+    startRefreshing();
+  });
+
+  function load(isRefresh) {
     fetch("/api/v1/home/summary", { headers: { accept: "application/json" } })
       .then(function (r) { if (!r.ok) { throw new Error("http " + r.status); } return r.json(); })
-      .then(render)
+      .then(function (d) { render(d, isRefresh); })
       .catch(function (err) {
-        var m = document.querySelector("main");
-        clear(m);
-        note(m, "bad",
+        // A failed REFRESH leaves the page alone. Replacing a working
+        // dashboard with an error because one poll missed would make a
+        // brief blip look like an outage, and the next poll will either
+        // fix it or the household will notice the clock is the only
+        // thing still moving.
+        if (isRefresh) { return; }
+        // A failed FIRST load says so in the band and LEAVES THE PAGE
+        // STANDING. The first version of this tore out <main> — which
+        // meant polling never started, no later poll had anywhere to
+        // render into, and a dashboard that failed once during a
+        // restart stayed broken until somebody walked over and reloaded
+        // it. On a wall tablet that is the whole failure mode.
+        var box = el("conditions");
+        clear(box);
+        note(box, "bad",
           "Can't reach Wildstone right now, so this page can't tell you what's happening at home.",
-          String(err.message || err));
+          "It keeps trying.");
+        startRefreshing();
       });
   }
 
-  function render(d) {
+  function render(d, isRefresh) {
     asOf = d.as ? new Date(d.as) : new Date();
     member = d.member || "";
     // The household's hue comes from desired state; a viewer may be
@@ -493,8 +540,25 @@
     el("m-files").hidden = !s.files;
     el("assistant-wid").hidden = !s.assistant;
     el("m-assistant").hidden = !s.assistant;
+
+    // THE TWO ACTING SURFACES ARE NOT RE-INITIALISED ON A REFRESH, and
+    // this is the line that makes polling safe. Both hold state the
+    // server does not know about: a conversation and its session, a
+    // half-typed question, an upload with a progress bar halfway
+    // across. Re-running their setup every twenty seconds would throw
+    // all of that away — a poll that erases what somebody is doing is
+    // worse than a stale card.
+    //
+    // The recent-files list IS refreshed, because it is a read like any
+    // other — unless an upload is in flight, whose row lives in that
+    // same list and would vanish mid-progress.
+    if (isRefresh) {
+      if (s.files && uploadsInFlight === 0) { loadRecent(); }
+      return;
+    }
     if (s.files) { loadFiles(); }
     if (s.assistant) { loadAssistant(); }
+    startRefreshing();
   }
 
   function initialsOf(name) {
@@ -672,6 +736,10 @@
     });
   }
 
+  // Whether the member has opened the full list. Survives a refresh,
+  // because they asked for it.
+  var notifExpanded = false;
+
   // ---- Notifications. Two rows at a time, so the card's height is
   // fixed whatever the backlog.
   function renderNotifications(c) {
@@ -690,13 +758,18 @@
       return;
     }
     el("notif-clear").hidden = false;
-    var shown = c.items.slice(0, 2), rest = c.items.slice(2);
+    // Two rows, unless the member has already asked for the rest — a
+    // refresh that folded the list back up every twenty seconds would
+    // make the disclosure unusable.
+    var shown = notifExpanded ? c.items : c.items.slice(0, 2);
+    var rest = notifExpanded ? [] : c.items.slice(2);
     shown.forEach(function (n) { body.appendChild(notifRow(n)); });
     if (rest.length) {
       var more = make("button", "hbtn hbtn-ghost", rest.length + " more");
       more.type = "button";
       more.appendChild(icon("caret-down"));
       more.addEventListener("click", function () {
+        notifExpanded = true;
         more.remove();
         rest.forEach(function (n) { body.appendChild(notifRow(n)); });
       });
@@ -743,7 +816,10 @@
     appStatus = d.appStatus || {};
     statusKnown = !!d.statusKnown;
     groupOrder = d.groups || [];
-    paintLauncher("");
+    // Whatever is in the box, not "". A refresh that cleared somebody's
+    // half-typed filter would make the search box feel broken every
+    // twenty seconds.
+    paintLauncher(el("search").value || "");
   }
 
   function paintLauncher(term) {
@@ -929,6 +1005,10 @@
   }
 
   var filesCaps = null;
+  // How many uploads are mid-flight. A refresh leaves the recent list
+  // alone while any are, because their progress rows live in it and
+  // would vanish halfway across.
+  var uploadsInFlight = 0;
   skeletons(el("files-recent"), 3);
 
   function loadFiles() {
@@ -1040,6 +1120,8 @@
       el("files-recent").insertBefore(row, el("files-recent").firstChild);
 
       var xhr = new XMLHttpRequest();
+      uploadsInFlight++;
+      xhr.addEventListener("loadend", function () { uploadsInFlight--; });
       xhr.open("POST", "/api/v1/filedrop/upload?namespace=" + encodeURIComponent(ns) +
                        "&name=" + encodeURIComponent(file.name));
       xhr.setRequestHeader("Content-Type", "application/octet-stream");
