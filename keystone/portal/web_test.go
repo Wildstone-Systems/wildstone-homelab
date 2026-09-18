@@ -18,7 +18,7 @@ import (
 )
 
 // pages are the surfaces Page serves.
-var pages = []string{"home", "files", "assistant", "activity", "files-widget", "assistant-widget"}
+var pages = []string{"home", "files", "assistant", "activity", "files-widget", "assistant-widget", "calendar"}
 
 // classAttr finds every class="..." in a page.
 var classAttr = regexp.MustCompile(`class="([^"{}]+)"`)
