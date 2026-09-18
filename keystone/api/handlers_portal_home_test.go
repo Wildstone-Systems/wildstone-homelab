@@ -17,11 +17,13 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -777,5 +779,40 @@ func TestOnlyTheNamedProjectionsGoUnaudited(t *testing.T) {
 	post, _ := http.NewRequest(http.MethodPost, "/api/v1/home/summary", nil)
 	if !auditWorthy(post, 200) {
 		t.Error("a POST went unaudited because its path is in the polled set")
+	}
+}
+
+// The group names the front page compares against are the ones the
+// renderer actually emits.
+//
+// The page decides two things by group name: which group carries the
+// "Add something" link into the catalog, and which one says it is
+// reachable over the tailnet. Both are string comparisons against names
+// that live in Go (reconcile.Groups), so a rename there would silently
+// take the catalog link off the page — no error, no failing test, just
+// a household that can no longer find the way to ask for an app.
+func TestThePageAndTheRendererAgreeOnGroupNames(t *testing.T) {
+	page, ok := portal.Page("home")
+	if !ok {
+		t.Fatal("the front page is not served")
+	}
+	// The names the page compares against, read out of its own source
+	// rather than restated here — a copy in this test would drift with
+	// the page instead of catching it.
+	decl := regexp.MustCompile(`var householdGroup = "([^"]+)", adminGroup = "([^"]+)";`).
+		FindStringSubmatch(string(page))
+	if decl == nil {
+		t.Fatal("the page no longer declares the group names where this test can read them")
+	}
+
+	emitted := map[string]bool{}
+	for _, g := range reconcile.Groups() {
+		emitted[g] = true
+	}
+	for _, name := range []string{decl[1], decl[2]} {
+		if !emitted[name] {
+			t.Errorf("the page looks for group %q, which the renderer does not emit (it emits %v)",
+				name, reconcile.Groups())
+		}
 	}
 }

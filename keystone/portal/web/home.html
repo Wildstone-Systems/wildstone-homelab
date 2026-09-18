@@ -801,6 +801,11 @@
 
   // ---- the launcher.
   var allApps = [], appStatus = {}, statusKnown = true, groupOrder = [];
+  // The household's own group, by the name the renderer gives it
+  // (reconcile.Groups). Named here rather than inline so the two places
+  // this page compares a group name are one edit apart if it ever
+  // changes.
+  var householdGroup = "Household", adminGroup = "Admin";
   // The renderer emits dashboard-icons slugs, and a few Material Design
   // names for things with no logo of their own. Those map onto the
   // glyph font rather than rendering as a broken image.
@@ -845,13 +850,27 @@
       sec.style.marginBottom = "var(--space-8)";
       var head = make("div", "secthead");
       head.appendChild(make("h2", null, group));
-      if (group === "Admin") {
+      if (group === adminGroup) {
         head.appendChild(make("span", "muted nowrap", "reachable over the tailnet"));
       } else if (!statusKnown) {
         // Not a grid of red dots, which would read as a total outage.
         head.appendChild(make("span", "muted nowrap", "can't check which apps are up"));
       }
       head.appendChild(make("span", "fade"));
+      // The way in to the catalog, where the design puts it: on the
+      // household's own group, because that is where somebody is
+      // looking when they notice the house does not have the thing they
+      // want. Not on Admin — operator-class capabilities are not
+      // requestable from a household surface at all, and a link
+      // implying otherwise would send a member to a page that omits
+      // exactly what they clicked it for.
+      if (group === householdGroup) {
+        var add = make("a", "hbtn hbtn-ghost");
+        add.href = "/catalog/";
+        add.appendChild(icon("plus"));
+        add.appendChild(make("span", null, "Add something"));
+        head.appendChild(add);
+      }
       sec.appendChild(head);
       var grid = make("div", "appgrid");
       inGroup.forEach(function (a) { grid.appendChild(appCard(a)); });
