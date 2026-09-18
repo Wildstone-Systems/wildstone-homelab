@@ -105,6 +105,26 @@ type Turn struct {
 	// is untouched.
 	AsOwner bool
 
+	// Connection names the CONNECTION the request arrived through, and
+	// it carries a ceiling of its own: a set of tools refused on this
+	// surface whatever the Butler, the grants or the administrative
+	// controls would otherwise allow (connection.go).
+	//
+	// It is not the same as RequireSurface below, and the difference is
+	// the point. The surface test is about the BUTLER — is this one
+	// entitled to answer a family caller. This is about the REQUEST —
+	// whatever that Butler may do elsewhere, an operator-class tool is
+	// refused when the question came from the household's dashboard.
+	// The first catches a Butler built with too much; the second
+	// catches an existing operator Butler exposed on the wrong surface
+	// by mistake, and only the second is still true when somebody
+	// hand-crafts the request.
+	//
+	// Empty means no connection ceiling, which is right for the Console
+	// and for the chat adapters: each already has its own, and a name
+	// here that nothing set would be a ceiling nobody chose.
+	Connection ConnectionScope
+
 	// RequireSurface is the structural ceiling the caller arrived
 	// through, and a Butler on any other surface is refused.
 	//
@@ -381,4 +401,18 @@ func (bs *Butlers) Sole(surface runtimedb.ButlerSurface, member string, asOwner 
 		}
 		return runtimedb.Butler{}, fmt.Errorf("%w: %s", ErrAmbiguousButler, strings.Join(names, ", "))
 	}
+}
+
+// ConnectionScope is one connection's rule, as the narrowest thing a
+// caller can hand over: a name for refusals to cite, and a predicate.
+//
+// An interface-free shape on purpose. butlerlive should not import the
+// surfaces that call it — the portal knows what the portal denies — and
+// a function value is the whole of what this package needs to enforce
+// it.
+type ConnectionScope struct {
+	// Name is what a refusal cites, e.g. "household_portal".
+	Name string
+	// Permits answers for one tool. A nil Permits is no ceiling.
+	Permits func(tool string) (bool, string)
 }

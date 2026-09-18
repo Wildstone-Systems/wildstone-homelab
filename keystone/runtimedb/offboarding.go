@@ -103,10 +103,17 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 	}
 	// Ownership moves to a Person, so the administrator taking it on
 	// has to be one. Resolved once, before any transfer, so a bad
-	// administrator fails before half the work has moved.
-	adminPerson, err := resolvePersonID(db.sql, administrator)
-	if err != nil {
-		return result, fmt.Errorf("runtimedb: transferring shared work: the administrator %w", err)
+	// administrator fails before half the work has moved — and resolved
+	// only when there IS shared work, because an offboarding with
+	// nothing to hand over does not need somebody to hand it to. A
+	// household whose operator is not itself a declared person can
+	// still offboard a member who owns nothing shared.
+	adminPerson := ""
+	if anySharedWork(tasks) {
+		var err error
+		if adminPerson, err = resolvePersonID(db.sql, administrator); err != nil {
+			return result, fmt.Errorf("runtimedb: transferring shared work: the administrator %w", err)
+		}
 	}
 	for _, t := range tasks {
 		switch t.State {
@@ -312,4 +319,26 @@ func (db *DB) ListOffboardingRecords(member string) ([]OffboardingRecord, error)
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// anySharedWork reports whether any of these tasks is shared work still
+// in flight — the only kind an offboarding transfers.
+//
+// It repeats the loop's own two conditions rather than being folded
+// into it, because the administrator has to resolve BEFORE the first
+// transfer: discovering a bad one partway through would leave some work
+// moved and the rest not, which is the state this function exists to
+// avoid.
+func anySharedWork(tasks []ButlerTask) bool {
+	for _, t := range tasks {
+		switch t.State {
+		case ButlerTaskPending, ButlerTaskRunning, ButlerTaskWaiting:
+		default:
+			continue
+		}
+		if t.Audience == ButlerAudienceShared {
+			return true
+		}
+	}
+	return false
 }

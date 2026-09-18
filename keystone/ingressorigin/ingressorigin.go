@@ -158,6 +158,15 @@ var wellKnown = map[string]int{
 	// colliding with it. A pin is a preference the assigner honours
 	// first, not a claim two hosts can share.
 	"podcasts": 48443, // podcasts-podgrab, via podcasts_subdomain
+
+	// The household portal's two surfaces (#197, #198). Both are served
+	// by Keystone itself rather than by a container, and both are
+	// EMBEDDED in the dashboard — so their addresses are baked into the
+	// rendered services.yaml as iframe sources. An unpinned port here
+	// would move on the next install and leave the family's dashboard
+	// showing two empty frames.
+	"drop":      49443, // filedrop-wildstone, via drop_subdomain
+	"assistant": 50443, // assistant-wildstone, via assistant_subdomain
 }
 
 // Of derives the addressing posture from desired state.

@@ -60,7 +60,7 @@ func TestOnlyAdminsDeclareUrgentKinds(t *testing.T) {
 // A reply that is not clearly yes or no does nothing, and says so.
 func TestAmbiguousAnswerIsRefusedWithAnExplanation(t *testing.T) {
 	h := newHarness(t)
-	h.member("op")
+	h.person("op")
 	raised, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
 		Kind: "approval", Recipient: "op", DedupeKey: "n1", Asks: true,
 	}, runtimedb.DefaultButlerSettings(), timeSoon())
@@ -94,7 +94,7 @@ func TestAmbiguousAnswerIsRefusedWithAnExplanation(t *testing.T) {
 // finds out they were never told.
 func TestMissedNoticesAreVisible(t *testing.T) {
 	h := newHarness(t)
-	h.member("op")
+	h.person("op")
 	// Raised an hour ago with a one-millisecond life: nobody was ever
 	// going to see it.
 	if _, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{

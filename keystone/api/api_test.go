@@ -83,7 +83,7 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
-// member puts a household member on record.
+// person puts a household member on record.
 //
 // Since migration 0040 a task's author and owner, a memory record's
 // author and a notice's recipient are foreign keys to a Person, so a
@@ -91,11 +91,23 @@ func newHarness(t *testing.T) *harness {
 // Machine principals are not people and are deliberately not recorded
 // here: `root-admin`, `op` and the adapters keep appearing in these
 // tests as actors, which is what they are.
-func (h *harness) member(handles ...string) {
+//
+// Named person rather than member because harness.member is the portal
+// tests' REQUEST helper — one issues a call as somebody, this one says
+// who somebody is.
+// They are ADMITTED as well as recorded, because the portal's door asks
+// Active(): a record alone is a person the household has heard of and
+// not let in, and a fixture that leaves them there is testing a
+// half-onboarded member nobody meant to create. Tests about admission
+// itself record and admit by hand.
+func (h *harness) person(handles ...string) {
 	h.t.Helper()
 	for _, handle := range handles {
 		if err := h.s.DB.RecordButlerMember(handle, runtimedb.RoleMember, "", ""); err != nil {
 			h.t.Fatalf("recording %q: %v", handle, err)
+		}
+		if err := h.s.DB.AdmitButlerMember(handle, "fixture"); err != nil {
+			h.t.Fatalf("admitting %q: %v", handle, err)
 		}
 	}
 }
@@ -110,7 +122,7 @@ func (h *harness) member(handles ...string) {
 // every fixture that asks a Butler mints one of these instead.
 func (h *harness) console(role runtimedb.Role, handle string) string {
 	h.t.Helper()
-	h.member(handle)
+	h.person(handle)
 	tok, err := h.s.Principals.Mint(principalNameFor(h.t, role), handle, 0)
 	if err != nil {
 		h.t.Fatalf("minting a %s token acting for %q: %v", role, handle, err)

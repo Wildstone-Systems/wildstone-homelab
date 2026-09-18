@@ -1,0 +1,398 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catalog</title>
+<link rel="stylesheet" href="/portal/assets/nocturne.css">
+<!--
+  The Catalog: everything the household could run, and the request that
+  turns "ask Ray for an app" into something the owner can act on.
+
+  REQUEST, DON'T INSTALL. Sending installs nothing and proposes no plan.
+  A member says which app and why; the owner approves it and picks the
+  machine, because that is the one field a member must not fill in.
+  There is no field anywhere on this page for a node, a path, an address
+  or a secret.
+
+  WHAT IS ABSENT IS PART OF THE DESIGN. Sign-in, the network, backups,
+  monitoring and the machines are not here and are not refused here —
+  the server never sends them. The note at the foot says so once, which
+  beats a member finding a control that turns them down.
+
+  THE DRAFT IS FIVE LINES, and four of them are read-only. That is the
+  point: a member should be able to see exactly what they are asking
+  for, and see that the consequential parts are not theirs to decide.
+-->
+<style>
+  .chips { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  .catgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-3); }
+  .cat { text-align: left; cursor: pointer; }
+  .cat.installed { opacity: .55; cursor: default; }
+  .cat:disabled { cursor: default; }
+  .draftrow { display: flex; gap: var(--space-4); padding: var(--space-2) 0; font-size: 13px; }
+  .draftrow .k { width: 110px; flex: none; color: var(--muted); }
+  .draftrow .v { flex: 1; min-width: 0; }
+  dialog {
+    border: 0; border-radius: var(--radius-lg); padding: var(--space-8);
+    background: var(--color-surface); color: var(--color-text);
+    max-width: 520px; width: calc(100vw - 32px); box-shadow: var(--shadow-lg);
+  }
+  dialog::backdrop { background: rgba(0,0,0,.55); }
+  .reqrow { display: flex; gap: var(--space-3); align-items: baseline; padding: var(--space-3) 0;
+            border-bottom: 1px solid var(--faint); flex-wrap: wrap; }
+  .reqrow:last-child { border-bottom: 0; }
+</style>
+
+<main class="page">
+  <div class="spread" style="margin-bottom: var(--space-6)">
+    <a class="hbtn hbtn-ghost" href="/home/"><i class="ph ph-arrow-left" aria-hidden="true"></i> Home</a>
+    <span class="fade" aria-hidden="true"></span>
+    <span class="muted" id="member"></span>
+  </div>
+
+  <div class="row-between" style="margin-bottom: var(--space-6)">
+    <div>
+      <h1>Add something</h1>
+      <div class="muted">Everything the household could run. You ask; the owner installs.</div>
+    </div>
+  </div>
+
+  <div class="search" style="margin-bottom: var(--space-4)">
+    <i class="ph ph-magnifying-glass" style="font-size: 17px; color: var(--muted)" aria-hidden="true"></i>
+    <label class="sr" for="search">Search the catalog</label>
+    <input id="search" type="text" placeholder="Search the catalog…">
+  </div>
+
+  <div class="seg chips" id="cats" role="tablist" style="margin-bottom: var(--space-6)"></div>
+
+  <div id="note"></div>
+  <div id="list"></div>
+
+  <section class="stack" style="margin-top: var(--space-8)">
+    <div class="spread">
+      <h2 style="font-family: var(--font-heading); font-weight: 500; font-size: 17px; margin: 0">Your requests</h2>
+      <span class="fade" aria-hidden="true"></span>
+      <span class="muted" id="requests-note"></span>
+    </div>
+    <div class="surface" style="padding: var(--space-4) var(--space-6)" id="requests"></div>
+  </section>
+
+  <footer class="muted" style="margin-top: var(--space-8); font-size: 12px" id="omission"></footer>
+</main>
+
+<dialog id="draft">
+  <div class="spread" style="margin-bottom: var(--space-4)">
+    <span class="applogo" id="d-logo"></span>
+    <div style="flex: 1; min-width: 0">
+      <div style="font-size: 16px; font-weight: 500" id="d-title"></div>
+      <div class="muted" id="d-what"></div>
+    </div>
+  </div>
+
+  <div id="d-flags"></div>
+
+  <!-- The plan the owner would approve, in five lines. Four are
+       read-only, and the machine is read-only because it is the owner's
+       call — a member never names one. -->
+  <div class="stack" style="gap: 0; margin: var(--space-4) 0">
+    <div class="draftrow"><span class="k">The app</span><span class="v" id="d-package"></span></div>
+    <div class="draftrow"><span class="k">Where</span><span class="v muted" id="d-address">an address on the household's own network</span></div>
+    <div class="draftrow"><span class="k">Sign-in</span><span class="v muted">your household account, through the usual sign-in page</span></div>
+    <div class="draftrow"><span class="k">Backed up</span><span class="v muted" id="d-backup">with the household's other data</span></div>
+    <div class="draftrow"><span class="k">Machine</span><span class="v muted">the owner chooses — not set here</span></div>
+  </div>
+
+  <div id="d-profiles" hidden style="margin-bottom: var(--space-4)">
+    <div class="eyebrow" style="margin-bottom: var(--space-2)">Which one</div>
+    <div class="seg chips" id="d-profile-seg"></div>
+  </div>
+
+  <div class="composer" style="margin-bottom: var(--space-4)">
+    <label class="sr" for="d-note">Why you want it</label>
+    <textarea id="d-note" rows="2" placeholder="Why you'd like it — this travels with the request"></textarea>
+  </div>
+
+  <div id="d-result"></div>
+  <div class="asks" style="justify-content: flex-end">
+    <button class="hbtn hbtn-secondary" id="d-cancel" type="button">Cancel</button>
+    <button class="hbtn hbtn-primary" id="d-send" type="button">Send to the owner</button>
+  </div>
+</dialog>
+
+<script>
+(function () {
+  "use strict";
+
+  function el(id) { return document.getElementById(id); }
+  function text(id, v) { var n = el(id); if (n) { n.textContent = v; } }
+  function clear(n) { while (n && n.firstChild) { n.removeChild(n.firstChild); } }
+  function make(tag, cls, content) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (content !== undefined && content !== null) { n.textContent = String(content); }
+    return n;
+  }
+  function icon(name, size, colour) {
+    var i = make("i", "ph ph-" + name);
+    if (size) { i.style.fontSize = size; }
+    if (colour) { i.style.color = colour; }
+    i.setAttribute("aria-hidden", "true");
+    return i;
+  }
+  function note(box, kind, message) {
+    clear(box);
+    var n = make("div", "note note-" + kind);
+    n.appendChild(icon(kind === "bad" ? "warning-circle" : "warning", "17px"));
+    var b = make("div", null, message);
+    b.style.flex = "1";
+    n.appendChild(b);
+    box.appendChild(n);
+  }
+  function ago(iso) {
+    var d = (Date.now() - new Date(iso)) / 1000;
+    if (d < 60) { return "just now"; }
+    if (d < 3600) { return Math.round(d / 60) + "m ago"; }
+    if (d < 86400) { return Math.round(d / 3600) + "h ago"; }
+    var y = Math.round(d / 86400);
+    return y === 1 ? "yesterday" : y + " days ago";
+  }
+
+  var cards = [], categories = [], category = "", term = "", current = null, chosenProfile = "";
+
+  function start() {
+    fetch("/api/v1/catalog", { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "Can't read the catalog."); }
+        cards = res.j.cards || [];
+        categories = res.j.categories || [];
+        text("omission", res.j.note || "");
+        buildChips();
+        paint();
+      })
+      .catch(function (err) { note(el("note"), "bad", String(err.message || err)); });
+    loadRequests();
+  }
+
+  function buildChips() {
+    var box = el("cats");
+    clear(box);
+    var all = make("button", "on", "Everything");
+    all.type = "button";
+    all.addEventListener("click", function () { pick("", all); });
+    box.appendChild(all);
+    categories.forEach(function (c) {
+      // A category with nothing in it is omitted, not shown empty.
+      if (!cards.some(function (k) { return k.category === c.key; })) { return; }
+      var b = make("button", "", c.title);
+      b.type = "button";
+      b.addEventListener("click", function () { pick(c.key, b); });
+      box.appendChild(b);
+    });
+  }
+
+  function pick(key, btn) {
+    category = key;
+    Array.prototype.forEach.call(el("cats").children, function (o) {
+      o.className = o === btn ? "on" : "";
+    });
+    paint();
+  }
+
+  function paint() {
+    var box = el("list");
+    clear(box);
+    var shown = cards.filter(function (c) {
+      if (category && c.category !== category) { return false; }
+      if (!term) { return true; }
+      return (c.title + " " + (c.what || "") + " " + c.capability).toLowerCase().indexOf(term) >= 0;
+    });
+    if (!shown.length) {
+      // Searches the household's own catalog only, and says so rather
+      // than silently becoming an internet search.
+      box.appendChild(make("div", "muted", term
+        ? "Nothing in the household's catalog matches " + term
+        : "Nothing in this group."));
+      return;
+    }
+    var grid = make("div", "catgrid");
+    shown.forEach(function (c) { grid.appendChild(card(c)); });
+    box.appendChild(grid);
+  }
+
+  function card(c) {
+    var b = make("button", "appcard cat" + (c.installed ? " installed" : ""));
+    b.type = "button";
+    // Installed capabilities show in place, dimmed and not clickable, so
+    // nobody requests a second Jellyfin.
+    if (c.installed) { b.disabled = true; }
+
+    var logo = make("span", "applogo");
+    if (c.icon && c.icon.indexOf("mdi-") !== 0) {
+      var img = document.createElement("img");
+      img.src = "/portal/icons/" + encodeURIComponent(c.icon) + ".svg";
+      img.alt = "";
+      img.addEventListener("error", function () {
+        clear(logo);
+        logo.appendChild(icon("squares-four", "20px", "var(--muted)"));
+      });
+      logo.appendChild(img);
+    } else {
+      logo.appendChild(icon("squares-four", "20px", "var(--muted)"));
+    }
+    b.appendChild(logo);
+
+    var t = make("div");
+    t.style.cssText = "flex:1;min-width:0";
+    var top = make("div", "spread");
+    top.appendChild(make("span", "appname", c.title));
+    if (c.installed) { top.appendChild(make("span", "pill pill-ok", "installed")); }
+    // An empty label emits no pill at all: a grey blob beside a name
+    // reads as a broken glyph.
+    if (c.sensitivity) { top.appendChild(make("span", "pill pill-warn", c.sensitivity)); }
+    t.appendChild(top);
+    // Nothing describes some packages, and the card says so rather than
+    // inventing what an app does.
+    t.appendChild(make("div", "appdesc", c.what || "No description yet"));
+    t.appendChild(make("div", "muted", c.capability + " · " + c.profile));
+    b.appendChild(t);
+
+    if (!c.installed) {
+      b.addEventListener("click", function () { openDraft(c); });
+    }
+    return b;
+  }
+
+  // ---- the draft.
+  function openDraft(c) {
+    current = c;
+    chosenProfile = c.profile;
+    text("d-title", c.title);
+    text("d-what", c.what || "");
+    text("d-package", c.title + " (" + c.package + ")");
+    clear(el("d-result"));
+    el("d-note").value = "";
+
+    var logo = el("d-logo");
+    clear(logo);
+    if (c.icon && c.icon.indexOf("mdi-") !== 0) {
+      var img = document.createElement("img");
+      img.src = "/portal/icons/" + encodeURIComponent(c.icon) + ".svg";
+      img.alt = "";
+      logo.appendChild(img);
+    } else {
+      logo.appendChild(icon("squares-four", "20px", "var(--muted)"));
+    }
+
+    // The two flags a member is owed before they ask.
+    var flags = el("d-flags");
+    clear(flags);
+    if (c.sameJobAs) {
+      note(flags, "warn", "This does the same job as " + c.sameJobAs +
+        ", which the household already runs. You can still ask for it.");
+    }
+    if (c.leaves) {
+      var n = make("div", "note note-warn");
+      n.appendChild(icon("globe", "17px"));
+      var b = make("div", null, "Using this sends household content outside the house.");
+      b.style.flex = "1";
+      n.appendChild(b);
+      flags.appendChild(n);
+    }
+
+    // Where the catalog offers a choice, the member makes it; where it
+    // does not, there is no control.
+    var seg = el("d-profile-seg");
+    clear(seg);
+    if (c.alternatives && c.alternatives.length > 1) {
+      el("d-profiles").hidden = false;
+      c.alternatives.forEach(function (p) {
+        var btn = make("button", p === chosenProfile ? "on" : "", p);
+        btn.type = "button";
+        btn.addEventListener("click", function () {
+          chosenProfile = p;
+          Array.prototype.forEach.call(seg.children, function (o) {
+            o.className = o.textContent === p ? "on" : "";
+          });
+          // The plan changes with the choice, which is the point of
+          // showing it: a member picking a profile should see what they
+          // are now asking for.
+          var alt = cards.filter(function (k) {
+            return k.capability === c.capability && k.profile === p;
+          })[0];
+          if (alt) { text("d-package", alt.title + " (" + alt.package + ")"); current = alt; }
+        });
+        seg.appendChild(btn);
+      });
+    } else {
+      el("d-profiles").hidden = true;
+    }
+    el("draft").showModal();
+  }
+
+  el("d-cancel").addEventListener("click", function () { el("draft").close(); });
+  el("d-send").addEventListener("click", function () {
+    if (!current) { return; }
+    var b = el("d-send");
+    b.disabled = true;
+    var url = "/api/v1/catalog/requests?package=" + encodeURIComponent(current.package) +
+              "&profile=" + encodeURIComponent(chosenProfile) +
+              "&note=" + encodeURIComponent(el("d-note").value.trim());
+    fetch(url, { method: "POST" })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "that didn't send"); }
+        el("draft").close();
+        // The sent request appears immediately in Your requests, so the
+        // member can see that pressing Send did something.
+        loadRequests();
+      })
+      .catch(function (err) { note(el("d-result"), "bad", String(err.message || err)); })
+      .then(function () { b.disabled = false; });
+  });
+
+  // ---- your requests.
+  function loadRequests() {
+    fetch("/api/v1/catalog/requests", { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        var box = el("requests");
+        clear(box);
+        if (!res.ok) {
+          note(box, "warn", "Can't read your requests.");
+          return;
+        }
+        text("member", res.j.member || "");
+        text("requests-note", res.j.note || "");
+        var items = res.j.requests || [];
+        if (!items.length) {
+          box.appendChild(make("div", "muted", "You haven't asked for anything yet."));
+          return;
+        }
+        items.forEach(function (q) {
+          var row = make("div", "reqrow");
+          row.appendChild(make("span", null, titleFor(q.package)));
+          row.appendChild(make("span", "pill " + (q.state === "installed" ? "pill-ok" : "pill-mute"), q.state));
+          if (q.note) { row.appendChild(make("span", "muted", "“" + q.note + "”")); }
+          var when = make("span", "muted tnum", ago(q.at));
+          when.style.marginLeft = "auto";
+          row.appendChild(when);
+          box.appendChild(row);
+        });
+      })
+      .catch(function () { note(el("requests"), "warn", "Can't read your requests."); });
+  }
+
+  function titleFor(pkg) {
+    var hit = cards.filter(function (c) { return c.package === pkg; })[0];
+    return hit ? hit.title : pkg;
+  }
+
+  var search = el("search");
+  search.addEventListener("input", function () { term = search.value.trim().toLowerCase(); paint(); });
+  search.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { search.value = ""; term = ""; paint(); }
+  });
+
+  start();
+})();
+</script>

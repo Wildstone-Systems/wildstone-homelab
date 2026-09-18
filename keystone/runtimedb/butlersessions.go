@@ -258,10 +258,34 @@ func (db *DB) ListButlerTurns(seq int64) ([]ButlerTurn, error) {
 	return out, rows.Err()
 }
 
-// ListButlerSessions returns the newest limit sessions, newest first,
-// WITHOUT transcripts. An empty surface lists both; naming one lists
-// only that surface's sessions (ADR-W026 A1).
-func (db *DB) ListButlerSessions(limit int, surface ButlerSurface, butler string) ([]ButlerSession, error) {
+// ButlerSessionFilter narrows a session listing. Every field is
+// optional, and an empty filter lists everything.
+//
+// A struct rather than three more string parameters, because the fields
+// are all strings and a caller that transposes two of them gets a
+// listing that is wrong rather than a compiler error.
+type ButlerSessionFilter struct {
+	// Surface is admin or family. Empty lists both (ADR-W026 A1).
+	Surface ButlerSurface
+	// Butler is the Butler whose sessions these are.
+	Butler string
+	// ActingFor is the person the session was held on behalf of.
+	//
+	// IT BELONGS HERE RATHER THAN IN THE CALLER'S LOOP, and the
+	// household assistant is why. Its page lists one member's own
+	// conversations, and it used to read a fixed number of the newest
+	// family sessions and filter them afterwards — which is not a
+	// filter at all in the household this was meant to protect. A
+	// member whose partner has had the last two hundred conversations
+	// reads two hundred of theirs, keeps none, and is shown an empty
+	// list beneath a heading that says it is their history. Over-reading
+	// only moves the number at which that happens.
+	ActingFor string
+}
+
+// ListButlerSessions returns the newest limit sessions matching the
+// filter, newest first, WITHOUT transcripts.
+func (db *DB) ListButlerSessions(limit int, f ButlerSessionFilter) ([]ButlerSession, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -270,13 +294,24 @@ func (db *DB) ListButlerSessions(limit int, surface ButlerSurface, butler string
 	// empty; widening to "every session on its surface" would answer a
 	// question about one Butler with another Butler's conversations.
 	clauses, args := []string{}, []any{}
-	if surface != "" {
+	if f.Surface != "" {
 		clauses = append(clauses, "surface = ?")
-		args = append(args, string(surface))
+		args = append(args, string(f.Surface))
 	}
-	if butler != "" {
+	if f.Butler != "" {
 		clauses = append(clauses, "butler = ?")
-		args = append(args, butler)
+		args = append(args, f.Butler)
+	}
+	if f.ActingFor != "" {
+		// NOCASE, because the household has one Sandy however she
+		// signed in (ADR-W032 A4) and the door admits her either way:
+		// the proxy asserting a different capitalisation would leave
+		// her authenticated and her own conversations invisible. Every
+		// other reader of a member name compares this way; a predicate
+		// that did not would be the one place the household had two of
+		// her.
+		clauses = append(clauses, "acting_for = ? COLLATE NOCASE")
+		args = append(args, f.ActingFor)
 	}
 	where := ""
 	if len(clauses) > 0 {
@@ -340,4 +375,50 @@ func (db *DB) GetButlerSession(id string) (ButlerSession, error) {
 		return ButlerSession{}, err
 	}
 	return s, nil
+}
+
+// FirstUserTurns returns the opening thing the person said in each of
+// the named sessions, keyed by session sequence number.
+//
+// IT EXISTS BECAUSE final_text IS THE ASSISTANT'S. AppendButlerTurns
+// overwrites it with the model's reply on every assistant turn, so a
+// list that titled its rows from it was naming each conversation after
+// the answer rather than the question — and renaming it after every
+// follow-up, so the same conversation had a different title each time a
+// member came back to it.
+//
+// One query rather than one per session: a sidebar of two dozen rows is
+// not a reason for two dozen round trips, and the transcript columns are
+// left out because a title needs one line, not a conversation.
+func (db *DB) FirstUserTurns(seqs []int64) (map[int64]string, error) {
+	out := map[int64]string{}
+	if len(seqs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(seqs))
+	args := make([]any, len(seqs))
+	for i, seq := range seqs {
+		placeholders[i] = "?"
+		args[i] = seq
+	}
+	rows, err := db.sql.Query(
+		`SELECT session, text FROM (
+		   SELECT session, text, ROW_NUMBER() OVER (PARTITION BY session ORDER BY ordinal) AS rn
+		     FROM butler_session_turns
+		    WHERE role = ? AND session IN (`+strings.Join(placeholders, ",")+`)
+		 ) WHERE rn = 1`,
+		append([]any{ButlerRoleUser}, args...)...)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: reading opening turns: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var seq int64
+		var text string
+		if err := rows.Scan(&seq, &text); err != nil {
+			return nil, err
+		}
+		out[seq] = text
+	}
+	return out, rows.Err()
 }

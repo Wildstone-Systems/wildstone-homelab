@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -109,6 +110,98 @@ func (db *DB) HouseholdEventsAfter(after int64, limit int) ([]HouseholdEvent, er
 	rows, err := db.sql.Query(
 		`SELECT seq, event_id, occurred_at, recorded_at, subject, source, type, entity, payload, correlation_id, schema_version
 		 FROM household_events WHERE seq > ? ORDER BY seq LIMIT ?`, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing household events: %w", err)
+	}
+	defer rows.Close()
+	return scanHouseholdEvents(rows)
+}
+
+// HouseholdEventFilter narrows an event listing to what a caller is
+// actually going to keep. Every field is optional.
+//
+// IT EXISTS BECAUSE A LIMIT AND A FILTER DO NOT COMMUTE. A caller that
+// reads the newest N rows and then keeps the ones it wanted has not
+// asked for its own rows at all: it has asked for everybody's and
+// discarded most of them, and in a household where somebody else is
+// busy it discards all of them. The catalog page did exactly that and
+// showed a member no requests while their requests were still waiting
+// on the owner.
+type HouseholdEventFilter struct {
+	// Type is the event type, e.g. catalog.requested.
+	Type string
+	// Subject is the person the event is about, matched the way the
+	// rest of the household matches names: without regard to case.
+	Subject string
+	// Since bounds the window at the old end, so a caller wanting the
+	// newest events WITHIN a period gets them from the newest end.
+	//
+	// It exists because HouseholdEventsSince answers a different
+	// question — the OLDEST rows at or after a time, which is what a
+	// "has this happened yet today" check wants — and a card showing
+	// what the house did today reached for it and got the first two
+	// hundred events of the morning. On a busy day the evening was
+	// never in the window, and no amount of sorting afterwards could
+	// put it there.
+	Since time.Time
+}
+
+// HouseholdEventsBefore returns up to limit household events with a
+// sequence number BELOW before, newest first — the window a paged
+// history reads backwards through. A before of zero starts at the
+// newest event, which is what an unpositioned first page wants.
+//
+// By sequence rather than by timestamp, and newest-first rather than
+// oldest-first, which is the pair of choices that makes paging correct:
+// two events can share a second, so a timestamp cursor either skips one
+// or repeats it forever, and a reader walking backwards needs the rows
+// adjacent to where it stopped rather than the oldest in the range.
+func (db *DB) HouseholdEventsBefore(before int64, limit int, f HouseholdEventFilter) ([]HouseholdEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	// A zero cursor means "from the newest", expressed as an upper bound
+	// nothing can exceed rather than as a branch with a second query to
+	// keep in step with this one.
+	if before <= 0 {
+		before = math.MaxInt64
+	}
+	clauses, args := []string{"seq < ?"}, []any{before}
+	if f.Type != "" {
+		clauses = append(clauses, "type = ?")
+		args = append(args, f.Type)
+	}
+	if !f.Since.IsZero() {
+		// occurred_at stores RFC3339Nano UTC, so the comparison is
+		// lexicographic — but NOT against an RFC3339Nano bound, and the
+		// difference is a real hole rather than a nicety. That format
+		// drops trailing zeros, so a moment inside a second is SHORTER
+		// than the whole second: "00:00:00.001Z" against "00:00:00Z"
+		// differs first at '.' against 'Z', and '.' sorts lower. Every
+		// sub-second event in the bound's own second would compare as
+		// earlier than the bound and be dropped — a hole at exactly the
+		// boundary the caller named, which for a card showing "today"
+		// is the first second of the day.
+		//
+		// So the bound is the second-floor with no zone suffix, which
+		// is a PREFIX of every stamp in that second and therefore sorts
+		// at or below all of them, and below every later one. The whole
+		// boundary second is included, which is what "since" means.
+		clauses = append(clauses, "occurred_at >= ?")
+		args = append(args, f.Since.UTC().Truncate(time.Second).Format("2006-01-02T15:04:05"))
+	}
+	if f.Subject != "" {
+		// NOCASE because every reader of this column compares names
+		// case-insensitively — the household has one Sandy however she
+		// signed in (ADR-W032 A4) — and a predicate that did not would
+		// hide a member's own rows from them.
+		clauses = append(clauses, "subject = ? COLLATE NOCASE")
+		args = append(args, f.Subject)
+	}
+	args = append(args, limit)
+	rows, err := db.sql.Query(
+		`SELECT seq, event_id, occurred_at, recorded_at, subject, source, type, entity, payload, correlation_id, schema_version
+		 FROM household_events WHERE `+strings.Join(clauses, " AND ")+` ORDER BY seq DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing household events: %w", err)
 	}

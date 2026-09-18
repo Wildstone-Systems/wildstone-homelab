@@ -126,16 +126,40 @@ func TestCertificateRotation(t *testing.T) {
 		t.Fatalf("renewed cert CN = %q, want node-a", renewedCert.Subject.CommonName)
 	}
 
-	// (a) gateway sees it connected (post-renewal reconnect completed).
-	if !h.gw.WaitConnected("node-a", 10*time.Second) {
-		t.Fatal("agent did not reconnect with the renewed certificate")
+	// (a) and (c) together: the gateway can DISPATCH to it, retried
+	// until it can or the deadline passes.
+	//
+	// NOT WaitConnected FOLLOWED BY ONE DISPATCH, which is what this
+	// did, and the ordering it assumed is the opposite of the agent's.
+	// The cert lands on disk first and the forced reconnect follows, so
+	// at the moment the loop above sees the new NotAfter the OLD session
+	// is usually still up — WaitConnected returns true for it
+	// immediately, the reconnect then tears it down, and the dispatch
+	// lands in the gap with "node-a is not connected". It passed
+	// whenever the disconnect happened to arrive first, which on an
+	// unloaded machine is almost always; CI is where the window opens.
+	//
+	// "Connected" was never the property worth asserting anyway. What
+	// the renewal has to leave behind is a session that WORKS, and
+	// asking for that repeatedly cannot race the reconnect: before it,
+	// the dispatch fails and is retried; after it, it succeeds.
+	deadline = time.Now().Add(20 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		res, err := h.gw.Dispatch(ctx, "node-a", &wsv1.Operation{Op: &wsv1.Operation_Health{Health: &wsv1.Health{}}})
+		cancel()
+		if err != nil {
+			lastErr = err
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		if hres := res.GetHealth(); hres == nil || !hres.GetOk() {
+			t.Fatalf("post-renewal health: %+v", res)
+		}
+		return
 	}
-
-	// (c) a Health op works post-renewal.
-	res := dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_Health{Health: &wsv1.Health{}}})
-	if hres := res.GetHealth(); hres == nil || !hres.GetOk() {
-		t.Fatalf("post-renewal health: %+v", res)
-	}
+	t.Fatalf("no working session after the certificate was renewed: %v", lastErr)
 }
 
 // TestRenewWithoutClientCertRefused: calling Renew on a connection dialed

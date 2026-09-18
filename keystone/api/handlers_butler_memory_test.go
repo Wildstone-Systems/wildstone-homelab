@@ -20,7 +20,7 @@ func seedMemory(t *testing.T, h *harness, content, owner string, audience runtim
 	if owner == runtimedb.HouseholdOwner {
 		author = "mika"
 	}
-	h.member(author)
+	h.person(author)
 	seq, err := h.s.DB.RecordMemory(runtimedb.MemoryRecord{
 		Kind: runtimedb.MemoryFact, Subject: owner, Content: content, Audience: audience,
 		PermissionLabel: owner, Owner: owner, Author: author,
@@ -103,7 +103,7 @@ func TestMemoryReadsAreScopedToTheCaller(t *testing.T) {
 // The digest shows shared changes and never private ones.
 func TestMemoryDigestNeverCarriesPrivateChanges(t *testing.T) {
 	h := newHarness(t)
-	h.member("mika")
+	h.person("mika")
 	private := seedMemory(t, h, "mika is job hunting", "mika", runtimedb.ButlerAudiencePrivate)
 	if err := h.s.DB.ForgetMemory(private, "mika"); err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestMemoryDigestNeverCarriesPrivateChanges(t *testing.T) {
 // not one.
 func TestAServicePrincipalCannotRewriteHouseholdMemory(t *testing.T) {
 	h := newHarness(t)
-	h.member("mika")
+	h.person("mika")
 	seq, err := h.s.DB.RecordMemory(runtimedb.MemoryRecord{
 		Kind: runtimedb.MemoryFact, Subject: "household",
 		Content:  "the spare key is under the mat",
@@ -210,7 +210,7 @@ func TestARoutineCannotBeCreatedAlreadyRunning(t *testing.T) {
 // or forget it. A regression introduced by the scoping work itself.
 func TestTheMemoryViewShowsNamedButlerRecords(t *testing.T) {
 	h := newHarness(t)
-	h.member("mika")
+	h.person("mika")
 	if err := h.s.DB.UpsertModel(runtimedb.Model{
 		Name: "kitchen-box", Kind: runtimedb.ModelLocal, Provider: "ollama",
 		Readiness: runtimedb.ModelReady, Enabled: true,

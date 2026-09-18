@@ -40,7 +40,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: chat-matrix-admin
-  version: 1.0.2
+  version: 1.0.3
   capability: chat-matrix-admin
   profile: matrix
 params:

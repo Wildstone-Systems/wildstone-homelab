@@ -107,7 +107,7 @@ func (s *Server) listNotices(r *http.Request, id principal.Identity) (any, int, 
 	if id.Role == runtimedb.RoleAdmin && r.URL.Query().Get("all") == "true" {
 		member = ""
 	}
-	notices, err := s.DB.ListNotices(member, 100)
+	notices, err := s.DB.ListNotices(100, runtimedb.NoticeFilter{Recipient: member})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}

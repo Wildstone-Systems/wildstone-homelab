@@ -173,6 +173,10 @@ type Server struct {
 	BackupRestore func(ctx context.Context, plan string) error
 
 	limiter *limiter
+	// hostFacts caches the machines card's live readings, so a house
+	// full of tablets does not cost one agent round trip each
+	// (handlers_portal_machines.go).
+	hostFacts machineStatsCache
 }
 
 // ButlerConversations is the named-Butler seam (ADR-W031). It is an
@@ -503,6 +507,82 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/chat/outbound", s.handle(principal.VerbConverse, s.pollChatOutbound))
 	mux.Handle("POST /api/v1/chat/outbound/{seq}/ack", s.handle(principal.VerbConverse, s.ackChatOutbound))
 	mux.Handle("POST /api/v1/chat/bindings/{id}/revoke", s.handle(principal.VerbManage, s.revokeChatBinding))
+
+	// The household portal (#197, #198): the two surfaces a family
+	// member uses directly, rather than an application they are sent to.
+	//
+	// Every one of these goes through s.portal, not s.handle. They are
+	// on the same listener as the Console's API and they are the only
+	// routes on it a household member can reach: the identity s.portal
+	// produces holds no RBAC verb at all, so a member whose browser
+	// wanders to /api/v1/resources is refused there exactly as an
+	// anonymous caller would be.
+	//
+	// Paths are named for the CAPABILITY that declares each surface,
+	// because that capability's install is what makes them answer: with
+	// it absent, s.portal refuses with 404 and nothing here is live.
+	mux.Handle("GET /filedrop/{$}", s.portal(surfaceFiles, s.portalPage("files")))
+	mux.Handle("GET /filedrop/widget", s.portal(surfaceFiles, s.portalPage("files-widget")))
+	mux.Handle("GET /api/v1/filedrop/capabilities", s.portal(surfaceFiles, s.filedropCapabilities))
+	mux.Handle("GET /api/v1/filedrop/recent", s.portal(surfaceFiles, s.filedropRecent))
+	mux.Handle("GET /api/v1/filedrop/list", s.portal(surfaceFiles, s.filedropList))
+	mux.Handle("GET /api/v1/filedrop/file", s.portal(surfaceFiles, s.filedropFile))
+	mux.Handle("POST /api/v1/filedrop/upload", s.portal(surfaceFiles, s.filedropUpload))
+	mux.Handle("POST /api/v1/filedrop/delete", s.portal(surfaceFiles, s.filedropDelete))
+	mux.Handle("POST /api/v1/filedrop/rename", s.portal(surfaceFiles, s.filedropRename))
+
+	mux.Handle("GET /assistant/{$}", s.portal(surfaceAssistant, s.portalPage("assistant")))
+	mux.Handle("GET /assistant/widget", s.portal(surfaceAssistant, s.portalPage("assistant-widget")))
+	mux.Handle("GET /api/v1/assistant/agents", s.portal(surfaceAssistant, s.assistantAgents))
+	mux.Handle("GET /api/v1/assistant/scope", s.portal(surfaceAssistant, s.assistantScope))
+	mux.Handle("GET /api/v1/assistant/conversations", s.portal(surfaceAssistant, s.assistantConversations))
+	mux.Handle("GET /api/v1/assistant/memory", s.portal(surfaceAssistant, s.assistantMemory))
+	// Forgetting is gated in the handler, not the store: ForgetMemory
+	// takes a sequence number and trusts it.
+	mux.Handle("POST /api/v1/assistant/memory/forget", s.portal(surfaceAssistant, s.assistantForget))
+	mux.Handle("POST /api/v1/assistant/ask", s.portal(surfaceAssistant, s.assistantAsk))
+	mux.Handle("GET /api/v1/assistant/conversations/{id}", s.portal(surfaceAssistant, s.assistantConversation))
+
+	// The household's own front page (the dashboard capability's
+	// wildstone profile). One read answers every card on it, for the
+	// reason handlers_portal_home.go opens with: nine reads of a moving
+	// database is how two cards end up telling different stories about
+	// one event.
+	mux.Handle("GET /home/{$}", s.portal(surfaceHome, s.portalPage("home")))
+	mux.Handle("GET /api/v1/home/summary", s.portal(surfaceHome, s.homeSummary))
+	// The one write the page has: a member answering the question they
+	// were asked. Whose question it is, is settled in the database.
+	mux.Handle("POST /api/v1/home/notices/answer", s.portal(surfaceHome, s.homeAnswerNotice))
+	// Clearing takes no seq: see homeClearNotices. It can only ever
+	// reach the caller's own notifications.
+	mux.Handle("POST /api/v1/home/notices/clear", s.portal(surfaceHome, s.homeClearNotices))
+
+	// The household's banner photo. Setting it and framing it are
+	// separate writes: the framing is chosen once the picture is on
+	// screen, where a person can see what they are choosing.
+	mux.Handle("GET /api/v1/home/banner", s.portal(surfaceHome, s.homeBannerImage))
+	mux.Handle("POST /api/v1/home/banner", s.portal(surfaceHome, s.homeBannerSet))
+	mux.Handle("POST /api/v1/home/banner/frame", s.portal(surfaceHome, s.homeBannerFrame))
+	mux.Handle("POST /api/v1/home/banner/clear", s.portal(surfaceHome, s.homeBannerClear))
+
+	// Activity: the household record, on the same surface as the front
+	// page because it is the same projection over a longer window.
+	mux.Handle("GET /activity/{$}", s.portal(surfaceHome, s.portalPage("activity")))
+	mux.Handle("GET /api/v1/activity", s.portal(surfaceHome, s.activityHistory))
+
+	// The Catalog: request, don't install. Sending files a household
+	// event for the owner to act on and proposes no plan — the one
+	// field a plan needs is the machine, and that is the owner's call.
+	mux.Handle("GET /catalog/{$}", s.portal(surfaceHome, s.portalPage("catalog")))
+	mux.Handle("GET /api/v1/catalog", s.portal(surfaceHome, s.catalogList))
+	mux.Handle("GET /api/v1/catalog/requests", s.portal(surfaceHome, s.catalogRequests))
+	mux.Handle("POST /api/v1/catalog/requests", s.portal(surfaceHome, s.catalogRequest))
+
+	// The portal's static design files: the stylesheet, Inter, the
+	// Phosphor glyph font and the app icon set. Shared by every
+	// household surface, so the door accepts membership of any of them
+	// rather than naming one (portalAsset).
+	mux.Handle("GET /portal/{dir}/{name}", s.portalAsset(s.portalAssetFile))
 
 	mux.Handle("GET /api/v1/household/butler", s.handle(principal.VerbRead, s.getHouseholdButlerStatus))
 	mux.Handle("POST /api/v1/household/butler/ask", s.handle(principal.VerbRead, s.askHouseholdButler))

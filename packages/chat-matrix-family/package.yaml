@@ -47,7 +47,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: chat-matrix-family
-  version: 1.0.2
+  version: 1.0.3
   capability: chat-matrix-family
   profile: matrix
 params:

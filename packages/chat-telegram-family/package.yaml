@@ -80,7 +80,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: chat-telegram-family
-  version: 1.0.2
+  version: 1.0.3
   capability: chat-telegram-family
   profile: telegram
 params:
