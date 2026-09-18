@@ -35,6 +35,9 @@ const (
 	// name. Nothing can tell which one wrote a given row, so it is
 	// never resolved.
 	AlsoAPrincipal Verdict = "also-a-principal"
+	// Scope: a well-known non-person owner, in a column that takes one.
+	// Valid, permanent, and never resolved to anybody.
+	Scope Verdict = "scope"
 	// Orphan: no Person and no principal.
 	Orphan Verdict = "orphan"
 )
@@ -59,12 +62,18 @@ type Handle struct {
 	Uses       []Use
 }
 
+// scopes are the non-person owners a Scoped column may legitimately
+// hold. They are values, not names, and no Person is ever resolved from
+// one.
+var scopes = map[string]bool{"household": true}
+
 // InHumanColumn reports whether this handle appears anywhere slice 2b
 // would repoint. A handle used only in actor columns is not a Person
-// question at all.
+// question at all. Scoped columns count: they hold a Person in one
+// ownership mode, and that mode is exactly what 2b repoints.
 func (h Handle) InHumanColumn() bool {
 	for _, u := range h.Uses {
-		if u.Kind == Human {
+		if u.Kind == Human || u.Kind == Scoped {
 			return true
 		}
 	}
@@ -83,7 +92,7 @@ func (h Handle) Blocking() bool {
 		return false
 	}
 	switch h.Verdict {
-	case Resolved:
+	case Resolved, Scope:
 		return false
 	default:
 		return true
@@ -107,6 +116,18 @@ func (r Report) Blocking() []Handle {
 		}
 	}
 	return out
+}
+
+// scopedUse reports whether any of these uses is in a column that
+// accepts a scope. The same literal in a plain human column is not a
+// scope — it is somebody who managed to be called household.
+func scopedUse(us []Use) bool {
+	for _, u := range us {
+		if u.Kind == Scoped {
+			return true
+		}
+	}
+	return false
 }
 
 // person is one row of the people table.
@@ -179,6 +200,13 @@ func Survey(q Querier) (Report, error) {
 		h := Handle{Value: value, Uses: us}
 		matches := byFold[fold(value)]
 		switch {
+		// A recognised scope in a column that takes one. Checked first
+		// because it is a VALUE with a fixed meaning, not a name to
+		// look up: household-shared memory is owned by the household
+		// and always will be, so resolving it — or blocking on it —
+		// would refuse to migrate every deployment that has any.
+		case scopes[fold(value)] && scopedUse(us):
+			h.Verdict = Scope
 		// Checked BEFORE resolution, and that order is the whole point.
 		//
 		// butler_members.member is unique only within butler_members,

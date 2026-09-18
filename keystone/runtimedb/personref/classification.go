@@ -36,9 +36,11 @@
 //
 // # Where a person column can still hold a principal
 //
-// Five columns are classified human even though the legacy Butler ask
-// path can write a principal name into them: butler_memory.owner and
-// .author, butler_tasks.author and .owner, and butler_index.owner.
+// Five columns take a person even though the legacy Butler ask path can
+// write a principal name into them: butler_memory.owner and .author,
+// butler_tasks.author and .owner, and butler_index.owner. (The two
+// owner columns are Scoped rather than Human, because they also take
+// the `household` scope — a separate matter from this one.)
 // handlers_butler.go builds the turn with Member: id.Name, and
 // butlerlive writes that straight through (#240).
 //
@@ -81,6 +83,12 @@ const (
 	// principal on another. Out of scope until the Person/principal
 	// split (#210); the recorded text stays.
 	Actor Kind = "actor"
+	// Scoped names a Person in one ownership mode and a well-known
+	// non-person scope in another — butler_memory.owner is a Person for
+	// a private record and the literal `household` for a shared one.
+	// 2b repoints the person-owned rows and leaves the scoped ones
+	// alone, which is a decision it can only make per row.
+	Scoped Kind = "scoped"
 	// NotAPerson is a false positive of the name heuristic.
 	NotAPerson Kind = "not-a-person"
 )
@@ -109,8 +117,8 @@ var Columns = []Column{
 		"the person whose conversation it is; GetButlerMember(conv.Member) resolves it in butlerhandoff.go"},
 	{"butler_handoffs", "member", Human,
 		"REFERENCES butler_members(member); GetButlerMember(member) validates it before the handoff"},
-	{"butler_memory", "owner", Human,
-		"schema: owner is the person the record belongs to — who may correct it, forget it, and export it. NOTE: the legacy ask path can write a principal here (#240); the report surfaces that as blocking, which is the correct signal"},
+	{"butler_memory", "owner", Scoped,
+		"schema, in full: `owner is the person the record belongs to ... For household-shared records it is the household`. A Person for a private record, the literal `household` for a shared one. Also reachable by the legacy ask path (#240)"},
 	{"butler_memory", "author", Human,
 		"the person who stated it, paired with owner on MemoryRecord. Same legacy-path exposure as owner (#240)"},
 	{"butler_tasks", "author", Human,
@@ -172,8 +180,8 @@ var Columns = []Column{
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
 	{"butler_identity_links", "revoked_by", Actor,
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
-	{"butler_index", "owner", Human,
-		"butlerstore passes Owner: member when indexing a note; it mirrors butler_memory.owner and inherits its exposure (#240)"},
+	{"butler_index", "owner", Scoped,
+		"mirrors butler_memory.owner, so it carries the same `household` scope for shared documents, and the same legacy-path exposure (#240)"},
 	{"butler_members", "admitted_by", Actor,
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
 	{"butler_members", "disabled_by", Actor,
@@ -236,8 +244,8 @@ var Columns = []Column{
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
 	{"household_routines", "disabled_by", Actor,
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
-	{"integration_connections", "owner", Actor,
-		"holds the literal `household` for a household-owned connection — neither a Person nor a principal — and api.createConnection defaults an omitted owner to actingMember(id). Needs ownership-aware handling in 2b (#241), not a plain repoint"},
+	{"integration_connections", "owner", Scoped,
+		"the literal `household` for a household-owned connection, a Person when ownership is personal. api.createConnection also defaults an omitted owner to actingMember(id)"},
 	{"integration_connections", "created_by", Actor,
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
 	{"integration_placements", "added_by", Actor,

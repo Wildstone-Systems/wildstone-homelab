@@ -92,6 +92,8 @@ func writeReport(w io.Writer, rep personref.Report, all bool) {
 		fmt.Fprintln(w, "                   Decide which Person it is; nothing is merged automatically.")
 		fmt.Fprintln(w, "  ambiguous        more than one Person answers to it. Never merged, never picked.")
 		fmt.Fprintln(w, "  orphan           no Person and no principal. A Person is never invented.")
+		fmt.Fprintln(w, "  scope            a non-person owner such as the household. Valid and permanent;")
+		fmt.Fprintln(w, "                   never resolved, never blocking.")
 		fmt.Fprintln(w, "  also-a-principal a Person AND a machine principal answer to this name, so no")
 		fmt.Fprintln(w, "                   row bearing it can be attributed to either. Rename one.")
 	}

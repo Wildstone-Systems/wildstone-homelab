@@ -344,9 +344,9 @@ func TestEveryVerdictCarriesItsEvidence(t *testing.T) {
 			t.Errorf("%s.%s is classified %s with no evidence", c.Table, c.Column, c.Kind)
 		}
 		switch c.Kind {
-		case personref.Human, personref.Actor, personref.NotAPerson:
+		case personref.Human, personref.Actor, personref.Scoped, personref.NotAPerson:
 		default:
-			t.Errorf("%s.%s has kind %q, which is not one of the three", c.Table, c.Column, c.Kind)
+			t.Errorf("%s.%s has kind %q, which is not a recognised verdict", c.Table, c.Column, c.Kind)
 		}
 	}
 }

@@ -238,8 +238,13 @@ func TestTheReportNamesEveryColumnAHandleAppearsIn(t *testing.T) {
 		if u.Rows < 1 {
 			t.Errorf("%s.%s reports %d rows", u.Table, u.Column, u.Rows)
 		}
-		if u.Kind != personref.Human {
-			t.Errorf("%s.%s is reported as %s, and it is classified human", u.Table, u.Column, u.Kind)
+		want := personref.Human
+		if u.Column == "owner" {
+			// owner also takes the `household` scope; author never does.
+			want = personref.Scoped
+		}
+		if u.Kind != want {
+			t.Errorf("%s.%s is reported as %s, want %s", u.Table, u.Column, u.Kind, want)
 		}
 	}
 	if !owner || !author {
@@ -303,7 +308,8 @@ func TestRetainedAuditTextIsNotSurveyed(t *testing.T) {
 // could not.
 func TestColumnsThatMirrorAPersonAreClassifiedHuman(t *testing.T) {
 	want := map[string]bool{
-		"butler_index.owner": true,
+		"butler_memory.author": true,
+		"butler_tasks.author":  true,
 	}
 	for _, c := range personref.Columns {
 		key := c.Table + "." + c.Column
@@ -338,7 +344,6 @@ func TestColumnsWrittenByAnyPrincipalAreNotHuman(t *testing.T) {
 		"butler_capability_requests.requested_by": "api.fileCapabilityRequest",
 		"integration_secrets.member":              "api.onboardIntegrationSecret (default)",
 		"member_notice_preferences.member":        "api.setNoticePreferences (default)",
-		"integration_connections.owner":           "api.createConnection (default), plus the literal `household`",
 	}
 	for _, c := range personref.Columns {
 		key := c.Table + "." + c.Column
@@ -420,5 +425,71 @@ func TestAPrincipalAloneIsStillNotBlocking(t *testing.T) {
 	}
 	if len(rep.Blocking()) != 0 {
 		t.Fatalf("blocking = %+v, want none", rep.Blocking())
+	}
+}
+
+// Household-shared memory does not block the migration.
+//
+// butler_memory.owner takes the literal `household` for a shared
+// record — the schema says so in the sentence after the one about
+// persons, which I had been quoting without — and butler_index.owner
+// mirrors it. That is a supported, permanent mode, not a defect, so
+// reporting it as an orphan would refuse to migrate every deployment
+// that has any shared memory at all.
+func TestHouseholdOwnedMemoryIsAScopeNotAnOrphan(t *testing.T) {
+	rep, _ := surveyed(t, func(db *runtimedb.DB) {
+		people(t, db, "mika")
+		if _, err := db.RecordMemory(runtimedb.MemoryRecord{
+			Kind: runtimedb.MemoryFact, Subject: "household", Content: "the bins go out on Tuesday",
+			Audience: runtimedb.ButlerAudienceShared, PermissionLabel: "household",
+			Owner: "household", Author: "mika", SourceKind: "conversation", SourceID: "v-10",
+		}); err != nil {
+			t.Fatalf("RecordMemory: %v", err)
+		}
+	})
+
+	h := find(t, rep, "household")
+	if h.Verdict != personref.Scope {
+		t.Fatalf("household is %q, want scope — it is a supported owner, not a missing person", h.Verdict)
+	}
+	if h.PersonID != "" {
+		t.Error("the household scope was resolved to a Person")
+	}
+	if h.Blocking() {
+		t.Error("household-shared memory blocks the migration; every deployment with shared memory would be refused")
+	}
+	if len(rep.Blocking()) != 0 {
+		t.Fatalf("blocking = %+v, want none for an ordinary shared record", rep.Blocking())
+	}
+	// It is still reported, because 2b has to know those rows exist and
+	// are deliberately not repointed.
+	if !h.InHumanColumn() {
+		t.Error("the scope is not reported as appearing in a column 2b touches")
+	}
+}
+
+// A PERSON who happens to be called household, in a column that takes
+// no scope, is not a scope. The sentinel's meaning is per column.
+func TestTheScopeIsOnlyAScopeWhereAColumnTakesOne(t *testing.T) {
+	rep, _ := surveyed(t, func(db *runtimedb.DB) {
+		people(t, db, "mika")
+		// butler_tasks.author takes a person and never a scope.
+		if _, err := db.InsertButlerTask(runtimedb.ButlerTask{
+			Kind: runtimedb.ButlerTaskConversation, Author: "household", Owner: "mika",
+			Surface: runtimedb.ButlerSurfaceFamily, Profile: runtimedb.ProfileHousehold,
+			Audience:  runtimedb.ButlerAudienceShared,
+			Objective: "x", CompletionCriteria: "done",
+			Retention: runtimedb.ButlerRetentionConversation,
+		}); err != nil {
+			t.Fatalf("InsertButlerTask: %v", err)
+		}
+	})
+	h := find(t, rep, "household")
+	if h.Verdict == personref.Scope {
+		t.Fatal("a value in butler_tasks.author was treated as a scope; that column takes a person, " +
+			"so the value is an orphan and the migration must say so")
+	}
+	if !h.Blocking() {
+		t.Error("an orphan in a person-only column does not block")
 	}
 }
