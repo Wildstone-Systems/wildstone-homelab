@@ -296,4 +296,10 @@ var Columns = []Column{
 		"the topic the question is about, not who asked it"},
 	{"household_events", "subject", NotAPerson,
 		"schema: `member / device / household id` — polymorphic subject, not a person column"},
+	{"meter_readings", "meter", NotAPerson,
+		"the metadata.name of a Meter resource — a thing the household counts, not somebody who counts it"},
+
+	// ---- Actor: a person on one path, a machine principal on another ----
+	{"meter_readings", "recorded_by", Actor,
+		"a member when the reading came from the Console, the CLI or chat; the publishing principal when a capability sent it (ADR-W034 A3)"},
 }
