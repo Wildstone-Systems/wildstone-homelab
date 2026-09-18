@@ -418,15 +418,24 @@ func (s *Server) event(typ, planID string, id principal.Identity, msg string) {
 // applied — and an operator who is told up front is not the operator of
 // F37, meeting them one ERROR_CODE_NOT_FOUND at a time, per tick, after
 // approving a plan that could not have worked.
+//
+// Each secret's purpose travels with it, because the form now asks for
+// the value right there, and "calendar-service-password" alone does not
+// tell an operator it is the password of a directory account they had
+// to create first.
 func previewOf(p *plan.Plan, puts []resource.Resource) map[string]any {
 	provided := []string{}
+	purposes := map[string]string{}
 	for _, r := range puts {
 		if r.Kind == resource.KindSecret && r.Secret != nil && r.Secret.Provided {
 			provided = append(provided, r.Secret.Name)
+			if r.Secret.Purpose != "" {
+				purposes[r.Secret.Name] = r.Secret.Purpose
+			}
 		}
 	}
 	sort.Strings(provided)
-	return map[string]any{"plan": p, "providedSecrets": provided}
+	return map[string]any{"plan": p, "providedSecrets": provided, "secretPurposes": purposes}
 }
 
 // expandedRouteBlockers are reasons the Routes THIS proposal renders will
