@@ -465,3 +465,70 @@ func TestAOneOffCounterCommitmentNeedsNoNumberToClose(t *testing.T) {
 		t.Errorf("status = %d, want 201: a one-off opens no next cycle to measure", got)
 	}
 }
+
+// The server lists what a commitment can be answered with, so the page
+// never works it out for itself (Codex, #244).
+func TestTheCardIsToldWhichAnswersACommitmentTakes(t *testing.T) {
+	h := commitmentHarness(t)
+	overdueCheckup(t, h, []string{"household/mika"}, "")
+
+	parent, ok := commitmentItem(h.needsYou(t, "mika"), "kai-checkup")
+	if !ok {
+		t.Fatal("the checkup is missing")
+	}
+	verbs := map[string]bool{}
+	for _, a := range parent.Asks {
+		verbs[a.Verb] = true
+		if a.Label == "" {
+			t.Errorf("ask %q has no label: the page has no sentence of its own to fall back on", a.Verb)
+		}
+	}
+	for _, want := range []string{"done", "waived", "booked"} {
+		if !verbs[want] {
+			t.Errorf("no %q ask: the checkup requires booking and is answerable", want)
+		}
+	}
+
+	// Somebody who may not answer is offered nothing. The affordance is
+	// absent, never present-and-refused.
+	child, ok := commitmentItem(h.needsYou(t, "kai"), "kai-checkup")
+	if !ok {
+		t.Fatal("the checkup is missing from the child's card")
+	}
+	if len(child.Asks) != 0 {
+		t.Errorf("asks = %+v for somebody who may not answer", child.Asks)
+	}
+}
+
+// A commitment nobody can conclude asks for the NUMBER and nothing
+// else. "Done" on a card that cannot say whether the thing is due is an
+// answer to a question nobody asked.
+func TestAnUnresolvedCommitmentAsksForTheNumberFirst(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+
+	item, ok := commitmentItem(h.needsYou(t, "mika"), "f150-oil")
+	if !ok {
+		t.Fatal("a commitment nobody can conclude is not asking for anything")
+	}
+	if len(item.Asks) != 1 {
+		t.Fatalf("asks = %+v, want exactly the reading", item.Asks)
+	}
+	if item.Asks[0].Verb != "reading" || item.Asks[0].Meter != "f150-odometer" {
+		t.Errorf("ask = %+v, want the odometer read", item.Asks[0])
+	}
+	if item.Asks[0].Unit != "miles" {
+		t.Errorf("unit = %q, want the declared unit so the box says what to type", item.Asks[0].Unit)
+	}
+}

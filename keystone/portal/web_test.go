@@ -516,3 +516,41 @@ func TestARefreshLeavesAloneWhatIsInUse(t *testing.T) {
 		t.Error("the busy test does not ask where the caret actually is")
 	}
 }
+
+// A commitment on the household's page must be answerable FROM the
+// household's page (Codex, #244).
+//
+// The Needs-you card used to render answer controls only for `i.seq`,
+// which a commitment does not have — it is a named resource, not a
+// notice row. So commitments appeared on the shipped page and a member
+// could not mark one done, waive it, book it or record the number it
+// was asking for without building HTTP requests by hand. The card asked
+// and then refused to listen.
+//
+// This pins the branch rather than the buttons: the labels are the
+// server's, and the page must not grow a second list of them.
+func TestTheNeedsCardCanAnswerACommitmentAndNotOnlyANotice(t *testing.T) {
+	body, ok := Page("home")
+	if !ok {
+		t.Fatal("home is not served")
+	}
+	page := string(body)
+
+	for _, want := range []struct{ frag, why string }{
+		{"i.decidable && i.ref && i.asks", "the card has no branch for an item a sequence number cannot address"},
+		{"/api/v1/home/commitments/", "the card cannot reach the commitment answer path"},
+		{"/api/v1/home/meters/", "the card cannot record the number it is asking for"},
+		{"encodeURIComponent(ask.verb)", "the page names the answers itself instead of using the server's"},
+	} {
+		if !strings.Contains(page, want.frag) {
+			t.Errorf("home is missing %q: %s", want.frag, want.why)
+		}
+	}
+
+	// The refusal is shown, not swallowed. "What did f150-odometer say?"
+	// is the only thing a member can act on, and a generic sentence in
+	// its place would leave them tapping a button that keeps failing.
+	if !strings.Contains(page, "res.j.error") {
+		t.Error("home does not surface the server's own refusal sentence")
+	}
+}

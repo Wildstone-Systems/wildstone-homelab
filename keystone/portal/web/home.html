@@ -695,10 +695,27 @@
       if (i.consequence) { wrap.appendChild(make("div", "muted indent", i.consequence)); }
       // No card shows an action a member lacks authority for: the
       // affordance is absent, never present-and-refused.
+      //
+      // TWO KINDS OF ITEM, TWO ANSWER PATHS. A notice is a row with an
+      // id and its answers are yes and no. A commitment is a named
+      // resource whose answers the SERVER lists in `asks`, because
+      // whether it wants a number, a tick or an appointment depends on
+      // how it was declared and where its cycle stands. A page working
+      // that out for itself would be a second copy of the state machine.
+      var row = null;
       if (i.decidable && i.seq) {
-        var row = make("div", "asks indent");
+        row = make("div", "asks indent");
         row.appendChild(decideBtn(i.seq, "yes", "Yes", "hbtn hbtn-primary"));
         row.appendChild(decideBtn(i.seq, "no", "No", "hbtn hbtn-secondary"));
+      } else if (i.decidable && i.ref && i.asks && i.asks.length) {
+        row = make("div", "asks indent");
+        i.asks.forEach(function (a, n) {
+          row.appendChild(a.verb === "reading"
+            ? readingAsk(a)
+            : answerBtn(i.ref, a, n === 0 ? "hbtn hbtn-primary" : "hbtn hbtn-secondary"));
+        });
+      }
+      if (row) {
         var why = make("button", "hbtn hbtn-ghost", "Ask the assistant why");
         why.type = "button";
         why.addEventListener("click", function () {
@@ -715,6 +732,94 @@
     });
     box.appendChild(stack);
     if (c.more) { box.appendChild(make("div", "muted", "and " + c.more + " more")); }
+  }
+
+  // answerBtn records one answer to a commitment: done, waived or
+  // booked. The verb IS the route's last segment, so the page never
+  // holds a second list of what the answers are called.
+  //
+  // "Booked it" asks when, because an appointment nobody named a date
+  // for is the same not-knowing the commitment already had.
+  function answerBtn(ref, ask, cls) {
+    var b = make("button", cls, ask.label);
+    b.type = "button";
+    b.addEventListener("click", function () {
+      var body = {};
+      if (ask.verb === "booked") {
+        var when = window.prompt("When is the appointment? (for example 2026-10-14)");
+        if (!when) { return; }
+        var parsed = new Date(when);
+        if (isNaN(parsed.getTime())) {
+          answerFailed(b, "that is not a date this understands");
+          return;
+        }
+        body.at = parsed.toISOString();
+      }
+      b.disabled = true;
+      answer("/api/v1/home/commitments/" + encodeURIComponent(ref) + "/" +
+             encodeURIComponent(ask.verb), body, b);
+    });
+    return b;
+  }
+
+  // readingAsk is the one ask that takes a value rather than a tap.
+  //
+  // It comes first and alone when a meter cannot be concluded from,
+  // because "Done" on a card that cannot say whether the thing is due
+  // is an answer to a question nobody asked. The number is the answer.
+  function readingAsk(ask) {
+    var wrap = make("span", "asks");
+    var box = make("input", "hinput");
+    box.type = "number";
+    box.step = "any";
+    box.min = "0";
+    box.placeholder = ask.unit || "number";
+    box.setAttribute("aria-label", ask.label);
+    box.style.maxWidth = "9rem";
+    var b = make("button", "hbtn hbtn-primary", "Save");
+    b.type = "button";
+    b.addEventListener("click", function () {
+      var v = parseFloat(box.value);
+      if (isNaN(v) || v < 0) {
+        answerFailed(b, "a meter counts up from zero");
+        return;
+      }
+      b.disabled = true;
+      postAnswer("/api/v1/home/meters/" + encodeURIComponent(ask.meter) + "/readings", { value: v }, b);
+    });
+    wrap.appendChild(make("span", "muted nowrap", ask.label));
+    wrap.appendChild(box);
+    wrap.appendChild(b);
+    return wrap;
+  }
+
+  // answer posts one and reloads the card, or says why it did not go
+  // through. The server's own sentence is shown rather than a generic
+  // one: "what did f150-odometer say?" is the whole reason the write
+  // was refused, and replacing it with "that did not work" would hide
+  // the only thing a member can act on.
+  function postAnswer(path, body, b) {
+    fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {})
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "that didn't go through"); }
+        load();
+      })
+      .catch(function (err) { answerFailed(b, String(err.message || err)); });
+  }
+
+  function answerFailed(b, why) {
+    b.disabled = false;
+    var said = b.parentNode.querySelector(".asks-said");
+    if (!said) {
+      said = make("span", "asks-said", "");
+      b.parentNode.appendChild(said);
+    }
+    said.textContent = why;
   }
 
   function decideBtn(seq, answer, label, cls) {

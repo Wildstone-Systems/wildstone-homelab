@@ -74,7 +74,7 @@ func forwardedGroups(r *http.Request) []string {
 // Only the ones that want something. A commitment quietly counting down
 // is not waiting on anybody, and putting it here would fill the one card
 // a household reads with things it does not have to do.
-func (s *Server) commitmentItems(w who, now time.Time) ([]needsYouItem, error) {
+func (s *Server) commitmentItems(w who, desired []resource.Resource, now time.Time) ([]needsYouItem, error) {
 	if s.Upkeep == nil {
 		return nil, nil
 	}
@@ -99,9 +99,62 @@ func (s *Server) commitmentItems(w who, now time.Time) ([]needsYouItem, error) {
 			Consequence: commitmentConsequence(st),
 			Decidable:   mayComplete(st, w),
 			Tone:        commitmentTone(st),
+			Asks:        commitmentAsks(st, mayComplete(st, w), meterUnits(desired)),
 		})
 	}
 	return items, nil
+}
+
+// commitmentAsks is what the card offers a member who may answer.
+//
+// THE PAGE DOES NOT WORK THIS OUT. Whether a commitment wants a number,
+// a tick or an appointment depends on how it was declared and where its
+// cycle stands, and a page deciding for itself would be a second copy
+// of the state machine — one that drifts from the one that will refuse
+// the write. Before this the page had no branch for a commitment at
+// all, so the rows rendered read-only and a member could not answer
+// them without building HTTP requests by hand (Codex, #244).
+//
+// A NUMBER COMES FIRST WHEN ONE IS MISSING. An unresolved commitment
+// cannot be concluded either way, and "Done" on a card that cannot say
+// whether the thing is due is an answer to a question nobody asked. The
+// reading is the answer, and once it lands the next evaluation says
+// what it means.
+func commitmentAsks(st upkeep.Standing, may bool, units map[string]string) []needsYouAsk {
+	if !may {
+		// The affordance is absent for somebody who cannot act, never
+		// present-and-refused. That is the homepage's own rule.
+		return nil
+	}
+	if len(st.Occurrence.Unresolved) > 0 && st.Occurrence.Trigger == "" {
+		var asks []needsYouAsk
+		for _, meter := range st.Occurrence.Unresolved {
+			asks = append(asks, needsYouAsk{
+				Verb: "reading", Label: "Record " + meter, Meter: meter, Unit: units[meter],
+			})
+		}
+		return asks
+	}
+	asks := []needsYouAsk{{Verb: "done", Label: "Done"}}
+	// An appointment is only an answer for something that needs one, and
+	// only while there is not one already: a booked cycle is not on this
+	// card at all.
+	if st.RequiresBooking {
+		asks = append(asks, needsYouAsk{Verb: "booked", Label: "Booked it"})
+	}
+	return append(asks, needsYouAsk{Verb: "waived", Label: "Skip it"})
+}
+
+// meterUnits is the declared unit for each meter, so the card can ask
+// for "miles" rather than for a bare number.
+func meterUnits(desired []resource.Resource) map[string]string {
+	out := map[string]string{}
+	for _, res := range desired {
+		if res.Kind == resource.KindMeter && res.Meter != nil {
+			out[res.Metadata.Name] = res.Meter.Unit
+		}
+	}
+	return out
 }
 
 // commitmentWants reports whether a commitment is asking for anything.

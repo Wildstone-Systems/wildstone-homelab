@@ -104,9 +104,13 @@ type Standing struct {
 	// to know whether closing this one opens another, and therefore
 	// whether the evidence it is about to record will have to measure
 	// anything.
-	Rollover   string                       `json:"rollover,omitempty"`
-	Occurrence commitment.Occurrence        `json:"occurrence"`
-	Booking    *runtimedb.CommitmentBooking `json:"booking,omitempty"`
+	Rollover string `json:"rollover,omitempty"`
+	// RequiresBooking is whether an appointment is part of answering
+	// this. A surface needs it to know whether "booked" is an answer on
+	// offer or a verb this commitment has no use for.
+	RequiresBooking bool                         `json:"requiresBooking,omitempty"`
+	Occurrence      commitment.Occurrence        `json:"occurrence"`
+	Booking         *runtimedb.CommitmentBooking `json:"booking,omitempty"`
 }
 
 // Evaluate works out where every declared commitment stands, right now,
@@ -185,7 +189,7 @@ func (e *Engine) standing(res resource.Resource, meters map[string]commitment.Me
 		Name: res.Metadata.Name, Description: spec.Description,
 		Owner: res.Metadata.Owner, Scope: spec.Scope,
 		MayComplete: spec.MayComplete, Notify: spec.Notify, Disabled: spec.Disabled,
-		Rollover: spec.Rollover,
+		Rollover: spec.Rollover, RequiresBooking: spec.RequiresBooking,
 	}
 	in, booking, err := e.input(res, meters, now)
 	if err != nil {

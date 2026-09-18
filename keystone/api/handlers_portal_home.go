@@ -158,6 +158,28 @@ type needsYouItem struct {
 	// present-and-refused.
 	Decidable bool        `json:"decidable"`
 	Tone      portal.Tone `json:"tone"`
+	// Asks are the answers on offer, for an item a sequence number
+	// cannot address. A notice has none: its two answers are yes and no
+	// and every client already knows them.
+	//
+	// The SERVER decides what is on offer, not the page. Whether a
+	// commitment wants a number, a tick or an appointment depends on how
+	// it was declared and where its cycle stands, and a page that worked
+	// that out for itself would be a second implementation of the
+	// state machine — drifting from the one that will refuse the write.
+	Asks []needsYouAsk `json:"asks,omitempty"`
+}
+
+// needsYouAsk is one answer a member can give from the card.
+type needsYouAsk struct {
+	// Verb is the answer path: the last segment of the route that
+	// records it.
+	Verb  string `json:"verb"`
+	Label string `json:"label"`
+	// Meter is which number is being asked for, for the one ask that
+	// takes a value rather than a tap.
+	Meter string `json:"meter,omitempty"`
+	Unit  string `json:"unit,omitempty"`
 }
 
 type needsYouCard struct {
@@ -329,7 +351,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 		Groups: householdGroups(),
 	}
 	resp.Search.Engine, resp.Search.Offered = engine, portal.Engines
-	resp.NeedsYou = s.homeNeedsYou(memberWho(r, member), now)
+	resp.NeedsYou = s.homeNeedsYou(memberWho(r, member), desired, now)
 	resp.Activity = s.homeActivity(member, now)
 	resp.Notifications = s.homeNotifications(member)
 	resp.Calendar = s.homeCalendar(desired)
@@ -363,7 +385,7 @@ const maxNeedsYou = 3
 // paths — and §7 excludes exactly that from this card. Saying "two
 // things are waiting for the owner" is honest, useful, and leaks
 // nothing.
-func (s *Server) homeNeedsYou(w who, now time.Time) needsYouCard {
+func (s *Server) homeNeedsYou(w who, desired []resource.Resource, now time.Time) needsYouCard {
 	card := needsYouCard{Items: []needsYouItem{}}
 	// Asked of the database as "questions still waiting on this
 	// person", not as "the newest fifty notices, some of which might
@@ -413,7 +435,7 @@ func (s *Server) homeNeedsYou(w who, now time.Time) needsYouCard {
 	// a commitment quietly counting down is not waiting on anybody, and
 	// filling the one card a household reads with things it does not
 	// have to do is how the card stops being read (ADR-W034 K5).
-	if commitments, cerr := s.commitmentItems(w, now); cerr != nil {
+	if commitments, cerr := s.commitmentItems(w, desired, now); cerr != nil {
 		s.Log.Error("home needs-you commitments", "err", cerr)
 		// Same sentence as the notices failure, and for the same
 		// reason: not being able to tell must not look like an
