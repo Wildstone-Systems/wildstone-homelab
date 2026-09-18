@@ -19,10 +19,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
 	"github.com/chickenrat17/wildstone-homelab/keystone/api"
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/backup"
@@ -85,6 +87,8 @@ func main() {
 	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W024 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
 	replyURL := flag.String("household-reply-url", "", "household event intake URL a notification's reply buttons post to, as a PHONE can reach it (not Keystone's loopback address); empty means notifications carry no reply buttons and a rule that asks for them fails loudly")
 	replyTTL := flag.Duration("household-reply-ttl", 12*time.Hour, "how long a notification's reply token stays valid")
+	calendarURL := flag.String("calendar-url", "", "CalDAV collection the calendar.* household actions read and write, e.g. http://radicale:5232/wildstone-calendar/household/ (ADR-W034). Empty leaves them all unregistered, so a Butler does not offer the household a calendar this deployment has not got. The password comes ONLY from CALENDAR_PASSWORD, never a flag")
+	calendarUser := flag.String("calendar-user", "", "directory account the calendar actions sign in to the CalDAV collection as; its password comes from CALENDAR_PASSWORD")
 	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia). Empty fails closed. This names ONE trust boundary and it now gates TWO things: the household review page (ADR-W030 A8.1), and Console sign-in by forwarded identity (ADR-W032) — a request from one of these addresses carrying Remote-User and a Remote-Groups list containing console_users is authenticated as that person, with admin authority. Setting this does not by itself grant anyone the Console: they must also be in the console_users directory group, which packages/wildstone-console declares")
 	flag.Parse()
 
@@ -98,6 +102,7 @@ func main() {
 	householdCfg := householdConfig{
 		Interval: *automationEvery, Timezone: *householdTZ,
 		NtfyURL: *ntfyURL, ReplyURL: *replyURL, ReplyTTL: *replyTTL,
+		CalendarURL: *calendarURL, CalendarUser: *calendarUser,
 		Ingress: splitNonEmpty(*householdIngress),
 	}
 	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, butlerCfg, householdCfg, log); err != nil {
@@ -226,7 +231,20 @@ type householdConfig struct {
 	// speaks from. Empty leaves the household review page unavailable
 	// rather than open (ADR-W030 A8.1).
 	Ingress []string
+	// CalendarURL is the CalDAV collection the calendar.* actions act
+	// on; empty leaves them all unregistered (ADR-W034).
+	CalendarURL string
+	// CalendarUser is the directory account those actions sign in as.
+	// Its password arrives in CALENDAR_PASSWORD, never in a flag — the
+	// same division -ntfy-url and NTFY_TOKEN already make.
+	CalendarUser string
 }
+
+// confirmWindow is how long a confirm-tier question stays open, and
+// therefore also how long one yes is good for. Short, because the whole
+// premise is that somebody is there: a question still unanswered ten
+// minutes later is one the household has moved on from.
+const confirmWindow = 10 * time.Minute
 
 // butlerSessionPrincipal is the acting principal on every Butler session
 // record (ADR-W001 A1). The small-duplicated-constant pattern: the API
@@ -700,6 +718,72 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		// would refuse every action, which is not what "no catalog" means.
 		actions.Declared = domestic.DeclaredFromPackages(agentToolSources(cat))
 	}
+	// Asking a household member to confirm one action (ADR-W024 A5.1).
+	//
+	// It rides the NOTICES table, which is the household's own
+	// ask-and-answer channel and deliberately not a notification
+	// capability: a notice is per member, expiring, single-use, and it
+	// is rendered wherever that member actually is — the Home page
+	// today, and any surface that learns to render one tomorrow. A
+	// household with no ntfy installed can still be asked.
+	//
+	// What authorises a retry is a row this function reads, written by
+	// runtimedb.AnswerNotice, which checks that the answerer is the
+	// person the question was asked of, that it has not expired, that it
+	// was not already answered, and that the reply resolves to a clear
+	// yes or no. The model never sees a token, so there is nothing for
+	// it to replay: it gets a refusal, and the next attempt succeeds
+	// only because a person answered in the meantime.
+	actions.Confirm = func(_ context.Context, req domestic.ConfirmRequest) (domestic.Confirmation, error) {
+		settings, _, serr := db.GetButlerSettings()
+		if serr != nil {
+			return domestic.ConfirmAsked, serr
+		}
+		now := time.Now()
+		// The dedupe key carries a TIME BUCKET as well as the call.
+		//
+		// Without the call, one yes would authorise any later action.
+		// Without the bucket, the key would match forever — a notices
+		// dedupe is not time-scoped — so the SAME question could never
+		// be asked twice, and a member who let one expire could never
+		// be asked again. One bucket is one confirmation window.
+		bucket := now.Unix() / int64(confirmWindow.Seconds())
+		decision, rerr := db.RaiseNotice(runtimedb.NoticeRequest{
+			Kind:          "household.confirm",
+			Recipient:     req.Member,
+			CorrelationID: req.CorrelationID,
+			DedupeKey:     fmt.Sprintf("household-confirm:%s:%d", req.Key, bucket),
+			Body:          req.Question,
+			Asks:          true,
+			TTL:           confirmWindow,
+		}, settings, now)
+		if rerr != nil {
+			return domestic.ConfirmAsked, rerr
+		}
+		if decision.Sent {
+			return domestic.ConfirmAsked, nil
+		}
+		// Deduplicated onto a question already put to them: read where
+		// they have got to with it.
+		n, gerr := db.GetNotice(decision.Seq)
+		if gerr != nil {
+			return domestic.ConfirmAsked, gerr
+		}
+		if n.AnsweredAt.IsZero() {
+			return domestic.ConfirmPending, nil
+		}
+		// An answer is spent when it is used. AcknowledgeNotice only
+		// succeeds on a notice not already acknowledged, so this is the
+		// atomic single-use marker — two dispatches racing on one yes
+		// cannot both win it.
+		if aerr := db.AcknowledgeNotice(n.Seq); aerr != nil {
+			return domestic.ConfirmPending, nil
+		}
+		if approved, ok := runtimedb.AnswerApproves(n.Answer); ok && approved {
+			return domestic.ConfirmApproved, nil
+		}
+		return domestic.ConfirmDenied, nil
+	}
 	actions.Audit = func(c domestic.Call, r domestic.Result, aerr error) {
 		ev := runtimedb.Event{
 			Type: "domestic.acted", Kind: "Automation", Name: c.Rule, Message: r.Summary,
@@ -773,6 +857,52 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	if err != nil {
 		return fmt.Errorf("-household-timezone %q: %w", householdCfg.Timezone, err)
 	}
+	// The calendar's household actions (ADR-W034 phase 4).
+	//
+	// Registered whenever a collection is configured, which is the human
+	// decision this path has: an operator who pointed Keystone at a
+	// calendar and gave it a credential has said the household's agents
+	// may use it. That is the same gate -ntfy-url is, and it is a
+	// DIFFERENT gate from the one on the adapter's work-queue path,
+	// where a connection has to be widened before an action reaches an
+	// adapter at all. Both are a person deciding; they are just
+	// different people's decisions on different roads (ADR-W034 A5).
+	var calendarActions *domestic.Calendar
+	if householdCfg.CalendarURL != "" {
+		cal := &domestic.Calendar{
+			Upstream: &caldav.Upstream{
+				CollectionURL: householdCfg.CalendarURL,
+				Username:      householdCfg.CalendarUser,
+				Password:      os.Getenv("CALENDAR_PASSWORD"),
+				Location:      householdLoc,
+				// Writable because the tools are the point. The read
+				// tools work without it; the three write ones would
+				// register and refuse, which is a Butler offering the
+				// household something that cannot happen.
+				Writable: true,
+			},
+			Location: householdLoc,
+		}
+		for _, e := range cal.Executors() {
+			actions.Register(e)
+		}
+		// The hand-off seam is bound after apiSrv exists; see below.
+		calendarActions = cal
+		if householdCfg.CalendarUser == "" || os.Getenv("CALENDAR_PASSWORD") == "" {
+			// Loud, because the alternative is silent: Radicale answers
+			// 401 to every read, the tools are registered and fail,
+			// and the capability reports as installed the whole time.
+			// That is the shape ADR-W029 exists to catch — a converged
+			// install that does not work — and the only place it can be
+			// caught here is startup.
+			log.Warn("calendar actions are wired but have no credential: "+
+				"set -calendar-user and CALENDAR_PASSWORD, or the calendar will refuse every request",
+				"user", householdCfg.CalendarUser, "password", os.Getenv("CALENDAR_PASSWORD") != "")
+		}
+		log.Info("calendar actions wired", "collection", householdCfg.CalendarURL,
+			"user", householdCfg.CalendarUser, "credential", os.Getenv("CALENDAR_PASSWORD") != "")
+	}
+
 	automationEvery := householdCfg.Interval
 	if automationEvery <= 0 {
 		automationEvery = 15 * time.Second
@@ -889,6 +1019,41 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv.GatewayAddr = advertisedGatewayAddr(hosts, lis.Addr().String())
 	apiSrv.APIURL = advertisedAPIURL(hosts, apiLis.Addr().String())
 	apiSrv.HouseholdTimezone = householdCfg.Timezone
+	apiSrv.CalendarCollectionURL = householdCfg.CalendarURL
+	// calendar.how_to_add answers from desired state, because where a
+	// Route is actually served changes with the ingress posture — so it
+	// is resolved per call through the API server's own resolver rather
+	// than frozen into a string at startup. keystone/domestic holds no
+	// Statefile; this closure is the whole of its access, and it returns
+	// four strings about one member.
+	if calendarActions != nil {
+		// The home page's calendar card, reading the SHARED calendar
+		// through the same upstream the actions use — one credential,
+		// one client, one place a change to either lands.
+		apiSrv.CalendarEvents = func(from, to time.Time) ([]api.CalendarCardEvent, error) {
+			events, eerr := calendarActions.Upstream.Events(context.Background(), from, to)
+			if eerr != nil {
+				return nil, eerr
+			}
+			sort.Slice(events, func(i, j int) bool { return events[i].Start.Before(events[j].Start) })
+			out := make([]api.CalendarCardEvent, 0, len(events))
+			for _, e := range events {
+				out = append(out, api.CalendarCardEvent{Title: e.Summary, Start: e.Start, AllDay: e.AllDay})
+			}
+			return out, nil
+		}
+		calendarActions.Handoff = func(member string) (domestic.CalendarHandoff, bool, error) {
+			h, ok, herr := apiSrv.CalendarHandoffFor(member)
+			if herr != nil || !ok {
+				return domestic.CalendarHandoff{}, ok, herr
+			}
+			return domestic.CalendarHandoff{
+				Server: h.Server, Username: h.Username,
+				OwnCalendars: h.OwnCalendars, HouseholdCalendar: h.HouseholdCalendar,
+				ProfileURL: h.ProfileURL,
+			}, true, nil
+		}
+	}
 	apiSrv.ManagedPrefix = managedPrefix
 	// The coordinator routes need this process's own lease identity, so
 	// a promotion writes the id THIS deployment will re-acquire at its
@@ -1062,6 +1227,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 					Rule:        "butler-session",
 					Subject:     c.Member,
 					TriggerType: "butler.household_session",
+					// A person asked and is reading the answer. This is
+					// the second axis ADR-W024 A5.1 adds, and it is set
+					// HERE rather than inferred from the rule name,
+					// because a surface asserting "somebody is present"
+					// should have to say so.
+					Attended: true,
 				})
 				if aerr != nil {
 					return "", aerr

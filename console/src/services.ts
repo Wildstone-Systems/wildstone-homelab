@@ -76,6 +76,13 @@ const GROUP_OF: Record<string, Group> = {
   inventory: "Home",
   recipes: "Home",
   budget: "Home",
+  // Home rather than Identity beside `mail`, and the difference is the
+  // capability's whole reason for existing: mail-roundcube's calendars
+  // are a surface on somebody else's account, where this one is the
+  // household's own store on the household's own disk (ADR-W034 A2). A
+  // person looking for it is looking among the things the house runs on,
+  // not among the accounts.
+  calendar: "Home",
 
   documents: "Documents",
   "pdf-tools": "Documents",

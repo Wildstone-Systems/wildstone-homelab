@@ -144,6 +144,14 @@ var homepageApps = map[string]homepageApp{
 	// "invalid credentials" (ADR-W029 A9).
 	"roundcube": {"Mail", "roundcube", "Your email — sign in with your address and your mail password"},
 	"davis":     {"Calendars", "mdi-calendar-month", "Calendars and contacts on every phone — same login as Mail"},
+
+	// The calendar capability. Radicale has no dashboard-icons slug of
+	// its own, so it takes a Material Design icon in the shape of the
+	// thing it serves rather than a guess at a slug that would render
+	// as a broken image — the same reasoning as Davis above. The
+	// description says which password to type, because this one is the
+	// household sign-in and Davis's, one card away, is not.
+	"radicale": {"Calendar", "mdi-calendar-blank", "The household's own calendars, on every phone — your household sign-in"},
 }
 
 // homepageFallbackIcon is what an app with no row gets. A generic

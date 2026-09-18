@@ -1,6 +1,7 @@
 # ADR-W024: Household events and automations — the family's butler, deterministic first
 
-- **Status:** proposed
+- **Status:** proposed; A5 amended by A5.1 (2026-09-18), which adds the
+  attendance axis and the `confirm` tier.
 - **Relates to:** ADR-W001 (concierge, acting identity), ADR-W004 (plans
   are the only write path), ADR-W005 A1 (`agentTools` parsed, not run),
   ADR-W006/W017 (the Butler's ceiling), ADR-W007 (one API, one event
@@ -186,6 +187,94 @@ Two things do not run through it:
   with at most the `butler` role: read and propose. Only the Wildstone
   Butler sits behind the domestic gateway, because only its sessions are
   principal-bound, redacted, and bounded (ADR-W017 A1).
+
+### A5.1. Attendance is the second axis (amendment, 2026-09-18)
+
+**A5 as written has one field answering two questions, and the second
+question was not asked because when this ADR was written there was only
+one caller.**
+
+The automation engine fired rules on a schedule and that was the whole
+of the household layer, so "may this action run" was entirely a
+statement about the action. Then the Butler's family surface arrived
+(ADR-W026, ADR-W030) and reused the same gateway — and a second kind of
+caller appeared without the model growing a dimension for it.
+
+The two situations a tier cannot tell apart:
+
+- a rule fires at 3am and deletes a calendar event. Nobody saw it.
+- somebody says "cancel Friday's dentist" in chat, and the Butler deletes
+  it. They asked, they are there, they read the reply.
+
+Both were `calendar.delete_event` at `domestic`. The system had to pick
+one answer for both, and whichever it picked was wrong half the time —
+so either an unattended rule could quietly delete things, or a person
+in the room could not.
+
+**So a call carries whether a person is attending it, and a tool carries
+whether it needs one.**
+
+- `Call.Attended` is set by the SURFACE, not derived here from a rule
+  name. A surface asserting that somebody is present should have to say
+  so, rather than the gateway guessing from a string every future
+  surface would have to know.
+- `confirm` joins `read` and `domestic` as a declarable tier. It means:
+  acts, only with a person in the loop, and only after that person has
+  said yes to **this specific call**.
+
+| tier | unattended rule | attended session |
+| --- | --- | --- |
+| `read` | allow | allow |
+| `domestic` | allow | allow |
+| `confirm` | **refuse** | allow, after they answer |
+| anything higher | refuse | refuse |
+
+An unattended rule is refused a `confirm` action outright rather than
+being made to wait for an answer. There is nobody to ask, and a rule
+that silently stops working because a question expired is worse than one
+that was never allowed to carry the action.
+
+**Confirmation is a question put to a person, not a flag the caller
+sets.** The mechanism is the notices table this repository already has:
+per member, expiring, single-use, answerable from whichever surface that
+member is actually on, and deliberately not tied to any notification
+capability — a household with no ntfy installed can still be asked. It
+renders on the Home page today and on any surface that learns to render
+one tomorrow.
+
+Four properties make it a control rather than a hope:
+
+1. **The model never sees a token.** It gets a refusal. What authorises
+   the retry is a row written by `AnswerNotice`, which checks that the
+   answerer is the person the question was asked of, that it has not
+   expired, that it was not already answered, and that the reply
+   resolves to a clear yes or no — "ambiguity is not consent, and
+   neither is a timeout".
+2. **Consent is bound to the call.** The dedupe key is a hash of the
+   tool, the member and every argument, so approving "delete the dentist
+   appointment on Friday" authorises exactly that and not "delete dinner
+   on Saturday".
+3. **An answer is spent when it is used**, atomically, so two dispatches
+   racing on one yes cannot both win it.
+4. **The question is about the thing, not the tool call.** An executor
+   may implement `Describe` to say what a call would do without doing
+   it, so a person reads "Delete 'Dentist for Sam' from Fri 18 Sep?"
+   rather than a tool name and a parameter list. It also moves the
+   executor's own refusals earlier: an ambiguous request is rejected
+   before anybody is asked to approve something that could not have been
+   performed.
+
+**What did NOT change.** A5's core claim stands and is not weakened
+here: a household action is a narrow, declared, permissioned operation,
+infrastructure changes stay plans, and an external agent still does not
+sit behind this gateway. `confirm` adds a tier that is *more*
+restrictive than `domestic`, never less.
+
+**Why this was amended rather than worked around.** The calendar
+capability (ADR-W034) wanted "delete, but ask first", and the shape of
+that want is general — it is every destructive household action, not a
+calendar quirk. A tier only one capability understood would have been
+the same mistake in a smaller box.
 
 ### A6. Context providers are read tools, and the model is the last step
 

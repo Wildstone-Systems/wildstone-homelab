@@ -54,5 +54,6 @@ The detailed implementation sequence belongs in GitHub issues/planning. ADR-W033
 - [ADR-W030](decisions/ADR-W030-butler-continuity-durable-work-and-scoped-integrations.md) — historical continuity, durable-work, and scoped-integration decisions. See W033 Part G for current supersessions.
 - [ADR-W031](decisions/ADR-W031-butlers-are-user-created-specialists.md) — historical specialist-Butler design. See W033 Part G for the current Agent-class, model-chain, Connection, and memory model.
 - [ADR-W032](decisions/ADR-W032-who-may-open-the-console.md) — historical Console-access design. Final W033 makes Console strictly Owner-only and treats Child as a constrained Member profile rather than a third fundamental role.
+- [ADR-W034](decisions/ADR-W034-the-household-keeps-its-own-calendar.md) — the `calendar` capability. Mostly a capability decision, listed here for the part that is not: what an agent may do to a calendar, and why writing is gated twice.
 - [Capability and design brief](butler-capability-and-design-brief.md) — non-normative rationale and deployment examples.
 - `butler-memory.md` — notes generated from existing code, retained for repository inventory rather than as a normative source.

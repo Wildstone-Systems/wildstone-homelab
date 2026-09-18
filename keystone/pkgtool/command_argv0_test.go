@@ -88,6 +88,18 @@ var imageArgv0 = map[string]string{
 	// docker/Dockerfile-standalone at tchapi/davis@main, whose final
 	// stage sets no ENTRYPOINT and no USER.
 	"ghcr.io/tchapi/davis-standalone": "/bin/sh",
+
+	// Radicale's image declares
+	// ENTRYPOINT ["/app/bin/python", "/app/bin/radicale"] with
+	// CMD ["--hosts", "0.0.0.0:5232,[::]:5232"], so a command carries
+	// flags only — the prometheus shape. Naming the binary again would
+	// run `radicale radicale` and exit on an unrecognised argument.
+	// Evidence: the published Dockerfile at Kozea/Radicale@master. The
+	// image CONFIG blob is not reachable from here — ghcr redirects
+	// blobs to pkg-containers.githubusercontent.com, which CI's network
+	// does not reach — so the Dockerfile is the check, and a docker
+	// inspect on a node is the stronger one when one is available.
+	"ghcr.io/kozea/radicale": "",
 }
 
 // TestPackageCommandsNameTheirBinary walks every shipped package's

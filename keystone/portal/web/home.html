@@ -461,6 +461,17 @@
     if (d < 86400) { return Math.round(d / 3600) + "h"; }
     return Math.round(d / 86400) + "d";
   }
+  // Today / Tomorrow / a weekday. A card covering three days that showed
+  // only a clock time would put tomorrow's dinner on tonight.
+  function dayName(iso) {
+    if (!iso) { return ""; }
+    var d = new Date(iso), now = new Date();
+    var days = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) -
+                           new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
+    if (days === 0) { return "Today"; }
+    if (days === 1) { return "Tomorrow"; }
+    return d.toLocaleDateString([], { weekday: "short" });
+  }
   function when(iso) {
     return iso ? new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
   }
@@ -744,9 +755,39 @@
     var body = el("cal-body");
     clear(body);
     if (c.available) {
-      text("cal-sum", "");
-      text("m-calendar-sub", "Nothing in the next three days");
-      body.appendChild(make("div", "muted", "Nothing in the next three days."));
+      var evs = c.events || [];
+      if (evs.length) {
+        text("cal-sum", evs.length === 1 ? "1 thing" : evs.length + " things");
+        text("m-calendar-sub", evs.length === 1 ? "1 thing coming up" : evs.length + " things coming up");
+        evs.forEach(function (e) {
+          var row = make("div", "frow");
+          row.appendChild(make("span", "nm", e.title));
+          row.appendChild(make("span", "muted tnum", e.allDay ? dayName(e.at) + " all day"
+                                                              : dayName(e.at) + " " + when(e.at)));
+          body.appendChild(row);
+        });
+      } else {
+        text("cal-sum", "");
+        text("m-calendar-sub", "Nothing in the next three days");
+        body.appendChild(make("div", "muted", "Nothing in the next three days."));
+      }
+      // The hand-off. On an iPhone the shared household calendar cannot
+      // be added any other way — a phone only finds the calendars under
+      // the principal it signed in as — so this button is not a
+      // shortcut, it is the path.
+      if (c.addToPhone) {
+        var add = make("a", "hbtn", "Add to your phone");
+        add.href = c.addToPhone;
+        add.appendChild(icon("arrow-square-out"));
+        body.appendChild(add);
+        if (c.server) {
+          body.appendChild(make("div", "muted",
+            "On a laptop: add a CalDAV account at " + c.server +
+            ", signing in as " + (c.username || "you") + " with your household password."));
+        }
+      }
+      if (c.problem) { note(body, "warn", c.problem); }
+      if (c.openAt) { el("m-calendar").href = c.openAt; }
     } else {
       text("cal-sum", "needs your sign-in");
       text("m-calendar-sub", c.problem || "nothing upcoming");
