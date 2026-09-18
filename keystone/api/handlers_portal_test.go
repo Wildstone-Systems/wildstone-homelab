@@ -521,3 +521,115 @@ func TestOnlyTheConsequentialFileWritesReachTheHouseholdStream(t *testing.T) {
 		}
 	}
 }
+
+// The personal namespace, through the door.
+//
+// The store's own tests prove the isolation; these prove the DOOR does
+// not undo it — that the member the space resolves from is the one the
+// ingress proved, and not anything in the request.
+func TestOneMembersPersonalFilesAreNotReachableByAnother(t *testing.T) {
+	h, root := portalHarness(t)
+
+	// Maya puts something in her own space.
+	res := h.member(http.MethodPost, "/api/v1/filedrop/upload?namespace=me&name=diary.txt",
+		"maya", "filedrop_users", strings.NewReader("maya's"), "application/octet-stream")
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("maya's upload: status %d", res.StatusCode)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Members", "maya", "diary.txt")); err != nil {
+		t.Fatalf("maya's file is not in her own space: %v", err)
+	}
+
+	// Sandy's own space is empty, and hers is a different place.
+	var mine struct {
+		Items []map[string]any `json:"items"`
+	}
+	res = h.member(http.MethodGet, "/api/v1/filedrop/list?namespace=me", "sandy", "filedrop_users", nil, "")
+	if err := json.NewDecoder(res.Body).Decode(&mine); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if len(mine.Items) != 0 {
+		t.Errorf("sandy sees %d files in her own space: %v", len(mine.Items), mine.Items)
+	}
+
+	// And nothing sandy can put in the request reaches maya's.
+	for _, ns := range []string{"me/maya", "Members/maya", "../Members/maya", "maya"} {
+		res = h.member(http.MethodGet,
+			"/api/v1/filedrop/list?namespace="+url.QueryEscape(ns), "sandy", "filedrop_users", nil, "")
+		res.Body.Close()
+		if res.StatusCode == http.StatusOK {
+			t.Errorf("namespace %q answered 200 for sandy", ns)
+		}
+		res = h.member(http.MethodGet,
+			"/api/v1/filedrop/file?namespace="+url.QueryEscape(ns)+"&name=diary.txt",
+			"sandy", "filedrop_users", nil, "")
+		res.Body.Close()
+		if res.StatusCode == http.StatusOK {
+			t.Errorf("sandy downloaded maya's diary through namespace %q", ns)
+		}
+		res = h.member(http.MethodPost,
+			"/api/v1/filedrop/delete?namespace="+url.QueryEscape(ns)+"&name=diary.txt",
+			"sandy", "filedrop_users", nil, "")
+		res.Body.Close()
+	}
+	if _, err := os.Stat(filepath.Join(root, "Members", "maya", "diary.txt")); err != nil {
+		t.Errorf("maya's file was removed by a refused request: %v", err)
+	}
+
+	// Maya reads her own back.
+	res = h.member(http.MethodGet, "/api/v1/filedrop/file?namespace=me&name=diary.txt",
+		"maya", "filedrop_users", nil, "")
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || string(body) != "maya's" {
+		t.Errorf("maya cannot read her own file: status %d body %q", res.StatusCode, body)
+	}
+}
+
+// The personal destination is offered with what it actually promises,
+// and withheld from a member whose name cannot become a directory.
+func TestThePersonalDestinationIsOfferedHonestly(t *testing.T) {
+	h, _ := portalHarness(t)
+
+	var caps struct {
+		Namespaces []map[string]string `json:"namespaces"`
+	}
+	res := h.member(http.MethodGet, "/api/v1/filedrop/capabilities", "sandy", "filedrop_users", nil, "")
+	if err := json.NewDecoder(res.Body).Decode(&caps); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+
+	var me map[string]string
+	for _, n := range caps.Namespaces {
+		if n["key"] == "me" {
+			me = n
+		}
+	}
+	if me == nil {
+		t.Fatal("no personal destination offered")
+	}
+	// It must not promise privacy it cannot keep against whoever runs
+	// the machine.
+	if !strings.Contains(me["note"], "machine") {
+		t.Errorf("note = %q, want it to name the limit of the promise", me["note"])
+	}
+
+	// A member name this cannot turn into a directory is offered no
+	// personal tab at all, rather than one that answers 404.
+	res = h.member(http.MethodGet, "/api/v1/filedrop/capabilities", "not a name", "filedrop_users", nil, "")
+	var odd struct {
+		Namespaces []map[string]string `json:"namespaces"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&odd); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	for _, n := range odd.Namespaces {
+		if n["key"] == "me" {
+			t.Error("a personal destination was offered to a member with no usable name")
+		}
+	}
+}

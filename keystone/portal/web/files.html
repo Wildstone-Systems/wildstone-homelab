@@ -97,6 +97,7 @@
   <div class="spread" style="margin-bottom: var(--space-4); flex-wrap: wrap">
     <div class="seg" id="tabs" role="tablist"></div>
     <span class="pill pill-mute tnum" id="nspath">&nbsp;</span>
+    <span class="muted" id="nsnote"></span>
     <span class="fade" aria-hidden="true"></span>
     <button class="hbtn hbtn-primary" id="upload" type="button">
       <i class="ph ph-upload-simple" aria-hidden="true"></i> Upload
@@ -268,6 +269,12 @@
       b.setAttribute("aria-selected", b.dataset.key === key ? "true" : "false");
     });
     text("nspath", "/files/" + key);
+    // What this destination MEANS, from the server rather than from a
+    // table here: the personal one says who can see it, because "Mine"
+    // on its own would be read as a promise the machine's administrator
+    // can break.
+    var row = (caps.namespaces || []).filter(function (n) { return n.key === key; })[0];
+    text("nsnote", (row && row.note) || "");
     text("dropmsg", "Drop files here to add them to /files/" + key);
     list();
   }
@@ -292,8 +299,9 @@
     var box = el("listing");
     clear(box);
     if (!items.length) {
-      box.appendChild(make("p", "muted",
-        "No files yet. Anything dropped here lands in the household's shared folder."));
+      box.appendChild(make("p", "muted", ns === "me"
+        ? "Nothing here yet. Anything dropped here is yours — nobody else sees it on the dashboard."
+        : "No files yet. Anything dropped here lands in the household's shared folder."));
       return;
     }
     // Photos get the grid; everything else gets the table. The grid is

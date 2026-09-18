@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -51,15 +52,65 @@ type Namespace struct {
 // Namespaces is the closed set. "shared" first: it is the default, and
 // the default is what an upload with no opinion gets.
 //
-// Deliberately two rather than the four #197 sketches. Personal space
-// (/files/me) is a real feature and a real decision — whether a
-// household member's own subtree is private FROM the operator, what
-// happens to it when they are offboarded — and shipping a directory
-// named after a person before that decision is made would be shipping
-// the word "private" without the property.
+// "me" is the personal one, and its Dir is EMPTY because it does not
+// have one until a person is known: it resolves to a directory under
+// Members/ named for the authenticated member, and the name comes from
+// the proven identity rather than from any field of a request. There is
+// no spelling in this API for "somebody else's personal space".
+//
+// The two questions that held this back have answers now, and both are
+// the repository's rather than mine.
+//
+// IS IT PRIVATE FROM THE OPERATOR? No, and it cannot be. These files
+// live on the household's own filesystem and whoever administers the
+// machine can read them; encryption at rest with a key the operator does
+// not hold is a different feature. So the property this actually
+// provides is privacy FROM OTHER MEMBERS, and the page says exactly
+// that rather than the word "private" on its own. Shipping a directory
+// named after a person while implying more than that is what the
+// earlier note was refusing to do.
+//
+// WHAT HAPPENS AT OFFBOARDING? ADR-W030 already decided it for personal
+// work: it pauses and nothing is deleted, because it is somebody's
+// unfinished business and the household may need to know what it was.
+// That falls out here with no code: "me" resolves from the authenticated
+// member, an offboarded person no longer authenticates, and their
+// directory stays exactly where it is for the household to deal with.
 var Namespaces = []Namespace{
 	{Key: "shared", Title: "Shared", Dir: "Shared"},
 	{Key: "photos", Title: "Photos", Dir: "Photos"},
+	{Key: "me", Title: "Mine", Dir: ""},
+}
+
+// personalRoot is the directory every member's own space lives under.
+const personalRoot = "Members"
+
+// memberDir is the strict shape a member's directory name may take.
+//
+// STRICT, AND REFUSING RATHER THAN NORMALISING, which is the whole
+// point. A sanitiser that mapped "a/b" and "a_b" onto one directory
+// would silently join two people's private space; refusing anything
+// that is not already a plain name cannot. Members come from a
+// directory service and look like this; one that does not gets no
+// personal space rather than somebody else's.
+var memberDir = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
+
+// PersonalDir is the directory name for one member's own space, or
+// ok=false for a name this will not turn into a directory.
+//
+// Lower-cased, because the rest of the household compares member names
+// case-insensitively (ADR-W032 A4 records what happens when it does
+// not) and two spellings of one person must not become two folders.
+func PersonalDir(member string) (string, bool) {
+	name := strings.TrimSpace(member)
+	if !memberDir.MatchString(name) {
+		return "", false
+	}
+	// "." and ".." pass the character class and are not names.
+	if strings.Trim(name, ".") == "" {
+		return "", false
+	}
+	return personalRoot + "/" + strings.ToLower(name), true
 }
 
 // DefaultNamespace is what an upload that names none lands in.
@@ -90,6 +141,12 @@ var (
 type FileStore struct {
 	Root      string
 	MaxUpload int64
+	// Member is the authenticated person this store is acting for, and
+	// it is the ONLY thing that resolves the "me" namespace. Set by the
+	// caller from the proven identity; empty means the personal space is
+	// unavailable rather than shared, so a bug that forgets to set it
+	// fails closed.
+	Member string
 }
 
 // Item is one stored file as a person sees it: what it is called, how
@@ -103,6 +160,10 @@ type Item struct {
 
 // NamespaceFor resolves a key to its row. The empty key is the default;
 // anything else unrecognised is refused.
+//
+// It does NOT resolve "me" to a directory — it cannot, because it does
+// not know who is asking. Every path that touches the filesystem goes
+// through (*FileStore).namespace instead, which does.
 func NamespaceFor(key string) (Namespace, error) {
 	if key == "" {
 		key = DefaultNamespace
@@ -113,6 +174,34 @@ func NamespaceFor(key string) (Namespace, error) {
 		}
 	}
 	return Namespace{}, fmt.Errorf("%w: %q", ErrNamespace, key)
+}
+
+// namespace resolves a key for THIS store's member, filling in the
+// personal space's directory.
+//
+// The member is never a parameter and never comes from a request. That
+// is the entire isolation guarantee: there is no argument a caller can
+// supply that makes this return another person's directory, so "member
+// A cannot read member B's files" is a property of the signature rather
+// than of a check somebody has to remember.
+func (s *FileStore) namespace(key string) (Namespace, error) {
+	ns, err := NamespaceFor(key)
+	if err != nil {
+		return Namespace{}, err
+	}
+	if ns.Dir != "" {
+		return ns, nil
+	}
+	dir, ok := PersonalDir(s.Member)
+	if !ok {
+		// No usable member: the personal space is ABSENT, never
+		// silently the shared one. An upload that landed in Shared
+		// because a name had a dash in it would be a privacy failure
+		// wearing a shrug.
+		return Namespace{}, fmt.Errorf("%w: %q", ErrNamespace, key)
+	}
+	ns.Dir = dir
+	return ns, nil
 }
 
 // MaxUploadFor is the effective per-file ceiling: what the household
@@ -165,11 +254,33 @@ func (s *FileStore) open(ns Namespace) (*os.Root, error) {
 	// Only on creation. An operator who has deliberately tightened an
 	// existing destination should not have it widened again on the next
 	// upload.
+	//
+	// A PERSONAL SPACE IS THE EXCEPTION, and gets 0o700. The reasoning
+	// above is about the SHARED destinations: they exist so that the
+	// media server and a file browser can see what the family dropped.
+	// Nobody else is meant to read one member's own folder, so widening
+	// it to every container on the box would hand the property away at
+	// the moment of creation. Its parent, Members/, is 0o711 — traversable
+	// so each member's own directory can be opened, not listable, so a
+	// process that gets that far cannot enumerate the household.
+	mode := os.FileMode(0o755)
+	if strings.HasPrefix(ns.Dir, personalRoot+"/") {
+		mode = 0o700
+		parent := filepath.Join(s.Root, personalRoot)
+		if _, err := os.Stat(parent); errors.Is(err, os.ErrNotExist) {
+			if err := os.MkdirAll(parent, 0o711); err != nil {
+				return nil, fmt.Errorf("portal: preparing personal space: %w", err)
+			}
+			if err := os.Chmod(parent, 0o711); err != nil {
+				return nil, fmt.Errorf("portal: preparing personal space: %w", err)
+			}
+		}
+	}
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, mode); err != nil {
 			return nil, fmt.Errorf("portal: preparing %s: %w", ns.Title, err)
 		}
-		if err := os.Chmod(dir, 0o755); err != nil {
+		if err := os.Chmod(dir, mode); err != nil {
 			return nil, fmt.Errorf("portal: preparing %s: %w", ns.Title, err)
 		}
 	} else if err != nil {
@@ -197,7 +308,7 @@ type Stored struct {
 // request whose size is chosen by the person making it, and #197 says
 // so in as many words.
 func (s *FileStore) Save(nsKey, offered string, body io.Reader) (Stored, error) {
-	ns, err := NamespaceFor(nsKey)
+	ns, err := s.namespace(nsKey)
 	if err != nil {
 		return Stored{}, err
 	}
@@ -373,7 +484,7 @@ func SafeName(offered string) string {
 
 // List returns one namespace's files, newest first.
 func (s *FileStore) List(nsKey string) ([]Item, error) {
-	ns, err := NamespaceFor(nsKey)
+	ns, err := s.namespace(nsKey)
 	if err != nil {
 		return nil, err
 	}
@@ -461,7 +572,7 @@ func sortNewestFirst(items []Item) {
 // "..": it is the same rule the write path applied, so a name that
 // could not have been created here cannot be read here either.
 func (s *FileStore) Open(nsKey, name string) (*os.File, os.FileInfo, error) {
-	ns, err := NamespaceFor(nsKey)
+	ns, err := s.namespace(nsKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -502,7 +613,7 @@ func (s *FileStore) Open(nsKey, name string) (*os.File, os.FileInfo, error) {
 // this surface, and RemoveAll on a caller-named path is not a power a
 // household dashboard should hold.
 func (s *FileStore) Delete(nsKey, name string) error {
-	ns, err := NamespaceFor(nsKey)
+	ns, err := s.namespace(nsKey)
 	if err != nil {
 		return err
 	}
@@ -546,7 +657,7 @@ func (s *FileStore) Delete(nsKey, name string) error {
 // result is reported, because a person who typed "holiday/2026.jpg" and
 // got "holiday_2026.jpg" should see that rather than wonder.
 func (s *FileStore) Rename(nsKey, from, to string) (string, error) {
-	ns, err := NamespaceFor(nsKey)
+	ns, err := s.namespace(nsKey)
 	if err != nil {
 		return "", err
 	}
