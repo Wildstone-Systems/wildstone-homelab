@@ -391,6 +391,13 @@ func TestCatalogShipsTheLaunchServiceSet(t *testing.T) {
 		"vpn-gluetun",
 		// asked for after the expansion
 		"podcasts-podgrab",
+		// The household's own calendar (ADR-W034). Listed here rather
+		// than left to the count because it is the only calendar a
+		// household can run that does not need a mail provider behind
+		// it — mail-roundcube's Davis authenticates every request
+		// against IMAP — so losing it silently would lose the
+		// capability, not just a profile of one.
+		"calendar-radicale",
 	} {
 		if !have[want] {
 			t.Errorf("packages/%s is missing from the catalog", want)

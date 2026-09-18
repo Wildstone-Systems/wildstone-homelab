@@ -102,7 +102,7 @@ var migrated = dbtemplate.New(func(path string) error {
 
 // record puts the cast these fixtures use on record as Persons.
 //
-// Since migration 0040 a task's author and owner, and a memory record's
+// Since migration 0043 a task's author and owner, and a memory record's
 // author, are foreign keys to a Person, so a fixture cannot file work
 // for "mika" without saying who mika is. Machine principals stay out
 // of it: "butler" and "root-admin" still appear here as actors, and
@@ -542,7 +542,7 @@ func (p *promotingProvider) Chat(ctx context.Context, req provider.ChatRequest) 
 // chatConnection gives an Agent a bot and returns the Connection a
 // queued message leaves by.
 //
-// Since migration 0042 the outbound queue is per Connection rather than
+// Since migration 0045 the outbound queue is per Connection rather than
 // per surface, so a notifier's message belongs to one Agent's bot — not
 // to whichever bot happens to serve the operator surface.
 func chatConnection(t *testing.T, db *runtimedb.DB, butler string) runtimedb.Connection {

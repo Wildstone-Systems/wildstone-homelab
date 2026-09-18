@@ -345,7 +345,7 @@ func TestRealMigrationSetDeclaresTheDirectiveOnlyWhereIntended(t *testing.T) {
 	// Both rebuild a table other tables reference, and nothing else may:
 	// the directive turns enforcement off for a whole migration, so a
 	// file that declares it without needing it is a hole nobody notices.
-	want := []string{"0039_person_core.sql", "0040_person_id_references.sql"}
+	want := []string{"0039_person_core.sql", "0043_person_id_references.sql"}
 	if len(declared) != len(want) {
 		t.Fatalf("migrations declaring foreign_keys=off = %v, want %v", declared, want)
 	}

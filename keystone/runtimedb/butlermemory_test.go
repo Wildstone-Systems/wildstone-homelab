@@ -17,7 +17,7 @@ import (
 
 // fact builds a record owned by owner and stated by them.
 //
-// A household-owned record is the exception, and 0040 is why: the
+// A household-owned record is the exception, and 0043 is why: the
 // household can OWN a record, and cannot have stated one. Owner is a
 // scoped column that takes the household; author is a person column
 // that does not. So a shared fact is authored by somebody, and these

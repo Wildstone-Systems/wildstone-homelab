@@ -322,10 +322,10 @@ func (gw *HouseholdGateway) Capabilities(readOnly bool) CapabilityManifest {
 				"the list of household actions could not be read just now")
 		} else {
 			for _, a := range vocab.Actions {
-				// A tier above domestic cannot be dispatched from this
-				// surface, so it is not a capability of this surface and
-				// is left out rather than listed and refused.
-				if !householdActionTiers[a.Tier] {
+				// A tier this surface cannot dispatch is not a
+				// capability of this surface, so it is left out rather
+				// than listed and refused.
+				if !householdActionTiers(a.Tier) {
 					continue
 				}
 				m.Actions = append(m.Actions, CapabilityAction{Tool: a.Tool, Tier: a.Tier})

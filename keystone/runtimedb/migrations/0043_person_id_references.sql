@@ -1,5 +1,5 @@
 -- +wildstone: foreign_keys=off
--- 0040: repoint every provably-human reference at person_id (design
+-- 0043: repoint every provably-human reference at person_id (design
 -- §2.2, §19 area 1; work slice 2b of the agent-system epic).
 --
 -- 0039 gave a Person a stable identity and deliberately left every
@@ -63,7 +63,7 @@ CREATE TEMP TABLE person_refs_unresolved (problem TEXT NOT NULL);
 CREATE TEMP TRIGGER person_refs_refuse
 BEFORE INSERT ON person_refs_unresolved
 BEGIN
-    SELECT RAISE(ABORT, 'migration 0040: ' || NEW.problem ||
+    SELECT RAISE(ABORT, 'migration 0043: ' || NEW.problem ||
         ' -- run `keystone person-refs` for the full list and resolve it first');
 END;
 
@@ -169,7 +169,7 @@ WHERE owner <> 'household' AND owner NOT IN (SELECT member FROM butler_members) 
 -- below fail. 0039 stood it aside with an explicit DROP TRIGGER for the
 -- same reason — here the rebuild takes it down anyway, so the only care
 -- needed is not to put it back too early.
-CREATE TABLE butler_access_v40 (
+CREATE TABLE butler_access_v43 (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
     butler     INTEGER NOT NULL REFERENCES butlers(seq),
     -- person_id replaces member. The grant follows the person, so a
@@ -188,12 +188,12 @@ CREATE TABLE butler_access_v40 (
     CHECK (granted_by <> '')
 );
 
-INSERT INTO butler_access_v40 (seq, butler, person_id, granted_at, granted_by, revoked_at, revoked_by)
+INSERT INTO butler_access_v43 (seq, butler, person_id, granted_at, granted_by, revoked_at, revoked_by)
 SELECT a.seq, a.butler, m.person_id, a.granted_at, a.granted_by, a.revoked_at, a.revoked_by
 FROM butler_access a JOIN butler_members m ON m.member = a.member;
 
 DROP TABLE butler_access;
-ALTER TABLE butler_access_v40 RENAME TO butler_access;
+ALTER TABLE butler_access_v43 RENAME TO butler_access;
 
 CREATE UNIQUE INDEX butler_access_live ON butler_access (butler, person_id)
     WHERE revoked_at = '';
@@ -210,7 +210,7 @@ CREATE INDEX butler_access_person ON butler_access (person_id, revoked_at);
 -- a child, so '' has always meant "none" — and '' is not an identity.
 -- NULL says the same thing in a column that holds ids, and it is what
 -- the CHECK below can test honestly.
-CREATE TABLE butler_members_v40 (
+CREATE TABLE butler_members_v43 (
     seq          INTEGER PRIMARY KEY AUTOINCREMENT,
     person_id    TEXT NOT NULL UNIQUE,
     member       TEXT NOT NULL UNIQUE,
@@ -236,7 +236,7 @@ CREATE TABLE butler_members_v40 (
     CHECK (profile <> 'child' OR role = 'member')
 );
 
-INSERT INTO butler_members_v40 (seq, person_id, member, role, profile, admitted, generation,
+INSERT INTO butler_members_v43 (seq, person_id, member, role, profile, admitted, generation,
     created_at, admitted_at, admitted_by, disabled_at, disabled_by,
     offboarded_at, offboarded_by, guardian_person_id)
 SELECT
@@ -247,7 +247,7 @@ SELECT
 FROM butler_members b;
 
 DROP TABLE butler_members;
-ALTER TABLE butler_members_v40 RENAME TO butler_members;
+ALTER TABLE butler_members_v43 RENAME TO butler_members;
 
 CREATE INDEX butler_members_admitted ON butler_members (admitted, member);
 CREATE INDEX butler_members_active_owners
@@ -318,7 +318,7 @@ END;
 -- foreign key into butler_members(member). It moves to person_id, which
 -- is what that key should have been: a surface link that survives a
 -- rename is the point of linking to an identity rather than a label.
-CREATE TABLE butler_identity_links_v40 (
+CREATE TABLE butler_identity_links_v43 (
     seq         INTEGER PRIMARY KEY AUTOINCREMENT,
     link_type   TEXT NOT NULL CHECK (link_type IN ('api-principal', 'chat-binding', 'trusted-ingress')),
     -- external_id is the principal name, the chat binding id rendered as
@@ -342,14 +342,14 @@ CREATE TABLE butler_identity_links_v40 (
     CHECK (created_by <> '')
 );
 
-INSERT INTO butler_identity_links_v40 (seq, link_type, external_id, person_id, generation,
+INSERT INTO butler_identity_links_v43 (seq, link_type, external_id, person_id, generation,
     created_at, created_by, revoked_at, revoked_by)
 SELECT l.seq, l.link_type, l.external_id, m.person_id, l.generation,
        l.created_at, l.created_by, l.revoked_at, l.revoked_by
 FROM butler_identity_links l JOIN butler_members m ON m.member = l.member;
 
 DROP TABLE butler_identity_links;
-ALTER TABLE butler_identity_links_v40 RENAME TO butler_identity_links;
+ALTER TABLE butler_identity_links_v43 RENAME TO butler_identity_links;
 
 CREATE INDEX butler_identity_links_by_person ON butler_identity_links (person_id, seq);
 CREATE UNIQUE INDEX butler_identity_links_live
@@ -360,19 +360,19 @@ CREATE UNIQUE INDEX butler_identity_links_live
 -- The other pre-existing foreign key into butler_members(member).
 -- Referenced in turn by butler_conversation_sessions and
 -- butler_handoffs, both by seq, which is why seq is carried across.
-CREATE TABLE butler_conversations_v40 (
+CREATE TABLE butler_conversations_v43 (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
     person_id  TEXT NOT NULL REFERENCES butler_members(person_id),
     created_at TEXT NOT NULL,
     subject    TEXT NOT NULL DEFAULT ''
 );
 
-INSERT INTO butler_conversations_v40 (seq, person_id, created_at, subject)
+INSERT INTO butler_conversations_v43 (seq, person_id, created_at, subject)
 SELECT c.seq, m.person_id, c.created_at, c.subject
 FROM butler_conversations c JOIN butler_members m ON m.member = c.member;
 
 DROP TABLE butler_conversations;
-ALTER TABLE butler_conversations_v40 RENAME TO butler_conversations;
+ALTER TABLE butler_conversations_v43 RENAME TO butler_conversations;
 
 CREATE INDEX butler_conversations_by_person ON butler_conversations (person_id, seq);
 
@@ -381,7 +381,7 @@ CREATE INDEX butler_conversations_by_person ON butler_conversations (person_id, 
 -- member here had no foreign key and no CHECK; it gains both, because
 -- the column names the person whose conversation crossed surfaces and
 -- there is no other kind of value it could hold.
-CREATE TABLE butler_handoffs_v40 (
+CREATE TABLE butler_handoffs_v43 (
     seq          INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation INTEGER NOT NULL REFERENCES butler_conversations(seq),
     person_id    TEXT NOT NULL REFERENCES butler_members(person_id),
@@ -398,14 +398,14 @@ CREATE TABLE butler_handoffs_v40 (
     CHECK (from_surface <> to_surface)
 );
 
-INSERT INTO butler_handoffs_v40 (seq, conversation, person_id, from_surface, to_surface,
+INSERT INTO butler_handoffs_v43 (seq, conversation, person_id, from_surface, to_surface,
     from_session, at, carried, withheld)
 SELECT h.seq, h.conversation, m.person_id, h.from_surface, h.to_surface,
        h.from_session, h.at, h.carried, h.withheld
 FROM butler_handoffs h JOIN butler_members m ON m.member = h.member;
 
 DROP TABLE butler_handoffs;
-ALTER TABLE butler_handoffs_v40 RENAME TO butler_handoffs;
+ALTER TABLE butler_handoffs_v43 RENAME TO butler_handoffs;
 
 CREATE INDEX butler_handoffs_by_conversation ON butler_handoffs (conversation, seq);
 
@@ -434,7 +434,7 @@ END;
 -- or the write path ties the two together (#241), and a shared record
 -- that genuinely belongs to one person resolves to that person here, as
 -- it should. The value in the column decides, not the row's audience.
-CREATE TABLE butler_memory_v40 (
+CREATE TABLE butler_memory_v43 (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
     kind       TEXT NOT NULL CHECK (kind IN ('fact', 'preference', 'inference', 'procedure')),
     subject    TEXT NOT NULL DEFAULT '',
@@ -470,7 +470,7 @@ CREATE TABLE butler_memory_v40 (
     CHECK (source_id <> '')
 );
 
-INSERT INTO butler_memory_v40 (seq, kind, subject, content, audience, permission_label,
+INSERT INTO butler_memory_v43 (seq, kind, subject, content, audience, permission_label,
     owner_person_id, source_kind, source_id, observed_at, confidence, safety_relevant,
     created_at, author_person_id, superseded_by, forgotten_at, forgotten_by,
     envelope_version, butler)
@@ -483,7 +483,7 @@ SELECT r.seq, r.kind, r.subject, r.content, r.audience, r.permission_label,
 FROM butler_memory r;
 
 DROP TABLE butler_memory;
-ALTER TABLE butler_memory_v40 RENAME TO butler_memory;
+ALTER TABLE butler_memory_v43 RENAME TO butler_memory;
 
 CREATE INDEX butler_memory_eligible ON butler_memory (subject, forgotten_at, seq);
 CREATE INDEX butler_memory_by_source ON butler_memory (source_kind, source_id);
@@ -514,7 +514,7 @@ END;
 -- therefore leaves it valid, and the three triggers below are dropped
 -- with the old table before the copy, so the copy does not reindex
 -- anything. Restored verbatim afterwards.
-CREATE TABLE butler_index_v40 (
+CREATE TABLE butler_index_v43 (
     seq         INTEGER PRIMARY KEY AUTOINCREMENT,
     source_kind TEXT NOT NULL,
     source_id   TEXT NOT NULL,
@@ -537,7 +537,7 @@ CREATE TABLE butler_index_v40 (
     CHECK (source_id <> '')
 );
 
-INSERT INTO butler_index_v40 (seq, source_kind, source_id, memory, owner_person_id,
+INSERT INTO butler_index_v43 (seq, source_kind, source_id, memory, owner_person_id,
     audience, permission_label, content, observed_at, indexed_at, volatile,
     embedding, tokens, butler)
 SELECT x.seq, x.source_kind, x.source_id, x.memory,
@@ -547,7 +547,7 @@ SELECT x.seq, x.source_kind, x.source_id, x.memory,
 FROM butler_index x;
 
 DROP TABLE butler_index;
-ALTER TABLE butler_index_v40 RENAME TO butler_index;
+ALTER TABLE butler_index_v43 RENAME TO butler_index;
 
 CREATE INDEX butler_index_permission ON butler_index (audience, owner_person_id, seq);
 CREATE INDEX butler_index_scope ON butler_index (butler, audience, owner_person_id, seq);
@@ -571,7 +571,7 @@ END;
 -- member who asked for the work and never changes, and that owner is
 -- who operates it now, which offboarding moves. Neither takes the
 -- household — a task with no person behind it has nobody to hand it to.
-CREATE TABLE butler_tasks_v40 (
+CREATE TABLE butler_tasks_v43 (
     seq                 INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at          TEXT NOT NULL,     -- RFC3339Nano UTC
     updated_at          TEXT NOT NULL,
@@ -613,7 +613,7 @@ CREATE TABLE butler_tasks_v40 (
     butler              TEXT NOT NULL DEFAULT ''
 );
 
-INSERT INTO butler_tasks_v40 (seq, created_at, updated_at, kind, state,
+INSERT INTO butler_tasks_v43 (seq, created_at, updated_at, kind, state,
     author_person_id, owner_person_id, surface, profile, audience, session, origin_turn,
     correlation_id, objective, completion_criteria, grants_json, budget_json,
     deadline_at, next_wakeup_at, lease_epoch, uncertainty, result_summary,
@@ -628,7 +628,7 @@ SELECT t.seq, t.created_at, t.updated_at, t.kind, t.state,
 FROM butler_tasks t;
 
 DROP TABLE butler_tasks;
-ALTER TABLE butler_tasks_v40 RENAME TO butler_tasks;
+ALTER TABLE butler_tasks_v43 RENAME TO butler_tasks;
 
 CREATE INDEX butler_tasks_butler ON butler_tasks (butler, state);
 CREATE INDEX butler_tasks_by_owner ON butler_tasks (owner_person_id, seq);
@@ -671,7 +671,7 @@ END;
 -- it is a password, and this is not one." A token that stops resolving
 -- because its holder was renamed is not much better, which is what this
 -- repoint fixes. created_by and used_by are actors and stay as text.
-CREATE TABLE household_review_tokens_v40 (
+CREATE TABLE household_review_tokens_v43 (
     hash       TEXT PRIMARY KEY,
     plan_id    TEXT NOT NULL,
     routine    INTEGER REFERENCES household_routines(seq),
@@ -688,14 +688,14 @@ CREATE TABLE household_review_tokens_v40 (
     CHECK (expires_at <> '')
 );
 
-INSERT INTO household_review_tokens_v40 (hash, plan_id, routine, revision, person_id,
+INSERT INTO household_review_tokens_v43 (hash, plan_id, routine, revision, person_id,
     created_at, created_by, expires_at, used_at, used_by)
 SELECT k.hash, k.plan_id, k.routine, k.revision, m.person_id,
        k.created_at, k.created_by, k.expires_at, k.used_at, k.used_by
 FROM household_review_tokens k JOIN butler_members m ON m.member = k.member;
 
 DROP TABLE household_review_tokens;
-ALTER TABLE household_review_tokens_v40 RENAME TO household_review_tokens;
+ALTER TABLE household_review_tokens_v43 RENAME TO household_review_tokens;
 
 CREATE INDEX household_review_tokens_plan ON household_review_tokens (plan_id);
 
@@ -712,7 +712,7 @@ END;
 -- text. Offboarding is the one operation that most needs the reference
 -- to survive: it is a record about a person at the moment their handle
 -- stops being interesting.
-CREATE TABLE offboarding_records_v40 (
+CREATE TABLE offboarding_records_v43 (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
     person_id  TEXT NOT NULL REFERENCES butler_members(person_id),
     at         TEXT NOT NULL,
@@ -726,12 +726,12 @@ CREATE TABLE offboarding_records_v40 (
     CHECK (store <> '')
 );
 
-INSERT INTO offboarding_records_v40 (seq, person_id, at, actor, store, affected, detail)
+INSERT INTO offboarding_records_v43 (seq, person_id, at, actor, store, affected, detail)
 SELECT o.seq, m.person_id, o.at, o.actor, o.store, o.affected, o.detail
 FROM offboarding_records o JOIN butler_members m ON m.member = o.member;
 
 DROP TABLE offboarding_records;
-ALTER TABLE offboarding_records_v40 RENAME TO offboarding_records;
+ALTER TABLE offboarding_records_v43 RENAME TO offboarding_records;
 
 CREATE INDEX offboarding_records_person ON offboarding_records (person_id, seq);
 
@@ -740,7 +740,7 @@ CREATE INDEX offboarding_records_person ON offboarding_records (person_id, seq);
 -- recipient is the member the notice is for: the runtime filters on it,
 -- authorises replies by it, and offboarding sweeps by it. answered_by
 -- is an actor column and keeps its text.
-CREATE TABLE notices_v40 (
+CREATE TABLE notices_v43 (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
     kind       TEXT NOT NULL,
     recipient_person_id TEXT NOT NULL REFERENCES butler_members(person_id),
@@ -762,6 +762,10 @@ CREATE TABLE notices_v40 (
     answered_at TEXT NOT NULL DEFAULT '',
     answer      TEXT NOT NULL DEFAULT '',
     answered_by TEXT NOT NULL DEFAULT '',
+    -- Added by 0040: a notice that ASKS carries what it asked, because
+    -- consent to an unnamed action is not consent. A rebuild that
+    -- forgot it would put that back.
+    question   TEXT NOT NULL DEFAULT '',
 
     CHECK (kind <> ''),
     CHECK (recipient_person_id <> ''),
@@ -769,16 +773,17 @@ CREATE TABLE notices_v40 (
     CHECK (answered_at = '' OR asks = 1)
 );
 
-INSERT INTO notices_v40 (seq, kind, recipient_person_id, routed_to_admin, correlation_id,
+INSERT INTO notices_v43 (seq, kind, recipient_person_id, routed_to_admin, correlation_id,
     outbound, dedupe_key, urgent, relevance, created_at, hold_until, expires_at,
-    delivered_at, acknowledged_at, undelivered_at, asks, answered_at, answer, answered_by)
+    delivered_at, acknowledged_at, undelivered_at, asks, answered_at, answer, answered_by, question)
 SELECT n.seq, n.kind, m.person_id, n.routed_to_admin, n.correlation_id,
        n.outbound, n.dedupe_key, n.urgent, n.relevance, n.created_at, n.hold_until, n.expires_at,
-       n.delivered_at, n.acknowledged_at, n.undelivered_at, n.asks, n.answered_at, n.answer, n.answered_by
+       n.delivered_at, n.acknowledged_at, n.undelivered_at, n.asks, n.answered_at, n.answer,
+       n.answered_by, n.question
 FROM notices n JOIN butler_members m ON m.member = n.recipient;
 
 DROP TABLE notices;
-ALTER TABLE notices_v40 RENAME TO notices;
+ALTER TABLE notices_v43 RENAME TO notices;
 
 CREATE INDEX notices_by_recipient ON notices (recipient_person_id, seq);
 CREATE UNIQUE INDEX notices_dedupe ON notices (dedupe_key);

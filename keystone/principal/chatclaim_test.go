@@ -29,7 +29,7 @@ func person(t *testing.T, s *Store, handle, role string) {
 // agent gives the household one Agent with a bot, and returns the
 // Connection an invite is issued against.
 //
-// A claim names a Connection since 0042, not a surface: a surface is a
+// A claim names a Connection since 0045, not a surface: a surface is a
 // class of Agents, and an invite to a class admits somebody to every
 // member of it.
 func agent(t *testing.T, s *Store, name string, surface runtimedb.ButlerSurface) runtimedb.Connection {

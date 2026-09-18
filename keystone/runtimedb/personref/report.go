@@ -201,9 +201,9 @@ func Survey(q Querier) (Report, error) {
 	}
 
 	// Both tables, filtered by what this database actually has. On a
-	// deployment still at 0039 that is LegacyColumns; on one past 0040
+	// deployment still at 0039 that is LegacyColumns; on one past 0043
 	// it is the person_id columns, which hold no free text and are
-	// skipped below. Nothing is surveyed twice, because 0040 replaced
+	// skipped below. Nothing is surveyed twice, because 0043 replaced
 	// each legacy column rather than adding beside it.
 	uses := map[string][]Use{}
 	for _, c := range append(append([]Column{}, Columns...), LegacyColumns...) {
@@ -406,7 +406,7 @@ func fold(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 
 // columnExists asks the live schema rather than assuming it.
 //
-// The classification spans both sides of migration 0040, and this is
+// The classification spans both sides of migration 0043, and this is
 // what keeps that honest: a column the database does not have is not
 // surveyed, so the same binary reports correctly against a deployment
 // that has migrated and one that has not.

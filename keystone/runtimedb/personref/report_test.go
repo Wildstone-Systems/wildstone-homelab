@@ -10,19 +10,19 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb/personref"
 )
 
-// surveyed builds a database AS IT STOOD BEFORE MIGRATION 0040, lets
+// surveyed builds a database AS IT STOOD BEFORE MIGRATION 0043, lets
 // the caller write realistic legacy rows into it, and then surveys it
 // through a READ-ONLY handle — the same way the CLI does.
 //
 // Stopping at 0039 is the point rather than a convenience. Free-text
-// person references only exist before 0040 moved them, so a deployment
+// person references only exist before 0043 moved them, so a deployment
 // that still has them is a deployment that has not migrated, and that
 // is precisely when this report is worth running: `keystone person-refs`
 // opens the file read-only and does not migrate it, so this binary can
 // pre-flight an un-upgraded database.
 //
 // The seed writes raw SQL for the same reason. The store above this
-// package speaks the 0040 schema now, so a fixture built through it
+// package speaks the 0043 schema now, so a fixture built through it
 // could not produce the rows these tests are about.
 func surveyed(t *testing.T, seed func(*runtimedb.DB)) (personref.Report, string) {
 	t.Helper()
@@ -82,7 +82,7 @@ func admit(t *testing.T, db *runtimedb.DB, handle, by string) {
 	}
 }
 
-// legacyMemory writes one pre-0040 memory row: owner and author as free
+// legacyMemory writes one pre-0043 memory row: owner and author as free
 // text, which is the whole thing the survey exists to find.
 func legacyMemory(t *testing.T, db *runtimedb.DB, owner, author, audience, sourceID, content string) {
 	t.Helper()
@@ -96,7 +96,7 @@ func legacyMemory(t *testing.T, db *runtimedb.DB, owner, author, audience, sourc
 }
 
 // legacyTask is the same for butler_tasks, whose author and owner were
-// free text before 0040.
+// free text before 0043.
 func legacyTask(t *testing.T, db *runtimedb.DB, author, owner string) {
 	t.Helper()
 	if _, err := db.ExecForTest(
@@ -326,7 +326,7 @@ func TestColumnsThatMirrorAPersonAreClassifiedHuman(t *testing.T) {
 		"butler_memory.author": true,
 		"butler_tasks.author":  true,
 	}
-	// These are pre-0040 columns now: 0040 repointed both, so the
+	// These are pre-0043 columns now: 0043 repointed both, so the
 	// verdict that decided it lives in the legacy table. The assertion
 	// is unchanged — it is what made the repoint correct.
 	for _, c := range personref.LegacyColumns {

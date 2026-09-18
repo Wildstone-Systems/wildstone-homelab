@@ -1,7 +1,7 @@
--- 0042: a Connection belongs to exactly one Agent (ADR-W033 B7; design
+-- 0045: a Connection belongs to exactly one Agent (ADR-W033 B7; design
 -- §8.1; work slice 2b of the agent-system epic).
 --
--- 0041 made a Connection admit a Person. This one gives it an Agent.
+-- 0044 made a Connection admit a Person. This one gives it an Agent.
 --
 -- What was wrong, in the household's own terms: a binding named a
 -- SURFACE. `admin` is not an Agent — it is a class of them — so
@@ -54,7 +54,7 @@ CREATE TEMP TABLE connection_unassigned (problem TEXT NOT NULL);
 CREATE TEMP TRIGGER connection_unassigned_refuse
 BEFORE INSERT ON connection_unassigned
 BEGIN
-    SELECT RAISE(ABORT, 'migration 0042: ' || NEW.problem ||
+    SELECT RAISE(ABORT, 'migration 0045: ' || NEW.problem ||
         ' -- a connection belongs to exactly one agent (ADR-W033 B7). Create or choose the butler that should answer there and give it that address (`wild butler address`), then run again');
 END;
 
@@ -142,7 +142,7 @@ LIMIT 1;
 -- transport goes with surface. The Connection fixes both — an address
 -- has one transport and one Agent — and a copy of a fact the referenced
 -- row already holds is a copy that can disagree with it.
-CREATE TABLE chat_bindings_v42 (
+CREATE TABLE chat_bindings_v45 (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     -- The Connection this admission is under (B7, B9). One Agent, one
     -- transport, one bot.
@@ -157,7 +157,7 @@ CREATE TABLE chat_bindings_v42 (
     conversation TEXT NOT NULL DEFAULT ''
 );
 
-INSERT INTO chat_bindings_v42 (id, connection, account, person_id, display_name,
+INSERT INTO chat_bindings_v45 (id, connection, account, person_id, display_name,
     created_at, created_by, last_used_at, revoked_at, conversation)
 SELECT b.id,
        (SELECT a.seq FROM butler_addresses a
@@ -177,7 +177,7 @@ WHERE EXISTS (
       AND a.external_id = 'chat-' || b.transport || '-' || b.surface);
 
 DROP TABLE chat_bindings;
-ALTER TABLE chat_bindings_v42 RENAME TO chat_bindings;
+ALTER TABLE chat_bindings_v45 RENAME TO chat_bindings;
 
 -- One live admission per account per Connection. The same account may
 -- hold Connections to several Agents — that is B7's "an Agent may have
@@ -195,7 +195,7 @@ CREATE INDEX chat_bindings_by_connection ON chat_bindings (connection, id);
 -- same reason it is gone above, and so is the '' that meant "any
 -- transport": a code that could be redeemed anywhere cannot name the
 -- Agent it admits somebody to.
-CREATE TABLE chat_claim_codes_v42 (
+CREATE TABLE chat_claim_codes_v45 (
     hash        TEXT PRIMARY KEY,
     connection  INTEGER NOT NULL REFERENCES butler_addresses(seq),
     person_id   TEXT NOT NULL REFERENCES butler_members(person_id),
@@ -206,7 +206,7 @@ CREATE TABLE chat_claim_codes_v42 (
     binding_id  INTEGER NOT NULL DEFAULT 0
 );
 
-INSERT INTO chat_claim_codes_v42 (hash, connection, person_id, created_at,
+INSERT INTO chat_claim_codes_v45 (hash, connection, person_id, created_at,
     created_by, expires_at, redeemed_at, binding_id)
 SELECT c.hash,
        (SELECT a.seq FROM butler_addresses a
@@ -220,7 +220,7 @@ WHERE EXISTS (
       AND a.external_id = 'chat-' || c.transport || '-' || c.surface);
 
 DROP TABLE chat_claim_codes;
-ALTER TABLE chat_claim_codes_v42 RENAME TO chat_claim_codes;
+ALTER TABLE chat_claim_codes_v45 RENAME TO chat_claim_codes;
 
 -- ---------------------------------------------------------------------
 -- chat_threads.
@@ -229,7 +229,7 @@ ALTER TABLE chat_claim_codes_v42 RENAME TO chat_claim_codes;
 -- the Agent, and the Person is already here. The conversation stays in
 -- the key because one Connection carries many — a direct chat and a
 -- group are different conversations on one bot.
-CREATE TABLE chat_threads_v42 (
+CREATE TABLE chat_threads_v45 (
     connection   INTEGER NOT NULL REFERENCES butler_addresses(seq),
     conversation TEXT NOT NULL,
     person_id    TEXT NOT NULL REFERENCES butler_members(person_id),
@@ -238,7 +238,7 @@ CREATE TABLE chat_threads_v42 (
     PRIMARY KEY (connection, conversation, person_id)
 );
 
-INSERT INTO chat_threads_v42 (connection, conversation, person_id, session_id, updated_at)
+INSERT INTO chat_threads_v45 (connection, conversation, person_id, session_id, updated_at)
 SELECT
        (SELECT a.seq FROM butler_addresses a
         WHERE a.revoked_at = '' AND a.transport = t.transport
@@ -251,7 +251,7 @@ WHERE EXISTS (
       AND a.external_id = 'chat-' || t.transport || '-' || t.surface);
 
 DROP TABLE chat_threads;
-ALTER TABLE chat_threads_v42 RENAME TO chat_threads;
+ALTER TABLE chat_threads_v45 RENAME TO chat_threads;
 
 -- ---------------------------------------------------------------------
 -- chat_outbound.
@@ -259,7 +259,7 @@ ALTER TABLE chat_threads_v42 RENAME TO chat_threads;
 -- The delivery queue is per Connection, which is what an adapter polls:
 -- its own bot's messages, and no other Agent's. Polling by surface gave
 -- one bot every Owner Agent's replies.
-CREATE TABLE chat_outbound_v42 (
+CREATE TABLE chat_outbound_v45 (
     seq            INTEGER PRIMARY KEY AUTOINCREMENT,
     connection     INTEGER NOT NULL REFERENCES butler_addresses(seq),
     target         TEXT NOT NULL,          -- conversation id: a direct chat or a group
@@ -275,7 +275,7 @@ CREATE TABLE chat_outbound_v42 (
     hold_until     TEXT NOT NULL DEFAULT ''
 );
 
-INSERT INTO chat_outbound_v42 (seq, connection, target, body, kind, binding_id,
+INSERT INTO chat_outbound_v45 (seq, connection, target, body, kind, binding_id,
     correlation_id, dedupe_key, created_at, expires_at, delivered_at, hold_until)
 SELECT o.seq,
        (SELECT a.seq FROM butler_addresses a
@@ -290,7 +290,7 @@ WHERE EXISTS (
       AND a.external_id = 'chat-' || o.transport || '-' || o.surface);
 
 DROP TABLE chat_outbound;
-ALTER TABLE chat_outbound_v42 RENAME TO chat_outbound;
+ALTER TABLE chat_outbound_v45 RENAME TO chat_outbound;
 
 CREATE UNIQUE INDEX chat_outbound_dedupe ON chat_outbound (dedupe_key);
 CREATE INDEX chat_outbound_pending ON chat_outbound (connection, seq);
@@ -308,7 +308,7 @@ CREATE INDEX chat_outbound_pending ON chat_outbound (connection, seq);
 -- question and record household.answered under its correlation id —
 -- the rule that asked never hears back, and a rule that did not ask
 -- does. The Connection is what separates them.
-CREATE TABLE chat_questions_v42 (
+CREATE TABLE chat_questions_v45 (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     connection     INTEGER NOT NULL REFERENCES butler_addresses(seq),
     correlation_id TEXT NOT NULL,
@@ -319,7 +319,7 @@ CREATE TABLE chat_questions_v42 (
     answered_at    TEXT NOT NULL DEFAULT ''
 );
 
-INSERT INTO chat_questions_v42 (id, connection, correlation_id, target, rule, subject,
+INSERT INTO chat_questions_v45 (id, connection, correlation_id, target, rule, subject,
     asked_at, answered_at)
 SELECT q.id,
        (SELECT a.seq FROM butler_addresses a
@@ -333,7 +333,7 @@ WHERE EXISTS (
       AND a.external_id = 'chat-' || q.transport || '-' || q.surface);
 
 DROP TABLE chat_questions;
-ALTER TABLE chat_questions_v42 RENAME TO chat_questions;
+ALTER TABLE chat_questions_v45 RENAME TO chat_questions;
 
 CREATE INDEX chat_questions_open ON chat_questions (connection, target, answered_at, id);
 

@@ -8,7 +8,7 @@ import (
 
 // The handle/identity boundary.
 //
-// Since 0040 every provably-human column stores a person_id rather than
+// Since 0043 every provably-human column stores a person_id rather than
 // a handle, so a rename moves the label and detaches nothing. The
 // callers above this package still speak handles — that is what a
 // person types, what the Console shows, and what an API request names —
@@ -17,7 +17,7 @@ import (
 //
 // Which columns those are is not decided here either. The classification
 // in runtimedb/personref holds one verdict per column with its evidence,
-// and 0040 moved exactly the ones it marks `human` or `scoped`. Actor
+// and 0043 moved exactly the ones it marks `human` or `scoped`. Actor
 // columns still hold recorded text, because the value there may be a
 // machine principal and an id that resolves to nothing is not evidence.
 
@@ -38,7 +38,7 @@ var ErrNoSuchPerson = errors.New("runtimedb: no person on record with that handl
 
 // personID resolves a handle to the stable identity behind it.
 //
-// The match is exact, which is the same rule migration 0040 gates on
+// The match is exact, which is the same rule migration 0043 gates on
 // and the same one slice 2a adopted: handles are unique
 // case-insensitively, and a case variant is reported and never merged.
 // Resolving `Sam` to `sam` here would quietly undo that.
@@ -111,7 +111,7 @@ func ownerFromPersonID(handle sql.NullString) string {
 //
 // Reads are deliberately more forgiving than writes. A reader may be a
 // machine principal — the Butler asking on somebody's behalf, an
-// operator token calling the API — and before 0040 a name like that
+// operator token calling the API — and before 0043 a name like that
 // simply matched no owner and saw only shared material. Erroring
 // instead would turn a read that used to work into a failure, so an
 // unresolvable reader keeps meaning "owns nothing here".

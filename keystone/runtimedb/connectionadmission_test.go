@@ -10,7 +10,7 @@ import (
 
 // Connection admission (ADR-W033 A2, B9, B10; design §8.3).
 //
-// A Connection admits a Person. Before migration 0041 an admin-surface
+// A Connection admits a Person. Before migration 0044 an admin-surface
 // binding named a Keystone PRINCIPAL — `op`, `root-admin` — because
 // principal/chatclaim.go required one, so a chat account reached an
 // Owner Agent as a credential with nobody behind it. These tests pin
@@ -157,7 +157,7 @@ func TestAClaimCodeNamesAPersonOnRecord(t *testing.T) {
 	}
 }
 
-// Migration 0041 refuses a deployment still admitting a machine
+// Migration 0044 refuses a deployment still admitting a machine
 // principal, rather than migrating it into something that looks like a
 // person.
 //
@@ -166,7 +166,7 @@ func TestAClaimCodeNamesAPersonOnRecord(t *testing.T) {
 // admin-surface code, so a deployment that bound the operator's own
 // Telegram account has exactly this row — and it is not a row the
 // migration can resolve, because `op` is a credential and no Person is
-// behind it. Refusing leaves the database at 0040 with the binding
+// behind it. Refusing leaves the database at 0043 with the binding
 // intact, so the account can claim again against the Owner it belongs
 // to.
 func TestMigrationRefusesAConnectionAdmittingAPrincipal(t *testing.T) {
@@ -175,8 +175,8 @@ func TestMigrationRefusesAConnectionAdmittingAPrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := old.migrateThrough("migrations/0040_person_id_references.sql"); err != nil {
-		t.Fatalf("migrating through 0040: %v", err)
+	if err := old.migrateThrough("migrations/0043_person_id_references.sql"); err != nil {
+		t.Fatalf("migrating through 0043: %v", err)
 	}
 	// Exactly what the old claim path wrote: an admin-surface binding
 	// naming a principal, with no Person behind it.
@@ -195,7 +195,7 @@ func TestMigrationRefusesAConnectionAdmittingAPrincipal(t *testing.T) {
 	db, err := Open(path)
 	if err == nil {
 		db.Close()
-		t.Fatal("0041 migrated a connection that admits a machine principal")
+		t.Fatal("0044 migrated a connection that admits a machine principal")
 	}
 	if !strings.Contains(err.Error(), "op") {
 		t.Errorf("the refusal does not name the binding to fix: %v", err)
@@ -233,8 +233,8 @@ func TestMigrationCarriesAConnectionThatNamesAPerson(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := old.migrateThrough("migrations/0040_person_id_references.sql"); err != nil {
-		t.Fatalf("migrating through 0040: %v", err)
+	if err := old.migrateThrough("migrations/0043_person_id_references.sql"); err != nil {
+		t.Fatalf("migrating through 0043: %v", err)
 	}
 	if _, err := old.sql.Exec(
 		`INSERT INTO butler_members (person_id, member, role, admitted, generation, created_at)
@@ -246,10 +246,10 @@ func TestMigrationCarriesAConnectionThatNamesAPerson(t *testing.T) {
 		 VALUES ('telegram', '12345', 'family', 'sam', '2026-01-01T00:00:00Z', 'root-admin')`); err != nil {
 		t.Fatal(err)
 	}
-	// An Agent answering on that bot, because 0042 refuses a binding
+	// An Agent answering on that bot, because 0045 refuses a binding
 	// with no Agent behind it. This is what an Owner does before
 	// upgrading. Written through the store rather than in raw SQL:
-	// 0041 and 0042 leave the models, butlers and addresses tables
+	// 0044 and 0045 leave the models, butlers and addresses tables
 	// alone, so the current code speaks that half of the schema
 	// correctly and only the chat tables need writing by hand.
 	if err := old.UpsertModel(Model{
@@ -290,7 +290,7 @@ func TestMigrationCarriesAConnectionThatNamesAPerson(t *testing.T) {
 	}
 }
 
-// 0042 refuses a binding with no Agent behind it, and says which
+// 0045 refuses a binding with no Agent behind it, and says which
 // address needs one.
 //
 // This is what every deployment upgrading with chat already bound will
@@ -303,8 +303,8 @@ func TestMigrationRefusesAConnectionWithNoAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := old.migrateThrough("migrations/0041_connections_admit_a_person.sql"); err != nil {
-		t.Fatalf("migrating through 0041: %v", err)
+	if err := old.migrateThrough("migrations/0044_connections_admit_a_person.sql"); err != nil {
+		t.Fatalf("migrating through 0044: %v", err)
 	}
 	if _, err := old.sql.Exec(
 		`INSERT INTO butler_members (person_id, member, role, admitted, generation, created_at)
@@ -321,7 +321,7 @@ func TestMigrationRefusesAConnectionWithNoAgent(t *testing.T) {
 	db, err := Open(path)
 	if err == nil {
 		db.Close()
-		t.Fatal("0042 migrated a binding with no agent behind it")
+		t.Fatal("0045 migrated a binding with no agent behind it")
 	}
 	if !strings.Contains(err.Error(), "chat-telegram-family") {
 		t.Errorf("the refusal does not name the address that needs an agent: %v", err)
@@ -329,7 +329,7 @@ func TestMigrationRefusesAConnectionWithNoAgent(t *testing.T) {
 }
 
 // connect gives an Agent a bot on a transport and returns the
-// Connection — the fixture every chat test needs since 0042, because
+// Connection — the fixture every chat test needs since 0045, because
 // admission is to one Agent's Connection rather than to a surface.
 //
 // The external id is the capability the bot's credential is minted for,

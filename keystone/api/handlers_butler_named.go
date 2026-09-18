@@ -350,7 +350,7 @@ func (s *Server) preserveFailedTurn(turn butlerlive.Turn, prior *turnContext, an
 // turnHasAPerson refuses a Butler turn that speaks for nobody.
 //
 // A turn can write memory, file work and raise a notice, and since
-// migration 0040 every one of those names a Person rather than whatever
+// migration 0043 every one of those names a Person rather than whatever
 // string the caller authenticated as. A bare machine token — root-admin,
 // op, an adapter's own principal — has no person behind it, so the write
 // would fail on a foreign key several layers down, with an error that

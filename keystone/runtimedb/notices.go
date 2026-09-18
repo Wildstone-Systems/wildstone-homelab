@@ -181,6 +181,10 @@ type Notice struct {
 	Answer         string    `json:"answer,omitempty"`
 	AnsweredBy     string    `json:"answeredBy,omitempty"`
 	OutboundSeq    int64     `json:"outboundSeq,omitempty"`
+	// Question is what an asking notice actually asked, as the person
+	// answering it needs to read. Empty on a notice whose kind says
+	// everything there is to say.
+	Question string `json:"question,omitempty"`
 }
 
 // NoticeRequest is what a caller wants to say and to whom.
@@ -194,7 +198,11 @@ type NoticeRequest struct {
 	AdminFallback string
 	CorrelationID string
 	DedupeKey     string
-	Body          string
+	// Body is what the notice SAYS, and for an asking notice it is what
+	// the person answering has to read. Stored since migration 0043; it
+	// was accepted and discarded before that, which made a confirm-tier
+	// question render as its own kind.
+	Body string
 	// Asks marks a notice that poses a question. Only these can be
 	// answered; a reply to anything else authorizes nothing.
 	Asks bool
@@ -290,11 +298,11 @@ func (db *DB) RaiseNotice(req NoticeRequest, householdQuiet ButlerSettings, at t
 	}
 	res, err := db.sql.Exec(
 		`INSERT INTO notices (kind, recipient_person_id, routed_to_admin, correlation_id, dedupe_key,
-		     urgent, relevance, created_at, hold_until, expires_at, asks)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		     urgent, relevance, created_at, hold_until, expires_at, asks, question)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		req.Kind, recipientID, boolInt(routedToAdmin), req.CorrelationID, req.DedupeKey,
 		boolInt(kind.Urgent), kind.Relevance, now(), timeText(hold),
-		at.Add(ttl).UTC().Format(time.RFC3339Nano), boolInt(req.Asks))
+		at.Add(ttl).UTC().Format(time.RFC3339Nano), boolInt(req.Asks), req.Body)
 	if err != nil {
 		return NoticeDecision{}, fmt.Errorf("runtimedb: recording notice: %w", err)
 	}
@@ -521,18 +529,21 @@ func (db *DB) GetNotice(seq int64) (Notice, error) {
 	return scanNotice(db.sql.QueryRow(noticeColumns+` WHERE n.seq = ?`, seq))
 }
 
-// The recipient reads back as the handle they carry now, so a notice
-// still says who it is for after they are renamed.
 // noticeFrom is shared by the listing and the count for the reason
 // noticeClauses is: a count taken over a different set of rows than the
 // listing reads is a header that disagrees with the list under it, and
 // the JOIN is part of that set.
+//
+// The recipient reads back as the handle they carry NOW, because the
+// join resolves it from the person_id. A notice still says who it is
+// for after they are renamed.
 const noticeFrom = ` FROM notices n
 	 JOIN butler_members r ON r.person_id = n.recipient_person_id`
 
 const noticeColumns = `SELECT n.seq, n.kind, r.member, n.routed_to_admin, n.correlation_id, n.dedupe_key,
 	 n.urgent, n.relevance, n.created_at, n.hold_until, n.expires_at, n.delivered_at, n.acknowledged_at,
-	 n.undelivered_at, n.asks, n.answered_at, n.answer, n.answered_by, COALESCE(n.outbound, 0)` + noticeFrom
+	 n.undelivered_at, n.asks, n.answered_at, n.answer, n.answered_by, COALESCE(n.outbound, 0),
+	 COALESCE(n.question, '')` + noticeFrom
 
 func scanNotice(row rowScanner) (Notice, error) {
 	var n Notice
@@ -540,7 +551,7 @@ func scanNotice(row rowScanner) (Notice, error) {
 	var created, hold, expires, delivered, acked, undelivered, answered string
 	err := row.Scan(&n.Seq, &n.Kind, &n.Recipient, &admin, &n.CorrelationID, &n.DedupeKey,
 		&urgent, &n.Relevance, &created, &hold, &expires, &delivered, &acked, &undelivered,
-		&asks, &answered, &n.Answer, &n.AnsweredBy, &n.OutboundSeq)
+		&asks, &answered, &n.Answer, &n.AnsweredBy, &n.OutboundSeq, &n.Question)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Notice{}, ErrNotFound
 	}
@@ -734,3 +745,11 @@ func (db *DB) DueNotices(at time.Time) ([]Notice, error) {
 	}
 	return out, rows.Err()
 }
+
+// AnswerApproves reports what a recorded answer meant.
+//
+// Exported so a caller reading a notice back can reach the same verdict
+// AnswerNotice reached when it stored one, rather than keeping a second
+// list of the words that mean yes. Two lists is how "ok" comes to
+// authorise something in one place and not in another.
+func AnswerApproves(answer string) (approved, ok bool) { return resolveAnswer(answer) }

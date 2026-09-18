@@ -10,7 +10,7 @@ import (
 // chatTestDB gives a database two Agents with a bot each, and returns
 // the household Agent's Connection and the Owner Agent's.
 //
-// Two of them, because since 0042 the queue is per Connection and the
+// Two of them, because since 0045 the queue is per Connection and the
 // interesting assertion is that one Agent's bot does not collect
 // another's messages. A surface could not express that: both Owner
 // Agents are `admin`.

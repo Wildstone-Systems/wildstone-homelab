@@ -85,7 +85,7 @@ func newHarness(t *testing.T) *harness {
 
 // person puts a household member on record.
 //
-// Since migration 0040 a task's author and owner, a memory record's
+// Since migration 0043 a task's author and owner, a memory record's
 // author and a notice's recipient are foreign keys to a Person, so a
 // fixture cannot file any of them for "sam" without saying who sam is.
 // Machine principals are not people and are deliberately not recorded

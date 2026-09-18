@@ -208,7 +208,7 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 	// actingMember, not id.Name. The turn is had by the PERSON the
 	// caller is acting for — a Console session names one — and what it
 	// writes says so: its memory, its work and its notices all name a
-	// Person since 0040. Passing the principal's own name here is how
+	// Person since 0043. Passing the principal's own name here is how
 	// `root-admin` ended up owning household memory (#240).
 	return s.runAdminButlerSession(r.Context(), message, actingMember(id), nil)
 }

@@ -262,9 +262,9 @@ func now() string {
 //
 // It exists for tests in other packages that must exercise the schema
 // as it stood at a particular point. personref is the one that needs
-// it: its whole legacy classification describes columns 0040 removed,
+// it: its whole legacy classification describes columns 0043 removed,
 // and the only way to survey those is a database that has not reached
-// 0040 — which is exactly the deployment the pre-flight report is for.
+// 0043 — which is exactly the deployment the pre-flight report is for.
 // Nothing in production calls it.
 func OpenThroughForTest(path, last string) (*DB, error) {
 	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", path)

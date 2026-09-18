@@ -538,7 +538,7 @@ func (db *DB) GetMemory(seq int64) (MemoryRecord, error) {
 
 // Owner and author come back as the handles they carry now, so a
 // caller above this package still sees names. The owner join is a LEFT
-// one and its absence is the household: NULL is how 0040 stores a
+// one and its absence is the household: NULL is how 0043 stores a
 // record the household owns rather than any one person.
 const memoryColumns = `SELECT r.seq, r.kind, r.subject, r.content, r.audience, r.permission_label,
 	 COALESCE(o.member, 'household'),
@@ -615,7 +615,7 @@ func (db *DB) RetrieveMemory(q MemoryQuery) ([]MemoryRecord, error) {
 	}
 	// A reader who is nobody on record owns nothing and sees the shared
 	// material only, which is what the free-text owner match did before
-	// 0040 for a principal or an unknown name.
+	// 0043 for a principal or an unknown name.
 	reader, err := personIDForRead(db.sql, q.Reader)
 	if err != nil {
 		return nil, err

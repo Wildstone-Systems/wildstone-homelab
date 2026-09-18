@@ -179,7 +179,7 @@ func (db *DB) RecordButlerMember(member, role, profile, guardian string) error {
 		preset = profile
 	}
 	// The guardian is a Person, so it is stored as one. Nobody named is
-	// NULL rather than '': since 0040 the column holds an identity, and
+	// NULL rather than '': since 0043 the column holds an identity, and
 	// '' is not one.
 	var guardianID any
 	if guardian != "" {
@@ -286,7 +286,7 @@ func (db *DB) SetButlerMemberRole(member, role, actor string) error {
 // RenameButlerMemberHandle changes the display/login handle. person_id
 // does not move, which is the whole reason it exists.
 //
-// Since 0040 this is one UPDATE of one column, and that is the point of
+// Since 0043 this is one UPDATE of one column, and that is the point of
 // the slice. It used to carry butler_identity_links and
 // butler_conversations along under defer_foreign_keys, because those
 // two held a foreign key on the handle — and it could not carry the

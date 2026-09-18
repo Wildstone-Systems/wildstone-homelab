@@ -30,7 +30,7 @@ import (
 // queue used to key on a SURFACE, and so did the question ledger. A
 // surface is a class of Agents, not an Agent, so admitting an account
 // to `admin` admitted it to every Owner Agent at once — including ones
-// created later. Migration 0042 pointed all five at the Connection
+// created later. Migration 0045 pointed all five at the Connection
 // instead.
 
 // ErrNoConnection is returned when no live Connection answers at an

@@ -162,67 +162,74 @@ var dismissed = map[string]string{
 	"promoted_from":       "the coordinator process that was fenced — a machine party, never a person",
 	"prompt_version":      "an enum or classification, not a party",
 	"provider":            "names a machine, service or artifact, not a person",
-	"readiness":           "an enum or classification, not a party",
-	"readiness_detail":    "descriptive text, not a party",
-	"reason":              "descriptive text, not a party",
-	"recorded_at":         "a timestamp",
-	"redeemed_at":         "a timestamp",
-	"released_at":         "a timestamp",
-	"remote":              "names a machine, service or artifact, not a person",
-	"removing_at":         "a timestamp",
-	"replayed_at":         "a timestamp",
-	"request_json":        "a serialized blob",
-	"resolved_at":         "a timestamp",
-	"result_at":           "a timestamp",
-	"result_json":         "a serialized blob",
-	"result_summary":      "descriptive text, not a party",
-	"result_type":         "an enum or classification, not a party",
-	"resume_at":           "a timestamp",
-	"retention":           "an enum or classification, not a party",
-	"retired_at":          "a timestamp",
-	"revoked_at":          "a timestamp",
-	"risk":                "an enum or classification, not a party",
-	"role":                "an enum or classification, not a party",
-	"rule":                "names a machine, service or artifact, not a person",
-	"run_kind":            "an enum or classification, not a party",
-	"scope":               "an enum or classification, not a party",
-	"scope_id":            "an identifier for a non-person entity",
-	"secret_ref":          "an identifier for a non-person entity",
-	"seen_at":             "a timestamp",
-	"session_id":          "an identifier for a non-person entity",
-	"snapshot_at":         "a timestamp",
-	"source":              "names a machine, service or artifact, not a person",
-	"source_id":           "an identifier for a non-person entity",
-	"source_ids":          "an identifier for a non-person entity",
-	"source_kind":         "an enum or classification, not a party",
-	"started_at":          "a timestamp",
-	"state":               "an enum or classification, not a party",
-	"status":              "an enum or classification, not a party",
-	"store":               "names a machine, service or artifact, not a person",
-	"strategy":            "an enum or classification, not a party",
-	"subject_id":          "an identifier for a non-person entity",
-	"subject_kind":        "an enum or classification, not a party",
-	"summary":             "descriptive text, not a party",
-	"suppressed_at":       "a timestamp",
-	"surface":             "an enum or classification, not a party",
-	"taken_at":            "a timestamp",
-	"target":              "names a machine, service or artifact, not a person",
-	"text":                "descriptive text, not a party",
-	"time":                "a timestamp",
-	"timezone":            "names a machine, service or artifact, not a person",
-	"to_state":            "an enum or classification, not a party",
-	"to_surface":          "an enum or classification, not a party",
-	"tool":                "names a machine, service or artifact, not a person",
-	"tool_json":           "a serialized blob",
-	"transcript_json":     "a serialized blob",
-	"transport":           "names a machine, service or artifact, not a person",
-	"type":                "an enum or classification, not a party",
-	"uncertainty":         "an enum or classification, not a party",
-	"undelivered_at":      "a timestamp",
-	"updated_at":          "a timestamp",
-	"used_at":             "a timestamp",
-	"verified_at":         "a timestamp",
-	"version":             "an enum or classification, not a party",
+	// It is the sentence a notice asked, e.g. "Delete 'Dentist for Sam'
+	// from Fri 18 Sep?". It can MENTION a person, the way any free text
+	// can, and that is not the same as being a reference to one: nothing
+	// resolves it, joins on it, or would orphan a record if somebody
+	// were renamed. Same shape as `answer` above, which is the reply to
+	// it.
+	"question":         "descriptive text, not a party",
+	"readiness":        "an enum or classification, not a party",
+	"readiness_detail": "descriptive text, not a party",
+	"reason":           "descriptive text, not a party",
+	"recorded_at":      "a timestamp",
+	"redeemed_at":      "a timestamp",
+	"released_at":      "a timestamp",
+	"remote":           "names a machine, service or artifact, not a person",
+	"removing_at":      "a timestamp",
+	"replayed_at":      "a timestamp",
+	"request_json":     "a serialized blob",
+	"resolved_at":      "a timestamp",
+	"result_at":        "a timestamp",
+	"result_json":      "a serialized blob",
+	"result_summary":   "descriptive text, not a party",
+	"result_type":      "an enum or classification, not a party",
+	"resume_at":        "a timestamp",
+	"retention":        "an enum or classification, not a party",
+	"retired_at":       "a timestamp",
+	"revoked_at":       "a timestamp",
+	"risk":             "an enum or classification, not a party",
+	"role":             "an enum or classification, not a party",
+	"rule":             "names a machine, service or artifact, not a person",
+	"run_kind":         "an enum or classification, not a party",
+	"scope":            "an enum or classification, not a party",
+	"scope_id":         "an identifier for a non-person entity",
+	"secret_ref":       "an identifier for a non-person entity",
+	"seen_at":          "a timestamp",
+	"session_id":       "an identifier for a non-person entity",
+	"snapshot_at":      "a timestamp",
+	"source":           "names a machine, service or artifact, not a person",
+	"source_id":        "an identifier for a non-person entity",
+	"source_ids":       "an identifier for a non-person entity",
+	"source_kind":      "an enum or classification, not a party",
+	"started_at":       "a timestamp",
+	"state":            "an enum or classification, not a party",
+	"status":           "an enum or classification, not a party",
+	"store":            "names a machine, service or artifact, not a person",
+	"strategy":         "an enum or classification, not a party",
+	"subject_id":       "an identifier for a non-person entity",
+	"subject_kind":     "an enum or classification, not a party",
+	"summary":          "descriptive text, not a party",
+	"suppressed_at":    "a timestamp",
+	"surface":          "an enum or classification, not a party",
+	"taken_at":         "a timestamp",
+	"target":           "names a machine, service or artifact, not a person",
+	"text":             "descriptive text, not a party",
+	"time":             "a timestamp",
+	"timezone":         "names a machine, service or artifact, not a person",
+	"to_state":         "an enum or classification, not a party",
+	"to_surface":       "an enum or classification, not a party",
+	"tool":             "names a machine, service or artifact, not a person",
+	"tool_json":        "a serialized blob",
+	"transcript_json":  "a serialized blob",
+	"transport":        "names a machine, service or artifact, not a person",
+	"type":             "an enum or classification, not a party",
+	"uncertainty":      "an enum or classification, not a party",
+	"undelivered_at":   "a timestamp",
+	"updated_at":       "a timestamp",
+	"used_at":          "a timestamp",
+	"verified_at":      "a timestamp",
+	"version":          "an enum or classification, not a party",
 }
 
 // liveColumns opens a fully migrated database and returns every
@@ -351,7 +358,7 @@ func TestEveryVerdictCarriesItsEvidence(t *testing.T) {
 	}
 }
 
-// Every legacy verdict names a column migration 0040 actually removed.
+// Every legacy verdict names a column migration 0043 actually removed.
 //
 // Without this the legacy table becomes a place stale entries accumulate
 // unnoticed: Survey skips whatever the schema does not have, so a column
@@ -362,7 +369,7 @@ func TestEveryLegacyVerdictNamesAColumnThatIsGone(t *testing.T) {
 	live := liveColumns(t)
 	for _, c := range personref.LegacyColumns {
 		if _, ok := live[c.Table+"."+c.Column]; ok {
-			t.Errorf("%s.%s is listed as pre-0040 but is still in the schema", c.Table, c.Column)
+			t.Errorf("%s.%s is listed as pre-0043 but is still in the schema", c.Table, c.Column)
 		}
 	}
 }
@@ -401,10 +408,10 @@ func TestConnectionIdentityColumnsNameAPerson(t *testing.T) {
 		"chat_threads.identity":     true,
 		"chat_claim_codes.identity": true,
 	}
-	// The legacy table, because 0041 repointed all three in the same
+	// The legacy table, because 0044 repointed all three in the same
 	// slice that corrected them. The verdict is what made the repoint
 	// right, and it has to stay readable for a database that has not
-	// run 0041 yet — which is precisely a deployment still admitting a
+	// run 0044 yet — which is precisely a deployment still admitting a
 	// principal to an Owner Agent.
 	for _, c := range personref.LegacyColumns {
 		key := c.Table + "." + c.Column

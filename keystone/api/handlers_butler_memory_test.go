@@ -11,7 +11,7 @@ import (
 // seedMemory records one memory record owned by owner.
 //
 // A household-owned record is authored by a person, not by the
-// household: since 0040 owner is the scoped column that takes the
+// household: since 0043 owner is the scoped column that takes the
 // household and author is the person column that does not. So a shared
 // record here is stated by the member these fixtures already have.
 func seedMemory(t *testing.T, h *harness, content, owner string, audience runtimedb.ButlerTaskAudience) int64 {

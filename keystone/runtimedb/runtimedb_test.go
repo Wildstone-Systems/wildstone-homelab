@@ -43,7 +43,7 @@ func open(t *testing.T) *DB {
 
 // openWith is open with a cast of people already on record.
 //
-// Since 0040 every provably-human column is a foreign key, so a fixture
+// Since 0043 every provably-human column is a foreign key, so a fixture
 // that files a task, a memory record or a notice for "sam" has to say
 // who sam is first. That is not a test inconvenience — it is the whole
 // point of the slice, and a deployment is held to exactly the same

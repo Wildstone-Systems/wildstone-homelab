@@ -347,8 +347,12 @@ func TestCalDAVParsesRealisticEvents(t *testing.T) {
 	if events[0].Summary != "School run" {
 		t.Fatalf("first event = %+v", events[0])
 	}
-	// A folded SUMMARY is one summary, not a truncated one.
-	if events[1].Summary != "Dentist forSam" && events[1].Summary != "Dentist for Sam" {
+	// A folded SUMMARY is one summary, rejoined exactly as it was
+	// written. The fixture's continuation line opens with TWO spaces:
+	// one is the fold, the other is the space between the words. This
+	// accepted "Dentist forSam" as well until the write path's round
+	// trip made the difference impossible to ignore.
+	if events[1].Summary != "Dentist for Sam" {
 		t.Fatalf("a folded summary was not rejoined: %q", events[1].Summary)
 	}
 	if events[0].Start.IsZero() {
