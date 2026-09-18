@@ -9,6 +9,7 @@ package main
 // blocking, so this is the list to clear first.
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -45,7 +46,26 @@ func personRefs(args []string) error {
 	}
 	defer db.Close()
 
-	rep, err := personref.Survey(db)
+	// ONE read transaction, not the pool.
+	//
+	// This command is meant to be run against a live deployment, and a
+	// pooled *sql.DB gives every query its own autocommit snapshot. A
+	// rename landing between loading the people and scanning the
+	// columns would have the report resolve post-rename references
+	// against a pre-rename person list and conclude that nothing blocks
+	// — on a database that, by the time it finished, contained an
+	// orphan. A report whose parts disagree is worse than no report,
+	// because its whole purpose is to be trusted before a migration.
+	//
+	// Deferred rollback rather than commit: a read transaction has
+	// nothing to commit, and rollback is the honest close.
+	tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("starting a read transaction on %s: %w", path, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rep, err := personref.Survey(tx)
 	if err != nil {
 		return err
 	}

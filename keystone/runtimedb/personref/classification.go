@@ -104,7 +104,16 @@ var Columns = []Column{
 	{"butler_members", "member", Human,
 		"the handle itself. Not repointed — it IS the row person_id belongs to — but classified so the table is complete"},
 
+	{"notices", "recipient", Human,
+		"schema: `recipient is the member`. Runtime filters, authorizes replies and offboards by it. Missed by the first name heuristic (#239 review)"},
 	// ---- Actor: person OR machine principal; left as recorded text ----
+	{"chat_claim_codes", "identity", Actor,
+		"the identity a claim code was minted for; principal or member, as chat_bindings.identity"},
+	{"chat_bindings", "identity", Actor,
+		"schema: `principal (admin) or household member (family)` — polymorphic by construction, the actor family in one column"},
+	{"chat_threads", "identity", Actor,
+		"the bound identity a thread belongs to; principal or member, as chat_bindings.identity"},
+
 	{"audit", "principal", Actor,
 		"a machine principal from the principals table — the legacy machine axis (#201 Decision 6, slice #210)"},
 	{"audit", "acting_for", Actor,
