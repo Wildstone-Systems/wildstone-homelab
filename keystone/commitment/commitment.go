@@ -2,7 +2,7 @@
 // has committed to, what its meters have read, and what has been done
 // about it, it says whether the thing is due — and nothing else.
 //
-// It is work package K3 of ADR-W034 (draft), built first and deliberately
+// It is work package K3 of ADR-W035 (draft), built first and deliberately
 // alone, because it is the only part of that design that is hard to get
 // right and the only part that does not move when the storage, the API
 // or the resource schema around it change.
@@ -13,13 +13,13 @@
 //     and returns a decision. No clock of its own, no database, no
 //     network, no model. The same inputs always produce the same
 //     answer, which is what makes a commitment replayable against
-//     history before anybody approves it (ADR-W024 A7, ADR-W034 A5).
+//     history before anybody approves it (ADR-W024 A7, ADR-W035 A5).
 //   - Honest about what it does not know. A meter nobody has read
 //     recently cannot support the conclusion "not due yet", and this
 //     package says so rather than doing arithmetic on a stale number
-//     (ADR-W034 A11).
+//     (ADR-W035 A11).
 //   - Silent about notification. It returns a state; who hears about it
-//     is an Automation the household writes (ADR-W034 A12).
+//     is an Automation the household writes (ADR-W035 A12).
 //
 // What this package is not: storage (K4), a resource schema (K1/K2), a
 // scheduler, or anything that can act. It imports nothing but the
@@ -39,7 +39,7 @@ import (
 )
 
 // MeterClock is the built-in meter every household has without
-// installing, configuring or publishing anything (ADR-W034 A2). Its
+// installing, configuring or publishing anything (ADR-W035 A2). Its
 // positions are seconds since the Unix epoch, and its readings are not
 // recorded: the current position is whatever Now says.
 const MeterClock = "clock"
@@ -48,7 +48,7 @@ const MeterClock = "clock"
 //
 // Evaluate returns only the four open states. Satisfied and Waived are
 // how a cycle CLOSES — they are recorded by the ledger when a completion
-// is written, and the next occurrence opens immediately (ADR-W034 A6),
+// is written, and the next occurrence opens immediately (ADR-W035 A6),
 // so the function that answers "where does this stand" never returns
 // them.
 type State string
@@ -63,7 +63,7 @@ const (
 )
 
 // Rollover decides where the next occurrence is measured from
-// (ADR-W034 A9). Both are needed and neither is a sensible default, so
+// (ADR-W035 A9). Both are needed and neither is a sensible default, so
 // there is no zero value: an empty Rollover is a validation error.
 type Rollover string
 
@@ -101,7 +101,7 @@ type Meter struct {
 	// current and wrong for one a person reads off a dashboard.
 	StaleAfter time.Duration `json:"staleAfter,omitempty"`
 	// Estimate is units per day, used ONLY to project a date for display.
-	// A projection never moves a state (ADR-W034 A11). Zero means derive
+	// A projection never moves a state (ADR-W035 A11). Zero means derive
 	// a rate from the readings, or show nothing.
 	Estimate float64 `json:"estimate,omitempty"`
 	// Readings in any order; Evaluate sorts a copy.
@@ -110,7 +110,7 @@ type Meter struct {
 
 // Reading is one observation of a meter, however it arrived: typed into
 // the Console, sent from the CLI, said in household chat, or published
-// by an installed capability. All four are equal here (ADR-W034 A3) —
+// by an installed capability. All four are equal here (ADR-W035 A3) —
 // this package cannot tell them apart and has no reason to.
 type Reading struct {
 	At    time.Time `json:"at"`
@@ -138,7 +138,7 @@ type Reading struct {
 
 // DueRule is one threshold: this meter, this far apart, warning this
 // early. A commitment carries one or more, and the earliest to trip
-// decides (ADR-W034 A10).
+// decides (ADR-W035 A10).
 type DueRule struct {
 	Meter string `json:"meter"`
 	// Every is the gap between occurrences, measured from the cycle's
@@ -169,7 +169,7 @@ type Commitment struct {
 	Due  []DueRule `json:"due"`
 	// RequiresBooking splits the two failures apart. When true, knowing
 	// the thing is due is not enough: due_soon persists, and keeps
-	// asking, until an appointment actually exists (ADR-W034 A7).
+	// asking, until an appointment actually exists (ADR-W035 A7).
 	RequiresBooking bool     `json:"requiresBooking,omitempty"`
 	Rollover        Rollover `json:"rollover"`
 	// Anchor is when tracking starts — the first cycle is measured from
@@ -185,7 +185,7 @@ type Commitment struct {
 // Completion closes a cycle. Evidence is not optional: the positions the
 // meters stood at are what the next cycle is measured from, so an oil
 // change recorded without a mileage is a note rather than a maintenance
-// record (ADR-W034 A8).
+// record (ADR-W035 A8).
 type Completion struct {
 	At        time.Time          `json:"at"`
 	By        string             `json:"by,omitempty"`
@@ -261,7 +261,7 @@ type RuleStatus struct {
 // Projection is a guess about when a counter rule will come due, for
 // display only. It exists so a household can plan; it is labelled
 // everywhere it appears, and nothing in this package ever reads it back
-// (ADR-W034 A11).
+// (ADR-W035 A11).
 type Projection struct {
 	Meter      string    `json:"meter"`
 	At         time.Time `json:"at"`
@@ -315,7 +315,7 @@ func Evaluate(in Input) (Occurrence, error) {
 	// has not happened yet than to a meter reading from next week. The
 	// first review round bounded readings and left this slice open, which
 	// let a recurring commitment advance into a future cycle and a
-	// one-off report itself done before the work (ADR-W034 A5).
+	// one-off report itself done before the work (ADR-W035 A5).
 	history := make([]Completion, 0, len(in.History))
 	for _, h := range in.History {
 		if !h.At.After(in.Now) {
@@ -404,7 +404,7 @@ func validate(in Input) error {
 	switch c.Rollover {
 	case Once, FromCompletion, FromSchedule:
 	default:
-		return fmt.Errorf("commitment: %q must say rollover: once, fromCompletion or fromSchedule — there is no safe default (ADR-W034 A9)", c.Name)
+		return fmt.Errorf("commitment: %q must say rollover: once, fromCompletion or fromSchedule — there is no safe default (ADR-W035 A9)", c.Name)
 	}
 	if c.Anchor.IsZero() {
 		return fmt.Errorf("commitment: %q has no anchor: the first cycle has to start somewhere", c.Name)
@@ -518,7 +518,7 @@ func evalRule(in Input, rule DueRule, last *Completion, closed int, loc *time.Lo
 			p, ok := completionPosition(*last, rule.Meter)
 			if !ok {
 				st.Unresolved = fmt.Sprintf(
-					"the last completion recorded no reading for meter %q, so the next one cannot be measured from it (ADR-W034 A8)", rule.Meter)
+					"the last completion recorded no reading for meter %q, so the next one cannot be measured from it (ADR-W035 A8)", rule.Meter)
 				return st, nil
 			}
 			anchor = p
@@ -536,9 +536,9 @@ func evalRule(in Input, rule DueRule, last *Completion, closed int, loc *time.Lo
 				// for the same reason: without the reading at completion
 				// there is no way to know which slot the work landed in,
 				// and assuming exactly one passed can open a cycle that
-				// is already behind the meter (ADR-W034 A8).
+				// is already behind the meter (ADR-W035 A8).
 				st.Unresolved = fmt.Sprintf(
-					"the last completion recorded no reading for meter %q, so which scheduled slot it met cannot be known (ADR-W034 A8)", rule.Meter)
+					"the last completion recorded no reading for meter %q, so which scheduled slot it met cannot be known (ADR-W035 A8)", rule.Meter)
 				return st, nil
 			}
 			// p was recorded in the coordinate space of its own day. The
@@ -808,11 +808,11 @@ func counterPosition(m Meter, now time.Time) (Reading, string) {
 // decide folds the rules into one state. Earliest wins: whichever
 // threshold is furthest along its own interval is the one that speaks,
 // which is how "every 6 months or 5,000 miles" compares a month against
-// a mile (ADR-W034 A10).
+// a mile (ADR-W035 A10).
 //
 // A rule that could not be concluded from never decides anything. It
 // leaves its meter in Unresolved, where it becomes a request for a
-// reading rather than a verdict (ADR-W034 A11).
+// reading rather than a verdict (ADR-W035 A11).
 func decide(occ *Occurrence) {
 	furthest := func(where func(RuleStatus) bool) (RuleStatus, bool) {
 		var best RuleStatus

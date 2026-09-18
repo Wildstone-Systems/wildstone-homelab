@@ -44,6 +44,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/report"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
+	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
 )
 
 var version = "dev" // set via -ldflags at release
@@ -1089,6 +1090,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		butlerCfg = butlerConfig{Provider: stored.Provider, Model: stored.Model, Endpoint: stored.Endpoint}
 	}
 
+	// The commitment pass (ADR-W035 A15). Declared here because the
+	// agent's read tool needs it just below and the timer starts it
+	// further down — one engine either way, so the household's answer to
+	// "what is due" is the same whoever asks.
+	upkeepEngine := &upkeep.Engine{DB: db, State: state, Loc: householdLoc, Log: log}
+
 	if bp, backend, err := newButlerProvider(butlerCfg); err != nil {
 		return err
 	} else {
@@ -1104,6 +1111,10 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			mode, _ = probeButler(context.Background(), bp, log)
 		}
 		bgw := butler.NewToolGateway(state, &butler.AgentReader{Gateway: gw})
+		// Where the household's commitments stand, for the agent's read
+		// tool. The adapter is in this package because neither the pass
+		// nor the model should import the other (commitmentstandings.go).
+		bgw.Commitments = commitmentStandings{engine: upkeepEngine}
 		// The diagnose tool's injected observed seam (ADR-W017 A5): the
 		// butler package reads observed health through this closure and
 		// never imports runtimedb/reconcile itself.
@@ -1223,6 +1234,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		household := butler.HouseholdSeams{
 			Events:     api.HouseholdEventSeam(db, memberScoped),
 			Vocabulary: bgw.AutomationVocabulary,
+			// The chat door a meter reading may come through (ADR-W035
+			// A3), over the same store and the same refusals as the HTTP
+			// intake. Wired unconditionally: the tracker works with no
+			// capabilities installed (A4), so its doors are not
+			// something a household has to switch on.
+			RecordReading: apiSrv.MeterReadingSeam(),
 		}
 		if len(actions.Tools()) > 0 {
 			household.Actions = func(ctx context.Context, c butler.HouseholdActionCall) (string, error) {
@@ -1437,6 +1454,29 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 
 	// Everything the engine needs is wired; start its loop.
 	go auto.Run(context.Background(), automationEvery)
+
+	// The household's commitments (ADR-W035 A15): once a day, work out
+	// what has come due and record the changes on the household
+	// timeline. Nothing here notifies anybody — an Automation the
+	// household wrote decides who hears about a commitment.* fact, on
+	// which surface, at what hour (A12).
+	//
+	// Beside the morning report rather than in cron for ADR-W011 A4's
+	// reason, and at the same hour because a household reads its house
+	// once: a checkup with a sixty-day lead and an oil change with a
+	// three-hundred-mile lead are both indifferent to the minute.
+	apiSrv.Upkeep = upkeepEngine
+	upkeepPoke := make(chan struct{}, 1)
+	apiSrv.OnMeterReading = func() {
+		// A reading can change an answer, so the pass runs again rather
+		// than waiting for tomorrow: somebody who has just typed in a
+		// mileage is standing there wanting to know.
+		select {
+		case upkeepPoke <- struct{}{}:
+		default:
+		}
+	}
+	go upkeepEngine.Run(context.Background().Done(), upkeepPoke, nextMorning(time.Now()))
 
 	// Morning report timer (ADR-W017 A5): once a day at 07:00 local, build
 	// the deterministic report and append its summary to the event stream
