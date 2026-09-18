@@ -277,12 +277,23 @@ func TestTheAssistantsPanelsDiscloseRatherThanHide(t *testing.T) {
 		}
 	}
 
-	// Every digest sits after a hairline rather than jammed against the
-	// title: a long one beside an eyebrow reads as a run-on line, and
-	// the design's own header pattern is label, rule, then the meta.
+	// The digest sits UNDER its title, not beside it.
+	//
+	// Side by side in a 268px column, "What was done in your name" and
+	// "2 actions · 1 refused" are wider than the card — and both were
+	// nowrap, so they did not wrap, they spilled out of it. Stacking is
+	// the only arrangement that cannot overflow at that width whatever
+	// the digest says.
 	for _, id := range []string{"caps-digest", "memory-digest", "receipts-digest", "convos-digest"} {
-		if !regexp.MustCompile(`class="fade"[^>]*>\s*</span>\s*<span class="muted nowrap" id="` + id + `"`).MatchString(page) {
-			t.Errorf("%s is not separated from its title by a hairline", id)
+		if !regexp.MustCompile(`display: block"[^>]*>[^<]*</span>\s*<span class="muted" id="` + id + `"`).MatchString(page) {
+			t.Errorf("%s does not sit beneath its title on its own line", id)
+		}
+	}
+
+	// And nothing in a panel header may be pinned to one line.
+	for _, m := range regexp.MustCompile(`(?s)<summary class="wid-head"[^>]*>(.*?)</summary>`).FindAllStringSubmatch(page, -1) {
+		if strings.Contains(m[1], "nowrap") {
+			t.Error("a panel header pins content to one line; in a narrow column that overflows the card")
 		}
 	}
 
@@ -332,5 +343,51 @@ func TestBothAssistantSurfacesCarryAnAgentPicker(t *testing.T) {
 		if !regexp.MustCompile(`(?s)agents\.length === 1.{0,400}?title = "The only assistant`).MatchString(page) {
 			t.Errorf("%s does not explain why the agent cannot be changed when there is one", name)
 		}
+	}
+}
+
+// A panel opens to a few rows, not to everything it has.
+//
+// Twelve capability rows, a household's whole memory, every action of a
+// long conversation: each is useful in full and overwhelming by
+// default, so opening a panel is the first level of disclosure and
+// "show more" is the second.
+func TestPanelsOpenToAFewRowsRatherThanAllOfThem(t *testing.T) {
+	body, ok := Page("assistant")
+	if !ok {
+		t.Fatal("the assistant page is not served")
+	}
+	page := stripComments(string(body))
+
+	if !strings.Contains(page, "function discloseRows(") {
+		t.Fatal("no second level of disclosure")
+	}
+	// Every list on the page goes through it, or grows without bound.
+	for _, call := range []string{
+		"discloseRows(box, rows,",  // what it may do
+		"discloseRows(box, items,", // what it remembers
+		"discloseRows(box, all,",   // what was done in your name
+	} {
+		if !strings.Contains(page, call) {
+			t.Errorf("a list is rendered without the second level: %s", call)
+		}
+	}
+	// The conversation list groups by day, so it has its own, and must
+	// still cap.
+	if !regexp.MustCompile(`paintConversations\(box, items, false\)`).MatchString(page) {
+		t.Error("the conversation list is not capped")
+	}
+
+	// The control offers the REMAINDER. A member who has just read
+	// "12 allowed" in the digest should not then be offered "12 more".
+	for _, m := range regexp.MustCompile(`"Show " \+ (\w+)(?:\.length)? \+ " more"`).
+		FindAllStringSubmatch(page, -1) {
+		if m[1] == "items" || m[1] == "all" || m[1] == "rows" {
+			t.Errorf(`"show more" counts the whole list (%s) rather than what is left`, m[1])
+		}
+	}
+	if !strings.Contains(page, `"Show " + rest.length + " more"`) &&
+		!strings.Contains(page, `"Show " + rest + " more"`) {
+		t.Error("no control offering the remaining rows")
 	}
 }

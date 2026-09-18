@@ -228,16 +228,24 @@
       <div id="assistant-note"></div>
       <div id="thread" style="display: flex; flex-direction: column; gap: var(--space-4);
                               min-height: 84px; max-height: 240px; overflow-y: auto"></div>
+      <!-- The openers and the composer travel together and sit against
+           the bottom of the card. The auto margin used to be on the
+           composer alone, which dropped it to the floor and left the
+           suggested questions stranded in the middle of the card above
+           a gap — they are a prompt FOR the box, so they belong on top
+           of it. -->
+      <div style="margin-top: auto; display: flex; flex-direction: column; gap: var(--space-3)">
       <div class="asks" id="asks" hidden>
         <button class="hbtn" type="button">What's for dinner tomorrow?</button>
         <button class="hbtn" type="button">Add milk to the shopping list</button>
       </div>
-      <div class="composer" style="margin-top: auto">
+      <div class="composer">
         <label class="sr" for="ask">Ask the assistant</label>
         <textarea id="ask" rows="1" placeholder="Ask the house for something"></textarea>
         <button class="hbtn hbtn-primary send" id="send" type="button" aria-label="Send">
           <i class="ph ph-arrow-up" aria-hidden="true"></i>
         </button>
+      </div>
       </div>
       <div class="spread">
         <span class="muted grow" id="acts-as"></span>

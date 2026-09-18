@@ -65,6 +65,9 @@
   .cap { display: flex; gap: var(--space-3); align-items: flex-start; font-size: 12.5px; }
   .cap .mark { flex: none; margin-top: 2px; }
   .cap .q { color: var(--muted); }
+  /* A 268px column and capability names with no spaces in them: without
+     this they run straight out of the card. */
+  .cap, .cap .q, #memory, #receipts { overflow-wrap: anywhere; }
   /* On a phone the thread and composer come first; the two panels
      become disclosures rather than two full-length columns pushing the
      conversation off screen. */
@@ -115,9 +118,10 @@
       </button>
       <details class="panel">
         <summary class="wid-head" style="margin-top: var(--space-3)">
-          <span class="eyebrow nowrap">Earlier</span>
-          <span class="fade" aria-hidden="true"></span>
-          <span class="muted nowrap" id="convos-digest"></span>
+          <span class="grow" style="min-width: 0">
+            <span class="eyebrow" style="display: block">Earlier</span>
+            <span class="muted" id="convos-digest"></span>
+          </span>
           <i class="ph ph-caret-down" aria-hidden="true"></i>
         </summary>
         <div id="convos" style="margin-top: var(--space-3)"></div>
@@ -168,9 +172,10 @@
       <section class="wid">
         <details class="panel">
           <summary class="wid-head">
-            <span class="eyebrow nowrap" id="caps-head">What it may do</span>
-            <span class="fade" aria-hidden="true"></span>
-            <span class="muted nowrap" id="caps-digest"></span>
+            <span class="grow" style="min-width: 0">
+              <span class="eyebrow" style="display: block" id="caps-head">What it may do</span>
+              <span class="muted" id="caps-digest"></span>
+            </span>
             <i class="ph ph-caret-down" aria-hidden="true"></i>
           </summary>
           <div class="caps" id="caps" style="margin-top: var(--space-3)"></div>
@@ -181,9 +186,10 @@
       <section class="wid">
         <details class="panel">
           <summary class="wid-head">
-            <span class="eyebrow nowrap">What it remembers</span>
-            <span class="fade" aria-hidden="true"></span>
-            <span class="muted nowrap" id="memory-digest"></span>
+            <span class="grow" style="min-width: 0">
+              <span class="eyebrow" style="display: block">What it remembers</span>
+              <span class="muted" id="memory-digest"></span>
+            </span>
             <i class="ph ph-caret-down" aria-hidden="true"></i>
           </summary>
           <div id="memory" style="margin-top: var(--space-3)"></div>
@@ -194,9 +200,10 @@
       <section class="wid">
         <details class="panel">
           <summary class="wid-head">
-            <span class="eyebrow nowrap">What was done in your name</span>
-            <span class="fade" aria-hidden="true"></span>
-            <span class="muted nowrap" id="receipts-digest"></span>
+            <span class="grow" style="min-width: 0">
+              <span class="eyebrow" style="display: block">What was done in your name</span>
+              <span class="muted" id="receipts-digest"></span>
+            </span>
             <i class="ph ph-caret-down" aria-hidden="true"></i>
           </summary>
           <div id="receipts" style="margin-top: var(--space-3)"></div>
@@ -331,6 +338,32 @@
       });
   }
 
+  // ---- two levels of disclosure.
+  //
+  // Opening a panel should not dump everything it has. Twelve capability
+  // rows, a household's whole memory or every action of a long
+  // conversation are all lists that are USEFUL in full and overwhelming
+  // by default, so a panel opens to a few and offers the rest. The
+  // header's digest already said how many there were, so the count on
+  // this control is the remainder rather than the total — a member who
+  // read "12 allowed" should not then be offered "12 more".
+  var firstFew = 4;
+
+  function discloseRows(box, rows, draw) {
+    clear(box);
+    var shown = rows.slice(0, firstFew), rest = rows.slice(firstFew);
+    shown.forEach(function (r) { box.appendChild(draw(r)); });
+    if (!rest.length) { return; }
+    var more = make("button", "hbtn hbtn-ghost", "Show " + rest.length + " more");
+    more.type = "button";
+    more.appendChild(icon("caret-down"));
+    more.addEventListener("click", function () {
+      more.remove();
+      rest.forEach(function (r) { box.appendChild(draw(r)); });
+    });
+    box.appendChild(more);
+  }
+
   // ---- what this surface allows, from the connection profile itself.
   function loadScope() {
     fetch("/api/v1/assistant/scope", { headers: { accept: "application/json" } })
@@ -343,8 +376,12 @@
           "This dashboard refuses the machines, apps, accounts, secrets and the control " +
           "plane's own records, whatever the assistant is allowed elsewhere.";
         var allowed = res.j.allowed || [], denied = res.j.denied || [];
-        allowed.forEach(function (c) { box.appendChild(capRow(c, true)); });
-        denied.forEach(function (c) { box.appendChild(capRow(c, false)); });
+        // Allowed first, then the ceiling. Tagged so one list can carry
+        // both without the helper needing to know the difference.
+        var rows = [];
+        allowed.forEach(function (c) { rows.push({ c: c, ok: true }); });
+        denied.forEach(function (c) { rows.push({ c: c, ok: false }); });
+        discloseRows(box, rows, function (r) { return capRow(r.c, r.ok); });
         // Shut, the header answers the question: how much can it do,
         // and how much is off limits from here.
         text("caps-digest", allowed.length + " allowed \u00b7 " + denied.length + " not from here");
@@ -389,25 +426,41 @@
           box.appendChild(make("p", "muted", "No conversations yet."));
           return;
         }
-        var groups = { Today: [], Earlier: [] };
-        var today = new Date().toDateString();
-        items.forEach(function (c) {
-          groups[new Date(c.at).toDateString() === today ? "Today" : "Earlier"].push(c);
-        });
-        ["Today", "Earlier"].forEach(function (g) {
-          if (!groups[g].length) { return; }
-          box.appendChild(make("div", "eyebrow", g));
-          groups[g].forEach(function (c) {
-            var b = make("button", "convo" + (c.id === session ? " on" : ""));
-            b.type = "button";
-            b.appendChild(make("div", "t", c.title));
-            b.appendChild(make("div", "muted", whenish(c.at) + (c.agent ? " · " + c.agent : "")));
-            b.addEventListener("click", function () { openConversation(c.id); });
-            box.appendChild(b);
-          });
-        });
+        // The same two levels as the panels on the right: a few, then
+        // the rest on request. Grouped by day, so the count that
+        // matters is how many CONVERSATIONS are hidden rather than how
+        // many rows.
+        paintConversations(box, items, false);
       })
       .catch(function () {});
+  }
+
+  // Draws the conversation list, grouped by day, showing a few unless
+  // asked for all of them.
+  function paintConversations(box, items, all) {
+    clear(box);
+    var shown = all ? items : items.slice(0, firstFew);
+    var rest = items.length - shown.length;
+    var today = new Date().toDateString(), lastGroup = "";
+    shown.forEach(function (c) {
+      var group = new Date(c.at).toDateString() === today ? "Today" : "Earlier";
+      if (group !== lastGroup) {
+        box.appendChild(make("div", "eyebrow", group));
+        lastGroup = group;
+      }
+      var b = make("button", "convo" + (c.id === session ? " on" : ""));
+      b.type = "button";
+      b.appendChild(make("div", "t", c.title));
+      b.appendChild(make("div", "muted", whenish(c.at) + (c.agent ? " \u00b7 " + c.agent : "")));
+      b.addEventListener("click", function () { openConversation(c.id); });
+      box.appendChild(b);
+    });
+    if (rest <= 0) { return; }
+    var more = make("button", "hbtn hbtn-ghost", "Show " + rest + " more");
+    more.type = "button";
+    more.appendChild(icon("caret-down"));
+    more.addEventListener("click", function () { paintConversations(box, items, true); });
+    box.appendChild(more);
   }
 
   function newConversation() {
@@ -512,7 +565,7 @@
           (mine ? " \u00b7 " + mine + " yours" : ""));
         text("memory-note", "You can make it forget anything it learned about you. " +
           "What the household shares is the owner's.");
-        items.forEach(function (m) { box.appendChild(memoryRow(m)); });
+        discloseRows(box, items, memoryRow);
       })
       .catch(function () { text("memory-note", "Can't read what the assistant remembers right now."); });
   }
@@ -584,7 +637,7 @@
     text("receipts-digest", all.length + (all.length === 1 ? " action" : " actions") +
       (refused ? " \u00b7 " + refused + " refused" : ""));
     text("receipts-note", "");
-    all.forEach(function (r) { box.appendChild(receiptPill(r)); });
+    discloseRows(box, all, receiptPill);
   }
 
   Array.prototype.forEach.call(el("asks").querySelectorAll("button"), function (b) {
