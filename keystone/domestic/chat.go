@@ -104,7 +104,7 @@ func (c *ChatSender) Execute(ctx context.Context, call Call) (Result, error) {
 	recipient, err := c.Lookup(ctx, member)
 	if err != nil {
 		return Result{}, &RefusalError{Tool: call.Tool, Reason: fmt.Sprintf(
-			"%s has no %s account bound: introduce them with `wild chat code -surface family -identity %s`",
+			"%s has no %s account bound: introduce them with `wild chat code -butler <agent> -identity %s`",
 			member, c.Transport, member)}
 	}
 	seq, err := c.Ask(ctx, recipient, body, call.CorrelationID, call.Rule, member)

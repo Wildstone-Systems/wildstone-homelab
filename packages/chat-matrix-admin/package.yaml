@@ -1,4 +1,4 @@
-# Chat (Matrix), admin surface: the operator's Butler over Matrix
+# Chat (Matrix) for an OWNER AGENT: reachable over Matrix
 # (ADR-W026 A2/A3, work package G5).
 #
 # The same adapter binary as chat-matrix-family, against a DIFFERENT
@@ -10,7 +10,7 @@
 # the words "nothing has changed yet"; approving happens in the Console
 # or `wild`, where a Wildstone credential authenticates you (ADR-W026 A5).
 #
-# This surface answers in a direct room only. A message in a shared room
+# An Owner Agent answers in a direct room only. A message in a shared room
 # gets one line saying so, and opens no session.
 #
 # INSTALLING (in this order):
@@ -18,9 +18,9 @@
 #  1. Make a SECOND Matrix account — not the household's — and get its
 #     access token.
 #
-#  2. Mint its credential (this is what makes it the admin surface):
+#  2. Credential the bot and assign it to its Agent, in one act:
 #
-#        wild chat adapter chat-matrix-admin -node <node> -surface admin
+#        wild chat adapter chat-matrix-admin -node <node> -butler <agent>
 #
 #  3. Set the access token, then enable the capability:
 #
@@ -28,7 +28,7 @@
 #
 #  4. Bind your own account:
 #
-#        wild chat code -surface admin -identity <your-principal> -transport matrix
+#        wild chat code -butler <agent> -identity <you> -transport matrix
 #
 # THE IMAGE. As for the Telegram packages: build it from
 # cli/cmd/chat-adapter/Dockerfile and pass the digest. It must be

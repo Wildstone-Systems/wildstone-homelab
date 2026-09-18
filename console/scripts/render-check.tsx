@@ -77,7 +77,7 @@ import { RouteList } from "../src/views/butlers/TabModel";
 import { Confirm } from "../src/ui/Confirm";
 import { Tabs } from "../src/ui/Tabs";
 import type { ButlerRow as ButlerRosterRow, Model } from "../src/api";
-import { ConnectChat, InstallStep, InviteStep, surfaceOf, vendorSecret } from "../src/views/ConnectChat";
+import { ConnectChat, InstallStep, InviteStep, vendorSecret } from "../src/views/ConnectChat";
 
 // Exactly what GET /api/v1/packages serves, copied from the live VM.
 const pkg = {
@@ -433,18 +433,18 @@ check("the operator thread promises approval, not action", adminThread.includes(
 check("household blurb names the ceiling", SURFACES.family.blurb.includes("no access to the home lab"));
 check("household blurb does not promise proposals", !SURFACES.family.blurb.includes("propose changes —"));
 
-// Chat bindings (ADR-W026 A4). The screen has to teach two things a
-// person cannot recover from getting wrong: the code is shown once, and
-// a binding is per-surface.
+// Chat bindings (ADR-W026 A4, ADR-W033 B7). The screen has to teach two
+// things a person cannot recover from getting wrong: the code is shown
+// once, and a binding reaches ONE agent.
 const chat = renderToString(h(Chat));
 check("Chat renders without throwing", chat.length > 0);
-check("chat screen says bindings are per-surface", chat.includes("per-surface"));
+check("chat screen says bindings are per agent", chat.includes("per\n        agent") || chat.includes("per agent"));
 check("chat screen says chat cannot approve", chat.includes("approve"));
 
 const code = renderToString(
   h(IssuedCode, {
     claim: {
-      code: "K7QP-3XMR-9TWD", surface: "family", identity: "sam",
+      code: "K7QP-3XMR-9TWD", butler: "alfred", transport: "telegram", identity: "sam",
       expiresAt: "2026-09-06T18:00:00Z", note: "Send this code to the telegram bot.",
     },
   }),
@@ -1258,27 +1258,28 @@ check("a node with no secrets says so", noSecrets.includes("No secrets on this n
 
 // -------------------------------------------------------------- Chat
 const BINDINGS: ChatBinding[] = [
-  { id: 1, transport: "telegram", account: "@sam", displayName: "Sam", surface: "family",
+  { id: 1, connection: 1, butler: "hobson", transport: "telegram", account: "@sam", displayName: "Sam",
     identity: "sam", createdAt: "2026-09-01T00:00:00Z", createdBy: "mika",
     lastUsedAt: "2026-09-06T00:00:00Z" },
-  { id: 2, transport: "telegram", account: "@old", surface: "admin", identity: "mika",
+  { id: 2, connection: 2, butler: "alfred", transport: "telegram", account: "@old", identity: "mika",
     createdAt: "2026-08-01T00:00:00Z", createdBy: "mika", revokedAt: "2026-09-02T00:00:00Z" },
 ];
 const TRANSPORTS: ChatTransport[] = [
-  { transport: "telegram", surface: "family", capability: "chat-telegram-family", installed: true, credentialed: true, online: true },
-  { transport: "telegram", surface: "admin", capability: "chat-telegram-admin", installed: true, credentialed: true, online: true },
+  { transport: "telegram", butler: "hobson", capability: "chat-telegram-family", installed: true, credentialed: true, online: true },
+  { transport: "telegram", butler: "alfred", capability: "chat-telegram-admin", installed: true, credentialed: true, online: true },
 ];
 const chatProps = {
   transports: TRANSPORTS,
   members: [{ value: "sam", label: "sam · Sam" }],
-  principals: [{ value: "mika", label: "mika · operator" }],
   onToggleRevoked: () => {},
   reload: () => {},
 };
 const chat2 = renderToString(h(ChatView, { ...chatProps, bindings: BINDINGS, showRevoked: true }));
-// "family" and "admin" are wire values. The screen says Household and
-// Operator, which is what the Butler's own surface switch calls them.
-check("a binding names its butler the way the Butler screen does", chat2.includes("Household") && chat2.includes("Operator"), chat2.slice(0, 600));
+// The agent by NAME. A class — "Household", "Operator" — would file
+// every owner agent's bindings under one label, and the whole point of a
+// connection belonging to one agent is that Alfred's reach is not
+// Robert's.
+check("a binding names the agent it reaches", chat2.includes("hobson") && chat2.includes("alfred"), chat2.slice(0, 600));
 check("a revoked binding is shown as revoked, not hidden", chat2.includes("revoked"));
 check("a binding that has never been used says never", chat2.includes("never"));
 const noneBound = renderToString(h(ChatView, { ...chatProps, bindings: [], showRevoked: false }));
@@ -1299,21 +1300,21 @@ check("no code waiting says what to do", noCode.includes("Ask the person to requ
 // and where it is fixed.
 const missing = renderToString(
   h(Prerequisites, {
-    surface: "family", usable: [], chosen: undefined, allTransports: [
-      { transport: "telegram", surface: "family", capability: "chat-telegram-family", installed: false, credentialed: false, online: false },
+    butler: "", usable: [], chosen: undefined, allTransports: [
+      { transport: "telegram", capability: "chat-telegram-family", installed: false, credentialed: false, online: false },
     ], haveIdentities: false,
   }),
 );
 check("no members points at the Household screen", missing.includes("Household screen"));
-check("no adapter names the package to install", missing.includes("chat-telegram-family"));
+check("a bot with no agent names the package to give away", missing.includes("chat-telegram-family"));
 
 // Installed but never given a token: the bot is running and cannot
 // redeem anything, which looks identical to a working one.
 const uncredentialed = renderToString(
   h(Prerequisites, {
-    surface: "family",
-    usable: [{ transport: "telegram", surface: "family", capability: "chat-telegram-family", installed: true, credentialed: false, online: true }],
-    chosen: { transport: "telegram", surface: "family", capability: "chat-telegram-family", installed: true, credentialed: false, online: true },
+    butler: "hobson",
+    usable: [{ transport: "telegram", butler: "hobson", capability: "chat-telegram-family", installed: true, credentialed: false, online: true }],
+    chosen: { transport: "telegram", butler: "hobson", capability: "chat-telegram-family", installed: true, credentialed: false, online: true },
     allTransports: [], haveIdentities: true,
   }),
 );
@@ -1359,8 +1360,12 @@ check("two directories are disambiguated", twoNodes.includes("directory node"));
 // deployment, and the payoff is a link that carries the code.
 const connect = renderToString(h(ConnectChat));
 check("Connect screen renders without throwing", connect.length > 0);
-check("connect screen says each surface is its own bot", connect.includes("its own bot"));
-check("surface comes from the capability name", surfaceOf("chat-telegram-admin") === "admin" && surfaceOf("chat-telegram-family") === "family");
+// A bot belongs to one agent (ADR-W033 B7). The screen used to derive
+// which butler a bot served by parsing chat-<transport>-<surface>, which
+// could only ever name a CLASS: Alfred and Robert are both admin agents,
+// so it could not tell one owner agent's bot from the other's.
+check("connect screen says a bot belongs to one agent", connect.includes("belongs to exactly one agent"));
+check("connect screen does not name a surface a bot serves", !connect.includes("-surface"), connect.slice(0, 600));
 
 // The install form is generated from the PACKAGE. chat-matrix-* asks
 // for a homeserver_url that chat-telegram-* does not, and a form that
@@ -1429,23 +1434,44 @@ check("telegram vendor secret", vendorSecret({
 } as never) === "chat-telegram-family-bot");
 
 const online = {
-  transport: "telegram", surface: "family" as const, capability: "chat-telegram-family",
+  transport: "telegram", butler: "hobson", capability: "chat-telegram-family",
   installed: true, credentialed: true, handle: "wildstone_house_bot", online: true,
 };
 const invite = renderToString(
   h(InviteStep, {
-    surface: "family", transport: online,
+    butler: "hobson", transport: online,
     members: [{ username: "sam", displayName: "Sam", groups: [], owner: "system", node: "n1" }],
-    principals: [],
   }),
 );
 check("invite offers the declared member", invite.includes("Sam"));
 check("invite asks for a link, not a code", invite.includes("Get invite link"));
+check("invite names the agent the binding reaches", invite.includes("hobson"), invite.slice(0, 600));
+
+// An owner agent admits owners only (ADR-W033 B9). Keystone refuses the
+// rest, and a screen that offers the whole household without saying so
+// sends the operator to a refusal it could have predicted.
+const ownerOnly = renderToString(
+  h(InviteStep, {
+    butler: "alfred", ownersOnly: true, transport: online,
+    members: [{ username: "sam", displayName: "Sam", groups: [], owner: "system", node: "n1" }],
+  }),
+);
+check("an owner agent's invite says only an owner is admitted", ownerOnly.includes("only an owner can be admitted"), ownerOnly.slice(0, 900));
+
+// A bot nobody has been given has nowhere for an invite to land, and
+// saying so is cheaper than a claim that cannot be redeemed.
+const unassigned = renderToString(
+  h(InviteStep, {
+    butler: "", transport: online,
+    members: [{ username: "sam", displayName: "Sam", groups: [], owner: "system", node: "n1" }],
+  }),
+);
+check("a bot with no agent says to assign one first", unassigned.includes("not been given to an agent"), unassigned.slice(0, 900));
 
 // With nobody declared there is nothing to invite, and the screen says
 // where that is fixed rather than showing an empty dropdown.
 const nobody = renderToString(
-  h(InviteStep, { surface: "family", transport: online, members: [], principals: [] }),
+  h(InviteStep, { butler: "hobson", transport: online, members: [] }),
 );
 check("no members points at the Household screen", nobody.includes("Household screen"));
 
@@ -1454,7 +1480,7 @@ check("no members points at the Household screen", nobody.includes("Household sc
 const linked = renderToString(
   h(IssuedCode, {
     claim: {
-      code: "K7QP-3XMR-9TWD", surface: "family", identity: "sam",
+      code: "K7QP-3XMR-9TWD", butler: "hobson", transport: "telegram", identity: "sam",
       expiresAt: "2026-09-07T18:00:00Z", note: "Send this link to sam.",
       handle: "wildstone_house_bot",
       link: "https://t.me/wildstone_house_bot?start=K7QP-3XMR-9TWD",

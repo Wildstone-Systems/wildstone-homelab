@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChatsCircle, Prohibit } from "@phosphor-icons/react";
-import { api, ChatBinding, ChatClaim, ChatTransport, ButlerSurface } from "../api";
+import { api, ChatBinding, ChatClaim, ChatTransport } from "../api";
 import { ago, ErrorLine, until, useAction, useLoad, when } from "../lib";
 import { StatusPill } from "../ui/status";
 
@@ -21,7 +21,6 @@ export function Chat() {
   const bindings = useLoad<ChatBinding[]>(() => api.chatBindings(showRevoked), [showRevoked]);
   const transports = useLoad(() => api.chatTransports(), []);
   const members = useLoad(() => api.householdMembers(), []);
-  const principals = useLoad(() => api.principals(), []);
 
   return (
     <ChatView
@@ -31,14 +30,11 @@ export function Chat() {
         value: m.username,
         label: m.displayName ? `${m.username} · ${m.displayName}` : m.username,
       }))}
-      principals={(principals.data ?? [])
-        .filter((p) => !p.disabled)
-        .map((p) => ({ value: p.name, label: `${p.name} · ${p.role}` }))}
       showRevoked={showRevoked}
       onToggleRevoked={() => setShowRevoked((v) => !v)}
       loading={bindings.loading}
       reload={bindings.reload}
-      error={bindings.error ?? transports.error ?? members.error ?? principals.error}
+      error={bindings.error ?? transports.error ?? members.error}
     />
   );
 }
@@ -52,7 +48,6 @@ export function ChatView({
   bindings,
   transports,
   members,
-  principals,
   showRevoked,
   onToggleRevoked,
   loading,
@@ -62,41 +57,46 @@ export function ChatView({
   bindings: ChatBinding[];
   transports: ChatTransport[];
   members: Invitee[];
-  principals: Invitee[];
   showRevoked: boolean;
   onToggleRevoked: () => void;
   loading?: boolean;
   reload: () => void;
   error?: string | null;
 }) {
-  const [surface, setSurface] = useState<ButlerSurface>("family");
+  const [butler, setButler] = useState("");
   const [identity, setIdentity] = useState("");
   const [transport, setTransport] = useState("");
   const [issued, setIssued] = useState<ChatClaim | null>(null);
   const issue = useAction();
 
-  // Who this surface can bind: a household member on the family
-  // surface, a live principal on the operator's.
-  const identities = surface === "family" ? members : principals;
-  const usable = transports.filter((t) => t.installed && t.surface === surface);
+  // An invite is to ONE agent's bot (ADR-W033 B7), so the agents worth
+  // offering are the ones a credentialed bot already answers for — an
+  // agent with no bot has no connection for an account to be admitted
+  // to, and a code issued for it could never be redeemed.
+  const agents = [...new Set(transports.filter((t) => t.butler).map((t) => t.butler as string))].sort();
+  const who = butler || agents[0] || "";
+  // Always people: a Connection admits a Person (ADR-W033 A2/B9), and a
+  // chat account bound to a machine credential had nobody behind it.
+  const identities = members;
+  const usable = transports.filter((t) => t.installed && t.butler === who);
 
-  // Keep the two selects on a real option as the surface changes, so
-  // the form never submits a stale identity from the other surface.
+  // Keep the selects on a real option as the agent changes, so the form
+  // never submits a transport that agent has no bot on.
   useEffect(() => {
     setIssued(null);
     setIdentity((prev) => (identities.some((i) => i.value === prev) ? prev : identities[0]?.value ?? ""));
     setTransport((prev) => (usable.some((t) => t.transport === prev) ? prev : usable[0]?.transport ?? ""));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [surface, members, principals, transports]);
+  }, [who, members, transports]);
 
   const chosen = usable.find((t) => t.transport === transport);
 
   return (
     <>
       <div className="sub">
-        A chat account reaches a Butler only through a binding you created here. Bindings are
-        per-surface: an account bound to the household Butler cannot reach the operator one, and
-        neither can approve a plan — approval happens in this Console.
+        A chat account reaches a Butler only through a binding you created here. Bindings are per
+        agent: an account bound to one agent's bot reaches that agent and no other, and no binding
+        can approve a plan — approval happens in this Console.
       </div>
       <ErrorLine error={error ?? null} />
 
@@ -104,12 +104,17 @@ export function ChatView({
         <h3>Invite an account</h3>
         <div className="row">
           <select
-            value={surface}
-            aria-label="surface"
-            onChange={(e) => setSurface(e.target.value as ButlerSurface)}
+            value={who}
+            aria-label="butler"
+            disabled={agents.length === 0}
+            onChange={(e) => setButler(e.target.value)}
           >
-            <option value="family">Household butler</option>
-            <option value="admin">Operator butler</option>
+            {agents.length === 0 && <option value="">no agent has a bot yet</option>}
+            {agents.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
           </select>
           <select
             value={identity}
@@ -139,10 +144,12 @@ export function ChatView({
           </select>
           <button
             className="btn btn-primary"
-            disabled={issue.state.phase === "busy" || identity === "" || transport === ""}
+            disabled={
+              issue.state.phase === "busy" || who === "" || identity === "" || transport === ""
+            }
             onClick={() =>
               issue.run(async () => {
-                setIssued(await api.issueChatClaim(surface, identity, transport));
+                setIssued(await api.issueChatClaim(who, identity, transport));
               }, "issued")
             }
           >
@@ -150,12 +157,12 @@ export function ChatView({
           </button>
         </div>
         <div className="muted">
-          {surface === "admin"
-            ? "An operator binding lets that account ask the Butler about the home lab and receive its proposals. It still cannot approve one."
-            : "A household binding reaches the family Butler only — no containers, storage, accounts or access rules."}
+          The binding reaches {who || "that agent"} and nothing else. What it can do is whatever that
+          agent can do, and no binding can approve a plan. An owner agent admits owners only, so an
+          invite for anybody else is refused.
         </div>
         <Prerequisites
-          surface={surface}
+          butler={who}
           usable={usable}
           chosen={chosen}
           allTransports={transports}
@@ -206,13 +213,13 @@ export function ChatView({
 // dropdown to be interpreted. An invite needs a person to invite and a
 // bot to send the code to, and neither is this screen's job to create.
 export function Prerequisites({
-  surface,
+  butler,
   usable,
   chosen,
   allTransports,
   haveIdentities,
 }: {
-  surface: ButlerSurface;
+  butler: string;
   usable: ChatTransport[];
   chosen?: ChatTransport;
   allTransports: ChatTransport[];
@@ -221,19 +228,23 @@ export function Prerequisites({
   const notes: string[] = [];
   if (!haveIdentities) {
     notes.push(
-      surface === "family"
-        ? "No household members yet. Add one on the Household screen — a member is a declared account, and the code binds a chat account to that person."
-        : "No principals to bind. Mint one before inviting an operator account.",
+      "No household members yet. Add one on the Household screen — a member is a declared account, and the code binds a chat account to that person.",
     );
   }
-  if (usable.length === 0) {
-    const available = allTransports
-      .filter((t) => t.surface === surface)
+  if (butler === "") {
+    const spare = allTransports
+      .filter((t) => !t.butler)
       .map((t) => t.capability)
       .join(", ");
     notes.push(
-      `No ${surface} chat adapter is installed, so there is no bot for a code to be sent to.` +
-        (available ? ` Set one up on the Connect chat screen: ${available}.` : ""),
+      "No agent has a bot yet, so there is nowhere for a code to be sent." +
+        (spare
+          ? ` Give one of these to an agent on the Connect chat screen: ${spare}.`
+          : " Set one up on the Connect chat screen."),
+    );
+  } else if (usable.length === 0) {
+    notes.push(
+      `${butler} has no installed chat adapter, so there is no bot for a code to be sent to. Finish its install on the Connect chat screen.`,
     );
   } else if (chosen && !chosen.credentialed) {
     notes.push(
@@ -265,12 +276,11 @@ function BindingRow({ binding, reload }: { binding: ChatBinding; reload: () => v
       </td>
       <td>{binding.transport}</td>
       <td>
-        {/* Which butler, in the words the rest of the console uses —
-            "family" is the wire value, "Household" is what the surface
-            switch on the Butler screen calls it. */}
-        <StatusPill kind="mute">
-          {binding.surface === "family" ? "Household" : "Operator"}
-        </StatusPill>
+        {/* The agent this account reaches, by name. A class — "Household"
+            or "Operator" — would put every owner agent's bindings under
+            one label, and the whole point of a connection belonging to
+            one agent is that Alfred's reach is not Robert's. */}
+        <StatusPill kind="mute">{binding.butler}</StatusPill>
       </td>
       <td>{binding.identity}</td>
       <td className="muted" title={when(binding.createdAt)}>

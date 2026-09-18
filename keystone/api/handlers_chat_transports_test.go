@@ -52,8 +52,16 @@ func TestChatTransportsAreTheInstalledAdapters(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("transports = %+v, want one", got)
 	}
-	if got[0].Transport != "telegram" || got[0].Surface != "family" || !got[0].Installed {
-		t.Fatalf("transport = %+v, want an installed family telegram", got[0])
+	if got[0].Transport != "telegram" || !got[0].Installed {
+		t.Fatalf("transport = %+v, want an installed telegram adapter", got[0])
+	}
+	// Installed and not yet assigned: a bot belongs to one Agent, and
+	// nobody has given this one an address (ADR-W033 B7). The listing
+	// says so rather than reporting the surface its name happens to
+	// end in, which said which CLASS of Agent might answer and never
+	// which one.
+	if got[0].Butler != "" {
+		t.Fatalf("butler = %q, want none before the bot is given an agent", got[0].Butler)
 	}
 	// Installed but not yet credentialed: the adapter is running and
 	// cannot reach Keystone, so a code issued for it is unredeemable.

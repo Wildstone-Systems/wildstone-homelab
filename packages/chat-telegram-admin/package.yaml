@@ -1,5 +1,5 @@
-# Chat (Telegram), admin surface: the operator's Butler, reachable from
-# the phone in your pocket (ADR-W026 A2/A3, work package G4).
+# Chat (Telegram) for an OWNER AGENT: reachable from the phone in your
+# pocket (ADR-W026 A2/A3, ADR-W033 B7, work package G4).
 #
 # WHAT THIS RUNS. The same adapter binary as chat-telegram-family
 # (cli/cmd/chat-adapter), against a DIFFERENT bot, with a DIFFERENT
@@ -21,17 +21,28 @@
 # NO INGRESS. The adapter dials out to Telegram and holds the connection
 # open. No Route, no port, nothing new at the edge.
 #
-# GROUPS. This surface answers in a direct message only. A group message
-# gets one line saying so, and opens no session.
+# GROUPS. An Owner Agent answers in a direct message only. A group
+# message gets one line saying so, and opens no session.
+#
+# ONE BOT, ONE AGENT (ADR-W033 B7). Credentialing this bot assigns it to
+# one Agent — `wild chat adapter` takes the Agent's name and refuses a
+# bot that already answers for somebody else — and its token is that
+# Agent's alone. Two Agents sharing a bot would make "which Agent
+# answered" a question with no answer.
+#
+# WHO IT ADMITS. An Owner Agent's Connection admits OWNERS, and only
+# them: `wild chat code` names a Person this deployment has declared,
+# never a machine principal. A credential is not a person, and a chat
+# account reaching an Owner Agent as one had nobody behind it.
 #
 # INSTALLING (in this order):
 #
 #  1. Make a SECOND bot with @BotFather — not the household's. Two
 #     audiences, two bots.
 #
-#  2. Mint the credential (this is what makes it the admin surface):
+#  2. Credential the bot and assign it to its Agent, in one act:
 #
-#        wild chat adapter chat-telegram-admin -node <node> -surface admin
+#        wild chat adapter chat-telegram-admin -node <node> -butler <agent>
 #
 #  3. Set the bot token, then enable the capability:
 #
@@ -39,7 +50,7 @@
 #
 #  4. Bind your own account:
 #
-#        wild chat code -surface admin -identity <your-principal> -transport telegram
+#        wild chat code -butler <agent> -identity <you> -transport telegram
 #
 # THE IMAGE. As for the family package: this repository ships the source,
 # the Dockerfile and the released binary and publishes no container
@@ -95,5 +106,5 @@ templates:
       restart: unless-stopped
 # No agentTools: a household rule notifies the HOUSEHOLD, not the
 # operator's private bot. The operator's alerting is the morning report
-# and ntfy, and pointing a rule at this surface would put household
+# and ntfy, and pointing a rule at an Owner Agent would put household
 # events into the one conversation that can also propose changes.

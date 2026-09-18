@@ -37,7 +37,12 @@ type chatTransport struct {
 	// Transport is what a binding records and an adapter reports, e.g.
 	// "telegram". It is the value a claim code carries.
 	Transport string `json:"transport"`
-	Surface   string `json:"surface"`
+	// Butler is the Agent this bot answers for, empty until it has been
+	// credentialed and given an address. A bot serves one Agent
+	// (ADR-W033 B7), so this is the question an operator is actually
+	// asking when they look at the list — the surface it used to report
+	// named a class of Agents and could not tell one from another.
+	Butler string `json:"butler,omitempty"`
 	// Capability is the package that provides it.
 	Capability string `json:"capability"`
 	// Installed is whether this deployment has that capability.
@@ -122,20 +127,23 @@ func (s *Server) chatTransports() ([]chatTransport, error) {
 
 	out := []chatTransport{}
 	for name := range names {
-		surface, ok := capabilitySurface(name)
+		transport, ok := capabilityTransport(name)
 		if !ok {
 			// Not a chat adapter package by the naming convention. It
 			// is skipped rather than guessed at: minting a credential
 			// for it would be refused for the same reason.
 			continue
 		}
-		transport := strings.TrimSuffix(strings.TrimPrefix(name, chatCapabilityPrefix), "-"+string(surface))
-		if transport == "" {
-			continue
+		// Which Agent answers here, if any. Read from the address
+		// rather than parsed out of the name, because the address is
+		// where the assignment actually lives.
+		butler := ""
+		if at, err := s.DB.ChatConnectionAt(transport, name); err == nil {
+			butler = at.Butler
 		}
 		t := chatTransport{
 			Transport:    transport,
-			Surface:      string(surface),
+			Butler:       butler,
 			Capability:   name,
 			Installed:    enabled[name],
 			Credentialed: s.adapterCredentialed(name),
@@ -152,7 +160,7 @@ func (s *Server) chatTransports() ([]chatTransport, error) {
 		if out[i].Transport != out[j].Transport {
 			return out[i].Transport < out[j].Transport
 		}
-		return out[i].Surface < out[j].Surface
+		return out[i].Capability < out[j].Capability
 	})
 	return out, nil
 }
@@ -195,9 +203,9 @@ func (s *Server) registerChatAdapter(r *http.Request, id principal.Identity) (an
 		return nil, http.StatusForbidden, fmt.Errorf(
 			"only a chat adapter's own credential may register a bot")
 	}
-	surface, ok := capabilitySurface(capability)
+	want, ok := capabilityTransport(capability)
 	if !ok {
-		return nil, http.StatusBadRequest, fmt.Errorf("capability %q does not name a surface", capability)
+		return nil, http.StatusBadRequest, fmt.Errorf("capability %q does not name a transport", capability)
 	}
 	transport := strings.TrimSpace(req.Transport)
 	handle := strings.TrimSpace(strings.TrimPrefix(req.Handle, "@"))
@@ -206,9 +214,9 @@ func (s *Server) registerChatAdapter(r *http.Request, id principal.Identity) (an
 	}
 	// The capability name already says which transport this is; a
 	// registration that disagrees with it is refused rather than
-	// believed, for the same reason a surface is never taken from a
+	// believed, for the same reason an Agent is never taken from a
 	// request body.
-	if want := strings.TrimSuffix(strings.TrimPrefix(capability, chatCapabilityPrefix), "-"+string(surface)); want != transport {
+	if want != transport {
 		return nil, http.StatusBadRequest, fmt.Errorf(
 			"capability %q is the %s transport, but %q was reported", capability, want, transport)
 	}
@@ -218,6 +226,14 @@ func (s *Server) registerChatAdapter(r *http.Request, id principal.Identity) (an
 	}
 	if !pattern.MatchString(handle) {
 		return nil, http.StatusBadRequest, fmt.Errorf("that is not a %s handle", transport)
+	}
+	// The ceiling comes from the Agent this bot answers for. A bot with
+	// no Agent yet has none, and the commands it publishes are the ones
+	// every Connection offers — it cannot advertise an Owner Agent's
+	// menu before anybody has given it one.
+	surface := runtimedb.ButlerSurfaceFamily
+	if at, aerr := s.DB.ChatConnectionAt(transport, capability); aerr == nil {
+		surface = at.Surface
 	}
 	rec := runtimedb.ChatAdapter{
 		Capability:  capability,
@@ -243,6 +259,7 @@ func (s *Server) registerChatAdapter(r *http.Request, id principal.Identity) (an
 		"handle":     handle,
 		"surface":    string(surface),
 		"commands":   commandsFor(surface),
+		"butler":     butlerAt(s, transport, capability),
 	}, http.StatusOK, nil
 }
 
@@ -329,4 +346,35 @@ func (s *Server) capabilityNodes() (map[string]string, error) {
 		}
 	}
 	return nodes, nil
+}
+
+// capabilityTransport reads the transport out of a chat capability's
+// name.
+//
+// The catalog convention is chat-<transport>-<something>, and the
+// transport is the part that still matters: it says which API the bot
+// speaks. The trailing segment used to be the surface and was
+// load-bearing — it decided which Butler the bot was wired to — but an
+// Agent is named explicitly now, so the suffix is only a name.
+func capabilityTransport(capability string) (string, bool) {
+	rest, ok := strings.CutPrefix(capability, chatCapabilityPrefix)
+	if !ok {
+		return "", false
+	}
+	transport, _, ok := strings.Cut(rest, "-")
+	if !ok || transport == "" {
+		return "", false
+	}
+	return transport, true
+}
+
+// butlerAt names the Agent a bot answers for, or "" while it has none.
+// It is reported back to the adapter so an operator reading its logs
+// can see which Agent it came up as.
+func butlerAt(s *Server, transport, capability string) string {
+	at, err := s.DB.ChatConnectionAt(transport, capability)
+	if err != nil {
+		return ""
+	}
+	return at.Butler
 }
