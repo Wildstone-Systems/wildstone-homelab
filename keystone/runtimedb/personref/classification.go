@@ -34,6 +34,34 @@
 // as recorded text, and this package says so out loud rather than
 // leaving the next reader to rediscover it.
 //
+// # Where a person column can still hold a principal
+//
+// Five columns are classified human even though the legacy Butler ask
+// path can write a principal name into them: butler_memory.owner and
+// .author, butler_tasks.author and .owner, and butler_index.owner.
+// handlers_butler.go builds the turn with Member: id.Name, and
+// butlerlive writes that straight through (#240).
+//
+// They are NOT demoted to actor, and the repository owner has decided
+// the gate blocks on them rather than migrating them with a null owner.
+// The reasoning, recorded here so it is not re-argued every review:
+//
+// An operator filing feedback or requesting a capability is a coherent
+// recording, so those columns are actor. A memory record OWNED by
+// root-admin is not. The schema defines owner as "who may correct it,
+// forget it, and export it"; a principal can do none of those,
+// offboarding cannot find the row, and nothing will ever resolve it.
+// The row has no owner in the only sense the column means.
+//
+// So the survey reporting those values as blocking is the correct
+// signal, not a false alarm, and a deployment that used the legacy path
+// resolves them before migrating. The alternative — migrating with a
+// null owner — would weaken slice 2b from "every human reference
+// resolves" to "every resolvable one", and leave the unresolvable rows
+// in place indefinitely.
+//
+// #240 fixes the write path so the set stops growing.
+//
 // # Why names are not enough
 //
 // Two columns caught by the name heuristic are not people at all:
