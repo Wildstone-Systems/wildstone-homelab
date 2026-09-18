@@ -117,6 +117,24 @@ func (db *DB) HouseholdEventsAfter(after int64, limit int) ([]HouseholdEvent, er
 	return scanHouseholdEvents(rows)
 }
 
+// HouseholdEventFilter narrows an event listing to what a caller is
+// actually going to keep. Every field is optional.
+//
+// IT EXISTS BECAUSE A LIMIT AND A FILTER DO NOT COMMUTE. A caller that
+// reads the newest N rows and then keeps the ones it wanted has not
+// asked for its own rows at all: it has asked for everybody's and
+// discarded most of them, and in a household where somebody else is
+// busy it discards all of them. The catalog page did exactly that and
+// showed a member no requests while their requests were still waiting
+// on the owner.
+type HouseholdEventFilter struct {
+	// Type is the event type, e.g. catalog.requested.
+	Type string
+	// Subject is the person the event is about, matched the way the
+	// rest of the household matches names: without regard to case.
+	Subject string
+}
+
 // HouseholdEventsBefore returns up to limit household events with a
 // sequence number BELOW before, newest first — the window a paged
 // history reads backwards through. A before of zero starts at the
@@ -127,7 +145,7 @@ func (db *DB) HouseholdEventsAfter(after int64, limit int) ([]HouseholdEvent, er
 // two events can share a second, so a timestamp cursor either skips one
 // or repeats it forever, and a reader walking backwards needs the rows
 // adjacent to where it stopped rather than the oldest in the range.
-func (db *DB) HouseholdEventsBefore(before int64, limit int) ([]HouseholdEvent, error) {
+func (db *DB) HouseholdEventsBefore(before int64, limit int, f HouseholdEventFilter) ([]HouseholdEvent, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -137,9 +155,23 @@ func (db *DB) HouseholdEventsBefore(before int64, limit int) ([]HouseholdEvent, 
 	if before <= 0 {
 		before = math.MaxInt64
 	}
+	clauses, args := []string{"seq < ?"}, []any{before}
+	if f.Type != "" {
+		clauses = append(clauses, "type = ?")
+		args = append(args, f.Type)
+	}
+	if f.Subject != "" {
+		// NOCASE because every reader of this column compares names
+		// case-insensitively — the household has one Sandy however she
+		// signed in (ADR-W032 A4) — and a predicate that did not would
+		// hide a member's own rows from them.
+		clauses = append(clauses, "subject = ? COLLATE NOCASE")
+		args = append(args, f.Subject)
+	}
+	args = append(args, limit)
 	rows, err := db.sql.Query(
 		`SELECT seq, event_id, occurred_at, recorded_at, subject, source, type, entity, payload, correlation_id, schema_version
-		 FROM household_events WHERE seq < ? ORDER BY seq DESC LIMIT ?`, before, limit)
+		 FROM household_events WHERE `+strings.Join(clauses, " AND ")+` ORDER BY seq DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing household events: %w", err)
 	}

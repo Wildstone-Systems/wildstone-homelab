@@ -358,7 +358,14 @@ const maxNeedsYou = 3
 // nothing.
 func (s *Server) homeNeedsYou(member string, now time.Time) needsYouCard {
 	card := needsYouCard{Items: []needsYouItem{}}
-	notices, err := s.DB.ListNotices(member, 50)
+	// Asked of the database as "questions still waiting on this
+	// person", not as "the newest fifty notices, some of which might
+	// be". Fifty ordinary notices used to be enough to hide a decision
+	// that was still waiting, and this card exists to prevent exactly
+	// that.
+	notices, err := s.DB.ListNotices(maxNeedsYou, runtimedb.NoticeFilter{
+		Recipient: member, Deliverable: true, Pending: true, At: now,
+	})
 	if err != nil {
 		s.Log.Error("home needs-you notices", "err", err)
 		// §7's exact copy. "Can't tell whether anything needs you" is
@@ -368,12 +375,6 @@ func (s *Server) homeNeedsYou(member string, now time.Time) needsYouCard {
 	}
 	var items []needsYouItem
 	for _, n := range notices {
-		if !n.Asks || !n.AnsweredAt.IsZero() || !n.UndeliveredAt.IsZero() {
-			continue
-		}
-		if !n.ExpiresAt.IsZero() && now.After(n.ExpiresAt) {
-			continue
-		}
 		items = append(items, needsYouItem{
 			Seq:       n.Seq,
 			Summary:   s.noticeTitle(n.Kind),
@@ -557,7 +558,12 @@ const maxNotifications = 6
 // query rather than in a filter somebody can forget.
 func (s *Server) homeNotifications(member string) notificationsCard {
 	card := notificationsCard{Items: []notification{}}
-	notices, err := s.DB.ListNotices(member, 40)
+	// Deliverable in the query, so the window holds forty notices this
+	// member could actually have seen rather than forty rows some of
+	// which never reached them.
+	notices, err := s.DB.ListNotices(40, runtimedb.NoticeFilter{
+		Recipient: member, Deliverable: true,
+	})
 	if err != nil {
 		s.Log.Error("home notifications", "err", err)
 		card.Problem = "Can't reach notifications"
@@ -566,31 +572,36 @@ func (s *Server) homeNotifications(member string) notificationsCard {
 	card.Available = true
 	var items []notification
 	for _, n := range notices {
-		if !n.UndeliveredAt.IsZero() {
-			continue
-		}
 		unread := n.AcknowledgedAt.IsZero()
 		if unread {
 			card.Unread++
 		}
-		if len(items) < maxNotifications {
-			items = append(items, notification{
-				Seq:    n.Seq,
-				Title:  s.noticeTitle(n.Kind),
-				Source: n.Kind,
-				At:     n.CreatedAt,
-				Unread: unread,
-			})
-		}
+		items = append(items, notification{
+			Seq:    n.Seq,
+			Title:  s.noticeTitle(n.Kind),
+			Source: n.Kind,
+			At:     n.CreatedAt,
+			Unread: unread,
+		})
 	}
 	// Unread first, then newest — §7's order, and the reason the unread
 	// count in the header is a summary rather than a scroll.
+	//
+	// SORTED BEFORE IT IS CUT, which is the whole point of sorting it.
+	// The cut used to happen in the loop above, on the newest rows,
+	// and the sort then reordered whatever had survived: six read
+	// notices and a seventh unread one produced a card advertising one
+	// unread item and not one unread row to show for it, however far
+	// the member expanded it.
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Unread != items[j].Unread {
 			return items[i].Unread
 		}
 		return items[i].Seq > items[j].Seq
 	})
+	if len(items) > maxNotifications {
+		items = items[:maxNotifications]
+	}
 	if items != nil {
 		card.Items = items
 	}
@@ -892,16 +903,15 @@ func (s *Server) homeClearNotices(_ http.ResponseWriter, _ *http.Request, member
 	if s.DB == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("this page is not ready yet")
 	}
-	notices, err := s.DB.ListNotices(member, 200)
+	notices, err := s.DB.ListNotices(200, runtimedb.NoticeFilter{
+		Recipient: member, Deliverable: true, Unacknowledged: true,
+	})
 	if err != nil {
 		s.Log.Error("home clear notices", "err", err)
 		return nil, http.StatusInternalServerError, fmt.Errorf("that didn't go through")
 	}
 	cleared := 0
 	for _, n := range notices {
-		if !n.AcknowledgedAt.IsZero() || !n.UndeliveredAt.IsZero() {
-			continue
-		}
 		// A question that has not been answered is NOT cleared by this.
 		// Acknowledging it would take the decision off the member's page
 		// while leaving whatever is waiting on it still waiting, which

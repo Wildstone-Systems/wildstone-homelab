@@ -161,7 +161,7 @@ func TestRelevanceThreshold(t *testing.T) {
 		t.Fatalf("the drop does not say why: %q", got.Reason)
 	}
 	// Nothing was recorded, so it cannot be delivered later either.
-	notices, _ := db.ListNotices("sam", 10)
+	notices, _ := db.ListNotices(10, NoticeFilter{Recipient: "sam"})
 	if len(notices) != 0 {
 		t.Fatalf("a dropped notice was still recorded: %+v", notices)
 	}
@@ -403,7 +403,7 @@ func TestExpiredNoticeDoesNotReopenACompletedTask(t *testing.T) {
 	if notice.UndeliveredAt.IsZero() || notice.CorrelationID != taskID {
 		t.Fatalf("notice = %+v", notice)
 	}
-	listed, _ := db.ListNotices("sam", 10)
+	listed, _ := db.ListNotices(10, NoticeFilter{Recipient: "sam"})
 	if len(listed) != 1 || listed[0].UndeliveredAt.IsZero() {
 		t.Fatalf("the missed notice is not visible: %+v", listed)
 	}

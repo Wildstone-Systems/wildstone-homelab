@@ -253,6 +253,10 @@ func (s *Server) catalogRequest(_ http.ResponseWriter, r *http.Request, member s
 // would be a second answer to "is this running", and the second answer
 // is the one that goes stale — a member would be told their request is
 // still waiting a week after the owner installed it.
+// maxCatalogRequests bounds the list. A household's request history
+// grows without limit and a page does not.
+const maxCatalogRequests = 100
+
 func (s *Server) catalogRequests(_ http.ResponseWriter, _ *http.Request, member string, desired []resource.Resource) (any, int, error) {
 	if s.DB == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("this deployment has no catalog")
@@ -263,7 +267,14 @@ func (s *Server) catalogRequests(_ http.ResponseWriter, _ *http.Request, member 
 			installed[r.Metadata.Package] = true
 		}
 	}
-	events, err := s.DB.HouseholdEventsBefore(0, 400)
+	// Asked for as this member's catalog requests rather than as the
+	// newest four hundred household events. A busy week of uploads and
+	// routines used to fill that window, and a member whose requests
+	// were older than it saw an empty page while the owner still had
+	// their request waiting.
+	events, err := s.DB.HouseholdEventsBefore(0, maxCatalogRequests, runtimedb.HouseholdEventFilter{
+		Type: catalogEventType, Subject: member,
+	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, fmt.Errorf("can't read your requests")
 	}
@@ -275,9 +286,6 @@ func (s *Server) catalogRequests(_ http.ResponseWriter, _ *http.Request, member 
 	}
 	out := []request{}
 	for _, e := range events {
-		if e.Type != catalogEventType || !strings.EqualFold(e.Subject, member) {
-			continue
-		}
 		state := "waiting on the owner"
 		if installed[e.Entity] {
 			state = "installed"

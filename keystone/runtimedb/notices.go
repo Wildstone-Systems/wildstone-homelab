@@ -508,16 +508,64 @@ func scanNotice(row rowScanner) (Notice, error) {
 	return n, nil
 }
 
+// NoticeFilter narrows a notice listing to what a caller will keep.
+// Every field is optional, and an empty filter lists everything.
+//
+// THE PREDICATES BELONG IN THE QUERY, and the reason is the one
+// HouseholdEventFilter gives: a limit applied before a filter is not a
+// filter. The "Needs you" card read the newest fifty notices and then
+// looked for questions among them, so fifty ordinary notices were
+// enough to hide a decision that was still waiting — the card said
+// nothing needed the member while something did, which is the one
+// failure that card exists to prevent.
+type NoticeFilter struct {
+	// Recipient is the member whose notices these are.
+	Recipient string
+	// Deliverable drops notices that never reached the member.
+	Deliverable bool
+	// Unacknowledged drops notices already cleared.
+	Unacknowledged bool
+	// Pending narrows to questions still waiting on an answer: it asks,
+	// it is unanswered, and it has not expired as of At.
+	Pending bool
+	// At is the clock Pending's expiry is measured against. Zero means
+	// now.
+	At time.Time
+}
+
 // ListNotices returns recent notices for one member ("" for all),
 // newest first.
-func (db *DB) ListNotices(member string, limit int) ([]Notice, error) {
+func (db *DB) ListNotices(limit int, f NoticeFilter) ([]Notice, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	where, args := "", []any{}
-	if member != "" {
-		where = " WHERE recipient = ?"
-		args = append(args, member)
+	clauses, args := []string{}, []any{}
+	if f.Recipient != "" {
+		clauses = append(clauses, "recipient = ?")
+		args = append(args, f.Recipient)
+	}
+	if f.Deliverable {
+		clauses = append(clauses, "undelivered_at = ''")
+	}
+	if f.Unacknowledged {
+		clauses = append(clauses, "acknowledged_at = ''")
+	}
+	if f.Pending {
+		// A question still waiting on this person: it asks, nobody has
+		// answered it, and it has not run out. expires_at stores
+		// RFC3339Nano UTC, so the comparison is lexicographic — the
+		// same trick HouseholdEventsSince relies on.
+		clauses = append(clauses, "asks = 1", "answered_at = ''",
+			"(expires_at = '' OR expires_at > ?)")
+		at := f.At
+		if at.IsZero() {
+			at = time.Now()
+		}
+		args = append(args, at.UTC().Format(time.RFC3339Nano))
+	}
+	where := ""
+	if len(clauses) > 0 {
+		where = " WHERE " + strings.Join(clauses, " AND ")
 	}
 	args = append(args, limit)
 	rows, err := db.sql.Query(noticeColumns+where+` ORDER BY seq DESC LIMIT ?`, args...)

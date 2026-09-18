@@ -24,6 +24,7 @@ import (
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
 // activityPage is how many rows one request answers. The page asks for
@@ -96,7 +97,7 @@ func (s *Server) activityHistory(_ http.ResponseWriter, r *http.Request, member 
 	dropped := 0
 	cursor := before
 	for len(rows) < activityPage {
-		events, err := s.DB.HouseholdEventsBefore(cursor, scan)
+		events, err := s.DB.HouseholdEventsBefore(cursor, scan, runtimedb.HouseholdEventFilter{})
 		if err != nil {
 			s.Log.Error("activity history", "err", err)
 			return nil, http.StatusInternalServerError, fmt.Errorf("can't load the household's record")
