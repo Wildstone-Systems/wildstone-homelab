@@ -56,6 +56,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "person-refs" {
+		if err := personRefs(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "keystone person-refs:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	showVersion := flag.Bool("version", false, "print version and exit")
 	listen := flag.String("listen", ":9440", "agent gateway listen address")

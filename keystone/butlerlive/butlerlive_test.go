@@ -703,3 +703,74 @@ func TestAConversationCanHaveASecondMessage(t *testing.T) {
 		t.Fatalf("the follow-up resumed the finished task %s", first.TaskID)
 	}
 }
+
+// Repointing a route at a different upstream model reaches that model
+// (#235).
+//
+// The client is cached per route, and the cache key has to carry what
+// the route RESOLVED to rather than only which route it was. Model is
+// the configured row's name; ProviderModel is what the client is built
+// from. UpsertModel edits in place, so a repointed route keeps its seq,
+// its name, its provider and its endpoint — every other component of
+// the key. Without ProviderModel in it the stale client kept answering
+// while the database, the response and the audit log reported the new
+// model, which is the quietest possible way to get this wrong.
+func TestRepointingARouteAtAnotherModelReachesIt(t *testing.T) {
+	f := newFixture(t)
+
+	// One client per upstream model, so "which client answered" is
+	// observable rather than inferred.
+	var mu sync.Mutex
+	built := map[string]*witness{}
+	f.butlers.Providers = func(b runtimedb.Butler) (provider.Provider, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if w, ok := built[b.ProviderModel]; ok {
+			return w, nil
+		}
+		w := &witness{name: b.ProviderModel}
+		built[b.ProviderModel] = w
+		return w, nil
+	}
+	seen := func(model string) *witness {
+		mu.Lock()
+		defer mu.Unlock()
+		return built[model]
+	}
+
+	if _, err := f.butlers.Serve(context.Background(), f.turn("alfred", "before the change")); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if w := seen("llama"); w == nil || !w.sawText("before the change") {
+		t.Fatalf("the first turn did not reach the configured model")
+	}
+
+	// Repoint kitchen-box at a different upstream model, keeping its
+	// name, provider and endpoint — which is what the Models screen
+	// does, and what leaves every other part of the key untouched.
+	if err := f.db.UpsertModel(runtimedb.Model{
+		Name: "kitchen-box", Kind: runtimedb.ModelLocal, Provider: "ollama",
+		ProviderModel: "llama3", Endpoint: "http://kitchen:11434",
+		Readiness: runtimedb.ModelReady, Enabled: true,
+	}, "root-admin"); err != nil {
+		t.Fatalf("UpsertModel: %v", err)
+	}
+
+	ans, err := f.butlers.Serve(context.Background(), f.turn("alfred", "after the change"))
+	if err != nil {
+		t.Fatalf("Serve after repointing: %v", err)
+	}
+
+	if w := seen("llama3"); w == nil || !w.sawText("after the change") {
+		t.Fatalf("the turn after repointing never reached llama3; the cached client for the old model answered instead")
+	}
+	// And the old one is not still taking the household's material.
+	if w := seen("llama"); w != nil && w.sawText("after the change") {
+		t.Fatalf("the old model received a turn sent after the route was repointed away from it")
+	}
+	// What the answer REPORTS has to match what actually answered,
+	// which is the half of the defect that made it silent.
+	if ans.Model != "llama3" {
+		t.Fatalf("the answer reports %q, and llama3 is what answered", ans.Model)
+	}
+}
