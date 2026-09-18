@@ -100,12 +100,29 @@ var migrated = dbtemplate.New(func(path string) error {
 	return db.Close()
 })
 
+// record puts the cast these fixtures use on record as Persons.
+//
+// Since migration 0040 a task's author and owner, and a memory record's
+// author, are foreign keys to a Person, so a fixture cannot file work
+// for "mika" without saying who mika is. Machine principals stay out
+// of it: "butler" and "root-admin" still appear here as actors, and
+// actor columns still hold recorded text.
+func record(t *testing.T, db *runtimedb.DB, handles ...string) {
+	t.Helper()
+	for _, h := range handles {
+		if err := db.RecordButlerMember(h, runtimedb.RoleMember, "", ""); err != nil {
+			t.Fatalf("recording %q: %v", h, err)
+		}
+	}
+}
+
 func testLedger(t *testing.T, path string) (*runtimedb.DB, *Ledger) {
 	t.Helper()
 	db, err := runtimedb.Open(migrated.Into(t, path))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	record(t, db, "mika", "sam")
 	lease, err := db.AcquireCoordinator("keystone-a")
 	if err != nil {
 		t.Fatalf("AcquireCoordinator: %v", err)

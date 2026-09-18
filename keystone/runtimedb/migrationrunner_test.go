@@ -342,9 +342,17 @@ func TestRealMigrationSetDeclaresTheDirectiveOnlyWhereIntended(t *testing.T) {
 			declared = append(declared, entry.Name())
 		}
 	}
-	want := []string{"0039_person_core.sql"}
-	if len(declared) != len(want) || declared[0] != want[0] {
-		t.Errorf("migrations declaring foreign_keys=off = %v, want %v", declared, want)
+	// Both rebuild a table other tables reference, and nothing else may:
+	// the directive turns enforcement off for a whole migration, so a
+	// file that declares it without needing it is a hole nobody notices.
+	want := []string{"0039_person_core.sql", "0040_person_id_references.sql"}
+	if len(declared) != len(want) {
+		t.Fatalf("migrations declaring foreign_keys=off = %v, want %v", declared, want)
+	}
+	for i, name := range want {
+		if declared[i] != name {
+			t.Errorf("migrations declaring foreign_keys=off = %v, want %v", declared, want)
+		}
 	}
 
 	// And after the real set runs, enforcement is on.
@@ -353,8 +361,8 @@ func TestRealMigrationSetDeclaresTheDirectiveOnlyWhereIntended(t *testing.T) {
 		t.Error("foreign keys are off after the real migration set")
 	}
 	if _, err := db.sql.Exec(
-		`INSERT INTO butler_identity_links (link_type, external_id, member, generation, created_at, created_by)
-		 VALUES ('api-principal', 'x', 'nobody', 1, 't', 'root-admin')`); err == nil {
+		`INSERT INTO butler_identity_links (link_type, external_id, person_id, generation, created_at, created_by)
+		 VALUES ('api-principal', 'x', 'psn_nobody', 1, 't', 'root-admin')`); err == nil {
 		t.Error("butler_identity_links no longer enforces its foreign key")
 	}
 }

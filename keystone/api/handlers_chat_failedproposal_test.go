@@ -73,6 +73,7 @@ func wireFailingButler(t *testing.T, h *harness) *failingButlers {
 
 func TestAFailedChatTurnAnnouncesWhatItProposed(t *testing.T) {
 	h := newHarness(t)
+	h.member("sam")
 	wireFailingButler(t, h)
 
 	resp, _ := h.send(runtimedb.RoleConcierge, map[string]any{
@@ -106,6 +107,7 @@ func TestAFailedChatTurnAnnouncesWhatItProposed(t *testing.T) {
 // adapter's redelivery still gets to retry the turn.
 func TestAnnouncingAProposalDoesNotConsumeTheRetry(t *testing.T) {
 	h := newHarness(t)
+	h.member("sam")
 	f := wireFailingButler(t, h)
 
 	body := map[string]any{
@@ -124,6 +126,7 @@ func TestAnnouncingAProposalDoesNotConsumeTheRetry(t *testing.T) {
 // reaches the approval queue unmentioned.
 func TestEveryNewProposalIsAnnounced(t *testing.T) {
 	h := newHarness(t)
+	h.member("sam")
 	wireFailingButler(t, h)
 
 	for _, id := range []string{"m-1", "m-2", "m-3"} {
@@ -227,6 +230,7 @@ func TestTheNoticeIsKeyedOnTheMessageAndTheOutcome(t *testing.T) {
 // silently never happens.
 func TestAFailedChatTurnAnnouncesARefusedProposal(t *testing.T) {
 	h := newHarness(t)
+	h.member("sam")
 	f := wireFailingButler(t, h)
 	// Valid enough to be attempted, invalid enough to be refused before
 	// it reaches the queue.
@@ -274,6 +278,7 @@ func TestAFailedChatTurnAnnouncesARefusedProposal(t *testing.T) {
 // refused half still needs a conversation that will actually retry it.
 func TestANoticeWithBothOutcomesNamesBothRecoveries(t *testing.T) {
 	h := newHarness(t)
+	h.member("sam")
 	f := wireFailingButler(t, h)
 	good := f.answer.Calls[0]
 	bad := good
@@ -306,6 +311,7 @@ func TestANoticeWithBothOutcomesNamesBothRecoveries(t *testing.T) {
 // bot invites a retry and then goes quiet on it.
 func TestAskingAgainAfterARefusalIsToldAgain(t *testing.T) {
 	h := newHarness(t)
+	h.member("sam")
 	f := wireFailingButler(t, h)
 	f.answer.Calls[0].ResourceYAML = "apiVersion: wildstone.dev/v1\nkind: Container\nmetadata: {}\n"
 
@@ -332,6 +338,7 @@ func TestAskingAgainAfterARefusalIsToldAgain(t *testing.T) {
 // adapter posts it.
 func TestARedeliveredQuestionIsToldOnce(t *testing.T) {
 	h := newHarness(t)
+	h.member("sam")
 	f := wireFailingButler(t, h)
 	f.answer.Calls[0].ResourceYAML = "apiVersion: wildstone.dev/v1\nkind: Container\nmetadata: {}\n"
 
@@ -354,6 +361,7 @@ func TestARedeliveredQuestionIsToldOnce(t *testing.T) {
 // learns to ignore the bot.
 func TestAFailedChatTurnWithNothingProposedStaysQuiet(t *testing.T) {
 	h := newHarness(t)
+	h.member("sam")
 	f := wireFailingButler(t, h)
 	f.answer.Calls = nil
 

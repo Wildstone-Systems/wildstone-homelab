@@ -127,6 +127,10 @@ func TestRevocationLandsAtTheNextCheck(t *testing.T) {
 // future migration can produce one before that surface has its evidence.
 func TestChildRecordsExistButCannotBeAdmitted(t *testing.T) {
 	db := open(t)
+	// The guardian is a Person now, not a name, so there has to be one.
+	if err := db.RecordButlerMember("mika", RoleOwner, "", ""); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.RecordButlerMember("kid", RoleMember, ProfileChild, ""); err == nil {
 		t.Fatal("a child record was written with no guardian")
 	}
@@ -137,8 +141,9 @@ func TestChildRecordsExistButCannotBeAdmitted(t *testing.T) {
 		t.Fatal("a child was admitted to the Butler")
 	}
 	if _, err := db.sql.Exec(
-		`INSERT INTO butler_members (person_id, member, role, profile, admitted, generation, created_at, guardian)
-		 VALUES ('psn_kid2', 'kid2', 'member', 'child', 1, 1, 't', 'mika')`); err == nil {
+		`INSERT INTO butler_members (person_id, member, role, profile, admitted, generation, created_at, guardian_person_id)
+		 SELECT 'psn_kid2', 'kid2', 'member', 'child', 1, 1, 't', person_id
+		 FROM butler_members WHERE member = 'mika'`); err == nil {
 		t.Fatal("an admitted child was inserted directly")
 	}
 	m, err := db.GetButlerMember("kid")

@@ -195,14 +195,26 @@ func (db *DB) RecordMemory(m MemoryRecord) (int64, error) {
 }
 
 func insertMemoryTx(tx *sql.Tx, m MemoryRecord) (int64, error) {
+	// Owner and author are stored as identities. The owner may be the
+	// household, which is NULL; the author is always a person, because
+	// a record nobody stated is not a record. Both resolve inside this
+	// transaction so a rename landing mid-write cannot split them.
+	owner, err := ownerPersonID(tx, m.Owner)
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: recording memory: the owner %w", err)
+	}
+	author, err := resolvePersonID(tx, m.Author)
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: recording memory: the author %w", err)
+	}
 	res, err := tx.Exec(
-		`INSERT INTO butler_memory (kind, subject, content, audience, permission_label, owner,
-		     source_kind, source_id, observed_at, confidence, safety_relevant, created_at, author,
+		`INSERT INTO butler_memory (kind, subject, content, audience, permission_label, owner_person_id,
+		     source_kind, source_id, observed_at, confidence, safety_relevant, created_at, author_person_id,
 		     envelope_version, butler)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.Kind, m.Subject, m.Content, string(m.Audience), m.PermissionLabel, m.Owner,
+		m.Kind, m.Subject, m.Content, string(m.Audience), m.PermissionLabel, owner,
 		m.SourceKind, m.SourceID, timeText(m.ObservedAt), m.Confidence,
-		boolInt(m.SafetyRelevant), now(), m.Author, TaskEnvelopeVersion, m.Butler)
+		boolInt(m.SafetyRelevant), now(), author, TaskEnvelopeVersion, m.Butler)
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: inserting memory: %w", err)
 	}
@@ -521,13 +533,21 @@ func (db *DB) InvalidateMemoryFromSource(sourceKind, sourceID, actor string) (in
 
 // GetMemory returns one record, forgotten or not.
 func (db *DB) GetMemory(seq int64) (MemoryRecord, error) {
-	return scanMemory(db.sql.QueryRow(memoryColumns+` WHERE seq = ?`, seq))
+	return scanMemory(db.sql.QueryRow(memoryColumns+` WHERE r.seq = ?`, seq))
 }
 
-const memoryColumns = `SELECT seq, kind, subject, content, audience, permission_label, owner,
-	 source_kind, source_id, observed_at, confidence, safety_relevant, created_at, author,
-	 COALESCE(superseded_by, 0), forgotten_at, forgotten_by, envelope_version, butler
-	 FROM butler_memory`
+// Owner and author come back as the handles they carry now, so a
+// caller above this package still sees names. The owner join is a LEFT
+// one and its absence is the household: NULL is how 0040 stores a
+// record the household owns rather than any one person.
+const memoryColumns = `SELECT r.seq, r.kind, r.subject, r.content, r.audience, r.permission_label,
+	 COALESCE(o.member, 'household'),
+	 r.source_kind, r.source_id, r.observed_at, r.confidence, r.safety_relevant, r.created_at,
+	 a.member,
+	 COALESCE(r.superseded_by, 0), r.forgotten_at, r.forgotten_by, r.envelope_version, r.butler
+	 FROM butler_memory r
+	 LEFT JOIN butler_members o ON o.person_id = r.owner_person_id
+	 JOIN butler_members a ON a.person_id = r.author_person_id`
 
 func scanMemory(row rowScanner) (MemoryRecord, error) {
 	var m MemoryRecord
@@ -593,26 +613,33 @@ func (db *DB) RetrieveMemory(q MemoryQuery) ([]MemoryRecord, error) {
 	if q.Limit <= 0 || q.Limit > 200 {
 		q.Limit = 50
 	}
-	where := ` WHERE forgotten_at = '' AND superseded_by IS NULL
-	           AND (audience = 'shared' OR owner = ?)`
-	args := []any{q.Reader}
+	// A reader who is nobody on record owns nothing and sees the shared
+	// material only, which is what the free-text owner match did before
+	// 0040 for a principal or an unknown name.
+	reader, err := personIDForRead(db.sql, q.Reader)
+	if err != nil {
+		return nil, err
+	}
+	where := ` WHERE r.forgotten_at = '' AND r.superseded_by IS NULL
+	           AND (r.audience = 'shared' OR r.owner_person_id = ?)`
+	args := []any{reader}
 	// The Butler's scope is ANDed onto the reader's, in SQL, before any
 	// content loads. Both have to hold: this person may see it AND this
 	// Butler holds it.
-	if clause, scopeArgs := scopeClause("butler", q.Butler); clause != "" {
+	if clause, scopeArgs := scopeClause("r.butler", q.Butler); clause != "" {
 		where += clause
 		args = append(args, scopeArgs...)
 	}
 	if q.Subject != "" {
-		where += " AND subject = ?"
+		where += " AND r.subject = ?"
 		args = append(args, q.Subject)
 	}
 	if q.Kind != "" {
-		where += " AND kind = ?"
+		where += " AND r.kind = ?"
 		args = append(args, q.Kind)
 	}
 	args = append(args, q.Limit)
-	rows, err := db.sql.Query(memoryColumns+where+` ORDER BY seq DESC LIMIT ?`, args...)
+	rows, err := db.sql.Query(memoryColumns+where+` ORDER BY r.seq DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: retrieving memory: %w", err)
 	}
@@ -648,10 +675,14 @@ func (db *DB) ExportMemoryFor(reader string) ([]MemoryRecord, error) {
 	// people's are not: a shared record that was forgotten or corrected
 	// is not something an export may hand back in full, or "forget
 	// that" would mean "until somebody exports".
+	readerID, err := personIDForRead(db.sql, reader)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := db.sql.Query(
-		memoryColumns+` WHERE owner = ?
-		     OR (audience = 'shared' AND forgotten_at = '' AND superseded_by IS NULL)
-		   ORDER BY seq`, reader)
+		memoryColumns+` WHERE r.owner_person_id = ?
+		     OR (r.audience = 'shared' AND r.forgotten_at = '' AND r.superseded_by IS NULL)
+		   ORDER BY r.seq`, readerID)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: exporting memory: %w", err)
 	}

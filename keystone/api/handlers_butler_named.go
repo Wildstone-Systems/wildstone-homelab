@@ -129,6 +129,9 @@ func (s *Server) butlersConfigured() bool {
 // second way of recording what happened — two audit paths would mean
 // two things to keep true.
 func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn, prior *turnContext) (any, int, error) {
+	if code, err := s.turnHasAPerson(turn.Member); err != nil {
+		return nil, code, err
+	}
 	ans, err := s.Butlers.Serve(ctx, turn)
 	if err != nil {
 		// Serve returns the durable task id ALONGSIDE its error, and
@@ -342,4 +345,34 @@ func (s *Server) preserveFailedTurn(turn butlerlive.Turn, prior *turnContext, an
 		SessionID: sessionID, Mode: string(mode),
 		PlanIDs: planIDs, ProposalErrors: proposalErrs,
 	}
+}
+
+// turnHasAPerson refuses a Butler turn that speaks for nobody.
+//
+// A turn can write memory, file work and raise a notice, and since
+// migration 0040 every one of those names a Person rather than whatever
+// string the caller authenticated as. A bare machine token — root-admin,
+// op, an adapter's own principal — has no person behind it, so the write
+// would fail on a foreign key several layers down, with an error that
+// says nothing about what to do.
+//
+// This is the write path half of #240: the schema now refuses to record
+// a principal where a person belongs, and the endpoint says so where the
+// caller can act on it. It deliberately checks the resolved member
+// rather than requiring ActingFor outright, so a deployment whose
+// administrator IS a Person on record keeps working.
+func (s *Server) turnHasAPerson(member string) (int, error) {
+	if member == "" {
+		return http.StatusBadRequest, fmt.Errorf("a butler turn is had by somebody; this one names nobody")
+	}
+	_, err := s.DB.GetButlerMember(member)
+	switch {
+	case errors.Is(err, runtimedb.ErrNotFound):
+		return http.StatusBadRequest, fmt.Errorf(
+			"%q is not a household member, and a butler turn is had by a person: "+
+				"call with a token that acts for one, or admit %q first (ADR-W030 A2.1)", member, member)
+	case err != nil:
+		return http.StatusInternalServerError, err
+	}
+	return 0, nil
 }

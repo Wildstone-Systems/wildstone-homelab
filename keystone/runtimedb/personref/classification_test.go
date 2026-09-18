@@ -148,7 +148,6 @@ var dismissed = map[string]string{
 	"payload":             "a serialized blob",
 	"payload_json":        "a serialized blob",
 	"permission_label":    "an enum or classification, not a party",
-	"person_id":           "an identifier for a non-person entity",
 	"plan_id":             "an identifier for a non-person entity",
 	"plan_ids":            "an identifier for a non-person entity",
 	"plan_json":           "a serialized blob",
@@ -339,14 +338,30 @@ func TestNoVerdictOutlivesItsColumn(t *testing.T) {
 // instead of re-deriving the classification, and what tells a later
 // reader whether a changed write path has invalidated it.
 func TestEveryVerdictCarriesItsEvidence(t *testing.T) {
-	for _, c := range personref.Columns {
+	for _, c := range append(append([]personref.Column{}, personref.Columns...), personref.LegacyColumns...) {
 		if strings.TrimSpace(c.Why) == "" {
 			t.Errorf("%s.%s is classified %s with no evidence", c.Table, c.Column, c.Kind)
 		}
 		switch c.Kind {
-		case personref.Human, personref.Actor, personref.Scoped, personref.NotAPerson:
+		case personref.Human, personref.Actor, personref.Scoped, personref.NotAPerson, personref.PersonID:
 		default:
 			t.Errorf("%s.%s has kind %q, which is not a recognised verdict", c.Table, c.Column, c.Kind)
+		}
+	}
+}
+
+// Every legacy verdict names a column migration 0040 actually removed.
+//
+// Without this the legacy table becomes a place stale entries accumulate
+// unnoticed: Survey skips whatever the schema does not have, so a column
+// listed here that still exists would be surveyed TWICE — once as free
+// text and once under its person_id verdict — and one that was never
+// removed would sit here forever claiming to describe the past.
+func TestEveryLegacyVerdictNamesAColumnThatIsGone(t *testing.T) {
+	live := liveColumns(t)
+	for _, c := range personref.LegacyColumns {
+		if _, ok := live[c.Table+"."+c.Column]; ok {
+			t.Errorf("%s.%s is listed as pre-0040 but is still in the schema", c.Table, c.Column)
 		}
 	}
 }

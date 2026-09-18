@@ -75,6 +75,7 @@ func seedTracedTask(t *testing.T, h *harness, owner string, audience runtimedb.B
 // The timeline explains a run end to end and carries no source content.
 func TestTaskTimelineExplainsARunWithoutContent(t *testing.T) {
 	h := newHarness(t)
+	h.member("root-admin")
 	id := seedTracedTask(t, h, "root-admin", runtimedb.ButlerAudiencePrivate)
 
 	var body struct {
@@ -134,6 +135,7 @@ func TestTaskTimelineExplainsARunWithoutContent(t *testing.T) {
 // answers exactly as a task that does not exist would.
 func TestPrivateTasksAreInvisibleToOthers(t *testing.T) {
 	h := newHarness(t)
+	h.member("sam")
 	id := seedTracedTask(t, h, "sam", runtimedb.ButlerAudiencePrivate)
 
 	var list struct {
@@ -160,6 +162,7 @@ func TestPrivateTasksAreInvisibleToOthers(t *testing.T) {
 // were complete.
 func TestWithheldRowsAreCountedNotHidden(t *testing.T) {
 	h := newHarness(t)
+	h.member("sam")
 	id, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: "sam", Owner: "sam",
 		Surface: runtimedb.ButlerSurfaceAdmin, Profile: "operator",
@@ -197,6 +200,7 @@ func TestWithheldRowsAreCountedNotHidden(t *testing.T) {
 // the shape of what happened and none of its content.
 func TestReviewedFailureBecomesAnEvaluation(t *testing.T) {
 	h := newHarness(t)
+	h.member("root-admin")
 	id := seedTracedTask(t, h, "root-admin", runtimedb.ButlerAudiencePrivate)
 
 	// First the human judgement.
@@ -271,6 +275,7 @@ func TestReviewedFailureBecomesAnEvaluation(t *testing.T) {
 // Debug capture is explicit, scoped, bounded, and visible.
 func TestDebugCaptureIsBoundedAndVisible(t *testing.T) {
 	h := newHarness(t)
+	h.member("root-admin")
 	id := seedTracedTask(t, h, "root-admin", runtimedb.ButlerAudiencePrivate)
 
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/tasks/"+id+"/debug",

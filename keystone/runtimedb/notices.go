@@ -281,11 +281,18 @@ func (db *DB) RaiseNotice(req NoticeRequest, householdQuiet ButlerSettings, at t
 	if ttl <= 0 {
 		ttl = DefaultChatOutboundTTL
 	}
+	// A notice is for a person, so the row names one. The fallback
+	// administrator is resolved the same way: an administrator who is
+	// not a Person on record has no notices to receive.
+	recipientID, err := resolvePersonID(db.sql, recipient)
+	if err != nil {
+		return NoticeDecision{}, fmt.Errorf("runtimedb: recording notice: the recipient %w", err)
+	}
 	res, err := db.sql.Exec(
-		`INSERT INTO notices (kind, recipient, routed_to_admin, correlation_id, dedupe_key,
+		`INSERT INTO notices (kind, recipient_person_id, routed_to_admin, correlation_id, dedupe_key,
 		     urgent, relevance, created_at, hold_until, expires_at, asks)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		req.Kind, recipient, boolInt(routedToAdmin), req.CorrelationID, req.DedupeKey,
+		req.Kind, recipientID, boolInt(routedToAdmin), req.CorrelationID, req.DedupeKey,
 		boolInt(kind.Urgent), kind.Relevance, now(), timeText(hold),
 		at.Add(ttl).UTC().Format(time.RFC3339Nano), boolInt(req.Asks))
 	if err != nil {
@@ -395,7 +402,9 @@ func (db *DB) AnswerNotice(seq int64, answer, by string) (approved bool, err err
 	var asks int
 	var recipient, undelivered, answered, expires string
 	err = tx.QueryRow(
-		`SELECT recipient, asks, undelivered_at, answered_at, expires_at FROM notices WHERE seq = ?`, seq).
+		`SELECT r.member, n.asks, n.undelivered_at, n.answered_at, n.expires_at
+		 FROM notices n JOIN butler_members r ON r.person_id = n.recipient_person_id
+		 WHERE n.seq = ?`, seq).
 		Scan(&recipient, &asks, &undelivered, &answered, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrNotFound
@@ -466,13 +475,16 @@ func resolveAnswer(answer string) (approved, ok bool) {
 
 // GetNotice returns one notice.
 func (db *DB) GetNotice(seq int64) (Notice, error) {
-	return scanNotice(db.sql.QueryRow(noticeColumns+` WHERE seq = ?`, seq))
+	return scanNotice(db.sql.QueryRow(noticeColumns+` WHERE n.seq = ?`, seq))
 }
 
-const noticeColumns = `SELECT seq, kind, recipient, routed_to_admin, correlation_id, dedupe_key,
-	 urgent, relevance, created_at, hold_until, expires_at, delivered_at, acknowledged_at,
-	 undelivered_at, asks, answered_at, answer, answered_by, COALESCE(outbound, 0)
-	 FROM notices`
+// The recipient reads back as the handle they carry now, so a notice
+// still says who it is for after they are renamed.
+const noticeColumns = `SELECT n.seq, n.kind, r.member, n.routed_to_admin, n.correlation_id, n.dedupe_key,
+	 n.urgent, n.relevance, n.created_at, n.hold_until, n.expires_at, n.delivered_at, n.acknowledged_at,
+	 n.undelivered_at, n.asks, n.answered_at, n.answer, n.answered_by, COALESCE(n.outbound, 0)
+	 FROM notices n
+	 JOIN butler_members r ON r.person_id = n.recipient_person_id`
 
 func scanNotice(row rowScanner) (Notice, error) {
 	var n Notice
@@ -516,11 +528,16 @@ func (db *DB) ListNotices(member string, limit int) ([]Notice, error) {
 	}
 	where, args := "", []any{}
 	if member != "" {
-		where = " WHERE recipient = ?"
-		args = append(args, member)
+		// A listing for somebody nobody knows is empty, not an error.
+		id, err := personIDForRead(db.sql, member)
+		if err != nil {
+			return nil, err
+		}
+		where = " WHERE n.recipient_person_id = ?"
+		args = append(args, id)
 	}
 	args = append(args, limit)
-	rows, err := db.sql.Query(noticeColumns+where+` ORDER BY seq DESC LIMIT ?`, args...)
+	rows, err := db.sql.Query(noticeColumns+where+` ORDER BY n.seq DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing notices: %w", err)
 	}
@@ -541,8 +558,8 @@ func (db *DB) ListNotices(member string, limit int) ([]Notice, error) {
 func (db *DB) DueNotices(at time.Time) ([]Notice, error) {
 	stamp := at.UTC().Format(time.RFC3339Nano)
 	rows, err := db.sql.Query(
-		noticeColumns+` WHERE delivered_at = '' AND undelivered_at = ''
-		   AND (hold_until = '' OR hold_until <= ?) AND expires_at > ? ORDER BY seq`, stamp, stamp)
+		noticeColumns+` WHERE n.delivered_at = '' AND n.undelivered_at = ''
+		   AND (n.hold_until = '' OR n.hold_until <= ?) AND n.expires_at > ? ORDER BY n.seq`, stamp, stamp)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: reading due notices: %w", err)
 	}

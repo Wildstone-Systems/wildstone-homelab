@@ -33,10 +33,12 @@ func (h *harness) scripted(t *testing.T) *scriptedProvider {
 // could not see what had been asked.
 func TestButlerAskRecordsTheQuestionAsWellAsTheAnswer(t *testing.T) {
 	h := newHarness(t)
+	// A butler turn is had by a person, so the caller acts for one.
+	asksAsRoleOperator := h.console(runtimedb.RoleOperator, "mika")
 	h.wireButler(answerTurns("Two nodes: n1 and n2."), runtimedb.ButlerModeFull)
 
 	var ask askResponse
-	h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/ask",
+	h.doToken(asksAsRoleOperator, "POST", "/api/v1/butler/ask",
 		map[string]string{"message": "what nodes do I have?"}, &ask)
 
 	var sess runtimedb.ButlerSession
@@ -62,14 +64,16 @@ func TestButlerAskRecordsTheQuestionAsWellAsTheAnswer(t *testing.T) {
 // answered more than once.
 func TestButlerProposalIsRecordedOnTheTurnThatMadeIt(t *testing.T) {
 	h := newHarness(t)
+	// A butler turn is had by a person, so the caller acts for one.
+	asksAsRoleOperator := h.console(runtimedb.RoleOperator, "mika")
 	h.wireButler(append(proposeGrafanaTurns(), answerTurns("Nothing else to add.")...), runtimedb.ButlerModeFull)
 
 	var ask askResponse
-	h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/ask", map[string]string{"message": "expose grafana"}, &ask)
+	h.doToken(asksAsRoleOperator, "POST", "/api/v1/butler/ask", map[string]string{"message": "expose grafana"}, &ask)
 	if len(ask.PlanIDs) != 1 {
 		t.Fatalf("planIds = %v, want one", ask.PlanIDs)
 	}
-	h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/sessions/"+ask.SessionID+"/ask",
+	h.doToken(asksAsRoleOperator, "POST", "/api/v1/butler/sessions/"+ask.SessionID+"/ask",
 		map[string]string{"message": "anything else?"}, nil)
 
 	var sess runtimedb.ButlerSession
@@ -87,14 +91,16 @@ func TestButlerProposalIsRecordedOnTheTurnThatMadeIt(t *testing.T) {
 
 func TestButlerFollowUpContinuesTheSameSession(t *testing.T) {
 	h := newHarness(t)
+	// A butler turn is had by a person, so the caller acts for one.
+	asksAsRoleOperator := h.console(runtimedb.RoleOperator, "mika")
 	h.wireButler(answerTurns("Two nodes: n1 and n2.", "n2 has been offline since 14:04."), runtimedb.ButlerModeFull)
 
 	var first askResponse
-	h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/ask",
+	h.doToken(asksAsRoleOperator, "POST", "/api/v1/butler/ask",
 		map[string]string{"message": "what nodes do I have?"}, &first)
 
 	var second askResponse
-	resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/sessions/"+first.SessionID+"/ask",
+	resp := h.doToken(asksAsRoleOperator, "POST", "/api/v1/butler/sessions/"+first.SessionID+"/ask",
 		map[string]string{"message": "is either of them down?"}, &second)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("follow-up status = %d, want 200", resp.StatusCode)
@@ -141,11 +147,13 @@ func TestButlerFollowUpContinuesTheSameSession(t *testing.T) {
 // one, so history carries the text and not the tool traffic.
 func TestButlerFollowUpDoesNotReplayStaleToolResults(t *testing.T) {
 	h := newHarness(t)
+	// A butler turn is had by a person, so the caller acts for one.
+	asksAsRoleOperator := h.console(runtimedb.RoleOperator, "mika")
 	h.wireButler(append(proposeGrafanaTurns(), answerTurns("Nothing else.")...), runtimedb.ButlerModeFull)
 
 	var first askResponse
-	h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/ask", map[string]string{"message": "expose grafana"}, &first)
-	h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/sessions/"+first.SessionID+"/ask",
+	h.doToken(asksAsRoleOperator, "POST", "/api/v1/butler/ask", map[string]string{"message": "expose grafana"}, &first)
+	h.doToken(asksAsRoleOperator, "POST", "/api/v1/butler/sessions/"+first.SessionID+"/ask",
 		map[string]string{"message": "anything else?"}, nil)
 
 	convos := h.scripted(t).convos

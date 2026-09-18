@@ -367,10 +367,14 @@ func (db *DB) GrantButlerAccess(butler, member, by string) error {
 	if err != nil {
 		return err
 	}
+	person, err := resolvePersonID(db.sql, member)
+	if err != nil {
+		return err
+	}
 	_, err = db.sql.Exec(
-		`INSERT INTO butler_access (butler, member, granted_at, granted_by)
+		`INSERT INTO butler_access (butler, person_id, granted_at, granted_by)
 		 VALUES (?, ?, ?, ?)
-		 ON CONFLICT DO NOTHING`, b.Seq, member, now(), by)
+		 ON CONFLICT DO NOTHING`, b.Seq, person, now(), by)
 	if err != nil {
 		return fmt.Errorf("runtimedb: granting butler access: %w", err)
 	}
@@ -388,9 +392,13 @@ func (db *DB) RevokeButlerAccess(butler, member, by string) error {
 	if err != nil {
 		return err
 	}
+	person, err := resolvePersonID(db.sql, member)
+	if err != nil {
+		return err
+	}
 	res, err := db.sql.Exec(
 		`UPDATE butler_access SET revoked_at = ?, revoked_by = ?
-		 WHERE butler = ? AND member = ? AND revoked_at = ''`, now(), by, b.Seq, member)
+		 WHERE butler = ? AND person_id = ? AND revoked_at = ''`, now(), by, b.Seq, person)
 	if err != nil {
 		return fmt.Errorf("runtimedb: revoking butler access: %w", err)
 	}
@@ -408,7 +416,8 @@ func (db *DB) ListButlerAccess(butler string) ([]string, error) {
 		return nil, err
 	}
 	rows, err := db.sql.Query(
-		`SELECT member FROM butler_access WHERE butler = ? AND revoked_at = '' ORDER BY member`, b.Seq)
+		`SELECT m.member FROM butler_access a JOIN butler_members m ON m.person_id = a.person_id
+		 WHERE a.butler = ? AND a.revoked_at = '' ORDER BY m.member`, b.Seq)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing butler access: %w", err)
 	}
@@ -437,7 +446,8 @@ func (db *DB) ButlersFor(member string) ([]Butler, error) {
 	}
 	rows, err := db.sql.Query(butlerColumns+`
 		 JOIN butler_access a ON a.butler = b.seq
-		 WHERE a.member = ? AND a.revoked_at = '' AND b.enabled = 1 AND b.retired_at = ''
+		 JOIN butler_members p ON p.person_id = a.person_id
+		 WHERE p.member = ? AND a.revoked_at = '' AND b.enabled = 1 AND b.retired_at = ''
 		 ORDER BY b.name`, member)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing butlers for %q: %w", member, err)
@@ -467,8 +477,8 @@ func (db *DB) ResolveButlerFor(butler, member string) (Butler, error) {
 	}
 	var n int
 	if err := db.sql.QueryRow(
-		`SELECT COUNT(*) FROM butler_access
-		 WHERE butler = ? AND member = ? AND revoked_at = ''`, b.Seq, member).Scan(&n); err != nil {
+		`SELECT COUNT(*) FROM butler_access a JOIN butler_members p ON p.person_id = a.person_id
+		 WHERE a.butler = ? AND p.member = ? AND a.revoked_at = ''`, b.Seq, member).Scan(&n); err != nil {
 		return Butler{}, fmt.Errorf("runtimedb: resolving butler access: %w", err)
 	}
 	if n == 0 {

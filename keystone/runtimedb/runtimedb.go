@@ -256,6 +256,30 @@ func now() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
 }
 
+// OpenThroughForTest opens the database applying migrations only up to
+// and including last, named as it appears on disk (e.g.
+// "0039_person_core.sql").
+//
+// It exists for tests in other packages that must exercise the schema
+// as it stood at a particular point. personref is the one that needs
+// it: its whole legacy classification describes columns 0040 removed,
+// and the only way to survey those is a database that has not reached
+// 0040 — which is exactly the deployment the pre-flight report is for.
+// Nothing in production calls it.
+func OpenThroughForTest(path, last string) (*DB, error) {
+	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", path)
+	sqlDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: open %s: %w", path, err)
+	}
+	db := &DB{sql: sqlDB, path: path}
+	if err := db.migrateThrough("migrations/" + last); err != nil {
+		sqlDB.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
 // ExecForTest runs a raw statement. It exists so tests in other
 // packages can prove a schema constraint holds against a writer that
 // bypasses this package's own methods — which is the only interesting

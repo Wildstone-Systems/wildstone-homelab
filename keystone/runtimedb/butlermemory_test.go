@@ -15,10 +15,21 @@ import (
 	"testing"
 )
 
+// fact builds a record owned by owner and stated by them.
+//
+// A household-owned record is the exception, and 0040 is why: the
+// household can OWN a record, and cannot have stated one. Owner is a
+// scoped column that takes the household; author is a person column
+// that does not. So a shared fact is authored by somebody, and these
+// fixtures pick the person every one of them already has on record.
 func fact(content, owner string, audience ButlerTaskAudience) MemoryRecord {
+	author := owner
+	if owner == HouseholdOwner {
+		author = "mika"
+	}
 	return MemoryRecord{
 		Kind: MemoryFact, Subject: owner, Content: content, Audience: audience,
-		PermissionLabel: "household", Owner: owner, Author: owner,
+		PermissionLabel: "household", Owner: owner, Author: author,
 		SourceKind: "conversation", SourceID: "bs-1",
 	}
 }
@@ -52,7 +63,7 @@ func TestMemoryNeedsProvenanceAndPermission(t *testing.T) {
 // mistaken for a permission, and the authority resolver does not read
 // this table at all.
 func TestPoisonedMemoryCannotCreateAuthority(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "butler-extraction")
 
 	// A hostile "fact" claiming a permission stores as a claim and
 	// nothing more.
@@ -96,7 +107,7 @@ func TestPoisonedMemoryCannotCreateAuthority(t *testing.T) {
 // A derivative takes the strictest audience of its sources, so private
 // material cannot become shared by being summarised.
 func TestDerivativesCannotWidenAudience(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika", "sam", "butler-extraction")
 	shared, err := db.RecordMemory(fact("dinner is usually at seven", "household", ButlerAudienceShared))
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +187,7 @@ func TestDerivativesCannotWidenAudience(t *testing.T) {
 // A correction supersedes rather than edits, takes derivatives with it,
 // and cannot widen what it corrects.
 func TestCorrectionSupersedesAndInvalidates(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika", "butler-extraction")
 	original, err := db.RecordMemory(fact("bin day is Tuesday", "household", ButlerAudienceShared))
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +243,7 @@ func TestCorrectionSupersedesAndInvalidates(t *testing.T) {
 // A forget sticks: the record leaves retrieval, and the same source
 // cannot teach it again.
 func TestForgettingSuppressesTheSource(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	seq, err := db.RecordMemory(fact("mika is looking for a new job", "mika", ButlerAudiencePrivate))
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +282,7 @@ func TestForgettingSuppressesTheSource(t *testing.T) {
 
 // Deleting a source invalidates everything learned from it.
 func TestDeletingASourceInvalidatesItsMemory(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	for _, c := range []string{"the spare key is under the mat", "the gate code is 1234"} {
 		if _, err := db.RecordMemory(fact(c, "household", ButlerAudienceShared)); err != nil {
 			t.Fatal(err)
@@ -293,7 +304,7 @@ func TestDeletingASourceInvalidatesItsMemory(t *testing.T) {
 // Shared changes reach the digest; private ones never do; safety-
 // relevant removals are marked immediate.
 func TestDigestCarriesSharedChangesOnly(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 
 	if _, err := db.RecordMemory(fact("mika prefers tea", "mika", ButlerAudiencePrivate)); err != nil {
 		t.Fatal(err)
@@ -342,7 +353,7 @@ func TestDigestCarriesSharedChangesOnly(t *testing.T) {
 
 // An export is a read governed by current permissions, never a bypass.
 func TestExportExcludesInaccessibleMaterial(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika", "sam")
 	if _, err := db.RecordMemory(fact("dinner is at seven", "household", ButlerAudienceShared)); err != nil {
 		t.Fatal(err)
 	}

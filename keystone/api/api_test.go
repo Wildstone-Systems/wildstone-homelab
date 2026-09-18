@@ -78,6 +78,59 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
+// member puts a household member on record.
+//
+// Since migration 0040 a task's author and owner, a memory record's
+// author and a notice's recipient are foreign keys to a Person, so a
+// fixture cannot file any of them for "sam" without saying who sam is.
+// Machine principals are not people and are deliberately not recorded
+// here: `root-admin`, `op` and the adapters keep appearing in these
+// tests as actors, which is what they are.
+func (h *harness) member(handles ...string) {
+	h.t.Helper()
+	for _, handle := range handles {
+		if err := h.s.DB.RecordButlerMember(handle, runtimedb.RoleMember, "", ""); err != nil {
+			h.t.Fatalf("recording %q: %v", handle, err)
+		}
+	}
+}
+
+// console records handle as a household member and returns a token for
+// role that ACTS FOR them — a Console caller.
+//
+// A Butler turn is had by a person (#240): it can write memory, file
+// work and raise a notice, and every one of those now names a Person
+// rather than whatever the caller authenticated as. A bare machine
+// token has nobody behind it, so the endpoint refuses it — which is why
+// every fixture that asks a Butler mints one of these instead.
+func (h *harness) console(role runtimedb.Role, handle string) string {
+	h.t.Helper()
+	h.member(handle)
+	tok, err := h.s.Principals.Mint(principalNameFor(h.t, role), handle, 0)
+	if err != nil {
+		h.t.Fatalf("minting a %s token acting for %q: %v", role, handle, err)
+	}
+	return tok
+}
+
+func principalNameFor(t *testing.T, role runtimedb.Role) string {
+	t.Helper()
+	switch role {
+	case runtimedb.RoleAdmin:
+		return "root-admin"
+	case runtimedb.RoleOperator:
+		return "op"
+	case runtimedb.RoleButler:
+		return "butler"
+	case runtimedb.RoleConcierge:
+		return "concierge"
+	case runtimedb.RoleValet:
+		return "valet"
+	}
+	t.Fatalf("no principal in the harness holds the role %q", role)
+	return ""
+}
+
 // do issues a request with the given role's token ("" = unauthenticated)
 // and decodes the JSON body into out (skipped when out is nil).
 func (h *harness) do(role runtimedb.Role, method, path string, body any, out any) *http.Response {

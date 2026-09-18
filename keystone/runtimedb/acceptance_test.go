@@ -178,7 +178,8 @@ func TestPartCAcceptance(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := db.ExecForTest(
-			`UPDATE butler_identity_links SET revoked_at = '', revoked_by = '' WHERE member = 'sam'`); err != nil {
+			`UPDATE butler_identity_links SET revoked_at = '', revoked_by = ''
+			 WHERE person_id = (SELECT person_id FROM butler_members WHERE member = 'sam')`); err != nil {
 			t.Fatal(err)
 		}
 

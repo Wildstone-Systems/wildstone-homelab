@@ -91,6 +91,18 @@ const (
 	Scoped Kind = "scoped"
 	// NotAPerson is a false positive of the name heuristic.
 	NotAPerson Kind = "not-a-person"
+	// PersonID already holds an identity rather than a handle: the
+	// columns migration 0040 repointed, plus butler_members.person_id
+	// itself. There is no free text here to resolve, so the survey
+	// leaves them alone — a person_id that named nobody would be a
+	// broken foreign key, which the database refuses on its own and
+	// does not need a report to find.
+	//
+	// They stay classified rather than dismissed by name because the
+	// record of WHICH columns moved is the useful part, and because a
+	// new person_id column appearing somewhere unexpected should still
+	// have to say what it is.
+	PersonID Kind = "person-id"
 )
 
 // Column is one verdict, with the evidence that produced it. Why is not
@@ -107,41 +119,87 @@ type Column struct {
 // Columns is the whole classification. Every candidate column in the
 // live schema must appear here — TestEveryCandidateColumnHasAVerdict
 // fails the build otherwise.
+// LegacyColumns is the classification as it stood BEFORE migration 0040,
+// when every one of these held a handle as free text.
+//
+// It is kept, and surveyed, because `keystone person-refs` opens the
+// database file read-only and does NOT migrate it. So this binary can
+// be pointed at a deployment still on 0039 — which is exactly when the
+// pre-flight is worth running, since 0040 refuses to apply while any of
+// these is unresolvable. Survey skips whichever set the live schema
+// does not have, so the same command answers correctly on both sides of
+// the migration.
+//
+// Each entry names the column 0040 replaced it with, so the two tables
+// read as one story rather than as a contradiction.
+var LegacyColumns = []Column{
+	{"butler_access", "member", Human,
+		"pre-0040: the person admitted to a Butler, as a handle. Now butler_access.person_id"},
+	{"butler_identity_links", "member", Human,
+		"pre-0040: the person a surface identity belongs to. Now butler_identity_links.person_id"},
+	{"butler_conversations", "member", Human,
+		"pre-0040: the person whose conversation it is. Now butler_conversations.person_id"},
+	{"butler_handoffs", "member", Human,
+		"pre-0040: the person whose conversation crossed surfaces. Now butler_handoffs.person_id"},
+	{"butler_memory", "author", Human,
+		"pre-0040: the person who stated the record. Now butler_memory.author_person_id"},
+	{"butler_memory", "owner", Scoped,
+		"pre-0040: the person the record belongs to, or the literal `household` for a shared one. Now butler_memory.owner_person_id, where the household is NULL"},
+	{"butler_index", "owner", Scoped,
+		"pre-0040: mirrors butler_memory.owner. Now butler_index.owner_person_id"},
+	{"butler_tasks", "author", Human,
+		"pre-0040: the person who asked for the work. Now butler_tasks.author_person_id"},
+	{"butler_tasks", "owner", Human,
+		"pre-0040: who operates the work now. Now butler_tasks.owner_person_id"},
+	{"household_review_tokens", "member", Human,
+		"pre-0040: who the token was issued to. Now household_review_tokens.person_id"},
+	{"offboarding_records", "member", Human,
+		"pre-0040: the person being offboarded. Now offboarding_records.person_id"},
+	{"notices", "recipient", Human,
+		"pre-0040: the person the notice is for. Now notices.recipient_person_id"},
+	{"butler_members", "guardian", Human,
+		"pre-0040: the responsible adult for a child record. Now butler_members.guardian_person_id"},
+}
+
 var Columns = []Column{
 	// ---- Human: repointed by slice 2b ----
-	{"butler_access", "member", Human,
-		"GrantButlerAccess(butler, member, by) — member is the person admitted to a Butler; by is the actor"},
-	{"butler_identity_links", "member", Human,
-		"LinkSurfaceIdentity(linkType, externalID, member, createdBy) — already REFERENCES butler_members(member)"},
-	{"butler_conversations", "member", Human,
-		"the person whose conversation it is; GetButlerMember(conv.Member) resolves it in butlerhandoff.go"},
-	{"butler_handoffs", "member", Human,
-		"REFERENCES butler_members(member); GetButlerMember(member) validates it before the handoff"},
-	{"butler_memory", "owner", Scoped,
-		"schema, in full: `owner is the person the record belongs to ... For household-shared records it is the household`. A Person for a private record, the literal `household` for a shared one. Also reachable by the legacy ask path (#240)"},
-	{"butler_memory", "author", Human,
-		"the person who stated it, paired with owner on MemoryRecord. Same legacy-path exposure as owner (#240)"},
-	{"butler_tasks", "author", Human,
-		"schema: author is the member who asked for the work and never changes. Same legacy-path exposure (#240)"},
-	{"butler_tasks", "owner", Human,
-		"schema: owner is who operates it now, and offboarding moves it — a person by construction. Same legacy-path exposure (#240)"},
+	{"butler_access", "person_id", PersonID,
+		"the person admitted to a Butler. Repointed by 0040 from member; by is still the actor"},
+	{"butler_identity_links", "person_id", PersonID,
+		"the person a surface identity belongs to. Repointed by 0040; the foreign key it already had moved from member to person_id"},
+	{"butler_conversations", "person_id", PersonID,
+		"the person whose conversation it is. Repointed by 0040; the foreign key moved from member to person_id"},
+	{"butler_handoffs", "person_id", PersonID,
+		"the person whose conversation crossed surfaces. Repointed by 0040, which also gave it the foreign key it never had"},
+	{"butler_memory", "owner_person_id", PersonID,
+		"the person the record belongs to. Repointed by 0040, which stores the documented `household` owner as NULL rather than as a person who is not one"},
+	{"butler_memory", "author_person_id", PersonID,
+		"the person who stated the record. Repointed by 0040; the legacy path that could write a principal here (#240) is refused at the write now"},
+	{"butler_tasks", "author_person_id", PersonID,
+		"the person who asked for the work, and it never changes. Repointed by 0040"},
+	{"butler_tasks", "owner_person_id", PersonID,
+		"who operates the work now; offboarding moves it. Repointed by 0040"},
 	{"butler_task_feedback", "author", Actor,
 		"api.addButlerTaskFeedback passes actingMember(id) — root-admin on a bare admin token. The schema says the person never the Butler, which rules out the Butler, not principals (#239 review)"},
-	{"household_review_tokens", "member", Human,
-		"IssueHouseholdReviewToken(planID, member, issuedBy, …); schema: 'member is who it was issued to'"},
+	{"household_review_tokens", "person_id", PersonID,
+		"who the token was issued to. Repointed by 0040; created_by and used_by are actors and stayed text"},
 	{"integration_secrets", "member", Actor,
 		"api.onboardIntegrationSecret defaults an omitted member to actingMember(id), so a bare admin token stores root-admin. The schema says PERSONAL credential; nothing enforces it (#239 review, #240)"},
 	{"member_notice_preferences", "member", Actor,
 		"api.setNoticePreferences stores actingMember(id) when member is omitted, and TestNoticePreferencesAreYourOwn exercises that with the bare op token. An operator having its own notice preferences is a supported path, not an accident"},
-	{"offboarding_records", "member", Human,
-		"recordOffboarding(member, actor, …) — member is the person being offboarded; actor is the actor"},
-	{"butler_members", "guardian", Human,
-		"schema: 'guardian is required for a child record' — names the responsible adult"},
+	{"offboarding_records", "person_id", PersonID,
+		"the person being offboarded. Repointed by 0040; actor is the actor and stayed text"},
+	{"butler_members", "guardian_person_id", PersonID,
+		"the responsible adult for a child record. Repointed by 0040, which also made it nullable: '' was never an identity"},
 	{"butler_members", "member", Human,
 		"the handle itself. Not repointed — it IS the row person_id belongs to — but classified so the table is complete"},
+	{"butler_members", "person_id", PersonID,
+		"the identity the handle above is a label for (0039). Every person_id elsewhere resolves here"},
+	{"butler_role_changes", "person_id", PersonID,
+		"the audited person, by identity (0039). Kept beside the handle so the trail still resolves after a rename"},
 
-	{"notices", "recipient", Human,
-		"schema: `recipient is the member`. Runtime filters, authorizes replies and offboards by it. Missed by the first name heuristic (#239 review)"},
+	{"notices", "recipient_person_id", PersonID,
+		"the person the notice is for. Repointed by 0040 from recipient; answered_by is an actor and stayed text"},
 	// ---- Actor: person OR machine principal; left as recorded text ----
 	{"chat_claim_codes", "identity", Actor,
 		"the identity a claim code was minted for; principal or member, as chat_bindings.identity"},
@@ -180,8 +238,8 @@ var Columns = []Column{
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
 	{"butler_identity_links", "revoked_by", Actor,
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
-	{"butler_index", "owner", Scoped,
-		"mirrors butler_memory.owner, so it carries the same `household` scope for shared documents, and the same legacy-path exposure (#240)"},
+	{"butler_index", "owner_person_id", PersonID,
+		"mirrors butler_memory.owner_person_id, NULL for a household-owned chunk. Repointed by 0040"},
 	{"butler_members", "admitted_by", Actor,
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
 	{"butler_members", "disabled_by", Actor,

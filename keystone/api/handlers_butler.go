@@ -202,7 +202,12 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 	// snapshot it takes — checking here as well would read the backend
 	// twice for one request, which is the thing ADR-W017 A9's snapshot
 	// exists to prevent.
-	return s.runAdminButlerSession(r.Context(), message, id.Name, nil)
+	// actingMember, not id.Name. The turn is had by the PERSON the
+	// caller is acting for — a Console session names one — and what it
+	// writes says so: its memory, its work and its notices all name a
+	// Person since 0040. Passing the principal's own name here is how
+	// `root-admin` ended up owning household memory (#240).
+	return s.runAdminButlerSession(r.Context(), message, actingMember(id), nil)
 }
 
 // askOneButler answers as ONE named Butler, on whichever surface that
@@ -236,8 +241,10 @@ func (s *Server) askOneButler(r *http.Request, id principal.Identity) (any, int,
 			fmt.Errorf("no butler is configured on this deployment")
 	}
 	return s.runNamedButlerSession(r.Context(), butlerlive.Turn{
-		Butler:  name,
-		Member:  id.Name,
+		Butler: name,
+		// The person the caller acts for, not the credential's own
+		// name — see the note on askButler above (#240).
+		Member:  actingMember(id),
 		Text:    req.Message,
 		AsOwner: actingAsOwner(id),
 	}, nil)
@@ -382,6 +389,16 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor s
 	if askProv == nil || askGw == nil {
 		return nil, http.StatusServiceUnavailable,
 			fmt.Errorf("butler provider not configured (start keystone with -butler-provider)")
+	}
+	// The same rule as the named path: a turn is had by a person. See
+	// turnHasAPerson.
+	//
+	// After the configuration check, deliberately. A deployment with no
+	// Butler at all has nothing to say about who is asking, and
+	// answering "you are not a member" there would send an operator
+	// looking for the wrong problem.
+	if code, err := s.turnHasAPerson(actingFor); err != nil {
+		return nil, code, err
 	}
 	session := &butler.Session{
 		Gateway:  askGw,

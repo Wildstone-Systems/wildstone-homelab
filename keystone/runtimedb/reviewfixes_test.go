@@ -15,7 +15,7 @@ import (
 // own forgotten records are yours to keep a copy of; other people's
 // are not, or "forget that" would hold only until somebody exported.
 func TestExportDoesNotReturnOtherPeoplesForgottenRecords(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "sam", "mika")
 
 	mine, err := db.RecordMemory(MemoryRecord{
 		Kind: MemoryFact, Subject: "sam", Content: "sam sleeps badly on Sundays",
@@ -194,7 +194,7 @@ func TestEnablingAToolDoesNotBypassARequiredGrant(t *testing.T) {
 // their own name, and — because a notice is answerable once — lock the
 // intended recipient out of their own decision permanently.
 func TestOnlyTheRecipientCanAnswerANotice(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "sam")
 	decision, err := db.RaiseNotice(NoticeRequest{
 		Kind: "approval", Recipient: "sam", DedupeKey: "a-1",
 		Asks: true, Body: "shall I cancel the delivery?",
