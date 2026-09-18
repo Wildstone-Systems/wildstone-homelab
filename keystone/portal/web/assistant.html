@@ -73,8 +73,15 @@
     .cols > .first { order: -1; }
     details.panel > summary { cursor: pointer; padding: var(--space-3) 0; }
   }
-  details.panel > summary { list-style: none; }
+  details.panel > summary { list-style: none; cursor: pointer; }
   details.panel > summary::-webkit-details-marker { display: none; }
+  /* The caret is the only thing that says whether there is more behind
+     a shut panel, so it has to turn. */
+  details.panel[open] > summary .ph-caret-down { transform: rotate(180deg); }
+  details.panel > summary .ph-caret-down { transition: transform .12s; }
+  @media (prefers-reduced-motion: reduce) {
+    details.panel > summary .ph-caret-down { transition: none; }
+  }
 </style>
 
 <main class="page">
@@ -132,15 +139,29 @@
       </div>
     </section>
 
-    <!-- What it may do, and what it remembers. -->
+    <!-- What it may do, what it remembers, and what it did.
+         
+         ALL THREE START SHUT, and each header answers its own question
+         in one line so that shut is still informative. §12.2 draws them
+         as full-length panels beside the thread and §15 only collapses
+         them on a phone; open, they are twelve capability rows, a
+         memory list and a receipt per action, which is a column far
+         taller than the conversation it is meant to sit beside and a
+         lot of height for something a member reads once.
+         
+         The digest is the part that makes this disclosure rather than
+         hiding: "7 allowed · 5 not from here" is the answer most people
+         want, and the rows behind it are for the person who wants to
+         check. -->
     <div class="stack">
       <section class="wid">
-        <details class="panel" open>
+        <details class="panel">
           <summary class="wid-head">
-            <span class="eyebrow grow" id="caps-head">What it may do</span>
+            <span class="eyebrow" id="caps-head">What it may do</span>
+            <span class="muted grow" id="caps-digest"></span>
             <i class="ph ph-caret-down" aria-hidden="true"></i>
           </summary>
-          <div class="caps" id="caps"></div>
+          <div class="caps" id="caps" style="margin-top: var(--space-3)"></div>
           <p class="muted" id="caps-note" style="margin-top: var(--space-4)"></p>
         </details>
       </section>
@@ -148,21 +169,23 @@
       <section class="wid">
         <details class="panel">
           <summary class="wid-head">
-            <span class="eyebrow grow">What it remembers</span>
+            <span class="eyebrow">What it remembers</span>
+            <span class="muted grow" id="memory-digest"></span>
             <i class="ph ph-caret-down" aria-hidden="true"></i>
           </summary>
-          <div id="memory"></div>
+          <div id="memory" style="margin-top: var(--space-3)"></div>
           <p class="muted" id="memory-note"></p>
         </details>
       </section>
 
       <section class="wid">
-        <details class="panel" open>
+        <details class="panel">
           <summary class="wid-head">
-            <span class="eyebrow grow">What was done in your name</span>
+            <span class="eyebrow">What was done in your name</span>
+            <span class="muted grow" id="receipts-digest"></span>
             <i class="ph ph-caret-down" aria-hidden="true"></i>
           </summary>
-          <div id="receipts"></div>
+          <div id="receipts" style="margin-top: var(--space-3)"></div>
           <p class="muted" id="receipts-note"></p>
           <a class="hbtn hbtn-ghost" href="/activity/">See what the house did
             <i class="ph ph-arrow-right" aria-hidden="true"></i></a>
@@ -224,6 +247,9 @@
   } catch (e) {}
 
   function start() {
+    // The digests are filled before anything is fetched, so a shut
+    // panel never reads as blank while the page loads.
+    renderReceipts([]);
     loadScope();
     fetch("/api/v1/assistant/agents", { headers: { accept: "application/json" } })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
@@ -283,14 +309,18 @@
     fetch("/api/v1/assistant/scope", { headers: { accept: "application/json" } })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
-        if (!res.ok) { return; }
+        if (!res.ok) { text("caps-digest", "couldn't load"); return; }
         var box = el("caps");
         clear(box);
         el("scope-pill").title =
           "This dashboard refuses the machines, apps, accounts, secrets and the control " +
           "plane's own records, whatever the assistant is allowed elsewhere.";
-        (res.j.allowed || []).forEach(function (c) { box.appendChild(capRow(c, true)); });
-        (res.j.denied || []).forEach(function (c) { box.appendChild(capRow(c, false)); });
+        var allowed = res.j.allowed || [], denied = res.j.denied || [];
+        allowed.forEach(function (c) { box.appendChild(capRow(c, true)); });
+        denied.forEach(function (c) { box.appendChild(capRow(c, false)); });
+        // Shut, the header answers the question: how much can it do,
+        // and how much is off limits from here.
+        text("caps-digest", allowed.length + " allowed \u00b7 " + denied.length + " not from here");
         text("caps-note", res.j.note || "");
       })
       .catch(function () { /* the panel is informational; the ceiling is not */ });
@@ -351,6 +381,7 @@
 
   function newConversation() {
     session = "";
+    renderReceipts([]);
     clear(el("thread"));
     clear(el("note"));
     text("thread-title", "New conversation");
@@ -433,14 +464,21 @@
         if (!res.ok) {
           // Not an empty list, which would read as "it has learned
           // nothing about you".
+          text("memory-digest", "couldn't load");
           text("memory-note", res.j.error || "Can't read what the assistant remembers right now.");
           return;
         }
         var items = res.j.items || [];
         if (!items.length) {
+          text("memory-digest", "nothing yet");
           text("memory-note", "It hasn't learned anything about you yet.");
           return;
         }
+        // How many are YOURS is the number a member cares about, since
+        // those are the ones they can make it forget.
+        var mine = items.filter(function (m) { return m.mine; }).length;
+        text("memory-digest", items.length + (items.length === 1 ? " thing" : " things") +
+          (mine ? " \u00b7 " + mine + " yours" : ""));
         text("memory-note", "You can make it forget anything it learned about you. " +
           "What the household shares is the owner's.");
         items.forEach(function (m) { box.appendChild(memoryRow(m)); });
@@ -474,6 +512,28 @@
     return row;
   }
 
+  // Re-reads the open conversation for its receipts only.
+  //
+  // Deliberately not a redraw of the thread: the member is looking at
+  // it, their own turn is already there, and replacing the lot to
+  // update a panel on the right would make the conversation flicker
+  // every time they said something.
+  function refreshReceipts() {
+    if (!session) { return; }
+    fetch("/api/v1/assistant/conversations/" + encodeURIComponent(session),
+          { headers: { accept: "application/json" } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j) { return; }
+        var all = [];
+        (j.messages || []).forEach(function (m) {
+          (m.receipts || []).forEach(function (r) { all.push(r); });
+        });
+        renderReceipts(all);
+      })
+      .catch(function () {});
+  }
+
   // The panel is the thread's receipts, gathered — a member asking
   // "what has this thing done for me" should not have to scroll a
   // conversation to find out.
@@ -481,10 +541,17 @@
     var box = el("receipts");
     clear(box);
     if (!all.length) {
+      text("receipts-digest", "nothing yet");
       text("receipts-note", "Nothing has been done in your name in this conversation — " +
         "it has only answered questions.");
       return;
     }
+    // A refusal is the row worth surfacing without being asked: it is
+    // the ceiling made visible, and a member should not have to open a
+    // panel to learn something was refused.
+    var refused = all.filter(function (r) { return r.refused; }).length;
+    text("receipts-digest", all.length + (all.length === 1 ? " action" : " actions") +
+      (refused ? " \u00b7 " + refused + " refused" : ""));
     text("receipts-note", "");
     all.forEach(function (r) { box.appendChild(receiptPill(r)); });
   }
@@ -528,6 +595,11 @@
         }
         box.value = "";
         loadConversations();
+        // Re-read the conversation once the answer is in. The ask
+        // response carries the reply but not what the assistant DID to
+        // produce it, so the optimistic turn has no receipts on it and
+        // the panel's digest would be a message behind.
+        refreshReceipts();
       })
       .catch(function (err) {
         // A failed send keeps the typed text, and Try again resends it.

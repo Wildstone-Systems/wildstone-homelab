@@ -232,3 +232,51 @@ func TestTheBannerTypeIsReadFromTheBytes(t *testing.T) {
 		}
 	}
 }
+
+// A collapsible panel's header answers its own question while it is
+// shut.
+//
+// The Assistant page's three side panels are twelve capability rows, a
+// memory list and a receipt per action — a column taller than the
+// conversation it sits beside, and a lot of height for something a
+// member reads once. They start shut. That is only disclosure rather
+// than hiding if the header still says what is behind it, so each one
+// carries a digest the script fills in, and a caret that turns.
+func TestTheAssistantsPanelsDiscloseRatherThanHide(t *testing.T) {
+	body, ok := Page("assistant")
+	if !ok {
+		t.Fatal("the assistant page is not served")
+	}
+	page := stripComments(string(body))
+
+	// Nothing starts open: an <details open> here is the thing being
+	// fixed.
+	if regexp.MustCompile(`<details[^>]*\bopen\b`).MatchString(page) {
+		t.Error("a side panel still starts open")
+	}
+
+	// Three panels, three digests, each filled by the script.
+	panels := regexp.MustCompile(`<details class="panel">`).FindAllString(page, -1)
+	if len(panels) != 3 {
+		t.Errorf("found %d collapsible panels, want 3", len(panels))
+	}
+	for _, id := range []string{"caps-digest", "memory-digest", "receipts-digest"} {
+		if !strings.Contains(page, `id="`+id+`"`) {
+			t.Errorf("no %s in the markup: a shut panel would read as blank", id)
+		}
+		// And something must actually write to it.
+		if !strings.Contains(page, `text("`+id+`"`) {
+			t.Errorf("%s is never filled in", id)
+		}
+	}
+
+	// The caret is the only thing that says there is more behind a shut
+	// panel, so it has to move.
+	if !strings.Contains(page, "details.panel[open] > summary .ph-caret-down") {
+		t.Error("the caret does not turn, so a shut panel looks like a dead heading")
+	}
+	// A summary that does not look pressable is not a control.
+	if !regexp.MustCompile(`details\.panel > summary \{[^}]*cursor: pointer`).MatchString(page) {
+		t.Error("the panel headers are not styled as pressable")
+	}
+}
