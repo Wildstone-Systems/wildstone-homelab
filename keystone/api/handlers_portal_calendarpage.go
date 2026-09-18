@@ -65,6 +65,10 @@ type CalendarBook interface {
 // query string ask Radicale for a decade.
 const maxCalendarPageDays = 62
 
+// maxCalendarWriteBytes bounds one add or change: a title, two dates,
+// two times and a place, with plenty of room to spare.
+const maxCalendarWriteBytes = 16 << 10
+
 // calendarPageEvent is one event as the page draws it. Day and EndDay
 // are in the household's timezone, so a tablet with its clock set
 // elsewhere still files dinner under the right date.
@@ -269,7 +273,7 @@ func (s *Server) calendarHref(raw string) (string, error) {
 
 func decodeCalendarWrite(r *http.Request) (calendarPageWrite, error) {
 	var req calendarPageWrite
-	if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxReadingBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxCalendarWriteBytes)).Decode(&req); err != nil {
 		return req, fmt.Errorf("the request is not an event: %w", err)
 	}
 	return req, nil
