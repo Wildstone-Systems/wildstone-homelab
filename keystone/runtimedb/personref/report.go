@@ -31,6 +31,10 @@ const (
 	// Expected, and not an error: an actor column holds these by
 	// design.
 	MachinePrincipal Verdict = "machine-principal"
+	// AlsoAPrincipal: a Person AND a machine principal answer to this
+	// name. Nothing can tell which one wrote a given row, so it is
+	// never resolved.
+	AlsoAPrincipal Verdict = "also-a-principal"
 	// Orphan: no Person and no principal.
 	Orphan Verdict = "orphan"
 )
@@ -128,6 +132,14 @@ func Survey(q Querier) (Report, error) {
 		f := fold(p.handle)
 		byFold[f] = append(byFold[f], p)
 	}
+	// Principals are folded too. A Person called Root-Admin beside a
+	// principal called root-admin is the same collision wearing a
+	// different hat, and the case rule this slice adopts says those are
+	// one name.
+	principalsByFold := map[string]bool{}
+	for name := range principals {
+		principalsByFold[fold(name)] = true
+	}
 
 	uses := map[string][]Use{}
 	for _, c := range Columns {
@@ -167,6 +179,23 @@ func Survey(q Querier) (Report, error) {
 		h := Handle{Value: value, Uses: us}
 		matches := byFold[fold(value)]
 		switch {
+		// Checked BEFORE resolution, and that order is the whole point.
+		//
+		// butler_members.member is unique only within butler_members,
+		// and principals.name only within principals, so nothing stops
+		// a Person from being called root-admin. Resolving first would
+		// then attach a machine-written row to an unrelated human — and
+		// machine-written rows in human columns are not hypothetical:
+		// the legacy ask path puts them there (#240), which is the
+		// exact case this report exists to catch. Attributing one to a
+		// Person who happens to share the name is the silent wrong
+		// merge the whole slice is built to prevent.
+		case len(matches) > 0 && principalsByFold[fold(value)]:
+			h.Verdict = AlsoAPrincipal
+			for _, m := range matches {
+				h.Candidates = append(h.Candidates, m.handle)
+			}
+			sort.Strings(h.Candidates)
 		case len(matches) > 1:
 			h.Verdict = Ambiguous
 			for _, m := range matches {

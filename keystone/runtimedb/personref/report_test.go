@@ -354,3 +354,69 @@ func TestColumnsWrittenByAnyPrincipalAreNotHuman(t *testing.T) {
 		t.Errorf("%s has no verdict at all", key)
 	}
 }
+
+// A name on BOTH identity axes is never resolved to the Person.
+//
+// butler_members.member is unique only within butler_members, and
+// principals.name only within principals, so a Person may be called
+// root-admin. Resolving before checking principals would attach a
+// machine-written row to an unrelated human — and machine-written rows
+// in human columns are not hypothetical: the legacy ask path puts them
+// there (#240). That is the silent wrong merge this whole slice exists
+// to prevent, so it has to be caught before resolution, not after.
+func TestANameOnBothAxesIsNeverResolved(t *testing.T) {
+	rep, _ := surveyed(t, func(db *runtimedb.DB) {
+		if err := db.CreatePrincipal("root-admin", runtimedb.RoleAdmin, ""); err != nil {
+			t.Fatalf("CreatePrincipal: %v", err)
+		}
+		// A Person who happens to share the principal's name. Nothing
+		// in either schema forbids it.
+		people(t, db, "root-admin")
+		// A row the legacy ask path would have written: machine origin,
+		// human column.
+		if _, err := db.RecordMemory(runtimedb.MemoryRecord{
+			Kind: runtimedb.MemoryFact, Subject: "household", Content: "written by the machine path",
+			Audience: runtimedb.ButlerAudienceShared, PermissionLabel: "household",
+			Owner: "root-admin", Author: "root-admin", SourceKind: "conversation", SourceID: "v-8",
+		}); err != nil {
+			t.Fatalf("RecordMemory: %v", err)
+		}
+	})
+
+	h := find(t, rep, "root-admin")
+	if h.Verdict != personref.AlsoAPrincipal {
+		t.Fatalf("root-admin is %q, want also-a-principal — a Person and a principal both answer to it", h.Verdict)
+	}
+	if h.PersonID != "" {
+		t.Fatal("a name shared with a machine principal was attached to a Person; " +
+			"that is the silent wrong merge, and afterwards it looks like data")
+	}
+	if !h.Blocking() {
+		t.Fatal("a name on both axes does not block the migration")
+	}
+	if len(h.Candidates) != 1 || h.Candidates[0] != "root-admin" {
+		t.Errorf("candidates = %v, want the Person named so an Owner can rename one of them", h.Candidates)
+	}
+}
+
+// The converse, so the fix cannot pass by blocking everything: a
+// principal whose name NO Person shares is still the ordinary,
+// non-blocking case in an actor column.
+func TestAPrincipalAloneIsStillNotBlocking(t *testing.T) {
+	rep, _ := surveyed(t, func(db *runtimedb.DB) {
+		if err := db.CreatePrincipal("root-admin", runtimedb.RoleAdmin, ""); err != nil {
+			t.Fatalf("CreatePrincipal: %v", err)
+		}
+		people(t, db, "mika")
+		if err := db.AdmitButlerMember("mika", "root-admin"); err != nil {
+			t.Fatalf("AdmitButlerMember: %v", err)
+		}
+	})
+	h := find(t, rep, "root-admin")
+	if h.Verdict != personref.MachinePrincipal {
+		t.Fatalf("root-admin is %q, want machine-principal when no Person shares the name", h.Verdict)
+	}
+	if len(rep.Blocking()) != 0 {
+		t.Fatalf("blocking = %+v, want none", rep.Blocking())
+	}
+}
