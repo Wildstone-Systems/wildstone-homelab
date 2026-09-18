@@ -334,7 +334,7 @@ Each implementation PR updates its package here with an implemented-by link, the
 | **P11** | Placement, credentials, and failover | `runtimedb/integrationplacement.go`, `migrations/0027_integration_placement.sql` | `integrationplacement_test.go`: failover moves only the lease among prepared nodes; no eligible node produces a wait; a referenced secret cannot be erased; incomplete cleanup leaves the connection visibly degraded. | Secret values never enter Keystone — there is no column for one and no parameter that could carry one. |
 | **P12** | First read integrations and cross-app run | `adapter/adapter.go`, `adapter/homeassistant/`, `adapter/caldav/`, `adapter/pantry/`, `crossapp/crossapp.go`, `testing/fixtures/routines/*.yaml` | `contract_test.go` for the four result types; `scenario_test.go` runs both fixture routines and proves an uncertain action pauses rather than retries. | `When` is the only conditional a routine gets: a routine with expressions in it is a program, and a program is not something a household reviews. |
 | **P13** | Routine authoring and approvals | `runtimedb/householdroutines.go`, `migrations/0028_household_routines.sql`, `plan/household.go`, `api/handlers_household_review.go`, the `/approve` refusal in `handlers_chat_commands.go`, `console/src/views/Routines.tsx` | `handlers_household_review_test.go`: an admitted adult approves a pure routine plan holding no API token; infrastructure/mixed/authority plans are refused; a link is bound to person, revision, expiry and one use, and works only through the identity proxy; chat approves nothing by any route. `plan/household_test.go` covers classification. | Classification is all-or-nothing: one non-Automation step sends the whole plan back to the Console. `/approve` exists in order to refuse. `TrustedIngress` is an exact address list, and empty means the review route is unavailable rather than open — `-household-ingress` sets it. |
-| **P14** | Model routing and locality | `runtimedb/modelroutes.go`, `migrations/0029_model_routes.sql`, `api/handlers_model_routes.go` | `modelroutes_test.go`: local-only material never reaches a cloud route however busy or broken the local one is; a fallback carries no action authority; capacity holds under concurrent selection; escalation never returns to a route already tried. | **Not yet installed on the live call path** — see the wiring gap below. The policy and its store are complete and tested; `main.go` still builds the Butler provider from the legacy `-butler-provider` flag. |
+| **P14** | Model assignment and locality | `runtimedb/modelroutes.go`, `runtimedb/butlers.go`, `migrations/0029_model_routes.sql`, `migrations/0035_remove_the_router.sql`, `butlerlive/`, `api/handlers_butler_named.go` | `butlerlive/butlerlive_test.go` proves it where a conversation is actually served: a message addressed to a local-model Butler reaches that model and the cloud model receives nothing at all; the converse holds; a Butler whose model is down waits and no other model is called; the address decides even when the message says otherwise. `modelroutes_test.go` proves what a route IS rather than how one is chosen. | **Superseded in scope by ADR-W031 A2, and now on the live call path.** The runtime router described in the original scope was withdrawn and deleted (W031 B7): a model is ASSIGNED to a Butler, and `main.go` builds the client from that assignment. The legacy `-butler-provider` survives as a whole-deployment fallback for a deployment that has created no Butlers — a fact about the deployment, never about the message. |
 | **P15** | Proactive delivery and notices | `runtimedb/notices.go`, `migrations/0030_notice_policy.sql`, `api/handlers_notices.go` | `notices_test.go`: quiet hours, audience and dedupe hold across restart; an ambiguous or expired reply authorizes nothing; only the intended recipient can answer; an expired notice cannot reopen a completed task. | A person's own quiet window overrides the household's. Answering is bound to the notice's recipient — without that, any reader could answer someone else's question and lock them out of their own decision. |
 | **P16** | Offboarding, restore, and the v1 gate | `runtimedb/offboarding.go`, `restore.go`, `migrations/0031_offboarding_restore.sql`, `api/handlers_offboarding.go`, `docs/recovery.md` | `acceptance_test.go` (`TestPartCAcceptance`) runs the whole Part C proof list as one sequence; `quarantine_test.go` proves each held category is refused and permitted after release; `reviewfixes_test.go` covers the replay failures. | Quarantine is enforced at the STORE, not on the HTTP routes, so a background loop or chat adapter is covered by construction. Replies and removal/revocation are deliberately ungated: quarantine blocks doing and permits undoing, or the hold would block its own release. |
 
@@ -343,30 +343,43 @@ The evidence run for every package is `go vet ./...` and `go test -race ./...` i
 The combined Part C acceptance suite runs as `TestPartCAcceptance` in
 `keystone/runtimedb`.
 
-### Known wiring gap
+### The live conversational path
 
-All sixteen packages have landed as stores, policy, API routes and Console
-views, and each is covered by the evidence above. They are **not yet installed
-on the live conversational path**: `keystone/cmd/keystone/main.go` still builds
-a single Butler provider from `-butler-provider` and installs it directly into
-`ButlerHost`, and nothing in production imports `keystone/butlerstore`,
-`butler.Runner`, `keystone/adapter` or `keystone/crossapp`.
+The sixteen packages landed as stores, policy, API routes and Console views
+before anything served a conversation through them, and for a while that gap
+was the most important thing to say about Part C: every guarantee held on the
+paths a Console drove, and an ordinary Butler conversation still ran the
+pre-W030 loop against a single provider built from `-butler-provider`.
 
-What that means concretely, until the wiring lands:
+That is closed. `keystone/butlerlive` serves a conversation as a named Butler
+(ADR-W031) over `butler.Runner` and a `butlerstore.Ledger`, and
+`cmd/keystone` wires it while the process holds the coordinator lease.
+Concretely:
 
-- A Console or API caller drives durable tasks, memory, authority, connections,
-  routines and notices through the endpoints, and every guarantee above holds
-  on those paths.
-- An ordinary Butler *conversation* still runs the pre-W030 loop: it is not
-  durable across a restart, and it does not consult the model router, so
-  configuring material as local-only does not by itself stop the configured
-  provider receiving it.
-- Locality remains enforced the way it was before this ADR — by which provider
-  is configured at all — not by `SelectModelRoute`.
+- **Which model answers comes from the Butler the message was ADDRESSED to**,
+  and the address comes from the receiving bot's own Keystone credential
+  rather than from anything in the request. Nothing reads the message to
+  decide, which is the property ADR-W031 A2 replaced the router to obtain.
+- **A conversation is a durable task.** Steps, attempts and a work trace are
+  checkpointed before each dispatch, so a conversation survives a restart and
+  a resumed turn serves an already-verified tool result from the ledger
+  instead of dispatching it again.
+- **A session is scoped to one Butler before it can run anything** — its
+  authority resolver and memory scope are bound at construction, so A4's
+  isolation is structural rather than a filter that must be remembered.
+- **There is no fallback branch.** A Butler whose model is unreachable waits;
+  the only model the serving path can reach is the one its Butler was
+  assigned.
 
-This is tracked as a follow-up and is a release-gate item: P14 in particular is
-not complete for the purposes of the v1 gate until the router is on the call
-path.
+What the legacy `-butler-provider` still does: it answers when the deployment
+has created **no Butlers at all**, so an upgrade does not silently go mute.
+That decision reads deployment state and never message content — "has anyone
+made a Butler yet" is answerable before a single byte of what was said is
+examined, which is exactly what a per-message fallback could not claim.
+
+Still not on the live path, and tracked separately: `keystone/adapter` behind
+the integration-work queue, and `keystone/crossapp` routines run from the
+automation engine.
 
 The v1 release gate is P16, not the first successful cross-app demo. A partial deployment may dogfood P1–P5 on the existing surfaces, but memory, new connections, and new write paths remain disabled until their own package evidence and the applicable offboarding/recovery paths pass.
 

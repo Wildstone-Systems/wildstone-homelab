@@ -1,0 +1,746 @@
+# ADR-W033: The Wildstone agent system
+
+- **Status:** accepted design direction, rewritten after architectural review on 2026-09-16
+- **Scope:** identity, authority, agents/Butlers, Connections, memory, secrets, plans, routines, lifecycle, and recovery
+- **Design of record:** [`docs/agent-system-design.md`](../agent-system-design.md)
+- **Audit detail:** remains in [`ADR-W033-review.md`](ADR-W033-review.md) and the existing audit documents. This ADR links decisions to that work but does not carry the full findings matrix.
+- **Implementation:** none of the decisions below imply that the repository already conforms. This is the design target.
+
+`Butler` and `Agent` mean the same architectural object. Product-facing text may say Butler; technical text may say Agent.
+
+---
+
+# 0. Why this ADR exists
+
+The agent audit surfaced many individual findings, but most of them shared a smaller set of unanswered architectural questions. Fixing findings one by one would have let implementation order decide the architecture accidentally. This ADR does the reverse: settle the architecture first, then derive remediation from it.
+
+The governing principle is that identity, authority, knowledge, work, and external reach stay separate. Models may interpret requests and propose work, but they do not create identity, manufacture authority, widen memory audiences, or approve their own durable automation.
+
+Older ADRs remain historical records. Where this ADR conflicts with an older clause, this ADR explicitly supersedes or amends it rather than rewriting history.
+
+---
+
+# A. Human identity, roles, and surfaces
+
+## A0. Authority is decided in three layers
+
+Stated once, up front, because the reviews that produced this document kept finding the same defect in different places: a **specific** resource rule was stronger than the **general** authorization rule it sat under, so a literal implementation could satisfy the general rule while violating the specific one.
+
+The layers, in order, each never widening the one before:
+
+1. **General execution authority** — may this actor do work at all, and within what bounds?
+2. **Resource-specific authority** — may it reach *this* record, *this* secret, *this* tool?
+3. **Disclosure and audience policy** — may the result reach *this* audience, on *this* Connection?
+
+Layer 1 has three kinds of actor, and they are genuinely different principals rather than one impersonating another: an interactive **Person**; a **Task**, whose authority is *derived* — it inherits the bounded authority of the request that created it, is re-evaluated at every boundary, can never widen, and is not a grant object anyone issues or holds; and an approved **routine version** running unattended.
+
+The general rules **require layers 2 and 3 without enumerating them**. That is the part that closes the class rather than one instance of it: a new resource brings its own grant semantics, and the general rule cannot silently permit what that resource forbids because it never claimed to know the whole list.
+
+## A1. There are two fundamental human roles
+
+Wildstone has exactly two fundamental human roles:
+
+- `owner`
+- `member`
+
+`child` is not a third RBAC role. It is a constrained Member profile/policy preset. The same mechanism may later support profiles such as `guest` without adding another fundamental authority rung.
+
+An Owner administers the deployment. A Member consumes household services and capabilities.
+
+## A2. Every human is one canonical Person
+
+A Person has one stable internal identity regardless of how they authenticate or communicate. Directory login, web session, Telegram identity, Discord identity, and future bindings all attach to the same Person.
+
+A claimed name, display name, phone number, or chat username establishes nothing by itself. External identifiers become identity bindings only after authenticated enrolment or explicit Owner administration.
+
+## A3. The first Owner is created during installation
+
+A fresh install must not complete without at least one active Owner.
+
+The installer asks for the initial administrative username and password and creates the first Owner and directory identity before setup completes. Wildstone does not use a "first browser visitor becomes admin" flow.
+
+After installation, the user is directed to the network-bound Wildstone URL and signs in normally.
+
+## A4. Homepage and Console are different trust surfaces
+
+### Homepage
+
+Homepage is the household plane. Every authenticated Owner and Member may reach it, subject to service and capability entitlements.
+
+Homepage uses a persistent household SSO session so normal navigation among Homepage and services does not repeatedly ask for credentials.
+
+Homepage is not an administrative surface. Even for an Owner, it remains the household experience. It may offer a visible link to Console, but it does not become an admin dashboard.
+
+Only Member Agents appear on Homepage.
+
+### Console
+
+Console is the control plane. Only Owners may enter it. There is no delegated Member exception: if a Person can enter Console, they are an Owner.
+
+Console requires fresh or recent step-up authentication even when the household SSO session is still valid. Highly consequential administrative actions **require** a currently fresh Owner session — not "may require": an elevation window that expires without closing the action is not an administrative boundary. Wildstone does not require a new password or second factor for every individual click inside that window.
+
+## A5. Service access is group-based and enforced outside the UI
+
+Each app/package declares one or more Wildstone access groups, projected into the directory/SSO layer using the strongest compatible integration mechanism available to the service: OIDC, LDAP, or safe proxy/forward-auth where compatible.
+
+A package must not rely on Homepage card visibility as authorization. A user who knows the direct service URL is still denied unless their effective entitlement allows access.
+
+New Members inherit a default household access group, expected to be something like `Family`, and may receive additional service/group assignments.
+
+Higher-level groups such as `Adults`, `Kids`, `Media`, `Documents`, or `Home Automation` may be expressed in Wildstone and projected to effective directory memberships. Explicit deny/restriction overrides inherited allow.
+
+## A6. Demotion and last-Owner protection are immediate
+
+Changing an Owner to Member immediately removes Console authority and invalidates active Console sessions.
+
+Wildstone must always retain at least one active Owner. The last Owner cannot demote, disable, soft-delete, or otherwise remove their own active Owner status until another active Owner exists.
+
+## A7. Host privilege is the final recovery authority
+
+If web authentication is lost, recovery is performed from the host through the CLI by a root-privileged caller, whether local or over SSH.
+
+The product must support flows equivalent to:
+
+```text
+wildstone owner reset-password <username>
+wildstone owner create <username>
+```
+
+Recovery actions are audited. This is the break-glass path; no hidden web backdoor is required.
+
+---
+
+# B. Agents, tools, models, and Connections
+
+## B1. Agents belong to the household
+
+Agents are household-owned resources, not creator-owned resources.
+
+Any Owner may administer any Agent. Members cannot create, modify, clone, pause, retire, delete, or reconfigure Agents.
+
+## B2. There are two Agent classes
+
+- `owner` Agent
+- `member` Agent
+
+A Member Person may interact only with Member Agents.
+
+An Owner Person may interact with Owner or Member Agents.
+
+This is structural, not merely a runtime preference. A normal Member-to-Owner-Agent path is not admitted in the first place.
+
+## B3. Tools have authority classes
+
+Tools are classified at least as:
+
+- Member tool
+- Owner tool
+
+Member tools may be granted to either Agent class. Owner tools may be granted only to Owner Agents. Configuration that assigns an Owner tool to a Member Agent is invalid and must be rejected.
+
+A tool may additionally be marked `opt-in`, meaning it is excluded from broad default grants even when its class otherwise matches.
+
+## B4. Tool grants support dynamic service bundles and explicit selections
+
+An Owner can grant a whole service/class bundle or individual tools.
+
+A dynamic grant such as "all Home Assistant Member tools" automatically includes future Home Assistant tools that are both Member-class and not opt-in. It does not absorb future Owner-class or opt-in tools.
+
+An explicit list remains static.
+
+## B5. Agent creation, upgrade, and downgrade are intentionally asymmetric
+
+A newly created Owner Agent receives all currently available Member and Owner tools by default except tools marked opt-in.
+
+A newly created Member Agent can receive only Member tools.
+
+Downgrading an Owner Agent to Member automatically strips all tool grants. The Owner may then re-grant appropriate Member tools.
+
+Upgrading a Member Agent to Owner preserves its existing Member grants but does not automatically add Owner tools. This avoids silent privilege expansion through Connections that may still admit Members.
+
+## B6. Model fallback is configured per Agent
+
+An Agent owns an ordered model/provider chain, not one global model and not a deployment-wide fallback order.
+
+Example:
+
+```text
+Alfred
+1. local Ollama model
+2. OpenAI model
+3. OpenRouter model
+
+Sandy
+1. different local model
+2. Anthropic model
+```
+
+Model fallback stays within the assigned Agent. Wildstone does not automatically substitute another Agent when one Agent cannot perform an inference step.
+
+Privacy requirements still constrain the model chain. A local-only task must fail rather than silently fall through to a cloud model.
+
+## B7. Connection is the common reach abstraction
+
+Every way a Person communicates with an Agent is a first-class `Connection`, including Homepage, Telegram, Discord, Slack, voice, and future transports.
+
+A Connection belongs to exactly one Agent. An Agent may have many Connections, including multiple Connections of the same transport type.
+
+Each Connection has its own lifecycle, credential or secret reference, admission policy, configuration, and disclosure/privacy classification.
+
+Disabling a Connection does not pause the Agent.
+
+## B8. Homepage is a first-class trusted Connection
+
+Homepage is not a special bypass around the Connection model.
+
+A Person using Homepage may select and converse with any Member Agent to which they are admitted. Owner Agents are not exposed on Homepage.
+
+## B8.1 Groups are one household principal namespace
+
+Service entitlements (A5), memory audiences (C-series) and secret grants (D3) all reference the same groups — `Adults`, `Kids` — rather than each keeping a parallel notion of who they mean.
+
+One namespace is not one permission. Membership is an identity primitive; what it authorizes is each resource's own decision. Being in `Adults` does not confer every adult service, every adults-only record and every adults-only secret; it means that when those rules each say "adults" they mean the same people. The alternative is two group systems that drift, and a household unable to explain why someone is in one and not the other.
+
+## B9. Connection admission supports Person and Group subjects
+
+The admission schema supports both Person and Group subjects from the beginning so group-oriented capability does not require a schema redesign later.
+
+MVP admission is Person-based. True group-conversation semantics are future work because safe group chat requires speaker identity, changing audience membership, destination-aware disclosure, and per-speaker authority.
+
+Unknown or unbound external identities are refused before model inference.
+
+**So group and multi-recipient destinations fail closed in MVP**, and this is the consequence of deferring group semantics rather than a separate rule. Person admission authenticates the speaker; it says nothing about who else is in the room. A *recognised* Person addressing an Agent from a group destination is refused and directed to a one-to-one Connection, because otherwise they could pull their own Personal memory in front of unadmitted participants while every disclosure rule here still read as satisfied. "The sender is known" is not "the audience is known".
+
+Owner-Agent Connections admit Owners only. Configuration and runtime both enforce this.
+
+## B10. Conversations follow Person + Agent, not transport
+
+A session is fundamentally associated with:
+
+```text
+Person + Agent + session_id
+```
+
+Messages record which Connection they arrived on and left on, but the Connection is not the session identity.
+
+If the same Person talks to the same Agent on another Connection within a configurable recency threshold, and exactly one session is eligible, Wildstone continues it. Outside that threshold, it starts a new session.
+
+Where more than one session is eligible, Wildstone asks rather than choosing. Two recent conversations with the same Agent are two conversations the Person kept apart, and continuing the arbitrarily-more-recent one, or merging them, is a decision the system is not entitled to make on the Person's behalf. No candidate's context is loaded until they answer; `/new` resolves it without choosing.
+
+The **whole candidate** is disclosure, not merely its subject, and it is governed separately from context. A conversation can be revealed by its subject, by its timestamp, by a neutral placeholder holding a slot in a list, or simply by the list being one item longer; "no context is loaded" covers context rather than metadata, and the candidate is precisely what is shown before anyone has chosen.
+
+So the current Connection's disclosure policy — its disclosure/privacy classification per B7, and the delivery boundary of D7; design contract §8.4 carries the detail — is evaluated against each part separately before display: **existence** — omit the candidate entirely if not permitted; **subject** — replace with a neutral label; **timestamp and activity metadata** — omit; and likewise any other identifying metadata. Existence is the leg that has to be policy-dependent, because checking only the subject leaves a protected session disclosed by the placeholder that replaced it — a slot in a list still says there is a conversation here you are not being told about. Candidate count and ordering are taken from what survived filtering and must not imply what was removed.
+
+After filtering: exactly one safe candidate continues unambiguously; several safe candidates go to the Person to choose among those only; and where none are safe while protected candidates exist, the system **fails closed** — a generic redirect to a trusted Connection such as Homepage that reveals no number, subject, timestamp or existence, and reads identically whether one protected session was hidden or five. The case is sessions begun on Homepage and continued ambiguously over Telegram: safe where they were written, not safe where they would now be shown.
+
+A command such as `/new` starts a new independent session immediately. Other session commands such as listing or resuming sessions may be added without changing the architecture.
+
+The most recent accepted inbound Connection is the default reply path.
+
+## B11. Cross-Connection fallback is explicit policy
+
+If the current reply Connection becomes unavailable, Wildstone does not silently switch to another Connection by default.
+
+Fallback may be explicitly configured between approved Connections, for example Discord to Telegram while Homepage to Telegram remains disallowed. This allows convenience without erasing privacy boundaries.
+
+---
+
+# C. Memory and knowledge
+
+## C1. There are four memory scopes
+
+Wildstone distinguishes:
+
+1. **Session context** — transient conversation/task state.
+2. **Agent-local memory** — durable knowledge belonging to one Agent.
+3. **Personal memory** — durable knowledge scoped to one Person.
+4. **Household memory** — durable knowledge intentionally shared across the household.
+
+They may live in one physical memory service, but their logical ownership and authorization are distinct.
+
+## C2. Session context is not durable memory by default
+
+A conversation may influence the current session without automatically becoming durable memory.
+
+When a Person explicitly says "remember this", that instruction itself is sufficient authorization to create Personal memory. Wildstone does not ask a redundant confirmation.
+
+## C3. Agents may autonomously create Personal memory
+
+An Agent may extract and save relevant Personal memories from ordinary conversation without asking for confirmation each time, because the resulting memory remains scoped to that Person and under that Person's control.
+
+The Person can inspect, correct, forget, export, or restrict their Personal memory.
+
+The Agent must preserve provenance and must distinguish stated information from inference rather than silently promoting guesses to facts.
+
+## C4. Household memory is the sharing boundary
+
+Agents do not autonomously promote Personal memory to Household memory.
+
+An Agent may propose promotion, but the Person whose Personal memory it is must approve that promotion through normal product controls.
+
+Owner status does not make one Person the owner of another Person's Personal memory. Owners may administratively inspect server-held data, but inspection is not ownership and does not grant normal-product authority to promote another Person's memory.
+
+## C5. Agent-local memory is real and isolated
+
+Each Agent may autonomously create durable Agent-local memory that it considers useful for its own operation and patterns.
+
+Agent-local memory is not directly readable by other Agents initially. Cross-agent continuity should primarily come from Personal and Household memory rather than one Agent reaching into another Agent's private store.
+
+**Isolation from other Agents is not isolation between people, and the second is the likelier leak.** One Agent serves several people, so a record it learned from Person A sits in the store that answers Person B; cross-Agent isolation says nothing about that. A derived Agent-local record therefore inherits the strictest audience and privacy constraints of its sources and may never widen them, and on a shared Agent retrieval and prompt assembly evaluate the active Person against those inherited constraints. Otherwise Agent-local memory becomes a way to launder a source's audience by copying it somewhere that has none of its own.
+
+On Agent deletion, an Owner can delete, export, promote selected records, or transfer Agent-local memory to another Agent. Transfers preserve provenance indicating the source Agent and the authorized transfer.
+
+## C6. Personal-memory access follows Agent admission by default
+
+When a Person is admitted to use an Agent, that Agent receives access to that Person's Personal memory by default. The access can be explicitly restricted.
+
+Those admissions never combine. An Agent serving several people resolves Personal memory for the **Person on the current request** and no one else; the union of what it may reach across everyone it serves is not a set anything is evaluated against. Otherwise an Agent admitted by two people answers one of them out of the other's memory, and every rule in this section still reads as satisfied.
+
+This avoids a second configuration step merely to make the Agent useful while keeping the scope tied to that Person.
+
+## C7. Member Agents receive Household memory by default
+
+Member Agents receive Household-memory access by default, subject to explicit restriction and per-record privacy policy.
+
+That access is **eligibility to query the household namespace, not authority to disclose every household record to every Person admitted to the Agent.** Retrieval and prompt assembly evaluate each candidate record against the active Person on the current request, including the record's audience and privacy policy; a record whose audience excludes that Person is excluded from both, whatever the Agent can reach.
+
+The case that makes it concrete is one Member Agent shared by an adult and a child. The Agent is eligible for Household memory and the child is not in an adults-only record's audience — so without the active-Person check the Agent's eligibility would be doing the child's authorization for them. This is the same rule C6 applies to Personal memory, and the reason it has to be said twice is that Household memory is *meant* to be shared, which makes the missing check look like correct behaviour.
+
+The per-Agent restriction is unchanged and is a second limit rather than a substitute: it can narrow what an Agent reaches below what its people could see, and can never widen it above them.
+
+**An unattended routine has no active Person, so it is its own memory principal.** A scheduled routine runs with nobody present (E6), which leaves the active-Person rule above with no subject; the answer is not to borrow one. An approved routine version is a bounded principal for memory retrieval, as it already is for Household-secret `use` (E6.0), and it never inherits or impersonates its proposer, approver, or any other Person. Effective unattended access intersects the exact routine-version authorization, that version's memory grant, the record's own audience and privacy policy, the assigned Agent's eligibility, **the routine's approved output audience**, and current privacy and safety policy.
+
+The output-audience leg is what makes this safe rather than merely well-typed: a routine reads in order to deliver, so what it may read is bounded by who will read its output. An adults-only Household record must not feed a routine delivering to a Child audience, and Agent-local source inheritance (C5) is not bypassed by running unattended.
+
+Personal memory is the boundary worth stating on its own: **Owner approval of a routine does not grant another Person's Personal memory.** Approval authorizes the work; it does not transfer ownership of the knowledge the work may consume. Such routines are not prohibited — they may simply require grant support that does not exist yet.
+
+Owner classification does not imply unrestricted access to every Person's Personal memory. Administrative authority and disclosure authority remain separate.
+
+## C8. Memory records preserve audience, provenance, and correction history
+
+A durable memory record carries enough metadata to support at least:
+
+- scope/owner
+- subject
+- content
+- kind
+- audience
+- provenance
+- confidence or stated/inferred status
+- lifecycle status
+- sensitivity/privacy policy
+
+Corrections supersede rather than silently rewrite history.
+
+Derivatives inherit the strictest disclosure/privacy requirements of their sources.
+
+Retrieval filters inside the candidate query and rechecks the destination before delivery.
+
+## C9. Retrieval combines exact and semantic candidates under one permission filter
+
+Keyword and semantic retrieval are both useful, but neither may bypass audience/privacy filtering.
+
+Live applications remain authoritative for live state. Memory is contextual knowledge, not a replacement for source-of-truth service data.
+
+## C10. Forgetting survives restore
+
+Forgetting/deletion must reach active memory, derived indexes, summaries, and caches and must be journaled so a backup restore cannot resurrect intentionally forgotten data.
+
+## C11. Sensitive semantic memory is not a secret
+
+Semantic information that an Agent needs to reason about remains memory even when sensitive. It may carry stronger policy, for example:
+
+```text
+sensitivity: protected
+cloud_processing: local_only
+external_delivery: restricted
+```
+
+Memory also preserves processing provenance, including whether cloud inference was already involved when the information was captured.
+
+A privacy rule can become stricter later, but provenance is not rewritten to pretend earlier disclosure did not occur.
+
+---
+
+# D. Secrets and privacy
+
+## D1. Household secrets use a store separate from infrastructure/node secrets
+
+The existing node/infrastructure secret store keeps its own properties. Household/user secrets are a separate domain because they require different ownership, use, reveal, and recovery semantics.
+
+Secret scopes include at least Personal and Household, and they do not share authorization rules.
+
+A Personal secret belongs to exactly one Person and its audience is that Person alone. No other Person may use or reveal its raw value, **including an Owner acting through normal product authority**.
+
+Secret permissions are product-level: **use** — interactively, with the owning Person active on the request — by an Agent that Person has admitted *and* explicitly granted; **manage** — create, edit, grant, revoke, control reveal — by that Person only.
+
+**Unattended routines cannot use Personal secrets; they fail closed.** A Person's grant to an Agent authorizes that Person's own interactive use through that Agent; it is not a standing capability the Agent carries into work the Person is not part of. When a routine runs with no active Person (E6), a Personal secret does not resolve, and nothing substitutes for the absent owner — not the Agent's grant, not Owner approval of the routine, not the routine's own approval or version, not a shared-Agent relationship, not the proposer's identity, not the approver's. That list is exhaustive deliberately: every entry is a plausible-looking stand-in, and a Personal secret has exactly one legitimate authority, who is by definition not there.
+
+The hole this closes is concrete: Person A grants a shared Agent use of A's Personal secret, an Owner approves an unattended routine on that same Agent, and the routine resolves A's secret with A never involved. Household secrets remain the supported type for unattended work, through the exact-version principal in D3/E6.0.
+
+An MVP boundary rather than a permanent prohibition. Personal-secret use by routines would need explicit Person-authorized exact-version delegation with its own revocation, audit and interface semantics; none of that is designed here, so until it is the answer is no.
+
+Administrative lifecycle operations are deliberately a separate concept. An Owner runs the server, so an Owner can quarantine, disable, delete and resolve ownership at offboarding. Those act on the object and **never reveal the raw value or confer `manage`**: an Owner can make a Personal secret stop existing without being able to read it, grant it, or decide who else may. Collapsing the two would make "Owner" a reveal path by accident, which is the same boundary C7 keeps for Personal memory — administration is not ownership.
+
+**Personal-secret raw reveal is deferred for MVP.** Members may propose Personal secrets and use authorized ones through tools; direct create/edit/delete controls are deferred, and there is no Personal reveal surface at all unless a separately approved trusted one is added later. Household secrets are the shared case the rules below describe, and their reveal rules are unchanged.
+
+## D2. Models receive references, not raw secret values
+
+By default, a model receives an opaque secret reference rather than the value.
+
+Trusted runtime/tool code resolves the reference below inference. Resolution rechecks identity, authorization, destination, and validity.
+
+This remains the default even for local models so secrets do not casually leak into transcripts, memory extraction, embeddings, summaries, or a later cloud fallback.
+
+## D3. Use, manage, and reveal are distinct permissions
+
+A tool may use a secret without the Agent/model seeing it.
+
+The permission model distinguishes at least:
+
+- use
+- manage
+- reveal
+
+Member Agents may be allowed to use authorized secrets through tools without receiving manage or reveal authority.
+
+**For Household secrets, authorization is principal/object rather than an Agent-wide boolean.** A Household secret grants its permissions to explicit principals, and an Agent grant makes that Agent technically capable of using the secret through a tool without ever substituting for authorizing the caller.
+
+There are **two kinds of principal because there are two kinds of execution**, and this general rule recognises both rather than leaving routines as an exception carved out of it. **Interactive**: the principal is the active Person, directly or through Group membership, and effective `use`/`reveal` intersects that Person or Group, the Agent/tool capability, the secret's own permission grant, and the trusted Connection or reveal-surface policy. **Unattended** — Household secrets only, since Personal secrets fail closed with no active Person (above): the principal is the exact approved routine version (E6.0), no active Person is required, the runtime never borrows or impersonates the proposer or approver, and effective `use` intersects that exact-version principal, the Agent/tool capability, a `use` grant held by that exact routine version, current service capability, and current privacy and safety policy.
+
+Across both: a routine principal gets `use` only and never human raw-value `reveal`; `manage` stays Owner-controlled; and changing a routine's executable behaviour or its required secret grants creates a new version needing reapproval.
+
+Stating only the interactive form here would make this rule contradict E6.0, and a literal implementation would have to either refuse every unattended secret-backed routine or quietly bypass this section — which is how a bypass becomes the real authorization rule.
+
+Without this, a Member Agent admitted by two people becomes a way around the audience: Person B uses or reveals a secret granted only to Person A, or only to an adults-only group, because the Agent they share holds a grant and the Agent was treated as the principal. Reveal surfaces are unchanged (D4) — this decides who may reveal, not where.
+
+## D4. Secret reveal depends on both Agent class and trusted Connection
+
+Owner Agents are not reachable on Homepage. An Owner Agent may reveal an authorized secret only through trusted Console chat/UI, subject to current Owner authorization and fresh administrative session requirements where applicable.
+
+A Member Agent may reveal an authorized Household-shared secret through the trusted Homepage Connection.
+
+Raw reveal should be rendered by trusted UI/runtime code as a protected component rather than inserted into ordinary model-authored transcript text where possible.
+
+External chat Connections such as Telegram or Discord are not secret-reveal surfaces merely because the sender is authenticated.
+
+## D5. Member secret management is intentionally narrower in MVP
+
+The long-term model may allow Members to manage their own Personal secrets while Owners manage Household secrets.
+
+For MVP, Wildstone may be stricter:
+
+- Members may propose secrets.
+- Members may use authorized secrets through tools.
+- Members may reveal authorized Household-shared secrets through trusted Homepage.
+- Owners create/edit/delete Household secrets and approve proposals.
+- Owners reveal through trusted Console.
+
+This is an implementation simplification, not an architectural prohibition on future Personal-secret management.
+
+## D6. A secret disclosed over an external Connection is already disclosed
+
+If a Person types a secret into Telegram or another external Connection, Wildstone must not pretend it remained local.
+
+The system should warn, stop repeating/using the raw value in conversation, offer a secret-storage proposal, and preserve provenance that the secret was received through that external Connection.
+
+## D7. Processing and delivery are separate privacy boundaries
+
+Every sensitive operation asks two independent questions:
+
+1. May this content be processed by this model/provider?
+2. May this content be delivered over this Connection?
+
+A local model does not make Telegram private. A trusted local Homepage Connection does not make a cloud model local.
+
+Connections therefore carry disclosure/privacy characteristics sufficient for policy evaluation, such as local/external transport, encryption properties, and retention/logging class.
+
+If privacy requirements cannot be satisfied, execution fails loudly. Wildstone does not silently downgrade privacy.
+
+---
+
+# E. Plans, approvals, routines, and work
+
+## E1. Plan is a first-class primitive
+
+Durable or consequential proposed changes are represented as versioned Plans rather than informal chat intent.
+
+A Plan carries at least:
+
+- proposer Person
+- proposing Agent
+- exact version
+- requested tools/capabilities
+- trigger/schedule where relevant
+- targets/parameters
+- delivery behavior
+- approval requirement
+- status
+- resulting resource/action
+
+Plan states include at least `draft`, `submitted`, `awaiting_review`, `approved`, `rejected`, and `superseded`.
+
+Pending Plans remain pending indefinitely in MVP rather than expiring automatically.
+
+## E2. Agents propose; human Owners activate
+
+Member Agents may draft and submit Member-class Plans.
+
+Owner Agents may draft and submit Member- or Owner-class Plans.
+
+No Agent may approve or activate its own Plan. A human Owner must approve the exact executable version.
+
+This supersedes the previous standing-grant design that allowed some Agent-created routines to self-activate.
+
+## E3. Submitted Plans enter an Owner Review Queue and notify a designated Owner
+
+The persistent Owner Review Queue is the source of truth and is visible to all Owners.
+
+Notification delivery follows designated Owner/reviewer preferences. For example, Alfred may notify the designated Owner over Telegram that Abigail and Sandy submitted a routine Plan.
+
+The Agent/Connection delivering the review request is not the approver. The human Owner is.
+
+The first valid Owner decision resolves the submitted version.
+
+## E4. Editing and approval are separate actions
+
+Editing an executable Plan creates a new version. That version requires an explicit approval action.
+
+No material edit inherits approval from an older version.
+
+## E5. Approved routines are household-owned
+
+Once approved, a routine is a durable Household resource rather than property of the proposing Person or assisting Agent.
+
+It records provenance such as:
+
+- proposed_by_person
+- proposed_through_agent
+- approved_by_owner
+- assigned_agent
+
+but its continued existence does not depend on those actors remaining present.
+
+## E6. Approval creates bounded routine authority
+
+An Owner approves a routine once; each normal run does not require another approval.
+
+Approval binds the exact routine version and its executable bounds, including tools, targets, parameter limits, trigger/schedule, **output audience**, delivery policy, assigned Agent, and the **per-resource grants** the version requires.
+
+Output audience and delivery policy are deliberately separate. Output audience is *who may receive or learn from the result*, and it is an authorization input — it bounds what the routine may read (C7), because a routine reads in order to deliver. Delivery policy is *where and how* the result goes. A routine can have a correct destination and a wrong audience, which is why the audience is approved rather than inferred from the destination.
+
+The runtime still checks current service/tool availability and current safety/privacy policy on every run.
+
+## E6.0 An approved routine is its own principal for secret use
+
+A scheduled routine runs unattended: no active Person, and by E6 it does not keep borrowing its proposer's authority. Household-secret authorization grants to Person and Group principals (D3), so without a third kind of principal every routine needing a secret either fails that intersection or impersonates a proposer indefinitely — and the second is worse for being invisible.
+
+So an approved routine is a principal in its own right, **bounded to its exact approved version**, and a Household secret may grant `use` to that routine version as it would to a Person or Group. Effective unattended `use` intersects the exact-version routine authorization, the routine/version secret-use grant, the assigned Agent/tool capability, current service capability, and current privacy and safety policy.
+
+Any change to executable behaviour **or to the secret grants a routine requires** creates a new version needing Owner reapproval: a routine cannot acquire a secret it was not approved with by being edited around it. This covers `use` only — raw-value reveal to a human is unchanged, since a routine resolves a secret below inference to reach a service and never reveals one.
+
+## E6.1 Any Owner can stop a routine immediately
+
+Everything in E5 and E6 makes an approved routine durable: it runs without per-run approval, and it outlives its proposer and its approving Owner. Durability without a stop is a routine nobody can turn off, so the stop is stated here rather than left to be inferred from lifecycle.
+
+**Stopping needs no Plan and no approval.** It is deliberately asymmetric with starting: an Owner who has decided a recurring consequential effect must end does not wait in a review queue behind the thing they are trying to stop.
+
+`disabled` preserves the bounded authorization so the routine can be re-enabled without a new approval. `revoked` withdraws it, and returning to service takes a new approved version like any first activation. Soft deletion ends execution authority at the soft delete, not at the purge. In-flight runs stop at their next boundary on the same terms as F1, and an effect already committed past a boundary is recorded rather than assumed away. A household-wide stop halts all routine execution at once.
+
+## E7. Member-class routines contain only Member-class tools
+
+A Member Agent cannot propose or execute a routine requiring Owner tools.
+
+An Owner Agent may propose Member- or Owner-class routine work, but human Owner approval is still required for activation.
+
+## E8. Routines separate deterministic steps from inference steps
+
+The routine engine/scheduler owns routine execution. An Agent is invoked only where inference is required.
+
+If the assigned Agent is paused or unavailable:
+
+- deterministic steps continue normally
+- inference-dependent steps become blocked or fail loudly with visible status
+- the routine itself is not destroyed or silently paused as a whole
+
+Wildstone does not automatically substitute another Agent.
+
+Changing the assigned Agent is an authorization-relevant edit and requires a new routine version and Owner approval.
+
+## E9. Tasks outlive turns; turns own fresh ledgers
+
+A Task represents the thing a Person asked to accomplish and may span multiple turns.
+
+Each turn gets a fresh ledger of observations, attempts, tool results, and evidence. A later turn must not silently reuse stale readings from an earlier turn.
+
+Budget, overall status, and uncertainty belong to the Task.
+
+## E10. Completion requires evidence; uncertainty is explicit
+
+A model claiming an action completed is not evidence.
+
+External effects should use idempotency/deduplication where supported. After a timeout, Wildstone inspects the external outcome before retrying. If confirmation is impossible, the Task records an uncertain outcome rather than blindly repeating a consequential effect.
+
+## E11. Learned procedures are structured definitions
+
+A reusable learned procedure is a versioned structured definition, not a remembered sentence reinterpreted from scratch on every run.
+
+Saving a procedure grants no new authority. Activating it follows the same Plan and Owner-approval rules as any other routine.
+
+---
+
+# F. Lifecycle, revocation, deletion, and recovery
+
+## F1. Authority revocation is immediate; durable-resource resolution is explicit
+
+**Demotion is not offboarding.** Owner → Member demotion recomputes authority *downward*: Console access, elevated Owner sessions, Owner-only admissions and pending Owner-bound approvals and artifacts go immediately, while the Person's Member identity, Homepage and entitled-service access, Member-Agent admissions, Personal memory and every other Member-level authority remain. A demoted Owner is still a Member of this household, and running the full path below on them would disable the identity that is supposed to remain. Demotion borrows the mechanism — recompute now, recheck at every boundary — without borrowing the scope.
+
+Revoking, disabling, or deleting a Person immediately removes active authority:
+
+- revoke SSO/web/Console sessions as applicable
+- update directory/group entitlements
+- revoke Agent Connection admission
+- invalidate Person-bound approvals that have not yet been consumed
+- invalidate prepared private context where necessary
+- deny new actions
+- stop queued and in-flight work at its next boundary
+
+The last of those is not covered by "deny new actions", where the operative word is *new*. At the moment of revocation there is already authorized work in motion — a reply in a delivery queue, a model turn mid-flight, a retry about to fire, private context already assembled for a prompt. Each rechecks authority at its next boundary and fails there, and a delivery stopped this way reports the failure without disclosing what it carried. Revocation is prompt because it sweeps and correct because everything rechecks anyway; neither half replaces the other.
+
+"Invalidate approvals" reaches authorization still bound to that Person — pending and unconsumed approvals, queued Plans awaiting their review, approval sessions, and prepared artifacts such as issued secret references. It does **not** reach an already-materialized Household routine authorization that was validly approved beforehand: that belongs to the Household (E-series), not to its proposer or approver, and F2 below depends on the distinction. Without it, an Owner leaving would quietly take the household's routines with them.
+
+The one case resolved rather than assumed: a routine that delivers to the revoked Person, or that depends on an admission only they held, pauses for Owner resolution. Not deleted, and not left delivering to someone who has gone.
+
+Durable/shared resources are not silently destroyed merely because the Person left.
+
+## F2. Person deletion inventories durable resources
+
+Before final deletion/purge, Wildstone shows Owners the durable resources associated with the Person and allows explicit resolution such as transfer, retain, export, retire, block, or delete as appropriate.
+
+Personal work/data may be exported or deleted. Household routines may continue because they are Household-owned.
+
+## F3. Agents have explicit lifecycle states
+
+Agents support at least:
+
+- active
+- paused
+- retired
+- pending deletion / soft-deleted
+- purged/deleted
+
+A retired Agent remains inspectable in Console, including configuration/history and exportable memory, but cannot execute again.
+
+## F4. Agent deletion resolves memory, routines, Connections, and work
+
+Deleting an Agent presents an explicit resolution flow:
+
+- Agent-local memory: delete, export, transfer, or promote selected records
+- assigned routines: reassign, leave blocked, or retire
+- Connections: disable/revoke
+- outstanding work: cancel or block with recorded reason
+
+Personal and Household memory are not deleted merely because an Agent is deleted.
+
+## F5. Service/package removal makes bindings dormant rather than erasing them
+
+When a package/service disappears, its service access groups, user assignments, Agent tool grants, and routine definitions remain but become inactive/unavailable.
+
+A routine depending on a missing capability becomes `blocked` with a visible reason.
+
+When the exact compatible capability returns, dormant bindings reactivate and a routine blocked only for that reason automatically returns to service, with the transition recorded in history/audit.
+
+Materially changed semantics must not be treated as the same capability merely because a label is similar.
+
+## F6. Soft deletion persists until explicit Owner purge
+
+People, Agents, Connections, routines, and similar durable resources are soft-deleted by default and remain recoverable indefinitely until an Owner explicitly performs final purge.
+
+There is no automatic retention timer required for MVP.
+
+---
+
+# G. Amendments and supersessions
+
+This ADR is authoritative where it conflicts with earlier decisions. Older ADRs remain untouched as historical records.
+
+The major changes are:
+
+- **ADR-W030 A6 / prior routine activation:** superseded where it allowed an Agent to self-activate routine work under a standing grant. Under this ADR, Agents propose and a human Owner activates the exact version.
+- **ADR-W030 A7/A8:** authority remains an intersection but now uses the Person, Agent, Connection, and Task/routine authorization as distinct required legs.
+- **ADR-W031 A4 / prior per-Butler-memory framing:** superseded by explicit Session, Agent-local, Personal, and Household memory scopes. Agent-local durable memory is a real concept.
+- **ADR-W031 A7 and ADR-W026 A3:** retained in substance where they require independent Agent credentials, generalized through the Connection abstraction.
+- **ADR-W032 role/profile assumptions:** superseded by exactly two fundamental human roles, Owner and Member; Child is a constrained Member profile.
+- **Prior single-model Agent definition:** superseded by a per-Agent ordered model/provider chain.
+- **Prior Agent-pause/routine coupling:** superseded. Household routines survive Agent loss; deterministic steps continue and inference steps block.
+- **ADR-W012 infrastructure secret-store properties:** intentionally retained; Household/user secrets remain a separate store/domain.
+
+Detailed finding-by-finding coverage remains in the review/audit documents rather than this ADR.
+
+---
+
+# H. Costs and rejected alternatives
+
+The design intentionally accepts several costs:
+
+- Persistent household SSO and strict Console reauthentication require two distinct session behaviors.
+- Dynamic service/tool bundles require stable capability identity and compatibility checks.
+- Four memory scopes and disclosure policies are more complex than one generic memory store, but they match the actual ownership boundaries.
+- Agent-local memory introduces lifecycle work at Agent deletion, including transfer provenance.
+- A separate Household secret domain adds operational complexity but keeps raw credentials out of normal memory/model paths.
+- Requiring human Owner approval for every newly activated routine adds friction but prevents Agents from silently creating durable automation.
+- Cross-Connection session continuity requires careful privacy-aware reply routing.
+- Fail-closed privacy means some work will stop rather than "helpfully" use an unsafe fallback.
+
+Rejected alternatives include:
+
+- a third fundamental `child` role
+- first-browser-visitor bootstrap
+- blanket forward-auth for every app regardless of compatibility
+- Members administering Agents
+- automatic Owner-tool grants when upgrading a Member Agent
+- one global model fallback order
+- Connection-bound conversation identity
+- silent cross-Connection reply fallback
+- eliminating Agent-local memory
+- treating sensitive semantic memory as a secret
+- allowing Agents to self-activate durable routines
+- automatic Agent substitution
+- hard deletion by default
+
+---
+
+# I. Dependency-oriented implementation order
+
+The ADR records only the dependency order. Detailed implementation planning belongs in issues or a separate implementation plan.
+
+1. Human identity and surfaces
+2. Service entitlements
+3. Agent classes and tools
+4. Connections and sessions
+5. Memory scopes and retrieval policy
+6. Secrets and privacy boundaries
+7. Plans and Owner Review Queue
+8. Routine execution
+9. Lifecycle and soft deletion
+10. Audit remediation, migrations, and rollout
+
+Detailed acceptance criteria live in [`docs/agent-system-design.md`](../agent-system-design.md), which is the clean design contract.
+
+---
+
+# J. Open implementation choices
+
+The architecture intentionally does not freeze every implementation detail. Still open are items such as:
+
+- exact session-recency timeout
+- exact slash-command vocabulary beyond the required ability to start a new session
+- exact directory/group projection implementation per app
+- exact protected-memory sensitivity taxonomy
+- exact Connection disclosure fields
+- exact model/embedding products
+- numeric Task/routine budgets
+- exact UI for Plan review and protected secret reveal
+- exact soft-delete purge UX
+
+Those choices must preserve the decisions above and may be made during implementation without reopening this ADR unless they change an architectural boundary.

@@ -22,23 +22,56 @@ package runtimedb
 //   next check rather than whenever a cache expires.
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
 	"time"
 )
 
-// Butler profiles (ADR-W030 A1). The ceiling a member runs under, not a
-// preference they can change.
+// Human roles (design §2.3). There are exactly two, and the closed set
+// is the point: Owners administer the deployment, Members consume it.
+//
+// These are NOT principals.RoleOperator and friends, which are machine
+// and API roles on a different axis, and not the Butler capability
+// profiles below either. A person has a role here; a credential has a
+// principal role; a Butler has a capability profile. Three questions,
+// three answers, deliberately not merged.
+const (
+	RoleOwner  = "owner"
+	RoleMember = "member"
+)
+
+// Butler capability profiles (ADR-W030 A1). The ceiling a BUTLER runs
+// under — the tool surface it is allowed to reach.
+//
+// Until 0039 butler_members.profile borrowed these same two strings to
+// describe a PERSON, which is what conflated "demote an Owner" with
+// "restrict a child". A person's role now lives in role, and the only
+// profile a person can carry is ProfileChild.
 const (
 	ProfileHousehold = "household"
 	ProfileOperator  = "operator"
-	// ProfileChild is stored so guardian relationships can be recorded,
-	// and cannot be admitted: the schema refuses an admitted child until
-	// that surface has its own evidence.
+	// ProfileChild is a constrained Member preset (design §2.3), not a
+	// third role: a child is a Member whose profile is 'child', and the
+	// schema refuses any other combination. It is stored so guardian
+	// relationships can be recorded, and cannot be admitted until that
+	// surface has its own evidence.
 	ProfileChild = "child"
 )
+
+// ErrLastOwner is returned when an operation would leave the household
+// with no active Owner (design §2.5, §18.1).
+//
+// It is a named error because this one is worth telling the caller
+// about precisely: unlike ErrNotAdmitted, which collapses five states
+// so a prober learns nothing, refusing to remove the last Owner
+// discloses nothing an administrator does not already know, and the
+// readable reason is the difference between a Console that explains
+// itself and one that appears broken.
+var ErrLastOwner = errors.New("runtimedb: the last active owner cannot be demoted, disabled, or offboarded while no other active owner exists")
 
 // Identity link types. Each names a different way of being
 // authenticated, and the difference is what makes "how do we know this
@@ -60,8 +93,16 @@ var ErrNotAdmitted = errors.New("runtimedb: this identity is not admitted to the
 
 // ButlerMember is one person's Butler admission state.
 type ButlerMember struct {
-	Member       string    `json:"member"`
-	Profile      string    `json:"profile"`
+	// PersonID is the stable internal identity (design §2.2). It never
+	// changes — not on a rename, not on a re-admission, not when a
+	// directory login moves. Member is a handle; this is the person.
+	PersonID string `json:"personId"`
+	Member   string `json:"member"`
+	// Role is 'owner' or 'member'.
+	Role string `json:"role"`
+	// Profile is the constrained-Member preset, empty for most people.
+	// Empty means NULL in storage: no preset, an ordinary Member.
+	Profile      string    `json:"profile,omitempty"`
 	Admitted     bool      `json:"admitted"`
 	Generation   int64     `json:"generation"`
 	CreatedAt    time.Time `json:"createdAt"`
@@ -80,31 +121,251 @@ func (m ButlerMember) Active() bool {
 	return m.Admitted && m.DisabledAt.IsZero() && m.OffboardedAt.IsZero()
 }
 
-// RecordButlerMember creates or updates a member's record WITHOUT
+// newPersonID mints a stable internal identity. It is opaque on
+// purpose: nothing about a Person that can change may be recoverable
+// from it, or something downstream will start parsing it instead of
+// joining on it.
+func newPersonID() (string, error) {
+	raw := make([]byte, 8)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("runtimedb: generating a person id: %w", err)
+	}
+	return "psn_" + hex.EncodeToString(raw), nil
+}
+
+// RecordButlerMember creates or updates a person's record WITHOUT
 // admitting them. It is how a child record exists before there is a
 // child surface, and how an administrator stages someone before the
 // approving Plan lands.
-func (db *DB) RecordButlerMember(member, profile, guardian string) error {
-	switch profile {
-	case ProfileHousehold, ProfileOperator, ProfileChild:
+//
+// profile is the constrained-Member preset and is normally empty. It
+// does NOT set the role: a child is recorded with role 'member' and
+// profile 'child', because a child is a constrained Member and not a
+// third kind of person (design §2.3).
+//
+// An existing person's role is never changed here. Crossing the Owner
+// boundary is an audited act with its own invariant, so it goes through
+// SetButlerMemberRole and nowhere else — a staging call must not be
+// able to make someone an Owner as a side effect of updating their
+// guardian.
+func (db *DB) RecordButlerMember(member, role, profile, guardian string) error {
+	switch role {
+	case RoleOwner, RoleMember:
 	default:
-		return fmt.Errorf("runtimedb: butler profile must be household|operator|child, got %q", profile)
+		return fmt.Errorf("runtimedb: a person's role must be owner|member, got %q (design §2.3)", role)
+	}
+	switch profile {
+	case "", ProfileChild:
+	default:
+		return fmt.Errorf("runtimedb: the only profile preset is %q, got %q (design §2.3)", ProfileChild, profile)
 	}
 	if member == "" {
 		return fmt.Errorf("runtimedb: a butler member record requires a member name")
 	}
+	if profile == ProfileChild && role != RoleMember {
+		return fmt.Errorf("runtimedb: a child is a constrained member, not a %s (design §2.3)", role)
+	}
 	if profile == ProfileChild && guardian == "" {
 		return fmt.Errorf("runtimedb: a child record requires a guardian (ADR-W030 A2.1)")
 	}
-	_, err := db.sql.Exec(
-		`INSERT INTO butler_members (member, profile, admitted, generation, created_at, guardian)
-		 VALUES (?, ?, 0, 1, ?, ?)
-		 ON CONFLICT(member) DO UPDATE SET profile = excluded.profile, guardian = excluded.guardian`,
-		member, profile, now(), guardian)
+	personID, err := newPersonID()
 	if err != nil {
+		return err
+	}
+	// preset is NULL rather than '' when there is no preset: the column
+	// is a closed enum plus NULL, and '' is neither.
+	var preset any
+	if profile != "" {
+		preset = profile
+	}
+	if _, err := db.sql.Exec(
+		`INSERT INTO butler_members (person_id, member, role, profile, admitted, generation, created_at, guardian)
+		 VALUES (?, ?, ?, ?, 0, 1, ?, ?)
+		 ON CONFLICT(member) DO UPDATE SET profile = excluded.profile, guardian = excluded.guardian`,
+		personID, member, role, preset, now(), guardian); err != nil {
 		return fmt.Errorf("runtimedb: recording butler member: %w", err)
 	}
 	return nil
+}
+
+// SetButlerMemberRole promotes a Person to Owner or demotes them to
+// Member, and is the only path that changes a role.
+//
+// It refuses to demote the last active Owner (design §2.5). The schema
+// refuses that too, and the schema is the authority; this check exists
+// so an administrator gets a sentence they can act on instead of a
+// constraint failure. Both run inside one immediate transaction, so two
+// Owners demoted concurrently serialize and the second one loses.
+//
+// Demotion is not offboarding (§17.1): this changes the role and writes
+// the audit row, and deliberately does not touch admission, links or
+// the generation. Recomputing the authority that hangs off the Owner
+// boundary — Console access, elevated sessions, pending Owner-bound
+// approvals — is the caller's job and a later slice's code.
+func (db *DB) SetButlerMemberRole(member, role, actor string) error {
+	switch role {
+	case RoleOwner, RoleMember:
+	default:
+		return fmt.Errorf("runtimedb: a person's role must be owner|member, got %q (design §2.3)", role)
+	}
+	if actor == "" {
+		return fmt.Errorf("runtimedb: a role change requires the administrator who made it (design §18.1)")
+	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("runtimedb: changing role: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var personID, current, profile string
+	var preset sql.NullString
+	var admitted int
+	var disabledAt, offboardedAt string
+	err = tx.QueryRow(
+		`SELECT person_id, role, profile, admitted, disabled_at, offboarded_at
+		 FROM butler_members WHERE member = ?`, member).
+		Scan(&personID, &current, &preset, &admitted, &disabledAt, &offboardedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("runtimedb: changing role: %w", err)
+	}
+	profile = preset.String
+	if current == role {
+		// Nothing changed, so there is nothing to audit. Writing a row
+		// here would put "promoted to owner" in the trail for someone
+		// who already was one.
+		return nil
+	}
+	if profile == ProfileChild && role != RoleMember {
+		return fmt.Errorf("runtimedb: %q carries the child preset and cannot be made an %s (design §2.3)", member, role)
+	}
+	if role == RoleMember && current == RoleOwner {
+		wasActive := admitted == 1 && disabledAt == "" && offboardedAt == ""
+		if wasActive {
+			var others int
+			if err := tx.QueryRow(
+				`SELECT COUNT(*) FROM butler_members
+				 WHERE role = 'owner' AND admitted = 1 AND disabled_at = '' AND offboarded_at = ''
+				   AND member <> ?`, member).Scan(&others); err != nil {
+				return fmt.Errorf("runtimedb: counting active owners: %w", err)
+			}
+			if others == 0 {
+				return fmt.Errorf("%w: %s is the only one", ErrLastOwner, member)
+			}
+		}
+	}
+	if _, err := tx.Exec(
+		`UPDATE butler_members SET role = ? WHERE member = ?`, role, member); err != nil {
+		return fmt.Errorf("runtimedb: changing role: %w", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO butler_role_changes (at, person_id, member, actor, old_role, new_role)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		now(), personID, member, actor, current, role); err != nil {
+		return fmt.Errorf("runtimedb: auditing role change: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("runtimedb: changing role: %w", err)
+	}
+	return nil
+}
+
+// RenameButlerMemberHandle changes the display/login handle. person_id
+// does not move, which is the whole reason it exists.
+//
+// The two tables that hold a FOREIGN KEY on the handle —
+// butler_identity_links and butler_conversations — are carried with it
+// in the same transaction, under defer_foreign_keys so the parent and
+// its children can be consistent at COMMIT rather than after every
+// statement. Without that the rename cannot happen at all: SQLite
+// rejects the parent UPDATE the moment a link references the old value.
+//
+// It does NOT rewrite the handle where other tables store it as free
+// text with no foreign key — butler_tasks.owner, butler_memory.owner,
+// household_routines.member, notice policy, offboarding records and
+// roughly a dozen more. Those are the references slice 2 repoints onto
+// person_id, and repointing them here would BE slice 2. Until then a
+// rename is safe for identity resolution and leaves historical rows
+// naming the handle the person had at the time, which for an audit
+// trail is arguably what you want anyway.
+func (db *DB) RenameButlerMemberHandle(member, newHandle string) error {
+	if newHandle == "" {
+		return fmt.Errorf("runtimedb: a handle cannot be empty")
+	}
+	if newHandle == member {
+		return nil
+	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("runtimedb: renaming %q: %w", member, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Settable inside a transaction, unlike foreign_keys itself.
+	if _, err := tx.Exec(`PRAGMA defer_foreign_keys = ON`); err != nil {
+		return fmt.Errorf("runtimedb: renaming %q: %w", member, err)
+	}
+	res, err := tx.Exec(
+		`UPDATE butler_members SET member = ? WHERE member = ?`, newHandle, member)
+	if err != nil {
+		return fmt.Errorf("runtimedb: renaming %q to %q: %w", member, newHandle, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("runtimedb: renaming %q: %w", member, err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	for _, table := range []string{"butler_identity_links", "butler_conversations"} {
+		if _, err := tx.Exec(
+			`UPDATE `+table+` SET member = ? WHERE member = ?`, newHandle, member); err != nil {
+			return fmt.Errorf("runtimedb: carrying %s across the rename of %q: %w", table, member, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("runtimedb: renaming %q to %q: %w", member, newHandle, err)
+	}
+	return nil
+}
+
+// ButlerRoleChange is one audited crossing of the Owner boundary.
+type ButlerRoleChange struct {
+	Seq      int64     `json:"seq"`
+	At       time.Time `json:"at"`
+	PersonID string    `json:"personId"`
+	Member   string    `json:"member"`
+	Actor    string    `json:"actor"`
+	OldRole  string    `json:"oldRole"`
+	NewRole  string    `json:"newRole"`
+}
+
+// ListButlerRoleChanges returns one Person's role history, oldest
+// first. It takes a person_id rather than a handle because the handle
+// may have changed since.
+func (db *DB) ListButlerRoleChanges(personID string) ([]ButlerRoleChange, error) {
+	rows, err := db.sql.Query(
+		`SELECT seq, at, person_id, member, actor, old_role, new_role
+		 FROM butler_role_changes WHERE person_id = ? ORDER BY seq`, personID)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing role changes: %w", err)
+	}
+	defer rows.Close()
+	var out []ButlerRoleChange
+	for rows.Next() {
+		var c ButlerRoleChange
+		var at string
+		if err := rows.Scan(&c.Seq, &at, &c.PersonID, &c.Member, &c.Actor, &c.OldRole, &c.NewRole); err != nil {
+			return nil, err
+		}
+		if c.At, err = time.Parse(time.RFC3339Nano, at); err != nil {
+			return nil, fmt.Errorf("runtimedb: bad role change timestamp %q: %w", at, err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // AdmitButlerMember admits a member to the Butler.
@@ -123,7 +384,7 @@ func (db *DB) AdmitButlerMember(member, admittedBy string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var profile string
+	var profile sql.NullString
 	var generation int64
 	err = tx.QueryRow(`SELECT profile, generation FROM butler_members WHERE member = ?`, member).
 		Scan(&profile, &generation)
@@ -133,7 +394,7 @@ func (db *DB) AdmitButlerMember(member, admittedBy string) error {
 	if err != nil {
 		return fmt.Errorf("runtimedb: admitting butler member: %w", err)
 	}
-	if profile == ProfileChild {
+	if profile.String == ProfileChild {
 		return fmt.Errorf("runtimedb: the child surface is not enabled, so %q cannot be admitted (ADR-W030 Part C)", member)
 	}
 	stamp := now()
@@ -180,12 +441,34 @@ func (db *DB) denyMember(member, by, atColumn, byColumn string) error {
 	defer func() { _ = tx.Rollback() }()
 
 	var generation int64
-	err = tx.QueryRow(`SELECT generation FROM butler_members WHERE member = ?`, member).Scan(&generation)
+	var role string
+	var admitted int
+	var disabledAt, offboardedAt string
+	err = tx.QueryRow(
+		`SELECT generation, role, admitted, disabled_at, offboarded_at
+		 FROM butler_members WHERE member = ?`, member).
+		Scan(&generation, &role, &admitted, &disabledAt, &offboardedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("runtimedb: withdrawing butler access: %w", err)
+	}
+	// Disabling and offboarding both strip an Owner of Owner authority
+	// just as completely as a demotion does, so the Last Owner
+	// invariant covers them on the same terms (design §2.5, §18.1). The
+	// schema refuses it either way; this is the readable half.
+	if role == RoleOwner && admitted == 1 && disabledAt == "" && offboardedAt == "" {
+		var others int
+		if err := tx.QueryRow(
+			`SELECT COUNT(*) FROM butler_members
+			 WHERE role = 'owner' AND admitted = 1 AND disabled_at = '' AND offboarded_at = ''
+			   AND member <> ?`, member).Scan(&others); err != nil {
+			return fmt.Errorf("runtimedb: counting active owners: %w", err)
+		}
+		if others == 0 {
+			return fmt.Errorf("%w: %s is the only one", ErrLastOwner, member)
+		}
 	}
 	stamp := now()
 	// admitted goes to 0 in the same statement as the timestamp: a
@@ -216,7 +499,7 @@ func (db *DB) GetButlerMember(member string) (ButlerMember, error) {
 	return scanMember(db.sql.QueryRow(memberColumns+` WHERE member = ?`, member))
 }
 
-const memberColumns = `SELECT member, profile, admitted, generation, created_at, admitted_at,
+const memberColumns = `SELECT person_id, member, role, profile, admitted, generation, created_at, admitted_at,
 	 admitted_by, disabled_at, disabled_by, offboarded_at, offboarded_by, guardian
 	 FROM butler_members`
 
@@ -224,7 +507,9 @@ func scanMember(row rowScanner) (ButlerMember, error) {
 	var m ButlerMember
 	var admitted int
 	var created, admittedAt, disabledAt, offboardedAt string
-	err := row.Scan(&m.Member, &m.Profile, &admitted, &m.Generation, &created, &admittedAt,
+	// profile is NULL for anyone with no preset, which is most people.
+	var preset sql.NullString
+	err := row.Scan(&m.PersonID, &m.Member, &m.Role, &preset, &admitted, &m.Generation, &created, &admittedAt,
 		&m.AdmittedBy, &disabledAt, &m.DisabledBy, &offboardedAt, &m.OffboardedBy, &m.Guardian)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ButlerMember{}, ErrNotFound
@@ -232,6 +517,7 @@ func scanMember(row rowScanner) (ButlerMember, error) {
 	if err != nil {
 		return ButlerMember{}, fmt.Errorf("runtimedb: scanning butler member: %w", err)
 	}
+	m.Profile = preset.String
 	m.Admitted = admitted != 0
 	for _, f := range []struct {
 		text string
@@ -419,6 +705,41 @@ func (db *DB) ListSurfaceLinks(member string) ([]ButlerIdentityLink, error) {
 			}
 		}
 		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// ButlerMembersByHandleFold returns every person whose handle matches
+// case-insensitively.
+//
+// It returns a LIST because the schema permits more than one match.
+// ADR-W032 A4 records that member names are compared exactly and that
+// `Admin` and `admin` are therefore two records; normalising them is
+// listed there as a thing to fix regardless, and has not been done. A
+// caller that asked for one row would have to pick between them, and
+// picking is exactly the wrong move for an authorization check.
+//
+// This exists for checks that REFUSE. A caller deciding whether someone
+// may be let in must not use it to decide they may: equal names are not
+// proof of identity (ADR-W030 A2.1), and a looser comparison is looser
+// proof. Used the other way it is sound, and strictly safer than an
+// exact match — a person the household has disabled cannot slip past a
+// lifecycle check by being spelled with a different capital letter.
+//
+// COLLATE NOCASE is ASCII-only, which is what handles are here.
+func (db *DB) ButlerMembersByHandleFold(handle string) ([]ButlerMember, error) {
+	rows, err := db.sql.Query(memberColumns+` WHERE member = ? COLLATE NOCASE ORDER BY member`, handle)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: matching butler members by handle: %w", err)
+	}
+	defer rows.Close()
+	var out []ButlerMember
+	for rows.Next() {
+		m, err := scanMember(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
 	}
 	return out, rows.Err()
 }

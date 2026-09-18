@@ -267,6 +267,32 @@ bot or the facility.
 
 ---
 
+### A2.1. The word "route" goes with the router (2026-09-10)
+
+Migration 0035 removed the router and deliberately kept the rows,
+noting "what a route is FOR now: the model a Butler is assigned to". It
+did not rename them, and the leftover word earned its confusion:
+nothing routes, so a log line reading `route=cloud-witness
+model=witness-1` looks like two competing answers to "which model".
+
+`Route` was also already taken — `resource.KindRoute` is the
+reverse-proxy route, and a codebase with two unrelated Routes makes
+every conversation about either of them start with which one.
+
+Migration 0037 renames the table to `models`, `butlers.route` to
+`butlers.model`, and the API paths from `/butler/routes` to
+`/butler/models`. The endpoint-discovery call that held that path moves
+to `/butler/models/offered`, which is the more accurate name for it
+anyway: it lists what a given endpoint could give you, not what this
+house has configured.
+
+The bundle survives, because a bare model string on the Butler cannot
+carry the data boundary. One Ollama endpoint serves `gemma4:e4b` off
+local disk and `gemma4:31b-cloud` from Ollama's own infrastructure — so
+neither the endpoint nor the provider says where the material goes. Only
+`kind` does, and it is a property of the pairing rather than of either
+half.
+
 # Part B — What this changes in ADR-W030
 
 | W030 | Change |
@@ -302,6 +328,7 @@ All seven packages have landed. Each row names what proves it.
 | **B5** | Per-Butler addressing | `migrations/0034_butler_assignment.sql`, `runtimedb/butlerassign.go` | `butlerassign_test.go`: a message reaches a Butler by the address it arrived on; one address resolves to one Butler; arriving there is not permission, and the access list still decides. The address is `(transport, external id)` — a Telegram deployment can put each Butler on its own bot or on its own forum topic without a schema change, which is what settles Part D's open question. |
 | **B6** | Console roster | `api/handlers_butlers.go`, `console/src/views/Butlers.tsx`, `console/src/api.ts`, `App.tsx` | `handlers_butlers_test.go`: every roster row names its model and whether it leaves the house; a switch applies at once and returns the crossing warning; shaping a Butler needs manage; the scope endpoint answers in one call. |
 | **B7** | The router removed | `migrations/0035_remove_the_router.sql`, `runtimedb/modelroutes.go` | `modelroutes_test.go` now tests what a route IS rather than how one is chosen: the kind is an immutable boundary, only a probed route carries action authority, a disabled route stays disabled. Locality is proven where it now lives — in `butlerscope_test.go` and the Part C acceptance suite. |
+| **B8** | Butlers on the live conversational path | `butlerlive/butlerlive.go`, `butlerlive/serve.go`, `api/handlers_butler_named.go`, `api/handlers_chat_message.go`, `cmd/keystone/main.go` | `butlerlive/butlerlive_test.go`: a message addressed to a local-model Butler reaches that model and the cloud model receives nothing; the address decides even when the message claims to be for another Butler; an unreachable Butler waits and no other model is called; the session's authority resolver is bound to one Butler before the surface can run; a family-surface caller cannot reach an admin Butler; a conversation survives a restart and the read taken before it is served from the ledger rather than dispatched again. |
 
 ### B6 in more detail
 
@@ -374,11 +401,26 @@ explanation.
 
 Acceptance for the whole change is one demonstration: material given to
 a Butler on a local model is not reachable by a Butler on a cloud model.
-That is proven at the store, and it is proven again in the Part C
-acceptance suite. It is NOT yet proven at the level that serves a live
-conversation, because that path is still the one ADR-W030's wiring gap
-describes — see #148. B1 to B7 make the guarantee expressible and
-enforced; installing it on the live path is the work that issue tracks.
+That is proven at the store, again in the Part C acceptance suite, and —
+since #148 — at the level that actually serves a conversation.
+
+The last of those is the one that took the guarantee from expressible to
+true. `keystone/butlerlive` resolves the Butler from the address a
+message arrived at, builds the client from the model that Butler was
+ASSIGNED, and runs the turn through the durable runner with an authority
+resolver bound to that Butler alone. Its tests assert the strong form
+rather than the convenient one: not "the right model was chosen", which
+a router would also satisfy after the fact, but that the other model
+received nothing at all.
+
+Two things about how that is tested are worth keeping, because both were
+wrong first and passed anyway. A test that disables a route proves the
+STORE's refusal, not the serving path's — the serving path's own
+contribution to A6 is that it contains no fallback to substitute, so
+that is what is sabotaged to check the test bites. And a resumed turn
+must re-ask for the read it already has; a resume where the model
+requests nothing proves nothing about whether a verified result would
+have been served from the ledger.
 
 ---
 

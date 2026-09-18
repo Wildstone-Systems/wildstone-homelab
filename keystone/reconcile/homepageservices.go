@@ -18,7 +18,7 @@ package reconcile
 // check. All five are derived, and the ONE place a new app declares them
 // is homepageApps below — a single row per upstream container. That is
 // the whole integration contract, and it is deliberately not a field on
-// the Route: a package declaring its own icon and blurb restates what
+// the Model: a package declaring its own icon and blurb restates what
 // its own Route already implies, which is the "declaring half of a
 // relationship" trap ADR-W021 A6 rejects for the href itself.
 //

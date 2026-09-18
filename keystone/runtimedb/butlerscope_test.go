@@ -347,8 +347,8 @@ func TestButlerScopeSummarisesTheReach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Model != "kitchen-box" || s.RouteKind != RouteLocal {
-		t.Fatalf("scope reports model %q (%s)", s.Model, s.RouteKind)
+	if s.Model != "kitchen-box" || s.ModelKind != ModelLocal {
+		t.Fatalf("scope reports model %q (%s)", s.Model, s.ModelKind)
 	}
 	if len(s.Connections) != 1 || s.Connections[0] != "gym-tracker" {
 		t.Fatalf("scope connections = %v", s.Connections)
@@ -439,7 +439,7 @@ func TestAButlerCannotBeNamedTheEveryButlerSentinel(t *testing.T) {
 	db := butlerFixture(t)
 	if _, err := db.CreateButler(Butler{
 		Name: AllButlers, Surface: ButlerSurfaceFamily, Profile: ProfileHousehold,
-		Route: "kitchen-box",
+		Model: "kitchen-box",
 	}, "mika"); err == nil {
 		t.Fatal("a butler was created with the name that means every butler")
 	}
@@ -457,7 +457,7 @@ func TestDisablingARouteStopsTheButlersAlreadyOnIt(t *testing.T) {
 	if _, err := db.ResolveButlerFor("health", "sam"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SetModelRouteEnabled("kitchen-box", false, "mika"); err != nil {
+	if err := db.SetModelEnabled("kitchen-box", false, "mika"); err != nil {
 		t.Fatal(err)
 	}
 	_, err := db.ResolveButlerFor("health", "sam")

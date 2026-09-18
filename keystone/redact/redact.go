@@ -550,3 +550,70 @@ func String(s string) string {
 	}
 	return protected
 }
+
+// credentialWords name a credential in prose rather than by shape.
+//
+// Deliberately narrow. Each of these is a thing a person hands over to
+// prove who they are, and none of them has a common innocent sense that
+// would make the word alone misleading — which is why "secret" and
+// "key" are absent and "secret key" is present.
+var credentialWords = []string{
+	"password", "passwd", "passphrase", "passcode",
+	"pin code", "pin number", "secret key", "private key", "api key",
+	"seed phrase", "recovery code", "reset code", "verification code",
+	"one-time code", "one time code", "security question",
+	"credentials", "token",
+}
+
+// NamesACredential reports whether s reads as somebody naming a
+// credential, whatever the value next to it looks like.
+//
+// String cannot see this and is not wrong not to. Its rules are about
+// SHAPE — a long hex run, a value under a credential-shaped key — and
+// "my router password is hunter2" has neither: the value is a short
+// ordinary word, and "is" is not a key/value separator. Nothing in the
+// string looks like a secret, and it is one.
+//
+// The cost of that gap depends entirely on how long the text lives. In
+// a tool result it is read once by one session. In a memory record it
+// is read by every session afterwards, which is why ADR-W030 A3.1 asks
+// for exclusion of credentials and password-reset material ON TOP OF
+// the redaction path rather than as part of it.
+//
+// It is a predicate rather than a redaction because there is nothing
+// safe to leave behind. "My router [REDACTED] is hunter2" removes the
+// wrong half, and knowing which half is the secret is the thing shape
+// rules cannot do. A caller storing text refuses it; nobody has to
+// guess.
+func NamesACredential(s string) bool {
+	if s == "" {
+		return false
+	}
+	lower := strings.ToLower(s)
+	for _, w := range credentialWords {
+		i := strings.Index(lower, w)
+		for i >= 0 {
+			// Word boundaries, so "tokenizer" and "spinning" are not
+			// credentials. A following "s" or "'s" is, because a
+			// plural password is still a password.
+			before := i == 0 || !isWordByte(lower[i-1])
+			end := i + len(w)
+			for end < len(lower) && (lower[end] == 's' || lower[end] == '\'') {
+				end++
+			}
+			if before && (end == len(lower) || !isWordByte(lower[end])) {
+				return true
+			}
+			next := strings.Index(lower[i+1:], w)
+			if next < 0 {
+				break
+			}
+			i += 1 + next
+		}
+	}
+	return false
+}
+
+func isWordByte(b byte) bool {
+	return b == '_' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
+}

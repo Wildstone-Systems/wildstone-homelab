@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -148,5 +150,36 @@ func TestSeedRefsKeepsOnlyRowsThatSayTheResourceWasThere(t *testing.T) {
 	}
 	if len(got) != 1 || got[0] != "Volume/there" {
 		t.Errorf("seeded %v; want only the row that reported the resource present", got)
+	}
+}
+
+// A Butler's client is built from the model, not from the assignment's
+// name.
+//
+// They are the same string for anything configured from the provider's
+// own list, and differ for a row named before that — "ollama-cloud"
+// pointing at gemma4:31b-cloud. Passing the name asks the provider for
+// a model called "ollama-cloud", which it does not have, and the person
+// gets a 404 naming something they never typed.
+//
+// This is here rather than in butlerlive because butlerlive's tests
+// supply their own providers, so the one line where an assignment
+// becomes a provider call had nothing looking at it.
+func TestAButlersClientAsksForTheModelNotTheAssignmentName(t *testing.T) {
+	p, err := butlerProviderFor(runtimedb.Butler{
+		Name: "alfred", Provider: "ollama",
+		Model:         "ollama-cloud",     // what the assignment is called here
+		ProviderModel: "gemma4:31b-cloud", // what Ollama calls it
+		Endpoint:      "http://192.0.2.10:11434",
+	})
+	if err != nil {
+		t.Fatalf("building the client: %v", err)
+	}
+	ol, ok := p.(*provider.OllamaProvider)
+	if !ok {
+		t.Fatalf("provider = %T, want *provider.OllamaProvider", p)
+	}
+	if ol.Model != "gemma4:31b-cloud" {
+		t.Fatalf("asked the provider for %q, want the model gemma4:31b-cloud — the assignment's name is a key, not a model", ol.Model)
 	}
 }

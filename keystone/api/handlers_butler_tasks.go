@@ -28,6 +28,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -378,4 +379,42 @@ func (s *Server) listButlerDebugCaptures(_ *http.Request, _ principal.Identity) 
 		return nil, http.StatusInternalServerError, err
 	}
 	return map[string]any{"captures": captures}, http.StatusOK, nil
+}
+
+// cancelButlerTask stops a task that is not going to finish.
+//
+// It exists because nothing reaps a wait whose cause has gone. A task
+// that stopped on "model-unavailable" waits for a model that answers
+// again; when the reason was a bug rather than an outage, the model
+// comes back and the task does not, because nothing is watching for
+// that. Three of them accumulated on a live deployment in one morning.
+//
+// Cancelling is not deleting. The task, its steps and its evidence stay
+// readable — they are the record of work that was attempted, and a
+// household asking later what happened is owed it. What changes is that
+// it stops being pending work.
+//
+// Manage, because it decides that work will not happen.
+func (s *Server) cancelButlerTask(r *http.Request, id principal.Identity) (any, int, error) {
+	taskID := r.PathValue("id")
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if code, err := decodeStrict(r, &req); err != nil {
+		return nil, code, err
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		// A cancelled task with no reason is a mystery in the audit
+		// trail six months later.
+		return nil, http.StatusBadRequest, fmt.Errorf("cancelling a task needs a reason")
+	}
+	if err := s.DB.TransitionButlerTask(taskID, runtimedb.ButlerTaskCancelled, reason, actingMember(id)); err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return nil, http.StatusNotFound, fmt.Errorf("no task %q", taskID)
+		}
+		// A finished task cannot be cancelled, and the store says so.
+		return nil, http.StatusConflict, err
+	}
+	return map[string]any{"cancelled": taskID, "reason": reason}, http.StatusOK, nil
 }

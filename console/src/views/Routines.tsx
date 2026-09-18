@@ -87,6 +87,7 @@ export function RoutineList({
   const [q, setQ] = useState("");
   const [state, setState] = useState<StateFilter>("all");
   const [audience, setAudience] = useState<Audience>("admin");
+  const [writing, setWriting] = useState(false);
 
   const rows = load.data?.routines ?? [];
   const specs = load.data?.specs ?? {};
@@ -150,17 +151,21 @@ export function RoutineList({
           <button
             className="btn btn-primary"
             style={{ marginLeft: "auto" }}
-            // Authoring a routine from scratch is its own epic. The
-            // button is here because the screen is incomplete without
-            // somewhere for it to go, and disabled because pretending
-            // otherwise is worse.
-            disabled
-            title="Writing a new routine is not built yet"
+            onClick={() => setWriting((v) => !v)}
           >
-            <Plus size={15} /> New routine
+            <Plus size={15} /> {writing ? "Cancel" : "New routine"}
           </button>
         )}
       </div>
+
+      {writing && (
+        <NewRoutine
+          onDone={() => {
+            setWriting(false);
+            load.reload();
+          }}
+        />
+      )}
 
       <ErrorLine error={load.error} />
       {rows.length === 0 && !load.loading && <div className="muted">No routines yet.</div>}
@@ -210,6 +215,82 @@ export function RoutineList({
     </>
   );
 }
+
+// Writing a routine.
+//
+// A routine IS its document — nothing in Wildstone knows what breakfast
+// is, and the file is the whole of the behaviour. So this is a text
+// editor with a name on it, not a form with a field per concept: a form
+// would have to enumerate the steps a routine may take, and it would be
+// wrong the first time somebody wanted one it did not list.
+//
+// It is created as a draft and says so. The server refuses any other
+// state on this route, because the endpoint needs only `propose` — a
+// credential that could create an enabled routine could skip the review
+// activation is supposed to require (ADR-W030 A6/A7.1).
+//
+// Editing an existing routine is the spec editor on RoutineEdit, which
+// round-trips the parsed grammar. This one writes the document, because
+// a routine that does not exist yet has no spec to serve.
+function NewRoutine({ onDone }: { onDone: () => void }) {
+  const [name, setName] = useState("");
+  const [document, setDocument] = useState(TEMPLATE);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function create() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.createHouseholdRoutine({ name: name.trim(), document });
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="work-form" style={{ display: "block", marginTop: 8 }}>
+      <div className="row" style={{ gap: 8, alignItems: "center" }}>
+        <input
+          aria-label="routine name"
+          placeholder="what to call it"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <button className="btn btn-secondary" disabled={!name.trim() || busy} onClick={create}>
+          {busy ? "Saving…" : "Create as draft"}
+        </button>
+      </div>
+      <textarea
+        aria-label="routine document"
+        rows={14}
+        spellCheck={false}
+        style={{ width: "100%", marginTop: 6, fontFamily: "ui-monospace, monospace" }}
+        value={document}
+        onChange={(e) => setDocument(e.target.value)}
+      />
+      <div className="muted" style={{ fontSize: "0.9em" }}>
+        It starts as a draft and does nothing. Put it in trial to watch what it would do, then let
+        it act.
+      </div>
+      <ErrorLine error={error} />
+    </div>
+  );
+}
+
+const TEMPLATE = `name: my-routine
+trigger: person.left_home
+
+# Two reports of the same thing within this window are one event.
+dedupeWindow: 10m
+
+steps:
+  - kind: notify
+    message: someone left
+`;
 
 function WildstoneCard({
   routine: r,

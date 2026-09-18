@@ -128,10 +128,27 @@ jobs:
         # reconciler, butler loop); the detector is the cheapest guard
         # against the data races those paths could grow. Requires cgo,
         # available on the amd64 runner.
+        #
+        # -timeout: go test defaults to 10 minutes PER TEST BINARY, and
+        # under -race two packages already sit near it — runtimedb runs
+        # 353s on a fast runner and 506s on a slow one, and keystone/api
+        # is close behind. Runner speed then decides pass or fail: the
+        # same commit has gone green on one machine and panicked at
+        # 600.038s on another, with every unrelated package ~40% slower
+        # on the slow run. That is a coin toss dressed as a test result,
+        # and it costs a 25-minute cycle each time it lands wrong.
+        #
+        # 30m is headroom rather than a target. The cost itself is dealt
+        # with in keystone/internal/dbtemplate, which migrates one
+        # database per test binary and copies it: the whole keystone
+        # module now runs in under two minutes here rather than four,
+        # and butlerstore alone went from 133s to 12s. The ceiling stays
+        # because it keeps the failure honest — a timeout should mean
+        # something hung, not that the runner was busy.
         env:
           CGO_ENABLED: "1"
         run: |
-          for m in proto wardstone keystone cli testing/e2e; do (cd "$m" && go test -race ./...); done
+          for m in proto wardstone keystone cli testing/e2e; do (cd "$m" && go test -race -timeout 30m ./...); done
       - name: ts codegen drift (ADR-W007 A7)
         if: matrix.goarch == 'amd64'
         # The committed console/src/generated/resources.ts must match what

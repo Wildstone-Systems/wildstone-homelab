@@ -15,21 +15,21 @@ import (
 // and two admitted people.
 func butlerFixture(t *testing.T) *DB {
 	t.Helper()
-	db := butlerTestDB(t)
-	for _, r := range []ModelRoute{
-		{Name: "kitchen-box", Kind: RouteLocal, Provider: "ollama", Model: "llama",
-			Readiness: RouteReady, Enabled: true},
-		{Name: "cloud", Kind: RouteCloud, Provider: "anthropic", Model: "sonnet",
-			Readiness: RouteReady, Enabled: true},
+	db := open(t)
+	for _, r := range []Model{
+		{Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", ProviderModel: "llama",
+			Readiness: ModelReady, Enabled: true},
+		{Name: "cloud", Kind: ModelCloud, Provider: "anthropic", ProviderModel: "sonnet",
+			Readiness: ModelReady, Enabled: true},
 	} {
-		if err := db.UpsertModelRoute(r, "root-admin"); err != nil {
-			t.Fatalf("UpsertModelRoute(%s): %v", r.Name, err)
+		if err := db.UpsertModel(r, "root-admin"); err != nil {
+			t.Fatalf("UpsertModel(%s): %v", r.Name, err)
 		}
 	}
-	for _, m := range []struct{ name, profile string }{
-		{"mika", ProfileOperator}, {"sam", ProfileHousehold},
+	for _, m := range []struct{ name, role string }{
+		{"mika", RoleOwner}, {"sam", RoleMember},
 	} {
-		if err := db.RecordButlerMember(m.name, m.profile, ""); err != nil {
+		if err := db.RecordButlerMember(m.name, m.role, "", ""); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.AdmitButlerMember(m.name, "root-admin"); err != nil {
@@ -43,7 +43,7 @@ func newButler(t *testing.T, db *DB, name, route string) {
 	t.Helper()
 	if _, err := db.CreateButler(Butler{
 		Name: name, Directive: "look after " + name, Surface: ButlerSurfaceFamily,
-		Profile: ProfileHousehold, Route: route,
+		Profile: ProfileHousehold, Model: route,
 	}, "mika"); err != nil {
 		t.Fatalf("CreateButler(%s): %v", name, err)
 	}
@@ -61,15 +61,15 @@ func TestAButlerCarriesItsOwnNameAndModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if alfred.Route != "kitchen-box" || alfred.RouteKind != RouteLocal {
-		t.Fatalf("alfred runs on %q (%s), want kitchen-box (local)", alfred.Route, alfred.RouteKind)
+	if alfred.Model != "kitchen-box" || alfred.ModelKind != ModelLocal {
+		t.Fatalf("alfred runs on %q (%s), want kitchen-box (local)", alfred.Model, alfred.ModelKind)
 	}
 	robert, err := db.GetButler("robert")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if robert.RouteKind != RouteCloud {
-		t.Fatalf("robert runs on a %s route, want cloud", robert.RouteKind)
+	if robert.ModelKind != ModelCloud {
+		t.Fatalf("robert runs on a %s route, want cloud", robert.ModelKind)
 	}
 	// Two Butlers, two models, no shared "the Butler".
 	all, err := db.ListButlers()
@@ -84,7 +84,7 @@ func TestAButlerCarriesItsOwnNameAndModel(t *testing.T) {
 	// later: an unnamed Butler cannot be assigned a routine, and one
 	// with no model has nowhere to run.
 	if _, err := db.CreateButler(Butler{
-		Surface: ButlerSurfaceFamily, Profile: ProfileHousehold, Route: "kitchen-box",
+		Surface: ButlerSurfaceFamily, Profile: ProfileHousehold, Model: "kitchen-box",
 	}, "mika"); err == nil {
 		t.Fatal("a butler was created with no name")
 	}
@@ -95,7 +95,7 @@ func TestAButlerCarriesItsOwnNameAndModel(t *testing.T) {
 	}
 	if _, err := db.CreateButler(Butler{
 		Name: "ghost", Surface: ButlerSurfaceFamily, Profile: ProfileHousehold,
-		Route: "no-such-route",
+		Model: "no-such-route",
 	}, "mika"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a butler was created against a route that does not exist: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestAButlersCeilingCannotMove(t *testing.T) {
 	// the record is not the one the gateway enforces.
 	if _, err := db.CreateButler(Butler{
 		Name: "mismatched", Surface: ButlerSurfaceFamily, Profile: ProfileOperator,
-		Route: "kitchen-box",
+		Model: "kitchen-box",
 	}, "mika"); err == nil {
 		t.Fatal("an operator-profile butler was created on the family surface")
 	}
@@ -191,7 +191,7 @@ func TestAButlerWithNoModelWaitsRatherThanSubstituting(t *testing.T) {
 	if err := db.GrantButlerAccess("health", "sam", "mika"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.RecordRouteReadiness("kitchen-box", RouteUnavailable, "the box is off"); err != nil {
+	if err := db.RecordModelReadiness("kitchen-box", ModelUnavailable, "the box is off"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -210,13 +210,13 @@ func TestAButlerWithNoModelWaitsRatherThanSubstituting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.Route != "kitchen-box" {
-		t.Fatalf("an unavailable model was substituted: health now runs on %q", b.Route)
+	if b.Model != "kitchen-box" {
+		t.Fatalf("an unavailable model was substituted: health now runs on %q", b.Model)
 	}
 
 	// A QA-only verdict is a different thing: the model is THERE and is
 	// not trusted with actions. It answers questions.
-	if err := db.RecordRouteReadiness("kitchen-box", RouteQAOnly, "it invented a tool name"); err != nil {
+	if err := db.RecordModelReadiness("kitchen-box", ModelQAOnly, "it invented a tool name"); err != nil {
 		t.Fatal(err)
 	}
 	qa, err := db.ResolveButlerFor("health", "sam")
@@ -239,8 +239,8 @@ func TestChangingAButlersModelIsDirectAndReportsTheCrossing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetButlerRoute: %v", err)
 	}
-	if from.RouteKind != RouteLocal || to.RouteKind != RouteCloud {
-		t.Fatalf("route change reported %s -> %s", from.RouteKind, to.RouteKind)
+	if from.ModelKind != ModelLocal || to.ModelKind != ModelCloud {
+		t.Fatalf("route change reported %s -> %s", from.ModelKind, to.ModelKind)
 	}
 	if !CrossesToCloud(from, to) {
 		t.Fatal("a local-to-cloud move did not report itself as one, so nothing could warn")
@@ -250,7 +250,7 @@ func TestChangingAButlersModelIsDirectAndReportsTheCrossing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if live.Route != "cloud" || live.UpdatedBy != "mika" {
+	if live.Model != "cloud" || live.UpdatedBy != "mika" {
 		t.Fatalf("the change did not apply directly: %+v", live)
 	}
 
@@ -303,15 +303,15 @@ func TestRetiringAButlerKeepsItsRecord(t *testing.T) {
 // still names a model that is meant to be there.
 func TestAButlerCannotBeAssignedADisabledRoute(t *testing.T) {
 	db := butlerFixture(t)
-	if err := db.UpsertModelRoute(ModelRoute{
-		Name: "retired-box", Kind: RouteLocal, Provider: "ollama", Model: "old",
-		Readiness: RouteReady, Enabled: false,
+	if err := db.UpsertModel(Model{
+		Name: "retired-box", Kind: ModelLocal, Provider: "ollama", ProviderModel: "old",
+		Readiness: ModelReady, Enabled: false,
 	}, "root-admin"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.CreateButler(Butler{
 		Name: "stranded", Surface: ButlerSurfaceFamily, Profile: ProfileHousehold,
-		Route: "retired-box",
+		Model: "retired-box",
 	}, "mika"); err == nil {
 		t.Fatal("a butler was created against a disabled route")
 	}
@@ -320,7 +320,7 @@ func TestAButlerCannotBeAssignedADisabledRoute(t *testing.T) {
 	if _, _, err := db.SetButlerRoute("health", "retired-box", "mika"); err == nil {
 		t.Fatal("a butler was moved onto a disabled route")
 	}
-	if b, _ := db.GetButler("health"); b.Route != "kitchen-box" {
-		t.Fatalf("the refused move still changed the assignment: %q", b.Route)
+	if b, _ := db.GetButler("health"); b.Model != "kitchen-box" {
+		t.Fatalf("the refused move still changed the assignment: %q", b.Model)
 	}
 }

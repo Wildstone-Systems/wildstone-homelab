@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, ButlerModel } from "../api";
+import { api, OfferedModel } from "../api";
 import { ErrorLine, useLoad } from "../lib";
 
 // Choosing which model answers (ADR-W017 A9).
@@ -20,7 +20,7 @@ const PROVIDERS = [
   { id: "off", label: "Off — no Butler" },
 ];
 
-function size(m: ButlerModel): string {
+function size(m: OfferedModel): string {
   if (!m.sizeBytes || m.sizeBytes < 1 << 20) return "";
   return `${(m.sizeBytes / 1e9).toFixed(1)} GB`;
 }
@@ -30,7 +30,7 @@ export function ButlerSettings({ onSaved }: { onSaved?: () => void }) {
   const [provider, setProvider] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [model, setModel] = useState("");
-  const [models, setModels] = useState<ButlerModel[] | null>(null);
+  const [models, setModels] = useState<OfferedModel[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -44,7 +44,7 @@ export function ButlerSettings({ onSaved }: { onSaved?: () => void }) {
     setBusy("models");
     setError(null);
     try {
-      setModels((await api.butlerModels(e || undefined)).models);
+      setModels((await api.offeredModels(e || undefined)).models);
     } catch (err) {
       setModels(null);
       setError(String(err));

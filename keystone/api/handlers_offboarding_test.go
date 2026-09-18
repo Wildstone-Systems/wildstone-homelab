@@ -12,10 +12,10 @@ import (
 // reports what it did per store.
 func TestOffboardingReportsPerStore(t *testing.T) {
 	h := newHarness(t)
-	for _, m := range []struct{ name, profile string }{
-		{"root-admin", runtimedb.ProfileOperator}, {"sam", runtimedb.ProfileHousehold},
+	for _, m := range []struct{ name, role string }{
+		{"root-admin", runtimedb.RoleOwner}, {"sam", runtimedb.RoleMember},
 	} {
-		if err := h.s.DB.RecordButlerMember(m.name, m.profile, ""); err != nil {
+		if err := h.s.DB.RecordButlerMember(m.name, m.role, "", ""); err != nil {
 			t.Fatal(err)
 		}
 		if err := h.s.DB.AdmitButlerMember(m.name, "root-admin"); err != nil {

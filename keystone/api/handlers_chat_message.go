@@ -20,11 +20,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/household"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
@@ -70,6 +72,12 @@ type inboundMessage struct {
 	// with the Console or wild, testing the contract). An adapter's
 	// surface comes from its role and naming a different one is refused.
 	Surface string `json:"surface,omitempty"`
+	// Butler may likewise be named ONLY by a read-holding human, and for
+	// the same reason: they have no bot to arrive through, so there is
+	// no address to resolve one from. An adapter that sets it is
+	// refused — its own credential IS the address (ADR-W031 A7), and a
+	// bot that could name a Butler could name somebody else's.
+	Butler string `json:"butler,omitempty"`
 }
 
 // inboundResponse tells the adapter what happened without telling it
@@ -276,12 +284,89 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		out any
 		st  int
 	)
-	if surface == runtimedb.ButlerSurfaceFamily {
+	// Which Butler answers is decided HERE, from the address the message
+	// arrived at, and the legacy single-provider path is taken only when
+	// this deployment has created no Butlers at all (ADR-W031 A2).
+	//
+	// The fallback reads deployment state and never the message. That
+	// distinction is the whole of A2: a per-message fallback would have
+	// to look at something about the message to decide, and the looking
+	// is the disclosure. "Has anyone made a Butler yet" is answerable
+	// before a single byte of what was said is examined.
+	if s.butlersConfigured() {
+		address, named, terr := butlerTargetFor(id, strings.TrimSpace(msg.Butler))
+		if terr != nil {
+			return nil, http.StatusForbidden, terr
+		}
+		turn := butlerlive.Turn{
+			Transport:      transport,
+			Address:        address,
+			Butler:         named,
+			Member:         binding.Identity,
+			Text:           text,
+			Group:          msg.Group,
+			SystemExtra:    systemExtra,
+			RequireSurface: surface,
+		}
+		if prior != nil {
+			turn.SessionID, turn.History = prior.SessionID, prior.History
+		}
+		out, st, err = s.runNamedButlerSession(r.Context(), turn, prior)
+	} else if surface == runtimedb.ButlerSurfaceFamily {
 		out, st, err = s.runFamilySession(r.Context(), text, binding.Identity, systemExtra, msg.Group, prior)
 	} else {
 		out, st, err = s.runAdminButlerSession(r.Context(), text, binding.Identity, prior)
 	}
 	if err != nil {
+		// A turn can fail after tools have already run. When it did,
+		// runNamedButlerSession kept the durable task and gave us the
+		// session holding it — so point the thread at that session
+		// before the error goes back. Without this the pointer stays
+		// where it was, the next message opens a fresh task, and the
+		// tool calls that already completed run a second time.
+		if ask, ok := out.(askResponse); ok && ask.SessionID != "" {
+			if perr := s.DB.SetChatThreadSession(
+				transport, conversation, surface, binding.Identity, ask.SessionID); perr != nil {
+				s.Log.Error("recording chat thread for a failed turn",
+					"session", ask.SessionID, "err", perr)
+			}
+			// The same turn may also have tried to propose something.
+			// In the Console the person sees the outcome in their plan
+			// list; here the reply IS the surface, so returning only an
+			// error leaves them with nothing.
+			//
+			// BOTH outcomes are told, and the refusal matters more than
+			// the success. A plan that was accepted sits in the queue
+			// and can be approved late; a proposal that was REFUSED is
+			// gone. ResourceYAML lives on the tool call and never
+			// reaches the stored transcript, and the resume path
+			// reconstructs only the tool result — so the next turn has
+			// nothing left to submit, and a refusal nobody mentioned is
+			// a change the person asked for that silently never
+			// happened (ADR-W017 A3).
+			//
+			// The claim is deliberately NOT settled, because this is a
+			// notice and not the answer: the question is still
+			// unanswered and the next attempt at it — a redelivery, or
+			// the person asking again — must not be suppressed as a
+			// duplicate. The thread pointer set just above means that
+			// attempt resumes the session holding the work rather than
+			// proposing it a second time. Note that the bundled adapter
+			// does not itself redeliver a failed relay (it advances its
+			// cursor first, then apologises), which is why this notice
+			// is queued whether or not anything comes back — see #232.
+			//
+			// Deduplicated on the message AND the outcome, so a
+			// redelivery of this question announces once while a later
+			// question that ends the same way is still announced.
+			if len(ask.PlanIDs) > 0 || len(ask.ProposalErrors) > 0 {
+				s.queueChatReply(surface, transport, conversation,
+					chatProposalNotice(ask.PlanIDs, ask.ProposalErrors), binding.ID, "",
+					chatProposalDedupe(
+						chatDedupe(surface, transport, conversation, msg.MessageID, "proposal", text),
+						ask.PlanIDs, ask.ProposalErrors))
+			}
+		}
 		return nil, st, err
 	}
 	s.touchBinding(binding, conversation, msg.Group)
@@ -369,6 +454,80 @@ func chatReplyBody(ask askResponse) string {
 		body += "\n\n(I ran out of steps before finishing that one.)"
 	}
 	return body
+}
+
+// chatProposalNotice is what a person is told when the turn failed
+// around work it had already tried to propose.
+//
+// It does not pretend to be an answer — the question is still
+// unanswered — and it distinguishes the two outcomes, because they ask
+// different things of the person. A plan that is waiting needs a
+// decision. A proposal that was refused needs asking again, and saying
+// so is the only chance they get: the refused change cannot be
+// recovered from the session.
+//
+// "Ask me again" alone would be advice that does not work, which is
+// worse than none. The refusal happened in submitSessionProposals,
+// AFTER the gateway accepted the call — so the runner recorded that
+// step as verified, and a resumed task serves it straight back from the
+// ledger (butler/runner.go, toolCall) without re-running it or
+// reconstructing ResourceYAML. Asking again inside this conversation
+// therefore resumes the same task, replays the recorded result, and
+// queues nothing, while sounding like it worked. /new clears the thread
+// pointer, so the next question opens a fresh task whose propose_change
+// actually dispatches. See #234 for closing the underlying gap, which
+// is that a proposal refused downstream is left standing as a verified
+// step.
+func chatProposalNotice(planIDs, proposalErrs []string) string {
+	waiting := fmt.Sprintf(
+		"I didn't get to finish that, but part of it is waiting for you: %s. Nothing has changed yet — approve it in the Console or with `wild plan approve`.",
+		strings.Join(planIDs, ", "))
+	const refused = "I didn't get to finish that, and a change I tried to propose was refused before it reached the approval queue. " +
+		"Nothing has changed, and nothing is waiting. Send /new and ask me again — carrying on in this conversation resumes the same task, which will not attempt that change a second time."
+	switch {
+	case len(planIDs) == 0:
+		return refused
+	case len(proposalErrs) == 0:
+		return waiting
+	default:
+		return waiting + "\n\nSomething else I tried to propose was refused before it reached the queue and is not waiting anywhere. Send /new and ask for that part again."
+	}
+}
+
+// chatProposalDedupe keys the notice above on the message that caused
+// it AND the outcome it reported. Both halves are load-bearing, and
+// each covers a case the other gets wrong.
+//
+// messageKey is this message's identity, from chatDedupe — which brings
+// the surface, transport and conversation scoping with it, and falls
+// back to bucketed text for adapters that send no message id. Without
+// it the key is a pure function of the conversation and the outcome, so
+// a person who follows this very notice and asks again, and hits the
+// same validation refusal, would key identically to the first attempt
+// and be told nothing. The dedupe row outlives the conversation, so
+// that silence would be permanent — the one path the notice tells them
+// to take, and it goes quiet.
+//
+// The outcome is here because the same message can be delivered twice
+// and end differently: the first attempt refused, the resumed second
+// one proposing a plan. Keying on the message alone would suppress the
+// second, which is the half of the story that needs approving.
+//
+// Its refusals are hashed rather than spelled out because they are
+// provider and validation text: they can be long, they can carry
+// whatever the caller sent, and a dedupe key is not a place to put
+// either.
+func chatProposalDedupe(messageKey string, planIDs, proposalErrs []string) string {
+	ids := append([]string(nil), planIDs...)
+	sort.Strings(ids)
+	refused := ""
+	if len(proposalErrs) > 0 {
+		errs := append([]string(nil), proposalErrs...)
+		sort.Strings(errs)
+		sum := sha256.Sum256([]byte(strings.Join(errs, "\x00")))
+		refused = "|refused:" + hex.EncodeToString(sum[:8])
+	}
+	return fmt.Sprintf("proposal:%s:%s%s", messageKey, strings.Join(ids, ","), refused)
 }
 
 // queueChatReply enqueues one reply, returning its seq. A queue failure

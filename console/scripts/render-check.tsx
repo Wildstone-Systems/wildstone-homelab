@@ -22,6 +22,7 @@ import { Freshness, Shell, TokenGate } from "../src/App";
 import { HomeView, buildProblems } from "../src/views/Home";
 import { ServicesView, InstalledTile, CatalogCard, InstalledDetail, AppLogo, tileKind, matching, RemoveForm, ownerCounts, ownedByPackage } from "../src/views/Services";
 import { groupServices, upstreamContainer , healthOf, GROUPS, groupOf, mappedCapabilities } from "../src/services";
+import { healthOf as butlerHealthOf } from "../src/ui/status";
 import { eventKind } from "../src/ui/HourChart";
 import type { ConsoleSnapshot } from "../src/state";
 import type { BackupRun, ButlerSession, EventRow, Observed, PackageView, PlanRecord, ResourceView } from "../src/api";
@@ -64,7 +65,18 @@ const store = new Map<string, string>();
   length: 0,
 } as Storage;
 import { Prerequisites } from "../src/views/Chat";
-import { Household, AddMember } from "../src/views/Household";
+import { Household, AddMember, EditMember } from "../src/views/Household";
+import { AttentionBanner, Butlers, NoButlers, NoMatches, RosterRow, needsAttention, reachLine, select, toolLine } from "../src/views/Butlers";
+import { Tool } from "../src/views/butlers/TabTools";
+import { ButlerPicker, matches, openingFor, preferred } from "../src/views/butler/picker";
+import { BlockedStrip } from "../src/views/Butler";
+import { withheldFrom } from "../src/views/butlers/TabReach";
+import { retireLines } from "../src/views/butlers/ButlerDrawer";
+import { NewButlerDialog } from "../src/views/butlers/NewButlerDialog";
+import { RouteList } from "../src/views/butlers/TabModel";
+import { Confirm } from "../src/ui/Confirm";
+import { Tabs } from "../src/ui/Tabs";
+import type { ButlerRow as ButlerRosterRow, Model } from "../src/api";
 import { ConnectChat, InstallStep, InviteStep, surfaceOf, vendorSecret } from "../src/views/ConnectChat";
 
 // Exactly what GET /api/v1/packages serves, copied from the live VM.
@@ -277,11 +289,15 @@ check("an empty thread teaches the surface's ceiling", emptyThread.includes("no 
 // what that butler CANNOT do, because "ask the butler" reading the same
 // on both surfaces is how a person ends up asking the family butler to
 // restart a container and believing it might.
-check("butler screen offers both surfaces", butler.includes("Operator") && butler.includes("Household"));
-// The surface switch is a segmented control in the sidebar head since
-// the redesign; what has to stay true is which one is selected.
-check("butler screen defaults to the operator surface",
-  /aria-selected="true"[^>]*>Operator/.test(butler), butler.slice(0, 900));
+// The surface toggle is gone. It was a control for choosing a
+// correspondent that could not name one: a household with three
+// household Butlers had a button meaning "one of these", and sending to
+// it either picked for you or implied all three answered.
+check("the surface toggle is gone", !butler.includes('role="tablist" aria-label="Butler surface"'), butler.slice(0, 900));
+check("a Butler selector stands where it was", butler.includes("picker-wrap"), butler.slice(0, 900));
+// Nothing is selected before the roster loads, and the screen says so
+// rather than naming a Butler it has not read.
+check("with no roster yet it names no Butler", text(butler).includes("No Butler yet"), text(butler).slice(0, 600));
 // Before a status response arrives the screen shows the unconfigured
 // card, which is what a fresh install sees — never a blank thread.
 check("butler screen is never blank while it checks", butler.includes("Checking the Butler") || butler.includes("Not configured"), butler.slice(0, 400));
@@ -314,22 +330,63 @@ check("an empty bucket is not named", bucket([session("s", before(3600_000))], N
 check("an undated conversation still lands somewhere",
   bucket([session("s", "")], NOW)[0].label === "Earlier");
 
+// A Butler for the chat screen's fixtures. The selector replaced a
+// surface toggle, so everything here is now per-Butler. It is its own
+// literal rather than borrowing the roster's builder, which is declared
+// further down this file.
+const chatRow = (
+  over: Partial<ButlerRosterRow["butler"]> = {},
+  row: Partial<ButlerRosterRow> = {},
+): ButlerRosterRow => ({
+  butler: {
+    name: "health", directive: "keeps track of training and sleep", surface: "family",
+    profile: "household", model: "qwen3.5:4b", modelKind: "local", providerModel: "qwen3.5:4b",
+    provider: "ollama", readiness: "ready", modelEnabled: true, enabled: true,
+    createdAt: "2026-03-14T09:00:00Z", createdBy: "tom", updatedAt: "2026-09-09T09:00:00Z",
+    ...over,
+  },
+  leavesTheHouse: false, carriesActions: true, reachable: true,
+  people: 2, connections: 1, toolsAllowed: 3, toolsAvailable: 4, ...row,
+});
+
+// anHourAgoButStillToday is the rail fixture's timestamp: an hour ago,
+// unless an hour ago was yesterday.
+//
+// "An hour ago" alone is wrong for one hour out of every day. Between
+// midnight and 01:00 it lands on the PREVIOUS date, the rail correctly
+// heads it "Yesterday", and a check asserting "Today" fails — on a
+// commit that passed an hour earlier and will pass again an hour later,
+// which is the worst kind of red because nothing in the diff explains
+// it.
+function anHourAgoButStillToday(): string {
+  const now = new Date();
+  const hourAgo = new Date(now.getTime() - 3600_000);
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  return (hourAgo < startOfToday ? now : hourAgo).toISOString();
+}
+
 const convoRail = renderToString(h(ConversationRail, {
-  surface: "admin", openID: "s-today",
+  rows: [chatRow()], current: chatRow(), onPickButler: () => {}, onManage: () => {},
+  openID: "s-today",
   // Dated against the REAL clock: ConversationRail buckets with its own
   // default `now`, so a fixture timestamp would name a different group
   // every day after the one it was written on.
-  sessions: { data: [session("s-today", new Date(Date.now() - 3600_000).toISOString())], error: null, loading: false },
-  onPick: () => {}, onSurface: () => {}, onNew: () => {}, onClose: () => {},
+  sessions: { data: [session("s-today", anHourAgoButStillToday())], error: null, loading: false },
+  onPick: () => {}, onNew: () => {}, onClose: () => {},
 }));
 check("the rail heads each day group", convoRail.includes("Today"), convoRail.slice(0, 400));
 check("the rail marks the open conversation", convoRail.includes('class="convo on"'), convoRail);
 check("the rail offers a new conversation", convoRail.includes("New conversation"));
 const emptyRail = renderToString(h(ConversationRail, {
-  surface: "family", openID: null, sessions: { data: [], error: null, loading: false },
-  onPick: () => {}, onSurface: () => {}, onNew: () => {}, onClose: () => {},
+  rows: [chatRow()], current: chatRow(), onPickButler: () => {}, onManage: () => {},
+  openID: null, sessions: { data: [], error: null, loading: false },
+  onPick: () => {}, onNew: () => {}, onClose: () => {},
 }));
-check("an empty rail names the surface it is empty for", text(emptyRail).includes("No household conversations yet"), text(emptyRail));
+// It names the BUTLER it is empty for, not the surface: "no household
+// conversations" was true of three Butlers at once.
+check("an empty rail names the Butler it is empty for", text(emptyRail).includes("No conversations with health yet"), text(emptyRail));
+check("the rail carries the Butler selector", emptyRail.includes("Which Butler?") || emptyRail.includes("picker"), emptyRail.slice(0, 400));
 
 // The header says what is answering. A popover that is shut must not
 // render the settings form: the whole point of moving it there was that
@@ -337,27 +394,36 @@ check("an empty rail names the surface it is empty for", text(emptyRail).include
 const bar = renderToString(h(ThreadBar, {
   title: "why is jellyfin unhealthy?", configured: true, open: false,
   status: { configured: true, provider: "ollama", model: "llama3.1" },
-  onToggle: () => {}, onClose: () => {}, onNew: () => {}, onSaved: () => {},
+  onToggle: () => {}, onClose: () => {}, onNew: () => {}, onManage: () => {},
 }));
 check("the header names the backend answering", text(bar).includes("ollama · llama3.1"), text(bar));
 check("the header names the conversation", bar.includes("why is jellyfin unhealthy?"));
 check("a shut popover renders nothing", !bar.includes("Butler settings"), bar);
 const barOff = renderToString(h(ThreadBar, {
   title: "New conversation", configured: false, open: false, status: null,
-  onToggle: () => {}, onClose: () => {}, onNew: () => {}, onSaved: () => {},
+  onToggle: () => {}, onClose: () => {}, onNew: () => {}, onManage: () => {},
 }));
 check("an unconfigured backend says so in the header", barOff.includes("Not configured"), barOff);
 
 // The opening: the asks are here and nowhere else, so a suggested
 // question cannot be pressed halfway through a conversation.
-const opening = renderToString(h(EmptyState, { surface: "admin", busy: false, onSend: () => {} }));
+const opsRow = chatRow({ name: "ops", surface: "admin", profile: "operator" });
+const opening = renderToString(h(EmptyState, { row: opsRow, busy: false, onSend: () => {} }));
 for (const ask of SURFACES.admin.asks) {
   check(`the opening offers "${ask}"`, opening.includes(ask), opening.slice(0, 300));
 }
-check("the opening asks the surface's own question", opening.includes(SURFACES.admin.title));
+// The opening is the BUTLER's now, derived from its own record — a
+// table keyed by name would greet the fourth Butler a household made
+// with a blank.
+check("the opening names the Butler, not the surface", opening.includes("What should ops look into?"), opening.slice(0, 400));
 check("the opening carries the composer", opening.includes('aria-label="Ask the Butler"'));
-const family = renderToString(h(EmptyState, { surface: "family", busy: false, onSend: () => {} }));
-check("the household opening names its ceiling", family.includes("no access to the home lab"), family.slice(0, 400));
+const family = renderToString(h(EmptyState, { row: chatRow(), busy: false, onSend: () => {} }));
+check("a household opening names its ceiling", text(family).includes("cannot touch the home lab"), text(family).slice(0, 400));
+check("a local Butler says its words stay home", text(family).includes("on your own hardware"), text(family).slice(0, 400));
+const cloudOpening = renderToString(h(EmptyState, {
+  row: chatRow({ provider: "anthropic" }, { leavesTheHouse: true }), busy: false, onSend: () => {},
+}));
+check("a cloud Butler says where its words go, first", text(cloudOpening).includes("outside the house: anything you tell it goes to anthropic"), text(cloudOpening).slice(0, 400));
 const adminThread = renderToString(
   h(Thread, { surface: "admin", session: null, pending: null, proposals: [], onProposalResolved: () => {} }),
 );
@@ -1398,6 +1464,295 @@ const linked = renderToString(
 check("the link is what is shown", linked.includes("t.me/wildstone_house_bot?start=K7QP-3XMR-9TWD"));
 check("the raw code is not shown beside it", !linked.includes(">K7QP-3XMR-9TWD<"));
 
+// ----------------------------------------------------------- Butlers
+//
+// The screen's job is to make it impossible to look at a Butler without
+// seeing where its words go, so these checks are mostly about the row
+// and the drawer telling the truth rather than about them rendering.
+
+const localModel = (over: Partial<Model> = {}): Model => ({
+  name: "llama3.1:8b", kind: "local", provider: "ollama", endpoint: "http://studio:11434",
+  readiness: "ready", enabled: true, ...over,
+});
+const CLOUD = localModel({ name: "claude-sonnet", kind: "cloud", provider: "anthropic" });
+const QA = localModel({ name: "gemma2:27b", readiness: "qa-only", readinessDetail: "failed tool check" });
+const OFF = localModel({ name: "gpt-4o", kind: "cloud", provider: "openai", enabled: false });
+
+const bRow = (over: Partial<ButlerRosterRow["butler"]> = {}, row: Partial<ButlerRosterRow> = {}): ButlerRosterRow => ({
+  butler: {
+    name: "health", directive: "keeps track of training and sleep", surface: "family",
+    profile: "household", model: "llama3.1:8b", modelKind: "local", provider: "ollama",
+    readiness: "ready", modelEnabled: true, enabled: true,
+    createdAt: "2026-03-14T09:00:00Z", createdBy: "tom", updatedAt: "2026-09-09T09:00:00Z",
+    ...over,
+  },
+  leavesTheHouse: false, carriesActions: true, reachable: true,
+  people: 2, connections: 2, toolsAllowed: 3, toolsAvailable: 4, ...row,
+});
+
+// The destination is in the row, not one click away. This is A2 and A4
+// rendered, and it is the single thing this screen exists to get right.
+const localRow = renderToString(h(RosterRow, { row: bRow(), selected: false, onOpen: () => {}, model: localModel() }));
+check("a local Butler's row says its words stay in the house", localRow.includes("stays in the house"), localRow);
+const cloudRow = renderToString(h(RosterRow, {
+  row: bRow({ name: "nutrition", model: "claude-sonnet", modelKind: "cloud", provider: "anthropic" }, { leavesTheHouse: true }),
+  selected: false, onOpen: () => {}, model: CLOUD,
+}));
+check("a cloud Butler's row says so without opening it", cloudRow.includes("leaves the house"), cloudRow);
+
+// The pill reads the SERVER's flag, never the route kind beside it. A
+// client deriving the most consequential fact on the screen is a client
+// that can derive it wrongly, so a row whose kind says cloud and whose
+// flag says otherwise must follow the flag — and be a server bug, not a
+// screen that quietly disagrees with the API.
+const disagreeing = renderToString(h(RosterRow, {
+  row: bRow({ model: "claude-sonnet", modelKind: "cloud" }, { leavesTheHouse: false }),
+  selected: false, onOpen: () => {}, model: CLOUD,
+}));
+check("the destination pill follows leavesTheHouse, not the route kind", disagreeing.includes("stays in the house"), disagreeing);
+
+// A Butler nobody can reach is flagged in the roster, because a Butler
+// that answers nobody looks exactly like a working one otherwise.
+const unreachable = renderToString(h(RosterRow, { row: bRow({}, { people: 0 }), selected: false, onOpen: () => {}, model: localModel() }));
+check("a Butler with nobody ticked says so on the row", unreachable.includes("nobody can talk to it"), unreachable);
+
+const retiredRow = renderToString(h(RosterRow, {
+  row: bRow({ retiredAt: "2026-08-12T00:00:00Z" }), selected: false, onOpen: () => {}, model: localModel(),
+}));
+check("a retired Butler reads as kept, not deleted", retiredRow.includes("kept, not deleted"), retiredRow);
+
+// healthOf is the one place readiness becomes words.
+check("a working Butler is ready", butlerHealthOf(bRow(), localModel()).label === "ready");
+check("a Butler that failed its tool probe answers questions only",
+  butlerHealthOf(bRow({}, { carriesActions: false }), QA).label === "questions only");
+check("the failure detail comes from the route, not invented",
+  butlerHealthOf(bRow({}, { carriesActions: false }), QA).detail === "failed tool check");
+check("a Butler on a disabled route names the route, not a generic outage",
+  butlerHealthOf(bRow({ modelEnabled: false }, { reachable: false }), OFF).detail.includes("turned off in Model routes"));
+check("retired outranks unreachable — it is not answering on purpose",
+  butlerHealthOf(bRow({ retiredAt: "2026-08-12T00:00:00Z" }, { reachable: false }), localModel()).kind === "mute");
+
+// The filters. Retired is the only one that inverts the predicate, and
+// it is the one worth pinning: every other filter narrows the LIVE set.
+const roster = [
+  bRow(),
+  bRow({ name: "nutrition", directive: "meal planning", model: "claude-sonnet", modelKind: "cloud" }, { leavesTheHouse: true, reachable: false }),
+  bRow({ name: "ops", directive: "diagnoses services", surface: "admin", profile: "operator" }, { carriesActions: false }),
+  bRow({ name: "old", directive: "retired job", retiredAt: "2026-08-12T00:00:00Z" }),
+];
+check("All hides retired Butlers", select(roster, { filter: "all", query: "", sort: "name" }).length === 3);
+check("Retired shows only them", select(roster, { filter: "retired", query: "", sort: "name" }).map((r) => r.butler.name).join() === "old");
+check("Leaves the house selects by the server's own flag",
+  select(roster, { filter: "cloud", query: "", sort: "name" }).map((r) => r.butler.name).join() === "nutrition");
+check("Needs attention catches both unreachable and questions-only",
+  select(roster, { filter: "attention", query: "", sort: "name" }).map((r) => r.butler.name).join() === "nutrition,ops");
+check("search reads the directive as well as the name",
+  select(roster, { filter: "all", query: "sleep", sort: "name" }).map((r) => r.butler.name).join() === "health");
+check("a retired Butler never leaks into a surface filter",
+  select(roster, { filter: "family", query: "", sort: "name" }).every((r) => !r.butler.retiredAt));
+check("needsAttention ignores retired Butlers", !needsAttention(bRow({ retiredAt: "2026-08-12T00:00:00Z" }, { reachable: false })));
+
+// Singularisation, because "1 people" makes a reader distrust the row.
+check("one person reads as a person", reachLine(bRow({}, { people: 1, connections: 1 })) === "1 person · 1 connection");
+check("nobody reads as no people", reachLine(bRow({}, { people: 0, connections: 0 })).startsWith("no people"));
+check("an operator Butler counts operators", reachLine(bRow({ surface: "admin" }, { people: 2 })).startsWith("2 operators"));
+check("the tool denominator is what is available here", toolLine(bRow({}, { toolsAllowed: 5, toolsAvailable: 6 })) === "5 of 6 tools");
+
+// The banner names the Butlers and what is wrong with each.
+const banner = renderToString(h(AttentionBanner, {
+  rows: [roster[1], roster[2]], routes: [localModel(), CLOUD, QA], onShow: () => {},
+}));
+check("the banner names each Butler and its fault", banner.includes("nutrition can&#x27;t reach its model") && banner.includes("ops answers questions only"), banner);
+
+// Tool rows: three states, and only two of them are ours to undo.
+const onTool = renderToString(h(Tool, {
+  tool: { name: "get_household_events", summary: "Reads the household timeline.", available: true },
+  busy: false, onSet: () => {},
+}));
+check("an available tool reads as on", onTool.includes(">on<"), onTool);
+check("an available tool offers to take it away", onTool.includes('aria-pressed="true"'), onTool);
+
+const offTool = renderToString(h(Tool, {
+  tool: { name: "do_household_action", summary: "Runs one domestic action.", mutating: true, available: false, reason: "health does not have do_household_action" },
+  narrowedReason: "it only ever needed to read", busy: false, onSet: () => {},
+}));
+check("a narrowed tool reads as off, not unavailable", offTool.includes(">off<") && !offTool.includes("unavailable"), offTool);
+check("the narrowing carries the reason it was given", offTool.includes("it only ever needed to read"), offTool);
+check("a mutating tool says it does something", offTool.includes("does something"), offTool);
+
+const goneTool = renderToString(h(Tool, {
+  tool: { name: "get_container_logs", summary: "Reads a container's recent log lines.", available: false, reason: "this deployment has not wired the source behind it" },
+  busy: false, onSet: () => {},
+}));
+check("a tool nothing wired reads as unavailable", goneTool.includes("unavailable"), goneTool);
+check("it says why rather than offering a switch", goneTool.includes("has not wired the source") && !goneTool.includes("tri"), goneTool);
+
+// A4's crossover rule, which the store also enforces with a trigger.
+const priv = {
+  seq: 1, name: "gym", adapter: "withings", ownership: "personal" as const, owner: "tom",
+  audience: "private" as const, actionsEnabled: false, indexingEnabled: true, cloudAllowed: false,
+  state: "ready" as const, leaseEpoch: 1,
+};
+check("a private connection is withheld from a household Butler", withheldFrom("family", priv).includes("private to tom"));
+check("an operator Butler may still be given it", withheldFrom("admin", priv) === "");
+check("a shared connection is offered to both", withheldFrom("family", { ...priv, audience: "shared" }) === "");
+
+// WHAT BREAKS: counted, and every zero omitted.
+const lines = retireLines({
+  people: ["tom", "sam", "kids"],
+  routines: [{ name: "sunday shop", state: "enabled" }, { name: "meal plan", state: "enabled" }],
+  sessions: 2, memoryCount: 3,
+});
+check("the retire list counts people", lines[0] === "3 people lose the Butler they message");
+check("it names the routines rather than counting them alone", lines[1].includes("“sunday shop” and “meal plan”"), lines.join(" | "));
+check("it says memory is kept, not deleted", lines.some((l) => l.includes("kept, not deleted")), lines.join(" | "));
+const nothingBreaks = retireLines({ people: [], routines: [], sessions: 0, memoryCount: 0 });
+check("nothing to break renders no list at all", nothingBreaks.length === 0, nothingBreaks.join(" | "));
+const disabled = retireLines({ people: [], routines: [{ name: "old", state: "disabled" }], sessions: 0, memoryCount: 0 });
+check("a routine somebody already disabled is not something this breaks", disabled.length === 0, disabled.join(" | "));
+
+// The confirmations state a consequence and name what is kept.
+const cloudConfirm = renderToString(h(Confirm, {
+  kind: "warn", icon: null, title: "This sends health's material outside the house",
+  body: "Everything anyone tells health from now on goes to anthropic.",
+  listTitle: "WHAT CHANGES", lines: ["2 people talk to this Butler"],
+  confirmLabel: "Yes, switch it", cancelLabel: "Keep llama3.1:8b",
+  onConfirm: () => {}, onCancel: () => {},
+}));
+check("the crossing confirmation names the provider", cloudConfirm.includes("goes to anthropic"), cloudConfirm);
+check("cancel names what is kept, not the word Cancel", cloudConfirm.includes("Keep llama3.1:8b") && !cloudConfirm.includes(">Cancel<"), cloudConfirm);
+
+// The route lists put the boundary in a heading, not a suffix.
+const local = renderToString(h(RouteList, { title: "ON YOUR HARDWARE", routes: [localModel(), QA], current: "llama3.1:8b", busy: false, onPick: () => {} }));
+check("the selected route is the checked radio", local.includes('aria-checked="true"'), local);
+check("a qa-only route says questions only", local.includes("questions only"), local);
+const cloudList = renderToString(h(RouteList, { title: "OUTSIDE THE HOUSE", routes: [CLOUD, OFF], current: "claude-sonnet", busy: false, onPick: () => {} }));
+check("a cloud route says it leaves the house", cloudList.includes("leaves the house"), cloudList);
+check("a disabled route says where to turn it back on", cloudList.includes("turned off in Model routes"), cloudList);
+
+// A Butler on a since-disabled route still renders as being on it.
+const stranded = renderToString(h(RouteList, { title: "OUTSIDE THE HOUSE", routes: [CLOUD, OFF], current: "gpt-4o", busy: false, onPick: () => {} }));
+check("a Butler stranded on a disabled route still shows that route as its own",
+  stranded.split('aria-checked="true"').length === 2 && stranded.includes("gpt-4o"), stranded);
+
+// The create dialog restates the whole choice as a sentence.
+const dialog = renderToString(h(NewButlerDialog, {
+  routes: [localModel(), CLOUD], existing: ["health"], say: () => {}, onClose: () => {}, onCreated: () => {},
+}));
+check("the create dialog summarises what is being made", dialog.includes("YOU ARE MAKING"), dialog);
+check("it says nobody can talk to it yet", dialog.includes("Nobody can talk to it until you give it an address"), dialog);
+check("it offers both surfaces as cards, not a select", dialog.includes("surface-card"), dialog);
+
+// The tab strip.
+const tabs = renderToString(h(Tabs, {
+  label: "health detail", current: "model",
+  items: [{ id: "identity", label: "Identity" }, { id: "model", label: "Model" }, { id: "tools", label: "Tools", count: "5/6" }, { id: "memory", label: "Memory", count: 0 }],
+  onSelect: () => {},
+}));
+check("the open tab is the selected one", tabs.includes('aria-selected="true"'), tabs);
+check("a tab count is shown when there is one", tabs.includes("5/6"), tabs);
+check("a zero count is not rendered as a broken counter", !tabs.includes(">0<"), tabs);
+
+// The two empty states.
+const noMatch = renderToString(h(NoMatches, { filter: "attention", onClear: () => {} }));
+check("no matches offers a way back", noMatch.includes("Clear filters"), noMatch);
+const noneRetired = renderToString(h(NoMatches, { filter: "retired", onClear: () => {} }));
+check("the retired filter says nothing has been retired", noneRetired.includes("No Butler has been retired"), noneRetired);
+const noRoutes = renderToString(h(NoButlers, { routes: [], onNew: () => {} }));
+check("with no model routes the empty state says a Butler needs a model", noRoutes.includes("A Butler needs a model to be anything"), noRoutes);
+check("and the button is disabled until there is one", noRoutes.includes("disabled"), noRoutes);
+const ready = renderToString(h(NoButlers, { routes: [localModel()], onNew: () => {} }));
+check("with a route the empty state offers to make one", !ready.includes("A Butler needs a model to be anything"), ready);
+
+// The screen itself, which must never render blank while it loads.
+const screen = renderToString(h(Butlers));
+check("the Butlers screen renders without throwing", screen.length > 0);
+check("it states the model rule before any data arrives", screen.includes("sends what it is told outside the house"), screen.slice(0, 600));
+
+// ------------------------------------------------ Butler selector
+//
+// The selector's job is to make "who am I talking to" unambiguous, so
+// these checks are about what it refuses to blur.
+
+const pickerRows = [
+  chatRow(),
+  chatRow({ name: "kitchen", directive: "timers and the freezer" }),
+  chatRow({ name: "ops", surface: "admin", profile: "operator" }),
+  chatRow({ name: "old", retiredAt: "2026-08-12T00:00:00Z" }),
+];
+const picker = renderToString(h(ButlerPicker, {
+  rows: pickerRows, current: pickerRows[0], onPick: () => {}, onManage: () => {},
+}));
+check("the picker names the selected Butler", picker.includes("health"), picker.slice(0, 400));
+check("and where its words go, without opening it", text(picker).includes("stays in the house"), text(picker));
+// Closed, it is one Butler and not a list.
+check("a shut picker lists nobody else", !picker.includes("kitchen"), picker.slice(0, 600));
+
+// preferred(): never opens on a Butler that cannot answer.
+check("it opens on a ready operator Butler",
+  preferred(pickerRows)?.butler.name === "ops");
+check("it skips one that cannot answer",
+  preferred([chatRow({ name: "broken", surface: "admin" }, { reachable: false }), chatRow({ name: "fine" })])?.butler.name === "fine");
+check("a retired Butler is never opened on",
+  preferred([chatRow({ name: "old", retiredAt: "2026-08-12T00:00:00Z" }), chatRow({ name: "live" })])?.butler.name === "live");
+check("with everything unwell it still opens on one", !!preferred([chatRow({}, { reachable: false })]));
+
+// The filter reads the directive too, which is how you find the Butler
+// whose job you remember and whose name you do not.
+check("the filter matches a name", matches(chatRow(), "heal"));
+check("the filter matches a directive", matches(chatRow({ name: "kitchen", directive: "timers and the freezer" }), "freezer"));
+check("the filter rejects a miss", !matches(chatRow(), "nutrition"));
+
+// openingFor(): derived from the record, never a table keyed by name.
+const localOpen = openingFor(chatRow());
+check("the opening names the Butler", localOpen.title.includes("health"));
+check("it repeats the directive its owner wrote", localOpen.blurb.includes("keeps track of training and sleep"));
+check("a household Butler states its ceiling", localOpen.blurb.includes("cannot touch the home lab"));
+const opsOpen = openingFor(chatRow({ name: "ops", surface: "admin" }));
+check("an operator Butler states a different one", opsOpen.blurb.includes("waits for your approval"));
+check("the placeholder names the Butler", opsOpen.placeholder.includes("ops"));
+
+// The blocked strip explains a Butler that cannot answer, and names the
+// reason rather than saying "unavailable".
+const blockedOff = renderToString(h(BlockedStrip, {
+  row: chatRow({ modelEnabled: false }, { reachable: false }), onManage: () => {},
+}));
+check("a turned-off model says it is turned off", text(blockedOff).includes("qwen3.5:4b is turned off"), text(blockedOff));
+check("and offers the way to fix it", blockedOff.includes("Change its model"), blockedOff);
+const blockedDown = renderToString(h(BlockedStrip, {
+  row: chatRow({}, { reachable: false }), onManage: () => {},
+}));
+check("a model that is not answering says that instead", text(blockedDown).includes("is not answering"), text(blockedDown));
+
+// ------------------------------------------------ member editing
+//
+// The drawer's job is to be honest about what it can and cannot do.
+const memberRow = {
+  username: "giulia", displayName: "Giulia", email: "g@example.com",
+  groups: ["media_users"], owner: "system", node: "wildstone-homelab",
+};
+const editing = renderToString(h(EditMember, {
+  member: memberRow,
+  groups: [
+    { name: "media_users", owner: "capability/media", node: "wildstone-homelab" },
+    { name: "console_users", owner: "capability/console", node: "wildstone-homelab" },
+  ],
+  onClose: () => {}, onDone: () => {},
+}));
+check("a group they are in is shown as already theirs", text(editing).includes("already in it"), text(editing));
+// The additive rule, said where the control is rather than discovered
+// from an app that still opens.
+check("it says a group cannot be taken away here", text(editing).includes("never removes one"), text(editing));
+check("a group they are already in cannot be unticked", editing.includes("disabled"), editing.slice(0, 900));
+// A group declared on another node is not offered: a membership is only
+// real on the directory the group is declared against.
+const otherNode = renderToString(h(EditMember, {
+  member: memberRow,
+  groups: [{ name: "elsewhere_users", owner: "capability/x", node: "other-node" }],
+  onClose: () => {}, onDone: () => {},
+}));
+check("a group on another directory is not offered", !otherNode.includes("elsewhere_users"), otherNode.slice(0, 600));
+check("and it says why there is nothing to pick", text(otherNode).includes("No groups are declared"), text(otherNode));
 // ---------------------------------------------------------- Routines
 //
 // The list's job is two distinctions: what state a routine is in, and

@@ -37,13 +37,13 @@ type butlerModel struct {
 	Local      bool   `json:"local"`
 }
 
-// listButlerModels asks a backend what it can actually run.
+// listOfferedModels asks a backend what it can actually run.
 //
 // The endpoint is a query parameter rather than the configured one, so
 // an operator can see a candidate's models BEFORE committing to it —
 // choosing a model you cannot see is how a typo becomes a support
 // question.
-func (s *Server) listButlerModels(r *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) listOfferedModels(r *http.Request, _ principal.Identity) (any, int, error) {
 	endpoint := r.URL.Query().Get("endpoint")
 	if endpoint == "" && s.ButlerHost != nil {
 		endpoint = s.ButlerHost.Endpoint
@@ -51,29 +51,44 @@ func (s *Server) listButlerModels(r *http.Request, _ principal.Identity) (any, i
 	if endpoint == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("endpoint required (no Butler endpoint is configured to fall back to)")
 	}
+	out, resolved, code, err := offeredModels(r.Context(), endpoint)
+	if err != nil {
+		return nil, code, err
+	}
+	return map[string]any{"endpoint": resolved, "models": out}, http.StatusOK, nil
+}
+
+// offeredModels asks one provider endpoint what it serves.
+//
+// Shared by the listing the Console renders and by the assignment path,
+// so a model's local/cloud verdict is drawn from the same evidence in
+// both — the provider's own listing, with the real size. A second
+// implementation is a second chance to be wrong about the one fact that
+// decides whether material leaves the house.
+func offeredModels(ctx context.Context, endpoint string) ([]butlerModel, string, int, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return nil, http.StatusBadRequest, fmt.Errorf("endpoint must be an http(s) URL, got %q", endpoint)
+		return nil, "", http.StatusBadRequest, fmt.Errorf("endpoint must be an http(s) URL, got %q", endpoint)
 	}
 
 	// Bounded: an operator typing an address should get an answer or a
 	// clear failure, not a hung Console tab.
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(u.String(), "/")+"/api/tags", nil)
 	if err != nil {
-		return nil, http.StatusInternalServerError, err
+		return nil, "", http.StatusInternalServerError, err
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		// The operator's most likely mistake is an address this host
 		// cannot reach, so say that rather than "failed".
-		return nil, http.StatusBadGateway,
+		return nil, "", http.StatusBadGateway,
 			fmt.Errorf("could not reach %s from this machine: %w", u.Host, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return nil, http.StatusBadGateway,
+		return nil, "", http.StatusBadGateway,
 			fmt.Errorf("%s answered %s — is it an Ollama endpoint?", u.Host, res.Status)
 	}
 
@@ -87,7 +102,7 @@ func (s *Server) listButlerModels(r *http.Request, _ principal.Identity) (any, i
 		} `json:"models"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		return nil, http.StatusBadGateway, fmt.Errorf("%s did not answer with a model list: %w", u.Host, err)
+		return nil, "", http.StatusBadGateway, fmt.Errorf("%s did not answer with a model list: %w", u.Host, err)
 	}
 
 	out := make([]butlerModel, 0, len(body.Models))
@@ -100,7 +115,7 @@ func (s *Server) listButlerModels(r *http.Request, _ principal.Identity) (any, i
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return map[string]any{"endpoint": u.String(), "models": out}, http.StatusOK, nil
+	return out, u.String(), http.StatusOK, nil
 }
 
 // looksLocal distinguishes a model that runs on this hardware from one

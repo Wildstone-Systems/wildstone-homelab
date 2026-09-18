@@ -44,14 +44,21 @@ func (s *Server) listButlerMembers(_ *http.Request, _ principal.Identity) (any, 
 // and so does the schema.
 func (s *Server) recordButlerMember(r *http.Request, _ principal.Identity) (any, int, error) {
 	var req struct {
-		Member   string `json:"member"`
+		Member string `json:"member"`
+		// Role is the RBAC axis and defaults to member: staging someone
+		// must not make them an Owner by omission (design §2.3).
+		Role string `json:"role"`
+		// Profile is the constrained-Member preset, normally empty.
 		Profile  string `json:"profile"`
 		Guardian string `json:"guardian"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
 	}
-	if err := s.DB.RecordButlerMember(req.Member, req.Profile, req.Guardian); err != nil {
+	if req.Role == "" {
+		req.Role = runtimedb.RoleMember
+	}
+	if err := s.DB.RecordButlerMember(req.Member, req.Role, req.Profile, req.Guardian); err != nil {
 		return nil, http.StatusBadRequest, err
 	}
 	return map[string]any{"recorded": req.Member}, http.StatusOK, nil

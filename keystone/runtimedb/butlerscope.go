@@ -374,7 +374,7 @@ func (db *DB) PromoteMemoryToSharedPool(seq int64, by string) (gains []Butler, l
 type ButlerScopeSummary struct {
 	Butler      string            `json:"butler"`
 	Model       string            `json:"model"`
-	RouteKind   string            `json:"routeKind"`
+	ModelKind   string            `json:"modelKind"`
 	Connections []string          `json:"connections"`
 	Narrowed    map[string]string `json:"narrowedTools,omitempty"`
 	MemoryCount int               `json:"memoryCount"`
@@ -390,7 +390,7 @@ func (db *DB) ButlerScope(butler string) (ButlerScopeSummary, error) {
 		return ButlerScopeSummary{}, err
 	}
 	s := ButlerScopeSummary{
-		Butler: b.Name, Model: b.Route, RouteKind: b.RouteKind, Since: b.CreatedAt,
+		Butler: b.Name, Model: b.Model, ModelKind: b.ModelKind, Since: b.CreatedAt,
 	}
 	if s.Connections, err = db.ButlerConnections(butler); err != nil {
 		return ButlerScopeSummary{}, err

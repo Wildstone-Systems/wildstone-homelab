@@ -158,6 +158,26 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    // The session a failed Butler turn left its work in, when there is
+    // one.
+    //
+    // A failed request normally has nothing but a message. A turn that
+    // failed AFTER running tools is the exception: some of those calls
+    // changed the house, the server keeps the durable task and names
+    // the session holding it, and a caller that drops the name retries
+    // into a fresh task and runs them again. So it travels on the error
+    // rather than being parsed out of the body at each call site, where
+    // one of them would eventually forget.
+    public sessionId?: string,
+    // Proposals the turn tried to make and the queue refused.
+    //
+    // These travel for the same reason sessionId does, and are the more
+    // urgent of the two. A plan that WAS created is visible on the
+    // Plans screen and in the thread; a refused one exists nowhere.
+    // ResourceYAML never reaches the stored transcript, so resuming the
+    // task cannot submit it either — the operator has to ask again, and
+    // will not know to unless this is shown.
+    public proposalErrors?: string[],
   ) {
     super(message);
   }
@@ -186,7 +206,13 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new ApiError(res.status, (data as { error?: string }).error ?? res.statusText);
+    const failed = data as { error?: string; sessionId?: string; proposalErrors?: string[] };
+    throw new ApiError(
+      res.status,
+      failed.error ?? res.statusText,
+      failed.sessionId,
+      failed.proposalErrors,
+    );
   }
   return data as T;
 }
@@ -284,6 +310,8 @@ export interface EnablePreview {
 // a reason, so the surface can teach rather than just fail.
 export interface ButlerStatus {
   configured: boolean;
+  // Set on a per-Butler status: which Butler this describes.
+  butler?: string;
   provider?: string;
   model?: string;
   endpoint?: string;
@@ -314,6 +342,10 @@ export interface ButlerSession {
   // Which butler answered (ADR-W026 A1). Stamped by the endpoint the
   // session arrived on, never by the caller.
   surface: ButlerSurface;
+  // Which named Butler held the conversation (ADR-W031 A1). Empty on a
+  // session that ran before Butlers existed, or one the engine phrased
+  // for itself — a real value, not a gap to fill in.
+  butler?: string;
   // The LAST turn's answer and transcript, kept for every reader that
   // predates turns. A session is a conversation now (ADR-W027).
   finalText: string;
@@ -439,7 +471,7 @@ export interface IdentityNotification {
   note: string;
 }
 
-export interface ButlerModel {
+export interface OfferedModel {
   name: string;
   sizeBytes?: number;
   parameters?: string;
@@ -787,14 +819,25 @@ export interface ConnectionSecret {
 // Where a question may be sent (ADR-W030 A9). A route's kind is the data
 // boundary: cloud means material sent to it leaves the house, and a
 // route cannot change kind.
-export interface ModelRoute {
+// One named model a Butler can be assigned to: which model, where it
+// runs, and whether asking it something leaves the house.
+//
+// The bundle exists rather than a bare model string on the Butler
+// because none of its parts implies the others. One Ollama endpoint
+// serves gemma4:e4b off local disk and gemma4:31b-cloud from Ollama's
+// own infrastructure, so neither the endpoint nor the provider says
+// where the material goes — kind does.
+export interface Model {
   name: string;
   kind: "local" | "cloud";
   provider: string;
-  model?: string;
+  providerModel?: string;
   endpoint?: string;
   readiness: "unprobed" | "ready" | "qa-only" | "unavailable";
   readinessDetail?: string;
+  // When something last asked this model to operate a tool. Absent
+  // means nobody ever has, which is not the same as it having failed.
+  probedAt?: string;
   enabled: boolean;
 }
 
@@ -809,15 +852,36 @@ export interface Butler {
   directive?: string;
   surface: ButlerSurface;
   profile: string;
-  route: string;
-  routeKind: "local" | "cloud";
-  model?: string;
+  // model is the assigned model, by name. providerModel is what the
+  // provider itself calls it, which is a different and often more
+  // specific string: assigned "kitchen-box", answered by "qwen3.5:4b".
+  model: string;
+  modelKind: "local" | "cloud";
+  providerModel?: string;
   provider?: string;
+  endpoint?: string;
   readiness: "unprobed" | "ready" | "qa-only" | "unavailable";
+  // The MODEL's switch, not the Butler's: turning a model off has to
+  // stop the Butlers already assigned to it.
+  modelEnabled: boolean;
   enabled: boolean;
   createdAt: string;
   createdBy: string;
+  updatedAt: string;
+  updatedBy?: string;
   retiredAt?: string;
+}
+
+// The model as a person would name it.
+//
+// A Butler's configured model has a NAME that is a stable key and a
+// providerModel that is what the provider calls it. For anything new
+// they are the same string, because the model's own name is used. They
+// differ on rows configured before that — "kitchen-box" pointing at
+// qwen3.5:4b — and everywhere a screen shows a model to a person it
+// should say the model, not the key.
+export function modelLabel(b: Butler): string {
+  return b.providerModel || b.model;
 }
 
 // One roster row. leavesTheHouse is computed by the server rather than
@@ -828,15 +892,73 @@ export interface ButlerRow {
   leavesTheHouse: boolean;
   carriesActions: boolean;
   reachable: boolean;
+  // How far it reaches, counted by the server. The roster shows one
+  // line per Butler saying who can talk to it and what it may do, and a
+  // client assembling that would make three calls per row — with
+  // nothing to stop one failing and a row quietly reading "no people"
+  // for a Butler two people message.
+  people: number;
+  connections: number;
+  // toolsAvailable is what this deployment actually wired for the
+  // profile, NOT the whole ceiling: "5 of 6" is what this Butler can do
+  // here, where "5 of 13" would count tools nobody ever set up.
+  toolsAllowed: number;
+  toolsAvailable: number;
 }
 
 export interface ButlerScope {
   butler: string;
   model: string;
-  routeKind: "local" | "cloud";
+  modelKind: "local" | "cloud";
   connections: string[] | null;
   narrowedTools?: Record<string, string> | null;
   memoryCount: number;
+}
+
+// What retiring a Butler would break (ADR-W031 A8). Every number is
+// counted by the server, because the dialog that shows it is asking
+// somebody to accept a consequence — "some routines may fail" moves the
+// work of finding out back onto the person it was meant to inform.
+export interface ButlerImpact {
+  butler: string;
+  people: string[] | null;
+  routines: { name: string; state: string }[] | null;
+  sessions: number;
+  memoryCount: number;
+  // Other live Butlers on the same surface: what a routine could be
+  // pointed at instead.
+  successors: string[] | null;
+}
+
+// One tool as the gateway reports it (ADR-W030 P2).
+//
+// available is separate from presence on purpose, and the reason is
+// the useful half: a tool this deployment never wired, and one this
+// Butler has been narrowed out of, are both unavailable and only the
+// second is something the screen can undo.
+export interface CapabilityTool {
+  name: string;
+  summary: string;
+  mutating?: boolean;
+  grantRequired?: boolean;
+  untrusted?: boolean;
+  available: boolean;
+  reason?: string;
+}
+
+// What one Butler may do, as the engine resolves it. The console does
+// not derive any of this: the tool list is the gateway's registry and
+// availability is the effective-authority resolver's answer, so a
+// screen cannot show a tool as on that a dispatch would refuse.
+export interface ButlerTools {
+  butler: string;
+  profile: string;
+  surface: ButlerSurface;
+  modelVerdict: string;
+  tools: CapabilityTool[] | null;
+  actions: { tool: string; tier: string }[] | null;
+  // Tool name to the reason it was narrowed, "" when none was given.
+  narrowedTools: Record<string, string> | null;
 }
 
 export interface ButlerAddress {
@@ -958,20 +1080,20 @@ export interface ReplayResult {
 
 export const api = {
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
-  butlerModels: (endpoint?: string) =>
-    call<{ endpoint: string; models: ButlerModel[] }>(
+  offeredModels: (endpoint?: string) =>
+    call<{ endpoint: string; models: OfferedModel[] }>(
       "GET",
-      `/api/v1/butler/models${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ""}`,
+      `/api/v1/butler/models/offered${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ""}`,
     ),
-  modelRoutes: () =>
-    call<{ routes: { route: ModelRoute; carriesActions: boolean; leavesTheHouse: boolean }[] | null }>(
+  models: () =>
+    call<{ models: { model: Model; carriesActions: boolean; leavesTheHouse: boolean }[] | null }>(
       "GET",
-      "/api/v1/butler/routes",
+      "/api/v1/butler/models",
     ),
-  setModelRouteEnabled: (name: string, enabled: boolean) =>
+  setModelEnabled: (name: string, enabled: boolean) =>
     call<{ enabled: boolean }>(
       "POST",
-      `/api/v1/butler/routes/${encodeURIComponent(name)}/enabled`,
+      `/api/v1/butler/models/${encodeURIComponent(name)}/enabled`,
       { enabled },
     ),
   butlers: () => call<{ butlers: ButlerRow[] | null }>("GET", "/api/v1/butlers"),
@@ -980,7 +1102,12 @@ export const api = {
     directive?: string;
     surface: string;
     profile: string;
-    route: string;
+    // Either an already-configured model by name, or one the provider
+    // offers plus where it comes from. The server decides the kind.
+    model?: string;
+    providerModel?: string;
+    provider?: string;
+    endpoint?: string;
   }) => call<ButlerRow>("POST", "/api/v1/butlers", b),
   butlerScope: (name: string) =>
     call<{ scope: ButlerScope; people: string[] | null; addresses: ButlerAddress[] | null }>(
@@ -990,11 +1117,21 @@ export const api = {
   // Applies immediately (A8). crossesToCloud is set when this move
   // sends an open conversation's history out of the house on the next
   // message, and warning carries the sentence to show.
-  setButlerRoute: (name: string, route: string) =>
+  // Assigns a model the provider offers, configuring it here if this
+  // house has not used it before. The kind — whether asking it leaves
+  // the house — is decided by the server from the provider's own
+  // listing, never sent from here.
+  assignProviderModel: (name: string, providerModel: string, provider: string, endpoint: string) =>
     call<ButlerRow & { crossesToCloud?: boolean; warning?: string; previousModel?: string }>(
       "PUT",
-      `/api/v1/butlers/${encodeURIComponent(name)}/route`,
-      { route },
+      `/api/v1/butlers/${encodeURIComponent(name)}/model`,
+      { providerModel, provider, endpoint },
+    ),
+  setButlerModel: (name: string, model: string) =>
+    call<ButlerRow & { crossesToCloud?: boolean; warning?: string; previousModel?: string }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/model`,
+      { model },
     ),
   setButlerAccess: (name: string, member: string, allow: boolean) =>
     call<{ people: string[] | null }>(
@@ -1002,13 +1139,92 @@ export const api = {
       `/api/v1/butlers/${encodeURIComponent(name)}/access`,
       { member, allow },
     ),
+  // A directive instructs and authorises nothing (A9), so rewriting one
+  // is a plain edit rather than a proposal.
+  setButlerDirective: (name: string, directive: string) =>
+    call<ButlerRow>("PUT", `/api/v1/butlers/${encodeURIComponent(name)}/directive`, { directive }),
+  // Where a Butler answers. On chat this is the bot that receives the
+  // message, and it is what decides which Butler replies (A7) — so it
+  // is the one field on this screen that changes who hears what.
+  setButlerAddress: (
+    name: string,
+    a: { transport: string; externalId: string; label?: string; allow: boolean },
+  ) =>
+    call<{ addresses: ButlerAddress[] | null }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/address`,
+      a,
+    ),
   retireButler: (name: string) =>
     call<{ retired: string }>("DELETE", `/api/v1/butlers/${encodeURIComponent(name)}`),
+  restoreButler: (name: string) =>
+    call<ButlerRow>("POST", `/api/v1/butlers/${encodeURIComponent(name)}/restore`, {}),
+  // One call, not six. Creating then granting each connection then
+  // re-narrowing each tool can half-fail, and the half that fails is
+  // the narrowing — leaving a copy quietly wider than its original.
+  duplicateButler: (name: string, copyName?: string) =>
+    call<ButlerRow & { note?: string }>(
+      "POST",
+      `/api/v1/butlers/${encodeURIComponent(name)}/duplicate`,
+      copyName ? { name: copyName } : {},
+    ),
+  butlerImpact: (name: string) =>
+    call<ButlerImpact>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/impact`),
+  // Asks a model whether it can actually operate a tool, and stores the
+  // verdict. This is how a model earns the authority to do things — an
+  // unprobed one answers questions and nothing more.
+  probeModel: (name: string) =>
+    call<{ model: Model }>(
+      "POST",
+      `/api/v1/butler/models/${encodeURIComponent(name)}/probe`,
+      {},
+    ),
+  // What is answering for ONE Butler, and what it may do. The
+  // deployment-wide status was one provider, one model, one tool list —
+  // true while there was one Butler, and another Butler's answer the
+  // moment there were several.
+  oneButlerStatus: (name: string) =>
+    call<ButlerStatus>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/status`),
+  butlerSessionsFor: (name: string, limit = 20) =>
+    call<ButlerSession[]>(
+      "GET",
+      `/api/v1/butler/sessions?butler=${encodeURIComponent(name)}&limit=${limit}`,
+    ),
+  butlerTools: (name: string) =>
+    call<ButlerTools>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/tools`),
+  // Narrowing only, and the API says so in both directions: allow:false
+  // takes a tool away from this Butler, allow:true gives it back to
+  // whatever its profile allows. Neither can widen past the surface's
+  // ceiling, which is why this is not a state field.
+  setButlerTool: (name: string, tool: string, allow: boolean, reason = "") =>
+    call<{ butler: string; narrowedTools: Record<string, string> | null; note?: string }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/tool`,
+      { tool, allow, reason },
+    ),
+  setButlerConnection: (name: string, connection: string, allow: boolean) =>
+    call<{ butler: string; connections: string[] | null }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/connection`,
+      { connection, allow },
+    ),
   householdRoutines: () =>
     call<{ routines: HouseholdRoutine[] | null; specs?: Record<string, AutomationSpec> }>(
       "GET",
       "/api/v1/household/routines",
     ),
+  // A routine is born a DRAFT whatever is asked for: activation goes
+  // through the state endpoint and the Plan boundary, which is where a
+  // human is. The form says so rather than letting the server refuse.
+  createHouseholdRoutine: (r: { name: string; document: string; ownership?: string }) =>
+    call<{ seq: number; note?: string }>("POST", "/api/v1/household/routines", {
+      name: r.name,
+      document: r.document,
+      ownership: r.ownership ?? "wildstone",
+      externalId: "",
+      connection: "",
+      state: "",
+    }),
   householdRoutine: (name: string) =>
     call<RoutineDetail>("GET", `/api/v1/household/routines/${encodeURIComponent(name)}`),
   // The household stream (ADR-W024 A2). Its own cursor, and the handler
@@ -1070,11 +1286,18 @@ export const api = {
       "/api/v1/butler/index/compact",
       { maxAgeDays },
     ),
-  butlerMemory: (subject?: string) =>
-    call<{ records: MemoryRecord[] | null }>(
+  // butler narrows to one Butler's material; omitting it is every
+  // Butler the reader may see, which is what the endpoint defaults to.
+  butlerMemory: (q?: { subject?: string; butler?: string }) => {
+    const params = new URLSearchParams();
+    if (q?.subject) params.set("subject", q.subject);
+    if (q?.butler) params.set("butler", q.butler);
+    const qs = params.toString();
+    return call<{ records: MemoryRecord[] | null }>(
       "GET",
-      `/api/v1/butler/memory${subject ? `?subject=${encodeURIComponent(subject)}` : ""}`,
-    ),
+      `/api/v1/butler/memory${qs ? `?${qs}` : ""}`,
+    );
+  },
   correctButlerMemory: (seq: number, content: string) =>
     call<{ seq: number }>("POST", "/api/v1/butler/memory/correct", {
       seq,
@@ -1104,6 +1327,15 @@ export const api = {
       "GET",
       "/api/v1/butler/members",
     ),
+  // Recording and admitting are separate acts on purpose: existing and
+  // being allowed to use the Butler are different facts, and the panel
+  // says so. This is the first half, which had no control at all.
+  recordButlerMember: (member: string, profile: string, guardian?: string) =>
+    call<{ recorded: string }>("POST", "/api/v1/butler/members", {
+      member,
+      profile,
+      guardian: guardian ?? "",
+    }),
   admitButlerMember: (member: string) =>
     call<unknown>("POST", `/api/v1/butler/members/${encodeURIComponent(member)}/admit`, {}),
   disableButlerMember: (member: string) =>
@@ -1206,10 +1438,21 @@ export const api = {
       surface === "family" ? "/api/v1/household/butler/ask" : "/api/v1/butler/ask",
       { message },
     ),
-  butlerSessions: (limit = 20, surface?: ButlerSurface) =>
+  // Asks ONE named Butler, on whichever surface it lives.
+  //
+  // Deliberately its own route rather than askButler with a butler
+  // field: the surface endpoints are doors that pin a ceiling, so
+  // /butler/ask refuses a household Butler and says "no butler answers
+  // there for you". This one takes the ceiling from the Butler's own
+  // record, which is the only correct answer for a caller who holds
+  // both surfaces (ADR-W031 A10).
+  askOneButler: (name: string, message: string) =>
+    call<AskResponse>("POST", `/api/v1/butlers/${encodeURIComponent(name)}/ask`, { message }),
+  butlerSessions: (limit = 20, surface?: ButlerSurface, butler?: string) =>
     call<ButlerSession[]>(
       "GET",
-      `/api/v1/butler/sessions?limit=${limit}${surface ? `&surface=${surface}` : ""}`,
+      `/api/v1/butler/sessions?limit=${limit}${surface ? `&surface=${surface}` : ""}` +
+        (butler ? `&butler=${encodeURIComponent(butler)}` : ""),
     ),
   butlerSession: (id: string) =>
     call<ButlerSession>("GET", `/api/v1/butler/sessions/${encodeURIComponent(id)}`),
@@ -1250,6 +1493,14 @@ export const api = {
     groups: string[];
     node?: string;
   }) => call<PlanRecord>("POST", "/api/v1/household/members", m),
+  // Editing is a proposal like adding is: the account list belongs in
+  // state, in plans, in approval and in audit. Groups may only be ADDED
+  // — the provisioning job never removes a membership, so a plan that
+  // dropped one would apply and change nothing in the directory.
+  updateHouseholdMember: (
+    username: string,
+    m: { displayName?: string; email?: string; groups: string[] },
+  ) => call<PlanRecord>("PUT", `/api/v1/household/members/${encodeURIComponent(username)}`, m),
   backups: () => call<{ runs: BackupRun[] }>("GET", "/api/v1/backups"),
   runBackup: (plan: string) =>
     call<unknown>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/run`),

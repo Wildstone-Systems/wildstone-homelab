@@ -55,20 +55,29 @@ type Butler struct {
 	Directive string        `json:"directive,omitempty"`
 	Surface   ButlerSurface `json:"surface"`
 	Profile   string        `json:"profile"`
-	// Route is the assigned model, by name. RouteKind is "local" or
+	// Model is the assigned model, by name. ModelKind is "local" or
 	// "cloud" — the data boundary, and what a local-to-cloud warning
-	// keys off.
-	Route     string `json:"route"`
-	RouteSeq  int64  `json:"routeSeq"`
-	RouteKind string `json:"routeKind"`
-	Model     string `json:"model,omitempty"`
-	Provider  string `json:"provider,omitempty"`
+	// keys off. ProviderModel is what the provider itself calls it,
+	// which is a different string and often a more specific one:
+	// assigned "kitchen-box", answered by "qwen3.5:4b".
+	Model         string `json:"model"`
+	ModelSeq      int64  `json:"modelSeq"`
+	ModelKind     string `json:"modelKind"`
+	ProviderModel string `json:"providerModel,omitempty"`
+	Provider      string `json:"provider,omitempty"`
+	// Endpoint is the route's base URL, carried because a Butler that
+	// cannot be TALKED to is not a Butler. Without it the assignment
+	// names a provider and a model and still needs a second lookup to
+	// reach either, and the caller that forgets the lookup falls back to
+	// whatever the process was started with — which is the substitution
+	// A6 exists to forbid, arrived at by omission.
+	Endpoint  string `json:"endpoint,omitempty"`
 	Readiness string `json:"readiness"`
-	// RouteEnabled is the ROUTE's switch, not the Butler's. Disabling a
-	// route has to stop the Butlers already assigned to it: the 0032
-	// triggers only fire when a butler's route is written, so without
-	// this a route turned off yesterday still answers today.
-	RouteEnabled bool      `json:"routeEnabled"`
+	// ModelEnabled is the MODEL's switch, not the Butler's. Disabling a
+	// model has to stop the Butlers already assigned to it: the 0032
+	// triggers only fire when a butler's model is written, so without
+	// this a model turned off yesterday still answers today.
+	ModelEnabled bool      `json:"modelEnabled"`
 	Enabled      bool      `json:"enabled"`
 	CreatedAt    time.Time `json:"createdAt"`
 	CreatedBy    string    `json:"createdBy"`
@@ -89,38 +98,38 @@ func (b Butler) Live() bool { return b.Enabled && b.RetiredAt.IsZero() }
 // what a session may DO (ADR-W017 A4) and do not mean the model is
 // missing, which is a different failure with a different remedy.
 func (b Butler) Reachable() bool {
-	return b.Live() && b.RouteEnabled && b.Readiness != RouteUnavailable
+	return b.Live() && b.ModelEnabled && b.Readiness != ModelUnavailable
 }
 
 // CarriesActionAuthority reports whether a session with this Butler may
 // use tools that do things. Only a route that passed its probe.
 func (b Butler) CarriesActionAuthority() bool {
-	return b.Live() && b.Readiness == RouteReady
+	return b.Live() && b.Readiness == ModelReady
 }
 
 // butlerColumns is the join every read uses. A Butler is only ever
-// meaningful with its route resolved — a Butler whose model you have to
+// meaningful with its model resolved — a Butler whose model you have to
 // look up separately is one a caller will eventually forget to look up.
 const butlerColumns = `
 	SELECT b.seq, b.name, b.directive, b.surface, b.profile,
-	       r.name, r.seq, r.kind, r.model, r.provider, r.readiness, r.enabled,
+	       m.name, m.seq, m.kind, m.model, m.provider, m.endpoint, m.readiness, m.enabled,
 	       b.enabled, b.created_at, b.created_by, b.updated_at, b.updated_by,
 	       b.retired_at, b.retired_by
-	  FROM butlers b JOIN model_routes r ON r.seq = b.route`
+	  FROM butlers b JOIN models m ON m.seq = b.model`
 
 func scanButler(s interface{ Scan(...any) error }) (Butler, error) {
 	var b Butler
 	var surface string
-	var enabled, routeEnabled int
+	var enabled, modelEnabled int
 	var created, updated, retired string
 	if err := s.Scan(&b.Seq, &b.Name, &b.Directive, &surface, &b.Profile,
-		&b.Route, &b.RouteSeq, &b.RouteKind, &b.Model, &b.Provider, &b.Readiness, &routeEnabled,
+		&b.Model, &b.ModelSeq, &b.ModelKind, &b.ProviderModel, &b.Provider, &b.Endpoint, &b.Readiness, &modelEnabled,
 		&enabled, &created, &b.CreatedBy, &updated, &b.UpdatedBy,
 		&retired, &b.RetiredBy); err != nil {
 		return Butler{}, err
 	}
 	b.Surface = ButlerSurface(surface)
-	b.Enabled, b.RouteEnabled = enabled != 0, routeEnabled != 0
+	b.Enabled, b.ModelEnabled = enabled != 0, modelEnabled != 0
 	for _, f := range []struct {
 		text string
 		into *time.Time
@@ -155,7 +164,7 @@ func (db *DB) CreateButler(b Butler, by string) (int64, error) {
 		return 0, fmt.Errorf("runtimedb: creating a butler needs who created it")
 	case !ValidButlerSurface(b.Surface):
 		return 0, fmt.Errorf("runtimedb: a butler's surface must be admin|family, got %q", b.Surface)
-	case b.Route == "":
+	case b.Model == "":
 		return 0, fmt.Errorf("runtimedb: a butler needs an assigned model route — which model answers is not a field to fill in later (ADR-W031 A2)")
 	}
 	switch b.Profile {
@@ -171,10 +180,10 @@ func (db *DB) CreateButler(b Butler, by string) (int64, error) {
 			b.Profile, b.Surface)
 	}
 
-	var routeSeq int64
-	err := db.sql.QueryRow(`SELECT seq FROM model_routes WHERE name = ?`, b.Route).Scan(&routeSeq)
+	var modelSeq int64
+	err := db.sql.QueryRow(`SELECT seq FROM models WHERE name = ?`, b.Model).Scan(&modelSeq)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, fmt.Errorf("%w: no model route named %q", ErrNotFound, b.Route)
+		return 0, fmt.Errorf("%w: no model route named %q", ErrNotFound, b.Model)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: creating a butler: %w", err)
@@ -182,10 +191,10 @@ func (db *DB) CreateButler(b Butler, by string) (int64, error) {
 
 	stamp := now()
 	res, err := db.sql.Exec(
-		`INSERT INTO butlers (name, directive, surface, profile, route, enabled,
+		`INSERT INTO butlers (name, directive, surface, profile, model, enabled,
 		     created_at, created_by, updated_at, updated_by)
 		 VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
-		name, b.Directive, string(b.Surface), b.Profile, routeSeq, stamp, by, stamp, by)
+		name, b.Directive, string(b.Surface), b.Profile, modelSeq, stamp, by, stamp, by)
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: creating a butler: %w", err)
 	}
@@ -202,6 +211,25 @@ func (db *DB) GetButler(name string) (Butler, error) {
 		return Butler{}, fmt.Errorf("runtimedb: reading butler %q: %w", name, err)
 	}
 	return b, nil
+}
+
+// AnyButlers reports whether this deployment has created a Butler.
+//
+// It exists separately from ListButlers because it is asked on the
+// per-message path — every inbound chat message needs to know whether
+// this deployment is on the named-Butler path or the legacy one — and
+// loading every Butler and its joined route to answer "is there at
+// least one" is work done once per message for a boolean.
+func (db *DB) AnyButlers() (bool, error) {
+	var one int
+	err := db.sql.QueryRow(`SELECT 1 FROM butlers LIMIT 1`).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("runtimedb: checking for butlers: %w", err)
+	}
+	return true, nil
 }
 
 // ListButlers returns every Butler, retired ones included, ordered by
@@ -248,8 +276,8 @@ func (db *DB) SetButlerRoute(name, route, by string) (from, to Butler, err error
 	if err != nil {
 		return Butler{}, Butler{}, err
 	}
-	var routeSeq int64
-	err = db.sql.QueryRow(`SELECT seq FROM model_routes WHERE name = ?`, route).Scan(&routeSeq)
+	var modelSeq int64
+	err = db.sql.QueryRow(`SELECT seq FROM models WHERE name = ?`, route).Scan(&modelSeq)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Butler{}, Butler{}, fmt.Errorf("%w: no model route named %q", ErrNotFound, route)
 	}
@@ -257,8 +285,8 @@ func (db *DB) SetButlerRoute(name, route, by string) (from, to Butler, err error
 		return Butler{}, Butler{}, fmt.Errorf("runtimedb: changing a butler's model: %w", err)
 	}
 	if _, err := db.sql.Exec(
-		`UPDATE butlers SET route = ?, updated_at = ?, updated_by = ? WHERE seq = ?`,
-		routeSeq, now(), by, from.Seq); err != nil {
+		`UPDATE butlers SET model = ?, updated_at = ?, updated_by = ? WHERE seq = ?`,
+		modelSeq, now(), by, from.Seq); err != nil {
 		return Butler{}, Butler{}, fmt.Errorf("runtimedb: changing a butler's model: %w", err)
 	}
 	to, err = db.GetButler(name)
@@ -272,7 +300,7 @@ func (db *DB) SetButlerRoute(name, route, by string) (from, to Butler, err error
 // where material can go, and warning about it too would teach people to
 // click through the warning that matters.
 func CrossesToCloud(from, to Butler) bool {
-	return from.RouteKind == RouteLocal && to.RouteKind == RouteCloud
+	return from.ModelKind == ModelLocal && to.ModelKind == ModelCloud
 }
 
 // RetireButler stops a Butler without deleting what it did.
@@ -295,6 +323,35 @@ func (db *DB) RetireButler(name, by string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetButlerDirective rewrites what a Butler is for, in its owner's
+// words.
+//
+// A directive instructs and authorises nothing (ADR-W031 A9), which is
+// why this is a plain edit rather than a Plan: rewriting it cannot widen
+// a tool, reach a connection, or change a memory scope, so there is
+// nothing here for an approval to protect. What it CAN do is change how
+// a Butler talks and what it believes it is for, and that is worth
+// recording — the caller is named, and the change stamps updated_by.
+//
+// A retired Butler is refused. Editing the purpose of something that no
+// longer answers reads as reviving it, and it does not.
+func (db *DB) SetButlerDirective(name, directive, by string) (Butler, error) {
+	if by == "" {
+		return Butler{}, fmt.Errorf("runtimedb: changing a butler's directive needs who changed it")
+	}
+	res, err := db.sql.Exec(
+		`UPDATE butlers SET directive = ?, updated_at = ?, updated_by = ?
+		 WHERE name = ? AND retired_at = ''`,
+		strings.TrimSpace(directive), now(), by, name)
+	if err != nil {
+		return Butler{}, fmt.Errorf("runtimedb: setting a butler's directive: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Butler{}, ErrNotFound
+	}
+	return db.GetButler(name)
 }
 
 // GrantButlerAccess lets one person talk to one Butler.
@@ -432,11 +489,177 @@ func (db *DB) ResolveButlerFor(butler, member string) (Butler, error) {
 		// Butler's model, because that substitution is the disclosure
 		// this whole design exists to prevent.
 		why := "unavailable"
-		if !b.RouteEnabled {
+		if !b.ModelEnabled {
 			why = "turned off"
 		}
 		return Butler{}, fmt.Errorf("%w: %s runs on %s, which is %s — this waits rather than moving to another model (ADR-W031 A6)",
-			ErrButlerUnreachable, b.Name, b.Route, why)
+			ErrButlerUnreachable, b.Name, b.Model, why)
 	}
 	return b, nil
+}
+
+// RestoreButler brings a retired Butler back.
+//
+// It is a separate verb from creation, and the difference is the whole
+// point of retiring rather than deleting: the same row comes back, with
+// the same seq, so its scope, its narrowings, its memory and its
+// conversations are still its own. A household that retired a Butler by
+// mistake gets the Butler back, not a namesake.
+//
+// The route is checked again on the way in. A Butler retired six weeks
+// ago may have been assigned to a model somebody has since turned off,
+// and bringing it back onto nowhere would produce exactly the silent
+// non-answering A6 says must be a stated wait instead.
+func (db *DB) RestoreButler(name, by string) error {
+	if by == "" {
+		return fmt.Errorf("runtimedb: restoring a butler needs who restored it")
+	}
+	b, err := db.GetButler(name)
+	if err != nil {
+		return err
+	}
+	if b.RetiredAt.IsZero() {
+		return fmt.Errorf("runtimedb: %s is not retired", name)
+	}
+	if !b.ModelEnabled {
+		return fmt.Errorf(
+			"runtimedb: %s is assigned to %q, which is turned off — turn the route back on, or assign another, before bringing the butler back (ADR-W031 A6)",
+			name, b.Model)
+	}
+	res, err := db.sql.Exec(
+		`UPDATE butlers SET retired_at = '', retired_by = '', enabled = 1, updated_at = ?, updated_by = ?
+		 WHERE name = ? AND retired_at <> ''`, now(), by, name)
+	if err != nil {
+		return fmt.Errorf("runtimedb: restoring a butler: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DuplicateButler copies a Butler's SHAPE and none of its history.
+//
+// What is copied is what somebody making a second Butler like this one
+// would otherwise retype: the directive, the surface and profile, the
+// route, the connections it may read, and the tools it has been
+// narrowed out of. What is deliberately NOT copied is everything that
+// names a person — who may talk to it, what it remembers, what it has
+// been asked. A copy that inherited an access list would silently grant
+// a new Butler to people who agreed to the old one, and a copy that
+// inherited memory would move somebody's notes into a scope they never
+// chose (ADR-W031 A4/A5).
+//
+// It is one transaction because a half-copied Butler is worse than no
+// copy: a Butler with a route and no narrowings is one that has been
+// quietly widened.
+func (db *DB) DuplicateButler(name, newName, by string) (int64, error) {
+	src, err := db.GetButler(name)
+	if err != nil {
+		return 0, err
+	}
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return 0, fmt.Errorf("runtimedb: a copy needs a name of its own")
+	}
+	seq, err := db.CreateButler(Butler{
+		Name: newName, Directive: src.Directive, Surface: src.Surface,
+		Profile: src.Profile, Model: src.Model,
+	}, by)
+	if err != nil {
+		return 0, err
+	}
+	conns, err := db.ButlerConnections(name)
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range conns {
+		if err := db.GrantButlerConnection(newName, c, by); err != nil {
+			return 0, fmt.Errorf("runtimedb: copying %s's connections: %w", name, err)
+		}
+	}
+	narrowed, err := db.ButlerToolNarrowings(name)
+	if err != nil {
+		return 0, err
+	}
+	for tool, reason := range narrowed {
+		if err := db.NarrowButlerTool(newName, tool, reason, by); err != nil {
+			return 0, fmt.Errorf("runtimedb: copying %s's tool narrowings: %w", name, err)
+		}
+	}
+	return seq, nil
+}
+
+// ButlerImpact is what stops working if a Butler is retired.
+//
+// Every number here is counted rather than estimated, because the
+// screen that shows it is asking somebody to make a decision they
+// cannot see the consequences of otherwise. "2 routines call it" is
+// only worth printing if it is two.
+type ButlerImpact struct {
+	Butler string `json:"butler"`
+	// People who message it and would lose it.
+	People []string `json:"people"`
+	// Routines assigned to it. Each names its own state, because a
+	// disabled routine breaking is not news.
+	Routines []ButlerRoutineRef `json:"routines"`
+	// Sessions and MemoryCount are kept, not deleted — they are said
+	// so that retiring reads as the reversible thing it is.
+	Sessions    int `json:"sessions"`
+	MemoryCount int `json:"memoryCount"`
+	// Successors are the other live Butlers on the same surface, which
+	// is what a routine could be pointed at instead.
+	Successors []string `json:"successors"`
+}
+
+// ButlerRoutineRef is one routine that calls a Butler.
+type ButlerRoutineRef struct {
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+// ButlerImpactOf counts what retiring this Butler would break.
+func (db *DB) ButlerImpactOf(name string) (ButlerImpact, error) {
+	b, err := db.GetButler(name)
+	if err != nil {
+		return ButlerImpact{}, err
+	}
+	out := ButlerImpact{Butler: b.Name, People: []string{}, Routines: []ButlerRoutineRef{}, Successors: []string{}}
+	if out.People, err = db.ListButlerAccess(name); err != nil {
+		return ButlerImpact{}, err
+	}
+	rows, err := db.sql.Query(
+		`SELECT name, state FROM household_routines WHERE butler = ? ORDER BY name`, name)
+	if err != nil {
+		return ButlerImpact{}, fmt.Errorf("runtimedb: counting a butler's routines: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r ButlerRoutineRef
+		if err := rows.Scan(&r.Name, &r.State); err != nil {
+			return ButlerImpact{}, err
+		}
+		out.Routines = append(out.Routines, r)
+	}
+	if err := rows.Err(); err != nil {
+		return ButlerImpact{}, err
+	}
+	if err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM butler_sessions WHERE butler = ?`, name).Scan(&out.Sessions); err != nil {
+		return ButlerImpact{}, fmt.Errorf("runtimedb: counting a butler's sessions: %w", err)
+	}
+	if err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM butler_memory WHERE butler = ?`, name).Scan(&out.MemoryCount); err != nil {
+		return ButlerImpact{}, fmt.Errorf("runtimedb: counting a butler's memory: %w", err)
+	}
+	all, err := db.ListButlers()
+	if err != nil {
+		return ButlerImpact{}, err
+	}
+	for _, other := range all {
+		if other.Name != b.Name && other.Surface == b.Surface && other.RetiredAt.IsZero() {
+			out.Successors = append(out.Successors, other.Name)
+		}
+	}
+	return out, nil
 }
