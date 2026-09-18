@@ -369,3 +369,49 @@ func (db *DB) GetButlerSession(id string) (ButlerSession, error) {
 	}
 	return s, nil
 }
+
+// FirstUserTurns returns the opening thing the person said in each of
+// the named sessions, keyed by session sequence number.
+//
+// IT EXISTS BECAUSE final_text IS THE ASSISTANT'S. AppendButlerTurns
+// overwrites it with the model's reply on every assistant turn, so a
+// list that titled its rows from it was naming each conversation after
+// the answer rather than the question — and renaming it after every
+// follow-up, so the same conversation had a different title each time a
+// member came back to it.
+//
+// One query rather than one per session: a sidebar of two dozen rows is
+// not a reason for two dozen round trips, and the transcript columns are
+// left out because a title needs one line, not a conversation.
+func (db *DB) FirstUserTurns(seqs []int64) (map[int64]string, error) {
+	out := map[int64]string{}
+	if len(seqs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(seqs))
+	args := make([]any, len(seqs))
+	for i, seq := range seqs {
+		placeholders[i] = "?"
+		args[i] = seq
+	}
+	rows, err := db.sql.Query(
+		`SELECT session, text FROM (
+		   SELECT session, text, ROW_NUMBER() OVER (PARTITION BY session ORDER BY ordinal) AS rn
+		     FROM butler_session_turns
+		    WHERE role = ? AND session IN (`+strings.Join(placeholders, ",")+`)
+		 ) WHERE rn = 1`,
+		append([]any{ButlerRoleUser}, args...)...)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: reading opening turns: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var seq int64
+		var text string
+		if err := rows.Scan(&seq, &text); err != nil {
+			return nil, err
+		}
+		out[seq] = text
+	}
+	return out, rows.Err()
+}

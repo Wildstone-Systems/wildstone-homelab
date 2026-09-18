@@ -422,13 +422,27 @@ func (s *Server) assistantConversations(_ http.ResponseWriter, r *http.Request, 
 		// does not name a chat before having it.
 		Title string `json:"title"`
 	}
+	// AND THE FIRST THING THEY SAID IS NOT final_text. That column is
+	// the ASSISTANT's latest reply — AppendButlerTurns overwrites it on
+	// every assistant turn — so titling from it named each conversation
+	// after the answer instead of the question, and renamed it again
+	// every time the member followed up. A list whose rows change their
+	// names is a list nobody can find anything in.
+	seqs := make([]int64, 0, len(sessions))
+	for _, sess := range sessions {
+		seqs = append(seqs, sess.Seq)
+	}
+	opening, err := s.DB.FirstUserTurns(seqs)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	out := make([]conversation, 0, len(sessions))
 	for _, sess := range sessions {
 		out = append(out, conversation{
 			ID:    sess.ID,
 			Agent: sess.Butler,
 			At:    sess.CreatedAt,
-			Title: conversationTitle(sess.FinalText),
+			Title: conversationTitle(opening[sess.Seq]),
 		})
 	}
 	return map[string]any{"conversations": out, "member": member}, http.StatusOK, nil

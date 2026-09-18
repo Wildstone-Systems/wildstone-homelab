@@ -76,8 +76,16 @@ func (s *Server) assistantMemory(_ http.ResponseWriter, _ *http.Request, member 
 		s.Log.Info("assistant memory unavailable", "member", member, "err", err)
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("can't read what the assistant remembers right now")
 	}
-	items := make([]memoryItem, 0, len(records))
-	for _, m := range records {
+	// WALKED FROM THE NEWEST END, which is where the panel starts.
+	// ExportMemoryFor orders by ascending sequence, and this used to
+	// take the first forty eligible records and reverse them — so once
+	// a member had more than forty, the panel showed the OLDEST forty,
+	// newest-first among themselves, under a heading promising the
+	// newest. Everything learned since was missing, and the one thing a
+	// member most wants to correct is what it learned today.
+	items := make([]memoryItem, 0, maxMemoryShown)
+	for i := len(records) - 1; i >= 0 && len(items) < maxMemoryShown; i-- {
+		m := records[i]
 		// ExportMemoryFor is an EXPORT, and an export deliberately
 		// hands a person their own forgotten records back — they are
 		// theirs to have a copy of (ADR-W030 A3). This panel is not an
@@ -88,9 +96,6 @@ func (s *Server) assistantMemory(_ http.ResponseWriter, _ *http.Request, member 
 		if !m.Eligible() {
 			continue
 		}
-		if len(items) >= maxMemoryShown {
-			break
-		}
 		items = append(items, memoryItem{
 			Seq:     m.Seq,
 			Content: m.Content,
@@ -98,11 +103,6 @@ func (s *Server) assistantMemory(_ http.ResponseWriter, _ *http.Request, member 
 			Mine:    strings.EqualFold(m.Owner, member) && m.Audience != runtimedb.ButlerAudienceShared,
 			From:    memorySource(m),
 		})
-	}
-	// Newest first: what it learned about you today is what you are most
-	// likely to want to correct.
-	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
-		items[i], items[j] = items[j], items[i]
 	}
 	return map[string]any{"items": items, "member": member}, http.StatusOK, nil
 }

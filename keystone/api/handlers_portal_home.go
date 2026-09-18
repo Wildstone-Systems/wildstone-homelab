@@ -347,6 +347,14 @@ func portalSurfaceInstalled(desired []resource.Resource, surface portalSurface) 
 // scroll.
 const maxNeedsYou = 3
 
+// maxNeedsYouScan is how many waiting decisions are READ, so the "+N
+// more" beneath the card is a count rather than a guess. Pending
+// questions are rare by construction — each one is something the
+// household is actually blocked on — so this bound is generous enough
+// that the number is exact in any real household, and bounded all the
+// same.
+const maxNeedsYouScan = 50
+
 // homeNeedsYou builds the one card a member opens the page for.
 //
 // Two sources, deliberately unlike each other. A notice that ASKS is a
@@ -363,7 +371,12 @@ func (s *Server) homeNeedsYou(member string, now time.Time) needsYouCard {
 	// be". Fifty ordinary notices used to be enough to hide a decision
 	// that was still waiting, and this card exists to prevent exactly
 	// that.
-	notices, err := s.DB.ListNotices(maxNeedsYou, runtimedb.NoticeFilter{
+	// maxNeedsYouScan rather than maxNeedsYou, because the card does not
+	// only SHOW these — it counts them, and "+2 more" cannot be computed
+	// from a window the size of the card. Asking for exactly three meant
+	// a fourth waiting decision was invisible until one of the first
+	// three was answered.
+	notices, err := s.DB.ListNotices(maxNeedsYouScan, runtimedb.NoticeFilter{
 		Recipient: member, Deliverable: true, Pending: true, At: now,
 	})
 	if err != nil {
@@ -390,15 +403,16 @@ func (s *Server) homeNeedsYou(member string, now time.Time) needsYouCard {
 	}
 	// The owner's side, as one row. Counted from the plan ledger, which
 	// is the same place the Console's Plans page reads.
-	plans, err := s.DB.ListPlans(50)
+	// PlansInState rather than the newest fifty plans filtered
+	// afterwards: fifty approved, rejected or completed plans are a
+	// normal week, and behind them the card said nothing was waiting
+	// for the owner while something was.
+	plans, err := s.DB.PlansInState(runtimedb.PlanProposed)
 	if err != nil {
 		s.Log.Error("home needs-you plans", "err", err)
 	} else {
 		waiting, oldest := 0, time.Time{}
 		for _, p := range plans {
-			if p.State != runtimedb.PlanProposed {
-				continue
-			}
 			waiting++
 			if oldest.IsZero() || p.CreatedAt.Before(oldest) {
 				oldest = p.CreatedAt
@@ -468,6 +482,14 @@ func (s *Server) noticeTitle(kind string) string {
 // reads as a day rather than as a fragment.
 const maxActivity = 6
 
+// maxActivityScan is how many of today's events are read to fill those
+// six rows. More than six, because the audience test and the
+// unmapped-verb drop both run after the query and a window of exactly
+// six would return fewer; bounded all the same, because a household
+// with a very chatty publisher should get a short card rather than an
+// unbounded scan.
+const maxActivityScan = 200
+
 // homeActivity renders what the house did today, in household language.
 //
 // Today means midnight in the HOUSEHOLD's zone, not the process's. A
@@ -482,7 +504,15 @@ func (s *Server) homeActivity(member string, now time.Time) activityCard {
 	}
 	local := now.In(loc)
 	midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
-	events, err := s.DB.HouseholdEventsSince(midnight, 200)
+	// The NEWEST events of today, not the oldest. HouseholdEventsSince
+	// answers a different question — the first rows at or after a time,
+	// which is what a "has this happened yet" check wants — and on a day
+	// with more than a window's worth of events it handed this card the
+	// morning and nothing since. No sort afterwards can recover rows
+	// that were never read.
+	events, err := s.DB.HouseholdEventsBefore(0, maxActivityScan, runtimedb.HouseholdEventFilter{
+		Since: midnight,
+	})
 	if err != nil {
 		s.Log.Error("home activity", "err", err)
 		card.Problem = "Can't load today's activity."
@@ -551,6 +581,12 @@ func toneRank(t portal.Tone) int {
 // so the toggle has something to open, and the page does the capping.
 const maxNotifications = 6
 
+// maxNotificationsScan is how many rows are read to fill those six.
+// More than six so the unread-first ordering has something to choose
+// from, and bounded so a long-quiet household is not read end to end
+// for a card.
+const maxNotificationsScan = 40
+
 // homeNotifications is what this member missed — theirs alone.
 //
 // ListNotices is already scoped to the recipient, which is what makes
@@ -558,11 +594,25 @@ const maxNotifications = 6
 // query rather than in a filter somebody can forget.
 func (s *Server) homeNotifications(member string) notificationsCard {
 	card := notificationsCard{Items: []notification{}}
-	// Deliverable in the query, so the window holds forty notices this
-	// member could actually have seen rather than forty rows some of
-	// which never reached them.
-	notices, err := s.DB.ListNotices(40, runtimedb.NoticeFilter{
-		Recipient: member, Deliverable: true,
+	// THE COUNT IS ASKED FOR SEPARATELY, and it has to be. A header
+	// that says "3 unread" must not mean "3 unread among the forty I
+	// happened to read": that number goes quietly wrong in exactly the
+	// household that has a backlog, which is the one reading it.
+	unreadCount, err := s.DB.CountNotices(runtimedb.NoticeFilter{
+		Recipient: member, Deliverable: true, Unacknowledged: true,
+	})
+	if err != nil {
+		s.Log.Error("home notifications count", "err", err)
+		card.Problem = "Can't reach notifications"
+		return card
+	}
+	// Unread first IN THE QUERY, so the window the card draws from is
+	// the window the count is about. Sorting a window that was chosen
+	// by recency alone only reorders it: forty read notices in front of
+	// an unread one left the unread one out of the answer, and the card
+	// advertised it anyway.
+	notices, err := s.DB.ListNotices(maxNotificationsScan, runtimedb.NoticeFilter{
+		Recipient: member, Deliverable: true, UnreadFirst: true,
 	})
 	if err != nil {
 		s.Log.Error("home notifications", "err", err)
@@ -570,12 +620,10 @@ func (s *Server) homeNotifications(member string) notificationsCard {
 		return card
 	}
 	card.Available = true
+	card.Unread = unreadCount
 	var items []notification
 	for _, n := range notices {
 		unread := n.AcknowledgedAt.IsZero()
-		if unread {
-			card.Unread++
-		}
 		items = append(items, notification{
 			Seq:    n.Seq,
 			Title:  s.noticeTitle(n.Kind),

@@ -57,12 +57,25 @@ func TestAChattyMemberDoesNotHideAnothersHistory(t *testing.T) {
 	}
 }
 
-func insertFamilySession(t *testing.T, h *harness, member, text string) {
+// insertFamilySession records one conversation as the assistant would:
+// what the member asked, then what it answered.
+//
+// BOTH TURNS, because the title comes from the member's own opening
+// line and a session with no turns has no title to take. A fixture that
+// set only final_text was modelling a conversation that cannot happen.
+func insertFamilySession(t *testing.T, h *harness, member, said string) {
 	t.Helper()
-	if _, err := h.s.DB.InsertButlerSession(runtimedb.ButlerSession{
+	id, err := h.s.DB.InsertButlerSession(runtimedb.ButlerSession{
 		Principal: "portal", ActingFor: member, Provider: "test",
-		Surface: runtimedb.ButlerSurfaceFamily, Butler: "sandy", FinalText: text,
-	}); err != nil {
+		Surface: runtimedb.ButlerSurfaceFamily, Butler: "sandy",
+	})
+	if err != nil {
 		t.Fatalf("InsertButlerSession(%s): %v", member, err)
+	}
+	if err := h.s.DB.AppendButlerTurns(id, []runtimedb.ButlerTurn{
+		{Role: runtimedb.ButlerRoleUser, Text: said},
+		{Role: runtimedb.ButlerRoleAssistant, Text: "Of course."},
+	}); err != nil {
+		t.Fatalf("AppendButlerTurns(%s): %v", member, err)
 	}
 }

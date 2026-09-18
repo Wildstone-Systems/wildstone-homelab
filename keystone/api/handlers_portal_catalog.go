@@ -20,6 +20,7 @@ package api
 // against what is actually running.
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -313,17 +314,25 @@ func (s *Server) catalogRequests(_ http.ResponseWriter, _ *http.Request, member 
 // the payload is written by catalogRequest three functions up, the only
 // field a person typed is this one, and a parse failure yields no note
 // rather than an error a member would see on their own request list.
+// DECODED RATHER THAN SCANNED FOR. This used to look for `"note":"`
+// and stop at the next quote, which is not where the value ends: JSON
+// escapes a quote inside a string as \", so a note reading
+//
+//	Use the "family" edition
+//
+// came back to the member as `Use the \` — and every other escape, a
+// newline or an apostrophe run through \u, reached the page still
+// encoded. A member's own words are the one thing on this page that
+// must survive the round trip intact.
 func noteFrom(payload []byte) string {
-	const key = `"note":"`
-	s := string(payload)
-	i := strings.Index(s, key)
-	if i < 0 {
+	var decoded struct {
+		Note string `json:"note"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		// A payload that is not the shape this expects is a note that
+		// is absent, not an error a member would see on their own
+		// request list.
 		return ""
 	}
-	rest := s[i+len(key):]
-	j := strings.IndexByte(rest, '"')
-	if j < 0 {
-		return ""
-	}
-	return rest[:j]
+	return decoded.Note
 }

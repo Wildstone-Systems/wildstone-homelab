@@ -133,6 +133,17 @@ type HouseholdEventFilter struct {
 	// Subject is the person the event is about, matched the way the
 	// rest of the household matches names: without regard to case.
 	Subject string
+	// Since bounds the window at the old end, so a caller wanting the
+	// newest events WITHIN a period gets them from the newest end.
+	//
+	// It exists because HouseholdEventsSince answers a different
+	// question — the OLDEST rows at or after a time, which is what a
+	// "has this happened yet today" check wants — and a card showing
+	// what the house did today reached for it and got the first two
+	// hundred events of the morning. On a busy day the evening was
+	// never in the window, and no amount of sorting afterwards could
+	// put it there.
+	Since time.Time
 }
 
 // HouseholdEventsBefore returns up to limit household events with a
@@ -159,6 +170,25 @@ func (db *DB) HouseholdEventsBefore(before int64, limit int, f HouseholdEventFil
 	if f.Type != "" {
 		clauses = append(clauses, "type = ?")
 		args = append(args, f.Type)
+	}
+	if !f.Since.IsZero() {
+		// occurred_at stores RFC3339Nano UTC, so the comparison is
+		// lexicographic — but NOT against an RFC3339Nano bound, and the
+		// difference is a real hole rather than a nicety. That format
+		// drops trailing zeros, so a moment inside a second is SHORTER
+		// than the whole second: "00:00:00.001Z" against "00:00:00Z"
+		// differs first at '.' against 'Z', and '.' sorts lower. Every
+		// sub-second event in the bound's own second would compare as
+		// earlier than the bound and be dropped — a hole at exactly the
+		// boundary the caller named, which for a card showing "today"
+		// is the first second of the day.
+		//
+		// So the bound is the second-floor with no zone suffix, which
+		// is a PREFIX of every stamp in that second and therefore sorts
+		// at or below all of them, and below every later one. The whole
+		// boundary second is included, which is what "since" means.
+		clauses = append(clauses, "occurred_at >= ?")
+		args = append(args, f.Since.UTC().Truncate(time.Second).Format("2006-01-02T15:04:05"))
 	}
 	if f.Subject != "" {
 		// NOCASE because every reader of this column compares names
