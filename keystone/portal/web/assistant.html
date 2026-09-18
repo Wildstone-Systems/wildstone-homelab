@@ -35,10 +35,14 @@
   receipt omits it rather than estimating. A made-up number on a receipt
   is worse than a missing field on one.
 
-  ONE PANEL IS STILL NOT HERE, and says so. Memory — what the assistant
-  has learned, and Forget. That endpoint is the Console's today and
-  carries no member scoping; exposing it here would hand one member the
-  household's shared memory and everybody else's items with it.
+  MEMORY IS SCOPED BY THE STORE AND GATED BY THE DOOR. ExportMemoryFor
+  answers "what may this person read" — their own records plus household
+  ones that have not been forgotten — and it is the same query the
+  Console's export uses. Forgetting is checked here rather than there,
+  because ForgetMemory takes a sequence number and trusts it: a member
+  may forget what the assistant learned ABOUT THEM, and the household's
+  shared memory shows the word "shared" instead of a button that would
+  refuse.
 
   AGENT OUTPUT IS UNTRUSTED DISPLAY CONTENT. Rendered as text, never as
   markup, on every path below.
@@ -147,13 +151,8 @@
             <span class="eyebrow grow">What it remembers</span>
             <i class="ph ph-caret-down" aria-hidden="true"></i>
           </summary>
-          <!-- Stated, not stubbed. See the file comment. -->
-          <p class="muted">
-            Not on this page yet. What the assistant has learned, and being able to
-            make it forget something about you, needs a memory list scoped to one
-            person — today that list is the owner's and it carries the whole
-            household's, so showing it here would show you everybody else's.
-          </p>
+          <div id="memory"></div>
+          <p class="muted" id="memory-note"></p>
         </details>
       </section>
 
@@ -269,6 +268,7 @@
           note("note-warn", "It can still take a question, but the model it uses isn't answering right now.");
         }
         loadConversations();
+        loadMemory();
         if (session) { openConversation(session); }
       })
       .catch(function (err) {
@@ -420,6 +420,57 @@
     // ceiling made visible, and the design says to read it first.
     if (r.why) { row.appendChild(make("span", "muted grow", r.why)); }
     else if (r.result) { row.appendChild(make("span", "muted grow truncate", r.result)); }
+    return row;
+  }
+
+  // ---- what it remembers about you.
+  function loadMemory() {
+    fetch("/api/v1/assistant/memory", { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        var box = el("memory");
+        clear(box);
+        if (!res.ok) {
+          // Not an empty list, which would read as "it has learned
+          // nothing about you".
+          text("memory-note", res.j.error || "Can't read what the assistant remembers right now.");
+          return;
+        }
+        var items = res.j.items || [];
+        if (!items.length) {
+          text("memory-note", "It hasn't learned anything about you yet.");
+          return;
+        }
+        text("memory-note", "You can make it forget anything it learned about you. " +
+          "What the household shares is the owner's.");
+        items.forEach(function (m) { box.appendChild(memoryRow(m)); });
+      })
+      .catch(function () { text("memory-note", "Can't read what the assistant remembers right now."); });
+  }
+
+  function memoryRow(m) {
+    var row = make("div", "cap");
+    row.appendChild(make("div", "grow"));
+    row.lastChild.appendChild(make("div", null, m.content));
+    if (m.from) { row.lastChild.appendChild(make("div", "q", m.from)); }
+    if (m.mine) {
+      // Their own to forget. A shared record gets the label instead of
+      // a control — never a button that refuses.
+      var f = make("button", "hbtn hbtn-ghost", "Forget");
+      f.type = "button";
+      f.addEventListener("click", function () {
+        f.disabled = true;
+        fetch("/api/v1/assistant/memory/forget?seq=" + encodeURIComponent(m.seq), { method: "POST" })
+          .then(function (r) {
+            if (!r.ok) { throw new Error("that didn't go through"); }
+            row.remove();
+          })
+          .catch(function () { f.disabled = false; });
+      });
+      row.appendChild(f);
+    } else {
+      row.appendChild(make("span", "pill pill-mute nowrap", "shared"));
+    }
     return row;
   }
 

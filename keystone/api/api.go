@@ -536,6 +536,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/assistant/agents", s.portal(surfaceAssistant, s.assistantAgents))
 	mux.Handle("GET /api/v1/assistant/scope", s.portal(surfaceAssistant, s.assistantScope))
 	mux.Handle("GET /api/v1/assistant/conversations", s.portal(surfaceAssistant, s.assistantConversations))
+	mux.Handle("GET /api/v1/assistant/memory", s.portal(surfaceAssistant, s.assistantMemory))
+	// Forgetting is gated in the handler, not the store: ForgetMemory
+	// takes a sequence number and trusts it.
+	mux.Handle("POST /api/v1/assistant/memory/forget", s.portal(surfaceAssistant, s.assistantForget))
 	mux.Handle("POST /api/v1/assistant/ask", s.portal(surfaceAssistant, s.assistantAsk))
 	mux.Handle("GET /api/v1/assistant/conversations/{id}", s.portal(surfaceAssistant, s.assistantConversation))
 
