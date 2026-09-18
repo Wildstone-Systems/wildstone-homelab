@@ -290,6 +290,19 @@ func parseICSTime(value, params string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// Events reads the events overlapping [from, to).
+//
+// It is Query's own body, exported for the same reason EventWrite is:
+// Keystone's action gateway is in this process and should not have to
+// unwrap a map[string]any to read a list it could have been handed.
+func (u *Upstream) Events(ctx context.Context, from, to time.Time) ([]Event, error) {
+	raw, err := u.report(ctx, from, to)
+	if err != nil {
+		return nil, err
+	}
+	return parseEvents(raw)
+}
+
 // Capabilities verifies against the live collection.
 func (u *Upstream) Capabilities(ctx context.Context) ([]adapter.Capability, error) {
 	available := true
@@ -348,11 +361,7 @@ func (u *Upstream) Query(ctx context.Context, capability string, request json.Ra
 		return adapter.Answer{}, fmt.Errorf("%w: %s", adapter.ErrNoSuchCapability, capability)
 	}
 
-	raw, err := u.report(ctx, from, to)
-	if err != nil {
-		return adapter.Answer{}, err
-	}
-	events, err := parseEvents(raw)
+	events, err := u.Events(ctx, from, to)
 	if err != nil {
 		return adapter.Answer{}, err
 	}

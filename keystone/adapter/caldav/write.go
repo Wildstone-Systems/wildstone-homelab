@@ -71,12 +71,17 @@ var errReadOnly = fmt.Errorf("%w: this CalDAV connection is read-only. "+
 	"Calendar writes are off until somebody widens the connection and the adapter is run with writes enabled",
 	adapter.ErrNoSuchCapability)
 
-// eventWrite is the request body for a create or an update.
+// EventWrite is the request body for a create or an update.
 //
 // It is the plain-language shape an agent tool hands over — a title and
 // two times — and NOT iCalendar. Every field is optional on an update
 // and only the ones present are touched.
-type eventWrite struct {
+//
+// Exported because there are two callers with one implementation between
+// them: the adapter runtime, which arrives with JSON off the work queue,
+// and Keystone's own action gateway, which is in the same process and
+// should not have to marshal a struct to talk to a struct.
+type EventWrite struct {
 	// Href addresses an existing event, as a read reported it. Preferred
 	// over UID for anything this adapter did not create itself.
 	Href string `json:"href,omitempty"`
@@ -102,7 +107,7 @@ func (u *Upstream) Act(ctx context.Context, capability string, request json.RawM
 	if !u.Writable {
 		return adapter.Answer{}, errReadOnly
 	}
-	var req eventWrite
+	var req EventWrite
 	if len(request) > 0 {
 		if err := json.Unmarshal(request, &req); err != nil {
 			return adapter.Answer{}, fmt.Errorf("caldav: %s: the request is not an event: %w", capability, err)
@@ -110,11 +115,11 @@ func (u *Upstream) Act(ctx context.Context, capability string, request json.RawM
 	}
 	switch capability {
 	case CapCreateEvent:
-		return u.createEvent(ctx, req)
+		return u.CreateEvent(ctx, req)
 	case CapUpdateEvent:
-		return u.updateEvent(ctx, req)
+		return u.UpdateEvent(ctx, req)
 	case CapDeleteEvent:
-		return u.deleteEvent(ctx, req)
+		return u.DeleteEvent(ctx, req)
 	default:
 		return adapter.Answer{}, fmt.Errorf("%w: %s", adapter.ErrNoSuchCapability, capability)
 	}
@@ -135,8 +140,8 @@ func (u *Upstream) newUID() string {
 	return "wildstone-" + hex.EncodeToString(b[:])
 }
 
-// createEvent writes a new event and refuses to overwrite anything.
-func (u *Upstream) createEvent(ctx context.Context, req eventWrite) (adapter.Answer, error) {
+// CreateEvent writes a new event, and refuses to overwrite anything.
+func (u *Upstream) CreateEvent(ctx context.Context, req EventWrite) (adapter.Answer, error) {
 	summary := ""
 	if req.Summary != nil {
 		summary = *req.Summary
@@ -181,8 +186,8 @@ func (u *Upstream) createEvent(ctx context.Context, req eventWrite) (adapter.Ans
 	}}, nil
 }
 
-// updateEvent changes the named fields on an existing event.
-func (u *Upstream) updateEvent(ctx context.Context, req eventWrite) (adapter.Answer, error) {
+// UpdateEvent changes the fields it is given and leaves the rest alone.
+func (u *Upstream) UpdateEvent(ctx context.Context, req EventWrite) (adapter.Answer, error) {
 	href, err := u.resolveHref(req)
 	if err != nil {
 		return adapter.Answer{}, err
@@ -226,8 +231,8 @@ func (u *Upstream) updateEvent(ctx context.Context, req eventWrite) (adapter.Ans
 	}}, nil
 }
 
-// deleteEvent removes one event.
-func (u *Upstream) deleteEvent(ctx context.Context, req eventWrite) (adapter.Answer, error) {
+// DeleteEvent removes one event.
+func (u *Upstream) DeleteEvent(ctx context.Context, req EventWrite) (adapter.Answer, error) {
 	href, err := u.resolveHref(req)
 	if err != nil {
 		return adapter.Answer{}, err
@@ -256,7 +261,7 @@ func (u *Upstream) deleteEvent(ctx context.Context, req eventWrite) (adapter.Ans
 // resolved to the <uid>.ics this adapter would itself have written,
 // because that guess is right for its own events and wrong for
 // everybody else's.
-func (u *Upstream) resolveHref(req eventWrite) (string, error) {
+func (u *Upstream) resolveHref(req EventWrite) (string, error) {
 	base := strings.TrimRight(u.CollectionURL, "/")
 	if h := strings.TrimSpace(req.Href); h != "" {
 		if strings.HasPrefix(h, "http://") || strings.HasPrefix(h, "https://") {
@@ -281,7 +286,7 @@ func (u *Upstream) resolveHref(req eventWrite) (string, error) {
 
 // applyChanges rewrites the properties it was asked to and leaves every
 // other line of the stored object untouched. See the file comment.
-func applyChanges(current string, req eventWrite, start, end, now time.Time) (string, bool) {
+func applyChanges(current string, req EventWrite, start, end, now time.Time) (string, bool) {
 	replacements := map[string]string{}
 	if req.Summary != nil {
 		replacements["SUMMARY"] = "SUMMARY:" + escapeICS(*req.Summary)
@@ -573,7 +578,7 @@ func foldLine(line string) string {
 
 // --- request validation ---
 
-func parseWindow(req eventWrite) (time.Time, time.Time, error) {
+func parseWindow(req EventWrite) (time.Time, time.Time, error) {
 	layout := time.RFC3339
 	var start, end time.Time
 	var err error

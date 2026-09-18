@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
@@ -30,7 +31,7 @@ const (
 	// calendarCredentialDir is the volume the credential Job writes into
 	// and Radicale reads out of.
 	calendarCredentialDir = "/run/calendar"
-	// calendarCredentialVolume holds the directory reader's password.
+	// calendarCredentialVolume holds the service account's password.
 	calendarCredentialVolume = "radicale-credentials"
 	// calendarCollectionsVolume holds the household's calendars.
 	calendarCollectionsVolume = "radicale-collections"
@@ -50,7 +51,7 @@ func calendarPackage(t *testing.T) []resource.Resource {
 //
 // A managed file whose content carries a secret reference is narrowed to
 // 0600 root-owned when the node materializes it (wardstone ops.go), and
-// the Radicale image runs as uid 1000 — so putting the directory reader's
+// the Radicale image runs as uid 1000 — so putting the service account's
 // password in this ConfigFile would produce a config file the process
 // cannot open. Authelia is the only package that gets away with a
 // secret-bearing config, and only because it pins PUID=0; this image has
@@ -69,8 +70,8 @@ func TestCalendarConfigCarriesNoSecretReference(t *testing.T) {
 	// The other half of the same claim: the config must point at the
 	// file the Job writes, or Radicale refuses to start at all —
 	// radicale/auth/ldap.py raises on a reader DN with no secret.
-	if !strings.Contains(config, "ldap_secret_file = "+calendarCredentialDir+"/ldap-reader") {
-		t.Errorf("the Radicale config does not read its reader password from %s/ldap-reader, which is the only "+
+	if !strings.Contains(config, "ldap_secret_file = "+calendarCredentialDir+"/service-password") {
+		t.Errorf("the Radicale config does not read its bind password from %s/service-password, which is the only "+
 			"place anything writes one; with a reader DN and no secret Radicale raises at startup",
 			calendarCredentialDir)
 	}
@@ -105,7 +106,7 @@ func TestCalendarContainerReadsTheConfigWildstoneWrites(t *testing.T) {
 		t.Error("the radicale container does not mount /etc/wildstone/calendar, so the config it is pointed at is not there")
 	}
 	if !mountsVolume(spec, calendarCredentialVolume, calendarCredentialDir) {
-		t.Errorf("the radicale container does not mount %s at %s, so the reader password the Job writes is not visible to it",
+		t.Errorf("the radicale container does not mount %s at %s, so the password the Job writes is not visible to it",
 			calendarCredentialVolume, calendarCredentialDir)
 	}
 	if !mountsVolume(spec, calendarCollectionsVolume, "/var/lib/radicale") {
@@ -122,11 +123,11 @@ func TestCalendarContainerReadsTheConfigWildstoneWrites(t *testing.T) {
 // Radicale cannot read — which is the exact failure this whole
 // arrangement exists to avoid.
 func TestCalendarCredentialJobWritesWhereRadicaleReads(t *testing.T) {
-	spec := calendarContainer(t, "calendar-ldap-credential")
+	spec := calendarContainer(t, "calendar-service-file")
 
 	script := strings.Join(spec.Command, "\n")
-	if !strings.Contains(script, calendarCredentialDir+"/ldap-reader") {
-		t.Errorf("the credential job does not write %s/ldap-reader, which is the file the config names", calendarCredentialDir)
+	if !strings.Contains(script, calendarCredentialDir+"/service-password") {
+		t.Errorf("the credential job does not write %s/service-password, which is the file the config names", calendarCredentialDir)
 	}
 	if !strings.Contains(script, "chown 1000:1000") {
 		t.Error("the credential job does not chown the file it writes: a Job runs as root and Radicale runs as " +
@@ -141,8 +142,8 @@ func TestCalendarCredentialJobWritesWhereRadicaleReads(t *testing.T) {
 	// REFERENCE rather than its value — so without a knob that moves the
 	// hash, rotating the directory password would leave Radicale reading
 	// a file written from the old one, forever.
-	if _, ok := spec.Env["LDAP_READER_GENERATION"]; !ok {
-		t.Error("the credential job carries no LDAP_READER_GENERATION: nothing would re-run it after a rotation, " +
+	if _, ok := spec.Env["SERVICE_ACCOUNT_GENERATION"]; !ok {
+		t.Error("the credential job carries no SERVICE_ACCOUNT_GENERATION: nothing would re-run it after a rotation, " +
 			"because a rotated secret does not change the job's spec hash")
 	}
 }
@@ -171,7 +172,7 @@ func TestCalendarBackupTakesTheCalendarsAndNotTheCredential(t *testing.T) {
 		case calendarCollectionsVolume:
 			tookCalendars = true
 		case calendarCredentialVolume:
-			t.Errorf("the backup plan includes %s, which holds the directory reader's password: a snapshot of the "+
+			t.Errorf("the backup plan includes %s, which holds the service account's password: a snapshot of the "+
 				"calendars would carry a live credential for the household's directory", calendarCredentialVolume)
 		}
 	}
@@ -225,4 +226,71 @@ func mountsPath(spec *resource.ContainerSpec, target string) bool {
 		}
 	}
 	return false
+}
+
+// TestCalendarToolsAreDeclaredByThePackage is the check that makes
+// "the tools are on" true rather than asserted.
+//
+// Two halves have to agree and neither can see the other: the package's
+// `agentTools` block, which is what the domestic gateway will ALLOW, and
+// keystone/domestic.CalendarTools, which is what it will actually
+// DISPATCH. A tool in one and not the other fails in a way nothing
+// reports at install time:
+//
+//   - declared but not registered → a Butler lists it to the household,
+//     the household asks for it, and the gateway answers "no executor is
+//     registered for this tool on this control plane";
+//   - registered but not declared → the executor is wired and every call
+//     is refused, because a package that does not declare a tool has not
+//     offered it;
+//   - declared at a different TIER → the gateway refuses on the
+//     mismatch, which reads to a household like the calendar being
+//     broken.
+//
+// The tiers are checked too, not only the names, because the tier is
+// what decides whether a household surface may carry the tool at all.
+func TestCalendarToolsAreDeclaredByThePackage(t *testing.T) {
+	sp, ok := walkShipped(t)["calendar-radicale"]
+	if !ok {
+		t.Fatal("calendar-radicale is not in the catalog")
+	}
+	if sp.pkg.Metadata.Capability != domestic.CalendarCapability {
+		t.Fatalf("the package's capability is %q but the executors register under %q: every call would be "+
+			"refused as a tool the capability does not declare",
+			sp.pkg.Metadata.Capability, domestic.CalendarCapability)
+	}
+
+	declared := map[string]string{}
+	for _, tool := range sp.pkg.AgentTools {
+		declared[tool.Name] = tool.Risk
+	}
+	for name, tier := range domestic.CalendarTools {
+		got, present := declared[name]
+		if !present {
+			t.Errorf("keystone registers an executor for calendar.%s, which the package does not declare: "+
+				"the gateway refuses a tool its capability has not offered, so the executor is wired and dead", name)
+			continue
+		}
+		if got != tier {
+			t.Errorf("calendar.%s is declared at tier %q and registered at %q: the gateway refuses the mismatch, "+
+				"which reads to a household as the calendar being broken", name, got, tier)
+		}
+	}
+	for name := range declared {
+		if _, present := domestic.CalendarTools[name]; !present {
+			t.Errorf("the package declares calendar.%s, which nothing registers: a Butler lists it to the "+
+				"household and the gateway answers \"no executor is registered for this tool\"", name)
+		}
+	}
+
+	// A household surface may carry read and domestic and nothing else
+	// (ADR-W024 A5). A calendar tool declared above that tier is one a
+	// family session cannot call at all — which is not a smaller
+	// capability, it is a dead entry in the menu.
+	for name, tier := range declared {
+		if tier != "read" && tier != "domestic" {
+			t.Errorf("calendar.%s is declared at tier %q; a family session may only carry read or domestic, "+
+				"so the tool would never be callable", name, tier)
+		}
+	}
 }

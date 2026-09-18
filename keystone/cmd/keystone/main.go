@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
 	"github.com/chickenrat17/wildstone-homelab/keystone/api"
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/backup"
@@ -85,6 +86,8 @@ func main() {
 	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W024 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
 	replyURL := flag.String("household-reply-url", "", "household event intake URL a notification's reply buttons post to, as a PHONE can reach it (not Keystone's loopback address); empty means notifications carry no reply buttons and a rule that asks for them fails loudly")
 	replyTTL := flag.Duration("household-reply-ttl", 12*time.Hour, "how long a notification's reply token stays valid")
+	calendarURL := flag.String("calendar-url", "", "CalDAV collection the calendar.* household actions read and write, e.g. http://radicale:5232/wildstone-calendar/household/ (ADR-W034). Empty leaves all six unregistered, so a Butler does not offer the household a calendar this deployment has not got. The password comes ONLY from CALENDAR_PASSWORD, never a flag")
+	calendarUser := flag.String("calendar-user", "", "directory account the calendar actions sign in to the CalDAV collection as; its password comes from CALENDAR_PASSWORD")
 	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia). Empty fails closed. This names ONE trust boundary and it now gates TWO things: the household review page (ADR-W030 A8.1), and Console sign-in by forwarded identity (ADR-W032) — a request from one of these addresses carrying Remote-User and a Remote-Groups list containing console_users is authenticated as that person, with admin authority. Setting this does not by itself grant anyone the Console: they must also be in the console_users directory group, which packages/wildstone-console declares")
 	flag.Parse()
 
@@ -98,6 +101,7 @@ func main() {
 	householdCfg := householdConfig{
 		Interval: *automationEvery, Timezone: *householdTZ,
 		NtfyURL: *ntfyURL, ReplyURL: *replyURL, ReplyTTL: *replyTTL,
+		CalendarURL: *calendarURL, CalendarUser: *calendarUser,
 		Ingress: splitNonEmpty(*householdIngress),
 	}
 	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, butlerCfg, householdCfg, log); err != nil {
@@ -226,6 +230,13 @@ type householdConfig struct {
 	// speaks from. Empty leaves the household review page unavailable
 	// rather than open (ADR-W030 A8.1).
 	Ingress []string
+	// CalendarURL is the CalDAV collection the calendar.* actions act
+	// on; empty leaves all six unregistered (ADR-W034).
+	CalendarURL string
+	// CalendarUser is the directory account those actions sign in as.
+	// Its password arrives in CALENDAR_PASSWORD, never in a flag — the
+	// same division -ntfy-url and NTFY_TOKEN already make.
+	CalendarUser string
 }
 
 // butlerSessionPrincipal is the acting principal on every Butler session
@@ -773,6 +784,38 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	if err != nil {
 		return fmt.Errorf("-household-timezone %q: %w", householdCfg.Timezone, err)
 	}
+	// The calendar's six household actions (ADR-W034 phase 4).
+	//
+	// Registered whenever a collection is configured, which is the human
+	// decision this path has: an operator who pointed Keystone at a
+	// calendar and gave it a credential has said the household's agents
+	// may use it. That is the same gate -ntfy-url is, and it is a
+	// DIFFERENT gate from the one on the adapter's work-queue path,
+	// where a connection has to be widened before an action reaches an
+	// adapter at all. Both are a person deciding; they are just
+	// different people's decisions on different roads (ADR-W034 A5).
+	if householdCfg.CalendarURL != "" {
+		cal := &domestic.Calendar{
+			Upstream: &caldav.Upstream{
+				CollectionURL: householdCfg.CalendarURL,
+				Username:      householdCfg.CalendarUser,
+				Password:      os.Getenv("CALENDAR_PASSWORD"),
+				Location:      householdLoc,
+				// Writable because the tools are the point. The read
+				// tools work without it; the three write ones would
+				// register and refuse, which is a Butler offering the
+				// household something that cannot happen.
+				Writable: true,
+			},
+			Location: householdLoc,
+		}
+		for _, e := range cal.Executors() {
+			actions.Register(e)
+		}
+		log.Info("calendar actions wired", "collection", householdCfg.CalendarURL,
+			"user", householdCfg.CalendarUser, "credential", os.Getenv("CALENDAR_PASSWORD") != "")
+	}
+
 	automationEvery := householdCfg.Interval
 	if automationEvery <= 0 {
 		automationEvery = 15 * time.Second

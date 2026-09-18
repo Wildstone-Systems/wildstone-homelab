@@ -14,23 +14,73 @@
 # they are separate capabilities on separate addresses — and a household
 # that has neither should install this one.
 #
-# INSTALLING (two steps BEFORE enabling the capability, in this order):
+# INSTALLING. ONE account, TWO places its password goes, and that is the
+# whole of the manual work:
 #
-#  1. Create the directory account Radicale reads people out of. In
-#     LLDAP's own UI (the Directory card on the dashboard), add a user —
-#     `radicale` is the name this package defaults to — and put it in
-#     the built-in `lldap_strict_readonly` group. That group is LLDAP's
-#     own recommendation for service integrations: it can search the
-#     directory and can change nothing in it.
+#  1. Create the service account. In LLDAP's own UI (the Directory card
+#     on the dashboard) add a user — `radicale` is the name this package
+#     defaults to — and put it in TWO groups:
+#
+#       lldap_strict_readonly   LLDAP's own recommendation for service
+#                               integrations: it can search the directory
+#                               and change nothing in it. This is what
+#                               lets Radicale look people up.
+#       calendar_users          What lets the same account hold the
+#                               shared household calendar, which is where
+#                               the agent tools write.
+#
+#     ONE account rather than two, deliberately. Radicale searching the
+#     directory and Keystone writing the household calendar are both
+#     "the calendar service acting as itself", and a second account would
+#     be a second thing to create, rotate and forget. It gains nothing it
+#     did not already have: the rights file still anchors every PERSON's
+#     own calendars on the name they signed in with, and this account is
+#     not in any of them.
 #
 #  2. Give this capability that account's password:
 #
-#        wild secret set calendar-ldap-reader -node <node>
+#        wild secret set calendar-service-password -node <node>
 #
 #     It is a `provided` Secret because only the person who created the
 #     account in step 1 knows it — random bytes here would be a Radicale
 #     that starts and refuses every login, with the reason in a container
 #     log nobody is looking at.
+#
+#  3. Turn on the agent tools, by starting Keystone with the same
+#     account:
+#
+#        -calendar-url  https://<this service>/household/family/
+#        -calendar-user radicale
+#        CALENDAR_PASSWORD=...          (env, never a flag)
+#
+#     Without these the six tools below are never registered, and a
+#     Butler does not offer the household a calendar this deployment has
+#     not got. WITH them, they work the moment the capability is enabled.
+#
+# WHAT WILDSTONE CANNOT DO FOR YOU HERE, and why step 1 is by hand: a
+# package can declare that a person must EXIST in the directory
+# (kind: LdapUser) but deliberately carries no credential — a password
+# cannot live in a spec, because specs are replicated, restored and read
+# (ADR-W020 A4). There is no mechanism for a package to create a service
+# account with a password it knows. That is a real gap, it is the same
+# gap `wild household publisher home-automation` works around, and it is
+# worth closing once rather than per package.
+#
+# THE SHARED HOUSEHOLD CALENDAR. Everybody's own calendars are their own
+# and nobody else can read them. Alongside them is ONE household
+# calendar, under its own principal, that everyone in `calendar_users`
+# can read and write — and that the agent tools act on. The rights file
+# below is where both of those are said.
+#
+# It does not appear on an iPhone by itself, and a household will meet
+# that: a phone discovers the calendars under the principal it signed in
+# as, and the household calendar is not under anybody's. It is added
+# once, by its address, as a subscribed calendar; a desktop client or
+# DAVx5 takes it as a full read-write collection. That is a limit of how
+# CalDAV principals work rather than of this package — ADR-W034 records
+# it, and the alternative (putting the agent inside each person's own
+# calendar) is a standing grant over everyone's private appointments,
+# which is a decision for the permissions phase rather than a default.
 #
 # SIGN-IN POSTURE: the household directory, the app does it — auth:
 # app_ldap, the media-jellyfin posture. Everyone signs in with the
@@ -75,7 +125,7 @@
 #
 #  5. WHO DOES IT RUN AS? uid 1000 (`USER radicale`), which is load
 #     bearing twice over: the credential file the Job writes is chowned
-#     to 1000, and the reader password CANNOT be carried in the
+#     to 1000, and the service account's password CANNOT be carried in the
 #     ConfigFile — a managed file holding a secret reference lands 0600
 #     root-owned by design (wardstone ops.go), which a uid-1000 process
 #     cannot read. Authelia only escapes that by pinning PUID=0 and this
@@ -95,13 +145,20 @@
 # the calendars should not also carry the directory password that reads
 # the household's people.
 #
-# NO agentTools, AND WHY. ADR-W034 stages the agent-facing calendar tools
-# behind the Calendar Gateway, and a declaration here would be a promise
-# nothing keeps: the domestic gateway dispatches a tool only to a
-# registered executor, so a rule naming calendar.create_event today is
-# refused at dispatch with "no executor is registered for this tool".
-# The read path an agent has NOW is the CalDAV integration adapter
-# (keystone/adapter/caldav), pointed at this server's collection URL.
+# THE SIX AGENT TOOLS ARE ON. They are declared at the bottom of this
+# file and Keystone registers an executor for each, so a Butler can use
+# the calendar the day it is installed rather than after a later phase.
+#
+# One deployment step turns them on, and it is the operator's decision
+# rather than a default: Keystone is started with -calendar-url pointing
+# at the shared household collection, -calendar-user naming the service
+# account, and CALENDAR_PASSWORD carrying its password. Without those the
+# six are never registered, and a Butler does not offer the household a
+# calendar this deployment has not got.
+#
+# The three reads are `read` and the three writes are `domestic`, which
+# is the whole of what a household surface may carry (ADR-W024 A5).
+# Nothing here reaches a container, a node or a plan.
 #
 # NO publishes, AND WHY. Radicale's [hook] section emits to RabbitMQ or
 # to email, neither of which is Wildstone's household intake, and it can
@@ -118,7 +175,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: calendar-radicale
-  version: 1.0.0
+  version: 1.1.0
   capability: calendar
   profile: radicale
 requires:
@@ -134,13 +191,17 @@ params:
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
   - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
   - { name: ldap_base_dn, default: "dc=wildstone,dc=internal", description: "The directory’s root name. Must match the value the login service was installed with." }
-  - { name: ldap_reader_user, default: radicale, description: "The directory account this service searches people with. Create it in the Directory app and put it in the lldap_strict_readonly group, then set its password with `wild secret set calendar-ldap-reader`." }
+  - { name: service_account, default: radicale, description: "The directory account this service searches people with. Create it in the Directory app and put it in the lldap_strict_readonly group, then set its password with `wild secret set calendar-service-password`." }
   # Bumping this re-runs the credential Job. A Job re-runs when its spec
   # hash changes, and a rotated secret does not change the spec — the
   # env carries the REFERENCE, not the value — so without a knob here a
   # rotated directory password would sit in the secret store while
   # Radicale went on reading the file written from the old one.
-  - { name: ldap_reader_generation, default: "1", description: "Bump this after rotating the directory password, to rewrite the credential file Radicale reads." }
+  # The principal the shared household calendar lives under. It is a
+  # NAME, not an account: nobody signs in as it, and the rights file
+  # above is the whole of what it means.
+  - { name: household_principal, default: household, description: "The name the shared household calendar lives under, e.g. household. Its address is <this>/family on the calendar server." }
+  - { name: service_account_generation, default: "1", description: "Bump this after rotating the directory password, to rewrite the credential file Radicale reads." }
   - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
 policies:
   # A calendar is where a household writes down where its people will be
@@ -158,9 +219,9 @@ templates:
   - |
     apiVersion: wildstone.dev/v1
     kind: Secret
-    metadata: { name: calendar-ldap-reader, node: "{{ .Params.node }}" }
+    metadata: { name: calendar-service-password, node: "{{ .Params.node }}" }
     spec:
-      name: calendar-ldap-reader
+      name: calendar-service-password
       provided: true
       purpose: "The password of the read-only directory account the calendar searches people with. Create that account in the Directory app first, in the lldap_strict_readonly group. Nobody in the household types this."
   - |
@@ -216,8 +277,8 @@ templates:
         type = ldap
         ldap_uri = ldap://lldap:3890
         ldap_base = ou=people,{{ .Params.ldap_base_dn }}
-        ldap_reader_dn = uid={{ .Params.ldap_reader_user }},ou=people,{{ .Params.ldap_base_dn }}
-        ldap_secret_file = /run/calendar/ldap-reader
+        ldap_reader_dn = uid={{ .Params.service_account }},ou=people,{{ .Params.ldap_base_dn }}
+        ldap_secret_file = /run/calendar/service-password
         # uid is LLDAP's login attribute; cn is the DISPLAY name, so
         # filtering on it would make people sign in as "Alice Example".
         # The memberOf clause is what makes calendar_users the grant:
@@ -225,14 +286,21 @@ templates:
         # request, rather than at their next sign-in.
         ldap_filter = (&(objectClass=person)(uid={0})(memberOf=cn=calendar_users,ou=groups,{{ .Params.ldap_base_dn }}))
         ldap_user_attribute = uid
+        # Group memberships come back with the user, so the rights file
+        # below can say "anyone in calendar_users" instead of "anyone who
+        # got past the login".
+        ldap_groups_attribute = memberOf
         lc_username = True
 
+        [group]
+        type = from_auth
+
         [rights]
-        # Each person owns the collections under their own name and sees
-        # nobody else's. Sharing a calendar between household members is
-        # a decision a household makes per calendar, and Radicale's
-        # from_file backend is where it will go when it does.
-        type = owner_only
+        # Two things at once, which owner_only cannot express: each
+        # person owns their own calendars and sees nobody else's, AND
+        # everybody in calendar_users shares one household calendar.
+        type = from_file
+        file = /etc/wildstone/calendar/rights
 
         [storage]
         filesystem_folder = /var/lib/radicale/collections
@@ -246,6 +314,66 @@ templates:
         # Off by default upstream, and worth saying out loud here: this
         # log would otherwise carry the household's passwords.
         mask_passwords = True
+  # ---- Who may see what.
+  #
+  # Radicale takes the FIRST section matching both the user and the
+  # collection, so order is the logic here, not decoration.
+  #
+  # The household calendar lives under its own principal rather than
+  # inside anybody's. That is what makes it shared: a collection under
+  # `mika` is Mika's, and a household that reorganises around whoever
+  # created the shopping list has not got a shared calendar.
+  #
+  # WHAT THIS COSTS, said plainly because a household will meet it: a
+  # phone discovers the calendars under the principal it signed in as,
+  # so the household calendar does not appear on an iPhone by itself.
+  # It is added once, by its address, as a subscribed calendar. Desktop
+  # clients and DAVx5 take it as a full read-write collection. This is
+  # a limit of CalDAV principals rather than of this package — see
+  # ADR-W034.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: radicale-rights, node: "{{ .Params.node }}" }
+    spec:
+      filename: rights
+      content: |
+        # Managed by Wildstone — do not edit.
+
+        # The root listing, so a client can discover anything at all.
+        [root]
+        user: .+
+        collection:
+        permissions: R
+
+        # The shared household calendar. Membership of calendar_users is
+        # the whole grant, and it is checked on every request: somebody
+        # removed from the group stops syncing at their next one, rather
+        # than at their next sign-in.
+        [household-principal]
+        user: .+
+        groups: calendar_users
+        collection: {{ .Params.household_principal }}
+        permissions: RW
+
+        [household-calendars]
+        user: .+
+        groups: calendar_users
+        collection: {{ .Params.household_principal }}/[^/]+
+        permissions: rw
+
+        # Everybody's own space. Nothing here lets one person read
+        # another's: the collection pattern is anchored on the name they
+        # signed in with.
+        [own-principal]
+        user: .+
+        collection: {user}
+        permissions: RW
+
+        [own-calendars]
+        user: .+
+        collection: {user}/[^/]+
+        permissions: rw
   # ---- The credential file.
   #
   # A Job rather than a ConfigFile, for the reason the ConfigFile above
@@ -262,7 +390,7 @@ templates:
   - |
     apiVersion: wildstone.dev/v1
     kind: Job
-    metadata: { name: calendar-ldap-credential, node: "{{ .Params.node }}" }
+    metadata: { name: calendar-service-file, node: "{{ .Params.node }}" }
     spec:
       run:
         image: "alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"
@@ -271,18 +399,18 @@ templates:
           - -ec
           - |
             umask 077
-            [ -n "${LDAP_READER_PASSWORD:-}" ] || {
-              echo "calendar: calendar-ldap-reader is empty — set it with 'wild secret set calendar-ldap-reader'" >&2
+            [ -n "${SERVICE_PASSWORD:-}" ] || {
+              echo "calendar: calendar-service-password is empty — set it with 'wild secret set calendar-service-password'" >&2
               exit 1
             }
-            printf '%s' "$LDAP_READER_PASSWORD" > /run/calendar/ldap-reader
-            chown 1000:1000 /run/calendar/ldap-reader
-            chmod 400 /run/calendar/ldap-reader
+            printf '%s' "$SERVICE_PASSWORD" > /run/calendar/service-password
+            chown 1000:1000 /run/calendar/service-password
+            chmod 400 /run/calendar/service-password
         env:
-          LDAP_READER_PASSWORD: "secret/calendar-ldap-reader"
+          SERVICE_PASSWORD: "secret/calendar-service-password"
           # Read by nothing. It is in the spec so that bumping the param
           # changes the Job's spec hash and re-runs it; see the param.
-          LDAP_READER_GENERATION: "{{ .Params.ldap_reader_generation }}"
+          SERVICE_ACCOUNT_GENERATION: "{{ .Params.service_account_generation }}"
         mounts:
           - { source: radicale-credentials, target: /run/calendar }
   # ---- The server.
@@ -331,3 +459,21 @@ templates:
       passwordSecret: secret/restic-calendar
       schedule: daily
       retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }
+# The household actions this capability offers (ADR-W001, ADR-W024 A5).
+# The domestic gateway dispatches these six and nothing else, at exactly
+# these tiers — a rule or a Butler naming anything else is refused before
+# any executor sees it. keystone/domestic.CalendarTools is the other half
+# of this list, and TestCalendarToolsAreDeclaredByThePackage fails if the
+# two ever drift: a tool declared here with no executor is a promise the
+# household is told about and cannot have.
+agentTools:
+  - { name: get_agenda, risk: read }
+  - { name: search_events, risk: read }
+  - { name: check_availability, risk: read }
+  - { name: create_event, risk: domestic }
+  - { name: update_event, risk: domestic }
+  # Deleting wants a tier that does not exist — "do it, but ask first".
+  # What stands in for it: at most one event per call, a refusal rather
+  # than a guess when the match is ambiguous, and an audit record on the
+  # household stream like every other dispatch. ADR-W034 carries the gap.
+  - { name: delete_event, risk: domestic }
