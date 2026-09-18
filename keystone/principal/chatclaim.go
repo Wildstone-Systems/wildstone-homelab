@@ -38,13 +38,17 @@ const (
 // spell something unfortunate.
 const claimAlphabet = "23456789BCDFGHJKMNPQRSTVWXYZ"
 
-// IssueChatClaim mints one claim code for identity on surface and
-// returns the secret — the only moment it exists outside the caller's
-// hands. transport "" lets the code be redeemed on any transport;
-// naming one narrows it further.
-func (s *Store) IssueChatClaim(surface runtimedb.ButlerSurface, identity, transport, issuedBy string, ttl time.Duration) (string, runtimedb.ChatClaimCode, error) {
-	if !runtimedb.ValidButlerSurface(surface) {
-		return "", runtimedb.ChatClaimCode{}, fmt.Errorf("principal: unknown surface %q (admin|family)", surface)
+// IssueChatClaim mints one claim code admitting identity to one
+// Connection and returns the secret — the only moment it exists outside
+// the caller's hands.
+//
+// The Connection, not a surface: a code admits somebody to ONE Agent's
+// bot (ADR-W033 B7). It used to name a surface and, optionally, "any
+// transport", which between them could not say which Agent the person
+// would end up talking to.
+func (s *Store) IssueChatClaim(at runtimedb.Connection, identity, issuedBy string, ttl time.Duration) (string, runtimedb.ChatClaimCode, error) {
+	if at.Seq == 0 {
+		return "", runtimedb.ChatClaimCode{}, fmt.Errorf("principal: a claim code names the connection it admits somebody to")
 	}
 	if strings.TrimSpace(identity) == "" {
 		return "", runtimedb.ChatClaimCode{}, fmt.Errorf("principal: a claim code must name the identity it binds")
@@ -70,12 +74,13 @@ func (s *Store) IssueChatClaim(surface runtimedb.ButlerSurface, identity, transp
 		return "", runtimedb.ChatClaimCode{},
 			fmt.Errorf("principal: %q is not an admitted household member (ADR-W030 A2.1)", identity)
 	}
-	// The admin surface is an Owner Agent's reach, and an Owner-Agent
-	// Connection admits Owners only (B9). Until Connections belong to
-	// one Agent, the surface is what stands in for the Agent's class.
-	if surface == runtimedb.ButlerSurfaceAdmin && m.Role != runtimedb.RoleOwner {
-		return "", runtimedb.ChatClaimCode{},
-			fmt.Errorf("principal: %q is a member, and an owner-agent connection admits owners only (ADR-W033 B9)", identity)
+	// An Owner-Agent Connection admits Owners only (B9), and the
+	// Connection now says which Agent it belongs to, so the class comes
+	// from that Agent rather than from a surface the binding named.
+	if at.AdmitsOwnersOnly() && m.Role != runtimedb.RoleOwner {
+		return "", runtimedb.ChatClaimCode{}, fmt.Errorf(
+			"principal: %q is a member, and %s is an owner agent, whose connections admit owners only (ADR-W033 B9)",
+			identity, at.Butler)
 	}
 	if ttl <= 0 {
 		ttl = DefaultClaimTTL
@@ -88,11 +93,10 @@ func (s *Store) IssueChatClaim(surface runtimedb.ButlerSurface, identity, transp
 		return "", runtimedb.ChatClaimCode{}, err
 	}
 	rec := runtimedb.ChatClaimCode{
-		Surface:   surface,
-		Identity:  identity,
-		Transport: transport,
-		CreatedBy: issuedBy,
-		ExpiresAt: time.Now().Add(ttl),
+		Connection: at.Seq,
+		Identity:   identity,
+		CreatedBy:  issuedBy,
+		ExpiresAt:  time.Now().Add(ttl),
 	}
 	if err := s.DB.InsertChatClaimCode(hashSecret(code), rec); err != nil {
 		return "", runtimedb.ChatClaimCode{}, err
@@ -104,8 +108,8 @@ func (s *Store) IssueChatClaim(surface runtimedb.ButlerSurface, identity, transp
 // failure — unknown, expired, spent, wrong transport — comes back as
 // runtimedb.ErrClaimCode, so a caller trying codes learns nothing from
 // which one it was.
-func (s *Store) RedeemChatClaim(code, transport, account, displayName, conversation string, want runtimedb.ButlerSurface) (runtimedb.ChatBinding, error) {
-	return s.DB.RedeemChatClaimCode(hashSecret(NormalizeClaimCode(code)), transport, account, displayName, conversation, want)
+func (s *Store) RedeemChatClaim(code string, at runtimedb.Connection, account, displayName, conversation string) (runtimedb.ChatBinding, error) {
+	return s.DB.RedeemChatClaimCode(hashSecret(NormalizeClaimCode(code)), at, account, displayName, conversation)
 }
 
 // NormalizeClaimCode makes a typed code match an issued one: people add

@@ -16,14 +16,23 @@ import (
 	"time"
 )
 
-// ChatBinding is one chat account bound to one identity on one surface.
+// ChatBinding is one chat account admitted to one Connection — so to
+// one Agent, on one transport (ADR-W033 B7, B9).
+//
+// It used to name a SURFACE, which is a class of Agents rather than an
+// Agent: an account admitted to `admin` reached every Owner Agent,
+// including ones made afterwards. Butler and Transport are read from
+// the Connection rather than stored beside it, so they cannot disagree
+// with it.
 type ChatBinding struct {
-	ID          int64         `json:"id"`
-	Transport   string        `json:"transport"`
-	Account     string        `json:"account"`
-	Surface     ButlerSurface `json:"surface"`
-	Identity    string        `json:"identity"`
-	DisplayName string        `json:"displayName,omitempty"`
+	ID         int64 `json:"id"`
+	Connection int64 `json:"connection"`
+	// Butler is the Agent this Connection belongs to.
+	Butler      string `json:"butler"`
+	Transport   string `json:"transport"`
+	Account     string `json:"account"`
+	Identity    string `json:"identity"`
+	DisplayName string `json:"displayName,omitempty"`
 	// Conversation is where to reach this account when nobody asked — a
 	// rule's question rather than a reply. On Telegram it equals the
 	// account; on Matrix it is the direct room, which the account (an
@@ -39,18 +48,20 @@ type ChatBinding struct {
 func (b ChatBinding) Revoked() bool { return !b.RevokedAt.IsZero() }
 
 // ChatClaimCode is an issued, not-yet-redeemed invitation for one
-// identity to bind one chat account on one surface. The secret itself is
+// Person to be admitted to one Connection. The secret itself is
 // never stored — only its hash — so this struct describes a code, it
 // does not contain one.
 type ChatClaimCode struct {
-	Surface    ButlerSurface `json:"surface"`
-	Identity   string        `json:"identity"`
-	Transport  string        `json:"transport,omitempty"`
-	CreatedAt  time.Time     `json:"createdAt"`
-	CreatedBy  string        `json:"createdBy"`
-	ExpiresAt  time.Time     `json:"expiresAt"`
-	RedeemedAt time.Time     `json:"redeemedAt,omitempty"`
-	BindingID  int64         `json:"bindingId,omitempty"`
+	// Connection is the one this code admits somebody to. There is no
+	// "any transport" any more: a code that could be redeemed anywhere
+	// cannot name the Agent it admits them to.
+	Connection int64     `json:"connection"`
+	Identity   string    `json:"identity"`
+	CreatedAt  time.Time `json:"createdAt"`
+	CreatedBy  string    `json:"createdBy"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+	RedeemedAt time.Time `json:"redeemedAt,omitempty"`
+	BindingID  int64     `json:"bindingId,omitempty"`
 }
 
 // ErrClaimCode is returned when a presented code is not redeemable. Its
@@ -65,8 +76,8 @@ func (db *DB) InsertChatClaimCode(hash string, c ChatClaimCode) error {
 	if hash == "" || c.Identity == "" || c.CreatedBy == "" {
 		return fmt.Errorf("runtimedb: claim code requires a hash, identity and issuer")
 	}
-	if !ValidButlerSurface(c.Surface) {
-		return fmt.Errorf("runtimedb: claim code surface %q is not admin|family", c.Surface)
+	if c.Connection == 0 {
+		return fmt.Errorf("runtimedb: a claim code names the connection it admits somebody to (ADR-W033 B7)")
 	}
 	if c.ExpiresAt.IsZero() {
 		return fmt.Errorf("runtimedb: claim code requires an expiry (ADR-W026 A4: short-lived, single-use)")
@@ -78,9 +89,9 @@ func (db *DB) InsertChatClaimCode(hash string, c ChatClaimCode) error {
 		return fmt.Errorf("runtimedb: inserting claim code: %w", err)
 	}
 	_, err = db.sql.Exec(
-		`INSERT INTO chat_claim_codes (hash, surface, person_id, transport, created_at, created_by, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		hash, string(c.Surface), person, c.Transport, now(), c.CreatedBy,
+		`INSERT INTO chat_claim_codes (hash, connection, person_id, created_at, created_by, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		hash, c.Connection, person, now(), c.CreatedBy,
 		c.ExpiresAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("runtimedb: inserting claim code: %w", err)
@@ -88,21 +99,24 @@ func (db *DB) InsertChatClaimCode(hash string, c ChatClaimCode) error {
 	return nil
 }
 
-// RedeemChatClaimCode turns a presented code hash into a binding, in one
-// transaction: the code must be unredeemed, unexpired, and for this
-// transport; the binding is written; the code is burned. Redeeming twice
-// fails the second time, which is what single-use means.
+// RedeemChatClaimCode turns a presented code hash into an admission, in
+// one transaction: the code must be unredeemed, unexpired, and for the
+// Connection the redeeming bot IS; the binding is written; the code is
+// burned. Redeeming twice fails the second time, which is what
+// single-use means.
 //
-// An existing live binding for the same (transport, account, surface) is
-// revoked first, so re-binding an account — a new phone, a re-installed
-// app — is a normal act rather than a unique-constraint failure.
-// want is the surface the REDEEMING bot serves. A code for the other
-// surface is refused without being burned: a household code sent to the
-// operator's bot by mistake should be usable on the right one a minute
-// later, not spent on a binding that bot can never resolve.
-func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName, conversation string, want ButlerSurface) (ChatBinding, error) {
-	if transport == "" || account == "" {
-		return ChatBinding{}, fmt.Errorf("runtimedb: redeeming requires a transport and account")
+// An existing live binding for the same (connection, account) is revoked
+// first, so re-binding an account — a new phone, a re-installed app — is
+// a normal act rather than a unique-constraint failure.
+//
+// at is the Connection the redeeming bot serves. A code for a different
+// Agent is refused without being burned: a code meant for Alfred sent to
+// Robert's bot by mistake should be usable on the right one a minute
+// later, not spent on an admission that bot can never resolve. It used
+// to compare SURFACES, which could not tell Alfred from Robert at all.
+func (db *DB) RedeemChatClaimCode(hash string, at Connection, account, displayName, conversation string) (ChatBinding, error) {
+	if at.Seq == 0 || account == "" {
+		return ChatBinding{}, fmt.Errorf("runtimedb: redeeming requires the connection it arrived at and an account")
 	}
 	tx, err := db.sql.Begin()
 	if err != nil {
@@ -110,12 +124,13 @@ func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName, convers
 	}
 	defer tx.Rollback() //nolint:errcheck // rolled back unless committed
 
-	var surface, person, identity, codeTransport, redeemedAt, expiresAt, createdBy string
+	var connection int64
+	var person, identity, redeemedAt, expiresAt, createdBy string
 	err = tx.QueryRow(
-		`SELECT c.surface, c.person_id, m.member, c.transport, c.redeemed_at, c.expires_at, c.created_by
+		`SELECT c.connection, c.person_id, m.member, c.redeemed_at, c.expires_at, c.created_by
 		 FROM chat_claim_codes c JOIN butler_members m ON m.person_id = c.person_id
 		 WHERE c.hash = ?`, hash).
-		Scan(&surface, &person, &identity, &codeTransport, &redeemedAt, &expiresAt, &createdBy)
+		Scan(&connection, &person, &identity, &redeemedAt, &expiresAt, &createdBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ChatBinding{}, ErrClaimCode
 	}
@@ -125,13 +140,10 @@ func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName, convers
 	if redeemedAt != "" {
 		return ChatBinding{}, ErrClaimCode
 	}
-	if codeTransport != "" && codeTransport != transport {
-		return ChatBinding{}, ErrClaimCode
-	}
 	// Checked BEFORE the burn, and reported as the same refusal every
 	// other bad code gets: a bot relaying codes for strangers must not
-	// learn that this one was real and merely for the other surface.
-	if want != "" && ButlerSurface(surface) != want {
+	// learn that this one was real and merely for another Agent.
+	if connection != at.Seq {
 		return ChatBinding{}, ErrClaimCode
 	}
 	exp, err := time.Parse(time.RFC3339Nano, expiresAt)
@@ -145,8 +157,8 @@ func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName, convers
 	stamp := now()
 	if _, err := tx.Exec(
 		`UPDATE chat_bindings SET revoked_at = ?
-		 WHERE transport = ? AND account = ? AND surface = ? AND revoked_at = ''`,
-		stamp, transport, account, surface); err != nil {
+		 WHERE connection = ? AND account = ? AND revoked_at = ''`,
+		stamp, at.Seq, account); err != nil {
 		return ChatBinding{}, fmt.Errorf("runtimedb: replacing binding: %w", err)
 	}
 	// The binding carries the code's Person across unchanged rather than
@@ -154,9 +166,9 @@ func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName, convers
 	// construction, and a second lookup could disagree with the first if
 	// a rename landed between them.
 	res, err := tx.Exec(
-		`INSERT INTO chat_bindings (transport, account, surface, person_id, display_name, conversation, created_at, created_by)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		transport, account, surface, person, displayName, conversation, stamp, createdBy)
+		`INSERT INTO chat_bindings (connection, account, person_id, display_name, conversation, created_at, created_by)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		at.Seq, account, person, displayName, conversation, stamp, createdBy)
 	if err != nil {
 		return ChatBinding{}, fmt.Errorf("runtimedb: inserting binding: %w", err)
 	}
@@ -177,15 +189,15 @@ func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName, convers
 		return ChatBinding{}, err
 	}
 	return ChatBinding{
-		ID: id, Transport: transport, Account: account, Surface: ButlerSurface(surface),
-		Identity: identity, DisplayName: displayName, Conversation: conversation,
-		CreatedAt: created, CreatedBy: createdBy,
+		ID: id, Connection: at.Seq, Butler: at.Butler, Transport: at.Transport,
+		Account: account, Identity: identity, DisplayName: displayName,
+		Conversation: conversation, CreatedAt: created, CreatedBy: createdBy,
 	}, nil
 }
 
-// LookupChatBinding resolves a live binding for one account on one
-// surface. A revoked binding is not found, which is what makes revoking
-// take effect on the next message.
+// LookupChatBinding resolves a live admission for one account on one
+// Connection. A revoked binding is not found, which is what makes
+// revoking take effect on the next message.
 //
 // It also re-checks the admitted Person, which is the runtime half of
 // ADR-W033 B9: "Owner-Agent Connections admit Owners only.
@@ -198,12 +210,12 @@ func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName, convers
 // The refusal is ErrNotFound, exactly as a revoked binding is, so the
 // message path treats "you may no longer speak here" the same way it
 // treats "you never could" and tells a prober nothing about which.
-func (db *DB) LookupChatBinding(transport, account string, surface ButlerSurface) (ChatBinding, error) {
+func (db *DB) LookupChatBinding(at Connection, account string) (ChatBinding, error) {
 	row := db.sql.QueryRow(
-		bindingColumns+` WHERE b.transport = ? AND b.account = ? AND b.surface = ? AND b.revoked_at = ''
+		bindingColumns+` WHERE b.connection = ? AND b.account = ? AND b.revoked_at = ''
 		   AND m.admitted = 1 AND m.disabled_at = '' AND m.offboarded_at = ''
-		   AND (b.surface <> 'admin' OR m.role = 'owner')`,
-		transport, account, string(surface))
+		   AND (agent.surface <> 'admin' OR m.role = 'owner')`,
+		at.Seq, account)
 	b, err := scanChatBinding(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ChatBinding{}, ErrNotFound
@@ -273,18 +285,22 @@ func (db *DB) TouchChatBinding(id int64, conversation string) error {
 // a Console listing and an inbound message both see today's name after
 // a rename — which is the point of the Connection naming an identity
 // rather than a label (ADR-W033 A2).
-const bindingColumns = `SELECT b.id, b.transport, b.account, b.surface, m.member,
+// The Connection carries the transport and the Agent, so both are read
+// through it rather than stored beside it.
+const bindingColumns = `SELECT b.id, b.connection, agent.name, conn.transport, b.account, m.member,
 	 b.display_name, b.conversation, b.created_at, b.created_by, b.last_used_at, b.revoked_at
-	 FROM chat_bindings b JOIN butler_members m ON m.person_id = b.person_id`
+	 FROM chat_bindings b
+	 JOIN butler_members m ON m.person_id = b.person_id
+	 JOIN butler_addresses conn ON conn.seq = b.connection
+	 JOIN butlers agent ON agent.seq = conn.butler`
 
 func scanChatBinding(r rowScanner) (ChatBinding, error) {
 	var b ChatBinding
-	var surface, created, lastUsed, revoked string
-	if err := r.Scan(&b.ID, &b.Transport, &b.Account, &surface, &b.Identity, &b.DisplayName,
-		&b.Conversation, &created, &b.CreatedBy, &lastUsed, &revoked); err != nil {
+	var created, lastUsed, revoked string
+	if err := r.Scan(&b.ID, &b.Connection, &b.Butler, &b.Transport, &b.Account, &b.Identity,
+		&b.DisplayName, &b.Conversation, &created, &b.CreatedBy, &lastUsed, &revoked); err != nil {
 		return ChatBinding{}, err
 	}
-	b.Surface = ButlerSurface(surface)
 	var err error
 	if b.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
 		return ChatBinding{}, fmt.Errorf("runtimedb: parsing binding created_at: %w", err)

@@ -27,6 +27,9 @@ type ChatRecipient struct {
 	Target string
 	// BindingID is the binding this came from, for the audit record.
 	BindingID int64
+	// Connection is the Agent's bot this leaves by (ADR-W033 B7). A
+	// message is from one Agent, so the queue it joins is that Agent's.
+	Connection int64
 }
 
 // ChatSender is the "<capability>.send" executor. One is registered per

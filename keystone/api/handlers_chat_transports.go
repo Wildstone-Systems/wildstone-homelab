@@ -274,11 +274,12 @@ func inviteLink(transport, handle, code string) (url string, carriesCode bool) {
 // checked in. An unknown transport, an adapter that has never
 // registered, or a code that names no transport all yield no link — the
 // code still works, and the note still says what to do with it.
-func (s *Server) linkForClaim(surface runtimedb.ButlerSurface, transport, code string) (link, handle string, carriesCode bool) {
-	if transport == "" {
-		return "", "", false
-	}
-	a, err := s.DB.GetChatAdapter(chatCapabilityPrefix + transport + "-" + string(surface))
+func (s *Server) linkForClaim(at runtimedb.Connection, code string) (link, handle string, carriesCode bool) {
+	// The Connection's external id is the capability the bot was minted
+	// for, so there is no name to reconstruct from a transport and a
+	// surface — which could only ever have produced the two bots the
+	// catalog happens to ship.
+	a, err := s.DB.GetChatAdapter(at.ExternalID)
 	if errors.Is(err, runtimedb.ErrNotFound) || err != nil {
 		return "", "", false
 	}
