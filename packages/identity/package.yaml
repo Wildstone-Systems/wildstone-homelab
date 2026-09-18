@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: identity
-  version: 1.0.3
+  version: 1.0.4
   capability: identity
   profile: authelia-lldap
   exclusive: true
@@ -217,8 +217,28 @@ templates:
             jwt_secret: secret/authelia-jwt-secret
 
         authentication_backend:
+          # Password reset is ENABLED, and it is how anybody gets their
+          # first password — the first Owner at install time included
+          # (design §2.4, ADR-W020 A4).
+          #
+          # Authelia binds to LLDAP as the service account below and
+          # performs the modify itself, which is what makes this work at
+          # all: LLDAP sets passwords through an OPAQUE exchange that
+          # neither a shell script nor Keystone can perform, so the
+          # directory's own client is the only thing positioned to do it.
+          #
+          # Delivery is the file notifier, not mail: there is no relay
+          # and there will not be one (ADR-W020 A6). Authelia writes the
+          # one-time code, and an Owner reads it back through
+          # `GET /nodes/{node}/identity/code` — the surface that already
+          # exists for 2FA enrolment, doing the same job for the first
+          # password.
+          #
+          # Turning this off again would leave a household with no way
+          # to give anybody a first credential except through LLDAP's
+          # own UI, which is the step this package exists to remove.
           password_reset:
-            disable: true
+            disable: false
           ldap:
             implementation: lldap
             address: ldap://lldap:3890

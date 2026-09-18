@@ -276,20 +276,32 @@ step_tailscale() {
 }
 
 
-# Step 5: the admin account (ADR-W023 A3).
+# Step 5: the first Owner's name (design §2.4, ADR-W023 A3).
 #
 # Captured here rather than on a Console first-run screen, because
-# reaching the Console requires an admin, which is the thing being
-# created. The password is held in a variable for this run and never
-# written to the answers file — credentials do not live in state
-# (ADR-W020 A4).
+# reaching the Console requires an Owner, which is the thing being
+# created.
+#
+# A NAME and no password, and the change is deliberate. This step used
+# to ask for a password, then set it on LLDAP's built-in `admin` account
+# — so an operator who typed "mika" was told "create your account
+# 'mika'", got no such account, and logged in as `admin` with the
+# password they had chosen for somebody who did not exist. It only ever
+# looked right because the default was `admin`.
+#
+# Now the name creates a real directory user, and the password is set by
+# the person who will use it, through the one-time code Authelia writes
+# (ADR-W020 A4: the credential is never Wildstone's). That is the same
+# path every other household member takes, so there is one flow rather
+# than a special case for the first person.
 ADMIN_USER=""
-ADMIN_PASS=""
 step_admin() {
   echo
   echo "Now an account for you. This is what you will log in with, and"
   echo "what you will use to add everyone else later."
-  local u p1 p2
+  echo "You will choose your password at first sign-in, from a one-time"
+  echo "code this installer prints at the end."
+  local u
   while :; do
     printf 'Username [admin]: ' >&2
     read -r u </dev/tty || u=""
@@ -297,15 +309,8 @@ step_admin() {
     case "$u" in *[!a-zA-Z0-9._-]*) echo "letters, digits, dot, dash and underscore only" >&2; continue ;; esac
     break
   done
-  while :; do
-    printf 'Password: ' >&2; read -rs p1 </dev/tty; echo >&2
-    printf 'Again:    ' >&2; read -rs p2 </dev/tty; echo >&2
-    if [ "$p1" != "$p2" ]; then echo "they do not match; try again" >&2; continue; fi
-    if [ "${#p1}" -lt 8 ]; then echo "at least 8 characters, please" >&2; continue; fi
-    break
-  done
-  ADMIN_USER="$u"; ADMIN_PASS="$p1"
-  answers_save ADMIN_USER "$u"   # the NAME is a choice; the password is not stored
+  ADMIN_USER="$u"
+  answers_save ADMIN_USER "$u"   # the NAME is a choice; no credential is stored
 }
 
 # Step 6: what to install.
@@ -779,24 +784,91 @@ enable_capability() { # package params-json
   fail "$1: plan $id did not apply in time"
 }
 
-# The operator's chosen password becomes LLDAP's admin password. LLDAP
-# applies the config-provided password at startup ("Successfully (re)set
-# password for admin" in its own log), so setting the secret and
-# restarting is the whole mechanism.
+# LLDAP's built-in `admin` is a SERVICE account, and its password is
+# generated here rather than chosen.
 #
-# The result is VERIFIED rather than assumed: if the bind fails the
-# installer says so, because an install that reports success and leaves
-# the operator unable to log in is the worst outcome available.
+# It used to be the operator's own password, which conflated two
+# different things: the credential Authelia binds with to read and
+# modify the directory, and the credential a person signs in with. They
+# have different lifetimes, different blast radius, and only one of them
+# belongs to a human. Nobody signs in as `admin` now — the first Owner
+# is a real directory user (see create_first_owner) — so this is a
+# machine credential and is treated like one: generated, stored as a
+# Secret, never printed.
+#
+# LLDAP applies the config-provided password at startup ("Successfully
+# (re)set password for admin" in its own log), so setting the secret and
+# restarting is the whole mechanism.
 set_admin_password() {
-  api POST "/api/v1/nodes/$NODE_ID/secrets/lldap-admin-password" "{\"value\":\"$ADMIN_PASS\"}" >/dev/null \
-    || fail "could not set the admin password"
+  # 32 hex characters from the kernel. No operator ever types this.
+  local generated
+  generated="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  [ "${#generated}" -eq 32 ] || fail "could not generate the directory's service password"
+  api POST "/api/v1/nodes/$NODE_ID/secrets/lldap-admin-password" "{\"value\":\"$generated\"}" >/dev/null \
+    || fail "could not set the directory's service password"
   docker restart lldap >/dev/null 2>&1 || true
   local i
   for i in $(seq 1 30); do
     sleep 2
     if docker exec lldap /bin/sh -c 'exit 0' 2>/dev/null; then break; fi
   done
-  log "admin account '$ADMIN_USER' ready"
+  log "directory ready"
+}
+
+# The first Owner (design §2.4). Installation does not complete without
+# one, and that is a failure rather than a warning.
+#
+# Three things, in an order that matters:
+#
+#   1. The directory user, so there is an account to sign in with. It
+#      goes through the ordinary proposal path — the same plan a Console
+#      holder would approve — because a first Owner created by a private
+#      back door is one the audit trail cannot explain.
+#   2. The Person, recorded and admitted as an Owner. This is what
+#      Wildstone is authoritative for (decision 1 of #201); the directory
+#      holds the credential and nothing else.
+#   3. The check. An install that reported success and left a household
+#      with no Owner would hand the operator a Console that admits
+#      whoever the directory says — which is the state slice 3 exists to
+#      end.
+#
+# The first Owner carries no permanent privilege afterwards. They are an
+# ordinary Owner, and the Last Owner invariant — not a flag — is what
+# keeps them irreplaceable until a second one exists (§2.4, §2.5).
+create_first_owner() {
+  log "creating the first owner '$ADMIN_USER'"
+
+  # The directory account, in the group that offers the Console.
+  local r id st i
+  r="$(api POST /api/v1/household/members \
+    "{\"username\":\"$ADMIN_USER\",\"groups\":[\"console_users\"],\"node\":\"$NODE_ID\"}")"
+  id="$(echo "$r" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+  [ -n "$id" ] || fail "could not propose the account for '$ADMIN_USER': $(echo "$r" | head -c 200)"
+  api POST "/api/v1/plans/$id/approve" >/dev/null || fail "could not approve the account plan"
+  for i in $(seq 1 60); do
+    sleep 2
+    st="$(api GET "/api/v1/plans/$id" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+    [ "$st" = applied ] && break
+    [ "$st" = failed ] && fail "the account plan failed; see journalctl -u keystone"
+  done
+  [ "$st" = applied ] || fail "the account for '$ADMIN_USER' did not apply in time"
+
+  # The Person, as an Owner, admitted. Role is stated rather than left to
+  # default: recordButlerMember defaults to member on purpose, so an
+  # omission here would stage the first Owner as a Member and leave the
+  # household with none.
+  api POST /api/v1/butler/members "{\"member\":\"$ADMIN_USER\",\"role\":\"owner\"}" >/dev/null \
+    || fail "could not record '$ADMIN_USER' as an owner"
+  api POST "/api/v1/butler/members/$ADMIN_USER/admit" >/dev/null \
+    || fail "could not admit '$ADMIN_USER'"
+
+  # And the check that makes this a requirement rather than an intention.
+  api GET /api/v1/butler/members \
+    | tr '{' '\n' \
+    | grep "\"member\":\"$ADMIN_USER\"" \
+    | grep -q '"role":"owner"' \
+    || fail "'$ADMIN_USER' is not an owner after setup; refusing to report success (design §2.4)"
+  log "first owner '$ADMIN_USER' recorded and admitted"
 }
 
 post_install() {
@@ -852,6 +924,7 @@ post_install() {
   log "installing identity"
   enable_capability identity "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\"}"
   set_admin_password
+  create_first_owner
   log "installing dashboard"
   enable_capability dashboard "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\"}"
   for svc in $SERVICES; do
@@ -926,7 +999,11 @@ UNIT
     echo "Done."
     if [ -n "${DASHBOARD_URL:-}" ]; then
       echo "  Your dashboard: $DASHBOARD_URL"
-      echo "  Sign in as '$ADMIN_USER' with the password you chose."
+      echo "  Sign in as '$ADMIN_USER'. You have no password yet: choose"
+      echo "  \"forgotten password\" at the sign-in page, then read the"
+      echo "  one-time code back with"
+      echo "      sudo wild identity code --node $NODE_ID"
+      echo "  and set the password you want. Wildstone never holds it."
     else
       echo "  Services are running but have no ingress; re-run and choose"
       echo "  Tailscale to reach them from a browser."

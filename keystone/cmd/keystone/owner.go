@@ -5,10 +5,10 @@ package main
 //
 // This is the break-glass. Every other way to create or repair an Owner
 // runs through the API, and the API is behind the Console check that
-// slice 3 made Owner-only — so a household whose last Owner is disabled,
-// or whose Console holder was never recorded as a Person, has no way
-// back in through any surface Wildstone serves. §2.6 names
-// root-equivalent host access as the recovery authority, and this is it.
+// slice 3 made Owner-only — so a household with nobody recorded, or
+// whose Console holder was never recorded as a Person, has no way back
+// in through any surface Wildstone serves. §2.6 names root-equivalent
+// host access as the recovery authority, and this is it.
 //
 // Three properties, each load-bearing:
 //
@@ -120,13 +120,13 @@ func ownerFlags(name string, args []string) (string, *flag.FlagSet, error) {
 // ownerCreate records a person as an Owner and admits them, creating the
 // row if it is not there and promoting it if it is.
 //
-// It works when every existing Owner is disabled, and that is the whole
-// point rather than an edge case: the Last Owner invariant stops the
-// household demoting its way to zero Owners, but it cannot help a
-// household that never had one — which, until the installer creates the
-// first Owner, is every deployment. This is also the answer to a Console
-// holder who was never recorded as a Person and is now refused by the
-// door slice 3 closed.
+// It answers the two lockouts that are actually reachable. "Every Owner
+// disabled" is NOT one of them: the Last Owner invariant is a database
+// trigger, so it holds against a direct UPDATE as well as the API and a
+// household cannot arrive at zero active Owners by any road. What it can
+// arrive at is nobody recorded at all — the state of every deployment
+// until the installer creates the first Owner — and somebody recorded as
+// the wrong thing, which is the Console holder slice 3 now refuses.
 //
 // Idempotent on purpose. An operator who runs it twice because the first
 // run scrolled past should get the same household, not an error that
@@ -165,10 +165,8 @@ func ownerCreate(args []string) error {
 	}
 
 	// Admitting IS the reinstatement: it clears disabled_at and
-	// offboarded_at and bumps the generation. That is what makes this
-	// work on the household the command exists for — every Owner
-	// disabled — without a second verb that could disagree with this
-	// one about what "active" means.
+	// offboarded_at and bumps the generation. One verb rather than two
+	// that could disagree about what "active" means.
 	if err := db.AdmitButlerMember(member, actor); err != nil {
 		return fmt.Errorf("admitting %s: %w", member, err)
 	}
