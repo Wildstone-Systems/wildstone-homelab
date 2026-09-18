@@ -19,6 +19,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -887,6 +888,17 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		}
 		// The hand-off seam is bound after apiSrv exists; see below.
 		calendarActions = cal
+		if householdCfg.CalendarUser == "" || os.Getenv("CALENDAR_PASSWORD") == "" {
+			// Loud, because the alternative is silent: Radicale answers
+			// 401 to every read, the six tools are registered and fail,
+			// and the capability reports as installed the whole time.
+			// That is the shape ADR-W029 exists to catch — a converged
+			// install that does not work — and the only place it can be
+			// caught here is startup.
+			log.Warn("calendar actions are wired but have no credential: "+
+				"set -calendar-user and CALENDAR_PASSWORD, or the calendar will refuse every request",
+				"user", householdCfg.CalendarUser, "password", os.Getenv("CALENDAR_PASSWORD") != "")
+		}
 		log.Info("calendar actions wired", "collection", householdCfg.CalendarURL,
 			"user", householdCfg.CalendarUser, "credential", os.Getenv("CALENDAR_PASSWORD") != "")
 	}
@@ -1015,6 +1027,21 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Statefile; this closure is the whole of its access, and it returns
 	// four strings about one member.
 	if calendarActions != nil {
+		// The home page's calendar card, reading the SHARED calendar
+		// through the same upstream the actions use — one credential,
+		// one client, one place a change to either lands.
+		apiSrv.CalendarEvents = func(from, to time.Time) ([]api.CalendarCardEvent, error) {
+			events, eerr := calendarActions.Upstream.Events(context.Background(), from, to)
+			if eerr != nil {
+				return nil, eerr
+			}
+			sort.Slice(events, func(i, j int) bool { return events[i].Start.Before(events[j].Start) })
+			out := make([]api.CalendarCardEvent, 0, len(events))
+			for _, e := range events {
+				out = append(out, api.CalendarCardEvent{Title: e.Summary, Start: e.Start, AllDay: e.AllDay})
+			}
+			return out, nil
+		}
 		calendarActions.Handoff = func(member string) (domestic.CalendarHandoff, bool, error) {
 			h, ok, herr := apiSrv.CalendarHandoffFor(member)
 			if herr != nil || !ok {

@@ -1,0 +1,17 @@
+-- A notice that ASKS has to carry what it asked.
+--
+-- NoticeRequest has had a Body field since 0030 and nothing ever stored
+-- it: there was no column, so the text went in and was discarded. That
+-- was invisible while the only questions were ones whose KIND said
+-- everything — "a plan needs approving" is a complete sentence — and it
+-- stopped being invisible the moment a question needed to name its
+-- subject.
+--
+-- The household surface titles a notice from its kind, so a confirm-tier
+-- action rendered as "Household confirm" with a yes and a no beside it.
+-- Consent to an unnamed action is not consent, which makes this a
+-- correctness fix rather than a presentation one.
+--
+-- Nullable with an empty default: every notice written before now had no
+-- body to lose, and a kind-titled notice is still the normal case.
+ALTER TABLE notices ADD COLUMN question TEXT NOT NULL DEFAULT '';

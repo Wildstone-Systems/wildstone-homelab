@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
 	"github.com/chickenrat17/wildstone-homelab/keystone/mobileconfig"
@@ -251,4 +252,16 @@ func portalSurfaceOrigin(desired []resource.Resource, capability string) (string
 		}
 	}
 	return "", false
+}
+
+// CalendarCardEvent is one event the home page's calendar card shows.
+//
+// Narrowed on purpose, and it is the same narrowing the CalDAV adapter
+// makes: a title and a time. Description and attendees are the most
+// sensitive part of a calendar and a card saying "three things today"
+// needs none of it.
+type CalendarCardEvent struct {
+	Title  string
+	Start  time.Time
+	AllDay bool
 }

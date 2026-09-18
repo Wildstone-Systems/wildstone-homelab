@@ -354,6 +354,44 @@ against `domestic.CalendarTools`, names and tiers both. A tool in one and
 not the other fails at somebody's dispatch, where a Butler has already
 told the household it can do the thing.
 
+### B4. What walking the paths found
+
+Five defects, all of the same family: everything reconciled, every test
+passed, and the thing did not work. Recorded because the shape repeats.
+
+1. **The shared calendar did not exist.** Radicale does not create a
+   collection on demand — `app/put.py` returns 409 Conflict when a PUT's
+   parent is not already a collection — and nothing created it. The
+   household's first "add dinner on Friday" would have failed, as a
+   protocol error that reads like the server being down. The credential
+   Job now creates it, with the `VCALENDAR` tag and the right ownership,
+   only when absent.
+2. **The confirmation question was discarded.** `NoticeRequest.Body` had
+   been accepted and dropped since migration 0030, because there was no
+   column — invisible while every question's KIND said everything there
+   was to say. A confirm-tier action therefore rendered as "Household
+   confirm" with a yes and a no beside it. Consent to an unnamed action
+   is not consent, so this was a correctness fix, not a presentation one.
+3. **There was no way to reach the profile.** The API returned
+   `addToPhone` and the page never drew it. The one path to the feature
+   existed only for somebody who knew the URL.
+4. **The card claimed "Nothing in the next three days"** whenever it was
+   available, having looked at nothing. It now reads the shared calendar,
+   and an unreadable calendar is `Available: false` with a reason —
+   because "nothing on" and "could not look" are different answers and a
+   wall tablet must not render the second as the first.
+5. **A household running both calendars could get the wrong address.**
+   `calendarServer` returned the first matching Route, so a profile built
+   for the Wildstone calendar could carry davis's host: an account that
+   installs cleanly, fails to connect, and blames a password the person
+   does not have. Ours is preferred explicitly now, and a test pins it in
+   both orderings.
+
+The through-line: each was a claim about something OUTSIDE the code under
+test — what Radicale does with a PUT, what the notices table stores, what
+the page draws — and that is exactly the class ADR-W029 says a package's
+own checks cannot catch. Walking the paths found all five in one pass.
+
 ---
 
 # Part C — The plan (not binding)

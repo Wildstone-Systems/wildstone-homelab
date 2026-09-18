@@ -175,7 +175,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: calendar-radicale
-  version: 1.3.0
+  version: 1.4.0
   capability: calendar
   profile: radicale
 requires:
@@ -201,6 +201,7 @@ params:
   # NAME, not an account: nobody signs in as it, and the rights file
   # above is the whole of what it means.
   - { name: household_principal, default: household, description: "The name the shared household calendar lives under, e.g. household. Its address is <this>/family on the calendar server." }
+  - { name: household_calendar, default: family, description: "The shared calendar's own name inside that principal. Its full address is <household>/<this>." }
   - { name: service_account_generation, default: "1", description: "Bump this after rotating the directory password, to rewrite the credential file Radicale reads." }
   - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
 policies:
@@ -406,13 +407,39 @@ templates:
             printf '%s' "$SERVICE_PASSWORD" > /run/calendar/service-password
             chown 1000:1000 /run/calendar/service-password
             chmod 400 /run/calendar/service-password
+
+            # The shared calendar has to EXIST before anything can write
+            # to it. Radicale does not create a collection on demand:
+            # app/put.py returns 409 Conflict when the parent of a PUT is
+            # not already a collection, so without this the household's
+            # first "add dinner on Friday" fails, and it fails as a
+            # protocol error that reads like the server being down.
+            #
+            # A directory with a .Radicale.props naming the VCALENDAR tag
+            # IS a calendar, in the multifilesystem layout under
+            # collection-root. Written only when absent — this is the
+            # household's data from the moment it lands, and re-running
+            # the job must never touch what is in it.
+            HOUSEHOLD="/var/lib/radicale/collections/collection-root/$HOUSEHOLD_PRINCIPAL/$HOUSEHOLD_CALENDAR"
+            if [ ! -e "$HOUSEHOLD/.Radicale.props" ]; then
+              mkdir -p "$HOUSEHOLD"
+              printf '%s' "{\"tag\": \"VCALENDAR\", \"D:displayname\": \"Household\"}" \
+                > "$HOUSEHOLD/.Radicale.props"
+            fi
+            # Ownership, every run: the job is root and Radicale is uid
+            # 1000, so a directory created here is one the server cannot
+            # write into unless it is handed over.
+            chown -R 1000:1000 "/var/lib/radicale/collections/collection-root/$HOUSEHOLD_PRINCIPAL"
         env:
           SERVICE_PASSWORD: "secret/calendar-service-password"
+          HOUSEHOLD_PRINCIPAL: "{{ .Params.household_principal }}"
+          HOUSEHOLD_CALENDAR: "{{ .Params.household_calendar }}"
           # Read by nothing. It is in the spec so that bumping the param
           # changes the Job's spec hash and re-runs it; see the param.
           SERVICE_ACCOUNT_GENERATION: "{{ .Params.service_account_generation }}"
         mounts:
           - { source: radicale-credentials, target: /run/calendar }
+          - { source: radicale-collections, target: /var/lib/radicale }
   # ---- The server.
   - |
     apiVersion: wildstone.dev/v1

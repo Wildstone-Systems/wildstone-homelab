@@ -127,6 +127,17 @@ type Server struct {
 	// carries the member's own calendars alone.
 	CalendarCollectionURL string
 
+	// CalendarEvents reads the SHARED household calendar for the home
+	// page's card. nil leaves the card offering the hand-off and saying
+	// it cannot show what is on — which is honest, and is the state of
+	// a deployment that installed the capability and has not pointed
+	// Keystone at it.
+	//
+	// A seam rather than a client, because this package has no calendar
+	// credential and should not grow one: cmd/keystone owns it and hands
+	// down a function that returns three days of one collection.
+	CalendarEvents func(from, to time.Time) ([]CalendarCardEvent, error)
+
 	// Butlers serves conversations as named specialists (ADR-W031) —
 	// cmd/keystone wires it over butlerlive, butlerstore and the
 	// durable runner. nil leaves every conversation on the single

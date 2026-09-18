@@ -181,6 +181,10 @@ type Notice struct {
 	Answer         string    `json:"answer,omitempty"`
 	AnsweredBy     string    `json:"answeredBy,omitempty"`
 	OutboundSeq    int64     `json:"outboundSeq,omitempty"`
+	// Question is what an asking notice actually asked, as the person
+	// answering it needs to read. Empty on a notice whose kind says
+	// everything there is to say.
+	Question string `json:"question,omitempty"`
 }
 
 // NoticeRequest is what a caller wants to say and to whom.
@@ -194,7 +198,11 @@ type NoticeRequest struct {
 	AdminFallback string
 	CorrelationID string
 	DedupeKey     string
-	Body          string
+	// Body is what the notice SAYS, and for an asking notice it is what
+	// the person answering has to read. Stored since migration 0040; it
+	// was accepted and discarded before that, which made a confirm-tier
+	// question render as its own kind.
+	Body string
 	// Asks marks a notice that poses a question. Only these can be
 	// answered; a reply to anything else authorizes nothing.
 	Asks bool
@@ -283,11 +291,11 @@ func (db *DB) RaiseNotice(req NoticeRequest, householdQuiet ButlerSettings, at t
 	}
 	res, err := db.sql.Exec(
 		`INSERT INTO notices (kind, recipient, routed_to_admin, correlation_id, dedupe_key,
-		     urgent, relevance, created_at, hold_until, expires_at, asks)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		     urgent, relevance, created_at, hold_until, expires_at, asks, question)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		req.Kind, recipient, boolInt(routedToAdmin), req.CorrelationID, req.DedupeKey,
 		boolInt(kind.Urgent), kind.Relevance, now(), timeText(hold),
-		at.Add(ttl).UTC().Format(time.RFC3339Nano), boolInt(req.Asks))
+		at.Add(ttl).UTC().Format(time.RFC3339Nano), boolInt(req.Asks), req.Body)
 	if err != nil {
 		return NoticeDecision{}, fmt.Errorf("runtimedb: recording notice: %w", err)
 	}
@@ -505,7 +513,8 @@ func (db *DB) GetNotice(seq int64) (Notice, error) {
 
 const noticeColumns = `SELECT seq, kind, recipient, routed_to_admin, correlation_id, dedupe_key,
 	 urgent, relevance, created_at, hold_until, expires_at, delivered_at, acknowledged_at,
-	 undelivered_at, asks, answered_at, answer, answered_by, COALESCE(outbound, 0)
+	 undelivered_at, asks, answered_at, answer, answered_by, COALESCE(outbound, 0),
+	 COALESCE(question, '')
 	 FROM notices`
 
 func scanNotice(row rowScanner) (Notice, error) {
@@ -514,7 +523,7 @@ func scanNotice(row rowScanner) (Notice, error) {
 	var created, hold, expires, delivered, acked, undelivered, answered string
 	err := row.Scan(&n.Seq, &n.Kind, &n.Recipient, &admin, &n.CorrelationID, &n.DedupeKey,
 		&urgent, &n.Relevance, &created, &hold, &expires, &delivered, &acked, &undelivered,
-		&asks, &answered, &n.Answer, &n.AnsweredBy, &n.OutboundSeq)
+		&asks, &answered, &n.Answer, &n.AnsweredBy, &n.OutboundSeq, &n.Question)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Notice{}, ErrNotFound
 	}
