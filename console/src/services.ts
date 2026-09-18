@@ -80,6 +80,11 @@ const GROUP_OF: Record<string, Group> = {
   documents: "Documents",
   "pdf-tools": "Documents",
   files: "Documents",
+  // The household's own drop box (#197). Documents rather than Ops: a
+  // family looking for "where the uploads went" looks where the files
+  // are, not where the control plane is — even though this one happens
+  // to be served by it.
+  filedrop: "Documents",
   "file-sync": "Documents",
   bookmarks: "Documents",
   feeds: "Documents",
@@ -115,6 +120,10 @@ const GROUP_OF: Record<string, Group> = {
 
   "ai-chat": "AI",
   "language-models": "AI",
+  // The household's chat surface for the Butlers it already has (#198).
+  // It configures no model and installs nothing; what it is, to a person
+  // looking for it, is the assistant.
+  assistant: "AI",
 };
 
 export function groupOf(pkg: { capability: string }): Group {

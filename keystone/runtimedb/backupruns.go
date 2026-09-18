@@ -141,3 +141,45 @@ func scanBackupRun(row rowScanner) (BackupRun, error) {
 	}
 	return r, nil
 }
+
+// LatestBackupRun returns the newest finished run of one kind, and
+// false when there has never been one.
+//
+// A QUESTION OF ITS OWN RATHER THAN A FILTER OVER THE CONSOLE'S WINDOW.
+// The household's reassurance card wants two facts — when the last
+// backup succeeded, and how the last restore drill went — and it used
+// to look for them among the newest hundred runs. Four daily backup
+// plans put four hundred rows between monthly drills, so the drill was
+// outside the window and the card lost both its date and its proof
+// while a drill sat in the table; a hundred failures would have hidden
+// the last good backup the same way. A card about whether the household
+// could recover must not go quiet because the household backs up often.
+//
+// succeededOnly separates the two: the last SUCCESSFUL backup is the
+// honest answer to "when was the last backup", while the last drill
+// decides pass or fail whichever way it went — a household told "a
+// restore was proved" by an older success while last night's drill
+// failed has been reassured by the one thing this card exists for.
+func (db *DB) LatestBackupRun(kind BackupRunKind, succeededOnly bool) (BackupRun, bool, error) {
+	where := "run_kind = ? AND finished_at != ''"
+	args := []any{string(kind)}
+	if succeededOnly {
+		where += " AND status = ?"
+		args = append(args, string(BackupRunSucceeded))
+	}
+	row := db.sql.QueryRow(
+		`SELECT seq, plan_name, run_kind, plan_id, started_at, finished_at, status, detail
+		   FROM backup_runs WHERE `+where+` ORDER BY seq DESC LIMIT 1`, args...)
+	r, err := scanBackupRun(row)
+	// ErrNotFound rather than sql.ErrNoRows: scanBackupRun has already
+	// translated it, and "there has never been one" is an answer here
+	// rather than a failure — a household that has not run a drill yet
+	// gets a card that says so, not one that says it cannot tell.
+	if errors.Is(err, ErrNotFound) {
+		return BackupRun{}, false, nil
+	}
+	if err != nil {
+		return BackupRun{}, false, fmt.Errorf("runtimedb: reading the latest %s run: %w", kind, err)
+	}
+	return r, true, nil
+}

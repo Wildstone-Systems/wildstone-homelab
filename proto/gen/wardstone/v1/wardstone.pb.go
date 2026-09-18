@@ -3951,8 +3951,24 @@ type HostFactsResult struct {
 	RootDiskTotalBytes uint64                 `protobuf:"varint,6,opt,name=root_disk_total_bytes,json=rootDiskTotalBytes,proto3" json:"root_disk_total_bytes,omitempty"`
 	RootDiskFreeBytes  uint64                 `protobuf:"varint,7,opt,name=root_disk_free_bytes,json=rootDiskFreeBytes,proto3" json:"root_disk_free_bytes,omitempty"`
 	AgentVersion       string                 `protobuf:"bytes,8,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// What the machine is actually DOING, as opposed to what it has.
+	// Both are optional in the honest sense: an agent that cannot read
+	// them reports zero, and a zero here means "not measured" rather than
+	// "idle" — a surface must not draw a bar at zero from a missing
+	// reading (ADR-W026's household dashboard rules say so explicitly).
+	//
+	// mem_available_bytes is MemAvailable, not MemFree: free memory on a
+	// healthy Linux box is near zero because the page cache uses the
+	// rest, so a "memory used" bar built from MemFree reads as a machine
+	// permanently about to die.
+	MemAvailableBytes uint64 `protobuf:"varint,9,opt,name=mem_available_bytes,json=memAvailableBytes,proto3" json:"mem_available_bytes,omitempty"`
+	// cpu_busy_percent is sampled over a short interval inside the agent
+	// rather than derived from load average. Load is a queue length, not
+	// a percentage, and dividing it by the core count produces a number
+	// that looks like a utilisation and is not one.
+	CpuBusyPercent uint32 `protobuf:"varint,10,opt,name=cpu_busy_percent,json=cpuBusyPercent,proto3" json:"cpu_busy_percent,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *HostFactsResult) Reset() {
@@ -4039,6 +4055,20 @@ func (x *HostFactsResult) GetAgentVersion() string {
 		return x.AgentVersion
 	}
 	return ""
+}
+
+func (x *HostFactsResult) GetMemAvailableBytes() uint64 {
+	if x != nil {
+		return x.MemAvailableBytes
+	}
+	return 0
+}
+
+func (x *HostFactsResult) GetCpuBusyPercent() uint32 {
+	if x != nil {
+		return x.CpuBusyPercent
+	}
+	return 0
 }
 
 type Health struct {
@@ -6073,7 +6103,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x15ReadManagedFileResult\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\fR\acontent\x12*\n" +
 	"\x11source_sha256_hex\x18\x02 \x01(\tR\x0fsourceSha256Hex\"\v\n" +
-	"\tHostFacts\"\x9f\x02\n" +
+	"\tHostFacts\"\xf9\x02\n" +
 	"\x0fHostFactsResult\x12\x1a\n" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x0e\n" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x16\n" +
@@ -6082,7 +6112,10 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0fmem_total_bytes\x18\x05 \x01(\x04R\rmemTotalBytes\x121\n" +
 	"\x15root_disk_total_bytes\x18\x06 \x01(\x04R\x12rootDiskTotalBytes\x12/\n" +
 	"\x14root_disk_free_bytes\x18\a \x01(\x04R\x11rootDiskFreeBytes\x12#\n" +
-	"\ragent_version\x18\b \x01(\tR\fagentVersion\"\b\n" +
+	"\ragent_version\x18\b \x01(\tR\fagentVersion\x12.\n" +
+	"\x13mem_available_bytes\x18\t \x01(\x04R\x11memAvailableBytes\x12(\n" +
+	"\x10cpu_busy_percent\x18\n" +
+	" \x01(\rR\x0ecpuBusyPercent\"\b\n" +
 	"\x06Health\"6\n" +
 	"\fHealthResult\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x16\n" +

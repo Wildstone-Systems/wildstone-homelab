@@ -76,7 +76,15 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 	// session holds knows one Butler's name and there is no call that
 	// changes it.
 	if sc, ok := gw.(Scoped); ok {
-		sc.SetAuthorizer(&butlerstore.Authority{DB: bs.DB, Butler: b.Name})
+		// The per-Butler authority, and above it the ceiling of the
+		// connection this request arrived through. The order is the
+		// whole guarantee: WithConnection can only turn a yes into a
+		// no, so nothing the store resolves can raise what the surface
+		// forbids.
+		sc.SetAuthorizer(WithConnection(
+			&butlerstore.Authority{DB: bs.DB, Butler: b.Name},
+			t.Connection.Permits,
+		))
 		sc.SetSessionTask(task.ID)
 	} else {
 		// A surface that cannot be scoped must not be served as a
@@ -354,11 +362,23 @@ func quoteOneLine(s string) string {
 // endpoint has changed which machine sees the household's material, and
 // continuing to use a client built from the old value would be the
 // quietest possible way to get that wrong.
+//
+// ProviderModel is in the key for exactly that reason, and it is the
+// one this comment used to describe without covering (#235). Model is
+// the configured row's NAME; ProviderModel is what the client is built
+// from and what every turn sends. UpsertModel edits a row in place —
+// ON CONFLICT(name) DO UPDATE — so repointing a route at a different
+// upstream model changes neither the seq nor the name, and without this
+// the cached client kept answering as the old model while the database,
+// the response and the audit log all reported the new one. Repointing a
+// route at a different MODEL is the same class of mistake as repointing
+// it at a different machine, and it was just as quiet.
 func (bs *Butlers) providerFor(b runtimedb.Butler) (provider.Provider, error) {
 	if bs.Providers == nil {
 		return nil, fmt.Errorf("no provider factory is wired")
 	}
-	key := fmt.Sprintf("%d\x00%s\x00%s\x00%s", b.ModelSeq, b.Provider, b.Model, b.Endpoint)
+	key := fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s",
+		b.ModelSeq, b.Provider, b.Model, b.ProviderModel, b.Endpoint)
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	if p, ok := bs.clients[key]; ok {

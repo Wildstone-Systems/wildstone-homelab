@@ -153,10 +153,18 @@ var homepageApps = map[string]homepageApp{
 // one that was never claimed to be the app's own.
 const homepageFallbackIcon = "mdi-application-outline"
 
-// homepageGroups is the rendered group order. Household first because it
-// is what the family opens the page for; Admin second because it is the
-// operator's, and burying it is the point.
-var homepageGroups = []string{"Household", "Admin"}
+// homepageGroups is the rendered group order. Quick actions first
+// because they are the only cards a person can use without leaving the
+// page (#197, #198); Household next because it is what the family opens
+// the page for; Admin last because it is the operator's, and burying it
+// is the point.
+var homepageGroups = []string{portalGroupName, householdGroupName, "Admin"}
+
+// householdGroupName is where an ordinary service lands, and where the
+// empty state lands. Named rather than repeated since Quick actions
+// took the first position: "the group at index 0" and "the group a
+// household's services are in" stopped being the same string.
+const householdGroupName = "Household"
 
 // homepageGroup places a Route by its CLASSIFICATION, which is the field
 // that already says who a surface is for and is mandatory on every Route
@@ -166,7 +174,7 @@ func homepageGroup(classification string) string {
 	if classification == "admin_tailscale" {
 		return "Admin"
 	}
-	return "Household"
+	return householdGroupName
 }
 
 // homepageTitle turns a resource name into something to show a person.
@@ -349,6 +357,32 @@ type homepageEntry struct {
 	// name is the Route's resource name, kept only to disambiguate two
 	// services that resolve to the same title.
 	name string
+	// container and node are what the Route points at, and they are here
+	// for the Wildstone dashboard profile rather than for the rendered
+	// YAML: Homepage discovers whether an app answers by dialling it
+	// itself (siteMonitor), and a page served by Keystone has to join the
+	// observation Keystone already holds instead. An empty container
+	// means the Route names an address rather than a container, which is
+	// a service with no observation to join.
+	container string
+	node      string
+	// widget is the live frame a household surface renders instead of
+	// being only a link (#197, #198). Empty on every ordinary service,
+	// which is all of them but two.
+	widget *portalCard
+}
+
+// widgetSrc is the frame's address: the same origin the card links to,
+// at the widget's own path. Derived from the entry rather than stored,
+// so a Route that moves port moves both at once.
+func (e homepageEntry) widgetSrc() string {
+	if e.widget == nil {
+		return ""
+	}
+	// The theme rides in the URL: the frame is drawn inside Homepage's
+	// card and has no other way to learn which palette it is landing
+	// in (homepageTheme says why it cannot be inferred).
+	return strings.TrimSuffix(e.href, e.widget.page) + e.widget.widget + "?theme=" + homepageTheme
 }
 
 // renderHomepageServices builds Homepage's services.yaml from the Routes.
@@ -390,6 +424,19 @@ func renderHomepageServices(desired []resource.Resource) []byte {
 			if e.monitor != "" {
 				fmt.Fprintf(&b, "        siteMonitor: %s\n", e.monitor)
 			}
+			if e.widget != nil {
+				// Homepage's own iframe widget, configured and not
+				// extended: src, a name, and a height. Nothing here
+				// tells Homepage what the frame contains, because it
+				// is not Homepage's business and because the surface
+				// behind it authenticates the person itself.
+				b.WriteString("        widget:\n")
+				b.WriteString("          type: iframe\n")
+				fmt.Fprintf(&b, "          name: %s\n", e.widget.name)
+				fmt.Fprintf(&b, "          src: %s\n", e.widgetSrc())
+				fmt.Fprintf(&b, "          classes: %s\n", e.widget.classes)
+				b.WriteString("          referrerPolicy: no-referrer\n")
+			}
 		}
 	}
 	return []byte(b.String())
@@ -428,6 +475,16 @@ func homepageEntries(desired []resource.Resource) []homepageEntry {
 			href:  "https://" + routeSiteAddress(posture, r.Route.Host),
 			name:  r.Metadata.Name,
 		}
+		if card, portal := portalCardFor(r.Metadata.Package); portal {
+			// A household surface, not an application: the card's link
+			// opens the full page and the frame shows the compact one.
+			e.group = portalGroupName
+			e.title, e.icon, e.desc = card.title, card.icon, card.description
+			e.widget = &card
+			e.href += card.page
+			entries = append(entries, e)
+			continue
+		}
 		if app, known := homepageApps[upstreamContainerName(r.Route.Upstream)]; known {
 			e.title, e.icon, e.desc = app.title, app.icon, app.description
 		} else {
@@ -442,6 +499,7 @@ func homepageEntries(desired []resource.Resource) []homepageEntry {
 		if home != "" && r.Metadata.Node == home {
 			e.monitor = homepageMonitor(r.Route.Upstream)
 		}
+		e.container, e.node = upstreamContainerName(r.Route.Upstream), r.Metadata.Node
 		entries = append(entries, e)
 	}
 
@@ -494,7 +552,7 @@ func homepageEntries(desired []resource.Resource) []homepageEntry {
 // No href — there is nowhere to send a browser, and Homepage renders a
 // card without one perfectly well. The command is the useful part.
 var homepageEmptyState = homepageEntry{
-	group: homepageGroups[0],
+	group: householdGroupName,
 	title: "Nothing installed yet",
 	icon:  homepageFallbackIcon,
 	desc:  "Add a capability with `wild capability enable <name>` and it appears here",

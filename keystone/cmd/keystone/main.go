@@ -56,6 +56,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "person-refs" {
+		if err := personRefs(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "keystone person-refs:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	showVersion := flag.Bool("version", false, "print version and exit")
 	listen := flag.String("listen", ":9440", "agent gateway listen address")
@@ -423,6 +430,14 @@ func withConsole(apiHandler http.Handler, dir string) http.Handler {
 	fileServer := http.FileServer(http.Dir(dir))
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiHandler)
+	// The household portal's pages are served by the API handler too,
+	// and they are NOT under /api — they are pages, at the addresses a
+	// dashboard iframes. Without this the Console's catch-all answers
+	// them with its own index.html, which renders as a blank frame on
+	// the family's dashboard with nothing anywhere saying why.
+	for _, prefix := range api.PortalPrefixes {
+		mux.Handle(prefix, apiHandler)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(path.Clean(r.URL.Path), "/")))); err == nil {
