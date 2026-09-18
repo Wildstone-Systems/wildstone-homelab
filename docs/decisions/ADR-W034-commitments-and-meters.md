@@ -843,4 +843,83 @@ gated by the `LdapGroup` only that profile declares.
   W033 E2 superseding ADR-W030 A6, per A20. The later ADR governs;
   reconciling the older text is not this ADR's work.
 
-Nothing now stands between this ADR and K1 but the decision to start it.
+K1 through K7 are built (#244), and what review found of them is below.
+
+## What review found after K1–K7 (#244)
+
+Five defects, all real, all of the two shapes this ADR already names.
+They are recorded here rather than only in the commit log because each
+one is a place where the obvious implementation is wrong, and the next
+person to touch this code will be tempted by the same obvious thing.
+
+**A rule stated for one input and not its sibling** — the shape that
+found four of the eight defects in the K3 rounds, and three of these
+five.
+
+1. **A bare date and an RFC3339 instant are not the same kind of
+   thing.** `2026-09-10` means that day where the household lives, so it
+   is built at midnight in the household's timezone. `2026-09-10T12:00Z`
+   already names a moment. The pass rebuilt the wall-clock fields of
+   both in the household location, so noon UTC became noon local and
+   every threshold derived from the anchor moved with it — five hours in
+   a Chicago household, seven in a Los Angeles one, to a date that still
+   looked entirely plausible. `resource.CommitmentAnchorAt` takes the
+   location and tells the two forms apart. Absolute `due.at` values had
+   the same fault and the same fix.
+
+2. **`mayComplete: [group/parents]` granted authority to everybody.**
+   The check returned true for any group reference at all, justified by
+   a comment saying the write path would refuse anyone outside it — and
+   the write path calls the same function. A personal commitment
+   narrowed to the adults could be ticked off by the child it was
+   hidden from. The groups were available all along: the identity proxy
+   forwards them on the header the door already authenticates against.
+   They now travel with the member as one value, so a caller that
+   forgets them does not compile, and a group nobody is in denies. A
+   household that narrows a commitment to a group it never created
+   would rather find out because nobody can tick it off.
+
+3. **The page asked, and then would not listen.** Commitments rendered
+   on the family homepage as rows nobody could answer: the Needs-you
+   card drew its controls only for a notice's `seq`, and a commitment
+   is a named resource with none. Every answer path K5 shipped was
+   reachable only from curl. The server now lists the answers on offer
+   (`asks`) and the page holds no list of its own — a page working out
+   whether a commitment wants a number, a tick or an appointment would
+   be a second copy of the state machine, drifting from the one that
+   refuses the write.
+
+**Producing a number instead of saying it could not** — the behaviour
+the engine exists to refuse, found twice more outside the engine.
+
+4. **A counter cycle could be closed with no number, permanently.**
+   `done` or `waived` recorded a completion with empty positions. Both
+   rollover modes measure the next cycle from the position the meter
+   stood at, so the new cycle opened unresolvable — and no endpoint
+   deletes or corrects a completion, so one tap made the truck's oil
+   untrackable forever. The schema had said "evidence is not optional"
+   since it was written and was the only thing enforcing it. A reading
+   the member just took supplies its own evidence; a stale one does
+   not, because measuring the next change from wherever the truck was
+   in June is this failure wearing a helpful face.
+
+5. **`satisfiedBy` did nothing.** It validated, generated a Console
+   type, and was read by nothing. A household that declared it watched
+   the commitment go overdue with the proof sitting in its own
+   timeline. The pass now harvests before it judges — but the event is
+   **evidence, not an instruction**: it closes a cycle only when the
+   completion it implies can carry the numbers the next cycle needs,
+   under the same rule and the same function a member tapping Done is
+   held to. It is evaluated at the event's moment, which is what the
+   pure function's `Now` argument was for, so a reading taken two days
+   after the service does not retroactively make it usable.
+
+**What the shape of these says.** Four of the five are a rule that was
+true in one place and absent in its twin, and the fifth is a field with
+no reader. Both are invisible to coverage: every line ran, and the
+tests that ran them asserted the half that was right. The pins that
+caught things here were the cross-package interval agreement test, the
+stylesheet class audit, and the person-reference verdict on every new
+column — three guards that turn a silent omission into a build failure.
+That is the kind of test this design needs more of, and more of them
+than it needs assertions.
