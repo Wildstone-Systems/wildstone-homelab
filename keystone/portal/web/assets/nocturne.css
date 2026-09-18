@@ -499,3 +499,34 @@ a:hover { color: var(--color-accent-200); text-decoration: underline; }
 .ph-arrows-out-cardinal:before {
   content: "\e0a4";
 }
+
+/* ---- portal additions ----------------------------------------------
+ *
+ * NOT FROM THE DESIGN CANVAS. Everything above this line is ported from
+ * Household_Homepage's own stylesheet; anything below is the portal's,
+ * and a regeneration of the section above must keep it.
+ */
+
+/* Tap targets on a phone.
+ *
+ * §15 asks for "larger tap targets" and the canvas only raises the
+ * suggested-question chips, because those were the only buttons on the
+ * mockup's phone frame. Every other control — a file's download and
+ * delete, the selection bar, the activity filters, the catalog's
+ * buttons — was left at the desktop size, which is about 29px: under
+ * the design's own 38px and well under the 44px a thumb wants.
+ *
+ * Height only. Widening them would reflow rows that are already tight
+ * at 390px, and the problem is vertical: these controls are wide enough
+ * to hit and too short.
+ */
+@media (max-width: 720px) {
+  .hbtn { min-height: 40px; }
+  /* An icon-only control has no text to give it width either, so it
+     gets a square of the same size rather than a tall sliver. */
+  .hbtn:not(:has(span)):not(:has(.nm)) { min-width: 40px; }
+  .seg > button { min-height: 38px; padding-inline: var(--space-4); }
+  /* A checkbox is the one control a thumb misses most often, and it has
+     no padding of its own to grow. */
+  input[type="checkbox"] { width: 20px; height: 20px; }
+}

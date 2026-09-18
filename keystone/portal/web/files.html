@@ -28,7 +28,18 @@
 -->
 <style>
   .crumb { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-6); }
-  table { width: 100%; border-collapse: collapse; }
+  /* FIXED, not auto. An auto-layout table sizes its columns to fit
+     their content, so one long filename widens the name column, the
+     table exceeds its 100%, and the page scrolls sideways — and
+     text-overflow never engages, because nothing has constrained the
+     width it would ellipsise against. The widths live in a <colgroup>
+     rather than on the header cells because the header is display:none
+     on a phone, and a width on a hidden element is not a width. */
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  col.pick { width: 34px; }
+  col.size { width: 92px; }
+  col.when { width: 116px; }
+  col.acts { width: 84px; }
   thead th {
     text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .13em;
     text-transform: uppercase; color: var(--muted); padding: 0 var(--space-3) var(--space-3);
@@ -38,7 +49,8 @@
   tbody tr:last-child td { border-bottom: 0; }
   tbody tr.sel { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
   td.num { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  td.name { min-width: 0; }
+  td.name { min-width: 0; overflow: hidden; }
+  .nmcell a { min-width: 0; }
   .nmcell { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
   .rowacts { display: flex; gap: 2px; justify-content: flex-end; opacity: 0; }
   tr:hover .rowacts, tr:focus-within .rowacts { opacity: 1; }
@@ -53,7 +65,10 @@
   dialog {
     border: 0; border-radius: var(--radius-lg); padding: var(--space-8);
     background: var(--color-surface); color: var(--color-text);
-    max-width: 440px; box-shadow: var(--shadow-lg);
+    /* min(), because 440px is wider than a 390px phone and a modal
+       that overflows the viewport cannot be read or dismissed. */
+    max-width: min(440px, calc(100vw - 2 * var(--space-6)));
+    box-shadow: var(--shadow-lg);
   }
   dialog::backdrop { background: rgba(0,0,0,.55); }
   .grid-photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); gap: var(--space-3); }
@@ -64,10 +79,27 @@
   }
   @media (max-width: 720px) {
     /* Rows go two-line — filename above, size and when beneath — and
-       only the two actions a thumb can hit stay exposed. */
+       only the two actions a thumb can hit stay exposed.
+       
+       The row stops being a table row and becomes a flex row. Hiding
+       two columns is not enough on its own: their <col> widths would
+       still be reserved under a fixed layout, leaving 200px of empty
+       column beside a truncated name. Laying the row out directly is
+       both simpler and what the design describes. */
+    table, tbody, tr, td { display: block; }
     thead { display: none; }
+    tbody tr {
+      display: flex; align-items: center; gap: var(--space-3);
+      padding: var(--space-3) 0; border-bottom: 1px solid var(--faint);
+    }
+    tbody tr:last-child { border-bottom: 0; }
+    tbody td { padding: 0; border: 0; }
+    tbody td.name { flex: 1; min-width: 0; }
     tbody td.num, tbody td.when { display: none; }
     .sub2 { display: block !important; color: var(--muted); font-size: 11.5px; }
+    /* The two-line half must wrap rather than push the row wide: a
+       filename with no spaces in it has nowhere to break otherwise. */
+    .sub2 { overflow-wrap: anywhere; }
     .rowacts { opacity: 1; }
   }
   .sub2 { display: none; }
@@ -331,6 +363,13 @@
     }
 
     var table = make("table");
+    // The widths the fixed layout uses. Name has none, so it takes
+    // whatever is left over.
+    var cols = make("colgroup");
+    ["pick", "name", "size", "when", "acts"].forEach(function (c) {
+      cols.appendChild(make("col", c));
+    });
+    table.appendChild(cols);
     var thead = make("thead");
     var hr = make("tr");
     ["", "Name", "Size", "Modified", ""].forEach(function (h) { hr.appendChild(make("th", null, h)); });
