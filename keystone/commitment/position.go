@@ -5,7 +5,7 @@ import "time"
 // A position is a point in one meter's coordinate space, as a float64:
 // miles on an odometer, hours on a blower, seconds since the Unix epoch
 // on the clock. One type for both is what lets the rest of this package
-// have a single code path (ADR-WXXX A2), and this file is the only place
+// have a single code path (ADR-W034 A2), and this file is the only place
 // that knows the clock is different.
 //
 // Seconds as float64 hold the epoch to well under a microsecond — about

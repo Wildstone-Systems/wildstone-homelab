@@ -21,7 +21,7 @@ import (
 //     months" and is not the same as 182 days.
 //
 // Exactly one is set. The clock takes Span or Months; a counter meter
-// takes Amount. ADR-WXXX A2 makes the clock a meter like any other, and
+// takes Amount. ADR-W034 A2 makes the clock a meter like any other, and
 // this type is where that claim is paid for: everything above here works
 // in positions, and only advance() knows that one meter's positions are
 // seconds and that adding six months to them is a calendar operation.

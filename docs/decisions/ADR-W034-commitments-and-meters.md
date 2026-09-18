@@ -1,21 +1,22 @@
-# ADR-WXXX (DRAFT): Commitments and meters — the household keeps track of what it owes itself
+# ADR-W034: Commitments and meters — the household keeps track of what it owes itself
 
-- **Status:** draft, and **paused** by decision rather than stalled. Work
-  package K3 is prototyped in `keystone/commitment`; nothing else is
-  built, and nothing reads it. K1 is deliberately not started: the vertical
-  (which surface, whose authority, Owner or Member) decides its schema, and
-  that vertical depends on the agent rework and the family homepage, both
-  in flight. Resuming is tracked in the follow-up issue.
-- **Number:** deliberately `WXXX`. W032 (*Who may open the Console*) and
-  W033 (*The Wildstone agent system*) are taken on branches that have not
-  landed; this file is numbered on merge, most likely W034. See
-  "What lands on main will change this" at the end for the specific
-  decisions that need re-reading once they do.
+- **Status:** draft, ready to propose once the household homepage merges.
+  Work package K3 is prototyped in `keystone/commitment`; nothing else is
+  built and nothing reads it. K1 waits on PR #238 rather than on a
+  decision — the surface is settled below, and building on a 69-commit
+  branch under review is the only thing left worth avoiding.
+- **Number:** W034. Taken after W032 and W033 landed on main (#228); the
+  earlier `WXXX` placeholder existed because both were then unmerged.
 - **Relates to:** ADR-W024 (household events, the `Automation` resource,
-  the domestic gateway — this builds directly on it), ADR-W004 (plans are
-  the only write path), ADR-W007 (one API, one event stream), ADR-W009
-  (policy tiers), ADR-W030 A4 (durable work, completion requires
-  evidence), ADR-W011 A4 (scheduled duty belongs to Keystone, not cron)
+  the domestic gateway — this builds directly on it), ADR-W033 A1/A4
+  (Owner and Member, Console and the household plane), E2/E3 (Agents
+  propose, Owners activate), E5/E6 (what a routine is, and so what a
+  commitment is not), E8 (deterministic steps and inference steps),
+  ADR-W032 (who may open the Console), ADR-W004 (plans are the only write
+  path), ADR-W007 (one API, one event stream), ADR-W009 (policy tiers),
+  ADR-W030 A4 (durable work, completion requires evidence), ADR-W011 A4
+  (scheduled duty belongs to Keystone, not cron). Surface decisions are
+  written against PR #238, the Wildstone-served household homepage.
 - **Audience:** decision record for a core Keystone subsystem. Part A is
   the shape; Part B is the build order. Not an implementation spec — each
   work package gets its own spec when it is scheduled.
@@ -109,13 +110,13 @@ has no capability-free way to write a reading at all. A4's promise holds
 for the Owner and fails for the family, which is the half that matters.
 
 The fix is available and is not a change to A4 — it is what A4 requires.
-`keystone/portal` (the Files and Assistant surfaces) is Wildstone serving
-small household surfaces of its own, behind a door that produces an
-identity holding no RBAC verb. Commitments need one of those as a **core**
-surface, gated on the default household group rather than declared by a
-package. Ingress is not optional for any web UI, so depending on ingress
-does not violate A4; depending on the `dashboard` package does. Settling
-this is the first thing to do when this ADR resumes.
+`keystone/portal` is Wildstone serving small household surfaces of its
+own, behind a door that produces an identity holding no RBAC verb — and
+PR #238 extends it into the family front page itself. **A22 settles what
+that costs**, and A19 settles where a commitment appears on it. The short
+version: a family door needs the `dashboard` capability on its
+`wildstone` profile, and that is a dependency this ADR accepts and names
+rather than one it can design away.
 
 
 
@@ -365,6 +366,139 @@ than told a conclusion.
 
 ---
 
+### A18. A Commitment is not a routine
+
+ADR-W033 landed while this was drafted, and the first question it raises
+is whether a commitment should be one of its routines (E5) rather than a
+resource kind of its own.
+
+It should not. W033 E6 binds an approved routine to its **tools, targets,
+parameter limits, trigger/schedule, output audience, delivery policy,
+assigned Agent, and per-resource grants**. A commitment has none of
+those. It names no tool, reaches no service, delivers nothing, and has no
+Agent: it declares that something is *owed*, and a Keystone-owned engine
+works out whether it is due. Making it a routine would mean inventing all
+eight fields so that a thing which executes nothing could be described as
+if it did.
+
+The nearer relative is `BackupPlan` (ADR-W011 A4): a declaration that a
+duty exists, serviced by Keystone on its own schedule, rather than a
+document that runs.
+
+**The routine is the other half.** A commitment changes state; what
+happens next — who is told, how, in what words, at what hour — is a
+routine or an `Automation`, and that is where W033's tools, audience,
+delivery policy and Agent all belong. Keeping them apart satisfies E8's
+deterministic/inference line by construction rather than by care: the
+commitment engine is wholly deterministic and has no Agent to be blocked
+on, so the household still knows the truck is due with every model in the
+house switched off.
+
+### A19. The household homepage is the surface, and it already has the card
+
+PR #238 serves the family-facing dashboard from Keystone itself, with a
+`needsYou` card on the Home page. A commitment occurrence maps onto its
+`needsYouItem` field for field:
+
+| `needsYouItem` | Commitment occurrence |
+|---|---|
+| `Summary` | the engine's `Reason`, which is already household language |
+| `WaitingOn` | who has to act |
+| `Waited` | how long it has been `due_soon` or `overdue` |
+| `Consequence` | what has not happened yet |
+| `Decidable` | whether this member may satisfy it — A21's `mayComplete` |
+| `Tone` | derived from the state |
+
+So **commitments get no surface of their own.** They contribute
+`needsYou` items and Activity rows to a page the household already opens,
+which is the difference between a tracker people pass every day and one
+they have to remember to visit.
+
+Two things that page decided independently are worth recording, because
+agreement reached twice from different directions is the strongest
+evidence either is right:
+
+- Its `homeCard` carries `Available` and `Problem` under the rule *"never
+  render an unreachable service as nothing to do; silence and all-clear
+  must not look the same"*. That is A11 exactly: a meter nobody has read
+  is not a meter reading "not due".
+- Its `Decidable` renders an item a member may not act on as read-only —
+  *"the affordance is absent, never present-and-refused"*. That is the
+  checkup case, where the item is about a child and the action belongs to
+  a parent.
+
+**Honestly: the shape fits and the plumbing does not exist.**
+`homeNeedsYou` builds from notices and owner-side plans, and an item's
+`Seq` addresses a notice. Contributing commitments means extending the
+item source and the answer path, not reusing them as they stand. That is
+K5's work and it is real work.
+
+### A20. The write boundary is the connection ceiling, not a new role
+
+PR #238 makes `household_portal` a **connection ceiling** that decorates
+the authority resolver: it can only turn a yes into a no, is bound from
+the turn, and is never consulted for an already-denied tool. That is the
+mechanism this ADR needs, and it means no new role, verb or review page
+has to be invented for commitments.
+
+Three weights of write, and conflating any two of them breaks something:
+
+| Action | Weight | Why |
+|---|---|---|
+| Create or change a definition | Plan, Owner approves (W033 E2) | a durable rule that will nag people for years |
+| Record a reading, mark done, book, waive | ordinary member write, under the portal ceiling | **a reading is evidence, not authority**: it changes no rule and grants nothing |
+| Propose a definition | any member → Owner Review Queue (W033 E3) | members are blocked from activating, never from starting |
+
+The middle row is the one a literal reading of W033 E2 gets wrong.
+Requiring a Plan to write down a mileage means nobody writes down a
+mileage, and a tracker nobody answers is worse than no tracker, because
+it also teaches the household to ignore its notifications.
+
+### A21. Three fields, not one owner
+
+`owner` alone cannot express the case this ADR exists for. Kai's checkup
+is **about** Kai, **satisfied by** a parent, and Kai is not the person who
+should be nagged about it. So:
+
+- **`owner`** — who it is about. The existing vocabulary
+  (`household`, `household/<member>`, `capability/<name>`).
+- **`mayComplete`** — who may satisfy, book or waive it. This is what the
+  homepage renders as `Decidable`.
+- **`notify`** — who hears about a state change. Separate again, because
+  the person who must act and the person who should be told are not
+  always the same.
+- **`scope`** — `household` or `personal`, mirroring W033 C1's memory
+  scopes rather than inventing a parallel vocabulary. The furnace filter
+  is household; a medication refill is personal and opt-in.
+
+The earlier sketch's `mayComplete: [adults]` is withdrawn: W033 A1 makes
+`child` a constrained Member profile rather than a role, so "adults" is
+not a thing to name. These fields carry Person, Group and role-class
+references from W033's one namespace.
+
+### A22. What A4 costs, stated exactly
+
+A3's correction asked where a household Member writes a reading when
+nothing is installed. PR #238 answers it: the `dashboard` capability
+gains a `wildstone` profile that Keystone serves itself, `exclusive: true`
+with the gethomepage profile, and **only the wildstone profile declares
+the `LdapGroup`** the portal's routes are gated on.
+
+That is a good answer. `dashboard` is no longer an app launcher whose
+absence costs a household some convenience; under the wildstone profile
+it *is* the family front page, and depending on it is much closer to
+depending on ingress — which no web surface can avoid — than to depending
+on an optional extra.
+
+**The residue, recorded rather than smoothed over:** a household running
+the gethomepage profile gets 404 on the portal routes, so its Members
+have no door at all and the tracker is Console-and-CLI only, which is to
+say Owner-only. A4 therefore reads, precisely: the engine, the readings,
+the ledger and the Owner's access need nothing installed; a **family**
+door needs the `dashboard` capability on its `wildstone` profile. That is
+a capability dependency this ADR accepts, named here so nobody later
+discovers it as a surprise.
+
 # Part B — Work packages (ordered)
 
 Each lands nothing the previous one does not need, and each is testable
@@ -377,9 +511,9 @@ W024's `H` packages and W030's `P` packages.
 | **K2** | `Commitment` resource kind: schema, validation, plan integration, risk grading, the `commitment-*` policy rules, household plan classification | A commitment is a plan, approved once, policy-checked like any resource (A1, A16) |
 | **K3** | The due-ness function: pure evaluation over (commitment, readings, completions) → occurrence state, multi-meter earliest-wins, both rollover modes, staleness. Unit-tested against a table of fixtures. No storage, no timer. **Built — `keystone/commitment`** | The hard logic is correct and provable in isolation (A5, A9, A10, A11) |
 | **K4** | Occurrence ledger + the daily pass: `runtimedb` tables, state transitions, the timer, `commitment.*` events onto the household timeline, completion-with-evidence in one transaction | The state machine survives a restart and the timeline records why (A6, A8, A12, A15) |
-| **K5** | The answering paths: completion and reading via Console, via `wild`, and via a reply to a notification (reusing H4's reply tokens) | A person can answer from wherever they are, with nothing installed (A3) |
-| **K6** | Console: the commitment list, an occurrence's history, a reading field that is one tap from the notification, projection shown as projection | The household can see what it owes and answer in one place (A11) |
-| **K7** | The extension seam: an example `Automation` that turns `person.arrived_home` into "what's the odometer say", shipped as documentation rather than as built-in behaviour; Butler read/draft tools with a dry run | Home Assistant extends the tracker without the tracker depending on it (A4, A13) |
+| **K5** | The answering paths: commitments contribute `needsYou` items and Activity rows on the household homepage, and an answer path that records a reading, a completion, a booking or a waive. Extends the item source and the answer verb — neither exists for anything but notices today (A19) | A member answers where they already are, without a Console credential (A19, A20) |
+| **K6** | Console → Commitments, Owner-side: the definition list, an occurrence's history and ledger, a dry run, projection shown as projection | An Owner can see and change what the household owes (A20) |
+| **K7** | The extension seam: an example `Automation` that turns `person.arrived_home` into "what's the odometer say", shipped as documentation rather than built-in behaviour; Agent read/draft tools with a dry run | Home Assistant extends the tracker without the tracker depending on it (A4, A13) |
 
 K1–K4 are the product. K5–K7 are what make it pleasant.
 
@@ -557,27 +691,40 @@ settle, which is the argument for having built K3 first.
 
 ---
 
-## What lands on main will change this
+## What landed, and what it settled
 
-Written against `main` at `f8124b0`. Two branches are in flight and both
-touch decisions above. Re-read these before proposing this ADR:
+This ADR was drafted against a `main` that did not yet have the agent
+system, and deferred four decisions to it. They are now made.
 
-- **ADR-W032 (*Who may open the Console*)** rewrites how a household
-  member is authenticated and scoped. **A14** (ownership and who may
-  satisfy) and **A16**'s claim about household-classified plan approval
-  both depend on it, and are written thin on purpose.
-- **ADR-W033 (*The Wildstone agent system*)** restructures identity into
-  Person/Owner/Member, makes an approved routine its own principal
-  (E6.0), and gives any Owner an immediate stop (E6.1). Three
-  consequences to work through: whether a `Commitment` should be a
-  routine under E5 rather than a resource kind of its own; whether
-  `mayComplete` should be expressed in W033's Member/Owner classes
-  instead of an ad-hoc `[adults]`; and whether the daily pass needs the
-  routine-principal treatment E6.0 describes. **A13** should survive
-  intact — W033 E8 draws the same deterministic/inference line this ADR
-  draws.
-- The **number** becomes W034 or later, and the filename changes with it.
+**ADR-W032 and ADR-W033 landed** on main in #228, together with the
+Person core (#202). That settles:
 
-Nothing in Part A is expected to reverse, but A14 and A16 are the two
-most likely to be reworded, and the K2 package should not be specced
-until W033 lands.
+- **Whether a commitment is a W033 routine.** It is not — A18, and the
+  reasoning is now against landed text rather than a branch.
+- **A20 and A21**, which replace what A14 and A16 said thinly. Console is
+  Owner-only (W033 A4), Plans go to an Owner Review Queue (E2, E3), and
+  `child` is a Member profile rather than a role, so the earlier
+  `[adults]` shorthand is withdrawn.
+- **The number.** W034, taken once W032 and W033 were no longer in
+  flight.
+
+**The household homepage is PR #238**, open against this same main and
+not yet merged. A19 and A22 are written against it, which is why this ADR
+is ready to propose but K1 is not ready to start: the surface is decided,
+and building code on a 69-commit branch still under review is the one
+avoidable risk left. K3 is unaffected either way — it imports nothing but
+the standard library and has no opinion about surfaces.
+
+**Still open, and genuinely undecided rather than deferred:**
+
+- **One-off obligations.** "Dentist on the 3rd" does not recur. Whether
+  that is a `Commitment` whose rollover is absent, a separate kind of
+  reminder, or out of scope entirely, is unresolved — and it is the most
+  common thing a household will try to type in, so it should not be
+  answered by accident in K2.
+- **Whether a Member's proposal needs Owner approval in a two-adult
+  household.** W033 E2 is unambiguous that it does. ADR-W024's amendment
+  and ADR-W030 A6 said any trusted admitted adult could change a shared
+  routine without an owner veto. A20 follows W033 because it is the later
+  and more specific decision, but the tension is real and belongs to
+  whoever reconciles the two, not to this ADR.
