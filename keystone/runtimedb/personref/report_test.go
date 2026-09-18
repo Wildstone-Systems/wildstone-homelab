@@ -303,9 +303,8 @@ func TestRetainedAuditTextIsNotSurveyed(t *testing.T) {
 // could not.
 func TestColumnsThatMirrorAPersonAreClassifiedHuman(t *testing.T) {
 	want := map[string]bool{
-		"butler_index.owner":                      true,
-		"butler_capability_requests.requested_by": true,
-		"integration_connections.owner":           true,
+		"butler_index.owner":            true,
+		"integration_connections.owner": true,
 	}
 	for _, c := range personref.Columns {
 		key := c.Table + "." + c.Column
@@ -318,6 +317,40 @@ func TestColumnsThatMirrorAPersonAreClassifiedHuman(t *testing.T) {
 		delete(want, key)
 	}
 	for key := range want {
+		t.Errorf("%s has no verdict at all", key)
+	}
+}
+
+// And the converse, which #239's review had to teach me: a schema
+// comment states an INTENT, and the write path decides what is actually
+// in the column. Where they disagree, the writer wins.
+//
+// Both of these are documented as a person — "author is the person,
+// never the Butler", "requested_by is the MEMBER the asking session was
+// acting for" — and both are written with actingMember(id), which
+// yields the machine principal name when a bare admin or operator token
+// calls them. Their own tests exercise exactly that route. Classifying
+// them Human would make every deployment that has used those endpoints
+// fail the migration gate over a principal it was always allowed to
+// record.
+func TestColumnsWrittenByAnyPrincipalAreNotHuman(t *testing.T) {
+	writtenByActingMember := map[string]string{
+		"butler_task_feedback.author":             "api.addButlerTaskFeedback",
+		"butler_capability_requests.requested_by": "api.fileCapabilityRequest",
+	}
+	for _, c := range personref.Columns {
+		key := c.Table + "." + c.Column
+		writer, ok := writtenByActingMember[key]
+		if !ok {
+			continue
+		}
+		if c.Kind != personref.Actor {
+			t.Errorf("%s is classified %s, but %s writes it with actingMember(id), "+
+				"which is a machine principal name on a bare token", key, c.Kind, writer)
+		}
+		delete(writtenByActingMember, key)
+	}
+	for key := range writtenByActingMember {
 		t.Errorf("%s has no verdict at all", key)
 	}
 }
