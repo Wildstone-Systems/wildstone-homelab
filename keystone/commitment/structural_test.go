@@ -54,3 +54,63 @@ func TestTheClockMeterIsNamedTheSameInBothPackages(t *testing.T) {
 			MeterClock, resource.MeterClock)
 	}
 }
+
+// TestTheIntervalGrammarsAgree pins keystone/resource's interval
+// validator against this package's parser.
+//
+// They are separate implementations of one grammar because resource is
+// imported everywhere and this package is a leaf, so neither can hold the
+// other's copy. That is a duplication with a specific failure mode worth
+// testing rather than trusting: a validator that ACCEPTS what the engine
+// rejects lets a household approve a plan that can never run, and one
+// that REFUSES what the engine takes makes a legal commitment
+// unwritable. Both directions are checked, over the same table.
+func TestTheIntervalGrammarsAgree(t *testing.T) {
+	for _, in := range []string{
+		// counts
+		"5000", "300", "0.5", "1",
+		// spans
+		"90d", "2w", "36h", "30m", "45s",
+		// calendar steps
+		"6mo", "1yr", "2y", "18mo",
+		// and the ways people get it wrong
+		"", "   ", "abc", "0", "-5", "1.5mo", "1day", "2wk", "mo", "5000x",
+		"12,000", "6 mo", "1yr2mo", "yr", "0d", "0mo",
+	} {
+		_, parseErr := ParseInterval(in)
+		engineTakesIt := parseErr == nil
+		validatorTakesIt := resource.CommitmentIntervalValid(in)
+		if engineTakesIt != validatorTakesIt {
+			t.Errorf("%q: the engine %s it and the validator %s it",
+				in, took(engineTakesIt), took(validatorTakesIt))
+		}
+	}
+}
+
+func took(ok bool) string {
+	if ok {
+		return "takes"
+	}
+	return "refuses"
+}
+
+// TestTheRolloverModesAgree pins the other duplicated vocabulary. A
+// commitment whose rollover validates and then does not evaluate is a
+// plan a household approved and the engine cannot run.
+func TestTheRolloverModesAgree(t *testing.T) {
+	engine := map[string]bool{
+		string(Once): true, string(FromCompletion): true, string(FromSchedule): true,
+	}
+	declared := map[string]bool{}
+	for _, r := range resource.CommitmentRollovers() {
+		declared[r] = true
+	}
+	if len(engine) != len(declared) {
+		t.Fatalf("engine has %d modes, resource offers %d", len(engine), len(declared))
+	}
+	for mode := range engine {
+		if !declared[mode] {
+			t.Errorf("the engine runs %q and resource does not offer it", mode)
+		}
+	}
+}

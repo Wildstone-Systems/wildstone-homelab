@@ -456,7 +456,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
 			providerDesired = append(providerDesired, res)
-		case resource.KindAutomation, resource.KindMeter:
+		case resource.KindAutomation, resource.KindMeter, resource.KindCommitment:
 			keystoneDesired = append(keystoneDesired, res)
 		default:
 			return nil, fmt.Errorf("reconcile: unknown kind %q", res.Kind)
@@ -624,7 +624,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			sr = r.applyConfigFileStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindSeedFile:
 			sr = r.applySeedFileStep(ctx, nodeID, step, desiredByKey)
-		case resource.KindAutomation, resource.KindMeter:
+		case resource.KindAutomation, resource.KindMeter, resource.KindCommitment:
 			// Unreachable by construction (observed == desired above);
 			// stated so the switch is exhaustive and a future caller
 			// handing this engine a foreign plan gets a no-op, not an

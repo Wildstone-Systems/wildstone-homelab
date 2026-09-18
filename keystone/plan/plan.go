@@ -225,6 +225,10 @@ var kindOrder = map[resource.Kind]int{
 	// declared before the thing that comes due against it. Keystone-owned,
 	// so this orders the listing and nothing else (ADR-W034 A1).
 	resource.KindMeter: 8,
+	// Commitment after the Meter it reads, for the same reason: a
+	// household reading a plan wants the number declared before the
+	// thing that comes due against it.
+	resource.KindCommitment: 9,
 	// BackupPlan last: a backup declaration depends on the volumes it
 	// names, and nothing depends on it (ADR-W011 A4).
 	resource.KindBackupPlan: 9,
@@ -388,6 +392,8 @@ func specEqual(a, b resource.Resource) bool {
 		return a.Automation != nil && b.Automation != nil && reflect.DeepEqual(a.Automation, b.Automation)
 	case resource.KindMeter:
 		return a.Meter != nil && b.Meter != nil && *a.Meter == *b.Meter
+	case resource.KindCommitment:
+		return a.Commitment != nil && b.Commitment != nil && reflect.DeepEqual(a.Commitment, b.Commitment)
 	default:
 		return false
 	}
@@ -687,6 +693,17 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 			return RiskMedium, "meter removed: every commitment measured against it can no longer say whether it is due"
 		}
 		return RiskLow, "a declaration of a number the household keeps; it acts on nothing by itself (ADR-W034 A1)"
+	case resource.KindCommitment:
+		// Approved once, then it asks on its own for as long as the
+		// household keeps it — which is the whole point, and the reason
+		// creating or changing one always passes a human. Removing one
+		// is Low in the ordinary sense that nothing else changes, and
+		// the household should still be told plainly that the thing
+		// stops being tracked rather than becoming up to date.
+		if action == ActionDelete {
+			return RiskLow, "commitment removed: it stops being tracked — which is not the same as being done"
+		}
+		return RiskMedium, "a standing obligation that will ask the household on its own once approved: review what it is due against, and who it is for"
 	default:
 		return RiskMedium, "unrecognized kind"
 	}

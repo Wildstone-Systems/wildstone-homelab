@@ -89,6 +89,16 @@ func ParseInterval(s string) (Interval, error) {
 	if s == "" {
 		return Interval{}, fmt.Errorf("commitment: empty interval")
 	}
+	// No whitespace INSIDE. "6 mo" parsed as six months only because the
+	// quantity was trimmed on its way to ParseFloat, which made it legal
+	// here and illegal to the Statefile validator that offers the same
+	// grammar — so one tool accepted what the other refused. Found by the
+	// test in structural_test.go that pins the two against one table,
+	// which is the entire reason that test exists.
+	if strings.ContainsAny(s, " \t\n\r") {
+		return Interval{}, fmt.Errorf(
+			"commitment: %q has a space in it: an interval is one word — a number (5000), a span (90d, 2w, 36h) or a calendar step (6mo, 1yr)", s)
+	}
 	fail := func() (Interval, error) {
 		return Interval{}, fmt.Errorf("commitment: %q is not an interval: use a number (5000), a span (90d, 2w, 36h) or a calendar step (6mo, 1yr)", s)
 	}
