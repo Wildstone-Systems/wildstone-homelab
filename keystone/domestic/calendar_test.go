@@ -470,3 +470,100 @@ func TestTheGatewayStillTierChecksCalendarTools(t *testing.T) {
 		t.Fatal("a calendar tool was dispatched at an infrastructure tier")
 	}
 }
+
+// calendar.how_to_add is the answer to the question the whole capability
+// is for: how do I get this on my phone.
+func TestHowToAddAnswersForTheAskerAndNobodyElse(t *testing.T) {
+	c := calendarUnder(newFakeCalendar(t))
+	var askedFor string
+	c.Handoff = func(member string) (CalendarHandoff, bool, error) {
+		askedFor = member
+		return CalendarHandoff{
+			Server:            "https://cal.home.example.ts.net:51443",
+			Username:          member,
+			OwnCalendars:      "https://cal.home.example.ts.net:51443/mika/",
+			HouseholdCalendar: "https://cal.home.example.ts.net:51443/household/",
+			ProfileURL:        "https://home.example.ts.net/api/v1/home/calendar/profile.mobileconfig",
+		}, true, nil
+	}
+
+	var tool Executor
+	for _, e := range c.Executors() {
+		if e.Name() == CalendarCapability+"."+CalToolSetup {
+			tool = e
+		}
+	}
+	if tool == nil {
+		t.Fatal("calendar.how_to_add is not registered")
+	}
+
+	// The member comes from the SESSION, not from a param. A param would
+	// be a way to ask for somebody else's set-up.
+	got, err := tool.Execute(context.Background(), Call{
+		Tool: tool.Name(), Tier: "read", Subject: "mika",
+		Params: map[string]string{"member": "giulia", "user": "giulia"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if askedFor != "mika" {
+		t.Errorf("the hand-off was built for %q; a param named a different person and was followed", askedFor)
+	}
+	for _, want := range []string{"profile.mobileconfig", "cal.home.example.ts.net:51443", "mika", "household"} {
+		if !strings.Contains(got.Summary, want) {
+			t.Errorf("the answer does not contain %q — this is what gets pasted into a chat message:\n%s",
+				want, got.Summary)
+		}
+	}
+	// The profile is the only thing that puts the SHARED calendar on an
+	// iPhone, so it has to come first in an answer somebody skims.
+	if strings.Index(got.Summary, "profile.mobileconfig") > strings.Index(got.Summary, "CalDAV account") {
+		t.Errorf("the typed-address instructions come before the profile link:\n%s", got.Summary)
+	}
+	if strings.Contains(strings.ToLower(got.Summary), "giulia") {
+		t.Errorf("another member's name reached the answer:\n%s", got.Summary)
+	}
+}
+
+// A session with nobody bound to it cannot be set up, and a deployment
+// that cannot say where the calendar is says so.
+func TestHowToAddRefusesWhenItCannotAnswerTruthfully(t *testing.T) {
+	c := calendarUnder(newFakeCalendar(t))
+	var tool Executor
+	for _, e := range c.Executors() {
+		if e.Name() == CalendarCapability+"."+CalToolSetup {
+			tool = e
+		}
+	}
+
+	if _, err := tool.Execute(context.Background(), Call{Tier: "read"}); err == nil {
+		t.Error("an unattributed session got a set-up answer")
+	}
+	if _, err := tool.Execute(context.Background(), Call{Tier: "read", Subject: "mika"}); err == nil {
+		t.Error("a deployment with no hand-off seam invented an answer")
+	}
+	c.Handoff = func(string) (CalendarHandoff, bool, error) { return CalendarHandoff{}, false, nil }
+	if _, err := tool.Execute(context.Background(), Call{Tier: "read", Subject: "mika"}); err == nil {
+		t.Error("a household with no Wildstone calendar was told how to add one")
+	}
+}
+
+// It answers on a deployment whose agent tools are not wired to a
+// collection: "where is the calendar" is a different question from "what
+// is on it", and it is the one a household asks first.
+func TestHowToAddAnswersBeforeTheAgentToolsAreWired(t *testing.T) {
+	c := &Calendar{
+		Location: chicago, Now: func() time.Time { return calNow },
+		Handoff: func(member string) (CalendarHandoff, bool, error) {
+			return CalendarHandoff{Server: "https://cal.example", Username: member}, true, nil
+		},
+	}
+	for _, e := range c.Executors() {
+		if e.Name() != CalendarCapability+"."+CalToolSetup {
+			continue
+		}
+		if _, err := e.Execute(context.Background(), Call{Tier: "read", Subject: "mika"}); err != nil {
+			t.Fatalf("how_to_add refused on a deployment with no collection configured: %v", err)
+		}
+	}
+}

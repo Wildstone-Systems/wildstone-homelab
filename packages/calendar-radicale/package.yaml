@@ -175,7 +175,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: calendar-radicale
-  version: 1.1.0
+  version: 1.2.0
   capability: calendar
   profile: radicale
 requires:
@@ -467,6 +467,11 @@ templates:
 # two ever drift: a tool declared here with no executor is a promise the
 # household is told about and cannot have.
 agentTools:
+  # How to put the calendar on your phone. A read: it touches no event,
+  # it reads where the calendar IS. It is in this list because the
+  # answer belongs in the conversation where the question was asked,
+  # rather than only on a page somebody has to know to open.
+  - { name: how_to_add, risk: read }
   - { name: get_agenda, risk: read }
   - { name: search_events, risk: read }
   - { name: check_availability, risk: read }

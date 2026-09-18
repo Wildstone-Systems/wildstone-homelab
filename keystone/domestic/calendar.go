@@ -59,6 +59,11 @@ const (
 	CalToolCreate       = "create_event"
 	CalToolUpdate       = "update_event"
 	CalToolDelete       = "delete_event"
+	// CalToolSetup answers "how do I get this on my phone". It touches
+	// the calendar not at all — it reads where the calendar IS — which
+	// is why it is a read and why it still belongs here rather than in
+	// a page somebody has to know to open.
+	CalToolSetup = "how_to_add"
 )
 
 // CalendarTools maps each tool to the tier it must be declared at.
@@ -80,6 +85,7 @@ var CalendarTools = map[string]string{
 	CalToolCreate:       "domestic",
 	CalToolUpdate:       "domestic",
 	CalToolDelete:       "domestic",
+	CalToolSetup:        "read",
 }
 
 // maxAgendaDays bounds a range read. A household question is about today,
@@ -113,6 +119,29 @@ type Calendar struct {
 	Location *time.Location
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
+	// Handoff answers "where is the calendar and how do I add it", for
+	// ONE member. nil leaves calendar.how_to_add answering that this
+	// deployment cannot say.
+	//
+	// A seam rather than a field, because the answer is derived from
+	// desired state — where a Route is actually served changes with the
+	// ingress posture — and this package must not hold a Statefile to
+	// find that out. cmd/keystone binds it to the API server's own
+	// resolver, which is the same code the dashboard's links use.
+	Handoff func(member string) (CalendarHandoff, bool, error)
+}
+
+// CalendarHandoff is where the household's calendar is, for one person.
+//
+// A local shape rather than an import: this package is reached by the
+// action gateway and should not learn the API server's types to answer a
+// question about three strings.
+type CalendarHandoff struct {
+	Server            string
+	Username          string
+	OwnCalendars      string
+	HouseholdCalendar string
+	ProfileURL        string
 }
 
 func (c *Calendar) now() time.Time {
@@ -154,7 +183,11 @@ type calendarTool struct {
 func (t *calendarTool) Name() string { return CalendarCapability + "." + t.tool }
 
 func (t *calendarTool) Execute(ctx context.Context, c Call) (Result, error) {
-	if t.cal.Upstream == nil || t.cal.Upstream.CollectionURL == "" {
+	// how_to_add is about where the calendar IS, so it answers on a
+	// deployment that has a calendar and has not pointed the agent
+	// tools at it — which is a real posture and the one a household is
+	// in between installing the capability and wiring the credential.
+	if t.tool != CalToolSetup && (t.cal.Upstream == nil || t.cal.Upstream.CollectionURL == "") {
 		return Result{}, fmt.Errorf("no calendar is configured on this control plane")
 	}
 	switch t.tool {
@@ -170,6 +203,8 @@ func (t *calendarTool) Execute(ctx context.Context, c Call) (Result, error) {
 		return t.cal.update(ctx, c.Params)
 	case CalToolDelete:
 		return t.cal.remove(ctx, c.Params)
+	case CalToolSetup:
+		return t.cal.howToAdd(c)
 	default:
 		return Result{}, fmt.Errorf("calendar has no tool %q", t.tool)
 	}
@@ -701,3 +736,55 @@ func isTrue(v string) bool {
 }
 
 var _ Executor = (*calendarTool)(nil)
+
+// howToAdd answers "how do I get the calendar on my phone".
+//
+// It is written to be READ ALOUD or pasted into a chat message, because
+// that is where it lands: the summary is the whole channel to a family
+// session (see the file comment), and this particular answer is one a
+// person acts on with a phone in their hand.
+//
+// It answers for c.Subject and for nobody else. There is no param naming
+// a member, deliberately: the surface binds who is asking for the life
+// of the session and the model cannot name a different person, so the
+// one input this tool has is the one that cannot be steered.
+func (c *Calendar) howToAdd(call Call) (Result, error) {
+	member := strings.TrimSpace(call.Subject)
+	if member == "" {
+		return Result{}, fmt.Errorf("this session is not bound to a household member, so there is nobody to set up")
+	}
+	if c.Handoff == nil {
+		return Result{}, fmt.Errorf("this control plane cannot say where the calendar is")
+	}
+	h, ok, err := c.Handoff(member)
+	if err != nil {
+		return Result{}, err
+	}
+	if !ok {
+		return Result{}, fmt.Errorf("this household has no Wildstone calendar to add")
+	}
+
+	var b strings.Builder
+	if h.ProfileURL != "" {
+		// The profile FIRST, because it is the only thing that puts the
+		// shared household calendar on an iPhone — iOS will not add a
+		// writable account rooted at a principal it did not discover,
+		// and no amount of typing addresses gets round that.
+		fmt.Fprintf(&b, "On an iPhone or iPad, open this on the device and install it: %s — "+
+			"it adds both calendars and asks for your household password. ", h.ProfileURL)
+	}
+	fmt.Fprintf(&b, "On anything else, add a CalDAV account with server %s, username %s, "+
+		"and your household password", h.Server, h.Username)
+	if h.HouseholdCalendar != "" {
+		fmt.Fprintf(&b, "; the shared household calendar is at %s", h.HouseholdCalendar)
+	}
+	b.WriteString(".")
+
+	return Result{
+		Summary: b.String(),
+		Detail: map[string]string{
+			"member": member, "server": h.Server,
+			"profile": h.ProfileURL, "household": h.HouseholdCalendar,
+		},
+	}, nil
+}

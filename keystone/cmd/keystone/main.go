@@ -794,6 +794,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// where a connection has to be widened before an action reaches an
 	// adapter at all. Both are a person deciding; they are just
 	// different people's decisions on different roads (ADR-W034 A5).
+	var calendarActions *domestic.Calendar
 	if householdCfg.CalendarURL != "" {
 		cal := &domestic.Calendar{
 			Upstream: &caldav.Upstream{
@@ -812,6 +813,8 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		for _, e := range cal.Executors() {
 			actions.Register(e)
 		}
+		// The hand-off seam is bound after apiSrv exists; see below.
+		calendarActions = cal
 		log.Info("calendar actions wired", "collection", householdCfg.CalendarURL,
 			"user", householdCfg.CalendarUser, "credential", os.Getenv("CALENDAR_PASSWORD") != "")
 	}
@@ -932,6 +935,26 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv.GatewayAddr = advertisedGatewayAddr(hosts, lis.Addr().String())
 	apiSrv.APIURL = advertisedAPIURL(hosts, apiLis.Addr().String())
 	apiSrv.HouseholdTimezone = householdCfg.Timezone
+	apiSrv.CalendarCollectionURL = householdCfg.CalendarURL
+	// calendar.how_to_add answers from desired state, because where a
+	// Route is actually served changes with the ingress posture — so it
+	// is resolved per call through the API server's own resolver rather
+	// than frozen into a string at startup. keystone/domestic holds no
+	// Statefile; this closure is the whole of its access, and it returns
+	// four strings about one member.
+	if calendarActions != nil {
+		calendarActions.Handoff = func(member string) (domestic.CalendarHandoff, bool, error) {
+			h, ok, herr := apiSrv.CalendarHandoffFor(member)
+			if herr != nil || !ok {
+				return domestic.CalendarHandoff{}, ok, herr
+			}
+			return domestic.CalendarHandoff{
+				Server: h.Server, Username: h.Username,
+				OwnCalendars: h.OwnCalendars, HouseholdCalendar: h.HouseholdCalendar,
+				ProfileURL: h.ProfileURL,
+			}, true, nil
+		}
+	}
 	apiSrv.ManagedPrefix = managedPrefix
 	// The coordinator routes need this process's own lease identity, so
 	// a promotion writes the id THIS deployment will re-acquire at its

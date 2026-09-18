@@ -119,6 +119,14 @@ type Server struct {
 	// clock once instead of on every install form.
 	HouseholdTimezone string
 
+	// CalendarCollectionURL is the shared household calendar the
+	// calendar.* actions act on, wired from -calendar-url. This surface
+	// uses it for ONE thing: the principal it lives under, which is what
+	// a phone's configuration profile has to be pointed at. Empty means
+	// this deployment has no shared calendar, and the profile then
+	// carries the member's own calendars alone.
+	CalendarCollectionURL string
+
 	// Butlers serves conversations as named specialists (ADR-W031) —
 	// cmd/keystone wires it over butlerlive, butlerstore and the
 	// durable runner. nil leaves every conversation on the single
@@ -560,6 +568,11 @@ func (s *Server) Handler() http.Handler {
 	// The household's banner photo. Setting it and framing it are
 	// separate writes: the framing is chosen once the picture is on
 	// screen, where a person can see what they are choosing.
+	// Getting the calendar onto a phone (ADR-W034). The profile is the
+	// only path to the shared calendar on iOS; the details endpoint is
+	// what every other client needs.
+	mux.Handle("GET /api/v1/home/calendar/profile.mobileconfig", s.portal(surfaceHome, s.calendarProfile))
+	mux.Handle("GET /api/v1/home/calendar/setup", s.portal(surfaceHome, s.calendarSetupDetails))
 	mux.Handle("GET /api/v1/home/banner", s.portal(surfaceHome, s.homeBannerImage))
 	mux.Handle("POST /api/v1/home/banner", s.portal(surfaceHome, s.homeBannerSet))
 	mux.Handle("POST /api/v1/home/banner/frame", s.portal(surfaceHome, s.homeBannerFrame))

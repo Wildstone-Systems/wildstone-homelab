@@ -201,6 +201,15 @@ type notification struct {
 type calendarCard struct {
 	homeCard
 	OpenAt string `json:"openAt,omitempty"`
+	// AddToPhone is the configuration profile link, present only when
+	// this household runs Wildstone's own calendar. It is the whole
+	// answer to "how do I get this on my phone" and there is no other
+	// one — see handlers_portal_calendar.go.
+	AddToPhone string `json:"addToPhone,omitempty"`
+	// Server and Username are what a client that cannot install a
+	// profile needs typed into it.
+	Server   string `json:"server,omitempty"`
+	Username string `json:"username,omitempty"`
 }
 
 type notificationsCard struct {
@@ -325,7 +334,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 	resp.NeedsYou = s.homeNeedsYou(member, now)
 	resp.Activity = s.homeActivity(member, now)
 	resp.Notifications = s.homeNotifications(member)
-	resp.Calendar = s.homeCalendar(desired)
+	resp.Calendar = s.homeCalendar(member, desired)
 	resp.Apps, resp.AppStatus, resp.StatusKnown = s.homeApps(desired)
 	resp.Machines = s.homeMachines(r.Context(), now)
 	// Last, because it reads the launcher's own answers rather than
@@ -697,19 +706,42 @@ func (s *Server) homeNotifications(member string) notificationsCard {
 
 // homeCalendar reports the calendar's state, honestly.
 //
-// There is no CalDAV read in this control plane yet: §12.3's month view
-// and §7's three-day card both want the Calendars capability, and
-// nothing here can invent it. So this returns "not available" with the
-// reason, and the page renders §7's own copy rather than an empty card
-// implying the household has nothing on.
+// Two households, two different true answers, and telling them apart is
+// the whole of this function.
 //
-// Deliberately NOT a stub with sample events. A calendar card that shows
-// invented events on a family's wall tablet is worse than one that says
-// it cannot read the calendar: somebody will believe it.
-func (s *Server) homeCalendar(desired []resource.Resource) calendarCard {
+// A household running WILDSTONE'S OWN calendar (calendar-radicale) has
+// one Keystone can actually offer something about: it authenticates
+// against the household directory, and the control plane holds a service
+// credential for the shared calendar. So the card carries the hand-off
+// that matters — the configuration profile that puts the shared calendar
+// on a phone, which is the one thing a person cannot do from iOS's own
+// settings (ADR-W034, and the way forward docs/design/household-calendar.md
+// put third on its list).
+//
+// A household whose calendars come from DAVIS, inside the mail
+// capability, gets the answer that file documents at length: those
+// calendars need the member's own MAIL password, this dashboard does not
+// hold it and must not, and no amount of CalDAV client would change
+// that. The card says so rather than implying a transient failure.
+//
+// Deliberately NOT a stub with sample events in either case. A calendar
+// card that shows invented events on a family's wall tablet is worse
+// than one that says it cannot read the calendar: somebody will believe
+// it.
+func (s *Server) homeCalendar(member string, desired []resource.Resource) calendarCard {
 	route, found := calendarServer(desired)
 	if !found {
 		return calendarCard{homeCard: homeCard{Problem: "No calendar is set up yet."}}
+	}
+	// Wildstone's own calendar: there IS something to offer.
+	if setup, ok := s.calendarSetupFor(member, desired); ok && hasWildstoneCalendar(desired) {
+		return calendarCard{
+			homeCard:   homeCard{Available: true},
+			OpenAt:     route,
+			AddToPhone: "/api/v1/home/calendar/profile.mobileconfig",
+			Server:     setup.Origin,
+			Username:   member,
+		}
 	}
 	// INSTALLED, AND STILL NOT READABLE FROM HERE, which is a different
 	// sentence from "can't reach it right now" and the honest one.
@@ -732,6 +764,29 @@ func (s *Server) homeCalendar(desired []resource.Resource) calendarCard {
 		},
 		OpenAt: route,
 	}
+}
+
+// hasWildstoneCalendar reports whether the CalDAV server this household
+// runs is the one Wildstone installs.
+//
+// By the capability rather than by the container, and that is the
+// opposite of calendarServer's key on purpose: calendarServer answers
+// "is there a calendar to link to", where any CalDAV server will do,
+// and this answers "is it OURS" — which decides whether the control
+// plane may offer a profile for it. Offering one for davis would produce
+// an account that fails to connect, because the credential davis wants
+// is a mailbox password rather than the household sign-in the card's
+// copy would be promising.
+func hasWildstoneCalendar(desired []resource.Resource) bool {
+	for _, r := range desired {
+		if r.Kind != resource.KindRoute || r.Route == nil {
+			continue
+		}
+		if strings.TrimPrefix(r.Metadata.Owner, "capability/") == "calendar" {
+			return true
+		}
+	}
+	return false
 }
 
 // calendarServer reports whether this household runs a CalDAV server.
