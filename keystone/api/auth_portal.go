@@ -23,12 +23,26 @@ package api
 // s.portal — which is a closed list, four endpoints per surface, none
 // of which can be reached with anything but a member identity.
 //
-// Everything else is ADR-W032's reasoning, unchanged: the peer must be
-// the trusted ingress, because a header anyone can set is not an
-// authentication; membership IS the permission, so removing somebody
-// from the group revokes them on their next request; and no principal
-// row is created, because a persisted row is a second place to revoke
-// and a second place to forget.
+// Everything else is ADR-W032's reasoning: the peer must be the trusted
+// ingress, because a header anyone can set is not an authentication;
+// and no principal row is created, because a persisted row is a second
+// place to revoke and a second place to forget.
+//
+// ONE PART OF THAT REASONING WAS WRONG, and it is worth stating plainly
+// because this door was built on it. It said membership IS the
+// permission, "so removing somebody from the group revokes them on
+// their next request". Nothing in this system can remove anybody from a
+// group: the identity capability's provisioning job is additive by
+// construction and says so — it "never deletes a user and never removes
+// a membership". So the group could only ever GRANT. Offboarding a
+// household member left their dashboard, their files and their
+// assistant exactly where they were.
+//
+// So there is a fourth condition, and it is the same one main added to
+// the Console door for the same reason: a person the household has a
+// record of is held to that record's lifecycle. What differs is the
+// bar. The Console requires an active OWNER; this surface requires only
+// that the member is still a member.
 
 import (
 	"errors"
@@ -139,6 +153,13 @@ func (s *Server) portalMember(r *http.Request, surface portalSurface) (string, [
 	if member == "" {
 		return "", nil, fmt.Errorf("%w: the proxy forwarded no %s header",
 			errPortalDenied, TrustedIngressHeader)
+	}
+	if !s.forwardedUserIsStillAMember(member) {
+		// Named in the log like every other refusal, because "they were
+		// offboarded last week" is the one explanation an operator will
+		// otherwise spend an afternoon not finding.
+		return member, nil, fmt.Errorf("%w: %s is not an active member of this household",
+			errPortalDenied, member)
 	}
 	forwarded := strings.TrimSpace(r.Header.Get(ConsoleGroupsHeader))
 	if !hasGroup(forwarded, group) {
@@ -372,4 +393,56 @@ func auditWorthy(r *http.Request, status int) bool {
 		return true
 	}
 	return !polledPaths[r.URL.Path]
+}
+
+// forwardedUserIsStillAMember holds a forwarded name to the household's
+// own record of that person, when there is one.
+//
+// THE DIRECTORY GROUP CAN ONLY GRANT. Wildstone never removes a
+// membership — the provisioning job is additive by construction — so a
+// group is a record of who was once let in, not of who may be here now.
+// Whether somebody is still a member is the household's own answer, and
+// this is where it is asked.
+//
+// NO RECORD MEANS THE GROUP DECIDES, exactly as before. Requiring a
+// Person record would lock out every household that has not created
+// them yet, including this one's, and a door that refuses everybody is
+// not a safer door. It closes the hole it can close without a lockout
+// it cannot undo.
+//
+// MATCHED CASE-INSENSITIVELY, which is load-bearing rather than tidy.
+// Handles are compared exactly everywhere else, so "Sandy" and "sandy"
+// are two records (ADR-W032 A4, still open). An exact lookup would miss
+// the record whenever the proxy asserted a different capitalisation,
+// fall into the permissive branch, and admit somebody the household had
+// just offboarded. The permissive branch is the one an attacker aims
+// for, so nothing reaching it may depend on spelling.
+//
+// Looser matching is only ever used to REFUSE. It cannot grant: no
+// match at all still leaves the group deciding.
+func (s *Server) forwardedUserIsStillAMember(user string) bool {
+	if s.DB == nil {
+		return false
+	}
+	members, err := s.DB.ListButlerMembers()
+	if err != nil {
+		// A lookup that failed is not a lookup that passed.
+		return false
+	}
+	for _, m := range members {
+		if !strings.EqualFold(strings.TrimSpace(m.Member), strings.TrimSpace(user)) {
+			continue
+		}
+		// EVERY match must qualify. With two records differing only by
+		// case there is no telling which one the proxy meant, and an
+		// authorization check that guesses is not a check.
+		if !m.Active() {
+			return false
+		}
+	}
+	// Unlike the Console, no ROLE is required. This surface is for
+	// household members, and the group already says which of them may
+	// reach it; holding them to `owner` here would refuse the family the
+	// dashboard was built for.
+	return true
 }
