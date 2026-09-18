@@ -28,6 +28,7 @@ func remember(t *testing.T, h *harness, owner, content string, audience runtimed
 // A member reads their own and the household's, and nobody else's.
 func TestMemoryShowsYoursAndTheHouseholdsOnly(t *testing.T) {
 	h := homeHarness(t)
+	h.person("sandy", "maya")
 	mine := remember(t, h, "sandy", "Sandy does not eat fish", runtimedb.ButlerAudiencePrivate)
 	theirs := remember(t, h, "maya", "Maya is allergic to bees", runtimedb.ButlerAudiencePrivate)
 	shared := remember(t, h, "maya", "The bins go out on Tuesday", runtimedb.ButlerAudienceShared)
@@ -71,6 +72,7 @@ func TestMemoryShowsYoursAndTheHouseholdsOnly(t *testing.T) {
 // naming its sequence number.
 func TestForgettingReachesOnlyYourOwn(t *testing.T) {
 	h := homeHarness(t)
+	h.person("sandy", "maya")
 	mine := remember(t, h, "sandy", "Sandy does not eat fish", runtimedb.ButlerAudiencePrivate)
 	theirs := remember(t, h, "maya", "Maya is allergic to bees", runtimedb.ButlerAudiencePrivate)
 	shared := remember(t, h, "maya", "The bins go out on Tuesday", runtimedb.ButlerAudienceShared)
@@ -143,6 +145,7 @@ func TestMemorySourcesAreHouseholdLanguage(t *testing.T) {
 // is offered the button again has been told their forget did nothing.
 func TestForgottenAndCorrectedMemoryLeavesThePanel(t *testing.T) {
 	h := homeHarness(t)
+	h.person("sandy")
 	kept := remember(t, h, "sandy", "Sandy walks the dog at six", runtimedb.ButlerAudiencePrivate)
 	forgotten := remember(t, h, "sandy", "Sandy does not eat fish", runtimedb.ButlerAudiencePrivate)
 	corrected := remember(t, h, "sandy", "Sandy drives a blue car", runtimedb.ButlerAudiencePrivate)

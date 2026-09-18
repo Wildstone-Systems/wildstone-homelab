@@ -8,11 +8,22 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
+// seedMemory records one memory record owned by owner.
+//
+// A household-owned record is authored by a person, not by the
+// household: since 0043 owner is the scoped column that takes the
+// household and author is the person column that does not. So a shared
+// record here is stated by the member these fixtures already have.
 func seedMemory(t *testing.T, h *harness, content, owner string, audience runtimedb.ButlerTaskAudience) int64 {
 	t.Helper()
+	author := owner
+	if owner == runtimedb.HouseholdOwner {
+		author = "mika"
+	}
+	h.person(author)
 	seq, err := h.s.DB.RecordMemory(runtimedb.MemoryRecord{
 		Kind: runtimedb.MemoryFact, Subject: owner, Content: content, Audience: audience,
-		PermissionLabel: owner, Owner: owner, Author: owner,
+		PermissionLabel: owner, Owner: owner, Author: author,
 		SourceKind: "conversation", SourceID: "bs-" + content[:1],
 	})
 	if err != nil {
@@ -25,19 +36,23 @@ func seedMemory(t *testing.T, h *harness, content, owner string, audience runtim
 // private record is even confirmable.
 func TestMemoryChangesFollowOwnership(t *testing.T) {
 	h := newHarness(t)
+	// Correcting household memory is an ADULT's act (design §11.4), so
+	// the caller is a Console holder acting for a Person rather than a
+	// bare operator credential with nobody behind it.
+	adult := h.console(runtimedb.RoleOperator, "mika")
 	shared := seedMemory(t, h, "dinner is at seven", "household", runtimedb.ButlerAudienceShared)
 	private := seedMemory(t, h, "sam's therapy is on Tuesdays", "sam", runtimedb.ButlerAudiencePrivate)
 
 	// Equal adult standing: the operator corrects shared memory without
 	// asking whoever recorded it.
-	if res := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/butler/memory/correct",
+	if res := h.doToken(adult, http.MethodPost, "/api/v1/butler/memory/correct",
 		map[string]any{"seq": shared, "content": "dinner is at half six", "confidence": "stated"}, nil,
 	); res.StatusCode != http.StatusOK {
 		t.Fatalf("correcting shared memory = %d", res.StatusCode)
 	}
 	// Somebody else's private record answers 404 — a 403 would confirm
 	// it exists.
-	if res := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/butler/memory/forget",
+	if res := h.doToken(adult, http.MethodPost, "/api/v1/butler/memory/forget",
 		map[string]any{"seq": private}, nil,
 	); res.StatusCode != http.StatusNotFound {
 		t.Fatalf("forgetting another member's private record = %d, want 404", res.StatusCode)
@@ -88,6 +103,7 @@ func TestMemoryReadsAreScopedToTheCaller(t *testing.T) {
 // The digest shows shared changes and never private ones.
 func TestMemoryDigestNeverCarriesPrivateChanges(t *testing.T) {
 	h := newHarness(t)
+	h.person("mika")
 	private := seedMemory(t, h, "mika is job hunting", "mika", runtimedb.ButlerAudiencePrivate)
 	if err := h.s.DB.ForgetMemory(private, "mika"); err != nil {
 		t.Fatal(err)
@@ -112,6 +128,7 @@ func TestMemoryDigestNeverCarriesPrivateChanges(t *testing.T) {
 // not one.
 func TestAServicePrincipalCannotRewriteHouseholdMemory(t *testing.T) {
 	h := newHarness(t)
+	h.person("mika")
 	seq, err := h.s.DB.RecordMemory(runtimedb.MemoryRecord{
 		Kind: runtimedb.MemoryFact, Subject: "household",
 		Content:  "the spare key is under the mat",
@@ -193,6 +210,7 @@ func TestARoutineCannotBeCreatedAlreadyRunning(t *testing.T) {
 // or forget it. A regression introduced by the scoping work itself.
 func TestTheMemoryViewShowsNamedButlerRecords(t *testing.T) {
 	h := newHarness(t)
+	h.person("mika")
 	if err := h.s.DB.UpsertModel(runtimedb.Model{
 		Name: "kitchen-box", Kind: runtimedb.ModelLocal, Provider: "ollama",
 		Readiness: runtimedb.ModelReady, Enabled: true,

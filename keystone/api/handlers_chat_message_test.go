@@ -15,8 +15,11 @@ func (h *harness) bindAccount(t *testing.T, surface, identity, transport, accoun
 	t.Helper()
 	claim := h.issueClaim(t, surface, identity, transport)
 	var binding runtimedb.ChatBinding
+	// A human redeeming on somebody's behalf names the Agent: they have
+	// no bot to arrive through, so there is no Connection to resolve one
+	// from (ADR-W033 B7).
 	resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/bindings/redeem", map[string]any{
-		"code": claim.Code, "transport": transport, "account": account,
+		"code": claim.Code, "butler": agentFor(surface), "transport": transport, "account": account,
 	}, &binding)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("redeem: status = %d", resp.StatusCode)
@@ -45,6 +48,8 @@ func (h *harness) poll(t *testing.T, role runtimedb.Role, query string) []runtim
 func TestChatUnboundAccountGetsOneReply(t *testing.T) {
 	h := newHarness(t)
 	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	// The Agent's bot exists; this account is simply not admitted to it.
+	h.agentAt(t, "family", "telegram")
 
 	resp, out := h.send(runtimedb.RoleConcierge, map[string]any{
 		"transport": "telegram", "account": "99999", "text": "hello?", "messageId": "m-1",
@@ -117,23 +122,26 @@ func TestChatRoundTrip(t *testing.T) {
 // The surface comes from the credential, not the request (ADR-W026 A3).
 // This is what makes a stolen family-adapter token useless against the
 // operator surface.
-func TestChatSurfaceComesFromTheCredential(t *testing.T) {
+func TestChatConnectionComesFromTheCredential(t *testing.T) {
 	h := newHarness(t)
 	h.wireHouseholdButler([]*provider.ChatResponse{{Text: "hi"}}, runtimedb.ButlerModeFull)
-	h.bindAccount(t, "admin", "root-admin", "telegram", "12345")
+	h.agentAt(t, "family", "telegram")
+	h.bindAccount(t, "admin", "mika", "telegram", "12345")
 
-	// A concierge naming the admin surface is refused outright.
+	// A bot naming an Agent is refused outright: its own credential IS
+	// the Connection, so naming one could only ever be a bot claiming
+	// to be somebody else's (ADR-W031 A7, ADR-W033 B7).
 	resp, _ := h.send(runtimedb.RoleConcierge, map[string]any{
 		"transport": "telegram", "account": "12345", "text": "restart immich",
-		"surface": "admin", "messageId": "m-1",
+		"messageId": "m-1", "butler": "alfred",
 	})
 	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("concierge naming admin: status = %d, want 403", resp.StatusCode)
+		t.Fatalf("an adapter named an agent: status = %d, want 403", resp.StatusCode)
 	}
 
-	// And without naming it, the same account — which IS bound, but on
-	// the admin surface — reads as unbound to the family adapter,
-	// because bindings are per-surface.
+	// And without naming one, the same account — which IS admitted, but
+	// to a different Agent — reads as unbound here, because an
+	// admission is to one Agent.
 	resp, out := h.send(runtimedb.RoleConcierge, map[string]any{
 		"transport": "telegram", "account": "12345", "text": "restart immich", "messageId": "m-2",
 	})
@@ -141,13 +149,16 @@ func TestChatSurfaceComesFromTheCredential(t *testing.T) {
 		t.Fatalf("status = %d, out = %+v, want an unbound answer", resp.StatusCode, out)
 	}
 
-	// An admin-surface adapter (valet role) cannot claim the family one.
-	resp, _ = h.send(runtimedb.RoleValet, map[string]any{
-		"transport": "telegram", "account": "12345", "text": "hello",
-		"surface": "family", "messageId": "m-3",
+	// And the same account IS admitted through the bot of the Agent it
+	// was invited to. The Connection decides which Agent answers, so
+	// one account reaching two bots reaches two different Agents —
+	// which is the whole of B7 seen from the person's side.
+	resp, out = h.send(runtimedb.RoleValet, map[string]any{
+		"transport": "telegram", "account": "12345", "text": "hello", "messageId": "m-3",
 	})
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("butler adapter naming family: status = %d, want 403", resp.StatusCode)
+	if resp.StatusCode != http.StatusAccepted || !out.Bound {
+		t.Fatalf("the account is not admitted through its own agent's bot: status = %d, out = %+v",
+			resp.StatusCode, out)
 	}
 }
 
@@ -158,7 +169,7 @@ func TestChatGroupRules(t *testing.T) {
 	p := &scriptedProvider{turns: []*provider.ChatResponse{{Text: "The bins go out tonight."}}}
 	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
 	h.s.ButlerHost.Provider = p
-	h.bindAccount(t, "admin", "root-admin", "telegram", "555")
+	h.bindAccount(t, "admin", "mika", "telegram", "555")
 	h.bindAccount(t, "family", "sam", "telegram", "777")
 
 	// Admin surface, group: one refusal, no session.
@@ -297,6 +308,7 @@ func TestChatFailedSessionIsRetryable(t *testing.T) {
 func TestChatRateLimitIsPerAccount(t *testing.T) {
 	h := newHarness(t)
 	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	h.agentAt(t, "family", "telegram")
 
 	limited := false
 	for i := 0; i < chatBurst+3; i++ {
@@ -365,7 +377,7 @@ func TestChatInjectionCannotChangeSurface(t *testing.T) {
 func TestChatAdminReplyPointsAtApproval(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(proposeGrafanaTurns(), runtimedb.ButlerModeFull)
-	h.bindAccount(t, "admin", "root-admin", "telegram", "555")
+	h.bindAccount(t, "admin", "mika", "telegram", "555")
 
 	resp, out := h.send(runtimedb.RoleValet, map[string]any{
 		"transport": "telegram", "account": "555", "text": "expose grafana", "messageId": "m-1",
@@ -391,19 +403,20 @@ func TestChatAdminReplyPointsAtApproval(t *testing.T) {
 }
 
 // An adapter reads its own surface's queue and no other's.
-func TestChatOutboundIsScopedToSurface(t *testing.T) {
+func TestChatOutboundIsScopedToOneAgent(t *testing.T) {
 	h := newHarness(t)
 	h.wireHouseholdButler([]*provider.ChatResponse{{Text: "household answer"}}, runtimedb.ButlerModeFull)
+	h.agentAt(t, "admin", "telegram")
 	h.bindAccount(t, "family", "sam", "telegram", "777")
 	h.send(runtimedb.RoleConcierge, map[string]any{
 		"transport": "telegram", "account": "777", "text": "hello", "messageId": "m-1",
 	})
 
 	if got := h.poll(t, runtimedb.RoleValet, ""); len(got) != 0 {
-		t.Fatalf("the admin adapter read the family queue: %+v", got)
+		t.Fatalf("one agent's bot read another agent's queue: %+v", got)
 	}
 	if got := h.poll(t, runtimedb.RoleConcierge, ""); len(got) != 1 {
-		t.Fatalf("the family adapter cannot read its own queue: %+v", got)
+		t.Fatalf("an agent's bot cannot read its own queue: %+v", got)
 	}
 }
 
@@ -419,7 +432,7 @@ func TestChatDedupeDoesNotCollideAcrossSurfaces(t *testing.T) {
 		{Text: "household answer"}, {Text: "operator answer"},
 	}, runtimedb.ButlerModeFull)
 	h.bindAccount(t, "family", "sam", "telegram", "12345")
-	h.bindAccount(t, "admin", "root-admin", "telegram", "12345")
+	h.bindAccount(t, "admin", "mika", "telegram", "12345")
 
 	body := map[string]any{
 		"transport": "telegram", "account": "12345", "conversation": "12345",
@@ -443,8 +456,10 @@ func TestChatDedupeDoesNotCollideAcrossSurfaces(t *testing.T) {
 // not claim that text forever: an adapter that omits ids would answer
 // "yes" once in a conversation and then go quiet on it permanently.
 func TestChatFallbackDedupeIsBounded(t *testing.T) {
-	first := chatDedupe(runtimedb.ButlerSurfaceFamily, "telegram", "12345", "", "inbound", "yes")
-	same := chatDedupe(runtimedb.ButlerSurfaceFamily, "telegram", "12345", "", "inbound", "yes")
+	h := newHarness(t)
+	at := h.agentAt(t, "family", "telegram")
+	first := chatDedupe(at, "12345", "", "inbound", "yes")
+	same := chatDedupe(at, "12345", "", "inbound", "yes")
 	if first != same {
 		t.Fatalf("the same text in the same window produced two keys — a redelivery would be answered twice")
 	}
@@ -453,18 +468,23 @@ func TestChatFallbackDedupeIsBounded(t *testing.T) {
 	if !strings.Contains(first, "-") {
 		t.Fatalf("fallback key %q carries no window", first)
 	}
-	// And the surface still separates the two bots.
-	admin := chatDedupe(runtimedb.ButlerSurfaceAdmin, "telegram", "12345", "", "inbound", "yes")
+	// And the Connection still separates the bots — including two
+	// Agents on one transport, which a surface could not.
+	admin := chatDedupe(h.agentAt(t, "admin", "telegram"), "12345", "", "inbound", "yes")
 	if admin == first {
-		t.Fatalf("the fallback key collides across surfaces")
+		t.Fatalf("the fallback key collides across agents")
 	}
 }
 
 // One account's flood on the household bot must not spend the operator
 // bot's budget: on Telegram the account id is the same across both.
-func TestChatRateLimitIsPerSurface(t *testing.T) {
+func TestChatRateLimitIsPerAgent(t *testing.T) {
 	h := newHarness(t)
 	h.wireHouseholdButler([]*provider.ChatResponse{{Text: "hi"}}, runtimedb.ButlerModeFull)
+	// A bot each, because the bucket is keyed on the Connection: one
+	// person's account id is the same value for every bot they talk to.
+	h.agentAt(t, "family", "telegram")
+	h.agentAt(t, "admin", "telegram")
 
 	limited := false
 	for i := 0; i < chatBurst+3; i++ {
@@ -477,13 +497,45 @@ func TestChatRateLimitIsPerSurface(t *testing.T) {
 		}
 	}
 	if !limited {
-		t.Fatalf("the family surface was never limited")
+		t.Fatalf("the household agent's bot was never limited")
 	}
-	// The SAME account on the operator bot still has its own budget.
+	// The SAME account on another Agent's bot still has its own budget.
 	resp, _ := h.send(runtimedb.RoleValet, map[string]any{
 		"transport": "telegram", "account": "12345", "text": "how is the disk?", "messageId": "a-1",
 	})
 	if resp.StatusCode == http.StatusTooManyRequests {
-		t.Fatalf("a flood on the household bot spent the operator bot's budget")
+		t.Fatalf("a flood on one agent's bot spent another agent's budget")
+	}
+}
+
+// A human reading an Agent's queue does not have to name a transport.
+//
+// -transport is documented as optional and an Agent with one bot has
+// nothing to disambiguate, but the resolver read an absent transport as
+// a transport named "" — which matches no address — so `wild chat
+// outbound -butler sandy` was refused for every Agent in every
+// deployment. The adapter path never hit it: an adapter's credential
+// resolves its own Connection and never reaches here.
+func TestReadingAQueueDoesNotRequireNamingTheTransport(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	h.ensureChatPrereqs(t, "family", "sam", "telegram")
+	at := h.agentAt(t, "family", "telegram")
+	if _, err := h.s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{
+		Connection: at.Seq, Target: "12345", Body: "the bins go out tonight",
+		Kind: "push", DedupeKey: "bins-1",
+	}); err != nil {
+		t.Fatalf("EnqueueChatOutbound: %v", err)
+	}
+
+	// A human holding read, naming only the Agent.
+	got := h.poll(t, runtimedb.RoleAdmin, "?butler="+at.Butler)
+	if len(got) != 1 || got[0].Body != "the bins go out tonight" {
+		t.Fatalf("polling %s without a transport returned %+v", at.Butler, got)
+	}
+
+	// Naming the transport still works, and names the same queue.
+	if same := h.poll(t, runtimedb.RoleAdmin, "?butler="+at.Butler+"&transport=telegram"); len(same) != 1 {
+		t.Fatalf("polling with the transport returned %+v", same)
 	}
 }

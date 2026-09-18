@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
@@ -31,13 +30,22 @@ import (
 const chatAdapterPrincipalPrefix = "chat-"
 
 type mintAdapterRequest struct {
-	Node    string `json:"node"`
-	Surface string `json:"surface"`
+	Node string `json:"node"`
+	// Butler is the Agent this bot belongs to. It replaced Surface, and
+	// the difference is ADR-W033 B7: a bot serves one Agent, so
+	// credentialing it and assigning it are one act. A surface named a
+	// class of Agents, which left "which one answers here" to whatever
+	// the roster returned.
+	Butler string `json:"butler"`
 }
 
 // roleForSurface is the mapping that makes the two-bots rule real: a
 // family adapter can never hold more than converse, whatever the
 // package says or the operator types.
+//
+// The surface is the AGENT's class now rather than a string the
+// operator typed, so the rule holds without anybody having to keep the
+// capability name and the flag in agreement.
 func roleForSurface(surface runtimedb.ButlerSurface) (runtimedb.Role, error) {
 	switch surface {
 	case runtimedb.ButlerSurfaceFamily:
@@ -47,25 +55,6 @@ func roleForSurface(surface runtimedb.ButlerSurface) (runtimedb.Role, error) {
 	default:
 		return "", fmt.Errorf("surface must be admin or family")
 	}
-}
-
-// capabilitySurface reads the surface out of a chat capability's name.
-//
-// The catalog convention is chat-<transport>-<surface>, and it is
-// load-bearing rather than decorative: without this check, `wild chat
-// adapter chat-telegram-family -surface admin` would mint an
-// admin-surface credential into the FAMILY package's secret, and the
-// household's bot would come up talking to the operator's Butler. One
-// typo would defeat the two-package boundary the whole design rests on
-// (ADR-W026 A3), silently and at install time.
-func capabilitySurface(capability string) (runtimedb.ButlerSurface, bool) {
-	switch {
-	case strings.HasSuffix(capability, "-"+string(runtimedb.ButlerSurfaceFamily)):
-		return runtimedb.ButlerSurfaceFamily, true
-	case strings.HasSuffix(capability, "-"+string(runtimedb.ButlerSurfaceAdmin)):
-		return runtimedb.ButlerSurfaceAdmin, true
-	}
-	return "", false
 }
 
 // mintChatAdapter gives a chat capability its Keystone credential.
@@ -83,22 +72,53 @@ func (s *Server) mintChatAdapter(r *http.Request, id principal.Identity) (any, i
 	if req.Node == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("node required: the token is placed on the node as a provided secret")
 	}
-	surface := runtimedb.ButlerSurface(req.Surface)
-	role, err := roleForSurface(surface)
-	if err != nil {
-		return nil, http.StatusBadRequest, err
+	if req.Butler == "" {
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"butler required: a bot belongs to one agent (ADR-W033 B7), so credentialing it says which")
 	}
-	// The capability names the surface it is for; the request must agree
-	// with it. Minting the wrong one is not a permission error the
-	// operator would see later — it is a family bot wired to the
-	// operator's Butler, working perfectly, for as long as nobody looks.
-	if named, ok := capabilitySurface(capName); !ok {
+	agent, err := s.DB.GetButler(req.Butler)
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, http.StatusBadRequest, fmt.Errorf("no butler called %q", req.Butler)
+	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	// The ceiling comes from the AGENT, so a family bot cannot be wired
+	// to an Owner Agent by mistyping a flag. This used to be checked by
+	// making the capability name and the -surface flag agree, which
+	// could only ever tell the two classes apart — not one Owner Agent
+	// from another.
+	role, err := roleForSurface(agent.Surface)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	transport, ok := capabilityTransport(capName)
+	if !ok {
 		return nil, http.StatusBadRequest, fmt.Errorf(
-			"capability %q does not name a surface: a chat capability is chat-<transport>-admin or chat-<transport>-family", capName)
-	} else if named != surface {
-		return nil, http.StatusBadRequest, fmt.Errorf(
-			"capability %q is the %s surface, but -surface %s was asked for; install the %s package instead",
-			capName, named, surface, "chat-<transport>-"+string(surface))
+			"capability %q is not a chat capability: it should be chat-<transport>-<something>", capName)
+	}
+	// One bot, one Agent. Credentialing a bot that already answers for
+	// somebody else is refused rather than quietly repointed: the token
+	// this call is about to place is that Agent's, and two Agents
+	// sharing one would make "which agent answered" unanswerable —
+	// which is the whole reason B7 binds a Connection to exactly one.
+	//
+	// This half only READS. The address is written further down, after
+	// every remaining refusal, because a write before them is a write
+	// the operator never agreed to: a 503 or a ceiling conflict would
+	// come back as a refusal while the bot had already been handed over
+	// — and handing a family package's bot to an Owner Agent is exactly
+	// what the ceiling conflict exists to prevent.
+	needsAddress := false
+	switch at, err := s.DB.ChatConnectionAt(transport, capName); {
+	case err == nil && at.Butler != agent.Name:
+		return nil, http.StatusConflict, fmt.Errorf(
+			"%s already answers at %s, so that bot's token is theirs; revoke the address before giving it to %s",
+			at.Butler, capName, agent.Name)
+	case err != nil && !errors.Is(err, runtimedb.ErrNoConnection):
+		return nil, http.StatusInternalServerError, err
+	case errors.Is(err, runtimedb.ErrNoConnection):
+		needsAddress = true
 	}
 
 	// Everything the REQUEST can get wrong is answered before anything
@@ -115,16 +135,27 @@ func (s *Server) mintChatAdapter(r *http.Request, id principal.Identity) (any, i
 		if err := s.Principals.Create(name, role, ""); err != nil {
 			return nil, http.StatusBadRequest, err
 		}
-		s.event("principal.created", "", id, fmt.Sprintf("%s (%s, %s surface)", name, role, req.Surface))
+		s.event("principal.created", "", id, fmt.Sprintf("%s (%s, for %s)", name, role, agent.Name))
 	case err != nil:
 		return nil, http.StatusInternalServerError, err
 	case existing.Role != role:
-		// Re-minting an adapter for the other surface would silently
-		// move a bot from one ceiling to the other. Refuse: the operator
-		// should retire the capability and install the other one.
+		// Re-minting an adapter for an Agent of the other class would
+		// silently move a bot from one ceiling to the other. Refuse: the
+		// operator should retire the capability and install the other.
 		return nil, http.StatusConflict, fmt.Errorf(
-			"principal %s exists with role %s, not %s — a chat adapter cannot change surface by re-minting",
+			"principal %s exists with role %s, not %s — a chat adapter cannot change ceiling by re-minting",
 			name, existing.Role, role)
+	}
+
+	// Assigning the bot IS part of credentialing it, and now that
+	// nothing above can still refuse, this is where it happens. Two
+	// separate steps would leave a credentialed bot answering for
+	// nobody, which reads as working right up until somebody sends it a
+	// message.
+	if needsAddress {
+		if _, err := s.DB.AddButlerAddress(agent.Name, transport, capName, "", actingMember(id)); err != nil {
+			return nil, http.StatusBadRequest, fmt.Errorf("giving %s the address %s: %w", agent.Name, capName, err)
+		}
 	}
 
 	secretName := capability.AdapterSecretName(capName)
@@ -132,10 +163,10 @@ func (s *Server) mintChatAdapter(r *http.Request, id principal.Identity) (any, i
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	summary := fmt.Sprintf("mint %s-surface chat token for capability %s → secret/%s on %s (%d dependent container(s) re-created)",
-		req.Surface, capName, secretName, req.Node, len(dependents))
+	summary := fmt.Sprintf("mint a chat token for %s at capability %s → secret/%s on %s (%d dependent container(s) re-created)",
+		agent.Name, capName, secretName, req.Node, len(dependents))
 	stored, _ := json.Marshal(map[string]any{"summary": summary, "secret": secretName, "node": req.Node,
-		"principal": name, "role": string(role), "surface": req.Surface, "dependents": dependents})
+		"principal": name, "role": string(role), "butler": agent.Name, "dependents": dependents})
 	planID, err := s.DB.InsertPlan(secretsPrincipal, id.Name, summary, "medium", string(stored))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -162,7 +193,7 @@ func (s *Server) mintChatAdapter(r *http.Request, id principal.Identity) (any, i
 		s.OnApproved()
 	}
 	return map[string]any{
-		"principal": name, "role": string(role), "surface": req.Surface,
+		"principal": name, "role": string(role), "butler": agent.Name,
 		"secret": "secret/" + secretName, "node": req.Node,
 		"version": version, "dependentsRemoved": dependents, "plan": planID,
 	}, http.StatusOK, nil

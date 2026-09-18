@@ -382,9 +382,13 @@ export type ButlerSurface = "admin" | "family";
 // a claim code.
 export interface ChatBinding {
   id: number;
+  connection: number;
+  // The Agent whose bot this account is admitted to, and the transport
+  // that bot speaks. Both come from the Connection rather than being
+  // stored beside it, so they cannot disagree with it.
+  butler: string;
   transport: string;
   account: string;
-  surface: ButlerSurface;
   identity: string;
   displayName?: string;
   createdAt: string;
@@ -396,9 +400,9 @@ export interface ChatBinding {
 // The code comes back exactly once: the server stores only its hash.
 export interface ChatClaim {
   code: string;
-  surface: ButlerSurface;
+  butler: string;
   identity: string;
-  transport?: string;
+  transport: string;
   expiresAt: string;
   note: string;
   // The bot to send it to, and a link that opens a chat with it. Both
@@ -423,9 +427,10 @@ export interface HouseholdMember {
   node: string;
 }
 
-// A Keystone principal. An admin-surface binding names one: the chat
-// account speaks as that principal, so the invite picks from the ones
-// that exist rather than trusting a typed name.
+// A Keystone principal — a machine credential, never a person. Chat
+// invites deliberately do NOT pick from these: a Connection admits a
+// Person (ADR-W033 A2/B9), and a chat account bound to a credential had
+// nobody behind it.
 export interface Principal {
   name: string;
   role: string;
@@ -444,7 +449,11 @@ export interface HouseholdGroup {
 // adapters this deployment actually has, not a free-text guess.
 export interface ChatTransport {
   transport: string;
-  surface: ButlerSurface;
+  // The Agent this bot answers for, absent until it has been
+  // credentialed and given an address. A bot belongs to exactly one
+  // Agent (ADR-W033 B7); the surface this used to carry named a class
+  // of them and could not tell one from another.
+  butler?: string;
   capability: string;
   installed: boolean;
   // Whether the adapter has its Keystone token. Installed without one
@@ -1039,6 +1048,110 @@ export interface RoutineDetail {
 // then refuse. Offering free text here would be worse than offering
 // nothing: a routine triggering on an event nothing emits never fires,
 // and nothing tells its author why.
+// Commitments (ADR-W035). A Standing is where one stands right now: the
+// declaration plus the occurrence the engine derived, which is why
+// nothing here is stored and everything is recomputed.
+export interface CommitmentRule {
+  meter: string;
+  calendar: boolean;
+  anchor: number;
+  dueAt: number;
+  leadAt: number;
+  position: number;
+  known: boolean;
+  stale: boolean;
+  remaining: number;
+  progress: number;
+  crossed: boolean;
+  soon: boolean;
+  observedAt?: string;
+  anchorTime?: string;
+  dueTime?: string;
+  leadTime?: string;
+  unresolved?: string;
+}
+
+export interface CommitmentProjection {
+  meter: string;
+  at: string;
+  ratePerDay: number;
+  source: string;
+}
+
+export interface CommitmentOccurrence {
+  cycle: number;
+  state: string;
+  openedAt: string;
+  trigger?: string;
+  rules: CommitmentRule[];
+  pastDue?: boolean;
+  unresolved?: string[];
+  projection?: CommitmentProjection;
+  reason: string;
+}
+
+export interface CommitmentBooking {
+  seq: number;
+  commitment: string;
+  at: string;
+  bookedAt: string;
+  bookedBy: string;
+  note?: string;
+}
+
+export interface CommitmentStanding {
+  name: string;
+  description: string;
+  owner?: string;
+  scope?: string;
+  mayComplete?: string[];
+  notify?: string[];
+  disabled?: boolean;
+  rollover?: string;
+  requiresBooking?: boolean;
+  occurrence: CommitmentOccurrence;
+  booking?: CommitmentBooking;
+}
+
+export interface CommitmentCompletion {
+  seq: number;
+  commitment: string;
+  at: string;
+  recordedAt: string;
+  recordedBy: string;
+  waived?: boolean;
+  reason?: string;
+  positions?: Record<string, number>;
+  // The household event that closed this cycle, for a commitment that
+  // declares satisfiedBy. Absent for an answer a person gave.
+  externalId?: string;
+}
+
+export interface MeterReading {
+  seq: number;
+  meter: string;
+  value: number;
+  at: string;
+  recordedAt: string;
+  recordedBy: string;
+  source: string;
+  rebase?: boolean;
+  prior?: number;
+  reason?: string;
+}
+
+export interface MeterView {
+  name: string;
+  description: string;
+  unit?: string;
+  owner?: string;
+  staleAfter?: string;
+  estimate?: string;
+  builtIn?: boolean;
+  latest?: MeterReading;
+  stale?: boolean;
+}
+
 export interface AutomationGrammar {
   eventTypes: { type: string; package: string; capability?: string; subject?: string; description?: string }[];
   actions: { tool: string; tier: string; package: string; capability?: string }[];
@@ -1242,6 +1355,22 @@ export const api = {
   // Exactly one of: name (an approved rule), rule (a draft document), or
   // routine+spec (a draft held as a parsed spec, which is what the form
   // has).
+  commitments: () => call<CommitmentStanding[]>("GET", "/api/v1/household/commitments"),
+  commitment: (name: string) =>
+    call<{ standing: CommitmentStanding; completions: CommitmentCompletion[] }>(
+      "GET",
+      `/api/v1/household/commitments/${encodeURIComponent(name)}`,
+    ),
+  meters: () => call<MeterView[]>("GET", "/api/v1/household/meters"),
+  meterReadings: (name: string) =>
+    call<MeterReading[]>("GET", `/api/v1/household/meters/${encodeURIComponent(name)}/readings`),
+  recordReading: (name: string, value: number) =>
+    call<{ seq: number; duplicate: boolean }>(
+      "POST",
+      `/api/v1/household/meters/${encodeURIComponent(name)}/readings`,
+      { value },
+    ),
+
   replayAutomation: (req: {
     name?: string;
     rule?: string;
@@ -1466,23 +1595,28 @@ export const api = {
     call<AskResponse>("POST", `/api/v1/butler/sessions/${encodeURIComponent(id)}/ask`, { message }),
   chatBindings: (withRevoked = false) =>
     call<ChatBinding[]>("GET", `/api/v1/chat/bindings${withRevoked ? "?revoked=true" : ""}`),
-  issueChatClaim: (surface: ButlerSurface, identity: string, transport?: string) =>
-    call<ChatClaim>("POST", "/api/v1/chat/claims", {
-      surface,
-      identity,
-      ...(transport ? { transport } : {}),
-    }),
+  // An invite admits one Person to one Agent's bot (ADR-W033 B7). It
+  // used to name a surface, which is a class of Agents: an invite to
+  // `admin` admitted somebody to every Owner Agent at once.
+  // connection is the bot's capability name. It is always sent, not
+  // only when it is needed: an agent may hold several bots on one
+  // transport (ADR-W033 B7), and this screen already knows which row
+  // the operator picked, so there is nothing for the server to guess.
+  issueChatClaim: (butler: string, identity: string, transport: string, connection: string) =>
+    call<ChatClaim>("POST", "/api/v1/chat/claims", { butler, identity, transport, connection }),
   revokeChatBinding: (id: number) =>
     call<unknown>("POST", `/api/v1/chat/bindings/${id}/revoke`),
   chatTransports: () => call<ChatTransport[]>("GET", "/api/v1/chat/transports"),
-  // Gives a chat capability its Keystone token and places it on the
-  // node as the secret the adapter container reads. Minting again is
-  // rotation: earlier tokens are revoked first.
-  mintChatAdapter: (capability: string, node: string, surface: ButlerSurface) =>
-    call<{ principal: string; secret: string; node: string }>(
+  // Gives a chat capability its Keystone token, places it on the node
+  // as the secret the adapter container reads, and assigns the bot to
+  // an Agent — one act, because two would leave a credentialed bot
+  // answering for nobody. A bot already serving another Agent is
+  // refused rather than repointed. Minting again is rotation.
+  mintChatAdapter: (capability: string, node: string, butler: string) =>
+    call<{ principal: string; secret: string; node: string; butler: string }>(
       "POST",
       `/api/v1/chat/adapters/${encodeURIComponent(capability)}`,
-      { node, surface },
+      { node, butler },
     ),
   principals: () => call<Principal[]>("GET", "/api/v1/principals"),
   householdMembers: () => call<HouseholdMember[]>("GET", "/api/v1/household/members"),

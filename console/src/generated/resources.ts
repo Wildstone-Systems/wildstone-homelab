@@ -16,7 +16,9 @@ export type Kind =
   "SeedFile" |
   "Job" |
   "Secret" |
-  "Automation";
+  "Automation" |
+  "Meter" |
+  "Commitment";
 
 export const API_VERSION = "wildstone.dev/v1";
 
@@ -181,6 +183,41 @@ export interface AutomationSpec {
   action: AutomationAction;
 }
 
+export interface MeterSpec {
+  description: string;
+  unit: string;
+  staleAfter?: string;
+  estimate?: string;
+}
+
+export interface CommitmentDue {
+  meter: string;
+  every?: string;
+  at?: string;
+  atValue?: number;
+  lead?: string;
+}
+
+export interface CommitmentSatisfiedBy {
+  eventType: string;
+  subject?: string;
+  entity?: string;
+}
+
+export interface CommitmentSpec {
+  description: string;
+  disabled?: boolean;
+  due: CommitmentDue[];
+  requiresBooking?: boolean;
+  rollover: string;
+  anchor: string;
+  anchorAt?: Record<string, number>;
+  satisfiedBy?: CommitmentSatisfiedBy;
+  mayComplete?: string[];
+  notify?: string[];
+  scope?: string;
+}
+
 export type Spec =
   ContainerSpec |
   VolumeSpec |
@@ -195,7 +232,9 @@ export type Spec =
   SeedFileSpec |
   JobSpec |
   SecretSpec |
-  AutomationSpec;
+  AutomationSpec |
+  MeterSpec |
+  CommitmentSpec;
 
 export interface Resource {
   apiVersion: string;
@@ -219,4 +258,6 @@ export interface SpecByKind {
   Job: JobSpec;
   Secret: SecretSpec;
   Automation: AutomationSpec;
+  Meter: MeterSpec;
+  Commitment: CommitmentSpec;
 }

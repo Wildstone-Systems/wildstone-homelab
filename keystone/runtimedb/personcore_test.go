@@ -284,6 +284,9 @@ func TestMigrationMapsLegacyProfiles(t *testing.T) {
 // not the store, not the schema — may produce role = 'child'.
 func TestChildPresetIsAConstrainedMemberNotARole(t *testing.T) {
 	db := open(t)
+	if err := db.RecordButlerMember("mika", RoleOwner, "", ""); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.RecordButlerMember("kid", RoleMember, ProfileChild, "mika"); err != nil {
 		t.Fatalf("recording a child: %v", err)
 	}

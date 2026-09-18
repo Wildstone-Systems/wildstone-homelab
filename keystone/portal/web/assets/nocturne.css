@@ -249,6 +249,19 @@ a:hover { color: var(--color-accent-200); text-decoration: underline; }
 .asks { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .asks .hbtn { font-size: 12.5px; border-radius: 999px; color: var(--muted); border-color: var(--hair); }
 .asks .hbtn:hover { color: var(--color-text); background: var(--faint); }
+/* The one ask that takes a value rather than a tap: a meter reading,
+   answered from the card that asked for it. Borrowed tokens rather than
+   borrowed rules, so it sits beside the pill buttons without inheriting
+   their pill shape — a rounded box reads as somewhere to type. */
+.hinput { min-width: 0; font: inherit; font-size: 12.5px; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--hair); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); caret-color: var(--color-accent); }
+.hinput::placeholder { color: var(--muted); }
+.hinput:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+/* Why an answer did not go through, beside the button that tried. The
+   server's own sentence goes here — "what did f150-odometer say?" is
+   the only thing a member can act on, and a generic "that didn't work"
+   would hide it. Coloured as a problem rather than muted, because it is
+   one. */
+.asks-said { color: var(--st-bad); font-size: 12.5px; align-self: center; }
 .turn { display: flex; gap: var(--space-3); align-items: flex-start; }
 .turn-mark { width: 24px; height: 24px; flex: none; border-radius: 50%; display: grid; place-items: center; color: var(--color-accent-300); background: color-mix(in srgb, var(--color-accent) 18%, transparent); }
 .msg-user { align-self: flex-end; max-width: 78%; background: color-mix(in srgb, var(--color-text) 10%, transparent); padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg); border-bottom-right-radius: var(--radius-sm); font-size: 13.5px; }
@@ -279,6 +292,7 @@ a:hover { color: var(--color-accent-200); text-decoration: underline; }
   .machines > div { min-width: 132px; }
   .wid { padding: var(--space-4) !important; }
   .asks .hbtn { min-height: 40px; }
+  .hinput { min-height: 40px; font-size: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .sk { animation: none } }
 

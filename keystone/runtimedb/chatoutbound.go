@@ -59,15 +59,18 @@ const MaxChatBodyBytes = 3500
 
 // ChatOutbound is one queued message.
 type ChatOutbound struct {
-	Seq           int64         `json:"seq"`
-	Surface       ButlerSurface `json:"surface"`
-	Transport     string        `json:"transport"`
-	Target        string        `json:"target"`
-	Body          string        `json:"body"`
-	Kind          string        `json:"kind"`
-	BindingID     int64         `json:"bindingId,omitempty"`
-	CorrelationID string        `json:"correlationId,omitempty"`
-	DedupeKey     string        `json:"dedupeKey"`
+	Seq int64 `json:"seq"`
+	// Connection is the bot this message leaves by, and so the Agent it
+	// is from. The queue used to be keyed by surface, which handed one
+	// bot every Owner Agent's replies (ADR-W033 B7).
+	Connection    int64  `json:"connection"`
+	Transport     string `json:"transport"`
+	Target        string `json:"target"`
+	Body          string `json:"body"`
+	Kind          string `json:"kind"`
+	BindingID     int64  `json:"bindingId,omitempty"`
+	CorrelationID string `json:"correlationId,omitempty"`
+	DedupeKey     string `json:"dedupeKey"`
 	// HoldUntil defers delivery without dropping the message: a
 	// non-urgent notice raised during the household's quiet hours is
 	// queued now and becomes visible to the adapter when the quiet
@@ -86,11 +89,11 @@ var ErrDuplicateOutbound = errors.New("runtimedb: chat message already queued")
 // dedupe key returns the EXISTING seq with ErrDuplicateOutbound, so a
 // retried producer converges on one message rather than two.
 func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
-	if !ValidButlerSurface(m.Surface) {
-		return 0, fmt.Errorf("runtimedb: chat message surface %q is not admin|family", m.Surface)
+	if m.Connection == 0 {
+		return 0, fmt.Errorf("runtimedb: a chat message leaves by a connection (ADR-W033 B7)")
 	}
-	if m.Transport == "" || m.Target == "" || m.DedupeKey == "" {
-		return 0, fmt.Errorf("runtimedb: chat message requires a transport, target and dedupe key")
+	if m.Target == "" || m.DedupeKey == "" {
+		return 0, fmt.Errorf("runtimedb: chat message requires a target and dedupe key")
 	}
 	if strings.TrimSpace(m.Body) == "" {
 		return 0, fmt.Errorf("runtimedb: refusing to queue an empty chat message")
@@ -115,9 +118,9 @@ func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
 	}
 	db.pruneChatOutbound()
 	res, err := db.sql.Exec(
-		`INSERT INTO chat_outbound (surface, transport, target, body, kind, binding_id, correlation_id, dedupe_key, created_at, expires_at, hold_until)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		string(m.Surface), m.Transport, m.Target, m.Body, m.Kind, m.BindingID, m.CorrelationID,
+		`INSERT INTO chat_outbound (connection, target, body, kind, binding_id, correlation_id, dedupe_key, created_at, expires_at, hold_until)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.Connection, m.Target, m.Body, m.Kind, m.BindingID, m.CorrelationID,
 		m.DedupeKey, now(), m.ExpiresAt.UTC().Format(time.RFC3339Nano), timeText(m.HoldUntil))
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
@@ -133,10 +136,9 @@ func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
 }
 
 // ChatOutboundAfter returns undelivered, unexpired messages for one
-// surface after the cursor, oldest first. transport "" reads every
-// transport on that surface — useful for an operator looking at the
-// queue, and not what an adapter does.
-func (db *DB) ChatOutboundAfter(surface ButlerSurface, transport string, after int64, limit int) ([]ChatOutbound, error) {
+// Connection after the cursor, oldest first — which is what an adapter
+// polls: its own bot's messages, and no other Agent's.
+func (db *DB) ChatOutboundAfter(at Connection, after int64, limit int) ([]ChatOutbound, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
@@ -163,19 +165,14 @@ func (db *DB) ChatOutboundAfter(surface ButlerSurface, transport string, after i
 	stamp := now()
 	// A held message stays queued and deduplicated; it is simply not
 	// offered to the adapter until its hold expires (ADR-W030 A10).
-	args := []any{string(surface), after, stamp, stamp}
-	where := `surface = ? AND seq > ? AND delivered_at = '' AND expires_at > ? AND (hold_until = '' OR hold_until <= ?)`
+	args := []any{at.Seq, after, stamp, stamp}
+	where := `o.connection = ? AND o.seq > ? AND o.delivered_at = '' AND o.expires_at > ? AND (o.hold_until = '' OR o.hold_until <= ?)`
 	if quarantined {
-		where += ` AND kind <> 'push'`
-	}
-	if transport != "" {
-		where += " AND transport = ?"
-		args = append(args, transport)
+		where += ` AND o.kind <> 'push'`
 	}
 	args = append(args, limit)
 	rows, err := db.sql.Query(
-		`SELECT seq, surface, transport, target, body, kind, binding_id, correlation_id, dedupe_key, created_at, expires_at, delivered_at, hold_until
-		 FROM chat_outbound WHERE `+where+` ORDER BY seq ASC LIMIT ?`, args...)
+		outboundColumns+` WHERE `+where+` ORDER BY o.seq ASC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: reading chat outbound: %w", err)
 	}
@@ -183,17 +180,22 @@ func (db *DB) ChatOutboundAfter(surface ButlerSurface, transport string, after i
 	return scanChatOutbound(rows)
 }
 
+// The transport comes from the Connection, which is the row that owns
+// that fact.
+const outboundColumns = `SELECT o.seq, o.connection, conn.transport, o.target, o.body, o.kind,
+	 o.binding_id, o.correlation_id, o.dedupe_key, o.created_at, o.expires_at, o.delivered_at, o.hold_until
+	 FROM chat_outbound o JOIN butler_addresses conn ON conn.seq = o.connection`
+
 // scanChatOutbound reads the shared column list both queue reads select.
 func scanChatOutbound(rows *sql.Rows) ([]ChatOutbound, error) {
 	var out []ChatOutbound
 	for rows.Next() {
 		var m ChatOutbound
-		var surfaceStr, created, expires, delivered, hold string
-		if err := rows.Scan(&m.Seq, &surfaceStr, &m.Transport, &m.Target, &m.Body, &m.Kind,
+		var created, expires, delivered, hold string
+		if err := rows.Scan(&m.Seq, &m.Connection, &m.Transport, &m.Target, &m.Body, &m.Kind,
 			&m.BindingID, &m.CorrelationID, &m.DedupeKey, &created, &expires, &delivered, &hold); err != nil {
 			return nil, err
 		}
-		m.Surface = ButlerSurface(surfaceStr)
 		var err error
 		if m.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
 			return nil, fmt.Errorf("runtimedb: bad chat created_at %q: %w", created, err)
@@ -219,13 +221,12 @@ func scanChatOutbound(rows *sql.Rows) ([]ChatOutbound, error) {
 // indistinguishable from "never queued". A notice nobody can see is
 // operationally the same as a notice that was dropped, and the whole
 // point of holding rather than dropping is that it will arrive.
-func (db *DB) ChatOutboundHeld(surface ButlerSurface) ([]ChatOutbound, error) {
+func (db *DB) ChatOutboundHeld(at Connection) ([]ChatOutbound, error) {
 	stamp := now()
 	rows, err := db.sql.Query(
-		`SELECT seq, surface, transport, target, body, kind, binding_id, correlation_id, dedupe_key, created_at, expires_at, delivered_at, hold_until
-		 FROM chat_outbound
-		 WHERE surface = ? AND delivered_at = '' AND expires_at > ? AND hold_until > ?
-		 ORDER BY seq ASC`, string(surface), stamp, stamp)
+		outboundColumns+`
+		 WHERE o.connection = ? AND o.delivered_at = '' AND o.expires_at > ? AND o.hold_until > ?
+		 ORDER BY o.seq ASC`, at.Seq, stamp, stamp)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: reading held chat outbound: %w", err)
 	}
@@ -238,10 +239,10 @@ func (db *DB) ChatOutboundHeld(surface ButlerSurface) ([]ChatOutbound, error) {
 // the normal shape of at-least-once — but acking one that does not exist
 // is ErrNotFound, because that means the adapter and the queue disagree
 // about reality.
-func (db *DB) AckChatOutbound(surface ButlerSurface, seq int64) error {
+func (db *DB) AckChatOutbound(at Connection, seq int64) error {
 	var existing string
 	err := db.sql.QueryRow(
-		`SELECT delivered_at FROM chat_outbound WHERE seq = ? AND surface = ?`, seq, string(surface)).Scan(&existing)
+		`SELECT delivered_at FROM chat_outbound WHERE seq = ? AND connection = ?`, seq, at.Seq).Scan(&existing)
 	if err != nil {
 		return ErrNotFound
 	}

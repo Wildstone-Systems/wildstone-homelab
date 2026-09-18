@@ -15,7 +15,7 @@ import (
 // own forgotten records are yours to keep a copy of; other people's
 // are not, or "forget that" would hold only until somebody exported.
 func TestExportDoesNotReturnOtherPeoplesForgottenRecords(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "sam", "mika")
 
 	mine, err := db.RecordMemory(MemoryRecord{
 		Kind: MemoryFact, Subject: "sam", Content: "sam sleeps badly on Sundays",
@@ -194,7 +194,7 @@ func TestEnablingAToolDoesNotBypassARequiredGrant(t *testing.T) {
 // their own name, and — because a notice is answerable once — lock the
 // intended recipient out of their own decision permanently.
 func TestOnlyTheRecipientCanAnswerANotice(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "sam")
 	decision, err := db.RaiseNotice(NoticeRequest{
 		Kind: "approval", Recipient: "sam", DedupeKey: "a-1",
 		Asks: true, Body: "shall I cancel the delivery?",
@@ -305,22 +305,30 @@ func TestReconciliationRevokesACredentialARestoredPlacementStillHolds(t *testing
 // authority reconciliation has run.
 func TestQuarantineHoldsPushesThatCameBackWithTheRestore(t *testing.T) {
 	db := open(t)
+	if err := db.UpsertModel(Model{
+		Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", ProviderModel: "llama",
+		Readiness: ModelReady, Enabled: true,
+	}, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	record(t, db, "mika")
+	conn := connect(t, db, "sandy", "telegram", ButlerSurfaceFamily)
 
 	// Queued BEFORE the restore, as a snapshot would have contained.
 	if _, err := db.EnqueueChatOutbound(ChatOutbound{
-		Surface: ButlerSurfaceFamily, Transport: "telegram", Target: "sam",
+		Connection: conn.Seq, Target: "sam",
 		Body: "the bins are due", Kind: "push", DedupeKey: "q-push",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.EnqueueChatOutbound(ChatOutbound{
-		Surface: ButlerSurfaceFamily, Transport: "telegram", Target: "sam",
+		Connection: conn.Seq, Target: "sam",
 		Body: "the answer you asked for", Kind: "reply", DedupeKey: "q-reply",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	// Both are deliverable before the restore.
-	if got, _ := db.ChatOutboundAfter(ButlerSurfaceFamily, "telegram", 0, 10); len(got) != 2 {
+	if got, _ := db.ChatOutboundAfter(conn, 0, 10); len(got) != 2 {
 		t.Fatalf("before quarantine the adapter saw %d messages, want 2", len(got))
 	}
 
@@ -329,7 +337,7 @@ func TestQuarantineHoldsPushesThatCameBackWithTheRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := db.ChatOutboundAfter(ButlerSurfaceFamily, "telegram", 0, 10)
+	got, err := db.ChatOutboundAfter(conn, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +363,7 @@ func TestQuarantineHoldsPushesThatCameBackWithTheRestore(t *testing.T) {
 	if err := db.ReleaseRestoreQuarantine("root-admin"); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := db.ChatOutboundAfter(ButlerSurfaceFamily, "telegram", 0, 10)
+	after, _ := db.ChatOutboundAfter(conn, 0, 10)
 	if len(after) != 2 {
 		t.Fatalf("after release the adapter saw %d messages, want the push back: %+v", len(after), after)
 	}

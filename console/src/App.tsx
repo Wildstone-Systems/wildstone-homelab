@@ -11,6 +11,7 @@ import {
   PlugsConnected,
   Pulse,
   Repeat,
+  CalendarCheck,
   SealCheck,
   ShieldCheck,
   Sparkle,
@@ -36,6 +37,7 @@ import { Memory } from "./views/Memory";
 import { Nodes } from "./views/Nodes";
 import { Plans } from "./views/Plans";
 import { Butlers } from "./views/Butlers";
+import { Commitments } from "./views/Commitments";
 import { Routines } from "./views/Routines";
 import { Secrets } from "./views/Secrets";
 import { Work } from "./views/Work";
@@ -50,6 +52,7 @@ type View =
   | "memory"
   | "integrations"
   | "routines"
+  | "commitments"
   | "butlers"
   | "chat"
   | "household"
@@ -77,6 +80,7 @@ const TITLES: Record<View, [string, string]> = {
   memory: ["Owned data", "Memory"],
   integrations: ["Connected apps", "Integrations"],
   routines: ["On its own", "Routines"],
+  commitments: ["The house keeps track", "Commitments"],
   butlers: ["Who answers", "Butlers"],
   chat: ["Access", "Chat"],
   household: ["People", "Household"],
@@ -147,6 +151,7 @@ export function Shell() {
       { id: "memory", label: "Memory", icon: <Brain size={ICON} /> },
       { id: "integrations", label: "Integrations", icon: <PlugsConnected size={ICON} /> },
       { id: "routines", label: "Routines", icon: <Repeat size={ICON} /> },
+      { id: "commitments", label: "Commitments", icon: <CalendarCheck size={ICON} /> },
       { id: "chat", label: "Chat", icon: <ChatsCircle size={ICON} /> },
       { id: "household", label: "Household", icon: <UsersThree size={ICON} /> },
       { id: "connect", label: "Connect chat", icon: <PlugsConnected size={ICON} /> },
@@ -203,6 +208,7 @@ export function Shell() {
           {view === "memory" && <Memory />}
           {view === "integrations" && <Integrations />}
           {view === "routines" && <Routines key={openRoutine ?? "list"} openRoutine={openRoutine} />}
+          {view === "commitments" && <Commitments />}
           {view === "butlers" && <Butlers />}
           {view === "chat" && <Chat />}
           {view === "household" && <Household />}

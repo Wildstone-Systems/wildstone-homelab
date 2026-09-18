@@ -25,6 +25,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
+	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
 )
 
 // Server serves the public plane. All fields are required except Log and
@@ -179,6 +180,18 @@ type Server struct {
 	// only for side-effect-free replay; cmd/keystone runs its loop. New
 	// wires one over the same DB and Statefile.
 	Automation *automation.Engine
+	// Upkeep, when set, answers where the household's commitments stand.
+	// An interface rather than the engine so the api package does not
+	// depend on the pass's timer, and so a test can hand it fixed
+	// answers.
+	Upkeep interface {
+		Evaluate() ([]upkeep.Standing, error)
+	}
+	// OnMeterReading, when set, is called after a reading is recorded, so
+	// the commitment pass can run again rather than leaving somebody who
+	// has just typed in a mileage to wait until tomorrow to be told what
+	// it meant.
+	OnMeterReading func()
 	// OnHouseholdEvent, when set, is called after a new household event
 	// is recorded (not after a duplicate) — cmd/keystone wires it to the
 	// engine's Poke so a rule is evaluated when its trigger lands, not
@@ -325,6 +338,23 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/household/events", s.handle(principal.VerbRead, s.listHouseholdEvents))
 	mux.Handle("POST /api/v1/household/publishers/{capability}", s.handle(principal.VerbManage, s.mintPublisher))
 	// Replay is a read: it evaluates and returns, writes nothing.
+	// Meters and their readings (ADR-W035 K1). The reading is an
+	// ordinary authenticated write rather than a Plan: it is evidence,
+	// not authority, and an approval queue between a person and a
+	// mileage is how a household stops recording mileages.
+	//
+	// VerbEmit because a reading is a household fact, the same verb and
+	// the same reason as the event intake beside it. Known consequence:
+	// RoleOperator does not hold emit, so an operator cannot record a
+	// reading today — the same gap they already have on household
+	// events. Widening the role is an RBAC decision of its own and is
+	// deliberately not made here.
+	mux.Handle("GET /api/v1/household/meters", s.handle(principal.VerbRead, s.listMeters))
+	mux.Handle("GET /api/v1/household/meters/{name}/readings", s.handle(principal.VerbRead, s.listMeterReadings))
+	mux.Handle("POST /api/v1/household/meters/{name}/readings", s.handle(principal.VerbEmit, s.recordMeterReading))
+	mux.Handle("GET /api/v1/household/commitments", s.handle(principal.VerbRead, s.listCommitments))
+	mux.Handle("GET /api/v1/household/commitments/{name}", s.handle(principal.VerbRead, s.commitmentHistory))
+
 	mux.Handle("POST /api/v1/household/automations/replay", s.handle(principal.VerbRead, s.replayAutomation))
 	mux.Handle("GET /api/v1/household/automations/grammar", s.handle(principal.VerbRead, s.automationGrammar))
 
@@ -591,6 +621,15 @@ func (s *Server) Handler() http.Handler {
 
 	// Activity: the household record, on the same surface as the front
 	// page because it is the same projection over a longer window.
+	// Answering a commitment from the household's own page (ADR-W035
+	// K5). Not a Plan: the same reasoning as a meter reading, and the
+	// same three things a person can say — I did it, I skipped it, I
+	// booked it — plus the number a meter wants.
+	mux.Handle("POST /api/v1/home/commitments/{name}/done", s.portal(surfaceHome, s.answerCommitment("done")))
+	mux.Handle("POST /api/v1/home/commitments/{name}/waived", s.portal(surfaceHome, s.answerCommitment("waived")))
+	mux.Handle("POST /api/v1/home/commitments/{name}/booked", s.portal(surfaceHome, s.answerCommitment("booked")))
+	mux.Handle("POST /api/v1/home/meters/{name}/readings", s.portal(surfaceHome, s.homeMeterReading))
+
 	mux.Handle("GET /activity/{$}", s.portal(surfaceHome, s.portalPage("activity")))
 	mux.Handle("GET /api/v1/activity", s.portal(surfaceHome, s.activityHistory))
 
@@ -690,9 +729,109 @@ func (s *Server) authenticate(r *http.Request) (principal.Identity, bool) {
 		if err != nil {
 			return principal.Identity{}, false
 		}
+		if !s.actingPersonMayStillHold(id) {
+			return principal.Identity{}, false
+		}
 		return id, true
 	}
 	return s.consoleForwardAuth(r)
+}
+
+// actingPersonMayStillHold re-derives the standing of the PERSON a token
+// acts for, on every request (design §3.2, §10.1; §18.1 "Demoting an
+// Owner immediately invalidates Console access/session").
+//
+// A token is minted once and then presented. Authenticate asks whether
+// it was revoked, whether it expired, and whether its principal is
+// disabled — three questions about the credential, none about the human
+// behind it. So an Owner could mint themselves an admin token, be
+// demoted, and keep the whole control plane until it expired. The
+// forward-auth door already refuses them on their next request; without
+// this, demotion locked the door and left the window open.
+//
+// It sits HERE rather than in butler.authorize() for the reason slice 3
+// gives: authorize() returns {Allowed: structural} when no authorizer is
+// configured, because it models administrative state. A Person's role
+// and lifecycle are not administrative state, so the check goes in front
+// of that seam, unconditionally, on the one path every authenticated
+// request passes through.
+//
+// Two deliberate limits, each matching forwardedUserMayHoldConsole:
+//
+//   - A name with no Person behind it passes. Person records are created
+//     through an API that lives behind this check, so refusing here would
+//     lock out a deployment that has provisioned none. The design closes
+//     that at §2.4 (installer creates the first Owner) and §2.6 (root CLI
+//     recovery); neither is built yet (#206).
+//   - Only the CONSOLE's own role requires Owner. RoleAdmin is what
+//     consoleForwardAuth mints, so a RoleAdmin token is the Console's
+//     authority in another wrapper and is held to the Console's rule.
+//     The verb table is deliberately not consulted: RoleOperator also
+//     holds approve, and it is the legacy MACHINE axis that decision 6
+//     of #201 keeps explicitly separate from Owner/Member — keying an
+//     Owner requirement off its verbs would merge the two axes this
+//     epic is taking apart. Narrowing the legacy role is its own slice
+//     (#210).
+//
+// Lifecycle applies to EVERY acting credential, elevated or not.
+// Offboarding somebody stops their chat reach as surely as their
+// Console, and a concierge acting for a Member must keep working while
+// they are active — that is what a family Butler is.
+func (s *Server) actingPersonMayStillHold(id principal.Identity) bool {
+	// ActingFor, not actingMember(id), and the difference is a real gap
+	// that belongs to another slice.
+	//
+	// actingMember falls back to the principal's own NAME when a token
+	// acts for nobody, so a machine principal named after a person's
+	// handle writes their memory and their work under them. Checking
+	// that name here would revoke such a credential — but it would do it
+	// by treating a `principals` row and a `butler_members` row as the
+	// same person because they share a string, which merges the two
+	// registries decision 6 of #201 keeps apart. `root-admin` the
+	// credential and `root-admin` the household member are not the same
+	// subject, and a name collision must not make them one.
+	//
+	// The real defect is the fallback itself: a machine principal's name
+	// is not a person handle, and every actingMember call site inherits
+	// that. Narrowing the legacy machine axis is #210, which is where it
+	// can be fixed once rather than papered over here.
+	if id.ActingFor == "" {
+		return true
+	}
+	// Case-insensitively, and for the same reason the Console door is:
+	// handles are compared exactly everywhere else, so an exact lookup
+	// would miss the Person whenever a different capitalisation was
+	// recorded and fall into the permissive "no record" branch — turning
+	// a data-hygiene defect into a way to keep a revoked credential.
+	people, err := s.DB.ButlerMembersByHandleFold(id.ActingFor)
+	if err != nil {
+		// A lookup that failed is not a lookup that passed.
+		return false
+	}
+	if len(people) == 0 {
+		// No Person of that name, so there is no lifecycle to check.
+		// This is the ordinary case for a machine credential —
+		// root-admin, an adapter, the node agent — and it must stay
+		// permissive: resolving "names nobody" to "refused" would fail
+		// the whole control plane closed. It is NOT the Console door's
+		// rule, which refuses an unknown name once the household has an
+		// Owner; a forwarded human identity and a machine credential are
+		// different questions.
+		return true
+	}
+	console := id.Role == runtimedb.RoleAdmin
+	// Every match must qualify. With two records differing only by case
+	// there is no way to tell which one was meant, and an authorization
+	// check that guesses is not a check.
+	for _, m := range people {
+		if !m.Active() {
+			return false
+		}
+		if console && m.Role != runtimedb.RoleOwner {
+			return false
+		}
+	}
+	return true
 }
 
 // writeJSON is the ONLY response encoder on the public plane: it redacts

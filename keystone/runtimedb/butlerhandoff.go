@@ -60,8 +60,8 @@ func (db *DB) StartButlerConversation(member, subject string) (string, error) {
 		return "", ErrNotAdmitted
 	}
 	res, err := db.sql.Exec(
-		`INSERT INTO butler_conversations (member, created_at, subject) VALUES (?, ?, ?)`,
-		member, now(), subject)
+		`INSERT INTO butler_conversations (person_id, created_at, subject) VALUES (?, ?, ?)`,
+		m.PersonID, now(), subject)
 	if err != nil {
 		return "", fmt.Errorf("runtimedb: starting conversation: %w", err)
 	}
@@ -102,7 +102,9 @@ func (db *DB) GetButlerConversation(id string) (ButlerConversation, error) {
 	var c ButlerConversation
 	var created string
 	err = db.sql.QueryRow(
-		`SELECT seq, member, subject, created_at FROM butler_conversations WHERE seq = ?`, seq).
+		`SELECT c.seq, m.member, c.subject, c.created_at
+		 FROM butler_conversations c JOIN butler_members m ON m.person_id = c.person_id
+		 WHERE c.seq = ?`, seq).
 		Scan(&c.Seq, &c.Member, &c.Subject, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ButlerConversation{}, ErrNotFound
@@ -191,10 +193,13 @@ func (db *DB) HandoffConversation(conversationID string, from, to ButlerSurface,
 			fromSession = s
 		}
 	}
+	// The handoff names the same person the conversation does, taken
+	// from the conversation row rather than resolved again: they are by
+	// construction the same person, and two lookups could disagree.
 	if _, err := db.sql.Exec(
-		`INSERT INTO butler_handoffs (conversation, member, from_surface, to_surface, from_session, at, carried, withheld)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		conv.Seq, conv.Member, string(from), string(to), fromSession, now(), len(turns), withheld,
+		`INSERT INTO butler_handoffs (conversation, person_id, from_surface, to_surface, from_session, at, carried, withheld)
+		 SELECT ?, person_id, ?, ?, ?, ?, ?, ? FROM butler_conversations WHERE seq = ?`,
+		conv.Seq, string(from), string(to), fromSession, now(), len(turns), withheld, conv.Seq,
 	); err != nil {
 		return HandoffContext{}, fmt.Errorf("runtimedb: recording handoff: %w", err)
 	}
@@ -286,8 +291,9 @@ func (db *DB) ListButlerHandoffs(conversationID string) ([]ButlerHandoff, error)
 		return nil, err
 	}
 	rows, err := db.sql.Query(
-		`SELECT seq, member, from_surface, to_surface, at, carried, withheld
-		 FROM butler_handoffs WHERE conversation = ? ORDER BY seq`, conv)
+		`SELECT h.seq, m.member, h.from_surface, h.to_surface, h.at, h.carried, h.withheld
+		 FROM butler_handoffs h JOIN butler_members m ON m.person_id = h.person_id
+		 WHERE h.conversation = ? ORDER BY h.seq`, conv)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing handoffs: %w", err)
 	}

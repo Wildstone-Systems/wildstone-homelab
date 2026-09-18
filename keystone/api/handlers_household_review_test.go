@@ -325,11 +325,15 @@ func TestChatCannotApproveAPlanByAnyRoute(t *testing.T) {
 	planID := storePlan(t, h, resource.KindAutomation)
 
 	t.Run("typing approval is refused on both surfaces", func(t *testing.T) {
-		for surface, want := range map[runtimedb.ButlerSurface]string{
-			runtimedb.ButlerSurfaceFamily: "review link",
-			runtimedb.ButlerSurfaceAdmin:  "Console",
+		// One Agent of each class, because the refusal differs by where
+		// approval actually happens: a household Agent points at the
+		// review link, an Owner Agent at the Console.
+		for surface, want := range map[string]string{
+			"family": "review link",
+			"admin":  "Console",
 		} {
-			body, _, handled := h.s.runChatCommand(chatCommandCtx{Surface: surface}, "/approve "+planID)
+			body, _, handled := h.s.runChatCommand(
+				chatCommandCtx{At: h.agentAt(t, surface, "telegram")}, "/approve "+planID)
 			if !handled {
 				t.Fatalf("/approve on %s was not handled; a person would be told the command does not exist", surface)
 			}

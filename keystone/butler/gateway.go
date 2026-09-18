@@ -80,6 +80,10 @@ type ToolGateway struct {
 	// DefaultNode is used by get_health when the model's tool call omits a
 	// node.
 	DefaultNode string
+	// Commitments answers where the household's commitments stand. An
+	// interface so this package depends on neither the pass's timer nor
+	// runtimedb; nil makes get_commitments say nothing is tracked.
+	Commitments CommitmentStandings
 	// Observed is the injected read-only observed-state seam the diagnose
 	// tool walks (ADR-W017 A5) — cmd/keystone wires it over the runtime
 	// DB's observed rows; this package imports neither reconcile nor
@@ -163,6 +167,13 @@ func NewToolGateway(store *statefile.Store, reader *AgentReader) *ToolGateway {
 		"get_plan":              {Spec: getPlanSpec, Handler: handleGetPlan},
 		"explain_resource":      {Spec: explainResourceSpec, Handler: handleExplainResource},
 		"get_automation_schema": {Spec: automationSchemaSpec, Handler: handleGetAutomationSchema},
+		// Commitments: describe the schema, and report where things
+		// stand. There is deliberately no third tool — an agent drafts
+		// and reads, and a household whose agent can close its own
+		// commitments has a tracker that agrees with itself and nothing
+		// else (ADR-W035 A13).
+		"get_commitment_schema": {Spec: commitmentSchemaSpec, Handler: handleGetCommitmentSchema},
+		"get_commitments":       {Spec: commitmentStandingSpec, Handler: handleGetCommitments},
 		// The dry run quotes household events back — subjects, payload
 		// fields, whatever a sensor or another person's phone wrote — so
 		// its result is attacker-influenceable like a health detail is.

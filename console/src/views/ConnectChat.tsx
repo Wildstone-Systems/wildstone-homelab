@@ -1,14 +1,14 @@
 import { useState } from "react";
 import {
   api,
-  ButlerSurface,
+  Butler,
+  ButlerRow,
   ChatClaim,
   ChatTransport,
   HouseholdMember,
   NodeInfo,
   PackageView,
   PlanRecord,
-  Principal,
   SecretInfo,
 } from "../api";
 import { ErrorLine, useLoad } from "../lib";
@@ -52,9 +52,9 @@ export function ConnectChat() {
   return (
     <>
       <div className="sub">
-        Each surface is its own bot with its own credential — the household bot cannot see the home
-        lab, and neither bot can approve anything. Pick which one you are setting up; every step
-        below is read from the deployment, so you can leave and come back.
+        A bot belongs to exactly one agent, and its token is that agent's alone — two agents cannot
+        share one. Pick the package you are setting up and the agent it answers for; every step below
+        is read from the deployment, so you can leave and come back.
       </div>
       <ErrorLine error={packages.error ?? transports.error ?? nodes.error} />
 
@@ -88,7 +88,10 @@ export function ConnectChat() {
         <div className="muted">
           This capability is installed but its resources span nodes, so this screen cannot say
           which one runs the adapter. Rotate its credential with{" "}
-          <code>wild chat adapter {chosen.capability} -node &lt;node&gt; -surface {chosen.surface}</code>{" "}
+          <code>
+            wild chat adapter {chosen.capability} -node &lt;node&gt; -butler{" "}
+            {chosen.butler || "<agent>"}
+          </code>{" "}
           rather than from here.
         </div>
       )}
@@ -113,13 +116,12 @@ export function ConnectChat() {
   );
 }
 
-// surfaceOf reads the surface out of the capability name — the same
-// convention Keystone mints credentials by (chat-<transport>-<surface>),
-// and the reason a typo there cannot quietly wire the family's bot to
-// the operator's Butler.
-export function surfaceOf(capability: string): ButlerSurface {
-  return capability.endsWith("-admin") ? "admin" : "family";
-}
+// A bot belongs to exactly one Agent (ADR-W033 B7), and which one is
+// chosen when it is credentialed rather than read out of its name. The
+// old surfaceOf() parsed chat-<transport>-<surface> to decide which
+// Butler a bot was wired to, which could only ever distinguish the two
+// CLASSES: Alfred and Robert are both `admin`, so it could not tell one
+// Owner Agent's bot from the other's.
 
 // vendorSecret is the provided secret the OPERATOR supplies — the bot
 // token — as opposed to the one credentialing places (the adapter's own
@@ -156,8 +158,12 @@ function Steps({
     [node],
   );
   const members = useLoad<HouseholdMember[]>(() => api.householdMembers());
-  const principals = useLoad<Principal[]>(() => api.principals());
-  const surface = surfaceOf(capability);
+  const agents = useLoad<{ butlers: ButlerRow[] | null }>(() => api.butlers());
+  // The Agent this bot answers for, once it has one. Until then the
+  // operator picks at the credentialing step, which is where the bot is
+  // assigned.
+  const butler = transport?.butler ?? "";
+  const roster = (agents.data?.butlers ?? []).map((r) => r.butler);
   // The vendor's token, as THIS package declares it: chat-telegram-*
   // reads <capability>-bot and chat-matrix-* reads <capability>-token.
   // Assuming either would write the operator's token into a secret
@@ -175,16 +181,13 @@ function Steps({
         title="Make the bot"
         done={false}
         muted
-        note={
-          surface === "admin"
-            ? "Talk to @BotFather and create a bot for YOU. It must be a different bot from the household's: one bot serving both is one stolen phone away from being an infrastructure console."
-            : "Talk to @BotFather and create a bot for the HOUSEHOLD. Keep the token it gives you — it is step 3."
-        }
+        note="Talk to @BotFather and create a bot for ONE agent. A bot serves one agent and its token is that agent's alone, so an agent that should answer separately needs a bot of its own."
       />
       <MintStep
         capability={capability}
         node={node}
-        surface={surface}
+        butler={butler}
+        agents={roster}
         done={!!transport?.credentialed}
         canAct={canAct}
         onDone={onChanged}
@@ -210,10 +213,10 @@ function Steps({
         }
       />
       <InviteStep
-        surface={surface}
+        butler={butler}
+        ownersOnly={roster.find((a) => a.name === butler)?.surface === "admin"}
         transport={transport}
         members={members.data ?? []}
-        principals={principals.data ?? []}
       />
     </>
   );
@@ -248,45 +251,73 @@ function Step({
   );
 }
 
+// MintStep credentials the bot AND assigns it to an Agent, because they
+// are one act: two steps would leave a credentialed bot answering for
+// nobody, which reads as working right up until somebody messages it.
 function MintStep({
   capability,
   node,
-  surface,
+  butler,
+  agents,
   done,
   canAct,
   onDone,
 }: {
   capability: string;
   node: string;
-  surface: ButlerSurface;
+  butler: string;
+  agents: Butler[];
   done: boolean;
   canAct: boolean;
   onDone: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [chosen, setChosen] = useState("");
+  const who = butler || chosen || agents[0]?.name || "";
   const mint = () => {
     setBusy(true);
     setError(null);
     api
-      .mintChatAdapter(capability, node, surface)
+      .mintChatAdapter(capability, node, who)
       .then(onDone)
       .catch((e: Error) => setError(e.message))
       .finally(() => setBusy(false));
   };
+  const agent = agents.find((a) => a.name === who);
   return (
     <Step
       n={2}
-      title="Give the adapter its Keystone credential"
+      title="Credential the bot and give it to an agent"
       done={done}
       note={
         done
-          ? `Minted. The token is on ${node} as secret/${capability}-adapter and holds converse and nothing else: it can relay messages, and cannot read the house.`
-          : `Mints a ${surface === "admin" ? "valet" : "concierge"} principal and places its token on ${node}. Minting again later is rotation.`
+          ? `${butler || "An agent"} answers here. The token is on ${node} as secret/${capability}-adapter and holds converse and nothing else: it can relay messages, and cannot read the house.`
+          : agents.length === 0
+            ? "No agent to give it to. Make one on the Butlers screen first — a bot with no agent has nobody to answer as."
+            : `Mints a ${agent?.surface === "admin" ? "valet" : "concierge"} principal, places its token on ${node}, and makes this bot ${who}'s. A bot already answering for another agent is refused rather than moved.`
       }
     >
       <div className="row">
-        <button className="btn btn-secondary" disabled={busy || !canAct} onClick={mint}>
+        {!butler && (
+          <select
+            value={who}
+            disabled={agents.length === 0 || busy}
+            onChange={(e) => setChosen(e.target.value)}
+          >
+            {agents.length === 0 && <option value="">no agents yet</option>}
+            {agents.map((a) => (
+              <option key={a.name} value={a.name}>
+                {a.name} ({a.surface === "admin" ? "owner agent" : "member agent"})
+              </option>
+            ))}
+          </select>
+        )}
+        <button
+          className="btn btn-secondary"
+          disabled={busy || !canAct || who === ""}
+          onClick={mint}
+        >
           {busy ? "Minting…" : done ? "Rotate" : "Mint credential"}
         </button>
       </div>
@@ -502,15 +533,21 @@ export function InstallStep({
 // InviteStep is the payoff: pick the person, get a link that opens the
 // bot with the code already in it.
 export function InviteStep({
-  surface,
+  butler,
+  ownersOnly,
   transport,
   members,
-  principals,
 }: {
-  surface: ButlerSurface;
+  // The Agent this bot answers for. A claim is issued FOR an Agent, not
+  // for a class of them (ADR-W033 B7), so an empty one means the bot has
+  // not been given to anybody yet and there is nothing to invite to.
+  butler: string;
+  // Whether that Agent is an Owner Agent, whose Connections admit Owners
+  // only (ADR-W033 B9). The roster does not say who is an Owner, so this
+  // only warns — Keystone refuses the claim either way.
+  ownersOnly?: boolean;
   transport?: ChatTransport;
   members: HouseholdMember[];
-  principals: Principal[];
 }) {
   const [identity, setIdentity] = useState("");
   const [claim, setClaim] = useState<ChatClaim | null>(null);
@@ -518,18 +555,23 @@ export function InviteStep({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const options =
-    surface === "family"
-      ? members.map((m) => ({ value: m.username, label: m.displayName || m.username }))
-      : principals.filter((p) => !p.disabled).map((p) => ({ value: p.name, label: p.name }));
+  // Always people. A Connection admits a Person (ADR-W033 A2/B9), so
+  // there is no branch here: an Owner Agent's bot is invited to by the
+  // same list, and Keystone refuses the ones who are not Owners.
+  const options = members.map((m) => ({ value: m.username, label: m.displayName || m.username }));
   const who = identity || options[0]?.value || "";
+  const ready = butler !== "" && !!transport?.installed;
 
   const invite = () => {
+    // Guard BEFORE the busy flag: returning after setting it and before
+    // the .finally that clears it left the step stuck on "Issuing…"
+    // with nothing to un-stick it.
+    if (!transport) return;
     setBusy(true);
     setError(null);
     setCopied(false);
     api
-      .issueChatClaim(surface, who, transport?.transport)
+      .issueChatClaim(butler, who, transport.transport, transport.capability)
       .then(setClaim)
       .catch((e: Error) => setError(e.message))
       .finally(() => setBusy(false));
@@ -550,10 +592,12 @@ export function InviteStep({
       done={false}
       note={
         options.length === 0
-          ? surface === "family"
-            ? "Nobody has an account yet. Add someone on the Household screen first — an invite binds a chat account to a declared person."
-            : "No principal to bind."
-          : "The code works once, expires in minutes, and can only ever create the binding it names."
+          ? "Nobody has an account yet. Add someone on the Household screen first — an invite binds a chat account to a declared person."
+          : butler === ""
+            ? "This bot has not been given to an agent yet, so there is nobody for an invite to reach. Do step 2 first."
+            : ownersOnly
+              ? `The code works once, expires in minutes, and binds that person to ${butler}. ${butler} is an owner agent, so only an owner can be admitted — an invite for anybody else is refused.`
+              : `The code works once, expires in minutes, and binds that person to ${butler}.`
       }
     >
       <div className="row">
@@ -571,7 +615,7 @@ export function InviteStep({
         </select>
         <button
           className="btn btn-primary"
-          disabled={busy || who === "" || !transport?.installed}
+          disabled={busy || who === "" || !ready}
           onClick={invite}
         >
           {busy ? "Issuing…" : "Get invite link"}

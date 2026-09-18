@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -34,9 +33,20 @@ import (
 const maxChatBodyBytes = 8 << 10
 
 type claimRequest struct {
-	Surface   string `json:"surface"`
+	// Butler is the Agent this invite admits somebody to. It replaced
+	// Surface, and the difference is the whole of ADR-W033 B7: a
+	// surface is a class of Agents, so an invite to `admin` admitted
+	// somebody to every Owner Agent at once.
+	Butler    string `json:"butler"`
 	Identity  string `json:"identity"`
-	Transport string `json:"transport,omitempty"`
+	Transport string `json:"transport"`
+	// Connection picks WHICH of that Agent's bots on the transport,
+	// by the address's external id, and is only needed when it has
+	// more than one. B7 allows exactly that, so without a field to say
+	// which, an Agent with two Telegram bots could be invited to
+	// neither: the refusal names the ids, and this is where one goes
+	// back.
+	Connection string `json:"connection,omitempty"`
 	// TTLSeconds overrides the default expiry; 0 uses it.
 	TTLSeconds int `json:"ttlSeconds,omitempty"`
 }
@@ -46,9 +56,9 @@ type claimRequest struct {
 // gets one chance to pass it on, the same contract a minted token has.
 type claimResponse struct {
 	Code      string `json:"code"`
-	Surface   string `json:"surface"`
+	Butler    string `json:"butler"`
 	Identity  string `json:"identity"`
-	Transport string `json:"transport,omitempty"`
+	Transport string `json:"transport"`
 	ExpiresAt string `json:"expiresAt"`
 	Note      string `json:"note"`
 	// Handle is the bot this code should be sent to, and Link opens a
@@ -70,47 +80,89 @@ func (s *Server) issueChatClaim(r *http.Request, id principal.Identity) (any, in
 	if st, err := decodeChatBody(r, &req); err != nil {
 		return nil, st, err
 	}
-	surface := runtimedb.ButlerSurface(strings.TrimSpace(req.Surface))
-	if !runtimedb.ValidButlerSurface(surface) {
-		return nil, http.StatusBadRequest, fmt.Errorf("surface must be admin or family")
-	}
 	identity := strings.TrimSpace(req.Identity)
+	butler := strings.TrimSpace(req.Butler)
 	transport := strings.TrimSpace(req.Transport)
-	if st, err := s.checkClaimTarget(surface, identity, transport); err != nil {
+	if butler == "" || transport == "" {
+		return nil, http.StatusBadRequest,
+			fmt.Errorf("an invite names the butler it admits somebody to, and the transport it arrives on")
+	}
+	at, st, err := s.connectionNamed(butler, transport, strings.TrimSpace(req.Connection))
+	if err != nil {
+		return nil, st, err
+	}
+	if st, err := s.checkClaimTarget(at, identity); err != nil {
 		return nil, st, err
 	}
 	ttl := time.Duration(req.TTLSeconds) * time.Second
-	code, rec, err := s.Principals.IssueChatClaim(surface, identity, transport, id.Name, ttl)
+	code, rec, err := s.Principals.IssueChatClaim(at, identity, id.Name, ttl)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
 	s.event("chat.claim_issued", rec.Identity, id,
-		fmt.Sprintf("claim code issued for the %s surface, expires %s", rec.Surface, rec.ExpiresAt.UTC().Format(time.RFC3339)))
+		fmt.Sprintf("claim code issued for %s on %s, expires %s",
+			at.Butler, at.Transport, rec.ExpiresAt.UTC().Format(time.RFC3339)))
 
-	link, handle, carriesCode := s.linkForClaim(surface, rec.Transport, code)
+	link, handle, carriesCode := s.linkForClaim(at, code)
 	expires := rec.ExpiresAt.UTC().Format(time.RFC3339)
-	note := fmt.Sprintf("Send this code to the %s bot as a direct message. It works once, expires %s, and can only bind %q on the %s surface.",
-		orAny(rec.Transport), expires, rec.Identity, rec.Surface)
+	note := fmt.Sprintf("Send this code to the %s bot as a direct message. It works once, expires %s, and admits %q to %s and to nothing else.",
+		at.Transport, expires, rec.Identity, at.Butler)
 	switch {
 	case carriesCode:
 		// The link IS the code in tappable form, which is worth saying
 		// plainly: forwarding the link is forwarding the invite.
-		note = fmt.Sprintf("Send this link to %s. It opens @%s and carries the code, so there is nothing to type — and anyone who has the link can use it. It works once, expires %s, and binds only the %s surface.",
-			rec.Identity, handle, expires, rec.Surface)
+		note = fmt.Sprintf("Send this link to %s. It opens @%s and carries the code, so there is nothing to type — and anyone who has the link can use it. It works once, expires %s, and admits them to %s alone.",
+			rec.Identity, handle, expires, at.Butler)
 	case link != "":
-		note = fmt.Sprintf("The link opens a chat with %s; %s still sends the code itself. It works once, expires %s, and binds only the %s surface.",
-			handle, rec.Identity, expires, rec.Surface)
+		note = fmt.Sprintf("The link opens a chat with %s; %s still sends the code itself. It works once, expires %s, and admits them to %s alone.",
+			handle, rec.Identity, expires, at.Butler)
 	}
 	return claimResponse{
 		Code:      code,
-		Surface:   string(rec.Surface),
+		Butler:    at.Butler,
 		Identity:  rec.Identity,
-		Transport: rec.Transport,
+		Transport: at.Transport,
 		ExpiresAt: rec.ExpiresAt.UTC().Format(time.RFC3339),
 		Note:      note,
 		Handle:    handle,
 		Link:      link,
 	}, http.StatusCreated, nil
+}
+
+// connectionNamed resolves the Connection an operator asked for by
+// Agent and transport, with an optional external id picking between an
+// Agent's several bots on that transport.
+//
+// Ambiguity is an error rather than a choice: B7 lets an Agent hold
+// several Connections on one transport, and an invite issued for the
+// wrong one of somebody's two Telegram bots is an invite that works and
+// admits them somewhere they did not mean to go. But an error the
+// caller cannot act on is a dead end, so the refusal names the ids and
+// externalID is how one of them comes back.
+//
+// The named address must belong to the named Agent. Taking the Agent
+// from the address instead would let a mistyped butler be silently
+// ignored, and the whole point of the pair is that the operator says
+// who they mean.
+func (s *Server) connectionNamed(butler, transport, externalID string) (runtimedb.Connection, int, error) {
+	at, err := s.DB.ChatConnectionForButler(butler, transport, externalID)
+	switch {
+	case errors.Is(err, runtimedb.ErrNoConnection) && externalID != "":
+		// Separated from the case below because the operator named a
+		// bot: "that is not one of theirs" is what they need to hear,
+		// not "they have none".
+		return runtimedb.Connection{}, http.StatusBadRequest, fmt.Errorf(
+			"%s is not one of %s's bots", externalID, butler)
+	case errors.Is(err, runtimedb.ErrNoConnection):
+		return runtimedb.Connection{}, http.StatusBadRequest, fmt.Errorf(
+			"%s has no %s connection: give it one first (`wild butler address`), then invite somebody to it",
+			butler, orAny(transport))
+	case errors.Is(err, runtimedb.ErrAmbiguousConnection):
+		return runtimedb.Connection{}, http.StatusBadRequest, err
+	case err != nil:
+		return runtimedb.Connection{}, http.StatusInternalServerError, err
+	}
+	return at, 0, nil
 }
 
 // checkClaimTarget refuses an invite that could never be redeemed
@@ -124,11 +176,17 @@ func (s *Server) issueChatClaim(r *http.Request, id principal.Identity) (any, in
 // member was an LDAP account this control plane did not own, a typo
 // could only be caught by a person; now a member IS a declared
 // `LdapUser`, so the roster is right here to check against.
-func (s *Server) checkClaimTarget(surface runtimedb.ButlerSurface, identity, transport string) (int, error) {
-	// The admin half is checked where it lives: IssueChatClaim resolves
-	// the principal, and re-checking here would be a second copy to
-	// drift from.
-	if surface == runtimedb.ButlerSurfaceFamily {
+func (s *Server) checkClaimTarget(at runtimedb.Connection, identity string) (int, error) {
+	// Whether the named Person may be admitted is checked where it
+	// lives: IssueChatClaim resolves them, requires them admitted, and
+	// requires an Owner where the Connection belongs to an Owner Agent
+	// (ADR-W033 B9). Re-checking here would be a second copy to drift
+	// from.
+	//
+	// A family-surface Connection additionally wants the declared
+	// roster, because since ADR-W020 A3 a household member IS a declared
+	// LdapUser and a typo is catchable here rather than by a person.
+	if !at.AdmitsOwnersOnly() {
 		members, err := s.householdMemberNames()
 		if err != nil {
 			return http.StatusInternalServerError, err
@@ -139,50 +197,36 @@ func (s *Server) checkClaimTarget(surface runtimedb.ButlerSurface, identity, tra
 		}
 	}
 
-	transports, err := s.chatTransports()
+	// BOTH halves, because a code needs a bot that exists AND can talk
+	// to Keystone, and each half is separately reachable.
+	//
+	// Not installed: the capability was removed, or the address outlived
+	// it. An address is not revoked when its capability is disabled, and
+	// the adapter's principal is not deleted either, so a credential
+	// check alone would call a bot that is not running ready.
+	//
+	// The capability is the Connection's own external id: the bot a
+	// message arrives at IS the address (ADR-W031 A7), so the address
+	// names the capability this Connection is.
+	enabled, err := s.enabledCapabilities()
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}
-	// Installed is not enough: an adapter with no live Keystone token
-	// cannot redeem anything, so a code issued for it is exactly the
-	// unredeemable invite this check exists to prevent. That state is
-	// reachable — installing through Services without credentialing, or
-	// a setup interrupted between the two.
-	installed, uncredentialed := []string{}, []string{}
-	for _, t := range transports {
-		if !t.Installed || t.Surface != string(surface) {
-			continue
-		}
-		if t.Credentialed {
-			installed = append(installed, t.Transport)
-		} else {
-			uncredentialed = append(uncredentialed, t.Transport)
-		}
-	}
-	if len(installed) == 0 {
-		if len(uncredentialed) > 0 {
-			return http.StatusBadRequest, fmt.Errorf(
-				"the %s %s adapter has no Keystone token, so it cannot redeem a code: credential it first (wild chat adapter chat-%s-%s -node <node> -surface %s)",
-				surface, strings.Join(uncredentialed, "/"), uncredentialed[0], surface, surface)
-		}
+	if !enabled[at.ExternalID] {
 		return http.StatusBadRequest, fmt.Errorf(
-			"no %s chat adapter is installed: there is no bot to send a code to (install chat-<transport>-%s)",
-			surface, surface)
+			"%s is not installed, so there is no bot for a code to be sent to: install it, then credential it for %s",
+			at.ExternalID, at.Butler)
 	}
-	if transport == "" {
-		// A code with no transport is redeemable on any of them, which
-		// is only meaningful because at least one exists.
-		return http.StatusOK, nil
-	}
-	if !slices.Contains(installed, transport) {
-		if slices.Contains(uncredentialed, transport) {
-			return http.StatusBadRequest, fmt.Errorf(
-				"the %s %s adapter has no Keystone token, so it cannot redeem a code: credential it first",
-				surface, transport)
-		}
+
+	// No live Keystone token: the adapter cannot redeem anything, so a
+	// code issued for its Connection is exactly the unredeemable invite
+	// this check exists to prevent. That state is reachable too —
+	// installing through Services without credentialing, or a setup
+	// interrupted between the two.
+	if !s.adapterCredentialed(at.ExternalID) {
 		return http.StatusBadRequest, fmt.Errorf(
-			"no %s adapter on the %s surface: this deployment has %s",
-			transport, surface, strings.Join(installed, ", "))
+			"the %s adapter %s has no Keystone token, so it cannot redeem a code: credential it first (wild chat adapter %s -node <node> -butler %s)",
+			at.Transport, at.ExternalID, at.ExternalID, at.Butler)
 	}
 	return http.StatusOK, nil
 }
@@ -202,6 +246,9 @@ func (s *Server) householdMemberNames() (map[string]bool, error) {
 	return names, nil
 }
 
+// orAny keeps a refusal readable when no transport was named: "has no
+// connection" with a hole in it reads as a typo, which is what it looks
+// like to the person who has to act on it.
 func orAny(transport string) string {
 	if transport == "" {
 		return "chat"
@@ -210,7 +257,17 @@ func orAny(transport string) string {
 }
 
 type redeemRequest struct {
-	Code        string `json:"code"`
+	Code string `json:"code"`
+	// Butler names the Agent whose Connection this code is for, and is
+	// for a HUMAN caller only — an adapter's own credential is its
+	// Connection (ADR-W031 A7), so a bot that could name one could name
+	// somebody else's.
+	Butler string `json:"butler,omitempty"`
+	// Connection picks between that Agent's several bots on the
+	// transport, by external id, for the same reason claimRequest
+	// carries one. An adapter never sends it: its credential already
+	// IS the connection.
+	Connection  string `json:"connection,omitempty"`
 	Transport   string `json:"transport"`
 	Account     string `json:"account"`
 	DisplayName string `json:"displayName,omitempty"`
@@ -231,37 +288,74 @@ func (s *Server) redeemChatClaim(r *http.Request, id principal.Identity) (any, i
 	if st, err := decodeChatBody(r, &req); err != nil {
 		return nil, st, err
 	}
-	transport := strings.TrimSpace(req.Transport)
 	account := strings.TrimSpace(req.Account)
-	if transport == "" || account == "" {
-		return nil, http.StatusBadRequest, fmt.Errorf("transport and account are required")
+	if account == "" {
+		return nil, http.StatusBadRequest, fmt.Errorf("an account is required")
 	}
-	// The redeeming BOT's own surface, from its role. A code for the
-	// other surface is then refused rather than burned: redeeming a
-	// family code on the operator's bot used to succeed, spend the code,
-	// and leave the person bound on a surface that bot never resolves —
-	// so they read as unbound, with nothing left to retry.
+	// The redeeming BOT's own Connection. A code for a different Agent
+	// is then refused rather than burned: redeeming Alfred's code on
+	// Robert's bot would otherwise succeed, spend the code, and leave
+	// the person admitted somewhere that bot never resolves — so they
+	// read as unbound, with nothing left to retry.
 	//
-	// A human caller (the Console, `wild`) is pinned to no surface and
-	// constrains nothing: they can redeem on behalf of whoever is
-	// standing next to them, which is the whole point of a claim code.
-	want, _ := adapterSurface(id)
-	binding, err := s.Principals.RedeemChatClaim(req.Code, transport, account,
-		trimDisplayName(req.DisplayName), strings.TrimSpace(req.Conversation), want)
+	// This used to compare SURFACES, which could not tell Alfred from
+	// Robert at all: both are Owner Agents, so a code for either was
+	// redeemable on either's bot.
+	at, st, err := s.redeemingConnection(id, req)
+	if err != nil {
+		return nil, st, err
+	}
+	binding, err := s.Principals.RedeemChatClaim(req.Code, at, account,
+		trimDisplayName(req.DisplayName), strings.TrimSpace(req.Conversation))
 	if errors.Is(err, runtimedb.ErrClaimCode) {
 		// One refusal for every reason (unknown, expired, spent, wrong
 		// transport): an adapter relaying codes for strangers must not be
 		// able to tell them apart.
-		s.event("chat.claim_refused", "", id, fmt.Sprintf("claim refused for %s account", transport))
+		s.event("chat.claim_refused", "", id, fmt.Sprintf("claim refused for %s account", at.Transport))
 		return nil, http.StatusForbidden, fmt.Errorf("that code is not valid")
 	}
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	s.event("chat.bound", binding.Identity, id,
-		fmt.Sprintf("%s account bound to %q on the %s surface (binding %d)",
-			binding.Transport, binding.Identity, binding.Surface, binding.ID))
+		fmt.Sprintf("%s account admitted for %q to %s (binding %d)",
+			binding.Transport, binding.Identity, binding.Butler, binding.ID))
 	return binding, http.StatusCreated, nil
+}
+
+// redeemingConnection is the Connection a redemption arrives at.
+//
+// A chat adapter IS one: its credential carries the capability it was
+// minted for, a live address holds that capability as its external id,
+// and that address names the Agent. So the bot cannot claim to be
+// somebody else's Connection, and does not get to name one.
+//
+// A human — the Console holder, or `wild` — has no bot to arrive
+// through, so they say which Agent they are redeeming for. That is not
+// an escalation: issuing the code was the decision, and A10 gives the
+// Console holder every Butler anyway.
+func (s *Server) redeemingConnection(id principal.Identity, req redeemRequest) (runtimedb.Connection, int, error) {
+	if capability, isAdapter := butlerAddressFor(id); isAdapter {
+		if strings.TrimSpace(req.Butler) != "" {
+			return runtimedb.Connection{}, http.StatusBadRequest, fmt.Errorf(
+				"a chat adapter cannot name a butler; the bot a code arrives at is the connection (ADR-W031 A7)")
+		}
+		at, err := s.adapterConnection(capability)
+		if errors.Is(err, runtimedb.ErrNoConnection) {
+			return runtimedb.Connection{}, http.StatusBadRequest, fmt.Errorf(
+				"no butler answers at %s: give one that address before anybody is invited to it", capability)
+		}
+		if err != nil {
+			return runtimedb.Connection{}, http.StatusInternalServerError, err
+		}
+		return at, 0, nil
+	}
+	butler, transport := strings.TrimSpace(req.Butler), strings.TrimSpace(req.Transport)
+	if butler == "" || transport == "" {
+		return runtimedb.Connection{}, http.StatusBadRequest, fmt.Errorf(
+			"name the butler and transport: this credential is not a chat adapter, so there is no connection to resolve one from")
+	}
+	return s.connectionNamed(butler, transport, strings.TrimSpace(req.Connection))
 }
 
 // trimDisplayName bounds the transport-supplied label. It is untrusted

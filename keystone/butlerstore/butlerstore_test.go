@@ -100,12 +100,29 @@ var migrated = dbtemplate.New(func(path string) error {
 	return db.Close()
 })
 
+// record puts the cast these fixtures use on record as Persons.
+//
+// Since migration 0043 a task's author and owner, and a memory record's
+// author, are foreign keys to a Person, so a fixture cannot file work
+// for "mika" without saying who mika is. Machine principals stay out
+// of it: "butler" and "root-admin" still appear here as actors, and
+// actor columns still hold recorded text.
+func record(t *testing.T, db *runtimedb.DB, handles ...string) {
+	t.Helper()
+	for _, h := range handles {
+		if err := db.RecordButlerMember(h, runtimedb.RoleMember, "", ""); err != nil {
+			t.Fatalf("recording %q: %v", h, err)
+		}
+	}
+}
+
 func testLedger(t *testing.T, path string) (*runtimedb.DB, *Ledger) {
 	t.Helper()
 	db, err := runtimedb.Open(migrated.Into(t, path))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	record(t, db, "mika", "sam")
 	lease, err := db.AcquireCoordinator("keystone-a")
 	if err != nil {
 		t.Fatalf("AcquireCoordinator: %v", err)
@@ -520,4 +537,37 @@ func (p *promotingProvider) Chat(ctx context.Context, req provider.ChatRequest) 
 		}
 	}
 	return resp, err
+}
+
+// chatConnection gives an Agent a bot and returns the Connection a
+// queued message leaves by.
+//
+// Since migration 0045 the outbound queue is per Connection rather than
+// per surface, so a notifier's message belongs to one Agent's bot — not
+// to whichever bot happens to serve the operator surface.
+func chatConnection(t *testing.T, db *runtimedb.DB, butler string) runtimedb.Connection {
+	t.Helper()
+	if err := db.UpsertModel(runtimedb.Model{
+		Name: "kitchen-box", Kind: runtimedb.ModelLocal, Provider: "ollama", ProviderModel: "llama",
+		Readiness: runtimedb.ModelReady, Enabled: true,
+	}, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	const capability = "chat-telegram-admin"
+	if _, err := db.GetButler(butler); err != nil {
+		if _, err := db.CreateButler(runtimedb.Butler{
+			Name: butler, Directive: "look after the house", Surface: runtimedb.ButlerSurfaceAdmin,
+			Profile: runtimedb.ProfileOperator, Model: "kitchen-box",
+		}, "mika"); err != nil {
+			t.Fatalf("CreateButler(%s): %v", butler, err)
+		}
+		if _, err := db.AddButlerAddress(butler, "telegram", capability, "", "mika"); err != nil {
+			t.Fatalf("addressing %s: %v", butler, err)
+		}
+	}
+	at, err := db.ChatConnectionAt("telegram", capability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return at
 }

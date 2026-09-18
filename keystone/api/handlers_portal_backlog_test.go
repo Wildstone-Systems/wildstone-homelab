@@ -22,6 +22,7 @@ import (
 // card.
 func TestAPendingQuestionSurvivesABacklogOfNotices(t *testing.T) {
 	h := homeHarness(t)
+	h.person("sandy")
 	asked, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
 		Kind: "lock-up", Recipient: "sandy", DedupeKey: "the-question", Asks: true,
 		TTL: 72 * time.Hour,
@@ -58,6 +59,7 @@ func TestAPendingQuestionSurvivesABacklogOfNotices(t *testing.T) {
 // telling the member to go looking for something it is hiding.
 func TestAnUnreadNotificationIsNotCutBeforeTheSort(t *testing.T) {
 	h := homeHarness(t)
+	h.person("sandy")
 	unread, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
 		Kind: "washing-done", Recipient: "sandy", DedupeKey: "the-unread-one",
 	}, runtimedb.DefaultButlerSettings(), time.Now())
@@ -139,6 +141,7 @@ func TestACatalogRequestSurvivesABusyHousehold(t *testing.T) {
 // ever say "+0".
 func TestAFourthWaitingDecisionIsCounted(t *testing.T) {
 	h := homeHarness(t)
+	h.person("sandy")
 	for i := range 5 {
 		if _, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
 			Kind: "lock-up", Recipient: "sandy", DedupeKey: fmt.Sprintf("q-%d", i),
@@ -245,6 +248,7 @@ func TestTodayAtHomeShowsTheNewestEventsOfTheDay(t *testing.T) {
 // sufficient: the sort only ever saw the newest rows the query returned.
 func TestAnUnreadNotificationBehindAWholeWindowIsStillFound(t *testing.T) {
 	h := homeHarness(t)
+	h.person("sandy")
 	unread, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
 		Kind: "washing-done", Recipient: "sandy", DedupeKey: "the-unread-one",
 	}, runtimedb.DefaultButlerSettings(), time.Now())
@@ -283,6 +287,7 @@ func TestAnUnreadNotificationBehindAWholeWindowIsStillFound(t *testing.T) {
 // what a member wants to correct.
 func TestTheMemoryPanelShowsTheNewestNotTheOldest(t *testing.T) {
 	h := homeHarness(t)
+	h.person("sandy")
 	for i := range maxMemoryShown + 10 {
 		remember(t, h, "sandy", fmt.Sprintf("fact number %d", i), runtimedb.ButlerAudiencePrivate)
 	}
@@ -441,6 +446,7 @@ func TestTheDrillIsFoundBehindAYearOfBackups(t *testing.T) {
 // Clear means all of them, not a window's worth.
 func TestClearingNotificationsClearsMoreThanAWindow(t *testing.T) {
 	h := homeHarness(t)
+	h.person("sandy")
 	for i := range 260 {
 		if _, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
 			Kind: "washing-done", Recipient: "sandy", DedupeKey: fmt.Sprintf("n-%d", i),
@@ -605,6 +611,7 @@ func TestACapitalisationTheDoorForgivesDoesNotEmptyTheHousehold(t *testing.T) {
 // window somebody chose.
 func TestTheHiddenDecisionCountIsNotAWindowSize(t *testing.T) {
 	h := homeHarness(t)
+	h.person("sandy")
 	const waiting = 60
 	for i := range waiting {
 		if _, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{

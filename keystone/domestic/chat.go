@@ -27,6 +27,9 @@ type ChatRecipient struct {
 	Target string
 	// BindingID is the binding this came from, for the audit record.
 	BindingID int64
+	// Connection is the Agent's bot this leaves by (ADR-W033 B7). A
+	// message is from one Agent, so the queue it joins is that Agent's.
+	Connection int64
 }
 
 // ChatSender is the "<capability>.send" executor. One is registered per
@@ -101,7 +104,7 @@ func (c *ChatSender) Execute(ctx context.Context, call Call) (Result, error) {
 	recipient, err := c.Lookup(ctx, member)
 	if err != nil {
 		return Result{}, &RefusalError{Tool: call.Tool, Reason: fmt.Sprintf(
-			"%s has no %s account bound: introduce them with `wild chat code -surface family -identity %s`",
+			"%s has no %s account bound: introduce them with `wild chat code -butler <agent> -identity %s`",
 			member, c.Transport, member)}
 	}
 	seq, err := c.Ask(ctx, recipient, body, call.CorrelationID, call.Rule, member)

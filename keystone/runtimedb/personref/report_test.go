@@ -10,15 +10,26 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb/personref"
 )
 
-// surveyed builds a database, lets the caller write realistic legacy
-// rows into it, and then surveys it through a READ-ONLY handle — the
-// same way the CLI does, so the tests exercise the real guarantee.
+// surveyed builds a database AS IT STOOD BEFORE MIGRATION 0043, lets
+// the caller write realistic legacy rows into it, and then surveys it
+// through a READ-ONLY handle — the same way the CLI does.
+//
+// Stopping at 0039 is the point rather than a convenience. Free-text
+// person references only exist before 0043 moved them, so a deployment
+// that still has them is a deployment that has not migrated, and that
+// is precisely when this report is worth running: `keystone person-refs`
+// opens the file read-only and does not migrate it, so this binary can
+// pre-flight an un-upgraded database.
+//
+// The seed writes raw SQL for the same reason. The store above this
+// package speaks the 0043 schema now, so a fixture built through it
+// could not produce the rows these tests are about.
 func surveyed(t *testing.T, seed func(*runtimedb.DB)) (personref.Report, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	db, err := runtimedb.Open(path)
+	db, err := runtimedb.OpenThroughForTest(path, "0039_person_core.sql")
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatalf("OpenThroughForTest: %v", err)
 	}
 	if seed != nil {
 		seed(db)
@@ -48,14 +59,52 @@ func find(t *testing.T, rep personref.Report, handle string) personref.Handle {
 	return personref.Handle{}
 }
 
-// people adds Persons and admits them, which is what a real deployment
-// looks like.
+// people adds Persons, in the 0039 shape.
 func people(t *testing.T, db *runtimedb.DB, handles ...string) {
 	t.Helper()
 	for _, h := range handles {
-		if err := db.RecordButlerMember(h, runtimedb.RoleMember, "", ""); err != nil {
-			t.Fatalf("RecordButlerMember(%s): %v", h, err)
+		if _, err := db.ExecForTest(
+			`INSERT INTO butler_members (person_id, member, role, admitted, generation, created_at)
+			 VALUES (?, ?, 'member', 0, 1, 't')`, "psn_"+h, h); err != nil {
+			t.Fatalf("recording %s: %v", h, err)
 		}
+	}
+}
+
+// admit is AdmitButlerMember in raw SQL, so the fixture does not depend
+// on a store that now speaks a later schema.
+func admit(t *testing.T, db *runtimedb.DB, handle, by string) {
+	t.Helper()
+	if _, err := db.ExecForTest(
+		`UPDATE butler_members SET admitted = 1, admitted_at = 't', admitted_by = ?,
+		     generation = generation + 1 WHERE member = ?`, by, handle); err != nil {
+		t.Fatalf("admitting %s: %v", handle, err)
+	}
+}
+
+// legacyMemory writes one pre-0043 memory row: owner and author as free
+// text, which is the whole thing the survey exists to find.
+func legacyMemory(t *testing.T, db *runtimedb.DB, owner, author, audience, sourceID, content string) {
+	t.Helper()
+	if _, err := db.ExecForTest(
+		`INSERT INTO butler_memory (kind, subject, content, audience, permission_label, owner,
+		     source_kind, source_id, created_at, author, envelope_version)
+		 VALUES ('fact', ?, ?, ?, 'household', ?, 'conversation', ?, 't', ?, 1)`,
+		owner, content, audience, owner, sourceID, author); err != nil {
+		t.Fatalf("recording legacy memory owned by %q: %v", owner, err)
+	}
+}
+
+// legacyTask is the same for butler_tasks, whose author and owner were
+// free text before 0043.
+func legacyTask(t *testing.T, db *runtimedb.DB, author, owner string) {
+	t.Helper()
+	if _, err := db.ExecForTest(
+		`INSERT INTO butler_tasks (created_at, updated_at, kind, state, author, owner,
+		     surface, profile, audience, objective, completion_criteria, retention, envelope_version)
+		 VALUES ('t', 't', 'conversation', 'pending', ?, ?, 'family', 'household', 'shared',
+		     'x', 'done', 'conversation', 1)`, author, owner); err != nil {
+		t.Fatalf("recording a legacy task authored by %q: %v", author, err)
 	}
 }
 
@@ -64,13 +113,7 @@ func TestTheSurveyWritesNothing(t *testing.T) {
 	var before []byte
 	rep, path := surveyed(t, func(db *runtimedb.DB) {
 		people(t, db, "sam")
-		if _, err := db.RecordMemory(runtimedb.MemoryRecord{
-			Kind: runtimedb.MemoryFact, Subject: "household", Content: "the bins go out on Tuesday",
-			Audience: runtimedb.ButlerAudienceShared, PermissionLabel: "household",
-			Owner: "sam", Author: "sam", SourceKind: "conversation", SourceID: "v-1",
-		}); err != nil {
-			t.Fatalf("RecordMemory: %v", err)
-		}
+		legacyMemory(t, db, "sam", "sam", "shared", "v-1", "the bins go out on Tuesday")
 	})
 	if len(rep.Handles) == 0 {
 		t.Fatal("the fixture produced no handles, so this proves nothing")
@@ -108,9 +151,7 @@ func TestMachinePrincipalActorsAreNotOrphans(t *testing.T) {
 			t.Fatalf("CreatePrincipal: %v", err)
 		}
 		people(t, db, "mika")
-		if err := db.AdmitButlerMember("mika", "root-admin"); err != nil {
-			t.Fatalf("AdmitButlerMember: %v", err)
-		}
+		admit(t, db, "mika", "root-admin")
 	})
 
 	h := find(t, rep, "root-admin")
@@ -130,13 +171,7 @@ func TestMachinePrincipalActorsAreNotOrphans(t *testing.T) {
 func TestCaseVariantHandlesAreReportedNotMerged(t *testing.T) {
 	rep, _ := surveyed(t, func(db *runtimedb.DB) {
 		people(t, db, "Sam")
-		if _, err := db.RecordMemory(runtimedb.MemoryRecord{
-			Kind: runtimedb.MemoryFact, Subject: "sam", Content: "prefers oat milk",
-			Audience: runtimedb.ButlerAudiencePrivate, PermissionLabel: "personal",
-			Owner: "sam", Author: "sam", SourceKind: "conversation", SourceID: "v-2",
-		}); err != nil {
-			t.Fatalf("RecordMemory: %v", err)
-		}
+		legacyMemory(t, db, "sam", "sam", "private", "v-2", "prefers oat milk")
 	})
 
 	h := find(t, rep, "sam")
@@ -160,13 +195,7 @@ func TestAmbiguousHandlesAreNeverPickedBetween(t *testing.T) {
 		// Exactly the ADR-W032 A4 case: two rows, differing only by
 		// case, that the schema accepts today.
 		people(t, db, "Admin", "admin")
-		if _, err := db.RecordMemory(runtimedb.MemoryRecord{
-			Kind: runtimedb.MemoryFact, Subject: "household", Content: "the router password rotates monthly",
-			Audience: runtimedb.ButlerAudienceShared, PermissionLabel: "household",
-			Owner: "ADMIN", Author: "ADMIN", SourceKind: "conversation", SourceID: "v-3",
-		}); err != nil {
-			t.Fatalf("RecordMemory: %v", err)
-		}
+		legacyMemory(t, db, "ADMIN", "ADMIN", "shared", "v-3", "the router password rotates monthly")
 	})
 
 	h := find(t, rep, "ADMIN")
@@ -189,13 +218,7 @@ func TestAmbiguousHandlesAreNeverPickedBetween(t *testing.T) {
 func TestAnOrphanedHandleIsReportedNotInvented(t *testing.T) {
 	rep, _ := surveyed(t, func(db *runtimedb.DB) {
 		people(t, db, "mika")
-		if _, err := db.RecordMemory(runtimedb.MemoryRecord{
-			Kind: runtimedb.MemoryFact, Subject: "household", Content: "left by somebody who is gone",
-			Audience: runtimedb.ButlerAudienceShared, PermissionLabel: "household",
-			Owner: "ghost", Author: "ghost", SourceKind: "conversation", SourceID: "v-4",
-		}); err != nil {
-			t.Fatalf("RecordMemory: %v", err)
-		}
+		legacyMemory(t, db, "ghost", "ghost", "shared", "v-4", "left by somebody who is gone")
 	})
 
 	h := find(t, rep, "ghost")
@@ -215,13 +238,7 @@ func TestAnOrphanedHandleIsReportedNotInvented(t *testing.T) {
 func TestTheReportNamesEveryColumnAHandleAppearsIn(t *testing.T) {
 	rep, _ := surveyed(t, func(db *runtimedb.DB) {
 		people(t, db, "sam")
-		if _, err := db.RecordMemory(runtimedb.MemoryRecord{
-			Kind: runtimedb.MemoryFact, Subject: "household", Content: "a fact",
-			Audience: runtimedb.ButlerAudienceShared, PermissionLabel: "household",
-			Owner: "sam", Author: "sam", SourceKind: "conversation", SourceID: "v-5",
-		}); err != nil {
-			t.Fatalf("RecordMemory: %v", err)
-		}
+		legacyMemory(t, db, "sam", "sam", "shared", "v-5", "a fact")
 	})
 
 	h := find(t, rep, "sam")
@@ -278,9 +295,7 @@ func TestRetainedAuditTextIsNotSurveyed(t *testing.T) {
 		}
 		people(t, db, "mika", "sam")
 		for _, h := range []string{"mika", "sam"} {
-			if err := db.AdmitButlerMember(h, "root-admin"); err != nil {
-				t.Fatalf("AdmitButlerMember(%s): %v", h, err)
-			}
+			admit(t, db, h, "root-admin")
 		}
 		// A promotion, which writes butler_role_changes.
 		if err := db.SetButlerMemberRole("sam", runtimedb.RoleOwner, "root-admin"); err != nil {
@@ -311,7 +326,10 @@ func TestColumnsThatMirrorAPersonAreClassifiedHuman(t *testing.T) {
 		"butler_memory.author": true,
 		"butler_tasks.author":  true,
 	}
-	for _, c := range personref.Columns {
+	// These are pre-0043 columns now: 0043 repointed both, so the
+	// verdict that decided it lives in the legacy table. The assertion
+	// is unchanged — it is what made the repoint correct.
+	for _, c := range personref.LegacyColumns {
 		key := c.Table + "." + c.Column
 		if !want[key] {
 			continue
@@ -381,13 +399,7 @@ func TestANameOnBothAxesIsNeverResolved(t *testing.T) {
 		people(t, db, "root-admin")
 		// A row the legacy ask path would have written: machine origin,
 		// human column.
-		if _, err := db.RecordMemory(runtimedb.MemoryRecord{
-			Kind: runtimedb.MemoryFact, Subject: "household", Content: "written by the machine path",
-			Audience: runtimedb.ButlerAudienceShared, PermissionLabel: "household",
-			Owner: "root-admin", Author: "root-admin", SourceKind: "conversation", SourceID: "v-8",
-		}); err != nil {
-			t.Fatalf("RecordMemory: %v", err)
-		}
+		legacyMemory(t, db, "root-admin", "root-admin", "shared", "v-8", "written by the machine path")
 	})
 
 	h := find(t, rep, "root-admin")
@@ -415,9 +427,7 @@ func TestAPrincipalAloneIsStillNotBlocking(t *testing.T) {
 			t.Fatalf("CreatePrincipal: %v", err)
 		}
 		people(t, db, "mika")
-		if err := db.AdmitButlerMember("mika", "root-admin"); err != nil {
-			t.Fatalf("AdmitButlerMember: %v", err)
-		}
+		admit(t, db, "mika", "root-admin")
 	})
 	h := find(t, rep, "root-admin")
 	if h.Verdict != personref.MachinePrincipal {
@@ -439,13 +449,7 @@ func TestAPrincipalAloneIsStillNotBlocking(t *testing.T) {
 func TestHouseholdOwnedMemoryIsAScopeNotAnOrphan(t *testing.T) {
 	rep, _ := surveyed(t, func(db *runtimedb.DB) {
 		people(t, db, "mika")
-		if _, err := db.RecordMemory(runtimedb.MemoryRecord{
-			Kind: runtimedb.MemoryFact, Subject: "household", Content: "the bins go out on Tuesday",
-			Audience: runtimedb.ButlerAudienceShared, PermissionLabel: "household",
-			Owner: "household", Author: "mika", SourceKind: "conversation", SourceID: "v-10",
-		}); err != nil {
-			t.Fatalf("RecordMemory: %v", err)
-		}
+		legacyMemory(t, db, "household", "mika", "shared", "v-10", "the bins go out on Tuesday")
 	})
 
 	h := find(t, rep, "household")
@@ -474,15 +478,7 @@ func TestTheScopeIsOnlyAScopeWhereAColumnTakesOne(t *testing.T) {
 	rep, _ := surveyed(t, func(db *runtimedb.DB) {
 		people(t, db, "mika")
 		// butler_tasks.author takes a person and never a scope.
-		if _, err := db.InsertButlerTask(runtimedb.ButlerTask{
-			Kind: runtimedb.ButlerTaskConversation, Author: "household", Owner: "mika",
-			Surface: runtimedb.ButlerSurfaceFamily, Profile: runtimedb.ProfileHousehold,
-			Audience:  runtimedb.ButlerAudienceShared,
-			Objective: "x", CompletionCriteria: "done",
-			Retention: runtimedb.ButlerRetentionConversation,
-		}); err != nil {
-			t.Fatalf("InsertButlerTask: %v", err)
-		}
+		legacyTask(t, db, "household", "mika")
 	})
 	h := find(t, rep, "household")
 	if h.Verdict == personref.Scope {
@@ -506,23 +502,9 @@ func TestAScopeInOneColumnDoesNotExcuseAnOrphanInAnother(t *testing.T) {
 	rep, _ := surveyed(t, func(db *runtimedb.DB) {
 		people(t, db, "mika")
 		// Legitimate: a household-shared memory record.
-		if _, err := db.RecordMemory(runtimedb.MemoryRecord{
-			Kind: runtimedb.MemoryFact, Subject: "household", Content: "bins on Tuesday",
-			Audience: runtimedb.ButlerAudienceShared, PermissionLabel: "household",
-			Owner: "household", Author: "mika", SourceKind: "conversation", SourceID: "v-11",
-		}); err != nil {
-			t.Fatalf("RecordMemory: %v", err)
-		}
+		legacyMemory(t, db, "household", "mika", "shared", "v-11", "bins on Tuesday")
 		// Not legitimate: a task authored by nobody.
-		if _, err := db.InsertButlerTask(runtimedb.ButlerTask{
-			Kind: runtimedb.ButlerTaskConversation, Author: "household", Owner: "mika",
-			Surface: runtimedb.ButlerSurfaceFamily, Profile: runtimedb.ProfileHousehold,
-			Audience:  runtimedb.ButlerAudienceShared,
-			Objective: "x", CompletionCriteria: "done",
-			Retention: runtimedb.ButlerRetentionConversation,
-		}); err != nil {
-			t.Fatalf("InsertButlerTask: %v", err)
-		}
+		legacyTask(t, db, "household", "mika")
 	})
 
 	h := find(t, rep, "household")
@@ -558,13 +540,7 @@ func TestAScopeInOneColumnDoesNotExcuseAnOrphanInAnother(t *testing.T) {
 func TestTheScopeIsLicensedByTheRowsOwnershipMode(t *testing.T) {
 	rep, _ := surveyed(t, func(db *runtimedb.DB) {
 		people(t, db, "mika")
-		if _, err := db.RecordMemory(runtimedb.MemoryRecord{
-			Kind: runtimedb.MemoryFact, Subject: "mika", Content: "a private note owned by nobody",
-			Audience: runtimedb.ButlerAudiencePrivate, PermissionLabel: "personal",
-			Owner: "household", Author: "mika", SourceKind: "conversation", SourceID: "v-12",
-		}); err != nil {
-			t.Fatalf("RecordMemory: %v", err)
-		}
+		legacyMemory(t, db, "household", "mika", "private", "v-12", "a private note owned by nobody")
 	})
 
 	h := find(t, rep, "household")

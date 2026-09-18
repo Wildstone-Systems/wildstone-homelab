@@ -41,6 +41,16 @@ const (
 	// KindAutomation is a household rule (ADR-W024 A1): Keystone-owned,
 	// applied at no node, run by the automation engine.
 	KindAutomation Kind = "Automation"
+	// KindMeter is a number the household keeps that only counts up
+	// (ADR-W035 A1): Keystone-owned like Automation, applied at no node.
+	// Its readings are not part of the resource — they are evidence, not
+	// desired state.
+	KindMeter Kind = "Meter"
+	// KindCommitment is a thing the household owes itself (ADR-W035 A1):
+	// Keystone-owned, applied at no node. It declares when something
+	// comes due and whose answer it is; where each cycle stands is
+	// runtime state, because it changes without anybody declaring it.
+	KindCommitment Kind = "Commitment"
 )
 
 // ApiVersion is the only supported apiVersion for S2 resources.
@@ -774,6 +784,8 @@ type Resource struct {
 	Job        *JobSpec        `yaml:"-"`
 	Secret     *SecretSpec     `yaml:"-"`
 	Automation *AutomationSpec `yaml:"-"`
+	Meter      *MeterSpec      `yaml:"-"`
+	Commitment *CommitmentSpec `yaml:"-"`
 }
 
 // ValidationError is a typed validation failure, identifying the resource
@@ -898,6 +910,17 @@ var registry = map[Kind]kindEntry{
 		newSpec:  func() any { return &AutomationSpec{} },
 		validate: validateAutomation,
 	},
+	KindMeter: {
+		// Keystone-owned for the same reason (ADR-W035 A1): the due-ness
+		// pass reads it from the Statefile. Nothing is applied anywhere.
+		newSpec:  func() any { return &MeterSpec{} },
+		validate: validateMeter,
+	},
+	KindCommitment: {
+		// Keystone-owned, beside the meter it reads (ADR-W035 A1).
+		newSpec:  func() any { return &CommitmentSpec{} },
+		validate: validateCommitment,
+	},
 }
 
 // KnownKind reports whether k is in the closed registry.
@@ -983,6 +1006,8 @@ func (r *Resource) validateSpecExclusivity() error {
 		KindConfigFile: r.ConfigFile != nil,
 		KindSeedFile:   r.SeedFile != nil,
 		KindAutomation: r.Automation != nil,
+		KindMeter:      r.Meter != nil,
+		KindCommitment: r.Commitment != nil,
 	}
 	for k, isSet := range populated {
 		if k == r.Kind {

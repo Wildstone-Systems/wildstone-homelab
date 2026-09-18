@@ -178,11 +178,22 @@ func (db *DB) RecordButlerMember(member, role, profile, guardian string) error {
 	if profile != "" {
 		preset = profile
 	}
+	// The guardian is a Person, so it is stored as one. Nobody named is
+	// NULL rather than '': since 0043 the column holds an identity, and
+	// '' is not one.
+	var guardianID any
+	if guardian != "" {
+		resolved, err := resolvePersonID(db.sql, guardian)
+		if err != nil {
+			return fmt.Errorf("runtimedb: recording %q: the guardian %w", member, err)
+		}
+		guardianID = resolved
+	}
 	if _, err := db.sql.Exec(
-		`INSERT INTO butler_members (person_id, member, role, profile, admitted, generation, created_at, guardian)
+		`INSERT INTO butler_members (person_id, member, role, profile, admitted, generation, created_at, guardian_person_id)
 		 VALUES (?, ?, ?, ?, 0, 1, ?, ?)
-		 ON CONFLICT(member) DO UPDATE SET profile = excluded.profile, guardian = excluded.guardian`,
-		personID, member, role, preset, now(), guardian); err != nil {
+		 ON CONFLICT(member) DO UPDATE SET profile = excluded.profile, guardian_person_id = excluded.guardian_person_id`,
+		personID, member, role, preset, now(), guardianID); err != nil {
 		return fmt.Errorf("runtimedb: recording butler member: %w", err)
 	}
 	return nil
@@ -275,21 +286,19 @@ func (db *DB) SetButlerMemberRole(member, role, actor string) error {
 // RenameButlerMemberHandle changes the display/login handle. person_id
 // does not move, which is the whole reason it exists.
 //
-// The two tables that hold a FOREIGN KEY on the handle —
-// butler_identity_links and butler_conversations — are carried with it
-// in the same transaction, under defer_foreign_keys so the parent and
-// its children can be consistent at COMMIT rather than after every
-// statement. Without that the rename cannot happen at all: SQLite
-// rejects the parent UPDATE the moment a link references the old value.
+// Since 0043 this is one UPDATE of one column, and that is the point of
+// the slice. It used to carry butler_identity_links and
+// butler_conversations along under defer_foreign_keys, because those
+// two held a foreign key on the handle — and it could not carry the
+// dozen-odd tables that stored the handle as free text with no key at
+// all, so a rename silently orphaned them. Now nothing else stores the
+// handle: every provably-human reference names the person, and a
+// person who is renamed is still the same person.
 //
-// It does NOT rewrite the handle where other tables store it as free
-// text with no foreign key — butler_tasks.owner, butler_memory.owner,
-// household_routines.member, notice policy, offboarding records and
-// roughly a dozen more. Those are the references slice 2 repoints onto
-// person_id, and repointing them here would BE slice 2. Until then a
-// rename is safe for identity resolution and leaves historical rows
-// naming the handle the person had at the time, which for an audit
-// trail is arguably what you want anyway.
+// Actor columns are the deliberate exception. They keep the text
+// recorded at the time, because the value there may be a machine
+// principal rather than anybody, and an audit row that says who acted
+// should go on saying it after they are renamed.
 func (db *DB) RenameButlerMemberHandle(member, newHandle string) error {
 	if newHandle == "" {
 		return fmt.Errorf("runtimedb: a handle cannot be empty")
@@ -297,17 +306,7 @@ func (db *DB) RenameButlerMemberHandle(member, newHandle string) error {
 	if newHandle == member {
 		return nil
 	}
-	tx, err := db.sql.Begin()
-	if err != nil {
-		return fmt.Errorf("runtimedb: renaming %q: %w", member, err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Settable inside a transaction, unlike foreign_keys itself.
-	if _, err := tx.Exec(`PRAGMA defer_foreign_keys = ON`); err != nil {
-		return fmt.Errorf("runtimedb: renaming %q: %w", member, err)
-	}
-	res, err := tx.Exec(
+	res, err := db.sql.Exec(
 		`UPDATE butler_members SET member = ? WHERE member = ?`, newHandle, member)
 	if err != nil {
 		return fmt.Errorf("runtimedb: renaming %q to %q: %w", member, newHandle, err)
@@ -318,15 +317,6 @@ func (db *DB) RenameButlerMemberHandle(member, newHandle string) error {
 	}
 	if n == 0 {
 		return ErrNotFound
-	}
-	for _, table := range []string{"butler_identity_links", "butler_conversations"} {
-		if _, err := tx.Exec(
-			`UPDATE `+table+` SET member = ? WHERE member = ?`, newHandle, member); err != nil {
-			return fmt.Errorf("runtimedb: carrying %s across the rename of %q: %w", table, member, err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("runtimedb: renaming %q to %q: %w", member, newHandle, err)
 	}
 	return nil
 }
@@ -485,7 +475,8 @@ func (db *DB) denyMember(member, by, atColumn, byColumn string) error {
 	// offboarded.
 	if _, err := tx.Exec(
 		`UPDATE butler_identity_links SET revoked_at = ?, revoked_by = ?
-		 WHERE member = ? AND revoked_at = ''`, stamp, by, member); err != nil {
+		 WHERE person_id = (SELECT person_id FROM butler_members WHERE member = ?)
+		   AND revoked_at = ''`, stamp, by, member); err != nil {
 		return fmt.Errorf("runtimedb: revoking identity links: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -496,12 +487,18 @@ func (db *DB) denyMember(member, by, atColumn, byColumn string) error {
 
 // GetButlerMember returns one member's record.
 func (db *DB) GetButlerMember(member string) (ButlerMember, error) {
-	return scanMember(db.sql.QueryRow(memberColumns+` WHERE member = ?`, member))
+	return scanMember(db.sql.QueryRow(memberColumns+` WHERE b.member = ?`, member))
 }
 
-const memberColumns = `SELECT person_id, member, role, profile, admitted, generation, created_at, admitted_at,
-	 admitted_by, disabled_at, disabled_by, offboarded_at, offboarded_by, guardian
-	 FROM butler_members`
+// The guardian is stored as an identity and read back as the handle it
+// currently carries, so a guardian who is renamed stays the guardian and
+// the caller above never sees the id. COALESCE because the column is
+// NULL for everybody who has no guardian, which is most people.
+const memberColumns = `SELECT b.person_id, b.member, b.role, b.profile, b.admitted, b.generation,
+	 b.created_at, b.admitted_at, b.admitted_by, b.disabled_at, b.disabled_by,
+	 b.offboarded_at, b.offboarded_by,
+	 COALESCE((SELECT g.member FROM butler_members g WHERE g.person_id = b.guardian_person_id), '')
+	 FROM butler_members b`
 
 func scanMember(row rowScanner) (ButlerMember, error) {
 	var m ButlerMember
@@ -540,7 +537,7 @@ func scanMember(row rowScanner) (ButlerMember, error) {
 
 // ListButlerMembers returns every member record, admitted or not.
 func (db *DB) ListButlerMembers() ([]ButlerMember, error) {
-	rows, err := db.sql.Query(memberColumns + ` ORDER BY member`)
+	rows, err := db.sql.Query(memberColumns + ` ORDER BY b.member`)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing butler members: %w", err)
 	}
@@ -587,9 +584,9 @@ func (db *DB) LinkSurfaceIdentity(linkType, externalID, member, createdBy string
 		return err
 	}
 	_, err = db.sql.Exec(
-		`INSERT INTO butler_identity_links (link_type, external_id, member, generation, created_at, created_by)
+		`INSERT INTO butler_identity_links (link_type, external_id, person_id, generation, created_at, created_by)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		linkType, externalID, member, m.Generation, now(), createdBy)
+		linkType, externalID, m.PersonID, m.Generation, now(), createdBy)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return fmt.Errorf("runtimedb: %s %q is already linked to someone", linkType, externalID)
@@ -612,10 +609,10 @@ func (db *DB) RevokeSurfaceLink(linkType, externalID, revokedBy string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var member string
+	var person string
 	err = tx.QueryRow(
-		`SELECT member FROM butler_identity_links
-		 WHERE link_type = ? AND external_id = ? AND revoked_at = ''`, linkType, externalID).Scan(&member)
+		`SELECT person_id FROM butler_identity_links
+		 WHERE link_type = ? AND external_id = ? AND revoked_at = ''`, linkType, externalID).Scan(&person)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -630,7 +627,7 @@ func (db *DB) RevokeSurfaceLink(linkType, externalID, revokedBy string) error {
 		return fmt.Errorf("runtimedb: revoking surface link: %w", err)
 	}
 	if _, err := tx.Exec(
-		`UPDATE butler_members SET generation = generation + 1 WHERE member = ?`, member); err != nil {
+		`UPDATE butler_members SET generation = generation + 1 WHERE person_id = ?`, person); err != nil {
 		return fmt.Errorf("runtimedb: revoking surface link: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -651,8 +648,9 @@ func (db *DB) ResolveSurfaceIdentity(linkType, externalID string) (ButlerMember,
 	var member string
 	var generation int64
 	err := db.sql.QueryRow(
-		`SELECT member, generation FROM butler_identity_links
-		 WHERE link_type = ? AND external_id = ? AND revoked_at = ''`,
+		`SELECT m.member, l.generation
+		 FROM butler_identity_links l JOIN butler_members m ON m.person_id = l.person_id
+		 WHERE l.link_type = ? AND l.external_id = ? AND l.revoked_at = ''`,
 		linkType, externalID).Scan(&member, &generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ButlerMember{}, ErrNotAdmitted
@@ -682,8 +680,10 @@ func (db *DB) ResolveChatBinding(bindingID int64) (ButlerMember, error) {
 // ListSurfaceLinks returns a member's links, live ones first.
 func (db *DB) ListSurfaceLinks(member string) ([]ButlerIdentityLink, error) {
 	rows, err := db.sql.Query(
-		`SELECT seq, link_type, external_id, member, generation, created_at, created_by, revoked_at, revoked_by
-		 FROM butler_identity_links WHERE member = ? ORDER BY revoked_at <> '', seq`, member)
+		`SELECT l.seq, l.link_type, l.external_id, m.member, l.generation,
+		        l.created_at, l.created_by, l.revoked_at, l.revoked_by
+		 FROM butler_identity_links l JOIN butler_members m ON m.person_id = l.person_id
+		 WHERE m.member = ? ORDER BY l.revoked_at <> '', l.seq`, member)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing surface links: %w", err)
 	}
@@ -728,7 +728,7 @@ func (db *DB) ListSurfaceLinks(member string) ([]ButlerIdentityLink, error) {
 //
 // COLLATE NOCASE is ASCII-only, which is what handles are here.
 func (db *DB) ButlerMembersByHandleFold(handle string) ([]ButlerMember, error) {
-	rows, err := db.sql.Query(memberColumns+` WHERE member = ? COLLATE NOCASE ORDER BY member`, handle)
+	rows, err := db.sql.Query(memberColumns+` WHERE b.member = ? COLLATE NOCASE ORDER BY b.member`, handle)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: matching butler members by handle: %w", err)
 	}
@@ -742,4 +742,28 @@ func (db *DB) ButlerMembersByHandleFold(handle string) ([]ButlerMember, error) {
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// HouseholdHasAnOwner reports whether any active Owner is on record.
+//
+// It answers one question: has this household been provisioned at all?
+// False means nobody has ever been admitted as an Owner — a fresh
+// deployment, before the installer or an operator has created the first
+// one. It is not a way to ask whether a PARTICULAR person may do
+// something, and it must never be used as one.
+//
+// The answer is durable in one direction, which is what makes it usable
+// as a gate. The Last Owner invariant refuses to demote, disable or
+// offboard the only active Owner, so once this is true it stays true:
+// the un-provisioned state is a window a household leaves once and
+// cannot re-enter by any supported path.
+func (db *DB) HouseholdHasAnOwner() (bool, error) {
+	var n int
+	if err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM butler_members
+		 WHERE role = 'owner' AND admitted = 1 AND disabled_at = '' AND offboarded_at = ''`).
+		Scan(&n); err != nil {
+		return false, fmt.Errorf("runtimedb: counting active owners: %w", err)
+	}
+	return n > 0, nil
 }
