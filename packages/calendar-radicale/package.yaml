@@ -1,0 +1,333 @@
+# Calendar capability, profile "radicale": the household's OWN calendar
+# server. Events live on this machine, every phone syncs to it over
+# CalDAV, and nothing leaves the house.
+#
+# WHY THIS EXISTS WHEN mail-roundcube ALREADY SERVES CALENDARS. Davis, in
+# that package, is a calendar CLIENT-SIDE of a mailbox: it authenticates
+# every request against the household's IMAP provider
+# (AUTH_METHOD=IMAP), so it works only for a household that already has
+# mail somewhere else and it stops working the day that provider does.
+# This capability has no such dependency. It authenticates against the
+# household's own directory and stores collections on the household's own
+# disk, which is what makes it the durable local calendar rather than a
+# second surface on somebody else's account. Both may be installed —
+# they are separate capabilities on separate addresses — and a household
+# that has neither should install this one.
+#
+# INSTALLING (two steps BEFORE enabling the capability, in this order):
+#
+#  1. Create the directory account Radicale reads people out of. In
+#     LLDAP's own UI (the Directory card on the dashboard), add a user —
+#     `radicale` is the name this package defaults to — and put it in
+#     the built-in `lldap_strict_readonly` group. That group is LLDAP's
+#     own recommendation for service integrations: it can search the
+#     directory and can change nothing in it.
+#
+#  2. Give this capability that account's password:
+#
+#        wild secret set calendar-ldap-reader -node <node>
+#
+#     It is a `provided` Secret because only the person who created the
+#     account in step 1 knows it — random bytes here would be a Radicale
+#     that starts and refuses every login, with the reason in a container
+#     log nobody is looking at.
+#
+# SIGN-IN POSTURE: the household directory, the app does it — auth:
+# app_ldap, the media-jellyfin posture. Everyone signs in with the
+# household username and password they already have, and membership of
+# `calendar_users` is what grants the calendar (see the LdapGroup below).
+#
+# It CANNOT be authelia_oidc and that is a fact about CalDAV rather than
+# a preference: a phone's calendar app sends HTTP Basic credentials on
+# every request and cannot follow a login redirect, so forward-auth in
+# front of this would leave the whole household unable to sync. The same
+# reasoning mail-roundcube records for Davis.
+#
+# ---------------------------------------------------------------------
+# CHECKED AGAINST THE APP (ADR-W029). Each of these was read out of
+# upstream on 2026-09-18 rather than assumed:
+#
+#  1. HOW IS IT CONFIGURED? One ini file, and nothing else. Radicale
+#     reads no environment variables at all — radicale/config.py has no
+#     os.environ in it — so every setting here is in the ConfigFile
+#     below and an env var added to the container would be inert.
+#
+#  2. WHAT DOES IT REFUSE TO START WITHOUT? `ldap_secret` (or
+#     `ldap_secret_file`) whenever `ldap_reader_dn` is set:
+#     radicale/auth/ldap.py raises RuntimeError("LDAP authentication
+#     requires ldap_secret for ldap_reader_dn") in its constructor,
+#     before the listener opens. That is why the credential file is
+#     placed by a Job and why the two install steps above come first.
+#
+#  3. DOES THE IMAGE DECLARE A HEALTHCHECK? No. The published Dockerfile
+#     declares ENTRYPOINT, CMD, VOLUME and USER and no HEALTHCHECK, so
+#     "the container is running" is the strongest thing Wildstone can
+#     say about it on its own. The dashboard's status dot dials the
+#     container's own port, which is the stronger check available here.
+#
+#  4. IS ldap3 ACTUALLY IN THE IMAGE? Yes, and it is worth recording
+#     because the Dockerfile alone says otherwise: its
+#     `ARG DEPENDENCIES=bcrypt` default would ship an image where
+#     `type = ldap` dies on ImportError. The PUBLISHED image is not
+#     built with that default — .github/workflows/docker-publish.yml
+#     passes `DEPENDENCIES=bcrypt,argon2,ldap`. Reading the Dockerfile
+#     and stopping there is exactly the mistake ADR-W029 is about.
+#
+#  5. WHO DOES IT RUN AS? uid 1000 (`USER radicale`), which is load
+#     bearing twice over: the credential file the Job writes is chowned
+#     to 1000, and the reader password CANNOT be carried in the
+#     ConfigFile — a managed file holding a secret reference lands 0600
+#     root-owned by design (wardstone ops.go), which a uid-1000 process
+#     cannot read. Authelia only escapes that by pinning PUID=0 and this
+#     image has no such knob.
+#
+# The command carries flags only: the image declares
+# ENTRYPOINT ["/app/bin/python", "/app/bin/radicale"], so naming the
+# binary again would exec `radicale radicale`. Recorded in
+# keystone/pkgtool.imageArgv0.
+# ---------------------------------------------------------------------
+#
+# STATE, AND WHY IT IS BACKED UP DAILY. The collections volume is the
+# ONLY copy of the household's calendars — a phone that resyncs after a
+# loss gets whatever this volume says — so the plan is daily, like
+# mail-roundcube's, rather than the weekly a replaceable library gets.
+# The credential volume is deliberately NOT in it: a restic snapshot of
+# the calendars should not also carry the directory password that reads
+# the household's people.
+#
+# NO agentTools, AND WHY. ADR-W034 stages the agent-facing calendar tools
+# behind the Calendar Gateway, and a declaration here would be a promise
+# nothing keeps: the domestic gateway dispatches a tool only to a
+# registered executor, so a rule naming calendar.create_event today is
+# refused at dispatch with "no executor is registered for this tool".
+# The read path an agent has NOW is the CalDAV integration adapter
+# (keystone/adapter/caldav), pointed at this server's collection URL.
+#
+# NO publishes, AND WHY. Radicale's [hook] section emits to RabbitMQ or
+# to email, neither of which is Wildstone's household intake, and it can
+# call no webhook — so the "config" shim shape this repo prefers does not
+# apply. Publishing calendar.event.* is therefore a sidecar, which is
+# ADR-W034 phase 3 work rather than something to half-declare here.
+#
+# Image digest is REAL, resolved 2026-09-18 via the OCI registry API:
+#   ghcr.io/kozea/radicale:latest -> sha256:22cbf7be...2d49
+# The alpine pin is the one packages/identity already carries, for the
+# same reason it carries it: a job runner whose image declares no
+# ENTRYPOINT, so a shell script is runnable under a Cmd-only container.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: calendar-radicale
+  version: 1.0.0
+  capability: calendar
+  profile: radicale
+requires:
+  - { trait: identity, mode: ldap }
+  - { trait: ingress, mode: private }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  # NOT "calendar": mail-roundcube's Davis already defaults to that
+  # label, and two Routes wanting one host is a collision under the
+  # public-domain posture and a fight over one pinned port under the
+  # tailnet one. A household running both should be able to reach both.
+  - { name: calendar_subdomain, default: cal, description: "The name this service appears under, e.g. cal." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
+  - { name: ldap_base_dn, default: "dc=wildstone,dc=internal", description: "The directory’s root name. Must match the value the login service was installed with." }
+  - { name: ldap_reader_user, default: radicale, description: "The directory account this service searches people with. Create it in the Directory app and put it in the lldap_strict_readonly group, then set its password with `wild secret set calendar-ldap-reader`." }
+  # Bumping this re-runs the credential Job. A Job re-runs when its spec
+  # hash changes, and a rotated secret does not change the spec — the
+  # env carries the REFERENCE, not the value — so without a knob here a
+  # rotated directory password would sit in the secret store while
+  # Radicale went on reading the file written from the old one.
+  - { name: ldap_reader_generation, default: "1", description: "Bump this after rotating the directory password, to rewrite the credential file Radicale reads." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+policies:
+  # A calendar is where a household writes down where its people will be
+  # and when. Private by classification and high by sensitivity, which is
+  # the same answer mail-roundcube gives for the same material.
+  classifications: [family_private]
+  dataSensitivity: high
+templates:
+  # ---- Secrets.
+  #
+  # provided: true because only the person who created the directory
+  # account knows its password. A generated value here would be a
+  # Radicale that starts, binds with the wrong password, and answers 401
+  # to every phone in the house.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: calendar-ldap-reader, node: "{{ .Params.node }}" }
+    spec:
+      name: calendar-ldap-reader
+      provided: true
+      purpose: "The password of the read-only directory account the calendar searches people with. Create that account in the Directory app first, in the lldap_strict_readonly group. Nobody in the household types this."
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-calendar, node: "{{ .Params.node }}" }
+    spec:
+      name: restic-calendar
+      purpose: "Encrypts the calendar backup repository. Keep a copy somewhere else: without it a restore is impossible, and these are the only copies of the household's calendars."
+  # ---- Volumes.
+  #
+  # radicale-collections is the household's calendars. It is mounted at
+  # the home directory the image creates for its own user, so Docker
+  # seeds the volume with that directory's uid-1000 ownership rather
+  # than the root-owned 0755 a fresh volume otherwise gets.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: radicale-collections, node: "{{ .Params.node }}" }
+    spec: { name: radicale-collections }
+  # The directory password, as a file Radicale can read. A volume of its
+  # own rather than a corner of the collections volume, so that the
+  # backup plan can name the calendars without naming this.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: radicale-credentials, node: "{{ .Params.node }}" }
+    spec: { name: radicale-credentials }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: calendar-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: calendar-backup-repo }
+  # ---- The configuration.
+  #
+  # It carries NO secret reference, and that is deliberate rather than
+  # incidental: a managed file that does is narrowed to 0600 root-owned
+  # when the node materializes it, and this container runs as uid 1000.
+  # The one credential is placed beside it by the Job below.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: radicale-config, node: "{{ .Params.node }}" }
+    spec:
+      filename: config
+      content: |
+        # Managed by Wildstone — do not edit. Changes are reverted on the
+        # next reconcile tick; change the package's params instead.
+        [server]
+        hosts = 0.0.0.0:5232, [::]:5232
+
+        [auth]
+        type = ldap
+        ldap_uri = ldap://lldap:3890
+        ldap_base = ou=people,{{ .Params.ldap_base_dn }}
+        ldap_reader_dn = uid={{ .Params.ldap_reader_user }},ou=people,{{ .Params.ldap_base_dn }}
+        ldap_secret_file = /run/calendar/ldap-reader
+        # uid is LLDAP's login attribute; cn is the DISPLAY name, so
+        # filtering on it would make people sign in as "Alice Example".
+        # The memberOf clause is what makes calendar_users the grant:
+        # somebody removed from the group stops syncing at their next
+        # request, rather than at their next sign-in.
+        ldap_filter = (&(objectClass=person)(uid={0})(memberOf=cn=calendar_users,ou=groups,{{ .Params.ldap_base_dn }}))
+        ldap_user_attribute = uid
+        lc_username = True
+
+        [rights]
+        # Each person owns the collections under their own name and sees
+        # nobody else's. Sharing a calendar between household members is
+        # a decision a household makes per calendar, and Radicale's
+        # from_file backend is where it will go when it does.
+        type = owner_only
+
+        [storage]
+        filesystem_folder = /var/lib/radicale/collections
+
+        [web]
+        # The page a person opens once, to create their first calendar
+        # before adding the account to a phone.
+        type = internal
+
+        [logging]
+        # Off by default upstream, and worth saying out loud here: this
+        # log would otherwise carry the household's passwords.
+        mask_passwords = True
+  # ---- The credential file.
+  #
+  # A Job rather than a ConfigFile, for the reason the ConfigFile above
+  # records: a managed file holding a secret lands 0600 root-owned and
+  # Radicale runs as uid 1000. The Job runs as root, writes the value
+  # the node materialized into its environment, and hands the file to
+  # the user that has to read it.
+  #
+  # Jobs sort with Containers rather than before them, so on the very
+  # first tick Radicale may start before this has run and exit on the
+  # missing file. restart: unless-stopped and the next tick converge it —
+  # level-triggered convergence is the ordering mechanism here, the same
+  # answer keystone/plan's kindOrder gives for every other Job.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Job
+    metadata: { name: calendar-ldap-credential, node: "{{ .Params.node }}" }
+    spec:
+      run:
+        image: "alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"
+        command:
+          - /bin/sh
+          - -ec
+          - |
+            umask 077
+            [ -n "${LDAP_READER_PASSWORD:-}" ] || {
+              echo "calendar: calendar-ldap-reader is empty — set it with 'wild secret set calendar-ldap-reader'" >&2
+              exit 1
+            }
+            printf '%s' "$LDAP_READER_PASSWORD" > /run/calendar/ldap-reader
+            chown 1000:1000 /run/calendar/ldap-reader
+            chmod 400 /run/calendar/ldap-reader
+        env:
+          LDAP_READER_PASSWORD: "secret/calendar-ldap-reader"
+          # Read by nothing. It is in the spec so that bumping the param
+          # changes the Job's spec hash and re-runs it; see the param.
+          LDAP_READER_GENERATION: "{{ .Params.ldap_reader_generation }}"
+        mounts:
+          - { source: radicale-credentials, target: /run/calendar }
+  # ---- The server.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: radicale, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/kozea/radicale@sha256:22cbf7be469dee59ca1c1c166e981d97cffd4a590114a3143acf7018f79b2d49"
+      env:
+        TZ: "{{ .Params.timezone }}"
+      command: ["--config", "/etc/wildstone/calendar/config"]
+      mounts:
+        - { source: radicale-collections, target: /var/lib/radicale }
+        - { source: radicale-credentials, target: /run/calendar, readOnly: true }
+        - { source: /etc/wildstone/calendar, target: /etc/wildstone/calendar, readOnly: true }
+      restart: unless-stopped
+  # ---- The door.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: calendar, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.calendar_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/radicale:5232"
+      auth: app_ldap
+      classification: family_private
+  # The group that grants a person the calendar. Membership is managed
+  # in the Directory app, like every other household group; the filter
+  # in the config above is what enforces it.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: LdapGroup
+    metadata: { name: calendar-users, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      name: calendar_users
+  # ---- Backups (ADR-W013 A4). The calendars, daily. NOT
+  # radicale-credentials: see the header.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: calendar, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [radicale-collections]
+      repository: calendar-backup-repo
+      passwordSecret: secret/restic-calendar
+      schedule: daily
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

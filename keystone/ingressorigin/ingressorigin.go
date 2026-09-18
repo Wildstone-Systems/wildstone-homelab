@@ -167,6 +167,12 @@ var wellKnown = map[string]int{
 	// showing two empty frames.
 	"drop":      49443, // filedrop-wildstone, via drop_subdomain
 	"assistant": 50443, // assistant-wildstone, via assistant_subdomain
+
+	// calendar-radicale, via calendar_subdomain. Its default label is
+	// "cal" rather than "calendar" because "calendar" is already
+	// mail-roundcube's Davis surface above, and a pin is a preference
+	// the assigner honours first, not a claim two hosts can share.
+	"cal": 51443,
 }
 
 // Of derives the addressing posture from desired state.

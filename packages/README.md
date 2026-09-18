@@ -12,7 +12,7 @@ deployment — see `testing/fixtures/`.
 
 ## The catalog
 
-Fifty-five packages. Every one lints clean against the rest of the
+Sixty packages. Every one lints clean against the rest of the
 catalog, pins real image digests, has a row on the dashboard, a pinned
 tailnet port, and passes the cross-resource checks in
 `keystone/pkgtool/catalog_wiring_test.go` (secrets referenced are
@@ -110,6 +110,7 @@ one mechanism, which is worth deciding before any of them individually.
 | `recipes-mealie` | recipes | Mealie | app OIDC |
 | `feeds-freshrss` | feeds | FreshRSS | app OIDC |
 | `mail-roundcube` | mail | Roundcube webmail plus Davis for calendars and contacts, both against a mailbox you already have elsewhere | own |
+| `calendar-radicale` | calendar | Radicale — the household's own calendars, on its own disk, with no mail provider behind them (ADR-W034) | app LDAP |
 | `bookmarks-linkding` | bookmarks | linkding, signed in by the proxy's header | proxy |
 | `sync-syncthing` | file-sync | Syncthing | proxy |
 | `files-filebrowser` | files | File Browser | own |

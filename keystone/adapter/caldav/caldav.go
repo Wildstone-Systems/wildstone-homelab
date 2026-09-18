@@ -1,19 +1,33 @@
-// Package caldav is the read-only CalDAV adapter (ADR-W030 A5.1, work
-// package P12).
+// Package caldav is the CalDAV adapter (ADR-W030 A5.1, work package P12;
+// ADR-W034 for the write path).
 //
-// It reads events from a calendar collection and does nothing else.
-// Calendar WRITES — creating events, RSVPing to invitations — are
-// explicitly later, separately controlled work in ADR-W030's follow-up
-// list, so Act is not implemented and cannot be turned on by
-// configuration.
+// It reads events from a calendar collection, and — only when two
+// separate things both say so — creates, changes and deletes them
+// (ADR-W034 phase 2). Reading is the default and writing is not:
+//
+//   - Keystone refuses action work for a connection nobody has widened
+//     (runtimedb: `w.Kind == WorkAction && !conn.ActionsEnabled`), so an
+//     adapter never even receives one until a person decides;
+//   - and Writable below must be on, so an adapter deployed to answer
+//     questions cannot be talked into changing a calendar by anything
+//     that reaches it over the wire.
+//
+// The second is a deliberate second copy of the first, for the reason
+// keystone/domestic keeps its own copy of the tier rule: a call that
+// reached here some other way — a hand-edited row, a future path nobody
+// has thought of — still cannot write to the household's calendar.
+//
+// RSVPing to invitations is still NOT here. It is a different act with a
+// different blast radius (it sends mail, to people, as the household)
+// and stays on ADR-W030's follow-up list.
 //
 // The credential is personal. It arrives from the node's secret path
 // into this process's environment, having been onboarded through the
 // authenticated secret-input surface (never through chat), and it never
 // travels in a work payload or reaches a model. Where the provider
 // cannot issue a read-only app password, the wider power is disclosed at
-// onboarding and this adapter's read-only operation is what actually
-// constrains it.
+// onboarding, and what actually constrains it is the pair of gates
+// above rather than anything the provider was asked for.
 package caldav
 
 import (
@@ -51,6 +65,14 @@ type Upstream struct {
 	// means. A calendar question answered in UTC is wrong for most of
 	// the day in most of the world.
 	Location *time.Location
+	// Writable turns the action capabilities on. Off by default, and
+	// off is the honest posture for an adapter nobody has decided to
+	// widen — see the package comment for why this is a second copy of
+	// a check Keystone already makes.
+	Writable bool
+	// NewUID mints the identifier for a created event, injectable so a
+	// test can assert what was written rather than that something was.
+	NewUID func() string
 }
 
 func (u *Upstream) Name() string { return "caldav" }
@@ -86,6 +108,16 @@ type Event struct {
 	Start   time.Time `json:"start"`
 	End     time.Time `json:"end,omitzero"`
 	AllDay  bool      `json:"allDay,omitempty"`
+	// Href is where this event lives in the collection, relative to the
+	// server root, as the server itself reported it.
+	//
+	// It is carried because a UID is NOT an address. A server names the
+	// resource it stores, and only the events THIS adapter created are
+	// at the <uid>.ics the write path would guess — one added on a phone
+	// is wherever that phone put it. Changing or deleting an event the
+	// household made therefore starts by reading it, and this is the
+	// field that makes that possible.
+	Href string `json:"href,omitempty"`
 }
 
 // report issues a CalDAV REPORT for a time range and returns the raw
@@ -135,9 +167,11 @@ func (u *Upstream) report(ctx context.Context, from, to time.Time) (string, erro
 type multistatus struct {
 	XMLName  xml.Name `xml:"multistatus"`
 	Response []struct {
+		Href     string `xml:"href"`
 		Propstat []struct {
 			Prop struct {
 				CalendarData string `xml:"calendar-data"`
+				ETag         string `xml:"getetag"`
 			} `xml:"prop"`
 		} `xml:"propstat"`
 	} `xml:"response"`
@@ -157,7 +191,10 @@ func parseEvents(raw string) ([]Event, error) {
 	var events []Event
 	for _, r := range ms.Response {
 		for _, ps := range r.Propstat {
-			events = append(events, parseICS(ps.Prop.CalendarData)...)
+			for _, ev := range parseICS(ps.Prop.CalendarData) {
+				ev.Href = strings.TrimSpace(r.Href)
+				events = append(events, ev)
+			}
 		}
 	}
 	return events, nil
@@ -209,13 +246,22 @@ func parseICS(data string) []Event {
 // unfold joins iCalendar continuation lines, which begin with a space or
 // tab. A long SUMMARY arrives folded, and reading it a line at a time
 // truncates every event with a long name.
+//
+// EXACTLY ONE leading space or tab is removed, because exactly one was
+// added: RFC 5545 folds by inserting CRLF and a single whitespace
+// character, so every other leading space on a continuation line is the
+// household's own text. Trimming them all reads "Dentist for\r\n  Sam"
+// as "Dentist forSam" — which is what this did, and which is invisible
+// until a fold happens to land next to a space. It also made the write
+// path's own round trip lossy, since a summary long enough to fold is
+// long enough to contain one.
 func unfold(data string) []string {
 	raw := strings.Split(strings.ReplaceAll(data, "\r\n", "\n"), "\n")
 	var out []string
 	for _, line := range raw {
 		if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
 			if len(out) > 0 {
-				out[len(out)-1] += strings.TrimLeft(line, " \t")
+				out[len(out)-1] += line[1:]
 				continue
 			}
 		}
@@ -253,11 +299,24 @@ func (u *Upstream) Capabilities(ctx context.Context) ([]adapter.Capability, erro
 		available = false
 		detail = err.Error()
 	}
-	caps := make([]adapter.Capability, 0, 2)
+	caps := make([]adapter.Capability, 0, 2+len(ActionCapabilities))
 	for _, name := range []string{CapEvents, CapToday} {
 		caps = append(caps, adapter.Capability{
 			Kind: "query", Name: name, Available: available, Detail: detail,
 		})
+	}
+	// The write path is REPORTED whether or not it is on, with the
+	// reason when it is not. Recording a capability says "this works",
+	// never "this is allowed" (ADR-W030 A5) — and a capability that
+	// simply vanished when writes were off would leave whoever is
+	// deciding whether to widen a connection with nothing to decide
+	// about.
+	for _, name := range ActionCapabilities {
+		c := adapter.Capability{Kind: "action", Name: name, Available: available && u.Writable, Detail: detail}
+		if available && !u.Writable {
+			c.Detail = "this connection is read-only: calendar writes are off until somebody turns them on"
+		}
+		caps = append(caps, c)
 	}
 	return caps, nil
 }
@@ -308,13 +367,6 @@ func (u *Upstream) Query(ctx context.Context, capability string, request json.Ra
 	return adapter.Answer{Data: map[string]any{
 		"events": events, "from": from, "to": to, "observedAt": u.now().UTC(),
 	}}, nil
-}
-
-// Act performs nothing. Calendar writes and RSVPs are separately
-// controlled later work, not a flag on this adapter.
-func (u *Upstream) Act(context.Context, string, json.RawMessage) (adapter.Answer, error) {
-	return adapter.Answer{}, fmt.Errorf("%w: this CalDAV adapter is read-only; "+
-		"calendar writes and invitations are separately controlled", adapter.ErrNoSuchCapability)
 }
 
 var _ adapter.Upstream = (*Upstream)(nil)
