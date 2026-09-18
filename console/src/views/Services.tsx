@@ -1082,11 +1082,12 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
                 const have = existingSecrets?.has(s) ?? false;
                 return (
                   <div className="field" key={s}>
-                    <label>
+                    <label htmlFor={`secret-${s}`}>
                       <code>{s}</code>
                       {preview.secretPurposes?.[s] && <div className="muted">{preview.secretPurposes[s]}</div>}
                     </label>
                     <input
+                      id={`secret-${s}`}
                       type="password"
                       autoComplete="new-password"
                       value={secretValues[s] ?? ""}

@@ -432,42 +432,6 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 	return out, http.StatusOK, nil
 }
 
-// droppedByUpgrade is what this capability owns today that its new
-// expansion no longer produces.
-//
-// Installing over an existing capability only ever added: the proposal
-// carried Put and nothing else, so a resource the previous version
-// declared and the new one does not simply stayed. home-assistant 1.1.0
-// replaced a mounted ConfigFile with seeded files, and after the upgrade
-// the statefile still held configfile/home-assistant-wildstone —
-// reconciled forever, written to disk forever, mounted by nothing.
-//
-// Harmless there, and not harmless in general: the same gap leaves a
-// Route serving a container the package has dropped, or a Job running
-// against a service that no longer exists. An upgrade that does not
-// converge to the new package's definition is not an upgrade.
-//
-// DATA IS NEVER PROPOSED FOR DELETION. Volumes and seeded files belong
-// to the household from the moment they land (ADR-W004 A4, ADR-W029 A2)
-// — and a Volume delete cannot apply at all, so proposing one would fail
-// the whole plan every tick until F60 set it aside, taking the rest of
-// the upgrade with it. A package that stops declaring a volume leaves
-// the data exactly where it is.
-//
-// NEITHER IS A SIBLING PROFILE'S. This is scoped to the package being
-// installed, not to its capability, and the difference is the whole
-// point of the Package field on a resource's metadata. Owner names the
-// CAPABILITY, so books-calibre-web and books-kavita both render
-// resources owned by "capability/books"; keyed on owner alone, enabling
-// one read the other's container and Route as leftovers of an upgrade
-// and proposed deleting them. Installing one book app uninstalled the
-// other, and a household that wanted to compare them, or simply wanted
-// both, had no way to say so (ADR-W029 A7).
-//
-// Replacing a sibling is now something a capability must ask for —
-// `exclusive: true`, for the ones where two really cannot coexist — and
-// when it does, the deletions are named in the plan rather than
-// happening as a side effect of an install nobody read as a removal.
 // claimedByAnotherCapability refuses an install that would re-own a
 // resource another capability already holds.
 //
@@ -505,6 +469,42 @@ func claimedByAnotherCapability(pkg *pkgspec.Package, current, rendered []resour
 		pkg.Metadata.Name, strings.Join(clashes, ", "))
 }
 
+// droppedByUpgrade is what this capability owns today that its new
+// expansion no longer produces.
+//
+// Installing over an existing capability only ever added: the proposal
+// carried Put and nothing else, so a resource the previous version
+// declared and the new one does not simply stayed. home-assistant 1.1.0
+// replaced a mounted ConfigFile with seeded files, and after the upgrade
+// the statefile still held configfile/home-assistant-wildstone —
+// reconciled forever, written to disk forever, mounted by nothing.
+//
+// Harmless there, and not harmless in general: the same gap leaves a
+// Route serving a container the package has dropped, or a Job running
+// against a service that no longer exists. An upgrade that does not
+// converge to the new package's definition is not an upgrade.
+//
+// DATA IS NEVER PROPOSED FOR DELETION. Volumes and seeded files belong
+// to the household from the moment they land (ADR-W004 A4, ADR-W029 A2)
+// — and a Volume delete cannot apply at all, so proposing one would fail
+// the whole plan every tick until F60 set it aside, taking the rest of
+// the upgrade with it. A package that stops declaring a volume leaves
+// the data exactly where it is.
+//
+// NEITHER IS A SIBLING PROFILE'S. This is scoped to the package being
+// installed, not to its capability, and the difference is the whole
+// point of the Package field on a resource's metadata. Owner names the
+// CAPABILITY, so books-calibre-web and books-kavita both render
+// resources owned by "capability/books"; keyed on owner alone, enabling
+// one read the other's container and Route as leftovers of an upgrade
+// and proposed deleting them. Installing one book app uninstalled the
+// other, and a household that wanted to compare them, or simply wanted
+// both, had no way to say so (ADR-W029 A7).
+//
+// Replacing a sibling is now something a capability must ask for —
+// `exclusive: true`, for the ones where two really cannot coexist — and
+// when it does, the deletions are named in the plan rather than
+// happening as a side effect of an install nobody read as a removal.
 func droppedByUpgrade(pkg *pkgspec.Package, current, rendered []resource.Resource) []plan.DeletionRef {
 	owner := "capability/" + pkg.Metadata.Capability
 	type key struct{ kind, name string }
