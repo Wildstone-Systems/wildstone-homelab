@@ -175,7 +175,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: calendar-radicale
-  version: 1.2.0
+  version: 1.3.0
   capability: calendar
   profile: radicale
 requires:
@@ -477,8 +477,10 @@ agentTools:
   - { name: check_availability, risk: read }
   - { name: create_event, risk: domestic }
   - { name: update_event, risk: domestic }
-  # Deleting wants a tier that does not exist — "do it, but ask first".
-  # What stands in for it: at most one event per call, a refusal rather
-  # than a guess when the match is ambiguous, and an audit record on the
-  # household stream like every other dispatch. ADR-W034 carries the gap.
-  - { name: delete_event, risk: domestic }
+  # Deleting asks first, and `confirm` is the tier that says so
+  # (ADR-W024 A5.1). Two things follow: a rule firing at 3am cannot
+  # carry it at all, because there would be nobody to ask; and a person
+  # in chat gets a question naming the actual event — "Delete 'Dentist
+  # for Sam' from Fri 18 Sep?" — which they answer on the Home page.
+  # The yes is bound to THAT call, so it authorises nothing else.
+  - { name: delete_event, risk: confirm }

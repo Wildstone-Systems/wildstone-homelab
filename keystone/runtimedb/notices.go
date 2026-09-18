@@ -685,3 +685,11 @@ func (db *DB) DueNotices(at time.Time) ([]Notice, error) {
 	}
 	return out, rows.Err()
 }
+
+// AnswerApproves reports what a recorded answer meant.
+//
+// Exported so a caller reading a notice back can reach the same verdict
+// AnswerNotice reached when it stored one, rather than keeping a second
+// list of the words that mean yes. Two lists is how "ok" comes to
+// authorise something in one place and not in another.
+func AnswerApproves(answer string) (approved, ok bool) { return resolveAnswer(answer) }

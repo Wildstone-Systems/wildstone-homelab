@@ -193,24 +193,32 @@ Two costs, both real, both preferred to that grant:
 - **An agent cannot answer "what's on MY calendar tomorrow"** — only
   what is on the household's. Until C2, that is the honest boundary.
 
-### A10. Delete has no confirmation tier, and that is recorded rather than invented
+### A10. Delete asks first, on a tier that now exists
 
-The tiers a household surface may carry are `read` and `domestic`
-(ADR-W024 A5). Deleting an event wants a third — "do it, but ask first"
-— and there is no such thing in Wildstone today.
+Deleting an event wants "do it, but ask first", and when this capability
+was first written there was no such tier. There is now: **ADR-W024 A5.1**
+adds `confirm` and the attendance axis it needs, because the shape of the
+want is general — it is every destructive household action — and a tier
+only the calendar understood would have been the same mistake in a
+smaller box.
 
-Declaring `delete_event` above `domestic` would make it uncallable, which
-is a dead entry in a menu rather than a smaller capability. So it is
-`domestic`, and three things stand in for the confirmation:
+So `calendar.delete_event` is declared at `confirm`, and two things
+follow. A rule firing at 3am cannot carry it at all, because there would
+be nobody to ask. A person in chat gets a question naming the actual
+event — "Delete 'Dentist for Sam' from Fri 18 Sep?", via the executor's
+`Describe` — which they answer on the Home page, and their yes
+authorises that call and nothing else.
+
+Three things the executor does regardless, because a confirmation is not
+a substitute for an operation that behaves:
 
 - it removes at most one event per call;
 - it refuses, naming the candidates, when the title and date match none
-  or several — so it never picks;
+  or several — and it does so BEFORE anybody is asked, so an ambiguous
+  request costs one message rather than a question, an answer and then a
+  refusal;
 - every dispatch lands on the household stream, audited, like all the
   others.
-
-A confirmation tier is worth adding to ADR-W024's set. It should not be
-invented inside a calendar executor.
 
 ### A11. The calendar works with no agent at all
 

@@ -239,6 +239,12 @@ type householdConfig struct {
 	CalendarUser string
 }
 
+// confirmWindow is how long a confirm-tier question stays open, and
+// therefore also how long one yes is good for. Short, because the whole
+// premise is that somebody is there: a question still unanswered ten
+// minutes later is one the household has moved on from.
+const confirmWindow = 10 * time.Minute
+
 // butlerSessionPrincipal is the acting principal on every Butler session
 // record (ADR-W001 A1). The small-duplicated-constant pattern: the API
 // owns the same string for the sessions it creates, and this file needs
@@ -711,6 +717,72 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		// would refuse every action, which is not what "no catalog" means.
 		actions.Declared = domestic.DeclaredFromPackages(agentToolSources(cat))
 	}
+	// Asking a household member to confirm one action (ADR-W024 A5.1).
+	//
+	// It rides the NOTICES table, which is the household's own
+	// ask-and-answer channel and deliberately not a notification
+	// capability: a notice is per member, expiring, single-use, and it
+	// is rendered wherever that member actually is — the Home page
+	// today, and any surface that learns to render one tomorrow. A
+	// household with no ntfy installed can still be asked.
+	//
+	// What authorises a retry is a row this function reads, written by
+	// runtimedb.AnswerNotice, which checks that the answerer is the
+	// person the question was asked of, that it has not expired, that it
+	// was not already answered, and that the reply resolves to a clear
+	// yes or no. The model never sees a token, so there is nothing for
+	// it to replay: it gets a refusal, and the next attempt succeeds
+	// only because a person answered in the meantime.
+	actions.Confirm = func(_ context.Context, req domestic.ConfirmRequest) (domestic.Confirmation, error) {
+		settings, _, serr := db.GetButlerSettings()
+		if serr != nil {
+			return domestic.ConfirmAsked, serr
+		}
+		now := time.Now()
+		// The dedupe key carries a TIME BUCKET as well as the call.
+		//
+		// Without the call, one yes would authorise any later action.
+		// Without the bucket, the key would match forever — a notices
+		// dedupe is not time-scoped — so the SAME question could never
+		// be asked twice, and a member who let one expire could never
+		// be asked again. One bucket is one confirmation window.
+		bucket := now.Unix() / int64(confirmWindow.Seconds())
+		decision, rerr := db.RaiseNotice(runtimedb.NoticeRequest{
+			Kind:          "household.confirm",
+			Recipient:     req.Member,
+			CorrelationID: req.CorrelationID,
+			DedupeKey:     fmt.Sprintf("household-confirm:%s:%d", req.Key, bucket),
+			Body:          req.Question,
+			Asks:          true,
+			TTL:           confirmWindow,
+		}, settings, now)
+		if rerr != nil {
+			return domestic.ConfirmAsked, rerr
+		}
+		if decision.Sent {
+			return domestic.ConfirmAsked, nil
+		}
+		// Deduplicated onto a question already put to them: read where
+		// they have got to with it.
+		n, gerr := db.GetNotice(decision.Seq)
+		if gerr != nil {
+			return domestic.ConfirmAsked, gerr
+		}
+		if n.AnsweredAt.IsZero() {
+			return domestic.ConfirmPending, nil
+		}
+		// An answer is spent when it is used. AcknowledgeNotice only
+		// succeeds on a notice not already acknowledged, so this is the
+		// atomic single-use marker — two dispatches racing on one yes
+		// cannot both win it.
+		if aerr := db.AcknowledgeNotice(n.Seq); aerr != nil {
+			return domestic.ConfirmPending, nil
+		}
+		if approved, ok := runtimedb.AnswerApproves(n.Answer); ok && approved {
+			return domestic.ConfirmApproved, nil
+		}
+		return domestic.ConfirmDenied, nil
+	}
 	actions.Audit = func(c domestic.Call, r domestic.Result, aerr error) {
 		ev := runtimedb.Event{
 			Type: "domestic.acted", Kind: "Automation", Name: c.Rule, Message: r.Summary,
@@ -1128,6 +1200,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 					Rule:        "butler-session",
 					Subject:     c.Member,
 					TriggerType: "butler.household_session",
+					// A person asked and is reading the answer. This is
+					// the second axis ADR-W024 A5.1 adds, and it is set
+					// HERE rather than inferred from the rule name,
+					// because a surface asserting "somebody is present"
+					// should have to say so.
+					Attended: true,
 				})
 				if aerr != nil {
 					return "", aerr

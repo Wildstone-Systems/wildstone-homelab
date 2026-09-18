@@ -79,13 +79,13 @@ const (
 // records the gap rather than inventing a confirmation primitive in a
 // calendar executor.
 var CalendarTools = map[string]string{
-	CalToolAgenda:       "read",
-	CalToolSearch:       "read",
-	CalToolAvailability: "read",
-	CalToolCreate:       "domestic",
-	CalToolUpdate:       "domestic",
-	CalToolDelete:       "domestic",
-	CalToolSetup:        "read",
+	CalToolAgenda:       TierRead,
+	CalToolSearch:       TierRead,
+	CalToolAvailability: TierRead,
+	CalToolCreate:       TierDomestic,
+	CalToolUpdate:       TierDomestic,
+	CalToolDelete:       TierConfirm,
+	CalToolSetup:        TierRead,
 }
 
 // maxAgendaDays bounds a range read. A household question is about today,
@@ -788,3 +788,33 @@ func (c *Calendar) howToAdd(call Call) (Result, error) {
 		},
 	}, nil
 }
+
+// Describe implements Describer: what this call would do, in a sentence
+// somebody can answer yes or no to.
+//
+// Only the confirm-tier tool needs it, and only deleting is at that
+// tier. Resolving the event HERE is the good part: "three things on
+// Friday match 'dinner'" is reported before anybody is asked to approve
+// a deletion the gateway could not have carried out, so an ambiguous
+// request costs one message rather than a question, an answer, and then
+// a refusal.
+func (t *calendarTool) Describe(ctx context.Context, c Call) (string, error) {
+	if t.tool != CalToolDelete {
+		return "", nil
+	}
+	if t.cal.Upstream == nil || t.cal.Upstream.CollectionURL == "" {
+		return "", fmt.Errorf("no calendar is configured on this control plane")
+	}
+	found, day, err := t.cal.resolve(ctx, c.Params, CalToolDelete)
+	if err != nil {
+		return "", err
+	}
+	when := day.Format("Mon 2 Jan")
+	if !found.AllDay && !found.Start.IsZero() {
+		when = found.Start.In(t.cal.location()).Format("Mon 2 Jan") + " at " +
+			found.Start.In(t.cal.location()).Format("15:04")
+	}
+	return fmt.Sprintf("Delete %q from %s?", found.Summary, when), nil
+}
+
+var _ Describer = (*calendarTool)(nil)

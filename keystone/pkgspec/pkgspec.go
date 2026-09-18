@@ -252,6 +252,11 @@ var riskTiers = map[string]bool{
 	"medium":   true,
 	"high":     true,
 	"domestic": true,
+	// confirm: acts, but only with a person in the loop who has said
+	// yes to this specific call (ADR-W024 A5.1). Added because the two
+	// household tiers were one axis where the world has two questions —
+	// what the action does, and whether anybody is there.
+	"confirm": true,
 }
 
 // EventTypeRegexp is the household event type shape (ADR-W024 A2),
@@ -693,7 +698,7 @@ func validateAgentTool(t AgentToolSpec, field string) error {
 		return &ValidationError{Field: field + ".name", Msg: "must not be empty"}
 	}
 	if !riskTiers[t.Risk] {
-		return &ValidationError{Field: field + ".risk", Msg: "must be one of read, low, medium, high, domestic"}
+		return &ValidationError{Field: field + ".risk", Msg: "must be one of read, low, medium, high, domestic, confirm"}
 	}
 	return nil
 }

@@ -567,3 +567,217 @@ func TestHowToAddAnswersBeforeTheAgentToolsAreWired(t *testing.T) {
 		}
 	}
 }
+
+// --- the confirm tier (ADR-W024 A5.1) ---
+
+// fakeConfirm is a household member who can be asked.
+type fakeConfirm struct {
+	asked    []ConfirmRequest
+	state    Confirmation
+	stateFor map[string]Confirmation
+}
+
+func (f *fakeConfirm) fn(_ context.Context, req ConfirmRequest) (Confirmation, error) {
+	f.asked = append(f.asked, req)
+	if s, ok := f.stateFor[req.Key]; ok {
+		return s, nil
+	}
+	return f.state, nil
+}
+
+func confirmingGateway(t *testing.T, f *fakeCalendar, c *fakeConfirm) *Gateway {
+	t.Helper()
+	gw := &Gateway{
+		Declared: DeclaredFromPackages([]AgentToolSource{
+			{Capability: CalendarCapability, Tools: CalendarTools},
+		}),
+		Confirm: c.fn,
+	}
+	for _, e := range calendarUnder(f).Executors() {
+		gw.Register(e)
+	}
+	return gw
+}
+
+func deleteCall() Call {
+	return Call{
+		Tool: "calendar." + CalToolDelete, Tier: TierConfirm, Attended: true, Subject: "mika",
+		Params: map[string]string{"title": "dentist", "date": "2026-09-18"},
+	}
+}
+
+// A rule firing on its own cannot carry a confirm-tier action at all —
+// not "carries it and gets asked", because there is nobody to ask and a
+// question nobody answers is a rule that silently stops working.
+func TestAnUnattendedRuleCannotCarryAConfirmTierAction(t *testing.T) {
+	f := newFakeCalendar(t, vevent("a", "Dentist for Sam", "20260918T150000Z", ""))
+	c := &fakeConfirm{state: ConfirmApproved}
+	gw := confirmingGateway(t, f, c)
+
+	call := deleteCall()
+	call.Attended = false
+	call.Rule = "tidy-up-at-3am"
+
+	_, err := gw.Dispatch(context.Background(), call)
+	if err == nil {
+		t.Fatal("a 3am rule deleted a calendar event")
+	}
+	if len(c.asked) != 0 {
+		t.Error("an unattended rule caused somebody to be asked to confirm")
+	}
+	if f.sent(http.MethodDelete) {
+		t.Error("an unattended rule reached the calendar")
+	}
+}
+
+// Attended, but not yet confirmed: the person is asked, and the action
+// does NOT run. The refusal is what the model gets — never a token.
+func TestAnAttendedCallIsAskedAboutBeforeItRuns(t *testing.T) {
+	f := newFakeCalendar(t, vevent("a", "Dentist for Sam", "20260918T150000Z", ""))
+	c := &fakeConfirm{state: ConfirmAsked}
+	gw := confirmingGateway(t, f, c)
+
+	_, err := gw.Dispatch(context.Background(), deleteCall())
+	if err == nil {
+		t.Fatal("a confirm-tier action ran without being confirmed")
+	}
+	if f.sent(http.MethodDelete) {
+		t.Fatal("the event was deleted before anybody confirmed")
+	}
+	if len(c.asked) != 1 {
+		t.Fatalf("the member was asked %d times, want 1", len(c.asked))
+	}
+	// The question is about the EVENT, not about a tool call. Somebody
+	// is being asked to approve something in their week.
+	if !strings.Contains(c.asked[0].Question, "Dentist for Sam") {
+		t.Errorf("the question does not name the event: %q", c.asked[0].Question)
+	}
+	if strings.Contains(c.asked[0].Question, "delete_event") {
+		t.Errorf("the question reads as a tool call: %q", c.asked[0].Question)
+	}
+	if c.asked[0].Member != "mika" {
+		t.Errorf("the question was put to %q", c.asked[0].Member)
+	}
+}
+
+// The yes is bound to THIS call. Approving "delete the dentist on
+// Friday" must not approve "delete dinner on Saturday".
+func TestConsentIsBoundToTheCallAndNotToTheTool(t *testing.T) {
+	f := newFakeCalendar(t,
+		vevent("a", "Dentist for Sam", "20260918T150000Z", ""),
+		vevent("b", "Dinner with Sam", "20260918T233000Z", ""),
+	)
+	approved := deleteCall()
+	other := deleteCall()
+	other.Params = map[string]string{"title": "dinner", "date": "2026-09-18"}
+
+	c := &fakeConfirm{state: ConfirmAsked, stateFor: map[string]Confirmation{
+		confirmKey(approved): ConfirmApproved,
+	}}
+	gw := confirmingGateway(t, f, c)
+
+	if _, err := gw.Dispatch(context.Background(), approved); err != nil {
+		t.Fatalf("an approved call was refused: %v", err)
+	}
+	if !f.sent(http.MethodDelete) {
+		t.Fatal("an approved delete did not reach the calendar")
+	}
+	if _, err := gw.Dispatch(context.Background(), other); err == nil {
+		t.Fatal("a yes to one deletion authorised a different one")
+	}
+	if confirmKey(approved) == confirmKey(other) {
+		t.Fatal("two different calls share a confirmation key")
+	}
+}
+
+// The key is stable across map iteration order, or the same call asks a
+// new question every time and nobody can ever approve anything.
+func TestTheConfirmationKeyIsStable(t *testing.T) {
+	a := deleteCall()
+	b := deleteCall()
+	b.Params = map[string]string{"date": "2026-09-18", "title": "dentist"} // same pairs, other order
+	if confirmKey(a) != confirmKey(b) {
+		t.Fatal("the key depends on map order, so one call would ask a different question each time")
+	}
+}
+
+// A no is a no, and it reads as one.
+func TestANoRefusesAndDoesNotRun(t *testing.T) {
+	f := newFakeCalendar(t, vevent("a", "Dentist for Sam", "20260918T150000Z", ""))
+	c := &fakeConfirm{state: ConfirmDenied}
+	_, err := confirmingGateway(t, f, c).Dispatch(context.Background(), deleteCall())
+	if err == nil {
+		t.Fatal("a refused action ran")
+	}
+	if !strings.Contains(err.Error(), "said no") {
+		t.Errorf("a denial does not read as one: %v", err)
+	}
+	if f.sent(http.MethodDelete) {
+		t.Error("a refused delete reached the calendar")
+	}
+}
+
+// A control plane with no way to ask refuses, rather than performing.
+// No way to ask is not permission.
+func TestNoWayToAskIsNotPermission(t *testing.T) {
+	f := newFakeCalendar(t, vevent("a", "Dentist for Sam", "20260918T150000Z", ""))
+	gw := &Gateway{Declared: DeclaredFromPackages([]AgentToolSource{
+		{Capability: CalendarCapability, Tools: CalendarTools},
+	})}
+	for _, e := range calendarUnder(f).Executors() {
+		gw.Register(e)
+	}
+	if _, err := gw.Dispatch(context.Background(), deleteCall()); err == nil {
+		t.Fatal("a gateway with no confirm seam performed a confirm-tier action")
+	}
+	if f.sent(http.MethodDelete) {
+		t.Error("the event was deleted with nobody asked")
+	}
+}
+
+// The executor's own refusal happens BEFORE anybody is asked, so an
+// ambiguous request costs one message rather than a question, an answer
+// and then a refusal.
+func TestAnAmbiguousDeleteIsRefusedBeforeAnybodyIsAsked(t *testing.T) {
+	f := newFakeCalendar(t,
+		vevent("a", "Dinner with Sam", "20260918T233000Z", ""),
+		vevent("b", "Dinner with Giulia", "20260919T003000Z", ""),
+	)
+	c := &fakeConfirm{state: ConfirmApproved}
+	gw := confirmingGateway(t, f, c)
+
+	call := deleteCall()
+	call.Params = map[string]string{"title": "dinner", "date": "2026-09-18"}
+	_, err := gw.Dispatch(context.Background(), call)
+	if err == nil {
+		t.Fatal("an ambiguous delete was carried out")
+	}
+	if len(c.asked) != 0 {
+		t.Error("somebody was asked to approve a deletion the gateway could not have performed")
+	}
+	if !strings.Contains(err.Error(), "Dinner with Sam") {
+		t.Errorf("the refusal does not name the candidates: %v", err)
+	}
+}
+
+// Read and domestic tiers are untouched by any of this: they do not ask.
+func TestOrdinaryTiersAreNotAskedAbout(t *testing.T) {
+	f := newFakeCalendar(t)
+	c := &fakeConfirm{state: ConfirmAsked}
+	gw := confirmingGateway(t, f, c)
+
+	if _, err := gw.Dispatch(context.Background(), Call{
+		Tool: "calendar." + CalToolAgenda, Tier: TierRead, Attended: true, Subject: "mika",
+	}); err != nil {
+		t.Fatalf("a read was refused: %v", err)
+	}
+	if _, err := gw.Dispatch(context.Background(), Call{
+		Tool: "calendar." + CalToolCreate, Tier: TierDomestic, Attended: false, Subject: "mika",
+		Params: map[string]string{"title": "Bin day", "start": "2026-09-19T07:00"},
+	}); err != nil {
+		t.Fatalf("an unattended domestic action was refused: %v", err)
+	}
+	if len(c.asked) != 0 {
+		t.Errorf("read/domestic actions asked %d confirmation questions", len(c.asked))
+	}
+}

@@ -283,14 +283,23 @@ func TestCalendarToolsAreDeclaredByThePackage(t *testing.T) {
 		}
 	}
 
-	// A household surface may carry read and domestic and nothing else
-	// (ADR-W024 A5). A calendar tool declared above that tier is one a
-	// family session cannot call at all — which is not a smaller
+	// Every tool has to be one a family session can actually carry
+	// (ADR-W024 A5/A5.1) — asked of the one definition rather than a
+	// copy of the set. A tool declared above that is not a smaller
 	// capability, it is a dead entry in the menu.
 	for name, tier := range declared {
-		if tier != "read" && tier != "domestic" {
-			t.Errorf("calendar.%s is declared at tier %q; a family session may only carry read or domestic, "+
+		if !domestic.TierAllowed(tier, true) {
+			t.Errorf("calendar.%s is declared at tier %q, which a family session cannot carry, "+
 				"so the tool would never be callable", name, tier)
+		}
+	}
+
+	// And the split that tier exists to make: a confirm-tier tool must
+	// be refused to an unattended rule. Declaring one and having it run
+	// at 3am anyway is the whole failure A5.1 was added to prevent.
+	for name, tier := range declared {
+		if tier == domestic.TierConfirm && domestic.TierAllowed(tier, false) {
+			t.Errorf("calendar.%s is at the confirm tier but an unattended rule may carry it", name)
 		}
 	}
 }
