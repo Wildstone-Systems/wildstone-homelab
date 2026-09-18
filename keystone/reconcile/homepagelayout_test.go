@@ -57,7 +57,11 @@ func TestHomepageLayoutNamesOnlyGroupsThatExist(t *testing.T) {
 // the shared homepageEntries exists to rule out.
 func TestHomepageLayoutCoversTheEmptyState(t *testing.T) {
 	got := string(renderHomepageSettings(nil))
-	if !strings.Contains(got, "  "+homepageGroups[0]+":\n    style: row\n") {
+	// The empty state's OWN group, not the first one in the order: since
+	// the household surfaces took the first position (#197, #198) those
+	// are two different strings, and a page with nothing installed has
+	// no quick actions either.
+	if !strings.Contains(got, "  "+homepageEmptyState.group+":\n    style: row\n") {
 		t.Errorf("the empty state's group is not laid out:\n%s", got)
 	}
 	if strings.Contains(got, "  Admin:") {

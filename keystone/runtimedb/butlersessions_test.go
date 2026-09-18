@@ -51,7 +51,7 @@ func TestButlerSessionListOmitsTranscript(t *testing.T) {
 			t.Fatalf("insert %d: %v", i, err)
 		}
 	}
-	list, err := db.ListButlerSessions(2, "", "")
+	list, err := db.ListButlerSessions(2, ButlerSessionFilter{})
 	if err != nil {
 		t.Fatalf("ListButlerSessions: %v", err)
 	}
@@ -109,21 +109,21 @@ func TestButlerSessionListBySurface(t *testing.T) {
 			t.Fatalf("insert %s: %v", sfc, err)
 		}
 	}
-	family, err := db.ListButlerSessions(0, ButlerSurfaceFamily, "")
+	family, err := db.ListButlerSessions(0, ButlerSessionFilter{Surface: ButlerSurfaceFamily})
 	if err != nil {
 		t.Fatalf("ListButlerSessions(family): %v", err)
 	}
 	if len(family) != 1 || family[0].Surface != ButlerSurfaceFamily {
 		t.Fatalf("family list = %+v, want exactly the one family session", family)
 	}
-	admin, err := db.ListButlerSessions(0, ButlerSurfaceAdmin, "")
+	admin, err := db.ListButlerSessions(0, ButlerSessionFilter{Surface: ButlerSurfaceAdmin})
 	if err != nil {
 		t.Fatalf("ListButlerSessions(admin): %v", err)
 	}
 	if len(admin) != 2 {
 		t.Fatalf("admin list = %d sessions, want 2", len(admin))
 	}
-	both, err := db.ListButlerSessions(0, "", "")
+	both, err := db.ListButlerSessions(0, ButlerSessionFilter{})
 	if err != nil {
 		t.Fatalf("ListButlerSessions(all): %v", err)
 	}

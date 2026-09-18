@@ -1,0 +1,125 @@
+# The filedrop capability, profile "wildstone": the household's own
+# uploader and browser, served by Keystone (#197).
+#
+# WHY IT IS NOT THE `files` CAPABILITY. files-filebrowser is a whole
+# application with its own login, its own database and public share
+# links, and #149 records why putting forward-auth in front of all of it
+# is wrong. This is a different thing that happens to touch the same
+# folder: a drop box the family reaches from the dashboard, with
+# Wildstone's own identity in front of it and no second account anywhere.
+# A household can run both — they are separate capabilities on separate
+# addresses — and the folder they share is the contract between them.
+#
+# IT INSTALLS NOTHING. There is no Container and no Volume: the surface
+# is served by Keystone itself, from the same listener as the Console,
+# which is why the Route's upstream is an address rather than a
+# container. What this package adds is the three declarations that make
+# the surface exist — who may reach it, where its files go, and how a
+# browser gets there.
+#
+# THE GROUP IS ENFORCED BY KEYSTONE, NOT BY AUTHELIA, for the reason
+# packages/wildstone-console gives at length: under the tailnet posture
+# every Route shares one hostname and differs by port, so Authelia's
+# per-hostname rules cannot tell this surface from any other. The proxy
+# answers "who is this"; Keystone answers "and may they upload".
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: filedrop-wildstone
+  version: 1.0.0
+  capability: filedrop
+  profile: wildstone
+  # One drop box per household. A second profile would want the same
+  # address and the same folder, and the card on the dashboard would be
+  # ambiguous about which one it opens.
+  exclusive: true
+requires:
+  # The group is created by the identity capability's provisioning job,
+  # and the Route is only worth rendering if something enforces auth in
+  # front of it.
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: drop_subdomain, default: drop, description: "The name this service appears under, e.g. drop." }
+  - { name: node, required: true, description: "Which machine runs the control plane.", source: node }
+  - { name: keystone_addr, required: true, example: "192.168.1.10:9441", description: "Where Keystone's API answers, as address:port. This is what the proxy forwards to." }
+  # WHERE THE FILES GO. The default is the same media root the media
+  # packages serve, so a photo dropped on the dashboard is a photo
+  # Jellyfin or a file browser can see — which is the whole point of the
+  # feature and the acceptance criterion #197 states.
+  #
+  # This is the ONLY place a filesystem path is named. Nothing a
+  # household member sends can contribute to it: an upload names a
+  # destination ("shared", "photos") and Keystone maps that onto a
+  # folder under this root.
+  - { name: files_path, default: /srv/wildstone/media, description: "Folder on this machine to keep uploads in.", source: directory }
+  - { name: max_upload_mb, default: "512", description: "The largest single file the household may upload, in megabytes." }
+  # Node running the identity provider, whose managed config the
+  # LdapGroup is rendered into. Defaults to this package's own node,
+  # which is right for a single-node homelab.
+  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
+policies:
+  # The family's own surface. It holds what the household uploads, which
+  # is ordinary household material rather than the operator's.
+  classifications: [family_private]
+  dataSensitivity: medium
+externalConfig:
+  - filename: settings.yaml
+    consumer: Keystone
+    reason: >-
+      This capability installs no container, because the surface is
+      served by the control plane itself — so there is nothing in this
+      package for the file to be mounted into. Keystone reads the
+      ConfigFile RESOURCE out of desired state rather than the copy the
+      node holds, which is why the rendered file is a readable record of
+      the setting rather than the mechanism. It is written to the node
+      all the same: an operator asking "where do the family's uploads
+      go" should be able to answer it by reading a file.
+templates:
+  # The group that grants a person the drop box.
+  #
+  # Membership is the whole permission, and it is checked on every
+  # request rather than at sign-in: removing somebody from the group
+  # stops their next upload. That is what makes #197's "a member without
+  # write authority cannot upload by manipulating the UI, URL, or API
+  # request" true of the API and not only of the page.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: LdapGroup
+    metadata: { name: filedrop-users, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      name: filedrop_users
+  # The storage root, as desired state.
+  #
+  # A ConfigFile because this package installs no container, and a
+  # containerless package has no other carrier: a param is known only
+  # while the package is being expanded, and the request that uses it
+  # arrives weeks later. Keystone reads this back out of desired state —
+  # the resource, not the copy on the node's disk — and it is the only
+  # way a storage path reaches the upload endpoint.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: filedrop-settings, node: "{{ .Params.node }}" }
+    spec:
+      filename: settings.yaml
+      content: |
+        # managed by wildstone-keystone — do not edit
+        root: {{ .Params.files_path }}
+        maxUploadMB: {{ .Params.max_upload_mb }}
+  # The route.
+  #
+  # auth: authelia_oidc is what makes the proxy emit forward_auth and
+  # copy Remote-User and Remote-Groups. Those headers are the only thing
+  # that carries an identity here, which is why Keystone refuses them
+  # from anywhere but the proxy.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: filedrop, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.drop_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "{{ .Params.keystone_addr }}"
+      auth: authelia_oidc
+      classification: family_private

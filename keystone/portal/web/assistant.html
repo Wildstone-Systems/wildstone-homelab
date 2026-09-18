@@ -1,0 +1,708 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assistant</title>
+<link rel="stylesheet" href="/portal/assets/nocturne.css">
+<!--
+  The full conversation: what the front page's Assistant card is a
+  window onto, in the same session.
+
+  IT ADDS THE THINGS THE CARD CANNOT HOLD. History down the left, the
+  agent picker with what it is for, and — the one that earns the page —
+  "What it may do", which is where the intersection model becomes
+  legible to a household. A member can read that this dashboard will
+  refuse an operator capability before they discover it by being
+  refused, and read it in the same words the server uses when it
+  refuses: both come from the connection profile, so the page and the
+  ceiling cannot drift.
+
+  ACTION RECEIPTS ARE REAL. Every tool call is recorded inside the
+  assistant turn that produced it, as a structured record — name, input,
+  result, error, rejected — so a receipt is a projection of that rather
+  than a parse of prose. They appear twice on purpose: inline under the
+  turn that caused them, because that is where a member is looking when
+  they wonder what just happened, and gathered in the panel, because a
+  member asking "what has this thing done for me" should not have to
+  scroll a conversation to find out.
+
+  A transcript that cannot be parsed yields NO receipts rather than a
+  partial list. The panel's whole promise is that a member can see what
+  was done in their name, and a list that quietly dropped the one action
+  that did not parse would break that promise while looking complete.
+
+  ONE FIELD THE DESIGN ASKS FOR IS ABSENT: duration. Nothing records it
+  — the transcript keeps what happened, not how long it took — so the
+  receipt omits it rather than estimating. A made-up number on a receipt
+  is worse than a missing field on one.
+
+  MEMORY IS SCOPED BY THE STORE AND GATED BY THE DOOR. ExportMemoryFor
+  answers "what may this person read" — their own records plus household
+  ones that have not been forgotten — and it is the same query the
+  Console's export uses. Forgetting is checked here rather than there,
+  because ForgetMemory takes a sequence number and trusts it: a member
+  may forget what the assistant learned ABOUT THEM, and the household's
+  shared memory shows the word "shared" instead of a button that would
+  refuse.
+
+  AGENT OUTPUT IS UNTRUSTED DISPLAY CONTENT. Rendered as text, never as
+  markup, on every path below.
+-->
+<style>
+  .cols { display: grid; grid-template-columns: 232px minmax(0, 1fr) 268px; gap: var(--space-6); align-items: start; }
+  .convo {
+    display: block; width: 100%; text-align: left; border: 0; cursor: pointer;
+    background: none; color: inherit; font: inherit;
+    padding: var(--space-3); border-radius: var(--radius-md);
+  }
+  .convo:hover { background: var(--faint); }
+  .convo.on { background: color-mix(in srgb, var(--color-accent) 16%, transparent); }
+  .convo .t { font-size: 13px; }
+  .thread {
+    display: flex; flex-direction: column; gap: var(--space-4);
+    min-height: 220px; max-height: 58vh; overflow-y: auto; padding-right: var(--space-2);
+  }
+  .caps { display: flex; flex-direction: column; gap: var(--space-3); }
+  .cap { display: flex; gap: var(--space-3); align-items: flex-start; font-size: 12.5px; }
+  .cap .mark { flex: none; margin-top: 2px; }
+  .cap .q { color: var(--muted); }
+  /* A 268px column and capability names with no spaces in them: without
+     this they run straight out of the card. */
+  .cap, .cap .q, #memory, #receipts { overflow-wrap: anywhere; }
+  /* On a phone the thread and composer come first; the two panels
+     become disclosures rather than two full-length columns pushing the
+     conversation off screen. */
+  @media (max-width: 860px) {
+    .cols { grid-template-columns: minmax(0, 1fr); }
+    .cols > .first { order: -1; }
+    details.panel > summary { cursor: pointer; padding: var(--space-3) 0; }
+  }
+  details.panel > summary { list-style: none; cursor: pointer; }
+  details.panel > summary::-webkit-details-marker { display: none; }
+  /* The caret is the only thing that says whether there is more behind
+     a shut panel, so it has to turn. */
+  details.panel[open] > summary .ph-caret-down { transform: rotate(180deg); }
+  details.panel > summary .ph-caret-down { transition: transform .12s; }
+  @media (prefers-reduced-motion: reduce) {
+    details.panel > summary .ph-caret-down { transition: none; }
+  }
+</style>
+
+<main class="page">
+  <div class="spread" style="margin-bottom: var(--space-6)">
+    <a class="hbtn hbtn-ghost" href="/home/"><i class="ph ph-arrow-left" aria-hidden="true"></i> Home</a>
+    <span class="fade" aria-hidden="true"></span>
+    <span class="muted" id="member"></span>
+  </div>
+
+  <div class="row-between" style="margin-bottom: var(--space-6)">
+    <div>
+      <h1>Assistant</h1>
+      <div class="muted" id="subtitle">Ask the house for something</div>
+    </div>
+    <span class="pill pill-mute" id="scope-pill" title="Loading what this surface allows">household scope</span>
+  </div>
+
+  <div class="cols">
+
+    <!-- Conversations. Only this member's own: a household assistant
+         never exposes one member's conversations to another. -->
+    <section class="wid">
+      <!-- Shut like the others, and for the same reason: a household
+           that talks to its assistant daily has a list that grows
+           without limit, and it is the one part of this page nobody
+           needs open to say the next thing. New conversation stays
+           OUTSIDE the disclosure — starting one is the common action
+           and must not be two clicks behind a list nobody wanted. -->
+      <button class="hbtn hbtn-secondary" id="new" type="button" style="width: 100%">
+        <i class="ph ph-plus" aria-hidden="true"></i> New conversation
+      </button>
+      <details class="panel">
+        <summary class="wid-head" style="margin-top: var(--space-3)">
+          <span class="grow" style="min-width: 0">
+            <span class="eyebrow" style="display: block">Earlier</span>
+            <span class="muted" id="convos-digest"></span>
+          </span>
+          <i class="ph ph-caret-down" aria-hidden="true"></i>
+        </summary>
+        <div id="convos" style="margin-top: var(--space-3)"></div>
+      </details>
+    </section>
+
+    <!-- The thread. -->
+    <section class="wid first" style="min-height: 340px; justify-content: space-between">
+      <div class="wid-head">
+        <span class="eyebrow grow" id="thread-title">New conversation</span>
+        <span class="muted" id="agent-label"></span>
+        <select id="agent-select" class="hbtn hbtn-secondary" hidden aria-label="Which assistant"></select>
+      </div>
+      <div id="note"></div>
+      <div class="thread" id="thread"></div>
+      <div class="asks" id="asks">
+        <button class="hbtn" type="button">What's for dinner tomorrow?</button>
+        <button class="hbtn" type="button">Add milk to the shopping list</button>
+        <button class="hbtn" type="button">What did the house do today?</button>
+      </div>
+      <div class="stack" style="gap: var(--space-2)">
+        <div class="composer">
+          <label class="sr" for="ask">Ask the assistant</label>
+          <textarea id="ask" rows="2" placeholder="Ask the house for something"></textarea>
+          <button class="hbtn hbtn-primary send" id="send" type="button" aria-label="Send">
+            <i class="ph ph-paper-plane-tilt" aria-hidden="true"></i>
+          </button>
+        </div>
+        <div class="muted tnum" id="session-id"></div>
+      </div>
+    </section>
+
+    <!-- What it may do, what it remembers, and what it did.
+         
+         ALL THREE START SHUT, and each header answers its own question
+         in one line so that shut is still informative. §12.2 draws them
+         as full-length panels beside the thread and §15 only collapses
+         them on a phone; open, they are twelve capability rows, a
+         memory list and a receipt per action, which is a column far
+         taller than the conversation it is meant to sit beside and a
+         lot of height for something a member reads once.
+         
+         The digest is the part that makes this disclosure rather than
+         hiding: "7 allowed · 5 not from here" is the answer most people
+         want, and the rows behind it are for the person who wants to
+         check. -->
+    <div class="stack">
+      <section class="wid">
+        <details class="panel">
+          <summary class="wid-head">
+            <span class="grow" style="min-width: 0">
+              <span class="eyebrow" style="display: block" id="caps-head">What it may do</span>
+              <span class="muted" id="caps-digest"></span>
+            </span>
+            <i class="ph ph-caret-down" aria-hidden="true"></i>
+          </summary>
+          <div class="caps" id="caps" style="margin-top: var(--space-3)"></div>
+          <p class="muted" id="caps-note" style="margin-top: var(--space-4)"></p>
+        </details>
+      </section>
+
+      <section class="wid">
+        <details class="panel">
+          <summary class="wid-head">
+            <span class="grow" style="min-width: 0">
+              <span class="eyebrow" style="display: block">What it remembers</span>
+              <span class="muted" id="memory-digest"></span>
+            </span>
+            <i class="ph ph-caret-down" aria-hidden="true"></i>
+          </summary>
+          <div id="memory" style="margin-top: var(--space-3)"></div>
+          <p class="muted" id="memory-note"></p>
+        </details>
+      </section>
+
+      <section class="wid">
+        <details class="panel">
+          <summary class="wid-head">
+            <span class="grow" style="min-width: 0">
+              <span class="eyebrow" style="display: block">What was done in your name</span>
+              <span class="muted" id="receipts-digest"></span>
+            </span>
+            <i class="ph ph-caret-down" aria-hidden="true"></i>
+          </summary>
+          <div id="receipts" style="margin-top: var(--space-3)"></div>
+          <p class="muted" id="receipts-note"></p>
+          <a class="hbtn hbtn-ghost" href="/activity/">See what the house did
+            <i class="ph ph-arrow-right" aria-hidden="true"></i></a>
+        </details>
+      </section>
+    </div>
+
+  </div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  function el(id) { return document.getElementById(id); }
+  function text(id, v) { var n = el(id); if (n) { n.textContent = v; } }
+  function clear(n) { while (n && n.firstChild) { n.removeChild(n.firstChild); } }
+  function make(tag, cls, content) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (content !== undefined && content !== null) { n.textContent = String(content); }
+    return n;
+  }
+  function icon(name) {
+    var i = make("i", "ph ph-" + name);
+    i.setAttribute("aria-hidden", "true");
+    return i;
+  }
+  function note(cls, message, retry) {
+    var box = el("note");
+    clear(box);
+    var n = make("div", "note " + cls);
+    n.appendChild(icon(cls === "note-bad" ? "warning-circle" : "warning"));
+    n.appendChild(make("span", "grow", message));
+    if (retry) {
+      var b = make("button", "hbtn hbtn-ghost", "Try again");
+      b.type = "button";
+      b.addEventListener("click", function () { clear(box); retry(); });
+      n.appendChild(b);
+    }
+    box.appendChild(n);
+  }
+  function whenish(iso) {
+    var d = new Date(iso), now = new Date();
+    if (d.toDateString() === now.toDateString()) {
+      return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    }
+    return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  }
+
+  var member = "", agents = [], agent = "", session = "";
+
+  // The session can be handed over from the front page's card, which is
+  // what "Open conversation hands the same session to the full agent
+  // surface" means.
+  try {
+    var asked = new URLSearchParams(location.search).get("session");
+    if (asked) { session = asked; }
+  } catch (e) {}
+
+  function start() {
+    // The digests are filled before anything is fetched, so a shut
+    // panel never reads as blank while the page loads.
+    renderReceipts([]);
+    loadScope();
+    fetch("/api/v1/assistant/agents", { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "no assistant is set up yet"); }
+        member = res.j.member || "";
+        text("member", member);
+        text("caps-head", member ? "What it may do as " + member : "What it may do");
+        agents = res.j.agents || [];
+        if (!agents.length) {
+          el("ask").disabled = true;
+          el("send").disabled = true;
+          el("asks").hidden = true;
+          el("thread").appendChild(make("p", "muted",
+            "No assistant is set up yet. The owner turns one on, chooses what it may do, " +
+            "and it appears here."));
+          return;
+        }
+        agent = agents[0].name;
+        if (agents[0].directive) { text("subtitle", agents[0].directive); }
+        // THE PICKER IS ALWAYS THERE. It used to appear only with two
+        // or more, per the design's "one entry is a label, not a menu" —
+        // which is right about not drawing a menu with one item in it,
+        // and wrong about leaving a member with no way to find out
+        // whether there is anyone else to talk to. With one assistant
+        // it names them and says so when pressed; with several it is a
+        // menu.
+        if (agents.length === 1) {
+          el("agent-label").hidden = false;
+          text("agent-label", agent);
+          el("agent-label").title = "The only assistant set up for you. " +
+            "The owner decides which ones you can talk to here.";
+        } else {
+          el("agent-label").hidden = true;
+          var sel = el("agent-select");
+          sel.hidden = false;
+          agents.forEach(function (a) {
+            var o = document.createElement("option");
+            o.value = a.name;
+            o.textContent = a.name;
+            o.title = a.directive || "";
+            sel.appendChild(o);
+          });
+          sel.addEventListener("change", function () {
+            // Switching agent starts a new conversation and cannot
+            // raise authority above what the member and the surface
+            // already hold.
+            agent = sel.value;
+            var picked = agents.filter(function (a) { return a.name === agent; })[0];
+            text("subtitle", (picked && picked.directive) || "Ask the house for something");
+            newConversation();
+          });
+        }
+        if (agents.every(function (a) { return !a.reachable; })) {
+          note("note-warn", "It can still take a question, but the model it uses isn't answering right now.");
+        }
+        loadConversations();
+        loadMemory();
+        if (session) { openConversation(session); }
+      })
+      .catch(function (err) {
+        el("ask").disabled = true;
+        el("send").disabled = true;
+        note("note-bad", String(err.message || err));
+      });
+  }
+
+  // ---- two levels of disclosure.
+  //
+  // Opening a panel should not dump everything it has. Twelve capability
+  // rows, a household's whole memory or every action of a long
+  // conversation are all lists that are USEFUL in full and overwhelming
+  // by default, so a panel opens to a few and offers the rest. The
+  // header's digest already said how many there were, so the count on
+  // this control is the remainder rather than the total — a member who
+  // read "12 allowed" should not then be offered "12 more".
+  var firstFew = 4;
+
+  function discloseRows(box, rows, draw) {
+    clear(box);
+    var shown = rows.slice(0, firstFew), rest = rows.slice(firstFew);
+    shown.forEach(function (r) { box.appendChild(draw(r)); });
+    if (!rest.length) { return; }
+    var more = make("button", "hbtn hbtn-ghost", "Show " + rest.length + " more");
+    more.type = "button";
+    more.appendChild(icon("caret-down"));
+    more.addEventListener("click", function () {
+      more.remove();
+      rest.forEach(function (r) { box.appendChild(draw(r)); });
+    });
+    box.appendChild(more);
+  }
+
+  // ---- what this surface allows, from the connection profile itself.
+  function loadScope() {
+    fetch("/api/v1/assistant/scope", { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { text("caps-digest", "couldn't load"); return; }
+        var box = el("caps");
+        clear(box);
+        el("scope-pill").title =
+          "This dashboard refuses the machines, apps, accounts, secrets and the control " +
+          "plane's own records, whatever the assistant is allowed elsewhere.";
+        var allowed = res.j.allowed || [], denied = res.j.denied || [];
+        // Allowed first, then the ceiling. Tagged so one list can carry
+        // both without the helper needing to know the difference.
+        var rows = [];
+        allowed.forEach(function (c) { rows.push({ c: c, ok: true }); });
+        denied.forEach(function (c) { rows.push({ c: c, ok: false }); });
+        discloseRows(box, rows, function (r) { return capRow(r.c, r.ok); });
+        // Shut, the header answers the question: how much can it do,
+        // and how much is off limits from here.
+        text("caps-digest", allowed.length + " allowed \u00b7 " + denied.length + " not from here");
+        text("caps-note", res.j.note || "");
+      })
+      .catch(function () { /* the panel is informational; the ceiling is not */ });
+  }
+
+  function capRow(c, allowed) {
+    var row = make("div", "cap");
+    var mark = icon(allowed ? "seal-check" : "x");
+    mark.className += " mark";
+    mark.style.color = allowed ? "var(--st-ok)" : "var(--muted)";
+    row.appendChild(mark);
+    var body = make("div", "grow");
+    body.appendChild(make("div", null, c.what));
+    var q = make("div", "q");
+    q.appendChild(make("span", null, c.name));
+    if (c.qualified) { q.appendChild(make("span", null, " · " + c.qualified)); }
+    body.appendChild(q);
+    row.appendChild(body);
+    return row;
+  }
+
+  // ---- conversations.
+  function loadConversations() {
+    fetch("/api/v1/assistant/conversations", { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        var box = el("convos");
+        clear(box);
+        if (!res.ok) {
+          text("convos-digest", "couldn't load");
+          box.appendChild(make("p", "muted", "Can't load your conversations."));
+          return;
+        }
+        var items = res.j.conversations || [];
+        text("convos-digest", items.length
+          ? items.length + (items.length === 1 ? " conversation" : " conversations")
+          : "none yet");
+        if (!items.length) {
+          box.appendChild(make("p", "muted", "No conversations yet."));
+          return;
+        }
+        // The same two levels as the panels on the right: a few, then
+        // the rest on request. Grouped by day, so the count that
+        // matters is how many CONVERSATIONS are hidden rather than how
+        // many rows.
+        paintConversations(box, items, false);
+      })
+      .catch(function () {});
+  }
+
+  // Draws the conversation list, grouped by day, showing a few unless
+  // asked for all of them.
+  function paintConversations(box, items, all) {
+    clear(box);
+    var shown = all ? items : items.slice(0, firstFew);
+    var rest = items.length - shown.length;
+    var today = new Date().toDateString(), lastGroup = "";
+    shown.forEach(function (c) {
+      var group = new Date(c.at).toDateString() === today ? "Today" : "Earlier";
+      if (group !== lastGroup) {
+        box.appendChild(make("div", "eyebrow", group));
+        lastGroup = group;
+      }
+      var b = make("button", "convo" + (c.id === session ? " on" : ""));
+      b.type = "button";
+      b.appendChild(make("div", "t", c.title));
+      b.appendChild(make("div", "muted", whenish(c.at) + (c.agent ? " \u00b7 " + c.agent : "")));
+      b.addEventListener("click", function () { openConversation(c.id); });
+      box.appendChild(b);
+    });
+    if (rest <= 0) { return; }
+    var more = make("button", "hbtn hbtn-ghost", "Show " + rest + " more");
+    more.type = "button";
+    more.appendChild(icon("caret-down"));
+    more.addEventListener("click", function () { paintConversations(box, items, true); });
+    box.appendChild(more);
+  }
+
+  function newConversation() {
+    session = "";
+    renderReceipts([]);
+    clear(el("thread"));
+    clear(el("note"));
+    text("thread-title", "New conversation");
+    text("session-id", "");
+    el("asks").hidden = false;
+    loadConversations();
+    el("ask").focus();
+  }
+  el("new").addEventListener("click", newConversation);
+
+  function openConversation(id) {
+    fetch("/api/v1/assistant/conversations/" + encodeURIComponent(id),
+          { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "that conversation is not here any more"); }
+        session = res.j.session || id;
+        if (res.j.agent) {
+          agent = res.j.agent;
+          if (el("agent-select").hidden) { text("agent-label", agent); }
+          else { el("agent-select").value = agent; }
+        }
+        var thread = el("thread");
+        clear(thread);
+        clear(el("note"));
+        var all = [];
+        (res.j.messages || []).forEach(function (m) {
+          thread.appendChild(turn(m.role, m.text, m.receipts));
+          (m.receipts || []).forEach(function (r) { all.push(r); });
+        });
+        renderReceipts(all);
+        el("asks").hidden = (res.j.messages || []).length > 0;
+        text("session-id", session);
+        text("thread-title", "Conversation");
+        thread.scrollTop = thread.scrollHeight;
+        loadConversations();
+      })
+      .catch(function (err) { note("note-bad", String(err.message || err)); });
+  }
+
+  function turn(role, body, receipts) {
+    if (role === "user") { return make("div", "msg-user", body); }
+    var wrap = make("div", "turn");
+    var mark = make("span", "turn-mark");
+    mark.appendChild(icon("sparkle", true));
+    wrap.appendChild(mark);
+    var col = make("div", "grow");
+    // Model output as text, never markup.
+    col.appendChild(make("div", null, body));
+    (receipts || []).forEach(function (r) { col.appendChild(receiptPill(r)); });
+    wrap.appendChild(col);
+    return wrap;
+  }
+
+  // One action, collapsed to a pill. The capability IS the receipt: it
+  // is the same string the connection ceiling matches against, so a
+  // member reading "pantry.read" and a server refusing "infra.restart"
+  // are reading one vocabulary.
+  function receiptPill(r) {
+    var row = make("div", "spread");
+    row.style.marginTop = "var(--space-2)";
+    var pill = make("span", "pill " + (r.refused ? "pill-mute" : r.failed ? "pill-bad" : "pill-ok"));
+    pill.appendChild(icon(r.refused ? "prohibit" : r.failed ? "x-circle" : "check-circle", true));
+    pill.appendChild(make("span", null, r.capability));
+    row.appendChild(pill);
+    // A refusal names the rule rather than an error code — it is the
+    // ceiling made visible, and the design says to read it first.
+    if (r.why) { row.appendChild(make("span", "muted grow", r.why)); }
+    else if (r.result) { row.appendChild(make("span", "muted grow truncate", r.result)); }
+    return row;
+  }
+
+  // ---- what it remembers about you.
+  function loadMemory() {
+    fetch("/api/v1/assistant/memory", { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        var box = el("memory");
+        clear(box);
+        if (!res.ok) {
+          // Not an empty list, which would read as "it has learned
+          // nothing about you".
+          text("memory-digest", "couldn't load");
+          text("memory-note", res.j.error || "Can't read what the assistant remembers right now.");
+          return;
+        }
+        var items = res.j.items || [];
+        if (!items.length) {
+          text("memory-digest", "nothing yet");
+          text("memory-note", "It hasn't learned anything about you yet.");
+          return;
+        }
+        // How many are YOURS is the number a member cares about, since
+        // those are the ones they can make it forget.
+        var mine = items.filter(function (m) { return m.mine; }).length;
+        text("memory-digest", items.length + (items.length === 1 ? " thing" : " things") +
+          (mine ? " \u00b7 " + mine + " yours" : ""));
+        text("memory-note", "You can make it forget anything it learned about you. " +
+          "What the household shares is the owner's.");
+        discloseRows(box, items, memoryRow);
+      })
+      .catch(function () { text("memory-note", "Can't read what the assistant remembers right now."); });
+  }
+
+  function memoryRow(m) {
+    var row = make("div", "cap");
+    row.appendChild(make("div", "grow"));
+    row.lastChild.appendChild(make("div", null, m.content));
+    if (m.from) { row.lastChild.appendChild(make("div", "q", m.from)); }
+    if (m.mine) {
+      // Their own to forget. A shared record gets the label instead of
+      // a control — never a button that refuses.
+      var f = make("button", "hbtn hbtn-ghost", "Forget");
+      f.type = "button";
+      f.addEventListener("click", function () {
+        f.disabled = true;
+        fetch("/api/v1/assistant/memory/forget?seq=" + encodeURIComponent(m.seq), { method: "POST" })
+          .then(function (r) {
+            if (!r.ok) { throw new Error("that didn't go through"); }
+            row.remove();
+          })
+          .catch(function () { f.disabled = false; });
+      });
+      row.appendChild(f);
+    } else {
+      row.appendChild(make("span", "pill pill-mute nowrap", "shared"));
+    }
+    return row;
+  }
+
+  // Re-reads the open conversation for its receipts only.
+  //
+  // Deliberately not a redraw of the thread: the member is looking at
+  // it, their own turn is already there, and replacing the lot to
+  // update a panel on the right would make the conversation flicker
+  // every time they said something.
+  function refreshReceipts() {
+    if (!session) { return; }
+    fetch("/api/v1/assistant/conversations/" + encodeURIComponent(session),
+          { headers: { accept: "application/json" } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j) { return; }
+        var all = [];
+        (j.messages || []).forEach(function (m) {
+          (m.receipts || []).forEach(function (r) { all.push(r); });
+        });
+        renderReceipts(all);
+      })
+      .catch(function () {});
+  }
+
+  // The panel is the thread's receipts, gathered — a member asking
+  // "what has this thing done for me" should not have to scroll a
+  // conversation to find out.
+  function renderReceipts(all) {
+    var box = el("receipts");
+    clear(box);
+    if (!all.length) {
+      text("receipts-digest", "nothing yet");
+      text("receipts-note", "Nothing has been done in your name in this conversation — " +
+        "it has only answered questions.");
+      return;
+    }
+    // A refusal is the row worth surfacing without being asked: it is
+    // the ceiling made visible, and a member should not have to open a
+    // panel to learn something was refused.
+    var refused = all.filter(function (r) { return r.refused; }).length;
+    text("receipts-digest", all.length + (all.length === 1 ? " action" : " actions") +
+      (refused ? " \u00b7 " + refused + " refused" : ""));
+    text("receipts-note", "");
+    discloseRows(box, all, receiptPill);
+  }
+
+  Array.prototype.forEach.call(el("asks").querySelectorAll("button"), function (b) {
+    b.addEventListener("click", function () { el("ask").value = b.textContent; el("ask").focus(); });
+  });
+
+  function send() {
+    var box = el("ask"), body = box.value.trim();
+    if (!body || !agent) { return; }
+    var thread = el("thread");
+    el("asks").hidden = true;
+    var mine = turn("user", body);
+    mine.style.opacity = "0.6";
+    thread.appendChild(mine);
+    var working = turn("assistant", "Thinking…");
+    working.style.opacity = "0.7";
+    thread.appendChild(working);
+    thread.scrollTop = thread.scrollHeight;
+    box.disabled = true;
+    el("send").disabled = true;
+
+    fetch("/api/v1/assistant/ask", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent: agent, session: session, text: body })
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        thread.removeChild(working);
+        mine.style.opacity = "";
+        if (!res.ok) { throw new Error(res.j.error || "I couldn't answer that one"); }
+        session = res.j.session || session;
+        text("session-id", session);
+        thread.appendChild(turn("assistant", res.j.reply || ""));
+        if (res.j.proposals) {
+          thread.appendChild(make("div", "pill pill-warn",
+            res.j.proposals === 1 ? "1 thing needs the owner's approval"
+                                  : res.j.proposals + " things need the owner's approval"));
+        }
+        box.value = "";
+        loadConversations();
+        // Re-read the conversation once the answer is in. The ask
+        // response carries the reply but not what the assistant DID to
+        // produce it, so the optimistic turn has no receipts on it and
+        // the panel's digest would be a message behind.
+        refreshReceipts();
+      })
+      .catch(function (err) {
+        // A failed send keeps the typed text, and Try again resends it.
+        mine.style.opacity = "";
+        note("note-bad", String(err.message || err), send);
+      })
+      .then(function () {
+        box.disabled = false;
+        el("send").disabled = false;
+        thread.scrollTop = thread.scrollHeight;
+        box.focus();
+      });
+  }
+
+  el("send").addEventListener("click", send);
+  el("ask").addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+
+  start();
+})();
+</script>

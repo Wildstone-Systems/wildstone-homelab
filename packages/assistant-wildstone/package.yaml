@@ -1,0 +1,64 @@
+# The assistant capability, profile "wildstone": the household's own
+# chat surface for the Butlers it already has (#198).
+#
+# IT INSTALLS NOTHING AND IT CONFIGURES NO MODEL. Butlers, their models,
+# their directives and who may talk to them are ADR-W031's, managed from
+# the Console, and this package deliberately cannot touch any of it.
+# What it adds is a door: a group that says who may use the household
+# surface at all, and a Route that puts it behind the identity provider.
+#
+# The Butler a person reaches through it is still the one they were
+# granted, on the model it was assigned, with the tools its profile
+# allows. Installing this capability gives nobody a single capability
+# they did not already have — it gives them somewhere to use them from.
+#
+# WHY IT IS ITS OWN CAPABILITY rather than part of the dashboard: the
+# dashboard is one presentation of it. The same surface is what a
+# Wildstone-native portal would embed later, and a household that does
+# not want an assistant on the family dashboard should be able to not
+# install it — which is a capability, not a checkbox inside another one.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: assistant-wildstone
+  version: 1.0.0
+  capability: assistant
+  profile: wildstone
+  exclusive: true
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: assistant_subdomain, default: assistant, description: "The name this service appears under, e.g. assistant." }
+  - { name: node, required: true, description: "Which machine runs the control plane.", source: node }
+  - { name: keystone_addr, required: true, example: "192.168.1.10:9441", description: "Where Keystone's API answers, as address:port. This is what the proxy forwards to." }
+  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
+policies:
+  # Household material by definition: what a family member types to an
+  # assistant is about the house and the people in it.
+  classifications: [family_private]
+  dataSensitivity: high
+templates:
+  # The group that grants a person the assistant surface.
+  #
+  # It is a DOOR, not an authority. Being in it lets somebody open the
+  # widget; which assistants answer them is the Butler access list, and
+  # what those assistants may do is the Butler's profile. A person in
+  # this group with no Butler granted to them sees an empty selector,
+  # which is the correct outcome rather than an error.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: LdapGroup
+    metadata: { name: assistant-users, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      name: assistant_users
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: assistant, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.assistant_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "{{ .Params.keystone_addr }}"
+      auth: authelia_oidc
+      classification: family_private

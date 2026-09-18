@@ -355,6 +355,40 @@ func (db *DB) AcknowledgeNotice(seq int64) error {
 	return nil
 }
 
+// AcknowledgeNoticesFor clears every notice a member can clear, in one
+// statement.
+//
+// ONE STATEMENT RATHER THAN A WINDOW AND A LOOP, because "Clear" is a
+// promise about all of them. Reading a page of notices and
+// acknowledging those left a member with more than a page still holding
+// unread rows, a card still showing a count, and a button that had just
+// told them it worked. A control that reports success and leaves the
+// thing it was pressed for undone is worse than one that is slow.
+//
+// The recipient is a predicate, not a parameter the caller could aim
+// somewhere else, so this keeps the property homeClearNotices was built
+// around: there is no field in a request that can name another person's
+// notice.
+//
+// An unanswered question is excluded here rather than in the caller, so
+// the exclusion cannot be lost by a caller that forgets it.
+// Acknowledging one would take the decision off the member's page while
+// whatever waits on it still waits.
+func (db *DB) AcknowledgeNoticesFor(recipient string) (int, error) {
+	if recipient == "" {
+		return 0, fmt.Errorf("runtimedb: clearing notices needs a recipient")
+	}
+	res, err := db.sql.Exec(
+		`UPDATE notices SET acknowledged_at = ?
+		  WHERE recipient = ? AND acknowledged_at = '' AND undelivered_at = ''
+		    AND NOT (asks = 1 AND answered_at = '')`, now(), recipient)
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: clearing notices: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
 // ExpireNotices marks everything past its expiry as undelivered.
 //
 // It returns how many, because a household that never hears about
@@ -508,19 +542,93 @@ func scanNotice(row rowScanner) (Notice, error) {
 	return n, nil
 }
 
+// noticeClauses turns a filter into SQL, in ONE place.
+//
+// Shared by the listing and the count deliberately: a header that says
+// "3 unread" and a list that shows them have to be answering the same
+// question, and two copies of these predicates is the way they stop.
+func noticeClauses(f NoticeFilter) ([]string, []any) {
+	clauses, args := []string{}, []any{}
+	if f.Recipient != "" {
+		clauses = append(clauses, "recipient = ?")
+		args = append(args, f.Recipient)
+	}
+	if f.Deliverable {
+		clauses = append(clauses, "undelivered_at = ''")
+	}
+	if f.Unacknowledged {
+		clauses = append(clauses, "acknowledged_at = ''")
+	}
+	if f.Pending {
+		// A question still waiting on this person: it asks, nobody has
+		// answered it, and it has not run out. expires_at stores
+		// RFC3339Nano UTC, so the comparison is lexicographic — the
+		// same trick HouseholdEventsSince relies on.
+		clauses = append(clauses, "asks = 1", "answered_at = ''",
+			"(expires_at = '' OR expires_at > ?)")
+		at := f.At
+		if at.IsZero() {
+			at = time.Now()
+		}
+		args = append(args, at.UTC().Format(time.RFC3339Nano))
+	}
+	return clauses, args
+}
+
+// NoticeFilter narrows a notice listing to what a caller will keep.
+// Every field is optional, and an empty filter lists everything.
+//
+// THE PREDICATES BELONG IN THE QUERY, and the reason is the one
+// HouseholdEventFilter gives: a limit applied before a filter is not a
+// filter. The "Needs you" card read the newest fifty notices and then
+// looked for questions among them, so fifty ordinary notices were
+// enough to hide a decision that was still waiting — the card said
+// nothing needed the member while something did, which is the one
+// failure that card exists to prevent.
+type NoticeFilter struct {
+	// Recipient is the member whose notices these are.
+	Recipient string
+	// Deliverable drops notices that never reached the member.
+	Deliverable bool
+	// Unacknowledged drops notices already cleared.
+	Unacknowledged bool
+	// Pending narrows to questions still waiting on an answer: it asks,
+	// it is unanswered, and it has not expired as of At.
+	Pending bool
+	// At is the clock Pending's expiry is measured against. Zero means
+	// now.
+	At time.Time
+	// UnreadFirst puts unacknowledged notices at the head of the
+	// listing, BEFORE the limit is applied.
+	//
+	// A caller that sorts unread to the top after reading a window has
+	// only reordered that window: forty read notices in front of an
+	// unread one leave the unread one out of the answer entirely, and
+	// sorting what came back cannot put it there. The database decides
+	// what is in the window, so the card can only show what it is also
+	// counting.
+	UnreadFirst bool
+}
+
 // ListNotices returns recent notices for one member ("" for all),
 // newest first.
-func (db *DB) ListNotices(member string, limit int) ([]Notice, error) {
+func (db *DB) ListNotices(limit int, f NoticeFilter) ([]Notice, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	where, args := "", []any{}
-	if member != "" {
-		where = " WHERE recipient = ?"
-		args = append(args, member)
+	clauses, args := noticeClauses(f)
+	where := ""
+	if len(clauses) > 0 {
+		where = " WHERE " + strings.Join(clauses, " AND ")
+	}
+	order := " ORDER BY seq DESC"
+	if f.UnreadFirst {
+		// Unread first, then newest. The expression is a boolean, and
+		// DESC puts the true ones (1) at the head.
+		order = " ORDER BY (acknowledged_at = '') DESC, seq DESC"
 	}
 	args = append(args, limit)
-	rows, err := db.sql.Query(noticeColumns+where+` ORDER BY seq DESC LIMIT ?`, args...)
+	rows, err := db.sql.Query(noticeColumns+where+order+` LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing notices: %w", err)
 	}
@@ -534,6 +642,26 @@ func (db *DB) ListNotices(member string, limit int) ([]Notice, error) {
 		out = append(out, n)
 	}
 	return out, rows.Err()
+}
+
+// CountNotices is how many notices match, with no window at all.
+//
+// A count a card prints must not be the size of a page the card also
+// read: "3 unread" that means "3 unread among the forty I looked at" is
+// a number that goes quietly wrong exactly when it matters, in the
+// household with a backlog. This asks the question the header actually
+// asks.
+func (db *DB) CountNotices(f NoticeFilter) (int, error) {
+	clauses, args := noticeClauses(f)
+	where := ""
+	if len(clauses) > 0 {
+		where = " WHERE " + strings.Join(clauses, " AND ")
+	}
+	var n int
+	if err := db.sql.QueryRow(`SELECT COUNT(*) FROM notices`+where, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("runtimedb: counting notices: %w", err)
+	}
+	return n, nil
 }
 
 // DueNotices returns notices whose hold has passed and which have not

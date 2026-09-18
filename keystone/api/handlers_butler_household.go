@@ -145,7 +145,7 @@ func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any
 	// perfectly reachable Butler because a flag the deployment no longer
 	// uses was left at "off".
 	if s.butlersConfigured() {
-		return s.askNamedFamilyButler(r.Context(), message, named, id.Name, "", false, actingAsOwner(id), nil)
+		return s.askNamedFamilyButler(r.Context(), message, named, id.Name, "", false, actingAsOwner(id), nil, butlerlive.ConnectionScope{})
 	}
 	host := s.ButlerHost
 	if !host.householdConfigured() {
@@ -159,7 +159,13 @@ func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any
 // It is the operator path's sibling and differs only in the ceiling it
 // requires, which is the difference ADR-W026 A1 draws between the two
 // surfaces and the one thing that must not be shared between them.
-func (s *Server) askNamedFamilyButler(ctx context.Context, message, named, member, systemExtra string, group, asOwner bool, prior *turnContext) (any, int, error) {
+// conn is the connection ceiling the request arrived through, and it is
+// an explicit parameter rather than a default because the three callers
+// genuinely differ: the chat adapters and the household ask endpoint
+// each already have their own ceiling, and only the dashboard has this
+// one. A zero ConnectionScope is no ceiling, which is what those two
+// pass — a name none of them chose would be a ceiling nobody chose.
+func (s *Server) askNamedFamilyButler(ctx context.Context, message, named, member, systemExtra string, group, asOwner bool, prior *turnContext, conn butlerlive.ConnectionScope) (any, int, error) {
 	if named == "" {
 		b, err := s.Butlers.Sole(runtimedb.ButlerSurfaceFamily, member, asOwner)
 		if err != nil {
@@ -178,6 +184,7 @@ func (s *Server) askNamedFamilyButler(ctx context.Context, message, named, membe
 		SystemExtra:    systemExtra,
 		AsOwner:        asOwner,
 		RequireSurface: runtimedb.ButlerSurfaceFamily,
+		Connection:     conn,
 	}
 	if prior != nil {
 		turn.SessionID, turn.History = prior.SessionID, prior.History
