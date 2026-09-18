@@ -8,7 +8,7 @@ import (
 
 func reading(meter string, value float64, at time.Time) MeterReading {
 	return MeterReading{Meter: meter, Value: value, At: at,
-		RecordedBy: "mika", Source: ReadingFromCLI}
+		RecordedBy: "mika", Source: ReadingByPerson}
 }
 
 func mustAppend(t *testing.T, db *DB, r MeterReading) int64 {
@@ -84,7 +84,7 @@ func TestARetriedPublisherDeliveryIsANoOp(t *testing.T) {
 	db := open(t)
 	at := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
 	r := MeterReading{Meter: "odo", Value: 79300, At: at,
-		RecordedBy: "publisher-home-automation", Source: ReadingFromPublisher,
+		RecordedBy: "publisher-home-automation", Source: ReadingByPublisher,
 		ExternalID: "ha-0001"}
 
 	first := mustAppend(t, db, r)
@@ -120,7 +120,7 @@ func TestARebaseCarriesItsPriorValue(t *testing.T) {
 	db := open(t)
 	at := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
 	mustAppend(t, db, MeterReading{Meter: "odo", Value: 0, At: at,
-		RecordedBy: "mika", Source: ReadingFromConsole,
+		RecordedBy: "mika", Source: ReadingByPerson,
 		Rebase: true, Prior: 84210, Reason: "cluster replaced"})
 
 	got, err := db.LatestMeterReading("odo")
@@ -140,11 +140,11 @@ func TestAppendRefusesAnIncoherentReading(t *testing.T) {
 		r    MeterReading
 		want string
 	}{
-		{"no meter", MeterReading{Value: 1, At: at, RecordedBy: "m", Source: ReadingFromCLI}, "the meter it is of"},
-		{"nobody recorded it", MeterReading{Meter: "odo", Value: 1, At: at, Source: ReadingFromCLI}, "who recorded it"},
-		{"no time", MeterReading{Meter: "odo", Value: 1, RecordedBy: "m", Source: ReadingFromCLI}, "when it was read"},
-		{"no source", MeterReading{Meter: "odo", Value: 1, At: at, RecordedBy: "m"}, "console|cli|chat|publisher"},
-		{"invented source", MeterReading{Meter: "odo", Value: 1, At: at, RecordedBy: "m", Source: "smtp"}, "console|cli|chat|publisher"},
+		{"no meter", MeterReading{Value: 1, At: at, RecordedBy: "m", Source: ReadingByPerson}, "the meter it is of"},
+		{"nobody recorded it", MeterReading{Meter: "odo", Value: 1, At: at, Source: ReadingByPerson}, "who recorded it"},
+		{"no time", MeterReading{Meter: "odo", Value: 1, RecordedBy: "m", Source: ReadingByPerson}, "when it was read"},
+		{"no source", MeterReading{Meter: "odo", Value: 1, At: at, RecordedBy: "m"}, "person|publisher"},
+		{"invented source", MeterReading{Meter: "odo", Value: 1, At: at, RecordedBy: "m", Source: "smtp"}, "person|publisher"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, _, err := db.AppendMeterReading(tc.r); err == nil {

@@ -8,13 +8,22 @@
 -- write down a mileage would mean nobody ever writes down a mileage,
 -- which is the failure the whole design exists to prevent (A16).
 --
--- FOUR DOORS, ONE TABLE. A reading may arrive from the Console, from the
--- CLI, from household chat, or from an installed capability publishing
--- an event. `source` records which, because an operator asking "where did
--- this number come from" deserves an answer — but NOTHING READS IT WHEN
--- EVALUATING. A4 says a capability extends the tracker and never enables
--- it, and the sharp form of that promise is that the due-ness function
--- cannot tell the doors apart. The column is audit, not input.
+-- WHO SAID SO, AND WHAT KIND OF WHO. `recorded_by` is the principal, and
+-- `source` is the only thing about the door that identity can actually
+-- prove: a person's credential, or a capability's publisher principal.
+--
+-- An earlier draft of this column recorded which of the four doors a
+-- reading came through — console, cli, chat, publisher. Three of those
+-- are the same credential wearing different clothes, so the intake could
+-- only have learned them by being told, and a column documented as
+-- stamped-from-identity would have been holding a client's claim. The
+-- distinction identity can prove is the one worth storing; which screen
+-- a person typed into is not a fact the control plane has.
+--
+-- NOTHING READS IT WHEN EVALUATING, either way. A4 says a capability
+-- extends the tracker and never enables it, and the sharp form of that
+-- promise is that the due-ness function cannot tell a typed number from
+-- a published one. The column is audit, not input.
 --
 -- `at` is when the meter was READ; `recorded_at` is when Keystone heard
 -- about it. They differ whenever somebody writes down a number they took
@@ -28,8 +37,8 @@ CREATE TABLE meter_readings (
     recorded_at TEXT    NOT NULL,             -- RFC3339Nano UTC, stamped here
     -- Who said so: a member name, or the publishing principal.
     recorded_by TEXT    NOT NULL,
-    -- Which door it came through. Audit only; see above.
-    source      TEXT    NOT NULL CHECK (source IN ('console', 'cli', 'chat', 'publisher')),
+    -- What kind of caller recorded it. Audit only; see above.
+    source      TEXT    NOT NULL CHECK (source IN ('person', 'publisher')),
     -- A rebase marks the point where the meter's coordinate space
     -- restarts but the obligation does not: a replaced odometer, a
     -- swapped hour counter. `prior` is what the old meter read just

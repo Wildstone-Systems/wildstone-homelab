@@ -306,6 +306,21 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/household/events", s.handle(principal.VerbRead, s.listHouseholdEvents))
 	mux.Handle("POST /api/v1/household/publishers/{capability}", s.handle(principal.VerbManage, s.mintPublisher))
 	// Replay is a read: it evaluates and returns, writes nothing.
+	// Meters and their readings (ADR-W034 K1). The reading is an
+	// ordinary authenticated write rather than a Plan: it is evidence,
+	// not authority, and an approval queue between a person and a
+	// mileage is how a household stops recording mileages.
+	//
+	// VerbEmit because a reading is a household fact, the same verb and
+	// the same reason as the event intake beside it. Known consequence:
+	// RoleOperator does not hold emit, so an operator cannot record a
+	// reading today — the same gap they already have on household
+	// events. Widening the role is an RBAC decision of its own and is
+	// deliberately not made here.
+	mux.Handle("GET /api/v1/household/meters", s.handle(principal.VerbRead, s.listMeters))
+	mux.Handle("GET /api/v1/household/meters/{name}/readings", s.handle(principal.VerbRead, s.listMeterReadings))
+	mux.Handle("POST /api/v1/household/meters/{name}/readings", s.handle(principal.VerbEmit, s.recordMeterReading))
+
 	mux.Handle("POST /api/v1/household/automations/replay", s.handle(principal.VerbRead, s.replayAutomation))
 	mux.Handle("GET /api/v1/household/automations/grammar", s.handle(principal.VerbRead, s.automationGrammar))
 

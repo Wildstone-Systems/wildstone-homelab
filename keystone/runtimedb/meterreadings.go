@@ -8,11 +8,11 @@ package runtimedb
 //   - A reading is evidence, not authority. It is an ordinary
 //     authenticated write rather than a Plan, because requiring a Plan to
 //     write down a mileage means nobody writes down a mileage (A16).
-//   - The door a reading came through is recorded and never read back
-//     when deciding anything. A4 promises that an installed capability
-//     extends the tracker rather than enabling it, and the sharp form of
-//     that promise is that a number typed into the Console and one
-//     published by Home Assistant are indistinguishable downstream.
+//   - What kind of caller recorded it is stored and never read back when
+//     deciding anything. A4 promises that an installed capability extends
+//     the tracker rather than enabling it, and the sharp form of that
+//     promise is that a number typed into the Console and one published
+//     by Home Assistant are indistinguishable downstream.
 
 import (
 	"database/sql"
@@ -21,21 +21,23 @@ import (
 	"time"
 )
 
-// Where a reading came from. Stamped by the intake from the caller's own
-// identity and route, never taken from the request body — the same rule
-// household events follow for `source`, and for the same reason: a
-// publisher that could name its own door could name somebody else's.
+// What kind of caller recorded a reading. Derived by the intake from the
+// authenticated principal's role, never taken from the request body — the
+// same rule household events follow for `source`, and for the same
+// reason: a publisher that could name itself a person could launder an
+// automatic number as somebody's word.
+//
+// Only two, because only two are provable. The Console, the CLI and
+// household chat all present a person's credential, and which of them a
+// number was typed into is not something the control plane can know
+// without being told. `recorded_by` already carries who; this carries
+// whether a human was involved at all.
 const (
-	ReadingFromConsole   = "console"
-	ReadingFromCLI       = "cli"
-	ReadingFromChat      = "chat"
-	ReadingFromPublisher = "publisher"
+	ReadingByPerson    = "person"
+	ReadingByPublisher = "publisher"
 )
 
-var readingSources = map[string]bool{
-	ReadingFromConsole: true, ReadingFromCLI: true,
-	ReadingFromChat: true, ReadingFromPublisher: true,
-}
+var readingSources = map[string]bool{ReadingByPerson: true, ReadingByPublisher: true}
 
 // MeterReading is one observation of a meter.
 type MeterReading struct {
@@ -81,7 +83,7 @@ func (db *DB) AppendMeterReading(r MeterReading) (seq int64, duplicate bool, err
 	case r.At.IsZero():
 		return 0, false, fmt.Errorf("runtimedb: meter reading needs when it was read")
 	case !readingSources[r.Source]:
-		return 0, false, fmt.Errorf("runtimedb: meter reading source must be console|cli|chat|publisher, got %q", r.Source)
+		return 0, false, fmt.Errorf("runtimedb: meter reading source must be person|publisher, got %q", r.Source)
 	}
 
 	if r.ExternalID != "" {
