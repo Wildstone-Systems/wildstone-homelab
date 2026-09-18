@@ -412,10 +412,22 @@ func TestARecentReadingIsEvidenceEnoughToCloseACounterCycle(t *testing.T) {
 	}
 }
 
-// A reading too old to rely on is not evidence either. Measuring the
-// next cycle from wherever the truck was in June is the same "produced
-// a number instead of saying it could not" failure in a new place.
-func TestAStaleReadingIsNotEvidenceEnough(t *testing.T) {
+// A reading too old to rely on still closes the cycle — and says so.
+//
+// The stricter first version refused it, on the reasoning that measuring
+// the next cycle from a June odometer produces a number nobody checked.
+// That was stricter than the household needs: the point is that the oil
+// gets changed at about five thousand miles, and a commitment that
+// cannot be closed sits overdue forever with the work already done,
+// which is the failure the ADR says a schema cannot fix.
+//
+// The error runs the safe way. A stale reading is BEHIND where the meter
+// actually stood, so the next cycle comes due EARLY. Nagging sooner is a
+// nuisance; nagging never is a missed oil change.
+//
+// What is not negotiable is that the record says which numbers were
+// guessed.
+func TestAStaleReadingClosesTheCycleAndIsRecordedAsApproximate(t *testing.T) {
 	h := commitmentHarness(t)
 	if err := h.s.State.Put(resource.Resource{
 		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
@@ -434,14 +446,60 @@ func TestAStaleReadingIsNotEvidenceEnough(t *testing.T) {
 		RecordedBy: "mika", Source: runtimedb.ReadingByPerson}); err != nil {
 		t.Fatalf("AppendMeterReading: %v", err)
 	}
-	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika", nil); got != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400: a three-month-old odometer is not evidence", got)
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika", nil); got != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: a rough number is not no number", got)
 	}
-	// Typing the number still works, because the member is looking at it.
+	done := h.completions(t, "f150-oil")
+	if len(done) != 1 {
+		t.Fatalf("completions = %d, want 1", len(done))
+	}
+	if done[0].Positions["f150-odometer"] != 84210 {
+		t.Errorf("position = %v, want the reading it had", done[0].Positions["f150-odometer"])
+	}
+	if len(done[0].Approximate) != 1 || done[0].Approximate[0] != "f150-odometer" {
+		t.Errorf("approximate = %v, want the odometer named: a maintenance history that hides "+
+			"which mileages were guessed is the quiet kind of lie", done[0].Approximate)
+	}
+}
+
+// A number nobody has EVER recorded is still refused, and is still the
+// only thing that is. There is nothing to be approximately right with.
+func TestAMeterNobodyHasEverReadStillRefusesToClose(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika", nil); got != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", got)
+	}
+	// Typed, it closes — and is not marked approximate, because somebody
+	// was standing at the truck.
 	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika",
 		map[string]any{"meters": map[string]any{"f150-odometer": 90000}}); got != http.StatusCreated {
-		t.Errorf("status = %d, want 201", got)
+		t.Fatalf("status = %d, want 201", got)
 	}
+	done := h.completions(t, "f150-oil")
+	if len(done) != 1 || len(done[0].Approximate) != 0 {
+		t.Errorf("completion = %+v, want one with nothing guessed", done)
+	}
+}
+
+func (h *harness) completions(t *testing.T, name string) []runtimedb.CommitmentCompletion {
+	t.Helper()
+	done, err := h.s.DB.ListCommitmentCompletions(name)
+	if err != nil {
+		t.Fatalf("ListCommitmentCompletions: %v", err)
+	}
+	return done
 }
 
 // A one-off measures nothing from its completion, because nothing

@@ -310,7 +310,7 @@ func (e *Engine) harvest() error {
 			if err != nil {
 				return err
 			}
-			positions, eerr := Evidence(asOf, nil)
+			positions, approx, eerr := Evidence(asOf, nil)
 			if eerr != nil {
 				// The proof arrived and the numbers did not. The
 				// commitment stays open, and its own unresolved item is
@@ -323,7 +323,8 @@ func (e *Engine) harvest() error {
 			}
 			_, duplicate, err := e.DB.RecordCommitmentCompletion(runtimedb.CommitmentCompletion{
 				Commitment: res.Metadata.Name, At: ev.OccurredAt, RecordedBy: harvestedBy,
-				Reason: "recorded from " + ev.Type, Positions: positions, ExternalID: ev.EventID,
+				Reason: "recorded from " + ev.Type, Positions: positions,
+				Approximate: approx, ExternalID: ev.EventID,
 			})
 			if err != nil {
 				return fmt.Errorf("upkeep: commitment %q satisfiedBy: %w", res.Metadata.Name, err)

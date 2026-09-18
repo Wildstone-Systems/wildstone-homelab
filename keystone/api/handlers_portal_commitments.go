@@ -127,8 +127,12 @@ func commitmentAsks(st upkeep.Standing, may bool, units map[string]string) ([]ne
 		// present-and-refused. That is the homepage's own rule.
 		return nil, nil
 	}
+	// Both the numbers without which nothing can close, and the ones the
+	// engine would otherwise guess from a reading too old to rely on. The
+	// card asks for both; only the first kind blocks the write, which is
+	// why a household that ignores the box can still answer the item.
 	var needs []needsYouMeter
-	for _, meter := range upkeep.Missing(st, nil) {
+	for _, meter := range append(upkeep.Missing(st, nil), upkeep.Wanted(st, nil)...) {
 		needs = append(needs, needsYouMeter{Meter: meter, Unit: units[meter]})
 	}
 	var asks []needsYouAsk
@@ -317,13 +321,14 @@ func (s *Server) answerCommitment(what string) portalFunc {
 
 		switch what {
 		case "done", "waived":
-			positions, perr := upkeep.Evidence(st, req.Meters)
+			positions, approx, perr := upkeep.Evidence(st, req.Meters)
 			if perr != nil {
 				return nil, http.StatusBadRequest, perr
 			}
 			seq, _, err := s.DB.RecordCommitmentCompletion(runtimedb.CommitmentCompletion{
 				Commitment: name, At: at, RecordedBy: member,
 				Waived: what == "waived", Reason: req.Reason, Positions: positions,
+				Approximate: approx,
 			})
 			if err != nil {
 				return nil, http.StatusInternalServerError, err

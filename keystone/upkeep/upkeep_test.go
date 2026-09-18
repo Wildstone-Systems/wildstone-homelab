@@ -447,21 +447,16 @@ func TestAnEventTheCommitmentNamedClosesItsCycle(t *testing.T) {
 	}
 }
 
-// An event is evidence, not an instruction, and it cannot supply a
-// number nobody wrote down.
+// An event closes the cycle from the best number the household has, and
+// records that it was a guess.
 //
-// The completion is evaluated AT THE EVENT'S MOMENT, which is the whole
-// reason the due-ness function takes the time it is asked about. So a
-// `vehicle.serviced` that lands while the odometer is three months
-// stale does NOT close the cycle, and a reading taken two days LATER
-// does not retroactively make it closable: the truck was driven in
-// between, and measuring the next oil change from a number the truck
-// had not reached yet is the "produced a number instead of saying it
-// could not" failure wearing a helpful face.
-//
-// The household is not stuck — the commitment keeps asking for the
-// number, and a member who knows it answers with it.
-func TestAnEventCannotCloseACycleItCannotMeasure(t *testing.T) {
+// The stricter first version refused a stale reading outright, which
+// meant a `vehicle.serviced` could not close the cycle at all and the
+// commitment sat overdue forever with the truck already serviced. The
+// error runs the safe way — a stale reading is behind where the meter
+// stood, so the next change comes due early — and the completion says
+// which number was taken rather than given.
+func TestAnEventClosesFromTheBestNumberAndSaysItGuessed(t *testing.T) {
 	f := newFixture(t)
 	f.meter("f150-odometer", resource.MeterSpec{Description: "Odometer", Unit: "miles", StaleAfter: "168h"})
 	f.commitment("f150-oil", resource.CommitmentSpec{
@@ -476,15 +471,37 @@ func TestAnEventCannotCloseACycleItCannotMeasure(t *testing.T) {
 	f.event("vehicle.serviced", "f150", at(2026, time.July, 12))
 	f.at(at(2026, time.July, 13))
 	f.tick()
-	if done := f.completions("f150-oil"); len(done) != 0 {
-		t.Fatalf("a cycle was closed from a six-month-old odometer: %+v", done)
+	done := f.completions("f150-oil")
+	if len(done) != 1 {
+		t.Fatalf("completions = %d, want 1: the truck was serviced and the household knows it", len(done))
 	}
-	// A later reading does not reach back. The event stays unused.
-	f.read("f150-odometer", 84210, at(2026, time.July, 14))
-	f.at(at(2026, time.July, 15))
+	if done[0].Positions["f150-odometer"] != 80000 {
+		t.Errorf("position = %v, want the best reading it had", done[0].Positions["f150-odometer"])
+	}
+	if len(done[0].Approximate) != 1 || done[0].Approximate[0] != "f150-odometer" {
+		t.Errorf("approximate = %v, want the odometer named", done[0].Approximate)
+	}
+}
+
+// A meter nobody has EVER read is the one case left that refuses. There
+// is no number to be roughly right with, and inventing one is the
+// failure the whole package exists to prevent.
+func TestAnEventCannotCloseACycleWithNoNumberAtAll(t *testing.T) {
+	f := newFixture(t)
+	f.meter("f150-odometer", resource.MeterSpec{Description: "Odometer", Unit: "miles"})
+	f.commitment("f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: "2026-01-01",
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+		SatisfiedBy: &resource.CommitmentSatisfiedBy{
+			EventType: "vehicle.serviced", Entity: "f150",
+		},
+	})
+	f.event("vehicle.serviced", "f150", at(2026, time.July, 12))
+	f.at(at(2026, time.July, 13))
 	f.tick()
 	if done := f.completions("f150-oil"); len(done) != 0 {
-		t.Errorf("a reading taken after the service was used as the position at it: %+v", done)
+		t.Fatalf("a cycle was closed against an odometer nobody has ever read: %+v", done)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -38,6 +39,14 @@ type CommitmentCompletion struct {
 	// off the bins from colliding while a replayed event cannot close
 	// the same cycle twice.
 	ExternalID string `json:"externalId,omitempty"`
+	// Approximate names the meters whose position here was taken from a
+	// reading too old to rely on rather than given by whoever closed the
+	// cycle. Empty means every number in Positions was current.
+	//
+	// It is recorded rather than inferred because nothing later can tell:
+	// a mileage is a mileage, and a household reading its own maintenance
+	// history deserves to know which ones were guessed.
+	Approximate []string `json:"approximate,omitempty"`
 }
 
 // RecordCommitmentCompletion closes a cycle, with its evidence, in one
@@ -71,11 +80,11 @@ func (db *DB) RecordCommitmentCompletion(c CommitmentCompletion) (seq int64, dup
 		positions = string(encoded)
 	}
 	res, err := db.sql.Exec(
-		`INSERT INTO commitment_completions (commitment, at, recorded_at, recorded_by, waived, reason, positions, external_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO commitment_completions (commitment, at, recorded_at, recorded_by, waived, reason, positions, external_id, approximate)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (commitment, external_id) WHERE external_id <> '' DO NOTHING`,
 		c.Commitment, c.At.UTC().Format(time.RFC3339Nano), now(), c.RecordedBy,
-		boolToInt(c.Waived), c.Reason, positions, c.ExternalID)
+		boolToInt(c.Waived), c.Reason, positions, c.ExternalID, strings.Join(c.Approximate, ","))
 	if err != nil {
 		return 0, false, fmt.Errorf("runtimedb: recording completion: %w", err)
 	}
@@ -89,7 +98,7 @@ func (db *DB) RecordCommitmentCompletion(c CommitmentCompletion) (seq int64, dup
 	return seq, false, err
 }
 
-const completionColumns = `SELECT seq, commitment, at, recorded_at, recorded_by, waived, reason, positions, external_id
+const completionColumns = `SELECT seq, commitment, at, recorded_at, recorded_by, waived, reason, positions, external_id, approximate
 	 FROM commitment_completions`
 
 // ListCommitmentCompletions returns a commitment's closed cycles, oldest
@@ -103,12 +112,15 @@ func (db *DB) ListCommitmentCompletions(commitment string) ([]CommitmentCompleti
 	out := []CommitmentCompletion{}
 	for rows.Next() {
 		var c CommitmentCompletion
-		var at, recorded, positions string
+		var at, recorded, positions, approximate string
 		var waived int
-		if err := rows.Scan(&c.Seq, &c.Commitment, &at, &recorded, &c.RecordedBy, &waived, &c.Reason, &positions, &c.ExternalID); err != nil {
+		if err := rows.Scan(&c.Seq, &c.Commitment, &at, &recorded, &c.RecordedBy, &waived, &c.Reason, &positions, &c.ExternalID, &approximate); err != nil {
 			return nil, fmt.Errorf("runtimedb: scanning completion: %w", err)
 		}
 		c.Waived = waived == 1
+		if approximate != "" {
+			c.Approximate = strings.Split(approximate, ",")
+		}
 		if err := json.Unmarshal([]byte(positions), &c.Positions); err != nil {
 			return nil, fmt.Errorf("runtimedb: bad completion positions %q: %w", positions, err)
 		}

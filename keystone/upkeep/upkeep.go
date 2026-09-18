@@ -308,67 +308,83 @@ func (e *Engine) input(res resource.Resource, meters map[string]commitment.Meter
 	return in, live, nil
 }
 
-// Evidence is where A8 stops being a comment.
+// Evidence is where A8 stops being a comment, and where it stops being
+// stricter than the household needs.
 //
-// A RECURRING COUNTER CYCLE CANNOT BE CLOSED WITHOUT ITS NUMBER. The
-// position a meter stood at when the work was done is what the NEXT
-// cycle is measured from, so a completion recorded with nothing in it
-// closes this cycle and opens one that can never be concluded — and
-// there is no endpoint that deletes or corrects a completion, so the
-// household cannot take it back. The schema has said "evidence is not
-// optional" since it was written; before this it was the only thing
-// saying so (Codex, #244).
+// A RECURRING COUNTER CYCLE CANNOT BE CLOSED WITH NO NUMBER AT ALL. The
+// position a meter stood at is what the next cycle is measured from, so
+// a completion holding nothing closes this cycle and opens one that can
+// never be concluded — and no endpoint deletes a completion, so the
+// household cannot take it back.
 //
-// The number does not have to be typed twice, though. A member who has
-// just recorded a reading has already answered the question, so a rule
-// the engine could conclude from — known, and not too old to rely on —
-// supplies its own evidence. A stale one does not: a completion based
-// on an odometer nobody has looked at since June measures the next
-// cycle from wherever the truck was in June, which is the "produced a
-// number instead of saying it could not" failure this whole package is
-// built to refuse.
+// BUT A ROUGH NUMBER IS NOT NO NUMBER, and an earlier version of this
+// refused them alike. The point of the tracker is that the oil gets
+// changed at about five thousand miles, not that the odometer at the
+// moment of service is known exactly. Refusing a stale reading meant a
+// `vehicle.serviced` event could not close the cycle at all, so the
+// commitment sat overdue forever — and a household nagged forever about
+// something it has already done stops reading its notifications, which
+// is the one failure this design says a schema cannot fix.
 //
-// A one-off is exempt. Nothing is measured from it because nothing
-// follows it.
+// The error runs the safe way, which is what makes this sound. A stale
+// reading is BEHIND where the meter actually stood, so the next cycle is
+// measured from too low a number and comes due EARLY. Nagging sooner is
+// a nuisance; nagging never is a missed oil change.
+//
+// So: a number typed by somebody standing at the truck is best, a stale
+// reading is accepted and recorded as approximate, and nothing at all is
+// still refused. The second return names the meters whose position was
+// guessed, so the record says so rather than implying a precision it
+// does not have.
 //
 // It lives HERE, in one function, because two things close cycles: a
 // member tapping Done and a household event a commitment named in
-// `satisfiedBy`. The same rule has to govern both, and the version of
-// this that lived in the handler would have governed only the tap.
-func Evidence(st Standing, given map[string]float64) (map[string]float64, error) {
-	positions, missing := evidence(st, given)
+// `satisfiedBy`. The same rule has to govern both.
+func Evidence(st Standing, given map[string]float64) (map[string]float64, []string, error) {
+	positions, approx, missing := evidence(st, given)
 	if len(missing) > 0 {
-		return nil, fmt.Errorf(
-			"what did %s say? closing this without the number would leave the next one unmeasurable",
+		return nil, nil, fmt.Errorf(
+			"what did %s say? nobody has ever read it, so closing this would leave the next one unmeasurable",
 			strings.Join(missing, " and "))
 	}
-	return positions, nil
+	return positions, approx, nil
 }
 
-// Missing names the meters a completion would need a number for and
-// cannot supply itself.
+// Missing names the meters a completion cannot supply any number for.
+// These BLOCK the write.
 //
 // IT EXISTS SO THAT A SURFACE CAN ASK THE SAME QUESTION THE WRITE PATH
-// WILL. A card that worked out for itself whether a number was wanted
-// got it wrong twice over: it offered Done on a commitment whose stale
-// odometer `Evidence` would refuse, so every tap returned 400; and on
-// one wedged by a pre-0042 completion it offered only a reading, which
-// cannot clear that rule, so there was no way forward at all. Both are
-// the group-membership fault again — two places deciding one question.
+// WILL. A card that worked this out for itself got it wrong twice over:
+// it offered Done where Evidence refused, so every tap returned 400, and
+// it offered only a reading where a reading could not help, so there was
+// no way forward at all.
 func Missing(st Standing, given map[string]float64) []string {
-	_, missing := evidence(st, given)
+	_, _, missing := evidence(st, given)
 	return missing
 }
 
-func evidence(st Standing, given map[string]float64) (map[string]float64, []string) {
-	positions := map[string]float64{}
+// Wanted names the meters whose number would be taken from a reading too
+// old to rely on. These do NOT block the write — the card asks for them
+// so the household can do better than a guess, and accepts the guess
+// when nobody answers.
+func Wanted(st Standing, given map[string]float64) []string {
+	_, approx, _ := evidence(st, given)
+	return approx
+}
+
+// evidence returns the positions a completion would carry, the meters
+// among them whose position came from a reading too old to rely on, and
+// the meters it could supply nothing for at all.
+func evidence(st Standing, given map[string]float64) (positions map[string]float64, approx, missing []string) {
+	positions = map[string]float64{}
 	for k, v := range given {
 		positions[k] = v
 	}
 	if st.Rollover == resource.RolloverOnce {
-		return positions, nil
+		// Nothing is measured from a one-off's completion, because
+		// nothing follows it.
+		return positions, nil, nil
 	}
-	var missing []string
 	for _, rule := range st.Occurrence.Rules {
 		// The clock's position is the completion's own `at`, which is
 		// always known. Only counters need answering.
@@ -376,15 +392,19 @@ func evidence(st Standing, given map[string]float64) (map[string]float64, []stri
 			continue
 		}
 		if _, ok := positions[rule.Meter]; ok {
+			// Somebody typed it. Nothing beats that.
 			continue
 		}
-		if rule.Known && !rule.Stale {
-			positions[rule.Meter] = rule.Position
+		if !rule.Known {
+			if !slices.Contains(missing, rule.Meter) {
+				missing = append(missing, rule.Meter)
+			}
 			continue
 		}
-		if !slices.Contains(missing, rule.Meter) {
-			missing = append(missing, rule.Meter)
+		positions[rule.Meter] = rule.Position
+		if rule.Stale && !slices.Contains(approx, rule.Meter) {
+			approx = append(approx, rule.Meter)
 		}
 	}
-	return positions, missing
+	return positions, approx, missing
 }

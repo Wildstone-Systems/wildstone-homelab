@@ -17,6 +17,7 @@ package api
 // and look like a meter nobody reads.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/commitment"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
@@ -270,4 +272,43 @@ func (s *Server) commitmentHistory(r *http.Request, _ principal.Identity) (any, 
 		completions = []runtimedb.CommitmentCompletion{}
 	}
 	return map[string]any{"standing": found, "completions": completions}, http.StatusOK, nil
+}
+
+// MeterReadingSeam wires the family agent's reading door (ADR-W034 A3)
+// to the same store and the same refusals every other door uses.
+//
+// IT IS THE HANDLER'S RULES, NOT A SECOND SET. The meter must be
+// declared, the clock refuses readings because it reads itself, and the
+// value is stamped `person` because a household member is who the agent
+// is speaking for — all exactly as the HTTP intake beside it does. A
+// door that validated differently would be a fifth set of rules
+// pretending to be a fourth door.
+//
+// What it will not do is decide anything. It writes a number and returns
+// a sentence; the next pass works out what that number means, and the
+// agent finds out the same way everybody else does.
+func (s *Server) MeterReadingSeam() func(context.Context, butler.ReadingCall) (string, error) {
+	return func(_ context.Context, c butler.ReadingCall) (string, error) {
+		if err := s.meterMustBeDeclared(c.Meter); err != nil {
+			return "", err
+		}
+		if c.Member == "" {
+			return "", fmt.Errorf("a reading has to be somebody's")
+		}
+		if c.Value < 0 {
+			return "", fmt.Errorf("a meter counts up from zero")
+		}
+		seq, duplicate, err := s.DB.AppendMeterReading(runtimedb.MeterReading{
+			Meter: c.Meter, Value: c.Value, At: time.Now().UTC(),
+			RecordedBy: c.Member, Source: runtimedb.ReadingByPerson,
+		})
+		if err != nil {
+			return "", err
+		}
+		s.pokeUpkeep()
+		if duplicate {
+			return fmt.Sprintf("%s was already recorded at that number.", c.Meter), nil
+		}
+		return fmt.Sprintf("Recorded: %s is at %g (#%d).", c.Meter, c.Value, seq), nil
+	}
 }

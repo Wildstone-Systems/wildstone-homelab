@@ -1058,6 +1058,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		household := butler.HouseholdSeams{
 			Events:     api.HouseholdEventSeam(db, memberScoped),
 			Vocabulary: bgw.AutomationVocabulary,
+			// The chat door a meter reading may come through (ADR-W034
+			// A3), over the same store and the same refusals as the HTTP
+			// intake. Wired unconditionally: the tracker works with no
+			// capabilities installed (A4), so its doors are not
+			// something a household has to switch on.
+			RecordReading: apiSrv.MeterReadingSeam(),
 		}
 		if len(actions.Tools()) > 0 {
 			household.Actions = func(ctx context.Context, c butler.HouseholdActionCall) (string, error) {

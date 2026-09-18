@@ -1,20 +1,26 @@
 package butler
 
-// Commitments, for an agent (ADR-W034 A13, K7): two read tools, and no
-// third one.
+// Commitments, for an agent (ADR-W034 A13, K7): two read tools.
 //
 // The ceiling is the point. An agent may DRAFT a commitment — turn "track
 // the truck's oil every five thousand miles" into the document the engine
 // already understands — and it may READ where things stand, so it can
 // answer "what's coming up on the truck". It cannot mark one satisfied,
-// record a reading it was not given, waive a cycle, or move a threshold.
-// Those are writes by a person or a plan, and there is no tool here that
-// performs any of them.
+// waive a cycle, or move a threshold. Those are writes by a person or a
+// plan, and there is no tool here that performs any of them.
 //
 // That is not an omission to be fixed later. A household whose agent can
 // close its own commitments has a tracker that agrees with itself and
 // nothing else, and the value of the whole design is that the record
 // reflects what actually happened.
+//
+// The family surface does hold one commitment-adjacent WRITE —
+// record_meter_reading, in tools_reading.go — and the line between them
+// is A13's own. This file said "deliberately no third tool", which was
+// stricter than A13: the clause is "record a reading it was NOT GIVEN",
+// and a number a person said out loud was never on the forbidden list.
+// Writing down what somebody told you is transcription. Deciding what it
+// means is the engine's, and stays there.
 
 import (
 	"context"

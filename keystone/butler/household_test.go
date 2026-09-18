@@ -88,12 +88,25 @@ func TestHouseholdGatewayHoldsNoInfrastructure(t *testing.T) {
 	// the others — this package holds no store — and it reads only what
 	// the reader and this Butler are permitted, ANDed in the SQL that
 	// finds candidates rather than filtered afterwards.
+	//
+	// RecordReading was added deliberately too (ADR-W034 A3): household
+	// chat is one of the four doors a meter reading may come through,
+	// and it was the one door with no hinge. The capability it adds is
+	// exactly one write, of one number, attributed to the member whose
+	// session it is.
+	//
+	// It does NOT widen what an agent may decide, which is the line A13
+	// draws: the tool records a number a person gave and cannot close a
+	// cycle, waive one, book an appointment or move a threshold. The
+	// clause A13 actually contains is "record a reading it was not
+	// given" — a reading it WAS given was never forbidden, and reading
+	// it as a blanket ban is what left the chat door shut.
 	seamType := reflect.TypeOf(HouseholdSeams{})
 	var seams []string
 	for i := 0; i < seamType.NumField(); i++ {
 		seams = append(seams, seamType.Field(i).Name)
 	}
-	want := []string{"Events", "Actions", "Vocabulary", "Memory", "MaxContentBytes"}
+	want := []string{"Events", "Actions", "Vocabulary", "Memory", "RecordReading", "MaxContentBytes"}
 	if !reflect.DeepEqual(seams, want) {
 		t.Fatalf("HouseholdSeams fields = %v, want %v — a new seam is a new capability and needs its own decision", seams, want)
 	}
@@ -444,5 +457,156 @@ func TestDirectGatewayStillReadsTheHousehold(t *testing.T) {
 	}
 	if len(asked) != 1 || asked[0].Subject != "sam" || asked[0].GroupSafe {
 		t.Fatalf("direct lookup = %+v", asked)
+	}
+}
+
+// readingSeams wires the reading door and captures what reached it.
+func readingSeams(t *testing.T) (HouseholdSeams, *[]ReadingCall) {
+	t.Helper()
+	seams, _ := householdSeams(t)
+	var got []ReadingCall
+	seams.RecordReading = func(_ context.Context, c ReadingCall) (string, error) {
+		got = append(got, c)
+		return "Noted.", nil
+	}
+	return seams, &got
+}
+
+// The chat door A3 names, with A13's line drawn where A13 draws it: the
+// agent may write down a number it was given, and nothing else.
+func TestTheAgentCanWriteDownANumberItWasGiven(t *testing.T) {
+	seams, got := readingSeams(t)
+	gw := NewHouseholdGateway("mika", seams)
+
+	out, err := gw.Dispatch(context.Background(), "record_meter_reading", map[string]any{
+		"meter": "f150-odometer", "value": 84210.0,
+	})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if out.Rejected {
+		t.Fatalf("a reading a person gave was refused: %q", out.Content)
+	}
+	if len(*got) != 1 || (*got)[0].Meter != "f150-odometer" || (*got)[0].Value != 84210 {
+		t.Fatalf("recorded = %+v", *got)
+	}
+	// Attribution is the session's, not the model's. There is no input
+	// that changes it — ADR-W001 admits no unattributed household write.
+	if (*got)[0].Member != "mika" {
+		t.Errorf("member = %q, want the session's", (*got)[0].Member)
+	}
+}
+
+// A13's actual clause is "record a reading it was not given". A call
+// with no number is exactly that, and must be refused rather than
+// defaulted — zero is a real odometer value, so a silent default would
+// write a lie that reads like a fact.
+func TestTheAgentCannotRecordANumberItWasNotGiven(t *testing.T) {
+	seams, got := readingSeams(t)
+	gw := NewHouseholdGateway("mika", seams)
+
+	for _, input := range []map[string]any{
+		{"meter": "f150-odometer"},
+		{"meter": "f150-odometer", "value": "about eighty thousand"},
+		{"meter": "", "value": 84210.0},
+		{"meter": "f150-odometer", "value": -1.0},
+	} {
+		out, err := gw.Dispatch(context.Background(), "record_meter_reading", input)
+		if err != nil {
+			t.Fatalf("Dispatch(%v): %v", input, err)
+		}
+		if !out.Rejected {
+			t.Errorf("input %v was accepted: %q", input, out.Content)
+		}
+	}
+	if len(*got) != 0 {
+		t.Fatalf("a reading nobody gave reached the store: %+v", *got)
+	}
+}
+
+// The ceiling A13 draws, asserted over the whole surface rather than
+// over this one tool: recording a number is the ONLY commitment-shaped
+// write the family agent has. It cannot close a cycle, waive one, book
+// an appointment, or move a threshold.
+func TestTheAgentStillCannotAnswerACommitment(t *testing.T) {
+	seams, _ := readingSeams(t)
+	gw := NewHouseholdGateway("mika", seams)
+
+	for _, spec := range gw.Specs() {
+		for _, forbidden := range []string{"satisf", "waive", "book", "complete", "commitment_done"} {
+			if strings.Contains(strings.ToLower(spec.Name), forbidden) {
+				t.Errorf("the family agent offers %q — an agent that can close its own commitments "+
+					"has a tracker that agrees with itself and nothing else (ADR-W034 A13)", spec.Name)
+			}
+		}
+	}
+}
+
+// An unbound session writes nothing, the same backstop the action tool
+// carries.
+func TestAnUnboundSessionRecordsNoReading(t *testing.T) {
+	seams, got := readingSeams(t)
+	gw := NewHouseholdGateway("", seams)
+
+	out, err := gw.Dispatch(context.Background(), "record_meter_reading", map[string]any{
+		"meter": "f150-odometer", "value": 84210.0,
+	})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if !out.Rejected {
+		t.Errorf("an unattributed reading was accepted: %q", out.Content)
+	}
+	if len(*got) != 0 {
+		t.Fatalf("an unattributed reading reached the store: %+v", *got)
+	}
+}
+
+// A deployment that did not wire the door is not told it has one.
+func TestTheReadingToolIsAbsentWhenNothingCanWrite(t *testing.T) {
+	seams, _ := householdSeams(t) // no RecordReading
+	gw := NewHouseholdGateway("mika", seams)
+	for _, spec := range gw.Specs() {
+		if spec.Name == "record_meter_reading" {
+			t.Fatal("the reading tool was offered on a deployment that cannot write one")
+		}
+	}
+}
+
+// It is a write, so a session the household has not been shown to work
+// does not get it — the same verdict `remember` carries and for the same
+// reason (ADR-W017 A4).
+func TestAReadOnlySessionIsNotOfferedTheReadingTool(t *testing.T) {
+	seams, _ := readingSeams(t)
+	gw := NewHouseholdGateway("mika", seams)
+	for _, spec := range gw.OfferedSpecs(true) {
+		if spec.Name == "record_meter_reading" {
+			t.Fatal("a read-only family session was offered the reading tool")
+		}
+	}
+}
+
+// A number salvaged out of a sentence is a number the agent was not
+// given. `fmt.Sscanf` would have read all of these as a confident value.
+func TestANumberIsNotSalvagedOutOfASentence(t *testing.T) {
+	seams, got := readingSeams(t)
+	gw := NewHouseholdGateway("mika", seams)
+	for _, v := range []string{"84210 or so", "84210abc", "about 84210", "84,210", ""} {
+		out, err := gw.Dispatch(context.Background(), "record_meter_reading",
+			map[string]any{"meter": "f150-odometer", "value": v})
+		if err != nil {
+			t.Fatalf("Dispatch(%q): %v", v, err)
+		}
+		if !out.Rejected {
+			t.Errorf("%q was read as a number: %q", v, out.Content)
+		}
+	}
+	// A plain numeric string is still a number a person gave.
+	if _, err := gw.Dispatch(context.Background(), "record_meter_reading",
+		map[string]any{"meter": "f150-odometer", "value": "84210"}); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(*got) != 1 || (*got)[0].Value != 84210 {
+		t.Errorf("recorded = %+v, want the one plain number", *got)
 	}
 }

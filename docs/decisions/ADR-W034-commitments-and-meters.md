@@ -98,7 +98,7 @@ A meter reading may therefore be written four ways, all equal:
 |---|---|
 | Console — a field on the commitment's card | no, but Console is Owner-only |
 | `wild meter read f150-odometer 84210` | no, but it is an operator tool |
-| Household chat — "truck's at 84,210" | **yes** — a chat capability |
+| Household chat — "truck's at 84,210" | **yes** — a chat capability. Built as `record_meter_reading` (A13). |
 | A family-facing web surface | **yes** today — see the correction below |
 | A household event from a publisher | **yes — and this is the optional one** |
 
@@ -237,6 +237,32 @@ decision with a person attached, and the next occurrence still opens.
 
 ### A8. Completion requires evidence, and the evidence carries the reading
 
+**Amended after the build.** "Evidence" first meant a reading current
+enough for the engine to conclude from, and that was stricter than the
+household needs. The point of the tracker is that the oil gets changed
+at about five thousand miles, not that the odometer at the moment of
+service is known exactly — and a cycle that cannot be closed sits
+overdue forever with the work already done, which is the one failure the
+costs section says a schema cannot fix.
+
+So the rule is now three-way, and the middle case is the amendment:
+
+- A number somebody **typed** is used as given.
+- A reading **too old to rely on** is used, and the completion records
+  which meters were guessed (`approximate`).
+- **No reading at all** is still refused. There is nothing to be roughly
+  right with, and inventing one is the failure this whole design exists
+  to prevent.
+
+The error runs the safe way, which is what makes the middle case sound:
+a stale reading is BEHIND where the meter actually stood, so the next
+cycle is measured from too low a number and comes due EARLY. Nagging
+sooner is a nuisance; nagging never is a missed oil change.
+
+The card still asks for the number — a person standing at the truck
+beats any inference — it just no longer refuses the answer when nobody
+types it.
+
 A commitment is satisfied by a recorded completion: what was done, when,
 by whom, and **the meter reading at the time**. That last part is not
 optional — without it the next occurrence cannot be computed, and an oil
@@ -354,9 +380,32 @@ deterministic steps and inference steps:
 - The Butler may **read** commitments and meters through read-graded
   tools, to answer "what's coming up on the truck".
 
+- The Butler may **write down a reading it was given** — "truck's at
+  84,210" — through `record_meter_reading` on the family surface. A3
+  lists household chat as one of the four doors, and this is it. The
+  tool takes a number and nothing else: it cannot derive, estimate, or
+  look one up, a value it cannot parse whole is refused rather than
+  salvaged, and the reading is attributed to the member whose session it
+  is.
+
 It cannot mark a commitment satisfied, record a reading it was not
 given, waive an occurrence, or change a due threshold. Those are writes
 by a person or a plan.
+
+**The emphasis is load-bearing and was misread once.** K7 first shipped
+two read tools and a comment saying there was "deliberately no third",
+which was stricter than this decision: a reading it WAS given was never
+on the forbidden list. The effect was that the chat door A3 names had no
+hinge — a person could tell the agent the odometer and get a polite
+acknowledgement and nothing written down. The line is between
+transcribing a number a person said and deciding what it means. The
+agent does the first; the engine does the second.
+
+`record_meter_reading` is on by default and an Owner may turn it off per
+agent, through the ordinary tool control (ADR-W030 A7/A8, where disabled
+beats a tool's default). On by default because A4 says the tracker works
+without anything being switched on; per-agent because not every agent in
+a household needs to be able to write.
 
 A household whose Butler is switched off loses the phrasing and the
 drafting. It keeps the tracker.
