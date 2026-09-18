@@ -198,6 +198,13 @@ a current state cannot answer it.
 `lead` is per-commitment and per-meter: sixty days before a checkup, three
 hundred miles before an oil change. A commitment may set both.
 
+**`satisfied` and `waived` close a cycle rather than describe one**, so
+for a recurring commitment they are never where things stand: the moment
+one cycle closes the next has already opened. The exception is a one-off
+(A9), which has no next cycle — there the closing state *is* the answer,
+and "it was done on the third" is what the household should be told. The
+exception is exactly as wide as the case that needs it.
+
 ### A7. `scheduled` is a real state, because booking is a separate failure
 
 The checkup was not missed because nobody knew it was due. It was missed
@@ -227,18 +234,38 @@ a lie about finished work. It arrives again as W033 E10.
 
 A completion may be declared the same four ways a reading may (A3).
 
-### A9. Two rollover modes, and both are needed
+### A9. Three rollover modes, all named
 
-When an occurrence is satisfied, the next one is computed one of two ways:
+When an occurrence is satisfied, what happens next is one of three
+things, and the household says which:
 
 | Mode | Next due measured from | Example |
 |---|---|---|
+| `once` | nothing — the commitment is finished | the dentist on the third; a recall; a brake inspection at 90,000 miles |
 | `fromCompletion` | where the meter stood at completion | oil change — drift is correct, the clock starts when the oil is new |
 | `fromSchedule` | the original anchor, ignoring when it was done | annual checkup — a visit in November does not move next year's to November |
 
-Getting this wrong is the most common defect in every tool that attempts
-this, so it is an explicit, required field rather than a default anybody
-has to remember.
+Getting the last two confused is the most common defect in every tool
+that attempts this, so the field is required and has no default.
+
+**`once` is spelled out rather than expressed by leaving the field
+empty.** A missing value that silently means "one time" is how a
+household writes a recurring commitment, forgets the mode, and is told
+about the furnace filter exactly once — which is the failure this
+decision refuses a default in order to prevent.
+
+A one-off is not a lesser kind of commitment. It has a due point, a lead
+window, optionally a booking, and the same states as anything else; the
+whole of its difference is that satisfying it opens no next cycle. So
+"remind me about the dentist" and "track the truck's oil" are one
+feature, and a household never has to know which kind of thing it is
+creating.
+
+**A one-off may name its due point absolutely** — a date for the clock,
+a number for a counter — because "the dentist on the third" is the
+commonest one-off there is and expressing it as an interval from an
+anchor would mean doing calendar arithmetic to say a date already known.
+An absolute point belongs only to a one-off: a fixed point cannot repeat.
 
 ### A10. Several meters, earliest wins
 
@@ -449,6 +476,10 @@ Three weights of write, and conflating any two of them breaks something:
 | Record a reading, mark done, book, waive | ordinary member write, under the portal ceiling | **a reading is evidence, not authority**: it changes no rule and grants nothing |
 | Propose a definition | any member → Owner Review Queue (W033 E3) | members are blocked from activating, never from starting |
 
+Where ADR-W030 A6 said any trusted admitted adult could change a shared
+routine without an owner veto, **W033 E2 supersedes it**: it is the later
+and more specific decision, and this ADR follows it without reopening it.
+
 The middle row is the one a literal reading of W033 E2 gets wrong.
 Requiring a Plan to write down a mileage means nobody writes down a
 mileage, and a tracker nobody answers is worse than no tracker, because
@@ -565,6 +596,19 @@ spec:
   satisfiedBy:
     eventType: vehicle.serviced
     entity: f150
+```
+
+```yaml
+# The one-off. Same states, same card, no next cycle.
+kind: Commitment
+metadata: { name: kai-dentist, owner: household/kai }
+spec:
+  description: Kai's dentist appointment
+  due:
+    - { meter: clock, at: 2026-10-03, lead: 7d }
+  requiresBooking: true
+  rollover: once                # satisfying it finishes it
+  mayComplete: [household/mika, household/sarah]
 ```
 
 ---
@@ -715,16 +759,16 @@ and building code on a 69-commit branch still under review is the one
 avoidable risk left. K3 is unaffected either way — it imports nothing but
 the standard library and has no opinion about surfaces.
 
-**Still open, and genuinely undecided rather than deferred:**
+**Both questions this ADR left open are now closed.**
 
-- **One-off obligations.** "Dentist on the 3rd" does not recur. Whether
-  that is a `Commitment` whose rollover is absent, a separate kind of
-  reminder, or out of scope entirely, is unresolved — and it is the most
-  common thing a household will try to type in, so it should not be
-  answered by accident in K2.
-- **Whether a Member's proposal needs Owner approval in a two-adult
-  household.** W033 E2 is unambiguous that it does. ADR-W024's amendment
-  and ADR-W030 A6 said any trusted admitted adult could change a shared
-  routine without an owner veto. A20 follows W033 because it is the later
-  and more specific decision, but the tension is real and belongs to
-  whoever reconciles the two, not to this ADR.
+- **One-off obligations** are a `Commitment` whose rollover is `once`
+  (A9), with the A6 exception for how they finish. Prototyped and
+  tested. The alternative — a separate reminder kind — was rejected
+  because it would have split one household concept across two schemas,
+  two surfaces and two review paths on the strength of a difference that
+  turns out to be one field.
+- **Whether a Member's proposal needs Owner approval** is settled by
+  W033 E2 superseding ADR-W030 A6, per A20. The later ADR governs;
+  reconciling the older text is not this ADR's work.
+
+Only the merge of PR #238 now stands between this ADR and K1.

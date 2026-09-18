@@ -810,7 +810,7 @@ func TestEvaluateRefusesIncoherentInput(t *testing.T) {
 				c := ok
 				c.Due = []DueRule{{Meter: MeterClock, Every: Interval{}}}
 				return c
-			}(), Now: at(2026, time.June, 2)}, "never comes due"},
+			}(), Now: at(2026, time.June, 2)}, "neither every nor an absolute due point"},
 		{"booking it never asked for", Input{
 			Commitment: ok, Booking: &Booking{At: at(2026, time.July, 1)}, Now: at(2026, time.June, 2),
 		}, "does not require one"},
@@ -825,5 +825,214 @@ func TestEvaluateRefusesIncoherentInput(t *testing.T) {
 				t.Errorf("error = %q, want it to mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------
+// One-off commitments (A9, Once). The dentist on the third.
+// ---------------------------------------------------------------------
+
+func dentist(t *testing.T) Commitment {
+	t.Helper()
+	return Commitment{
+		Name:            "dentist",
+		Anchor:          at(2026, time.September, 18),
+		Rollover:        Once,
+		RequiresBooking: true,
+		Due:             []DueRule{{Meter: MeterClock, At: at(2026, time.October, 3), Lead: iv(t, "7d")}},
+	}
+}
+
+func TestAOneOffWalksTheSameStatesAsAnythingElse(t *testing.T) {
+	c := dentist(t)
+	for _, tc := range []struct {
+		now  time.Time
+		want State
+	}{
+		{at(2026, time.September, 20), StatePending},
+		{at(2026, time.September, 25), StatePending},
+		{at(2026, time.September, 26), StateDueSoon}, // seven days out
+		{at(2026, time.October, 2), StateDueSoon},
+		{at(2026, time.October, 3), StateOverdue},
+	} {
+		occ := eval(t, Input{Commitment: c, Now: tc.now})
+		if occ.State != tc.want {
+			t.Errorf("on %s: state = %q, want %q (%s)", tc.now.Format("2 Jan"), occ.State, tc.want, occ.Reason)
+		}
+		if occ.Cycle != 1 {
+			t.Errorf("on %s: cycle = %d, want 1", tc.now.Format("2 Jan"), occ.Cycle)
+		}
+	}
+	// The absolute date is used as given, not derived from an interval.
+	occ := eval(t, Input{Commitment: c, Now: at(2026, time.September, 20)})
+	if got := ruleFor(occ, MeterClock).DueTime; !got.Equal(at(2026, time.October, 3)) {
+		t.Errorf("dueTime = %s, want 3 Oct 2026", got.Format("2 Jan 2006"))
+	}
+}
+
+func TestAOneOffBooksAndIsMissedLikeAnythingElse(t *testing.T) {
+	c := dentist(t)
+	occ := eval(t, Input{Commitment: c, Booking: &Booking{At: at(2026, time.October, 3)}, Now: at(2026, time.September, 28)})
+	if occ.State != StateScheduled {
+		t.Errorf("state = %q, want scheduled", occ.State)
+	}
+	occ = eval(t, Input{Commitment: c, Booking: &Booking{At: at(2026, time.October, 3)}, Now: at(2026, time.October, 4)})
+	if occ.State != StateOverdue || !occ.PastDue {
+		t.Errorf("state = %q pastDue = %v, want overdue/true: the appointment was missed", occ.State, occ.PastDue)
+	}
+}
+
+func TestAnAnsweredOneOffIsFinishedRatherThanReopened(t *testing.T) {
+	// The exception to A6, exactly as wide as it needs to be: a recurring
+	// commitment always has an open cycle, so its closing state is never
+	// the answer. A one-off has no next cycle, so it is.
+	occ := eval(t, Input{
+		Commitment: dentist(t),
+		History:    []Completion{{At: at(2026, time.October, 3), By: "mika"}},
+		Now:        at(2027, time.March, 1), // long after
+	})
+	if occ.State != StateSatisfied {
+		t.Errorf("state = %q, want satisfied", occ.State)
+	}
+	if occ.Cycle != 1 {
+		t.Errorf("cycle = %d, want 1: nothing reopened", occ.Cycle)
+	}
+	if len(occ.Rules) != 0 {
+		t.Errorf("rules = %v, want none: there is no threshold left to measure", occ.Rules)
+	}
+	if occ.Projection != nil {
+		t.Errorf("projection = %+v, want none on a finished commitment", occ.Projection)
+	}
+	if !strings.Contains(occ.Reason, "3 Oct 2026") {
+		t.Errorf("reason = %q, want it to say when", occ.Reason)
+	}
+}
+
+func TestAWaivedOneOffSaysItWasNotDone(t *testing.T) {
+	occ := eval(t, Input{
+		Commitment: dentist(t),
+		History:    []Completion{{At: at(2026, time.October, 1), Waived: true, Reason: "moved to the new practice"}},
+		Now:        at(2026, time.October, 20),
+	})
+	if occ.State != StateWaived {
+		t.Errorf("state = %q, want waived", occ.State)
+	}
+	if !strings.Contains(occ.Reason, "not done") || !strings.Contains(occ.Reason, "new practice") {
+		t.Errorf("reason = %q, want it to say it was not done, and why", occ.Reason)
+	}
+}
+
+func TestARecurringCommitmentNeverReportsAClosingState(t *testing.T) {
+	// The other half of the exception: on identical history, a recurring
+	// commitment reports the cycle that opened, not the one that closed.
+	c := dentist(t)
+	c.Rollover = FromCompletion
+	c.Due = []DueRule{{Meter: MeterClock, Every: iv(t, "6mo"), Lead: iv(t, "7d")}}
+	occ := eval(t, Input{
+		Commitment: c,
+		History:    []Completion{{At: at(2026, time.October, 3)}},
+		Now:        at(2026, time.October, 20),
+	})
+	if occ.State == StateSatisfied || occ.State == StateWaived {
+		t.Errorf("state = %q: a recurring commitment always has an open cycle", occ.State)
+	}
+	if occ.Cycle != 2 {
+		t.Errorf("cycle = %d, want 2", occ.Cycle)
+	}
+}
+
+func TestAOneOffOnACounter(t *testing.T) {
+	// "Get the brakes looked at by 90,000 miles" — a one-off that no
+	// calendar can express.
+	c := Commitment{
+		Name: "f150-brakes", Anchor: at(2026, time.March, 1),
+		AnchorAt: map[string]float64{"odo": 79300}, Rollover: Once,
+		Due: []DueRule{{Meter: "odo", AtValue: 90000, Lead: iv(t, "1000")}},
+	}
+	for _, tc := range []struct {
+		miles float64
+		want  State
+	}{
+		{85000, StatePending},
+		{89000, StateDueSoon},
+		{90000, StateOverdue},
+	} {
+		occ := eval(t, Input{
+			Commitment: c,
+			Meters:     map[string]Meter{"odo": {Name: "odo", Readings: readings(at(2026, time.June, 1), tc.miles)}},
+			Now:        at(2026, time.June, 2),
+		})
+		if occ.State != tc.want {
+			t.Errorf("at %g miles: state = %q, want %q", tc.miles, occ.State, tc.want)
+		}
+		if got := ruleFor(occ, "odo").DueAt; got != 90000 {
+			t.Errorf("at %g miles: dueAt = %g, want 90000", tc.miles, got)
+		}
+	}
+}
+
+func TestOneOffRefusals(t *testing.T) {
+	base := Commitment{Name: "x", Anchor: at(2026, time.September, 18), Rollover: Once}
+	for _, tc := range []struct {
+		name string
+		in   Input
+		want string
+	}{
+		{"absolute point on a recurring commitment", Input{Commitment: func() Commitment {
+			c := base
+			c.Rollover = FromCompletion
+			c.Due = []DueRule{{Meter: MeterClock, At: at(2026, time.October, 3)}}
+			return c
+		}(), Now: at(2026, time.September, 20)}, "a fixed point cannot repeat"},
+		{"both when and how often", Input{Commitment: func() Commitment {
+			c := base
+			c.Due = []DueRule{{Meter: MeterClock, At: at(2026, time.October, 3), Every: iv(t, "6mo")}}
+			return c
+		}(), Now: at(2026, time.September, 20)}, "pick one"},
+		{"a date on a counter", Input{Commitment: func() Commitment {
+			c := base
+			c.Due = []DueRule{{Meter: "odo", At: at(2026, time.October, 3)}}
+			return c
+		}(), Meters: map[string]Meter{"odo": {Name: "odo"}}, Now: at(2026, time.September, 20)}, "is a number (atValue)"},
+		{"a number on the clock", Input{Commitment: func() Commitment {
+			c := base
+			c.Due = []DueRule{{Meter: MeterClock, AtValue: 90000}}
+			return c
+		}(), Now: at(2026, time.September, 20)}, "is a date (at)"},
+		{"due before tracking began", Input{Commitment: func() Commitment {
+			c := base
+			c.Due = []DueRule{{Meter: MeterClock, At: at(2026, time.August, 1)}}
+			return c
+		}(), Now: at(2026, time.September, 20)}, "already past before tracking began"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.in.Loc = chicago
+			if _, err := Evaluate(tc.in); err == nil {
+				t.Fatalf("accepted %s", tc.name)
+			} else if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestAOneOffIsClosedByTheFirstAnswer(t *testing.T) {
+	// A second completion on a one-off means a ledger let an answered
+	// thing be answered again — K4's job to prevent, not this function's
+	// to editorialise about. It reports the close that happened, which is
+	// the first one, rather than the most recent write.
+	occ := eval(t, Input{
+		Commitment: dentist(t),
+		History: []Completion{
+			{At: at(2026, time.October, 3), By: "mika"},
+			{At: at(2026, time.November, 9), By: "mika", Waived: true},
+		},
+		Now: at(2026, time.December, 1),
+	})
+	if occ.State != StateSatisfied {
+		t.Errorf("state = %q, want satisfied: the first answer closed it", occ.State)
+	}
+	if !strings.Contains(occ.Reason, "3 Oct 2026") {
+		t.Errorf("reason = %q, want the date of the first answer", occ.Reason)
 	}
 }

@@ -68,6 +68,19 @@ const (
 type Rollover string
 
 const (
+	// Once is a commitment that happens one time. A dentist appointment
+	// on the third, a recall to get seen to, a brake inspection at
+	// 90,000 miles. It has a due point, a lead, and optionally a
+	// booking, exactly as a recurring one does; what it does not have is
+	// a next occurrence, so satisfying it closes the commitment rather
+	// than opening another cycle.
+	//
+	// Spelled out rather than expressed by leaving Rollover empty. A
+	// missing field that silently means "once" is how a household writes
+	// a recurring commitment, forgets the mode, and is told about the
+	// furnace filter exactly one time — which is the failure A9 refuses
+	// a default in order to prevent.
+	Once Rollover = "once"
 	// FromCompletion measures the next occurrence from where the meter
 	// stood when the work was done. The oil change: the clock starts
 	// when the oil is new, and drift is correct.
@@ -127,8 +140,23 @@ type Reading struct {
 // early. A commitment carries one or more, and the earliest to trip
 // decides (ADR-W034 A10).
 type DueRule struct {
-	Meter string   `json:"meter"`
-	Every Interval `json:"every"`
+	Meter string `json:"meter"`
+	// Every is the gap between occurrences, measured from the cycle's
+	// anchor. Required for a recurring commitment; for a one-off it is
+	// one of the two ways to say when, and At is usually the other.
+	Every Interval `json:"every,omitzero"`
+	// At and AtValue are an ABSOLUTE due point, and only a one-off may
+	// carry one: a fixed point cannot repeat. At is for the clock,
+	// AtValue for a counter — two fields because a date and a mileage
+	// are not the same kind of thing, though a schema above this can
+	// present them as one and pick by the meter.
+	//
+	// This exists because "the dentist on the third" is the commonest
+	// one-off there is, and expressing it as an interval from an anchor
+	// would mean a person doing calendar arithmetic to say a date they
+	// already know.
+	At      time.Time `json:"at,omitzero"`
+	AtValue float64   `json:"atValue,omitempty"`
 	// Lead is how far ahead of the threshold the commitment starts
 	// asking. Zero means no warning at all: pending until the moment it
 	// is overdue.
@@ -287,6 +315,22 @@ func Evaluate(in Input) (Occurrence, error) {
 	slices.SortStableFunc(history, func(a, b Completion) int { return a.At.Compare(b.At) })
 	closed := len(history)
 
+	// A one-off that has been answered is finished, and the honest answer
+	// to "where does this stand" is the closing state itself.
+	//
+	// A6 says Evaluate never returns satisfied or waived, and for a
+	// recurring commitment that holds: the moment one cycle closes the
+	// next has already opened, so the closing state is never where things
+	// stand. A one-off has no next cycle, so the exception is exactly as
+	// wide as the case that needs it.
+	if c.Rollover == Once && closed > 0 {
+		// The FIRST completion is the one that closed it. A second is a
+		// ledger that allowed an answered one-off to be answered again,
+		// which K4 prevents; this function reports the close that
+		// happened rather than editorialising about the rest.
+		return closedOnce(c, history[0]), nil
+	}
+
 	occ := Occurrence{Cycle: closed + 1, OpenedAt: c.Anchor}
 	var last *Completion
 	if closed > 0 {
@@ -312,6 +356,24 @@ func Evaluate(in Input) (Occurrence, error) {
 	return occ, nil
 }
 
+// closedOnce is a finished one-off: no rules to evaluate, nothing owed,
+// and a sentence saying how it ended.
+func closedOnce(c Commitment, by Completion) Occurrence {
+	occ := Occurrence{Cycle: 1, OpenedAt: c.Anchor, Rules: []RuleStatus{}}
+	when := by.At.Format("2 Jan 2006")
+	if by.Waived {
+		occ.State = StateWaived
+		occ.Reason = c.Name + " was not done, by a decision on " + when
+		if by.Reason != "" {
+			occ.Reason += ": " + by.Reason
+		}
+		return occ
+	}
+	occ.State = StateSatisfied
+	occ.Reason = c.Name + " was done on " + when
+	return occ
+}
+
 func validate(in Input) error {
 	c := in.Commitment
 	if c.Name == "" {
@@ -321,9 +383,9 @@ func validate(in Input) error {
 		return fmt.Errorf("commitment: %q has no due rule: nothing can come due", c.Name)
 	}
 	switch c.Rollover {
-	case FromCompletion, FromSchedule:
+	case Once, FromCompletion, FromSchedule:
 	default:
-		return fmt.Errorf("commitment: %q must say rollover: fromCompletion or fromSchedule — there is no safe default (ADR-W034 A9)", c.Name)
+		return fmt.Errorf("commitment: %q must say rollover: once, fromCompletion or fromSchedule — there is no safe default (ADR-W034 A9)", c.Name)
 	}
 	if c.Anchor.IsZero() {
 		return fmt.Errorf("commitment: %q has no anchor: the first cycle has to start somewhere", c.Name)
@@ -346,11 +408,28 @@ func validate(in Input) error {
 		if err := rule.Lead.Validate(); err != nil {
 			return fmt.Errorf("commitment: %q due[%d].lead: %w", c.Name, i, err)
 		}
-		if rule.Every.Zero() {
-			return fmt.Errorf("commitment: %q due[%d].every is zero: an interval of nothing never comes due", c.Name, i)
+		absolute := !rule.At.IsZero() || rule.AtValue != 0
+		if absolute && c.Rollover != Once {
+			return fmt.Errorf("commitment: %q due[%d]: an absolute due point belongs to a one-off — a fixed point cannot repeat, so use every with rollover %s", c.Name, i, c.Rollover)
+		}
+		if absolute && !rule.Every.Zero() {
+			return fmt.Errorf("commitment: %q due[%d]: says both when it is due and how far apart it recurs; pick one", c.Name, i)
+		}
+		if !absolute && rule.Every.Zero() {
+			return fmt.Errorf("commitment: %q due[%d] says neither every nor an absolute due point: nothing can come due", c.Name, i)
+		}
+		if !rule.At.IsZero() && rule.Meter != MeterClock {
+			return fmt.Errorf("commitment: %q due[%d]: meter %q counts, so its absolute due point is a number (atValue), not a date", c.Name, i, rule.Meter)
+		}
+		if rule.AtValue != 0 && rule.Meter == MeterClock {
+			return fmt.Errorf("commitment: %q due[%d]: the clock's absolute due point is a date (at), not a number", c.Name, i)
+		}
+		if !rule.At.IsZero() && !rule.At.After(c.Anchor) {
+			return fmt.Errorf("commitment: %q due[%d]: due %s is not after the anchor %s: it was already past before tracking began",
+				c.Name, i, rule.At.Format("2 Jan 2006"), c.Anchor.Format("2 Jan 2006"))
 		}
 		if rule.Meter == MeterClock {
-			if !rule.Every.Calendar() {
+			if !rule.Every.Zero() && !rule.Every.Calendar() {
 				return fmt.Errorf("commitment: %q due[%d]: the clock is measured in time (90d, 6mo, 1yr), not in %s", c.Name, i, rule.Every)
 			}
 			if !rule.Lead.Zero() && !rule.Lead.Calendar() {
@@ -389,6 +468,19 @@ func evalRule(in Input, rule DueRule, last *Completion, closed int, loc *time.Lo
 	}
 
 	// Where does the open cycle start, and where does it come due?
+	//
+	// An absolute due point is the simple case and comes first: the
+	// household said when, so there is no interval to walk and no
+	// rollover to apply.
+	if !rule.At.IsZero() || rule.AtValue != 0 {
+		anchor := base
+		due := rule.AtValue
+		if st.Calendar {
+			due = clockPos(rule.At)
+		}
+		return finishRule(in, rule, st, anchor, due, c.Anchor, loc)
+	}
+
 	anchor, due := base, advance(base, rule.Every, st.Calendar, loc)
 	switch c.Rollover {
 	case FromCompletion:
@@ -426,11 +518,21 @@ func evalRule(in Input, rule DueRule, last *Completion, closed int, loc *time.Lo
 		}
 	}
 
-	// A replaced meter moves the coordinate space under the thresholds.
 	anchorTime := c.Anchor
 	if last != nil {
 		anchorTime = last.At
 	}
+	return finishRule(in, rule, st, anchor, due, anchorTime, loc)
+}
+
+// finishRule turns a rule's anchor and due point into its status: the
+// rebase translation, where the meter stands now, and what that means.
+//
+// Shared by both paths into it — an interval walked from a cycle's
+// anchor, and a one-off's absolute due point — because a threshold
+// should be crossed on exactly the same terms however it was arrived at.
+func finishRule(in Input, rule DueRule, st RuleStatus, anchor, due float64, anchorTime time.Time, loc *time.Location) (RuleStatus, error) {
+	// A replaced meter moves the coordinate space under the thresholds.
 	if !st.Calendar {
 		delta, ok := rebaseDelta(in.Meters[rule.Meter], anchorTime)
 		if !ok {
