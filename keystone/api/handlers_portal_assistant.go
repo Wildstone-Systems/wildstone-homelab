@@ -31,6 +31,7 @@ package api
 // kind of id in front of it would be a second lifetime to get wrong.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -244,14 +245,111 @@ func (s *Server) assistantConversation(_ http.ResponseWriter, r *http.Request, m
 	if sess.ActingFor != member || sess.Surface != runtimedb.ButlerSurfaceFamily {
 		return nil, http.StatusNotFound, fmt.Errorf("that conversation is not here any more")
 	}
-	messages := make([]map[string]string, 0, len(sess.Turns))
+	messages := make([]assistantMessage, 0, len(sess.Turns))
 	for _, t := range sess.Turns {
 		if t.Text == "" {
 			continue
 		}
-		messages = append(messages, map[string]string{"role": t.Role, "text": t.Text})
+		messages = append(messages, assistantMessage{
+			Role:     t.Role,
+			Text:     t.Text,
+			At:       t.CreatedAt,
+			Receipts: receiptsFrom(t.TranscriptJSON),
+			// A turn that proposed something says so. The proposals
+			// themselves live on the Console's Plans page, which is the
+			// owner's; what the member is owed here is that it happened.
+			Proposals: len(t.PlanIDs),
+		})
 	}
 	return map[string]any{"session": sess.ID, "agent": sess.Butler, "messages": messages}, http.StatusOK, nil
+}
+
+// assistantMessage is one turn as the full page renders it.
+type assistantMessage struct {
+	Role string    `json:"role"`
+	Text string    `json:"text"`
+	At   time.Time `json:"at,omitzero"`
+	// Receipts is what the assistant actually DID during this turn.
+	Receipts  []receipt `json:"receipts,omitempty"`
+	Proposals int       `json:"proposals,omitempty"`
+}
+
+// receipt is one action, as the design's "what was done in your name"
+// panel shows it.
+//
+// The design asks for who it acted as, through which connection, the
+// exact call, the result, the time and the duration. Five of those are
+// here. Duration is not recorded anywhere — the transcript keeps what
+// happened, not how long it took — so it is absent rather than
+// estimated: a made-up number on a receipt is worse than a missing
+// field on one.
+//
+// WHO and WHICH CONNECTION are not on the row because they are the same
+// for every row on this surface, and repeating them per action is how a
+// panel becomes unreadable. The page says them once, at the top: acting
+// as this member, through household_portal.
+type receipt struct {
+	// Capability is the tool's name, which IS the capability — the same
+	// string the connection ceiling matches against.
+	Capability string `json:"capability"`
+	// Refused marks an action the authority layer stopped BEFORE it
+	// ran. This is the row the design says to open first, because it is
+	// the ceiling made visible.
+	Refused bool `json:"refused,omitempty"`
+	// Why is the refusal's own sentence, which names the rule rather
+	// than an error code.
+	Why string `json:"why,omitempty"`
+	// Result is what came back, for an action that ran. Bounded,
+	// because a tool may return a page of text and a receipt is a line.
+	Result string `json:"result,omitempty"`
+	// Failed marks an action that ran and errored, which is neither a
+	// refusal nor a success and must not be rendered as either.
+	Failed bool `json:"failed,omitempty"`
+}
+
+// maxReceiptResult bounds one receipt's result line.
+const maxReceiptResult = 160
+
+// receiptsFrom turns a stored transcript into receipts.
+//
+// A transcript this cannot parse yields NO receipts rather than a
+// partial list, and that is the important line in this function. The
+// panel's whole promise is that a member can see what was done in their
+// name; a list that quietly dropped the one action that did not parse
+// would break that promise while looking complete. An empty panel is
+// visibly empty.
+func receiptsFrom(raw string) []receipt {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var stored storedTranscript
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		return nil
+	}
+	out := make([]receipt, 0, len(stored.Calls))
+	for _, c := range stored.Calls {
+		r := receipt{Capability: c.Name}
+		switch {
+		case c.Rejected:
+			// Refused before it ran, which is the design's own wording.
+			r.Refused, r.Why = true, c.Error
+			if r.Why == "" {
+				r.Why = "Refused before it ran."
+			}
+		case c.Error != "":
+			r.Failed, r.Why = true, c.Error
+		default:
+			r.Result = c.Result
+			if len([]rune(r.Result)) > maxReceiptResult {
+				r.Result = string([]rune(r.Result)[:maxReceiptResult]) + "\u2026"
+			}
+		}
+		out = append(out, r)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // assistantScope is what this surface may and may not do, for the panel

@@ -16,22 +16,29 @@
   refuses: both come from the connection profile, so the page and the
   ceiling cannot drift.
 
-  TWO OF THE DESIGN'S PANELS ARE NOT HERE, and both say so on the page
-  rather than being quietly missing.
+  ACTION RECEIPTS ARE REAL. Every tool call is recorded inside the
+  assistant turn that produced it, as a structured record — name, input,
+  result, error, rejected — so a receipt is a projection of that rather
+  than a parse of prose. They appear twice on purpose: inline under the
+  turn that caused them, because that is where a member is looking when
+  they wonder what just happened, and gathered in the panel, because a
+  member asking "what has this thing done for me" should not have to
+  scroll a conversation to find out.
 
-  Action receipts — who it acted as, through which connection, the exact
-  call, the result and the duration. The data exists: tool traffic is
-  recorded inside the assistant turn that produced it, in its
-  transcript. But the transcript goes through the redacting encoder on
-  its way out, and turning it into per-action receipts means a parser
-  and a shape to parse into. A receipt that quietly omitted an action
-  would be worse than none, because the panel's whole promise is that a
-  member can always see what was done in their name.
+  A transcript that cannot be parsed yields NO receipts rather than a
+  partial list. The panel's whole promise is that a member can see what
+  was done in their name, and a list that quietly dropped the one action
+  that did not parse would break that promise while looking complete.
 
-  Memory — what the assistant has learned, and Forget. That endpoint is
-  the Console's today and carries no member scoping; exposing it here
-  would hand one member the household's shared memory and everybody
-  else's items with it.
+  ONE FIELD THE DESIGN ASKS FOR IS ABSENT: duration. Nothing records it
+  — the transcript keeps what happened, not how long it took — so the
+  receipt omits it rather than estimating. A made-up number on a receipt
+  is worse than a missing field on one.
+
+  ONE PANEL IS STILL NOT HERE, and says so. Memory — what the assistant
+  has learned, and Forget. That endpoint is the Console's today and
+  carries no member scoping; exposing it here would hand one member the
+  household's shared memory and everybody else's items with it.
 
   AGENT OUTPUT IS UNTRUSTED DISPLAY CONTENT. Rendered as text, never as
   markup, on every path below.
@@ -151,19 +158,15 @@
       </section>
 
       <section class="wid">
-        <details class="panel">
+        <details class="panel" open>
           <summary class="wid-head">
             <span class="eyebrow grow">What was done in your name</span>
             <i class="ph ph-caret-down" aria-hidden="true"></i>
           </summary>
-          <p class="muted">
-            Not on this page yet. Every action the assistant takes is recorded
-            against you, and an approval it needs shows up on the front page under
-            "Needs you" — but the per-action receipts, with the exact call and its
-            result, are not rendered here. A receipt that quietly left an action out
-            would be worse than none.
-          </p>
-          <a class="hbtn hbtn-ghost" href="/activity/">See what the house did</a>
+          <div id="receipts"></div>
+          <p class="muted" id="receipts-note"></p>
+          <a class="hbtn hbtn-ghost" href="/activity/">See what the house did
+            <i class="ph ph-arrow-right" aria-hidden="true"></i></a>
         </details>
       </section>
     </div>
@@ -373,7 +376,12 @@
         var thread = el("thread");
         clear(thread);
         clear(el("note"));
-        (res.j.messages || []).forEach(function (m) { thread.appendChild(turn(m.role, m.text)); });
+        var all = [];
+        (res.j.messages || []).forEach(function (m) {
+          thread.appendChild(turn(m.role, m.text, m.receipts));
+          (m.receipts || []).forEach(function (r) { all.push(r); });
+        });
+        renderReceipts(all);
         el("asks").hidden = (res.j.messages || []).length > 0;
         text("session-id", session);
         text("thread-title", "Conversation");
@@ -383,15 +391,51 @@
       .catch(function (err) { note("note-bad", String(err.message || err)); });
   }
 
-  function turn(role, body) {
+  function turn(role, body, receipts) {
     if (role === "user") { return make("div", "msg-user", body); }
     var wrap = make("div", "turn");
     var mark = make("span", "turn-mark");
-    mark.appendChild(icon("sparkle"));
+    mark.appendChild(icon("sparkle", true));
     wrap.appendChild(mark);
+    var col = make("div", "grow");
     // Model output as text, never markup.
-    wrap.appendChild(make("div", "grow", body));
+    col.appendChild(make("div", null, body));
+    (receipts || []).forEach(function (r) { col.appendChild(receiptPill(r)); });
+    wrap.appendChild(col);
     return wrap;
+  }
+
+  // One action, collapsed to a pill. The capability IS the receipt: it
+  // is the same string the connection ceiling matches against, so a
+  // member reading "pantry.read" and a server refusing "infra.restart"
+  // are reading one vocabulary.
+  function receiptPill(r) {
+    var row = make("div", "spread");
+    row.style.marginTop = "var(--space-2)";
+    var pill = make("span", "pill " + (r.refused ? "pill-mute" : r.failed ? "pill-bad" : "pill-ok"));
+    pill.appendChild(icon(r.refused ? "prohibit" : r.failed ? "x-circle" : "check-circle", true));
+    pill.appendChild(make("span", null, r.capability));
+    row.appendChild(pill);
+    // A refusal names the rule rather than an error code — it is the
+    // ceiling made visible, and the design says to read it first.
+    if (r.why) { row.appendChild(make("span", "muted grow", r.why)); }
+    else if (r.result) { row.appendChild(make("span", "muted grow truncate", r.result)); }
+    return row;
+  }
+
+  // The panel is the thread's receipts, gathered — a member asking
+  // "what has this thing done for me" should not have to scroll a
+  // conversation to find out.
+  function renderReceipts(all) {
+    var box = el("receipts");
+    clear(box);
+    if (!all.length) {
+      text("receipts-note", "Nothing has been done in your name in this conversation — " +
+        "it has only answered questions.");
+      return;
+    }
+    text("receipts-note", "");
+    all.forEach(function (r) { box.appendChild(receiptPill(r)); });
   }
 
   Array.prototype.forEach.call(el("asks").querySelectorAll("button"), function (b) {
