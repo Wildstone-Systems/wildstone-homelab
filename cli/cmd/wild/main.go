@@ -46,6 +46,8 @@ func main() {
 		os.Exit(runHousehold(os.Args[2:]))
 	case "automation":
 		os.Exit(runAutomation(os.Args[2:]))
+	case "meter":
+		os.Exit(runMeter(os.Args[2:]))
 	case "butler":
 		os.Exit(runButler(os.Args[2:]))
 	case "chat":
@@ -73,6 +75,7 @@ func usage() {
   wild status | plan | capability | logs | audit | backup ...  (API client, ADR-W015)
   wild household events|emit|publisher ...   (see wild household)
   wild automation list|replay ...            (see wild automation)
+  wild meter read|list|history ...           (see wild meter)
   wild version`)
 }
 

@@ -39,6 +39,7 @@ import type { HouseholdEvent } from "../src/api";
 import type { HouseholdRoutine } from "../src/api";
 import type { AutomationSpec } from "../src/generated/resources";
 import { BackupsView, byPlan, explain } from "../src/views/Backups";
+import { byUrgency, CommitmentsView, isUnresolved, standingKind, standingLabel } from "../src/views/Commitments";
 import { SecretsView, usedBy, purposeOf } from "../src/views/Secrets";
 import { ChatView } from "../src/views/Chat";
 import { IdentityCode } from "../src/views/Identity";
@@ -565,7 +566,7 @@ check("gate labels its input", gate.includes('aria-label="API token"'), gate);
 const shell = renderToString(h(ConsoleStateProvider, { children: h(Shell) }));
 check("shell renders with no data yet", shell.length > 0);
 check("shell shows the icon rail", shell.includes('aria-label="Console sections"'), shell);
-for (const label of ["Home", "Services", "Butler", "Chat", "Household", "Connect chat", "Plans", "Activity", "Backups", "Nodes", "Secrets", "Identity"]) {
+for (const label of ["Home", "Services", "Butler", "Chat", "Household", "Connect chat", "Plans", "Activity", "Backups", "Commitments", "Nodes", "Secrets", "Identity"]) {
   check(`rail offers ${label}`, shell.includes(`aria-label="${label}"`));
 }
 check("shell names the screen you are on", shell.includes("Household"), shell);
@@ -1188,6 +1189,58 @@ check("a backup card shows its run history", text(backups).includes("Last 2 runs
 check("a two-run history is actually drawn", backups.includes("last 2 recorded runs"), "");
 const noBackups = renderToString(h(BackupsView, { runs: [], onRan: () => {} }));
 check("no runs explains when a plan appears", noBackups.includes("after its first run"));
+
+// ------------------------------------------------------- Commitments
+// The distinction this screen exists to hold: a commitment nobody can
+// evaluate and a commitment that is fine are different answers, and a
+// screen that renders the first as the second tells a household
+// everything is in order while nobody knows.
+const STANDINGS = [
+  {
+    name: "f150-oil", description: "F-150 oil and filter", owner: "household/mika",
+    occurrence: {
+      cycle: 2, state: "pending", openedAt: "2026-06-01T09:00:00Z", trigger: "",
+      reason: "f150-oil: nothing to say yet — meter \"odo\" was last read 12 weeks ago",
+      unresolved: ["odo"], rules: [],
+    },
+  },
+  {
+    name: "kai-checkup", description: "Kai's annual well-child visit", owner: "household/kai",
+    occurrence: {
+      cycle: 1, state: "overdue", openedAt: "2025-09-10T09:00:00Z", trigger: "clock",
+      reason: "kai-checkup is overdue (due 10 Sep 2026)", rules: [],
+    },
+  },
+  {
+    name: "furnace-filter", description: "Furnace filter", owner: "household",
+    occurrence: {
+      cycle: 1, state: "pending", openedAt: "2026-06-01T09:00:00Z", trigger: "clock",
+      reason: "furnace-filter is not due yet", rules: [],
+    },
+  },
+];
+check("a commitment nobody can evaluate is not reported as pending", standingLabel(STANDINGS[0] as never) === "can't tell", standingLabel(STANDINGS[0] as never));
+check("and it is not coloured like one that is fine", standingKind(STANDINGS[0] as never) !== standingKind(STANDINGS[2] as never));
+check("unresolved is detected from the named meter, not a state", isUnresolved(STANDINGS[0] as never) && !isUnresolved(STANDINGS[2] as never));
+const byNeed = byUrgency(STANDINGS as never).map((s) => s.name);
+check("overdue sorts first, then what nobody can tell", byNeed[0] === "kai-checkup" && byNeed[1] === "f150-oil", byNeed.join(","));
+
+const METERS = [
+  { name: "clock", description: "The calendar.", builtIn: true },
+  { name: "odo", description: "Odometer on the F-150", unit: "miles", stale: true,
+    latest: { seq: 1, meter: "odo", value: 84100, at: "2026-06-01T09:00:00Z", recordedAt: "2026-06-01T09:00:00Z", recordedBy: "mika", source: "person" } },
+  { name: "furnace-hours", description: "Blower hours", unit: "hours" },
+];
+const commitments = renderToString(h(CommitmentsView, { standings: STANDINGS as never, meters: METERS as never, onChanged: () => {} }));
+check("every commitment gets a card", text(commitments).includes("well-child visit") && text(commitments).includes("F-150 oil and filter"), text(commitments).slice(0, 400));
+check("the screen asks for the reading it is missing", text(commitments).includes("Needs a reading: odo"), text(commitments).slice(0, 600));
+const meterText = text(commitments);
+check("a meter nobody has read says so", meterText.includes("never read"));
+check("a stale meter says the number cannot be relied on", meterText.includes("too old to rely on"));
+check("never read and too old are different sentences", meterText.includes("never read") && meterText.includes("too old to rely on"));
+check("the calendar is marked built in and offers no box", meterText.includes("built in") && meterText.includes("declared nowhere"));
+const nothingTracked = renderToString(h(CommitmentsView, { standings: [], meters: [], onChanged: () => {} }));
+check("nothing tracked explains how one appears", nothingTracked.includes("propose one"));
 
 // ------------------------------------------------------------- Nodes
 // Uptime is the numeral because it is the question: a node up for

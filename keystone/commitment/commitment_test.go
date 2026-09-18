@@ -576,7 +576,7 @@ func TestOneUnresolvedMeterDoesNotSilenceTheOther(t *testing.T) {
 }
 
 func TestACompletionWithNoEvidenceCannotAnchorTheNextCycle(t *testing.T) {
-	// ADR-W034 A8: an oil change recorded with no mileage is a note, not
+	// ADR-W035 A8: an oil change recorded with no mileage is a note, not
 	// a maintenance record, and the function says which.
 	occ := eval(t, Input{
 		Commitment: staleTruck(t),

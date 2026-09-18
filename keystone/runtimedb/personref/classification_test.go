@@ -43,6 +43,7 @@ var dismissed = map[string]string{
 	"butler":              "names a Butler — an agent, which is a different axis from a Person (#201 Decision 5)",
 	"app_health":          "a health verdict for an app, not a party",
 	"applied_at":          "a timestamp",
+	"approximate":         "meter names whose position was guessed, not people",
 	"account":             "names a machine, service or artifact, not a person",
 	"acknowledged_at":     "a timestamp",
 	"acquired_at":         "a timestamp",

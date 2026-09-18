@@ -706,10 +706,37 @@
       if (i.consequence) { wrap.appendChild(make("div", "muted indent", i.consequence)); }
       // No card shows an action a member lacks authority for: the
       // affordance is absent, never present-and-refused.
+      //
+      // TWO KINDS OF ITEM, TWO ANSWER PATHS. A notice is a row with an
+      // id and its answers are yes and no. A commitment is a named
+      // resource whose answers the SERVER lists in `asks`, because
+      // whether it wants a number, a tick or an appointment depends on
+      // how it was declared and where its cycle stands. A page working
+      // that out for itself would be a second copy of the state machine.
+      var row = null;
       if (i.decidable && i.seq) {
-        var row = make("div", "asks indent");
+        row = make("div", "asks indent");
         row.appendChild(decideBtn(i.seq, "yes", "Yes", "hbtn hbtn-primary"));
         row.appendChild(decideBtn(i.seq, "no", "No", "hbtn hbtn-secondary"));
+      } else if (i.decidable && i.ref && i.asks && i.asks.length) {
+        row = make("div", "asks indent");
+        // The numbers first, ONCE, whatever the household then does with
+        // them. Typing the odometer to record it and typing it again to
+        // close the cycle is the same question asked twice.
+        var boxes = {};
+        (i.needs || []).forEach(function (n) {
+          row.appendChild(make("span", "muted nowrap", "What does " + n.meter + " say?"));
+          boxes[n.meter] = numberBox(n);
+          row.appendChild(boxes[n.meter]);
+        });
+        var when = wantsBooking(i.asks) ? dateBox() : null;
+        if (when) { row.appendChild(when); }
+        i.asks.forEach(function (a, n) {
+          row.appendChild(answerBtn(i.ref, a, boxes, when,
+            n === 0 ? "hbtn hbtn-primary" : "hbtn hbtn-secondary"));
+        });
+      }
+      if (row) {
         var why = make("button", "hbtn hbtn-ghost", "Ask the assistant why");
         why.type = "button";
         why.addEventListener("click", function () {
@@ -728,13 +755,126 @@
     if (c.more) { box.appendChild(make("div", "muted", "and " + c.more + " more")); }
   }
 
-  function decideBtn(seq, answer, label, cls) {
+  function wantsBooking(asks) {
+    for (var i = 0; i < asks.length; i++) {
+      if (asks[i].verb === "booked") { return true; }
+    }
+    return false;
+  }
+
+  function numberBox(need) {
+    var box = make("input", "hinput");
+    box.type = "number";
+    box.step = "any";
+    box.min = "0";
+    box.placeholder = need.unit || "number";
+    box.setAttribute("aria-label", "What does " + need.meter + " say, in " + (need.unit || "numbers"));
+    box.style.maxWidth = "9rem";
+    return box;
+  }
+
+  function dateBox() {
+    var box = make("input", "hinput");
+    box.type = "date";
+    box.setAttribute("aria-label", "When is the appointment");
+    return box;
+  }
+
+  // A DATE IS A DAY, AND A DAY IS NOT OVER AT MIDNIGHT. `new Date("2026-10-14")`
+  // is midnight UTC, which the engine reads as an appointment that has
+  // already been and gone — so a booking made for today was announced as
+  // missed the moment it was made, and west of UTC it was missed the
+  // evening before. An appointment somebody named only a day for has not
+  // gone until that day has, where they live.
+  function endOfDay(ymd) {
+    var p = String(ymd || "").split("-");
+    if (p.length !== 3) { return null; }
+    var d = new Date(+p[0], +p[1] - 1, +p[2], 23, 59, 59);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  }
+
+  // answerBtn records one answer to a commitment: the numbers on their
+  // own, or a completion, a waive, or an appointment. The verb IS the
+  // route's last segment, so the page never holds a second list of what
+  // the answers are called.
+  function answerBtn(ref, ask, boxes, when, cls) {
+    var b = make("button", cls, ask.label);
+    b.type = "button";
+    b.addEventListener("click", function () {
+      var meters = {}, missing = [];
+      Object.keys(boxes).forEach(function (meter) {
+        var v = parseFloat(boxes[meter].value);
+        if (isNaN(v) || v < 0) { missing.push(meter); return; }
+        meters[meter] = v;
+      });
+      if (missing.length) {
+        answerFailed(b, "what does " + missing.join(" and ") + " say?");
+        return;
+      }
+      if (ask.verb === "reading") {
+        b.disabled = true;
+        Object.keys(meters).forEach(function (meter) {
+          postAnswer("/api/v1/home/meters/" + encodeURIComponent(meter) + "/readings",
+                     { value: meters[meter] }, b);
+        });
+        return;
+      }
+      var body = {};
+      if (Object.keys(meters).length) { body.meters = meters; }
+      if (ask.verb === "booked") {
+        var at = endOfDay(when && when.value);
+        if (!at) {
+          answerFailed(b, "when is the appointment?");
+          return;
+        }
+        body.at = at;
+      }
+      b.disabled = true;
+      postAnswer("/api/v1/home/commitments/" + encodeURIComponent(ref) + "/" +
+                 encodeURIComponent(ask.verb), body, b);
+    });
+    return b;
+  }
+
+  // answer posts one and reloads the card, or says why it did not go
+  // through. The server's own sentence is shown rather than a generic
+  // one: "what did f150-odometer say?" is the whole reason the write
+  // was refused, and replacing it with "that did not work" would hide
+  // the only thing a member can act on.
+  function postAnswer(path, body, b) {
+    fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {})
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "that didn't go through"); }
+        load();
+      })
+      .catch(function (err) { answerFailed(b, String(err.message || err)); });
+  }
+
+  function answerFailed(b, why) {
+    b.disabled = false;
+    var said = b.parentNode.querySelector(".asks-said");
+    if (!said) {
+      said = make("span", "asks-said", "");
+      b.parentNode.appendChild(said);
+    }
+    said.textContent = why;
+  }
+
+  // `verdict` rather than `answer`: a parameter shadowing a helper of the
+  // same name is how a call to the WRONG `answer` compiled, passed a
+  // string-matching test, and shipped a card whose buttons all threw.
+  function decideBtn(seq, verdict, label, cls) {
     var b = make("button", cls, label);
     b.type = "button";
     b.addEventListener("click", function () {
       b.disabled = true;
       fetch("/api/v1/home/notices/answer?seq=" + encodeURIComponent(seq) +
-            "&answer=" + encodeURIComponent(answer), { method: "POST" })
+            "&answer=" + encodeURIComponent(verdict), { method: "POST" })
         .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
         .then(function (res) {
           if (!res.ok) { throw new Error(res.j.error || "that didn't go through"); }

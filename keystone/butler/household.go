@@ -165,6 +165,11 @@ type HouseholdSeams struct {
 	// is a working configuration: the surface then answers from the
 	// conversation alone, which is what it did before memory existed.
 	Memory MemorySeams
+	// RecordReading writes down a number a person gave the agent
+	// (ADR-W035 A3's chat door). cmd/keystone wires it over the runtime
+	// DB; this package holds no storage. nil withholds the tool
+	// entirely, rather than advertising one that cannot write.
+	RecordReading func(ctx context.Context, c ReadingCall) (string, error)
 	// MaxContentBytes bounds one tool result. <= 0 uses the package
 	// default.
 	MaxContentBytes int
@@ -247,9 +252,25 @@ func NewHouseholdGateway(member string, seams HouseholdSeams) *HouseholdGateway 
 		"list_household_actions": {Spec: householdActionsSpec, Handler: handleListHouseholdActions},
 		"do_household_action":    {Spec: householdDoSpec, Mutating: true, Handler: handleDoHouseholdAction},
 		// The same self-capability tool the operator surface has, over
-		// THIS surface's manifest. It can only ever describe the three
-		// household tools above, because that is the whole map it reads.
+		// THIS surface's manifest. It can only ever describe the tools
+		// registered here, because that is the whole map it reads.
 		"describe_capabilities": {Spec: describeCapabilitiesSpec, Describe: describeHouseholdCapabilities},
+	}
+	// A reading is a household write, so it carries Mutating for the
+	// reason `remember` does: nothing outside this house changes, but
+	// what it writes is durable and shapes every later verdict, and a
+	// session the household has not been shown to work should not be
+	// leaving numbers the truck's maintenance is measured from.
+	//
+	// GrantRequired is deliberately FALSE. The tracker has to work out
+	// of the box — A4 is that capabilities extend it and never enable
+	// it — and a reading door nobody switched on is a door. An Owner can
+	// still turn it off per agent through the ordinary control, because
+	// disabled beats a tool's default in the resolver's order.
+	if seams.RecordReading != nil {
+		gw.tools["record_meter_reading"] = householdEntry{
+			Spec: recordReadingSpec, Mutating: true, Handler: handleRecordReading,
+		}
 	}
 	// Registered only when the seam is wired. A tool that always answers
 	// "memory is not turned on" is one the manifest should not advertise
@@ -382,6 +403,8 @@ func (gw *HouseholdGateway) wired(name string) bool {
 		return gw.seams.Memory.Recall != nil
 	case "remember":
 		return gw.seams.Memory.Remember != nil
+	case "record_meter_reading":
+		return gw.seams.RecordReading != nil
 	case "describe_capabilities":
 		// Reads only what the gateway already holds, so it is wired
 		// wherever the surface is.

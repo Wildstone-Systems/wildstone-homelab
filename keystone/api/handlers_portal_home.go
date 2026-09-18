@@ -135,6 +135,13 @@ type needsYouItem struct {
 	// Seq addresses the item for an answer. Notices only; an aggregate
 	// row carries no id because there is nothing to answer.
 	Seq int64 `json:"seq,omitempty"`
+	// Kind and Ref address the items a sequence number cannot. A notice
+	// is a row with an id; a commitment is a named resource, and the
+	// answer path for one is not the answer path for the other. Kind is
+	// empty for a notice, which is what every existing client already
+	// assumes it is.
+	Kind string `json:"kind,omitempty"`
+	Ref  string `json:"ref,omitempty"`
 	// Summary is household language and nothing else. Plan text, node
 	// names and statefile hashes are deliberately excluded (§7), which
 	// is why an owner-side item below says only how many and how long.
@@ -151,6 +158,36 @@ type needsYouItem struct {
 	// present-and-refused.
 	Decidable bool        `json:"decidable"`
 	Tone      portal.Tone `json:"tone"`
+	// Asks are the answers on offer, for an item a sequence number
+	// cannot address. A notice has none: its two answers are yes and no
+	// and every client already knows them.
+	//
+	// The SERVER decides what is on offer, not the page. Whether a
+	// commitment wants a number, a tick or an appointment depends on how
+	// it was declared and where its cycle stands, and a page that worked
+	// that out for itself would be a second implementation of the
+	// state machine — drifting from the one that will refuse the write.
+	Asks []needsYouAsk `json:"asks,omitempty"`
+	// Needs are the numbers this item cannot be answered without. The
+	// card renders a box for each, ONCE, and every answer it offers
+	// carries whatever was typed — so the household types the odometer
+	// a single time whether they are recording it, closing the cycle or
+	// skipping it.
+	Needs []needsYouMeter `json:"needs,omitempty"`
+}
+
+// needsYouMeter is one number an item is waiting on.
+type needsYouMeter struct {
+	Meter string `json:"meter"`
+	Unit  string `json:"unit,omitempty"`
+}
+
+// needsYouAsk is one answer a member can give from the card.
+type needsYouAsk struct {
+	// Verb is the answer path: the last segment of the route that
+	// records it.
+	Verb  string `json:"verb"`
+	Label string `json:"label"`
 }
 
 type needsYouCard struct {
@@ -351,7 +388,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 		Groups: householdGroups(),
 	}
 	resp.Search.Engine, resp.Search.Offered = engine, portal.Engines
-	resp.NeedsYou = s.homeNeedsYou(member, now)
+	resp.NeedsYou = s.homeNeedsYou(memberWho(r, member), desired, now)
 	resp.Activity = s.homeActivity(member, now)
 	resp.Notifications = s.homeNotifications(member)
 	resp.Calendar = s.homeCalendar(member, desired, now)
@@ -385,7 +422,7 @@ const maxNeedsYou = 3
 // paths — and §7 excludes exactly that from this card. Saying "two
 // things are waiting for the owner" is honest, useful, and leaks
 // nothing.
-func (s *Server) homeNeedsYou(member string, now time.Time) needsYouCard {
+func (s *Server) homeNeedsYou(w who, desired []resource.Resource, now time.Time) needsYouCard {
 	card := needsYouCard{Items: []needsYouItem{}}
 	// Asked of the database as "questions still waiting on this
 	// person", not as "the newest fifty notices, some of which might
@@ -400,7 +437,7 @@ func (s *Server) homeNeedsYou(member string, now time.Time) needsYouCard {
 	// are bounded because a card shows three; the count is not bounded
 	// at all, because it is a count.
 	pending := runtimedb.NoticeFilter{
-		Recipient: member, Deliverable: true, Pending: true, At: now,
+		Recipient: w.member, Deliverable: true, Pending: true, At: now,
 	}
 	notices, err := s.DB.ListNotices(maxNeedsYou, pending)
 	if err != nil {
@@ -440,6 +477,22 @@ func (s *Server) homeNeedsYou(member string, now time.Time) needsYouCard {
 			Tone:        portal.ToneWaiting,
 		})
 	}
+	// The household's commitments. Only the ones asking for something:
+	// a commitment quietly counting down is not waiting on anybody, and
+	// filling the one card a household reads with things it does not
+	// have to do is how the card stops being read (ADR-W035 K5).
+	if commitments, cerr := s.commitmentItems(w, desired, now); cerr != nil {
+		s.Log.Error("home needs-you commitments", "err", cerr)
+		// Same sentence as the notices failure, and for the same
+		// reason: not being able to tell must not look like an
+		// all-clear.
+		card.Problem = "Can't tell whether anything needs you — Wildstone isn't answering."
+		card.Available = false
+		return card
+	} else {
+		items = append(items, commitments...)
+	}
+
 	// The owner's side, as one row. Counted from the plan ledger, which
 	// is the same place the Console's Plans page reads.
 	// PlansInState rather than the newest fifty plans filtered

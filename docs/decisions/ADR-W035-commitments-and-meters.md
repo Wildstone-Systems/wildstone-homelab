@@ -1,12 +1,15 @@
-# ADR-W034: Commitments and meters — the household keeps track of what it owes itself
+# ADR-W035: Commitments and meters — the household keeps track of what it owes itself
 
-- **Status:** proposed. Work package K3 is built and tested in
-  `keystone/commitment`; K1, K2 and K4–K7 are not started and nothing
-  imports the package yet. Every decision in Part A is made — the two
-  that were open (one-off obligations, and who may approve a Member's
-  proposal) are closed in A9 and A20.
-- **Number:** W034. Taken after W032 and W033 landed on main (#228); the
-  earlier `WXXX` placeholder existed because both were then unmerged.
+- **Status:** proposed, and built. K1 through K7 are implemented:
+  `Meter` and `Commitment` resource kinds, the readings store and its
+  four doors, the occurrence ledger, the daily pass, the household
+  homepage's rows and answer paths, the Console screen, and the agent's
+  two read tools. Every decision in Part A is made.
+- **Number:** W035. Renumbered from W034 when the calendar ADR landed on
+  main first and took that number (#245's merge, and the calendar work
+  alongside it). The earlier `WXXX` placeholder existed because W032 and
+  W033 were then unmerged, and this is the same hazard arriving a second
+  time: a number claimed on a branch is not a number until it merges.
 - **Relates to:** ADR-W024 (household events, the `Automation` resource,
   the domestic gateway — this builds directly on it), ADR-W033 A1/A4
   (Owner and Member, Console and the household plane), E2/E3 (Agents
@@ -98,7 +101,7 @@ A meter reading may therefore be written four ways, all equal:
 |---|---|
 | Console — a field on the commitment's card | no, but Console is Owner-only |
 | `wild meter read f150-odometer 84210` | no, but it is an operator tool |
-| Household chat — "truck's at 84,210" | **yes** — a chat capability |
+| Household chat — "truck's at 84,210" | **yes** — a chat capability. Built as `record_meter_reading` (A13). |
 | A family-facing web surface | **yes** today — see the correction below |
 | A household event from a publisher | **yes — and this is the optional one** |
 
@@ -237,6 +240,32 @@ decision with a person attached, and the next occurrence still opens.
 
 ### A8. Completion requires evidence, and the evidence carries the reading
 
+**Amended after the build.** "Evidence" first meant a reading current
+enough for the engine to conclude from, and that was stricter than the
+household needs. The point of the tracker is that the oil gets changed
+at about five thousand miles, not that the odometer at the moment of
+service is known exactly — and a cycle that cannot be closed sits
+overdue forever with the work already done, which is the one failure the
+costs section says a schema cannot fix.
+
+So the rule is now three-way, and the middle case is the amendment:
+
+- A number somebody **typed** is used as given.
+- A reading **too old to rely on** is used, and the completion records
+  which meters were guessed (`approximate`).
+- **No reading at all** is still refused. There is nothing to be roughly
+  right with, and inventing one is the failure this whole design exists
+  to prevent.
+
+The error runs the safe way, which is what makes the middle case sound:
+a stale reading is BEHIND where the meter actually stood, so the next
+cycle is measured from too low a number and comes due EARLY. Nagging
+sooner is a nuisance; nagging never is a missed oil change.
+
+The card still asks for the number — a person standing at the truck
+beats any inference — it just no longer refuses the answer when nobody
+types it.
+
 A commitment is satisfied by a recorded completion: what was done, when,
 by whom, and **the meter reading at the time**. That last part is not
 optional — without it the next occurrence cannot be computed, and an oil
@@ -354,9 +383,32 @@ deterministic steps and inference steps:
 - The Butler may **read** commitments and meters through read-graded
   tools, to answer "what's coming up on the truck".
 
+- The Butler may **write down a reading it was given** — "truck's at
+  84,210" — through `record_meter_reading` on the family surface. A3
+  lists household chat as one of the four doors, and this is it. The
+  tool takes a number and nothing else: it cannot derive, estimate, or
+  look one up, a value it cannot parse whole is refused rather than
+  salvaged, and the reading is attributed to the member whose session it
+  is.
+
 It cannot mark a commitment satisfied, record a reading it was not
 given, waive an occurrence, or change a due threshold. Those are writes
 by a person or a plan.
+
+**The emphasis is load-bearing and was misread once.** K7 first shipped
+two read tools and a comment saying there was "deliberately no third",
+which was stricter than this decision: a reading it WAS given was never
+on the forbidden list. The effect was that the chat door A3 names had no
+hinge — a person could tell the agent the odometer and get a polite
+acknowledgement and nothing written down. The line is between
+transcribing a number a person said and deciding what it means. The
+agent does the first; the engine does the second.
+
+`record_meter_reading` is on by default and an Owner may turn it off per
+agent, through the ordinary tool control (ADR-W030 A7/A8, where disabled
+beats a tool's default). On by default because A4 says the tracker works
+without anything being switched on; per-agent because not every agent in
+a household needs to be able to write.
 
 A household whose Butler is switched off loses the phrasing and the
 drafting. It keeps the tracker.
@@ -819,7 +871,7 @@ Person core (#202). That settles:
   Owner-only (W033 A4), Plans go to an Owner Review Queue (E2, E3), and
   `child` is a Member profile rather than a role, so the earlier
   `[adults]` shorthand is withdrawn.
-- **The number.** W034, taken once W032 and W033 were no longer in
+- **The number.** W035, taken once W032 and W033 were no longer in
   flight.
 
 **The household homepage merged** as #238. A19, A20 and A22 were written
@@ -843,4 +895,83 @@ gated by the `LdapGroup` only that profile declares.
   W033 E2 superseding ADR-W030 A6, per A20. The later ADR governs;
   reconciling the older text is not this ADR's work.
 
-Nothing now stands between this ADR and K1 but the decision to start it.
+K1 through K7 are built (#244), and what review found of them is below.
+
+## What review found after K1–K7 (#244)
+
+Five defects, all real, all of the two shapes this ADR already names.
+They are recorded here rather than only in the commit log because each
+one is a place where the obvious implementation is wrong, and the next
+person to touch this code will be tempted by the same obvious thing.
+
+**A rule stated for one input and not its sibling** — the shape that
+found four of the eight defects in the K3 rounds, and three of these
+five.
+
+1. **A bare date and an RFC3339 instant are not the same kind of
+   thing.** `2026-09-10` means that day where the household lives, so it
+   is built at midnight in the household's timezone. `2026-09-10T12:00Z`
+   already names a moment. The pass rebuilt the wall-clock fields of
+   both in the household location, so noon UTC became noon local and
+   every threshold derived from the anchor moved with it — five hours in
+   a Chicago household, seven in a Los Angeles one, to a date that still
+   looked entirely plausible. `resource.CommitmentAnchorAt` takes the
+   location and tells the two forms apart. Absolute `due.at` values had
+   the same fault and the same fix.
+
+2. **`mayComplete: [group/parents]` granted authority to everybody.**
+   The check returned true for any group reference at all, justified by
+   a comment saying the write path would refuse anyone outside it — and
+   the write path calls the same function. A personal commitment
+   narrowed to the adults could be ticked off by the child it was
+   hidden from. The groups were available all along: the identity proxy
+   forwards them on the header the door already authenticates against.
+   They now travel with the member as one value, so a caller that
+   forgets them does not compile, and a group nobody is in denies. A
+   household that narrows a commitment to a group it never created
+   would rather find out because nobody can tick it off.
+
+3. **The page asked, and then would not listen.** Commitments rendered
+   on the family homepage as rows nobody could answer: the Needs-you
+   card drew its controls only for a notice's `seq`, and a commitment
+   is a named resource with none. Every answer path K5 shipped was
+   reachable only from curl. The server now lists the answers on offer
+   (`asks`) and the page holds no list of its own — a page working out
+   whether a commitment wants a number, a tick or an appointment would
+   be a second copy of the state machine, drifting from the one that
+   refuses the write.
+
+**Producing a number instead of saying it could not** — the behaviour
+the engine exists to refuse, found twice more outside the engine.
+
+4. **A counter cycle could be closed with no number, permanently.**
+   `done` or `waived` recorded a completion with empty positions. Both
+   rollover modes measure the next cycle from the position the meter
+   stood at, so the new cycle opened unresolvable — and no endpoint
+   deletes or corrects a completion, so one tap made the truck's oil
+   untrackable forever. The schema had said "evidence is not optional"
+   since it was written and was the only thing enforcing it. A reading
+   the member just took supplies its own evidence; a stale one does
+   not, because measuring the next change from wherever the truck was
+   in June is this failure wearing a helpful face.
+
+5. **`satisfiedBy` did nothing.** It validated, generated a Console
+   type, and was read by nothing. A household that declared it watched
+   the commitment go overdue with the proof sitting in its own
+   timeline. The pass now harvests before it judges — but the event is
+   **evidence, not an instruction**: it closes a cycle only when the
+   completion it implies can carry the numbers the next cycle needs,
+   under the same rule and the same function a member tapping Done is
+   held to. It is evaluated at the event's moment, which is what the
+   pure function's `Now` argument was for, so a reading taken two days
+   after the service does not retroactively make it usable.
+
+**What the shape of these says.** Four of the five are a rule that was
+true in one place and absent in its twin, and the fifth is a field with
+no reader. Both are invisible to coverage: every line ran, and the
+tests that ran them asserted the half that was right. The pins that
+caught things here were the cross-package interval agreement test, the
+stylesheet class audit, and the person-reference verdict on every new
+column — three guards that turn a silent omission into a build failure.
+That is the kind of test this design needs more of, and more of them
+than it needs assertions.

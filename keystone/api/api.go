@@ -25,6 +25,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
+	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
 )
 
 // Server serves the public plane. All fields are required except Log and
@@ -179,6 +180,18 @@ type Server struct {
 	// only for side-effect-free replay; cmd/keystone runs its loop. New
 	// wires one over the same DB and Statefile.
 	Automation *automation.Engine
+	// Upkeep, when set, answers where the household's commitments stand.
+	// An interface rather than the engine so the api package does not
+	// depend on the pass's timer, and so a test can hand it fixed
+	// answers.
+	Upkeep interface {
+		Evaluate() ([]upkeep.Standing, error)
+	}
+	// OnMeterReading, when set, is called after a reading is recorded, so
+	// the commitment pass can run again rather than leaving somebody who
+	// has just typed in a mileage to wait until tomorrow to be told what
+	// it meant.
+	OnMeterReading func()
 	// OnHouseholdEvent, when set, is called after a new household event
 	// is recorded (not after a duplicate) — cmd/keystone wires it to the
 	// engine's Poke so a rule is evaluated when its trigger lands, not
@@ -325,6 +338,23 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/household/events", s.handle(principal.VerbRead, s.listHouseholdEvents))
 	mux.Handle("POST /api/v1/household/publishers/{capability}", s.handle(principal.VerbManage, s.mintPublisher))
 	// Replay is a read: it evaluates and returns, writes nothing.
+	// Meters and their readings (ADR-W035 K1). The reading is an
+	// ordinary authenticated write rather than a Plan: it is evidence,
+	// not authority, and an approval queue between a person and a
+	// mileage is how a household stops recording mileages.
+	//
+	// VerbEmit because a reading is a household fact, the same verb and
+	// the same reason as the event intake beside it. Known consequence:
+	// RoleOperator does not hold emit, so an operator cannot record a
+	// reading today — the same gap they already have on household
+	// events. Widening the role is an RBAC decision of its own and is
+	// deliberately not made here.
+	mux.Handle("GET /api/v1/household/meters", s.handle(principal.VerbRead, s.listMeters))
+	mux.Handle("GET /api/v1/household/meters/{name}/readings", s.handle(principal.VerbRead, s.listMeterReadings))
+	mux.Handle("POST /api/v1/household/meters/{name}/readings", s.handle(principal.VerbEmit, s.recordMeterReading))
+	mux.Handle("GET /api/v1/household/commitments", s.handle(principal.VerbRead, s.listCommitments))
+	mux.Handle("GET /api/v1/household/commitments/{name}", s.handle(principal.VerbRead, s.commitmentHistory))
+
 	mux.Handle("POST /api/v1/household/automations/replay", s.handle(principal.VerbRead, s.replayAutomation))
 	mux.Handle("GET /api/v1/household/automations/grammar", s.handle(principal.VerbRead, s.automationGrammar))
 
@@ -591,6 +621,15 @@ func (s *Server) Handler() http.Handler {
 
 	// Activity: the household record, on the same surface as the front
 	// page because it is the same projection over a longer window.
+	// Answering a commitment from the household's own page (ADR-W035
+	// K5). Not a Plan: the same reasoning as a meter reading, and the
+	// same three things a person can say — I did it, I skipped it, I
+	// booked it — plus the number a meter wants.
+	mux.Handle("POST /api/v1/home/commitments/{name}/done", s.portal(surfaceHome, s.answerCommitment("done")))
+	mux.Handle("POST /api/v1/home/commitments/{name}/waived", s.portal(surfaceHome, s.answerCommitment("waived")))
+	mux.Handle("POST /api/v1/home/commitments/{name}/booked", s.portal(surfaceHome, s.answerCommitment("booked")))
+	mux.Handle("POST /api/v1/home/meters/{name}/readings", s.portal(surfaceHome, s.homeMeterReading))
+
 	mux.Handle("GET /activity/{$}", s.portal(surfaceHome, s.portalPage("activity")))
 	mux.Handle("GET /api/v1/activity", s.portal(surfaceHome, s.activityHistory))
 
