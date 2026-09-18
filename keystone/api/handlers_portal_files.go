@@ -212,10 +212,18 @@ func (s *Server) filedropUpload(_ http.ResponseWriter, r *http.Request, member s
 	// that names the file. A photo called something private should not
 	// become a sentence on a wall tablet because somebody uploaded it.
 	if _, _, err := s.DB.AppendHouseholdEvent(runtimedb.HouseholdEvent{
-		// Addressed by the member and the stored name so a retried
-		// upload of the same file collapses onto one event rather than
-		// reporting the same thing twice.
-		EventID:       "filedrop:" + member + ":" + stored.Namespace + ":" + stored.Name,
+		// UNIQUE PER UPLOAD, and the deduplicating id it replaces was
+		// suppressing the wrong thing. It was addressed by the member
+		// and the stored name, on the theory that a retried upload of
+		// the same file should collapse onto one event — but a retry
+		// does not reuse the name: the collision policy gives it a
+		// suffix, so a retry was always a different id anyway. What the
+		// id actually caught was somebody deleting a file and uploading
+		// another under the same name later, which is a real second
+		// upload, and the household stream dropped it as a duplicate.
+		// Today at home simply did not mention it.
+		EventID: fmt.Sprintf("filedrop:%s:%s:%s:%d",
+			member, stored.Namespace, stored.Name, time.Now().UnixNano()),
 		Source:        "filedrop",
 		Type:          "filedrop.uploaded",
 		Subject:       member,

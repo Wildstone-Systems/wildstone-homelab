@@ -392,3 +392,157 @@ func TestAConversationIsNamedAfterTheMemberNotTheAssistant(t *testing.T) {
 		t.Errorf("after a follow-up the conversation is called %q — the title moved", got)
 	}
 }
+
+// A restore drill is found however diligently the household backs up.
+//
+// The two facts on this card are read from the same ledger the Console
+// paginates, and a household with four daily backup plans puts four
+// hundred rows between monthly drills. A card about whether the family
+// could recover must not go quiet because they back up often.
+func TestTheDrillIsFoundBehindAYearOfBackups(t *testing.T) {
+	h := homeHarness(t)
+	drill, err := h.s.DB.StartBackupRun("nightly", runtimedb.BackupRunDrill, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.FinishBackupRun(drill, runtimedb.BackupRunSucceeded, "restored"); err != nil {
+		t.Fatal(err)
+	}
+	// And the last good backup, buried under a run of failures.
+	good, err := h.s.DB.StartBackupRun("nightly", runtimedb.BackupRunBackup, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.FinishBackupRun(good, runtimedb.BackupRunSucceeded, "ok"); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 250 {
+		seq, err := h.s.DB.StartBackupRun(fmt.Sprintf("plan-%d", i), runtimedb.BackupRunBackup, "p1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.s.DB.FinishBackupRun(seq, runtimedb.BackupRunFailed, "no"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := h.summary(t, "sandy")
+	if got.Machines.LastDrill.IsZero() {
+		t.Error("the card lost the restore drill behind the household's own backups")
+	}
+	if !got.Machines.DrillOK {
+		t.Error("the drill succeeded and the card does not say so")
+	}
+	if got.Machines.LastBackup.IsZero() {
+		t.Error("the card lost the last successful backup behind a run of failures")
+	}
+}
+
+// Clear means all of them, not a window's worth.
+func TestClearingNotificationsClearsMoreThanAWindow(t *testing.T) {
+	h := homeHarness(t)
+	for i := range 260 {
+		if _, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
+			Kind: "washing-done", Recipient: "sandy", DedupeKey: fmt.Sprintf("n-%d", i),
+		}, runtimedb.DefaultButlerSettings(), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One unanswered question, which Clear must still leave alone.
+	asked, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
+		Kind: "lock-up", Recipient: "sandy", DedupeKey: "the-question", Asks: true,
+		TTL: 72 * time.Hour,
+	}, runtimedb.DefaultButlerSettings(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h.unthrottled()
+	res := h.member(http.MethodPost, "/api/v1/home/notices/clear", "sandy", "homepage_users", nil, "")
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("clear: status %d", res.StatusCode)
+	}
+
+	// One unread left, and it is the question: Clear does not touch a
+	// decision that is still waiting, so it stays unacknowledged and
+	// stays counted. Everything else has gone.
+	got := h.summary(t, "sandy")
+	if got.Notifications.Unread != 1 {
+		t.Errorf("after Clear the card counts %d unread, want only the unanswered question — the button reported success and left the rest",
+			got.Notifications.Unread)
+	}
+	// The question is untouched, and still on the card that asks it.
+	after, err := h.s.DB.GetNotice(asked.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.AcknowledgedAt.IsZero() {
+		t.Error("Clear acknowledged an unanswered question, taking the decision off the page")
+	}
+}
+
+// The household has one Sandy however she signed in.
+func TestAMembersConversationsAreFoundWhateverTheCase(t *testing.T) {
+	h := homeHarness(t)
+	insertFamilySession(t, h, "sandy", "When do the bins go out?")
+
+	h.unthrottled()
+	res := h.member(http.MethodGet, "/api/v1/assistant/conversations", "Sandy", "assistant_users", nil, "")
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("conversations: status %d", res.StatusCode)
+	}
+	var got struct {
+		Conversations []struct {
+			ID string `json:"id"`
+		} `json:"conversations"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Conversations) != 1 {
+		t.Fatalf("Sandy sees %d conversations, want the 1 stored for sandy", len(got.Conversations))
+	}
+
+	// And the conversation itself opens, rather than reading as somebody
+	// else's.
+	h.unthrottled()
+	one := h.member(http.MethodGet, "/api/v1/assistant/conversations/"+got.Conversations[0].ID,
+		"Sandy", "assistant_users", nil, "")
+	defer one.Body.Close()
+	if one.StatusCode != http.StatusOK {
+		t.Errorf("opening her own conversation as Sandy: status %d", one.StatusCode)
+	}
+}
+
+// A second upload under a name somebody freed up is a second event.
+func TestReusingAFreedNameIsStillAnEvent(t *testing.T) {
+	h, _ := portalHarness(t)
+
+	if res, body := h.upload("sandy", "shared", "notes.txt", "first"); res.StatusCode != http.StatusCreated {
+		t.Fatalf("first upload = %d (%v)", res.StatusCode, body)
+	}
+	h.unthrottled()
+	del := h.member(http.MethodPost, "/api/v1/filedrop/delete?namespace=shared&name=notes.txt",
+		"sandy", "filedrop_users", nil, "")
+	del.Body.Close()
+	if del.StatusCode != http.StatusOK {
+		t.Fatalf("delete = %d", del.StatusCode)
+	}
+	h.unthrottled()
+	if res, body := h.upload("sandy", "shared", "notes.txt", "second"); res.StatusCode != http.StatusCreated {
+		t.Fatalf("second upload = %d (%v)", res.StatusCode, body)
+	}
+
+	events, err := h.s.DB.HouseholdEventsBefore(0, 50, runtimedb.HouseholdEventFilter{
+		Type: "filedrop.uploaded",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Errorf("the household stream carries %d upload events, want 2 — the second was dropped as a duplicate of the first",
+			len(events))
+	}
+}

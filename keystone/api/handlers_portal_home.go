@@ -812,32 +812,37 @@ func (s *Server) homeApps(desired []resource.Resource) ([]reconcile.App, map[str
 // of host metrics.
 func (s *Server) homeMachines(ctx context.Context, now time.Time) machinesCard {
 	card := machinesCard{}
-	runs, err := s.DB.ListBackupRuns(100)
+	// EACH FACT IS ITS OWN QUESTION. This used to read the newest
+	// hundred runs and look for both among them, which is a window the
+	// household's own diligence closes: four daily backup plans put
+	// four hundred rows between monthly drills, and the card lost the
+	// drill's date and its result while a drill sat in the table. A
+	// hundred failures would have hidden the last good backup the same
+	// way. The card that says whether the household could recover must
+	// not go quiet because the household backs up often.
+	lastBackup, ok, err := s.DB.LatestBackupRun(runtimedb.BackupRunBackup, true)
 	if err != nil {
 		s.Log.Error("home machines backups", "err", err)
 		card.Problem = "Can't tell when the last backup was."
 		return card
 	}
 	card.Available = true
-	for _, run := range runs {
-		if run.Status != runtimedb.BackupRunSucceeded && run.RunKind != runtimedb.BackupRunDrill {
-			continue
-		}
-		switch run.RunKind {
-		case runtimedb.BackupRunBackup:
-			if run.Status == runtimedb.BackupRunSucceeded && run.FinishedAt.After(card.LastBackup) {
-				card.LastBackup = run.FinishedAt
-			}
-		case runtimedb.BackupRunDrill:
-			// The newest drill decides, pass or fail. A household that
-			// is told "a restore was proved" by an older success while
-			// last night's drill failed has been reassured by a card
-			// that is wrong about the only thing it is for.
-			if run.FinishedAt.After(card.LastDrill) {
-				card.LastDrill = run.FinishedAt
-				card.DrillOK = run.Status == runtimedb.BackupRunSucceeded
-			}
-		}
+	if ok {
+		card.LastBackup = lastBackup.FinishedAt
+	}
+	// The newest drill decides, pass or fail. A household that is told
+	// "a restore was proved" by an older success while last night's
+	// drill failed has been reassured by a card that is wrong about the
+	// only thing it is for.
+	lastDrill, ok, err := s.DB.LatestBackupRun(runtimedb.BackupRunDrill, false)
+	if err != nil {
+		s.Log.Error("home machines drills", "err", err)
+		card.Problem = "Can't tell when the last backup was."
+		return card
+	}
+	if ok {
+		card.LastDrill = lastDrill.FinishedAt
+		card.DrillOK = lastDrill.Status == runtimedb.BackupRunSucceeded
 	}
 	nodes, err := s.DB.ListNodes()
 	if err == nil {
@@ -951,32 +956,22 @@ func (s *Server) homeClearNotices(_ http.ResponseWriter, _ *http.Request, member
 	if s.DB == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("this page is not ready yet")
 	}
-	notices, err := s.DB.ListNotices(200, runtimedb.NoticeFilter{
-		Recipient: member, Deliverable: true, Unacknowledged: true,
-	})
+	// ALL OF THEM, in one statement. This used to read a window of two
+	// hundred and acknowledge those, which is a promise the button does
+	// not keep in the household that needs it: a member with more than
+	// a window of unread notices pressed Clear, was told it worked, and
+	// came back to a card still counting. The store excludes unanswered
+	// questions itself, so that exclusion cannot be lost by a caller
+	// that forgets it, and the recipient is a predicate rather than
+	// anything a request could name.
+	//
+	// The device race the loop handled is gone with it: a row another
+	// device acknowledged in between is simply not among the rows this
+	// updates.
+	cleared, err := s.DB.AcknowledgeNoticesFor(member)
 	if err != nil {
 		s.Log.Error("home clear notices", "err", err)
 		return nil, http.StatusInternalServerError, fmt.Errorf("that didn't go through")
-	}
-	cleared := 0
-	for _, n := range notices {
-		// A question that has not been answered is NOT cleared by this.
-		// Acknowledging it would take the decision off the member's page
-		// while leaving whatever is waiting on it still waiting, which
-		// is the one way this control could lose something that matters.
-		if n.Asks && n.AnsweredAt.IsZero() {
-			continue
-		}
-		if err := s.DB.AcknowledgeNotice(n.Seq); err != nil {
-			// Already acknowledged by another device between the read
-			// and the write is the expected race, not a failure.
-			if errors.Is(err, runtimedb.ErrNotFound) {
-				continue
-			}
-			s.Log.Error("home clear notice", "seq", n.Seq, "err", err)
-			continue
-		}
-		cleared++
 	}
 	return map[string]any{"cleared": cleared}, http.StatusOK, nil
 }

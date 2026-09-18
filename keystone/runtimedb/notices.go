@@ -355,6 +355,40 @@ func (db *DB) AcknowledgeNotice(seq int64) error {
 	return nil
 }
 
+// AcknowledgeNoticesFor clears every notice a member can clear, in one
+// statement.
+//
+// ONE STATEMENT RATHER THAN A WINDOW AND A LOOP, because "Clear" is a
+// promise about all of them. Reading a page of notices and
+// acknowledging those left a member with more than a page still holding
+// unread rows, a card still showing a count, and a button that had just
+// told them it worked. A control that reports success and leaves the
+// thing it was pressed for undone is worse than one that is slow.
+//
+// The recipient is a predicate, not a parameter the caller could aim
+// somewhere else, so this keeps the property homeClearNotices was built
+// around: there is no field in a request that can name another person's
+// notice.
+//
+// An unanswered question is excluded here rather than in the caller, so
+// the exclusion cannot be lost by a caller that forgets it.
+// Acknowledging one would take the decision off the member's page while
+// whatever waits on it still waits.
+func (db *DB) AcknowledgeNoticesFor(recipient string) (int, error) {
+	if recipient == "" {
+		return 0, fmt.Errorf("runtimedb: clearing notices needs a recipient")
+	}
+	res, err := db.sql.Exec(
+		`UPDATE notices SET acknowledged_at = ?
+		  WHERE recipient = ? AND acknowledged_at = '' AND undelivered_at = ''
+		    AND NOT (asks = 1 AND answered_at = '')`, now(), recipient)
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: clearing notices: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
 // ExpireNotices marks everything past its expiry as undelivered.
 //
 // It returns how many, because a household that never hears about

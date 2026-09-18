@@ -155,7 +155,7 @@ func (s *Server) assistantAsk(_ http.ResponseWriter, r *http.Request, member str
 		}
 		// Somebody else's conversation is not found rather than
 		// forbidden: a 403 on a guessed id confirms the id.
-		if sess.ActingFor != member || sess.Surface != runtimedb.ButlerSurfaceFamily {
+		if !strings.EqualFold(sess.ActingFor, member) || sess.Surface != runtimedb.ButlerSurfaceFamily {
 			return nil, http.StatusNotFound, fmt.Errorf("that conversation is not here any more")
 		}
 		if sess.Butler != "" {
@@ -242,7 +242,7 @@ func (s *Server) assistantConversation(_ http.ResponseWriter, r *http.Request, m
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	if sess.ActingFor != member || sess.Surface != runtimedb.ButlerSurfaceFamily {
+	if !strings.EqualFold(sess.ActingFor, member) || sess.Surface != runtimedb.ButlerSurfaceFamily {
 		return nil, http.StatusNotFound, fmt.Errorf("that conversation is not here any more")
 	}
 	messages := make([]assistantMessage, 0, len(sess.Turns))

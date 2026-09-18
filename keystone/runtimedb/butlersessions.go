@@ -303,7 +303,14 @@ func (db *DB) ListButlerSessions(limit int, f ButlerSessionFilter) ([]ButlerSess
 		args = append(args, f.Butler)
 	}
 	if f.ActingFor != "" {
-		clauses = append(clauses, "acting_for = ?")
+		// NOCASE, because the household has one Sandy however she
+		// signed in (ADR-W032 A4) and the door admits her either way:
+		// the proxy asserting a different capitalisation would leave
+		// her authenticated and her own conversations invisible. Every
+		// other reader of a member name compares this way; a predicate
+		// that did not would be the one place the household had two of
+		// her.
+		clauses = append(clauses, "acting_for = ? COLLATE NOCASE")
 		args = append(args, f.ActingFor)
 	}
 	where := ""
