@@ -307,10 +307,22 @@ step_admin() {
   echo "what you will use to add everyone else later."
   local u p1 p2
   while :; do
-    printf 'Username [admin]: ' >&2
+    printf 'Username: ' >&2
     read -r u </dev/tty || u=""
-    [ -z "$u" ] && u="admin"
+    [ -z "$u" ] && { echo "a username is required" >&2; continue; }
     case "$u" in *[!a-zA-Z0-9._-]*) echo "letters, digits, dot, dash and underscore only" >&2; continue ;; esac
+    # `admin` is LLDAP's own service account — the identity Authelia
+    # binds with to read and modify the directory. Taking that name
+    # would set the operator's password on the service credential and
+    # break the whole identity stack at the next restart. It used to be
+    # the DEFAULT here, which is exactly how the old defect hid: the
+    # account the installer really operated on and the one it named
+    # happened to be the same.
+    case "$u" in
+      admin|Admin|ADMIN)
+        echo "'admin' is the directory's own service account; please choose another name" >&2
+        continue ;;
+    esac
     break
   done
   while :; do
@@ -852,13 +864,46 @@ ALPINE_IMAGE="alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3
 # an install that reports success and leaves the operator unable to log
 # in is the worst outcome available, and it is the exact outcome this
 # whole step exists to stop.
+# json_escape makes a shell value safe to interpolate into a JSON string.
+#
+# Only the two characters JSON itself reserves. The password is checked
+# for length and nothing else, so a backslash or a quote in it would
+# otherwise produce a malformed body — and the visible symptom would be
+# "cannot sign in with the password just set" on a password that was in
+# fact set correctly, because the env var path has no such problem.
+json_escape() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+# lldap_login returns an admin-or-user token, or empty.
+#
+# Separated so the caller decides what a failure means, and assigned
+# with `|| true` at the call site: under `set -e` a failing command
+# substitution aborts the script before the `|| fail` beside it can say
+# anything, so the operator sees the install die mid-step with no
+# message. That is the worst possible shape for a step whose whole job
+# is to be verifiable.
+lldap_login() { # username password
+  docker run --rm --network "container:lldap" "$ALPINE_IMAGE" \
+    wget -qO- --header 'Content-Type: application/json' \
+      --post-data "{\"username\":\"$(json_escape "$1")\",\"password\":\"$(json_escape "$2")\"}" \
+      http://localhost:17170/auth/simple/login 2>/dev/null \
+    | sed -n 's/.*"token":"\([^"]*\)".*/\1/p'
+}
+
 set_owner_password() {
   local token
-  token="$(docker run --rm --network "container:lldap" "$ALPINE_IMAGE" \
-    wget -qO- --header 'Content-Type: application/json' \
-      --post-data "{\"username\":\"admin\",\"password\":\"$LLDAP_ADMIN_PASS\"}" \
-      http://localhost:17170/auth/simple/login 2>/dev/null \
-    | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+  # Retried, because the service password was set moments ago and the
+  # directory adopts it when the reconciler re-creates the container
+  # with the new Secret rendered in — not the instant the Secret is
+  # written. A single attempt here would race that, and would fail on
+  # timing rather than on anything being wrong.
+  local i
+  for i in $(seq 1 30); do
+    token="$(lldap_login admin "$LLDAP_ADMIN_PASS" || true)"
+    [ -n "$token" ] && break
+    sleep 2
+  done
   [ -n "$token" ] || fail "could not log in to the directory to set '$ADMIN_USER' a password"
 
   docker exec -e LLDAP_USER_PASSWORD="$ADMIN_PASS" lldap \
@@ -868,11 +913,9 @@ set_owner_password() {
 
   # Prove it: log in as them. Without this the install could report
   # success on a password that silently did not take.
-  docker run --rm --network "container:lldap" "$ALPINE_IMAGE" \
-    wget -qO- --header 'Content-Type: application/json' \
-      --post-data "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}" \
-      http://localhost:17170/auth/simple/login >/dev/null 2>&1 \
-    || fail "'$ADMIN_USER' cannot sign in with the password just set"
+  local proof
+  proof="$(lldap_login "$ADMIN_USER" "$ADMIN_PASS" || true)"
+  [ -n "$proof" ] || fail "'$ADMIN_USER' cannot sign in with the password just set"
   log "password set for '$ADMIN_USER'"
 }
 
@@ -899,20 +942,43 @@ set_owner_password() {
 create_first_owner() {
   log "creating the first owner '$ADMIN_USER'"
 
-  # The directory account, in the group that offers the Console.
-  local r id st i
-  r="$(api POST /api/v1/household/members \
-    "{\"username\":\"$ADMIN_USER\",\"groups\":[\"console_users\"],\"node\":\"$NODE_ID\"}")"
-  id="$(echo "$r" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
-  [ -n "$id" ] || fail "could not propose the account for '$ADMIN_USER': $(echo "$r" | head -c 200)"
-  api POST "/api/v1/plans/$id/approve" >/dev/null || fail "could not approve the account plan"
-  for i in $(seq 1 60); do
-    sleep 2
-    st="$(api GET "/api/v1/plans/$id" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
-    [ "$st" = applied ] && break
-    [ "$st" = failed ] && fail "the account plan failed; see journalctl -u keystone"
-  done
-  [ "$st" = applied ] || fail "the account for '$ADMIN_USER' did not apply in time"
+  # Re-runs are a documented path — the installer resumes from an
+  # answers file — and re-declaring an existing member is refused with a
+  # 409, because Keystone reads it as a rename rather than an add. So
+  # the account step is skipped when they are already declared, and the
+  # rest still runs: the Person half below is idempotent, and a run that
+  # got half way through is exactly when it needs to.
+  local declared
+  declared="$(api GET /api/v1/household/members || true)"
+  case "$declared" in
+    *"\"username\":\"$ADMIN_USER\""*)
+      log "'$ADMIN_USER' is already declared; leaving the account as it is" ;;
+    *)
+      # NO GROUPS, and that is not an omission.
+      #
+      # `console_users` is declared by the `console` capability, which
+      # this installer does not install — the Console is served by
+      # Keystone itself and reached on this host. Asking for an
+      # undeclared group is refused outright (addHouseholdMember checks
+      # declaredGroups), so requesting it here aborted every interactive
+      # install. An operator who later puts the Console behind the
+      # ingress adds the group then, on the Household screen, when the
+      # group exists to be added to.
+      local r id st i
+      r="$(api POST /api/v1/household/members \
+        "{\"username\":\"$ADMIN_USER\",\"node\":\"$NODE_ID\"}" || true)"
+      id="$(echo "$r" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+      [ -n "$id" ] || fail "could not propose the account for '$ADMIN_USER': $(echo "$r" | head -c 200)"
+      api POST "/api/v1/plans/$id/approve" >/dev/null || fail "could not approve the account plan"
+      st=""
+      for i in $(seq 1 60); do
+        sleep 2
+        st="$(api GET "/api/v1/plans/$id" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+        [ "$st" = applied ] && break
+        [ "$st" = failed ] && fail "the account plan failed; see journalctl -u keystone"
+      done
+      [ "$st" = applied ] || fail "the account for '$ADMIN_USER' did not apply in time" ;;
+  esac
 
   # Their password, set on the account just created.
   set_owner_password
@@ -921,17 +987,37 @@ create_first_owner() {
   # default: recordButlerMember defaults to member on purpose, so an
   # omission here would stage the first Owner as a Member and leave the
   # household with none.
-  api POST /api/v1/butler/members "{\"member\":\"$ADMIN_USER\",\"role\":\"owner\"}" >/dev/null \
-    || fail "could not record '$ADMIN_USER' as an owner"
-  api POST "/api/v1/butler/members/$ADMIN_USER/admit" >/dev/null \
-    || fail "could not admit '$ADMIN_USER'"
+  #
+  # The responses are READ rather than trusted to a `|| fail`. api()
+  # runs curl without -f, so an HTTP 4xx still exits 0 and every
+  # `|| fail` beside one of these calls was dead — which meant a failed
+  # admit produced a successful install and a recorded-but-unadmitted
+  # Owner: precisely the lockout `keystone owner create` exists to
+  # repair, created by the step meant to prevent it.
+  local rec adm
+  rec="$(api POST /api/v1/butler/members "{\"member\":\"$ADMIN_USER\",\"role\":\"owner\"}" || true)"
+  case "$rec" in
+    *'"error"'*) fail "could not record '$ADMIN_USER' as an owner: $(echo "$rec" | head -c 200)" ;;
+  esac
+  adm="$(api POST "/api/v1/butler/members/$ADMIN_USER/admit" || true)"
+  case "$adm" in
+    *'"error"'*) fail "could not admit '$ADMIN_USER': $(echo "$adm" | head -c 200)" ;;
+  esac
 
   # And the check that makes this a requirement rather than an intention.
-  api GET /api/v1/butler/members \
-    | tr '{' '\n' \
-    | grep "\"member\":\"$ADMIN_USER\"" \
-    | grep -q '"role":"owner"' \
-    || fail "'$ADMIN_USER' is not an owner after setup; refusing to report success (design §2.4)"
+  # ADMITTED as well as owner: a recorded Owner who was never let in is
+  # not an active Owner, and checking only the role would call that
+  # household done.
+  local row
+  row="$(api GET /api/v1/butler/members | tr '{' '\n' | grep "\"member\":\"$ADMIN_USER\"" || true)"
+  case "$row" in
+    *'"role":"owner"'*) ;;
+    *) fail "'$ADMIN_USER' is not an owner after setup; refusing to report success (design §2.4)" ;;
+  esac
+  case "$row" in
+    *'"admitted":true'*) ;;
+    *) fail "'$ADMIN_USER' is an owner but was never admitted; refusing to report success (design §2.4)" ;;
+  esac
   log "first owner '$ADMIN_USER' recorded and admitted"
 }
 

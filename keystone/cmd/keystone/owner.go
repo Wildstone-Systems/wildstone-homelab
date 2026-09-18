@@ -220,15 +220,33 @@ func ownerResetPassword(args []string) error {
 	actor := hostActor()
 	auditRecovery(db, actor, "reset-password", member)
 
-	// Deliberately instructions rather than an action. Resetting the
-	// password means talking to LLDAP, which runs in a container this
-	// process has no handle on and holds a credential this process must
-	// not learn. Printing the exact command keeps the boundary where
-	// ADR-W020 A4 puts it, and keeps this binary free of the directory's
-	// admin password.
+	// Instructions rather than an action, and they point at Authelia
+	// rather than at LLDAP.
+	//
+	// The first draft of this printed an `lldap_set_password` command.
+	// That command cannot be run: it needs an admin token, the token
+	// needs the directory's service password, and since the installer
+	// started generating that password into a write-only Secret there
+	// is no way for a person to read it back. A break-glass instruction
+	// nobody can execute is worse than none, because it looks like a
+	// way out.
+	//
+	// Authelia's password reset needs none of that. It binds to the
+	// directory itself, writes a one-time code to the notification file,
+	// and the person exchanges it for a password they choose — which is
+	// also the path every household member after the first one takes.
 	fmt.Printf("Wildstone does not hold %s's password and will not set one.\n\n", member)
-	fmt.Println("Ask the directory for a one-time code, then hand it to them:")
-	fmt.Printf("  docker exec lldap /app/lldap_set_password --username %s\n\n", member)
+	fmt.Println("Have them choose \"forgotten password\" at the sign-in page, then")
+	fmt.Println("read the one-time code back and hand it over. Either of:")
+	fmt.Println()
+	fmt.Println("  - the Console's Identity screen, which reads it for you; or")
+	fmt.Println("  - on the node running the identity capability, the file")
+	fmt.Println("    Authelia writes it to:")
+	fmt.Println("      cat /srv/wildstone/identity/notification.txt")
+	fmt.Println()
+	fmt.Println("Asking for another code REPLACES the pending one, so read it")
+	fmt.Println("once and hand it over before asking again.")
+	fmt.Println()
 	fmt.Println("They exchange it for a password they choose. Nothing about it is")
 	fmt.Println("recorded here — this command wrote an audit row saying it was run,")
 	fmt.Println("and nothing else.")

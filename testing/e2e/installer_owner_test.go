@@ -64,13 +64,28 @@ func TestInstallWithoutAnOwnerFails(t *testing.T) {
 	if !strings.Contains(body, "refusing to report success") {
 		t.Error("create_first_owner does not refuse to report success without an owner")
 	}
-	// The check has to end in `fail`. Asserted on the verification block
-	// rather than anywhere in the function, because a `fail` elsewhere
-	// would satisfy a looser test while the owner check warned and
-	// continued.
-	verify := body[strings.LastIndex(body, "api GET /api/v1/butler/members"):]
-	if !strings.Contains(verify, "|| fail ") {
+	// The check has to abort. Asserted on the verification block rather
+	// than anywhere in the function, because a `fail` elsewhere would
+	// satisfy a looser test while the owner check warned and continued.
+	//
+	// The index is checked before it is used. The first version sliced
+	// on LastIndex without testing for -1, so removing the verification
+	// block — the exact regression this guards — panicked instead of
+	// failing, and a panic in a table of checks is a worse signal than
+	// the failure it replaced.
+	at := strings.LastIndex(body, "api GET /api/v1/butler/members")
+	if at < 0 {
+		t.Fatal("create_first_owner no longer reads the member list back to verify")
+	}
+	verify := body[at:]
+	if !strings.Contains(verify, "fail ") {
 		t.Errorf("the owner check does not abort the install:\n%s", verify)
+	}
+	// Admitted as well as owner: a recorded Owner who was never let in
+	// is not an active Owner, and a check that read only the role would
+	// call that household done.
+	if !strings.Contains(verify, `"admitted":true`) {
+		t.Error("the check does not require the owner to be admitted")
 	}
 }
 
@@ -187,7 +202,16 @@ func TestTheDirectoryServiceAccountPasswordIsGenerated(t *testing.T) {
 	if end := strings.Index(body, "\n}\n"); end > 0 {
 		body = body[:end]
 	}
-	if strings.Contains(body, "ADMIN_PASS\"") && !strings.Contains(body, "LLDAP_ADMIN_PASS") {
-		t.Error("the directory's service password is the operator's again")
+	// The operator's password must not appear in this function at all.
+	// Written as a scan for $ADMIN_PASS that is not $LLDAP_ADMIN_PASS,
+	// because the two differ by a prefix and a naive Contains matches
+	// both — the first version of this test asked for
+	// `ADMIN_PASS"` AND NOT `LLDAP_ADMIN_PASS` anywhere in the same
+	// body, which no text can satisfy, so it could never fail.
+	for _, line := range strings.Split(body, "\n") {
+		stripped := strings.ReplaceAll(line, "LLDAP_ADMIN_PASS", "")
+		if strings.Contains(stripped, "ADMIN_PASS") {
+			t.Errorf("the directory's service password is the operator's again: %s", strings.TrimSpace(line))
+		}
 	}
 }
