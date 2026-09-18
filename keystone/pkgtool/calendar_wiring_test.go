@@ -149,6 +149,21 @@ func TestCalendarCredentialJobWritesWhereRadicaleReads(t *testing.T) {
 	}
 }
 
+// On a fresh volume the credential job runs before Radicale ever has, so
+// its mkdir -p is what creates collections/ and collection-root/, as root
+// and 0700. Handing over only GROUPS left Radicale unable to open its own
+// storage: it died at startup on "Cannot create storage path
+// .../collection-root (Permission denied)" and restarted for ever.
+func TestCalendarJobHandsRadicaleItsWholeStorage(t *testing.T) {
+	spec := calendarContainer(t, "calendar-service-file")
+	script := strings.Join(spec.Command, "\n")
+	if !strings.Contains(script, "chown -R 1000:1000 /var/lib/radicale/collections\n") &&
+		!strings.HasSuffix(script, "chown -R 1000:1000 /var/lib/radicale/collections") {
+		t.Error("the credential job does not hand the whole collections tree to uid 1000; the directories its " +
+			"mkdir -p creates above GROUPS stay root-owned and Radicale cannot start")
+	}
+}
+
 // TestCalendarBackupTakesTheCalendarsAndNotTheCredential.
 //
 // The collections volume is the only copy of the household's calendars,
