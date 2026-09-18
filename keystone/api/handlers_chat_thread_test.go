@@ -62,11 +62,9 @@ func TestChatThreadsAreNotSharedAcrossSurfaces(t *testing.T) {
 
 	h.send(runtimedb.RoleConcierge, map[string]any{
 		"transport": "telegram", "account": "12345", "text": "household question", "messageId": "m-1",
-		"surface": "family",
 	})
 	h.send(runtimedb.RoleValet, map[string]any{
 		"transport": "telegram", "account": "12345", "text": "operator question", "messageId": "m-2",
-		"surface": "admin",
 	})
 
 	var sessions []runtimedb.ButlerSession
@@ -94,7 +92,7 @@ func TestConsoleActivityKeepsAChatThreadAlive(t *testing.T) {
 
 	h.send(runtimedb.RoleValet, map[string]any{
 		"transport": "telegram", "account": "12345", "text": "first, on telegram",
-		"messageId": "m-1", "surface": "admin",
+		"messageId": "m-1",
 	})
 	var sessions []runtimedb.ButlerSession
 	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &sessions)
@@ -115,7 +113,7 @@ func TestConsoleActivityKeepsAChatThreadAlive(t *testing.T) {
 	// Back to Telegram: still the same conversation.
 	h.send(runtimedb.RoleValet, map[string]any{
 		"transport": "telegram", "account": "12345", "text": "third, on telegram",
-		"messageId": "m-2", "surface": "admin",
+		"messageId": "m-2",
 	})
 
 	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &sessions)

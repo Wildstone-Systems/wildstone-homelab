@@ -55,18 +55,10 @@ func wireFailingButler(t *testing.T, h *harness) *failingButlers {
 		}},
 	}}
 	h.s.Butlers = f
-	// The bot a message arrives at IS the address (ADR-W031 A7), so the
-	// adapter has to reach this path on an adapter's own credential
-	// rather than the harness's generic concierge.
-	name := chatAdapterPrincipalPrefix + "chat-telegram-family"
-	if err := h.s.Principals.Create(name, runtimedb.RoleConcierge, ""); err != nil {
-		t.Fatalf("Create(%s): %v", name, err)
-	}
-	tok, err := h.s.Principals.Mint(name, "", 0)
-	if err != nil {
-		t.Fatalf("Mint(%s): %v", name, err)
-	}
-	h.tokens[runtimedb.RoleConcierge] = tok
+	// The bot a message arrives at IS the address (ADR-W031 A7), and
+	// since ADR-W033 B7 that is what identifies its Connection — so the
+	// harness already mints this adapter's own credential and there is
+	// nothing to replace here.
 	h.bindAccount(t, "family", "sam", "telegram", "12345")
 	return f
 }
@@ -156,14 +148,16 @@ func TestEveryNewProposalIsAnnounced(t *testing.T) {
 // The notice's dedupe key is the message AND the outcome. Each half
 // covers a case the other gets wrong, so both are asserted.
 func TestTheNoticeIsKeyedOnTheMessageAndTheOutcome(t *testing.T) {
-	const (
-		surface = runtimedb.ButlerSurfaceFamily
-		tp      = "telegram"
-		convo   = "12345"
-	)
+	const convo = "12345"
+	// Two Agents, each with its own bot: the key is scoped by
+	// CONNECTION now, so the interesting collision is between two
+	// Agents rather than between two surfaces.
+	h := newHarness(t)
+	sandy := h.agentAt(t, "family", "telegram")
+	alfred := h.agentAt(t, "admin", "telegram")
 	// The message identity, as the handler builds it.
 	msg := func(id, text string) string {
-		return chatDedupe(surface, tp, convo, id, "proposal", text)
+		return chatDedupe(sandy, convo, id, "proposal", text)
 	}
 	plans := []string{"plan-1", "plan-2"}
 	same := chatProposalDedupe(msg("m-1", "expose grafana"), plans, nil)
@@ -204,18 +198,19 @@ func TestTheNoticeIsKeyedOnTheMessageAndTheOutcome(t *testing.T) {
 	}
 	// Scoped like every other reply, which it inherits from chatDedupe:
 	// one conversation's notice must not deduplicate another's, and
-	// neither must one surface's (ADR-W026 A3 — a private chat id is
-	// the same value for every bot the person talks to).
-	if got := chatProposalDedupe(chatDedupe(surface, tp, "67890", "m-1", "proposal", "expose grafana"), plans, nil); got == same {
+	// neither must one AGENT's — a private chat id is the same value
+	// for every bot the person talks to (ADR-W026 A3), and two Agents
+	// on one transport is the case a surface key could not separate.
+	if got := chatProposalDedupe(chatDedupe(sandy, "67890", "m-1", "proposal", "expose grafana"), plans, nil); got == same {
 		t.Errorf("two conversations share the key %s", got)
 	}
-	if got := chatProposalDedupe(chatDedupe(runtimedb.ButlerSurfaceAdmin, tp, convo, "m-1", "proposal", "expose grafana"), plans, nil); got == same {
-		t.Errorf("two surfaces share the key %s", got)
+	if got := chatProposalDedupe(chatDedupe(alfred, convo, "m-1", "proposal", "expose grafana"), plans, nil); got == same {
+		t.Errorf("two agents share the key %s", got)
 	}
 	// And it never collides with the reply the SUCCESSFUL path would
 	// send for the same message, which would silently swallow the
 	// answer when a retry finally worked.
-	if same == chatDedupe(surface, tp, convo, "m-1", "bs-1", "expose grafana") {
+	if same == chatDedupe(sandy, convo, "m-1", "bs-1", "expose grafana") {
 		t.Error("the notice and the eventual answer to the same message share a dedupe key")
 	}
 }

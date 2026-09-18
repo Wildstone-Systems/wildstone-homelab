@@ -62,9 +62,14 @@ func newHarness(t *testing.T) *harness {
 	for name, role := range map[string]runtimedb.Role{
 		"root-admin": runtimedb.RoleAdmin, "op": runtimedb.RoleOperator, "butler": runtimedb.RoleButler,
 		// The two chat adapters (ADR-W026 A3): converse and nothing
-		// else, one pinned to each surface.
-		"concierge": runtimedb.RoleConcierge,
-		"valet":     runtimedb.RoleValet,
+		// else. Their names are the CAPABILITY they were minted for,
+		// because since ADR-W033 B7 a bot's credential is what
+		// identifies its Connection — one Agent, one transport. A
+		// generic `concierge` token names no bot, so it names no
+		// Connection, and the inbound door cannot tell which Agent it
+		// arrived at.
+		chatAdapterPrincipalPrefix + "chat-telegram-family": runtimedb.RoleConcierge,
+		chatAdapterPrincipalPrefix + "chat-telegram-admin":  runtimedb.RoleValet,
 	} {
 		if err := p.Create(name, role, ""); err != nil {
 			t.Fatalf("Create(%s): %v", name, err)

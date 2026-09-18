@@ -18,8 +18,11 @@ func (h *harness) ask(t *testing.T, role runtimedb.Role, account, text, surface 
 		"transport": "telegram", "account": account, "text": text,
 		"messageId": text + account,
 	}
-	if surface != "" {
-		body["surface"] = surface
+	// An adapter's own credential is its Connection, so it names
+	// nothing (ADR-W031 A7, ADR-W033 B7). A human has no bot to arrive
+	// through and names the Agent instead.
+	if surface != "" && role != runtimedb.RoleConcierge && role != runtimedb.RoleValet {
+		body["butler"] = agentFor(surface)
 	}
 	resp, _ := h.send(role, body)
 	if resp.StatusCode != http.StatusAccepted {
@@ -168,7 +171,7 @@ func TestTodayWithholdsAnotherMembersFactsInAGroup(t *testing.T) {
 	var out inboundResponse
 	resp := h.do(runtimedb.RoleConcierge, "POST", "/api/v1/chat/messages", map[string]any{
 		"transport": "telegram", "account": "12345", "conversation": "room-1",
-		"group": true, "text": "/today", "messageId": "g-1", "surface": "family",
+		"group": true, "text": "/today", "messageId": "g-1",
 	}, &out)
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("group /today: status = %d", resp.StatusCode)

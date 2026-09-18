@@ -538,3 +538,36 @@ func (p *promotingProvider) Chat(ctx context.Context, req provider.ChatRequest) 
 	}
 	return resp, err
 }
+
+// chatConnection gives an Agent a bot and returns the Connection a
+// queued message leaves by.
+//
+// Since migration 0042 the outbound queue is per Connection rather than
+// per surface, so a notifier's message belongs to one Agent's bot — not
+// to whichever bot happens to serve the operator surface.
+func chatConnection(t *testing.T, db *runtimedb.DB, butler string) runtimedb.Connection {
+	t.Helper()
+	if err := db.UpsertModel(runtimedb.Model{
+		Name: "kitchen-box", Kind: runtimedb.ModelLocal, Provider: "ollama", ProviderModel: "llama",
+		Readiness: runtimedb.ModelReady, Enabled: true,
+	}, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	const capability = "chat-telegram-admin"
+	if _, err := db.GetButler(butler); err != nil {
+		if _, err := db.CreateButler(runtimedb.Butler{
+			Name: butler, Directive: "look after the house", Surface: runtimedb.ButlerSurfaceAdmin,
+			Profile: runtimedb.ProfileOperator, Model: "kitchen-box",
+		}, "mika"); err != nil {
+			t.Fatalf("CreateButler(%s): %v", butler, err)
+		}
+		if _, err := db.AddButlerAddress(butler, "telegram", capability, "", "mika"); err != nil {
+			t.Fatalf("addressing %s: %v", butler, err)
+		}
+	}
+	at, err := db.ChatConnectionAt("telegram", capability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return at
+}

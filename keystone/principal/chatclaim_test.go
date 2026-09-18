@@ -26,11 +26,48 @@ func person(t *testing.T, s *Store, handle, role string) {
 	}
 }
 
+// agent gives the household one Agent with a bot, and returns the
+// Connection an invite is issued against.
+//
+// A claim names a Connection since 0042, not a surface: a surface is a
+// class of Agents, and an invite to a class admits somebody to every
+// member of it.
+func agent(t *testing.T, s *Store, name string, surface runtimedb.ButlerSurface) runtimedb.Connection {
+	t.Helper()
+	if err := s.DB.UpsertModel(runtimedb.Model{
+		Name: "kitchen-box", Kind: runtimedb.ModelLocal, Provider: "ollama", ProviderModel: "llama",
+		Readiness: runtimedb.ModelReady, Enabled: true,
+	}, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	profile := runtimedb.ProfileHousehold
+	if surface == runtimedb.ButlerSurfaceAdmin {
+		profile = runtimedb.ProfileOperator
+	}
+	capability := "chat-telegram-" + string(surface)
+	if _, err := s.DB.GetButler(name); err != nil {
+		if _, err := s.DB.CreateButler(runtimedb.Butler{
+			Name: name, Directive: "look after the house", Surface: surface,
+			Profile: profile, Model: "kitchen-box",
+		}, "root-admin"); err != nil {
+			t.Fatalf("CreateButler(%s): %v", name, err)
+		}
+		if _, err := s.DB.AddButlerAddress(name, "telegram", capability, "", "root-admin"); err != nil {
+			t.Fatalf("addressing %s: %v", name, err)
+		}
+	}
+	at, err := s.DB.ChatConnectionAt("telegram", capability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
 // An owner-agent Connection admits an Owner.
 func TestAnAdminClaimNamesAnOwner(t *testing.T) {
 	s := store(t)
 	person(t, s, "mika", runtimedb.RoleOwner)
-	if _, _, err := s.IssueChatClaim(runtimedb.ButlerSurfaceAdmin, "mika", "telegram", "root-admin", 0); err != nil {
+	if _, _, err := s.IssueChatClaim(agent(t, s, "alfred", runtimedb.ButlerSurfaceAdmin), "mika", "root-admin", 0); err != nil {
 		t.Fatalf("an owner cannot be issued an admin claim: %v", err)
 	}
 }
@@ -41,7 +78,7 @@ func TestAnAdminClaimNamesAnOwner(t *testing.T) {
 func TestAnAdminClaimRefusesAMember(t *testing.T) {
 	s := store(t)
 	person(t, s, "sam", runtimedb.RoleMember)
-	_, _, err := s.IssueChatClaim(runtimedb.ButlerSurfaceAdmin, "sam", "telegram", "root-admin", 0)
+	_, _, err := s.IssueChatClaim(agent(t, s, "alfred", runtimedb.ButlerSurfaceAdmin), "sam", "root-admin", 0)
 	if err == nil {
 		t.Fatal("a member was admitted to an owner agent's connection")
 	}
@@ -59,7 +96,7 @@ func TestAPrincipalIsNotAdmittedToAConnection(t *testing.T) {
 	if err := s.DB.CreatePrincipal("op", runtimedb.RoleOperator, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.IssueChatClaim(runtimedb.ButlerSurfaceAdmin, "op", "telegram", "root-admin", 0); err == nil {
+	if _, _, err := s.IssueChatClaim(agent(t, s, "alfred", runtimedb.ButlerSurfaceAdmin), "op", "root-admin", 0); err == nil {
 		t.Fatal("a chat account was bound to a machine principal (ADR-W033 B9)")
 	}
 }
@@ -69,7 +106,7 @@ func TestAPrincipalIsNotAdmittedToAConnection(t *testing.T) {
 func TestAFamilyClaimNamesAMember(t *testing.T) {
 	s := store(t)
 	person(t, s, "sam", runtimedb.RoleMember)
-	if _, _, err := s.IssueChatClaim(runtimedb.ButlerSurfaceFamily, "sam", "telegram", "root-admin", 0); err != nil {
+	if _, _, err := s.IssueChatClaim(agent(t, s, "sandy", runtimedb.ButlerSurfaceFamily), "sam", "root-admin", 0); err != nil {
 		t.Fatalf("a member cannot be issued a family claim: %v", err)
 	}
 }
@@ -83,10 +120,10 @@ func TestAClaimRefusesSomebodyNotAdmitted(t *testing.T) {
 	if err := s.DB.RecordButlerMember("staged", runtimedb.RoleMember, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.IssueChatClaim(runtimedb.ButlerSurfaceFamily, "staged", "telegram", "root-admin", 0); err == nil {
+	if _, _, err := s.IssueChatClaim(agent(t, s, "sandy", runtimedb.ButlerSurfaceFamily), "staged", "root-admin", 0); err == nil {
 		t.Fatal("a staged, un-admitted person was given a connection")
 	}
-	if _, _, err := s.IssueChatClaim(runtimedb.ButlerSurfaceFamily, "nobody", "telegram", "root-admin", time.Minute); err == nil {
+	if _, _, err := s.IssueChatClaim(agent(t, s, "sandy", runtimedb.ButlerSurfaceFamily), "nobody", "root-admin", time.Minute); err == nil {
 		t.Fatal("a connection was issued for somebody who does not exist")
 	}
 }

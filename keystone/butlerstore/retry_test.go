@@ -232,10 +232,9 @@ func TestStallNoticeDeduplicatesAndWaitsForQuietHours(t *testing.T) {
 	night := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 3, 0, 0, 0, time.UTC)
 	ledger.Now = func() time.Time { return night }
 
+	at := chatConnection(t, db, "alfred")
 	n := &Notifier{Ledger: ledger, Binding: func(string) (runtimedb.ChatOutbound, bool, error) {
-		return runtimedb.ChatOutbound{
-			Surface: runtimedb.ButlerSurfaceAdmin, Transport: "telegram", Target: "direct:mika",
-		}, true, nil
+		return runtimedb.ChatOutbound{Connection: at.Seq, Target: "direct:mika"}, true, nil
 	}}
 	if err := n.NotifyStalled(id, "I could not reach the model."); err != nil {
 		t.Fatalf("NotifyStalled: %v", err)
@@ -246,7 +245,7 @@ func TestStallNoticeDeduplicatesAndWaitsForQuietHours(t *testing.T) {
 	}
 
 	// Held: the adapter sees nothing yet.
-	pending, err := db.ChatOutboundAfter(runtimedb.ButlerSurfaceAdmin, "telegram", 0, 10)
+	pending, err := db.ChatOutboundAfter(at, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +256,7 @@ func TestStallNoticeDeduplicatesAndWaitsForQuietHours(t *testing.T) {
 	// It is queued, once, with a hold that ends when the window does —
 	// held is visible, so "waiting for morning" is distinguishable from
 	// "never sent".
-	held, err := db.ChatOutboundHeld(runtimedb.ButlerSurfaceAdmin)
+	held, err := db.ChatOutboundHeld(at)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +279,7 @@ func TestStallNoticeDeduplicatesAndWaitsForQuietHours(t *testing.T) {
 	if err := n.NotifyStalled(other, "again"); err != nil {
 		t.Fatal(err)
 	}
-	sent, err := db.ChatOutboundAfter(runtimedb.ButlerSurfaceAdmin, "telegram", 0, 10)
+	sent, err := db.ChatOutboundAfter(at, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,17 +367,18 @@ func TestStallNoticeIsSilentWithNoDirectSurface(t *testing.T) {
 	db, ledger := testLedger(t, filepath.Join(t.TempDir(), "keystone.db"))
 	defer db.Close()
 	id := newTask(t, db)
+	at := chatConnection(t, db, "alfred")
 	n := &Notifier{Ledger: ledger, Binding: func(string) (runtimedb.ChatOutbound, bool, error) {
 		return runtimedb.ChatOutbound{}, false, nil
 	}}
 	if err := n.NotifyStalled(id, "stalled"); err != nil {
 		t.Fatalf("NotifyStalled with no binding: %v", err)
 	}
-	queued, err := db.ChatOutboundAfter(runtimedb.ButlerSurfaceAdmin, "", 0, 10)
+	queued, err := db.ChatOutboundAfter(at, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	heldMsgs, err := db.ChatOutboundHeld(runtimedb.ButlerSurfaceAdmin)
+	heldMsgs, err := db.ChatOutboundHeld(at)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -26,14 +26,20 @@ func TestChatQuestionAndAnswerCloseTheLoop(t *testing.T) {
 		Capability: "chat-telegram-family",
 		Transport:  "telegram",
 		Lookup: func(_ context.Context, member string) (domestic.ChatRecipient, error) {
-			target, id, err := h.s.ChatRecipientFor("telegram", member)
+			target, id, connection, err := h.s.ChatRecipientFor("telegram", member)
 			if err != nil {
 				return domestic.ChatRecipient{}, err
 			}
-			return domestic.ChatRecipient{Transport: "telegram", Target: target, BindingID: id}, nil
+			return domestic.ChatRecipient{
+				Transport: "telegram", Target: target, BindingID: id, Connection: connection,
+			}, nil
 		},
 		Ask: func(ctx context.Context, r domestic.ChatRecipient, body, correlationID, rule, subject string) (int64, error) {
-			return h.s.AskOverChat(ctx, r.Transport, r.Target, r.BindingID, body, correlationID, rule, subject)
+			at, aerr := h.s.DB.ChatConnectionBySeq(r.Connection)
+			if aerr != nil {
+				return 0, aerr
+			}
+			return h.s.AskOverChat(ctx, at, r.Target, r.BindingID, body, correlationID, rule, subject)
 		},
 	}
 	if _, err := sender.Execute(context.Background(), domestic.Call{
@@ -123,15 +129,19 @@ func TestChatRecipientRequiresAFamilyBinding(t *testing.T) {
 	h := newHarness(t)
 	h.bindAccount(t, "admin", "mika", "telegram", "555")
 
-	if _, _, err := h.s.ChatRecipientFor("telegram", "root-admin"); err == nil {
-		t.Fatalf("a rule resolved the operator's admin-surface account as a notification target")
+	// A rule notifies the household, never an Owner Agent's private
+	// bot. mika is admitted to alfred, an Owner Agent, so resolving
+	// them as a notification target must fail — and it is now the
+	// AGENT's class that says so rather than a surface on the binding.
+	if _, _, _, err := h.s.ChatRecipientFor("telegram", "mika"); err == nil {
+		t.Fatalf("a rule resolved an owner agent's account as a notification target")
 	}
-	if _, _, err := h.s.ChatRecipientFor("telegram", "sam"); err == nil {
+	if _, _, _, err := h.s.ChatRecipientFor("telegram", "sam"); err == nil {
 		t.Fatalf("a rule resolved an unbound member")
 	}
 
 	binding := h.bindAccount(t, "family", "sam", "telegram", "12345")
-	target, id, err := h.s.ChatRecipientFor("telegram", "sam")
+	target, id, _, err := h.s.ChatRecipientFor("telegram", "sam")
 	if err != nil || target != "12345" || id != binding.ID {
 		t.Fatalf("recipient = %q/%d, err = %v", target, id, err)
 	}
@@ -140,7 +150,7 @@ func TestChatRecipientRequiresAFamilyBinding(t *testing.T) {
 	if err := h.s.DB.RevokeChatBinding(binding.ID); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
-	if _, _, err := h.s.ChatRecipientFor("telegram", "sam"); err == nil {
+	if _, _, _, err := h.s.ChatRecipientFor("telegram", "sam"); err == nil {
 		t.Fatalf("a revoked binding is still a notification target")
 	}
 }
@@ -152,7 +162,7 @@ func TestChatStatementDoesNotOpenAQuestion(t *testing.T) {
 	h.wireHouseholdButler([]*provider.ChatResponse{{Text: "hello back"}}, runtimedb.ButlerModeFull)
 	h.bindAccount(t, "family", "sam", "telegram", "12345")
 
-	if _, err := h.s.AskOverChat(context.Background(), "telegram", "12345", 1,
+	if _, err := h.s.AskOverChat(context.Background(), h.agentAt(t, "family", "telegram"), "12345", 1,
 		"the dishwasher finished", "", "dishwasher", "sam"); err != nil {
 		t.Fatalf("AskOverChat: %v", err)
 	}
