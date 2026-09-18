@@ -685,6 +685,11 @@
     }
     if (!c.items.length) {
       text("needs-sum", "Nothing needs you right now.");
+      // The way through to everything the house tracks is offered even
+      // when nothing is asking — ESPECIALLY then. A tracker you can
+      // only reach when it is already nagging you is one you cannot
+      // check.
+      box.appendChild(trackerLink());
       return;
     }
     var mine = c.items.filter(function (i) { return i.decidable; }).length;
@@ -765,6 +770,23 @@
     });
     box.appendChild(stack);
     if (c.more) { box.appendChild(make("div", "muted", "and " + c.more + " more")); }
+    box.appendChild(trackerLink());
+  }
+
+  // THE CARD IS NOT A LINK. It keeps its rows and its buttons; this is
+  // a way through to the rest, the way "All activity" is under Today at
+  // home. A Needs-you card that degraded to "3 things need you →" would
+  // be exactly the tracker A19 refuses: one you have to remember to
+  // visit.
+  function trackerLink() {
+    var row = make("div", "spread");
+    row.style.marginTop = "var(--space-4)";
+    var a = make("a", "hbtn hbtn-ghost", "Everything the house tracks");
+    a.href = "/upkeep/";
+    a.appendChild(icon("arrow-right"));
+    row.appendChild(make("span", "fade"));
+    row.appendChild(a);
+    return row;
   }
 
   function wantsBooking(asks) {

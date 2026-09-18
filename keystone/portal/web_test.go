@@ -18,7 +18,7 @@ import (
 )
 
 // pages are the surfaces Page serves.
-var pages = []string{"home", "files", "assistant", "activity", "files-widget", "assistant-widget"}
+var pages = []string{"home", "files", "assistant", "activity", "upkeep", "files-widget", "assistant-widget"}
 
 // classAttr finds every class="..." in a page.
 var classAttr = regexp.MustCompile(`class="([^"{}]+)"`)
@@ -672,5 +672,89 @@ func TestEveryHelperThePagesCallIsDefined(t *testing.T) {
 			t.Errorf("%s calls %s(), which the page does not define and which is not a browser global — "+
 				"a renamed helper with a call site left behind throws at the click, not at the build", name, called)
 		}
+	}
+}
+
+// The tracker page holds both levels of disclosure and a search that
+// survives its own no-match.
+//
+// Both properties have their own scars on this surface. `discloseRows`
+// exists because a list with no cap grows without bound; the count it
+// offers is the REMAINDER, because a member who has just read "12
+// tracked" should not then be offered "12 more". And the filter box
+// lives outside the results because a no-match that takes the box with
+// it strands whoever typed into it.
+func TestTheTrackerPageDisclosesAndCanBeSearched(t *testing.T) {
+	body, ok := Page("upkeep")
+	if !ok {
+		t.Fatal("the tracker page is not served")
+	}
+	page := stripComments(string(body))
+
+	// Level one: how many rows a card opens with.
+	if !strings.Contains(page, "function discloseRows(") {
+		t.Fatal("no first level of disclosure: a household with forty tracked things gets a page a mile long")
+	}
+	for _, call := range []string{
+		"discloseRows(list, groups,", // the meters
+		"discloseRows(list, rows,",   // the commitments under one meter
+		"discloseRows(list, keepers,",
+	} {
+		if !strings.Contains(page, call) {
+			t.Errorf("a list is rendered without the first level: %s", call)
+		}
+	}
+	if !strings.Contains(page, `"Show " + rest.length + " more"`) {
+		t.Error(`"show more" does not count the remainder`)
+	}
+
+	// Level two: how much one row says.
+	if !strings.Contains(page, `head.setAttribute("aria-expanded"`) {
+		t.Error("a commitment row does not disclose, so its history has nowhere to go")
+	}
+	if !strings.Contains(page, "/api/v1/home/commitments/") {
+		t.Error("the page cannot read a commitment's history")
+	}
+
+	// Search, and the way back out of it.
+	if !strings.Contains(page, `el("q").addEventListener`) {
+		t.Error("the page has no search")
+	}
+	if !strings.Contains(page, "Nothing here matches.") {
+		t.Error("a search matching nothing says nothing")
+	}
+	if !strings.Contains(page, `el("qclear")`) {
+		t.Error("a no-match offers no control to clear the search")
+	}
+	// The box is in the document, not built inside the results — which
+	// is what keeps a no-match from taking it away.
+	if !strings.Contains(string(body), `<input id="q" type="search"`) {
+		t.Error("the search box is rendered with the results and would vanish with them")
+	}
+}
+
+// The card links to the page, and does not become one.
+//
+// A19's argument survives the page existing: a tracker you have to
+// remember to visit is one nobody visits. So Needs you keeps its rows
+// and its buttons, and the link is a way through to the rest — the way
+// "All activity" is under Today at home.
+func TestTheNeedsCardLinksToTheTrackerWithoutBecomingALink(t *testing.T) {
+	body, ok := Page("home")
+	if !ok {
+		t.Fatal("home is not served")
+	}
+	page := stripComments(string(body))
+
+	if !strings.Contains(page, `a.href = "/upkeep/"`) {
+		t.Error("the card offers no way through to everything the house tracks")
+	}
+	// Offered even when nothing is asking — especially then.
+	if !regexp.MustCompile(`(?s)Nothing needs you right now.{0,300}?trackerLink\(\)`).MatchString(page) {
+		t.Error("the link is absent when nothing needs you, which is when a household would go looking")
+	}
+	// And the rows still carry their own answers.
+	if !strings.Contains(page, "answerBtn(i.ref,") {
+		t.Error("the card no longer answers anything itself")
 	}
 }

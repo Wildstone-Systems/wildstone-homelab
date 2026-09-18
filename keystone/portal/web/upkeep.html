@@ -1,0 +1,417 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coming up</title>
+<link rel="stylesheet" href="/portal/assets/nocturne.css">
+<!--
+  Everything the household keeps track of, and what it owes itself
+  against each.
+
+  THE NEEDS-YOU CARD IS STILL THE FRONT DOOR. This page does not replace
+  it — A19's argument was that a tracker people have to remember to
+  visit is a tracker nobody visits, and that holds. The card keeps its
+  rows and its buttons; this is where the rest lives, which is most of
+  it: the card shows only what is ASKING for something, so a truck at
+  3,000 of 5,000 miles was visible to nobody but an Owner.
+
+  GROUPED BY METER, BECAUSE THAT IS THE MODEL. A meter is a number the
+  household keeps; a commitment is a thing measured against it. One
+  odometer feeds the oil, the tyres and the brakes — so the truck reads
+  as one thing and the number is entered once, however many things
+  depend on it.
+
+  TWO LEVELS OF DISCLOSURE, EVERYWHERE. How many rows a card shows, and
+  how much one row says. Both are needed: a household with forty
+  tracked things and a page with no second level has a page a mile long,
+  and a row that opens to its whole history is a row nobody can skim.
+
+  A PROJECTION IS A GUESS AND SAYS SO. "around Nov 2026" is never
+  rendered the way a date somebody set is.
+-->
+<style>
+  .grp { margin-bottom: var(--space-6); }
+  .grphead { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap;
+             margin-bottom: var(--space-3); }
+  .crow { border-bottom: 1px solid var(--faint); }
+  .crow:last-child { border-bottom: 0; }
+  .crowhead { display: flex; gap: var(--space-3); align-items: baseline; width: 100%;
+              padding: var(--space-3) 0; background: none; border: 0; color: inherit;
+              font: inherit; text-align: left; cursor: pointer; }
+  .crowhead:hover .cname { color: var(--color-accent); }
+  .crowhead .caret { color: var(--muted); transition: transform 120ms ease; }
+  .crowhead[aria-expanded="true"] .caret { transform: rotate(90deg); }
+  .cname { font-weight: 500; }
+  .cstand { margin-left: auto; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+  .cbody { padding: 0 0 var(--space-4) 25px; }
+  .guess { font-style: italic; }
+  .hist { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .hist td { padding: var(--space-2) var(--space-3) var(--space-2) 0; vertical-align: top;
+             border-bottom: 1px solid var(--faint); }
+  .hist tr:last-child td { border-bottom: 0; }
+  .hist .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  @media (max-width: 720px) {
+    .crowhead { flex-wrap: wrap; }
+    .cstand { margin-left: 0; width: 100%; padding-left: 25px; }
+    .cbody { padding-left: var(--space-2); }
+  }
+</style>
+
+<main class="page">
+  <div class="spread" style="margin-bottom: var(--space-6)">
+    <a class="hbtn hbtn-ghost" href="/home/"><i class="ph ph-arrow-left" aria-hidden="true"></i> Home</a>
+    <span class="fade" aria-hidden="true"></span>
+    <span class="muted" id="member"></span>
+  </div>
+
+  <div class="row-between" style="margin-bottom: var(--space-6)">
+    <div>
+      <h1>Coming up</h1>
+      <div class="muted">What the house is keeping track of</div>
+    </div>
+  </div>
+
+  <!-- One box across every section. It lives OUTSIDE the results, so a
+       search matching nothing cannot take away the only control that
+       would clear it. -->
+  <div class="search" style="margin-bottom: var(--space-6)">
+    <i class="ph ph-magnifying-glass" style="color: var(--muted)" aria-hidden="true"></i>
+    <label class="sr" for="q">Search what the house tracks</label>
+    <input id="q" type="search" placeholder="Search everything" autocomplete="off">
+    <button class="hbtn hbtn-ghost" id="qclear" type="button" hidden>Clear</button>
+  </div>
+
+  <div id="note"></div>
+  <section id="body"></section>
+
+  <footer class="muted" style="margin-top: var(--space-8); font-size: 12px">
+    You see what your household shares with you. Things about one person are theirs.
+  </footer>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  function el(id) { return document.getElementById(id); }
+  function text(id, v) { var n = el(id); if (n) { n.textContent = v; } }
+  function clear(n) { while (n && n.firstChild) { n.removeChild(n.firstChild); } }
+  function make(tag, cls, content) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (content !== undefined && content !== null) { n.textContent = String(content); }
+    return n;
+  }
+  function icon(name) {
+    var i = make("i", "ph ph-" + name);
+    i.setAttribute("aria-hidden", "true");
+    return i;
+  }
+  function toneColour(t) {
+    if (t === "failed") { return "var(--st-bad)"; }
+    if (t === "waiting") { return "var(--st-warn)"; }
+    if (t === "refused") { return "var(--muted)"; }
+    return "var(--st-ok)";
+  }
+
+  // firstFew is the first level of disclosure: how much of a list a
+  // card opens with. Small enough to skim, large enough that most
+  // households never press the control.
+  var firstFew = 5;
+
+  // discloseRows renders the first few and offers THE REMAINDER.
+  //
+  // The count is what is left, not the whole list — somebody who has
+  // just read "12 tracked" should not then be offered "12 more".
+  function discloseRows(box, rows, draw) {
+    var shown = rows.slice(0, firstFew), rest = rows.slice(firstFew);
+    shown.forEach(function (r) { box.appendChild(draw(r)); });
+    if (!rest.length) { return; }
+    var more = make("button", "hbtn hbtn-ghost", "Show " + rest.length + " more");
+    more.type = "button";
+    more.appendChild(icon("caret-down"));
+    more.addEventListener("click", function () {
+      more.remove();
+      rest.forEach(function (r) { box.appendChild(draw(r)); });
+    });
+    box.appendChild(more);
+  }
+
+  var page = null, query = "", filters = {};
+
+  function matches(row) {
+    if (!query) { return true; }
+    var hay = (row.description || "") + " " + row.name + " " + (row.detail || "");
+    return hay.toLowerCase().indexOf(query) >= 0;
+  }
+
+  // keep applies a section's own chips. Everything, and two cuts that
+  // do not overlap: things asking for something, and things in hand.
+  function keep(section, row) {
+    var f = filters[section] || "";
+    if (f === "asking") { return (row.asks || []).length > 0 && row.tone !== "ok"; }
+    if (f === "booked") { return !!row.bookedFor; }
+    if (f === "fine") { return row.tone === "ok" && !row.bookedFor; }
+    return true;
+  }
+
+  function chips(section, defs, onPick) {
+    var seg = make("div", "seg");
+    seg.setAttribute("role", "tablist");
+    seg.style.marginBottom = "var(--space-4)";
+    defs.forEach(function (d) {
+      var b = make("button", (filters[section] || "") === d.f ? "on" : "", d.label);
+      b.type = "button";
+      b.addEventListener("click", function () {
+        filters[section] = d.f;
+        render();
+      });
+      seg.appendChild(b);
+    });
+    return seg;
+  }
+
+  // ---- one commitment row, and its second level -----------------------
+
+  function commitmentRow(row) {
+    var wrap = make("div", "crow");
+    var head = make("button", "crowhead");
+    head.type = "button";
+    head.setAttribute("aria-expanded", "false");
+    var caret = icon("caret-right");
+    caret.className += " caret";
+    head.appendChild(caret);
+    // A span rather than a glyph, the way every other tone dot on this
+    // surface is drawn — the icon subset carries only what the pages
+    // name, and a filled circle is CSS.
+    var dot = make("span", "dot");
+    dot.style.background = toneColour(row.tone);
+    head.appendChild(dot);
+    head.appendChild(make("span", "cname", row.description || row.name));
+    if (row.personal) { head.appendChild(make("span", "pill pill-mute nowrap", "yours")); }
+    head.appendChild(make("span", "cstand", row.detail || row.standing));
+    wrap.appendChild(head);
+
+    var body = make("div", "cbody");
+    body.hidden = true;
+    wrap.appendChild(body);
+    var loaded = false;
+    head.addEventListener("click", function () {
+      var open = body.hidden;
+      body.hidden = !open;
+      head.setAttribute("aria-expanded", open ? "true" : "false");
+      if (open && !loaded) { loaded = true; loadHistory(row, body); }
+    });
+    return wrap;
+  }
+
+  // The second level: what this commitment is, and every cycle it has
+  // closed. Fetched when opened rather than with the page — a household
+  // with forty tracked things would otherwise pay for forty histories
+  // to render one screen.
+  function loadHistory(row, body) {
+    clear(body);
+    body.appendChild(make("div", "muted", "Reading its history…"));
+    fetch("/api/v1/home/commitments/" + encodeURIComponent(row.name))
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        clear(body);
+        if (!res.ok) {
+          body.appendChild(make("div", "muted", res.j.error || "Can't read its history."));
+          return;
+        }
+        body.appendChild(make("div", "muted", res.j.row.standing +
+          (res.j.row.bookedFor ? " — " + when(res.j.row.bookedFor) : "")));
+        if (!res.j.cycles.length) {
+          body.appendChild(make("div", "muted", "Nothing recorded yet."));
+          return;
+        }
+        var t = make("table", "hist");
+        res.j.cycles.forEach(function (c) {
+          var tr = make("tr");
+          tr.appendChild(make("td", "num", when(c.at)));
+          var what = make("td");
+          if (c.waived) {
+            what.appendChild(make("span", "", "skipped on purpose"));
+            if (c.reason) { what.appendChild(make("div", "muted", c.reason)); }
+          } else if (c.position !== undefined && c.position !== null) {
+            what.appendChild(make("span", "num",
+              c.position + (c.unit ? " " + c.unit : "") + (c.approximate ? " (estimated)" : "")));
+          } else {
+            what.appendChild(make("span", "", "done"));
+          }
+          if (c.note) { what.appendChild(make("div", "muted", c.note)); }
+          tr.appendChild(what);
+          tr.appendChild(make("td", "muted num", c.since || ""));
+          tr.appendChild(make("td", "muted", c.fromEvent ? "recorded by the house" : c.by));
+          t.appendChild(tr);
+        });
+        body.appendChild(t);
+      })
+      .catch(function () {
+        clear(body);
+        body.appendChild(make("div", "muted", "Can't read its history."));
+      });
+  }
+
+  function when(iso) {
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined,
+      { day: "numeric", month: "short", year: "numeric" });
+  }
+
+  // ---- the three sections ---------------------------------------------
+
+  function renderTracked(box) {
+    var groups = page.tracked.filter(function (g) {
+      return g.commitments.some(function (r) { return matches(r) && keep("tracked", r); }) ||
+             (!query && !g.commitments.length);
+    });
+    var card = section("Things you track", "tracked", [
+      { f: "", label: "Everything" },
+      { f: "asking", label: "Needs something" },
+      { f: "fine", label: "Fine" },
+    ]);
+    if (!groups.length) { return emptyCard(card, box); }
+    var list = make("div", "");
+    discloseRows(list, groups, drawMeterGroup);
+    card.body.appendChild(list);
+    box.appendChild(card.node);
+  }
+
+  function drawMeterGroup(g) {
+    var wrap = make("div", "grp");
+    var head = make("div", "grphead");
+    head.appendChild(make("span", "cname", g.meter.description || g.meter.name));
+    var stands = g.meter.latest
+      ? g.meter.latest.value + " " + (g.meter.unit || "") + " · read " + when(g.meter.latest.at)
+      : "never read";
+    var note = make("span", "muted", stands);
+    if (g.wanted) { note.style.color = "var(--st-warn)"; }
+    head.appendChild(note);
+    wrap.appendChild(head);
+
+    // The box belongs to the METER, once, however many things are
+    // measured against it.
+    var ask = make("div", "asks");
+    var boxInput = make("input", "hinput");
+    boxInput.type = "number";
+    boxInput.step = "any";
+    boxInput.min = "0";
+    boxInput.placeholder = g.meter.unit || "number";
+    boxInput.setAttribute("aria-label", "What does " + g.meter.name + " say");
+    boxInput.style.maxWidth = "9rem";
+    ask.appendChild(boxInput);
+    ask.appendChild(saveBtn(g.meter.name, boxInput));
+    wrap.appendChild(ask);
+
+    var rows = g.commitments.filter(function (r) { return matches(r) && keep("tracked", r); });
+    var list = make("div", "");
+    discloseRows(list, rows, commitmentRow);
+    wrap.appendChild(list);
+    return wrap;
+  }
+
+  function saveBtn(meter, input) {
+    var b = make("button", "hbtn hbtn-primary", "Save");
+    b.type = "button";
+    b.addEventListener("click", function () {
+      var v = parseFloat(input.value);
+      if (isNaN(v) || v < 0) { said(b, "a meter counts up from zero"); return; }
+      b.disabled = true;
+      fetch("/api/v1/home/meters/" + encodeURIComponent(meter) + "/readings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: v })
+      })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (!res.ok) { throw new Error(res.j.error || "that didn't go through"); }
+          load();
+        })
+        .catch(function (err) { b.disabled = false; said(b, String(err.message || err)); });
+    });
+    return b;
+  }
+
+  function said(b, why) {
+    var n = b.parentNode.querySelector(".asks-said");
+    if (!n) { n = make("span", "asks-said", ""); b.parentNode.appendChild(n); }
+    n.textContent = why;
+  }
+
+  function renderFlat(box, rows, title, key, defs) {
+    var card = section(title, key, defs);
+    var keepers = rows.filter(function (r) { return matches(r) && keep(key, r); });
+    if (!keepers.length) { return emptyCard(card, box); }
+    var list = make("div", "");
+    discloseRows(list, keepers, commitmentRow);
+    card.body.appendChild(list);
+    box.appendChild(card.node);
+  }
+
+  function section(title, key, defs) {
+    var node = make("section", "wid");
+    var head = make("div", "row-between");
+    head.appendChild(make("h2", "", title));
+    node.appendChild(head);
+    var body = make("div", "");
+    if (defs) { body.appendChild(chips(key, defs)); }
+    node.appendChild(body);
+    return { node: node, body: body };
+  }
+
+  // A section whose filter or search matches nothing still renders, with
+  // its chips and a way out. A card that vanished would take the only
+  // control that could bring it back.
+  function emptyCard(card, box) {
+    card.body.appendChild(make("div", "muted", "Nothing here matches."));
+    box.appendChild(card.node);
+  }
+
+  function render() {
+    var box = el("body");
+    clear(box);
+    if (!page) { return; }
+    if (!page.available) {
+      clear(el("note"));
+      var n = make("div", "note note-bad", page.problem || "Can't tell what the house is keeping track of.");
+      el("note").appendChild(n);
+      return;
+    }
+    renderTracked(box);
+    renderFlat(box, page.calendar, "On the calendar", "calendar", [
+      { f: "", label: "Everything" },
+      { f: "asking", label: "Needs something" },
+      { f: "booked", label: "Booked" },
+    ]);
+    if (page.done.length) {
+      renderFlat(box, page.done, "Done", "done", null);
+    }
+  }
+
+  function load() {
+    fetch("/api/v1/home/upkeep")
+      .then(function (r) { return r.json(); })
+      .then(function (j) { page = j; render(); })
+      .catch(function () {
+        page = { available: false, problem: "Can't tell what the house is keeping track of — Wildstone isn't answering.", tracked: [], calendar: [], done: [] };
+        render();
+      });
+  }
+
+  el("q").addEventListener("input", function () {
+    query = el("q").value.trim().toLowerCase();
+    el("qclear").hidden = !query;
+    render();
+  });
+  el("qclear").addEventListener("click", function () {
+    el("q").value = "";
+    query = "";
+    el("qclear").hidden = true;
+    el("q").focus();
+    render();
+  });
+
+  load();
+})();
+</script>
