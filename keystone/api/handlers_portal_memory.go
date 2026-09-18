@@ -9,6 +9,14 @@ package api
 // query the Console's export uses. A second implementation of "whose
 // memory is this" would be a second place for the answer to be wrong.
 //
+// THE LIFECYCLE IS THIS FILE'S, and that is a different question the
+// store answers differently on purpose. An export includes a person's
+// OWN forgotten records, because A3 says a copy of them is theirs to
+// have. A panel headed with what the assistant currently remembers
+// includes no such thing, or the member's own forget would appear to
+// have done nothing. So the scope comes from the store and the
+// eligibility test is applied here, where the heading is.
+//
 // FORGETTING IS GATED HERE, because the store's ForgetMemory takes a
 // sequence number and an actor and does not check ownership. It cannot:
 // the Console forgets on an operator's behalf, and an owner may forget
@@ -70,6 +78,16 @@ func (s *Server) assistantMemory(_ http.ResponseWriter, _ *http.Request, member 
 	}
 	items := make([]memoryItem, 0, len(records))
 	for _, m := range records {
+		// ExportMemoryFor is an EXPORT, and an export deliberately
+		// hands a person their own forgotten records back — they are
+		// theirs to have a copy of (ADR-W030 A3). This panel is not an
+		// export. It says "what the assistant remembers about you", and
+		// a record the member forgot an hour ago is exactly what it
+		// must not list: the surface would be telling them their own
+		// forget did nothing, and offering to do it again.
+		if !m.Eligible() {
+			continue
+		}
 		if len(items) >= maxMemoryShown {
 			break
 		}

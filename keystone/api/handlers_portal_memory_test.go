@@ -132,3 +132,78 @@ func TestMemorySourcesAreHouseholdLanguage(t *testing.T) {
 		t.Errorf("an unmapped source rendered as %q", got)
 	}
 }
+
+// What the member has already forgotten is not what the assistant
+// remembers.
+//
+// The panel reads through ExportMemoryFor, which is an EXPORT and
+// deliberately hands a person their own forgotten records back (A3).
+// That is right for an export and wrong for this heading: a member who
+// presses forget, sees the item still listed on the next refresh, and
+// is offered the button again has been told their forget did nothing.
+func TestForgottenAndCorrectedMemoryLeavesThePanel(t *testing.T) {
+	h := homeHarness(t)
+	kept := remember(t, h, "sandy", "Sandy walks the dog at six", runtimedb.ButlerAudiencePrivate)
+	forgotten := remember(t, h, "sandy", "Sandy does not eat fish", runtimedb.ButlerAudiencePrivate)
+	corrected := remember(t, h, "sandy", "Sandy drives a blue car", runtimedb.ButlerAudiencePrivate)
+
+	panel := func() map[int64]memoryItem {
+		t.Helper()
+		h.unthrottled()
+		res := h.member(http.MethodGet, "/api/v1/assistant/memory", "sandy", "assistant_users", nil, "")
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("memory: status %d", res.StatusCode)
+		}
+		var got struct {
+			Items []memoryItem `json:"items"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		seen := map[int64]memoryItem{}
+		for _, i := range got.Items {
+			seen[i.Seq] = i
+		}
+		return seen
+	}
+
+	before := panel()
+	for _, seq := range []int64{kept, forgotten, corrected} {
+		if _, ok := before[seq]; !ok {
+			t.Fatalf("record %d is missing before anything was forgotten", seq)
+		}
+	}
+
+	h.unthrottled()
+	res := h.member(http.MethodPost,
+		"/api/v1/assistant/memory/forget?seq="+strconv.FormatInt(forgotten, 10),
+		"sandy", "assistant_users", nil, "")
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("forget: status %d", res.StatusCode)
+	}
+
+	replacement, err := h.s.DB.CorrectMemory(corrected, runtimedb.MemoryRecord{
+		Kind: "fact", Content: "Sandy drives a green car", Owner: "sandy",
+		Audience: runtimedb.ButlerAudiencePrivate, PermissionLabel: "household",
+		SourceKind: "correction", SourceID: "bs-2", Confidence: "stated", Author: "sandy",
+	}, "sandy")
+	if err != nil {
+		t.Fatalf("CorrectMemory: %v", err)
+	}
+
+	after := panel()
+	if _, ok := after[forgotten]; ok {
+		t.Error("a record the member forgot is still on the page that offers to forget it")
+	}
+	if _, ok := after[corrected]; ok {
+		t.Error("a superseded record is still shown beside the correction that replaced it")
+	}
+	if _, ok := after[kept]; !ok {
+		t.Error("filtering removed a record that is still remembered")
+	}
+	if _, ok := after[replacement]; !ok {
+		t.Error("the correction that replaced a record is not shown")
+	}
+}

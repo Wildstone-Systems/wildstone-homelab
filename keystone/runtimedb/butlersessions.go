@@ -258,10 +258,34 @@ func (db *DB) ListButlerTurns(seq int64) ([]ButlerTurn, error) {
 	return out, rows.Err()
 }
 
-// ListButlerSessions returns the newest limit sessions, newest first,
-// WITHOUT transcripts. An empty surface lists both; naming one lists
-// only that surface's sessions (ADR-W026 A1).
-func (db *DB) ListButlerSessions(limit int, surface ButlerSurface, butler string) ([]ButlerSession, error) {
+// ButlerSessionFilter narrows a session listing. Every field is
+// optional, and an empty filter lists everything.
+//
+// A struct rather than three more string parameters, because the fields
+// are all strings and a caller that transposes two of them gets a
+// listing that is wrong rather than a compiler error.
+type ButlerSessionFilter struct {
+	// Surface is admin or family. Empty lists both (ADR-W026 A1).
+	Surface ButlerSurface
+	// Butler is the Butler whose sessions these are.
+	Butler string
+	// ActingFor is the person the session was held on behalf of.
+	//
+	// IT BELONGS HERE RATHER THAN IN THE CALLER'S LOOP, and the
+	// household assistant is why. Its page lists one member's own
+	// conversations, and it used to read a fixed number of the newest
+	// family sessions and filter them afterwards — which is not a
+	// filter at all in the household this was meant to protect. A
+	// member whose partner has had the last two hundred conversations
+	// reads two hundred of theirs, keeps none, and is shown an empty
+	// list beneath a heading that says it is their history. Over-reading
+	// only moves the number at which that happens.
+	ActingFor string
+}
+
+// ListButlerSessions returns the newest limit sessions matching the
+// filter, newest first, WITHOUT transcripts.
+func (db *DB) ListButlerSessions(limit int, f ButlerSessionFilter) ([]ButlerSession, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -270,13 +294,17 @@ func (db *DB) ListButlerSessions(limit int, surface ButlerSurface, butler string
 	// empty; widening to "every session on its surface" would answer a
 	// question about one Butler with another Butler's conversations.
 	clauses, args := []string{}, []any{}
-	if surface != "" {
+	if f.Surface != "" {
 		clauses = append(clauses, "surface = ?")
-		args = append(args, string(surface))
+		args = append(args, string(f.Surface))
 	}
-	if butler != "" {
+	if f.Butler != "" {
 		clauses = append(clauses, "butler = ?")
-		args = append(args, butler)
+		args = append(args, f.Butler)
+	}
+	if f.ActingFor != "" {
+		clauses = append(clauses, "acting_for = ?")
+		args = append(args, f.ActingFor)
 	}
 	where := ""
 	if len(clauses) > 0 {

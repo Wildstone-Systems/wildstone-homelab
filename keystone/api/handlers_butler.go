@@ -528,7 +528,9 @@ func (s *Server) listButlerSessions(r *http.Request, _ principal.Identity) (any,
 	// It is not defaulted from the surface: showing every household
 	// Butler's conversations under one Butler's name is the one thing
 	// this list must not do.
-	sessions, err := s.DB.ListButlerSessions(limit, surface, r.URL.Query().Get("butler"))
+	sessions, err := s.DB.ListButlerSessions(limit, runtimedb.ButlerSessionFilter{
+		Surface: surface, Butler: r.URL.Query().Get("butler"),
+	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}

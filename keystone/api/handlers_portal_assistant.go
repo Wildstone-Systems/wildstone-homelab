@@ -378,16 +378,25 @@ func (s *Server) assistantScope(_ http.ResponseWriter, _ *http.Request, member s
 	}, http.StatusOK, nil
 }
 
+// maxConversationsShown bounds the left-hand column. A household's
+// history grows without limit and a sidebar does not.
+const maxConversationsShown = 24
+
 // assistantConversations lists this member's own conversations, newest
 // first, for the full page's left-hand column.
 //
-// SCOPED IN THE HANDLER RATHER THAN THE QUERY, and it is worth being
-// plain about that. ListButlerSessions filters by surface and by
-// Butler, not by person, so the member test is the loop below. The
-// member it tests against comes from the forwarded identity the ingress
-// proved, never from the request — so the filter cannot be aimed, and a
-// household assistant never exposes one member's conversations to
-// another.
+// SCOPED IN THE QUERY, and it is worth being plain about why it moved
+// there. This used to read the newest 200 family sessions and test each
+// one against the member afterwards, over-reading on the theory that a
+// household where one person talks a lot would otherwise push everybody
+// else off their own list. It does not help: if a partner owns the
+// newest 200, all 200 are discarded and the member is shown an empty
+// list under a heading that says it is their history. A fixed over-read
+// only chooses the number of conversations at which somebody disappears.
+//
+// The member comes from the forwarded identity the ingress proved,
+// never from the request, so the filter cannot be aimed and a household
+// assistant never exposes one member's conversations to another.
 //
 // The surface filter is not redundant with it. A member may also have
 // talked to an operator-surface Butler if they hold the Console, and
@@ -396,10 +405,11 @@ func (s *Server) assistantConversations(_ http.ResponseWriter, r *http.Request, 
 	if s.DB == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("no assistant is configured on this deployment")
 	}
-	// Read more than are shown, because the member filter runs after
-	// the query: a household where one person talks a lot would
-	// otherwise push everybody else off their own list.
-	sessions, err := s.DB.ListButlerSessions(200, runtimedb.ButlerSurfaceFamily, "")
+	// Exactly what is shown, because the database is now doing the
+	// narrowing: every row it returns is one of this member's.
+	sessions, err := s.DB.ListButlerSessions(maxConversationsShown, runtimedb.ButlerSessionFilter{
+		Surface: runtimedb.ButlerSurfaceFamily, ActingFor: member,
+	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -412,14 +422,8 @@ func (s *Server) assistantConversations(_ http.ResponseWriter, r *http.Request, 
 		// does not name a chat before having it.
 		Title string `json:"title"`
 	}
-	out := make([]conversation, 0, 24)
+	out := make([]conversation, 0, len(sessions))
 	for _, sess := range sessions {
-		if sess.ActingFor != member {
-			continue
-		}
-		if len(out) >= 24 {
-			break
-		}
 		out = append(out, conversation{
 			ID:    sess.ID,
 			Agent: sess.Butler,
