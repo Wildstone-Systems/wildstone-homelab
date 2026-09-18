@@ -234,11 +234,36 @@ func (s *FileStore) Ready() bool {
 // every amount of string cleaning — cannot carry a write out of it
 // either. The filename normalisation below is still applied, because
 // "cannot escape" and "is a sane name" are different properties.
+//
+// THE CONFINEMENT STARTS AT THE CONFIGURED ROOT, not at the namespace,
+// and that is a correction rather than a flourish. This used to join
+// the root and the namespace into a path and hand THAT to os.OpenRoot,
+// which resolves its own argument the ordinary way — following any
+// symlink it is made of before the confinement exists to stop it. So a
+// symlink at `Shared`, or at a member's own directory, was followed,
+// and everything the kernel then refused to leave was the wrong
+// directory: a household member could list, download, rename and delete
+// through it, outside the root an administrator configured, with every
+// check in this package passing.
+//
+// The root is opened first and the namespace is resolved THROUGH it, so
+// the boundary is the one the operator actually set. A symlink that
+// stays inside the root is still followed — an operator who arranges
+// their own tree that way is not attacking themselves — and one that
+// leaves it is refused by the kernel, which is the whole point of
+// asking the kernel.
 func (s *FileStore) open(ns Namespace) (*os.Root, error) {
 	if !s.Ready() {
 		return nil, ErrNoRoot
 	}
-	dir := filepath.Join(s.Root, ns.Dir)
+	// Opened before anything is created, so every step below — the
+	// existence test, the mkdir, the chmod — is a step the kernel has
+	// already confined.
+	base, err := os.OpenRoot(s.Root)
+	if err != nil {
+		return nil, fmt.Errorf("portal: opening the storage root: %w", err)
+	}
+	defer base.Close()
 	// 0o755: the household's other applications — the media server, a
 	// file browser installed later — read this tree as their own user,
 	// and a destination only root can list is a destination whose whole
@@ -266,27 +291,30 @@ func (s *FileStore) open(ns Namespace) (*os.Root, error) {
 	mode := os.FileMode(0o755)
 	if strings.HasPrefix(ns.Dir, personalRoot+"/") {
 		mode = 0o700
-		parent := filepath.Join(s.Root, personalRoot)
-		if _, err := os.Stat(parent); errors.Is(err, os.ErrNotExist) {
-			if err := os.MkdirAll(parent, 0o711); err != nil {
+		// Lstat rather than Stat throughout, so that a symlink AT one of
+		// these names is seen as the symlink it is rather than as
+		// whatever it points at. What happens to it is then the
+		// kernel's to decide, below.
+		if _, err := base.Lstat(personalRoot); errors.Is(err, os.ErrNotExist) {
+			if err := base.Mkdir(personalRoot, 0o711); err != nil {
 				return nil, fmt.Errorf("portal: preparing personal space: %w", err)
 			}
-			if err := os.Chmod(parent, 0o711); err != nil {
+			if err := base.Chmod(personalRoot, 0o711); err != nil {
 				return nil, fmt.Errorf("portal: preparing personal space: %w", err)
 			}
 		}
 	}
-	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(dir, mode); err != nil {
+	if _, err := base.Lstat(ns.Dir); errors.Is(err, os.ErrNotExist) {
+		if err := base.MkdirAll(ns.Dir, mode); err != nil {
 			return nil, fmt.Errorf("portal: preparing %s: %w", ns.Title, err)
 		}
-		if err := os.Chmod(dir, mode); err != nil {
+		if err := base.Chmod(ns.Dir, mode); err != nil {
 			return nil, fmt.Errorf("portal: preparing %s: %w", ns.Title, err)
 		}
 	} else if err != nil {
 		return nil, fmt.Errorf("portal: preparing %s: %w", ns.Title, err)
 	}
-	return os.OpenRoot(dir)
+	return base.OpenRoot(ns.Dir)
 }
 
 // Stored is the result of one accepted upload.
@@ -550,12 +578,32 @@ func (s *FileStore) List(nsKey string) ([]Item, error) {
 
 // Recent is the widget's list: the newest files across every
 // namespace, which is what "did my upload work" actually asks.
+//
+// EACH NAMESPACE IS RESOLVED, not taken from the table as it stands.
+// The personal entry carries no directory of its own — it cannot, since
+// which directory it means depends on who is asking — and looping over
+// the table handed that empty directory straight to the opener, which
+// read it as "no subdirectory" and listed the storage ROOT under the
+// member's own heading. It showed nothing, because the root holds only
+// directories and those are skipped, so "Mine" contributed nothing to
+// this list and no test noticed. A member's own uploads belong in the
+// answer to "did my upload work" more than anybody's.
 func (s *FileStore) Recent(n int) ([]Item, error) {
 	if n <= 0 {
 		n = 5
 	}
 	var all []Item
-	for _, ns := range Namespaces {
+	for _, entry := range Namespaces {
+		ns, err := s.namespace(entry.Key)
+		if err != nil {
+			// A member with no usable name has no personal space. The
+			// shared destinations are still theirs to see, so this is a
+			// namespace to skip rather than a list to fail.
+			if errors.Is(err, ErrNamespace) {
+				continue
+			}
+			return nil, err
+		}
 		items, err := s.list(ns)
 		if err != nil {
 			return nil, err
@@ -588,7 +636,16 @@ func (s *FileStore) list(ns Namespace) ([]Item, error) {
 		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		info, err := e.Info()
+		// Stat'd back THROUGH the root rather than from the directory
+		// entry. A DirEntry from an fs.FS carries a lazy Info() that
+		// re-resolves the entry by the name its root was opened under,
+		// and this root is opened by a relative name inside the
+		// configured one — so that lookup resolves against the process's
+		// working directory and fails for every file. It fails quietly,
+		// into the "vanished between the listing and the stat" case
+		// below, which is how a listing that returned nothing at all
+		// looked exactly like an empty directory.
+		info, err := root.Lstat(e.Name())
 		if err != nil {
 			// A file that vanished between the listing and the stat is
 			// not an error worth failing a dashboard over.
