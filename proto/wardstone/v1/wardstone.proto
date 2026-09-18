@@ -598,6 +598,22 @@ message HostFactsResult {
   uint64 root_disk_total_bytes = 6;
   uint64 root_disk_free_bytes = 7;
   string agent_version = 8;
+  // What the machine is actually DOING, as opposed to what it has.
+  // Both are optional in the honest sense: an agent that cannot read
+  // them reports zero, and a zero here means "not measured" rather than
+  // "idle" — a surface must not draw a bar at zero from a missing
+  // reading (ADR-W026's household dashboard rules say so explicitly).
+  //
+  // mem_available_bytes is MemAvailable, not MemFree: free memory on a
+  // healthy Linux box is near zero because the page cache uses the
+  // rest, so a "memory used" bar built from MemFree reads as a machine
+  // permanently about to die.
+  uint64 mem_available_bytes = 9;
+  // cpu_busy_percent is sampled over a short interval inside the agent
+  // rather than derived from load average. Load is a queue length, not
+  // a percentage, and dividing it by the core count produces a number
+  // that looks like a utilisation and is not one.
+  uint32 cpu_busy_percent = 10;
 }
 
 message Health {}

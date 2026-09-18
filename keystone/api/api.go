@@ -173,6 +173,10 @@ type Server struct {
 	BackupRestore func(ctx context.Context, plan string) error
 
 	limiter *limiter
+	// hostFacts caches the machines card's live readings, so a house
+	// full of tablets does not cost one agent round trip each
+	// (handlers_portal_machines.go).
+	hostFacts machineStatsCache
 }
 
 // ButlerConversations is the named-Butler seam (ADR-W031). It is an

@@ -823,7 +823,21 @@
     // Single-node install: the heading reads "This machine" rather than
     // naming a node, and this card carries no hostnames or addresses.
     machine.appendChild(make("div", "eyebrow", m.nodes > 1 ? "The machines" : "This machine"));
-    if (m.metrics && m.metrics.available === false) {
+    var st = m.stats || {};
+    if (st.cpuKnown || st.memoryKnown || st.diskKnown) {
+      var meters = make("div", "spread");
+      meters.style.gap = "var(--space-6)";
+      meters.style.alignItems = "stretch";
+      // Only the readings that exist get a bar. A figure the agent
+      // could not measure is absent, never drawn at zero — §7: a bar at
+      // zero reads as an idle machine rather than a missing reading.
+      [["CPU", st.cpu, st.cpuKnown],
+       ["Memory", st.memory, st.memoryKnown],
+       ["Disk /", st.disk, st.diskKnown]].forEach(function (row) {
+        if (row[2]) { meters.appendChild(meter(row[0], row[1])); }
+      });
+      machine.appendChild(meters);
+    } else if (m.metrics && m.metrics.available === false) {
       // The design's three bars are not drawn, because nothing here can
       // source them — and never a bar at zero, which reads as an idle
       // machine rather than a missing reading.
@@ -843,6 +857,28 @@
   }
 
   // =============================================================== files
+  // One labelled bar. Amber above 80 and red above 90, which is the
+  // design's threshold and the point at which a household should be
+  // told rather than reassured.
+  function meter(label, pct) {
+    var wrap = make("div", "grow");
+    var top = make("div", "spread");
+    top.style.justifyContent = "space-between";
+    top.style.fontSize = "12px";
+    top.appendChild(make("span", "muted", label));
+    top.appendChild(make("span", "tnum", pct + "%"));
+    wrap.appendChild(top);
+    var bar = make("div", "bar");
+    bar.style.marginTop = "5px";
+    var fill = make("span");
+    fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+    fill.style.background = pct >= 90 ? "var(--st-bad)"
+                          : pct >= 80 ? "var(--st-warn)" : "var(--st-ok)";
+    bar.appendChild(fill);
+    wrap.appendChild(bar);
+    return wrap;
+  }
+
   var filesCaps = null;
   skeletons(el("files-recent"), 3);
 

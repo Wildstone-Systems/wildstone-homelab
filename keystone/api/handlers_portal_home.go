@@ -27,6 +27,7 @@ package api
 // somebody's operator vocabulary arriving in a summary string.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -204,6 +205,10 @@ type machinesCard struct {
 	LastBackup time.Time `json:"lastBackup,omitzero"`
 	LastDrill  time.Time `json:"lastDrill,omitzero"`
 	DrillOK    bool      `json:"drillOk"`
+	// Stats are the live readings, each with its own known flag. The
+	// three fail independently, so one unreadable figure does not throw
+	// away the other two.
+	Stats machineStats `json:"stats"`
 	// Metrics is deliberately a statement of absence rather than a set
 	// of zeroes. Keystone holds no CPU, memory or disk reading — those
 	// came from a widget running inside the Homepage container, reading
@@ -295,7 +300,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 	resp.Notifications = s.homeNotifications(member)
 	resp.Calendar = s.homeCalendar(desired)
 	resp.Apps, resp.AppStatus, resp.StatusKnown = s.homeApps(desired)
-	resp.Machines = s.homeMachines(now)
+	resp.Machines = s.homeMachines(r.Context(), now)
 	return resp, http.StatusOK, nil
 }
 
@@ -689,11 +694,8 @@ func (s *Server) homeApps(desired []resource.Resource) ([]reconcile.App, map[str
 
 // homeMachines is the reassurance card: recovery, and the honest absence
 // of host metrics.
-func (s *Server) homeMachines(now time.Time) machinesCard {
-	card := machinesCard{
-		// Stated once, here: this process has no host readings to give.
-		Metrics: homeCard{Problem: "Can't read machine stats"},
-	}
+func (s *Server) homeMachines(ctx context.Context, now time.Time) machinesCard {
+	card := machinesCard{}
 	runs, err := s.DB.ListBackupRuns(100)
 	if err != nil {
 		s.Log.Error("home machines backups", "err", err)
@@ -721,8 +723,26 @@ func (s *Server) homeMachines(now time.Time) machinesCard {
 			}
 		}
 	}
-	if nodes, err := s.DB.ListNodes(); err == nil {
+	nodes, err := s.DB.ListNodes()
+	if err == nil {
 		card.Nodes = len(nodes)
+	}
+	// The live readings, from the machine this control plane runs the
+	// household on. One node is the shape this card was drawn for; with
+	// several, the first is read and the heading says "The machines" —
+	// a per-machine breakdown is a page, not a card, and §7 puts no
+	// hostnames on this one anyway.
+	if len(nodes) > 0 {
+		if stats, ok := s.machineReadings(ctx, nodes[0].NodeID); ok {
+			card.Stats = stats
+		}
+	}
+	if !card.Stats.CPUKnown && !card.Stats.MemKnown && !card.Stats.DiskKnown {
+		// Nothing readable at all: the card says so in place of the
+		// bars rather than drawing three empty ones.
+		card.Metrics = homeCard{Problem: "Can't read machine stats"}
+	} else {
+		card.Metrics = homeCard{Available: true}
 	}
 	return card
 }
