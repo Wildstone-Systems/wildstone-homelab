@@ -300,6 +300,9 @@ export interface PackageView {
 export interface EnablePreview {
   plan: Plan;
   providedSecrets: string[];
+  // What each provided secret is FOR, in the package's own words, so the
+  // form can ask for the value with the explanation beside it.
+  secretPurposes?: Record<string, string>;
   // What installing this does to how EVERYONE signs in. Present only
   // when it raises the requirement for services already installed.
   authPolicyWarning?: string;

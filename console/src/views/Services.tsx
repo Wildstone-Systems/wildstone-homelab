@@ -919,8 +919,47 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
   const [preview, setPreview] = useState<EnablePreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The secrets only the operator can supply, asked for HERE rather than
+  // left to a note saying "set each one in Secrets". The note was
+  // accurate and did not work: calendar-radicale was approved without
+  // its directory password, and every one of its resources sat waiting
+  // with the reason in a status column nobody had open.
+  const [secretValues, setSecretValues] = useState<Record<string, string>>({});
+  // Names already in the node's store, so a reconfigure does not demand
+  // a password the operator set months ago. null until known.
+  const [existingSecrets, setExistingSecrets] = useState<Set<string> | null>(null);
+  const [secretsLater, setSecretsLater] = useState(false);
 
   const missing = params.filter((p) => p.required && !values[p.name]?.trim());
+  const node = values["node"]?.trim() ?? "";
+  const provided = preview?.providedSecrets ?? [];
+  const unsupplied = provided.filter((s) => !existingSecrets?.has(s) && !secretValues[s]);
+
+  const showPreview = (v: EnablePreview) => {
+    setPreview(v);
+    setExistingSecrets(null);
+    if (v.providedSecrets.length === 0 || !node) return;
+    // A failed lookup is treated as "none set": asking for a value that
+    // already exists costs a retype, assuming one exists costs a stalled
+    // install.
+    api
+      .nodeSecrets(node)
+      .then((r) => setExistingSecrets(new Set(r.secrets.map((x) => x.name))))
+      .catch(() => setExistingSecrets(new Set()));
+  };
+
+  // Secrets first, then the plan. A secret set for a plan that is then
+  // rejected is harmless — nothing reads it — while a plan approved
+  // before its secret is the stall this form exists to prevent.
+  const propose = async () => {
+    if (node) {
+      for (const s of provided) {
+        const v = secretValues[s];
+        if (v) await api.setSecret(node, s, v);
+      }
+    }
+    return api.enableCapability(pkg.name, values);
+  };
 
   const run = (p: Promise<unknown>, after: (v: never) => void) => {
     setBusy(true);
@@ -997,7 +1036,7 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
         <button
           className="btn btn-primary"
           disabled={busy || missing.length > 0}
-          onClick={() => run(api.previewCapability(pkg.name, values), setPreview)}
+          onClick={() => run(api.previewCapability(pkg.name, values), showPreview)}
         >
           {missing.length > 0 ? `fill in ${missing.map((m) => m.name).join(", ")}` : "Preview"}
         </button>
@@ -1018,12 +1057,14 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
               <div>{preview.authPolicyWarning}</div>
             </div>
           )}
-          {preview.providedSecrets.length > 0 && (
+          {provided.length > 0 && !node && (
+            // No node param to store them against: the old instruction is
+            // the only honest one left.
             <div className="callout callout-warn">
               <strong>You must supply these secrets before this can converge.</strong> They
               are not generated, because only you can produce a correct value:
               <ul>
-                {preview.providedSecrets.map((s) => (
+                {provided.map((s) => (
                   <li key={s}>
                     <code>secret/{s}</code>
                   </li>
@@ -1032,12 +1073,45 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
               Set each one in Secrets, for the node this installs on.
             </div>
           )}
+          {provided.length > 0 && node && (
+            <div className="callout callout-warn">
+              <strong>This needs {provided.length === 1 ? "a secret" : "secrets"} only you can supply.</strong>{" "}
+              They are not generated, because a made-up value would not work. Each is stored on{" "}
+              <code>{node}</code> before the plan is proposed.
+              {provided.map((s) => {
+                const have = existingSecrets?.has(s) ?? false;
+                return (
+                  <div className="field" key={s}>
+                    <label>
+                      <code>{s}</code>
+                      {preview.secretPurposes?.[s] && <div className="muted">{preview.secretPurposes[s]}</div>}
+                    </label>
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      value={secretValues[s] ?? ""}
+                      placeholder={have ? "already set — leave blank to keep it" : ""}
+                      onChange={(e) => setSecretValues({ ...secretValues, [s]: e.target.value })}
+                    />
+                  </div>
+                );
+              })}
+              <label className="muted">
+                <input
+                  type="checkbox"
+                  checked={secretsLater}
+                  onChange={(e) => setSecretsLater(e.target.checked)}
+                />{" "}
+                I will set these later in Secrets — the service waits until I do
+              </label>
+            </div>
+          )}
           <button
             className="btn btn-primary"
-            disabled={busy}
-            onClick={() => run(api.enableCapability(pkg.name, values), onDone)}
+            disabled={busy || (node !== "" && provided.length > 0 && existingSecrets === null) || (unsupplied.length > 0 && node !== "" && !secretsLater)}
+            onClick={() => run(propose(), onDone)}
           >
-            Propose plan
+            {unsupplied.length > 0 && node !== "" && !secretsLater ? `enter ${unsupplied.join(", ")}` : "Propose plan"}
           </button>
         </>
       )}

@@ -165,3 +165,35 @@ func TestEveryShippedExportIsCarriedByItsTrait(t *testing.T) {
 		}
 	}
 }
+
+// TestNoTwoCapabilitiesDeclareOneResource catches the collision the
+// engine cannot see at install time. A resource is identified by kind
+// and name alone, so when a package from ANOTHER capability declares
+// the same pair, installing it silently re-owns the existing resource:
+// calendar-radicale's Route/calendar replaced mail-roundcube's, moving
+// Davis's address to Radicale with nothing in the plan saying so.
+//
+// Sharing within one capability is allowed and deliberate — sibling
+// profiles such as the two book packages share Secret/restic-books, one
+// household repository whichever app is reading it.
+func TestNoTwoCapabilitiesDeclareOneResource(t *testing.T) {
+	type claim struct{ pkg, capability string }
+	claims := map[pkgspec.ResourceKey][]claim{}
+	for _, dir := range packageDirs(t) {
+		pkg, err := pkgspec.Load(filepath.Join(dir, "package.yaml"))
+		if err != nil {
+			t.Fatalf("%s: %v", filepath.Base(dir), err)
+		}
+		for _, k := range pkgspec.ResourceKeys(pkg) {
+			claims[k] = append(claims[k], claim{pkg.Metadata.Name, pkg.Metadata.Capability})
+		}
+	}
+	for k, cs := range claims {
+		for _, c := range cs[1:] {
+			if c.capability != cs[0].capability {
+				t.Errorf("%s/%s is declared by %s (capability %s) and %s (capability %s); installing one re-owns the other's",
+					k.Kind, k.Name, cs[0].pkg, cs[0].capability, c.pkg, c.capability)
+			}
+		}
+	}
+}

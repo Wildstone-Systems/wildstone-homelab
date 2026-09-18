@@ -194,7 +194,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: calendar-radicale
-  version: 2.0.0
+  version: 2.0.1
   capability: calendar
   profile: radicale
 requires:
@@ -490,10 +490,15 @@ templates:
         - { source: /etc/wildstone/calendar, target: /etc/wildstone/calendar, readOnly: true }
       restart: unless-stopped
   # ---- The door.
+  #
+  # Named "radicale", NOT "calendar", for the same reason the host label
+  # above is "cal": mail-roundcube's Davis already has Route/calendar. A
+  # resource is its kind and name, so 2.0.0's Route/calendar did not add
+  # a second door — it re-pointed Davis's at Radicale and re-owned it.
   - |
     apiVersion: wildstone.dev/v1
     kind: Route
-    metadata: { name: calendar, node: "{{ .Params.node }}" }
+    metadata: { name: radicale, node: "{{ .Params.node }}" }
     spec:
       host: "{{ .Params.calendar_subdomain }}.{{ .Params.public_domain }}"
       upstream: "container/radicale:5232"
