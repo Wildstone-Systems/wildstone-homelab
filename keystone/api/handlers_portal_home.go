@@ -189,6 +189,16 @@ type notification struct {
 	Unread bool      `json:"unread"`
 }
 
+// calendarCard is the calendar's state plus where to go instead.
+//
+// OpenAt is the hand-off: a member who cannot see their calendar here
+// should be one tap from the place they can, rather than told no and
+// left to find it.
+type calendarCard struct {
+	homeCard
+	OpenAt string `json:"openAt,omitempty"`
+}
+
 type notificationsCard struct {
 	homeCard
 	Items  []notification `json:"items"`
@@ -248,7 +258,7 @@ type homeSummaryResponse struct {
 	NeedsYou      needsYouCard      `json:"needsYou"`
 	Activity      activityCard      `json:"activity"`
 	Notifications notificationsCard `json:"notifications"`
-	Calendar      homeCard          `json:"calendar"`
+	Calendar      calendarCard      `json:"calendar"`
 	Apps          []reconcile.App   `json:"apps"`
 	Groups        []string          `json:"groups"`
 	// AppStatus maps a Route's resource name to "ok", "bad" or
@@ -578,11 +588,32 @@ func (s *Server) homeNotifications(member string) notificationsCard {
 // Deliberately NOT a stub with sample events. A calendar card that shows
 // invented events on a family's wall tablet is worse than one that says
 // it cannot read the calendar: somebody will believe it.
-func (s *Server) homeCalendar(desired []resource.Resource) homeCard {
-	if calendarServer(desired) {
-		return homeCard{Problem: "Can't reach the calendars right now"}
+func (s *Server) homeCalendar(desired []resource.Resource) calendarCard {
+	route, found := calendarServer(desired)
+	if !found {
+		return calendarCard{homeCard: homeCard{Problem: "No calendar is set up yet."}}
 	}
-	return homeCard{Problem: "No calendar is set up yet."}
+	// INSTALLED, AND STILL NOT READABLE FROM HERE, which is a different
+	// sentence from "can't reach it right now" and the honest one.
+	//
+	// The household's CalDAV server authenticates with each member's own
+	// MAIL password (the mail capability configures davis with
+	// AUTH_METHOD: IMAP). Keystone does not hold that password and must
+	// not: the whole premise of this surface is that the dashboard holds
+	// no credentials. So there is no service account to read a member's
+	// calendar with, and no header the portal can present that davis
+	// would accept.
+	//
+	// The card therefore says what is true and what to do about it,
+	// rather than implying a transient failure that will clear on its
+	// own. Making this widget real needs a decision recorded elsewhere —
+	// see docs/design/household-calendar.md — not a retry.
+	return calendarCard{
+		homeCard: homeCard{
+			Problem: "Your calendars need your mail password, which this dashboard doesn't hold.",
+		},
+		OpenAt: route,
+	}
 }
 
 // calendarServer reports whether this household runs a CalDAV server.
@@ -599,17 +630,23 @@ func (s *Server) homeCalendar(desired []resource.Resource) homeCard {
 // else, this list is the one place that has to learn its name — and
 // until it does, the card says "no calendar is set up yet", which is
 // wrong in the safe direction: it promises nothing it cannot show.
-func calendarServer(desired []resource.Resource) bool {
+func calendarServer(desired []resource.Resource) (string, bool) {
+	posture := ingressorigin.Of(desired)
 	for _, r := range desired {
-		if r.Kind != resource.KindRoute || r.Route == nil {
+		if r.Kind != resource.KindRoute || r.Route == nil || r.Route.Host == "" {
 			continue
 		}
 		switch upstreamContainer(r.Route.Upstream) {
 		case "davis", "radicale", "baikal":
-			return true
+			// The address a BROWSER must use, which under the tailnet
+			// posture is the node's certified name and this Route's
+			// port rather than the host the Route declares. Computed
+			// through the same helper the launcher's links use, so a
+			// hand-off that cannot be clicked is not possible.
+			return "https://" + posture.SiteAddress(r.Route.Host), true
 		}
 	}
-	return false
+	return "", false
 }
 
 // upstreamContainer is the container half of "container/<name>:<port>",

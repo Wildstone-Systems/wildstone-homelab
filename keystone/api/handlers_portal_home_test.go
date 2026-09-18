@@ -354,8 +354,15 @@ func TestTheCalendarIsFoundByTheServerThatSpeaksCaldav(t *testing.T) {
 	if got.Calendar.Available {
 		t.Error("the card claims to have read a calendar it cannot read yet")
 	}
-	if got.Calendar.Problem != "Can't reach the calendars right now" {
-		t.Errorf("problem = %q, want the unreachable copy — the household HAS a calendar server", got.Calendar.Problem)
+	// Found, so the copy changes from "none installed" to the reason
+	// this one cannot be read from here. Which sentence that is, and
+	// why it is not the transient one, is pinned by
+	// TestTheCalendarCardIsHonestAndHandsOff.
+	if strings.Contains(got.Calendar.Problem, "No calendar") {
+		t.Errorf("problem = %q — the household HAS a calendar server", got.Calendar.Problem)
+	}
+	if got.Calendar.OpenAt == "" {
+		t.Error("a calendar server was found but no hand-off was offered")
 	}
 }
 
@@ -635,5 +642,58 @@ func TestTheBannerDefaultsUntilAHouseholdChoosesOne(t *testing.T) {
 	}
 	if got = h.summary(t, "sandy"); got.Banner.Custom {
 		t.Error("the banner is still the household's own after clearing")
+	}
+}
+
+// The calendar card tells the truth about a permanent fact, and hands
+// the member somewhere to go.
+//
+// "Can't reach the calendars right now" is §7's copy for a TRANSIENT
+// failure, and using it here would promise that a permanent
+// architectural fact will clear on its own — the household's CalDAV
+// server authenticates with each member's mail password, which this
+// surface does not hold and will not (docs/design/household-calendar.md).
+func TestTheCalendarCardIsHonestAndHandsOff(t *testing.T) {
+	h := homeHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: "wildstone.dev/v1", Kind: resource.KindRoute,
+		Metadata: resource.Metadata{Name: "calendar", Owner: "capability/mail", Package: "mail-roundcube", Node: "n1"},
+		Route: &resource.RouteSpec{
+			Host: "calendar.example.com", Upstream: "container/davis:9000",
+			Auth: "none", Classification: "family_private",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := h.summary(t, "sandy").Calendar
+	if got.Available {
+		t.Error("the card claims to have read a calendar")
+	}
+	if strings.Contains(got.Problem, "right now") {
+		t.Errorf("problem = %q — that copy promises a transient failure", got.Problem)
+	}
+	if !strings.Contains(got.Problem, "password") {
+		t.Errorf("problem = %q, want it to name the actual obstacle", got.Problem)
+	}
+	// And somewhere to go: a member told no should be one tap from the
+	// place they can sign in, not left to find it.
+	if got.OpenAt == "" {
+		t.Error("no hand-off to the calendar app")
+	}
+	if !strings.HasPrefix(got.OpenAt, "https://") {
+		t.Errorf("openAt = %q, want a browser-usable address", got.OpenAt)
+	}
+}
+
+// With no calendar server at all there is nothing to hand off to, and
+// the card must not offer a link to nowhere.
+func TestNoCalendarServerOffersNoHandOff(t *testing.T) {
+	h := homeHarness(t)
+	got := h.summary(t, "sandy").Calendar
+	if got.OpenAt != "" {
+		t.Errorf("openAt = %q with no calendar installed", got.OpenAt)
+	}
+	if !strings.Contains(got.Problem, "No calendar") {
+		t.Errorf("problem = %q", got.Problem)
 	}
 }

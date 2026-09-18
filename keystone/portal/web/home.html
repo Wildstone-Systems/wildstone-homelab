@@ -248,7 +248,7 @@
 
   <!-- Calendar and Today at home. -->
   <div class="widgets" style="margin-bottom: var(--space-4)">
-    <a class="mlink" href="/activity/" id="m-calendar">
+    <a class="mlink" href="#" id="m-calendar">
       <span class="ic"><i class="ph ph-calendar-blank" aria-hidden="true"></i></span>
       <span class="grow"><span style="display:block">Calendar</span>
         <span class="muted" id="m-calendar-sub"></span></span>
@@ -590,9 +590,21 @@
       text("m-calendar-sub", "Nothing in the next three days");
       body.appendChild(make("div", "muted", "Nothing in the next three days."));
     } else {
-      text("cal-sum", c.problem || "nothing upcoming");
+      text("cal-sum", "needs your sign-in");
       text("m-calendar-sub", c.problem || "nothing upcoming");
-      note(body, "warn", c.problem || "Can't reach the calendars right now");
+      if (c.openAt) { el("m-calendar").href = c.openAt; }
+      var n = note(body, "warn", c.problem || "Can't reach the calendars right now");
+      // A member who cannot see their calendar here should be one tap
+      // from the place they can, rather than told no and left to find
+      // it themselves.
+      if (c.openAt) {
+        var go_ = make("a", "hbtn hbtn-ghost", "Open Calendars");
+        go_.href = c.openAt;
+        go_.target = "_blank";
+        go_.rel = "noopener";
+        go_.appendChild(icon("arrow-square-out"));
+        n.appendChild(go_);
+      }
     }
   }
 
