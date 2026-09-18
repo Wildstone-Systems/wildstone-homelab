@@ -16,7 +16,8 @@ export type Kind =
   "SeedFile" |
   "Job" |
   "Secret" |
-  "Automation";
+  "Automation" |
+  "Meter";
 
 export const API_VERSION = "wildstone.dev/v1";
 
@@ -181,6 +182,13 @@ export interface AutomationSpec {
   action: AutomationAction;
 }
 
+export interface MeterSpec {
+  description: string;
+  unit: string;
+  staleAfter?: string;
+  estimate?: string;
+}
+
 export type Spec =
   ContainerSpec |
   VolumeSpec |
@@ -195,7 +203,8 @@ export type Spec =
   SeedFileSpec |
   JobSpec |
   SecretSpec |
-  AutomationSpec;
+  AutomationSpec |
+  MeterSpec;
 
 export interface Resource {
   apiVersion: string;
@@ -219,4 +228,5 @@ export interface SpecByKind {
   Job: JobSpec;
   Secret: SecretSpec;
   Automation: AutomationSpec;
+  Meter: MeterSpec;
 }

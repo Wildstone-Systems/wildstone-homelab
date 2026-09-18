@@ -43,6 +43,7 @@ var kindSpecs = []struct {
 	{resource.KindJob, reflect.TypeOf(resource.JobSpec{})},
 	{resource.KindSecret, reflect.TypeOf(resource.SecretSpec{})},
 	{resource.KindAutomation, reflect.TypeOf(resource.AutomationSpec{})},
+	{resource.KindMeter, reflect.TypeOf(resource.MeterSpec{})},
 }
 
 func main() {

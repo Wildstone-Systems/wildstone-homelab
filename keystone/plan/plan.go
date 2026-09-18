@@ -220,6 +220,11 @@ var kindOrder = map[resource.Kind]int{
 	// on a rule. Keystone-owned, so the position only orders the plan's
 	// listing; there is no apply to sequence (ADR-W024 A1).
 	resource.KindAutomation: 8,
+	// Meter beside Automation and before it in the listing: a commitment
+	// reads a meter, and a household reading a plan wants the number
+	// declared before the thing that comes due against it. Keystone-owned,
+	// so this orders the listing and nothing else (ADR-W034 A1).
+	resource.KindMeter: 8,
 	// BackupPlan last: a backup declaration depends on the volumes it
 	// names, and nothing depends on it (ADR-W011 A4).
 	resource.KindBackupPlan: 9,
@@ -381,6 +386,8 @@ func specEqual(a, b resource.Resource) bool {
 		return containerEqual(&a.Job.Run, &b.Job.Run)
 	case resource.KindAutomation:
 		return a.Automation != nil && b.Automation != nil && reflect.DeepEqual(a.Automation, b.Automation)
+	case resource.KindMeter:
+		return a.Meter != nil && b.Meter != nil && *a.Meter == *b.Meter
 	default:
 		return false
 	}
@@ -668,6 +675,18 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 			return RiskLow, "rule removed: it stops firing; nothing else changes"
 		}
 		return RiskMedium, "a household rule that will act on its own once approved: review its trigger, conditions, and action"
+	case resource.KindMeter:
+		// Deleting a meter is the consequential direction, which is the
+		// opposite way round from most kinds and worth the words. The
+		// commitments that read it keep their thresholds and lose the
+		// number those thresholds are measured against, so each of them
+		// stops being able to say whether it is due — silently, unless
+		// somebody is told. Creating or changing one only alters how a
+		// number is read.
+		if action == ActionDelete {
+			return RiskMedium, "meter removed: every commitment measured against it can no longer say whether it is due"
+		}
+		return RiskLow, "a declaration of a number the household keeps; it acts on nothing by itself (ADR-W034 A1)"
 	default:
 		return RiskMedium, "unrecognized kind"
 	}

@@ -53,7 +53,7 @@ func TestNodeScopeIsEnforcedBothWays(t *testing.T) {
 // closed registry does. Adding a kind without deciding this fails here
 // rather than at runtime on the operator's node.
 func TestNodeScopedMatchesDispatch(t *testing.T) {
-	notAtANode := map[Kind]bool{KindDnsRecord: true, KindAutomation: true}
+	notAtANode := map[Kind]bool{KindDnsRecord: true, KindAutomation: true, KindMeter: true}
 	for _, k := range Kinds() {
 		if NodeScoped(k) == notAtANode[k] {
 			t.Errorf("%s: NodeScoped=%v but dispatched-off-node=%v — they must be opposites",
@@ -121,6 +121,11 @@ func validResourceOfKind(t *testing.T, k Kind) Resource {
 		r.Automation = &AutomationSpec{Description: "r1",
 			Trigger: AutomationTrigger{EventType: "person.left_home"},
 			Action:  AutomationAction{Tool: "notifications.notify", Tier: "domestic"}}
+	case KindMeter:
+		// A meter belongs to the household or a capability, for the same
+		// reason a rule does (ADR-W034 A1).
+		r.Metadata.Owner = "household"
+		r.Meter = &MeterSpec{Description: "odometer", Unit: "miles"}
 	default:
 		t.Fatalf("kind %s has no fixture here — a kind was added without deciding its node scope", k)
 	}

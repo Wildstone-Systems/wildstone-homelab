@@ -41,6 +41,11 @@ const (
 	// KindAutomation is a household rule (ADR-W024 A1): Keystone-owned,
 	// applied at no node, run by the automation engine.
 	KindAutomation Kind = "Automation"
+	// KindMeter is a number the household keeps that only counts up
+	// (ADR-W034 A1): Keystone-owned like Automation, applied at no node.
+	// Its readings are not part of the resource — they are evidence, not
+	// desired state.
+	KindMeter Kind = "Meter"
 )
 
 // ApiVersion is the only supported apiVersion for S2 resources.
@@ -774,6 +779,7 @@ type Resource struct {
 	Job        *JobSpec        `yaml:"-"`
 	Secret     *SecretSpec     `yaml:"-"`
 	Automation *AutomationSpec `yaml:"-"`
+	Meter      *MeterSpec      `yaml:"-"`
 }
 
 // ValidationError is a typed validation failure, identifying the resource
@@ -898,6 +904,12 @@ var registry = map[Kind]kindEntry{
 		newSpec:  func() any { return &AutomationSpec{} },
 		validate: validateAutomation,
 	},
+	KindMeter: {
+		// Keystone-owned for the same reason (ADR-W034 A1): the due-ness
+		// pass reads it from the Statefile. Nothing is applied anywhere.
+		newSpec:  func() any { return &MeterSpec{} },
+		validate: validateMeter,
+	},
 }
 
 // KnownKind reports whether k is in the closed registry.
@@ -983,6 +995,7 @@ func (r *Resource) validateSpecExclusivity() error {
 		KindConfigFile: r.ConfigFile != nil,
 		KindSeedFile:   r.SeedFile != nil,
 		KindAutomation: r.Automation != nil,
+		KindMeter:      r.Meter != nil,
 	}
 	for k, isSet := range populated {
 		if k == r.Kind {
