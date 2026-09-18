@@ -85,9 +85,8 @@ var scopes = map[string]bool{"household": true}
 // that is right per row and one that is right on average is exactly the
 // kind of thing a migration gate must not get wrong.
 var scopeMode = map[string]struct{ by, when string }{
-	"butler_memory.owner":           {"audience", "shared"},
-	"butler_index.owner":            {"audience", "shared"},
-	"integration_connections.owner": {"ownership", "household"},
+	"butler_memory.owner": {"audience", "shared"},
+	"butler_index.owner":  {"audience", "shared"},
 }
 
 // InHumanColumn reports whether this handle appears anywhere slice 2b

@@ -578,3 +578,53 @@ func TestTheScopeIsLicensedByTheRowsOwnershipMode(t *testing.T) {
 		t.Error("a private record owned by the household scope does not block")
 	}
 }
+
+// A personal connection owned by a machine principal does not block.
+//
+// api.createConnection defaults an omitted owner to actingMember(id),
+// so a bare admin creating a personal connection stores root-admin.
+// That is a supported path, and this was settled once already — then
+// reintroduced when the column was moved to Scoped for the sake of its
+// `household` sentinel, which put the principal back in a person-
+// bearing column. The sentinel is not worth a regression on the case
+// the column actually sees.
+func TestAPersonalConnectionOwnedByAPrincipalDoesNotBlock(t *testing.T) {
+	rep, _ := surveyed(t, func(db *runtimedb.DB) {
+		if err := db.CreatePrincipal("root-admin", runtimedb.RoleAdmin, ""); err != nil {
+			t.Fatalf("CreatePrincipal: %v", err)
+		}
+		people(t, db, "mika")
+		if _, err := db.CreateConnection(runtimedb.IntegrationConnection{
+			Name: "mail", Adapter: "imap", Endpoint: "imap://mail.example.com",
+			Ownership: runtimedb.OwnershipPersonal, Owner: "root-admin", CreatedBy: "root-admin",
+		}); err != nil {
+			t.Fatalf("CreateConnection: %v", err)
+		}
+	})
+
+	for _, h := range rep.Blocking() {
+		for _, u := range h.Uses {
+			if u.Table == "integration_connections" && u.Column == "owner" {
+				t.Fatalf("a personal connection owned by %q blocks the migration; "+
+					"that is the supported path the endpoint takes by default", h.Value)
+			}
+		}
+	}
+}
+
+// And the household sentinel there is equally harmless, so the verdict
+// costs nothing on the other mode either.
+func TestAHouseholdConnectionDoesNotBlock(t *testing.T) {
+	rep, _ := surveyed(t, func(db *runtimedb.DB) {
+		people(t, db, "mika")
+		if _, err := db.CreateConnection(runtimedb.IntegrationConnection{
+			Name: "calendar", Adapter: "caldav", Endpoint: "https://cal.example.com",
+			Ownership: runtimedb.OwnershipHousehold, Owner: "household", CreatedBy: "mika",
+		}); err != nil {
+			t.Fatalf("CreateConnection: %v", err)
+		}
+	})
+	if len(rep.Blocking()) != 0 {
+		t.Fatalf("a household-owned connection blocks: %+v", rep.Blocking())
+	}
+}
