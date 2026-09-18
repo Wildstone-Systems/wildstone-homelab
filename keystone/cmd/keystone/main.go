@@ -914,6 +914,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		butlerCfg = butlerConfig{Provider: stored.Provider, Model: stored.Model, Endpoint: stored.Endpoint}
 	}
 
+	// The commitment pass (ADR-W034 A15). Declared here because the
+	// agent's read tool needs it just below and the timer starts it
+	// further down — one engine either way, so the household's answer to
+	// "what is due" is the same whoever asks.
+	upkeepEngine := &upkeep.Engine{DB: db, State: state, Loc: householdLoc, Log: log}
+
 	if bp, backend, err := newButlerProvider(butlerCfg); err != nil {
 		return err
 	} else {
@@ -929,6 +935,10 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			mode, _ = probeButler(context.Background(), bp, log)
 		}
 		bgw := butler.NewToolGateway(state, &butler.AgentReader{Gateway: gw})
+		// Where the household's commitments stand, for the agent's read
+		// tool. The adapter is in this package because neither the pass
+		// nor the model should import the other (commitmentstandings.go).
+		bgw.Commitments = commitmentStandings{engine: upkeepEngine}
 		// The diagnose tool's injected observed seam (ADR-W017 A5): the
 		// butler package reads observed health through this closure and
 		// never imports runtimedb/reconcile itself.
@@ -1267,7 +1277,6 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// reason, and at the same hour because a household reads its house
 	// once: a checkup with a sixty-day lead and an oil change with a
 	// three-hundred-mile lead are both indifferent to the minute.
-	upkeepEngine := &upkeep.Engine{DB: db, State: state, Loc: householdLoc, Log: log}
 	apiSrv.Upkeep = upkeepEngine
 	upkeepPoke := make(chan struct{}, 1)
 	apiSrv.OnMeterReading = func() {

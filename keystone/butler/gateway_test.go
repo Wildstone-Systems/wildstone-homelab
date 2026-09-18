@@ -126,7 +126,8 @@ func TestToolSpecs_IncludesAllToolsSorted(t *testing.T) {
 	specs := gw.ToolSpecs()
 	want := []string{
 		"describe_capabilities", "diagnose", "dry_run_automation", "explain_resource",
-		"get_automation_schema", "get_capability_status", "get_container_logs",
+		"get_automation_schema", "get_capability_status", "get_commitment_schema",
+		"get_commitments", "get_container_logs",
 		"get_health", "get_plan", "get_system_overview", "propose_change",
 	}
 	if len(specs) != len(want) {

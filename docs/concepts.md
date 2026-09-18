@@ -471,6 +471,112 @@ approved once and then runs on its own, so a wrong assumption inside one
 is not a wrong answer in a conversation; it is a wrong answer every day
 until someone notices.
 
+## Commitments: what the household owes itself
+
+Alongside rules that react to events there is a second household
+subsystem for things that come *due* (ADR-W034). A **`Meter`** is a
+number that only counts up — miles on a vehicle, hours on a blower,
+gallons through a filter. A **`Commitment`** is a thing the household
+owes itself, due when a meter reaches a number.
+
+The decision the rest turns on is that **the calendar is a meter**, built
+in and declared nowhere. "Every 5,000 miles" and "every 365 days" become
+the same sentence with a different meter, so a checkup and an oil change
+are one feature rather than two, and a household never has to know which
+kind of thing it is creating.
+
+```yaml
+kind: Commitment
+metadata: { name: f150-oil, owner: household/mika }
+spec:
+  description: F-150 oil and filter
+  rollover: fromCompletion        # the clock starts when the oil is new
+  anchor: "2026-03-01"
+  anchorAt: { f150-odometer: 79300 }
+  due:                            # earliest wins
+    - { meter: f150-odometer, every: "5000", lead: "300" }
+    - { meter: clock, every: 6mo, lead: 14d }
+```
+
+Each cycle is its own occurrence, and `scheduled` is a state of its own
+because knowing a checkup is due and *having an appointment* are
+different facts — only the first was ever tracked, which is how a
+checkup goes unbooked for a year. A one-off (`rollover: once`) has the
+same states and simply opens no next cycle.
+
+Three fields answer three questions. `metadata.owner` is who it is
+**about**, `mayComplete` is who may **answer** it, `notify` is who
+**hears**. A child's checkup is about the child, booked by a parent, and
+the child is not who should be nagged.
+
+### Nothing is stored except what happened
+
+Completions and bookings are facts and are recorded. Where a cycle stands
+is not: it is recomputed from the readings and those facts every time
+anybody asks, so a restored backup works it out again rather than
+believing a stale verdict.
+
+A pass runs once a day, and again whenever a meter is read. It writes
+`commitment.due_soon`, `commitment.overdue` and the rest onto the
+household timeline **and stops**. Who hears about one, on which surface,
+at what hour is an `Automation` the household writes — which is why the
+truck's oil is still knowable with every model in the house switched off.
+
+Because being told the same thing every morning is how a household stops
+reading its notifications, the pass announces *transitions* and says
+nothing on a quiet day.
+
+### Not knowing is an answer
+
+A meter nobody has read recently cannot support the conclusion "not due
+yet". So a stale reading produces a request for a number rather than a
+verdict, and every surface keeps the two apart: the household's own page
+renders it as its own item, the Console gives it its own pill, and `wild
+meter list` prints "too old to rely on" rather than a reassuring number.
+A projection — "probably March, at twelve thousand miles a year" — is
+shown as an estimate everywhere it appears and never moves a state.
+
+### Recording a number is not a plan
+
+A reading is evidence, not authority: it changes no rule and grants
+nothing. So it is an ordinary authenticated write through any of four
+doors — the Console, `wild meter read`, the household's own page, or a
+capability publishing an event — and the engine cannot tell which one it
+came through. That is the promise that keeps a capability an extension
+rather than a prerequisite.
+
+```
+wild meter read f150-odometer 84210
+```
+
+### Home Assistant extends it; nothing requires Home Assistant
+
+The seam is a rule the household writes, not behaviour built into
+Keystone. With `home-automation` installed, Home Assistant already
+publishes `person.arrived_home`. An `Automation` can turn that into a
+question asked at the one moment somebody is sitting in the driveway
+looking at the odometer:
+
+```yaml
+kind: Automation
+metadata: { name: odometer-when-home, owner: household/mika }
+spec:
+  description: Ask for the odometer when Mika gets home and the truck is nearly due
+  trigger: { eventType: person.arrived_home, subject: mika }
+  conditions:
+    - { kind: eventPresent, eventType: commitment.due_soon, window: 720h }
+    - { kind: cooldown, window: 72h }
+  action:
+    tool: notifications.notify
+    tier: domestic
+    params:
+      topic: household
+      message: "What's the odometer say? The truck is coming up for an oil change."
+```
+
+Uninstall Home Assistant and nothing breaks. The commitment still knows
+what it is owed and still asks — on its own schedule, and less cleverly.
+
 ## The Butler proposes; humans approve
 
 The Butler (ADR-W006, ADR-W017) is an LLM operator with read tools

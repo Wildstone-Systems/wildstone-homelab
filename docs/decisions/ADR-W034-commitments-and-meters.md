@@ -1,10 +1,10 @@
 # ADR-W034: Commitments and meters — the household keeps track of what it owes itself
 
-- **Status:** proposed. Work package K3 is built and tested in
-  `keystone/commitment`; K1, K2 and K4–K7 are not started and nothing
-  imports the package yet. Every decision in Part A is made — the two
-  that were open (one-off obligations, and who may approve a Member's
-  proposal) are closed in A9 and A20.
+- **Status:** proposed, and built. K1 through K7 are implemented:
+  `Meter` and `Commitment` resource kinds, the readings store and its
+  four doors, the occurrence ledger, the daily pass, the household
+  homepage's rows and answer paths, the Console screen, and the agent's
+  two read tools. Every decision in Part A is made.
 - **Number:** W034. Taken after W032 and W033 landed on main (#228); the
   earlier `WXXX` placeholder existed because both were then unmerged.
 - **Relates to:** ADR-W024 (household events, the `Automation` resource,
