@@ -347,14 +347,6 @@ func portalSurfaceInstalled(desired []resource.Resource, surface portalSurface) 
 // scroll.
 const maxNeedsYou = 3
 
-// maxNeedsYouScan is how many waiting decisions are READ, so the "+N
-// more" beneath the card is a count rather than a guess. Pending
-// questions are rare by construction — each one is something the
-// household is actually blocked on — so this bound is generous enough
-// that the number is exact in any real household, and bounded all the
-// same.
-const maxNeedsYouScan = 50
-
 // homeNeedsYou builds the one card a member opens the page for.
 //
 // Two sources, deliberately unlike each other. A notice that ASKS is a
@@ -371,18 +363,27 @@ func (s *Server) homeNeedsYou(member string, now time.Time) needsYouCard {
 	// be". Fifty ordinary notices used to be enough to hide a decision
 	// that was still waiting, and this card exists to prevent exactly
 	// that.
-	// maxNeedsYouScan rather than maxNeedsYou, because the card does not
-	// only SHOW these — it counts them, and "+2 more" cannot be computed
-	// from a window the size of the card. Asking for exactly three meant
-	// a fourth waiting decision was invisible until one of the first
-	// three was answered.
-	notices, err := s.DB.ListNotices(maxNeedsYouScan, runtimedb.NoticeFilter{
+	// THE ROWS AND THE COUNT ARE TWO QUESTIONS, and the last round only
+	// got half of that. Reading a bounded window and counting what came
+	// back makes "+N more" a property of the window: with the window at
+	// the card's own size it could only say +0, and with it merely
+	// larger it undercounts the moment a household passes it. The rows
+	// are bounded because a card shows three; the count is not bounded
+	// at all, because it is a count.
+	pending := runtimedb.NoticeFilter{
 		Recipient: member, Deliverable: true, Pending: true, At: now,
-	})
+	}
+	notices, err := s.DB.ListNotices(maxNeedsYou, pending)
 	if err != nil {
 		s.Log.Error("home needs-you notices", "err", err)
 		// §7's exact copy. "Can't tell whether anything needs you" is
 		// the sentence that keeps silence and all-clear apart.
+		card.Problem = "Can't tell whether anything needs you — Wildstone isn't answering."
+		return card
+	}
+	waitingOnMember, err := s.DB.CountNotices(pending)
+	if err != nil {
+		s.Log.Error("home needs-you count", "err", err)
 		card.Problem = "Can't tell whether anything needs you — Wildstone isn't answering."
 		return card
 	}
@@ -445,8 +446,14 @@ func (s *Server) homeNeedsYou(member string, now time.Time) needsYouCard {
 		return items[i].Seq > items[j].Seq
 	})
 	card.Available = true
+	// What is hidden is everything waiting on this member that the rows
+	// do not carry, plus anything else sorted below the cut — the
+	// owner's row, when there is one and it did not fit.
+	if hidden := waitingOnMember - len(notices); hidden > 0 {
+		card.More = hidden
+	}
 	if len(items) > maxNeedsYou {
-		card.More = len(items) - maxNeedsYou
+		card.More += len(items) - maxNeedsYou
 		items = items[:maxNeedsYou]
 	}
 	if items != nil {
@@ -510,17 +517,64 @@ func (s *Server) homeActivity(member string, now time.Time) activityCard {
 	// with more than a window's worth of events it handed this card the
 	// morning and nothing since. No sort afterwards can recover rows
 	// that were never read.
-	events, err := s.DB.HouseholdEventsBefore(0, maxActivityScan, runtimedb.HouseholdEventFilter{
-		Since: midnight,
-	})
-	if err != nil {
-		s.Log.Error("home activity", "err", err)
-		card.Problem = "Can't load today's activity."
-		return card
-	}
+	//
+	// AND IT WALKS, because the filters below run after the query and
+	// can discard everything it returns. A day whose newest events are
+	// all about one other member, or all verbs this surface has no
+	// sentence for, gave the card a window of rows it kept none of — and
+	// an empty card is what a quiet household looks like, so a busy one
+	// was rendered as quiet. It advances a cursor in bounded batches
+	// until it has six visible rows or today runs out, the same shape
+	// activityHistory uses for the same reason.
 	card.Available = true
 	var rows []activityRow
+	cursor := int64(0)
+	for len(rows) < maxActivity {
+		events, err := s.DB.HouseholdEventsBefore(cursor, maxActivityScan, runtimedb.HouseholdEventFilter{
+			Since: midnight,
+		})
+		if err != nil {
+			s.Log.Error("home activity", "err", err)
+			card.Available = false
+			card.Rows = []activityRow{}
+			card.Problem = "Can't load today's activity."
+			return card
+		}
+		if len(events) == 0 {
+			break
+		}
+		rows = append(rows, s.activityRowsFrom(events, member, &card, &cursor)...)
+	}
+	// Strictly newest first, and worst first when times tie — §7's
+	// ordering, and the tie-break is what stops a failure sorting
+	// underneath an arrival that happened in the same second.
+	sort.SliceStable(rows, func(i, j int) bool {
+		if !rows[i].At.Equal(rows[j].At) {
+			return rows[i].At.After(rows[j].At)
+		}
+		return toneRank(rows[i].Tone) < toneRank(rows[j].Tone)
+	})
+	if len(rows) > maxActivity {
+		rows = rows[:maxActivity]
+	}
+	if rows != nil {
+		card.Rows = rows
+	}
+	return card
+}
+
+// activityRowsFrom turns one batch of household events into the rows
+// this member may see, advancing the cursor past every event it looked
+// at.
+//
+// The cursor moves for rows that are DROPPED as well as kept, which is
+// what makes the caller's loop terminate: a batch of two hundred events
+// this member cannot see still moves the walk two hundred events back,
+// rather than asking for the same two hundred again.
+func (s *Server) activityRowsFrom(events []runtimedb.HouseholdEvent, member string, card *activityCard, cursor *int64) []activityRow {
+	rows := make([]activityRow, 0, len(events))
 	for _, e := range events {
+		*cursor = e.Seq
 		// The audience test first: an event about one PERSON is not
 		// every member's to read. A child's movements are not their
 		// siblings' business, so a member-scoped event is withheld —
@@ -544,22 +598,7 @@ func (s *Server) homeActivity(member string, now time.Time) activityCard {
 		}
 		rows = append(rows, activityRow{Sentence: sentence, At: e.OccurredAt, Tone: tone})
 	}
-	// Strictly newest first, and worst first when times tie — §7's
-	// ordering, and the tie-break is what stops a failure sorting
-	// underneath an arrival that happened in the same second.
-	sort.SliceStable(rows, func(i, j int) bool {
-		if !rows[i].At.Equal(rows[j].At) {
-			return rows[i].At.After(rows[j].At)
-		}
-		return toneRank(rows[i].Tone) < toneRank(rows[j].Tone)
-	})
-	if len(rows) > maxActivity {
-		rows = rows[:maxActivity]
-	}
-	if rows != nil {
-		card.Rows = rows
-	}
-	return card
+	return rows
 }
 
 // toneRank orders tones worst-first for the tie-break above.

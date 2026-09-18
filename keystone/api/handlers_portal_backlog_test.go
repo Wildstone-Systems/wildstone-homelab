@@ -546,3 +546,123 @@ func TestReusingAFreedNameIsStillAnEvent(t *testing.T) {
 			len(events))
 	}
 }
+
+// The whole household answers to the spelling the door forgave.
+//
+// The door admits one Sandy however she signed in, and then every
+// member-scoped query underneath compares a stored name. A member
+// authenticated under a capitalisation the records are not under is
+// worse off than one who was refused: she is shown her own household,
+// empty, which looks like an answer.
+func TestACapitalisationTheDoorForgivesDoesNotEmptyTheHousehold(t *testing.T) {
+	h := homeHarness(t)
+	if err := h.s.DB.RecordButlerMember("sandy", runtimedb.RoleMember, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.AdmitButlerMember("sandy", "mika"); err != nil {
+		t.Fatal(err)
+	}
+	// Everything stored under the household's own spelling.
+	remember(t, h, "sandy", "Sandy does not eat fish", runtimedb.ButlerAudiencePrivate)
+	insertFamilySession(t, h, "sandy", "When do the bins go out?")
+	if _, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
+		Kind: "washing-done", Recipient: "sandy", DedupeKey: "n1",
+	}, runtimedb.DefaultButlerSettings(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read as the proxy might later assert her.
+	h.unthrottled()
+	res := h.member(http.MethodGet, "/api/v1/assistant/memory", "Sandy", "assistant_users", nil, "")
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("memory: status %d", res.StatusCode)
+	}
+	var mem struct {
+		Items  []memoryItem `json:"items"`
+		Member string       `json:"member"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&mem); err != nil {
+		t.Fatal(err)
+	}
+	if len(mem.Items) == 0 {
+		t.Error("Sandy's memory panel is empty; everything it holds is stored for sandy")
+	}
+	// The surface reports the household's spelling, not the asserted
+	// one: it is the name her records are under.
+	if mem.Member != "sandy" {
+		t.Errorf("the surface calls her %q, want the spelling her records use", mem.Member)
+	}
+
+	h.unthrottled()
+	notes := h.summary(t, "Sandy")
+	if notes.Notifications.Unread != 1 {
+		t.Errorf("Sandy's card counts %d unread, want the 1 raised for sandy", notes.Notifications.Unread)
+	}
+}
+
+// "+N more" counts every waiting decision, not the ones that fit in a
+// window somebody chose.
+func TestTheHiddenDecisionCountIsNotAWindowSize(t *testing.T) {
+	h := homeHarness(t)
+	const waiting = 60
+	for i := range waiting {
+		if _, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
+			Kind: "lock-up", Recipient: "sandy", DedupeKey: fmt.Sprintf("q-%d", i),
+			Asks: true, TTL: 72 * time.Hour,
+		}, runtimedb.DefaultButlerSettings(), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := h.summary(t, "sandy")
+	if len(got.NeedsYou.Items) != maxNeedsYou {
+		t.Fatalf("the card shows %d items, want %d", len(got.NeedsYou.Items), maxNeedsYou)
+	}
+	if want := waiting - maxNeedsYou; got.NeedsYou.More != want {
+		t.Errorf("the card says +%d more, want +%d — the count is the size of a window rather than the backlog",
+			got.NeedsYou.More, want)
+	}
+}
+
+// A card's worth of events this member cannot see does not make the
+// household look quiet.
+func TestTodayAtHomeWalksPastEventsThisMemberCannotSee(t *testing.T) {
+	h := homeHarness(t)
+	// Every member-scoped event about somebody else is withheld.
+	h.s.MemberScoped = func(string) bool { return true }
+
+	loc := h.s.HouseholdLoc
+	if loc == nil {
+		loc = time.Local
+	}
+	local := time.Now().In(loc)
+	midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+	early := midnight.Add(time.Second)
+
+	// The one row sandy may see, earliest today.
+	if _, _, err := h.s.DB.AppendHouseholdEvent(runtimedb.HouseholdEvent{
+		EventID: "hers", OccurredAt: early, Subject: "sandy",
+		Source: "portal", Type: "filedrop.uploaded", Entity: "a.jpg",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Then more of maya's than the card reads in one batch.
+	for i := range maxActivityScan + 20 {
+		if _, _, err := h.s.DB.AppendHouseholdEvent(runtimedb.HouseholdEvent{
+			EventID: fmt.Sprintf("mayas-%d", i), OccurredAt: early.Add(time.Duration(i+1) * time.Millisecond),
+			Subject: "maya", Source: "portal", Type: "filedrop.uploaded", Entity: "b.jpg",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := h.summary(t, "sandy")
+	if !got.Activity.Available {
+		t.Fatal("the activity card is unavailable")
+	}
+	if len(got.Activity.Rows) != 1 {
+		t.Errorf("sandy's card shows %d rows, want the 1 event that is hers — a busy day rendered as a quiet one",
+			len(got.Activity.Rows))
+	}
+}

@@ -155,13 +155,28 @@ func (s *Server) portalMember(r *http.Request, surface portalSurface) (string, [
 		return "", nil, fmt.Errorf("%w: the proxy forwarded no %s header",
 			errPortalDenied, TrustedIngressHeader)
 	}
-	if !s.forwardedUserIsStillAMember(member) {
+	// CANONICALISED HERE, ONCE, and this is the layer that has to do it.
+	// The door admits the household's one Sandy however she signed in
+	// (ADR-W032 A4), and then hands whatever spelling the proxy asserted
+	// to every member-scoped query underneath: her Butler roster, her
+	// memory, her notices, her conversations, her events. Those compare
+	// a stored name, so a capitalisation the door forgave left her
+	// authenticated and her own household empty — a state worse than a
+	// refusal, because it looks like an answer.
+	//
+	// Adding a case-insensitive predicate to each of those queries is
+	// the same fix written once per query and forgotten by the next one.
+	// The name is resolved to the household's own spelling at the door
+	// instead, so everything below sees the name the records are under.
+	canonical, ok := s.forwardedUserIsStillAMember(member)
+	if !ok {
 		// Named in the log like every other refusal, because "they were
 		// offboarded last week" is the one explanation an operator will
 		// otherwise spend an afternoon not finding.
 		return member, nil, fmt.Errorf("%w: %s is not an active member of this household",
 			errPortalDenied, member)
 	}
+	member = canonical
 	forwarded := strings.TrimSpace(r.Header.Get(ConsoleGroupsHeader))
 	if !hasGroup(forwarded, group) {
 		// The member is returned WITH the refusal so the audit row names
@@ -433,31 +448,50 @@ func auditWorthy(r *http.Request, status int) bool {
 //
 // Looser matching is only ever used to REFUSE. It cannot grant: no
 // match at all still leaves the group deciding.
-func (s *Server) forwardedUserIsStillAMember(user string) bool {
+func (s *Server) forwardedUserIsStillAMember(user string) (string, bool) {
 	if s.DB == nil {
-		return false
+		return "", false
 	}
 	members, err := s.DB.ListButlerMembers()
 	if err != nil {
 		// A lookup that failed is not a lookup that passed.
-		return false
+		return "", false
 	}
+	canonical := ""
 	for _, m := range members {
-		if !strings.EqualFold(strings.TrimSpace(m.Member), strings.TrimSpace(user)) {
+		stored := strings.TrimSpace(m.Member)
+		if !strings.EqualFold(stored, strings.TrimSpace(user)) {
 			continue
 		}
 		// EVERY match must qualify. With two records differing only by
 		// case there is no telling which one the proxy meant, and an
 		// authorization check that guesses is not a check.
 		if !m.Active() {
-			return false
+			return "", false
+		}
+		if canonical == "" {
+			canonical = stored
+		} else if canonical != stored {
+			// The household has this person under two spellings, which
+			// its own rule says cannot happen. Named in the log because
+			// half their records will be under each, and nothing else
+			// in the system will ever say so.
+			s.Log.Warn("household member stored under two spellings",
+				"asserted", user, "using", canonical, "also", stored)
 		}
 	}
 	// Unlike the Console, no ROLE is required. This surface is for
 	// household members, and the group already says which of them may
 	// reach it; holding them to `owner` here would refuse the family the
 	// dashboard was built for.
-	return true
+	//
+	// A member with no record at all keeps the spelling the proxy
+	// asserted: there is nothing to canonicalise against, and inventing
+	// one would be this layer deciding who somebody is.
+	if canonical == "" {
+		canonical = strings.TrimSpace(user)
+	}
+	return canonical, true
 }
 
 // errPortalCrossSite is a write that did not come from the portal's own
