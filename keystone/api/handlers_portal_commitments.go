@@ -135,14 +135,11 @@ func commitmentAsks(st upkeep.Standing, may bool, units map[string]string) ([]ne
 	for _, meter := range append(upkeep.Missing(st, nil), upkeep.Wanted(st, nil)...) {
 		needs = append(needs, needsYouMeter{Meter: meter, Unit: units[meter]})
 	}
-	var asks []needsYouAsk
-	if len(needs) > 0 {
-		// Recording the number without closing anything is its own
-		// answer: a household that reads the odometer and finds it is
-		// not due yet has answered the card's actual question.
-		asks = append(asks, needsYouAsk{Verb: "reading", Label: "Just save the number"})
-	}
-	asks = append(asks, needsYouAsk{Verb: "done", Label: "Done"})
+	// Saving the number without closing anything is its own answer, and
+	// it belongs to the METER rather than to any one commitment — the
+	// card collects it once and offers one Save. An ask per commitment
+	// would put three Saves under one odometer.
+	asks := []needsYouAsk{{Verb: "done", Label: "Done"}}
 	// An appointment is only an answer for something that needs one, and
 	// only while there is not one already: a booked cycle is not on this
 	// card at all.

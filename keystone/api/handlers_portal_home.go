@@ -176,6 +176,23 @@ type needsYouItem struct {
 	Needs []needsYouMeter `json:"needs,omitempty"`
 }
 
+// distinctNeeds collapses every item's numbers into one question per
+// meter, in the order they were first asked for.
+func distinctNeeds(items []needsYouItem) []needsYouMeter {
+	var out []needsYouMeter
+	seen := map[string]bool{}
+	for _, it := range items {
+		for _, n := range it.Needs {
+			if seen[n.Meter] {
+				continue
+			}
+			seen[n.Meter] = true
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // needsYouMeter is one number an item is waiting on.
 type needsYouMeter struct {
 	Meter string `json:"meter"`
@@ -196,6 +213,17 @@ type needsYouCard struct {
 	// More is how many are waiting beyond the three shown, so the card
 	// can say "and 4 more" rather than silently truncating.
 	More int `json:"more,omitempty"`
+	// Needs are the numbers this card is waiting on, ONE PER METER
+	// however many items want them.
+	//
+	// A meter is a number the household keeps; a commitment is a thing
+	// measured against it. One truck's odometer feeds the oil, the
+	// tyres and the brakes, so asking for it once per commitment asks
+	// one question three times. The meter is the unit a number is
+	// entered against; the item is the unit an answer is given against,
+	// and each item still carries its own Needs so an answer records
+	// the meters that answer actually measures.
+	Needs []needsYouMeter `json:"needs,omitempty"`
 }
 
 // activityRow is one thing the house did.
@@ -492,6 +520,7 @@ func (s *Server) homeNeedsYou(w who, desired []resource.Resource, now time.Time)
 	} else {
 		items = append(items, commitments...)
 	}
+	card.Needs = distinctNeeds(items)
 
 	// The owner's side, as one row. Counted from the plan ledger, which
 	// is the same place the Console's Plans page reads.

@@ -690,7 +690,23 @@
     var mine = c.items.filter(function (i) { return i.decidable; }).length;
     text("needs-sum", mine ? (mine === 1 ? "1 thing for you" : mine + " things for you")
                            : "waiting on somebody else");
+    // THE NUMBERS ONCE, ABOVE THE THINGS THEY DECIDE. A meter is a
+    // number the household keeps and a commitment is a thing measured
+    // against it, so one truck's odometer feeds the oil, the tyres and
+    // the brakes. Rendering a box per commitment asked one question
+    // three times.
     var stack = make("div", "stack");
+    var boxes = {};
+    if ((c.needs || []).length) {
+      var ask = make("div", "asks");
+      c.needs.forEach(function (n) {
+        ask.appendChild(make("span", "muted nowrap", "What does " + n.meter + " say?"));
+        boxes[n.meter] = numberBox(n);
+        ask.appendChild(boxes[n.meter]);
+      });
+      ask.appendChild(readingBtn(c.needs, boxes));
+      stack.appendChild(ask);
+    }
     c.items.forEach(function (i) {
       var wrap = make("div", "stack");
       wrap.style.gap = "var(--space-2)";
@@ -720,19 +736,15 @@
         row.appendChild(decideBtn(i.seq, "no", "No", "hbtn hbtn-secondary"));
       } else if (i.decidable && i.ref && i.asks && i.asks.length) {
         row = make("div", "asks indent");
-        // The numbers first, ONCE, whatever the household then does with
-        // them. Typing the odometer to record it and typing it again to
-        // close the cycle is the same question asked twice.
-        var boxes = {};
-        (i.needs || []).forEach(function (n) {
-          row.appendChild(make("span", "muted nowrap", "What does " + n.meter + " say?"));
-          boxes[n.meter] = numberBox(n);
-          row.appendChild(boxes[n.meter]);
-        });
         var when = wantsBooking(i.asks) ? dateBox() : null;
         if (when) { row.appendChild(when); }
+        // Each answer submits only the numbers ITS OWN commitment
+        // measures against, out of the boxes the card collected. A
+        // completion's positions are what the next cycle is measured
+        // from, so the water filter has no business on the truck's oil.
         i.asks.forEach(function (a, n) {
-          row.appendChild(answerBtn(i.ref, a, boxes, when,
+          if (a.verb === "reading") { return; }
+          row.appendChild(answerBtn(i.ref, a, mine(boxes, i.needs), when,
             n === 0 ? "hbtn hbtn-primary" : "hbtn hbtn-secondary"));
         });
       }
@@ -793,10 +805,47 @@
     return isNaN(d.getTime()) ? null : d.toISOString();
   }
 
-  // answerBtn records one answer to a commitment: the numbers on their
-  // own, or a completion, a waive, or an appointment. The verb IS the
-  // route's last segment, so the page never holds a second list of what
-  // the answers are called.
+  // mine narrows the card's boxes to the meters one commitment
+  // measures against.
+  function mine(boxes, needs) {
+    var out = {};
+    (needs || []).forEach(function (n) {
+      if (boxes[n.meter]) { out[n.meter] = boxes[n.meter]; }
+    });
+    return out;
+  }
+
+  // readingBtn saves the numbers without answering anything.
+  //
+  // It belongs with the boxes rather than with a commitment: a
+  // household that reads the odometer and finds nothing is due yet has
+  // answered the card's real question, and nothing needs closing.
+  function readingBtn(needs, boxes) {
+    var b = make("button", "hbtn hbtn-primary", "Save");
+    b.type = "button";
+    b.addEventListener("click", function () {
+      var values = {}, missing = [];
+      needs.forEach(function (n) {
+        var v = parseFloat(boxes[n.meter].value);
+        if (isNaN(v) || v < 0) { missing.push(n.meter); return; }
+        values[n.meter] = v;
+      });
+      if (missing.length) {
+        answerFailed(b, "what does " + missing.join(" and ") + " say?");
+        return;
+      }
+      b.disabled = true;
+      Object.keys(values).forEach(function (meter) {
+        postAnswer("/api/v1/home/meters/" + encodeURIComponent(meter) + "/readings",
+                   { value: values[meter] }, b);
+      });
+    });
+    return b;
+  }
+
+  // answerBtn records one answer to a commitment: a completion, a
+  // waive, or an appointment. The verb IS the route's last segment, so
+  // the page never holds a second list of what the answers are called.
   function answerBtn(ref, ask, boxes, when, cls) {
     var b = make("button", cls, ask.label);
     b.type = "button";
@@ -809,14 +858,6 @@
       });
       if (missing.length) {
         answerFailed(b, "what does " + missing.join(" and ") + " say?");
-        return;
-      }
-      if (ask.verb === "reading") {
-        b.disabled = true;
-        Object.keys(meters).forEach(function (meter) {
-          postAnswer("/api/v1/home/meters/" + encodeURIComponent(meter) + "/readings",
-                     { value: meters[meter] }, b);
-        });
         return;
       }
       var body = {};

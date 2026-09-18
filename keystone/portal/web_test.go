@@ -541,7 +541,9 @@ func TestTheNeedsCardCanAnswerACommitmentAndNotOnlyANotice(t *testing.T) {
 		{"/api/v1/home/commitments/", "the card cannot reach the commitment answer path"},
 		{"/api/v1/home/meters/", "the card cannot record the number it is asking for"},
 		{"encodeURIComponent(ask.verb)", "the page names the answers itself instead of using the server's"},
-		{"i.needs", "the card does not collect the numbers the server said it needs"},
+		{"c.needs", "the card does not collect its numbers once per meter — a box per " +
+			"commitment asks one truck's odometer three times"},
+		{"mine(boxes, i.needs)", "an answer submits every number on the card rather than its own"},
 		// A date is a day, and a day is not over at midnight. Building
 		// the instant from parts is what keeps an appointment made for
 		// today from being announced as already missed.
