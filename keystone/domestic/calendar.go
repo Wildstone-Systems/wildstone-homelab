@@ -183,6 +183,28 @@ type calendarTool struct {
 
 func (t *calendarTool) Name() string { return CalendarCapability + "." + t.tool }
 
+// calendarUsage is each tool's params, in the words a model reads. It
+// mirrors the Params comment above each handler; times with no offset
+// are the household's clock (see moment).
+var calendarUsage = map[string]string{
+	CalToolAgenda: "What is on. params: date (today | tomorrow | YYYY-MM-DD, default today), " +
+		"days (1-14, default 1).",
+	CalToolSearch: "Find events by title. params: query (required), from (YYYY-MM-DD, default today), " +
+		"days (1-14, default 14).",
+	CalToolAvailability: "Is anything on between two times. params: start, end " +
+		"(required, times like 2026-09-25T18:30).",
+	CalToolCreate: "Add an event. params: title (required), start (required: a time like " +
+		"2026-09-25T18:30, or a date with all_day), end or duration_minutes (default 60), " +
+		"location, all_day (true for a birthday or a holiday).",
+	CalToolUpdate: "Change an event, named by what it is. params: title and date (required: the " +
+		"event as it is now), new_title, start, end or duration_minutes, location.",
+	CalToolDelete: "Remove an event; the person is asked first. params: title, date (both required).",
+	CalToolSetup:  "How to put the household calendar on a phone or laptop. No params.",
+}
+
+// Usage implements UsageDescriber.
+func (t *calendarTool) Usage() string { return calendarUsage[t.tool] }
+
 func (t *calendarTool) Execute(ctx context.Context, c Call) (Result, error) {
 	// how_to_add is about where the calendar IS, so it answers on a
 	// deployment that has a calendar and has not pointed the agent
