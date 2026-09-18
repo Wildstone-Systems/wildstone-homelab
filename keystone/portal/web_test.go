@@ -255,18 +255,34 @@ func TestTheAssistantsPanelsDiscloseRatherThanHide(t *testing.T) {
 		t.Error("a side panel still starts open")
 	}
 
-	// Three panels, three digests, each filled by the script.
+	// Four panels — the three on the right plus the conversation list,
+	// which grows without limit on a household that talks to its
+	// assistant daily — and a digest on each, filled by the script.
 	panels := regexp.MustCompile(`<details class="panel">`).FindAllString(page, -1)
-	if len(panels) != 3 {
-		t.Errorf("found %d collapsible panels, want 3", len(panels))
+	if len(panels) != 4 {
+		t.Errorf("found %d collapsible panels, want 4", len(panels))
 	}
-	for _, id := range []string{"caps-digest", "memory-digest", "receipts-digest"} {
+	// New conversation is the common action and must not be buried
+	// behind the list: it sits outside the disclosure.
+	if regexp.MustCompile(`(?s)<details class="panel">.{0,400}?id="new"`).MatchString(page) {
+		t.Error(`"New conversation" is inside a collapsed panel`)
+	}
+	for _, id := range []string{"caps-digest", "memory-digest", "receipts-digest", "convos-digest"} {
 		if !strings.Contains(page, `id="`+id+`"`) {
 			t.Errorf("no %s in the markup: a shut panel would read as blank", id)
 		}
 		// And something must actually write to it.
 		if !strings.Contains(page, `text("`+id+`"`) {
 			t.Errorf("%s is never filled in", id)
+		}
+	}
+
+	// Every digest sits after a hairline rather than jammed against the
+	// title: a long one beside an eyebrow reads as a run-on line, and
+	// the design's own header pattern is label, rule, then the meta.
+	for _, id := range []string{"caps-digest", "memory-digest", "receipts-digest", "convos-digest"} {
+		if !regexp.MustCompile(`class="fade"[^>]*>\s*</span>\s*<span class="muted nowrap" id="` + id + `"`).MatchString(page) {
+			t.Errorf("%s is not separated from its title by a hairline", id)
 		}
 	}
 
@@ -278,5 +294,43 @@ func TestTheAssistantsPanelsDiscloseRatherThanHide(t *testing.T) {
 	// A summary that does not look pressable is not a control.
 	if !regexp.MustCompile(`details\.panel > summary \{[^}]*cursor: pointer`).MatchString(page) {
 		t.Error("the panel headers are not styled as pressable")
+	}
+}
+
+// Both assistant surfaces let a member see, and change, who they are
+// talking to.
+//
+// The design says one entry is a label and not a menu, which is right
+// about not drawing a dropdown with one item in it — and the first
+// implementation read it as "no control at all", which left a member
+// with no way to find out whether there is anyone else to talk to. The
+// label is present either way and says why when pressed.
+func TestBothAssistantSurfacesCarryAnAgentPicker(t *testing.T) {
+	for _, name := range []string{"home", "assistant"} {
+		body, ok := Page(name)
+		if !ok {
+			t.Fatalf("%s is not served", name)
+			continue
+		}
+		page := stripComments(string(body))
+
+		// The menu, for when there is more than one.
+		if !strings.Contains(page, `id="agent-select"`) {
+			t.Errorf("%s has no agent menu", name)
+		}
+		if !regexp.MustCompile(`sel\.addEventListener\("change"`).MatchString(page) {
+			t.Errorf("%s never acts on a change of agent", name)
+		}
+		// Switching must start a new conversation. "I sent this to
+		// Sandy" and "this went to Alfred" must not both be true of one
+		// thread, and the server refuses a mismatched pair anyway.
+		if !regexp.MustCompile(`(?s)sel\.addEventListener\("change".{0,600}?(session = ""|newConversation\(\))`).MatchString(page) {
+			t.Errorf("%s switches agent without starting a new conversation", name)
+		}
+		// And the single-agent case says why rather than showing a dead
+		// control.
+		if !regexp.MustCompile(`(?s)agents\.length === 1.{0,400}?title = "The only assistant`).MatchString(page) {
+			t.Errorf("%s does not explain why the agent cannot be changed when there is one", name)
+		}
 	}
 }

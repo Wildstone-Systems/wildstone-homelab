@@ -1198,10 +1198,16 @@
         }
         agent = agents[0].name;
         // One entry is a label, not a menu.
+        // One assistant is a label rather than a menu — but a LABEL,
+        // not a disabled button. A greyed-out control with a caret on it
+        // says "you may not change this"; what is true is that there is
+        // nothing to change it to, and the title says so when pressed.
         if (agents.length === 1) {
           el("agent-btn").hidden = false;
           el("agent-btn").disabled = true;
           el("agent-caret").hidden = true;
+          el("agent-btn").title = "The only assistant set up for you. " +
+            "The owner decides which ones you can talk to here.";
           text("agent-name", agent);
         } else {
           var sel = el("agent-select");
@@ -1220,7 +1226,12 @@
             agent = sel.value;
             session = "";
             clear(el("thread"));
+            clear(el("assistant-note"));
             el("asks").hidden = false;
+            // The card's link hands the SAME session over, so with the
+            // session cleared it must go to a fresh conversation rather
+            // than the previous agent's.
+            el("open-conversation").href = "/assistant/";
           });
         }
         text("m-assistant-sub", "Ask the house for something");

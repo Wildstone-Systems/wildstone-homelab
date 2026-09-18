@@ -104,13 +104,24 @@
     <!-- Conversations. Only this member's own: a household assistant
          never exposes one member's conversations to another. -->
     <section class="wid">
-      <div class="wid-head">
-        <span class="eyebrow grow">Conversations</span>
-      </div>
+      <!-- Shut like the others, and for the same reason: a household
+           that talks to its assistant daily has a list that grows
+           without limit, and it is the one part of this page nobody
+           needs open to say the next thing. New conversation stays
+           OUTSIDE the disclosure — starting one is the common action
+           and must not be two clicks behind a list nobody wanted. -->
       <button class="hbtn hbtn-secondary" id="new" type="button" style="width: 100%">
         <i class="ph ph-plus" aria-hidden="true"></i> New conversation
       </button>
-      <div id="convos"></div>
+      <details class="panel">
+        <summary class="wid-head" style="margin-top: var(--space-3)">
+          <span class="eyebrow nowrap">Earlier</span>
+          <span class="fade" aria-hidden="true"></span>
+          <span class="muted nowrap" id="convos-digest"></span>
+          <i class="ph ph-caret-down" aria-hidden="true"></i>
+        </summary>
+        <div id="convos" style="margin-top: var(--space-3)"></div>
+      </details>
     </section>
 
     <!-- The thread. -->
@@ -157,8 +168,9 @@
       <section class="wid">
         <details class="panel">
           <summary class="wid-head">
-            <span class="eyebrow" id="caps-head">What it may do</span>
-            <span class="muted grow" id="caps-digest"></span>
+            <span class="eyebrow nowrap" id="caps-head">What it may do</span>
+            <span class="fade" aria-hidden="true"></span>
+            <span class="muted nowrap" id="caps-digest"></span>
             <i class="ph ph-caret-down" aria-hidden="true"></i>
           </summary>
           <div class="caps" id="caps" style="margin-top: var(--space-3)"></div>
@@ -169,8 +181,9 @@
       <section class="wid">
         <details class="panel">
           <summary class="wid-head">
-            <span class="eyebrow">What it remembers</span>
-            <span class="muted grow" id="memory-digest"></span>
+            <span class="eyebrow nowrap">What it remembers</span>
+            <span class="fade" aria-hidden="true"></span>
+            <span class="muted nowrap" id="memory-digest"></span>
             <i class="ph ph-caret-down" aria-hidden="true"></i>
           </summary>
           <div id="memory" style="margin-top: var(--space-3)"></div>
@@ -181,8 +194,9 @@
       <section class="wid">
         <details class="panel">
           <summary class="wid-head">
-            <span class="eyebrow">What was done in your name</span>
-            <span class="muted grow" id="receipts-digest"></span>
+            <span class="eyebrow nowrap">What was done in your name</span>
+            <span class="fade" aria-hidden="true"></span>
+            <span class="muted nowrap" id="receipts-digest"></span>
             <i class="ph ph-caret-down" aria-hidden="true"></i>
           </summary>
           <div id="receipts" style="margin-top: var(--space-3)"></div>
@@ -269,10 +283,21 @@
           return;
         }
         agent = agents[0].name;
+        if (agents[0].directive) { text("subtitle", agents[0].directive); }
+        // THE PICKER IS ALWAYS THERE. It used to appear only with two
+        // or more, per the design's "one entry is a label, not a menu" —
+        // which is right about not drawing a menu with one item in it,
+        // and wrong about leaving a member with no way to find out
+        // whether there is anyone else to talk to. With one assistant
+        // it names them and says so when pressed; with several it is a
+        // menu.
         if (agents.length === 1) {
+          el("agent-label").hidden = false;
           text("agent-label", agent);
-          if (agents[0].directive) { text("subtitle", agents[0].directive); }
+          el("agent-label").title = "The only assistant set up for you. " +
+            "The owner decides which ones you can talk to here.";
         } else {
+          el("agent-label").hidden = true;
           var sel = el("agent-select");
           sel.hidden = false;
           agents.forEach(function (a) {
@@ -287,6 +312,8 @@
             // raise authority above what the member and the surface
             // already hold.
             agent = sel.value;
+            var picked = agents.filter(function (a) { return a.name === agent; })[0];
+            text("subtitle", (picked && picked.directive) || "Ask the house for something");
             newConversation();
           });
         }
@@ -350,10 +377,14 @@
         var box = el("convos");
         clear(box);
         if (!res.ok) {
+          text("convos-digest", "couldn't load");
           box.appendChild(make("p", "muted", "Can't load your conversations."));
           return;
         }
         var items = res.j.conversations || [];
+        text("convos-digest", items.length
+          ? items.length + (items.length === 1 ? " conversation" : " conversations")
+          : "none yet");
         if (!items.length) {
           box.appendChild(make("p", "muted", "No conversations yet."));
           return;
