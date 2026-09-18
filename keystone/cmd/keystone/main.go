@@ -1179,7 +1179,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 						tier = declared
 					}
 				}
-				v.Actions = append(v.Actions, butler.HouseholdAction{Tool: tool, Tier: tier})
+				v.Actions = append(v.Actions, butler.HouseholdAction{Tool: tool, Tier: tier, Usage: actions.Usage(tool)})
 			}
 			return v, nil
 		}
