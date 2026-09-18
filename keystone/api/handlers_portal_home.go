@@ -270,8 +270,12 @@ type homeSummaryResponse struct {
 	// is "nobody has checked" and not "everything is down". §7: grey
 	// dots and one line, "not a grid of red dots, which would read as a
 	// total outage".
-	StatusKnown bool         `json:"statusKnown"`
-	Machines    machinesCard `json:"machines"`
+	StatusKnown bool `json:"statusKnown"`
+	// Conditions is the band above everything: what the house wants a
+	// member to know before they read anything else. Empty on a normal
+	// day, which is the point (handlers_portal_conditions.go).
+	Conditions []condition  `json:"conditions"`
+	Machines   machinesCard `json:"machines"`
 }
 
 // ---------------------------------------------------------------- handler
@@ -311,6 +315,9 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 	resp.Calendar = s.homeCalendar(desired)
 	resp.Apps, resp.AppStatus, resp.StatusKnown = s.homeApps(desired)
 	resp.Machines = s.homeMachines(r.Context(), now)
+	// Last, because it reads the launcher's own answers rather than
+	// asking the same questions again.
+	resp.Conditions = s.homeConditions(desired, resp.Apps, resp.AppStatus, resp.StatusKnown)
 	return resp, http.StatusOK, nil
 }
 

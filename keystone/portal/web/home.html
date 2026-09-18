@@ -165,6 +165,7 @@
       <span class="muted grow" id="needs-sum"></span>
       <i class="ph ph-caret-up" id="needs-caret" aria-hidden="true"></i>
     </button>
+    <div id="conditions"></div>
     <div id="needs-body"></div>
   </section>
 
@@ -477,6 +478,7 @@
     document.title = d.household || "Home";
     paintBanner(d.banner || {});
 
+    renderConditions(d.conditions || []);
     renderNeeds(d.needsYou);
     renderCalendar(d.calendar);
     renderActivity(d.activity);
@@ -501,6 +503,41 @@
     if (!p.length) { return "?"; }
     if (p.length === 1) { return p[0].slice(0, 2).toLowerCase(); }
     return (p[0][0] + p[p.length - 1][0]).toLowerCase();
+  }
+
+  // ---- what the house wants said before anything else.
+  //
+  // Empty on a normal day. The three that are not empty — something not
+  // answering, the tailnet posture, a fresh install — are detected
+  // server-side from what is actually true, so this renders them and
+  // decides nothing.
+  function renderConditions(list) {
+    var box = el("conditions");
+    clear(box);
+    list.forEach(function (c) {
+      // A standing fact is sayable once. The tailnet note is true every
+      // day, and a banner that cannot be dismissed is a banner people
+      // learn to read past — including on the day it says something
+      // else.
+      if (c.dismissible && c.id) {
+        var key = "home.dismissed." + c.id;
+        try {
+          if (localStorage.getItem(key) === "1") { return; }
+        } catch (e) { /* no storage: show it, which is the safe way to be wrong */ }
+      }
+      var n = note(box, c.kind || "info", c.title, c.detail);
+      if (c.dismissible && c.id) {
+        var x = make("button", "hbtn hbtn-ghost");
+        x.type = "button";
+        x.setAttribute("aria-label", "Dismiss this message");
+        x.appendChild(icon("x"));
+        x.addEventListener("click", function () {
+          try { localStorage.setItem("home.dismissed." + c.id, "1"); } catch (e) {}
+          n.remove();
+        });
+        n.appendChild(x);
+      }
+    });
   }
 
   // ---- Needs you.
