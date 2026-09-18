@@ -333,6 +333,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/household/meters", s.handle(principal.VerbRead, s.listMeters))
 	mux.Handle("GET /api/v1/household/meters/{name}/readings", s.handle(principal.VerbRead, s.listMeterReadings))
 	mux.Handle("POST /api/v1/household/meters/{name}/readings", s.handle(principal.VerbEmit, s.recordMeterReading))
+	mux.Handle("GET /api/v1/household/commitments", s.handle(principal.VerbRead, s.listCommitments))
+	mux.Handle("GET /api/v1/household/commitments/{name}", s.handle(principal.VerbRead, s.commitmentHistory))
 
 	mux.Handle("POST /api/v1/household/automations/replay", s.handle(principal.VerbRead, s.replayAutomation))
 	mux.Handle("GET /api/v1/household/automations/grammar", s.handle(principal.VerbRead, s.automationGrammar))

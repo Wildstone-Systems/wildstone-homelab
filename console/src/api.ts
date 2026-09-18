@@ -1036,6 +1036,105 @@ export interface RoutineDetail {
 // then refuse. Offering free text here would be worse than offering
 // nothing: a routine triggering on an event nothing emits never fires,
 // and nothing tells its author why.
+// Commitments (ADR-W034). A Standing is where one stands right now: the
+// declaration plus the occurrence the engine derived, which is why
+// nothing here is stored and everything is recomputed.
+export interface CommitmentRule {
+  meter: string;
+  calendar: boolean;
+  anchor: number;
+  dueAt: number;
+  leadAt: number;
+  position: number;
+  known: boolean;
+  stale: boolean;
+  remaining: number;
+  progress: number;
+  crossed: boolean;
+  soon: boolean;
+  observedAt?: string;
+  anchorTime?: string;
+  dueTime?: string;
+  leadTime?: string;
+  unresolved?: string;
+}
+
+export interface CommitmentProjection {
+  meter: string;
+  at: string;
+  ratePerDay: number;
+  source: string;
+}
+
+export interface CommitmentOccurrence {
+  cycle: number;
+  state: string;
+  openedAt: string;
+  trigger?: string;
+  rules: CommitmentRule[];
+  pastDue?: boolean;
+  unresolved?: string[];
+  projection?: CommitmentProjection;
+  reason: string;
+}
+
+export interface CommitmentBooking {
+  seq: number;
+  commitment: string;
+  at: string;
+  bookedAt: string;
+  bookedBy: string;
+  note?: string;
+}
+
+export interface CommitmentStanding {
+  name: string;
+  description: string;
+  owner?: string;
+  scope?: string;
+  mayComplete?: string[];
+  notify?: string[];
+  disabled?: boolean;
+  occurrence: CommitmentOccurrence;
+  booking?: CommitmentBooking;
+}
+
+export interface CommitmentCompletion {
+  seq: number;
+  commitment: string;
+  at: string;
+  recordedAt: string;
+  recordedBy: string;
+  waived?: boolean;
+  reason?: string;
+  positions?: Record<string, number>;
+}
+
+export interface MeterReading {
+  seq: number;
+  meter: string;
+  value: number;
+  at: string;
+  recordedAt: string;
+  recordedBy: string;
+  source: string;
+  rebase?: boolean;
+  prior?: number;
+  reason?: string;
+}
+
+export interface MeterView {
+  name: string;
+  description: string;
+  unit?: string;
+  owner?: string;
+  staleAfter?: string;
+  estimate?: string;
+  builtIn?: boolean;
+  latest?: MeterReading;
+  stale?: boolean;
+}
+
 export interface AutomationGrammar {
   eventTypes: { type: string; package: string; capability?: string; subject?: string; description?: string }[];
   actions: { tool: string; tier: string; package: string; capability?: string }[];
@@ -1239,6 +1338,22 @@ export const api = {
   // Exactly one of: name (an approved rule), rule (a draft document), or
   // routine+spec (a draft held as a parsed spec, which is what the form
   // has).
+  commitments: () => call<CommitmentStanding[]>("GET", "/api/v1/household/commitments"),
+  commitment: (name: string) =>
+    call<{ standing: CommitmentStanding; completions: CommitmentCompletion[] }>(
+      "GET",
+      `/api/v1/household/commitments/${encodeURIComponent(name)}`,
+    ),
+  meters: () => call<MeterView[]>("GET", "/api/v1/household/meters"),
+  meterReadings: (name: string) =>
+    call<MeterReading[]>("GET", `/api/v1/household/meters/${encodeURIComponent(name)}/readings`),
+  recordReading: (name: string, value: number) =>
+    call<{ seq: number; duplicate: boolean }>(
+      "POST",
+      `/api/v1/household/meters/${encodeURIComponent(name)}/readings`,
+      { value },
+    ),
+
   replayAutomation: (req: {
     name?: string;
     rule?: string;

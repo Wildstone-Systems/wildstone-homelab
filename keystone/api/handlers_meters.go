@@ -28,6 +28,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
 )
 
 // maxReadingBytes bounds a reading request. A number, a timestamp and a
@@ -216,4 +217,57 @@ func (s *Server) listMeterReadings(r *http.Request, _ principal.Identity) (any, 
 		return nil, http.StatusInternalServerError, err
 	}
 	return readings, http.StatusOK, nil
+}
+
+// --- commitments, owner side (ADR-W034 K6) ---------------------------
+
+// listCommitments answers where every declared commitment stands.
+//
+// The same evaluation the household's own page uses, unfiltered: an
+// Owner in the Console is looking at the whole house, including the
+// personal commitments the portal keeps to their owner. That is the
+// Console being the control plane rather than a bigger Homepage — and it
+// is why this route holds VerbRead and the portal's holds nothing.
+func (s *Server) listCommitments(_ *http.Request, _ principal.Identity) (any, int, error) {
+	if s.Upkeep == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("the commitment engine is not running")
+	}
+	standings, err := s.Upkeep.Evaluate()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if standings == nil {
+		standings = []upkeep.Standing{}
+	}
+	return standings, http.StatusOK, nil
+}
+
+// commitmentHistory is one commitment's ledger: where it stands now, and
+// every cycle it has closed.
+func (s *Server) commitmentHistory(r *http.Request, _ principal.Identity) (any, int, error) {
+	if s.Upkeep == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("the commitment engine is not running")
+	}
+	name := r.PathValue("name")
+	standings, err := s.Upkeep.Evaluate()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	var found *upkeep.Standing
+	for i := range standings {
+		if standings[i].Name == name {
+			found = &standings[i]
+		}
+	}
+	if found == nil {
+		return nil, http.StatusNotFound, fmt.Errorf("no commitment named %q", name)
+	}
+	completions, err := s.DB.ListCommitmentCompletions(name)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if completions == nil {
+		completions = []runtimedb.CommitmentCompletion{}
+	}
+	return map[string]any{"standing": found, "completions": completions}, http.StatusOK, nil
 }
