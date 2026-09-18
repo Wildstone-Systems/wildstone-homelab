@@ -1,6 +1,6 @@
 # The household calendar widget, and why it is not built
 
-*Status: blocked by a decision, not by effort. 2026-09-18.*
+*Status: blocked by a decision, not by effort. Tracked as [#230](https://github.com/chickenrat17/wildstone-homelab/issues/230). 2026-09-18.*
 
 The implementation package specifies a Calendar widget on the household
 homepage (§7) and a full Calendar page (§12.3): read-only, the next
@@ -20,6 +20,22 @@ AUTH_METHOD: IMAP
 IMAP_AUTH_URL: "{{ .Params.imap_host }}:{{ .Params.imap_port }}"
 IMAP_AUTH_USER_AUTOCREATE: "true"
 ```
+
+On the reference deployment that resolves to `imap.gmail.com:993`, so the
+credential a member's calendar needs is their Gmail password.
+
+Two things were checked against the running container rather than
+reasoned about, because the first draft of this note asserted them:
+
+    unauth  /dav/                    401
+    admin   /dav/                    401      <- the admin credential is refused
+    admin   /dav/principals/admin/   404  "Principal with name admin not found"
+
+`ADMIN_LOGIN`/`ADMIN_PASSWORD` govern davis's web admin panel, not
+CalDAV. And the calendar is empty anyway — one principal (`mika`,
+auto-created on first sign-in), one calendar instance, zero calendar
+objects — so even a solved credential would render "Nothing in the next
+three days" today.
 
 A member's calendar is therefore readable only by presenting **that
 member's own mail password**. Keystone does not hold it, and the whole

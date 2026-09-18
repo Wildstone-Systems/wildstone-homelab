@@ -614,7 +614,7 @@ func (s *Server) homeCalendar(desired []resource.Resource) calendarCard {
 	// The card therefore says what is true and what to do about it,
 	// rather than implying a transient failure that will clear on its
 	// own. Making this widget real needs a decision recorded elsewhere —
-	// see docs/design/household-calendar.md — not a retry.
+	// see docs/design/household-calendar.md and #230 — not a retry.
 	return calendarCard{
 		homeCard: homeCard{
 			Problem: "Your calendars need your mail password, which this dashboard doesn't hold.",
