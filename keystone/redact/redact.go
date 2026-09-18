@@ -77,6 +77,22 @@ var commitRefScanRegexp = regexp.MustCompile(
 var eventIDRefScanRegexp = regexp.MustCompile(
 	`\\?"(?:eventId|correlationId)\\?"\s*:\s*\\?"[A-Za-z0-9._:+@-]{1,128}\\?"`)
 
+// calendarEventRefScanRegexp finds the address of one event in the
+// household calendar, carried under the key the calendar page uses for
+// it. A CalDAV server names an event's file after its UID, and a UID is
+// a UUID or a long random run — exactly the shape the value rules take
+// for a token. Without this the page received every event as
+// "/GROUPS/…/wildstone-[REDACTED].ics", and changing or removing one
+// asked the calendar for a file that does not exist.
+//
+// Keyed on the field name, like the event-id shelter, and only a
+// server-relative PATH is sheltered: the value came from the calendar
+// server's own listing, not from anything Keystone holds, and the page
+// handler refuses any address outside the household collection before
+// it is used.
+var calendarEventRefScanRegexp = regexp.MustCompile(
+	`\\?"calendarEvent\\?"\s*:\s*\\?"/[A-Za-z0-9._~%/:@+=-]{1,512}\\?"`)
+
 // kindRefScanRegexp finds a resource reference of the form "Kind/name"
 // over the closed kind vocabulary. These are sheltered for exactly the
 // reason digest pins are: an ordinary "Volume/immich-postgres-data" is a
@@ -408,6 +424,7 @@ func SecretShaped(s string) bool {
 	sheltered = digestPinScanRegexp.ReplaceAllString(sheltered, "")
 	sheltered = commitRefScanRegexp.ReplaceAllString(sheltered, "")
 	sheltered = eventIDRefScanRegexp.ReplaceAllString(sheltered, "")
+	sheltered = calendarEventRefScanRegexp.ReplaceAllString(sheltered, "")
 	sheltered = kindRefScanRegexp.ReplaceAllStringFunc(sheltered, func(m string) string {
 		if kindRefIsSafe(m) {
 			return ""
@@ -481,6 +498,12 @@ func String(s string) string {
 	// And household event/correlation ids named by their key (see
 	// eventIDRefScanRegexp).
 	protected = eventIDRefScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
+		refs = append(refs, m)
+		return fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, len(refs)-1)
+	})
+	// And calendar event addresses named by their key (see
+	// calendarEventRefScanRegexp).
+	protected = calendarEventRefScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
 		refs = append(refs, m)
 		return fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, len(refs)-1)
 	})

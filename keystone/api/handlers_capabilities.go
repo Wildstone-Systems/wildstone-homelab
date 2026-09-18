@@ -432,6 +432,43 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 	return out, http.StatusOK, nil
 }
 
+// claimedByAnotherCapability refuses an install that would re-own a
+// resource another capability already holds.
+//
+// A resource is identified by kind and name alone, so a Put of a name
+// that exists is an update, whoever declared it. calendar-radicale
+// shipped Route/calendar, the name mail-roundcube's Davis already used:
+// enabling the calendar rewrote Davis's Route to point at Radicale, the
+// plan called it "Update Route/calendar", and the household's existing
+// calendar address was on its way out with nothing saying so.
+//
+// Siblings within ONE capability share names deliberately (the book
+// packages' Secret/restic-books), so only a different capability's
+// claim is refused. Resources with no capability owner — written by
+// hand — are left to the operator, as they always were.
+func claimedByAnotherCapability(pkg *pkgspec.Package, current, rendered []resource.Resource) error {
+	mine := "capability/" + pkg.Metadata.Capability
+	type key struct{ kind, name string }
+	held := map[key]string{}
+	for _, r := range current {
+		if strings.HasPrefix(r.Metadata.Owner, "capability/") && r.Metadata.Owner != mine {
+			held[key{string(r.Kind), r.Metadata.Name}] = r.Metadata.Owner
+		}
+	}
+	var clashes []string
+	for _, r := range rendered {
+		if owner, ok := held[key{string(r.Kind), r.Metadata.Name}]; ok {
+			clashes = append(clashes, fmt.Sprintf("%s/%s (held by %s)", r.Kind, r.Metadata.Name, owner))
+		}
+	}
+	if len(clashes) == 0 {
+		return nil
+	}
+	sort.Strings(clashes)
+	return fmt.Errorf("package %s would take over resources another capability owns: %s — installing it would re-point them rather than add its own",
+		pkg.Metadata.Name, strings.Join(clashes, ", "))
+}
+
 // droppedByUpgrade is what this capability owns today that its new
 // expansion no longer produces.
 //
@@ -623,6 +660,9 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 		// missing required param, an unsatisfied requirement — not a
 		// server fault.
 		return nil, http.StatusBadRequest, err
+	}
+	if err := claimedByAnotherCapability(pkg, current, rendered); err != nil {
+		return nil, http.StatusConflict, err
 	}
 	docs := make([]string, 0, len(rendered))
 	for _, res := range rendered {

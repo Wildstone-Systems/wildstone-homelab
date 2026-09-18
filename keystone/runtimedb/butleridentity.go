@@ -743,3 +743,27 @@ func (db *DB) ButlerMembersByHandleFold(handle string) ([]ButlerMember, error) {
 	}
 	return out, rows.Err()
 }
+
+// HouseholdHasAnOwner reports whether any active Owner is on record.
+//
+// It answers one question: has this household been provisioned at all?
+// False means nobody has ever been admitted as an Owner — a fresh
+// deployment, before the installer or an operator has created the first
+// one. It is not a way to ask whether a PARTICULAR person may do
+// something, and it must never be used as one.
+//
+// The answer is durable in one direction, which is what makes it usable
+// as a gate. The Last Owner invariant refuses to demote, disable or
+// offboard the only active Owner, so once this is true it stays true:
+// the un-provisioned state is a window a household leaves once and
+// cannot re-enter by any supported path.
+func (db *DB) HouseholdHasAnOwner() (bool, error) {
+	var n int
+	if err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM butler_members
+		 WHERE role = 'owner' AND admitted = 1 AND disabled_at = '' AND offboarded_at = ''`).
+		Scan(&n); err != nil {
+		return false, fmt.Errorf("runtimedb: counting active owners: %w", err)
+	}
+	return n > 0, nil
+}

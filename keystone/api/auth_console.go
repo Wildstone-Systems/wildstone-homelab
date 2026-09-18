@@ -108,20 +108,39 @@ func (s *Server) consoleForwardAuth(r *http.Request) (principal.Identity, bool) 
 // person costs them a screen they can be given back. Admitting the
 // wrong person costs the household its control plane.
 //
-// What this deliberately does NOT do is require a trusted-ingress
-// identity link, which is what A2.1 would otherwise ask for and what
-// handlers_household_review.go does for its own surface. Links and
-// Person records are only ever created through the admin API, which
-// lives behind this very check — so requiring one would lock every
-// existing Console holder out of the surface they would need in order
-// to grant themselves the link. The design resolves that at §2.4, where
-// the installer creates the first Owner and their directory identity
-// before setup completes, and §2.6, where root CLI recovery exists as
-// the break-glass. Neither is built yet. Until they are, this closes
-// the hole it can close without a lockout it cannot undo: a Person the
-// household knows about is held to their role and lifecycle, and a
-// forwarded name with no Person record behind it is still governed by
-// the directory group alone.
+// A forwarded name with NO Person record is refused too, once the
+// household has an Owner — which is the half that makes Wildstone, not
+// the directory, the authority on who administers it (design §3.2). A
+// directory administrator who adds an account to `console_users` is
+// otherwise handing out the whole control plane from outside Wildstone,
+// which is the arrangement this slice exists to end.
+//
+// It is conditional on the household having an Owner, and that
+// condition is what avoids a lockout rather than merely postponing one.
+// Person records are created through the admin API, which lives behind
+// this very check — so on a deployment that has provisioned nobody,
+// refusing unknown names would leave no way in at all. Before the first
+// Owner, the directory group still decides, exactly as it did.
+//
+// The window closes by itself and cannot be re-entered. The Last Owner
+// invariant refuses to demote, disable or offboard the only active
+// Owner, so a household that has one keeps one, and this branch is
+// unreachable ever after. A deployment sitting in the window is not
+// trusting the directory by accident: it is a household that has not
+// been set up, and the group is the only statement anybody has made
+// about who should administer it.
+//
+// Recovery does not depend on this path. Bearer tokens authenticate
+// separately, and one acting for nobody is unaffected — so the
+// bootstrap admin token still reaches the API to create the first
+// Owner, which is what the installer (§2.4) and the root CLI (§2.6)
+// will formalise.
+//
+// What this still does NOT do is require a trusted-ingress identity
+// link, which is what A2.1 would otherwise ask for and what
+// handlers_household_review.go does for its own surface. That would
+// refuse every Person recorded before links existed, including the one
+// who has to grant them. It stays open, and #206 carries it.
 func (s *Server) forwardedUserMayHoldConsole(user string) bool {
 	// Matched case-INSENSITIVELY, and that is load-bearing rather than
 	// tidy. Handles are compared exactly everywhere else, so `Admin` and
@@ -141,6 +160,30 @@ func (s *Server) forwardedUserMayHoldConsole(user string) bool {
 		return false
 	}
 	if len(people) == 0 {
+		// Nobody on record under that name. On a provisioned household
+		// that is a directory account Wildstone has never been told
+		// about, and the group alone is not enough to administer a
+		// house (§3.2). Before the first Owner it is the only statement
+		// anybody has made, so it still decides.
+		provisioned, err := s.DB.HouseholdHasAnOwner()
+		if err != nil {
+			// A lookup that failed is not a lookup that passed.
+			return false
+		}
+		if provisioned {
+			// Said out loud, because this refusal is the one an operator
+			// cannot diagnose from the outside: the directory still says
+			// they may, the Console just stops. It is also the one that
+			// arrives on UPGRADE — a deployment whose forwarded name
+			// never exactly matched a recorded handle was admitted
+			// before and is not now — so the log line has to name the
+			// handle and the fix, or the first anybody knows is a blank
+			// screen.
+			s.Log.Warn("console refused: no household record for that name",
+				"user", user,
+				"fix", "add them on the Household screen, or `wild household members add`")
+			return false
+		}
 		return true
 	}
 	// Every match must qualify. With two records differing only by case

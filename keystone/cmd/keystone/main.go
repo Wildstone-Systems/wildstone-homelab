@@ -1054,6 +1054,8 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			}
 			return out, nil
 		}
+		// The calendar page writes through the very same upstream.
+		apiSrv.CalendarBook = calendarActions.Upstream
 		calendarActions.Handoff = func(member string) (domestic.CalendarHandoff, bool, error) {
 			h, ok, herr := apiSrv.CalendarHandoffFor(member)
 			if herr != nil || !ok {
