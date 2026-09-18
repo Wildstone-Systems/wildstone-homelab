@@ -311,9 +311,28 @@ func Evaluate(in Input) (Occurrence, error) {
 		return Occurrence{}, err
 	}
 
-	history := slices.Clone(in.History)
+	// Completions are facts, and a replay is no more entitled to one that
+	// has not happened yet than to a meter reading from next week. The
+	// first review round bounded readings and left this slice open, which
+	// let a recurring commitment advance into a future cycle and a
+	// one-off report itself done before the work (ADR-W034 A5).
+	history := make([]Completion, 0, len(in.History))
+	for _, h := range in.History {
+		if !h.At.After(in.Now) {
+			history = append(history, h)
+		}
+	}
 	slices.SortStableFunc(history, func(a, b Completion) int { return a.At.Compare(b.At) })
 	closed := len(history)
+
+	// Same rule for the appointment. BookedAt is when somebody made it,
+	// not when it is for: a booking made after the moment being replayed
+	// had not been made yet. An unset BookedAt says nothing either way,
+	// so it stays visible rather than being guessed at.
+	booking := in.Booking
+	if booking != nil && !booking.BookedAt.IsZero() && booking.BookedAt.After(in.Now) {
+		booking = nil
+	}
 
 	// A one-off that has been answered is finished, and the honest answer
 	// to "where does this stand" is the closing state itself.
@@ -350,7 +369,7 @@ func Evaluate(in Input) (Occurrence, error) {
 	}
 
 	decide(&occ)
-	applyBooking(&occ, c, in.Booking, in.Now)
+	applyBooking(&occ, c, booking, in.Now)
 	occ.Projection = project(in, occ)
 	occ.Reason = explain(occ, c, loc)
 	return occ, nil
@@ -427,6 +446,17 @@ func validate(in Input) error {
 		if !rule.At.IsZero() && !rule.At.After(c.Anchor) {
 			return fmt.Errorf("commitment: %q due[%d]: due %s is not after the anchor %s: it was already past before tracking began",
 				c.Name, i, rule.At.Format("2 Jan 2006"), c.Anchor.Format("2 Jan 2006"))
+		}
+		// The same check on a counter, where the anchor is known. A due
+		// point behind the position tracking started from is not a
+		// commitment that is very overdue; it is one nobody can ever
+		// meet, and it should be refused at the door like its calendar
+		// twin.
+		if rule.AtValue != 0 {
+			if start, ok := c.AnchorAt[rule.Meter]; ok && rule.AtValue <= start {
+				return fmt.Errorf("commitment: %q due[%d]: due at %g, but meter %q already read %g when tracking began: it was already past before tracking began",
+					c.Name, i, rule.AtValue, rule.Meter, start)
+			}
 		}
 		if rule.Meter == MeterClock {
 			if !rule.Every.Zero() && !rule.Every.Calendar() {
@@ -659,10 +689,40 @@ func baseAnchor(in Input, rule DueRule) (float64, bool) {
 		return v, true
 	}
 	m := in.Meters[rule.Meter]
-	if r, ok := oldestReading(m, in.Now); ok {
+	if r, ok := anchorReading(m, in.Commitment.Anchor, in.Now); ok {
 		return r.Value, true
 	}
 	return 0, false
+}
+
+// anchorReading is the reading that best says where a meter stood when
+// this commitment started tracking it.
+//
+// A meter outlives the commitments that read it: one odometer feeds the
+// oil, the tyres and the brakes, and each starts on its own day. Falling
+// back to the meter's oldest reading therefore anchors a commitment
+// created in June at a number from January, which is wrong by however
+// far the truck was driven in between — and worse if the meter was
+// replaced in between, because that pre-anchor reading is in a
+// coordinate space the rebase window deliberately excludes, so the
+// anchor and the translation then disagree.
+//
+// So: the newest reading at or before the anchor, or failing that the
+// oldest one after it, which is the closest thing to "where it stood
+// when we started" the record contains. Whether that reading is recent
+// enough to conclude anything from is a separate question, and
+// staleness answers it (A11).
+func anchorReading(m Meter, anchor, now time.Time) (Reading, bool) {
+	rs := sortedReadings(m, now)
+	if len(rs) == 0 {
+		return Reading{}, false
+	}
+	for i := len(rs) - 1; i >= 0; i-- {
+		if !rs[i].At.After(anchor) {
+			return rs[i], true
+		}
+	}
+	return rs[0], true
 }
 
 func completionPosition(c Completion, meter string) (float64, bool) {
@@ -743,14 +803,6 @@ func counterPosition(m Meter, now time.Time) (Reading, string) {
 			m.Name, rs[i-1].Value, rs[i].Value, rs[i].At.Format("2 Jan 2006"))
 	}
 	return rs[len(rs)-1], ""
-}
-
-func oldestReading(m Meter, upto time.Time) (Reading, bool) {
-	rs := sortedReadings(m, upto)
-	if len(rs) == 0 {
-		return Reading{}, false
-	}
-	return rs[0], true
 }
 
 // decide folds the rules into one state. Earliest wins: whichever

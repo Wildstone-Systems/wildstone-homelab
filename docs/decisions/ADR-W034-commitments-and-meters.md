@@ -157,13 +157,20 @@ ADR-W024 already holds to, applied to capabilities rather than to models.
 
 ### A5. Due-ness is a pure function, and the engine decides nothing else
 
-**A reading taken after the moment being asked about is not visible to
-it.** That sentence is what makes the rest of this decision true: a
-replay that can see a reading from after the point it is replaying is not
+**Nothing that happened after the moment being asked about is visible to
+it** — not a meter reading, not a completion, not the making of an
+appointment. That sentence is what makes the rest of this decision true:
+a replay that can see a fact from after the point it is replaying is not
 a replay, and the same bound keeps a publisher with a fast clock from
-moving today's answer. Review of the prototype found it reading the
-newest reading outright, which would have quietly undermined the one
-property the whole design leans on.
+moving today's answer.
+
+Two rounds of review were needed to get it, which is itself the lesson.
+The first found the function taking the newest reading outright. The
+second found that fixing *readings* had left completions and bookings
+open, so a recurring commitment still advanced into a future cycle and a
+one-off still reported itself done before the work. The bound belongs on
+every input the ledger supplies, and stating it that way — rather than
+per-field — is what closes the class instead of the instance.
 
 Given a commitment, the readings on its meters, and the record of what
 has been done, "is this due" is a pure function. No I/O, no model, no
@@ -764,14 +771,37 @@ wrong.
    past. Getting either half wrong moves a due point by the size of the
    replacement.
 
+10. **A meter outlives the commitments that read it.** One odometer
+    feeds the oil, the tyres and the brakes, and each starts tracking on
+    its own day, so a commitment with no declared starting position must
+    anchor at the reading nearest *its* start — not at the meter's
+    oldest reading ever. The naive fallback anchors a June commitment in
+    January, and worse when the meter was replaced in between, because
+    that pre-anchor reading sits in a coordinate space the rebase window
+    deliberately excludes and the anchor and the translation then
+    disagree.
+
+11. **A due point behind where tracking began is refused, on a counter
+    as on the clock.** "Due at 50" on a meter that read 100 the day the
+    commitment was written is not a very overdue commitment; it is one
+    nobody can ever meet. The calendar rule refused this from the start
+    and the counter rule did not, which is the same asymmetry as finding
+    9 in a different place.
+
 None of this needed storage, an API, a resource kind or a model to
 settle, which is the argument for having built K3 first.
 
-Findings 8 and 9, and the two amendments to A5 and A11 above, came from
-review of this PR rather than from writing it. They share a shape worth
-naming: each is a case where the function produced a number instead of
-saying it could not, which is the one behaviour this package exists to
-refuse.
+Findings 8 to 11, and the amendments to A5 and A11 above, came from two
+rounds of review on this PR rather than from writing it. They share a
+shape worth naming: each is a case where the function produced a number
+instead of saying it could not, which is the one behaviour this package
+exists to refuse.
+
+Findings 10 and 11 add a second shape, and it is the more instructive
+one: a rule stated for the clock and not for counters, or fixed for one
+input and not its siblings. Both rounds found one of each. A guarantee
+worth having is worth stating over every input it covers, which is how
+A5 is now written.
 
 ---
 

@@ -208,3 +208,134 @@ func TestALateCompletionIsPlacedOnTheScheduleInTheRightCoordinates(t *testing.T)
 		t.Errorf("anchor = %g, want 6000 (slot 10000, same shift)", st.Anchor)
 	}
 }
+
+// ---------------------------------------------------------------------
+// Second review round on PR #242. The first round bounded meter readings
+// at Now; these are the places the same guarantee was still leaking.
+// ---------------------------------------------------------------------
+
+// 6. Completions are facts too, and a replay is not entitled to ones
+// that have not happened yet.
+func TestACompletionFromAfterNowIsNotVisible(t *testing.T) {
+	c := Commitment{
+		Name: "furnace-filter", Anchor: at(2026, time.June, 1),
+		Rollover: FromCompletion,
+		Due:      []DueRule{{Meter: MeterClock, Every: iv(t, "3mo"), Lead: iv(t, "14d")}},
+	}
+	occ := eval(t, Input{
+		Commitment: c,
+		History:    []Completion{{At: at(2026, time.September, 4), By: "mika"}},
+		Now:        at(2026, time.September, 2), // before that completion
+	})
+	if occ.Cycle != 1 {
+		t.Errorf("cycle = %d, want 1: the 4 September completion has not happened yet", occ.Cycle)
+	}
+	if occ.State != StateOverdue {
+		t.Errorf("state = %q, want overdue: cycle one was due 1 September", occ.State)
+	}
+}
+
+func TestAOneOffIsNotSatisfiedByAFutureCompletion(t *testing.T) {
+	// The sharper version: a one-off would report itself DONE before the
+	// work happened.
+	occ := eval(t, Input{
+		Commitment: dentist(t), // due 3 Oct
+		History:    []Completion{{At: at(2026, time.October, 3), By: "mika"}},
+		Now:        at(2026, time.September, 28),
+	})
+	if occ.State == StateSatisfied {
+		t.Fatalf("a one-off reported itself satisfied five days before the appointment")
+	}
+	if occ.State != StateDueSoon {
+		t.Errorf("state = %q, want due_soon", occ.State)
+	}
+}
+
+func TestABookingMadeAfterNowIsNotVisible(t *testing.T) {
+	// The third instance of the same class, which the review did not
+	// name: a replay must not see an appointment that had not been made.
+	occ := eval(t, Input{
+		Commitment: checkup(t),
+		Booking: &Booking{
+			At:       at(2026, time.September, 15),
+			BookedAt: at(2026, time.September, 12), // booked later than Now
+		},
+		Now: at(2026, time.August, 1),
+	})
+	if occ.State == StateScheduled {
+		t.Errorf("state = scheduled from a booking that had not been made yet")
+	}
+	if occ.State != StateDueSoon {
+		t.Errorf("state = %q, want due_soon", occ.State)
+	}
+}
+
+// 7. The clock rule refuses a due point that was already past before
+// tracking began. A counter's should too.
+func TestACounterDuePointBeforeItsAnchorIsRefused(t *testing.T) {
+	in := Input{
+		Commitment: Commitment{
+			Name: "f150-brakes", Anchor: at(2026, time.March, 1),
+			AnchorAt: map[string]float64{"odo": 100}, Rollover: Once,
+			Due: []DueRule{{Meter: "odo", AtValue: 50}},
+		},
+		Meters: map[string]Meter{"odo": {Name: "odo", Readings: readings(at(2026, time.June, 1), 120.0)}},
+		Now:    at(2026, time.June, 2),
+		Loc:    chicago,
+	}
+	_, err := Evaluate(in)
+	if err == nil {
+		t.Fatal("accepted a due point of 50 on a meter that already read 100 when tracking began")
+	}
+	if !strings.Contains(err.Error(), "already past before tracking began") {
+		t.Errorf("error = %q, want the same wording the clock rule uses", err)
+	}
+}
+
+// 8. A meter outlives the commitments that read it. The odometer feeds
+// oil, tyres and brakes, each starting on its own day, so falling back
+// to the meter's oldest-ever reading anchors a June commitment in
+// January.
+func TestTheAnchorFallbackUsesTheReadingAtTrackingStart(t *testing.T) {
+	c := Commitment{
+		Name: "f150-tyres", Anchor: at(2026, time.June, 1),
+		Rollover: FromCompletion, // no AnchorAt: the fallback is what is under test
+		Due:      []DueRule{{Meter: "odo", Every: iv(t, "5000")}},
+	}
+	occ := eval(t, Input{
+		Commitment: c,
+		Meters: map[string]Meter{"odo": {Name: "odo", Readings: []Reading{
+			{At: at(2026, time.January, 1), Value: 1000}, // long before this commitment
+			{At: at(2026, time.June, 1), Value: 2000},    // where tracking actually starts
+			{At: at(2026, time.July, 1), Value: 2400},
+		}}},
+		Now: at(2026, time.July, 1),
+	})
+	if got := ruleFor(occ, "odo").DueAt; got != 7000 {
+		t.Errorf("dueAt = %g, want 7000 (2000 at tracking start + 5000), not an anchor from January", got)
+	}
+}
+
+func TestTheAnchorFallbackIgnoresACoordinateResetThatPredatesTracking(t *testing.T) {
+	// Worse than merely early: the pre-anchor reading is in a coordinate
+	// space the rebase window deliberately excludes, so the anchor and
+	// the translation disagree.
+	c := Commitment{
+		Name: "f150-tyres", Anchor: at(2026, time.June, 1),
+		Rollover: FromCompletion,
+		Due:      []DueRule{{Meter: "odo", Every: iv(t, "5000")}},
+	}
+	occ := eval(t, Input{
+		Commitment: c,
+		Meters: map[string]Meter{"odo": {Name: "odo", Readings: []Reading{
+			{At: at(2026, time.January, 1), Value: 90000},
+			{At: at(2026, time.February, 1), Value: 0, Rebase: true, Prior: 90000},
+			{At: at(2026, time.June, 1), Value: 3000}, // tracking starts here
+			{At: at(2026, time.July, 1), Value: 3500},
+		}}},
+		Now: at(2026, time.July, 1),
+	})
+	if got := ruleFor(occ, "odo").DueAt; got != 8000 {
+		t.Errorf("dueAt = %g, want 8000 (3000 + 5000) in the current coordinates", got)
+	}
+}
