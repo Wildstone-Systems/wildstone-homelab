@@ -373,7 +373,7 @@
       body.endTime = el("ev-end").value;
     }
     if (editing) {
-      body.href = editing.href;
+      body.href = editing.calendarEvent;
       send("/api/v1/calendar/events/update", body);
     } else {
       send("/api/v1/calendar/events", body);
@@ -385,7 +385,7 @@
   el("delete").addEventListener("click", function () {
     if (!editing) { return; }
     if (!confirm("Remove “" + editing.title + "” from the household calendar?")) { return; }
-    send("/api/v1/calendar/events/delete", { href: editing.href, title: editing.title });
+    send("/api/v1/calendar/events/delete", { href: editing.calendarEvent, title: editing.title });
   });
 
   el("ev-allday").addEventListener("change", syncAllDay);

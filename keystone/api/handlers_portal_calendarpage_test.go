@@ -242,3 +242,38 @@ func TestTheCardOpensTheCalendarPage(t *testing.T) {
 		t.Errorf("card.Page = %q, want /calendar/", card.Page)
 	}
 }
+
+// Through the real response path, redactor included. A CalDAV server
+// names an event's file after its UID — token-shaped — and the API's
+// redactor replaced it with [REDACTED], so the page asked to remove a
+// file that did not exist and Radicale answered 404. The address must
+// come back exactly as the server reported it, and a delete made with
+// it must reach that file.
+func TestAnEventsAddressSurvivesTheResponseAndCanBeRemoved(t *testing.T) {
+	h, book := calendarHarness(t)
+	const reported = "/GROUPS/Y2FsZW5kYXJfdXNlcnM%3D/wildstone-8f14e45fceea167a5a36dedd4bea2543.ics"
+	loc := h.s.HouseholdLoc
+	book.events = []caldav.Event{{
+		Href: reported, Summary: "Work Day", AllDay: true,
+		Start: time.Date(2026, 9, 19, 0, 0, 0, 0, loc), End: time.Date(2026, 9, 20, 0, 0, 0, 0, loc),
+	}}
+
+	res := h.member(http.MethodGet, "/api/v1/calendar/events?from=2026-09-01&to=2026-09-30", "mika", "calendar_users", nil, "")
+	var out struct {
+		Events []map[string]any `json:"events"`
+	}
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	res.Body.Close()
+	if len(out.Events) != 1 || out.Events[0]["calendarEvent"] != reported {
+		t.Fatalf("the event's address came back as %v, want %q", out.Events, reported)
+	}
+
+	h.unthrottled()
+	if res, body := h.calendarPost("/api/v1/calendar/events/delete",
+		map[string]any{"href": out.Events[0]["calendarEvent"], "title": "Work Day"}); res.StatusCode != http.StatusOK {
+		t.Fatalf("delete with the address the page was given = %d: %v", res.StatusCode, body)
+	}
+	if want := "http://radicale:5232/GROUPS/Y2FsZW5kYXJfdXNlcnM=/wildstone-8f14e45fceea167a5a36dedd4bea2543.ics"; len(book.deletes) != 1 || book.deletes[0] != want {
+		t.Errorf("deleted %v, want [%s]", book.deletes, want)
+	}
+}

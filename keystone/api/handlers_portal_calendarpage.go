@@ -73,7 +73,10 @@ const maxCalendarWriteBytes = 16 << 10
 // are in the household's timezone, so a tablet with its clock set
 // elsewhere still files dinner under the right date.
 type calendarPageEvent struct {
-	Href   string    `json:"href"`
+	// Href is the event's address in the collection, under a key the
+	// redactor shelters (redact.calendarEventRefScanRegexp): its file
+	// name is a UID, which is token-shaped.
+	Href   string    `json:"calendarEvent"`
 	Title  string    `json:"title"`
 	Start  time.Time `json:"start"`
 	End    time.Time `json:"end,omitzero"`
