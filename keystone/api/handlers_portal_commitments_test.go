@@ -328,3 +328,140 @@ func TestSomebodyOutsideTheGroupIsRefusedAtTheWritePath(t *testing.T) {
 		t.Errorf("status = %d, want 403", got)
 	}
 }
+
+// A counter-based commitment answered with no number wedges itself
+// forever (Codex, #244).
+//
+// The completion closes the cycle and records `{}` for positions. Both
+// rollover modes need the position the meter stood at to measure the
+// next cycle from, so the new cycle opens permanently unresolved — and
+// there is no endpoint that deletes or corrects a completion, so the
+// household cannot get it back. The schema has said "evidence is not
+// optional" since it was written; this is the code agreeing.
+func TestACounterCommitmentCannotBeClosedWithoutItsNumber(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+
+	for _, what := range []string{"done", "waived"} {
+		t.Run(what+" with no number", func(t *testing.T) {
+			got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/"+what, "mika", nil)
+			if got != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400: closing a counter cycle with no reading "+
+					"leaves the next one permanently unresolved and nothing can undo it", got)
+			}
+		})
+	}
+
+	// With the number, it closes — and the number is what the next cycle
+	// is measured from.
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika",
+		map[string]any{"meters": map[string]any{"f150-odometer": 84210}}); got != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", got)
+	}
+	done, err := h.s.DB.ListCommitmentCompletions("f150-oil")
+	if err != nil {
+		t.Fatalf("ListCommitmentCompletions: %v", err)
+	}
+	if len(done) != 1 || done[0].Positions["f150-odometer"] != 84210 {
+		t.Errorf("completion = %+v, want the odometer recorded", done)
+	}
+}
+
+// A member who has just read the meter should not have to type the
+// number twice. A reading recorded at or before the completion is the
+// evidence, and the intake snapshots it.
+func TestARecentReadingIsEvidenceEnoughToCloseACounterCycle(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles", StaleAfter: "720h"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/meters/f150-odometer/readings", "mika",
+		map[string]any{"value": 84210}); got != http.StatusCreated {
+		t.Fatalf("recording the reading: status %d", got)
+	}
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika", nil); got != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: a reading the household just took is the evidence", got)
+	}
+	done, err := h.s.DB.ListCommitmentCompletions("f150-oil")
+	if err != nil {
+		t.Fatalf("ListCommitmentCompletions: %v", err)
+	}
+	if len(done) != 1 || done[0].Positions["f150-odometer"] != 84210 {
+		t.Errorf("completion = %+v, want the reading snapshotted", done)
+	}
+}
+
+// A reading too old to rely on is not evidence either. Measuring the
+// next cycle from wherever the truck was in June is the same "produced
+// a number instead of saying it could not" failure in a new place.
+func TestAStaleReadingIsNotEvidenceEnough(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles", StaleAfter: "168h"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+	if _, _, err := h.s.DB.AppendMeterReading(runtimedb.MeterReading{
+		Meter: "f150-odometer", Value: 84210, At: time.Now().AddDate(0, -3, 0),
+		RecordedBy: "mika", Source: runtimedb.ReadingByPerson}); err != nil {
+		t.Fatalf("AppendMeterReading: %v", err)
+	}
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika", nil); got != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400: a three-month-old odometer is not evidence", got)
+	}
+	// Typing the number still works, because the member is looking at it.
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika",
+		map[string]any{"meters": map[string]any{"f150-odometer": 90000}}); got != http.StatusCreated {
+		t.Errorf("status = %d, want 201", got)
+	}
+}
+
+// A one-off measures nothing from its completion, because nothing
+// follows it. Requiring evidence there would refuse an answer for the
+// sake of a cycle that never opens.
+func TestAOneOffCounterCommitmentNeedsNoNumberToClose(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-warranty", resource.CommitmentSpec{
+		Description: "Warranty inspection, once", Rollover: resource.RolloverOnce,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", AtValue: 36000}},
+	}, "household/mika")
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-warranty/done", "mika", nil); got != http.StatusCreated {
+		t.Errorf("status = %d, want 201: a one-off opens no next cycle to measure", got)
+	}
+}

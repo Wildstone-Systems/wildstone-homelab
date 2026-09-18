@@ -92,15 +92,20 @@ func (e *Engine) log() *slog.Logger {
 // Standing is where one commitment stands, with everything a caller
 // needs to render it without asking a second question.
 type Standing struct {
-	Name        string                       `json:"name"`
-	Description string                       `json:"description"`
-	Owner       string                       `json:"owner,omitempty"`
-	Scope       string                       `json:"scope,omitempty"`
-	MayComplete []string                     `json:"mayComplete,omitempty"`
-	Notify      []string                     `json:"notify,omitempty"`
-	Disabled    bool                         `json:"disabled,omitempty"`
-	Occurrence  commitment.Occurrence        `json:"occurrence"`
-	Booking     *runtimedb.CommitmentBooking `json:"booking,omitempty"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Owner       string   `json:"owner,omitempty"`
+	Scope       string   `json:"scope,omitempty"`
+	MayComplete []string `json:"mayComplete,omitempty"`
+	Notify      []string `json:"notify,omitempty"`
+	Disabled    bool     `json:"disabled,omitempty"`
+	// Rollover is what happens when a cycle closes. A surface needs it
+	// to know whether closing this one opens another, and therefore
+	// whether the evidence it is about to record will have to measure
+	// anything.
+	Rollover   string                       `json:"rollover,omitempty"`
+	Occurrence commitment.Occurrence        `json:"occurrence"`
+	Booking    *runtimedb.CommitmentBooking `json:"booking,omitempty"`
 }
 
 // Evaluate works out where every declared commitment stands, right now,
@@ -179,6 +184,7 @@ func (e *Engine) standing(res resource.Resource, meters map[string]commitment.Me
 		Name: res.Metadata.Name, Description: spec.Description,
 		Owner: res.Metadata.Owner, Scope: spec.Scope,
 		MayComplete: spec.MayComplete, Notify: spec.Notify, Disabled: spec.Disabled,
+		Rollover: spec.Rollover,
 	}
 	in, booking, err := e.input(res, meters, now)
 	if err != nil {
