@@ -87,7 +87,7 @@ func main() {
 	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W024 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
 	replyURL := flag.String("household-reply-url", "", "household event intake URL a notification's reply buttons post to, as a PHONE can reach it (not Keystone's loopback address); empty means notifications carry no reply buttons and a rule that asks for them fails loudly")
 	replyTTL := flag.Duration("household-reply-ttl", 12*time.Hour, "how long a notification's reply token stays valid")
-	calendarURL := flag.String("calendar-url", "", "CalDAV collection the calendar.* household actions read and write, e.g. http://radicale:5232/wildstone-calendar/household/ (ADR-W034). Empty leaves all six unregistered, so a Butler does not offer the household a calendar this deployment has not got. The password comes ONLY from CALENDAR_PASSWORD, never a flag")
+	calendarURL := flag.String("calendar-url", "", "CalDAV collection the calendar.* household actions read and write, e.g. http://radicale:5232/wildstone-calendar/household/ (ADR-W034). Empty leaves them all unregistered, so a Butler does not offer the household a calendar this deployment has not got. The password comes ONLY from CALENDAR_PASSWORD, never a flag")
 	calendarUser := flag.String("calendar-user", "", "directory account the calendar actions sign in to the CalDAV collection as; its password comes from CALENDAR_PASSWORD")
 	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia). Empty fails closed. This names ONE trust boundary and it now gates TWO things: the household review page (ADR-W030 A8.1), and Console sign-in by forwarded identity (ADR-W032) — a request from one of these addresses carrying Remote-User and a Remote-Groups list containing console_users is authenticated as that person, with admin authority. Setting this does not by itself grant anyone the Console: they must also be in the console_users directory group, which packages/wildstone-console declares")
 	flag.Parse()
@@ -232,7 +232,7 @@ type householdConfig struct {
 	// rather than open (ADR-W030 A8.1).
 	Ingress []string
 	// CalendarURL is the CalDAV collection the calendar.* actions act
-	// on; empty leaves all six unregistered (ADR-W034).
+	// on; empty leaves them all unregistered (ADR-W034).
 	CalendarURL string
 	// CalendarUser is the directory account those actions sign in as.
 	// Its password arrives in CALENDAR_PASSWORD, never in a flag — the
@@ -857,7 +857,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	if err != nil {
 		return fmt.Errorf("-household-timezone %q: %w", householdCfg.Timezone, err)
 	}
-	// The calendar's six household actions (ADR-W034 phase 4).
+	// The calendar's household actions (ADR-W034 phase 4).
 	//
 	// Registered whenever a collection is configured, which is the human
 	// decision this path has: an operator who pointed Keystone at a
@@ -890,7 +890,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		calendarActions = cal
 		if householdCfg.CalendarUser == "" || os.Getenv("CALENDAR_PASSWORD") == "" {
 			// Loud, because the alternative is silent: Radicale answers
-			// 401 to every read, the six tools are registered and fail,
+			// 401 to every read, the tools are registered and fail,
 			// and the capability reports as installed the whole time.
 			// That is the shape ADR-W029 exists to catch — a converged
 			// install that does not work — and the only place it can be

@@ -53,7 +53,7 @@
 #        -calendar-user radicale
 #        CALENDAR_PASSWORD=...          (env, never a flag)
 #
-#     Without these the six tools below are never registered, and a
+#     Without these the tools below are never registered, and a
 #     Butler does not offer the household a calendar this deployment has
 #     not got. WITH them, they work the moment the capability is enabled.
 #
@@ -153,12 +153,12 @@
 # rather than a default: Keystone is started with -calendar-url pointing
 # at the shared household collection, -calendar-user naming the service
 # account, and CALENDAR_PASSWORD carrying its password. Without those the
-# six are never registered, and a Butler does not offer the household a
+# they are never registered, and a Butler does not offer the household a
 # calendar this deployment has not got.
 #
-# The three reads are `read` and the three writes are `domestic`, which
-# is the whole of what a household surface may carry (ADR-W024 A5).
-# Nothing here reaches a container, a node or a plan.
+# The reads are `read`, creating and changing are `domestic`, and
+# deleting is `confirm` — the tier ADR-W024 A5.1 adds for "do it, but ask
+# first". Nothing here reaches a container, a node or a plan.
 #
 # NO publishes, AND WHY. Radicale's [hook] section emits to RabbitMQ or
 # to email, neither of which is Wildstone's household intake, and it can
@@ -175,7 +175,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: calendar-radicale
-  version: 1.4.0
+  version: 1.4.1
   capability: calendar
   profile: radicale
 requires:
@@ -487,7 +487,7 @@ templates:
       schedule: daily
       retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }
 # The household actions this capability offers (ADR-W001, ADR-W024 A5).
-# The domestic gateway dispatches these six and nothing else, at exactly
+# The domestic gateway dispatches these and nothing else, at exactly
 # these tiers — a rule or a Butler naming anything else is refused before
 # any executor sees it. keystone/domestic.CalendarTools is the other half
 # of this list, and TestCalendarToolsAreDeclaredByThePackage fails if the

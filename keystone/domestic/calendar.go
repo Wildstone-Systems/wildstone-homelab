@@ -1,6 +1,6 @@
 package domestic
 
-// The calendar executors (ADR-W034 phase 4): the six household actions
+// The calendar executors (ADR-W034 phase 4): the household actions
 // that make `packages/calendar-radicale` usable by an agent the moment
 // it is installed.
 //
@@ -68,16 +68,17 @@ const (
 
 // CalendarTools maps each tool to the tier it must be declared at.
 //
-// Reads are `read` and writes are `domestic`, which is the whole of what
-// a household surface may carry (ADR-W024 A5). Nothing here is above
-// that: none of these six touches a container, a node or a plan.
+// Nothing here is above what a household surface may carry (ADR-W024
+// A5): none of these touches a container, a node or a plan.
 //
-// Deleting arguably wants a tier of its own — "do it, but ask first" —
-// and there is no such tier. What stands in for it is that a delete
-// removes at most one event, refuses when the match is ambiguous, and
-// lands on the household stream like every other dispatch. ADR-W034
-// records the gap rather than inventing a confirmation primitive in a
-// calendar executor.
+// Deleting is at `confirm`, the tier ADR-W024 A5.1 adds. It wanted "do
+// it, but ask first", there was no such thing when this capability was
+// first written, and the answer was to add it to W024 rather than to
+// invent a confirmation primitive inside a calendar executor — the want
+// is every destructive household action, not a calendar quirk. Two
+// things follow from the tier: a rule firing on its own cannot carry it
+// at all, because there is nobody to ask, and an attended call is
+// refused until the member has said yes to THAT call.
 var CalendarTools = map[string]string{
 	CalToolAgenda:       TierRead,
 	CalToolSearch:       TierRead,
@@ -106,7 +107,7 @@ const defaultDurationMinutes = 60
 
 // Calendar is the household's calendar, as the action gateway sees it.
 //
-// One instance backs all six tools; Executors returns the registrations.
+// One instance backs every tool; Executors returns the registrations.
 type Calendar struct {
 	// Upstream is the collection these tools act on. It must be
 	// Writable, or the three write tools refuse every call — which is a
@@ -173,7 +174,7 @@ func (c *Calendar) Executors() []Executor {
 }
 
 // calendarTool is one registered tool. It carries the name rather than
-// being six near-identical types, because the six share every seam and
+// being a type per tool, because they share every seam and
 // differ only in which branch of Execute they take.
 type calendarTool struct {
 	cal  *Calendar
