@@ -96,7 +96,7 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 	}
 
 	runner := &butler.Runner{
-		Gateway: directed{Toolset: gw, system: systemFor(ctx, gw, b, t)},
+		Gateway: directed{Toolset: gw, system: systemFor(ctx, gw, b, t, bs.clockLine())},
 		Ledger:  bs.Ledger,
 		// The probe verdict decides what a session may DO, not which
 		// model it talks to (ADR-W017 A4). A Butler on an unprobed or
@@ -182,9 +182,13 @@ type preambler interface {
 	MemoryPreamble(context.Context) string
 }
 
-func systemFor(ctx context.Context, gw butler.Toolset, b runtimedb.Butler, t Turn) string {
+func systemFor(ctx context.Context, gw butler.Toolset, b runtimedb.Butler, t Turn, clock string) string {
 	var sb strings.Builder
 	sb.WriteString(gw.SystemPrompt())
+	if clock != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(clock)
+	}
 	if d := strings.TrimSpace(b.Directive); d != "" {
 		sb.WriteString("\n\nYou are ")
 		sb.WriteString(b.Name)
@@ -396,4 +400,27 @@ func (bs *Butlers) providerFor(b runtimedb.Butler) (provider.Provider, error) {
 	}
 	bs.clients[key] = p
 	return p, nil
+}
+
+// clockLine tells a Butler when and where it is.
+//
+// A model has no clock. Asked "what's on the calendar", a family Butler
+// could only take "Today" from what a tool said; asked "this weekend",
+// it had no dates to give a tool at all. A member who had to tell Joan
+// "I'm in America Chicago and it's only 18 SEP 2026" was doing this
+// line's job.
+func (bs *Butlers) clockLine() string {
+	loc := bs.Location
+	if loc == nil {
+		return ""
+	}
+	now := time.Now
+	if bs.Now != nil {
+		now = bs.Now
+	}
+	t := now().In(loc)
+	return fmt.Sprintf("It is now %s, %s in the household's timezone (%s, UTC%s). "+
+		"\"Today\", \"tomorrow\" and \"this weekend\" mean the household's days in that zone, "+
+		"and a time with no zone is that clock.",
+		t.Format("Monday 2 January 2006"), t.Format("15:04"), loc.String(), t.Format("-07:00"))
 }

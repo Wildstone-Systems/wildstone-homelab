@@ -41,6 +41,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
@@ -218,6 +219,12 @@ type Butlers struct {
 	// stall and messages nobody.
 	Notifier butler.StallNotifier
 	Log      *slog.Logger
+	// Location is the household's timezone, and Now its clock (nil is
+	// time.Now). Every Butler is told the date and time in this zone:
+	// without it a model has no "today" but a tool's say-so, and no way
+	// at all to turn "this weekend" into dates.
+	Location *time.Location
+	Now      func() time.Time
 
 	// mu guards clients.
 	mu sync.Mutex

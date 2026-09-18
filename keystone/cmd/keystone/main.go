@@ -1301,6 +1301,9 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				DB:     db,
 				Ledger: ledger,
 				Log:    log,
+				// Every Butler is told the date and time in the
+				// household's zone; see butlerlive.clockLine.
+				Location: householdLoc,
 				// The provider is built from the MODEL the Butler was
 				// assigned, and from nothing else. There is no argument
 				// here that could come from a message: this function is
