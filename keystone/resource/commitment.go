@@ -339,3 +339,29 @@ func commitmentGroupAllowed(s string) bool {
 func intervalIsCalendar(s string) bool {
 	return strings.TrimRight(strings.TrimSpace(s), "0123456789.") != ""
 }
+
+// CommitmentAnchorAt resolves an anchor against the household's own
+// timezone, which is the only place that knows what time it is.
+//
+// A BARE DATE AND AN INSTANT ARE NOT THE SAME KIND OF THING, and
+// treating them alike is a bug this had. `2026-09-10` is a day where the
+// household lives, so it is built in loc and midnight there is where the
+// first cycle starts. `2026-09-10T12:00:00Z` already names a moment; a
+// caller that rebuilt its wall-clock fields in loc would move it seven
+// hours in an America/Los_Angeles household, and every threshold derived
+// from it would move with it — silently, and by an amount that still
+// looks like a plausible date.
+func CommitmentAnchorAt(anchor string, loc *time.Location) (time.Time, error) {
+	t, err := ParseCommitmentAnchor(anchor)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if loc == nil {
+		loc = time.UTC
+	}
+	if !commitmentDateRegexp.MatchString(strings.TrimSpace(anchor)) {
+		// An instant. It is already the moment it says it is.
+		return t, nil
+	}
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc), nil
+}

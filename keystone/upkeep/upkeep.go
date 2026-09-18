@@ -197,15 +197,18 @@ func (e *Engine) standing(res resource.Resource, meters map[string]commitment.Me
 // function's argument.
 func (e *Engine) input(res resource.Resource, meters map[string]commitment.Meter, now time.Time) (commitment.Input, *runtimedb.CommitmentBooking, error) {
 	spec := res.Commitment
-	anchor, err := resource.ParseCommitmentAnchor(spec.Anchor)
+	// A bare date means that day in the household's own timezone, not in
+	// UTC, and an RFC3339 instant already names its moment. Passing the
+	// location in is why `resource` can tell them apart while still not
+	// knowing what time it is anywhere.
+	//
+	// Rebuilding BOTH in loc was the bug: noon UTC became noon Chicago,
+	// five hours late, and every threshold derived from the anchor moved
+	// with it — to a date that still looked entirely plausible.
+	anchor, err := resource.CommitmentAnchorAt(spec.Anchor, e.loc())
 	if err != nil {
 		return commitment.Input{}, nil, fmt.Errorf("upkeep: commitment %q anchor: %w", res.Metadata.Name, err)
 	}
-	// A bare date means that day in the household's own timezone, not in
-	// UTC. Resolving it here is why resource does not: that package does
-	// not know what time it is anywhere.
-	anchor = time.Date(anchor.Year(), anchor.Month(), anchor.Day(),
-		anchor.Hour(), anchor.Minute(), anchor.Second(), anchor.Nanosecond(), e.loc())
 
 	c := commitment.Commitment{
 		Name: res.Metadata.Name, Anchor: anchor,
@@ -231,11 +234,13 @@ func (e *Engine) input(res resource.Resource, meters map[string]commitment.Meter
 			rule.Lead = iv
 		}
 		if d.At != "" {
-			at, perr := resource.ParseCommitmentAnchor(d.At)
+			// The same distinction as the anchor, for the same reason: an
+			// absolute due point given as an instant is that instant.
+			at, perr := resource.CommitmentAnchorAt(d.At, e.loc())
 			if perr != nil {
 				return commitment.Input{}, nil, fmt.Errorf("upkeep: commitment %q due at: %w", res.Metadata.Name, perr)
 			}
-			rule.At = time.Date(at.Year(), at.Month(), at.Day(), at.Hour(), at.Minute(), at.Second(), 0, e.loc())
+			rule.At = at
 		}
 		rule.AtValue = d.AtValue
 		c.Due = append(c.Due, rule)

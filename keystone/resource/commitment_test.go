@@ -3,6 +3,7 @@ package resource
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func commitmentResource(spec CommitmentSpec) Resource {
@@ -176,5 +177,35 @@ func TestCommitmentRoundTripsThroughYAML(t *testing.T) {
 		back.Commitment.SatisfiedBy.Entity != "f150" ||
 		back.Commitment.Due[1].Lead != "14d" {
 		t.Errorf("round trip changed the spec: %+v", back.Commitment)
+	}
+}
+
+// An RFC3339 anchor names a moment, and resolving it in the household's
+// timezone must not move it. Codex found this on #244: the caller
+// rebuilt every anchor's wall-clock fields in loc, so noon UTC became
+// noon Pacific and every threshold derived from it shifted seven hours.
+func TestAnRFC3339AnchorKeepsItsInstantAndABareDateDoesNot(t *testing.T) {
+	la, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Skip("no tzdata:", err)
+	}
+	instant, err := CommitmentAnchorAt("2026-09-10T12:00:00Z", la)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC); !instant.Equal(want) {
+		t.Errorf("RFC3339 anchor moved: got %s, want %s", instant, want)
+	}
+	// A bare date, by contrast, IS reinterpreted: it means that day where
+	// the household lives, and midnight there is not midnight in UTC.
+	bare, err := CommitmentAnchorAt("2026-09-10", la)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, 9, 10, 0, 0, 0, 0, la); !bare.Equal(want) {
+		t.Errorf("bare date not resolved in the household's timezone: got %s, want %s", bare, want)
+	}
+	if bare.Equal(time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)) {
+		t.Error("bare date was left in UTC; the household's own midnight is the point")
 	}
 }

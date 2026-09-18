@@ -350,3 +350,44 @@ func TestAPassCannotSeeABookingMadeAfterTheMomentItIsEvaluating(t *testing.T) {
 		t.Errorf("changes = %+v, want scheduled", got)
 	}
 }
+
+// An RFC3339 anchor is a moment, and the pass must not re-read its
+// wall-clock fields in the household's timezone (Codex, #244).
+//
+// Chicago is UTC-5 in June, so an anchor of 12:00Z re-read as 12:00
+// local is five hours late. A commitment due exactly one day after its
+// anchor is therefore due at 12:00Z the next day, and a pass run at
+// 16:00Z — four hours later — must already call it overdue. Under the
+// bug the threshold sat at 17:00Z and the pass said nothing.
+func TestAnInstantAnchorIsNotReinterpretedInTheHouseholdTimezone(t *testing.T) {
+	f := newFixture(t)
+	f.commitment("instant", resource.CommitmentSpec{
+		Description: "an anchor that names a moment",
+		Rollover:    resource.RolloverOnce,
+		Anchor:      "2026-06-01T12:00:00Z",
+		Due:         []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "1d"}},
+	})
+	f.at(time.Date(2026, time.June, 2, 16, 0, 0, 0, time.UTC))
+	st := f.standings()["instant"]
+	due := st.Occurrence.Rules[0].DueTime
+	if want := time.Date(2026, time.June, 2, 12, 0, 0, 0, time.UTC); !due.Equal(want) {
+		t.Errorf("dueTime = %s, want %s: the anchor was re-read in local time and moved %s",
+			due.UTC(), want, due.Sub(want))
+	}
+	if got := st.Occurrence.State; got != commitment.StateOverdue {
+		t.Errorf("state = %q, want overdue", got)
+	}
+}
+
+func (f *fixture) standings() map[string]Standing {
+	f.t.Helper()
+	list, err := f.e.Evaluate()
+	if err != nil {
+		f.t.Fatalf("Evaluate: %v", err)
+	}
+	m := map[string]Standing{}
+	for _, st := range list {
+		m[st.Name] = st
+	}
+	return m
+}

@@ -29,12 +29,52 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
 )
 
+// who is the person a commitment question is being asked about: the
+// household name the door canonicalised, and the directory groups their
+// session arrived with.
+//
+// THE GROUPS TRAVEL WITH THE MEMBER, and this type exists so that they
+// cannot be left behind. `mayComplete` may name a group, and a check
+// that had only the name in hand could do nothing with `group/parents`
+// but guess — which it did, permissively, so every member of the
+// household could answer a commitment restricted to the adults. Making
+// the pair one value means a caller that forgets the groups does not
+// compile.
+//
+// They come from the same forwarded header the door authenticated
+// against, so a member added to a group after they signed in is treated
+// as the group they signed in with. That is the rule every other group
+// check on this surface already follows.
+type who struct {
+	member string
+	groups []string
+}
+
+// memberWho reads the groups the identity proxy forwarded for a request
+// the door has already admitted.
+func memberWho(r *http.Request, member string) who {
+	return who{member: member, groups: forwardedGroups(r)}
+}
+
+func forwardedGroups(r *http.Request) []string {
+	if r == nil {
+		return nil
+	}
+	var out []string
+	for _, g := range strings.Split(r.Header.Get(ConsoleGroupsHeader), ",") {
+		if g = strings.TrimSpace(g); g != "" {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
 // commitmentItems are the Needs-you rows a member's commitments produce.
 //
 // Only the ones that want something. A commitment quietly counting down
 // is not waiting on anybody, and putting it here would fill the one card
 // a household reads with things it does not have to do.
-func (s *Server) commitmentItems(member string, now time.Time) ([]needsYouItem, error) {
+func (s *Server) commitmentItems(w who, now time.Time) ([]needsYouItem, error) {
 	if s.Upkeep == nil {
 		return nil, nil
 	}
@@ -47,17 +87,17 @@ func (s *Server) commitmentItems(member string, now time.Time) ([]needsYouItem, 
 		if st.Disabled || !commitmentWants(st) {
 			continue
 		}
-		if !visibleTo(st, member) {
+		if !visibleTo(st, w) {
 			continue
 		}
 		items = append(items, needsYouItem{
 			Ref:         st.Name,
 			Kind:        needsYouCommitment,
 			Summary:     st.Description,
-			WaitingOn:   waitingOn(st, member),
+			WaitingOn:   waitingOn(st, w),
 			Waited:      humanSince(st.Occurrence.OpenedAt, now),
 			Consequence: commitmentConsequence(st),
-			Decidable:   mayComplete(st, member),
+			Decidable:   mayComplete(st, w),
 			Tone:        commitmentTone(st),
 		})
 	}
@@ -86,11 +126,11 @@ func commitmentWants(st upkeep.Standing) bool {
 // A personal commitment is the owner's business and nobody else's — the
 // same boundary W033's memory scopes draw, using the same words rather
 // than a second vocabulary for the same question.
-func visibleTo(st upkeep.Standing, member string) bool {
+func visibleTo(st upkeep.Standing, w who) bool {
 	if st.Scope != resource.CommitmentScopePersonal {
 		return true
 	}
-	return strings.TrimPrefix(st.Owner, "household/") == member || mayComplete(st, member)
+	return strings.TrimPrefix(st.Owner, "household/") == w.member || mayComplete(st, w)
 }
 
 // mayComplete is the `decidable` question: may THIS member answer it?
@@ -106,31 +146,45 @@ func visibleTo(st upkeep.Standing, member string) bool {
 // profile rather than a role, so there is no adults-versus-children
 // vocabulary here to lean on, and inventing one in this file would put
 // it in the wrong place. A household wanting it narrower names who.
-func mayComplete(st upkeep.Standing, member string) bool {
+func mayComplete(st upkeep.Standing, w who) bool {
 	if len(st.MayComplete) == 0 {
 		if st.Scope == resource.CommitmentScopePersonal {
-			return strings.TrimPrefix(st.Owner, "household/") == member
+			return strings.TrimPrefix(st.Owner, "household/") == w.member
 		}
 		return true
 	}
-	for _, who := range st.MayComplete {
-		if strings.TrimPrefix(who, "household/") == member {
+	for _, p := range st.MayComplete {
+		if strings.TrimPrefix(p, "household/") == w.member {
 			return true
 		}
-		// A group reference is resolved by the directory, which this
-		// surface does not read. Treated as permissive rather than
-		// refusing somebody who is in it: an affordance wrongly offered
-		// is refused by the write path below, and an affordance wrongly
-		// withheld is invisible.
-		if strings.HasPrefix(who, "group/") || who == "household" {
+		// `household` is everybody who got through the door, and the
+		// door is the household boundary.
+		if p == "household" {
+			return true
+		}
+		// A GROUP IS ANSWERED, NOT ASSUMED. This branch used to return
+		// true for any group at all, on the reasoning that an affordance
+		// wrongly offered would be refused by the write path — but the
+		// write path calls this same function, so nothing refused it and
+		// `mayComplete: [group/parents]` was a comment rather than a
+		// rule (Codex, #244).
+		//
+		// The groups the proxy forwarded are the same ones the door
+		// authenticated against, so the question is answerable here and
+		// does not need a directory read. A group nobody is in denies,
+		// which is the safe direction: a household that narrows a
+		// commitment to a group it has not created has narrowed it to
+		// nobody, and would rather find that out by nobody being able to
+		// tick it off than by everybody being able to.
+		if g, ok := strings.CutPrefix(p, "group/"); ok && slices.Contains(w.groups, g) {
 			return true
 		}
 	}
 	return false
 }
 
-func waitingOn(st upkeep.Standing, member string) string {
-	if mayComplete(st, member) {
+func waitingOn(st upkeep.Standing, w who) string {
+	if mayComplete(st, w) {
 		return "you"
 	}
 	if owner := strings.TrimPrefix(st.Owner, "household/"); owner != st.Owner && owner != "" {
@@ -183,11 +237,12 @@ type commitmentAnswer struct {
 func (s *Server) answerCommitment(what string) portalFunc {
 	return func(_ http.ResponseWriter, r *http.Request, member string, _ []resource.Resource) (any, int, error) {
 		name := r.PathValue("name")
-		st, code, err := s.commitmentFor(name, member)
+		w := memberWho(r, member)
+		st, code, err := s.commitmentFor(name, w)
 		if err != nil {
 			return nil, code, err
 		}
-		if !mayComplete(st, member) {
+		if !mayComplete(st, w) {
 			// Reached only by somebody bypassing the page, since the
 			// affordance is absent rather than present-and-refused.
 			return nil, http.StatusForbidden, fmt.Errorf("%q is not yours to answer", name)
@@ -271,7 +326,7 @@ func (s *Server) homeMeterReading(_ http.ResponseWriter, r *http.Request, member
 }
 
 // commitmentFor finds a declared commitment a member may see.
-func (s *Server) commitmentFor(name, member string) (upkeep.Standing, int, error) {
+func (s *Server) commitmentFor(name string, w who) (upkeep.Standing, int, error) {
 	if s.Upkeep == nil {
 		return upkeep.Standing{}, http.StatusServiceUnavailable, fmt.Errorf("this page is not ready yet")
 	}
@@ -283,7 +338,7 @@ func (s *Server) commitmentFor(name, member string) (upkeep.Standing, int, error
 		if st.Name != name {
 			continue
 		}
-		if !visibleTo(st, member) {
+		if !visibleTo(st, w) {
 			// Absent rather than forbidden: a personal commitment
 			// somebody else cannot see should not be confirmed to exist
 			// by the shape of the refusal.

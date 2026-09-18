@@ -329,7 +329,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 		Groups: householdGroups(),
 	}
 	resp.Search.Engine, resp.Search.Offered = engine, portal.Engines
-	resp.NeedsYou = s.homeNeedsYou(member, now)
+	resp.NeedsYou = s.homeNeedsYou(memberWho(r, member), now)
 	resp.Activity = s.homeActivity(member, now)
 	resp.Notifications = s.homeNotifications(member)
 	resp.Calendar = s.homeCalendar(desired)
@@ -363,7 +363,7 @@ const maxNeedsYou = 3
 // paths — and §7 excludes exactly that from this card. Saying "two
 // things are waiting for the owner" is honest, useful, and leaks
 // nothing.
-func (s *Server) homeNeedsYou(member string, now time.Time) needsYouCard {
+func (s *Server) homeNeedsYou(w who, now time.Time) needsYouCard {
 	card := needsYouCard{Items: []needsYouItem{}}
 	// Asked of the database as "questions still waiting on this
 	// person", not as "the newest fifty notices, some of which might
@@ -378,7 +378,7 @@ func (s *Server) homeNeedsYou(member string, now time.Time) needsYouCard {
 	// are bounded because a card shows three; the count is not bounded
 	// at all, because it is a count.
 	pending := runtimedb.NoticeFilter{
-		Recipient: member, Deliverable: true, Pending: true, At: now,
+		Recipient: w.member, Deliverable: true, Pending: true, At: now,
 	}
 	notices, err := s.DB.ListNotices(maxNeedsYou, pending)
 	if err != nil {
@@ -413,7 +413,7 @@ func (s *Server) homeNeedsYou(member string, now time.Time) needsYouCard {
 	// a commitment quietly counting down is not waiting on anybody, and
 	// filling the one card a household reads with things it does not
 	// have to do is how the card stops being read (ADR-W034 K5).
-	if commitments, cerr := s.commitmentItems(member, now); cerr != nil {
+	if commitments, cerr := s.commitmentItems(w, now); cerr != nil {
 		s.Log.Error("home needs-you commitments", "err", cerr)
 		// Same sentence as the notices failure, and for the same
 		// reason: not being able to tell must not look like an

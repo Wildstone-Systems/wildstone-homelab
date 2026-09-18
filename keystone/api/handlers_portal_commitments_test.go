@@ -237,3 +237,94 @@ func (h *harness) memberJSON(t *testing.T, method, path, user string, body any) 
 	defer resp.Body.Close()
 	return resp.StatusCode
 }
+
+// memberJSONAs is memberJSON for a member in extra directory groups.
+func (h *harness) memberJSONAs(t *testing.T, method, path, user, groups string, body any) int {
+	t.Helper()
+	var r io.Reader = strings.NewReader("")
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		r = bytes.NewReader(encoded)
+	}
+	resp := h.member(method, path, user, groups, r, "application/json")
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// summaryAs reads the page for a member the proxy put in extra groups.
+func (h *harness) summaryAs(t *testing.T, user, groups string) homeSummaryResponse {
+	t.Helper()
+	res := h.member(http.MethodGet, "/api/v1/home/summary", user, groups, nil, "")
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("summary for %s: status %d", user, res.StatusCode)
+	}
+	var got homeSummaryResponse
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding summary: %v", err)
+	}
+	return got
+}
+
+// `mayComplete: [group/parents]` is a rule, not a comment (Codex, #244).
+//
+// This used to pass for everybody: a group reference was treated as
+// permissive on the reasoning that the write path would refuse anyone
+// who was not in it, and the write path calls the same function. So a
+// commitment narrowed to the adults could be ticked off by anybody who
+// could reach the page, and the narrowing was decorative.
+func TestAGroupInMayCompleteIsAnsweredRatherThanAssumed(t *testing.T) {
+	h := commitmentHarness(t)
+	overdueCheckup(t, h, []string{"group/parents"}, "")
+
+	inGroup, ok := commitmentItem(h.summaryAs(t, "mika", "homepage_users,parents").NeedsYou.Items, "kai-checkup")
+	if !ok {
+		t.Fatal("the checkup is missing from a parent's card")
+	}
+	if !inGroup.Decidable {
+		t.Errorf("somebody in group/parents was not offered the affordance: %+v", inGroup)
+	}
+	outOfGroup, ok := commitmentItem(h.needsYou(t, "kai"), "kai-checkup")
+	if !ok {
+		t.Fatal("the checkup should still be visible to the child it is about")
+	}
+	if outOfGroup.Decidable {
+		t.Errorf("somebody outside group/parents was offered the affordance: %+v", outOfGroup)
+	}
+
+	// Read both cards before writing: answering it closes the cycle, and
+	// a closed commitment is asking nobody for anything.
+	if got := h.memberJSONAs(t, http.MethodPost,
+		"/api/v1/home/commitments/kai-checkup/done", "mika", "homepage_users,parents", nil); got != http.StatusCreated {
+		t.Errorf("a parent was refused: status %d, want 201", got)
+	}
+}
+
+// And the write path refuses them, which is what the comment claimed
+// all along.
+func TestSomebodyOutsideTheGroupIsRefusedAtTheWritePath(t *testing.T) {
+	h := commitmentHarness(t)
+	overdueCheckup(t, h, []string{"group/parents"}, "")
+	if got := h.memberJSONAs(t, http.MethodPost,
+		"/api/v1/home/commitments/kai-checkup/done", "kai", "homepage_users", nil); got != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", got)
+	}
+	// A group the household never created narrows the commitment to
+	// nobody. That is the safe direction and it is deliberate: finding
+	// out because nobody can tick it off beats finding out because
+	// everybody could.
+	h.declareCommitment(t, "nobody", resource.CommitmentSpec{
+		Description: "narrowed to a group that does not exist",
+		Rollover:    resource.RolloverFromCompletion,
+		Anchor:      time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:         []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "3mo", Lead: "14d"}},
+		MayComplete: []string{"group/nonexistent"},
+	}, "household/mika")
+	if got := h.memberJSONAs(t, http.MethodPost,
+		"/api/v1/home/commitments/nobody/done", "mika", "homepage_users", nil); got != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", got)
+	}
+}
