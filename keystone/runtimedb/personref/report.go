@@ -42,12 +42,20 @@ const (
 	Orphan Verdict = "orphan"
 )
 
-// Use is one handle found in one column.
+// Use is one handle found in one column, in rows that agree about
+// whether they are scoped.
+//
+// A Scoped column can produce TWO uses for one handle — `household` in
+// shared memory rows is the scope, and the same word in private rows is
+// not — because the two answer the migration's question differently.
 type Use struct {
 	Table  string
 	Column string
 	Kind   Kind
 	Rows   int
+	// Scope is true when these rows hold the column's non-person scope
+	// rather than a reference to a party.
+	Scope bool
 }
 
 // Handle is one distinct value and everywhere it appears.
@@ -67,6 +75,21 @@ type Handle struct {
 // one.
 var scopes = map[string]bool{"household": true}
 
+// scopeMode says WHICH ROWS of a Scoped column hold the scope rather
+// than a person: the companion column recording the ownership mode, and
+// the value of it that licenses the scope.
+//
+// Asking only "is this value the word household" is a different and
+// weaker question. A PRIVATE memory record owned by `household` is not
+// a scoped row, it is a broken one, and the difference between a report
+// that is right per row and one that is right on average is exactly the
+// kind of thing a migration gate must not get wrong.
+var scopeMode = map[string]struct{ by, when string }{
+	"butler_memory.owner":           {"audience", "shared"},
+	"butler_index.owner":            {"audience", "shared"},
+	"integration_connections.owner": {"ownership", "household"},
+}
+
 // InHumanColumn reports whether this handle appears anywhere slice 2b
 // would repoint. A handle used only in actor columns is not a Person
 // question at all. Scoped columns count: they hold a Person in one
@@ -82,21 +105,32 @@ func (h Handle) InHumanColumn() bool {
 
 // Blocking reports whether this handle must stop the real migration.
 //
-// Only a handle in a HUMAN column can block, and only when it does not
-// resolve. A machine principal in an actor column is the normal case —
-// every deployment has rows written by root-admin — and treating it as
-// an unresolved reference is the mistake that would abort every real
-// migration.
+// Decided PER USE, not per handle. A handle is one string, and the same
+// string can be legitimate in one place and unresolvable in another:
+// `household` owning a shared memory record is the scope, and the same
+// word in butler_tasks.author is a person reference to nobody.
+// Collapsing the two — as an earlier version did, by asking whether ANY
+// use was scoped — let the scope excuse the orphan, which is precisely
+// the silent pass this report exists to prevent.
+//
+// A machine principal in an actor column is still the normal case:
+// every deployment has rows written by root-admin, and treating those
+// as unresolved is what would abort every real migration.
 func (h Handle) Blocking() bool {
-	if !h.InHumanColumn() {
+	if h.Verdict == Resolved {
 		return false
 	}
-	switch h.Verdict {
-	case Resolved, Scope:
-		return false
-	default:
+	for _, u := range h.Uses {
+		if u.Kind != Human && u.Kind != Scoped {
+			continue
+		}
+		if u.Scope {
+			// Legitimately the scope in these rows.
+			continue
+		}
 		return true
 	}
+	return false
 }
 
 // Report is the whole dry run.
@@ -118,16 +152,21 @@ func (r Report) Blocking() []Handle {
 	return out
 }
 
-// scopedUse reports whether any of these uses is in a column that
-// accepts a scope. The same literal in a plain human column is not a
-// scope — it is somebody who managed to be called household.
-func scopedUse(us []Use) bool {
+// allScoped reports whether every use that bears on the migration is
+// the column's scope. A use in an actor column does not count either
+// way — 2b does not touch those.
+func allScoped(us []Use) bool {
+	any := false
 	for _, u := range us {
-		if u.Kind == Scoped {
-			return true
+		if u.Kind != Human && u.Kind != Scoped {
+			continue
 		}
+		if !u.Scope {
+			return false
+		}
+		any = true
 	}
-	return false
+	return any
 }
 
 // person is one row of the people table.
@@ -183,9 +222,11 @@ func Survey(q Querier) (Report, error) {
 		if err != nil {
 			return Report{}, err
 		}
-		for value, rows := range found {
-			uses[value] = append(uses[value],
-				Use{Table: c.Table, Column: c.Column, Kind: c.Kind, Rows: rows})
+		for k, rows := range found {
+			uses[k.value] = append(uses[k.value], Use{
+				Table: c.Table, Column: c.Column, Kind: c.Kind,
+				Rows: rows, Scope: k.scoped && scopes[fold(k.value)],
+			})
 		}
 	}
 
@@ -200,12 +241,17 @@ func Survey(q Querier) (Report, error) {
 		h := Handle{Value: value, Uses: us}
 		matches := byFold[fold(value)]
 		switch {
-		// A recognised scope in a column that takes one. Checked first
-		// because it is a VALUE with a fixed meaning, not a name to
-		// look up: household-shared memory is owned by the household
-		// and always will be, so resolving it — or blocking on it —
-		// would refuse to migrate every deployment that has any.
-		case scopes[fold(value)] && scopedUse(us):
+		// Every place this value means anything to the migration is a
+		// scope. Checked first because a scope is a VALUE with a fixed
+		// meaning, not a name to look up: household-shared memory is
+		// owned by the household and always will be, so resolving it —
+		// or blocking on it — would refuse to migrate every deployment
+		// that has any.
+		//
+		// "Every place", not "any place". The same word elsewhere, in a
+		// column that takes only a person, is a reference to nobody and
+		// keeps its own verdict.
+		case scopes[fold(value)] && allScoped(us):
 			h.Verdict = Scope
 		// Checked BEFORE resolution, and that order is the whole point.
 		//
@@ -291,29 +337,43 @@ func loadPrincipals(q Querier) (map[string]bool, error) {
 	return out, rows.Err()
 }
 
-// distinct counts the rows behind each non-empty value of one column.
+// group is one value of a column, split by whether its rows are in the
+// column's scoped ownership mode.
+type group struct {
+	value  string
+	scoped bool
+}
+
+// distinct counts the rows behind each non-empty value of one column,
+// splitting a Scoped column's rows by their ownership mode so the two
+// can be judged separately.
 //
 // The identifiers are interpolated because a column name cannot be a
-// bound parameter in SQL. They are safe: both come from Columns, which
-// is a compile-time table in this package, and every entry is
-// reconciled against the live schema by the tests. Nothing here ever
+// bound parameter in SQL. They are safe: every one comes from Columns
+// or scopeMode, both compile-time tables in this package, and Columns
+// is reconciled against the live schema by the tests. Nothing here ever
 // sees a caller's string.
-func distinct(q Querier, c Column) (map[string]int, error) {
-	rows, err := q.Query(fmt.Sprintf(
-		`SELECT %s, COUNT(*) FROM %s WHERE %s <> '' GROUP BY %s`,
-		c.Column, c.Table, c.Column, c.Column))
+func distinct(q Querier, c Column) (map[group]int, error) {
+	mode, scoped := scopeMode[c.Table+"."+c.Column]
+	sel := fmt.Sprintf(`SELECT %s, COUNT(*), '' FROM %s WHERE %s <> '' GROUP BY %s`,
+		c.Column, c.Table, c.Column, c.Column)
+	if scoped {
+		sel = fmt.Sprintf(`SELECT %s, COUNT(*), %s FROM %s WHERE %s <> '' GROUP BY %s, %s`,
+			c.Column, mode.by, c.Table, c.Column, c.Column, mode.by)
+	}
+	rows, err := q.Query(sel)
 	if err != nil {
 		return nil, fmt.Errorf("personref: scanning %s.%s: %w", c.Table, c.Column, err)
 	}
 	defer rows.Close()
-	out := map[string]int{}
+	out := map[group]int{}
 	for rows.Next() {
-		var v string
+		var v, m string
 		var n int
-		if err := rows.Scan(&v, &n); err != nil {
+		if err := rows.Scan(&v, &n, &m); err != nil {
 			return nil, err
 		}
-		out[v] = n
+		out[group{value: v, scoped: scoped && m == mode.when}] += n
 	}
 	return out, rows.Err()
 }

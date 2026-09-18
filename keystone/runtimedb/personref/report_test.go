@@ -493,3 +493,88 @@ func TestTheScopeIsOnlyAScopeWhereAColumnTakesOne(t *testing.T) {
 		t.Error("an orphan in a person-only column does not block")
 	}
 }
+
+// A scope in one column does not excuse an orphan in another.
+//
+// The handle is one string; its uses are not. `household` owning a
+// shared memory record is the scope, and the same word in
+// butler_tasks.author is a person reference to nobody. An earlier
+// version asked whether ANY use was scoped and so let the first excuse
+// the second — a silent pass, on exactly the report a migration gate
+// depends on.
+func TestAScopeInOneColumnDoesNotExcuseAnOrphanInAnother(t *testing.T) {
+	rep, _ := surveyed(t, func(db *runtimedb.DB) {
+		people(t, db, "mika")
+		// Legitimate: a household-shared memory record.
+		if _, err := db.RecordMemory(runtimedb.MemoryRecord{
+			Kind: runtimedb.MemoryFact, Subject: "household", Content: "bins on Tuesday",
+			Audience: runtimedb.ButlerAudienceShared, PermissionLabel: "household",
+			Owner: "household", Author: "mika", SourceKind: "conversation", SourceID: "v-11",
+		}); err != nil {
+			t.Fatalf("RecordMemory: %v", err)
+		}
+		// Not legitimate: a task authored by nobody.
+		if _, err := db.InsertButlerTask(runtimedb.ButlerTask{
+			Kind: runtimedb.ButlerTaskConversation, Author: "household", Owner: "mika",
+			Surface: runtimedb.ButlerSurfaceFamily, Profile: runtimedb.ProfileHousehold,
+			Audience:  runtimedb.ButlerAudienceShared,
+			Objective: "x", CompletionCriteria: "done",
+			Retention: runtimedb.ButlerRetentionConversation,
+		}); err != nil {
+			t.Fatalf("InsertButlerTask: %v", err)
+		}
+	})
+
+	h := find(t, rep, "household")
+	if !h.Blocking() {
+		t.Fatal("the memory scope excused the orphaned task author; " +
+			"an unresolved person reference was declared migration-ready")
+	}
+	// And the report says which use is which, so an Owner can act on
+	// the right one rather than hunting.
+	var scoped, orphaned bool
+	for _, u := range h.Uses {
+		if u.Table == "butler_memory" && u.Column == "owner" {
+			scoped = u.Scope
+		}
+		if u.Table == "butler_tasks" && u.Column == "author" {
+			orphaned = !u.Scope
+		}
+	}
+	if !scoped {
+		t.Error("the shared memory row is not reported as the scope")
+	}
+	if !orphaned {
+		t.Error("the task author is reported as a scope, and that column takes only a person")
+	}
+}
+
+// The scope is licensed by the row's ownership mode, not by the word.
+//
+// butler_memory.owner is the household only for a SHARED record. The
+// same value on a private record is not a scoped row, it is a broken
+// one, and a report that cannot tell them apart is right on average
+// rather than right per row.
+func TestTheScopeIsLicensedByTheRowsOwnershipMode(t *testing.T) {
+	rep, _ := surveyed(t, func(db *runtimedb.DB) {
+		people(t, db, "mika")
+		if _, err := db.RecordMemory(runtimedb.MemoryRecord{
+			Kind: runtimedb.MemoryFact, Subject: "mika", Content: "a private note owned by nobody",
+			Audience: runtimedb.ButlerAudiencePrivate, PermissionLabel: "personal",
+			Owner: "household", Author: "mika", SourceKind: "conversation", SourceID: "v-12",
+		}); err != nil {
+			t.Fatalf("RecordMemory: %v", err)
+		}
+	})
+
+	h := find(t, rep, "household")
+	for _, u := range h.Uses {
+		if u.Table == "butler_memory" && u.Column == "owner" && u.Scope {
+			t.Fatal("a PRIVATE memory record owned by `household` was accepted as the scope; " +
+				"the scope belongs to shared records, and this row has no owner")
+		}
+	}
+	if !h.Blocking() {
+		t.Error("a private record owned by the household scope does not block")
+	}
+}
