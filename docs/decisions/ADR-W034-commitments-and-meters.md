@@ -1,10 +1,10 @@
 # ADR-W034: Commitments and meters — the household keeps track of what it owes itself
 
-- **Status:** draft, ready to propose once the household homepage merges.
-  Work package K3 is prototyped in `keystone/commitment`; nothing else is
-  built and nothing reads it. K1 waits on PR #238 rather than on a
-  decision — the surface is settled below, and building on a 69-commit
-  branch under review is the only thing left worth avoiding.
+- **Status:** proposed. Work package K3 is built and tested in
+  `keystone/commitment`; K1, K2 and K4–K7 are not started and nothing
+  imports the package yet. Every decision in Part A is made — the two
+  that were open (one-off obligations, and who may approve a Member's
+  proposal) are closed in A9 and A20.
 - **Number:** W034. Taken after W032 and W033 landed on main (#228); the
   earlier `WXXX` placeholder existed because both were then unmerged.
 - **Relates to:** ADR-W024 (household events, the `Automation` resource,
@@ -752,12 +752,14 @@ Person core (#202). That settles:
 - **The number.** W034, taken once W032 and W033 were no longer in
   flight.
 
-**The household homepage is PR #238**, open against this same main and
-not yet merged. A19 and A22 are written against it, which is why this ADR
-is ready to propose but K1 is not ready to start: the surface is decided,
-and building code on a 69-commit branch still under review is the one
-avoidable risk left. K3 is unaffected either way — it imports nothing but
-the standard library and has no opinion about surfaces.
+**The household homepage merged** as #238. A19, A20 and A22 were written
+against it in review, so each was re-checked against the merged tree
+rather than assumed to have survived: `needsYouItem` still carries
+`Summary`, `WaitingOn`, `Waited`, `Consequence`, `Decidable` and `Tone`;
+`homeCard` still carries `Available` and `Problem`; the connection is
+`household_portal` in `keystone/portal/scope.go`; and the family front
+page is `capability: dashboard, profile: wildstone, exclusive: true`,
+gated by the `LdapGroup` only that profile declares.
 
 **Both questions this ADR left open are now closed.**
 
@@ -771,4 +773,4 @@ the standard library and has no opinion about surfaces.
   W033 E2 superseding ADR-W030 A6, per A20. The later ADR governs;
   reconciling the older text is not this ADR's work.
 
-Only the merge of PR #238 now stands between this ADR and K1.
+Nothing now stands between this ADR and K1 but the decision to start it.
