@@ -10,7 +10,7 @@ import (
 )
 
 func TestCoordinatorLeaseIsSingleAndFenced(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 
 	if _, err := db.GetCoordinator(); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a lease existed before anyone took one: %v", err)

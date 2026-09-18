@@ -15,7 +15,7 @@ import (
 // own forgotten records are yours to keep a copy of; other people's
 // are not, or "forget that" would hold only until somebody exported.
 func TestExportDoesNotReturnOtherPeoplesForgottenRecords(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 
 	mine, err := db.RecordMemory(MemoryRecord{
 		Kind: MemoryFact, Subject: "sam", Content: "sam sleeps badly on Sundays",
@@ -65,7 +65,7 @@ func TestExportDoesNotReturnOtherPeoplesForgottenRecords(t *testing.T) {
 // placement: the epoch is never bumped, so the node it was running on
 // is still holding a credential nothing revoked.
 func TestProvingRemovalOfALivePlacementIsRefused(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	if _, err := db.CreateConnection(IntegrationConnection{
 		Name: "house-calendar", Adapter: "caldav", Ownership: OwnershipHousehold,
 		Owner: "household", CreatedBy: "root-admin",
@@ -99,7 +99,7 @@ func TestProvingRemovalOfALivePlacementIsRefused(t *testing.T) {
 // was never proven. A connection with a credential possibly still on a
 // machine nobody watches is degraded, however well the new node answers.
 func TestPlacementDoesNotClearAnUnprovenRemoval(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	if _, err := db.CreateConnection(IntegrationConnection{
 		Name: "house-calendar", Adapter: "caldav", Ownership: OwnershipHousehold,
 		Owner: "household", CreatedBy: "root-admin",
@@ -156,7 +156,7 @@ func TestPlacementDoesNotClearAnUnprovenRemoval(t *testing.T) {
 // grant, or an administrator's enable becomes a way around the
 // per-work authorization that made it grant-required (A7).
 func TestEnablingAToolDoesNotBypassARequiredGrant(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	if err := db.SetToolControl(ProfileHousehold, "send_message", ToolEnabled,
 		"the family surface may message", "root-admin"); err != nil {
 		t.Fatal(err)
@@ -194,7 +194,7 @@ func TestEnablingAToolDoesNotBypassARequiredGrant(t *testing.T) {
 // their own name, and — because a notice is answerable once — lock the
 // intended recipient out of their own decision permanently.
 func TestOnlyTheRecipientCanAnswerANotice(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	decision, err := db.RaiseNotice(NoticeRequest{
 		Kind: "approval", Recipient: "sam", DedupeKey: "a-1",
 		Asks: true, Body: "shall I cancel the delivery?",
@@ -228,7 +228,7 @@ func TestOnlyTheRecipientCanAnswerANotice(t *testing.T) {
 // fences that placement rather than giving up on the revocation, and
 // leaves the removal unproven, because nobody has been to that machine.
 func TestReconciliationRevokesACredentialARestoredPlacementStillHolds(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	if _, err := db.CreateConnection(IntegrationConnection{
 		Name: "house-calendar", Adapter: "caldav", Ownership: OwnershipHousehold,
 		Owner: "household", CreatedBy: "root-admin",
@@ -304,7 +304,7 @@ func TestReconciliationRevokesACredentialARestoredPlacementStillHolds(t *testing
 // and the adapter's next poll carries them out before any deletion or
 // authority reconciliation has run.
 func TestQuarantineHoldsPushesThatCameBackWithTheRestore(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 
 	// Queued BEFORE the restore, as a snapshot would have contained.
 	if _, err := db.EnqueueChatOutbound(ChatOutbound{

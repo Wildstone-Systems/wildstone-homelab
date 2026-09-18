@@ -33,7 +33,7 @@
 //     lifetime state, not persisted — a fresh Reconciler (e.g. after a
 //     Keystone restart) rediscovers volumes the first time they appear in
 //     a plan again, safely, because EnsureVolume is idempotent.
-//   - Route: ReadManagedFile of the rendered fragment path, byte-compared
+//   - Model: ReadManagedFile of the rendered fragment path, byte-compared
 //     against a fresh render of the desired spec. This is a true live
 //     check (present + equal = exists, present + different = Update,
 //     NOT_FOUND = absent) — no caching needed.

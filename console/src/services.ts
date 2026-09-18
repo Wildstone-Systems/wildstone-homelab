@@ -102,6 +102,11 @@ const GROUP_OF: Record<string, Group> = {
   identity: "Identity",
   passwords: "Identity",
   mail: "Identity",
+  // The Console administers the house rather than being one of the
+  // services in it, but it is a package now for the same reason
+  // everything else is: so its group is declared where an operator
+  // already manages who may reach what.
+  console: "Identity",
 
   "chat-matrix-admin": "Chat",
   "chat-matrix-family": "Chat",

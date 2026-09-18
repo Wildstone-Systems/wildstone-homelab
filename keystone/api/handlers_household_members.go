@@ -219,6 +219,116 @@ type addMemberRequest struct {
 // account in LLDAP — with no password, because a credential never lives
 // in a spec (ADR-W020 A4). The person gets their first password through
 // Authelia's own reset flow (ADR-W023 A7).
+// proposeMemberResource renders one LdapUser and proposes it, shared by
+// adding and updating so both take the same path to Plans.
+func (s *Server) proposeMemberResource(res resource.Resource, id principal.Identity, summary string) (any, int, error) {
+	doc, err := resource.Marshal(res)
+	if err != nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("rendering the member: %w", err)
+	}
+	out, status, err := s.submitProposal(id, proposalRequest{Summary: summary, Put: []string{string(doc)}})
+	if err != nil {
+		return nil, status, err
+	}
+	s.event("household.member_proposed", res.LdapUser.Username, id,
+		fmt.Sprintf("%s; it takes effect when the plan is approved", summary))
+	return out, status, nil
+}
+
+// updateHouseholdMember proposes a change to somebody already declared.
+//
+// It is a proposal like adding is, for the same reason: the account
+// list belongs in state, in plans, in approval and in audit. Nothing
+// here writes to the directory.
+//
+// Groups may only be ADDED. The provisioning job is additive in both
+// directions — it creates a user the directory lacks and adds a
+// membership it is missing, and never removes either — so a request
+// that dropped a group would change the Statefile, apply cleanly, and
+// leave the person in the group. The screen would say removed and
+// nothing would be. Refusing is the honest answer, and it names the
+// group so the operator knows what the control plane cannot do rather
+// than discovering it from an app that still opens.
+func (s *Server) updateHouseholdMember(r *http.Request, id principal.Identity) (any, int, error) {
+	username := strings.TrimSpace(r.PathValue("username"))
+	var req addMemberRequest
+	if st, err := decodeChatBody(r, &req); err != nil {
+		return nil, st, err
+	}
+	if len(req.Groups) > maxMemberGroups {
+		return nil, http.StatusBadRequest, fmt.Errorf("at most %d groups", maxMemberGroups)
+	}
+	current, err := s.State.Load()
+	if err != nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("loading statefile: %w", err)
+	}
+	var existing *resource.Resource
+	for i, res := range current {
+		if res.Kind == resource.KindLdapUser && res.LdapUser != nil && res.LdapUser.Username == username {
+			existing = &current[i]
+			break
+		}
+	}
+	if existing == nil {
+		return nil, http.StatusNotFound, fmt.Errorf("%q is not a household member", username)
+	}
+
+	had := map[string]bool{}
+	for _, g := range existing.LdapUser.Groups {
+		had[g] = true
+	}
+	want := map[string]bool{}
+	for _, g := range req.Groups {
+		if g = strings.TrimSpace(g); g != "" {
+			want[g] = true
+		}
+	}
+	for g := range had {
+		if !want[g] {
+			return nil, http.StatusBadRequest, fmt.Errorf(
+				"this cannot take %q away from %s: the provisioning job never removes a membership, "+
+					"so the plan would apply and they would still be in the group. Remove it in the "+
+					"directory itself", g, username)
+		}
+	}
+
+	declared, err := s.declaredGroups()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	node := existing.Metadata.Node
+	groups := make([]string, 0, len(want))
+	for g := range want {
+		d, ok := declared[g]
+		if !ok {
+			return nil, http.StatusBadRequest, fmt.Errorf(
+				"no capability declares the group %q: install the app that owns it first, or leave it out", g)
+		}
+		if d.node != node {
+			return nil, http.StatusBadRequest, fmt.Errorf(
+				"group %q is declared on node %s, not on the directory %s is on (%s)", g, d.node, username, node)
+		}
+		groups = append(groups, g)
+	}
+	sort.Strings(groups)
+
+	updated := *existing
+	spec := *existing.LdapUser
+	spec.Groups = groups
+	if n := strings.TrimSpace(req.DisplayName); n != "" {
+		spec.DisplayName = n
+	}
+	if e := strings.TrimSpace(req.Email); e != "" {
+		spec.Email = e
+	}
+	updated.LdapUser = &spec
+	if err := updated.Validate(); err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	return s.proposeMemberResource(updated, id,
+		fmt.Sprintf("update household member %s", username))
+}
+
 func (s *Server) addHouseholdMember(r *http.Request, id principal.Identity) (any, int, error) {
 	var req addMemberRequest
 	if st, err := decodeChatBody(r, &req); err != nil {

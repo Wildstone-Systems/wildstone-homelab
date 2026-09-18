@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"sort"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -23,6 +24,9 @@ var migrationFS embed.FS
 // SQLite serializes writers and WAL keeps readers unblocked.
 type DB struct {
 	sql *sql.DB
+	// path is kept so a table rebuild can reopen the same file on its
+	// own handle with foreign keys off. See applyRebuildMigration.
+	path string
 }
 
 // Open opens (creating if needed) the runtime database at path and applies
@@ -51,7 +55,7 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: open %s: %w", path, err)
 	}
-	db := &DB{sql: sqlDB}
+	db := &DB{sql: sqlDB, path: path}
 	if err := db.migrate(); err != nil {
 		sqlDB.Close()
 		return nil, err
@@ -68,7 +72,7 @@ func openUnmigrated(path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: open %s: %w", path, err)
 	}
-	return &DB{sql: sqlDB}, nil
+	return &DB{sql: sqlDB, path: path}, nil
 }
 
 func (db *DB) Close() error { return db.sql.Close() }
@@ -80,12 +84,20 @@ func (db *DB) migrate() error { return db.migrateThrough("") }
 
 // migrateThrough applies pending migrations up to and including the named
 // one (a "migrations/NNNN_x.sql" path); "" applies them all.
-func (db *DB) migrateThrough(last string) error {
+func (db *DB) migrateThrough(last string) error { return db.migrateFrom(migrationFS, last) }
+
+// migrateFrom is migrateThrough against an arbitrary migration source.
+// Only the runner's own tests pass anything but migrationFS: proving a
+// property of the RUNNER — that the foreign-keys-off directive is
+// opt-in, that a violation fails, that the migration after one is back
+// under enforcement — needs migrations written for that purpose, and
+// the real set cannot grow fixtures without becoming schema history.
+func (db *DB) migrateFrom(src fs.FS, last string) error {
 	if _, err := db.sql.Exec(
 		`CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
 		return fmt.Errorf("runtimedb: creating schema_migrations: %w", err)
 	}
-	names, err := fs.Glob(migrationFS, "migrations/*.sql")
+	names, err := fs.Glob(src, "migrations/*.sql")
 	if err != nil {
 		return fmt.Errorf("runtimedb: listing migrations: %w", err)
 	}
@@ -102,9 +114,15 @@ func (db *DB) migrateThrough(last string) error {
 		if done > 0 {
 			continue
 		}
-		body, err := migrationFS.ReadFile(name)
+		body, err := fs.ReadFile(src, name)
 		if err != nil {
 			return fmt.Errorf("runtimedb: reading migration %s: %w", name, err)
+		}
+		if strings.HasPrefix(string(body), rebuildDirective) {
+			if err := db.applyRebuildMigration(name, string(body)); err != nil {
+				return err
+			}
+			continue
 		}
 		tx, err := db.sql.Begin()
 		if err != nil {
@@ -122,6 +140,92 @@ func (db *DB) migrateThrough(last string) error {
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("runtimedb: commit migration %s: %w", name, err)
 		}
+	}
+	return nil
+}
+
+// rebuildDirective marks a migration that rebuilds a table other tables
+// hold foreign keys into. Such a migration must run with foreign keys
+// OFF, and it must be the first line of the file.
+//
+// SQLite cannot drop or widen a CHECK constraint in place, so changing
+// one means create-copy-drop-rename. With foreign keys ON that is
+// impossible for a table anything references: DROP TABLE performs an
+// implicit DELETE FROM, which orphans the children and fails with
+// SQLITE_CONSTRAINT_FOREIGNKEY. Deferring does not help — the deferred
+// counter is incremented by the drop and is not decremented by
+// recreating a table with the same rows, so the violation surfaces at
+// COMMIT instead.
+//
+// The alternative the earlier rebuilds took (0005, 0008, 0012, 0026) is
+// to rebuild the children in the same migration, which works when the
+// child is a leaf. It stops working when a child is itself a parent:
+// butler_conversations is referenced by butler_conversation_sessions
+// and butler_handoffs, so rebuilding butler_members that way would drag
+// in five tables to change one.
+//
+// So this follows SQLite's own documented procedure for "other kinds of
+// table schema changes" instead: foreign keys off, rebuild, verify with
+// foreign_key_check, commit. Nothing is repointed and the children's
+// REFERENCES clauses keep naming the same table.
+const rebuildDirective = "-- +wildstone: foreign_keys=off"
+
+// applyRebuildMigration runs one rebuild migration on a dedicated handle
+// opened with foreign keys off, then closes it.
+//
+// It is a separate handle rather than a pinned connection from the pool
+// because PRAGMA foreign_keys is a no-op inside a transaction and a
+// per-connection setting outside one: a pooled connection whose pragma
+// we failed to restore would silently stop enforcing foreign keys for
+// whatever ran on it next. A handle we own and close cannot leak that
+// way.
+func (db *DB) applyRebuildMigration(name, body string) error {
+	if db.path == "" || db.path == ":memory:" {
+		return fmt.Errorf("runtimedb: migration %s rebuilds a referenced table and needs a file-backed database, not %q", name, db.path)
+	}
+	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(0)", db.path)
+	rebuild, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("runtimedb: opening rebuild handle for %s: %w", name, err)
+	}
+	defer rebuild.Close()
+	// One connection: the whole point is that every statement here sees
+	// the same foreign_keys setting.
+	rebuild.SetMaxOpenConns(1)
+
+	tx, err := rebuild.Begin()
+	if err != nil {
+		return fmt.Errorf("runtimedb: begin migration %s: %w", name, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(body); err != nil {
+		return fmt.Errorf("runtimedb: applying migration %s: %w", name, err)
+	}
+	// The gate. With enforcement off for the duration, nothing else
+	// would notice a rebuild that orphaned a row, so the migration does
+	// not get to commit until the database says it is still whole.
+	violations, err := tx.Query(`PRAGMA foreign_key_check`)
+	if err != nil {
+		return fmt.Errorf("runtimedb: checking foreign keys after %s: %w", name, err)
+	}
+	var orphans int
+	for violations.Next() {
+		orphans++
+	}
+	violations.Close()
+	if err := violations.Err(); err != nil {
+		return fmt.Errorf("runtimedb: checking foreign keys after %s: %w", name, err)
+	}
+	if orphans > 0 {
+		return fmt.Errorf("runtimedb: migration %s left %d orphaned foreign key rows; refusing to commit", name, orphans)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)`, name, now()); err != nil {
+		return fmt.Errorf("runtimedb: recording migration %s: %w", name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("runtimedb: commit migration %s: %w", name, err)
 	}
 	return nil
 }

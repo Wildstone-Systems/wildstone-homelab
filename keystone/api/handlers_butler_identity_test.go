@@ -17,7 +17,7 @@ func TestButlerAdmissionAndHandoffThroughTheAPI(t *testing.T) {
 	// The admin token acts as "root-admin", which is who the harness
 	// mints it for.
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/members",
-		map[string]any{"member": "root-admin", "profile": "operator"}, nil,
+		map[string]any{"member": "root-admin", "role": "owner"}, nil,
 	); res.StatusCode != http.StatusOK {
 		t.Fatalf("record member = %d", res.StatusCode)
 	}
@@ -62,6 +62,18 @@ func TestButlerAdmissionAndHandoffThroughTheAPI(t *testing.T) {
 		t.Fatalf("another member's handoff = %d, want 404", res.StatusCode)
 	}
 
+	// A second Owner, so offboarding root-admin below is refused for no
+	// reason other than the one this test is about: the Last Owner
+	// invariant will not let a household lose its only one (§2.5).
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/members",
+		map[string]any{"member": "dana", "role": "owner"}, nil,
+	); res.StatusCode != http.StatusOK {
+		t.Fatalf("record second owner = %d", res.StatusCode)
+	}
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/members/dana/admit", nil, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("admit second owner = %d", res.StatusCode)
+	}
+
 	// Offboarding denies immediately and pauses unfinished personal work.
 	taskID, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: "root-admin", Owner: "root-admin",
@@ -103,7 +115,7 @@ func TestButlerCannotAdmitAnyone(t *testing.T) {
 		path string
 		body any
 	}{
-		{"/api/v1/butler/members", map[string]any{"member": "x", "profile": "operator"}},
+		{"/api/v1/butler/members", map[string]any{"member": "x", "role": "owner"}},
 		{"/api/v1/butler/members/x/admit", nil},
 		{"/api/v1/butler/members/x/links", map[string]any{"linkType": "api-principal", "externalId": "x"}},
 	} {

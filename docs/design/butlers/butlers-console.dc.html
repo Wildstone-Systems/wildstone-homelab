@@ -1,0 +1,1145 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<style>
+html,body{margin:0;height:100%;background:#161826;color:#e9e9ed;font-family:Inter,system-ui,sans-serif;font-size:14px;line-height:1.55}
+*{box-sizing:border-box}
+a{color:#9184d9;text-underline-offset:3px}a:hover{color:#d2cefd}
+button{font:inherit}
+input,select,textarea{font:inherit;font-size:14px;color:#e9e9ed;caret-color:#9184d9;background:#232532;border:1px solid rgba(233,233,237,.11);border-radius:8px;padding:6px 10px;min-height:34px}
+textarea{width:100%;resize:vertical;min-height:70px}
+input:hover,select:hover,textarea:hover{border-color:rgba(233,233,237,.4)}
+:focus{outline:none}:focus-visible{outline:2px solid #9184d9;outline-offset:2px}
+::selection{background:rgba(145,132,217,.3)}
+.tnum{font-variant-numeric:tabular-nums}
+.hit{cursor:pointer;transition:background .12s,border-color .12s,color .12s}
+.hit:hover{background:rgba(233,233,237,.05)}
+.rowcard:hover{border-color:rgba(233,233,237,.34)!important}
+.ri:hover{color:#e9e9ed!important;background:rgba(233,233,237,.07)}
+.scr::-webkit-scrollbar{width:10px}.scr::-webkit-scrollbar-thumb{background:rgba(233,233,237,.14);border-radius:8px}
+@keyframes slidein{from{transform:translateX(24px);opacity:.4}to{transform:translateX(0);opacity:1}}
+@keyframes fadein{from{opacity:0}to{opacity:1}}
+@keyframes pop{from{transform:translateY(8px) scale(.985);opacity:0}to{transform:none;opacity:1}}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style></helmet>
+
+<div style="display:flex;height:100vh;overflow:hidden;position:relative">
+
+<nav style="width:56px;flex:none;padding:11px 0;display:flex;flex-direction:column;align-items:center;gap:2px;border-right:1px solid rgba(233,233,237,.11);overflow:hidden">
+  <div style="color:#9184d9;margin-bottom:8px;display:grid;place-items:center;width:38px;height:38px"><i class="ph-fill ph-shield-check" style="font-size:22px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-house" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-squares-four" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-sparkle" style="font-size:19px"></i></div>
+  <div style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:#9184d9;background:rgba(145,132,217,.15)"><i class="ph ph-users-three" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-list-checks" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-shield-check" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-brain" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-plugs-connected" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-repeat" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-chats-circle" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-users-three" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-plugs-connected" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-seal-check" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-pulse" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-archive" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-cpu" style="font-size:19px"></i></div>
+  <span style="width:22px;height:1px;background:rgba(233,233,237,.11);margin:6px 0;flex:none"></span>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-key" style="font-size:19px"></i></div>
+  <div class="ri hit" style="width:38px;height:38px;display:grid;place-items:center;border-radius:8px;color:rgba(233,233,237,.68)"><i class="ph ph-identification-card" style="font-size:19px"></i></div>
+  <div style="margin-top:auto;padding-top:8px"><div style="width:26px;height:26px;border-radius:50%;background:rgba(145,132,217,.28);display:grid;place-items:center;font-size:11px;font-weight:600">to</div></div>
+</nav>
+
+<main style="flex:1;min-width:0;min-height:0;display:flex;flex-direction:column">
+  <div style="display:flex;align-items:baseline;gap:11px;padding:11px 17px;border-bottom:1px solid rgba(233,233,237,.11);flex-wrap:wrap">
+    <span style="font-size:11px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:rgba(233,233,237,.58)">Who answers</span>
+    <span style="font-size:15px;font-weight:500">Butlers</span>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:11px;font-size:12px;color:rgba(233,233,237,.58)">
+      <span class="tnum">statefile 4f9a1c</span>
+      <span>reconciled 12s ago</span>
+      <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:500;padding:2px 8px;border-radius:999px;background:#1b2c25;color:#5fae86"><span style="width:7px;height:7px;border-radius:50%;background:#5fae86"></span>live</span>
+    </div>
+  </div>
+
+  <div class="scr" style="flex:1;min-height:0;overflow-y:auto;padding:17px 17px 40px">
+    <div style="display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:14px">
+      <div style="flex:1;min-width:280px">
+        <div style="font-size:20px;font-weight:500;letter-spacing:-.015em">Butlers</div>
+        <div style="color:rgba(233,233,237,.58);font-size:13.5px;max-width:72ch">One model each, its own directive and its own reach. A Butler on a cloud model sends what it is told outside the house.</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onClick="{{ openDialog }}" style="display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:500;color:#9184d9;background:transparent;border:1px solid #9184d9;padding:6px 11px;border-radius:8px;cursor:pointer"><i class="ph ph-plus"></i>New Butler</button>
+        <button style="display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:500;color:#e9e9ed;background:transparent;border:1px solid rgba(233,233,237,.11);padding:6px 11px;border-radius:8px;cursor:pointer">Model routes</button>
+      </div>
+    </div>
+
+    <sc-if value="{{ attention.show }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;border-radius:8px;background:#2e2718;box-shadow:0 0 0 1px rgba(217,162,75,.4);margin-bottom:14px">
+        <span style="width:7px;height:7px;border-radius:50%;background:#d9a24b;flex:none"></span>
+        <div style="font-size:13px;color:#e9e9ed">{{ attention.text }}</div>
+        <button onClick="{{ attention.onShow }}" style="margin-left:auto;font-size:12px;font-weight:500;color:#d9a24b;background:transparent;border:1px solid rgba(217,162,75,.5);padding:3px 10px;border-radius:8px;cursor:pointer">Show only these</button>
+      </div>
+    </sc-if>
+
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <sc-for list="{{ filters }}" as="f" hint-placeholder-count="5">
+        <button onClick="{{ f.onPick }}" style="{{ f.style }}">{{ f.label }} <span style="opacity:.65">{{ f.count }}</span></button>
+      </sc-for>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <input type="text" value="{{ query }}" onChange="{{ onQuery }}" placeholder="Search name or directive" style="min-width:200px">
+        <select value="{{ sort }}" onChange="{{ onSort }}">
+          <option value="active">Sort: last asked</option>
+          <option value="name">Sort: name</option>
+          <option value="health">Sort: needs attention</option>
+        </select>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.2fr) minmax(0,.85fr) minmax(0,1.1fr) 78px 34px;gap:12px;padding:0 12px 6px;font-size:10.5px;font-weight:600;letter-spacing:.1em;color:rgba(233,233,237,.58);border-bottom:1px solid rgba(233,233,237,.11)">
+      <div>BUTLER</div><div>MODEL · WHERE ITS WORDS GO</div><div>WORKING?</div><div>REACH</div><div>LAST ASKED</div><div></div>
+    </div>
+
+    <sc-for list="{{ groups }}" as="g" hint-placeholder-count="2">
+      <div style="margin-top:16px">
+        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
+          <div style="font-size:14px;font-weight:500">{{ g.title }} · {{ g.count }}</div>
+          <div style="font-size:12px;color:rgba(233,233,237,.58)">{{ g.blurb }}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <sc-for list="{{ g.rows }}" as="r" hint-placeholder-count="3">
+            <div class="rowcard hit" onClick="{{ r.open }}" style="{{ r.style }}">
+              <div style="min-width:0">
+                <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+                  <span style="font-size:14px;font-weight:500">{{ r.name }}</span>
+                  <sc-if value="{{ r.flag }}" hint-placeholder-val="{{ false }}"><span style="font-size:10.5px;padding:1px 7px;border-radius:999px;background:rgba(233,233,237,.09);color:rgba(233,233,237,.58)">{{ r.flag }}</span></sc-if>
+                </div>
+                <div style="font-size:12px;color:rgba(233,233,237,.58);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.directive }}</div>
+              </div>
+              <div style="min-width:0">
+                <div style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.routeLabel }}</div>
+                <span style="{{ r.destPill }}"><span style="{{ r.destDot }}"></span>{{ r.destLabel }}</span>
+              </div>
+              <div style="min-width:0">
+                <div style="display:flex;align-items:center;gap:6px;font-size:13px"><span style="{{ r.healthDot }}"></span><span style="{{ r.healthInk }}">{{ r.healthLabel }}</span></div>
+                <div style="font-size:11px;color:rgba(233,233,237,.58);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.healthDetail }}</div>
+              </div>
+              <div style="font-size:12px;color:rgba(233,233,237,.58);min-width:0">
+                <div>{{ r.reachA }}</div><div>{{ r.reachB }}</div>
+              </div>
+              <div class="tnum" style="font-size:12px;color:rgba(233,233,237,.58)">{{ r.lastAsked }}</div>
+              <div style="display:grid;place-items:center;color:rgba(233,233,237,.58)"><i class="ph ph-caret-right"></i></div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-for>
+
+    <sc-if value="{{ nothing }}" hint-placeholder-val="{{ false }}">
+      <div style="margin-top:22px;padding:22px;border-radius:8px;background:#232532;box-shadow:0 0 0 1px #3f424d;text-align:center">
+        <div style="font-size:15px;font-weight:500">Nothing matches that.</div>
+        <div style="font-size:13px;color:rgba(233,233,237,.58);margin-top:2px">{{ nothingHint }}</div>
+        <button onClick="{{ clearFilters }}" style="margin-top:12px;font-size:13px;color:#9184d9;background:transparent;border:1px solid #9184d9;padding:5px 11px;border-radius:8px;cursor:pointer">Clear filters</button>
+      </div>
+    </sc-if>
+  </div>
+</main>
+
+<sc-if value="{{ sel }}" hint-placeholder-val="{{ false }}">
+  <div style="position:absolute;inset:0;background:rgba(10,11,20,.45);animation:fadein .14s ease-out" onClick="{{ closeDrawer }}"></div>
+</sc-if>
+
+<sc-if value="{{ sel }}" hint-placeholder-val="{{ false }}">
+  <aside style="position:absolute;top:0;right:0;bottom:0;width:min(600px,94vw);background:#1b1d2b;border-left:1px solid rgba(233,233,237,.11);box-shadow:-16px 0 40px rgba(0,0,0,.5);display:flex;flex-direction:column;animation:slidein .16s ease-out">
+    <div style="padding:14px 17px 11px;border-bottom:1px solid rgba(233,233,237,.11)">
+      <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
+        <span style="font-size:18px;font-weight:500;letter-spacing:-.015em">{{ sel.name }}</span>
+        <span style="font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(233,233,237,.09);color:rgba(233,233,237,.58)">{{ sel.surfaceLabel }}</span>
+        <span style="{{ sel.destPill }}"><span style="{{ sel.destDot }}"></span>{{ sel.destLabel }}</span>
+        <button onClick="{{ closeDrawer }}" style="margin-left:auto;width:28px;height:28px;display:grid;place-items:center;border-radius:8px;border:1px solid rgba(233,233,237,.11);background:transparent;color:rgba(233,233,237,.68);cursor:pointer"><i class="ph ph-x"></i></button>
+      </div>
+      <div class="tnum" style="font-size:11px;color:rgba(233,233,237,.58);margin-top:4px">{{ sel.meta }}</div>
+    </div>
+
+    <div style="display:flex;gap:2px;padding:8px 17px 0;border-bottom:1px solid rgba(233,233,237,.11);overflow-x:auto">
+      <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="6">
+        <button onClick="{{ t.onPick }}" style="{{ t.style }}">{{ t.label }}<sc-if value="{{ t.count }}" hint-placeholder-val="{{ false }}"><span style="font-size:10.5px;opacity:.6;margin-left:5px">{{ t.count }}</span></sc-if></button>
+      </sc-for>
+    </div>
+
+    <div class="scr" style="flex:1;min-height:0;overflow-y:auto;padding:17px">
+
+      <sc-if value="{{ isIdentity }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div>
+            <div style="font-size:12px;color:rgba(233,233,237,.58);margin-bottom:4px">Name</div>
+            <input type="text" value="{{ draft.name }}" onChange="{{ onDraftName }}" style="width:100%">
+          </div>
+          <div>
+            <div style="font-size:12px;color:rgba(233,233,237,.58);margin-bottom:4px">What it is for</div>
+            <textarea value="{{ draft.directive }}" onChange="{{ onDraftDirective }}"></textarea>
+            <div style="font-size:11px;color:rgba(233,233,237,.58);margin-top:3px">Shapes how it talks. It grants nothing — reach, tools and memory are set on their own tabs.</div>
+          </div>
+          <div style="padding:11px 13px;border-radius:8px;background:#232532;box-shadow:0 0 0 1px #3f424d">
+            <div style="font-size:12px;color:rgba(233,233,237,.58)">Surface</div>
+            <div style="font-size:14px;margin-top:2px">{{ sel.surfaceLabel }} — {{ sel.surfaceBlurb }}</div>
+            <div style="font-size:11px;color:rgba(233,233,237,.58);margin-top:5px">A surface is granted at creation and cannot be changed. Duplicate this Butler onto the other surface instead.</div>
+          </div>
+          <div class="tnum" style="font-size:11px;color:rgba(233,233,237,.58)">{{ sel.provenance }}</div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isModel }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <div style="padding:12px 13px;border-radius:8px;background:#232532;box-shadow:0 0 0 1px #3f424d">
+            <div style="font-size:10.5px;font-weight:600;letter-spacing:.1em;color:rgba(233,233,237,.58)">ON NOW</div>
+            <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-top:3px">
+              <div style="font-size:16px;font-weight:500">{{ sel.routeLabel }}</div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:12.5px"><span style="{{ sel.healthDot }}"></span><span style="{{ sel.healthInk }}">{{ sel.healthLong }}</span></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:7px">
+              <div class="tnum" style="font-size:11px;color:rgba(233,233,237,.58)">{{ sel.probeLine }}</div>
+              <button onClick="{{ recheck }}" style="{{ recheckStyle }}"><i class="{{ recheckIcon }}"></i>{{ recheckLabel }}</button>
+            </div>
+          </div>
+
+          <div>
+            <div style="font-size:10.5px;font-weight:600;letter-spacing:.1em;color:rgba(233,233,237,.58);margin-bottom:6px">ON YOUR HARDWARE</div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <sc-for list="{{ localRoutes }}" as="o" hint-placeholder-count="3">
+                <button onClick="{{ o.onPick }}" style="{{ o.style }}">
+                  <span style="{{ o.radio }}"></span>
+                  <span style="font-size:13.5px">{{ o.label }}</span>
+                  <span style="{{ o.noteInk }}">{{ o.note }}</span>
+                </button>
+              </sc-for>
+            </div>
+            <div style="font-size:10.5px;font-weight:600;letter-spacing:.1em;color:rgba(233,233,237,.58);margin:14px 0 6px">OUTSIDE THE HOUSE</div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <sc-for list="{{ cloudRoutes }}" as="o" hint-placeholder-count="2">
+                <button onClick="{{ o.onPick }}" style="{{ o.style }}">
+                  <span style="{{ o.radio }}"></span>
+                  <span style="font-size:13.5px">{{ o.label }}</span>
+                  <span style="{{ o.noteInk }}">{{ o.note }}</span>
+                </button>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="border-top:1px solid rgba(233,233,237,.11);padding-top:14px">
+            <div style="font-size:10.5px;font-weight:600;letter-spacing:.1em;color:rgba(233,233,237,.58)">TRY IT — asks this Butler on the model above</div>
+            <div style="display:flex;gap:8px;margin-top:7px">
+              <input type="text" value="{{ question }}" onChange="{{ onQuestion }}" placeholder="how did I sleep last week?" style="flex:1;min-width:0">
+              <button onClick="{{ ask }}" style="{{ askStyle }}">{{ askLabel }}</button>
+            </div>
+            <sc-if value="{{ answer }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:9px;padding:11px 13px;border-radius:8px;background:#232532;box-shadow:0 0 0 1px #3f424d;animation:fadein .18s ease-out">
+                <div style="font-size:13.5px">{{ answer.text }}</div>
+                <div class="tnum" style="font-size:11px;color:rgba(233,233,237,.58);margin-top:6px">{{ answer.meta }}</div>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isReach }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <div>
+            <div style="font-size:10.5px;font-weight:600;letter-spacing:.1em;color:rgba(233,233,237,.58);margin-bottom:6px">WHO MAY TALK TO IT</div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <sc-for list="{{ people }}" as="p" hint-placeholder-count="4">
+                <button onClick="{{ p.onToggle }}" style="{{ p.style }}">
+                  <span style="{{ p.box }}"><i class="{{ p.tick }}" style="font-size:11px"></i></span>
+                  <span style="font-size:13.5px">{{ p.name }}</span>
+                  <span class="tnum" style="font-size:11px;color:rgba(233,233,237,.58)">{{ p.address }}</span>
+                  <span class="tnum" style="margin-left:auto;font-size:11px;color:rgba(233,233,237,.58)">{{ p.lastAsked }}</span>
+                </button>
+              </sc-for>
+            </div>
+            <div style="font-size:11px;color:rgba(233,233,237,.58);margin-top:6px">{{ reachNote }}</div>
+          </div>
+          <div>
+            <div style="font-size:10.5px;font-weight:600;letter-spacing:.1em;color:rgba(233,233,237,.58);margin-bottom:6px">CONNECTIONS IT MAY READ</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">
+              <sc-for list="{{ connections }}" as="c" hint-placeholder-count="5">
+                <button onClick="{{ c.onToggle }}" style="{{ c.style }}">{{ c.label }}</button>
+              </sc-for>
+            </div>
+            <div style="font-size:11px;color:rgba(233,233,237,.58);margin-top:6px">{{ connectionNote }}</div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isTools }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+            <div style="font-size:10.5px;font-weight:600;letter-spacing:.1em;color:rgba(233,233,237,.58)">TOOLS — {{ toolSummary }}</div>
+            <div style="margin-left:auto;font-size:11px;color:rgba(233,233,237,.58)">{{ sel.profileLabel }}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <sc-for list="{{ tools }}" as="t" hint-placeholder-count="6">
+              <div style="display:grid;grid-template-columns:minmax(0,1.15fr) auto minmax(0,.9fr);gap:10px;align-items:center;padding:8px 11px;border-radius:8px;background:#232532;box-shadow:0 0 0 1px #3f424d">
+                <div style="min-width:0">
+                  <div style="font-size:13.5px;font-family:ui-monospace,Menlo,monospace">{{ t.name }}</div>
+                  <div style="font-size:11px;color:rgba(233,233,237,.58)">{{ t.blurb }}</div>
+                </div>
+                <div style="display:flex;gap:3px">
+                  <sc-for list="{{ t.options }}" as="o" hint-placeholder-count="3">
+                    <button onClick="{{ o.onPick }}" style="{{ o.style }}">{{ o.label }}</button>
+                  </sc-for>
+                </div>
+                <div class="tnum" style="font-size:11px;color:rgba(233,233,237,.58);text-align:right">{{ t.usage }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <sc-if value="{{ toolWarning }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:9px 12px;border-radius:8px;background:#2e2718;box-shadow:0 0 0 1px rgba(217,162,75,.4);font-size:13px">{{ toolWarning }}</div>
+          </sc-if>
+          <sc-if value="{{ hasLocked }}" hint-placeholder-val="{{ true }}">
+            <div style="border-top:1px solid rgba(233,233,237,.11);padding-top:13px">
+              <div style="font-size:10.5px;font-weight:600;letter-spacing:.1em;color:rgba(233,233,237,.58);margin-bottom:6px">{{ lockedTitle }}</div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <sc-for list="{{ locked }}" as="l" hint-placeholder-count="3">
+                  <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 11px;border-radius:8px;background:rgba(35,37,50,.5);border:1px dashed rgba(233,233,237,.16)">
+                    <div style="min-width:0">
+                      <div style="display:flex;align-items:baseline;gap:7px;flex-wrap:wrap">
+                        <span style="font-size:13.5px;font-family:ui-monospace,Menlo,monospace;color:rgba(233,233,237,.58)">{{ l.name }}</span>
+                        <span style="font-size:11px;padding:1px 7px;border-radius:999px;background:rgba(233,233,237,.09);color:rgba(233,233,237,.58)">{{ l.needs }}</span>
+                      </div>
+                      <div style="font-size:11px;color:rgba(233,233,237,.58)">{{ l.blurb }}</div>
+                    </div>
+                    <button onClick="{{ l.onEnable }}" style="flex:none;font-size:11.5px;color:#9184d9;background:transparent;border:1px solid rgba(145,132,217,.5);padding:3px 10px;border-radius:8px;cursor:pointer">Connect it</button>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isMemory }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div style="font-size:12px;color:rgba(233,233,237,.58)">{{ memoryNote }}</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <sc-for list="{{ memory }}" as="m" hint-placeholder-count="3">
+              <div style="padding:10px 12px;border-radius:8px;background:#232532;box-shadow:0 0 0 1px #3f424d">
+                <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+                  <span style="font-size:11px;padding:1px 7px;border-radius:999px;background:rgba(145,132,217,.18);color:#d2cefd">{{ m.subject }}</span>
+                  <span class="tnum" style="font-size:11px;color:rgba(233,233,237,.58)">{{ m.provenance }}</span>
+                  <div style="margin-left:auto;display:flex;gap:6px">
+                    <button onClick="{{ m.onCorrect }}" style="font-size:11.5px;color:#e9e9ed;background:transparent;border:1px solid rgba(233,233,237,.11);padding:2px 9px;border-radius:8px;cursor:pointer">Correct</button>
+                    <button onClick="{{ m.onForget }}" style="font-size:11.5px;color:#d9736f;background:transparent;border:1px solid rgba(217,115,111,.55);padding:2px 9px;border-radius:8px;cursor:pointer">Forget</button>
+                  </div>
+                </div>
+                <div style="font-size:13.5px;margin-top:5px">{{ m.text }}</div>
+                <sc-if value="{{ m.editing }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top:8px">
+                    <textarea value="{{ correction }}" onChange="{{ onCorrection }}"></textarea>
+                    <div style="display:flex;gap:8px;margin-top:6px">
+                      <button onClick="{{ m.onSaveCorrection }}" style="font-size:12.5px;color:#9184d9;background:transparent;border:1px solid #9184d9;padding:4px 11px;border-radius:8px;cursor:pointer">Save correction</button>
+                      <button onClick="{{ m.onCancelCorrection }}" style="font-size:12.5px;color:rgba(233,233,237,.58);background:transparent;border:0;cursor:pointer">Cancel</button>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isSessions }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <sc-for list="{{ sessions }}" as="s" hint-placeholder-count="3">
+            <div style="border-radius:8px;background:#232532;box-shadow:0 0 0 1px #3f424d;overflow:hidden">
+              <button onClick="{{ s.onToggle }}" style="width:100%;display:grid;grid-template-columns:80px minmax(0,1fr) auto;gap:10px;align-items:baseline;text-align:left;padding:10px 12px;background:transparent;border:0;color:#e9e9ed;cursor:pointer">
+                <span class="tnum" style="font-size:11.5px;color:rgba(233,233,237,.58);font-family:ui-monospace,Menlo,monospace">{{ s.id }}</span>
+                <span style="font-size:13.5px;min-width:0">{{ s.summary }}</span>
+                <span class="tnum" style="font-size:11px;color:rgba(233,233,237,.58)">{{ s.meta }}</span>
+              </button>
+              <sc-if value="{{ s.open }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:0 12px 12px;display:flex;flex-direction:column;gap:6px">
+                  <sc-for list="{{ s.turns }}" as="u" hint-placeholder-count="2">
+                    <div style="display:grid;grid-template-columns:56px minmax(0,1fr);gap:9px;font-size:12.5px;padding:6px 0;border-top:1px solid rgba(233,233,237,.07)">
+                      <span style="color:rgba(233,233,237,.58)">{{ u.who }}</span>
+                      <span>{{ u.text }}</span>
+                    </div>
+                  </sc-for>
+                  <div class="tnum" style="font-size:11px;color:rgba(233,233,237,.58)">{{ s.trace }}</div>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+          <sc-if value="{{ noSessions }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:18px;border-radius:8px;background:#232532;box-shadow:0 0 0 1px #3f424d;font-size:13.5px;color:rgba(233,233,237,.58)">Nobody has asked this Butler anything yet.</div>
+          </sc-if>
+        </div>
+      </sc-if>
+    </div>
+
+    <div style="border-top:1px solid rgba(233,233,237,.11);padding:11px 17px;display:flex;align-items:center;gap:8px;background:#161826">
+      <button onClick="{{ save }}" style="{{ saveStyle }}">{{ saveLabel }}</button>
+      <button onClick="{{ duplicate }}" style="font-size:14px;font-weight:500;color:#e9e9ed;background:transparent;border:1px solid rgba(233,233,237,.11);padding:6px 11px;border-radius:8px;cursor:pointer">Duplicate</button>
+      <button onClick="{{ retireOrRestore }}" style="{{ retireStyle }}">{{ retireLabel }}</button>
+    </div>
+  </aside>
+</sc-if>
+
+<sc-if value="{{ confirm }}" hint-placeholder-val="{{ false }}">
+  <div style="position:absolute;inset:0;background:rgba(10,11,20,.6);display:grid;place-items:center;padding:24px;animation:fadein .12s ease-out">
+    <div style="width:min(520px,96vw);border-radius:14px;background:#1b1d2b;box-shadow:0 0 0 1px #595d6c,0 16px 40px rgba(0,0,0,.65);animation:pop .16s ease-out">
+      <div style="padding:14px 17px;border-bottom:1px solid rgba(233,233,237,.11);display:flex;align-items:center;gap:9px">
+        <span style="{{ confirm.iconStyle }}"><i class="{{ confirm.icon }}"></i></span>
+        <div style="font-size:16px;font-weight:500">{{ confirm.title }}</div>
+      </div>
+      <div style="padding:15px 17px;display:flex;flex-direction:column;gap:11px">
+        <div style="font-size:13.5px;color:rgba(233,233,237,.82)">{{ confirm.body }}</div>
+        <sc-if value="{{ confirm.hasList }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:11px 13px;border-radius:8px;background:{{ confirm.listBg }}">
+            <div style="font-size:10.5px;font-weight:600;letter-spacing:.1em;color:{{ confirm.listInk }}">{{ confirm.listTitle }}</div>
+            <div style="display:flex;flex-direction:column;gap:3px;margin-top:5px">
+              <sc-for list="{{ confirm.lines }}" as="l" hint-placeholder-count="3">
+                <div style="font-size:13px">· {{ l.text }}</div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{ confirm.hasOption }}" hint-placeholder-val="{{ false }}">
+          <button onClick="{{ confirm.onOption }}" style="{{ confirm.optionStyle }}">
+            <span style="{{ confirm.optionBox }}"><i class="{{ confirm.optionTick }}" style="font-size:11px"></i></span>
+            <span style="font-size:13.5px">{{ confirm.optionLabel }}</span>
+          </button>
+        </sc-if>
+      </div>
+      <div style="padding:11px 17px;border-top:1px solid rgba(233,233,237,.11);display:flex;gap:8px">
+        <button onClick="{{ confirm.onConfirm }}" style="{{ confirm.confirmStyle }}">{{ confirm.confirmLabel }}</button>
+        <button onClick="{{ confirm.onCancel }}" style="font-size:14px;font-weight:500;color:#e9e9ed;background:transparent;border:1px solid rgba(233,233,237,.11);padding:6px 11px;border-radius:8px;cursor:pointer">{{ confirm.cancelLabel }}</button>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ dialog }}" hint-placeholder-val="{{ false }}">
+  <div style="position:absolute;inset:0;background:rgba(10,11,20,.6);display:grid;place-items:start center;padding:24px;overflow-y:auto;animation:fadein .12s ease-out">
+    <div style="width:min(620px,96vw);border-radius:14px;background:#1b1d2b;box-shadow:0 0 0 1px #595d6c,0 16px 40px rgba(0,0,0,.65);animation:pop .16s ease-out">
+      <div style="padding:14px 17px;border-bottom:1px solid rgba(233,233,237,.11);display:flex;align-items:baseline;gap:10px">
+        <div style="font-size:16px;font-weight:500">New Butler</div>
+        <div style="font-size:12px;color:rgba(233,233,237,.58)">One job each. Reach and tools can wait.</div>
+        <button onClick="{{ closeDialog }}" style="margin-left:auto;width:28px;height:28px;display:grid;place-items:center;border-radius:8px;border:1px solid rgba(233,233,237,.11);background:transparent;color:rgba(233,233,237,.68);cursor:pointer"><i class="ph ph-x"></i></button>
+      </div>
+      <div style="padding:16px 17px;display:flex;flex-direction:column;gap:14px">
+        <div>
+          <div style="font-size:10.5px;font-weight:600;letter-spacing:.1em;color:rgba(233,233,237,.58);margin-bottom:6px">START FROM</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <sc-for list="{{ templates }}" as="t" hint-placeholder-count="4">
+              <button onClick="{{ t.onPick }}" style="{{ t.style }}">{{ t.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:rgba(233,233,237,.58);margin-bottom:4px">Name</div>
+          <input type="text" value="{{ newDraft.name }}" onChange="{{ onNewName }}" placeholder="e.g. Alfred, or health" style="width:100%">
+          <sc-if value="{{ nameError }}" hint-placeholder-val="{{ false }}"><div style="color:#d9736f;font-size:12.5px;margin-top:4px">{{ nameError }}</div></sc-if>
+        </div>
+        <div>
+          <div style="font-size:12px;color:rgba(233,233,237,.58);margin-bottom:4px">What it is for</div>
+          <textarea value="{{ newDraft.directive }}" onChange="{{ onNewDirective }}" placeholder="e.g. keeps track of training and sleep"></textarea>
+          <div style="font-size:11px;color:rgba(233,233,237,.58);margin-top:3px">Shapes how it talks. It grants nothing.</div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:rgba(233,233,237,.58);margin-bottom:6px">Surface</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <sc-for list="{{ surfaceOptions }}" as="s" hint-placeholder-count="2">
+              <button onClick="{{ s.onPick }}" style="{{ s.style }}">
+                <div style="font-size:14px;font-weight:500">{{ s.title }}</div>
+                <div style="font-size:12px;color:rgba(233,233,237,.58)">{{ s.blurb }}</div>
+              </button>
+            </sc-for>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:rgba(233,233,237,.58);margin-bottom:6px">Model</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <sc-for list="{{ newRoutes }}" as="o" hint-placeholder-count="4">
+              <button onClick="{{ o.onPick }}" style="{{ o.style }}">
+                <span style="{{ o.radio }}"></span>
+                <span style="font-size:13.5px">{{ o.label }}</span>
+                <span style="{{ o.noteInk }}">{{ o.note }}</span>
+              </button>
+            </sc-for>
+          </div>
+        </div>
+        <div style="padding:11px 13px;border-radius:8px;background:{{ summary.bg }};box-shadow:0 0 0 1px {{ summary.ring }}">
+          <div style="font-size:10.5px;font-weight:600;letter-spacing:.1em;color:rgba(233,233,237,.58)">YOU ARE MAKING</div>
+          <div style="font-size:13.5px;margin-top:3px">{{ summary.text }}</div>
+        </div>
+      </div>
+      <div style="padding:11px 17px;border-top:1px solid rgba(233,233,237,.11);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <button onClick="{{ create }}" style="{{ createStyle }}">Create</button>
+        <button onClick="{{ createAndOpen }}" style="{{ createOpenStyle }}">Create and open Reach</button>
+        <button onClick="{{ closeDialog }}" style="margin-left:auto;font-size:14px;color:rgba(233,233,237,.58);background:transparent;border:0;cursor:pointer">Cancel</button>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+<template id="__bundler_thumbnail"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#161826"/><circle cx="50" cy="50" r="21" fill="none" stroke="#9184d9" stroke-width="4"/><path d="M42 50h16M50 42v16" stroke="#d2cefd" stroke-width="4" stroke-linecap="round"/></svg></template>
+
+<sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+  <div style="position:absolute;left:50%;bottom:24px;transform:translateX(-50%);padding:9px 15px;border-radius:999px;background:#232532;box-shadow:0 0 0 1px #595d6c,0 6px 18px rgba(0,0,0,.55);font-size:13px;display:flex;align-items:center;gap:8px;animation:pop .16s ease-out">
+    <span style="{{ toast.dot }}"></span>{{ toast.text }}
+  </div>
+</sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1280,&quot;height&quot;:820}}">
+class Component extends DCLogic {
+  state = {
+    routes: [
+      { name: "llama3.1:8b", host: "studio", kind: "local", readiness: "ready", enabled: true, provider: "ollama", endpoint: "http://192.168.1.99:11434" },
+      { name: "qwen2.5:14b", host: "studio", kind: "local", readiness: "ready", enabled: true, provider: "ollama", endpoint: "http://192.168.1.99:11434" },
+      { name: "gemma2:27b", host: "rack", kind: "local", readiness: "qa-only", enabled: true, provider: "ollama", endpoint: "http://192.168.1.12:11434" },
+      { name: "claude-sonnet", host: "anthropic", kind: "cloud", readiness: "ready", enabled: true, provider: "anthropic", endpoint: "api.anthropic.com" },
+      { name: "gpt-4o", host: "openai", kind: "cloud", readiness: "ready", enabled: false, provider: "openai", endpoint: "api.openai.com" },
+    ],
+    butlers: [
+      { name: "health", directive: "keeps track of training and sleep", surface: "family", route: "llama3.1:8b", readiness: "ready", detail: "tool check passed", lastAsked: "4m ago", probed: "2m ago", createdBy: "tom", createdAt: "14 Mar", sessionCount: 218,
+        people: [{ name: "tom", address: "matrix · @tom:home", on: true, lastAsked: "4m ago" }, { name: "sam", address: "matrix · @sam:home", on: true, lastAsked: "3d ago" }, { name: "kids (2)", address: "no address linked", on: false, lastAsked: "never" }],
+        connections: [{ label: "withings", on: true }, { label: "calendar", on: true }, { label: "grocery", on: false }, { label: "photos", on: false }, { label: "email", on: false }],
+        tools: { "notify.household": "off", "write.memory": "ask" },
+        memory: [
+          { seq: 412, subject: "tom", text: "Trains Tuesday and Thursday evenings; counts a 5k under 26 minutes as a good week.", provenance: "learned from chat · 6d ago" },
+          { seq: 397, subject: "sam", text: "Sleeps badly the night after a late shift — do not suggest early sessions then.", provenance: "learned from chat · 3w ago" },
+          { seq: 341, subject: "household", text: "Withings scale readings before 7am are the reliable ones.", provenance: "corrected by tom · 6w ago" },
+        ],
+        sessions: [
+          { id: "bs-1841", summary: "how did I sleep last week?", meta: "tom · 4m ago · 3 turns", trace: "read.timeline, read.connection(withings), summarise · 1.9s",
+            turns: [{ who: "tom", text: "how did I sleep last week?" }, { who: "health", text: "Six nights recorded, averaging 6h 41m — about 20 minutes down on the fortnight before. Tuesday was the outlier at 4h 55m." }] },
+          { id: "bs-1836", summary: "am I ready for the 10k?", meta: "tom · 2d ago · 6 turns", trace: "read.timeline, read.connection(withings) · 3.4s",
+            turns: [{ who: "tom", text: "am I ready for the 10k?" }, { who: "health", text: "On current pace, yes, with two weeks of the same. Your long runs have grown every week since February." }] },
+          { id: "bs-1802", summary: "remind me what my resting rate was in January", meta: "sam · 3d ago · 2 turns", trace: "read.connection(withings) · 1.1s",
+            turns: [{ who: "sam", text: "remind me what my resting rate was in January" }, { who: "health", text: "It sat at 58 for most of the month, dropping to 54 in the last week." }] },
+        ] },
+      { name: "nutrition", directive: "meal planning, shopping lists", surface: "family", route: "claude-sonnet", readiness: "unavailable", detail: "401 from provider", lastAsked: "2h ago", probed: "9m ago", createdBy: "sam", createdAt: "2 Apr", sessionCount: 96,
+        people: [{ name: "tom", address: "matrix · @tom:home", on: true, lastAsked: "2h ago" }, { name: "sam", address: "matrix · @sam:home", on: true, lastAsked: "1d ago" }, { name: "kids (2)", address: "matrix · shared room", on: true, lastAsked: "5d ago" }],
+        connections: [{ label: "grocery", on: true }, { label: "calendar", on: false }, { label: "withings", on: false }, { label: "email", on: true }],
+        tools: { "write.memory": "ask", "notify.household": "on" },
+        memory: [
+          { seq: 208, subject: "household", text: "No pork in the house; one of the kids will not eat mushrooms.", provenance: "told by sam · 2mo ago" },
+          { seq: 191, subject: "sam", text: "Shops Sunday morning and wants the list ready by Saturday night.", provenance: "learned from chat · 2mo ago" },
+        ],
+        sessions: [
+          { id: "bs-1839", summary: "what can we make with what's in?", meta: "tom · 2h ago · 4 turns", trace: "read.connection(grocery) · 2.6s",
+            turns: [{ who: "tom", text: "what can we make with what's in?" }, { who: "nutrition", text: "Enough for a lentil dhal tonight and a pasta tomorrow. You are out of tinned tomatoes." }] },
+          { id: "bs-1820", summary: "sunday list", meta: "sam · 1d ago · 8 turns", trace: "read.connection(grocery), write.memory · 4.1s",
+            turns: [{ who: "sam", text: "sunday list please" }, { who: "nutrition", text: "Twenty-two items, grouped by aisle. I have left off the mushrooms." }] },
+        ] },
+      { name: "kitchen", directive: "timers, recipes, what's in the freezer", surface: "family", route: "qwen2.5:14b", readiness: "ready", detail: "tool check passed", lastAsked: "11m ago", probed: "5m ago", createdBy: "tom", createdAt: "21 Apr", sessionCount: 411,
+        people: [{ name: "tom", address: "matrix · @tom:home", on: true, lastAsked: "11m ago" }, { name: "sam", address: "matrix · @sam:home", on: true, lastAsked: "2h ago" }, { name: "kids (2)", address: "matrix · shared room", on: true, lastAsked: "1d ago" }],
+        connections: [{ label: "grocery", on: true }, { label: "calendar", on: true }, { label: "photos", on: true }, { label: "email", on: false }],
+        tools: {},
+        memory: [{ seq: 502, subject: "household", text: "The chest freezer inventory is trusted; the fridge one is not.", provenance: "told by tom · 5w ago" }],
+        sessions: [{ id: "bs-1842", summary: "timer for 12 minutes", meta: "kids · 11m ago · 1 turn", trace: "set.timer · 0.4s", turns: [{ who: "kids", text: "timer for 12 minutes" }, { who: "kitchen", text: "Twelve minutes, started." }] }] },
+      { name: "bedtime", directive: "stories and lights for the kids' room", surface: "family", route: "llama3.1:8b", readiness: "ready", detail: "tool check passed", lastAsked: "never", probed: "1h ago", createdBy: "sam", createdAt: "3 Sep", sessionCount: 0,
+        people: [{ name: "tom", address: "matrix · @tom:home", on: false, lastAsked: "never" }, { name: "sam", address: "matrix · @sam:home", on: false, lastAsked: "never" }, { name: "kids (2)", address: "no address linked", on: false, lastAsked: "never" }],
+        connections: [{ label: "photos", on: false }, { label: "calendar", on: false }],
+        tools: { "read.timeline": "off", "notify.household": "off", "read.connection": "off" },
+        memory: [], sessions: [] },
+      { name: "garden", directive: "watering, what to plant and when", surface: "family", route: "llama3.1:8b", readiness: "ready", detail: "tool check passed", lastAsked: "3d ago", probed: "20m ago", createdBy: "tom", createdAt: "1 May", sessionCount: 34,
+        people: [{ name: "tom", address: "matrix · @tom:home", on: true, lastAsked: "3d ago" }, { name: "sam", address: "matrix · @sam:home", on: false, lastAsked: "never" }],
+        connections: [{ label: "weather", on: true }, { label: "calendar", on: false }],
+        tools: {}, memory: [], sessions: [] },
+      { name: "ops", directive: "diagnoses services, drafts plans", surface: "admin", route: "gemma2:27b", readiness: "qa-only", detail: "failed tool check", lastAsked: "1h ago", probed: "3m ago", createdBy: "tom", createdAt: "9 Feb", sessionCount: 640,
+        people: [{ name: "tom", address: "console · operator token", on: true, lastAsked: "1h ago" }, { name: "sam", address: "console · operator token", on: true, lastAsked: "1w ago" }],
+        connections: [{ label: "keystone", on: true }, { label: "wardstone", on: true }, { label: "grafana", on: false }],
+        tools: { "propose.plan": "ask", "notify.household": "off" },
+        memory: [{ seq: 88, subject: "home lab", text: "jellyfin restarts nightly by design — not a fault.", provenance: "corrected by tom · 3mo ago" }],
+        sessions: [{ id: "bs-1840", summary: "why is jellyfin unhealthy?", meta: "tom · 1h ago · 5 turns", trace: "read.services, read.logs · 5.2s", turns: [{ who: "tom", text: "why is jellyfin unhealthy?" }, { who: "ops", text: "Its health check has been failing since the 02:00 restart. I can draft a plan to widen the check window — you would approve it." }] }] },
+      { name: "backups", directive: "watches the drills and explains failures", surface: "admin", route: "llama3.1:8b", readiness: "ready", detail: "tool check passed", lastAsked: "6h ago", probed: "12m ago", createdBy: "tom", createdAt: "18 Feb", sessionCount: 71,
+        people: [{ name: "tom", address: "console · operator token", on: true, lastAsked: "6h ago" }],
+        connections: [{ label: "keystone", on: true }], tools: {}, memory: [], sessions: [] },
+      { name: "installer", directive: "walks new nodes through preflight", surface: "admin", route: "qwen2.5:14b", readiness: "ready", detail: "tool check passed", lastAsked: "2w ago", probed: "1h ago", createdBy: "sam", createdAt: "6 Jun", sessionCount: 9,
+        people: [{ name: "sam", address: "console · operator token", on: true, lastAsked: "2w ago" }],
+        connections: [{ label: "wardstone", on: true }], tools: {}, memory: [], sessions: [] },
+      { name: "shopping", directive: "the old list Butler", surface: "family", route: "claude-sonnet", readiness: "ready", detail: "tool check passed", lastAsked: "2mo ago", retiredAt: "12 Aug", probed: "2mo ago", createdBy: "sam", createdAt: "9 Jan", sessionCount: 140,
+        people: [], connections: [], tools: {}, memory: [], sessions: [] },
+      { name: "homework", directive: "helped with maths, retired after the trial", surface: "family", route: "llama3.1:8b", readiness: "ready", detail: "tool check passed", lastAsked: "5mo ago", retiredAt: "3 May", probed: "5mo ago", createdBy: "tom", createdAt: "2 Feb", sessionCount: 52,
+        people: [], connections: [], tools: {}, memory: [], sessions: [] },
+    ],
+    filter: "all", query: "", sort: "active",
+    selected: null, tab: "model",
+    draft: null, question: "", asking: false, answer: null, probing: false,
+    openSession: null, correcting: null, correction: "",
+    confirmKind: null, confirmRoute: null, confirmOption: false,
+    dialog: false, newDraft: { name: "", directive: "", surface: "family", route: "llama3.1:8b" }, nameError: null,
+    toast: null,
+  };
+
+  // A tool exists only while the package behind it is connected: no mail
+  // server, no send.email. Core tools need nothing.
+  TOOLS = [
+    { name: "read.timeline", blurb: "the household timeline", usage: "92x / 7d" },
+    { name: "write.memory", blurb: "remember something new", usage: "14x / 7d" },
+    { name: "notify.household", blurb: "send an unprompted message", usage: "0x / 7d" },
+    { name: "search.docs", blurb: "the household's documents", usage: "6x / 7d" },
+    { name: "read.health", blurb: "weight, sleep and heart rate", usage: "48x / 7d", needs: "withings" },
+    { name: "read.calendar", blurb: "who is where, and when", usage: "31x / 7d", needs: "calendar" },
+    { name: "write.list", blurb: "add to the shopping list", usage: "12x / 7d", needs: "grocery" },
+    { name: "search.photos", blurb: "find a photo by description", usage: "4x / 7d", needs: "photos" },
+    { name: "read.forecast", blurb: "local weather and rainfall", usage: "9x / 7d", needs: "weather" },
+    { name: "send.email", blurb: "send mail as the household", usage: "2x / 7d", needs: "email" },
+    { name: "read.services", blurb: "service health and versions", usage: "77x / 7d", needs: "keystone" },
+    { name: "propose.plan", blurb: "draft a home lab change for approval", usage: "3x / 7d", needs: "keystone", admin: true },
+    { name: "read.logs", blurb: "host and container logs", usage: "22x / 7d", needs: "wardstone" },
+    { name: "read.metrics", blurb: "dashboards and history", usage: "0x / 7d", needs: "grafana" },
+  ];
+
+  PILL = {
+    ok: "display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:500;padding:2px 8px;border-radius:999px;background:#1b2c25;color:#5fae86;margin-top:2px",
+    warn: "display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:500;padding:2px 8px;border-radius:999px;background:#2e2718;color:#d9a24b;margin-top:2px",
+  };
+
+  // ---- helpers
+
+  route(name) { return this.state.routes.find((r) => r.name === name); }
+  butler(name) { return this.state.butlers.find((b) => b.name === name); }
+  toolState(b, tool) { return (b.tools && b.tools[tool]) || "on"; }
+  connOn(b, label) { return (b.connections || []).some((c) => c.label === label && c.on); }
+  forSurface(b) { return this.TOOLS.filter((t) => !t.admin || b.surface === "admin"); }
+  toolPool(b) { return this.forSurface(b).filter((t) => !t.needs || this.connOn(b, t.needs)); }
+  // Only packages this household actually has: an operator package is
+  // absent from a household Butler's connections, so it is not offered.
+  hasPackage(b, label) { return (b.connections || []).some((c) => c.label === label); }
+  lockedTools(b) { return this.forSurface(b).filter((t) => t.needs && this.hasPackage(b, t.needs) && !this.connOn(b, t.needs)); }
+  toolsFrom(b, label) { return this.forSurface(b).filter((t) => t.needs === label).length; }
+  allowedTools(b) { return this.toolPool(b).filter((t) => this.toolState(b, t.name) !== "off").length; }
+  profileTools(b) { return this.toolPool(b).length; }
+  needsAttention(b) { return !b.retiredAt && b.readiness !== "ready"; }
+  leaves(b) { const r = this.route(b.route); return r ? r.kind === "cloud" : false; }
+
+  say(text, kind) {
+    const dot = "width:7px;height:7px;border-radius:50%;background:" + (kind === "warn" ? "#d9a24b" : kind === "bad" ? "#d9736f" : "#5fae86");
+    this.setState({ toast: { text, dot } });
+    clearTimeout(this._t);
+    this._t = setTimeout(() => this.setState({ toast: null }), 2800);
+  }
+
+  patch(name, changes) {
+    this.setState((s) => ({ butlers: s.butlers.map((b) => (b.name === name ? Object.assign({}, b, changes) : b)) }));
+  }
+
+  open(name) {
+    const b = this.butler(name);
+    this.setState({ selected: name, tab: "model", draft: { name: b.name, directive: b.directive }, answer: null, question: "", openSession: null, correcting: null });
+  }
+
+  // ---- routes
+
+  pickRoute(routeName) {
+    const b = this.butler(this.state.selected);
+    if (!b || routeName === b.route) return;
+    const to = this.route(routeName);
+    if (!to.enabled) { this.say(to.name + " is turned off in Model routes", "warn"); return; }
+    if (to.kind === "cloud" && !this.leaves(b)) { this.setState({ confirmKind: "cloud", confirmRoute: routeName }); return; }
+    this.applyRoute(routeName);
+  }
+
+  applyRoute(routeName) {
+    const b = this.butler(this.state.selected);
+    const to = this.route(routeName);
+    this.patch(b.name, {
+      route: routeName,
+      readiness: to.readiness === "qa-only" ? "qa-only" : "ready",
+      detail: to.readiness === "qa-only" ? "failed tool check" : "tool check passed",
+      probed: "just now",
+    });
+    this.setState({ confirmKind: null, confirmRoute: null, answer: null });
+    this.say(b.name + " now answers on " + routeName + (to.kind === "cloud" ? " — outside the house" : ""), to.kind === "cloud" ? "warn" : "ok");
+  }
+
+  recheck() {
+    if (this.state.probing) return;
+    const b = this.butler(this.state.selected);
+    this.setState({ probing: true });
+    setTimeout(() => {
+      const r = this.route(b.route);
+      this.patch(b.name, { readiness: r.readiness === "qa-only" ? "qa-only" : "ready", detail: r.readiness === "qa-only" ? "failed tool check" : "tool check passed", probed: "just now" });
+      this.setState({ probing: false });
+      this.say("Probed " + b.route, r.readiness === "qa-only" ? "warn" : "ok");
+    }, 900);
+  }
+
+  ask() {
+    const b = this.butler(this.state.selected);
+    if (this.state.asking) return;
+    if (b.readiness === "unavailable") { this.say("Cannot ask — " + b.route + " is unavailable", "bad"); return; }
+    const q = (this.state.question || "how did I sleep last week?").trim();
+    this.setState({ asking: true, answer: null });
+    setTimeout(() => {
+      const cloud = this.leaves(b);
+      this.setState({
+        asking: false,
+        answer: {
+          text: b.readiness === "qa-only"
+            ? "Answered, but this model did not pass its tool check, so it looked nothing up: \u201c" + q + "\u201d is outside what it can read right now."
+            : "Six nights recorded, averaging 6h 41m \u2014 about 20 minutes down on the fortnight before. Tuesday was the outlier at 4h 55m.",
+          meta: (b.readiness === "qa-only" ? "used 0 tools" : "used 3 tools") + " \u00b7 1.9s \u00b7 " + b.route + (cloud ? " \u00b7 sent outside the house" : " \u00b7 stayed in the house") + " \u00b7 session bs-1843",
+        },
+      });
+    }, 1100);
+  }
+
+  // ---- edits
+
+  save() {
+    const b = this.butler(this.state.selected);
+    const d = this.state.draft;
+    if (!d) return;
+    const name = d.name.trim();
+    if (!name) { this.say("A Butler needs a name", "bad"); return; }
+    this.patch(b.name, { name: name, directive: d.directive.trim() });
+    this.setState({ selected: name });
+    this.say("Saved " + name);
+  }
+
+  toggleTool(tool, value) {
+    const b = this.butler(this.state.selected);
+    const tools = Object.assign({}, b.tools);
+    tools[tool] = value;
+    this.patch(b.name, { tools: tools });
+  }
+
+  togglePerson(i) {
+    const b = this.butler(this.state.selected);
+    const people = b.people.map((p, n) => (n === i ? Object.assign({}, p, { on: !p.on }) : p));
+    this.patch(b.name, { people: people });
+    this.say(people[i].on ? people[i].name + " can talk to " + b.name : people[i].name + " can no longer talk to " + b.name, people[i].on ? "ok" : "warn");
+  }
+
+  toggleConnection(i) {
+    const b = this.butler(this.state.selected);
+    const cs = b.connections.map((c, n) => (n === i ? Object.assign({}, c, { on: !c.on }) : c));
+    this.patch(b.name, { connections: cs });
+    const c = cs[i];
+    const gained = this.forSurface(b).filter((t) => t.needs === c.label);
+    if (!gained.length) { this.say(c.label + (c.on ? " connected" : " disconnected"), c.on ? "ok" : "warn"); return; }
+    const names = gained.map((t) => t.name).join(", ");
+    this.say(c.on ? c.label + " connected \u2014 " + names + " now available" : c.label + " disconnected \u2014 " + names + " no longer exists", c.on ? "ok" : "warn");
+  }
+
+  forget(seq) {
+    const b = this.butler(this.state.selected);
+    this.patch(b.name, { memory: b.memory.filter((m) => m.seq !== seq) });
+    this.say("Forgotten. The note is gone from what " + b.name + " knows.", "warn");
+  }
+
+  saveCorrection(seq) {
+    const b = this.butler(this.state.selected);
+    const text = this.state.correction.trim();
+    if (!text) { this.setState({ correcting: null }); return; }
+    this.patch(b.name, { memory: b.memory.map((m) => (m.seq === seq ? Object.assign({}, m, { text: text, provenance: "corrected by tom \u00b7 just now" }) : m)) });
+    this.setState({ correcting: null, correction: "" });
+    this.say("Corrected");
+  }
+
+  duplicate() {
+    const b = this.butler(this.state.selected);
+    let n = b.name + " copy";
+    let i = 2;
+    while (this.butler(n)) { n = b.name + " copy " + i++; }
+    const copy = Object.assign({}, b, { name: n, retiredAt: undefined, lastAsked: "never", sessionCount: 0, sessions: [], memory: [], people: b.people.map((p) => Object.assign({}, p, { on: false, lastAsked: "never" })), createdBy: "tom", createdAt: "today" });
+    this.setState((s) => ({ butlers: s.butlers.concat([copy]) }));
+    this.open(n);
+    this.say(n + " made \u2014 nobody can talk to it yet", "warn");
+  }
+
+  retireOrRestore() {
+    const b = this.butler(this.state.selected);
+    if (b.retiredAt) { this.patch(b.name, { retiredAt: undefined }); this.say(b.name + " is answering again"); return; }
+    this.setState({ confirmKind: "retire", confirmOption: false });
+  }
+
+  doRetire() {
+    const b = this.butler(this.state.selected);
+    this.patch(b.name, { retiredAt: "today" });
+    this.setState({ confirmKind: null, confirmOption: false });
+    this.say(b.name + " retired. Nothing was deleted.", "warn");
+  }
+
+  // ---- create
+
+  openDialog() { this.setState({ dialog: true, nameError: null, newDraft: { name: "", directive: "", surface: "family", route: "llama3.1:8b" } }); }
+
+  applyTemplate(key) {
+    const T = {
+      blank: { name: "", directive: "", surface: "family", route: "llama3.1:8b" },
+      health: { name: "health", directive: "keeps track of training and sleep", surface: "family", route: "llama3.1:8b" },
+      kitchen: { name: "kitchen", directive: "timers, recipes, what's in the freezer", surface: "family", route: "qwen2.5:14b" },
+      operator: { name: "ops", directive: "diagnoses services, drafts plans", surface: "admin", route: "gemma2:27b" },
+    };
+    this.setState({ newDraft: Object.assign({}, T[key]), nameError: null, template: key });
+  }
+
+  create(openReach) {
+    const d = this.state.newDraft;
+    const name = d.name.trim();
+    if (!name) { this.setState({ nameError: "Give it a name — this is what people will say to reach it." }); return; }
+    if (this.butler(name)) { this.setState({ nameError: "There is already a Butler called " + name + "." }); return; }
+    const r = this.route(d.route);
+    const b = {
+      name: name, directive: d.directive.trim(), surface: d.surface, route: d.route,
+      readiness: r.readiness === "qa-only" ? "qa-only" : "ready",
+      detail: r.readiness === "qa-only" ? "failed tool check" : "tool check passed",
+      lastAsked: "never", probed: "just now", createdBy: "tom", createdAt: "today", sessionCount: 0,
+      people: (d.surface === "admin"
+        ? [{ name: "tom", address: "console \u00b7 operator token", on: false, lastAsked: "never" }, { name: "sam", address: "console \u00b7 operator token", on: false, lastAsked: "never" }]
+        : [{ name: "tom", address: "matrix \u00b7 @tom:home", on: false, lastAsked: "never" }, { name: "sam", address: "matrix \u00b7 @sam:home", on: false, lastAsked: "never" }, { name: "kids (2)", address: "no address linked", on: false, lastAsked: "never" }]),
+      connections: d.surface === "admin" ? [{ label: "keystone", on: false }, { label: "wardstone", on: false }] : [{ label: "calendar", on: false }, { label: "grocery", on: false }, { label: "photos", on: false }],
+      tools: {}, memory: [], sessions: [],
+    };
+    this.setState((s) => ({ butlers: s.butlers.concat([b]), dialog: false }));
+    this.open(name);
+    if (openReach) this.setState({ tab: "reach" });
+    this.say(name + " made \u2014 give it an address so somebody can talk to it", "warn");
+  }
+
+  // ---- render values
+
+  renderVals() {
+    const s = this.state;
+    const chip = (on) => "font-size:12px;font-weight:500;padding:3px 11px;border-radius:999px;cursor:pointer;border:1px solid " + (on ? "#9184d9" : "rgba(233,233,237,.11)") + ";background:" + (on ? "rgba(145,132,217,.16)" : "transparent") + ";color:" + (on ? "#d2cefd" : "#e9e9ed");
+    const dot = (c) => "width:9px;height:9px;border-radius:50%;flex:none;background:" + c;
+    const health = (b) => {
+      if (b.retiredAt) return { label: "retired " + b.retiredAt, color: "rgba(233,233,237,.58)", ink: "color:rgba(233,233,237,.58)", long: "retired " + b.retiredAt };
+      if (b.readiness === "unavailable") return { label: "unavailable", color: "#d9736f", ink: "color:#d9736f", long: "unavailable \u2014 " + b.detail };
+      if (b.readiness === "qa-only") return { label: "questions only", color: "#d9a24b", ink: "color:#d9a24b", long: "questions only \u2014 " + b.detail };
+      return { label: "ready", color: "#5fae86", ink: "color:#e9e9ed", long: "ready \u00b7 " + b.detail };
+    };
+
+    // roster
+    const q = s.query.trim().toLowerCase();
+    let rows = s.butlers.filter((b) => {
+      if (s.filter === "retired") { if (!b.retiredAt) return false; } else if (b.retiredAt) return false;
+      if (s.filter === "family" && b.surface !== "family") return false;
+      if (s.filter === "admin" && b.surface !== "admin") return false;
+      if (s.filter === "cloud" && !this.leaves(b)) return false;
+      if (s.filter === "attention" && !this.needsAttention(b)) return false;
+      if (q && (b.name + " " + b.directive).toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+    const rank = { never: 1e9 };
+    const age = (t) => { if (rank[t]) return rank[t]; const n = parseFloat(t) || 0; const u = t.replace(/[\d. ]/g, ""); const m = { m: 1, h: 60, d: 1440, w: 10080, mo: 43200 }; return n * (m[u.slice(0, 2)] || m[u[0]] || 1); };
+    if (s.sort === "name") rows = rows.slice().sort((a, b) => a.name.localeCompare(b.name));
+    else if (s.sort === "health") rows = rows.slice().sort((a, b) => (this.needsAttention(b) ? 1 : 0) - (this.needsAttention(a) ? 1 : 0));
+    else rows = rows.slice().sort((a, b) => age(a.lastAsked) - age(b.lastAsked));
+
+    const rowOf = (b) => {
+      const h = health(b);
+      const cloud = this.leaves(b);
+      const r = this.route(b.route);
+      const people = b.people.filter((p) => p.on).length;
+      const conns = b.connections.filter((c) => c.on).length;
+      return {
+        name: b.name,
+        directive: b.directive,
+        flag: b.retiredAt ? "retired" : people === 0 && !b.retiredAt ? "nobody can talk to it" : "",
+        routeLabel: b.route + " \u00b7 " + (r ? r.host : "?"),
+        destPill: cloud ? this.PILL.warn : this.PILL.ok,
+        destDot: "width:7px;height:7px;border-radius:50%;background:" + (cloud ? "#d9a24b" : "#5fae86"),
+        destLabel: cloud ? "leaves the house" : "stays in the house",
+        healthLabel: h.label, healthInk: h.ink, healthDot: dot(h.color),
+        healthDetail: b.retiredAt ? "kept, not deleted" : b.readiness === "ready" ? b.route + " probed " + b.probed : b.detail,
+        reachA: (people === 0 ? "no people" : people + (b.surface === "admin" ? (people === 1 ? " operator" : " operators") : (people === 1 ? " person" : " people"))) + " \u00b7 " + conns + (conns === 1 ? " connection" : " connections"),
+        reachB: this.allowedTools(b) + " of " + this.profileTools(b) + " tools" + (this.toolPool(b).some((t) => t.name === "propose.plan") && this.toolState(b, "propose.plan") !== "off" ? " \u00b7 may propose plans" : ""),
+        lastAsked: b.lastAsked,
+        open: () => this.open(b.name),
+        style: "display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.2fr) minmax(0,.85fr) minmax(0,1.1fr) 78px 34px;gap:12px;align-items:center;padding:10px 12px;border-radius:8px;background:#232532;border:1px solid " + (s.selected === b.name ? "#9184d9" : this.needsAttention(b) ? "rgba(217,162,75,.4)" : "rgba(233,233,237,.11)") + ";opacity:" + (b.retiredAt ? ".62" : "1"),
+      };
+    };
+
+    const groups = [
+      { key: "family", title: "Household", blurb: "Reads the home. Cannot touch the home lab." },
+      { key: "admin", title: "Operator", blurb: "Can propose changes to the home lab. Never approves them." },
+    ].map((g) => {
+      const mine = rows.filter((b) => b.surface === g.key);
+      return { key: g.key, title: g.title, blurb: g.blurb, count: mine.length, rows: mine.map(rowOf) };
+    }).filter((g) => g.count > 0);
+
+    const active = s.butlers.filter((b) => !b.retiredAt);
+    const attn = active.filter((b) => this.needsAttention(b));
+    const counts = {
+      all: active.length,
+      family: active.filter((b) => b.surface === "family").length,
+      admin: active.filter((b) => b.surface === "admin").length,
+      cloud: active.filter((b) => this.leaves(b)).length,
+      attention: attn.length,
+      retired: s.butlers.filter((b) => b.retiredAt).length,
+    };
+    const filters = [
+      { key: "all", label: "All" }, { key: "family", label: "Household" }, { key: "admin", label: "Operator" },
+      { key: "cloud", label: "Leaves the house" }, { key: "attention", label: "Needs attention" }, { key: "retired", label: "Retired" },
+    ].map((f) => ({ label: f.label, count: counts[f.key], style: chip(s.filter === f.key), onPick: () => this.setState({ filter: f.key }) }));
+
+    const attentionText = attn.length
+      ? attn.map((b) => b.name + " " + (b.readiness === "unavailable" ? "can't reach its model" : "answers questions only")).join(", ")
+      : "";
+
+    const vals = {
+      groups, filters,
+      query: s.query, sort: s.sort,
+      onQuery: (e) => this.setState({ query: e.target.value }),
+      onSort: (e) => this.setState({ sort: e.target.value }),
+      openDialog: () => this.openDialog(),
+      clearFilters: () => this.setState({ filter: "all", query: "" }),
+      nothing: groups.length === 0,
+      nothingHint: s.filter === "retired" ? "No Butler has been retired." : "Try a different filter, or clear the search.",
+      attention: { show: attn.length > 0 && s.filter !== "attention", text: attn.length + (attn.length === 1 ? " Butler needs" : " Butlers need") + " attention \u2014 " + attentionText, onShow: () => this.setState({ filter: "attention" }) },
+      toast: s.toast,
+      closeDrawer: () => this.setState({ selected: null }),
+      sel: null, confirm: null, dialog: s.dialog,
+    };
+
+    // drawer
+    const b = s.selected ? this.butler(s.selected) : null;
+    if (b) {
+      const h = health(b);
+      const cloud = this.leaves(b);
+      const r = this.route(b.route);
+      vals.sel = {
+        name: b.name,
+        surfaceLabel: b.surface === "admin" ? "Operator" : "Household",
+        surfaceBlurb: b.surface === "admin" ? "may propose home lab changes, never approves them" : "reads the home, cannot touch the home lab",
+        destPill: cloud ? this.PILL.warn : this.PILL.ok,
+        destDot: "width:7px;height:7px;border-radius:50%;background:" + (cloud ? "#d9a24b" : "#5fae86"),
+        destLabel: cloud ? "leaves the house" : "stays in the house",
+        meta: "made by " + b.createdBy + " \u00b7 " + b.createdAt + " \u00b7 " + b.sessionCount + " sessions" + (b.retiredAt ? " \u00b7 retired " + b.retiredAt : ""),
+        provenance: "created by " + b.createdBy + " on " + b.createdAt + " \u00b7 " + b.sessionCount + " sessions since",
+        routeLabel: b.route + " \u00b7 " + (r ? r.host : "?"),
+        healthDot: dot(h.color), healthInk: h.ink, healthLong: h.long,
+        probeLine: (r ? r.provider + " \u00b7 " + r.endpoint : "") + " \u00b7 probed " + b.probed,
+        profileLabel: (b.surface === "admin" ? "operator" : "household") + " profile default",
+      };
+
+      const tabDef = [
+        { key: "identity", label: "Identity" }, { key: "model", label: "Model" }, { key: "reach", label: "Reach" },
+        { key: "tools", label: "Tools", count: this.allowedTools(b) + "/" + this.profileTools(b) },
+        { key: "memory", label: "Memory", count: b.memory.length || "" },
+        { key: "sessions", label: "Sessions", count: b.sessions.length || "" },
+      ];
+      vals.tabs = tabDef.map((t) => ({
+        label: t.label, count: t.count || "",
+        style: "flex:none;font-size:13px;font-weight:500;padding:7px 11px;border:0;border-bottom:2px solid " + (s.tab === t.key ? "#9184d9" : "transparent") + ";background:transparent;color:" + (s.tab === t.key ? "#e9e9ed" : "rgba(233,233,237,.58)") + ";cursor:pointer",
+        onPick: () => this.setState({ tab: t.key }),
+      }));
+      vals.isIdentity = s.tab === "identity"; vals.isModel = s.tab === "model"; vals.isReach = s.tab === "reach";
+      vals.isTools = s.tab === "tools"; vals.isMemory = s.tab === "memory"; vals.isSessions = s.tab === "sessions";
+
+      vals.draft = s.draft || { name: b.name, directive: b.directive };
+      vals.onDraftName = (e) => this.setState({ draft: Object.assign({}, vals.draft, { name: e.target.value }) });
+      vals.onDraftDirective = (e) => this.setState({ draft: Object.assign({}, vals.draft, { directive: e.target.value }) });
+      const dirty = s.draft && (s.draft.name !== b.name || s.draft.directive !== b.directive);
+      vals.saveLabel = dirty ? "Save" : "Saved";
+      vals.saveStyle = "font-size:14px;font-weight:500;padding:6px 14px;border-radius:8px;cursor:" + (dirty ? "pointer" : "not-allowed") + ";border:1px solid " + (dirty ? "#9184d9" : "rgba(233,233,237,.11)") + ";background:" + (dirty ? "rgba(145,132,217,.16)" : "transparent") + ";color:" + (dirty ? "#d2cefd" : "rgba(233,233,237,.45)");
+      vals.save = () => (dirty ? this.save() : null);
+      vals.duplicate = () => this.duplicate();
+      vals.retireLabel = b.retiredAt ? "Bring back" : "Retire";
+      vals.retireStyle = "margin-left:auto;font-size:14px;font-weight:500;padding:6px 11px;border-radius:8px;cursor:pointer;background:transparent;border:1px solid " + (b.retiredAt ? "rgba(95,174,134,.55)" : "rgba(217,115,111,.55)") + ";color:" + (b.retiredAt ? "#5fae86" : "#d9736f");
+      vals.retireOrRestore = () => this.retireOrRestore();
+
+      const routeRow = (o) => {
+        const on = o.name === b.route;
+        const off = !o.enabled;
+        return {
+          label: o.name + " \u00b7 " + o.host,
+          note: off ? "turned off in Model routes" : o.readiness === "qa-only" ? "questions only" : o.kind === "cloud" ? "leaves the house" : "ready",
+          noteInk: "margin-left:auto;font-size:11px;font-variant-numeric:tabular-nums;color:" + (off ? "rgba(233,233,237,.45)" : o.readiness === "qa-only" ? "#d9a24b" : o.kind === "cloud" ? "#d9a24b" : "#5fae86"),
+          radio: "width:14px;height:14px;border-radius:50%;flex:none;border:1px solid " + (on ? "#9184d9" : "rgba(233,233,237,.34)") + ";background:" + (on ? "#9184d9" : "transparent") + ";box-shadow:" + (on ? "inset 0 0 0 3px #232532" : "none"),
+          style: "display:flex;align-items:center;gap:10px;text-align:left;padding:8px 11px;border-radius:8px;background:" + (on ? "rgba(145,132,217,.12)" : "#232532") + ";border:1px solid " + (on ? "#9184d9" : "rgba(233,233,237,.11)") + ";color:" + (off ? "rgba(233,233,237,.5)" : "#e9e9ed") + ";cursor:pointer",
+          onPick: () => this.pickRoute(o.name),
+        };
+      };
+      vals.localRoutes = s.routes.filter((o) => o.kind === "local").map(routeRow);
+      vals.cloudRoutes = s.routes.filter((o) => o.kind === "cloud").map(routeRow);
+      vals.recheck = () => this.recheck();
+      vals.recheckLabel = s.probing ? "probing\u2026" : "Re-check";
+      vals.recheckIcon = s.probing ? "ph ph-circle-notch" : "ph ph-arrows-clockwise";
+      vals.recheckStyle = "display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 10px;border-radius:8px;background:transparent;border:1px solid rgba(233,233,237,.11);color:#e9e9ed;cursor:pointer" + (s.probing ? ";opacity:.6" : "");
+      vals.question = s.question;
+      vals.onQuestion = (e) => this.setState({ question: e.target.value });
+      vals.ask = () => this.ask();
+      vals.asking = s.asking;
+      vals.askLabel = s.asking ? "asking\u2026" : "Ask";
+      vals.askStyle = "flex:none;font-size:14px;font-weight:500;padding:6px 14px;border-radius:8px;background:transparent;border:1px solid #9184d9;color:#9184d9;cursor:pointer" + (s.asking ? ";opacity:.6" : "");
+      vals.answer = s.answer;
+
+      vals.people = b.people.map((p, i) => ({
+        name: p.name, address: p.address, lastAsked: p.lastAsked === "never" ? "never asked" : "asked " + p.lastAsked,
+        box: "width:16px;height:16px;border-radius:4px;flex:none;display:grid;place-items:center;border:1px solid " + (p.on ? "#9184d9" : "rgba(233,233,237,.34)") + ";background:" + (p.on ? "#9184d9" : "transparent") + ";color:#161826",
+        tick: p.on ? "ph-fill ph-check" : "",
+        style: "display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:8px 11px;border-radius:8px;background:#232532;border:1px solid " + (p.on ? "rgba(145,132,217,.4)" : "rgba(233,233,237,.11)") + ";color:#e9e9ed;cursor:pointer",
+        onToggle: () => this.togglePerson(i),
+      }));
+      vals.reachNote = b.people.filter((p) => p.on).length === 0 ? "Nobody can talk to this Butler. It will answer nothing until somebody here is ticked." : "An unticked person cannot reach this Butler at all \u2014 it does not appear for them.";
+      vals.connections = b.connections.map((c, i) => {
+        const n = this.toolsFrom(b, c.label);
+        return {
+          label: (c.on ? c.label + " \u2713" : c.label) + (n ? " \u00b7 " + n + (n === 1 ? " tool" : " tools") : ""),
+          style: chip(c.on),
+          onToggle: () => this.toggleConnection(i),
+        };
+      });
+      vals.connectionNote = "A tool exists only while the package behind it is connected \u2014 there is no send.email without the mail server. Turning one off takes its tools away from " + b.name + ".";
+
+      const pool = this.toolPool(b);
+      vals.tools = pool.map((t) => {
+        const cur = this.toolState(b, t.name);
+        return {
+          name: t.name, blurb: t.blurb,
+          usage: cur === "off" ? "off" : t.usage,
+          options: [
+            { key: "on", label: "on" }, { key: "ask", label: "ask first" }, { key: "off", label: "off" },
+          ].map((o) => ({
+            label: o.label,
+            style: "font-size:11.5px;padding:3px 9px;border-radius:999px;cursor:pointer;border:1px solid " + (cur === o.key ? "#9184d9" : "rgba(233,233,237,.11)") + ";background:" + (cur === o.key ? "rgba(145,132,217,.16)" : "transparent") + ";color:" + (cur === o.key ? "#d2cefd" : "rgba(233,233,237,.58)"),
+            onPick: () => this.toggleTool(t.name, o.key),
+          })),
+        };
+      });
+      const lockedCount = this.lockedTools(b).length;
+      vals.toolSummary = this.allowedTools(b) + " of " + this.profileTools(b) + " allowed" + (lockedCount ? " \u00b7 " + lockedCount + " more come with connections" : "");
+      vals.toolWarning = this.allowedTools(b) === 0 ? "Every tool is off. " + b.name + " will still talk, but it cannot look anything up." : "";
+      const locked = this.lockedTools(b);
+      vals.hasLocked = locked.length > 0;
+      vals.lockedTitle = locked.length + (locked.length === 1 ? " MORE TOOL COMES WITH A CONNECTION" : " MORE TOOLS COME WITH CONNECTIONS");
+      vals.locked = locked.map((t) => ({
+        name: t.name, blurb: t.blurb, needs: "needs " + t.needs,
+        onEnable: () => {
+          const i = b.connections.findIndex((c) => c.label === t.needs);
+          if (i < 0) { this.say(t.needs + " is not connected to this household yet", "warn"); return; }
+          this.toggleConnection(i);
+        },
+      }));
+
+      vals.memoryNote = b.memory.length
+        ? "What " + b.name + " remembers, and where each note came from. Correcting rewrites the note; forgetting removes it."
+        : b.name + " has not been told anything worth remembering yet.";
+      vals.memory = b.memory.map((m) => ({
+        subject: m.subject, text: m.text, provenance: m.provenance,
+        editing: s.correcting === m.seq,
+        onCorrect: () => this.setState({ correcting: m.seq, correction: m.text }),
+        onForget: () => this.forget(m.seq),
+        onSaveCorrection: () => this.saveCorrection(m.seq),
+        onCancelCorrection: () => this.setState({ correcting: null }),
+      }));
+      vals.correction = s.correction;
+      vals.onCorrection = (e) => this.setState({ correction: e.target.value });
+
+      vals.sessions = b.sessions.map((x) => ({
+        id: x.id, summary: x.summary, meta: x.meta, trace: x.trace, turns: x.turns,
+        open: s.openSession === x.id,
+        onToggle: () => this.setState({ openSession: s.openSession === x.id ? null : x.id }),
+      }));
+      vals.noSessions = b.sessions.length === 0;
+    }
+
+    // confirms
+    if (s.confirmKind === "cloud" && b) {
+      const to = this.route(s.confirmRoute);
+      vals.confirm = {
+        icon: "ph ph-warning", iconStyle: "width:26px;height:26px;border-radius:8px;display:grid;place-items:center;background:#2e2718;color:#d9a24b;flex:none",
+        title: "This sends " + b.name + "'s material outside the house",
+        body: "Everything anyone tells " + b.name + " from now on goes to " + to.host + ". Its " + b.memory.length + " remembered notes stay where they are.",
+        hasList: true, listTitle: "WHAT CHANGES", listBg: "#2e2718", listInk: "#d9a24b",
+        lines: [
+          { text: "the conversation open right now carries over on its next message" },
+          { text: b.people.filter((p) => p.on).length + " people talk to this Butler" },
+          { text: "Activity will record the crossing, with your name on it" },
+        ],
+        hasOption: false,
+        confirmLabel: "Yes, switch it",
+        confirmStyle: "font-size:14px;font-weight:500;padding:6px 14px;border-radius:8px;cursor:pointer;background:rgba(217,162,75,.16);border:1px solid #d9a24b;color:#d9a24b",
+        cancelLabel: "Keep " + b.route,
+        onConfirm: () => this.applyRoute(s.confirmRoute),
+        onCancel: () => this.setState({ confirmKind: null, confirmRoute: null }),
+      };
+    } else if (s.confirmKind === "retire" && b) {
+      const people = b.people.filter((p) => p.on).length;
+      const lines = [];
+      if (people) lines.push({ text: people + " people lose the Butler they message" });
+      if (b.name === "nutrition") lines.push({ text: "2 routines call it \u2014 \u201csunday shop\u201d and \u201cmeal plan\u201d will fail" });
+      if (b.sessions.length) lines.push({ text: b.sessions.length + " sessions stay readable in the audit trail" });
+      lines.push({ text: b.memory.length + " remembered notes are kept, not deleted" });
+      vals.confirm = {
+        icon: "ph ph-archive", iconStyle: "width:26px;height:26px;border-radius:8px;display:grid;place-items:center;background:#301f21;color:#d9736f;flex:none",
+        title: "Retire " + b.name + "?",
+        body: "It stops answering immediately. Nothing is deleted \u2014 you can bring it back from the Retired filter.",
+        hasList: true, listTitle: "WHAT BREAKS", listBg: "#301f21", listInk: "#d9736f", lines: lines,
+        hasOption: b.name === "nutrition",
+        optionLabel: "Point those routines at kitchen instead",
+        optionTick: s.confirmOption ? "ph-fill ph-check" : "",
+        optionBox: "width:16px;height:16px;border-radius:4px;flex:none;display:grid;place-items:center;border:1px solid " + (s.confirmOption ? "#9184d9" : "rgba(233,233,237,.34)") + ";background:" + (s.confirmOption ? "#9184d9" : "transparent") + ";color:#161826",
+        optionStyle: "display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:8px;background:#232532;border:1px solid rgba(233,233,237,.11);color:#e9e9ed;cursor:pointer;text-align:left",
+        onOption: () => this.setState({ confirmOption: !s.confirmOption }),
+        confirmLabel: "Retire it",
+        confirmStyle: "font-size:14px;font-weight:500;padding:6px 14px;border-radius:8px;cursor:pointer;background:rgba(217,115,111,.16);border:1px solid #d9736f;color:#d9736f",
+        cancelLabel: "Keep it",
+        onConfirm: () => this.doRetire(),
+        onCancel: () => this.setState({ confirmKind: null }),
+      };
+    }
+
+    // dialog
+    const d = s.newDraft;
+    const dr = this.route(d.route);
+    vals.newDraft = d;
+    vals.nameError = s.nameError;
+    vals.closeDialog = () => this.setState({ dialog: false });
+    vals.onNewName = (e) => this.setState({ newDraft: Object.assign({}, d, { name: e.target.value }), nameError: null });
+    vals.onNewDirective = (e) => this.setState({ newDraft: Object.assign({}, d, { directive: e.target.value }) });
+    vals.templates = [
+      { key: "blank", label: "Blank" }, { key: "health", label: "Health" }, { key: "kitchen", label: "Kitchen" }, { key: "operator", label: "Operator" },
+    ].map((t) => ({ label: t.label, style: chip(s.template === t.key), onPick: () => this.applyTemplate(t.key) }));
+    vals.surfaceOptions = [
+      { key: "family", title: "Household", blurb: "Reads the home. Cannot touch the home lab." },
+      { key: "admin", title: "Operator", blurb: "May propose home lab changes. Never approves." },
+    ].map((o) => ({
+      title: o.title, blurb: o.blurb,
+      style: "flex:1;min-width:200px;text-align:left;padding:10px 12px;border-radius:8px;background:" + (d.surface === o.key ? "rgba(145,132,217,.12)" : "#232532") + ";border:1px solid " + (d.surface === o.key ? "#9184d9" : "rgba(233,233,237,.11)") + ";color:#e9e9ed;cursor:pointer",
+      onPick: () => this.setState({ newDraft: Object.assign({}, d, { surface: o.key, route: o.key === "admin" ? "gemma2:27b" : d.route }) }),
+    }));
+    vals.newRoutes = s.routes.map((o) => {
+      const on = o.name === d.route;
+      return {
+        label: o.name + " \u00b7 " + o.host,
+        note: !o.enabled ? "turned off in Model routes" : o.kind === "cloud" ? "leaves the house" : o.readiness === "qa-only" ? "on your hardware \u00b7 questions only" : "on your hardware \u00b7 ready",
+        noteInk: "margin-left:auto;font-size:11px;color:" + (!o.enabled ? "rgba(233,233,237,.45)" : o.kind === "cloud" ? "#d9a24b" : o.readiness === "qa-only" ? "#d9a24b" : "#5fae86"),
+        radio: "width:14px;height:14px;border-radius:50%;flex:none;border:1px solid " + (on ? "#9184d9" : "rgba(233,233,237,.34)") + ";background:" + (on ? "#9184d9" : "transparent") + ";box-shadow:" + (on ? "inset 0 0 0 3px #232532" : "none"),
+        style: "display:flex;align-items:center;gap:10px;text-align:left;padding:8px 11px;border-radius:8px;background:" + (on ? "rgba(145,132,217,.12)" : "#232532") + ";border:1px solid " + (on ? "#9184d9" : "rgba(233,233,237,.11)") + ";color:" + (o.enabled ? "#e9e9ed" : "rgba(233,233,237,.5)") + ";cursor:pointer",
+        onPick: () => (o.enabled ? this.setState({ newDraft: Object.assign({}, d, { route: o.name }) }) : this.say(o.name + " is turned off in Model routes", "warn")),
+      };
+    });
+    const cloudNew = dr && dr.kind === "cloud";
+    vals.summary = {
+      bg: cloudNew ? "#2e2718" : "#232532",
+      ring: cloudNew ? "rgba(217,162,75,.4)" : "#3f424d",
+      text: "a " + (d.surface === "admin" ? "operator" : "household") + " Butler called " + (d.name.trim() || "\u2014") + " on " + d.route + ", which " + (cloudNew ? "sends what it is told outside the house" : "stays in the house") + ". Nobody can talk to it until you give it an address.",
+    };
+    vals.create = () => this.create(false);
+    vals.createAndOpen = () => this.create(true);
+    vals.createStyle = "font-size:14px;font-weight:500;padding:6px 14px;border-radius:8px;cursor:pointer;background:rgba(145,132,217,.16);border:1px solid #9184d9;color:#d2cefd";
+    vals.createOpenStyle = "font-size:14px;font-weight:500;padding:6px 12px;border-radius:8px;cursor:pointer;background:transparent;border:1px solid rgba(233,233,237,.11);color:#e9e9ed";
+
+    return vals;
+  }
+}
+</script>
+</body>
+</html>

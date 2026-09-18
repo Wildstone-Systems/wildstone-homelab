@@ -20,15 +20,15 @@ import (
 )
 
 func TestPartCAcceptance(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	const admin = "mika"
 
 	// ---- setup: two admitted adults, some work, some memory, a
 	// connection, a routine.
-	for _, m := range []struct{ name, profile string }{
-		{admin, ProfileOperator}, {"sam", ProfileHousehold},
+	for _, m := range []struct{ name, role string }{
+		{admin, RoleOwner}, {"sam", RoleMember},
 	} {
-		if err := db.RecordButlerMember(m.name, m.profile, ""); err != nil {
+		if err := db.RecordButlerMember(m.name, m.role, "", ""); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.AdmitButlerMember(m.name, "root-admin"); err != nil {
@@ -312,11 +312,11 @@ func TestPartCAcceptance(t *testing.T) {
 		// refusing a request: a Butler is assigned a model, and
 		// material given to a local-model Butler is not reachable by a
 		// cloud-model one (ADR-W031 A2/A4).
-		for _, r := range []ModelRoute{
-			{Name: "kitchen-box", Kind: RouteLocal, Provider: "ollama", Readiness: RouteReady, Enabled: true},
-			{Name: "cloud", Kind: RouteCloud, Provider: "anthropic", Readiness: RouteReady, Enabled: true},
+		for _, r := range []Model{
+			{Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", Readiness: ModelReady, Enabled: true},
+			{Name: "cloud", Kind: ModelCloud, Provider: "anthropic", Readiness: ModelReady, Enabled: true},
 		} {
-			if err := db.UpsertModelRoute(r, "root-admin"); err != nil {
+			if err := db.UpsertModel(r, "root-admin"); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -324,7 +324,7 @@ func TestPartCAcceptance(t *testing.T) {
 			{"in-house", "kitchen-box"}, {"outside", "cloud"},
 		} {
 			if _, err := db.CreateButler(Butler{
-				Name: b.name, Surface: ButlerSurfaceFamily, Profile: ProfileHousehold, Route: b.route,
+				Name: b.name, Surface: ButlerSurfaceFamily, Profile: ProfileHousehold, Model: b.route,
 			}, admin); err != nil {
 				t.Fatal(err)
 			}
@@ -392,7 +392,7 @@ func newAcceptanceTask(t *testing.T, db *DB, owner string, audience ButlerTaskAu
 // never restored is not quarantined, and that ordinary case must not
 // read as an error.
 func TestQuarantineIsAbsentUntilARestore(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	if err := db.CheckQuarantine(); err != nil {
 		t.Fatalf("a database that was never restored reported %v", err)
 	}

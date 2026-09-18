@@ -12,7 +12,7 @@ import (
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
-	db, err := runtimedb.Open(t.TempDir() + "/keystone.db")
+	db, err := runtimedb.Open(migrated.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,705 @@
+package butlerlive
+
+// ADR-W031's evidence at the level that SERVES a conversation, which is
+// the whole point of the exercise. Every guarantee below was already
+// true of the store; none of it was true of a message arriving at a bot
+// until this package existed, and a property that holds one layer away
+// from where messages actually arrive is not a property anyone can rely
+// on.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
+	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+)
+
+// witness is a provider that records every message it was shown.
+//
+// It is the measuring instrument for A4, and it measures the right
+// thing: not "was the routing correct" but "what did this model
+// actually receive". A test that asserted on a routing decision would
+// pass just as happily if the material had reached the other model
+// first and been routed afterwards, which is the failure A2 says a
+// router cannot rule out.
+type witness struct {
+	name string
+	mu   sync.Mutex
+	saw  []string
+	// reply is what it answers with; empty means a plain acknowledgement.
+	reply string
+	// toolCalls, when set, is returned on the FIRST call instead of
+	// text, so a test can drive one tool dispatch.
+	toolCalls []provider.ToolCall
+	rounds    int
+	// dieAfter makes the provider unreachable once it has answered that
+	// many rounds, standing in for a model that goes away mid-turn. 0
+	// means it never dies.
+	dieAfter int
+}
+
+// revive brings the model back, as a restarted deployment finds it.
+//
+// It deliberately KEEPS the queued tool call. A resumed slice
+// reconstructs context by asking the model again rather than replaying
+// a saved transcript, so the model asks for the same read a second
+// time — that is normal, and it is precisely the moment the step ledger
+// has to earn its keep by answering from what is already verified
+// instead of dispatching again.
+//
+// Clearing it here would make the "not dispatched twice" assertion
+// vacuous: nothing would be re-requested, so nothing could be
+// re-dispatched, and the test would pass against a runner that ignored
+// the ledger entirely.
+func (w *witness) revive() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.dieAfter, w.rounds = 0, 0
+}
+
+func (w *witness) Name() string { return w.name }
+
+func (w *witness) Chat(_ context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.dieAfter > 0 && w.rounds >= w.dieAfter {
+		return nil, errors.New("provider unreachable")
+	}
+	w.rounds++
+	for _, m := range req.Messages {
+		w.saw = append(w.saw, m.Text)
+	}
+	w.saw = append(w.saw, req.System)
+	if w.toolCalls != nil && w.rounds == 1 {
+		return &provider.ChatResponse{ToolCalls: w.toolCalls, StopReason: "tool_use"}, nil
+	}
+	reply := w.reply
+	if reply == "" {
+		reply = w.name + " answered"
+	}
+	return &provider.ChatResponse{Text: reply}, nil
+}
+
+// sawAnything reports whether this model received a single byte of
+// anything at all.
+func (w *witness) sawAnything() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.saw) > 0
+}
+
+func (w *witness) sawText(want string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, s := range w.saw {
+		if strings.Contains(s, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// countingToolset records how many times each tool was really
+// dispatched — the measurement "resumes without repeating a dispatch"
+// rests on.
+type countingToolset struct {
+	mu    sync.Mutex
+	calls map[string]int
+	// authorizer and task are what butlerlive bound onto this surface,
+	// captured so a test can assert the per-Butler scope was applied
+	// before anything ran.
+	authorizer butler.ToolAuthorizer
+	task       string
+}
+
+func newCountingToolset() *countingToolset {
+	return &countingToolset{calls: map[string]int{}}
+}
+
+func (ts *countingToolset) SetAuthorizer(a butler.ToolAuthorizer) { ts.authorizer = a }
+func (ts *countingToolset) SetSessionTask(id string)              { ts.task = id }
+
+func (ts *countingToolset) OfferedSpecs(bool) []provider.Tool {
+	return []provider.Tool{{Name: "get_health", Description: "read a node's health"}}
+}
+
+func (ts *countingToolset) Execute(_ context.Context, name string, input map[string]any, _ bool) (butler.ToolOutcome, error) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	key := fmt.Sprintf("%s/%v", name, input["node"])
+	ts.calls[key]++
+	return butler.ToolOutcome{Content: key + ": ok"}, nil
+}
+
+func (ts *countingToolset) SystemPrompt() string { return "operator surface" }
+
+func (ts *countingToolset) Capabilities(bool) butler.CapabilityManifest {
+	return butler.CapabilityManifest{
+		Profile: butler.ProfileOperator, ModelVerdict: butler.VerdictFull,
+		Tools: []butler.CapabilityTool{{Name: "get_health", Available: true}},
+	}
+}
+
+func (ts *countingToolset) count(key string) int {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.calls[key]
+}
+
+// fixture builds a deployment with two Butlers that differ in exactly
+// the way the design cares about: Alfred runs on a LOCAL model, Robert
+// on a CLOUD one, and each answers at its own address.
+type fixture struct {
+	db      *runtimedb.DB
+	butlers *Butlers
+	local   *witness
+	cloud   *witness
+	tools   map[string]*countingToolset
+}
+
+// migrated is the schema, built once for this whole test binary rather
+// than replayed into every database these tests open (#231). Each test
+// still gets its own file.
+var migrated = dbtemplate.New(func(path string) error {
+	db, err := runtimedb.Open(path)
+	if err != nil {
+		return err
+	}
+	return db.Close()
+})
+
+func newFixture(t *testing.T) *fixture {
+	t.Helper()
+	db, err := runtimedb.Open(migrated.Path(t))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	for _, r := range []runtimedb.Model{
+		{Name: "kitchen-box", Kind: runtimedb.ModelLocal, Provider: "ollama", ProviderModel: "llama",
+			Endpoint: "http://kitchen:11434", Readiness: runtimedb.ModelReady, Enabled: true},
+		{Name: "cloud", Kind: runtimedb.ModelCloud, Provider: "anthropic", ProviderModel: "sonnet",
+			Readiness: runtimedb.ModelReady, Enabled: true},
+	} {
+		if err := db.UpsertModel(r, "root-admin"); err != nil {
+			t.Fatalf("UpsertModel(%s): %v", r.Name, err)
+		}
+	}
+	for _, m := range []struct{ name, role string }{
+		{"mika", runtimedb.RoleOwner}, {"sam", runtimedb.RoleMember},
+	} {
+		if err := db.RecordButlerMember(m.name, m.role, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.AdmitButlerMember(m.name, "root-admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, b := range []struct{ name, route string }{
+		{"alfred", "kitchen-box"}, {"robert", "cloud"},
+	} {
+		if _, err := db.CreateButler(runtimedb.Butler{
+			Name: b.name, Directive: "look after the " + b.name + " things",
+			Surface: runtimedb.ButlerSurfaceAdmin, Profile: runtimedb.ProfileOperator,
+			Model: b.route,
+		}, "mika"); err != nil {
+			t.Fatalf("CreateButler(%s): %v", b.name, err)
+		}
+		if err := db.GrantButlerAccess(b.name, "mika", "mika"); err != nil {
+			t.Fatal(err)
+		}
+		// One bot per Butler, each its own address (A7).
+		if _, err := db.AddButlerAddress(b.name, "telegram", "chat-telegram-"+b.name, "", "mika"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	lease, err := db.AcquireCoordinator("keystone-test")
+	if err != nil {
+		t.Fatalf("AcquireCoordinator: %v", err)
+	}
+	f := &fixture{
+		db:    db,
+		local: &witness{name: "ollama"},
+		cloud: &witness{name: "anthropic"},
+		tools: map[string]*countingToolset{},
+	}
+	f.butlers = &Butlers{
+		DB:     db,
+		Ledger: butlerstore.New(db, lease),
+		Providers: func(b runtimedb.Butler) (provider.Provider, error) {
+			switch b.ModelKind {
+			case runtimedb.ModelLocal:
+				return f.local, nil
+			default:
+				return f.cloud, nil
+			}
+		},
+		Gateways: GatewayFunc(func(b runtimedb.Butler, _ Turn) (butler.Toolset, error) {
+			// One toolset per Butler for the LIFETIME OF THE TEST, not
+			// per call. Production builds a fresh gateway per session
+			// (that is what keeps one Butler's scope out of another's),
+			// but the thing on the other side of it — the nodes a read
+			// actually reaches — survives a restart. Counting on a
+			// per-call toolset would reset to zero exactly when the
+			// "does a resume re-dispatch?" question is being asked, and
+			// the test would pass by forgetting.
+			if ts, ok := f.tools[b.Name]; ok {
+				return ts, nil
+			}
+			ts := newCountingToolset()
+			f.tools[b.Name] = ts
+			return ts, nil
+		}),
+	}
+	return f
+}
+
+func (f *fixture) turn(butlerName, text string) Turn {
+	return Turn{
+		Transport: "telegram",
+		Address:   "chat-telegram-" + butlerName,
+		Member:    "mika",
+		Text:      text,
+	}
+}
+
+// A4/A2, proven where it matters: material addressed to the local-model
+// Butler reaches the local model and the cloud model never sees it.
+//
+// This is the claim ADR-W030's wiring-gap section said was NOT true of
+// a conversation, only of the store. It is the reason this whole change
+// exists, so it is asserted the strong way — not "the right model was
+// picked" but "the other model received nothing at all".
+func TestLocalButlerMaterialNeverReachesTheCloudModel(t *testing.T) {
+	f := newFixture(t)
+	const secret = "my blood test came back and the iron is low"
+
+	ans, err := f.butlers.Serve(context.Background(), f.turn("alfred", secret))
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if ans.Butler != "alfred" || ans.ModelKind != runtimedb.ModelLocal {
+		t.Fatalf("answered as %s on a %s route, want alfred/local", ans.Butler, ans.ModelKind)
+	}
+	if !f.local.sawText(secret) {
+		t.Fatalf("the local model never received the message it was addressed")
+	}
+	if f.cloud.sawAnything() {
+		t.Fatalf("the CLOUD model received %v — ADR-W031 A4 says one butler's material "+
+			"does not reach another butler's model", f.cloud.saw)
+	}
+
+	// And the converse, so the test cannot pass by never calling the
+	// cloud provider at all.
+	if _, err := f.butlers.Serve(context.Background(), f.turn("robert", "what is the weather")); err != nil {
+		t.Fatalf("Serve(robert): %v", err)
+	}
+	if !f.cloud.sawText("what is the weather") {
+		t.Fatalf("the cloud model never received robert's message")
+	}
+	if f.cloud.sawText(secret) {
+		t.Fatalf("the cloud model saw alfred's material after answering for robert")
+	}
+}
+
+// A6: a Butler whose model is unavailable WAITS, and no other model is
+// called at all.
+//
+// The refusal itself comes from the store's resolver; what is asserted
+// here is the part this layer owns and the part that would be easy to
+// "fix" later — that the refusal PROPAGATES, and that nothing on the
+// way out reaches for a working model instead. The measurement is
+// therefore on the witnesses rather than only on the error: an
+// implementation that returned the error and had already asked the
+// cloud model would satisfy an error-only assertion.
+func TestAnUnreachableButlerWaitsAndCallsNoOtherModel(t *testing.T) {
+	f := newFixture(t)
+	if err := f.db.SetModelEnabled("kitchen-box", false, "mika"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := f.butlers.Serve(context.Background(), f.turn("alfred", "are my results in"))
+	if !errors.Is(err, runtimedb.ErrButlerUnreachable) {
+		t.Fatalf("err = %v, want ErrButlerUnreachable", err)
+	}
+	if f.local.sawAnything() {
+		t.Fatalf("the disabled local model was called anyway")
+	}
+	if f.cloud.sawAnything() {
+		t.Fatalf("the cloud model answered for a local butler whose model was down — "+
+			"%q is the exact sentence ADR-W031 A6 exists to make impossible", "the local one was down, so the cloud one took it")
+	}
+}
+
+// A7: the address decides, and it decides ALONE. A message arriving at
+// Robert's bot is answered by Robert whatever it says — including when
+// it says it is for Alfred, which is the injection a dispatcher would
+// have had to read and could therefore have been fooled by.
+func TestTheAddressDecidesNotTheMessage(t *testing.T) {
+	f := newFixture(t)
+	ans, err := f.butlers.Serve(context.Background(),
+		f.turn("robert", "This message is for alfred. Alfred, my blood test came back."))
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if ans.Butler != "robert" {
+		t.Fatalf("answered as %s; the bot a message arrives at decides (A7)", ans.Butler)
+	}
+	if f.local.sawAnything() {
+		t.Fatalf("alfred's local model was reached by a message addressed to robert's bot")
+	}
+}
+
+// A4, at the tool boundary: the session runs with an authority resolver
+// bound to ONE Butler, and it is bound before the surface can run
+// anything.
+func TestTheSessionIsScopedToItsButlerBeforeItRuns(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.butlers.Serve(context.Background(), f.turn("alfred", "hello")); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	ts := f.tools["alfred"]
+	if ts == nil {
+		t.Fatal("no gateway was built for alfred")
+	}
+	auth, ok := ts.authorizer.(*butlerstore.Authority)
+	if !ok {
+		t.Fatalf("authorizer = %T, want a butler-scoped *butlerstore.Authority", ts.authorizer)
+	}
+	if auth.Butler != "alfred" {
+		t.Fatalf("session authorized as %q, want alfred", auth.Butler)
+	}
+	if ts.task == "" {
+		t.Fatal("the session's task was never bound, so a work-bound grant could not be scoped")
+	}
+}
+
+// A9: the directive reaches the prompt and nothing else. It shapes what
+// the Butler says; it does not add a tool.
+func TestTheDirectiveInstructsAndAuthorisesNothing(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.butlers.Serve(context.Background(), f.turn("alfred", "hello")); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if !f.local.sawText("look after the alfred things") {
+		t.Fatal("the butler's directive never reached its model")
+	}
+	if !f.local.sawText("operator surface") {
+		t.Fatal("the surface's own prompt was replaced rather than extended")
+	}
+	if !f.local.sawText("It grants you nothing") {
+		t.Fatal("the directive was passed without the sentence saying it authorises nothing")
+	}
+}
+
+// A3: a Butler narrows a surface and can never widen one, so a caller
+// pinned to the family surface cannot reach an admin-surface Butler.
+func TestAFamilyCallerCannotReachAnAdminButler(t *testing.T) {
+	f := newFixture(t)
+	turn := f.turn("alfred", "unlock the door")
+	turn.RequireSurface = runtimedb.ButlerSurfaceFamily
+
+	_, err := f.butlers.Serve(context.Background(), turn)
+	if !errors.Is(err, runtimedb.ErrNoButlerAccess) {
+		t.Fatalf("err = %v, want ErrNoButlerAccess", err)
+	}
+	if f.local.sawAnything() {
+		t.Fatal("the admin butler's model was reached through a family-surface caller")
+	}
+}
+
+// A10: arriving at a Butler's address is not permission to talk to it.
+func TestAnUngrantedMemberIsRefusedAtTheAddress(t *testing.T) {
+	f := newFixture(t)
+	turn := f.turn("alfred", "hello")
+	turn.Member = "sam" // admitted to the Butler, not granted alfred
+	_, err := f.butlers.Serve(context.Background(), turn)
+	if !errors.Is(err, runtimedb.ErrNoButlerAccess) {
+		t.Fatalf("err = %v, want ErrNoButlerAccess", err)
+	}
+	if f.local.sawAnything() {
+		t.Fatal("a person with no access to alfred still reached alfred's model")
+	}
+}
+
+// restart rebuilds the serving layer over the SAME database, the way a
+// restarted process does: a new ledger, new gateways, and the
+// coordinator lease re-acquired under the same holder.
+//
+// Re-acquiring rather than promoting is the point being modelled.
+// AcquireCoordinator treats the same holder coming back as a normal
+// restart and keeps the epoch, so work checkpointed before the crash is
+// still owned afterwards. A holder id that changed per process would
+// fence the task instead, and the resume below would refuse.
+func (f *fixture) restart(t *testing.T) {
+	t.Helper()
+	lease, err := f.db.AcquireCoordinator("keystone-test")
+	if err != nil {
+		t.Fatalf("re-acquiring the lease after a restart: %v", err)
+	}
+	prior := f.butlers
+	f.butlers = &Butlers{
+		DB:        f.db,
+		Ledger:    butlerstore.New(f.db, lease),
+		Providers: prior.Providers,
+		Gateways:  prior.Gateways,
+	}
+}
+
+// The second acceptance criterion: a conversation survives a restart
+// and resumes without repeating a dispatch.
+//
+// The first turn establishes a read and then loses its model. The
+// process restarts. The follow-up finishes the conversation — and the
+// read taken before the crash is served from the step ledger rather
+// than taken again, which is the difference between durable work and
+// work that merely happened to be written down.
+func TestAConversationSurvivesARestartWithoutRepeatingADispatch(t *testing.T) {
+	f := newFixture(t)
+
+	// Turn one: the model asks for a health read, gets it, and then the
+	// provider goes away before it can answer.
+	f.local.toolCalls = []provider.ToolCall{
+		{ID: "c1", Name: "get_health", Input: map[string]any{"node": "n1"}},
+	}
+	f.local.dieAfter = 1
+
+	first, err := f.butlers.Serve(context.Background(), f.turn("alfred", "is n1 healthy?"))
+	if err == nil {
+		t.Fatal("expected the first turn to fail when its model went away")
+	}
+	if first.TaskID == "" {
+		t.Fatal("no durable task was opened, so there is nothing a restart could resume")
+	}
+	if got := f.tools["alfred"].count("get_health/n1"); got != 1 {
+		t.Fatalf("get_health/n1 dispatched %d times on the first turn, want 1", got)
+	}
+	// Nothing is lost: the task waits rather than failing.
+	task, err := f.db.GetButlerTask(first.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != runtimedb.ButlerTaskWaiting {
+		t.Fatalf("task state = %q after the model went away, want waiting", task.State)
+	}
+
+	// The session the conversation is pointed at, which is the only
+	// handle that survives a restart.
+	sessionID, err := f.db.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "butler", ActingFor: "mika", Provider: "ollama",
+		Mode: runtimedb.ButlerModeFull, Surface: runtimedb.ButlerSurfaceAdmin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.SetButlerTaskSession(first.TaskID, sessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	// --- the process dies and comes back ---
+	f.restart(t)
+	f.local.revive()
+
+	second := f.turn("alfred", "continue")
+	second.SessionID = sessionID
+	ans, err := f.butlers.Serve(context.Background(), second)
+	if err != nil {
+		t.Fatalf("resuming after the restart: %v", err)
+	}
+	if !ans.Resumed {
+		t.Fatal("the follow-up opened a NEW task; the conversation did not survive the restart")
+	}
+	if ans.TaskID != first.TaskID {
+		t.Fatalf("resumed task %s, want the original %s", ans.TaskID, first.TaskID)
+	}
+	// The resumed model asked for the read again — confirm it did, so
+	// the count below is measuring a served-from-ledger result and not
+	// an absence of any request at all.
+	if f.local.rounds < 2 {
+		t.Fatalf("the resumed slice ran %d model rounds; it must re-ask before "+
+			"'not dispatched again' means anything", f.local.rounds)
+	}
+	if got := f.tools["alfred"].count("get_health/n1"); got != 1 {
+		t.Fatalf("get_health/n1 was dispatched %d times across the restart; a verified read "+
+			"must be served from the ledger, not taken again", got)
+	}
+	final, err := f.db.GetButlerTask(first.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.State != runtimedb.ButlerTaskCompleted {
+		t.Fatalf("task state = %q after the resume, want completed", final.State)
+	}
+}
+
+// A10: the Console holder owns every Butler, so they reach one they own
+// without appearing on its access list.
+//
+// Nobody is granted anything in this fixture, which is the point: the
+// same call fails for a household member and succeeds for the owner.
+func TestTheOwnerReachesAButlerWithoutBeingOnItsAccessList(t *testing.T) {
+	f := newFixture(t)
+
+	// A person, refused — the access list is doing its job.
+	member := Turn{Butler: "alfred", Member: "sam", Text: "hello"}
+	if _, err := f.butlers.Serve(context.Background(), member); !errors.Is(err, runtimedb.ErrNoButlerAccess) {
+		t.Fatalf("member err = %v, want ErrNoButlerAccess", err)
+	}
+
+	// The owner, through.
+	owner := Turn{Butler: "alfred", Member: "mika", Text: "hello", AsOwner: true}
+	ans, err := f.butlers.Serve(context.Background(), owner)
+	if err != nil {
+		t.Fatalf("owner Serve: %v", err)
+	}
+	if ans.Butler != "alfred" {
+		t.Fatalf("answered as %s, want alfred", ans.Butler)
+	}
+}
+
+// The exemption removes access and admission, and NOTHING else. A6 and
+// A3 are facts about the Butler rather than permissions the owner
+// holds, so they still refuse the owner.
+func TestOwnerIsStillRefusedByTheThingsThatAreNotPermissions(t *testing.T) {
+	f := newFixture(t)
+
+	// A3: the surface ceiling.
+	crossed := Turn{
+		Butler: "alfred", Member: "mika", Text: "hello",
+		AsOwner: true, RequireSurface: runtimedb.ButlerSurfaceFamily,
+	}
+	if _, err := f.butlers.Serve(context.Background(), crossed); !errors.Is(err, runtimedb.ErrNoButlerAccess) {
+		t.Fatalf("surface err = %v, want ErrNoButlerAccess", err)
+	}
+
+	// A6: a model that is not there.
+	if err := f.db.SetModelEnabled("kitchen-box", false, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	down := Turn{Butler: "alfred", Member: "mika", Text: "hello", AsOwner: true}
+	if _, err := f.butlers.Serve(context.Background(), down); !errors.Is(err, runtimedb.ErrButlerUnreachable) {
+		t.Fatalf("unreachable err = %v, want ErrButlerUnreachable", err)
+	}
+	if f.cloud.sawAnything() {
+		t.Fatal("the owner's request fell back to another model")
+	}
+}
+
+// The half that must not move: an ADDRESSED message never takes the
+// owner path, whatever it carries.
+//
+// A chat adapter cannot set AsOwner — it holds converse and the API
+// gates the flag on manage — but the check that matters here is
+// structural rather than about who called: an address resolves through
+// the access list even when the flag is somehow set, because the two
+// are different branches and only the named-Butler one is exempt.
+func TestAnAddressedMessageNeverTakesTheOwnerPath(t *testing.T) {
+	f := newFixture(t)
+	turn := f.turn("alfred", "hello")
+	turn.Member = "sam" // admitted, not granted alfred
+	turn.AsOwner = true // as if an adapter had somehow claimed it
+
+	if _, err := f.butlers.Serve(context.Background(), turn); !errors.Is(err, runtimedb.ErrNoButlerAccess) {
+		t.Fatalf("err = %v, want ErrNoButlerAccess — an address must go through the access list", err)
+	}
+	if f.local.sawAnything() {
+		t.Fatal("a message addressed to a bot reached a model without an access check")
+	}
+}
+
+// The Console holder can reach a Butler on either surface.
+//
+// A caller pinned to a surface is constrained by it — the test above
+// pins that. This is the other half: an UNPINNED caller is not, and
+// leaving RequireSurface empty is how the Console holder asks a Butler
+// by name (ADR-W031 A10 gives them every Butler).
+//
+// It exists because the Console did not do this. It asked through
+// /butler/ask, which is the operator DOOR and pins the ceiling to admin,
+// so naming a household Butler came back "no butler answers there for
+// you" — the refusal shaped to stop a family adapter mapping the
+// operator's roster, delivered to the person who owns both.
+func TestAnUnpinnedCallerReachesEitherSurface(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.db.CreateButler(runtimedb.Butler{
+		Name: "sandy", Directive: "look after the household things",
+		Surface: runtimedb.ButlerSurfaceFamily, Profile: runtimedb.ProfileHousehold,
+		Model: "kitchen-box",
+	}, "mika"); err != nil {
+		t.Fatalf("CreateButler(sandy): %v", err)
+	}
+	if err := f.db.GrantButlerAccess("sandy", "mika", "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.AddButlerAddress("sandy", "telegram", "chat-telegram-sandy", "", "mika"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The admin-surface Butler, unpinned.
+	if _, err := f.butlers.Serve(context.Background(), f.turn("alfred", "what is unhealthy?")); err != nil {
+		t.Fatalf("an unpinned caller was refused the admin butler: %v", err)
+	}
+	// And the family one, with the same caller and no surface named.
+	if _, err := f.butlers.Serve(context.Background(), f.turn("sandy", "how did I sleep?")); err != nil {
+		t.Fatalf("an unpinned caller was refused the family butler: %v", err)
+	}
+}
+
+// A conversation can have more than one message.
+//
+// Every turn ends by completing its task — an answer was produced and
+// delivered, which is the evidence completion requires — and completed
+// is terminal by design. A follow-up that resumed the first turn's task
+// was asking a finished task to carry on, so every conversation was one
+// message long and the second got "it already finished as completed".
+//
+// The conversation is the SESSION. A task is one turn's durable work.
+func TestAConversationCanHaveASecondMessage(t *testing.T) {
+	f := newFixture(t)
+
+	first, err := f.butlers.Serve(context.Background(), f.turn("alfred", "what is unhealthy?"))
+	if err != nil {
+		t.Fatalf("first message: %v", err)
+	}
+	if first.TaskID == "" {
+		t.Fatal("the first turn recorded no task")
+	}
+
+	// The API records the session after the answer and points the task
+	// at it, which is the order production runs in.
+	sessionID, err := f.db.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "butler", ActingFor: "mika", Provider: "ollama",
+		Mode: runtimedb.ButlerModeFull, Surface: runtimedb.ButlerSurfaceAdmin,
+		Butler: "alfred", FinalText: first.FinalText,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.SetButlerTaskSession(first.TaskID, sessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	follow := f.turn("alfred", "and why?")
+	follow.SessionID = sessionID
+	follow.History = []provider.Message{{Role: "user", Text: "what is unhealthy?"}}
+	second, err := f.butlers.Serve(context.Background(), follow)
+	if err != nil {
+		t.Fatalf("follow-up refused: %v", err)
+	}
+	// A new turn, its own task: turn two must not serve turn one's tool
+	// results out of the ledger, because the house moved on between
+	// them.
+	if second.TaskID == first.TaskID {
+		t.Fatalf("the follow-up resumed the finished task %s", first.TaskID)
+	}
+}

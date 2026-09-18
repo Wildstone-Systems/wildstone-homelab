@@ -2,22 +2,11 @@ package runtimedb
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
 )
 
-func butlerTestDB(t *testing.T) *DB {
-	t.Helper()
-	db, err := Open(filepath.Join(t.TempDir(), "keystone.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
-}
-
 func TestButlerSessionRoundTrip(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 
 	id, err := db.InsertButlerSession(ButlerSession{
 		Principal:      "butler",
@@ -53,7 +42,7 @@ func TestButlerSessionRoundTrip(t *testing.T) {
 }
 
 func TestButlerSessionListOmitsTranscript(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	for i := 0; i < 3; i++ {
 		if _, err := db.InsertButlerSession(ButlerSession{
 			Principal: "butler", ActingFor: "op", Provider: "scripted",
@@ -62,7 +51,7 @@ func TestButlerSessionListOmitsTranscript(t *testing.T) {
 			t.Fatalf("insert %d: %v", i, err)
 		}
 	}
-	list, err := db.ListButlerSessions(2, "")
+	list, err := db.ListButlerSessions(2, "", "")
 	if err != nil {
 		t.Fatalf("ListButlerSessions: %v", err)
 	}
@@ -80,7 +69,7 @@ func TestButlerSessionListOmitsTranscript(t *testing.T) {
 }
 
 func TestButlerSessionRequiresPrincipalBinding(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	// ADR-W001: no anonymous session record, ever.
 	if _, err := db.InsertButlerSession(ButlerSession{Principal: "butler", Surface: ButlerSurfaceAdmin}); err == nil {
 		t.Fatalf("insert without acting_for succeeded")
@@ -96,7 +85,7 @@ func TestButlerSessionRequiresPrincipalBinding(t *testing.T) {
 // hides an operator session from an audit of the Statefile — so there is
 // no default at all.
 func TestButlerSessionRequiresSurface(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	if _, err := db.InsertButlerSession(ButlerSession{Principal: "butler", ActingFor: "op"}); err == nil {
 		t.Fatalf("insert without a surface succeeded")
 	}
@@ -111,7 +100,7 @@ func TestButlerSessionRequiresSurface(t *testing.T) {
 // what the household's butler has been asked to do gets exactly that,
 // and the reverse (ADR-W026 A1).
 func TestButlerSessionListBySurface(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	for _, sfc := range []ButlerSurface{ButlerSurfaceAdmin, ButlerSurfaceFamily, ButlerSurfaceAdmin} {
 		if _, err := db.InsertButlerSession(ButlerSession{
 			Principal: "butler", ActingFor: "op", Provider: "scripted",
@@ -120,21 +109,21 @@ func TestButlerSessionListBySurface(t *testing.T) {
 			t.Fatalf("insert %s: %v", sfc, err)
 		}
 	}
-	family, err := db.ListButlerSessions(0, ButlerSurfaceFamily)
+	family, err := db.ListButlerSessions(0, ButlerSurfaceFamily, "")
 	if err != nil {
 		t.Fatalf("ListButlerSessions(family): %v", err)
 	}
 	if len(family) != 1 || family[0].Surface != ButlerSurfaceFamily {
 		t.Fatalf("family list = %+v, want exactly the one family session", family)
 	}
-	admin, err := db.ListButlerSessions(0, ButlerSurfaceAdmin)
+	admin, err := db.ListButlerSessions(0, ButlerSurfaceAdmin, "")
 	if err != nil {
 		t.Fatalf("ListButlerSessions(admin): %v", err)
 	}
 	if len(admin) != 2 {
 		t.Fatalf("admin list = %d sessions, want 2", len(admin))
 	}
-	both, err := db.ListButlerSessions(0, "")
+	both, err := db.ListButlerSessions(0, "", "")
 	if err != nil {
 		t.Fatalf("ListButlerSessions(all): %v", err)
 	}
@@ -144,7 +133,7 @@ func TestButlerSessionListBySurface(t *testing.T) {
 }
 
 func TestButlerSessionNotFound(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	if _, err := db.GetButlerSession("bs-99"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}

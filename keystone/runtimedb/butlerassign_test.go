@@ -48,14 +48,14 @@ func TestARoutineNamesItsButler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.Name != "health" || b.RouteKind != RouteLocal {
-		t.Fatalf("the routine resolved to %s on a %s route", b.Name, b.RouteKind)
+	if b.Name != "health" || b.ModelKind != ModelLocal {
+		t.Fatalf("the routine resolved to %s on a %s route", b.Name, b.ModelKind)
 	}
 
 	// A6: if that Butler's model goes away, the routine WAITS. It does
 	// not run on the cloud Butler sitting right there.
 	newButler(t, db, "nutrition", "cloud")
-	if err := db.RecordRouteReadiness("kitchen-box", RouteUnavailable, "the box is off"); err != nil {
+	if err := db.RecordModelReadiness("kitchen-box", ModelUnavailable, "the box is off"); err != nil {
 		t.Fatal(err)
 	}
 	_, err = db.ResolveRoutineButler("morning-weigh-in")

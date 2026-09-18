@@ -114,3 +114,42 @@ func TestEventIDPreserved(t *testing.T) {
 		t.Fatal("SecretShaped fired on a keyed event id")
 	}
 }
+
+// A credential named in prose is one the shape rules cannot see.
+//
+// String looks for shapes: a long hex run, a value under a
+// credential-shaped key. "My router password is hunter2" has neither —
+// which is fine for a tool result read once, and not fine for a memory
+// record read by every session after it (ADR-W030 A3.1).
+func TestNamesACredential(t *testing.T) {
+	for _, s := range []string{
+		"The router password is hunter2",
+		"my passphrase is correct horse",
+		"keep my PIN code somewhere",
+		"the reset code they texted me was 449102",
+		"here are my credentials",
+		"the api key for the weather thing",
+		"her security question is her first school",
+	} {
+		if !NamesACredential(s) {
+			t.Errorf("NamesACredential(%q) = false", s)
+		}
+		// And the shape rules genuinely do not catch these, which is
+		// the reason this predicate exists at all.
+		if String(s) != s {
+			t.Logf("String already redacted %q — good, but not what this covers", s)
+		}
+	}
+	for _, s := range []string{
+		"",
+		"the tokenizer is slow",
+		"she keeps the spare key under the mat",
+		"it is a secret between us",
+		"pin the note to the fridge",
+		"I prefer tea to coffee",
+	} {
+		if NamesACredential(s) {
+			t.Errorf("NamesACredential(%q) = true", s)
+		}
+	}
+}

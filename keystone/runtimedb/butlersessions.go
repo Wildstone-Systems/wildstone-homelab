@@ -48,17 +48,23 @@ func ValidButlerSurface(s ButlerSurface) bool {
 // "what did it say" and would otherwise have to walk Turns to find out.
 // Turns is the whole conversation, oldest first (ADR-W027).
 type ButlerSession struct {
-	Seq            int64             `json:"seq"`
-	ID             string            `json:"id"` // "bs-<seq>"
-	CreatedAt      time.Time         `json:"createdAt"`
-	Principal      string            `json:"principal"`
-	ActingFor      string            `json:"actingFor"`
-	Provider       string            `json:"provider"`
-	Mode           ButlerSessionMode `json:"mode"`
-	Surface        ButlerSurface     `json:"surface"`
-	FinalText      string            `json:"finalText"`
-	Capped         bool              `json:"capped"`
-	TranscriptJSON string            `json:"transcriptJson,omitempty"`
+	Seq       int64             `json:"seq"`
+	ID        string            `json:"id"` // "bs-<seq>"
+	CreatedAt time.Time         `json:"createdAt"`
+	Principal string            `json:"principal"`
+	ActingFor string            `json:"actingFor"`
+	Provider  string            `json:"provider"`
+	Mode      ButlerSessionMode `json:"mode"`
+	Surface   ButlerSurface     `json:"surface"`
+	// Butler names which specialist answered (ADR-W031 A1). Empty is a
+	// real value: a session recorded before Butlers existed, or one the
+	// engine phrased for itself, did not run as one. It is stamped from
+	// the resolved Butler, never from the request — a caller that could
+	// name it could file its conversation under somebody else's name.
+	Butler         string `json:"butler,omitempty"`
+	FinalText      string `json:"finalText"`
+	Capped         bool   `json:"capped"`
+	TranscriptJSON string `json:"transcriptJson,omitempty"`
 	// Turns is set by GetButlerSession and by AppendButlerTurns; it is
 	// omitted from list results for the same reason the transcript is.
 	Turns []ButlerTurn `json:"turns,omitempty"`
@@ -118,9 +124,9 @@ func (db *DB) InsertButlerSession(s ButlerSession) (string, error) {
 	defer func() { _ = tx.Rollback() }()
 
 	res, err := tx.Exec(
-		`INSERT INTO butler_sessions (created_at, principal, acting_for, provider, mode, surface, final_text, capped, transcript_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		now(), s.Principal, s.ActingFor, s.Provider, string(s.Mode), string(s.Surface), s.FinalText,
+		`INSERT INTO butler_sessions (created_at, principal, acting_for, provider, mode, surface, butler, final_text, capped, transcript_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		now(), s.Principal, s.ActingFor, s.Provider, string(s.Mode), string(s.Surface), s.Butler, s.FinalText,
 		boolInt(s.Capped), s.TranscriptJSON)
 	if err != nil {
 		return "", fmt.Errorf("runtimedb: inserting butler session: %w", err)
@@ -255,18 +261,30 @@ func (db *DB) ListButlerTurns(seq int64) ([]ButlerTurn, error) {
 // ListButlerSessions returns the newest limit sessions, newest first,
 // WITHOUT transcripts. An empty surface lists both; naming one lists
 // only that surface's sessions (ADR-W026 A1).
-func (db *DB) ListButlerSessions(limit int, surface ButlerSurface) ([]ButlerSession, error) {
+func (db *DB) ListButlerSessions(limit int, surface ButlerSurface, butler string) ([]ButlerSession, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	where, args := "", []any{}
+	// The butler filter is an equality on the stamp, deliberately not a
+	// fallback to the surface. A Butler with no sessions must come back
+	// empty; widening to "every session on its surface" would answer a
+	// question about one Butler with another Butler's conversations.
+	clauses, args := []string{}, []any{}
 	if surface != "" {
-		where = " WHERE surface = ?"
+		clauses = append(clauses, "surface = ?")
 		args = append(args, string(surface))
+	}
+	if butler != "" {
+		clauses = append(clauses, "butler = ?")
+		args = append(args, butler)
+	}
+	where := ""
+	if len(clauses) > 0 {
+		where = " WHERE " + strings.Join(clauses, " AND ")
 	}
 	args = append(args, limit)
 	rows, err := db.sql.Query(
-		`SELECT seq, created_at, principal, acting_for, provider, mode, surface, final_text, capped
+		`SELECT seq, created_at, principal, acting_for, provider, mode, surface, butler, final_text, capped
 		 FROM butler_sessions`+where+` ORDER BY seq DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing butler sessions: %w", err)
@@ -277,7 +295,7 @@ func (db *DB) ListButlerSessions(limit int, surface ButlerSurface) ([]ButlerSess
 		var s ButlerSession
 		var created, mode, surface string
 		var capped int
-		if err := rows.Scan(&s.Seq, &created, &s.Principal, &s.ActingFor, &s.Provider, &mode, &surface, &s.FinalText, &capped); err != nil {
+		if err := rows.Scan(&s.Seq, &created, &s.Principal, &s.ActingFor, &s.Provider, &mode, &surface, &s.Butler, &s.FinalText, &capped); err != nil {
 			return nil, err
 		}
 		s.ID = butlerSessionID(s.Seq)
@@ -299,12 +317,12 @@ func (db *DB) GetButlerSession(id string) (ButlerSession, error) {
 		return ButlerSession{}, ErrNotFound
 	}
 	row := db.sql.QueryRow(
-		`SELECT seq, created_at, principal, acting_for, provider, mode, surface, final_text, capped, transcript_json
+		`SELECT seq, created_at, principal, acting_for, provider, mode, surface, butler, final_text, capped, transcript_json
 		 FROM butler_sessions WHERE seq = ?`, seq)
 	var s ButlerSession
 	var created, mode, surface string
 	var capped int
-	err := row.Scan(&s.Seq, &created, &s.Principal, &s.ActingFor, &s.Provider, &mode, &surface, &s.FinalText, &capped, &s.TranscriptJSON)
+	err := row.Scan(&s.Seq, &created, &s.Principal, &s.ActingFor, &s.Provider, &mode, &surface, &s.Butler, &s.FinalText, &capped, &s.TranscriptJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ButlerSession{}, ErrNotFound
 	}

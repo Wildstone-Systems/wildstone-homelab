@@ -30,6 +30,119 @@ export function ButlerAuthority() {
   );
 }
 
+// Recording a person.
+//
+// The panel could admit, disable and offboard people and had no way to
+// record one, so a fresh deployment showed "nobody is recorded yet" and
+// offered nothing to do about it. Without this the whole chain below is
+// unreachable from the Console: no member means no one to grant a
+// Butler to, which means no one who can talk to it.
+//
+// Who is a CHOICE rather than typed text. The household directory
+// already knows who lives here, and a free string invites the one
+// mistake this control must not allow quietly: a typo records a person
+// who does not exist, they can be admitted and granted a Butler, and
+// nothing ever matches them — an access list that looks correct and
+// grants nothing to anybody.
+//
+// The signed-in principal is offered alongside them. It is usually not
+// a directory user (the Console holder authenticates as `admin`, not as
+// a person in LDAP), and it is exactly who a person setting this up
+// first needs to record — so leaving it out would mean the one name
+// they need is the one the list refuses to contain.
+//
+// A child is recorded and never admitted — the store refuses, and so
+// does the schema — so the profile is offered rather than assumed, and
+// picking child asks for the guardian it requires.
+function RecordMember({
+  recorded,
+  onRecorded,
+}: {
+  recorded: string[];
+  onRecorded: () => void;
+}) {
+  const people = useLoad(() => api.householdMembers());
+  const me = useLoad(() => api.whoami());
+  const [name, setName] = useState("");
+  const [profile, setProfile] = useState("household");
+  const [guardian, setGuardian] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const directory = (people.data ?? []).map((p) => ({
+    id: p.username,
+    label: p.displayName ? `${p.username} — ${p.displayName}` : p.username,
+  }));
+  const self = me.data?.name;
+  const candidates = [
+    ...directory,
+    ...(self && !directory.some((d) => d.id === self)
+      ? [{ id: self, label: `${self} — you, signed in at this Console` }]
+      : []),
+  ].filter((c) => !recorded.includes(c.id));
+
+  async function record() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.recordButlerMember(name, profile, guardian.trim() || undefined);
+      setName("");
+      setGuardian("");
+      onRecorded();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (candidates.length === 0 && !people.loading) {
+    return (
+      <div className="muted" style={{ marginTop: 8 }}>
+        Everyone this deployment knows about is already recorded.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="row" style={{ gap: 8, alignItems: "center" }}>
+        <select aria-label="person" value={name} onChange={(e) => setName(e.target.value)}>
+          <option value="">Record someone…</option>
+          {candidates.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+        <select aria-label="profile" value={profile} onChange={(e) => setProfile(e.target.value)}>
+          <option value="household">household</option>
+          <option value="operator">operator</option>
+          <option value="child">child</option>
+        </select>
+        {profile === "child" && (
+          <select aria-label="guardian" value={guardian} onChange={(e) => setGuardian(e.target.value)}>
+            <option value="">Guardian…</option>
+            {recorded.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        )}
+        <button className="btn btn-secondary" disabled={!name || busy} onClick={record}>
+          {busy ? "Recording…" : "Record"}
+        </button>
+      </div>
+      <div className="muted" style={{ fontSize: "0.9em", marginTop: 2 }}>
+        Recording does not admit. Admit them below once they should be able to use the Butler.
+      </div>
+      <ErrorLine error={people.error} />
+      <ErrorLine error={error} />
+    </div>
+  );
+}
+
 function Members() {
   const members = useLoad(() => api.butlerMembers());
   const action = useAction();
@@ -44,6 +157,10 @@ function Members() {
           and being allowed to use the Butler are different facts.
         </div>
       )}
+      <RecordMember
+        recorded={rows.map((r) => r.member.member)}
+        onRecorded={() => members.reload()}
+      />
       <ul className="work-evidence">
         {rows.map((row) => (
           <li key={row.member.member}>

@@ -100,7 +100,7 @@ func (db *DB) ResolveRoutineButler(routine string) (Butler, error) {
 		// because the substitution is the disclosure this exists to
 		// prevent.
 		return Butler{}, fmt.Errorf("%w: %s runs on %s, which is unavailable — %q waits rather than running on another model (ADR-W031 A6)",
-			ErrButlerUnreachable, b.Name, b.Route, routine)
+			ErrButlerUnreachable, b.Name, b.Model, routine)
 	}
 	return b, nil
 }
@@ -328,7 +328,7 @@ func (db *DB) PreviewPoolPromotion(seq int64) (PoolDisclosure, error) {
 			continue
 		}
 		d.Butlers = append(d.Butlers, b.Name)
-		if b.RouteKind == RouteCloud {
+		if b.ModelKind == ModelCloud {
 			d.LeavesHouse = true
 			d.CloudButlers = append(d.CloudButlers, b.Name)
 		}

@@ -23,13 +23,13 @@ import (
 )
 
 func TestQuarantineHoldsEveryButlerFacingPath(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	const admin = "mika"
 
-	for _, m := range []struct{ name, profile string }{
-		{admin, ProfileOperator}, {"sam", ProfileHousehold},
+	for _, m := range []struct{ name, role string }{
+		{admin, RoleOwner}, {"sam", RoleMember},
 	} {
-		if err := db.RecordButlerMember(m.name, m.profile, ""); err != nil {
+		if err := db.RecordButlerMember(m.name, m.role, "", ""); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.AdmitButlerMember(m.name, "root-admin"); err != nil {

@@ -193,15 +193,15 @@ func TestARoutineCannotBeCreatedAlreadyRunning(t *testing.T) {
 // or forget it. A regression introduced by the scoping work itself.
 func TestTheMemoryViewShowsNamedButlerRecords(t *testing.T) {
 	h := newHarness(t)
-	if err := h.s.DB.UpsertModelRoute(runtimedb.ModelRoute{
-		Name: "kitchen-box", Kind: runtimedb.RouteLocal, Provider: "ollama",
-		Readiness: runtimedb.RouteReady, Enabled: true,
+	if err := h.s.DB.UpsertModel(runtimedb.Model{
+		Name: "kitchen-box", Kind: runtimedb.ModelLocal, Provider: "ollama",
+		Readiness: runtimedb.ModelReady, Enabled: true,
 	}, "root-admin"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.s.DB.CreateButler(runtimedb.Butler{
 		Name: "health", Surface: runtimedb.ButlerSurfaceFamily,
-		Profile: runtimedb.ProfileHousehold, Route: "kitchen-box",
+		Profile: runtimedb.ProfileHousehold, Model: "kitchen-box",
 	}, "root-admin"); err != nil {
 		t.Fatal(err)
 	}

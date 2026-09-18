@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -28,9 +29,22 @@ type harness struct {
 	tokens map[runtimedb.Role]string
 }
 
+// migrated is the schema, built once for this whole test binary. This
+// package stands up a server — and so a database — 184 times, and
+// replaying thirty-nine migrations into each of them is what ran the
+// -race suite out of its clock (#231). Each harness still gets its own
+// private file; it is now a copy rather than a re-enactment.
+var migrated = dbtemplate.New(func(path string) error {
+	db, err := runtimedb.Open(path)
+	if err != nil {
+		return err
+	}
+	return db.Close()
+})
+
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Path(t))
 	if err != nil {
 		t.Fatalf("runtimedb.Open: %v", err)
 	}

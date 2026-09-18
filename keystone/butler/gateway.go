@@ -112,6 +112,45 @@ type ToolGateway struct {
 	tools map[string]toolEntry
 }
 
+// SetAuthorizer binds the effective-authority resolver for one session,
+// and SetSessionTask the task its work-bound grants are scoped to.
+//
+// They are methods rather than only fields so a caller holding the
+// Toolset interface can bind them. That caller is the thing that serves
+// a conversation as a named Butler: it cannot know which gateway it was
+// handed, and it must be able to scope whichever one it was — a surface
+// that could be served UNSCOPED because the binding did not typecheck
+// is a surface that would eventually be served unscoped.
+func (gw *ToolGateway) SetAuthorizer(a ToolAuthorizer) { gw.Authorizer = a }
+
+// SetSessionTask scopes work-bound grants to one task.
+func (gw *ToolGateway) SetSessionTask(id string) { gw.SessionTask = id }
+
+// Scoped returns a copy of this gateway that resolves authority through
+// a, leaving the original untouched and carrying no session's grants.
+//
+// It exists so something can ASK what one Butler may do without being
+// that Butler's session. The host's gateway is shared by every request
+// in flight, so binding an authorizer to it would be both a data race
+// and a live session answering under a different Butler's narrowings.
+// The copy is shallow on purpose: the seams are what this deployment
+// wired and must be reported as they are, while the registry map is
+// written once at construction and only read after.
+//
+// SessionTask is deliberately dropped rather than copied. A work-bound
+// grant belongs to the task that was issued it (ADR-W030 A8), and a
+// reader inheriting one would be shown a tool as available on the
+// strength of a permission that expires with somebody else's work.
+func (gw *ToolGateway) Scoped(a ToolAuthorizer) *ToolGateway {
+	if gw == nil {
+		return nil
+	}
+	out := *gw
+	out.Authorizer = a
+	out.SessionTask = ""
+	return &out
+}
+
 // NewToolGateway builds a ToolGateway with the full ADR-W006 A3 tool set
 // registered.
 func NewToolGateway(store *statefile.Store, reader *AgentReader) *ToolGateway {

@@ -28,6 +28,8 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/backup"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
 	"github.com/chickenrat17/wildstone-homelab/keystone/catalog"
 	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/gateway"
@@ -68,15 +70,15 @@ func main() {
 	resticImage := flag.String("restic-image", defaultResticImage, "digest-pinned restic image every backup run uses")
 	catalogDir := flag.String("catalog-dir", "", "directory of packages this control plane can install (ADR-W021 A3); empty leaves the package/capability endpoints answering 503")
 	consoleDir := flag.String("console-dir", "", "directory of built Console static files to serve beside /api (ADR-W016 A5); empty serves the API only")
-	butlerProvider := flag.String("butler-provider", "off", "Butler LLM provider: off|anthropic|openai|ollama (ADR-W017 A4); API keys come ONLY from ANTHROPIC_API_KEY/OPENAI_API_KEY env vars, never a flag")
-	butlerModel := flag.String("butler-model", "", "Butler model name; empty uses the provider's default")
-	butlerEndpoint := flag.String("butler-endpoint", "", "Butler provider base URL (openai-compatible gateways, ollama host); empty uses the provider's default")
+	butlerProvider := flag.String("butler-provider", "off", "legacy single-provider Butler: off|anthropic|openai|ollama (ADR-W017 A4). Used ONLY while this deployment has created no Butlers; once one exists, each Butler answers on the model it was assigned (ADR-W031 A2). API keys come ONLY from ANTHROPIC_API_KEY/OPENAI_API_KEY env vars, never a flag")
+	butlerModel := flag.String("butler-model", "", "model name for the legacy single-provider Butler; empty uses the provider's default. A named Butler's model comes from its assigned route, not from here")
+	butlerEndpoint := flag.String("butler-endpoint", "", "base URL for the legacy single-provider Butler (openai-compatible gateways, ollama host); empty uses the provider's default. A named Butler's endpoint comes from its assigned route")
 	automationEvery := flag.Duration("automation-interval", 15*time.Second, "how often the household automation engine ticks between event pokes (ADR-W024 H3)")
 	householdTZ := flag.String("household-timezone", "Local", "IANA time zone the household's rules keep (timeOfDay/weekday conditions), e.g. Europe/London")
 	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W024 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
 	replyURL := flag.String("household-reply-url", "", "household event intake URL a notification's reply buttons post to, as a PHONE can reach it (not Keystone's loopback address); empty means notifications carry no reply buttons and a rule that asks for them fails loudly")
 	replyTTL := flag.Duration("household-reply-ttl", 12*time.Hour, "how long a notification's reply token stays valid")
-	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia) that fronts the household review page (ADR-W030 A8.1). Empty leaves /api/v1/household/review unavailable rather than open: an unconfigured trust boundary fails closed, so a household routine approval can only be done from the Console until this is set")
+	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia). Empty fails closed. This names ONE trust boundary and it now gates TWO things: the household review page (ADR-W030 A8.1), and Console sign-in by forwarded identity (ADR-W032) — a request from one of these addresses carrying Remote-User and a Remote-Groups list containing console_users is authenticated as that person, with admin authority. Setting this does not by itself grant anyone the Console: they must also be in the console_users directory group, which packages/wildstone-console declares")
 	flag.Parse()
 
 	if *showVersion {
@@ -153,6 +155,36 @@ func claimCode(args []string) error {
 	fmt.Printf("admin token for %q written to %s (mode 0600)\n", *name, dest)
 	fmt.Println("read it once, use it, then delete the file.")
 	return nil
+}
+
+// coordinatorHolder identifies THIS deployment for the runtime
+// database's single-coordinator lease (ADR-W030 A11).
+//
+// Two properties are required of it, and both are easy to get wrong.
+//
+// It must be STABLE across restarts, because AcquireCoordinator treats
+// re-acquiring your own lease as a normal restart and keeps the epoch.
+// A holder built from a pid, a boot id or a random value would make
+// every restart look like a second coordinator arriving, and recovering
+// from an ordinary crash would need an administrative promotion.
+//
+// It must be DISTINCT per host, because two machines pointed at one
+// data directory is precisely the situation the lease exists to refuse.
+// A holder that ignored the host would let both believe they held it,
+// which is the racing-schedulers failure with the safeguard switched on.
+func coordinatorHolder(dataDir string) string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		// A host that cannot name itself still needs one id rather than
+		// a different one each boot; the data directory keeps it
+		// distinct from another deployment on the same machine.
+		host = "unknown-host"
+	}
+	abs, err := filepath.Abs(dataDir)
+	if err != nil {
+		abs = dataDir
+	}
+	return host + ":" + abs
 }
 
 func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir string, butlerCfg butlerConfig, householdCfg householdConfig, log *slog.Logger) error {
@@ -314,6 +346,25 @@ func probeButler(ctx context.Context, p provider.Provider, log *slog.Logger) (ru
 	return runtimedb.ButlerModeFull, "probe passed: full mode"
 }
 
+// butlerProviderFor builds the client for ONE Butler, from its own
+// assignment and from nothing else. There is no argument here that
+// could come from a message: it is handed a Butler and reads what its
+// assignment says.
+//
+// It is a named function rather than a closure because it is the one
+// place a Butler's assignment becomes a provider call, and it had a bug
+// nothing could see: it passed Model where ProviderModel belonged.
+// Those are the same string for anything configured from the provider's
+// list and differ for a row named before that, so a Butler on
+// "ollama-cloud" asked Ollama for a model by that name and got a 404
+// naming something the person had never typed.
+func butlerProviderFor(b runtimedb.Butler) (provider.Provider, error) {
+	p, _, err := newButlerProvider(butlerConfig{
+		Provider: b.Provider, Model: b.ProviderModel, Endpoint: b.Endpoint,
+	})
+	return p, err
+}
+
 // newButlerProvider builds the configured Butler provider, or a nil
 // provider when the Butler is off. API keys come ONLY from the provider's
 // environment variable (ADR-W017 A4) — there is deliberately no key flag.
@@ -375,10 +426,28 @@ func withConsole(apiHandler http.Handler, dir string) http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(path.Clean(r.URL.Path), "/")))); err == nil {
+				// Everything under /assets carries a content hash in its
+				// filename, so a given URL's bytes never change. Those
+				// can be cached hard and forever; a new build produces
+				// new names rather than new content at old names.
+				if strings.HasPrefix(r.URL.Path, "/assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				}
 				fileServer.ServeHTTP(w, r)
 				return
 			}
 		}
+		// index.html is the one file whose URL stays the same while its
+		// content changes, because it names the hashed bundle. Serving
+		// it with no cache directive left browsers free to reuse an old
+		// copy on their own judgement — which points at an asset the
+		// deploy has since deleted, so an upgraded Console renders as
+		// the version before it, or as nothing at all.
+		//
+		// no-cache is not "do not store": it stores and REVALIDATES, so
+		// the usual response is a 304 and the cost is one conditional
+		// request per load.
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
 	})
 	return mux
@@ -413,6 +482,40 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		return err
 	}
 	defer db.Close()
+
+	// The single active coordinator lease (ADR-W030 A11), taken before
+	// anything can dispatch: durable work is only ever written by the
+	// process that owns this database.
+	//
+	// Finding another holder is deliberately NOT fatal. Refusing to
+	// start would make the situation unrecoverable — promotion is an API
+	// call, and an API that will not come up cannot serve it. So this
+	// process runs, serves every read path, and wires no durable Butler
+	// work. That is the store's own rule ("a second process that finds
+	// another holder refuses to dispatch and says so") applied where
+	// dispatch actually happens, rather than one step earlier where it
+	// would take the recovery route down with it.
+	//
+	// Nothing releases the lease. There is no Release call and there is
+	// deliberately no timeout takeover: a crash mid-call leaves the lease
+	// held by this same holder id, and the restart re-acquires it at the
+	// same epoch, which is what lets the runner resume a task from its
+	// checkpoints instead of finding the work orphaned. Handing it to a
+	// different host is PromoteCoordinator, an explicit act that fences
+	// the old epoch.
+	lease, leaseErr := db.AcquireCoordinator(coordinatorHolder(dataDir))
+	coordinating := leaseErr == nil
+	switch {
+	case coordinating:
+		log.Info("coordinator lease held", "holder", lease.Holder, "epoch", lease.Epoch,
+			"acquiredAt", lease.AcquiredAt.Format(time.RFC3339))
+	case errors.Is(leaseErr, runtimedb.ErrCoordinatorHeld):
+		log.Error("another coordinator holds this runtime database; no durable Butler work is wired in this process. "+
+			"Stop the other process and restart, or POST /api/v1/coordinator/promote to take it over deliberately",
+			"err", leaseErr)
+	default:
+		return fmt.Errorf("taking the coordinator lease: %w", leaseErr)
+	}
 
 	// Node inventory (#30): the gateway keeps no database dependency, so
 	// it reports node lifecycle through this hook and Keystone persists
@@ -676,8 +779,46 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// widened by a DNS answer (ADR-W030 A8.1).
 	apiSrv.TrustedIngress = householdCfg.Ingress
 	if len(apiSrv.TrustedIngress) == 0 {
-		log.Info("household review page unavailable: -household-ingress is not set, " +
-			"so routine approvals happen in the Console until it is")
+		log.Info("household review page unavailable, and Console sign-in by forwarded " +
+			"identity is off: -household-ingress is not set, so routine approvals happen " +
+			"in the Console and the Console itself needs a bearer token")
+	} else {
+		// Said out loud because this address list is now the boundary
+		// for an ADMIN identity, not only for a household member's
+		// routine approval. An operator who set it for the review page
+		// should learn here that it does more.
+		log.Info("trusted identity proxy configured",
+			"addresses", apiSrv.TrustedIngress,
+			"gates", "household review page, and Console sign-in for members of "+api.ConsoleGroup)
+	}
+	// Probing one model, for the Console's assignment and Re-check.
+	//
+	// It builds a provider for THAT model rather than reusing the
+	// running one: the whole point is to check a model this deployment
+	// may never have talked to, and asking the configured backend
+	// whether a different model works would answer about the wrong one.
+	apiSrv.ProbeModel = func(ctx context.Context, providerName, model, endpoint string) (string, string) {
+		p, _, err := newButlerProvider(butlerConfig{Provider: providerName, Model: model, Endpoint: endpoint})
+		if err != nil || p == nil {
+			detail := "this deployment cannot build a client for that provider"
+			if err != nil {
+				detail = err.Error()
+			}
+			return runtimedb.ModelUnavailable, detail
+		}
+		mode, detail := probeButler(ctx, p, log)
+		if mode == runtimedb.ButlerModeFull {
+			return runtimedb.ModelReady, "probe passed: it called the tool it was asked to"
+		}
+		// A model that answered but would not call a tool is qa-only; one
+		// that did not answer at all is unavailable, and the difference
+		// is what a person needs to know before assigning it.
+		if strings.Contains(strings.ToLower(detail), "deadline") ||
+			strings.Contains(strings.ToLower(detail), "connection") ||
+			strings.Contains(strings.ToLower(detail), "refused") {
+			return runtimedb.ModelUnavailable, detail
+		}
+		return runtimedb.ModelQAOnly, detail
 	}
 	apiSrv.Automation = auto
 	apiSrv.OnHouseholdEvent = auto.Poke
@@ -734,6 +875,10 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv.APIURL = advertisedAPIURL(hosts, apiLis.Addr().String())
 	apiSrv.HouseholdTimezone = householdCfg.Timezone
 	apiSrv.ManagedPrefix = managedPrefix
+	// The coordinator routes need this process's own lease identity, so
+	// a promotion writes the id THIS deployment will re-acquire at its
+	// next restart rather than one nobody holds.
+	apiSrv.CoordinatorHolder = coordinatorHolder(dataDir)
 	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
 	apiSrv.BackupRestore = bak.RestoreAlongside
 
@@ -919,6 +1064,98 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				"endpoint", backend.Endpoint, "mode", string(mode))
 		} else {
 			log.Info("butler not configured; it can be enabled from the Console (ADR-W017 A9)")
+		}
+
+		// Named Butlers on the live conversational path (ADR-W031),
+		// over the durable runner and the fenced ledger (ADR-W030 P3).
+		//
+		// Wired only while this process holds the coordinator lease.
+		// Durable work writes steps, attempts and traces, and a second
+		// process writing them under a lease it does not hold is the
+		// racing-schedulers failure the lease exists to refuse. Without
+		// the lease this deployment keeps serving every read path and
+		// answers conversations on the legacy provider, which is
+		// degraded but honest.
+		if coordinating {
+			ledger := butlerstore.New(db, lease)
+			// Admission is wired explicitly rather than defaulted: "no
+			// admission records exist yet" and "this person is not
+			// admitted" must not be the same answer, so turning it on
+			// is an act (ADR-W030 A2.1).
+			ledger.OwnerActive = ledger.AdmissionCheck()
+			butlers := &butlerlive.Butlers{
+				DB:     db,
+				Ledger: ledger,
+				Log:    log,
+				// The provider is built from the MODEL the Butler was
+				// assigned, and from nothing else. There is no argument
+				// here that could come from a message: this function is
+				// handed a Butler and reads what its assignment says.
+				//
+				// ProviderModel, not Model. Model is the assignment's
+				// own name — which for anything configured from the
+				// provider's list is the same string, and is not for a
+				// row named before that. Sending the name to Ollama
+				// asks it for a model called "ollama-cloud" and gets a
+				// 404 naming something the person never typed.
+				Providers: butlerProviderFor,
+				Gateways: butlerlive.GatewayFunc(func(b runtimedb.Butler, t butlerlive.Turn) (butler.Toolset, error) {
+					switch b.Surface {
+					case runtimedb.ButlerSurfaceFamily:
+						if household.Events == nil && household.Actions == nil {
+							return nil, fmt.Errorf("this deployment has no household surface wired")
+						}
+						// The audience decides which CAPABILITIES the
+						// session has, not merely what its prompt asks
+						// for (ADR-W026 A7) — so a room gets the
+						// narrowed gateway, built fresh and bound to the
+						// member.
+						// Memory is bound to THIS session: the
+						// reader and the Butler are closed over in
+						// butlerstore, from the turn and the Butler
+						// record, so nothing a model types can name a
+						// different one. That is what makes recall
+						// safe to offer as a tool at all, and it is
+						// what decides who owns anything remember
+						// keeps.
+						mine := household
+						mine.Memory = butlerstore.MemorySeams(db, b.Name, t.Member, log)
+						if t.Group {
+							return butler.NewHouseholdGroupGateway(t.Member, mine), nil
+						}
+						return butler.NewHouseholdGateway(t.Member, mine), nil
+					case runtimedb.ButlerSurfaceAdmin:
+						// A copy per session, because butlerlive sets
+						// this Butler's authorizer and task on it. A
+						// shared instance would leak one Butler's scope
+						// into another's session, which is exactly the
+						// isolation A4 is about. The tool map is built
+						// once and never written, so sharing it is safe.
+						perSession := *bgw
+						return &perSession, nil
+					default:
+						return nil, fmt.Errorf("unknown butler surface %q", b.Surface)
+					}
+				}),
+			}
+			// The stalled-task notice goes to the direct surface the
+			// task's owner was already talking on (ADR-W030 A4/P4).
+			butlers.Notifier = &butlerstore.Notifier{Ledger: ledger}
+			apiSrv.Butlers = butlers
+
+			named, lerr := db.ListButlers()
+			switch {
+			case lerr != nil:
+				log.Error("listing butlers", "err", lerr)
+			case len(named) == 0:
+				log.Info("no butlers created yet; conversations answer on the legacy provider until one is (ADR-W031)")
+			default:
+				for _, nb := range named {
+					log.Info("butler on the live path", "butler", nb.Name, "surface", nb.Surface,
+						"model", nb.Model, "kind", nb.ModelKind, "answers_as", nb.ProviderModel,
+						"readiness", nb.Readiness)
+				}
+			}
 		}
 
 		// Runtime reconfiguration (ADR-W017 A9). Rebuilds the provider

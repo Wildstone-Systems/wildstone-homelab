@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/catalog"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
@@ -45,6 +46,19 @@ type Server struct {
 	// path is unavailable rather than open: an unconfigured trust
 	// boundary must fail closed.
 	TrustedIngress []string
+
+	// ProbeModel asks one model whether it can actually operate a tool,
+	// and is how a model earns the authority to do things (ADR-W017 A4).
+	//
+	// It is a seam rather than an implementation because building a
+	// provider means knowing about API keys in the environment, which
+	// cmd/keystone already knows and this package deliberately does not.
+	//
+	// nil leaves a newly assigned model UNPROBED rather than assuming
+	// it works: unprobed answers questions and carries no authority to
+	// use tools that do things, which is the safe reading of "nobody
+	// has checked".
+	ProbeModel func(ctx context.Context, provider, model, endpoint string) (readiness, detail string)
 
 	// OnApproved, when set, is called (non-blocking contract: keep it
 	// cheap) after a plan approval commits — cmd/keystone wires it to the
@@ -105,6 +119,21 @@ type Server struct {
 	// clock once instead of on every install form.
 	HouseholdTimezone string
 
+	// Butlers serves conversations as named specialists (ADR-W031) —
+	// cmd/keystone wires it over butlerlive, butlerstore and the
+	// durable runner. nil leaves every conversation on the single
+	// -butler-provider path, which is what a deployment that has
+	// created no Butlers keeps running.
+	Butlers ButlerConversations
+
+	// CoordinatorHolder is THIS process's identity for the runtime
+	// database's single-coordinator lease (ADR-W030 A11) — cmd/keystone
+	// wires it. Empty leaves the coordinator routes answering 503: a
+	// process that cannot name itself must not be able to promote
+	// itself, because the id it promoted to would be one nothing can
+	// re-acquire on the next restart.
+	CoordinatorHolder string
+
 	// ButlerHost hosts the Butler ask endpoint (ADR-W017 A2/A4) —
 	// cmd/keystone wires it from -butler-provider. nil leaves ask
 	// answering 503; session history stays readable.
@@ -144,6 +173,26 @@ type Server struct {
 	BackupRestore func(ctx context.Context, plan string) error
 
 	limiter *limiter
+}
+
+// ButlerConversations is the named-Butler seam (ADR-W031). It is an
+// interface rather than the concrete type so that a deployment with no
+// durable wiring — and a test that wants one turn without a runtime
+// database — can be the nil case honestly rather than by constructing
+// something half-real.
+type ButlerConversations interface {
+	// Any reports whether this deployment has created any Butler. It is
+	// the only question whose answer may route a conversation onto the
+	// legacy provider, and it reads deployment state rather than the
+	// message.
+	Any() (bool, error)
+	// Serve runs one turn as whichever Butler the turn's address or
+	// name resolves to.
+	Serve(ctx context.Context, t butlerlive.Turn) (butlerlive.Answer, error)
+	// Sole names the only Butler a person may talk to on a surface, for
+	// the Console path where there is no bot to address. It refuses
+	// rather than picks when there is more than one.
+	Sole(surface runtimedb.ButlerSurface, member string, asOwner bool) (runtimedb.Butler, error)
 }
 
 // New wires a Server. The rate limits are per ADR-W007 A5: a generous
@@ -263,6 +312,10 @@ func (s *Server) Handler() http.Handler {
 	// approves the plan.
 	mux.Handle("GET /api/v1/household/members", s.handle(principal.VerbRead, s.listHouseholdMembers))
 	mux.Handle("POST /api/v1/household/members", s.handle(principal.VerbPropose, s.addHouseholdMember))
+	// Editing somebody is a proposal like adding one, and for the same
+	// reason: the account list belongs in state, in plans, in approval
+	// and in audit.
+	mux.Handle("PUT /api/v1/household/members/{username}", s.handle(principal.VerbPropose, s.updateHouseholdMember))
 	mux.Handle("GET /api/v1/household/groups", s.handle(principal.VerbRead, s.listHouseholdGroups))
 
 	// Butler (ADR-W017 A2): ask carries the read verb — conversing is not
@@ -273,7 +326,7 @@ func (s *Server) Handler() http.Handler {
 	// Admin-only: it reaches out to an operator-supplied address from
 	// inside the control plane, which is not a read a viewer should be
 	// able to make.
-	mux.Handle("GET /api/v1/butler/models", s.handle(principal.VerbManage, s.listButlerModels))
+	mux.Handle("GET /api/v1/butler/models/offered", s.handle(principal.VerbManage, s.listOfferedModels))
 	mux.Handle("GET /api/v1/butler/config", s.handle(principal.VerbManage, s.getButlerConfig))
 	mux.Handle("PUT /api/v1/butler/config", s.handle(principal.VerbManage, s.setButlerConfig))
 	// The administrator's side of integrations. Every one needs manage.
@@ -343,6 +396,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/butler/tasks/{id}/feedback", s.handle(principal.VerbRead, s.addButlerTaskFeedback))
 	mux.Handle("POST /api/v1/butler/tasks/{id}/evaluation", s.handle(principal.VerbManage, s.exportButlerEvaluation))
 	mux.Handle("POST /api/v1/butler/tasks/{id}/debug", s.handle(principal.VerbManage, s.enableButlerDebugCapture))
+	mux.Handle("POST /api/v1/butler/tasks/{id}/cancel", s.handle(principal.VerbManage, s.cancelButlerTask))
 	mux.Handle("GET /api/v1/butler/evaluations", s.handle(principal.VerbRead, s.listButlerEvaluations))
 	mux.Handle("GET /api/v1/butler/debug", s.handle(principal.VerbRead, s.listButlerDebugCaptures))
 	mux.Handle("POST /api/v1/butler/members/{member}/offboarding", s.handle(principal.VerbManage, s.offboardMember))
@@ -356,8 +410,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/notices/preferences", s.handle(principal.VerbRead, s.getNoticePreferences))
 	mux.Handle("PUT /api/v1/notices/preferences", s.handle(principal.VerbRead, s.setNoticePreferences))
 	mux.Handle("PUT /api/v1/notices/kinds", s.handle(principal.VerbManage, s.setNoticeKind))
-	mux.Handle("GET /api/v1/butler/routes", s.handle(principal.VerbRead, s.listModelRoutes))
-	mux.Handle("PUT /api/v1/butler/routes", s.handle(principal.VerbManage, s.upsertModelRoute))
+	mux.Handle("GET /api/v1/butler/models", s.handle(principal.VerbRead, s.listModels))
+	mux.Handle("PUT /api/v1/butler/models", s.handle(principal.VerbManage, s.upsertModel))
 
 	// Butlers (ADR-W031). Reading the roster is a read; everything that
 	// shapes a Butler — its model, its people, its connections, its
@@ -367,18 +421,49 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/butlers", s.handle(principal.VerbRead, s.listButlers))
 	mux.Handle("POST /api/v1/butlers", s.handle(principal.VerbManage, s.createButler))
 	mux.Handle("GET /api/v1/butlers/{name}/scope", s.handle(principal.VerbRead, s.butlerScope))
-	mux.Handle("PUT /api/v1/butlers/{name}/route", s.handle(principal.VerbManage, s.setButlerRoute))
+	// Reading what a Butler may do is a read, and it is deliberately
+	// its own route rather than a field on the scope: the answer comes
+	// from the gateway and the authority resolver, not from the scope
+	// tables, and folding it in would make one endpoint's cost depend
+	// on wiring the other knows nothing about.
+	mux.Handle("GET /api/v1/butlers/{name}/tools", s.handle(principal.VerbRead, s.butlerTools))
+	mux.Handle("PUT /api/v1/butlers/{name}/model", s.handle(principal.VerbManage, s.setButlerModel))
+	mux.Handle("PUT /api/v1/butlers/{name}/directive", s.handle(principal.VerbManage, s.setButlerDirective))
 	mux.Handle("PUT /api/v1/butlers/{name}/access", s.handle(principal.VerbManage, s.setButlerAccess))
 	mux.Handle("PUT /api/v1/butlers/{name}/connection", s.handle(principal.VerbManage, s.setButlerConnection))
 	mux.Handle("PUT /api/v1/butlers/{name}/tool", s.handle(principal.VerbManage, s.setButlerTool))
 	mux.Handle("PUT /api/v1/butlers/{name}/address", s.handle(principal.VerbManage, s.setButlerAddress))
 	mux.Handle("DELETE /api/v1/butlers/{name}", s.handle(principal.VerbManage, s.retireButler))
-	mux.Handle("POST /api/v1/butler/routes/{name}/readiness", s.handle(principal.VerbManage, s.recordRouteReadiness))
-	mux.Handle("POST /api/v1/butler/routes/{name}/enabled", s.handle(principal.VerbManage, s.setModelRouteEnabled))
+	// Restore and duplicate are manage for the same reason retiring is:
+	// each decides standing configuration. Impact is a read, and it is
+	// the one a retire dialog needs BEFORE anybody has decided.
+	mux.Handle("POST /api/v1/butlers/{name}/restore", s.handle(principal.VerbManage, s.restoreButler))
+	mux.Handle("POST /api/v1/butlers/{name}/duplicate", s.handle(principal.VerbManage, s.duplicateButler))
+	mux.Handle("GET /api/v1/butlers/{name}/impact", s.handle(principal.VerbRead, s.butlerImpact))
+	// Talking is a read, like the other ask routes. What differs is the
+	// ceiling: this one takes it from the named Butler rather than from
+	// the door, which is the only correct answer for a caller who holds
+	// both surfaces.
+	mux.Handle("POST /api/v1/butlers/{name}/ask", s.handle(principal.VerbRead, s.askOneButler))
+	mux.Handle("GET /api/v1/butlers/{name}/status", s.handle(principal.VerbRead, s.butlerStatus))
+	mux.Handle("POST /api/v1/butler/models/{name}/readiness", s.handle(principal.VerbManage, s.recordModelReadiness))
+	// Probing is manage because it writes the verdict that decides
+	// whether a model may operate tools at all.
+	mux.Handle("POST /api/v1/butler/models/{name}/probe", s.handle(principal.VerbManage, s.probeModel))
+	mux.Handle("DELETE /api/v1/butler/models/{name}", s.handle(principal.VerbManage, s.deleteModel))
+	mux.Handle("POST /api/v1/butler/models/{name}/enabled", s.handle(principal.VerbManage, s.setModelEnabled))
 	mux.Handle("GET /api/v1/butler/settings", s.handle(principal.VerbManage, s.getButlerSettings))
 	mux.Handle("PUT /api/v1/butler/settings", s.handle(principal.VerbManage, s.setButlerSettings))
 	mux.Handle("POST /api/v1/butler/ask", s.handle(principal.VerbRead, s.askButler))
 	mux.Handle("GET /api/v1/butler/sessions", s.handle(principal.VerbRead, s.listButlerSessions))
+	// The coordinator lease (ADR-W030 A11). Reading it is `read`
+	// because an operator diagnosing a Butler that has gone quiet needs
+	// to know which process owns the database; promoting is `manage`
+	// because it decides that ownership, and it fences whatever the
+	// previous holder still believed it was doing.
+	mux.Handle("GET /api/v1/coordinator", s.handle(principal.VerbRead, s.getCoordinator))
+	mux.Handle("POST /api/v1/coordinator/promote", s.handle(principal.VerbManage, s.promoteCoordinator))
+
 	mux.Handle("GET /api/v1/butler/sessions/{id}", s.handle(principal.VerbRead, s.getButlerSession))
 	// A follow-up carries the read verb like the first question does:
 	// conversing is not a write. The surface it runs on comes from the
@@ -479,7 +564,7 @@ func (s *Server) handle(verb principal.Verb, h handlerFunc) http.Handler {
 		body, st, err := h(r, id)
 		status = st
 		if err != nil {
-			s.writeError(w, st, err.Error())
+			s.writeErrorBody(w, st, err.Error(), body)
 			return
 		}
 		if body == nil {
@@ -492,14 +577,18 @@ func (s *Server) handle(verb principal.Verb, h handlerFunc) http.Handler {
 func (s *Server) authenticate(r *http.Request) (principal.Identity, bool) {
 	auth := r.Header.Get("Authorization")
 	const scheme = "Bearer "
-	if !strings.HasPrefix(auth, scheme) {
-		return principal.Identity{}, false
+	if strings.HasPrefix(auth, scheme) {
+		// A token always decides when one is offered, even a bad one.
+		// Falling through to the proxy path on a failed token would let
+		// a stale or revoked credential quietly become whatever the
+		// headers claim, which is an escalation dressed as a fallback.
+		id, err := s.Principals.Authenticate(strings.TrimSpace(strings.TrimPrefix(auth, scheme)))
+		if err != nil {
+			return principal.Identity{}, false
+		}
+		return id, true
 	}
-	id, err := s.Principals.Authenticate(strings.TrimSpace(strings.TrimPrefix(auth, scheme)))
-	if err != nil {
-		return principal.Identity{}, false
-	}
-	return id, true
+	return s.consoleForwardAuth(r)
 }
 
 // writeJSON is the ONLY response encoder on the public plane: it redacts
@@ -537,6 +626,41 @@ type mintResponse struct {
 
 func (s *Server) writeError(w http.ResponseWriter, status int, msg string) {
 	s.writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// writeErrorBody is writeError for a failure that still has something to
+// hand back.
+//
+// Almost every failed request has nothing to say beyond why it failed,
+// and passes body nil to get exactly the old shape. One case is not like
+// that: a Butler turn can fail AFTER tools have already run, and the
+// session holding that durable work is the only way the caller reaches
+// it again. A surface with no server-side thread pointer — the Console
+// and the API, unlike chat — would otherwise retry, open a fresh task,
+// and repeat calls that already changed the house.
+//
+// The body's own fields are merged and "error" is added last, so it wins
+// over any field of that name rather than being silently dropped. A body
+// that cannot be rendered as an object degrades to the plain error
+// rather than failing the response: the caller is already being told
+// something went wrong, and that message is the part it cannot lose.
+func (s *Server) writeErrorBody(w http.ResponseWriter, status int, msg string, body any) {
+	if body == nil {
+		s.writeError(w, status, msg)
+		return
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		s.writeError(w, status, msg)
+		return
+	}
+	fields := map[string]any{}
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		s.writeError(w, status, msg)
+		return
+	}
+	fields["error"] = msg
+	s.writeJSON(w, status, fields)
 }
 
 func remoteHost(r *http.Request) string {

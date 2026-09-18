@@ -20,7 +20,7 @@ import (
 
 func authorityDB(t *testing.T) (*runtimedb.DB, *Authority) {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Path(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

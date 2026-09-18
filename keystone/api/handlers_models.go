@@ -18,33 +18,33 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
-func (s *Server) listModelRoutes(_ *http.Request, _ principal.Identity) (any, int, error) {
-	routes, err := s.DB.ListModelRoutes()
+func (s *Server) listModels(_ *http.Request, _ principal.Identity) (any, int, error) {
+	models, err := s.DB.ListModels()
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	// Report the authority each route carries rather than making a
+	// Report the authority each model carries rather than making a
 	// reader derive it from readiness: "answers questions only" is the
 	// thing an operator actually wants to see.
 	//
-	// A route is now the model a Butler is ASSIGNED to (ADR-W031 A2),
-	// not one of several a router might pick between — so there is
-	// nothing here about capacity or priority, because nothing selects.
-	out := make([]map[string]any, 0, len(routes))
-	for _, r := range routes {
+	// Nothing here is about capacity or priority, because nothing
+	// selects: a Butler is ASSIGNED a model (ADR-W031 A2) rather than
+	// having one picked for it per call.
+	out := make([]map[string]any, 0, len(models))
+	for _, r := range models {
 		out = append(out, map[string]any{
-			"route":          r,
+			"model":          r,
 			"carriesActions": r.CarriesActionAuthority(),
-			"leavesTheHouse": r.Kind == runtimedb.RouteCloud,
+			"leavesTheHouse": r.Kind == runtimedb.ModelCloud,
 		})
 	}
-	return map[string]any{"routes": out}, http.StatusOK, nil
+	return map[string]any{"models": out}, http.StatusOK, nil
 }
 
-// upsertModelRoute records a route. No API key here and never will be,
+// upsertModel records a route. No API key here and never will be,
 // for the reason ADR-W017 A4 gives about the Butler config: what became
 // editable is which model to use, not the secret used to reach it.
-func (s *Server) upsertModelRoute(r *http.Request, id principal.Identity) (any, int, error) {
+func (s *Server) upsertModel(r *http.Request, id principal.Identity) (any, int, error) {
 	var req struct {
 		Name     string `json:"name"`
 		Kind     string `json:"kind"`
@@ -61,8 +61,8 @@ func (s *Server) upsertModelRoute(r *http.Request, id principal.Identity) (any, 
 		}
 		return nil, code, err
 	}
-	if err := s.DB.UpsertModelRoute(runtimedb.ModelRoute{
-		Name: req.Name, Kind: req.Kind, Provider: req.Provider, Model: req.Model,
+	if err := s.DB.UpsertModel(runtimedb.Model{
+		Name: req.Name, Kind: req.Kind, Provider: req.Provider, ProviderModel: req.Model,
 		Endpoint: req.Endpoint, Enabled: req.Enabled,
 	}, actingMember(id)); err != nil {
 		return nil, http.StatusBadRequest, err
@@ -74,8 +74,8 @@ func (s *Server) upsertModelRoute(r *http.Request, id principal.Identity) (any, 
 	}, http.StatusOK, nil
 }
 
-// recordRouteReadiness stores a probe verdict for one route.
-func (s *Server) recordRouteReadiness(r *http.Request, _ principal.Identity) (any, int, error) {
+// recordModelReadiness stores a probe verdict for one route.
+func (s *Server) recordModelReadiness(r *http.Request, _ principal.Identity) (any, int, error) {
 	name := r.PathValue("name")
 	var req struct {
 		Readiness string `json:"readiness"`
@@ -84,7 +84,7 @@ func (s *Server) recordRouteReadiness(r *http.Request, _ principal.Identity) (an
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
 	}
-	if err := s.DB.RecordRouteReadiness(name, req.Readiness, req.Detail); err != nil {
+	if err := s.DB.RecordModelReadiness(name, req.Readiness, req.Detail); err != nil {
 		if errors.Is(err, runtimedb.ErrNotFound) {
 			return nil, http.StatusNotFound, fmt.Errorf("no route named %q", name)
 		}
@@ -93,8 +93,8 @@ func (s *Server) recordRouteReadiness(r *http.Request, _ principal.Identity) (an
 	return map[string]any{"name": name, "readiness": req.Readiness}, http.StatusOK, nil
 }
 
-// setModelRouteEnabled turns a route off without losing it.
-func (s *Server) setModelRouteEnabled(r *http.Request, id principal.Identity) (any, int, error) {
+// setModelEnabled turns a route off without losing it.
+func (s *Server) setModelEnabled(r *http.Request, id principal.Identity) (any, int, error) {
 	name := r.PathValue("name")
 	var req struct {
 		Enabled bool `json:"enabled"`
@@ -102,11 +102,27 @@ func (s *Server) setModelRouteEnabled(r *http.Request, id principal.Identity) (a
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
 	}
-	if err := s.DB.SetModelRouteEnabled(name, req.Enabled, actingMember(id)); err != nil {
+	if err := s.DB.SetModelEnabled(name, req.Enabled, actingMember(id)); err != nil {
 		if errors.Is(err, runtimedb.ErrNotFound) {
 			return nil, http.StatusNotFound, fmt.Errorf("no route named %q", name)
 		}
 		return nil, http.StatusBadRequest, err
 	}
 	return map[string]any{"name": name, "enabled": req.Enabled}, http.StatusOK, nil
+}
+
+// deleteModel removes a configured model nothing is assigned to.
+//
+// It exists because the Model tab configures a row the first time
+// anybody picks a model, so trying three and keeping one leaves two
+// behind — and until now there was no way to say so.
+func (s *Server) deleteModel(r *http.Request, _ principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	if err := s.DB.DeleteModel(name); err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return nil, http.StatusNotFound, fmt.Errorf("no model named %q", name)
+		}
+		return nil, http.StatusConflict, err
+	}
+	return map[string]any{"deleted": name}, http.StatusOK, nil
 }

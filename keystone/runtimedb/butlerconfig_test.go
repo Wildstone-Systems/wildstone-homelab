@@ -1,27 +1,14 @@
 package runtimedb
 
 import (
-	"path/filepath"
 	"testing"
 )
-
-// testDB opens a real database in a temp dir, so the migration under
-// test actually runs rather than being assumed.
-func testDB(t *testing.T) *DB {
-	t.Helper()
-	db, err := Open(filepath.Join(t.TempDir(), "keystone.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
-}
 
 // ADR-W017 A9: provider config is runtime state. These assert the two
 // properties the amendment rests on.
 
 func TestButlerConfigAbsentIsNotAnError(t *testing.T) {
-	db := testDB(t)
+	db := open(t)
 	// A deployment that has never opened the Console has no stored
 	// config and is correctly running on its startup flags. Reporting
 	// that as an error would make the normal state look broken.
@@ -35,7 +22,7 @@ func TestButlerConfigAbsentIsNotAnError(t *testing.T) {
 }
 
 func TestButlerConfigRoundTrips(t *testing.T) {
-	db := testDB(t)
+	db := open(t)
 	want := ButlerConfig{Provider: "ollama", Model: "qwen3.5:4b", Endpoint: "http://192.168.1.20:11434", UpdatedBy: "admin"}
 	if err := db.SetButlerConfig(want); err != nil {
 		t.Fatal(err)
@@ -56,7 +43,7 @@ func TestButlerConfigRoundTrips(t *testing.T) {
 // describes one provider and model, so changing either must discard it.
 // Carrying it over would let a model inherit a pass it never earned.
 func TestChangingConfigClearsTheProbeVerdict(t *testing.T) {
-	db := testDB(t)
+	db := open(t)
 	if err := db.SetButlerConfig(ButlerConfig{Provider: "ollama", Model: "small"}); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +65,7 @@ func TestChangingConfigClearsTheProbeVerdict(t *testing.T) {
 // One deployment, one Butler configuration. A second row would be a
 // second answer to a question that has one.
 func TestButlerConfigHoldsOneRow(t *testing.T) {
-	db := testDB(t)
+	db := open(t)
 	for _, m := range []string{"a", "b", "c"} {
 		if err := db.SetButlerConfig(ButlerConfig{Provider: "ollama", Model: m}); err != nil {
 			t.Fatal(err)
