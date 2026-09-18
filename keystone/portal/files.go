@@ -323,15 +323,15 @@ func (s *FileStore) Save(nsKey, offered string, body io.Reader) (Stored, error) 
 	if err != nil {
 		return Stored{}, err
 	}
-	// Any failure from here on removes the temporary file. A partial
-	// upload that stays on disk is storage nobody can see and nobody
-	// will ever delete.
-	committed := false
+	// The temporary file always goes, and that is right whichever way
+	// the commit below went: a rename moved it away and this is a
+	// no-op, a hard link published its data under the real name and
+	// this drops the second link, or the upload failed and this is the
+	// partial file going — storage nobody can see and nobody will ever
+	// delete.
 	defer func() {
 		tmp.Close()
-		if !committed {
-			_ = root.Remove(tmpName)
-		}
+		_ = root.Remove(tmpName)
 	}()
 
 	max := s.MaxUploadFor()
@@ -353,14 +353,10 @@ func (s *FileStore) Save(nsKey, offered string, body io.Reader) (Stored, error) 
 		return Stored{}, fmt.Errorf("portal: closing %s: %w", name, err)
 	}
 
-	final, renamed, err := freeName(root, name)
+	final, renamed, err := claimName(root, tmpName, name)
 	if err != nil {
 		return Stored{}, err
 	}
-	if err := root.Rename(tmpName, final); err != nil {
-		return Stored{}, fmt.Errorf("portal: storing %s: %w", final, err)
-	}
-	committed = true
 	// 0o644 for the reason the directory is 0o755, and it is a chmod
 	// rather than a create mode for the same one: the umask would
 	// otherwise make every uploaded file root-only.
@@ -379,25 +375,81 @@ func (s *FileStore) Save(nsKey, offered string, body io.Reader) (Stored, error) 
 	}, nil
 }
 
-// freeName is the collision policy: keep the name, or add a counter.
+// claimName is the collision policy: keep the name, or add a counter.
 //
 // Overwriting was the alternative and it is not survivable on a
 // household surface — two phones both call their photos IMG_0001.jpg,
 // and the second upload would silently destroy the first person's. The
 // counter goes before the extension so the file still opens.
-func freeName(root *os.Root, name string) (string, bool, error) {
-	if _, err := root.Stat(name); errors.Is(err, os.ErrNotExist) {
-		return name, false, nil
-	}
+//
+// LOOKING AND THEN TAKING IS NOT THE SAME AS TAKING. This used to ask
+// whether a name existed and then rename onto it, which is two steps
+// with a gap in the middle, and two phones uploading the same common
+// filename at the same moment both found it free and both renamed onto
+// it: os.Rename replaces a file that is in the way, so the second
+// upload destroyed the first while both people were told it worked.
+// The counter cannot protect anybody if the answer it is based on is
+// already stale by the time it is used.
+//
+// So the name is TAKEN, in one operation the filesystem will not let
+// two callers win, and the candidate that loses is a collision like any
+// other — it moves on to the next counter rather than failing.
+func claimName(root *os.Root, tmpName, name string) (string, bool, error) {
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
-	for i := 1; i <= 999; i++ {
-		candidate := fmt.Sprintf("%s-%d%s", stem, i, ext)
-		if _, err := root.Stat(candidate); errors.Is(err, os.ErrNotExist) {
-			return candidate, true, nil
+	for i := 0; i <= 999; i++ {
+		candidate := name
+		if i > 0 {
+			candidate = fmt.Sprintf("%s-%d%s", stem, i, ext)
+		}
+		taken, err := takeName(root, tmpName, candidate)
+		if err != nil {
+			return "", false, err
+		}
+		if taken {
+			return candidate, i > 0, nil
 		}
 	}
 	return "", false, fmt.Errorf("portal: %s already exists a thousand times over", name)
+}
+
+// takeName publishes the completed upload under one candidate name, and
+// reports false if somebody else holds that name.
+//
+// A hard link first, because it is the whole commit in a single step
+// the filesystem refuses to do twice: it fails rather than replaces
+// when the name is taken, and it makes the name appear with the whole
+// file already behind it. The scratch file's own link goes in Save's
+// cleanup.
+//
+// Not every filesystem a household might mount its storage on has hard
+// links, so a failure that is not "it exists" falls back to reserving
+// the name with an exclusive create and renaming over the reservation.
+// That is atomic in the part that matters — two callers cannot both
+// create the same name with O_EXCL — at the cost of a moment where the
+// name exists with nothing in it.
+func takeName(root *os.Root, tmpName, candidate string) (bool, error) {
+	switch err := root.Link(tmpName, candidate); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, os.ErrExist):
+		return false, nil
+	}
+	f, err := root.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("portal: reserving %s: %w", candidate, err)
+	}
+	f.Close()
+	if err := root.Rename(tmpName, candidate); err != nil {
+		// The reservation is ours and it is empty. Leaving it would be
+		// a nameless nothing in the household's storage.
+		_ = root.Remove(candidate)
+		return false, fmt.Errorf("portal: storing %s: %w", candidate, err)
+	}
+	return true, nil
 }
 
 // createTemp opens a uniquely named scratch file inside the namespace's
@@ -688,13 +740,24 @@ func (s *FileStore) Rename(nsKey, from, to string) (string, error) {
 	}
 	// Refused rather than overwriting, and refused rather than
 	// silently suffixed: an upload collision is somebody adding a
-	// second thing and freeName is right there, but a RENAME collision
+	// second thing and claimName is right there, but a RENAME collision
 	// is somebody about to lose a file they did not name in this
 	// request.
-	if _, err := root.Lstat(safe); err == nil {
-		return "", fmt.Errorf("portal: %s is already there", safe)
+	//
+	// The name is taken with an exclusive create rather than tested
+	// with Lstat, for the reason claimName gives: a test and a rename
+	// are two steps, and a concurrent upload or rename fits between
+	// them — after which os.Rename would replace what it found.
+	reserved, err := root.OpenFile(safe, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf("portal: %s is already there", safe)
+		}
+		return "", fmt.Errorf("portal: renaming %s: %w", from, err)
 	}
+	reserved.Close()
 	if err := root.Rename(from, safe); err != nil {
+		_ = root.Remove(safe)
 		return "", fmt.Errorf("portal: renaming %s: %w", from, err)
 	}
 	return safe, nil
