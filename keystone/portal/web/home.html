@@ -867,17 +867,19 @@
       if (!term) { return true; }
       return (a.title + " " + (a.desc || "")).toLowerCase().indexOf(term) >= 0;
     });
-    if (!apps.length) {
-      // It does not offer a web search. This box searches the
-      // household, and silently becoming an internet search box would
-      // be a privacy surprise.
-      box.appendChild(make("div", "muted", "Nothing here matches " + term));
-      return;
-    }
     groupOrder.forEach(function (group) {
       var inGroup = apps.filter(function (a) { return a.group === group; });
-      // A group with no services is omitted, not shown empty.
-      if (!inGroup.length) { return; }
+      // A group with no services is omitted, not shown empty — EXCEPT
+      // the household's while a filter is running.
+      //
+      // The filter box lives in that heading, so dropping the section
+      // when nothing matched took the control away with it: a member
+      // who mistyped had no box left to correct, and Escape had nothing
+      // to reach. Refreshing the page was the only way back. A filter
+      // that can delete itself is a trap, so the household heading
+      // survives its own no-match.
+      var keepForFilter = group === householdGroup && term !== "";
+      if (!inGroup.length && !keepForFilter) { return; }
       var sec = make("section");
       sec.style.marginBottom = "var(--space-8)";
       var head = make("div", "secthead");
@@ -940,9 +942,28 @@
         head.appendChild(add);
       }
       sec.appendChild(head);
-      var grid = make("div", "appgrid");
-      inGroup.forEach(function (a) { grid.appendChild(appCard(a)); });
-      sec.appendChild(grid);
+      if (inGroup.length) {
+        var grid = make("div", "appgrid");
+        inGroup.forEach(function (a) { grid.appendChild(appCard(a)); });
+        sec.appendChild(grid);
+      } else {
+        // Said under the box that caused it, with a way out that does
+        // not require knowing Escape works. It does not offer a web
+        // search: that is the box at the top of the page, and this one
+        // silently becoming one would be the privacy surprise §7 names.
+        var none = make("div", "spread");
+        none.appendChild(make("span", "muted", "Nothing here matches " + term));
+        var clearBtn = make("button", "hbtn hbtn-ghost", "Clear");
+        clearBtn.type = "button";
+        clearBtn.addEventListener("click", function () {
+          appTerm = "";
+          paintLauncher("");
+          var again = el("appsearch");
+          if (again) { again.focus(); }
+        });
+        none.appendChild(clearBtn);
+        sec.appendChild(none);
+      }
       box.appendChild(sec);
     });
   }

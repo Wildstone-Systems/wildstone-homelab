@@ -440,3 +440,43 @@ func TestTheWebSearchAndTheAppSearchAreSeparate(t *testing.T) {
 		t.Error("a form on this surface cannot submit; the CSP sets form-action 'none'")
 	}
 }
+
+// The app filter cannot delete the box it is typed into.
+//
+// paintLauncher used to bail out when nothing matched, appending "no
+// match" and returning — which skipped the group loop that BUILDS the
+// filter input, so a member who mistyped had no box left to correct.
+// Escape had nothing to reach either, and reloading the page was the
+// only way back. A control that can remove itself is a trap.
+func TestTheAppFilterSurvivesItsOwnNoMatch(t *testing.T) {
+	body, ok := Page("home")
+	if !ok {
+		t.Fatal("the front page is not served")
+	}
+	page := stripComments(string(body))
+
+	fn := regexp.MustCompile(`(?s)function paintLauncher\(term\) \{(.*?)\n  \}`).FindStringSubmatch(page)
+	if fn == nil {
+		t.Fatal("paintLauncher is not where this test can read it")
+	}
+	bodyText := fn[1]
+
+	// The loop that renders the groups — and therefore the filter box —
+	// must not be reachable only after an early exit.
+	loop := strings.Index(bodyText, "groupOrder.forEach")
+	if loop < 0 {
+		t.Fatal("paintLauncher no longer iterates the groups")
+	}
+	if ret := strings.Index(bodyText, "return;"); ret >= 0 && ret < loop {
+		t.Error("paintLauncher returns before rendering its groups; a no-match would take the filter box with it")
+	}
+
+	// And the empty case must still offer a way out that does not
+	// require knowing a keyboard shortcut.
+	if !strings.Contains(bodyText, "Nothing here matches") {
+		t.Error("a filter matching nothing says nothing")
+	}
+	if !regexp.MustCompile(`(?s)Nothing here matches.{0,400}?"Clear"`).MatchString(bodyText) {
+		t.Error("a no-match offers no control to clear the filter")
+	}
+}
