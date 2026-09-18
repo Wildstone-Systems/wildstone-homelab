@@ -56,7 +56,7 @@ func TestOurCalendarWinsWhenAHouseholdRunsBoth(t *testing.T) {
 // The profile is built for the signed-in member, and the household
 // principal comes from the collection Keystone was pointed at.
 func TestTheSetupIsDerivedFromTheCollectionKeystoneWasGiven(t *testing.T) {
-	s := &Server{CalendarCollectionURL: "http://radicale:5232/household/family/"}
+	s := &Server{CalendarCollectionURL: "http://radicale:5232/GROUPS/Y2FsZW5kYXJfdXNlcnM=/"}
 	setup, ok := s.calendarSetupFor("mika", []resource.Resource{ourRoute})
 	if !ok {
 		t.Fatal("no setup derived")
@@ -64,9 +64,11 @@ func TestTheSetupIsDerivedFromTheCollectionKeystoneWasGiven(t *testing.T) {
 	if setup.OwnPrincipal != "/mika/" {
 		t.Errorf("own principal = %q", setup.OwnPrincipal)
 	}
-	if setup.HouseholdPrincipal != "/household/" {
-		t.Errorf("household principal = %q, want the collection's PARENT — a client pointed at the "+
-			"calendar itself finds one calendar rather than the principal's", setup.HouseholdPrincipal)
+	// The WHOLE path, not its parent: the shared calendar is a group
+	// collection with no principal above it, and this address is for
+	// saying rather than for mounting.
+	if setup.HouseholdCalendar != "/GROUPS/Y2FsZW5kYXJfdXNlcnM=/" {
+		t.Errorf("household calendar = %q, want the collection Keystone was pointed at", setup.HouseholdCalendar)
 	}
 	// The internal address must never reach a phone.
 	if strings.Contains(setup.Origin, "radicale:5232") {
@@ -76,8 +78,8 @@ func TestTheSetupIsDerivedFromTheCollectionKeystoneWasGiven(t *testing.T) {
 	// No collection configured: the member still gets their own.
 	bare := &Server{}
 	setup, ok = bare.calendarSetupFor("mika", []resource.Resource{ourRoute})
-	if !ok || setup.HouseholdPrincipal != "" {
-		t.Errorf("with no collection configured, household principal = %q", setup.HouseholdPrincipal)
+	if !ok || setup.HouseholdCalendar != "" {
+		t.Errorf("with no collection configured, household calendar = %q", setup.HouseholdCalendar)
 	}
 }
 
@@ -88,7 +90,7 @@ func TestTheCardNeverClaimsNothingWhenItCouldNotLook(t *testing.T) {
 	now := time.Date(2026, 9, 18, 8, 0, 0, 0, time.UTC)
 
 	// Unreachable.
-	broken := &Server{CalendarCollectionURL: "http://radicale:5232/household/family/"}
+	broken := &Server{CalendarCollectionURL: "http://radicale:5232/GROUPS/Y2FsZW5kYXJfdXNlcnM=/"}
 	broken.CalendarEvents = func(time.Time, time.Time) ([]CalendarCardEvent, error) {
 		return nil, errors.New("connection refused")
 	}
@@ -103,7 +105,7 @@ func TestTheCardNeverClaimsNothingWhenItCouldNotLook(t *testing.T) {
 
 	// Genuinely empty: available, an empty (non-nil) list, and the
 	// hand-off still offered.
-	empty := &Server{CalendarCollectionURL: "http://radicale:5232/household/family/"}
+	empty := &Server{CalendarCollectionURL: "http://radicale:5232/GROUPS/Y2FsZW5kYXJfdXNlcnM=/"}
 	empty.CalendarEvents = func(time.Time, time.Time) ([]CalendarCardEvent, error) {
 		return nil, nil
 	}
@@ -116,7 +118,7 @@ func TestTheCardNeverClaimsNothingWhenItCouldNotLook(t *testing.T) {
 	}
 
 	// With events.
-	full := &Server{CalendarCollectionURL: "http://radicale:5232/household/family/"}
+	full := &Server{CalendarCollectionURL: "http://radicale:5232/GROUPS/Y2FsZW5kYXJfdXNlcnM=/"}
 	full.CalendarEvents = func(time.Time, time.Time) ([]CalendarCardEvent, error) {
 		return []CalendarCardEvent{{Title: "Dinner with Sam", Start: now.Add(10 * time.Hour)}}, nil
 	}

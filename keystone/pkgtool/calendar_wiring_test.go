@@ -12,6 +12,7 @@ package pkgtool
 // than as anything a reconcile reports.
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -301,5 +302,101 @@ func TestCalendarToolsAreDeclaredByThePackage(t *testing.T) {
 		if tier == domestic.TierConfirm && domestic.TierAllowed(tier, false) {
 			t.Errorf("calendar.%s is at the confirm tier but an unattended rule may carry it", name)
 		}
+	}
+}
+
+// TestTheHouseholdCalendarIsTheGroupsOwnCollection pins the one value in
+// this package that is written twice and cannot be computed once.
+//
+// Radicale surfaces a group's shared collection by looking for
+// <group_collections_folder>/<base64 of the group name> and yielding it
+// inside the principal of everybody in that group. So the package has to
+// spell that base64 — in the rights file that grants access to it, and
+// in the job that creates it — and the package template language has no
+// base64 to derive it with.
+//
+// Hardcoded and pinned, therefore, rather than hardcoded and hoped for.
+// Rename the LdapGroup without changing the encoding and nothing fails:
+// the calendar is created somewhere no member's discovery looks, the
+// rights rule guards a path nothing uses, and the household's shared
+// calendar simply never appears on anybody's phone.
+func TestTheHouseholdCalendarIsTheGroupsOwnCollection(t *testing.T) {
+	rendered := calendarPackage(t)
+
+	var group string
+	for _, r := range rendered {
+		if r.Kind == resource.KindLdapGroup && r.LdapGroup != nil {
+			group = r.LdapGroup.Name
+		}
+	}
+	if group == "" {
+		t.Fatal("calendar-radicale declares no LdapGroup, so nothing grants the shared calendar")
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(group))
+
+	// The rights file must grant THIS group THIS path.
+	var rights string
+	for _, r := range rendered {
+		if r.Kind == resource.KindConfigFile && r.ConfigFile != nil && r.ConfigFile.Filename == "rights" {
+			rights = r.ConfigFile.Content
+		}
+	}
+	if rights == "" {
+		t.Fatal("calendar-radicale renders no rights file")
+	}
+	if !strings.Contains(rights, "groups: "+group) {
+		t.Errorf("the rights file does not grant the %q group anything; membership is the whole grant", group)
+	}
+	if !strings.Contains(rights, "collection: GROUPS/"+encoded) {
+		t.Errorf("the rights file does not name GROUPS/%s, which is where Radicale looks for %q's shared "+
+			"collection — so the grant guards a path nothing uses", encoded, group)
+	}
+
+	// And the job must create it at exactly that path.
+	job := calendarContainer(t, "calendar-service-file")
+	if got := job.Env["HOUSEHOLD_GROUP_B64"]; got != encoded {
+		t.Errorf("the job creates the shared calendar under GROUPS/%s, but %q encodes to %s — "+
+			"the calendar would be created where no member's discovery looks", got, group, encoded)
+	}
+	if !strings.Contains(strings.Join(job.Command, "\n"), "GROUPS/$HOUSEHOLD_GROUP_B64") {
+		t.Error("the job does not create the shared calendar under the group folder")
+	}
+
+	// The config has to be asking for group memberships at all, or
+	// _user_groups is empty and none of the above is ever consulted.
+	config := calendarConfigFile(t)
+	for _, want := range []string{"type = from_auth", "ldap_groups_attribute"} {
+		if !strings.Contains(config, want) {
+			t.Errorf("the config does not carry %q, so Radicale never learns anybody's groups and the "+
+				"shared calendar is invisible to everyone", want)
+		}
+	}
+}
+
+// A member who signs in for the first time should find a calendar, not
+// an empty account. Radicale creates the principal on its own; these are
+// what go in it.
+func TestAMembersFirstCalendarIsMadeForThem(t *testing.T) {
+	config := calendarConfigFile(t)
+	if !strings.Contains(config, "predefined_collections") {
+		t.Fatal("no predefined_collections: a member installs the profile, signs in, and meets an account " +
+			"with no calendars in it")
+	}
+	if !strings.Contains(config, `"tag": "VCALENDAR"`) {
+		t.Error("the predefined collection is not tagged VCALENDAR, so it is not a calendar")
+	}
+}
+
+// The image must be a RELEASE. This repository publishes `latest` from
+// its nightly schedule build, so a package that pinned `latest` pinned
+// an unreleased master build of the thing holding the household's
+// calendar — which is what this package did until the digest was moved
+// to `stable`.
+func TestTheCalendarImageIsTheReleaseNotTheNightly(t *testing.T) {
+	spec := calendarContainer(t, "radicale")
+	const releaseDigest = "sha256:0d60d544710bda0fa83bfdea685db731b6cbf74e12d7f22b4997e9cff3a50468"
+	if !strings.HasSuffix(spec.Image, releaseDigest) {
+		t.Errorf("the radicale image is %q; the pin should be the `stable` tag's digest (%s, = 3.8.0). "+
+			"`latest` on this repository is the nightly build.", spec.Image, releaseDigest)
 	}
 }

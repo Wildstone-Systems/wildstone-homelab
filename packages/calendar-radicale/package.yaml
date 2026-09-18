@@ -49,7 +49,7 @@
 #  3. Turn on the agent tools, by starting Keystone with the same
 #     account:
 #
-#        -calendar-url  https://<this service>/household/family/
+#        -calendar-url  https://<this service>/GROUPS/Y2FsZW5kYXJfdXNlcnM=/
 #        -calendar-user radicale
 #        CALENDAR_PASSWORD=...          (env, never a flag)
 #
@@ -66,21 +66,32 @@
 # gap `wild household publisher home-automation` works around, and it is
 # worth closing once rather than per package.
 #
-# THE SHARED HOUSEHOLD CALENDAR. Everybody's own calendars are their own
-# and nobody else can read them. Alongside them is ONE household
-# calendar, under its own principal, that everyone in `calendar_users`
-# can read and write — and that the agent tools act on. The rights file
-# below is where both of those are said.
+# THE SHARED HOUSEHOLD CALENDAR, AND HOW IT REACHES A PHONE.
 #
-# It does not appear on an iPhone by itself, and a household will meet
-# that: a phone discovers the calendars under the principal it signed in
-# as, and the household calendar is not under anybody's. It is added
-# once, by its address, as a subscribed calendar; a desktop client or
-# DAVx5 takes it as a full read-write collection. That is a limit of how
-# CalDAV principals work rather than of this package — ADR-W034 records
-# it, and the alternative (putting the agent inside each person's own
-# calendar) is a standing grant over everyone's private appointments,
-# which is a decision for the permissions phase rather than a default.
+# Everybody's own calendars are their own and nobody else can read them.
+# Alongside them is ONE household calendar that everyone in
+# `calendar_users` can read and write, and that the agent tools act on.
+#
+# It is stored as a GROUP collection — under
+# `collection-root/GROUPS/<base64 of the group name>` — because that is
+# the one arrangement Radicale will surface without anybody adding a
+# second account. Its discovery yields a group's collection as a child of
+# the principal of every member of that group (3.8.0's `[group]` feature,
+# with `type = from_auth` above feeding it the memberships the directory
+# returned). So a person signs in as themselves and the household
+# calendar is simply there, beside their own.
+#
+# The alternative — a principal of its own — is what this package shipped
+# first, and it could only reach an iPhone through a configuration
+# profile pinning a second account, because a CalDAV client discovers
+# only the calendars under the principal it signed in as. The group
+# collection removes that whole problem rather than working around it.
+#
+# NOT VERIFIED ON A DEVICE. Discovery returns the group collection with
+# an href outside the requested principal's path, which is what the
+# mechanism is for and what a compliant client should follow. If a phone
+# turns out not to, the fallback needs no change here: add the household
+# calendar by its own address as a second account.
 #
 # SIGN-IN POSTURE: the household directory, the app does it — auth:
 # app_ldap, the media-jellyfin posture. Everyone signs in with the
@@ -167,7 +178,15 @@
 # ADR-W034 phase 3 work rather than something to half-declare here.
 #
 # Image digest is REAL, resolved 2026-09-18 via the OCI registry API:
-#   ghcr.io/kozea/radicale:latest -> sha256:22cbf7be...2d49
+#   ghcr.io/kozea/radicale:stable -> sha256:0d60d544...0468  (= 3.8.0)
+#
+# STABLE, NOT LATEST, and the difference is not cosmetic here. This
+# repository publishes `latest` from its NIGHTLY schedule build, not from
+# releases: on 2026-09-18 `latest` and `nightly-20260918` were the same
+# digest and `3.8.0` was a different one. A package that pinned `latest`
+# would have pinned an unreleased master build of the thing holding the
+# household's calendar. `stable` is the tag this project's release
+# workflow applies on a release, and it matches 3.8.0 exactly.
 # The alpine pin is the one packages/identity already carries, for the
 # same reason it carries it: a job runner whose image declares no
 # ENTRYPOINT, so a shell script is runnable under a Cmd-only container.
@@ -175,7 +194,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: calendar-radicale
-  version: 1.4.1
+  version: 2.0.0
   capability: calendar
   profile: radicale
 requires:
@@ -197,11 +216,6 @@ params:
   # env carries the REFERENCE, not the value — so without a knob here a
   # rotated directory password would sit in the secret store while
   # Radicale went on reading the file written from the old one.
-  # The principal the shared household calendar lives under. It is a
-  # NAME, not an account: nobody signs in as it, and the rights file
-  # above is the whole of what it means.
-  - { name: household_principal, default: household, description: "The name the shared household calendar lives under, e.g. household. Its address is <this>/family on the calendar server." }
-  - { name: household_calendar, default: family, description: "The shared calendar's own name inside that principal. Its full address is <household>/<this>." }
   - { name: service_account_generation, default: "1", description: "Bump this after rotating the directory password, to rewrite the credential file Radicale reads." }
   - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
 policies:
@@ -305,6 +319,19 @@ templates:
 
         [storage]
         filesystem_folder = /var/lib/radicale/collections
+        # A PERSON'S FIRST CALENDAR, made for them.
+        #
+        # Radicale already creates a member's principal on their first
+        # authenticated request. It was empty, so somebody who installed
+        # the profile and signed in met an account with no calendars in
+        # it and no obvious next step. These are created inside the
+        # principal at the same moment, so the first thing they see is a
+        # calendar they can write to.
+        #
+        # Group membership is already the gate: the ldap_filter above
+        # means only somebody in calendar_users can authenticate at all,
+        # so only they ever reach this.
+        predefined_collections = {"personal": {"C:supported-calendar-component-set": "VEVENT", "D:displayname": "My calendar", "tag": "VCALENDAR"}}
 
         [web]
         # The page a person opens once, to create their first calendar
@@ -347,20 +374,22 @@ templates:
         collection:
         permissions: R
 
-        # The shared household calendar. Membership of calendar_users is
-        # the whole grant, and it is checked on every request: somebody
-        # removed from the group stops syncing at their next one, rather
-        # than at their next sign-in.
-        [household-principal]
+        # The shared household calendar, which is a GROUP collection.
+        #
+        # Radicale's discovery yields collections under
+        # <group_collections_folder>/<base64 of a group name> as children
+        # of the principal of anybody in that group. That is what makes
+        # this calendar APPEAR on a member's phone beside their own,
+        # rather than being a second account they have to add: they sign
+        # in as themselves and the household calendar is simply there.
+        #
+        # Membership is the whole grant and it is checked on every
+        # request, so somebody removed from calendar_users stops syncing
+        # at their next one rather than at their next sign-in.
+        [household-calendar]
         user: .+
         groups: calendar_users
-        collection: {{ .Params.household_principal }}
-        permissions: RW
-
-        [household-calendars]
-        user: .+
-        groups: calendar_users
-        collection: {{ .Params.household_principal }}/[^/]+
+        collection: GROUPS/Y2FsZW5kYXJfdXNlcnM=
         permissions: rw
 
         # Everybody's own space. Nothing here lets one person read
@@ -420,7 +449,7 @@ templates:
             # collection-root. Written only when absent — this is the
             # household's data from the moment it lands, and re-running
             # the job must never touch what is in it.
-            HOUSEHOLD="/var/lib/radicale/collections/collection-root/$HOUSEHOLD_PRINCIPAL/$HOUSEHOLD_CALENDAR"
+            HOUSEHOLD="/var/lib/radicale/collections/collection-root/GROUPS/$HOUSEHOLD_GROUP_B64"
             if [ ! -e "$HOUSEHOLD/.Radicale.props" ]; then
               mkdir -p "$HOUSEHOLD"
               printf '%s' "{\"tag\": \"VCALENDAR\", \"D:displayname\": \"Household\"}" \
@@ -429,11 +458,16 @@ templates:
             # Ownership, every run: the job is root and Radicale is uid
             # 1000, so a directory created here is one the server cannot
             # write into unless it is handed over.
-            chown -R 1000:1000 "/var/lib/radicale/collections/collection-root/$HOUSEHOLD_PRINCIPAL"
+            chown -R 1000:1000 "/var/lib/radicale/collections/collection-root/GROUPS"
         env:
           SERVICE_PASSWORD: "secret/calendar-service-password"
-          HOUSEHOLD_PRINCIPAL: "{{ .Params.household_principal }}"
-          HOUSEHOLD_CALENDAR: "{{ .Params.household_calendar }}"
+          # The group's name, base64-encoded, which is how Radicale
+          # names a group's collection on disk. Hardcoded beside the
+          # LdapGroup it encodes rather than computed, because the
+          # package template has no base64 — and pinned to it by
+          # TestTheHouseholdCalendarIsTheGroupsOwnCollection, so the two
+          # cannot drift.
+          HOUSEHOLD_GROUP_B64: "Y2FsZW5kYXJfdXNlcnM="
           # Read by nothing. It is in the spec so that bumping the param
           # changes the Job's spec hash and re-runs it; see the param.
           SERVICE_ACCOUNT_GENERATION: "{{ .Params.service_account_generation }}"
@@ -446,7 +480,7 @@ templates:
     kind: Container
     metadata: { name: radicale, node: "{{ .Params.node }}" }
     spec:
-      image: "ghcr.io/kozea/radicale@sha256:22cbf7be469dee59ca1c1c166e981d97cffd4a590114a3143acf7018f79b2d49"
+      image: "ghcr.io/kozea/radicale@sha256:0d60d544710bda0fa83bfdea685db731b6cbf74e12d7f22b4997e9cff3a50468"
       env:
         TZ: "{{ .Params.timezone }}"
       command: ["--config", "/etc/wildstone/calendar/config"]

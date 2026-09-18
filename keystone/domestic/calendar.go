@@ -776,8 +776,10 @@ func (c *Calendar) howToAdd(call Call) (Result, error) {
 	}
 	fmt.Fprintf(&b, "On anything else, add a CalDAV account with server %s, username %s, "+
 		"and your household password", h.Server, h.Username)
+	b.WriteString(". The shared household calendar appears beside your own once you sign in — " +
+		"you do not add it separately")
 	if h.HouseholdCalendar != "" {
-		fmt.Fprintf(&b, "; the shared household calendar is at %s", h.HouseholdCalendar)
+		fmt.Fprintf(&b, ", though its own address is %s if a client does not show it", h.HouseholdCalendar)
 	}
 	b.WriteString(".")
 

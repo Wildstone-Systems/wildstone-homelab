@@ -50,9 +50,9 @@ type calendarSetup struct {
 	Origin string
 	// OwnPrincipal is this member's own space.
 	OwnPrincipal string
-	// HouseholdPrincipal is the shared calendar's, empty when this
-	// deployment has not configured one.
-	HouseholdPrincipal string
+	// HouseholdCalendar is the shared calendar's own address, empty when
+	// this deployment has not configured one.
+	HouseholdCalendar string
 }
 
 // calendarSetupFor derives the setup from desired state and the
@@ -80,37 +80,38 @@ func (s *Server) calendarSetupFor(member string, desired []resource.Resource) (c
 		}
 	}
 	return calendarSetup{
-		Host:               parsed.Hostname(),
-		Port:               port,
-		Origin:             origin,
-		OwnPrincipal:       "/" + member + "/",
-		HouseholdPrincipal: householdPrincipalPath(s.CalendarCollectionURL),
+		Host:              parsed.Hostname(),
+		Port:              port,
+		Origin:            origin,
+		OwnPrincipal:      "/" + member + "/",
+		HouseholdCalendar: householdCalendarPath(s.CalendarCollectionURL),
 	}, true
 }
 
-// householdPrincipalPath is the shared calendar's principal, taken from
+// householdCalendarPath is the shared calendar's own address, taken from
 // the collection Keystone was pointed at.
 //
 // Derived rather than configured separately, because the two would
 // disagree: `-calendar-url` already names the collection the agent tools
 // write to, and a second setting for "and this is where it is" is a
-// second thing to keep in step. The collection is a calendar INSIDE a
-// principal — .../household/family/ — so the principal is its parent,
-// which is what a client should be pointed at to find everything there.
-func householdPrincipalPath(collection string) string {
+// second thing to keep in step.
+//
+// The whole path, not its parent. The shared calendar is a GROUP
+// collection — /GROUPS/<base64 of the group name>/ — so there is no
+// principal above it to point a client at, and there does not need to
+// be: Radicale's discovery yields a group's collection inside the
+// principal of everybody in that group, so a member finds it by signing
+// in as themselves. This address is for SAYING, not for mounting.
+func householdCalendarPath(collection string) string {
 	collection = strings.TrimSpace(collection)
 	if collection == "" {
 		return ""
 	}
 	parsed, err := url.Parse(collection)
-	if err != nil {
+	if err != nil || strings.Trim(parsed.Path, "/") == "" {
 		return ""
 	}
-	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-	if len(segments) == 0 || segments[0] == "" {
-		return ""
-	}
-	return "/" + segments[0] + "/"
+	return "/" + strings.Trim(parsed.Path, "/") + "/"
 }
 
 // calendarProfile serves the configuration profile.
@@ -120,19 +121,20 @@ func (s *Server) calendarProfile(w http.ResponseWriter, _ *http.Request, member 
 		return nil, http.StatusNotFound, fmt.Errorf("this household has no calendar to add")
 	}
 
+	// ONE account, and that is the point of the group collection rather
+	// than a shortcut.
+	//
+	// An earlier version pinned a second account at the shared
+	// calendar's own principal, because a CalDAV client discovers only
+	// the calendars under the principal it signed in as. The shared
+	// calendar is now a GROUP collection, which Radicale's discovery
+	// yields inside the principal of everybody in that group — so this
+	// one account carries the member's own calendars AND the
+	// household's, and a second would mount the same calendar twice.
 	profile := mobileconfig.Profile{
 		Host: setup.Host, Port: setup.Port, Username: member,
+		Accounts: []mobileconfig.Account{{Name: member, PrincipalURL: setup.OwnPrincipal}},
 	}
-	// The shared calendar first, because it is the one a person cannot
-	// add any other way and therefore the reason they opened this link.
-	if setup.HouseholdPrincipal != "" {
-		profile.Accounts = append(profile.Accounts, mobileconfig.Account{
-			Name: householdCalendarName, PrincipalURL: setup.HouseholdPrincipal,
-		})
-	}
-	profile.Accounts = append(profile.Accounts, mobileconfig.Account{
-		Name: member, PrincipalURL: setup.OwnPrincipal,
-	})
 
 	body, err := profile.Build()
 	if err != nil {
@@ -172,8 +174,10 @@ func (s *Server) calendarSetupDetails(_ http.ResponseWriter, _ *http.Request, me
 		"profileURL":   "/api/v1/home/calendar/profile.mobileconfig",
 		"password":     "your household password — the one you sign in here with",
 	}
-	if setup.HouseholdPrincipal != "" {
-		out["householdCalendar"] = setup.Origin + setup.HouseholdPrincipal
+	if setup.HouseholdCalendar != "" {
+		out["householdCalendar"] = setup.Origin + setup.HouseholdCalendar
+		out["householdNote"] = "the shared household calendar appears beside your own once you sign in; " +
+			"this address is only needed if a client does not show it"
 	}
 	return out, http.StatusOK, nil
 }
@@ -227,8 +231,8 @@ func (s *Server) CalendarHandoffFor(member string) (CalendarHandoff, bool, error
 		Username:     member,
 		OwnCalendars: setup.Origin + setup.OwnPrincipal,
 	}
-	if setup.HouseholdPrincipal != "" {
-		out.HouseholdCalendar = setup.Origin + setup.HouseholdPrincipal
+	if setup.HouseholdCalendar != "" {
+		out.HouseholdCalendar = setup.Origin + setup.HouseholdCalendar
 	}
 	// The profile is served by the HOME surface, not by the calendar
 	// server, so its address is the dashboard's own — resolved the same

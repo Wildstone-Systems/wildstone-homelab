@@ -183,15 +183,12 @@ mean a standing grant over every member's private appointments for the
 convenience of a create. That grant is a decision for the permissions
 phase (C2), not a default.
 
-Two costs, both real, both preferred to that grant:
+One cost, and one that was a cost until the mechanism was found:
 
-- **The household calendar does not appear on an iPhone by itself.** A
-  phone discovers the calendars under the principal it signed in as, and
-  this one is under none of them. It is added once by address, as a
-  subscribed calendar; DAVx5 and desktop clients take it read-write. This
-  is how CalDAV principals work, not something the package can fix.
 - **An agent cannot answer "what's on MY calendar tomorrow"** — only
   what is on the household's. Until C2, that is the honest boundary.
+- **Getting the shared calendar onto a phone was the hard part, and is
+  no longer.** See A12.
 
 ### A10. Delete asks first, on a tier that now exists
 
@@ -230,6 +227,78 @@ to become a dependency of it.
 The corollary is in the failure behaviour: if Radicale is unreachable the
 adapter reports `unavailable` and dependent work waits. Nothing anywhere
 reconstructs an agenda from memory.
+
+### A12. The shared calendar is a GROUP collection, so a phone finds it
+
+A CalDAV client discovers the calendars under the principal it signed in
+as and nothing else. That is why a shared calendar under its own
+principal could only reach an iPhone through a configuration profile
+pinning a second account — and why the profile was, for a while, the only
+path to the thing the household actually wanted.
+
+Radicale has the arrangement that removes the problem rather than working
+around it. A collection stored under
+`collection-root/<group_collections_folder>/<base64 of a group name>` is
+yielded by discovery as a child of the principal of **everybody in that
+group**. So the household calendar lives at
+`GROUPS/Y2FsZW5kYXJfdXNlcnM=` — `calendar_users`, encoded — and a member
+signs in as themselves and finds it beside their own.
+
+Three things had to be true and all three were checked against the
+released version rather than master:
+
+- `[group] type = from_auth` feeds Radicale the memberships the directory
+  returned. New in **3.8.0**.
+- `ldap_groups_attribute = memberOf` returns group **DNs**, and Radicale
+  takes the RDN value of each — so `cn=calendar_users,ou=groups,…`
+  becomes `calendar_users`, which is what both the rights file's
+  `groups:` clause and the base64 folder name are written against.
+- The rights file grants that group `rw` on that path.
+
+The base64 is spelled twice — in the rights file and in the job that
+creates the collection — because the package template language has no
+base64 to derive it with.
+`TestTheHouseholdCalendarIsTheGroupsOwnCollection` pins both against the
+LdapGroup's own name, because renaming the group without changing the
+encoding fails silently in the worst way: the calendar is created where
+no member's discovery looks, the rights rule guards a path nothing uses,
+and the shared calendar simply never appears.
+
+**Not verified on a device.** Discovery returns the group collection with
+an href outside the requested principal's path, which is what the
+mechanism is for and what a compliant client should follow. If a phone
+turns out not to, the fallback needs no change: add the household
+calendar by its own address as a second account.
+
+### A13. A member's first calendar is made for them
+
+Radicale creates a member's principal on their first authenticated
+request, and it was empty — so somebody who installed the profile and
+signed in met an account with no calendars in it and no obvious next
+step. `[storage] predefined_collections` fills it at the same moment.
+
+Group membership is already the gate, with nothing extra to enforce: the
+`ldap_filter` means only somebody in `calendar_users` can authenticate at
+all, so only they ever reach it.
+
+### A14. Pin the release, not `latest`
+
+`ghcr.io/kozea/radicale:latest` is **not the latest release**. This
+project's workflow publishes `latest` from its nightly schedule build: on
+2026-09-18 `latest` and `nightly-20260918` were the same digest, and
+`3.8.0` was a different one. The first version of this package pinned
+`latest`, which meant pinning an unreleased master build of the thing
+holding the household's calendar.
+
+The pin is `stable` — the tag the release workflow applies on a release,
+matching `3.8.0` — and `TestTheCalendarImageIsTheReleaseNotTheNightly`
+holds it there.
+
+The general rule, which is not in ADR-W029 and should be: resolving a
+digest from a tag is not enough. **Check what the tag means in that
+project.** `latest` is a convention, not a guarantee, and this is the
+second time in one capability that reading an upstream's publishing
+setup contradicted what its name implied.
 
 ---
 
