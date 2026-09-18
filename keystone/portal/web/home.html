@@ -160,7 +160,7 @@
        queue; the summary stays visible when shut, so collapsing never
        hides that something is waiting. -->
   <section class="surface band">
-    <button class="bandhead" id="needs-fold" aria-expanded="true" aria-controls="needs-body">
+    <button type="button" class="bandhead" id="needs-fold" aria-expanded="true" aria-controls="needs-body">
       <span class="g" id="greeting">&nbsp;</span>
       <span class="muted grow" id="needs-sum"></span>
       <i class="ph ph-caret-up" id="needs-caret" aria-hidden="true"></i>
@@ -262,7 +262,7 @@
     </a>
 
     <section class="wid wid-hide">
-      <button class="wid-head" id="cal-fold" aria-expanded="false" aria-controls="cal-body"
+      <button type="button" class="wid-head" id="cal-fold" aria-expanded="false" aria-controls="cal-body"
               style="background:none;border:0;padding:0;color:inherit;font:inherit;cursor:pointer;width:100%">
         <span class="eyebrow">Calendar</span>
         <span class="muted grow" id="cal-sum"></span>
@@ -287,7 +287,7 @@
   <div class="widgets" style="margin-bottom: var(--space-8)">
     <section class="wid">
       <div class="wid-head">
-        <button id="notif-fold" aria-expanded="true" aria-controls="notif-body"
+        <button type="button" id="notif-fold" aria-expanded="true" aria-controls="notif-body"
                 style="background:none;border:0;padding:0;color:inherit;font:inherit;cursor:pointer;
                        display:flex;align-items:center;gap:var(--space-3);flex:1">
           <span class="eyebrow">Notifications</span>
