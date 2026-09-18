@@ -927,7 +927,18 @@
         }
       }
       if (c.problem) { note(body, "warn", c.problem); }
-      if (c.openAt) { el("m-calendar").href = c.openAt; }
+      if (c.openAt) {
+        el("m-calendar").href = c.openAt;
+        // The same way through as the refusal below offers. The compact
+        // row already linked here; the full card was the one place on
+        // the page a working calendar could not be opened from.
+        var open_ = make("a", "hbtn hbtn-ghost", "Open Calendar");
+        open_.href = c.openAt;
+        open_.target = "_blank";
+        open_.rel = "noopener";
+        open_.appendChild(icon("arrow-square-out"));
+        body.appendChild(open_);
+      }
     } else {
       text("cal-sum", "needs your sign-in");
       text("m-calendar-sub", c.problem || "nothing upcoming");
