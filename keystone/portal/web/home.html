@@ -144,12 +144,32 @@
   </header>
 
   <div class="theme-strip" style="margin-bottom: var(--space-4)">
+    <!-- The web search.
+
+         §7 refuses one on this surface, and its reason is the one that
+         matters: a box that SILENTLY becomes an internet search is a
+         privacy surprise. This one names the engine on the control
+         itself, and the app search has moved to the launcher it
+         actually filters — the old box answered three cards further
+         down the page, which is its own kind of surprise.
+
+         Nothing leaves the house until Enter. No suggestion request, no
+         as-you-type call: a dashboard that sent every keystroke to a
+         search engine would hand over more than the searches, and on a
+         wall tablet it would do it for whoever walked past.
+         rel="noreferrer" for the same reason — the engine has no
+         business learning the household's address. -->
     <div class="search" style="flex: 1; box-shadow: none; background: transparent; border: 0; padding: 0">
       <i class="ph ph-magnifying-glass" style="color: var(--muted)" aria-hidden="true"></i>
-      <label class="sr" for="search">Find an app</label>
-      <input id="search" type="search" placeholder="Find an app">
-      <span class="muted">⌘K</span>
+      <label class="sr" for="websearch">Search the web</label>
+      <input id="websearch" type="search" placeholder="Search the web">
     </div>
+    <label class="sr" for="engine">Which search engine</label>
+    <select id="engine" class="hbtn hbtn-secondary"></select>
+    <a class="hbtn hbtn-primary" id="websearch-go" href="#" target="_blank" rel="noopener noreferrer"
+       aria-label="Search the web">
+      <i class="ph ph-arrow-square-out" aria-hidden="true"></i>
+    </a>
     <span class="themebits" style="width: 1px; height: 22px; background: var(--hair); flex: none" aria-hidden="true"></span>
     <span class="eyebrow themebits">Theme</span>
     <div class="themebits" id="hues" style="display: flex; align-items: center; gap: var(--space-3)"></div>
@@ -533,6 +553,7 @@
     document.title = d.household || "Home";
     paintBanner(d.banner || {});
 
+    renderSearch(d.search);
     renderConditions(d.conditions || []);
     renderNeeds(d.needsYou);
     renderCalendar(d.calendar);
@@ -814,6 +835,9 @@
   // this page compares a group name are one edit apart if it ever
   // changes.
   var householdGroup = "Household", adminGroup = "Admin";
+  // What the app filter holds. Kept here rather than read off the input,
+  // because a repaint replaces the input.
+  var appTerm = "";
   // The renderer emits dashboard-icons slugs, and a few Material Design
   // names for things with no logo of their own. Those map onto the
   // glyph font rather than rendering as a broken image.
@@ -832,7 +856,7 @@
     // Whatever is in the box, not "". A refresh that cleared somebody's
     // half-typed filter would make the search box feel broken every
     // twenty seconds.
-    paintLauncher(el("search").value || "");
+    paintLauncher(appTerm);
   }
 
   function paintLauncher(term) {
@@ -872,6 +896,42 @@
       // requestable from a household surface at all, and a link
       // implying otherwise would send a member to a page that omits
       // exactly what they clicked it for.
+      // The app filter, beside the heading of the group it filters.
+      // Its results are the grid directly beneath it, which is the
+      // whole reason it moved off the top of the page.
+      if (group === householdGroup) {
+        var find = make("div", "search");
+        find.style.cssText = "padding: 4px var(--space-3); flex: none; min-width: 0; max-width: 220px";
+        var mag = icon("magnifying-glass");
+        mag.style.color = "var(--muted)";
+        find.appendChild(mag);
+        var label = make("label", "sr", "Find an app");
+        label.setAttribute("for", "appsearch");
+        find.appendChild(label);
+        var input = document.createElement("input");
+        input.id = "appsearch";
+        input.type = "search";
+        input.placeholder = "Find an app";
+        input.value = appTerm;
+        input.style.fontSize = "13px";
+        input.addEventListener("input", function () {
+          appTerm = input.value;
+          paintLauncher(appTerm);
+          // Repainting replaced the box this event came from, so the
+          // caret has to be put back where the member left it.
+          var again = el("appsearch");
+          if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+        });
+        input.addEventListener("keydown", function (e) {
+          if (e.key === "Escape") { appTerm = ""; paintLauncher(""); }
+          if (e.key === "Enter") {
+            var first = document.querySelector("#launcher .appcard");
+            if (first) { window.location.href = first.href; }
+          }
+        });
+        find.appendChild(input);
+        head.appendChild(find);
+      }
       if (group === householdGroup) {
         var add = make("a", "hbtn hbtn-ghost");
         add.href = "/catalog/";
@@ -931,17 +991,80 @@
     return card;
   }
 
-  var search = el("search");
-  search.addEventListener("input", function () { paintLauncher(search.value); });
-  search.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") { search.value = ""; paintLauncher(""); }
-    if (e.key === "Enter") {
-      var first = document.querySelector("#launcher .appcard");
-      if (first) { window.location.href = first.href; }
+  // ---- the web search.
+  //
+  // The address is built here and put on a real link, so a member can
+  // see where it goes before they press it and the browser can open it
+  // in a tab of its own. Building it on an anchor rather than a form is
+  // also what keeps it working at all: this surface is served with
+  // form-action 'none', so a submitting form would be blocked.
+  var webInput = el("websearch"), engineSel = el("engine");
+  var engines = [], engine = null;
+
+  function currentEngine() {
+    for (var i = 0; i < engines.length; i++) {
+      if (engines[i].key === (engine && engine.key)) { return engines[i]; }
+    }
+    return engines[0] || null;
+  }
+
+  function paintSearch() {
+    var e = currentEngine();
+    if (!e) { return; }
+    var terms = webInput.value.trim();
+    var go = el("websearch-go");
+    go.href = terms ? e.query + encodeURIComponent(terms) : "#";
+    // Nothing to search for is a control that does nothing, said
+    // plainly rather than a link to an empty result page.
+    go.setAttribute("aria-disabled", terms ? "false" : "true");
+    go.style.opacity = terms ? "" : ".5";
+    webInput.placeholder = "Search " + e.name;
+  }
+
+  function renderSearch(s) {
+    engines = (s && s.offered) || [];
+    engine = (s && s.engine) || engines[0] || null;
+    clear(engineSel);
+    engines.forEach(function (e) {
+      var o = document.createElement("option");
+      o.value = e.key;
+      o.textContent = e.name;
+      engineSel.appendChild(o);
+    });
+    // A per-viewer choice sits on top of the household's, the way the
+    // palette preview does: one person changing the engine on the wall
+    // tablet should not change the house.
+    try {
+      var saved = localStorage.getItem("home.engine");
+      if (saved) {
+        for (var i = 0; i < engines.length; i++) {
+          if (engines[i].key === saved) { engine = engines[i]; }
+        }
+      }
+    } catch (e2) {}
+    if (engine) { engineSel.value = engine.key; }
+    paintSearch();
+  }
+
+  engineSel.addEventListener("change", function () {
+    for (var i = 0; i < engines.length; i++) {
+      if (engines[i].key === engineSel.value) { engine = engines[i]; }
+    }
+    try { localStorage.setItem("home.engine", engineSel.value); } catch (e) {}
+    paintSearch();
+    webInput.focus();
+  });
+  webInput.addEventListener("input", paintSearch);
+  webInput.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { webInput.value = ""; paintSearch(); }
+    if (e.key === "Enter" && webInput.value.trim()) {
+      // Opened rather than navigated: the dashboard is often the only
+      // thing on the screen it is running on.
+      window.open(el("websearch-go").href, "_blank", "noopener,noreferrer");
     }
   });
   document.addEventListener("keydown", function (e) {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); search.focus(); }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); webInput.focus(); }
   });
 
   // ---- the machines. Read-only by design.

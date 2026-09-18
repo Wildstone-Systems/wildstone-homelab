@@ -59,6 +59,8 @@ type homeSettings struct {
 	// is distinguishable from "the file says nothing". Zero is a legal
 	// hue, which makes the usual zero-value default wrong here.
 	AccentHue *int `yaml:"accentHue"`
+	// SearchEngine is a key from portal.Engines, never an address.
+	SearchEngine string `yaml:"searchEngine"`
 }
 
 // defaultHouseholdName is what the page is called when nothing names it.
@@ -74,7 +76,7 @@ const defaultAccentHue = 267
 // homePresentation resolves the household's name and hue from desired
 // state, falling back to values that render correctly rather than to
 // blanks.
-func homePresentation(desired []resource.Resource) (string, int) {
+func homePresentation(desired []resource.Resource) (string, int, portal.Engine) {
 	for _, r := range desired {
 		if r.Kind != resource.KindConfigFile || r.ConfigFile == nil {
 			continue
@@ -104,9 +106,11 @@ func homePresentation(desired []resource.Resource) (string, int) {
 			// household colour.
 			hue = ((*settings.AccentHue % 360) + 360) % 360
 		}
-		return name, hue
+		engine, _ := portal.EngineFor(settings.SearchEngine)
+		return name, hue, engine
 	}
-	return defaultHouseholdName, defaultAccentHue
+	fallback, _ := portal.EngineFor("")
+	return defaultHouseholdName, defaultAccentHue, fallback
 }
 
 // ---------------------------------------------------------------- shapes
@@ -243,6 +247,14 @@ type homeSummaryResponse struct {
 	Member    string    `json:"member"`
 	Household string    `json:"household"`
 	AccentHue int       `json:"accentHue"`
+	// Search is the household's web search: which engine, and the
+	// address a search goes to. The full list travels with it so the
+	// page can offer a change without a second request — it is eight
+	// rows and it never varies.
+	Search struct {
+		Engine  portal.Engine   `json:"engine"`
+		Offered []portal.Engine `json:"offered"`
+	} `json:"search"`
 	// Banner is the household's own picture and how it is framed, or
 	// the zero value when they have not chosen one.
 	Banner bannerView `json:"banner"`
@@ -290,7 +302,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 	if s.DB == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("this page is not ready yet")
 	}
-	name, hue := homePresentation(desired)
+	name, hue, engine := homePresentation(desired)
 	now := time.Now()
 
 	resp := homeSummaryResponse{
@@ -309,6 +321,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 		},
 		Groups: householdGroups(),
 	}
+	resp.Search.Engine, resp.Search.Offered = engine, portal.Engines
 	resp.NeedsYou = s.homeNeedsYou(member, now)
 	resp.Activity = s.homeActivity(member, now)
 	resp.Notifications = s.homeNotifications(member)

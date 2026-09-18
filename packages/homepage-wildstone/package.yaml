@@ -61,6 +61,15 @@ params:
   # own accent lightness and chroma, so no choice a household makes can
   # put a pair below the contrast floor. 267 is the system's own violet.
   - { name: accent_hue, default: "267", description: "The household's colour, as a hue from 0 to 360. 267 is the default violet." }
+  # WHICH SEARCH ENGINE the household's own search box uses. A name from
+  # a closed list, never an address: the URL lives in Keystone
+  # (keystone/portal/search.go), so a typo here cannot turn the family's
+  # front page into a redirect to somewhere else.
+  #
+  # DuckDuckGo by default, which is a decision rather than a coin toss —
+  # a household that never opens this setting still gets a search box,
+  # and the one they get should not be the one that keeps the most.
+  - { name: search_engine, default: "duckduckgo", description: "Which search engine the household's search box uses: duckduckgo, google, bing, yahoo, brave, startpage, ecosia or wikipedia." }
   # Node running the identity provider, whose managed config the
   # LdapGroup is rendered into. Defaults to this package's own node,
   # which is right for a single-node homelab.
@@ -118,6 +127,7 @@ templates:
         householdName: |-
           {{ .Params.household_name }}
         accentHue: {{ .Params.accent_hue }}
+        searchEngine: {{ .Params.search_engine }}
   # The route.
   #
   # auth: authelia_oidc is what makes the proxy emit forward_auth and

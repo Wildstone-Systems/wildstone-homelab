@@ -391,3 +391,52 @@ func TestPanelsOpenToAFewRowsRatherThanAllOfThem(t *testing.T) {
 		t.Error("no control offering the remaining rows")
 	}
 }
+
+// The two searches are separate, scoped, and each sits where its
+// results appear.
+//
+// The old box filtered the app launcher from the top of the page, so
+// its results were three cards below it. It is a web search now, and
+// the app filter moved into the heading of the grid it filters. §7's
+// objection stands and is met: what it refuses is a box that SILENTLY
+// becomes an internet search, and both of these say which they are.
+func TestTheWebSearchAndTheAppSearchAreSeparate(t *testing.T) {
+	body, ok := Page("home")
+	if !ok {
+		t.Fatal("the front page is not served")
+	}
+	page := stripComments(string(body))
+
+	for _, id := range []string{"websearch", "engine", "websearch-go"} {
+		if !strings.Contains(page, `id="`+id+`"`) {
+			t.Errorf("no %s control", id)
+		}
+	}
+	// The app filter is built into the launcher heading rather than
+	// sitting in the markup at the top of the page.
+	if strings.Contains(page, `<input id="appsearch"`) {
+		t.Error("the app filter is back at the top of the page, away from its results")
+	}
+	if !strings.Contains(page, `input.id = "appsearch"`) {
+		t.Error("nothing builds the app filter into the launcher heading")
+	}
+
+	// NOTHING may be sent anywhere as the member types. A fetch or an
+	// XHR aimed at an engine would turn the box into a keystroke feed.
+	for _, e := range Engines {
+		host := strings.TrimPrefix(strings.Split(e.Query, "/?")[0], "https://")
+		host = strings.Split(host, "/")[0]
+		if regexp.MustCompile(`(?:fetch|XMLHttpRequest|src\s*=)[^\n]*` + regexp.QuoteMeta(host)).MatchString(page) {
+			t.Errorf("the page contacts %s outside a deliberate navigation", host)
+		}
+	}
+	// The search goes out as a link the member can see, opened in its
+	// own tab — and never as a form, which this surface's
+	// form-action 'none' would block anyway.
+	if !strings.Contains(page, `rel="noopener noreferrer"`) {
+		t.Error("the search link leaks a referrer: the engine learns the household's address")
+	}
+	if regexp.MustCompile(`<form\b`).MatchString(page) {
+		t.Error("a form on this surface cannot submit; the CSP sets form-action 'none'")
+	}
+}
