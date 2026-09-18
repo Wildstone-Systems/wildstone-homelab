@@ -510,8 +510,11 @@ func TestAStaleReadingCannotSupportNotDueYet(t *testing.T) {
 	if occ.Trigger != "" {
 		t.Errorf("trigger = %q, want empty: no rule was fit to decide", occ.Trigger)
 	}
-	if !strings.Contains(occ.Reason, "needs a reading") {
+	if !strings.Contains(occ.Reason, "needs a fresh reading") {
 		t.Errorf("reason = %q, want it to ask for a reading", occ.Reason)
+	}
+	if strings.Contains(occ.Reason, "h0m0s") {
+		t.Errorf("reason = %q shows a Go duration to a household", occ.Reason)
 	}
 }
 

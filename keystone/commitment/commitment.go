@@ -495,31 +495,56 @@ func evalRule(in Input, rule DueRule, last *Completion, closed int, loc *time.Lo
 			due = advance(anchor, rule.Every, st.Calendar, loc)
 		}
 	case FromSchedule:
-		// The schedule is fixed to the original anchor: step forward one
-		// cycle per closed occurrence.
-		for range closed {
-			anchor = due
-			due = advance(anchor, rule.Every, st.Calendar, loc)
-		}
-		// A cycle closed LATE can leave the next slot already in the
-		// past — a checkup anchored to September and finally done the
-		// following November. Skip to the first slot after it, which is
-		// what "stays in September" has to mean in a year it slipped.
+		// The schedule is fixed to the original anchor, so every slot is
+		// measured from base and the open cycle is found by counting
+		// slots rather than by walking positions.
+		n := closed
 		if last != nil {
-			if p, ok := completionPosition(*last, rule.Meter); ok {
-				for n := 0; due <= p; n++ {
-					if n > maxScheduleSteps {
-						return st, fmt.Errorf("commitment: %q meter %q: schedule did not reach %v after %d steps", c.Name, rule.Meter, p, maxScheduleSteps)
-					}
-					anchor = due
-					due = advance(anchor, rule.Every, st.Calendar, loc)
+			p, ok := completionPosition(*last, rule.Meter)
+			if !ok {
+				// The same missing evidence fromCompletion refuses, and
+				// for the same reason: without the reading at completion
+				// there is no way to know which slot the work landed in,
+				// and assuming exactly one passed can open a cycle that
+				// is already behind the meter (ADR-W034 A8).
+				st.Unresolved = fmt.Sprintf(
+					"the last completion recorded no reading for meter %q, so which scheduled slot it met cannot be known (ADR-W034 A8)", rule.Meter)
+				return st, nil
+			}
+			// p was recorded in the coordinate space of its own day. The
+			// schedule lives in the original one, so compare like with
+			// like before deciding which slots are behind us.
+			if !st.Calendar {
+				d, ok := rebaseDelta(in.Meters[rule.Meter], c.Anchor, last.At)
+				if !ok {
+					st.Unresolved = fmt.Sprintf(
+						"meter %q was replaced with no reading recorded beforehand, so the completion cannot be placed on the schedule", rule.Meter)
+					return st, nil
+				}
+				p -= d
+			}
+			// A cycle closed LATE can leave the next slot already behind
+			// it — a checkup anchored to September and finally done the
+			// following November. Skip to the first slot after it, which
+			// is what "stays in September" has to mean in a year it
+			// slipped.
+			for scheduleSlot(base, rule.Every, n+1, st.Calendar, loc) <= p {
+				n++
+				if n > maxScheduleSteps {
+					return st, fmt.Errorf("commitment: %q meter %q: schedule did not reach %v after %d steps", c.Name, rule.Meter, p, maxScheduleSteps)
 				}
 			}
 		}
+		anchor = scheduleSlot(base, rule.Every, n, st.Calendar, loc)
+		due = scheduleSlot(base, rule.Every, n+1, st.Calendar, loc)
 	}
 
+	// Where the rebase window opens follows where the cycle was
+	// anchored: at the last completion for fromCompletion, and at the
+	// commitment's own anchor for fromSchedule, whose slots were walked
+	// from there.
 	anchorTime := c.Anchor
-	if last != nil {
+	if last != nil && c.Rollover == FromCompletion {
 		anchorTime = last.At
 	}
 	return finishRule(in, rule, st, anchor, due, anchorTime, loc)
@@ -534,7 +559,7 @@ func evalRule(in Input, rule DueRule, last *Completion, closed int, loc *time.Lo
 func finishRule(in Input, rule DueRule, st RuleStatus, anchor, due float64, anchorTime time.Time, loc *time.Location) (RuleStatus, error) {
 	// A replaced meter moves the coordinate space under the thresholds.
 	if !st.Calendar {
-		delta, ok := rebaseDelta(in.Meters[rule.Meter], anchorTime)
+		delta, ok := rebaseDelta(in.Meters[rule.Meter], anchorTime, in.Now)
 		if !ok {
 			st.Unresolved = fmt.Sprintf(
 				"meter %q was replaced with no reading recorded beforehand, so the old thresholds cannot be carried across", rule.Meter)
@@ -555,9 +580,12 @@ func finishRule(in Input, rule DueRule, st RuleStatus, anchor, due float64, anch
 		st.Position, st.Known, st.ObservedAt = clockPos(in.Now), true, in.Now
 	} else {
 		m := in.Meters[rule.Meter]
-		r, ok := newestReading(m)
-		if !ok {
-			st.Unresolved = fmt.Sprintf("meter %q has never been read", rule.Meter)
+		if m.Name == "" {
+			m.Name = rule.Meter
+		}
+		r, problem := counterPosition(m, in.Now)
+		if problem != "" {
+			st.Unresolved = problem
 			return st, nil
 		}
 		st.Position, st.Known, st.ObservedAt = r.Value, true, r.At
@@ -576,10 +604,50 @@ func finishRule(in Input, rule DueRule, st RuleStatus, anchor, due float64, anch
 	// last real reading already passed is passed, however old that
 	// reading is.
 	if st.Stale && !st.Crossed {
-		st.Unresolved = fmt.Sprintf("meter %q was last read %s ago, too long to conclude it is not due",
-			rule.Meter, in.Now.Sub(st.ObservedAt).Round(time.Hour))
+		st.Unresolved = fmt.Sprintf(
+			"meter %q was last read %s ago, too long to conclude it is not due: it needs a fresh reading",
+			rule.Meter, humanAge(in.Now.Sub(st.ObservedAt)))
 	}
 	return st, nil
+}
+
+// scheduleSlot is the nth due point of a fixed schedule, measured from
+// base every time rather than by stepping from the slot before it.
+//
+// That distinction is the whole function. Stepping compounds the
+// month-end clamp: a schedule anchored on 31 January is due 28 February,
+// and a step from THAT lands on 28 March, so one short month moves every
+// occurrence for the rest of the commitment's life. A fixed schedule
+// promises the original anchor's day, so each slot is computed from the
+// anchor and only the month it lands in may shorten it.
+func scheduleSlot(base float64, iv Interval, n int, calendar bool, loc *time.Location) float64 {
+	if n <= 0 {
+		return base
+	}
+	if !calendar {
+		return base + float64(n)*iv.Amount
+	}
+	if iv.Months != 0 {
+		return clockPos(addMonths(clockTime(base, loc), n*iv.Months, loc))
+	}
+	return base + float64(n)*iv.Span.Seconds()
+}
+
+// humanAge renders how long ago something was, for a sentence a
+// household reads. Go's own duration format is honest and unreadable
+// past a day or two: "2208h0m0s" is ninety-two days, and nobody should
+// have to work that out from a notification.
+func humanAge(d time.Duration) string {
+	switch days := int(d.Hours() / 24); {
+	case days >= 14:
+		return fmt.Sprintf("%d weeks", days/7)
+	case days >= 2:
+		return fmt.Sprintf("%d days", days)
+	case d >= 2*time.Hour:
+		return fmt.Sprintf("%d hours", int(d.Hours()))
+	default:
+		return "less than two hours"
+	}
 }
 
 // baseAnchor is where a rule's very first cycle is measured from.
@@ -591,7 +659,7 @@ func baseAnchor(in Input, rule DueRule) (float64, bool) {
 		return v, true
 	}
 	m := in.Meters[rule.Meter]
-	if r, ok := oldestReading(m); ok {
+	if r, ok := oldestReading(m, in.Now); ok {
 		return r.Value, true
 	}
 	return 0, false
@@ -605,13 +673,21 @@ func completionPosition(c Completion, meter string) (float64, bool) {
 	return v, ok
 }
 
-// rebaseDelta is how far the coordinate space has shifted since the open
-// cycle's anchor, summed over every replacement in between.
-func rebaseDelta(m Meter, since time.Time) (float64, bool) {
-	rs := sortedReadings(m)
+// rebaseDelta is how far a meter's coordinate space shifted over the
+// window (after, upto], summed across every replacement in it.
+//
+// A window rather than a single "since" because the two rollover modes
+// measure from different places. A fromCompletion cycle is anchored at
+// the position the last completion recorded, so only replacements after
+// that completion have moved anything. A fromSchedule cycle is walked
+// from the commitment's ORIGINAL anchor, so it carries every replacement
+// since then — including ones that happened before the last completion,
+// which a "since the completion" window would silently drop.
+func rebaseDelta(m Meter, after, upto time.Time) (float64, bool) {
+	rs := sortedReadings(m, upto)
 	delta, ok := 0.0, true
 	for i, r := range rs {
-		if !r.Rebase || !r.At.After(since) {
+		if !r.Rebase || !r.At.After(after) {
 			continue
 		}
 		prior, have := r.Prior, r.Prior != 0
@@ -626,22 +702,51 @@ func rebaseDelta(m Meter, since time.Time) (float64, bool) {
 	return delta, ok
 }
 
-func sortedReadings(m Meter) []Reading {
-	rs := slices.Clone(m.Readings)
+// sortedReadings returns a meter's readings in order, up to and
+// including upto, and never past it.
+//
+// The bound is the point of the function. Evaluate is handed the moment
+// it is asked about precisely so that a commitment can be replayed
+// against history, and a replay that can see a reading taken after that
+// moment is not a replay — it is a peek. The same bound protects the
+// live path from a publisher whose clock runs fast.
+func sortedReadings(m Meter, upto time.Time) []Reading {
+	rs := make([]Reading, 0, len(m.Readings))
+	for _, r := range m.Readings {
+		if !r.At.After(upto) {
+			rs = append(rs, r)
+		}
+	}
 	slices.SortStableFunc(rs, func(a, b Reading) int { return a.At.Compare(b.At) })
 	return rs
 }
 
-func newestReading(m Meter) (Reading, bool) {
-	rs := sortedReadings(m)
+// counterPosition is where a counter stands as of now, or the reason it
+// cannot be said.
+//
+// A counter that goes DOWN without a declared rebase is a fault — a
+// mistyped digit, or a meter replaced without anybody saying so — and
+// taking the lower number as a position is how an overdue commitment
+// walks quietly back to pending. The meter only counts up; when the
+// record says otherwise, the record is wrong and this says so.
+func counterPosition(m Meter, now time.Time) (Reading, string) {
+	rs := sortedReadings(m, now)
 	if len(rs) == 0 {
-		return Reading{}, false
+		return Reading{}, fmt.Sprintf("meter %q has never been read", m.Name)
 	}
-	return rs[len(rs)-1], true
+	for i := 1; i < len(rs); i++ {
+		if rs[i].Rebase || rs[i].Value >= rs[i-1].Value {
+			continue
+		}
+		return Reading{}, fmt.Sprintf(
+			"meter %q went backwards, from %g to %g on %s, with no replacement recorded: a counter only counts up, so this is a mistyped reading or an undeclared new meter",
+			m.Name, rs[i-1].Value, rs[i].Value, rs[i].At.Format("2 Jan 2006"))
+	}
+	return rs[len(rs)-1], ""
 }
 
-func oldestReading(m Meter) (Reading, bool) {
-	rs := sortedReadings(m)
+func oldestReading(m Meter, upto time.Time) (Reading, bool) {
+	rs := sortedReadings(m, upto)
 	if len(rs) == 0 {
 		return Reading{}, false
 	}
@@ -728,7 +833,7 @@ func project(in Input, occ Occurrence) *Projection {
 	m := in.Meters[best.Meter]
 	rate, source := m.Estimate, "estimate"
 	if rate <= 0 {
-		r, ok := observedRate(m)
+		r, ok := observedRate(m, in.Now)
 		if !ok {
 			return nil
 		}
@@ -748,8 +853,8 @@ func project(in Input, occ Occurrence) *Projection {
 
 // observedRate is how fast a meter has actually moved, since the last
 // time its coordinate space restarted.
-func observedRate(m Meter) (float64, bool) {
-	rs := sortedReadings(m)
+func observedRate(m Meter, now time.Time) (float64, bool) {
+	rs := sortedReadings(m, now)
 	for i := len(rs) - 1; i >= 0; i-- {
 		if rs[i].Rebase {
 			rs = rs[i:]
@@ -805,7 +910,16 @@ func explain(occ Occurrence, c Commitment, loc *time.Location) string {
 		return c.Name + " is coming due" + where()
 	default:
 		if len(occ.Unresolved) > 0 && occ.Trigger == "" {
-			return c.Name + ": nothing recent enough to say — " + occ.Unresolved[0] + " needs a reading"
+			// Say which of the several reasons it is. "Stale", "never
+			// read" and "counts downwards" are three different requests
+			// of the household, and one generic sentence for all three
+			// sends somebody to look at a dashboard when the actual
+			// problem is a digit typed wrongly last Tuesday.
+			for _, st := range occ.Rules {
+				if st.Unresolved != "" {
+					return c.Name + ": nothing to say yet — " + st.Unresolved
+				}
+			}
 		}
 		return c.Name + " is not due yet" + where()
 	}

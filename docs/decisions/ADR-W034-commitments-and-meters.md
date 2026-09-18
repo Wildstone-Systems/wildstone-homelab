@@ -157,6 +157,14 @@ ADR-W024 already holds to, applied to capabilities rather than to models.
 
 ### A5. Due-ness is a pure function, and the engine decides nothing else
 
+**A reading taken after the moment being asked about is not visible to
+it.** That sentence is what makes the rest of this decision true: a
+replay that can see a reading from after the point it is replaying is not
+a replay, and the same bound keeps a publisher with a fast clock from
+moving today's answer. Review of the prototype found it reading the
+newest reading outright, which would have quietly undermined the one
+property the whole design leans on.
+
 Given a commitment, the readings on its meters, and the record of what
 has been done, "is this due" is a pure function. No I/O, no model, no
 clock beyond the reading it is handed. That makes it replayable and
@@ -297,6 +305,15 @@ Meters also go backwards in the real world: a replaced odometer, a sold
 vehicle, a new furnace. That is a declared `rebase` on the meter, with a
 reason, not a reading that silently invalidates every interval computed
 before it.
+
+**An undeclared regression is a fault, not a position.** A counter only
+counts up, so a reading lower than the one before it with no rebase
+recorded is a mistyped digit or a meter replaced without anybody saying
+so. Taking the lower number is how an overdue commitment walks quietly
+back to "not due yet" — the exact failure this decision exists to
+prevent, arriving through the front door. So the rule reports itself
+unresolved and names the two readings, and the household is asked about
+the number rather than told a conclusion drawn from it.
 
 ### A12. The engine emits; automations nag
 
@@ -730,8 +747,31 @@ wrong.
    write and produces a commitment that reports itself overdue on the
    day it was done.
 
+8. **A fixed schedule is measured from its anchor, never from the slot
+   before it.** Stepping compounds the month-end clamp of finding 6: a
+   schedule anchored on 31 January is due 28 February, and a step from
+   *that* lands on 28 March, so one short month moves every occurrence
+   for the rest of the commitment's life. Each slot is computed from the
+   anchor, and only the month it lands in may shorten it.
+
+9. **A coordinate reset is scoped to the mode that anchored the cycle.**
+   A `fromCompletion` cycle is anchored at the position the last
+   completion recorded, so only replacements after that completion have
+   moved anything. A `fromSchedule` cycle is walked from the
+   commitment's original anchor, so it carries every replacement since
+   *then* — and the completion's own recorded position has to be
+   translated into that same space before deciding which slots it is
+   past. Getting either half wrong moves a due point by the size of the
+   replacement.
+
 None of this needed storage, an API, a resource kind or a model to
 settle, which is the argument for having built K3 first.
+
+Findings 8 and 9, and the two amendments to A5 and A11 above, came from
+review of this PR rather than from writing it. They share a shape worth
+naming: each is a case where the function produced a number instead of
+saying it could not, which is the one behaviour this package exists to
+refuse.
 
 ---
 
