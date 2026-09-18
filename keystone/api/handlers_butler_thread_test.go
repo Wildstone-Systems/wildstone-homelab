@@ -170,16 +170,24 @@ func TestButlerFollowUpRefusedOnSomeoneElsesSession(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(answerTurns("Two nodes.", "should never run"), runtimedb.ButlerModeFull)
 
-	var first askResponse
-	h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/ask", map[string]string{"message": "what nodes?"}, &first)
+	// Two Console callers, because the rule is about two PEOPLE. A
+	// session belongs to the person it was recorded for (ADR-W033 B10),
+	// and before the identity slice both of these were the same shared
+	// credential — so the test could only ever have compared two
+	// principals, which is not the boundary it is describing.
+	mine := h.console(runtimedb.RoleOperator, "mika")
+	theirs := h.console(runtimedb.RoleAdmin, "sam")
 
-	resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/butler/sessions/"+first.SessionID+"/ask",
+	var first askResponse
+	h.doToken(mine, "POST", "/api/v1/butler/ask", map[string]string{"message": "what nodes?"}, &first)
+
+	resp := h.doToken(theirs, "POST", "/api/v1/butler/sessions/"+first.SessionID+"/ask",
 		map[string]string{"message": "and what else?"}, nil)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", resp.StatusCode)
 	}
-	// The admin can still read it — that is what the audit is for.
-	if resp := h.do(runtimedb.RoleAdmin, "GET", "/api/v1/butler/sessions/"+first.SessionID, nil, nil); resp.StatusCode != http.StatusOK {
+	// They can still read it — that is what the audit is for.
+	if resp := h.doToken(theirs, "GET", "/api/v1/butler/sessions/"+first.SessionID, nil, nil); resp.StatusCode != http.StatusOK {
 		t.Fatalf("admin read = %d, want 200", resp.StatusCode)
 	}
 }

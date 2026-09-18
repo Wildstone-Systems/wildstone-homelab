@@ -121,7 +121,7 @@ func TestChatQuestionAndAnswerCloseTheLoop(t *testing.T) {
 // notification target (ADR-W026 A3).
 func TestChatRecipientRequiresAFamilyBinding(t *testing.T) {
 	h := newHarness(t)
-	h.bindAccount(t, "admin", "root-admin", "telegram", "555")
+	h.bindAccount(t, "admin", "mika", "telegram", "555")
 
 	if _, _, err := h.s.ChatRecipientFor("telegram", "root-admin"); err == nil {
 		t.Fatalf("a rule resolved the operator's admin-surface account as a notification target")

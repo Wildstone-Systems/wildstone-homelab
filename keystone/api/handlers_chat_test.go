@@ -50,6 +50,42 @@ func (h *harness) ensureChatPrereqs(t *testing.T, surface, identity, transport s
 		}
 		changed = true
 	}
+	// The Person the Connection admits (ADR-W033 B9, design §8.3). An
+	// admin-surface Connection is an Owner Agent's reach, so the Person
+	// it admits is an Owner; a family one is an ordinary Member.
+	//
+	// This is the fixture the slice changed. It used to name a Keystone
+	// principal on the admin surface — `op`, `root-admin` — because
+	// chatclaim.go required one. A credential is not a Person, and a
+	// chat account reaching an Owner Agent as one had nobody behind it.
+	role := runtimedb.RoleMember
+	if surface == "admin" {
+		role = runtimedb.RoleOwner
+	}
+	m, err := h.s.DB.GetButlerMember(identity)
+	if err != nil {
+		if err := h.s.DB.RecordButlerMember(identity, role, "", ""); err != nil {
+			t.Fatalf("recording %q: %v", identity, err)
+		}
+		m, err = h.s.DB.GetButlerMember(identity)
+		if err != nil {
+			t.Fatalf("reading %q back: %v", identity, err)
+		}
+	}
+	// RecordButlerMember never changes a role — crossing the Owner
+	// boundary is its own audited act — so an existing Member named for
+	// an admin-surface Connection is promoted through the path that
+	// records it.
+	if role == runtimedb.RoleOwner && m.Role != runtimedb.RoleOwner {
+		if err := h.s.DB.SetButlerMemberRole(identity, runtimedb.RoleOwner, "root-admin"); err != nil {
+			t.Fatalf("promoting %q: %v", identity, err)
+		}
+	}
+	if !m.Active() {
+		if err := h.s.DB.AdmitButlerMember(identity, "root-admin"); err != nil {
+			t.Fatalf("admitting %q: %v", identity, err)
+		}
+	}
 	if surface == "family" && !haveMember {
 		if err := h.s.State.Put(resource.Resource{
 			ApiVersion: resource.ApiVersion, Kind: resource.KindLdapUser,

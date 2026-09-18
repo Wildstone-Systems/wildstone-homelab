@@ -147,7 +147,7 @@ func TestButlerAuthorsARuleTheEngineThenRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.State != runtimedb.PlanProposed || rec.Principal != "butler" || rec.ActingFor != "op" {
+	if rec.State != runtimedb.PlanProposed || rec.Principal != "butler" || rec.ActingFor != "mika" {
 		t.Fatalf("plan = %+v", rec)
 	}
 	if resp := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); resp.StatusCode != http.StatusForbidden {

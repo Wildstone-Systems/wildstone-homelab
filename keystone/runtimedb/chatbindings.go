@@ -71,10 +71,16 @@ func (db *DB) InsertChatClaimCode(hash string, c ChatClaimCode) error {
 	if c.ExpiresAt.IsZero() {
 		return fmt.Errorf("runtimedb: claim code requires an expiry (ADR-W026 A4: short-lived, single-use)")
 	}
-	_, err := db.sql.Exec(
-		`INSERT INTO chat_claim_codes (hash, surface, identity, transport, created_at, created_by, expires_at)
+	// A code names the Person it will admit (ADR-W033 B9), so the
+	// binding it produces cannot name anybody else.
+	person, err := resolvePersonID(db.sql, c.Identity)
+	if err != nil {
+		return fmt.Errorf("runtimedb: inserting claim code: %w", err)
+	}
+	_, err = db.sql.Exec(
+		`INSERT INTO chat_claim_codes (hash, surface, person_id, transport, created_at, created_by, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		hash, string(c.Surface), c.Identity, c.Transport, now(), c.CreatedBy,
+		hash, string(c.Surface), person, c.Transport, now(), c.CreatedBy,
 		c.ExpiresAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("runtimedb: inserting claim code: %w", err)
@@ -104,11 +110,12 @@ func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName, convers
 	}
 	defer tx.Rollback() //nolint:errcheck // rolled back unless committed
 
-	var surface, identity, codeTransport, redeemedAt, expiresAt, createdBy string
+	var surface, person, identity, codeTransport, redeemedAt, expiresAt, createdBy string
 	err = tx.QueryRow(
-		`SELECT surface, identity, transport, redeemed_at, expires_at, created_by
-		 FROM chat_claim_codes WHERE hash = ?`, hash).
-		Scan(&surface, &identity, &codeTransport, &redeemedAt, &expiresAt, &createdBy)
+		`SELECT c.surface, c.person_id, m.member, c.transport, c.redeemed_at, c.expires_at, c.created_by
+		 FROM chat_claim_codes c JOIN butler_members m ON m.person_id = c.person_id
+		 WHERE c.hash = ?`, hash).
+		Scan(&surface, &person, &identity, &codeTransport, &redeemedAt, &expiresAt, &createdBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ChatBinding{}, ErrClaimCode
 	}
@@ -142,10 +149,14 @@ func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName, convers
 		stamp, transport, account, surface); err != nil {
 		return ChatBinding{}, fmt.Errorf("runtimedb: replacing binding: %w", err)
 	}
+	// The binding carries the code's Person across unchanged rather than
+	// resolving the handle again: they are the same Person by
+	// construction, and a second lookup could disagree with the first if
+	// a rename landed between them.
 	res, err := tx.Exec(
-		`INSERT INTO chat_bindings (transport, account, surface, identity, display_name, conversation, created_at, created_by)
+		`INSERT INTO chat_bindings (transport, account, surface, person_id, display_name, conversation, created_at, created_by)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		transport, account, surface, identity, displayName, conversation, stamp, createdBy)
+		transport, account, surface, person, displayName, conversation, stamp, createdBy)
 	if err != nil {
 		return ChatBinding{}, fmt.Errorf("runtimedb: inserting binding: %w", err)
 	}
@@ -175,10 +186,23 @@ func (db *DB) RedeemChatClaimCode(hash, transport, account, displayName, convers
 // LookupChatBinding resolves a live binding for one account on one
 // surface. A revoked binding is not found, which is what makes revoking
 // take effect on the next message.
+//
+// It also re-checks the admitted Person, which is the runtime half of
+// ADR-W033 B9: "Owner-Agent Connections admit Owners only.
+// Configuration and runtime both enforce this." Checking only at issue
+// would mean a Person demoted, disabled or offboarded after binding
+// kept the reach the binding gave them — the same hole A6 closes for
+// Console, where demotion is immediate rather than effective at the
+// next re-enrolment.
+//
+// The refusal is ErrNotFound, exactly as a revoked binding is, so the
+// message path treats "you may no longer speak here" the same way it
+// treats "you never could" and tells a prober nothing about which.
 func (db *DB) LookupChatBinding(transport, account string, surface ButlerSurface) (ChatBinding, error) {
 	row := db.sql.QueryRow(
-		`SELECT id, transport, account, surface, identity, display_name, conversation, created_at, created_by, last_used_at, revoked_at
-		 FROM chat_bindings WHERE transport = ? AND account = ? AND surface = ? AND revoked_at = ''`,
+		bindingColumns+` WHERE b.transport = ? AND b.account = ? AND b.surface = ? AND b.revoked_at = ''
+		   AND m.admitted = 1 AND m.disabled_at = '' AND m.offboarded_at = ''
+		   AND (b.surface <> 'admin' OR m.role = 'owner')`,
 		transport, account, string(surface))
 	b, err := scanChatBinding(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -194,11 +218,9 @@ func (db *DB) LookupChatBinding(transport, account string, surface ButlerSurface
 func (db *DB) ListChatBindings(withRevoked bool) ([]ChatBinding, error) {
 	where := ""
 	if !withRevoked {
-		where = " WHERE revoked_at = ''"
+		where = " WHERE b.revoked_at = ''"
 	}
-	rows, err := db.sql.Query(
-		`SELECT id, transport, account, surface, identity, display_name, conversation, created_at, created_by, last_used_at, revoked_at
-		 FROM chat_bindings` + where + ` ORDER BY id DESC`)
+	rows, err := db.sql.Query(bindingColumns + where + ` ORDER BY b.id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing chat bindings: %w", err)
 	}
@@ -246,6 +268,14 @@ func (db *DB) TouchChatBinding(id int64, conversation string) error {
 		`UPDATE chat_bindings SET last_used_at = ?, conversation = ? WHERE id = ?`, now(), conversation, id)
 	return err
 }
+
+// Identity reads back as the handle the admitted Person carries now, so
+// a Console listing and an inbound message both see today's name after
+// a rename — which is the point of the Connection naming an identity
+// rather than a label (ADR-W033 A2).
+const bindingColumns = `SELECT b.id, b.transport, b.account, b.surface, m.member,
+	 b.display_name, b.conversation, b.created_at, b.created_by, b.last_used_at, b.revoked_at
+	 FROM chat_bindings b JOIN butler_members m ON m.person_id = b.person_id`
 
 func scanChatBinding(r rowScanner) (ChatBinding, error) {
 	var b ChatBinding

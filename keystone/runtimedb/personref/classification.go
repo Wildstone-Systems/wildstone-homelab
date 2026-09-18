@@ -217,6 +217,15 @@ var LegacyColumns = []Column{
 		"pre-0040: the person the notice is for. Now notices.recipient_person_id"},
 	{"butler_members", "guardian", Human,
 		"pre-0040: the responsible adult for a child record. Now butler_members.guardian_person_id"},
+
+	// Repointed by 0041 rather than 0040, and classified actor until
+	// slice 2b read the ADR instead of the write path.
+	{"chat_bindings", "identity", Human,
+		"pre-0041: the subject a Connection admits, as a handle — or, on the admin surface, as a machine principal, which ADR-W033 B9 supersedes. Now chat_bindings.person_id"},
+	{"chat_claim_codes", "identity", Human,
+		"pre-0041: the subject a claim code admits, which ADR-W033 B9 says is a Person. Now chat_claim_codes.person_id"},
+	{"chat_threads", "identity", Human,
+		"pre-0041: the subject whose session a thread holds, which ADR-W033 B10 says is a Person. Now chat_threads.person_id"},
 }
 
 var Columns = []Column{
@@ -259,15 +268,16 @@ var Columns = []Column{
 	{"notices", "recipient_person_id", PersonID,
 		"the person the notice is for. Repointed by 0040 from recipient; answered_by is an actor and stayed text"},
 	// ---- Actor: person OR machine principal; left as recorded text ----
-	// The three Connection identity columns. Reclassified from actor in
-	// slice 2b: the schema comment records the pre-W033 model, not a
-	// polymorphic column. See "Where the ADR decides" above.
-	{"chat_claim_codes", "identity", Human,
-		"the Person a claim code admits. ADR-W033 B9 / design §8.3: a Connection's admission subject is a Person or a Group. principal/chatclaim.go still requires a principal for the admin surface, which is the defect W033 supersedes"},
-	{"chat_bindings", "identity", Human,
-		"the Person the Connection admits. ADR-W033 A2 — a Telegram or Discord identity attaches to the canonical Person — and B9/§8.3. The `principal (admin) or household member (family)` comment is ADR-W026 A3, which W033 G retains only for the ADAPTER's own credential"},
-	{"chat_threads", "identity", Human,
-		"the Person whose session this is. ADR-W033 B10 / design §9: a session is Person + Agent + session_id, and the Connection is never the session identity"},
+	// The three Connection identity columns, repointed by 0041. They
+	// were classified actor until slice 2b, from a write path that was
+	// itself the defect — see "Where the ADR decides" above, and the
+	// legacy verdicts below for what they held before.
+	{"chat_claim_codes", "person_id", PersonID,
+		"the Person a claim code admits. ADR-W033 B9 / design §8.3: a Connection's admission subject is a Person or a Group. Repointed by 0041"},
+	{"chat_bindings", "person_id", PersonID,
+		"the Person the Connection admits. ADR-W033 A2 — a Telegram or Discord identity attaches to the canonical Person — and B9/§8.3. Repointed by 0041; the adapter's own credential still authenticates the bot"},
+	{"chat_threads", "person_id", PersonID,
+		"the Person whose session this is. ADR-W033 B10 / design §9: a session is Person + Agent + session_id, and the Connection is never the session identity. Repointed by 0041"},
 
 	{"audit", "principal", Actor,
 		"a machine principal from the principals table — the legacy machine axis (#201 Decision 6, slice #210)"},

@@ -61,7 +61,7 @@ func TestHouseholdBotOffersNoHomeLabCommands(t *testing.T) {
 func TestOperatorBotOffersTheHomeLabCommands(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(nil, runtimedb.ButlerModeFull)
-	h.bindAccount(t, "admin", "op", "telegram", "12345")
+	h.bindAccount(t, "admin", "mika", "telegram", "12345")
 
 	help := h.ask(t, runtimedb.RoleValet, "12345", "/help", "admin")
 	for _, offered := range []string{"/status", "/plans", "/nodes", "/backups", "/services", "/new", "/whoami"} {
@@ -82,7 +82,7 @@ func TestOperatorBotOffersTheHomeLabCommands(t *testing.T) {
 func TestCommandsAnswerWithNoButlerConfigured(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(nil, runtimedb.ButlerModeFull)
-	h.bindAccount(t, "admin", "op", "telegram", "12345")
+	h.bindAccount(t, "admin", "mika", "telegram", "12345")
 	h.s.ButlerHost = nil
 
 	got := h.ask(t, runtimedb.RoleValet, "12345", "/status", "admin")
@@ -97,7 +97,7 @@ func TestCommandsAnswerWithNoButlerConfigured(t *testing.T) {
 func TestUnknownCommandIsRefusedNotAsked(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(answerTurns("the model should not have run"), runtimedb.ButlerModeFull)
-	h.bindAccount(t, "admin", "op", "telegram", "12345")
+	h.bindAccount(t, "admin", "mika", "telegram", "12345")
 
 	got := h.ask(t, runtimedb.RoleValet, "12345", "/aprove plan-1", "admin")
 	if !strings.Contains(got, "I don't know /aprove") {
@@ -119,7 +119,7 @@ func TestWhoamiNamesTheSurfaceAndItsCeiling(t *testing.T) {
 	h := newHarness(t)
 	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
 	h.bindAccount(t, "family", "sam", "telegram", "12345")
-	h.bindAccount(t, "admin", "op", "telegram", "999")
+	h.bindAccount(t, "admin", "mika", "telegram", "999")
 
 	family := h.ask(t, runtimedb.RoleConcierge, "12345", "/whoami", "family")
 	if !strings.Contains(family, "HOUSEHOLD") || !strings.Contains(family, "no access to the home lab") {
@@ -189,10 +189,13 @@ func TestTodayWithholdsAnotherMembersFactsInAGroup(t *testing.T) {
 func TestPlanCommandReadsButSaysApprovalIsElsewhere(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(proposeGrafanaTurns(), runtimedb.ButlerModeFull)
-	h.bindAccount(t, "admin", "op", "telegram", "12345")
+	h.bindAccount(t, "admin", "mika", "telegram", "12345")
 
 	var ask askResponse
-	h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/ask", map[string]string{"message": "expose grafana"}, &ask)
+	// The same Person who holds the Telegram Connection, asking from the
+	// Console — which is the point of the plan being readable on either.
+	h.doToken(h.console(runtimedb.RoleOperator, "mika"), "POST", "/api/v1/butler/ask",
+		map[string]string{"message": "expose grafana"}, &ask)
 	if len(ask.PlanIDs) != 1 {
 		t.Fatalf("no plan proposed: %+v", ask)
 	}

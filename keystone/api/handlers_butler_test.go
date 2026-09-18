@@ -113,8 +113,12 @@ func TestButlerAskFullFlow(t *testing.T) {
 	if rec.State != runtimedb.PlanProposed {
 		t.Fatalf("plan state = %s, want proposed", rec.State)
 	}
-	if rec.Principal != "butler" || rec.ActingFor != "op" {
-		t.Fatalf("plan principal = %s acting for %q, want butler acting for op", rec.Principal, rec.ActingFor)
+	// Acting for the PERSON, not the credential. The Butler proposes as
+	// itself on behalf of whoever asked, and since the identity slice
+	// that is the person the caller acts for rather than the shared
+	// operator token they authenticated with (#240).
+	if rec.Principal != "butler" || rec.ActingFor != "mika" {
+		t.Fatalf("plan principal = %s acting for %q, want butler acting for mika", rec.Principal, rec.ActingFor)
 	}
 
 	// The statefile itself is untouched until a human approves.
@@ -132,7 +136,7 @@ func TestButlerAskFullFlow(t *testing.T) {
 	if resp := h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &list); resp.StatusCode != http.StatusOK {
 		t.Fatalf("list sessions: %d", resp.StatusCode)
 	}
-	if len(list) != 1 || list[0].ID != "bs-1" || list[0].ActingFor != "op" || list[0].TranscriptJSON != "" {
+	if len(list) != 1 || list[0].ID != "bs-1" || list[0].ActingFor != "mika" || list[0].TranscriptJSON != "" {
 		t.Fatalf("session list = %+v", list)
 	}
 	var sess runtimedb.ButlerSession

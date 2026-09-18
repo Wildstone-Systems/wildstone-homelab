@@ -36,19 +36,23 @@ func seedMemory(t *testing.T, h *harness, content, owner string, audience runtim
 // private record is even confirmable.
 func TestMemoryChangesFollowOwnership(t *testing.T) {
 	h := newHarness(t)
+	// Correcting household memory is an ADULT's act (design §11.4), so
+	// the caller is a Console holder acting for a Person rather than a
+	// bare operator credential with nobody behind it.
+	adult := h.console(runtimedb.RoleOperator, "mika")
 	shared := seedMemory(t, h, "dinner is at seven", "household", runtimedb.ButlerAudienceShared)
 	private := seedMemory(t, h, "sam's therapy is on Tuesdays", "sam", runtimedb.ButlerAudiencePrivate)
 
 	// Equal adult standing: the operator corrects shared memory without
 	// asking whoever recorded it.
-	if res := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/butler/memory/correct",
+	if res := h.doToken(adult, http.MethodPost, "/api/v1/butler/memory/correct",
 		map[string]any{"seq": shared, "content": "dinner is at half six", "confidence": "stated"}, nil,
 	); res.StatusCode != http.StatusOK {
 		t.Fatalf("correcting shared memory = %d", res.StatusCode)
 	}
 	// Somebody else's private record answers 404 — a 403 would confirm
 	// it exists.
-	if res := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/butler/memory/forget",
+	if res := h.doToken(adult, http.MethodPost, "/api/v1/butler/memory/forget",
 		map[string]any{"seq": private}, nil,
 	); res.StatusCode != http.StatusNotFound {
 		t.Fatalf("forgetting another member's private record = %d, want 404", res.StatusCode)

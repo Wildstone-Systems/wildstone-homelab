@@ -58,7 +58,7 @@ func TestChatThreadsAreNotSharedAcrossSurfaces(t *testing.T) {
 	h := newHarness(t)
 	h.wireHouseholdButler(answerTurns("family answer", "admin answer"), runtimedb.ButlerModeFull)
 	h.bindAccount(t, "family", "sam", "telegram", "12345")
-	h.bindAccount(t, "admin", "op", "telegram", "12345")
+	h.bindAccount(t, "admin", "mika", "telegram", "12345")
 
 	h.send(runtimedb.RoleConcierge, map[string]any{
 		"transport": "telegram", "account": "12345", "text": "household question", "messageId": "m-1",
@@ -90,7 +90,7 @@ func TestChatThreadsAreNotSharedAcrossSurfaces(t *testing.T) {
 func TestConsoleActivityKeepsAChatThreadAlive(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(answerTurns("from telegram", "from the console", "back on telegram"), runtimedb.ButlerModeFull)
-	h.bindAccount(t, "admin", "op", "telegram", "12345")
+	h.bindAccount(t, "admin", "mika", "telegram", "12345")
 
 	h.send(runtimedb.RoleValet, map[string]any{
 		"transport": "telegram", "account": "12345", "text": "first, on telegram",
@@ -102,8 +102,12 @@ func TestConsoleActivityKeepsAChatThreadAlive(t *testing.T) {
 		t.Fatalf("sessions after the first message = %d", len(sessions))
 	}
 
-	// Continue it from the Console, as the same principal.
-	if resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/sessions/"+sessions[0].ID+"/ask",
+	// Continue it from the Console, as the same PERSON. That is what
+	// carries the conversation across Connections (ADR-W033 B10): the
+	// Telegram binding and the Console session name mika, and the
+	// transport is not the session identity.
+	if resp := h.doToken(h.console(runtimedb.RoleOperator, "mika"), "POST",
+		"/api/v1/butler/sessions/"+sessions[0].ID+"/ask",
 		map[string]string{"message": "second, in the console"}, nil); resp.StatusCode != http.StatusOK {
 		t.Fatalf("console follow-up: status = %d", resp.StatusCode)
 	}

@@ -41,8 +41,9 @@ type ChatThread struct {
 func (db *DB) ChatThreadSession(transport, conversation string, surface ButlerSurface, identity string) (string, bool, error) {
 	var id string
 	err := db.sql.QueryRow(
-		`SELECT session_id FROM chat_threads
-		 WHERE transport = ? AND conversation = ? AND surface = ? AND identity = ?`,
+		`SELECT t.session_id FROM chat_threads t
+		 JOIN butler_members m ON m.person_id = t.person_id
+		 WHERE t.transport = ? AND t.conversation = ? AND t.surface = ? AND m.member = ?`,
 		transport, conversation, string(surface), identity,
 	).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -63,12 +64,19 @@ func (db *DB) SetChatThreadSession(transport, conversation string, surface Butle
 	if !ValidButlerSurface(surface) {
 		return fmt.Errorf("runtimedb: chat thread needs a valid surface, got %q", surface)
 	}
-	_, err := db.sql.Exec(
-		`INSERT INTO chat_threads (transport, conversation, surface, identity, session_id, updated_at)
+	// The thread names the Person whose session it is (ADR-W033 B10).
+	// A thread for somebody who is not on record is not a thread whose
+	// owner we could name later, so it is refused rather than written.
+	person, err := resolvePersonID(db.sql, identity)
+	if err != nil {
+		return fmt.Errorf("runtimedb: recording chat thread: %w", err)
+	}
+	_, err = db.sql.Exec(
+		`INSERT INTO chat_threads (transport, conversation, surface, person_id, session_id, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(transport, conversation, surface, identity)
+		 ON CONFLICT(transport, conversation, surface, person_id)
 		 DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at`,
-		transport, conversation, string(surface), identity, sessionID, now(),
+		transport, conversation, string(surface), person, sessionID, now(),
 	)
 	if err != nil {
 		return fmt.Errorf("runtimedb: recording chat thread: %w", err)
@@ -82,7 +90,8 @@ func (db *DB) SetChatThreadSession(transport, conversation string, surface Butle
 func (db *DB) ClearChatThread(transport, conversation string, surface ButlerSurface, identity string) error {
 	_, err := db.sql.Exec(
 		`DELETE FROM chat_threads
-		 WHERE transport = ? AND conversation = ? AND surface = ? AND identity = ?`,
+		 WHERE transport = ? AND conversation = ? AND surface = ?
+		   AND person_id = (SELECT person_id FROM butler_members WHERE member = ?)`,
 		transport, conversation, string(surface), identity,
 	)
 	if err != nil {

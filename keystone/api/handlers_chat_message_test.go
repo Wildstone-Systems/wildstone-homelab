@@ -120,7 +120,7 @@ func TestChatRoundTrip(t *testing.T) {
 func TestChatSurfaceComesFromTheCredential(t *testing.T) {
 	h := newHarness(t)
 	h.wireHouseholdButler([]*provider.ChatResponse{{Text: "hi"}}, runtimedb.ButlerModeFull)
-	h.bindAccount(t, "admin", "root-admin", "telegram", "12345")
+	h.bindAccount(t, "admin", "mika", "telegram", "12345")
 
 	// A concierge naming the admin surface is refused outright.
 	resp, _ := h.send(runtimedb.RoleConcierge, map[string]any{
@@ -158,7 +158,7 @@ func TestChatGroupRules(t *testing.T) {
 	p := &scriptedProvider{turns: []*provider.ChatResponse{{Text: "The bins go out tonight."}}}
 	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
 	h.s.ButlerHost.Provider = p
-	h.bindAccount(t, "admin", "root-admin", "telegram", "555")
+	h.bindAccount(t, "admin", "mika", "telegram", "555")
 	h.bindAccount(t, "family", "sam", "telegram", "777")
 
 	// Admin surface, group: one refusal, no session.
@@ -365,7 +365,7 @@ func TestChatInjectionCannotChangeSurface(t *testing.T) {
 func TestChatAdminReplyPointsAtApproval(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(proposeGrafanaTurns(), runtimedb.ButlerModeFull)
-	h.bindAccount(t, "admin", "root-admin", "telegram", "555")
+	h.bindAccount(t, "admin", "mika", "telegram", "555")
 
 	resp, out := h.send(runtimedb.RoleValet, map[string]any{
 		"transport": "telegram", "account": "555", "text": "expose grafana", "messageId": "m-1",
@@ -419,7 +419,7 @@ func TestChatDedupeDoesNotCollideAcrossSurfaces(t *testing.T) {
 		{Text: "household answer"}, {Text: "operator answer"},
 	}, runtimedb.ButlerModeFull)
 	h.bindAccount(t, "family", "sam", "telegram", "12345")
-	h.bindAccount(t, "admin", "root-admin", "telegram", "12345")
+	h.bindAccount(t, "admin", "mika", "telegram", "12345")
 
 	body := map[string]any{
 		"transport": "telegram", "account": "12345", "conversation": "12345",

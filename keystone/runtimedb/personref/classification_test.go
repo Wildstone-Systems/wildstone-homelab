@@ -400,7 +400,12 @@ func TestConnectionIdentityColumnsNameAPerson(t *testing.T) {
 		"chat_threads.identity":     true,
 		"chat_claim_codes.identity": true,
 	}
-	for _, c := range personref.Columns {
+	// The legacy table, because 0041 repointed all three in the same
+	// slice that corrected them. The verdict is what made the repoint
+	// right, and it has to stay readable for a database that has not
+	// run 0041 yet — which is precisely a deployment still admitting a
+	// principal to an Owner Agent.
+	for _, c := range personref.LegacyColumns {
 		key := c.Table + "." + c.Column
 		if !want[key] {
 			continue

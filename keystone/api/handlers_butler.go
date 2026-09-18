@@ -196,7 +196,10 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 		return nil, st, err
 	}
 	if s.butlersConfigured() {
-		return s.askNamedButler(r.Context(), message, named, id.Name, actingAsOwner(id), nil)
+		// The person the caller acts for, as below — a turn is had by a
+		// Person (ADR-W033 B10), and this branch used the credential's
+		// own name while the one below it did not.
+		return s.askNamedButler(r.Context(), message, named, actingMember(id), actingAsOwner(id), nil)
 	}
 	// The unconfigured check lives in the session runner, with the one
 	// snapshot it takes — checking here as well would read the backend
@@ -329,7 +332,12 @@ func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	if sess.ActingFor != id.Name {
+	// Against the PERSON, not the credential. A session is Person +
+	// Agent + session_id (ADR-W033 B10), and it is recorded acting-for
+	// the person the caller spoke as — so comparing the principal's own
+	// name here would refuse a Console holder their own conversation
+	// and hand a shared credential everybody else's.
+	if sess.ActingFor != actingMember(id) {
 		return nil, http.StatusForbidden,
 			fmt.Errorf("session %s belongs to %s; a conversation can only be continued by the person it was recorded for", sess.ID, sess.ActingFor)
 	}

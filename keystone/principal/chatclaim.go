@@ -49,19 +49,33 @@ func (s *Store) IssueChatClaim(surface runtimedb.ButlerSurface, identity, transp
 	if strings.TrimSpace(identity) == "" {
 		return "", runtimedb.ChatClaimCode{}, fmt.Errorf("principal: a claim code must name the identity it binds")
 	}
-	// An admin-surface code binds a chat account to a KEYSTONE PRINCIPAL,
-	// so the principal has to exist and be enabled — otherwise the first
-	// thing the operator learns about a typo is that their bot answers
-	// nothing. A family code names a household member, which is an LDAP
-	// account this control plane does not own, so it is taken as given.
-	if surface == runtimedb.ButlerSurfaceAdmin {
-		p, err := s.DB.GetPrincipal(identity)
-		if err != nil {
-			return "", runtimedb.ChatClaimCode{}, fmt.Errorf("principal: admin claim for unknown principal %q: %w", identity, err)
-		}
-		if p.Disabled {
-			return "", runtimedb.ChatClaimCode{}, fmt.Errorf("principal: %q is disabled", identity)
-		}
+	// A Connection admits a PERSON (ADR-W033 B9, design §8.3), on either
+	// surface. This used to require a Keystone principal for an
+	// admin-surface code and take a family identity as given, which is
+	// the model W033 supersedes: every external identity — directory
+	// login, web session, Telegram, Discord — attaches to the same
+	// canonical Person (A2), and the adapter's own credential
+	// authenticates the bot rather than naming who speaks through it.
+	//
+	// Checked at issue as well as at use because B9 says both:
+	// "Configuration and runtime both enforce this." A code is
+	// configuration, and the first thing an operator should learn about
+	// a typo is not that their bot answers nobody.
+	m, err := s.DB.GetButlerMember(identity)
+	if err != nil {
+		return "", runtimedb.ChatClaimCode{},
+			fmt.Errorf("principal: claim for %q, who is not a household member: %w", identity, err)
+	}
+	if !m.Active() {
+		return "", runtimedb.ChatClaimCode{},
+			fmt.Errorf("principal: %q is not an admitted household member (ADR-W030 A2.1)", identity)
+	}
+	// The admin surface is an Owner Agent's reach, and an Owner-Agent
+	// Connection admits Owners only (B9). Until Connections belong to
+	// one Agent, the surface is what stands in for the Agent's class.
+	if surface == runtimedb.ButlerSurfaceAdmin && m.Role != runtimedb.RoleOwner {
+		return "", runtimedb.ChatClaimCode{},
+			fmt.Errorf("principal: %q is a member, and an owner-agent connection admits owners only (ADR-W033 B9)", identity)
 	}
 	if ttl <= 0 {
 		ttl = DefaultClaimTTL
