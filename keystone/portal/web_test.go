@@ -480,3 +480,39 @@ func TestTheAppFilterSurvivesItsOwnNoMatch(t *testing.T) {
 		t.Error("a no-match offers no control to clear the filter")
 	}
 }
+
+// A refresh does not redraw what somebody is using.
+//
+// The front page polls every twenty seconds. That is safe only while
+// nothing a member is interacting with gets rebuilt underneath them,
+// and the list of such things grew when the app filter moved INSIDE the
+// launcher: repainting the launcher destroys the box being typed into
+// and takes the caret with it, every twenty seconds.
+//
+// Three cases, all the same root cause — a control living inside
+// something the poll redraws.
+func TestARefreshLeavesAloneWhatIsInUse(t *testing.T) {
+	body, ok := Page("home")
+	if !ok {
+		t.Fatal("the front page is not served")
+	}
+	page := stripComments(string(body))
+
+	// The launcher is skipped while the caret is inside it.
+	if !regexp.MustCompile(`if \(!\(isRefresh && busyWithin\("launcher"\)\)\) \{\s*renderLauncher`).MatchString(page) {
+		t.Error("a poll repaints the launcher even when the app filter has focus")
+	}
+	// The engine list is built once, not on every poll.
+	if !regexp.MustCompile(`if \(!isRefresh\) \{ renderSearch`).MatchString(page) {
+		t.Error("a poll rebuilds the engine list, closing an open dropdown")
+	}
+	// The two acting surfaces are never re-initialised by a poll.
+	if !regexp.MustCompile(`(?s)if \(isRefresh\) \{.{0,400}?return;`).MatchString(page) {
+		t.Error("a poll re-initialises the acting surfaces, discarding a conversation or an upload")
+	}
+	// And the busy test asks the DOM rather than trusting a flag, which
+	// is the part that cannot go stale.
+	if !strings.Contains(page, "region.contains(active)") {
+		t.Error("the busy test does not ask where the caret actually is")
+	}
+}

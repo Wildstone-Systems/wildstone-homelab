@@ -427,6 +427,23 @@
   // Relative times render against the SERVER's instant, so an event
   // reads the same here as on the page the card links to even on a
   // tablet whose clock has drifted.
+  // Is the member busy inside this part of the page?
+  //
+  // The refresh rule this page already follows — a poll must not erase
+  // what somebody is doing — needs one more case now that a control
+  // lives INSIDE something the poll redraws. The app filter is built by
+  // the launcher, so repainting the launcher destroys the box being
+  // typed into and takes the caret with it. Every twenty seconds.
+  //
+  // Asked of the live DOM rather than tracked with a flag, because the
+  // question is literally "is the caret in there" and a flag is a
+  // second answer to it that can go stale.
+  function busyWithin(id) {
+    var region = el(id), active = document.activeElement;
+    if (!region || !active || active === document.body) { return false; }
+    return region.contains(active);
+  }
+
   var asOf = new Date();
   function ago(iso) {
     if (!iso) { return ""; }
@@ -553,13 +570,24 @@
     document.title = d.household || "Home";
     paintBanner(d.banner || {});
 
-    renderSearch(d.search);
+    // The engine list is eight rows that never change, so it is built
+    // once. Rebuilding it on every poll would close an open dropdown and
+    // discard a selection in progress.
+    if (!isRefresh) { renderSearch(d.search); }
     renderConditions(d.conditions || []);
     renderNeeds(d.needsYou);
     renderCalendar(d.calendar);
     renderActivity(d.activity);
     renderNotifications(d.notifications);
-    renderLauncher(d);
+    // Not while the caret is in the filter that lives inside it.
+    //
+    // Focus is the whole test, deliberately. Skipping whenever a filter
+    // is merely SET would freeze the launcher for as long as somebody
+    // left a word in the box and walked away — and a repaint preserves
+    // the term anyway, so the only thing at stake is the caret.
+    if (!(isRefresh && busyWithin("launcher"))) {
+      renderLauncher(d);
+    }
     renderMachines(d.machines);
 
     // An absent capability draws no card at all: an empty frame with
