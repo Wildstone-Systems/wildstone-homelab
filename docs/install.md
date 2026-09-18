@@ -380,13 +380,17 @@ docker buildx imagetools inspect ghcr.io/<you>/chat-adapter:1.0.0   # prints the
 docker logout ghcr.io
 docker pull ghcr.io/<you>/chat-adapter@sha256:<digest>
 
-# 2. Make the bot (Telegram: talk to @BotFather) and keep its token.
+# 2. Make the bot (Telegram: talk to @BotFather) and keep its token. A
+#    bot belongs to ONE agent (ADR-W033 B7), so an agent that should
+#    answer separately needs a bot of its own.
 
-# 3. Mint the adapter's Keystone credential. The surface decides the
-#    role: family -> concierge, admin -> valet. Both hold the `converse`
-#    verb and nothing else, and the capability's name has to agree with
-#    the surface you ask for.
-wild chat adapter chat-telegram-family -node <node> -surface family
+# 3. Mint the adapter's Keystone credential and give the bot to an agent
+#    — one act, because two would leave a credentialed bot answering for
+#    nobody. The AGENT decides the role: a member agent -> concierge, an
+#    owner agent -> valet. Both hold the `converse` verb and nothing
+#    else. A bot already answering for another agent is refused rather
+#    than repointed; revoke its address first.
+wild chat adapter chat-telegram-family -node <node> -butler <agent>
 
 # 4. Set the bot token, then enable the capability with the image digest.
 wild secret set chat-telegram-family-bot -node <node>
@@ -395,8 +399,10 @@ wild capability enable chat-telegram-family \
   -set keystone_url=http://<tailnet-ip>:9441 \
   -set adapter_image=<registry>/chat-adapter@sha256:<digest>
 
-# 5. Introduce someone. Nobody can talk to the bot until you do.
-wild chat code -surface family -identity <member> -transport telegram
+# 5. Introduce someone. Nobody can talk to the bot until you do. The
+#    identity is a PERSON this household has declared, and an owner
+#    agent's bot admits owners only.
+wild chat code -butler <agent> -identity <member> -transport telegram
 ```
 
 Read the code out; they send it to the bot on its own, once. It works

@@ -105,11 +105,17 @@ func (db *DB) IndexDocumentInto(d IndexDocument) (int64, error) {
 	if d.MemorySeq != 0 {
 		memory = d.MemorySeq
 	}
+	// The owner mirrors butler_memory's: a person, or the household as
+	// NULL.
+	owner, err := ownerPersonID(db.sql, d.Owner)
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: indexing document: the owner %w", err)
+	}
 	res, err := db.sql.Exec(
-		`INSERT INTO butler_index (source_kind, source_id, memory, owner, audience,
+		`INSERT INTO butler_index (source_kind, source_id, memory, owner_person_id, audience,
 		     permission_label, content, observed_at, indexed_at, volatile, embedding, tokens, butler)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.SourceKind, d.SourceID, memory, d.Owner, string(d.Audience), d.PermissionLabel,
+		d.SourceKind, d.SourceID, memory, owner, string(d.Audience), d.PermissionLabel,
 		d.Content, timeText(d.ObservedAt), now(), boolInt(d.Volatile),
 		encodeEmbedding(d.Embedding), d.Tokens, d.Butler)
 	if err != nil {
@@ -227,20 +233,28 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
 	}
 
 	scope, scopeArgs := scopeClause("i.butler", q.Butler)
-	query := `SELECT i.seq, i.source_kind, i.source_id, COALESCE(i.memory, 0), i.owner, i.audience,
+	// An unknown reader owns nothing and matches only shared material,
+	// the same as memory retrieval.
+	reader, err := personIDForRead(db.sql, q.Reader)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT i.seq, i.source_kind, i.source_id, COALESCE(i.memory, 0),
+		        COALESCE(io.member, 'household'), i.audience,
 		        i.permission_label, i.content, i.observed_at, i.indexed_at, i.volatile,
 		        i.embedding, i.tokens, bm25(butler_index_fts)
 		 FROM butler_index_fts
 		 JOIN butler_index i ON i.seq = butler_index_fts.rowid
+		 LEFT JOIN butler_members io ON io.person_id = i.owner_person_id
 		 WHERE butler_index_fts MATCH ?
-		   AND (i.audience = 'shared' OR i.owner = ?)
+		   AND (i.audience = 'shared' OR i.owner_person_id = ?)
 		   AND NOT EXISTS (
 		       SELECT 1 FROM butler_memory m WHERE m.seq = i.memory
 		         AND (m.forgotten_at <> '' OR m.superseded_by IS NOT NULL))` +
 		scope + `
 		 ORDER BY bm25(butler_index_fts)
 		 LIMIT ?`
-	args := append([]any{ftsQuery(q.Text), q.Reader}, scopeArgs...)
+	args := append([]any{ftsQuery(q.Text), reader}, scopeArgs...)
 	args = append(args, fetch)
 	rows, err := db.sql.Query(query, args...)
 	if err != nil {

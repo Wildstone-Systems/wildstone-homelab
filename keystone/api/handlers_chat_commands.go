@@ -28,8 +28,8 @@ import (
 // own context, never the caller's ambient state, so a command cannot see
 // past the binding that produced it.
 type chatCommandCtx struct {
-	Surface      runtimedb.ButlerSurface
-	Transport    string
+	// At is the Connection the command arrived on — one Agent, one bot.
+	At           runtimedb.Connection
 	Conversation string
 	Identity     string
 	Binding      runtimedb.ChatBinding
@@ -156,7 +156,7 @@ func (s *Server) runChatCommand(c chatCommandCtx, text string) (body, reason str
 	}
 	c.Arg = arg
 	for _, cmd := range chatCommands {
-		if cmd.Name != name || !cmd.offeredOn(c.Surface) {
+		if cmd.Name != name || !cmd.offeredOn(c.At.Surface) {
 			continue
 		}
 		out, err := cmd.Run(s, c)
@@ -173,7 +173,7 @@ func (s *Server) runChatCommand(c chatCommandCtx, text string) (body, reason str
 func (s *Server) chatHelp(c chatCommandCtx) (string, error) {
 	var b strings.Builder
 	which := "the household"
-	if c.Surface == runtimedb.ButlerSurfaceAdmin {
+	if c.At.AdmitsOwnersOnly() {
 		which = "the operator"
 	}
 	fmt.Fprintf(&b, "I'm %s butler. Ask me anything in plain language, or use:\n", which)
@@ -183,7 +183,7 @@ func (s *Server) chatHelp(c chatCommandCtx) (string, error) {
 	var order []string
 	names := map[string][]string{}
 	for _, cmd := range chatCommands {
-		if !cmd.offeredOn(c.Surface) {
+		if !cmd.offeredOn(c.At.Surface) {
 			continue
 		}
 		name := "/" + cmd.Name
@@ -203,19 +203,19 @@ func (s *Server) chatHelp(c chatCommandCtx) (string, error) {
 
 func (s *Server) chatWhoami(c chatCommandCtx) (string, error) {
 	var b strings.Builder
-	if c.Surface == runtimedb.ButlerSurfaceAdmin {
+	if c.At.AdmitsOwnersOnly() {
 		b.WriteString("This is the OPERATOR butler.\n")
 		b.WriteString("It reads system state and can propose changes — a proposal waits for you to approve it in the Console. It cannot approve anything itself, and neither can you from here.\n")
 	} else {
 		b.WriteString("This is the HOUSEHOLD butler.\n")
 		b.WriteString("It reads the household timeline and can do household things. It has no access to the home lab itself — no containers, storage, accounts or access rules.\n")
 	}
-	fmt.Fprintf(&b, "\nYou speak as: %s\nOver: %s", c.Identity, c.Transport)
+	fmt.Fprintf(&b, "\nYou speak as: %s\nOver: %s", c.Identity, c.At.Transport)
 	return b.String(), nil
 }
 
 func (s *Server) chatNewConversation(c chatCommandCtx) (string, error) {
-	if err := s.DB.ClearChatThread(c.Transport, c.Conversation, c.Surface, c.Identity); err != nil {
+	if err := s.DB.ClearChatThread(c.At, c.Conversation, c.Identity); err != nil {
 		return "", err
 	}
 	return "Starting fresh. The previous conversation is still recorded — this one just won't build on it.", nil
@@ -649,7 +649,7 @@ func roughly(d time.Duration) string {
 // different: an operator has a Console and a CLI, and a household member
 // has a link somebody sends them.
 func (s *Server) chatApprove(c chatCommandCtx) (string, error) {
-	if c.Surface == runtimedb.ButlerSurfaceFamily {
+	if c.At.Surface == runtimedb.ButlerSurfaceFamily {
 		return "I can't take an approval here — a message doesn't show who typed it or what they read, " +
 			"and in a group chat agreement and silence look the same. If this is a change to one of " +
 			"the house's routines, ask for a review link: it opens a page that signs you in, shows " +

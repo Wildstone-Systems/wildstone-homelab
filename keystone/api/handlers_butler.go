@@ -196,13 +196,21 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 		return nil, st, err
 	}
 	if s.butlersConfigured() {
-		return s.askNamedButler(r.Context(), message, named, id.Name, actingAsOwner(id), nil)
+		// The person the caller acts for, as below — a turn is had by a
+		// Person (ADR-W033 B10), and this branch used the credential's
+		// own name while the one below it did not.
+		return s.askNamedButler(r.Context(), message, named, actingMember(id), actingAsOwner(id), nil)
 	}
 	// The unconfigured check lives in the session runner, with the one
 	// snapshot it takes — checking here as well would read the backend
 	// twice for one request, which is the thing ADR-W017 A9's snapshot
 	// exists to prevent.
-	return s.runAdminButlerSession(r.Context(), message, id.Name, nil)
+	// actingMember, not id.Name. The turn is had by the PERSON the
+	// caller is acting for — a Console session names one — and what it
+	// writes says so: its memory, its work and its notices all name a
+	// Person since 0043. Passing the principal's own name here is how
+	// `root-admin` ended up owning household memory (#240).
+	return s.runAdminButlerSession(r.Context(), message, actingMember(id), nil)
 }
 
 // askOneButler answers as ONE named Butler, on whichever surface that
@@ -236,8 +244,10 @@ func (s *Server) askOneButler(r *http.Request, id principal.Identity) (any, int,
 			fmt.Errorf("no butler is configured on this deployment")
 	}
 	return s.runNamedButlerSession(r.Context(), butlerlive.Turn{
-		Butler:  name,
-		Member:  id.Name,
+		Butler: name,
+		// The person the caller acts for, not the credential's own
+		// name — see the note on askButler above (#240).
+		Member:  actingMember(id),
 		Text:    req.Message,
 		AsOwner: actingAsOwner(id),
 	}, nil)
@@ -322,7 +332,12 @@ func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	if sess.ActingFor != id.Name {
+	// Against the PERSON, not the credential. A session is Person +
+	// Agent + session_id (ADR-W033 B10), and it is recorded acting-for
+	// the person the caller spoke as — so comparing the principal's own
+	// name here would refuse a Console holder their own conversation
+	// and hand a shared credential everybody else's.
+	if sess.ActingFor != actingMember(id) {
 		return nil, http.StatusForbidden,
 			fmt.Errorf("session %s belongs to %s; a conversation can only be continued by the person it was recorded for", sess.ID, sess.ActingFor)
 	}
@@ -382,6 +397,16 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor s
 	if askProv == nil || askGw == nil {
 		return nil, http.StatusServiceUnavailable,
 			fmt.Errorf("butler provider not configured (start keystone with -butler-provider)")
+	}
+	// The same rule as the named path: a turn is had by a person. See
+	// turnHasAPerson.
+	//
+	// After the configuration check, deliberately. A deployment with no
+	// Butler at all has nothing to say about who is asking, and
+	// answering "you are not a member" there would send an operator
+	// looking for the wrong problem.
+	if code, err := s.turnHasAPerson(actingFor); err != nil {
+		return nil, code, err
 	}
 	session := &butler.Session{
 		Gateway:  askGw,

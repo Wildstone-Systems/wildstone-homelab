@@ -161,6 +161,7 @@ func TestAnUnnamedHouseholdStillHasAHeading(t *testing.T) {
 // is not even visible to them.
 func TestOneMembersQuestionIsNotAnothersToSeeOrAnswer(t *testing.T) {
 	h := homeHarness(t)
+	h.person("sandy", "maya")
 	raised, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
 		Kind: "lock-up", Recipient: "maya", DedupeKey: "n1", Asks: true,
 	}, runtimedb.DefaultButlerSettings(), time.Now())
@@ -216,6 +217,7 @@ func TestOneMembersQuestionIsNotAnothersToSeeOrAnswer(t *testing.T) {
 // the wall tablet does not clear anybody else's phone.
 func TestClearingNotificationsCannotReachAnotherPerson(t *testing.T) {
 	h := homeHarness(t)
+	h.person("sandy", "maya")
 	mine, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
 		Kind: "washing-done", Recipient: "sandy", DedupeKey: "s1",
 	}, runtimedb.DefaultButlerSettings(), time.Now())

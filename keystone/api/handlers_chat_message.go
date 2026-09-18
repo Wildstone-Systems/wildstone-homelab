@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -78,6 +79,11 @@ type inboundMessage struct {
 	// refused — its own credential IS the address (ADR-W031 A7), and a
 	// bot that could name a Butler could name somebody else's.
 	Butler string `json:"butler,omitempty"`
+	// Connection picks between that Butler's several bots (B7), by the
+	// address's external id, for the same read-holding human. An
+	// adapter never sends it either: its credential already IS the
+	// connection.
+	Connection string `json:"connection,omitempty"`
 }
 
 // inboundResponse tells the adapter what happened without telling it
@@ -88,49 +94,6 @@ type inboundResponse struct {
 	Bound    bool   `json:"bound"`
 	Queued   int64  `json:"queued,omitempty"`
 	Reason   string `json:"reason,omitempty"`
-}
-
-// surfaceForCaller decides which Butler this caller may reach.
-//
-//   - concierge → family, always. It has no other spelling.
-//   - valet     → admin, always. The admin adapter's own role, which is
-//     NOT the butler role every external agent already holds (ADR-W024
-//     A5): a chat verb there would have handed each of them this queue.
-//   - read-holding humans (admin/operator) → whichever they name, so the
-//     Console and `wild` can exercise the contract end to end.
-func surfaceForCaller(id principal.Identity, requested string) (runtimedb.ButlerSurface, error) {
-	if surface, isAdapter := adapterSurface(id); isAdapter {
-		if requested != "" && requested != string(surface) {
-			return "", fmt.Errorf("this credential serves the %s surface", surface)
-		}
-		return surface, nil
-	}
-	if !principal.Allowed(id.Role, principal.VerbRead) {
-		return "", fmt.Errorf("this credential cannot choose a surface")
-	}
-	surface := runtimedb.ButlerSurface(requested)
-	if !runtimedb.ValidButlerSurface(surface) {
-		return "", fmt.Errorf("surface must be admin or family")
-	}
-	return surface, nil
-}
-
-// adapterSurface reports the surface a CHAT ADAPTER's credential is
-// pinned to, and whether the caller is one at all.
-//
-// The distinction matters wherever a check exists to stop a bot acting
-// on the wrong surface: a human with the Console or `wild` is not a bot
-// pinned to one, and holding them to an adapter's constraint would only
-// stop an operator redeeming a code on behalf of somebody standing next
-// to them.
-func adapterSurface(id principal.Identity) (runtimedb.ButlerSurface, bool) {
-	switch id.Role {
-	case runtimedb.RoleConcierge:
-		return runtimedb.ButlerSurfaceFamily, true
-	case runtimedb.RoleValet:
-		return runtimedb.ButlerSurfaceAdmin, true
-	}
-	return "", false
 }
 
 // receiveChatMessage is the adapter's inbound door (ADR-W026 A8).
@@ -157,7 +120,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		// Bounded before anything else looks at it (ADR-W026 A6).
 		return nil, http.StatusRequestEntityTooLarge, fmt.Errorf("message exceeds %d bytes", maxAskBytes)
 	}
-	surface, err := surfaceForCaller(id, strings.TrimSpace(msg.Surface))
+	at, err := s.connectionForCaller(id, msg)
 	if err != nil {
 		return nil, http.StatusForbidden, err
 	}
@@ -169,12 +132,11 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// Rate limits are per ACCOUNT, applied before the binding lookup, so
 	// an unbound stranger cannot spend the household's provider budget
 	// or flood the outbound queue with guidance replies.
-	// The bucket key carries the SURFACE for the same reason the dedupe
-	// key does: on Telegram one person's account id is identical across
-	// both bots, so without it eight messages to the household bot would
-	// spend the operator bot's budget and answer a real operator request
-	// with a 429.
-	if !s.limiter.allowChat(string(surface) + ":" + transport + ":" + account) {
+	// The bucket key carries the CONNECTION for the same reason the
+	// dedupe key does: on Telegram one person's account id is identical
+	// across every bot, so without it eight messages to one Agent would
+	// spend another Agent's budget and answer a real request with a 429.
+	if !s.limiter.allowChat(fmt.Sprintf("%d:%s", at.Seq, account)) {
 		return nil, http.StatusTooManyRequests, fmt.Errorf("too many messages; slow down")
 	}
 
@@ -185,8 +147,8 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// This is the automation engine's claim-before-dispatch shape
 	// (ADR-W024 H4), and the same deliberate trade: at-most-once, since
 	// a duplicated action is worse than a missed one.
-	claimKey := chatDedupe(surface, transport, conversation, msg.MessageID, "inbound", text)
-	claimed, priorSeq, err := s.DB.ClaimChatInbound(claimKey, surface)
+	claimKey := chatDedupe(at, conversation, msg.MessageID, "inbound", text)
+	claimed, priorSeq, err := s.DB.ClaimChatInbound(claimKey, at.Surface)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -207,23 +169,23 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		}
 	}()
 
-	binding, err := s.DB.LookupChatBinding(transport, account, surface)
+	binding, err := s.DB.LookupChatBinding(at, account)
 	if err != nil {
 		// One reply, no detail, no session row (ADR-W026 A4).
-		seq := s.queueChatReply(surface, transport, conversation, unboundReply, 0, "",
-			chatDedupe(surface, transport, conversation, msg.MessageID, "unbound", text))
+		seq := s.queueChatReply(at, conversation, unboundReply, 0, "",
+			chatDedupe(at, conversation, msg.MessageID, "unbound", text))
 		s.settleInbound(claimKey, seq, &settled)
 		return inboundResponse{Accepted: true, Bound: false, Queued: seq,
-			Reason: "no binding for this account on this surface"}, http.StatusAccepted, nil
+			Reason: "no admission for this account on this connection"}, http.StatusAccepted, nil
 	}
 
 	// Group rules (ADR-W026 A7). The operator surface refuses outright;
 	// the family surface answers, with the audience declared to it.
 	systemExtra := ""
 	if msg.Group {
-		if surface == runtimedb.ButlerSurfaceAdmin {
-			seq := s.queueChatReply(surface, transport, conversation, adminGroupReply, binding.ID, "",
-				chatDedupe(surface, transport, conversation, msg.MessageID, "admin-group", text))
+		if at.AdmitsOwnersOnly() {
+			seq := s.queueChatReply(at, conversation, adminGroupReply, binding.ID, "",
+				chatDedupe(at, conversation, msg.MessageID, "admin-group", text))
 			s.settleInbound(claimKey, seq, &settled)
 			return inboundResponse{Accepted: true, Bound: true, Queued: seq,
 				Reason: "the operator surface answers in direct messages only"}, http.StatusAccepted, nil
@@ -238,10 +200,10 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// rule opens still closes with the Butler switched off — the
 	// deterministic-backbone principle, applied to the one place chat
 	// could quietly have broken it.
-	if surface == runtimedb.ButlerSurfaceFamily {
-		if body, answered := s.recordChatAnswer(binding, conversation, text); answered {
-			seq := s.queueChatReply(surface, transport, conversation, body, binding.ID, "",
-				chatDedupe(surface, transport, conversation, msg.MessageID, "answer", text))
+	if !at.AdmitsOwnersOnly() {
+		if body, answered := s.recordChatAnswer(at, binding, conversation, text); answered {
+			seq := s.queueChatReply(at, conversation, body, binding.ID, "",
+				chatDedupe(at, conversation, msg.MessageID, "answer", text))
 			s.settleInbound(claimKey, seq, &settled)
 			s.touchBinding(binding, conversation, msg.Group)
 			return inboundResponse{Accepted: true, Bound: true, Queued: seq,
@@ -254,15 +216,14 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// answer, and these keep working when the Butler is off or the
 	// startup probe put it in qa-only.
 	if body, reason, handled := s.runChatCommand(chatCommandCtx{
-		Surface:      surface,
-		Transport:    transport,
+		At:           at,
 		Conversation: conversation,
 		Identity:     binding.Identity,
 		Binding:      binding,
 		Group:        msg.Group,
 	}, text); handled {
-		seq := s.queueChatReply(surface, transport, conversation, body, binding.ID, "",
-			chatDedupe(surface, transport, conversation, msg.MessageID, "command", text))
+		seq := s.queueChatReply(at, conversation, body, binding.ID, "",
+			chatDedupe(at, conversation, msg.MessageID, "command", text))
 		s.settleInbound(claimKey, seq, &settled)
 		s.touchBinding(binding, conversation, msg.Group)
 		return inboundResponse{Accepted: true, Bound: true, Queued: seq,
@@ -278,7 +239,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// after an answer reached a Butler that had never heard the first
 	// question — the multi-turn work landed for the Console and left
 	// this path passing nil.
-	prior := s.chatThread(transport, conversation, surface, binding.Identity)
+	prior := s.chatThread(at, conversation, binding.Identity)
 
 	var (
 		out any
@@ -306,13 +267,13 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 			Text:           text,
 			Group:          msg.Group,
 			SystemExtra:    systemExtra,
-			RequireSurface: surface,
+			RequireSurface: at.Surface,
 		}
 		if prior != nil {
 			turn.SessionID, turn.History = prior.SessionID, prior.History
 		}
 		out, st, err = s.runNamedButlerSession(r.Context(), turn, prior)
-	} else if surface == runtimedb.ButlerSurfaceFamily {
+	} else if !at.AdmitsOwnersOnly() {
 		out, st, err = s.runFamilySession(r.Context(), text, binding.Identity, systemExtra, msg.Group, prior)
 	} else {
 		out, st, err = s.runAdminButlerSession(r.Context(), text, binding.Identity, prior)
@@ -326,7 +287,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		// tool calls that already completed run a second time.
 		if ask, ok := out.(askResponse); ok && ask.SessionID != "" {
 			if perr := s.DB.SetChatThreadSession(
-				transport, conversation, surface, binding.Identity, ask.SessionID); perr != nil {
+				at, conversation, binding.Identity, ask.SessionID); perr != nil {
 				s.Log.Error("recording chat thread for a failed turn",
 					"session", ask.SessionID, "err", perr)
 			}
@@ -360,10 +321,10 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 			// redelivery of this question announces once while a later
 			// question that ends the same way is still announced.
 			if len(ask.PlanIDs) > 0 || len(ask.ProposalErrors) > 0 {
-				s.queueChatReply(surface, transport, conversation,
+				s.queueChatReply(at, conversation,
 					chatProposalNotice(ask.PlanIDs, ask.ProposalErrors), binding.ID, "",
 					chatProposalDedupe(
-						chatDedupe(surface, transport, conversation, msg.MessageID, "proposal", text),
+						chatDedupe(at, conversation, msg.MessageID, "proposal", text),
 						ask.PlanIDs, ask.ProposalErrors))
 			}
 		}
@@ -373,7 +334,8 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 
 	ask, _ := out.(askResponse)
 	if ask.SessionID != "" {
-		if err := s.DB.SetChatThreadSession(transport, conversation, surface, binding.Identity, ask.SessionID); err != nil {
+		if err := s.DB.SetChatThreadSession(
+			at, conversation, binding.Identity, ask.SessionID); err != nil {
 			// The answer already happened and is about to be sent. A
 			// thread pointer that failed to save costs the NEXT message
 			// its context; dropping this reply would cost this one
@@ -382,8 +344,8 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		}
 	}
 	body := chatReplyBody(ask)
-	seq := s.queueChatReply(surface, transport, conversation, body, binding.ID, "",
-		chatDedupe(surface, transport, conversation, msg.MessageID, ask.SessionID, text))
+	seq := s.queueChatReply(at, conversation, body, binding.ID, "",
+		chatDedupe(at, conversation, msg.MessageID, ask.SessionID, text))
 	s.settleInbound(claimKey, seq, &settled)
 	return inboundResponse{Accepted: true, Bound: true, Queued: seq}, http.StatusAccepted, nil
 }
@@ -404,8 +366,8 @@ const chatIdleWindow = 30 * time.Minute
 // surface, and those are the authority — a thread pointer that has
 // drifted (a binding revoked and reissued to somebody else on the same
 // chat id) must not hand a stranger the previous person's conversation.
-func (s *Server) chatThread(transport, conversation string, surface runtimedb.ButlerSurface, identity string) *turnContext {
-	id, ok, err := s.DB.ChatThreadSession(transport, conversation, surface, identity)
+func (s *Server) chatThread(at runtimedb.Connection, conversation, identity string) *turnContext {
+	id, ok, err := s.DB.ChatThreadSession(at, conversation, identity)
 	if err != nil {
 		s.Log.Error("reading chat thread failed", "err", err)
 		return nil
@@ -419,7 +381,7 @@ func (s *Server) chatThread(transport, conversation string, surface runtimedb.Bu
 		// a new conversation, not a failure.
 		return nil
 	}
-	if sess.ActingFor != identity || sess.Surface != surface {
+	if sess.ActingFor != identity || sess.Surface != at.Surface {
 		s.Log.Warn("chat thread pointed at another principal's session; starting fresh",
 			"session", id, "expected", identity, "got", sess.ActingFor)
 		return nil
@@ -534,9 +496,9 @@ func chatProposalDedupe(messageKey string, planIDs, proposalErrs []string) strin
 // is logged rather than returned: the session already happened and is
 // already recorded, and telling the adapter the whole request failed
 // would have it redeliver a message that has been answered.
-func (s *Server) queueChatReply(surface runtimedb.ButlerSurface, transport, target, body string, bindingID int64, correlationID, dedupe string) int64 {
+func (s *Server) queueChatReply(at runtimedb.Connection, target, body string, bindingID int64, correlationID, dedupe string) int64 {
 	seq, err := s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{
-		Surface: surface, Transport: transport, Target: target,
+		Connection: at.Seq, Target: target,
 		Body: redact.String(body), Kind: "reply", BindingID: bindingID,
 		CorrelationID: correlationID, DedupeKey: dedupe,
 	})
@@ -560,9 +522,12 @@ func (s *Server) queueChatReply(surface runtimedb.ButlerSurface, transport, targ
 // here, the second bot's reply would be silently deduplicated away as a
 // duplicate of the first's, and the household would watch one of their
 // two bots go quiet for no visible reason.
-func chatDedupe(surface runtimedb.ButlerSurface, transport, conversation, messageID, discriminator, text string) string {
+func chatDedupe(at runtimedb.Connection, conversation, messageID, discriminator, text string) string {
 	if messageID != "" {
-		return fmt.Sprintf("%s:%s:%s:%s", surface, transport, conversation, messageID)
+		// Keyed on the CONNECTION rather than on a surface: two Agents
+		// on one transport are two conversations, and one message id
+		// arriving at each of their bots is two messages.
+		return fmt.Sprintf("%d:%s:%s", at.Seq, conversation, messageID)
 	}
 	// No message id: the text stands in for one, bucketed by time.
 	//
@@ -573,9 +538,8 @@ func chatDedupe(surface runtimedb.ButlerSurface, transport, conversation, messag
 	// Bucketing bounds that to one window: a genuine redelivery inside
 	// it collapses, and the same words tomorrow are a new message.
 	bucket := time.Now().UTC().Truncate(chatFallbackWindow).Unix()
-	sum := sha256.Sum256([]byte(string(surface) + "\x00" + transport + "\x00" + conversation +
-		"\x00" + discriminator + "\x00" + text))
-	return fmt.Sprintf("%s:%s:%s:h%s-%d", surface, transport, conversation,
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00%s\x00%s", at.Seq, conversation, discriminator, text)))
+	return fmt.Sprintf("%d:%s:h%s-%d", at.Seq, conversation,
 		hex.EncodeToString(sum[:8]), bucket)
 }
 
@@ -584,16 +548,15 @@ func chatDedupe(surface runtimedb.ButlerSurface, transport, conversation, messag
 // first. The surface comes from the caller's role, so an adapter cannot
 // read another surface's queue.
 func (s *Server) pollChatOutbound(r *http.Request, id principal.Identity) (any, int, error) {
-	surface, err := surfaceForCaller(id, strings.TrimSpace(r.URL.Query().Get("surface")))
+	at, err := s.pollingConnection(r, id)
 	if err != nil {
 		return nil, http.StatusForbidden, err
 	}
 	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	waitMs, _ := strconv.Atoi(r.URL.Query().Get("waitMs"))
-	transport := strings.TrimSpace(r.URL.Query().Get("transport"))
 	messages, err := longPoll(r, waitMs, func() ([]runtimedb.ChatOutbound, error) {
-		return s.DB.ChatOutboundAfter(surface, transport, after, limit)
+		return s.DB.ChatOutboundAfter(at, after, limit)
 	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -605,7 +568,7 @@ func (s *Server) pollChatOutbound(r *http.Request, id principal.Identity) (any, 
 // acking something that was never queued is a 404, because that means
 // the adapter and the queue disagree.
 func (s *Server) ackChatOutbound(r *http.Request, id principal.Identity) (any, int, error) {
-	surface, err := surfaceForCaller(id, strings.TrimSpace(r.URL.Query().Get("surface")))
+	at, err := s.pollingConnection(r, id)
 	if err != nil {
 		return nil, http.StatusForbidden, err
 	}
@@ -613,8 +576,8 @@ func (s *Server) ackChatOutbound(r *http.Request, id principal.Identity) (any, i
 	if err != nil {
 		return nil, http.StatusBadRequest, fmt.Errorf("seq must be a number")
 	}
-	if err := s.DB.AckChatOutbound(surface, seq); err != nil {
-		return nil, http.StatusNotFound, fmt.Errorf("no queued message %d on this surface", seq)
+	if err := s.DB.AckChatOutbound(at, seq); err != nil {
+		return nil, http.StatusNotFound, fmt.Errorf("no queued message %d on this connection", seq)
 	}
 	return map[string]any{"acked": seq}, http.StatusOK, nil
 }
@@ -625,16 +588,22 @@ func (s *Server) ackChatOutbound(r *http.Request, id principal.Identity) (any, i
 // rule that matters is written next to the endpoints that share it: a
 // rule reaches a member only through a binding a human created, exactly
 // as an inbound message does.
-func (s *Server) ChatRecipientFor(transport, member string) (target string, bindingID int64, err error) {
+func (s *Server) ChatRecipientFor(transport, member string) (target string, bindingID, connection int64, err error) {
 	bindings, err := s.DB.ListChatBindings(false)
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
 	for _, b := range bindings {
-		// The family surface only: a household rule notifies the
-		// household, never the operator's private bot, which is also why
-		// the admin packages declare no agentTools.
-		if b.Surface != runtimedb.ButlerSurfaceFamily || b.Transport != transport || b.Identity != member {
+		// A household rule notifies the household, never an Owner
+		// Agent's private bot — which is also why the admin packages
+		// declare no agentTools. The Connection says which Agent, so
+		// the test is that Agent's class rather than a surface stored
+		// on the binding.
+		at, cerr := s.DB.ChatConnectionBySeq(b.Connection)
+		if cerr != nil || at.AdmitsOwnersOnly() {
+			continue
+		}
+		if b.Transport != transport || b.Identity != member {
 			continue
 		}
 		// The direct conversation, not the account. On Telegram they are
@@ -646,18 +615,18 @@ func (s *Server) ChatRecipientFor(transport, member string) (target string, bind
 		// where they do not — the send fails visibly rather than going
 		// quietly nowhere.
 		if b.Conversation != "" {
-			return b.Conversation, b.ID, nil
+			return b.Conversation, b.ID, b.Connection, nil
 		}
-		return b.Account, b.ID, nil
+		return b.Account, b.ID, b.Connection, nil
 	}
-	return "", 0, fmt.Errorf("no live %s binding for %q on the family surface", transport, member)
+	return "", 0, 0, fmt.Errorf("no live %s connection admits %q to a member agent", transport, member)
 }
 
 // AskOverChat queues a rule's message and, when it carries a correlation
 // id, records the question so the member's next reply closes the loop as
 // household.answered (ADR-W024 H4).
-func (s *Server) AskOverChat(ctx context.Context, transport, target string, bindingID int64, body, correlationID, rule, subject string) (int64, error) {
-	seq, err := s.QueueChatPush(ctx, runtimedb.ButlerSurfaceFamily, transport, target, bindingID, body, correlationID, "")
+func (s *Server) AskOverChat(ctx context.Context, at runtimedb.Connection, target string, bindingID int64, body, correlationID, rule, subject string) (int64, error) {
+	seq, err := s.QueueChatPush(ctx, at, target, bindingID, body, correlationID, "")
 	if err != nil {
 		return 0, err
 	}
@@ -668,8 +637,7 @@ func (s *Server) AskOverChat(ctx context.Context, transport, target string, bind
 	}
 	if _, err := s.DB.RecordChatQuestion(runtimedb.ChatQuestion{
 		CorrelationID: correlationID,
-		Surface:       runtimedb.ButlerSurfaceFamily,
-		Transport:     transport,
+		Connection:    at.Seq,
 		Target:        target,
 		Rule:          rule,
 		Subject:       subject,
@@ -686,12 +654,12 @@ func (s *Server) AskOverChat(ctx context.Context, transport, target string, bind
 // because cmd/keystone wires it into the domestic gateway as an
 // executor; it is the same queue, so a push and a reply are delivered
 // and retried identically.
-func (s *Server) QueueChatPush(_ context.Context, surface runtimedb.ButlerSurface, transport, target string, bindingID int64, body, correlationID, dedupe string) (int64, error) {
+func (s *Server) QueueChatPush(_ context.Context, at runtimedb.Connection, target string, bindingID int64, body, correlationID, dedupe string) (int64, error) {
 	if dedupe == "" {
-		dedupe = chatDedupe(surface, transport, target, "", "push", body+time.Now().UTC().Format(time.RFC3339Nano))
+		dedupe = chatDedupe(at, target, "", "push", body+time.Now().UTC().Format(time.RFC3339Nano))
 	}
 	seq, err := s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{
-		Surface: surface, Transport: transport, Target: target, BindingID: bindingID,
+		Connection: at.Seq, Target: target, BindingID: bindingID,
 		Body: redact.String(body), Kind: "push", CorrelationID: correlationID, DedupeKey: dedupe,
 	})
 	if err != nil && seq == 0 {
@@ -711,8 +679,8 @@ func (s *Server) QueueChatPush(_ context.Context, surface runtimedb.ButlerSurfac
 // A question nobody answers expires rather than waiting forever, and a
 // claimed question is claimed once: two messages arriving together
 // produce one answer, not two.
-func (s *Server) recordChatAnswer(binding runtimedb.ChatBinding, conversation, text string) (string, bool) {
-	question, err := s.DB.ClaimChatAnswer(binding.Transport, conversation, runtimedb.ChatQuestionWindow)
+func (s *Server) recordChatAnswer(at runtimedb.Connection, binding runtimedb.ChatBinding, conversation, text string) (string, bool) {
+	question, err := s.DB.ClaimChatAnswer(at, conversation, runtimedb.ChatQuestionWindow)
 	if err != nil {
 		return "", false // no open question: an ordinary message
 	}
@@ -782,4 +750,85 @@ func (s *Server) touchBinding(binding runtimedb.ChatBinding, conversation string
 	if err := s.DB.TouchChatBinding(binding.ID, direct); err != nil {
 		s.Log.Error("touching chat binding failed", "err", err)
 	}
+}
+
+// connectionForCaller decides which Connection a message arrived at,
+// without reading the message (ADR-W033 B7).
+//
+// A chat adapter IS a Connection: its credential carries the capability
+// it was minted for, a live address holds that capability, and that
+// address names one Agent. It gets no say — naming a butler or a
+// surface in the body is refused rather than ignored, because silently
+// dropping a field a misconfigured bot set would have it answering as
+// the wrong Agent and looking correct.
+//
+// A read-holding human — the Console, or `wild` exercising the contract
+// — has no bot to arrive through, so they name the Agent. That is not
+// an escalation: ADR-W031 A10 gives the Console holder every Butler.
+//
+// This replaced surfaceForCaller, and the difference is the point. A
+// surface is a class of Agents: resolving a message to `admin` said
+// which KIND of Agent should answer, and left which one to whatever
+// the roster happened to return.
+func (s *Server) connectionForCaller(id principal.Identity, msg inboundMessage) (runtimedb.Connection, error) {
+	if capability, isAdapter := butlerAddressFor(id); isAdapter {
+		if strings.TrimSpace(msg.Butler) != "" || strings.TrimSpace(msg.Surface) != "" {
+			return runtimedb.Connection{}, fmt.Errorf(
+				"a chat adapter cannot name a butler or a surface; the bot a message arrives at is the connection (ADR-W031 A7)")
+		}
+		at, err := s.adapterConnection(capability)
+		if errors.Is(err, runtimedb.ErrNoConnection) {
+			return runtimedb.Connection{}, fmt.Errorf(
+				"no butler answers at %s: give one that address before its bot is used", capability)
+		}
+		return at, err
+	}
+	if !principal.Allowed(id.Role, principal.VerbRead) {
+		return runtimedb.Connection{}, fmt.Errorf("this credential cannot choose a connection")
+	}
+	butler := strings.TrimSpace(msg.Butler)
+	transport := strings.TrimSpace(msg.Transport)
+	if butler == "" {
+		return runtimedb.Connection{}, fmt.Errorf(
+			"name a butler: this credential is not a chat adapter, so there is no connection to resolve one from")
+	}
+	// transport and connection both narrow, and both are optional: an
+	// Agent with one bot needs neither.
+	at, err := s.DB.ChatConnectionForButler(butler, transport, strings.TrimSpace(msg.Connection))
+	if errors.Is(err, runtimedb.ErrNoConnection) {
+		return runtimedb.Connection{}, fmt.Errorf("%s has no %s connection", butler, orAny(transport))
+	}
+	return at, err
+}
+
+// pollingConnection is the Connection whose queue an adapter may read.
+//
+// An adapter's own credential decides it, so a bot cannot read another
+// Agent's replies — the guarantee that used to be "an adapter cannot
+// read another surface's queue", which said nothing about two Agents
+// sharing one surface.
+func (s *Server) pollingConnection(r *http.Request, id principal.Identity) (runtimedb.Connection, error) {
+	if capability, isAdapter := butlerAddressFor(id); isAdapter {
+		at, err := s.adapterConnection(capability)
+		if errors.Is(err, runtimedb.ErrNoConnection) {
+			return runtimedb.Connection{}, fmt.Errorf("no butler answers at %s", capability)
+		}
+		return at, err
+	}
+	if !principal.Allowed(id.Role, principal.VerbRead) {
+		return runtimedb.Connection{}, fmt.Errorf("this credential cannot read a queue")
+	}
+	butler := strings.TrimSpace(r.URL.Query().Get("butler"))
+	transport := strings.TrimSpace(r.URL.Query().Get("transport"))
+	if butler == "" {
+		return runtimedb.Connection{}, fmt.Errorf("name a butler: this credential is not a chat adapter")
+	}
+	// Both narrowings are OPTIONAL. An Agent with a single bot needs
+	// neither, which is what the CLI documents; ?transport= picks
+	// between transports and ?connection=<external id> between an
+	// Agent's several bots on one (B7). Leaving either out used to
+	// match a transport named "" — nothing — so the queue of an Agent
+	// that had exactly one bot could not be read at all.
+	external := strings.TrimSpace(r.URL.Query().Get("connection"))
+	return s.DB.ChatConnectionForButler(butler, transport, external)
 }

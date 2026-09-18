@@ -25,6 +25,7 @@ func authorityDB(t *testing.T) (*runtimedb.DB, *Authority) {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
+	record(t, db, "mika", "sam")
 	return db, &Authority{DB: db}
 }
 

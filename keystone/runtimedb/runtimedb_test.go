@@ -41,6 +41,33 @@ func open(t *testing.T) *DB {
 	return db
 }
 
+// openWith is open with a cast of people already on record.
+//
+// Since 0043 every provably-human column is a foreign key, so a fixture
+// that files a task, a memory record or a notice for "sam" has to say
+// who sam is first. That is not a test inconvenience — it is the whole
+// point of the slice, and a deployment is held to exactly the same
+// rule.
+//
+// Machine principals are deliberately NOT people: `root-admin` and `op`
+// still appear in these tests as actors, and actor columns still store
+// them as text.
+func openWith(t *testing.T, handles ...string) *DB {
+	t.Helper()
+	db := open(t)
+	record(t, db, handles...)
+	return db
+}
+
+func record(t *testing.T, db *DB, handles ...string) {
+	t.Helper()
+	for _, h := range handles {
+		if err := db.RecordButlerMember(h, RoleMember, "", ""); err != nil {
+			t.Fatalf("recording %q: %v", h, err)
+		}
+	}
+}
+
 func TestMigrationsApplyOnceAndAreIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
 	db, err := Open(path)

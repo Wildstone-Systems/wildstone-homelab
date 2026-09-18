@@ -181,6 +181,10 @@ type Notice struct {
 	Answer         string    `json:"answer,omitempty"`
 	AnsweredBy     string    `json:"answeredBy,omitempty"`
 	OutboundSeq    int64     `json:"outboundSeq,omitempty"`
+	// Question is what an asking notice actually asked, as the person
+	// answering it needs to read. Empty on a notice whose kind says
+	// everything there is to say.
+	Question string `json:"question,omitempty"`
 }
 
 // NoticeRequest is what a caller wants to say and to whom.
@@ -194,7 +198,11 @@ type NoticeRequest struct {
 	AdminFallback string
 	CorrelationID string
 	DedupeKey     string
-	Body          string
+	// Body is what the notice SAYS, and for an asking notice it is what
+	// the person answering has to read. Stored since migration 0043; it
+	// was accepted and discarded before that, which made a confirm-tier
+	// question render as its own kind.
+	Body string
 	// Asks marks a notice that poses a question. Only these can be
 	// answered; a reply to anything else authorizes nothing.
 	Asks bool
@@ -281,13 +289,20 @@ func (db *DB) RaiseNotice(req NoticeRequest, householdQuiet ButlerSettings, at t
 	if ttl <= 0 {
 		ttl = DefaultChatOutboundTTL
 	}
+	// A notice is for a person, so the row names one. The fallback
+	// administrator is resolved the same way: an administrator who is
+	// not a Person on record has no notices to receive.
+	recipientID, err := resolvePersonID(db.sql, recipient)
+	if err != nil {
+		return NoticeDecision{}, fmt.Errorf("runtimedb: recording notice: the recipient %w", err)
+	}
 	res, err := db.sql.Exec(
-		`INSERT INTO notices (kind, recipient, routed_to_admin, correlation_id, dedupe_key,
-		     urgent, relevance, created_at, hold_until, expires_at, asks)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		req.Kind, recipient, boolInt(routedToAdmin), req.CorrelationID, req.DedupeKey,
+		`INSERT INTO notices (kind, recipient_person_id, routed_to_admin, correlation_id, dedupe_key,
+		     urgent, relevance, created_at, hold_until, expires_at, asks, question)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		req.Kind, recipientID, boolInt(routedToAdmin), req.CorrelationID, req.DedupeKey,
 		boolInt(kind.Urgent), kind.Relevance, now(), timeText(hold),
-		at.Add(ttl).UTC().Format(time.RFC3339Nano), boolInt(req.Asks))
+		at.Add(ttl).UTC().Format(time.RFC3339Nano), boolInt(req.Asks), req.Body)
 	if err != nil {
 		return NoticeDecision{}, fmt.Errorf("runtimedb: recording notice: %w", err)
 	}
@@ -378,10 +393,19 @@ func (db *DB) AcknowledgeNoticesFor(recipient string) (int, error) {
 	if recipient == "" {
 		return 0, fmt.Errorf("runtimedb: clearing notices needs a recipient")
 	}
+	// A notice records the Person it is for (ADR-W033 A2), so the
+	// handle is resolved here rather than compared. personIDForRead
+	// gives "" for a handle nobody is on record under, which matches no
+	// row: clearing for a stranger clears nothing, which is the same
+	// answer the predicate above already gave.
+	id, err := personIDForRead(db.sql, recipient)
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: clearing notices: %w", err)
+	}
 	res, err := db.sql.Exec(
 		`UPDATE notices SET acknowledged_at = ?
-		  WHERE recipient = ? AND acknowledged_at = '' AND undelivered_at = ''
-		    AND NOT (asks = 1 AND answered_at = '')`, now(), recipient)
+		  WHERE recipient_person_id = ? AND acknowledged_at = '' AND undelivered_at = ''
+		    AND NOT (asks = 1 AND answered_at = '')`, now(), id)
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: clearing notices: %w", err)
 	}
@@ -429,7 +453,9 @@ func (db *DB) AnswerNotice(seq int64, answer, by string) (approved bool, err err
 	var asks int
 	var recipient, undelivered, answered, expires string
 	err = tx.QueryRow(
-		`SELECT recipient, asks, undelivered_at, answered_at, expires_at FROM notices WHERE seq = ?`, seq).
+		`SELECT r.member, n.asks, n.undelivered_at, n.answered_at, n.expires_at
+		 FROM notices n JOIN butler_members r ON r.person_id = n.recipient_person_id
+		 WHERE n.seq = ?`, seq).
 		Scan(&recipient, &asks, &undelivered, &answered, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrNotFound
@@ -500,13 +526,24 @@ func resolveAnswer(answer string) (approved, ok bool) {
 
 // GetNotice returns one notice.
 func (db *DB) GetNotice(seq int64) (Notice, error) {
-	return scanNotice(db.sql.QueryRow(noticeColumns+` WHERE seq = ?`, seq))
+	return scanNotice(db.sql.QueryRow(noticeColumns+` WHERE n.seq = ?`, seq))
 }
 
-const noticeColumns = `SELECT seq, kind, recipient, routed_to_admin, correlation_id, dedupe_key,
-	 urgent, relevance, created_at, hold_until, expires_at, delivered_at, acknowledged_at,
-	 undelivered_at, asks, answered_at, answer, answered_by, COALESCE(outbound, 0)
-	 FROM notices`
+// noticeFrom is shared by the listing and the count for the reason
+// noticeClauses is: a count taken over a different set of rows than the
+// listing reads is a header that disagrees with the list under it, and
+// the JOIN is part of that set.
+//
+// The recipient reads back as the handle they carry NOW, because the
+// join resolves it from the person_id. A notice still says who it is
+// for after they are renamed.
+const noticeFrom = ` FROM notices n
+	 JOIN butler_members r ON r.person_id = n.recipient_person_id`
+
+const noticeColumns = `SELECT n.seq, n.kind, r.member, n.routed_to_admin, n.correlation_id, n.dedupe_key,
+	 n.urgent, n.relevance, n.created_at, n.hold_until, n.expires_at, n.delivered_at, n.acknowledged_at,
+	 n.undelivered_at, n.asks, n.answered_at, n.answer, n.answered_by, COALESCE(n.outbound, 0),
+	 COALESCE(n.question, '')` + noticeFrom
 
 func scanNotice(row rowScanner) (Notice, error) {
 	var n Notice
@@ -514,7 +551,7 @@ func scanNotice(row rowScanner) (Notice, error) {
 	var created, hold, expires, delivered, acked, undelivered, answered string
 	err := row.Scan(&n.Seq, &n.Kind, &n.Recipient, &admin, &n.CorrelationID, &n.DedupeKey,
 		&urgent, &n.Relevance, &created, &hold, &expires, &delivered, &acked, &undelivered,
-		&asks, &answered, &n.Answer, &n.AnsweredBy, &n.OutboundSeq)
+		&asks, &answered, &n.Answer, &n.AnsweredBy, &n.OutboundSeq, &n.Question)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Notice{}, ErrNotFound
 	}
@@ -547,25 +584,30 @@ func scanNotice(row rowScanner) (Notice, error) {
 // Shared by the listing and the count deliberately: a header that says
 // "3 unread" and a list that shows them have to be answering the same
 // question, and two copies of these predicates is the way they stop.
-func noticeClauses(f NoticeFilter) ([]string, []any) {
+// recipientID is the Person f.Recipient names, already resolved by the
+// caller: a notice records the Person it is for (ADR-W033 A2), not the
+// handle they answer to, and a handle can be renamed. Resolving in here
+// would want a database handle in the one function whose whole purpose
+// is that the listing and the count cannot say different things.
+func noticeClauses(f NoticeFilter, recipientID string) ([]string, []any) {
 	clauses, args := []string{}, []any{}
 	if f.Recipient != "" {
-		clauses = append(clauses, "recipient = ?")
-		args = append(args, f.Recipient)
+		clauses = append(clauses, "n.recipient_person_id = ?")
+		args = append(args, recipientID)
 	}
 	if f.Deliverable {
-		clauses = append(clauses, "undelivered_at = ''")
+		clauses = append(clauses, "n.undelivered_at = ''")
 	}
 	if f.Unacknowledged {
-		clauses = append(clauses, "acknowledged_at = ''")
+		clauses = append(clauses, "n.acknowledged_at = ''")
 	}
 	if f.Pending {
 		// A question still waiting on this person: it asks, nobody has
 		// answered it, and it has not run out. expires_at stores
 		// RFC3339Nano UTC, so the comparison is lexicographic — the
 		// same trick HouseholdEventsSince relies on.
-		clauses = append(clauses, "asks = 1", "answered_at = ''",
-			"(expires_at = '' OR expires_at > ?)")
+		clauses = append(clauses, "n.asks = 1", "n.answered_at = ''",
+			"(n.expires_at = '' OR n.expires_at > ?)")
 		at := f.At
 		if at.IsZero() {
 			at = time.Now()
@@ -573,6 +615,26 @@ func noticeClauses(f NoticeFilter) ([]string, []any) {
 		args = append(args, at.UTC().Format(time.RFC3339Nano))
 	}
 	return clauses, args
+}
+
+// noticeWhere resolves the filter's recipient and assembles the clause.
+// An unknown handle resolves to no Person, and `recipient_person_id = ”`
+// matches nothing — a listing for somebody nobody knows is empty, not an
+// error, which is what a card asking about a member who was offboarded
+// mid-render needs it to be.
+func (db *DB) noticeWhere(f NoticeFilter) (string, []any, error) {
+	id := ""
+	if f.Recipient != "" {
+		var err error
+		if id, err = personIDForRead(db.sql, f.Recipient); err != nil {
+			return "", nil, err
+		}
+	}
+	clauses, args := noticeClauses(f, id)
+	if len(clauses) == 0 {
+		return "", args, nil
+	}
+	return " WHERE " + strings.Join(clauses, " AND "), args, nil
 }
 
 // NoticeFilter narrows a notice listing to what a caller will keep.
@@ -616,16 +678,15 @@ func (db *DB) ListNotices(limit int, f NoticeFilter) ([]Notice, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	clauses, args := noticeClauses(f)
-	where := ""
-	if len(clauses) > 0 {
-		where = " WHERE " + strings.Join(clauses, " AND ")
+	where, args, err := db.noticeWhere(f)
+	if err != nil {
+		return nil, err
 	}
-	order := " ORDER BY seq DESC"
+	order := " ORDER BY n.seq DESC"
 	if f.UnreadFirst {
 		// Unread first, then newest. The expression is a boolean, and
 		// DESC puts the true ones (1) at the head.
-		order = " ORDER BY (acknowledged_at = '') DESC, seq DESC"
+		order = " ORDER BY (n.acknowledged_at = '') DESC, n.seq DESC"
 	}
 	args = append(args, limit)
 	rows, err := db.sql.Query(noticeColumns+where+order+` LIMIT ?`, args...)
@@ -652,13 +713,12 @@ func (db *DB) ListNotices(limit int, f NoticeFilter) ([]Notice, error) {
 // household with a backlog. This asks the question the header actually
 // asks.
 func (db *DB) CountNotices(f NoticeFilter) (int, error) {
-	clauses, args := noticeClauses(f)
-	where := ""
-	if len(clauses) > 0 {
-		where = " WHERE " + strings.Join(clauses, " AND ")
+	where, args, err := db.noticeWhere(f)
+	if err != nil {
+		return 0, err
 	}
 	var n int
-	if err := db.sql.QueryRow(`SELECT COUNT(*) FROM notices`+where, args...).Scan(&n); err != nil {
+	if err := db.sql.QueryRow(`SELECT COUNT(*)`+noticeFrom+where, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("runtimedb: counting notices: %w", err)
 	}
 	return n, nil
@@ -669,8 +729,8 @@ func (db *DB) CountNotices(f NoticeFilter) (int, error) {
 func (db *DB) DueNotices(at time.Time) ([]Notice, error) {
 	stamp := at.UTC().Format(time.RFC3339Nano)
 	rows, err := db.sql.Query(
-		noticeColumns+` WHERE delivered_at = '' AND undelivered_at = ''
-		   AND (hold_until = '' OR hold_until <= ?) AND expires_at > ? ORDER BY seq`, stamp, stamp)
+		noticeColumns+` WHERE n.delivered_at = '' AND n.undelivered_at = ''
+		   AND (n.hold_until = '' OR n.hold_until <= ?) AND n.expires_at > ? ORDER BY n.seq`, stamp, stamp)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: reading due notices: %w", err)
 	}
@@ -685,3 +745,11 @@ func (db *DB) DueNotices(at time.Time) ([]Notice, error) {
 	}
 	return out, rows.Err()
 }
+
+// AnswerApproves reports what a recorded answer meant.
+//
+// Exported so a caller reading a notice back can reach the same verdict
+// AnswerNotice reached when it stored one, rather than keeping a second
+// list of the words that mean yes. Two lists is how "ok" comes to
+// authorise something in one place and not in another.
+func AnswerApproves(answer string) (approved, ok bool) { return resolveAnswer(answer) }

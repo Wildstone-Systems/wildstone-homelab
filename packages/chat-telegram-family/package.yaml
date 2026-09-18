@@ -1,5 +1,6 @@
-# Chat (Telegram), family surface: the household's Butler, reachable from
-# the app everyone already has open (ADR-W026 A2/A3, work package G4).
+# Chat (Telegram) for a MEMBER AGENT: the household's Butler, reachable
+# from the app everyone already has open (ADR-W026 A2/A3, ADR-W033 B7,
+# work package G4).
 #
 # WHAT THIS RUNS. One small adapter container (cli/cmd/chat-adapter in
 # this repository) that speaks Telegram's Bot API on one side and
@@ -13,12 +14,25 @@
 # nothing new at the edge — the household gains a chat interface and the
 # attack surface does not move.
 #
-# THE OTHER SURFACE IS A DIFFERENT PACKAGE. chat-telegram-admin runs the
-# operator's Butler over a SEPARATE bot with a SEPARATE token. That is
-# not tidiness: one bot serving both audiences is one compromised phone
-# away from being an infrastructure console, and the split is what makes
-# "the family bot cannot reach the Statefile" true by construction
-# rather than by a filter somebody has to get right.
+# ONE BOT, ONE AGENT (ADR-W033 B7). This package is one bot, and
+# credentialing it assigns it to one Agent — `wild chat adapter` takes
+# the Agent's name and refuses a bot that already answers for somebody
+# else. Its token is that Agent's alone.
+#
+# That is not tidiness. One bot serving two audiences is one compromised
+# phone away from being an infrastructure console, and a bot shared
+# between two Agents makes "which Agent answered" a question with no
+# answer. chat-telegram-admin is a SEPARATE bot with a SEPARATE token
+# for an Owner Agent, and the split is what makes "the household's bot
+# cannot reach the Statefile" true by construction rather than by a
+# filter somebody has to get right.
+#
+# HOW MANY BOTS. One per package installed, so this catalog gives a
+# household two Telegram bots — one Member Agent and one Owner Agent.
+# An Agent may hold many Connections and a household may have many
+# Agents; what is capped is the packaging, because installing this
+# package twice under different names needs package instancing the
+# package system does not have yet.
 #
 # INSTALLING (three steps, in this order):
 #
@@ -29,7 +43,7 @@
 #     concierge principal and places its token on the node as the
 #     provided secret this package's container reads:
 #
-#        wild chat adapter chat-telegram-family -node <node> -surface family
+#        wild chat adapter chat-telegram-family -node <node> -butler <agent>
 #
 #  3. Set the bot token as the other provided secret, then enable:
 #
@@ -38,7 +52,7 @@
 #  4. Introduce people. Nobody can talk to the bot until a binding
 #     exists:
 #
-#        wild chat code -surface family -identity <member> -transport telegram
+#        wild chat code -butler <agent> -identity <member> -transport telegram
 #
 #     Read the code to them; they send it to the bot on its own, once.
 #
@@ -66,7 +80,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: chat-telegram-family
-  version: 1.0.2
+  version: 1.0.3
   capability: chat-telegram-family
   profile: telegram
 params:

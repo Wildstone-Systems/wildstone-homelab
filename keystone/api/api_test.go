@@ -62,9 +62,14 @@ func newHarness(t *testing.T) *harness {
 	for name, role := range map[string]runtimedb.Role{
 		"root-admin": runtimedb.RoleAdmin, "op": runtimedb.RoleOperator, "butler": runtimedb.RoleButler,
 		// The two chat adapters (ADR-W026 A3): converse and nothing
-		// else, one pinned to each surface.
-		"concierge": runtimedb.RoleConcierge,
-		"valet":     runtimedb.RoleValet,
+		// else. Their names are the CAPABILITY they were minted for,
+		// because since ADR-W033 B7 a bot's credential is what
+		// identifies its Connection — one Agent, one transport. A
+		// generic `concierge` token names no bot, so it names no
+		// Connection, and the inbound door cannot tell which Agent it
+		// arrived at.
+		chatAdapterPrincipalPrefix + "chat-telegram-family": runtimedb.RoleConcierge,
+		chatAdapterPrincipalPrefix + "chat-telegram-admin":  runtimedb.RoleValet,
 	} {
 		if err := p.Create(name, role, ""); err != nil {
 			t.Fatalf("Create(%s): %v", name, err)
@@ -76,6 +81,71 @@ func newHarness(t *testing.T) *harness {
 		h.tokens[role] = tok
 	}
 	return h
+}
+
+// person puts a household member on record.
+//
+// Since migration 0043 a task's author and owner, a memory record's
+// author and a notice's recipient are foreign keys to a Person, so a
+// fixture cannot file any of them for "sam" without saying who sam is.
+// Machine principals are not people and are deliberately not recorded
+// here: `root-admin`, `op` and the adapters keep appearing in these
+// tests as actors, which is what they are.
+//
+// Named person rather than member because harness.member is the portal
+// tests' REQUEST helper — one issues a call as somebody, this one says
+// who somebody is.
+// They are ADMITTED as well as recorded, because the portal's door asks
+// Active(): a record alone is a person the household has heard of and
+// not let in, and a fixture that leaves them there is testing a
+// half-onboarded member nobody meant to create. Tests about admission
+// itself record and admit by hand.
+func (h *harness) person(handles ...string) {
+	h.t.Helper()
+	for _, handle := range handles {
+		if err := h.s.DB.RecordButlerMember(handle, runtimedb.RoleMember, "", ""); err != nil {
+			h.t.Fatalf("recording %q: %v", handle, err)
+		}
+		if err := h.s.DB.AdmitButlerMember(handle, "fixture"); err != nil {
+			h.t.Fatalf("admitting %q: %v", handle, err)
+		}
+	}
+}
+
+// console records handle as a household member and returns a token for
+// role that ACTS FOR them — a Console caller.
+//
+// A Butler turn is had by a person (#240): it can write memory, file
+// work and raise a notice, and every one of those now names a Person
+// rather than whatever the caller authenticated as. A bare machine
+// token has nobody behind it, so the endpoint refuses it — which is why
+// every fixture that asks a Butler mints one of these instead.
+func (h *harness) console(role runtimedb.Role, handle string) string {
+	h.t.Helper()
+	h.person(handle)
+	tok, err := h.s.Principals.Mint(principalNameFor(h.t, role), handle, 0)
+	if err != nil {
+		h.t.Fatalf("minting a %s token acting for %q: %v", role, handle, err)
+	}
+	return tok
+}
+
+func principalNameFor(t *testing.T, role runtimedb.Role) string {
+	t.Helper()
+	switch role {
+	case runtimedb.RoleAdmin:
+		return "root-admin"
+	case runtimedb.RoleOperator:
+		return "op"
+	case runtimedb.RoleButler:
+		return "butler"
+	case runtimedb.RoleConcierge:
+		return "concierge"
+	case runtimedb.RoleValet:
+		return "valet"
+	}
+	t.Fatalf("no principal in the harness holds the role %q", role)
+	return ""
 }
 
 // do issues a request with the given role's token ("" = unauthenticated)

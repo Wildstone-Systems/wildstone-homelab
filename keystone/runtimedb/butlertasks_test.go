@@ -37,7 +37,7 @@ func evidence() ButlerTaskEvidence {
 }
 
 func TestButlerTaskRoundTrip(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	session := newSession(t, db, "looking now", []ButlerTurn{
 		{Role: ButlerRoleUser, Text: "why is n2 offline?"},
 		{Role: ButlerRoleAssistant, Text: "looking now"},
@@ -87,7 +87,7 @@ func TestButlerTaskRoundTrip(t *testing.T) {
 // point back. Attribution recorded in 0003/0014 stays exactly as it was
 // (ADR-W030 P1).
 func TestButlerTaskDoesNotRewriteConversationAttribution(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	session := newSession(t, db, "answered", []ButlerTurn{
 		{Role: ButlerRoleUser, Text: "status?"},
 		{Role: ButlerRoleAssistant, Text: "answered"},
@@ -141,7 +141,7 @@ func TestButlerTaskRequiresAuthorityMetadata(t *testing.T) {
 }
 
 func TestButlerTaskTransitionsAreClosed(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	id := newTask(t, db, nil)
 
 	if err := db.TransitionButlerTask(id, ButlerTaskFailed, "no such node", "butler"); err == nil {
@@ -174,7 +174,7 @@ func TestButlerTaskTransitionsAreClosed(t *testing.T) {
 // Completion requires evidence, at both layers: the store refuses an
 // empty set, and TransitionButlerTask cannot reach completed at all.
 func TestButlerTaskCannotCompleteWithoutEvidence(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	id := newTask(t, db, nil)
 	if err := db.TransitionButlerTask(id, ButlerTaskRunning, "", ""); err != nil {
 		t.Fatal(err)
@@ -207,7 +207,7 @@ func TestButlerTaskCannotCompleteWithoutEvidence(t *testing.T) {
 // dies between "write the evidence" and "flip the state" must leave work
 // to finish, never a completed task that never delivered.
 func TestButlerTaskCompletionIsRefusedBySchemaWithoutEvidence(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	id := newTask(t, db, nil)
 	seq, err := parseButlerTaskID(id)
 	if err != nil {
@@ -236,6 +236,9 @@ func TestButlerTaskInterruptedBetweenEvidenceAndCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Reopened by path rather than through openWith, so the cast is
+	// recorded here.
+	record(t, db, "sam", "mika")
 	id := newTask(t, db, nil)
 	if err := db.TransitionButlerTask(id, ButlerTaskRunning, "", ""); err != nil {
 		t.Fatal(err)
@@ -272,7 +275,7 @@ func TestButlerTaskInterruptedBetweenEvidenceAndCompletion(t *testing.T) {
 }
 
 func TestButlerEvidenceRequiresPermissionMetadata(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	id := newTask(t, db, nil)
 	for name, mutate := range map[string]func(*ButlerTaskEvidence){
 		"no permission label": func(e *ButlerTaskEvidence) { e.PermissionLabel = "" },
@@ -297,7 +300,7 @@ func TestButlerEvidenceRequiresPermissionMetadata(t *testing.T) {
 }
 
 func TestButlerStepsAndAttemptsCheckpoint(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	id := newTask(t, db, nil)
 	step, err := db.AppendButlerTaskStep(id, ButlerTaskStep{
 		Kind: ButlerStepTool, Name: "node_status", ParamsJSON: `{"node":"n2"}`,
@@ -343,7 +346,7 @@ func TestButlerStepsAndAttemptsCheckpoint(t *testing.T) {
 // finally answers, its result is refused rather than applied over the
 // state the fencing settled (ADR-W030 A4).
 func TestButlerAttemptFencedByNewerEpoch(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	id := newTask(t, db, nil)
 	step, err := db.AppendButlerTaskStep(id, ButlerTaskStep{Kind: ButlerStepModel, Name: "answer"})
 	if err != nil {
@@ -386,7 +389,7 @@ func TestButlerAttemptFencedByNewerEpoch(t *testing.T) {
 }
 
 func TestButlerTaskWaitsAreSingleAndClosed(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	id := newTask(t, db, nil)
 	if err := db.TransitionButlerTask(id, ButlerTaskRunning, "", ""); err != nil {
 		t.Fatal(err)
@@ -429,17 +432,21 @@ func TestButlerTaskWaitsAreSingleAndClosed(t *testing.T) {
 // Offboarding transfers operational ownership and preserves authorship
 // (ADR-W030 A4). The store enforces the second half.
 func TestButlerTaskAuthorshipIsImmutable(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "sam", "mika")
 	id := newTask(t, db, func(task *ButlerTask) {
 		task.Author = "sam"
 		task.Owner = "sam"
 		task.Audience = ButlerAudienceShared
 	})
 	seq, _ := parseButlerTaskID(id)
-	if _, err := db.sql.Exec(`UPDATE butler_tasks SET owner = 'mika' WHERE seq = ?`, seq); err != nil {
+	if _, err := db.sql.Exec(
+		`UPDATE butler_tasks SET owner_person_id = (SELECT person_id FROM butler_members WHERE member = 'mika')
+		 WHERE seq = ?`, seq); err != nil {
 		t.Fatalf("transferring ownership: %v", err)
 	}
-	if _, err := db.sql.Exec(`UPDATE butler_tasks SET author = 'mika' WHERE seq = ?`, seq); err == nil {
+	if _, err := db.sql.Exec(
+		`UPDATE butler_tasks SET author_person_id = (SELECT person_id FROM butler_members WHERE member = 'mika')
+		 WHERE seq = ?`, seq); err == nil {
 		t.Fatal("authorship was rewritten")
 	}
 	got, _ := db.GetButlerTask(id)
@@ -449,7 +456,7 @@ func TestButlerTaskAuthorshipIsImmutable(t *testing.T) {
 }
 
 func TestButlerTraceRequiresPermissionMetadata(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	id := newTask(t, db, nil)
 	base := ButlerTraceEvent{
 		Type: TraceToolDispatched, PermissionLabel: "operator",
@@ -499,7 +506,7 @@ func TestButlerTraceRequiresPermissionMetadata(t *testing.T) {
 // The trace and the transition history are append-only. Retention may
 // DELETE them; nothing may edit them after the fact (ADR-W030 A11).
 func TestButlerTraceAndHistoryAreAppendOnly(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	id := newTask(t, db, nil)
 	if err := db.AppendButlerTraceEvent(id, ButlerTraceEvent{
 		Type: TraceOutcome, PermissionLabel: "operator", Audience: ButlerAudiencePrivate,
@@ -526,7 +533,7 @@ func TestButlerTraceAndHistoryAreAppendOnly(t *testing.T) {
 
 // The whole point of a durable ledger: what is running after a restart.
 func TestButlerTasksInStateIsTheResumeQueue(t *testing.T) {
-	db := open(t)
+	db := openWith(t, "mika")
 	running := newTask(t, db, nil)
 	newTask(t, db, nil) // stays pending
 	if err := db.TransitionButlerTask(running, ButlerTaskRunning, "", ""); err != nil {

@@ -41,6 +41,7 @@ func failedTurnTask(t *testing.T, h *harness) string {
 // next turn resumes it instead of starting over.
 func TestAFailedTurnKeepsItsDurableTask(t *testing.T) {
 	h := newHarness(t)
+	h.person("sam")
 	taskID := failedTurnTask(t, h)
 
 	out := h.s.preserveFailedTurn(
@@ -105,6 +106,7 @@ func TestATurnThatFailedBeforeAnyWorkKeepsNothing(t *testing.T) {
 // it — while the activity line still claims the calls were kept.
 func TestAFailedFollowUpKeepsItsCompletedCalls(t *testing.T) {
 	h := newHarness(t)
+	h.person("sam")
 
 	// A first, successful-looking turn, so there is a session to append
 	// to and a prior context pointing at it.
@@ -257,6 +259,7 @@ func TestHandlePassesAPreservedBodyThroughOnError(t *testing.T) {
 // nobody told.
 func TestAFailedTurnStillSubmitsAnAcceptedProposal(t *testing.T) {
 	h := newHarness(t)
+	h.person("sam")
 	taskID := failedTurnTask(t, h)
 
 	out := h.s.preserveFailedTurn(

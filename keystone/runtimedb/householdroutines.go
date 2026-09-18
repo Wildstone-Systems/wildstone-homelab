@@ -411,11 +411,18 @@ func (db *DB) IssueHouseholdReviewToken(planID, member, issuedBy string, routine
 	if routineSeq != 0 {
 		routine = routineSeq
 	}
+	// The token names the person it was issued to, by identity. A token
+	// that stops resolving because its holder was renamed is nearly as
+	// useless as one that works for whoever holds it.
+	person, err := resolvePersonID(db.sql, member)
+	if err != nil {
+		return "", fmt.Errorf("runtimedb: issuing a review token: %w", err)
+	}
 	if _, err := db.sql.Exec(
-		`INSERT INTO household_review_tokens (hash, plan_id, routine, revision, member,
+		`INSERT INTO household_review_tokens (hash, plan_id, routine, revision, person_id,
 		     created_at, created_by, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		hashReviewToken(secret), planID, routine, revision, member, now(), issuedBy,
+		hashReviewToken(secret), planID, routine, revision, person, now(), issuedBy,
 		time.Now().UTC().Add(ttl).Format(time.RFC3339Nano)); err != nil {
 		return "", fmt.Errorf("runtimedb: issuing a review token: %w", err)
 	}
@@ -447,8 +454,9 @@ func (db *DB) RedeemHouseholdReviewToken(secret, member string) (planID string, 
 	var routine sql.NullInt64
 	var revision int
 	err = tx.QueryRow(
-		`SELECT plan_id, member, routine, revision, expires_at, used_at
-		 FROM household_review_tokens WHERE hash = ?`, hashReviewToken(secret)).
+		`SELECT k.plan_id, p.member, k.routine, k.revision, k.expires_at, k.used_at
+		 FROM household_review_tokens k JOIN butler_members p ON p.person_id = k.person_id
+		 WHERE k.hash = ?`, hashReviewToken(secret)).
 		Scan(&planID, &tokenMember, &routine, &revision, &expires, &used)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrReviewToken

@@ -127,6 +127,10 @@ var categoryOf = map[string]string{
 	"inventory":       "house",
 	"budget":          "house",
 	"passwords":       "house",
+	// A calendar is where a household writes down where its people will
+	// be. It belongs with the other things the house runs on rather than
+	// with mail, which is somebody else's account.
+	"calendar": "house",
 	// Files and photos.
 	"photos":    "files",
 	"files":     "files",

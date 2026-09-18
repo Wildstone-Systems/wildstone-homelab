@@ -200,9 +200,28 @@ func Survey(q Querier) (Report, error) {
 		principalsByFold[fold(name)] = true
 	}
 
+	// Both tables, filtered by what this database actually has. On a
+	// deployment still at 0039 that is LegacyColumns; on one past 0043
+	// it is the person_id columns, which hold no free text and are
+	// skipped below. Nothing is surveyed twice, because 0043 replaced
+	// each legacy column rather than adding beside it.
 	uses := map[string][]Use{}
-	for _, c := range Columns {
+	for _, c := range append(append([]Column{}, Columns...), LegacyColumns...) {
 		if c.Kind == NotAPerson {
+			continue
+		}
+		// A person_id column holds an identity, not a handle, so there
+		// is nothing here to resolve: a value naming nobody is a broken
+		// foreign key, which the database refuses outright rather than
+		// leaving for a report to notice.
+		if c.Kind == PersonID {
+			continue
+		}
+		present, err := columnExists(q, c.Table, c.Column)
+		if err != nil {
+			return Report{}, err
+		}
+		if !present {
 			continue
 		}
 		// Two columns hold a person's handle without REFERRING to one,
@@ -384,3 +403,22 @@ func distinct(q Querier, c Column) (map[group]int, error) {
 // the same person as "sam" to everyone except a byte comparison, and
 // leaving that to chance is how a rename orphans a row.
 func fold(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+
+// columnExists asks the live schema rather than assuming it.
+//
+// The classification spans both sides of migration 0043, and this is
+// what keeps that honest: a column the database does not have is not
+// surveyed, so the same binary reports correctly against a deployment
+// that has migrated and one that has not.
+func columnExists(q Querier, table, column string) (bool, error) {
+	rows, err := q.Query(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column)
+	if err != nil {
+		return false, fmt.Errorf("personref: checking for %s.%s: %w", table, column, err)
+	}
+	defer rows.Close()
+	found := rows.Next()
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("personref: checking for %s.%s: %w", table, column, err)
+	}
+	return found, nil
+}

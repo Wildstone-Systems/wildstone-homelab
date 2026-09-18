@@ -228,13 +228,25 @@ func (db *DB) InsertButlerTask(t ButlerTask) (string, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Author and owner are people, so they are stored as identities.
+	// Resolved inside this transaction: a rename between the resolve and
+	// the insert would otherwise attach the task to the wrong snapshot
+	// of who exists.
+	author, err := resolvePersonID(tx, t.Author)
+	if err != nil {
+		return "", fmt.Errorf("runtimedb: inserting butler task: the author %w", err)
+	}
+	owner, err := resolvePersonID(tx, t.Owner)
+	if err != nil {
+		return "", fmt.Errorf("runtimedb: inserting butler task: the owner %w", err)
+	}
 	res, err := tx.Exec(
-		`INSERT INTO butler_tasks (created_at, updated_at, kind, state, author, owner,
+		`INSERT INTO butler_tasks (created_at, updated_at, kind, state, author_person_id, owner_person_id,
 		     surface, profile, audience, session, origin_turn, correlation_id, objective,
 		     completion_criteria, grants_json, budget_json, deadline_at, next_wakeup_at,
 		     lease_epoch, uncertainty, result_summary, retention, envelope_version)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?)`,
-		stamp, stamp, string(t.Kind), string(ButlerTaskPending), t.Author, t.Owner,
+		stamp, stamp, string(t.Kind), string(ButlerTaskPending), author, owner,
 		string(t.Surface), t.Profile, string(t.Audience), session, originTurn,
 		t.CorrelationID, t.Objective, t.CompletionCriteria, grants, budget,
 		timeText(t.DeadlineAt), timeText(t.NextWakeupAt),
@@ -266,7 +278,7 @@ func (db *DB) GetButlerTask(id string) (ButlerTask, error) {
 	if err != nil {
 		return ButlerTask{}, err
 	}
-	return scanButlerTask(db.sql.QueryRow(butlerTaskColumns+` WHERE seq = ?`, seq))
+	return scanButlerTask(db.sql.QueryRow(butlerTaskColumns+` WHERE t.seq = ?`, seq))
 }
 
 // SetButlerTaskSession points a task at the conversation it belongs to.
@@ -331,14 +343,19 @@ func (db *DB) ButlerTaskForSession(sessionID string) (ButlerTask, error) {
 		return ButlerTask{}, fmt.Errorf("runtimedb: malformed butler session id %q", sessionID)
 	}
 	return scanButlerTask(db.sql.QueryRow(
-		butlerTaskColumns+` WHERE session = ? ORDER BY seq DESC LIMIT 1`, seq))
+		butlerTaskColumns+` WHERE t.session = ? ORDER BY t.seq DESC LIMIT 1`, seq))
 }
 
-const butlerTaskColumns = `SELECT seq, created_at, updated_at, kind, state, author, owner,
-	 surface, profile, audience, session, origin_turn, correlation_id, objective,
-	 completion_criteria, grants_json, budget_json, deadline_at, next_wakeup_at,
-	 lease_epoch, uncertainty, result_summary, retention, envelope_version
-	 FROM butler_tasks`
+// Author and owner come back as the handles those people carry now, so
+// a task reads the same after either of them is renamed.
+const butlerTaskColumns = `SELECT t.seq, t.created_at, t.updated_at, t.kind, t.state,
+	 a.member, o.member,
+	 t.surface, t.profile, t.audience, t.session, t.origin_turn, t.correlation_id, t.objective,
+	 t.completion_criteria, t.grants_json, t.budget_json, t.deadline_at, t.next_wakeup_at,
+	 t.lease_epoch, t.uncertainty, t.result_summary, t.retention, t.envelope_version
+	 FROM butler_tasks t
+	 JOIN butler_members a ON a.person_id = t.author_person_id
+	 JOIN butler_members o ON o.person_id = t.owner_person_id`
 
 func scanButlerTask(row rowScanner) (ButlerTask, error) {
 	var t ButlerTask
@@ -400,11 +417,17 @@ func (db *DB) ListButlerTasks(limit int, owner string) ([]ButlerTask, error) {
 	}
 	where, args := "", []any{}
 	if owner != "" {
-		where = " WHERE owner = ?"
-		args = append(args, owner)
+		// Listing somebody else's work is a read, so an owner nobody
+		// knows lists nothing rather than failing.
+		id, err := personIDForRead(db.sql, owner)
+		if err != nil {
+			return nil, err
+		}
+		where = " WHERE t.owner_person_id = ?"
+		args = append(args, id)
 	}
 	args = append(args, limit)
-	rows, err := db.sql.Query(butlerTaskColumns+where+` ORDER BY seq DESC LIMIT ?`, args...)
+	rows, err := db.sql.Query(butlerTaskColumns+where+` ORDER BY t.seq DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing butler tasks: %w", err)
 	}
@@ -415,7 +438,7 @@ func (db *DB) ListButlerTasks(limit int, owner string) ([]ButlerTask, error) {
 // ButlerTasksInState returns every task in state, oldest first — the
 // resume queue after a restart.
 func (db *DB) ButlerTasksInState(state ButlerTaskState) ([]ButlerTask, error) {
-	rows, err := db.sql.Query(butlerTaskColumns+` WHERE state = ? ORDER BY seq`, string(state))
+	rows, err := db.sql.Query(butlerTaskColumns+` WHERE t.state = ? ORDER BY t.seq`, string(state))
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing butler tasks in %s: %w", state, err)
 	}

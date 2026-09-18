@@ -25,6 +25,15 @@ func TestChatTransportsAreTheInstalledAdapters(t *testing.T) {
 		t.Fatalf("transports with nothing installed = %+v, want none", none)
 	}
 
+	// The harness mints every adapter's credential up front, because a
+	// bot's credential is what names its Connection now (ADR-W033 B7).
+	// This test is about the state BEFORE credentialing, so it revokes
+	// that token first — which is also the honest way to say what
+	// "uncredentialed" means: no live token, however it got that way.
+	if _, err := h.s.DB.RevokeTokensFor(chatAdapterPrincipalPrefix + "chat-telegram-family"); err != nil {
+		t.Fatal(err)
+	}
+
 	// Install the family Telegram adapter, the way the capability
 	// engine records it: a resource owned by the capability.
 	if err := h.s.State.Put(resource.Resource{
@@ -43,8 +52,16 @@ func TestChatTransportsAreTheInstalledAdapters(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("transports = %+v, want one", got)
 	}
-	if got[0].Transport != "telegram" || got[0].Surface != "family" || !got[0].Installed {
-		t.Fatalf("transport = %+v, want an installed family telegram", got[0])
+	if got[0].Transport != "telegram" || !got[0].Installed {
+		t.Fatalf("transport = %+v, want an installed telegram adapter", got[0])
+	}
+	// Installed and not yet assigned: a bot belongs to one Agent, and
+	// nobody has given this one an address (ADR-W033 B7). The listing
+	// says so rather than reporting the surface its name happens to
+	// end in, which said which CLASS of Agent might answer and never
+	// which one.
+	if got[0].Butler != "" {
+		t.Fatalf("butler = %q, want none before the bot is given an agent", got[0].Butler)
 	}
 	// Installed but not yet credentialed: the adapter is running and
 	// cannot reach Keystone, so a code issued for it is unredeemable.
@@ -58,10 +75,9 @@ func TestChatTransportsAreTheInstalledAdapters(t *testing.T) {
 	// The principal alone is not a credential. Credentialing mints a
 	// token AND places it on the node; a placement that fails revokes
 	// the token and leaves the principal behind, and reading that as
-	// done would mark a failed step complete.
-	if err := h.s.Principals.Create(chatAdapterPrincipalPrefix+"chat-telegram-family", runtimedb.RoleConcierge, ""); err != nil {
-		t.Fatal(err)
-	}
+	// done would mark a failed step complete. The principal already
+	// exists here — the harness made it — which is exactly the state
+	// that revocation leaves behind.
 	got = nil
 	h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/chat/transports", nil, &got)
 	if len(got) != 1 || got[0].Credentialed {
@@ -107,7 +123,7 @@ func TestChatClaimIsCheckedAgainstTheDeployment(t *testing.T) {
 	// Nothing installed at all: the refusal says so rather than minting
 	// a code with no bot to send it to.
 	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/chat/claims", map[string]any{
-		"surface": "family", "identity": "sam", "transport": "telegram",
+		"butler": agentFor("family"), "identity": "sam", "transport": "telegram",
 	}, nil); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("no adapter: status = %d, want 400", resp.StatusCode)
 	}
@@ -116,21 +132,21 @@ func TestChatClaimIsCheckedAgainstTheDeployment(t *testing.T) {
 
 	// A member who was never declared.
 	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/chat/claims", map[string]any{
-		"surface": "family", "identity": "smA", "transport": "telegram",
+		"butler": agentFor("family"), "identity": "smA", "transport": "telegram",
 	}, nil); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("unknown member: status = %d, want 400", resp.StatusCode)
 	}
 
 	// A transport this deployment has no adapter for.
 	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/chat/claims", map[string]any{
-		"surface": "family", "identity": "sam", "transport": "matrix",
+		"butler": agentFor("family"), "identity": "sam", "transport": "matrix",
 	}, nil); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("uninstalled transport: status = %d, want 400", resp.StatusCode)
 	}
 
 	// The one it does have works.
 	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/chat/claims", map[string]any{
-		"surface": "family", "identity": "sam", "transport": "telegram",
+		"butler": agentFor("family"), "identity": "sam", "transport": "telegram",
 	}, nil); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("installed transport: status = %d, want 201", resp.StatusCode)
 	}
@@ -142,7 +158,7 @@ func TestChatClaimIsCheckedAgainstTheDeployment(t *testing.T) {
 		t.Fatal(err)
 	}
 	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/chat/claims", map[string]any{
-		"surface": "family", "identity": "sam", "transport": "telegram",
+		"butler": agentFor("family"), "identity": "sam", "transport": "telegram",
 	}, nil); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("uncredentialed adapter: status = %d, want 400", resp.StatusCode)
 	}

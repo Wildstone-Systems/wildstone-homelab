@@ -48,6 +48,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 )
 
 const (
@@ -71,7 +72,15 @@ const (
 // infrastructure tier. A family session cannot restart a container for
 // the same reason a household rule cannot — that is a plan, and plans
 // live on the other surface.
-var householdActionTiers = map[string]bool{"read": true, "domestic": true}
+// householdActionTiers answers "may this surface carry an action at this
+// tier", and it delegates rather than keeping a list.
+//
+// This surface is the ATTENDED one — a family session is a person who
+// asked and is waiting — which is what makes `confirm` carryable here
+// and nowhere else (ADR-W024 A5.1). Saying that by passing `true` to the
+// one definition beats a second copy of the set that has to be
+// remembered when the first one changes.
+func householdActionTiers(tier string) bool { return domestic.TierAllowed(tier, true) }
 
 // HouseholdFact is one household event, already flattened into the small
 // shape this surface shows a model. The seam does the flattening so this
@@ -576,7 +585,7 @@ func (gw *HouseholdGateway) availableActions() ([]HouseholdAction, error) {
 	}
 	out := make([]HouseholdAction, 0, len(vocab.Actions))
 	for _, a := range vocab.Actions {
-		if householdActionTiers[a.Tier] {
+		if householdActionTiers(a.Tier) {
 			out = append(out, a)
 		}
 	}

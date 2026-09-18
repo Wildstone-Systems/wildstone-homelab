@@ -1,4 +1,4 @@
-# Chat (Matrix), family surface: the household's Butler on a homeserver
+# Chat (Matrix) for a MEMBER AGENT: the household's Butler on a homeserver
 # the household can run itself (ADR-W026 A2/A3, work package G5).
 #
 # THIS PACKAGE IS THE PROOF. It is the same adapter binary, the same
@@ -27,7 +27,7 @@
 #
 #  2. Mint its Keystone credential:
 #
-#        wild chat adapter chat-matrix-family -node <node> -surface family
+#        wild chat adapter chat-matrix-family -node <node> -butler <agent>
 #
 #  3. Set the access token, then enable the capability:
 #
@@ -35,7 +35,7 @@
 #
 #  4. Introduce people:
 #
-#        wild chat code -surface family -identity <member> -transport matrix
+#        wild chat code -butler <agent> -identity <member> -transport matrix
 #
 # THE IMAGE. As for the Telegram packages: build it from
 # cli/cmd/chat-adapter/Dockerfile and pass the digest. It must be
@@ -47,7 +47,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: chat-matrix-family
-  version: 1.0.2
+  version: 1.0.3
   capability: chat-matrix-family
   profile: matrix
 params:

@@ -16,12 +16,13 @@ bookmarks-linkding 1.0.1 7e6b58723ddbc0c6
 books-calibre-web 1.0.2 b202d14553db085e
 books-kavita 1.0.2 b3fde26c0d2b3b05
 budget-actual 1.1.0 68f1dfdf247433cc
+calendar-radicale 2.0.0 45df7218f8eefde7
 cameras-frigate 1.0.1 0ac585beb5876da1
 captcha-flaresolverr 1.0.1 6420402a747e2ee5
-chat-matrix-admin 1.0.2 b30335cccac333e3
-chat-matrix-family 1.0.2 45e17a94238eb43b
-chat-telegram-admin 1.0.2 81fda57e489701e6
-chat-telegram-family 1.0.2 985c13742423aaf2
+chat-matrix-admin 1.0.3 79c98d8ce2aafe03
+chat-matrix-family 1.0.3 498001d22dd17af9
+chat-telegram-admin 1.0.3 7af6584f75ffe23a
+chat-telegram-family 1.0.3 043ce5b37febd488
 code-gitea 1.0.1 44a8494cd02dee51
 dashboard 1.0.1 c0a5ca5341926568
 dashboard-homarr 1.0.3 d6ad61a6afaacde0
