@@ -350,3 +350,174 @@ func TestForwardedConsoleAuthRefusesAnAmbiguousHandle(t *testing.T) {
 		t.Fatalf("an ambiguous handle was admitted: %d", res.StatusCode)
 	}
 }
+
+// bearer issues a request with a specific token rather than the
+// harness's stock one for a role, because these tests are about a token
+// that names a PERSON and what happens to it when that person changes.
+func (h *harness) bearer(t *testing.T, token, method, path string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(method, h.srv.URL+path, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	res.Body.Close()
+	return res
+}
+
+// Demoting an Owner invalidates the elevated session they are HOLDING,
+// not just the next door they walk through (design §3.2, §18.1 —
+// "Demoting an Owner immediately invalidates Console access/session").
+//
+// The forward-auth door already refuses them on their next request, and
+// that is tested above. A token is the other half and the harder one: it
+// is minted once and then presented, so nothing re-derives the holder's
+// standing unless something asks. Authenticate checked the token was not
+// revoked or expired and the PRINCIPAL was not disabled — never that the
+// person it acts for is still someone who may hold this.
+//
+// So an Owner could mint themselves an admin token, be demoted, and keep
+// the whole control plane until the token expired. "Immediately" has to
+// mean the credential in their hand, or demotion is a door that locks
+// while the window stays open.
+func TestDemotionInvalidatesAnElevatedTokenHeldByThatPerson(t *testing.T) {
+	h := newHarness(t)
+	// A second Owner, so the demotion is not refused for leaving the
+	// household without one (§2.5).
+	for _, who := range []string{"consoleholder", "other"} {
+		if err := h.s.DB.RecordButlerMember(who, runtimedb.RoleOwner, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.s.DB.AdmitButlerMember(who, "root-admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	token, err := h.s.Principals.Mint("root-admin", "consoleholder", 0)
+	if err != nil {
+		t.Fatalf("minting: %v", err)
+	}
+
+	// It works while they are an Owner.
+	if res := h.bearer(t, token, http.MethodGet, "/api/v1/butlers"); res.StatusCode != http.StatusOK {
+		t.Fatalf("an owner's token: status = %d, want 200", res.StatusCode)
+	}
+
+	if err := h.s.DB.SetButlerMemberRole("consoleholder", runtimedb.RoleMember, "other"); err != nil {
+		t.Fatal(err)
+	}
+
+	if res := h.bearer(t, token, http.MethodGet, "/api/v1/butlers"); res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a demoted owner's token still works: status = %d, want 401", res.StatusCode)
+	}
+}
+
+// The same for the rest of the lifecycle, because demotion is only one
+// of the ways a person stops being someone who may hold this. An
+// offboarded or disabled person's token is the same hole wearing a
+// different hat.
+func TestAnElevatedTokenDiesWithThePersonItActsFor(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		end  func(t *testing.T, h *harness)
+	}{
+		{"disabled", func(t *testing.T, h *harness) {
+			if err := h.s.DB.DisableButlerMember("consoleholder", "other"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"offboarded", func(t *testing.T, h *harness) {
+			if err := h.s.DB.OffboardButlerMember("consoleholder", "other"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			for _, who := range []string{"consoleholder", "other"} {
+				if err := h.s.DB.RecordButlerMember(who, runtimedb.RoleOwner, "", ""); err != nil {
+					t.Fatal(err)
+				}
+				if err := h.s.DB.AdmitButlerMember(who, "root-admin"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			token, err := h.s.Principals.Mint("root-admin", "consoleholder", 0)
+			if err != nil {
+				t.Fatalf("minting: %v", err)
+			}
+			if res := h.bearer(t, token, http.MethodGet, "/api/v1/butlers"); res.StatusCode != http.StatusOK {
+				t.Fatalf("before: status = %d, want 200", res.StatusCode)
+			}
+			tc.end(t, h)
+			if res := h.bearer(t, token, http.MethodGet, "/api/v1/butlers"); res.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("after: status = %d, want 401", res.StatusCode)
+			}
+		})
+	}
+}
+
+// The counterpart, and the one that stops the fix above from being a
+// blunt instrument: a NON-elevated credential acting for a Member keeps
+// working, because that is what a household Butler is.
+//
+// A concierge acting for a Member holds converse and nothing else. If
+// the acting-person check demanded Owner of every token, every family
+// chat binding would stop the moment it shipped — the fix would have
+// closed an escalation by breaking the ordinary case, which is how a
+// security change gets reverted rather than kept.
+func TestAMembersOwnCredentialIsNotRevokedByBeingAMember(t *testing.T) {
+	h := newHarness(t)
+	if err := h.s.DB.RecordButlerMember("sam", runtimedb.RoleMember, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.AdmitButlerMember("sam", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.Principals.Create("family-bot", runtimedb.RoleConcierge, ""); err != nil {
+		t.Fatal(err)
+	}
+	token, err := h.s.Principals.Mint("family-bot", "sam", 0)
+	if err != nil {
+		t.Fatalf("minting: %v", err)
+	}
+	// A route a concierge may reach: converse, not manage.
+	res := h.bearer(t, token, http.MethodGet, "/api/v1/chat/outbound?butler=nobody")
+	if res.StatusCode == http.StatusUnauthorized {
+		t.Fatal("a member's own concierge credential was refused for being a member's")
+	}
+
+	// But offboarding them still stops it: lifecycle applies to
+	// everybody, and it is only the OWNER requirement that is scoped to
+	// elevated credentials.
+	if err := h.s.DB.OffboardButlerMember("sam", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if res := h.bearer(t, token, http.MethodGet, "/api/v1/chat/outbound?butler=nobody"); res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("an offboarded member's credential: status = %d, want 401", res.StatusCode)
+	}
+}
+
+// A machine credential that acts for nobody is untouched.
+//
+// Most of the control plane runs on these — the adapters, the node
+// agent, root-admin itself before anybody is on record — and a check
+// that resolved "" to "no such person" would have failed them all
+// closed. Worth its own test because the empty case is the one a later
+// refactor drops.
+func TestACredentialActingForNobodyIsUnaffected(t *testing.T) {
+	h := newHarness(t)
+	if err := h.s.DB.RecordButlerMember("consoleholder", runtimedb.RoleMember, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	token, err := h.s.Principals.Mint("root-admin", "", 0)
+	if err != nil {
+		t.Fatalf("minting: %v", err)
+	}
+	if res := h.bearer(t, token, http.MethodGet, "/api/v1/butlers"); res.StatusCode != http.StatusOK {
+		t.Fatalf("a credential acting for nobody: status = %d, want 200", res.StatusCode)
+	}
+}
