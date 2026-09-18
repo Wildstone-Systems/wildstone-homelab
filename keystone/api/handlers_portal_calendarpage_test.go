@@ -277,3 +277,53 @@ func TestAnEventsAddressSurvivesTheResponseAndCanBeRemoved(t *testing.T) {
 		t.Errorf("deleted %v, want [%s]", book.deletes, want)
 	}
 }
+
+// The page shows an event's place and note, sends a new one's only when
+// filled in, and on a change always sends both — so emptying the place
+// on the page clears it instead of leaving it behind.
+func TestThePagesPlaceAndNotesRoundTrip(t *testing.T) {
+	h, book := calendarHarness(t)
+	loc := h.s.HouseholdLoc
+	book.events = []caldav.Event{{
+		Href: "/GROUPS/Y2FsZW5kYXJfdXNlcnM%3D/w.ics", Summary: "Work Day",
+		Start: time.Date(2026, 9, 19, 6, 0, 0, 0, loc), End: time.Date(2026, 9, 19, 19, 0, 0, 0, loc),
+		Location: "At work", Description: "Take out the trash",
+	}}
+	res := h.member(http.MethodGet, "/api/v1/calendar/events?from=2026-09-19&to=2026-09-19", "mika", "calendar_users", nil, "")
+	var out struct {
+		Events []map[string]any `json:"events"`
+	}
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	res.Body.Close()
+	if len(out.Events) != 1 || out.Events[0]["location"] != "At work" || out.Events[0]["notes"] != "Take out the trash" {
+		t.Fatalf("the page was not given the place and note: %v", out.Events)
+	}
+
+	h.unthrottled()
+	if res, body := h.calendarPost("/api/v1/calendar/events", map[string]any{
+		"title": "Dentist", "date": "2026-09-22", "startTime": "09:00", "endTime": "09:30",
+	}); res.StatusCode != http.StatusOK {
+		t.Fatalf("create = %d: %v", res.StatusCode, body)
+	}
+	if w := book.writes[0]; w.Location != nil || w.Description != nil {
+		t.Errorf("an add with no place or note still sent them: %v %v", w.Location, w.Description)
+	}
+
+	h.unthrottled()
+	if res, body := h.calendarPost("/api/v1/calendar/events/update", map[string]any{
+		"href": "/GROUPS/Y2FsZW5kYXJfdXNlcnM%3D/w.ics", "title": "Work Day", "date": "2026-09-19",
+		"startTime": "06:00", "endTime": "19:00", "location": "", "notes": "Take out the trash",
+	}); res.StatusCode != http.StatusOK {
+		t.Fatalf("update = %d: %v", res.StatusCode, body)
+	}
+	w := book.writes[1]
+	if w.Location == nil || *w.Location != "" {
+		t.Errorf("an emptied place was not sent as a clear: %v", w.Location)
+	}
+	if w.Description == nil || *w.Description != "Take out the trash" {
+		t.Errorf("the note was not sent: %v", w.Description)
+	}
+	if w.Start != "2026-09-19T06:00:00-05:00" || w.End != "2026-09-19T19:00:00-05:00" {
+		t.Errorf("the times moved: %s..%s", w.Start, w.End)
+	}
+}

@@ -88,6 +88,9 @@ type calendarPageEvent struct {
 	// zone, empty for an all-day event.
 	StartTime string `json:"startTime,omitempty"`
 	EndTime   string `json:"endTime,omitempty"`
+	// Location and Notes are the event's place and description.
+	Location string `json:"location,omitempty"`
+	Notes    string `json:"notes,omitempty"`
 }
 
 func (s *Server) calendarLoc() *time.Location {
@@ -154,7 +157,8 @@ func (s *Server) calendarPageEvents(_ http.ResponseWriter, r *http.Request, _ st
 }
 
 func pageEvent(e caldav.Event, loc *time.Location) calendarPageEvent {
-	p := calendarPageEvent{Href: e.Href, Title: e.Summary, Start: e.Start, End: e.End, AllDay: e.AllDay}
+	p := calendarPageEvent{Href: e.Href, Title: e.Summary, Start: e.Start, End: e.End, AllDay: e.AllDay,
+		Location: e.Location, Notes: e.Description}
 	if e.AllDay {
 		// A DATE is a calendar day, not an instant: read its fields as
 		// they are rather than converting them through a zone. DTEND is
@@ -195,11 +199,15 @@ type calendarPageWrite struct {
 	StartTime string `json:"startTime,omitempty"`
 	EndTime   string `json:"endTime,omitempty"`
 	Location  string `json:"location,omitempty"`
+	Notes     string `json:"notes,omitempty"`
 }
 
 // toEventWrite turns the page's dates and times into the adapter's
 // RFC3339 window. All-day ends are exclusive, as iCalendar has them.
-func (w calendarPageWrite) toEventWrite(loc *time.Location) (caldav.EventWrite, error) {
+//
+// On a change (existing), place and notes are always sent, so emptying
+// one on the page clears it; on an add, only what was filled in is.
+func (w calendarPageWrite) toEventWrite(loc *time.Location, existing bool) (caldav.EventWrite, error) {
 	title := strings.TrimSpace(w.Title)
 	if title == "" {
 		return caldav.EventWrite{}, fmt.Errorf("give the event a name")
@@ -218,8 +226,12 @@ func (w calendarPageWrite) toEventWrite(loc *time.Location) (caldav.EventWrite, 
 		}
 	}
 	out := caldav.EventWrite{Summary: &title, AllDay: w.AllDay}
-	if where := strings.TrimSpace(w.Location); where != "" {
+	where, notes := strings.TrimSpace(w.Location), strings.TrimSpace(w.Notes)
+	if existing || where != "" {
 		out.Location = &where
+	}
+	if existing || notes != "" {
+		out.Description = &notes
 	}
 	if w.AllDay {
 		out.Start = day.Format("2006-01-02")
@@ -299,7 +311,7 @@ func (s *Server) calendarPageCreate(_ http.ResponseWriter, r *http.Request, memb
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
-	w, err := req.toEventWrite(s.calendarLoc())
+	w, err := req.toEventWrite(s.calendarLoc(), false)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
@@ -324,7 +336,7 @@ func (s *Server) calendarPageUpdate(_ http.ResponseWriter, r *http.Request, memb
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
-	w, err := req.toEventWrite(s.calendarLoc())
+	w, err := req.toEventWrite(s.calendarLoc(), true)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}

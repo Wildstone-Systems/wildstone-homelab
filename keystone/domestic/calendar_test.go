@@ -178,7 +178,7 @@ func TestAgendaReadsAsAnAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Today", "2 things", "08:00 School run", "18:30 Dinner with Sam"} {
+	for _, want := range []string{"Today", "2 things", "08:00-08:30 School run", "18:30-20:00 Dinner with Sam"} {
 		if !strings.Contains(got.Summary, want) {
 			t.Errorf("the agenda summary does not contain %q — a model reads this back to the household:\n%s",
 				want, got.Summary)
@@ -827,7 +827,7 @@ func TestATimeInItsOwnZoneKeepsItsHour(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"18:00 Dinner", "16:00 Piano"} {
+	for _, want := range []string{"18:00-19:00 Dinner", "16:00-16:30 Piano"} {
 		if !strings.Contains(got.Summary, want) {
 			t.Errorf("want %q in the agenda (a TZID time in its zone, a floating time on the household's clock):\n%s",
 				want, got.Summary)
@@ -850,5 +850,23 @@ func TestEveryCalendarToolDescribesItsInputs(t *testing.T) {
 	}
 	if g.Usage("calendar.no_such_tool") != "" {
 		t.Error("an unregistered tool reported a usage")
+	}
+}
+
+// The agenda a Butler reads back carries the end, the place and the
+// note: the Work Day conversation ended with Joan saying title and start
+// time were all it could see, while the note sat in the event.
+func TestTheAgendaCarriesTheEndThePlaceAndTheNote(t *testing.T) {
+	workDay := strings.Join([]string{
+		"BEGIN:VEVENT", "UID:w", "SUMMARY:Work Day",
+		"DTSTART:20260918T110000Z", "DTEND:20260919T000000Z",
+		"LOCATION:Office", "DESCRIPTION:Need to take out the trash.", "END:VEVENT",
+	}, "\r\n")
+	got, err := run(t, calendarUnder(newFakeCalendar(t, workDay)), CalToolAgenda, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "06:00-19:00 Work Day (at: Office) [notes: Need to take out the trash.]"; !strings.Contains(got.Summary, want) {
+		t.Errorf("want %q in:\n%s", want, got.Summary)
 	}
 }
