@@ -557,7 +557,11 @@ check("rail draws the divider it was asked for", rail.includes("divider"));
 // Unauthorised is the state a fresh install sees first, and the one
 // screen that has to work before anything else does.
 const gate = renderToString(h(TokenGate, { onDone: () => {} }));
-check("gate asks for a token", gate.includes("Paste an API token"));
+check("gate asks for a token", gate.includes("paste an API token"));
+// Two ways in, and the screen used to name one. An operator who chose a
+// username and password at install found nothing here that matched what
+// they had been given.
+check("gate names signing in as yourself first", gate.includes("username and password you chose"), gate.slice(0, 700));
 check("gate names the tool that mints more", gate.includes("wild"));
 check("gate labels its input", gate.includes('aria-label="API token"'), gate);
 

@@ -269,8 +269,20 @@ function initials(name: string): string {
   return (parts[0][0] + parts[1][0]).toLowerCase();
 }
 
-// TokenGate (ADR-W016 A3): paste an API token; verified with whoami
-// before it is kept, and kept only in sessionStorage.
+// TokenGate (ADR-W016 A3): the way in when the identity proxy is not
+// the one asking. The token is verified with whoami before it is kept,
+// and kept only in sessionStorage.
+//
+// It says BOTH ways now, because there are two and this screen only
+// ever admitted to one. The ordinary way in is the account the installer
+// created: an Owner signs in through the identity proxy, which asserts
+// who they are and never reaches this page at all. A token is the other
+// way — a deployment with no ingress yet, a recovery session, a script.
+//
+// Naming only the token made the Console look like a machine surface
+// with a password-shaped hole, and left an operator who had just chosen
+// a username and password at install with nothing here that matched what
+// they had been given (design §2.4).
 export function TokenGate({ onDone }: { onDone: () => void }) {
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -294,8 +306,14 @@ export function TokenGate({ onDone }: { onDone: () => void }) {
           <ShieldCheck size={22} weight="fill" color="var(--color-accent)" />
           <h3 style={{ margin: 0 }}>Wildstone Console</h3>
         </div>
+        <div className="muted" style={{ marginBottom: "var(--space-3)" }}>
+          If your household has a sign-in page, use it — you reach the Console as
+          yourself, with the username and password you chose when Wildstone was
+          installed. You will not see this screen.
+        </div>
         <div className="muted" style={{ marginBottom: "var(--space-4)" }}>
-          Paste an API token (first start printed one; mint more with wild).
+          Otherwise, paste an API token (first start printed one; mint more with
+          wild).
         </div>
         <div className="row">
           <input

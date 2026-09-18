@@ -126,26 +126,68 @@ func TestInstallerGivesTheFirstOwnerNoPermanentPrivilege(t *testing.T) {
 	}
 }
 
-// The installer holds no human credential.
+// The password the operator types is set on the account they named.
 //
-// It used to prompt for a password and set it on LLDAP's built-in
-// `admin` — so the account the operator was told they were creating did
-// not exist, and the password they chose belonged to somebody else. The
-// password prompt is gone; the directory's own service password is
-// generated and never shown.
+// This is the defect the slice found, stated as a test. The installer
+// used to prompt for a password and set it on LLDAP's built-in `admin`,
+// so an operator who typed "mika" was told they had an account called
+// mika, had none, and signed in as admin. The two facts that make that
+// impossible now are asserted together, because either alone is the bug:
+// a password is collected, AND it is set on $ADMIN_USER.
 //
-// ADR-W020 A4 is the rule: the credential is never Wildstone's. This is
-// the test that the installer keeps to it.
-func TestInstallerCollectsNoPassword(t *testing.T) {
+// ADR-W033 supersedes ADR-W020 A4 for the first Owner; see the note on
+// A4. Everyone after them still gets a claim code.
+func TestInstallerSetsTheOperatorsPasswordOnTheirOwnAccount(t *testing.T) {
 	src := installerSource(t)
-	if strings.Contains(src, "ADMIN_PASS") {
-		t.Error("the installer still carries an operator password (ADR-W020 A4)")
+	if !strings.Contains(src, "ADMIN_PASS") {
+		t.Fatal("the installer no longer collects a password (design §2.4)")
 	}
-	if strings.Contains(src, "with the password you chose") {
-		t.Error("the installer still tells the operator to sign in with a password it never set for them")
+	if !strings.Contains(src, "set_owner_password") {
+		t.Fatal("the installer collects a password and never sets it on an account")
 	}
-	// And the service password is generated rather than typed.
+	idx := strings.Index(src, "set_owner_password() {")
+	if idx < 0 {
+		t.Fatal("set_owner_password is called but not defined")
+	}
+	body := src[idx:]
+	if end := strings.Index(body, "\n}\n"); end > 0 {
+		body = body[:end]
+	}
+	// On the operator's OWN account, not the directory's service one.
+	// The whole defect was that these were the same call.
+	if !strings.Contains(body, `--username "$ADMIN_USER"`) {
+		t.Error("the password is not set on the account the operator named")
+	}
+	if !strings.Contains(body, `LLDAP_USER_PASSWORD="$ADMIN_PASS"`) {
+		t.Error("the password set is not the one the operator typed")
+	}
+	// And the result is proved rather than assumed, because the failure
+	// this step exists to stop is silent.
+	if !strings.Contains(body, "cannot sign in with the password just set") {
+		t.Error("set_owner_password does not verify the password took")
+	}
+}
+
+// The directory's own admin stays a service account: generated, never
+// typed, never the thing a person signs in as.
+//
+// Separate from the test above because they are different claims, and
+// collapsing them is what produced the original defect — one password
+// doing two jobs.
+func TestTheDirectoryServiceAccountPasswordIsGenerated(t *testing.T) {
+	src := installerSource(t)
 	if !strings.Contains(src, "/dev/urandom") {
 		t.Error("the directory's service password is no longer generated")
+	}
+	idx := strings.Index(src, "set_admin_password() {")
+	if idx < 0 {
+		t.Fatal("set_admin_password is gone")
+	}
+	body := src[idx:]
+	if end := strings.Index(body, "\n}\n"); end > 0 {
+		body = body[:end]
+	}
+	if strings.Contains(body, "ADMIN_PASS\"") && !strings.Contains(body, "LLDAP_ADMIN_PASS") {
+		t.Error("the directory's service password is the operator's again")
 	}
 }

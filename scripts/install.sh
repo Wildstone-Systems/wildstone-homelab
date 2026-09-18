@@ -282,26 +282,30 @@ step_tailscale() {
 # reaching the Console requires an Owner, which is the thing being
 # created.
 #
-# A NAME and no password, and the change is deliberate. This step used
-# to ask for a password, then set it on LLDAP's built-in `admin` account
-# — so an operator who typed "mika" was told "create your account
-# 'mika'", got no such account, and logged in as `admin` with the
-# password they had chosen for somebody who did not exist. It only ever
-# looked right because the default was `admin`.
+# The name and the password both, and both are USED — which is the fix.
 #
-# Now the name creates a real directory user, and the password is set by
-# the person who will use it, through the one-time code Authelia writes
-# (ADR-W020 A4: the credential is never Wildstone's). That is the same
-# path every other household member takes, so there is one flow rather
-# than a special case for the first person.
+# This step used to ask for a password and then set it on LLDAP's
+# built-in `admin`, never creating the account it named. An operator who
+# typed "mika" was told "create your account 'mika'", got no such
+# account, and signed in as `admin` with the password they had chosen for
+# somebody who did not exist. It only ever looked right because the
+# default was `admin`.
+#
+# Now the name creates a real directory user, the password is set on
+# THAT user, and they can sign in to the Console the moment the installer
+# finishes (ADR-W033; ADR-W020 A4 said the credential is never
+# Wildstone's and is superseded where the two conflict — see the note in
+# that ADR).
+#
+# The password is held in a variable for this run and never written to
+# the answers file: it is used to provision, and then forgotten.
 ADMIN_USER=""
+ADMIN_PASS=""
 step_admin() {
   echo
   echo "Now an account for you. This is what you will log in with, and"
   echo "what you will use to add everyone else later."
-  echo "You will choose your password at first sign-in, from a one-time"
-  echo "code this installer prints at the end."
-  local u
+  local u p1 p2
   while :; do
     printf 'Username [admin]: ' >&2
     read -r u </dev/tty || u=""
@@ -309,8 +313,15 @@ step_admin() {
     case "$u" in *[!a-zA-Z0-9._-]*) echo "letters, digits, dot, dash and underscore only" >&2; continue ;; esac
     break
   done
-  ADMIN_USER="$u"
-  answers_save ADMIN_USER "$u"   # the NAME is a choice; no credential is stored
+  while :; do
+    printf 'Password: ' >&2; read -rs p1 </dev/tty; echo >&2
+    printf 'Again:    ' >&2; read -rs p2 </dev/tty; echo >&2
+    if [ "$p1" != "$p2" ]; then echo "they do not match; try again" >&2; continue; fi
+    if [ "${#p1}" -lt 8 ]; then echo "at least 8 characters, please" >&2; continue; fi
+    break
+  done
+  ADMIN_USER="$u"; ADMIN_PASS="$p1"
+  answers_save ADMIN_USER "$u"   # the NAME is a choice; the password is not stored
 }
 
 # Step 6: what to install.
@@ -799,12 +810,15 @@ enable_capability() { # package params-json
 # LLDAP applies the config-provided password at startup ("Successfully
 # (re)set password for admin" in its own log), so setting the secret and
 # restarting is the whole mechanism.
+LLDAP_ADMIN_PASS=""
 set_admin_password() {
-  # 32 hex characters from the kernel. No operator ever types this.
-  local generated
-  generated="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-  [ "${#generated}" -eq 32 ] || fail "could not generate the directory's service password"
-  api POST "/api/v1/nodes/$NODE_ID/secrets/lldap-admin-password" "{\"value\":\"$generated\"}" >/dev/null \
+  # 32 hex characters from the kernel. No operator ever types this, and
+  # it is kept in a variable only for the rest of this run: creating the
+  # first Owner's password needs an admin token, and Secrets are
+  # write-only by design, so there is no reading it back afterwards.
+  LLDAP_ADMIN_PASS="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  [ "${#LLDAP_ADMIN_PASS}" -eq 32 ] || fail "could not generate the directory's service password"
+  api POST "/api/v1/nodes/$NODE_ID/secrets/lldap-admin-password" "{\"value\":\"$LLDAP_ADMIN_PASS\"}" >/dev/null \
     || fail "could not set the directory's service password"
   docker restart lldap >/dev/null 2>&1 || true
   local i
@@ -813,6 +827,53 @@ set_admin_password() {
     if docker exec lldap /bin/sh -c 'exit 0' 2>/dev/null; then break; fi
   done
   log "directory ready"
+}
+
+# ALPINE is the same pinned image the identity package's provisioning job
+# uses, for the same reason: an empty ENTRYPOINT and a busybox wget built
+# with long options. Kept in step with packages/identity/package.yaml.
+ALPINE_IMAGE="alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"
+
+# set_owner_password gives the first Owner the password they chose.
+#
+# LLDAP stores passwords through an OPAQUE registration, so there is no
+# GraphQL mutation for it and no way to do it from SQL or a config file:
+# its schema has createUser and updateUser and nothing that takes a
+# password. The only thing that can perform the exchange is
+# `lldap_set_password`, which ships in the LLDAP image at /app.
+#
+# Two containers, because neither can do it alone. The token comes from
+# a throwaway alpine sharing LLDAP's network namespace — the LLDAP image
+# has no HTTP client — and the exchange runs inside LLDAP, where the
+# binary is. `--network container:lldap` rather than a network name so
+# this does not have to know what Wildstone called the network.
+#
+# VERIFIED rather than assumed, the way set_admin_password's bind was:
+# an install that reports success and leaves the operator unable to log
+# in is the worst outcome available, and it is the exact outcome this
+# whole step exists to stop.
+set_owner_password() {
+  local token
+  token="$(docker run --rm --network "container:lldap" "$ALPINE_IMAGE" \
+    wget -qO- --header 'Content-Type: application/json' \
+      --post-data "{\"username\":\"admin\",\"password\":\"$LLDAP_ADMIN_PASS\"}" \
+      http://localhost:17170/auth/simple/login 2>/dev/null \
+    | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+  [ -n "$token" ] || fail "could not log in to the directory to set '$ADMIN_USER' a password"
+
+  docker exec -e LLDAP_USER_PASSWORD="$ADMIN_PASS" lldap \
+    /app/lldap_set_password --base-url http://localhost:17170 \
+    --token "$token" --username "$ADMIN_USER" >/dev/null 2>&1 \
+    || fail "could not set the password for '$ADMIN_USER'"
+
+  # Prove it: log in as them. Without this the install could report
+  # success on a password that silently did not take.
+  docker run --rm --network "container:lldap" "$ALPINE_IMAGE" \
+    wget -qO- --header 'Content-Type: application/json' \
+      --post-data "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}" \
+      http://localhost:17170/auth/simple/login >/dev/null 2>&1 \
+    || fail "'$ADMIN_USER' cannot sign in with the password just set"
+  log "password set for '$ADMIN_USER'"
 }
 
 # The first Owner (design §2.4). Installation does not complete without
@@ -852,6 +913,9 @@ create_first_owner() {
     [ "$st" = failed ] && fail "the account plan failed; see journalctl -u keystone"
   done
   [ "$st" = applied ] || fail "the account for '$ADMIN_USER' did not apply in time"
+
+  # Their password, set on the account just created.
+  set_owner_password
 
   # The Person, as an Owner, admitted. Role is stated rather than left to
   # default: recordButlerMember defaults to member on purpose, so an
@@ -999,11 +1063,7 @@ UNIT
     echo "Done."
     if [ -n "${DASHBOARD_URL:-}" ]; then
       echo "  Your dashboard: $DASHBOARD_URL"
-      echo "  Sign in as '$ADMIN_USER'. You have no password yet: choose"
-      echo "  \"forgotten password\" at the sign-in page, then read the"
-      echo "  one-time code back with"
-      echo "      sudo wild identity code --node $NODE_ID"
-      echo "  and set the password you want. Wildstone never holds it."
+      echo "  Sign in as '$ADMIN_USER' with the password you chose."
     else
       echo "  Services are running but have no ingress; re-run and choose"
       echo "  Tailscale to reach them from a browser."
