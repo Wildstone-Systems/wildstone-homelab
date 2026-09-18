@@ -42,6 +42,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/report"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
+	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
 )
 
 var version = "dev" // set via -ldflags at release
@@ -1255,6 +1256,29 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 
 	// Everything the engine needs is wired; start its loop.
 	go auto.Run(context.Background(), automationEvery)
+
+	// The household's commitments (ADR-W034 A15): once a day, work out
+	// what has come due and record the changes on the household
+	// timeline. Nothing here notifies anybody — an Automation the
+	// household wrote decides who hears about a commitment.* fact, on
+	// which surface, at what hour (A12).
+	//
+	// Beside the morning report rather than in cron for ADR-W011 A4's
+	// reason, and at the same hour because a household reads its house
+	// once: a checkup with a sixty-day lead and an oil change with a
+	// three-hundred-mile lead are both indifferent to the minute.
+	upkeepEngine := &upkeep.Engine{DB: db, State: state, Loc: householdLoc, Log: log}
+	upkeepPoke := make(chan struct{}, 1)
+	apiSrv.OnMeterReading = func() {
+		// A reading can change an answer, so the pass runs again rather
+		// than waiting for tomorrow: somebody who has just typed in a
+		// mileage is standing there wanting to know.
+		select {
+		case upkeepPoke <- struct{}{}:
+		default:
+		}
+	}
+	go upkeepEngine.Run(context.Background().Done(), upkeepPoke, nextMorning(time.Now()))
 
 	// Morning report timer (ADR-W017 A5): once a day at 07:00 local, build
 	// the deterministic report and append its summary to the event stream

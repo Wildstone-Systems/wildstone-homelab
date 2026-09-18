@@ -100,6 +100,9 @@ func (s *Server) recordMeterReading(r *http.Request, id principal.Identity) (any
 	if duplicate {
 		return receipt, http.StatusOK, nil
 	}
+	if s.OnMeterReading != nil {
+		s.OnMeterReading()
+	}
 	return receipt, http.StatusCreated, nil
 }
 

@@ -160,6 +160,11 @@ type Server struct {
 	// only for side-effect-free replay; cmd/keystone runs its loop. New
 	// wires one over the same DB and Statefile.
 	Automation *automation.Engine
+	// OnMeterReading, when set, is called after a reading is recorded, so
+	// the commitment pass can run again rather than leaving somebody who
+	// has just typed in a mileage to wait until tomorrow to be told what
+	// it meant.
+	OnMeterReading func()
 	// OnHouseholdEvent, when set, is called after a new household event
 	// is recorded (not after a duplicate) — cmd/keystone wires it to the
 	// engine's Poke so a rule is evaluated when its trigger lands, not
