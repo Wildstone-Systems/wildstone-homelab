@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/commitment"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -32,6 +33,13 @@ type Change struct {
 // Tick runs one pass: evaluate everything, record what changed, and
 // return it. Nothing else in this package writes.
 func (e *Engine) Tick() ([]Change, error) {
+	// The proof first, the verdict second. An event that closes a cycle
+	// has to be in the ledger before the pass reads it, or the household
+	// is told something is overdue in the same breath as its own
+	// timeline says it was done.
+	if err := e.harvest(); err != nil {
+		return nil, err
+	}
 	standings, err := e.Evaluate()
 	if err != nil {
 		return nil, err
@@ -204,4 +212,122 @@ func (e *Engine) Run(done <-chan struct{}, poke <-chan struct{}, at time.Time) {
 			e.log().Info("commitment pass", "changes", len(changes))
 		}
 	}
+}
+
+// harvestedBy is who a completion an event proved is recorded as.
+//
+// Not the publisher and not a member: the publisher said the truck was
+// serviced, which is a fact about the truck, and turning that into "this
+// cycle is closed" is this engine's inference. A household reading its
+// own history should be able to tell the two apart.
+const harvestedBy = "system/commitment"
+
+// maxHarvest bounds how many matching events one pass reads per
+// commitment. Only the first usable one closes the cycle, so this is a
+// guard against a publisher that has emitted the same verb ten thousand
+// times, not a limit on anything the household would notice.
+const maxHarvest = 200
+
+// harvest closes the cycles that household events already prove.
+//
+// A commitment may name the event that satisfies it — `vehicle.serviced`
+// for the truck's oil — and before this the field validated, generated a
+// Console type and did nothing else (Codex, #244). A household that
+// declared it watched the commitment go overdue with the proof sitting
+// in its own timeline.
+//
+// THE EVENT IS EVIDENCE, NOT AN INSTRUCTION. It closes the cycle only
+// when the completion it implies can carry the numbers the next cycle
+// needs — the same rule a member tapping Done is held to, in the same
+// function. A `vehicle.serviced` that arrives while the odometer is
+// three months stale leaves the commitment open and asking for the
+// number, which is correct: the household knows the truck was serviced
+// and still cannot say what the next oil change is measured from.
+//
+// It is also evaluated AT THE EVENT'S MOMENT rather than now. The
+// package is pure and takes the time it is asked about precisely so
+// this is possible, and "what did the odometer say when the truck was
+// serviced" is the question a completion records.
+func (e *Engine) harvest() error {
+	desired, err := e.State.Load()
+	if err != nil {
+		return fmt.Errorf("upkeep: reading desired state: %w", err)
+	}
+	meters, err := e.meters(desired)
+	if err != nil {
+		return err
+	}
+	now := e.now()
+	for _, res := range desired {
+		if res.Kind != resource.KindCommitment || res.Commitment == nil {
+			continue
+		}
+		by := res.Commitment.SatisfiedBy
+		if by == nil || res.Commitment.Disabled {
+			continue
+		}
+		st, err := e.standing(res, meters, now)
+		if err != nil {
+			return err
+		}
+		if closedForGood(st) {
+			continue
+		}
+		events, err := e.DB.QueryHouseholdEvents(runtimedb.HouseholdQuery{
+			Type: by.EventType, Subject: by.Subject, SubjectSet: by.Subject != "",
+			Entity: by.Entity,
+			// From the moment this cycle opened: an event that closed the
+			// LAST one must not close this one too, and a service done
+			// before the commitment existed is not evidence about it.
+			From: st.Occurrence.OpenedAt, To: now, Limit: maxHarvest,
+		})
+		if err != nil {
+			return fmt.Errorf("upkeep: commitment %q satisfiedBy: %w", res.Metadata.Name, err)
+		}
+		for _, ev := range events {
+			asOf, err := e.standing(res, meters, ev.OccurredAt)
+			if err != nil {
+				return err
+			}
+			positions, eerr := Evidence(asOf, nil)
+			if eerr != nil {
+				// The proof arrived and the numbers did not. The
+				// commitment stays open, and its own unresolved item is
+				// already asking for exactly what is missing.
+				if e.Log != nil {
+					e.Log.Info("upkeep: an event could not close a cycle yet",
+						"commitment", res.Metadata.Name, "event", ev.EventID, "why", eerr)
+				}
+				continue
+			}
+			_, duplicate, err := e.DB.RecordCommitmentCompletion(runtimedb.CommitmentCompletion{
+				Commitment: res.Metadata.Name, At: ev.OccurredAt, RecordedBy: harvestedBy,
+				Reason: "recorded from " + ev.Type, Positions: positions, ExternalID: ev.EventID,
+			})
+			if err != nil {
+				return fmt.Errorf("upkeep: commitment %q satisfiedBy: %w", res.Metadata.Name, err)
+			}
+			if duplicate {
+				// This one already closed a cycle. Keep looking: the
+				// event that closes THIS cycle may be further down the
+				// stream, and stopping here would hide it.
+				continue
+			}
+			// One event closes one cycle. Whether the next one is
+			// already closed too is the next pass's question, asked of a
+			// ledger that now contains this.
+			break
+		}
+	}
+	return nil
+}
+
+// closedForGood reports a one-off that has already been answered. Its
+// cycle never reopens, so an event arriving afterwards has nothing to
+// close and must not record a second completion against it.
+func closedForGood(st Standing) bool {
+	if st.Rollover != resource.RolloverOnce {
+		return false
+	}
+	return st.Occurrence.State == commitment.StateSatisfied || st.Occurrence.State == commitment.StateWaived
 }

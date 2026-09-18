@@ -224,7 +224,7 @@ func TestCompletingOpensTheNextCycleAndSaysSo(t *testing.T) {
 	f.at(at(2026, time.September, 11))
 	f.tick() // overdue
 
-	if _, err := f.db.RecordCommitmentCompletion(runtimedb.CommitmentCompletion{
+	if _, _, err := f.db.RecordCommitmentCompletion(runtimedb.CommitmentCompletion{
 		Commitment: "kai-checkup", At: at(2026, time.October, 9), RecordedBy: "mika"}); err != nil {
 		t.Fatalf("RecordCommitmentCompletion: %v", err)
 	}
@@ -390,4 +390,199 @@ func (f *fixture) standings() map[string]Standing {
 		m[st.Name] = st
 	}
 	return m
+}
+
+// `satisfiedBy` was validated, generated a Console type, and did
+// nothing else (Codex, #244). A household that declared it watched the
+// commitment go overdue with the proof sitting in its own timeline.
+func TestAnEventTheCommitmentNamedClosesItsCycle(t *testing.T) {
+	f := newFixture(t)
+	f.commitment("f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: "2026-01-01",
+		Due:    []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "6mo", Lead: "14d"}},
+		SatisfiedBy: &resource.CommitmentSatisfiedBy{
+			EventType: "vehicle.serviced", Entity: "f150",
+		},
+	})
+	f.at(at(2026, time.July, 10)) // past due
+	if got := f.standings()["f150-oil"].Occurrence.State; got != commitment.StateOverdue {
+		t.Fatalf("state = %q, want overdue before the event", got)
+	}
+
+	f.event("vehicle.serviced", "f150", at(2026, time.July, 12))
+	f.at(at(2026, time.July, 13))
+	f.tick()
+	st := f.standings()["f150-oil"]
+	if st.Occurrence.State == commitment.StateOverdue {
+		t.Errorf("the event did not close the cycle: %+v", st.Occurrence)
+	}
+	done, err := f.db.ListCommitmentCompletions("f150-oil")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != 1 {
+		t.Fatalf("completions = %d, want 1", len(done))
+	}
+	if done[0].RecordedBy != harvestedBy {
+		t.Errorf("recordedBy = %q, want %q: the inference is the engine's, not the publisher's",
+			done[0].RecordedBy, harvestedBy)
+	}
+	if !done[0].At.Equal(at(2026, time.July, 12)) {
+		t.Errorf("at = %s, want the moment the work was done", done[0].At)
+	}
+
+	// The pass runs every day and re-reads the stream. The same event
+	// must not close a cycle again tomorrow.
+	for _, day := range []time.Time{at(2026, time.July, 14), at(2026, time.July, 20)} {
+		f.at(day)
+		f.tick()
+	}
+	done, err = f.db.ListCommitmentCompletions("f150-oil")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != 1 {
+		t.Errorf("completions = %d after three passes, want 1: the event was replayed", len(done))
+	}
+}
+
+// An event is evidence, not an instruction, and it cannot supply a
+// number nobody wrote down.
+//
+// The completion is evaluated AT THE EVENT'S MOMENT, which is the whole
+// reason the due-ness function takes the time it is asked about. So a
+// `vehicle.serviced` that lands while the odometer is three months
+// stale does NOT close the cycle, and a reading taken two days LATER
+// does not retroactively make it closable: the truck was driven in
+// between, and measuring the next oil change from a number the truck
+// had not reached yet is the "produced a number instead of saying it
+// could not" failure wearing a helpful face.
+//
+// The household is not stuck — the commitment keeps asking for the
+// number, and a member who knows it answers with it.
+func TestAnEventCannotCloseACycleItCannotMeasure(t *testing.T) {
+	f := newFixture(t)
+	f.meter("f150-odometer", resource.MeterSpec{Description: "Odometer", Unit: "miles", StaleAfter: "168h"})
+	f.commitment("f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: "2026-01-01",
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+		SatisfiedBy: &resource.CommitmentSatisfiedBy{
+			EventType: "vehicle.serviced", Entity: "f150",
+		},
+	})
+	f.read("f150-odometer", 80000, at(2026, time.January, 1))
+	f.event("vehicle.serviced", "f150", at(2026, time.July, 12))
+	f.at(at(2026, time.July, 13))
+	f.tick()
+	if done := f.completions("f150-oil"); len(done) != 0 {
+		t.Fatalf("a cycle was closed from a six-month-old odometer: %+v", done)
+	}
+	// A later reading does not reach back. The event stays unused.
+	f.read("f150-odometer", 84210, at(2026, time.July, 14))
+	f.at(at(2026, time.July, 15))
+	f.tick()
+	if done := f.completions("f150-oil"); len(done) != 0 {
+		t.Errorf("a reading taken after the service was used as the position at it: %+v", done)
+	}
+}
+
+// When the household WAS keeping the meter current, the event closes
+// the cycle and the position it records is the one the meter stood at
+// when the work was done.
+func TestAnEventClosesACounterCycleItCanMeasure(t *testing.T) {
+	f := newFixture(t)
+	f.meter("f150-odometer", resource.MeterSpec{Description: "Odometer", Unit: "miles", StaleAfter: "168h"})
+	f.commitment("f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: "2026-01-01",
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+		SatisfiedBy: &resource.CommitmentSatisfiedBy{
+			EventType: "vehicle.serviced", Entity: "f150",
+		},
+	})
+	f.read("f150-odometer", 80000, at(2026, time.January, 1))
+	f.read("f150-odometer", 84900, at(2026, time.July, 10))
+	f.event("vehicle.serviced", "f150", at(2026, time.July, 12))
+	// A reading after the service, to prove the completion takes the one
+	// from before it rather than the newest one lying around.
+	f.read("f150-odometer", 85400, at(2026, time.July, 14))
+	f.at(at(2026, time.July, 15))
+	f.tick()
+	done := f.completions("f150-oil")
+	if len(done) != 1 {
+		t.Fatalf("completions = %d, want 1", len(done))
+	}
+	if got := done[0].Positions["f150-odometer"]; got != 84900 {
+		t.Errorf("position = %v, want 84900: the odometer as it stood when the truck was serviced", got)
+	}
+}
+
+func (f *fixture) completions(name string) []runtimedb.CommitmentCompletion {
+	f.t.Helper()
+	done, err := f.db.ListCommitmentCompletions(name)
+	if err != nil {
+		f.t.Fatalf("ListCommitmentCompletions: %v", err)
+	}
+	return done
+}
+
+func (f *fixture) event(eventType, entity string, when time.Time) {
+	f.t.Helper()
+	if _, _, err := f.db.AppendHouseholdEvent(runtimedb.HouseholdEvent{
+		EventID:    eventType + "@" + entity + "@" + when.Format(time.RFC3339),
+		OccurredAt: when, Type: eventType, Entity: entity,
+		Source: "publisher/garage", SchemaVersion: 1,
+	}); err != nil {
+		f.t.Fatalf("AppendHouseholdEvent: %v", err)
+	}
+}
+
+// A one-off's cycle never reopens, so an event arriving after it was
+// answered has nothing to close.
+//
+// Deduping by event id is not enough here: a SECOND `dental.visit` is a
+// different event with a different id, and without this the engine
+// would record a second completion against a commitment that only ever
+// had one thing to do.
+func TestASecondEventCannotCloseAOneOffTwice(t *testing.T) {
+	f := newFixture(t)
+	f.commitment("kai-dentist", resource.CommitmentSpec{
+		Description: "The dentist, on the third", Rollover: resource.RolloverOnce,
+		Anchor: "2026-01-01",
+		Due:    []resource.CommitmentDue{{Meter: resource.MeterClock, At: "2026-03-03"}},
+		SatisfiedBy: &resource.CommitmentSatisfiedBy{
+			EventType: "dental.visit", Subject: "kai",
+		},
+	})
+	f.eventFor("dental.visit", "kai", at(2026, time.March, 3))
+	f.at(at(2026, time.March, 4))
+	f.tick()
+	if done := f.completions("kai-dentist"); len(done) != 1 {
+		t.Fatalf("completions = %d, want 1", len(done))
+	}
+	if got := f.standings()["kai-dentist"].Occurrence.State; got != commitment.StateSatisfied {
+		t.Fatalf("state = %q, want satisfied", got)
+	}
+
+	// Kai goes to the dentist again in September. That is not this
+	// commitment coming round again — it has no next cycle.
+	f.eventFor("dental.visit", "kai", at(2026, time.September, 9))
+	f.at(at(2026, time.September, 10))
+	f.tick()
+	if done := f.completions("kai-dentist"); len(done) != 1 {
+		t.Errorf("completions = %d, want 1: a one-off was closed twice", len(done))
+	}
+}
+
+func (f *fixture) eventFor(eventType, subject string, when time.Time) {
+	f.t.Helper()
+	if _, _, err := f.db.AppendHouseholdEvent(runtimedb.HouseholdEvent{
+		EventID:    eventType + "@" + subject + "@" + when.Format(time.RFC3339),
+		OccurredAt: when, Type: eventType, Subject: subject,
+		Source: "publisher/clinic", SchemaVersion: 1,
+	}); err != nil {
+		f.t.Fatalf("AppendHouseholdEvent: %v", err)
+	}
 }

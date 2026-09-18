@@ -261,11 +261,11 @@ func (s *Server) answerCommitment(what string) portalFunc {
 
 		switch what {
 		case "done", "waived":
-			positions, perr := completionEvidence(st, req.Meters)
+			positions, perr := upkeep.Evidence(st, req.Meters)
 			if perr != nil {
 				return nil, http.StatusBadRequest, perr
 			}
-			seq, err := s.DB.RecordCommitmentCompletion(runtimedb.CommitmentCompletion{
+			seq, _, err := s.DB.RecordCommitmentCompletion(runtimedb.CommitmentCompletion{
 				Commitment: name, At: at, RecordedBy: member,
 				Waived: what == "waived", Reason: req.Reason, Positions: positions,
 			})
@@ -289,60 +289,6 @@ func (s *Server) answerCommitment(what string) portalFunc {
 		}
 		return nil, http.StatusBadRequest, fmt.Errorf("unknown answer %q", what)
 	}
-}
-
-// completionEvidence is where A8 stops being a comment.
-//
-// A RECURRING COUNTER CYCLE CANNOT BE CLOSED WITHOUT ITS NUMBER. The
-// position a meter stood at when the work was done is what the NEXT
-// cycle is measured from, so a completion recorded with nothing in it
-// closes this cycle and opens one that can never be concluded — and
-// there is no endpoint that deletes or corrects a completion, so the
-// household cannot take it back. The schema has said "evidence is not
-// optional" since it was written; before this it was the only thing
-// saying so (Codex, #244).
-//
-// The number does not have to be typed twice, though. A member who has
-// just recorded a reading has already answered the question, so a rule
-// the engine could conclude from — known, and not too old to rely on —
-// supplies its own evidence. A stale one does not: a completion based
-// on an odometer nobody has looked at since June measures the next
-// cycle from wherever the truck was in June, which is the "produced a
-// number instead of saying it could not" failure this whole package is
-// built to refuse.
-//
-// A one-off is exempt. Nothing is measured from it because nothing
-// follows it.
-func completionEvidence(st upkeep.Standing, given map[string]float64) (map[string]float64, error) {
-	positions := map[string]float64{}
-	for k, v := range given {
-		positions[k] = v
-	}
-	if st.Rollover == resource.RolloverOnce {
-		return positions, nil
-	}
-	var missing []string
-	for _, rule := range st.Occurrence.Rules {
-		// The clock's position is the completion's own `at`, which is
-		// always known. Only counters need answering.
-		if rule.Calendar || rule.Meter == resource.MeterClock {
-			continue
-		}
-		if _, ok := positions[rule.Meter]; ok {
-			continue
-		}
-		if rule.Known && !rule.Stale {
-			positions[rule.Meter] = rule.Position
-			continue
-		}
-		missing = append(missing, rule.Meter)
-	}
-	if len(missing) > 0 {
-		return nil, fmt.Errorf(
-			"what did %s say? closing this without the number would leave the next one unmeasurable",
-			strings.Join(missing, " and "))
-	}
-	return positions, nil
 }
 
 // homeMeterReading lets a member answer the other kind of question: not

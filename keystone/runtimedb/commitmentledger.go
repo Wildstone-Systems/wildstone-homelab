@@ -32,43 +32,66 @@ type CommitmentCompletion struct {
 	// the next cycle is measured from, which is why A8 calls it evidence
 	// and why a completion without it leaves the next cycle unplaceable.
 	Positions map[string]float64 `json:"positions,omitempty"`
+	// ExternalID is the household event that closed this cycle, for a
+	// commitment that declares `satisfiedBy`. Empty for an answer a
+	// person gave, and that emptiness is what keeps two people ticking
+	// off the bins from colliding while a replayed event cannot close
+	// the same cycle twice.
+	ExternalID string `json:"externalId,omitempty"`
 }
 
 // RecordCommitmentCompletion closes a cycle, with its evidence, in one
 // statement — so a crash cannot leave a cycle closed and the readings it
 // was closed at missing.
-func (db *DB) RecordCommitmentCompletion(c CommitmentCompletion) (int64, error) {
+// RecordCommitmentCompletion writes a closed cycle, and reports whether
+// it was already written.
+//
+// `duplicate` is the same shape AppendMeterReading uses, and it exists
+// for the same reason: the caller has to be able to tell "recorded" from
+// "the household fact this came from had already closed this cycle".
+// Returning a bare zero seq for both invites the caller to treat a
+// no-op as a write, which is how a harvest loop stops looking at the
+// event that actually matters.
+func (db *DB) RecordCommitmentCompletion(c CommitmentCompletion) (seq int64, duplicate bool, err error) {
 	if err := db.gate(GateIngestion); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	switch {
 	case c.Commitment == "":
-		return 0, fmt.Errorf("runtimedb: a completion needs the commitment it closes")
+		return 0, false, fmt.Errorf("runtimedb: a completion needs the commitment it closes")
 	case c.RecordedBy == "":
-		return 0, fmt.Errorf("runtimedb: a completion needs who recorded it")
+		return 0, false, fmt.Errorf("runtimedb: a completion needs who recorded it")
 	case c.At.IsZero():
-		return 0, fmt.Errorf("runtimedb: a completion needs when the work was done")
+		return 0, false, fmt.Errorf("runtimedb: a completion needs when the work was done")
 	}
 	positions := "{}"
 	if len(c.Positions) > 0 {
 		encoded, err := json.Marshal(c.Positions)
 		if err != nil {
-			return 0, fmt.Errorf("runtimedb: encoding completion positions: %w", err)
+			return 0, false, fmt.Errorf("runtimedb: encoding completion positions: %w", err)
 		}
 		positions = string(encoded)
 	}
 	res, err := db.sql.Exec(
-		`INSERT INTO commitment_completions (commitment, at, recorded_at, recorded_by, waived, reason, positions)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO commitment_completions (commitment, at, recorded_at, recorded_by, waived, reason, positions, external_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (commitment, external_id) WHERE external_id <> '' DO NOTHING`,
 		c.Commitment, c.At.UTC().Format(time.RFC3339Nano), now(), c.RecordedBy,
-		boolToInt(c.Waived), c.Reason, positions)
+		boolToInt(c.Waived), c.Reason, positions, c.ExternalID)
 	if err != nil {
-		return 0, fmt.Errorf("runtimedb: recording completion: %w", err)
+		return 0, false, fmt.Errorf("runtimedb: recording completion: %w", err)
 	}
-	return res.LastInsertId()
+	if n, aerr := res.RowsAffected(); aerr == nil && n == 0 {
+		// The same household fact, seen again by a later pass. Not an
+		// error and not a second completion: the cycle it closed is
+		// already closed.
+		return 0, true, nil
+	}
+	seq, err = res.LastInsertId()
+	return seq, false, err
 }
 
-const completionColumns = `SELECT seq, commitment, at, recorded_at, recorded_by, waived, reason, positions
+const completionColumns = `SELECT seq, commitment, at, recorded_at, recorded_by, waived, reason, positions, external_id
 	 FROM commitment_completions`
 
 // ListCommitmentCompletions returns a commitment's closed cycles, oldest
@@ -84,7 +107,7 @@ func (db *DB) ListCommitmentCompletions(commitment string) ([]CommitmentCompleti
 		var c CommitmentCompletion
 		var at, recorded, positions string
 		var waived int
-		if err := rows.Scan(&c.Seq, &c.Commitment, &at, &recorded, &c.RecordedBy, &waived, &c.Reason, &positions); err != nil {
+		if err := rows.Scan(&c.Seq, &c.Commitment, &at, &recorded, &c.RecordedBy, &waived, &c.Reason, &positions, &c.ExternalID); err != nil {
 			return nil, fmt.Errorf("runtimedb: scanning completion: %w", err)
 		}
 		c.Waived = waived == 1
