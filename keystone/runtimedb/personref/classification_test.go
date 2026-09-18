@@ -376,3 +376,46 @@ func TestNoColumnIsClassifiedTwice(t *testing.T) {
 		seen[key] = true
 	}
 }
+
+// The Connection identity columns name a Person, and the writer does
+// not get a vote.
+//
+// This is the correction slice 2b had to make, and it is worth pinning
+// because the wrong answer was reached by following this package's own
+// rule. chat_bindings.identity carries a comment from ADR-W026 A3 —
+// "principal (admin) or household member (family)" — and
+// principal/chatclaim.go enforces it, requiring a machine principal for
+// an admin-surface claim. Classified by its writer, the column is
+// polymorphic. Classified by ADR-W033 B9 and design §8.3, which say a
+// Connection admits a Person or a Group, it is a person reference and
+// the writer is the defect.
+//
+// An ADR that names the subject outranks both the schema comment and
+// the code. The evidence check is half the test: a later reader must
+// not be able to demote these again without arguing with the ADR,
+// because the demotion would look perfectly reasonable from the writer.
+func TestConnectionIdentityColumnsNameAPerson(t *testing.T) {
+	want := map[string]bool{
+		"chat_bindings.identity":    true,
+		"chat_threads.identity":     true,
+		"chat_claim_codes.identity": true,
+	}
+	for _, c := range personref.Columns {
+		key := c.Table + "." + c.Column
+		if !want[key] {
+			continue
+		}
+		if c.Kind != personref.Human {
+			t.Errorf("%s is classified %s; ADR-W033 B9 admits a Person to a Connection, "+
+				"and the principal its writer stores is the model W033 superseded", key, c.Kind)
+		}
+		if !strings.Contains(c.Why, "W033") {
+			t.Errorf("%s does not cite the ADR that decides it, so the next reader "+
+				"has only the writer to go on: %q", key, c.Why)
+		}
+		delete(want, key)
+	}
+	for key := range want {
+		t.Errorf("%s has no verdict at all", key)
+	}
+}

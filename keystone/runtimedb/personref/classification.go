@@ -64,6 +64,64 @@
 //
 // #240 fixes the write path so the set stops growing.
 //
+// # Where the ADR decides, and the writer does not
+//
+// The rule above — the writer decides what a column means — was learned
+// the hard way against SCHEMA COMMENTS, which state an intent nothing
+// enforces. It does not survive contact with a column whose subject an
+// ADR names, because there the writer may simply be the defect.
+//
+// ADR-W033 is authoritative where it conflicts with earlier decisions,
+// and it names the subject of the Connection and session columns
+// outright. A Connection admits a Person or a Group (B9, design §8.3);
+// every external identity — directory login, web session, Telegram,
+// Discord — attaches to the same canonical Person (A2); a session is
+// Person + Agent + session_id (B10, design §9). An Owner-Agent
+// Connection admits Owners, and an Owner is a Person with role `owner`,
+// not a machine credential.
+//
+// So `principal (admin) or household member (family)` — the comment on
+// chat_bindings.identity, written under ADR-W026 A3 — is not evidence of
+// a polymorphic column. It is a record of the model W033 superseded, and
+// principal/chatclaim.go enforcing it is the defect rather than the
+// contract. W033 G retains W026 A3 only "where [it requires]
+// independent Agent credentials, generalized through the Connection
+// abstraction": the ADAPTER keeps its own credential, and the
+// admission subject does not become that credential.
+//
+// The precedence, stated once so it is not re-derived:
+//
+//	an ADR that names the subject   >   the schema comment
+//	                                >   what the write path stores today
+//
+// This was found in review of slice 2b and corrected there. Which
+// columns it moved is recorded on each verdict below.
+//
+// # Columns W033 governs that are NOT reclassified here
+//
+// These hold a person by W033's reading and still carry an actor
+// verdict, because the slice that owns the decision has not run and a
+// verdict changed on speculation is the same error in the other
+// direction:
+//
+//   - member_notice_preferences.member — E3 routes notices by
+//     designated Owner/reviewer preference, which is a Person's. The
+//     operator token's own preferences are the machine axis leaking
+//     into a person concept, but nothing in W033 says preferences
+//     cannot be held per credential. Left to the Connections slice
+//     (#212), which owns delivery.
+//   - integration_secrets.member — §12.2 keeps the household secret
+//     store separate from the infrastructure one, and this column is in
+//     the second. Left to the secrets slice (#216).
+//   - butler_capability_requests.requested_by, butler_task_feedback.author
+//     — a Member asking an Owner for a capability, and a person's
+//     judgement of a run. Both read as Person under B1, and both are
+//     recorded by actingMember today. Left to the Agent-class slice
+//     (#210), which decides the actor representation.
+//
+// Every other actor column records WHO ACTED, and epic #201 Decision 6
+// keeps the legacy machine axis deliberately until #210.
+//
 // # Why names are not enough
 //
 // Two columns caught by the name heuristic are not people at all:
@@ -201,12 +259,15 @@ var Columns = []Column{
 	{"notices", "recipient_person_id", PersonID,
 		"the person the notice is for. Repointed by 0040 from recipient; answered_by is an actor and stayed text"},
 	// ---- Actor: person OR machine principal; left as recorded text ----
-	{"chat_claim_codes", "identity", Actor,
-		"the identity a claim code was minted for; principal or member, as chat_bindings.identity"},
-	{"chat_bindings", "identity", Actor,
-		"schema: `principal (admin) or household member (family)` — polymorphic by construction, the actor family in one column"},
-	{"chat_threads", "identity", Actor,
-		"the bound identity a thread belongs to; principal or member, as chat_bindings.identity"},
+	// The three Connection identity columns. Reclassified from actor in
+	// slice 2b: the schema comment records the pre-W033 model, not a
+	// polymorphic column. See "Where the ADR decides" above.
+	{"chat_claim_codes", "identity", Human,
+		"the Person a claim code admits. ADR-W033 B9 / design §8.3: a Connection's admission subject is a Person or a Group. principal/chatclaim.go still requires a principal for the admin surface, which is the defect W033 supersedes"},
+	{"chat_bindings", "identity", Human,
+		"the Person the Connection admits. ADR-W033 A2 — a Telegram or Discord identity attaches to the canonical Person — and B9/§8.3. The `principal (admin) or household member (family)` comment is ADR-W026 A3, which W033 G retains only for the ADAPTER's own credential"},
+	{"chat_threads", "identity", Human,
+		"the Person whose session this is. ADR-W033 B10 / design §9: a session is Person + Agent + session_id, and the Connection is never the session identity"},
 
 	{"audit", "principal", Actor,
 		"a machine principal from the principals table — the legacy machine axis (#201 Decision 6, slice #210)"},
