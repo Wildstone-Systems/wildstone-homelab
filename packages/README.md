@@ -115,7 +115,7 @@ one mechanism, which is worth deciding before any of them individually.
 | `files-filebrowser` | files | File Browser | own |
 | `code-gitea` | code | Gitea | own |
 | `inventory-homebox` | inventory | Homebox | app OIDC |
-| `budget-actual` | budget | Actual Budget | own |
+| `budget-actual` | budget | Actual Budget | own, or app OIDC — `budget_login` |
 | `pdf-stirling` | pdf-tools | Stirling PDF | proxy |
 | `tools-it-tools` | utilities | IT-Tools | proxy |
 | `chat-telegram-*`, `chat-matrix-*` | chat | the Butler over Telegram / Matrix (ADR-W026) | — |

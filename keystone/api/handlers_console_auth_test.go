@@ -4,13 +4,15 @@ package api
 //
 // This is the one authentication path that constructs an administrator
 // out of two request headers, so the tests here are mostly about what it
-// REFUSES. Each of the three conditions is exercised alone, because a
-// path that is safe only when all three happen to hold is a path one
+// REFUSES. Each of the four conditions is exercised alone, because a
+// path that is safe only when all four happen to hold is a path one
 // refactor away from not being safe at all.
 
 import (
 	"net/http"
 	"testing"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
 // forwarded issues a request the way the identity proxy would: no bearer
@@ -167,4 +169,184 @@ func TestAForwardedRequestIsAuditedUnderTheirOwnName(t *testing.T) {
 		}
 	}
 	t.Fatal("the forwarded request was not audited at all")
+}
+
+// The Console is the Owner surface, and the household's own record of a
+// person is what withdraws it (design §3.2, §18.1).
+//
+// The group cannot do that job on this deployment: group membership is
+// only ever added, never removed, so without these checks a person who
+// was demoted, disabled or offboarded keeps the whole control plane for
+// as long as their directory account exists.
+func TestForwardedConsoleAuthRefusesAPersonWhoMayNotAdminister(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, h *harness)
+		want  int
+	}{
+		{
+			name:  "an active owner is admitted",
+			setup: func(t *testing.T, h *harness) { consolePerson(t, h, runtimedb.RoleOwner, nil) },
+			want:  http.StatusOK,
+		},
+		{
+			name:  "a member is refused",
+			setup: func(t *testing.T, h *harness) { consolePerson(t, h, runtimedb.RoleMember, nil) },
+			want:  http.StatusUnauthorized,
+		},
+		{
+			name: "a demoted owner is refused",
+			setup: func(t *testing.T, h *harness) {
+				consolePerson(t, h, runtimedb.RoleOwner, nil)
+				// A second owner, so the demotion is not refused for
+				// leaving the household without one (§2.5).
+				if err := h.s.DB.RecordButlerMember("other", runtimedb.RoleOwner, "", ""); err != nil {
+					t.Fatal(err)
+				}
+				if err := h.s.DB.AdmitButlerMember("other", "root-admin"); err != nil {
+					t.Fatal(err)
+				}
+				if err := h.s.DB.SetButlerMemberRole("consoleholder", runtimedb.RoleMember, "other"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: http.StatusUnauthorized,
+		},
+		{
+			name: "a disabled owner is refused",
+			setup: func(t *testing.T, h *harness) {
+				consolePerson(t, h, runtimedb.RoleOwner, func(t *testing.T, h *harness) {
+					if err := h.s.DB.DisableButlerMember("consoleholder", "root-admin"); err != nil {
+						t.Fatal(err)
+					}
+				})
+			},
+			want: http.StatusUnauthorized,
+		},
+		{
+			name: "an offboarded owner is refused",
+			setup: func(t *testing.T, h *harness) {
+				consolePerson(t, h, runtimedb.RoleOwner, func(t *testing.T, h *harness) {
+					if err := h.s.DB.OffboardButlerMember("consoleholder", "root-admin"); err != nil {
+						t.Fatal(err)
+					}
+				})
+			},
+			want: http.StatusUnauthorized,
+		},
+		{
+			name: "an un-admitted person is refused",
+			setup: func(t *testing.T, h *harness) {
+				// Recorded but never admitted.
+				if err := h.s.DB.RecordButlerMember("consoleholder", runtimedb.RoleOwner, "", ""); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: http.StatusUnauthorized,
+		},
+		{
+			name: "a name the household has no record of still passes on the group alone",
+			// Deliberate: Person records are only created through the
+			// admin API, which is behind this check, so refusing here
+			// would lock out a deployment that has not provisioned one.
+			// See forwardedUserMayHoldConsole.
+			setup: func(t *testing.T, h *harness) {},
+			want:  http.StatusOK,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+			tc.setup(t, h)
+			res := h.forwarded(http.MethodGet, "/api/v1/butlers", "consoleholder", ConsoleGroup)
+			if res.StatusCode != tc.want {
+				t.Fatalf("status = %d, want %d", res.StatusCode, tc.want)
+			}
+		})
+	}
+}
+
+// consolePerson records and admits "consoleholder" with the given role,
+// then runs an optional lifecycle step against them.
+func consolePerson(t *testing.T, h *harness, role string, after func(*testing.T, *harness)) {
+	t.Helper()
+	if err := h.s.DB.RecordButlerMember("consoleholder", role, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.AdmitButlerMember("consoleholder", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if role == runtimedb.RoleOwner && after != nil {
+		// Disabling or offboarding the only Owner is refused by the
+		// Last Owner invariant, so give the household a second one.
+		if err := h.s.DB.RecordButlerMember("spare-owner", runtimedb.RoleOwner, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.s.DB.AdmitButlerMember("spare-owner", "root-admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if after != nil {
+		after(t, h)
+	}
+}
+
+// Spelling must not be a way past the lifecycle check.
+//
+// Handles are compared exactly everywhere else (ADR-W032 A4, still
+// open), so `Admin` and `admin` are two records. An exact lookup in the
+// Console guard would miss the Person whenever the proxy asserted a
+// different capitalisation and fall into the permissive "no record"
+// branch — turning a known data-hygiene defect into a way to keep the
+// control plane after being disabled.
+func TestForwardedConsoleAuthIsNotFooledByCapitalisation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		recorded string
+		asserted string
+		want     int
+	}{
+		{"exact match, still refused", "consoleholder", "consoleholder", http.StatusUnauthorized},
+		{"asserted lower, recorded upper", "ConsoleHolder", "consoleholder", http.StatusUnauthorized},
+		{"asserted upper, recorded lower", "consoleholder", "CONSOLEHOLDER", http.StatusUnauthorized},
+		{"mixed both ways", "CoNsOlEhOlDeR", "cOnSoLeHoLdEr", http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+			// Recorded as a Member, so they may not hold the Console
+			// whatever the proxy spells them as.
+			if err := h.s.DB.RecordButlerMember(tc.recorded, runtimedb.RoleMember, "", ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.s.DB.AdmitButlerMember(tc.recorded, "root-admin"); err != nil {
+				t.Fatal(err)
+			}
+			res := h.forwarded(http.MethodGet, "/api/v1/butlers", tc.asserted, ConsoleGroup)
+			if res.StatusCode != tc.want {
+				t.Fatalf("status = %d, want %d", res.StatusCode, tc.want)
+			}
+		})
+	}
+}
+
+// With two records differing only by case there is no way to tell which
+// one the proxy meant, so the check refuses rather than guessing.
+func TestForwardedConsoleAuthRefusesAnAmbiguousHandle(t *testing.T) {
+	h := newHarness(t)
+	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	for handle, role := range map[string]string{
+		"twin": runtimedb.RoleOwner,
+		"Twin": runtimedb.RoleMember,
+	} {
+		if err := h.s.DB.RecordButlerMember(handle, role, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.s.DB.AdmitButlerMember(handle, "root-admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if res := h.forwarded(http.MethodGet, "/api/v1/butlers", "twin", ConsoleGroup); res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("an ambiguous handle was admitted: %d", res.StatusCode)
+	}
 }

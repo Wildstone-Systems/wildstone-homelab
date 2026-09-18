@@ -34,7 +34,7 @@ func prepare(t *testing.T, db *DB, node string) {
 // and it is incomplete until the container is running, the secret is
 // provisioned, and readiness is verified.
 func TestDeclaredIsNotEligible(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	connectionFixture(t, db)
 	if err := db.AddPlacement("calendar", "n1", PlacementPrimary, 0, "root-admin"); err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func TestDeclaredIsNotEligible(t *testing.T) {
 // Failover moves the lease among prepared nodes, one holder at a time,
 // and fences the node it left.
 func TestFailoverMovesOnlyTheLease(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	connectionFixture(t, db)
 	for _, p := range []struct {
 		node, role string
@@ -116,7 +116,7 @@ func TestFailoverMovesOnlyTheLease(t *testing.T) {
 // Failback waits for the primary to settle, so a flapping node does not
 // drag the lease back and forth.
 func TestFailbackWaitsForStabilization(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	connectionFixture(t, db)
 	for _, p := range []struct {
 		node, role string
@@ -159,7 +159,7 @@ func TestFailbackWaitsForStabilization(t *testing.T) {
 
 // When nothing is eligible, dependent work waits. Nothing improvises.
 func TestNoEligibleNodeIsAWait(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	connectionFixture(t, db)
 	if err := db.AddPlacement("calendar", "n1", PlacementPrimary, 0, "root-admin"); err != nil {
 		t.Fatal(err)
@@ -185,7 +185,7 @@ func TestNoEligibleNodeIsAWait(t *testing.T) {
 // Removal fences first and must then be PROVEN. Incomplete cleanup
 // leaves the connection visibly degraded.
 func TestRemovalIsFencedThenProven(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	connectionFixture(t, db)
 	for _, p := range []struct {
 		node, role string
@@ -248,7 +248,7 @@ func TestRemovalIsFencedThenProven(t *testing.T) {
 // Removing the last node leaves the connection unavailable rather than
 // pretending it is fine.
 func TestRemovingTheLastNodeLeavesItUnavailable(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	connectionFixture(t, db)
 	if err := db.AddPlacement("calendar", "n1", PlacementPrimary, 0, "root-admin"); err != nil {
 		t.Fatal(err)
@@ -272,7 +272,7 @@ func TestRemovingTheLastNodeLeavesItUnavailable(t *testing.T) {
 // A credential's VALUE never reaches Keystone, and a reference that
 // looks like one is refused.
 func TestSecretsAreReferencesNotValues(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	connectionFixture(t, db)
 
 	for name, ref := range map[string]string{

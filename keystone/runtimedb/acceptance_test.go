@@ -20,15 +20,15 @@ import (
 )
 
 func TestPartCAcceptance(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	const admin = "mika"
 
 	// ---- setup: two admitted adults, some work, some memory, a
 	// connection, a routine.
-	for _, m := range []struct{ name, profile string }{
-		{admin, ProfileOperator}, {"sam", ProfileHousehold},
+	for _, m := range []struct{ name, role string }{
+		{admin, RoleOwner}, {"sam", RoleMember},
 	} {
-		if err := db.RecordButlerMember(m.name, m.profile, ""); err != nil {
+		if err := db.RecordButlerMember(m.name, m.role, "", ""); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.AdmitButlerMember(m.name, "root-admin"); err != nil {
@@ -392,7 +392,7 @@ func newAcceptanceTask(t *testing.T, db *DB, owner string, audience ButlerTaskAu
 // never restored is not quarantined, and that ordinary case must not
 // read as an error.
 func TestQuarantineIsAbsentUntilARestore(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	if err := db.CheckQuarantine(); err != nil {
 		t.Fatalf("a database that was never restored reported %v", err)
 	}

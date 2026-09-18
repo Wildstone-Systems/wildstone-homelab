@@ -166,6 +166,11 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 		if err != nil {
 			return nil, err
 		}
+		if rendered == nil {
+			// This template declined to produce a resource for these
+			// params. See renderTemplate.
+			continue
+		}
 
 		res, err := resource.Unmarshal(rendered)
 		if err != nil {
@@ -601,9 +606,24 @@ func renderTemplate(pkgName string, index int, tmplStr string, ctx templateConte
 	if err := t.Execute(&buf, ctx); err != nil {
 		return nil, &TemplateError{Package: pkgName, Index: index, Err: fmt.Errorf("executing template: %w", err)}
 	}
-	rendered := buf.String()
-	if strings.TrimSpace(rendered) == "" {
-		return nil, &TemplateError{Package: pkgName, Index: index, Err: fmt.Errorf("rendered to empty document")}
+	// A template that renders to nothing produces NO RESOURCE, rather
+	// than an error. It is how a package makes one resource conditional
+	// on a param — budget-actual's OidcClient exists only when
+	// budget_login is "oidc", because a client registered for an app
+	// that was never told its id is exactly the dangling half-wiring
+	// TestShippedOidcWiringIsCoherent exists to catch.
+	//
+	// This used to be "rendered to empty document", an error guarding
+	// against a template whose whole body sits inside a mistyped `{{ if
+	// }}`. The guard is kept where it can tell the two apart: pkgspec
+	// refuses a BLANK template (text with nothing in it is always a
+	// mistake), while emptiness that only appears for some params is a
+	// choice the author made with an action they wrote. A resource that
+	// vanishes by accident is also not silent for long — a Route whose
+	// container is gone, a mount naming a Volume nobody creates, and an
+	// OidcClient with no app behind it are each their own invariant.
+	if strings.TrimSpace(buf.String()) == "" {
+		return nil, nil
 	}
 	return buf.Bytes(), nil
 }

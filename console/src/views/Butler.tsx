@@ -11,6 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   api,
+  ApiError,
   modelLabel,
   AskResponse,
   ButlerRow,
@@ -174,13 +175,22 @@ export function Butler({
     setBusy(true);
     setAskError(null);
     setPending(message);
+    // Keyed on openID rather than on the loaded thread, and the
+    // difference is a race with real consequences. openID is set the
+    // moment a session is known; thread is filled in by a fetch that
+    // happens afterwards and can fail. Branching on thread meant that
+    // between adopting a preserved session and its fetch landing, a
+    // retry went back to askOneButler — opening a FRESH task and
+    // running again the tool calls the preservation exists to protect.
+    // openID is what "which conversation is this" actually means here,
+    // and it is already correct by the time send can be called again.
     const call: Promise<AskResponse> =
-      thread === null
+      openID === null
         ? // The Butler by NAME. Asking a surface was the ambiguity this
           // screen removed, and asking through the surface endpoint
           // would also refuse a household Butler outright.
           api.askOneButler(current.butler.name, message)
-        : api.continueButlerSession(thread.id, message);
+        : api.continueButlerSession(openID, message);
     call
       // Re-opening the session is what loads the new turns AND the
       // plans they proposed; the effect above does both, so there is
@@ -190,7 +200,39 @@ export function Butler({
         setReloads((n) => n + 1);
       })
       .then(() => sessions.reload())
-      .catch((e: Error) => setAskError(e.message))
+      .catch((e: Error) => {
+        // A turn can fail after tools have already run, and the server
+        // preserves that work and names the session holding it.
+        // Adopting it is what makes the next message continue the task
+        // instead of opening a new one and repeating calls that already
+        // changed the house.
+        if (e instanceof ApiError && e.sessionId) {
+          setOpenID(e.sessionId);
+          setReloads((n) => n + 1);
+          void sessions.reload();
+        }
+        // A proposal the queue refused leaves no trace to find later.
+        // The tool trace on the preserved turn shows that propose_change
+        // RAN, which reads as success; the refusal happened after it,
+        // during submission, and is only reported here. Saying it with
+        // the error is what stops the operator assuming the change is
+        // waiting on the Plans screen.
+        //
+        // It says to start a NEW conversation rather than just to ask
+        // again, and the difference is not politeness. This thread has
+        // just adopted the preserved session, so asking again resumes
+        // that task — and the server recorded the accepted
+        // propose_change as a verified step, which a resumed task
+        // replays from its ledger instead of re-running. Retrying here
+        // would look like it worked and queue nothing (#234).
+        const refused =
+          e instanceof ApiError && e.proposalErrors?.length ? e.proposalErrors : null;
+        setAskError(
+          refused
+            ? `${e.message} — and a change it tried to propose was refused before reaching the approval queue (${refused.join("; ")}). Nothing is waiting there. Start a new conversation and ask again; continuing this one resumes the same task, which will not attempt that change a second time.`
+            : e.message,
+        );
+      })
       .finally(() => {
         setBusy(false);
         setPending(null);
@@ -689,10 +731,41 @@ export function Turn({
   proposals: PlanRecord[];
   onResolved: (id: string) => void;
 }) {
-  if (turn.role === "user") {
-    return <div className="msg msg-user">{turn.text}</div>;
-  }
   const made = proposals.filter((p) => (turn.planIds ?? []).includes(p.id));
+  if (turn.role === "user") {
+    // A user turn normally carries nothing but the question, and the
+    // early return below is that case.
+    //
+    // A turn that FAILED after running tools is the exception. Its calls
+    // are recorded on the question, because the Butler never answered
+    // and inventing an assistant turn would put words in its mouth — so
+    // this is the only place they can be shown. Hiding them is how
+    // somebody does by hand the thing that already happened.
+    const ran = parseCalls(turn.transcriptJson).length > 0 || (turn.planIds ?? []).length > 0;
+    if (!ran) {
+      return <div className="msg msg-user">{turn.text}</div>;
+    }
+    return (
+      <TurnRow>
+        <div className="msg msg-user">{turn.text}</div>
+        <div className="msg-note">
+          This turn did not finish. What it had already done is below, and the
+          next message continues it rather than starting again.
+        </div>
+        <ToolTrace turn={turn} />
+        {made.map((p) => (
+          <div className="proposal" key={p.id}>
+            <PendingPlan plan={p} onResolved={() => onResolved(p.id)} />
+          </div>
+        ))}
+        {made.length === 0 && (turn.planIds ?? []).length > 0 && (
+          <div className="msg-note">
+            Proposed {turn.planIds!.join(", ")} — open Plans to approve.
+          </div>
+        )}
+      </TurnRow>
+    );
+  }
   return (
     <TurnRow>
       <div className="msg msg-butler">{turn.text || "(no answer text)"}</div>

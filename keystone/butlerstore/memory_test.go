@@ -9,7 +9,6 @@ package butlerstore
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -19,7 +18,7 @@ import (
 
 func memoryDB(t *testing.T) *runtimedb.DB {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Path(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

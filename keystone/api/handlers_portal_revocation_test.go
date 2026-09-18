@@ -23,7 +23,7 @@ func TestOffboardingAMemberRevokesTheirPortalAccess(t *testing.T) {
 	h := homeHarness(t)
 
 	// A household member, admitted and using the dashboard.
-	if err := h.s.DB.RecordButlerMember("sandy", runtimedb.ProfileHousehold, ""); err != nil {
+	if err := h.s.DB.RecordButlerMember("sandy", runtimedb.RoleMember, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.s.DB.AdmitButlerMember("sandy", "owner"); err != nil {
@@ -90,7 +90,7 @@ func TestAMemberWithNoRecordIsStillLetIn(t *testing.T) {
 // conditions, and the door asks Active().
 func TestADisabledMemberIsRefused(t *testing.T) {
 	h := homeHarness(t)
-	if err := h.s.DB.RecordButlerMember("maya", runtimedb.ProfileHousehold, ""); err != nil {
+	if err := h.s.DB.RecordButlerMember("maya", runtimedb.RoleMember, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.s.DB.AdmitButlerMember("maya", "owner"); err != nil {
@@ -115,7 +115,7 @@ func TestADisabledMemberIsRefused(t *testing.T) {
 // attacker aims for.
 func TestACaseDifferentSpellingCannotSlipPastRevocation(t *testing.T) {
 	h := homeHarness(t)
-	if err := h.s.DB.RecordButlerMember("sandy", runtimedb.ProfileHousehold, ""); err != nil {
+	if err := h.s.DB.RecordButlerMember("sandy", runtimedb.RoleMember, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.s.DB.AdmitButlerMember("sandy", "owner"); err != nil {

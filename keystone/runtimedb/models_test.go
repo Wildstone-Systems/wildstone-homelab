@@ -37,7 +37,7 @@ func routes(t *testing.T, db *DB) {
 // boundary for every Butler assigned to the route by name — silently,
 // and without any of them being edited.
 func TestRouteKindIsImmutable(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	routes(t, db)
 	if _, err := db.ExecForTest(
 		`UPDATE models SET kind = 'local' WHERE name = 'anthropic'`); err == nil {
@@ -49,7 +49,7 @@ func TestRouteKindIsImmutable(t *testing.T) {
 // about which model to pick: it is about what a chosen one is trusted
 // with.
 func TestOnlyAProbedRouteCarriesActionAuthority(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 
 	// Unprobed is not ready. It has not been checked, which is
 	// different from having been checked and passed.
@@ -109,7 +109,7 @@ func TestOnlyAProbedRouteCarriesActionAuthority(t *testing.T) {
 // property B1's schema trigger depends on: a Butler cannot be pointed
 // at a route that has been turned off.
 func TestADisabledRouteStaysDisabled(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	routes(t, db)
 	if err := db.SetModelEnabled("anthropic", false, "root-admin"); err != nil {
 		t.Fatal(err)

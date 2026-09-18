@@ -25,7 +25,7 @@ func indexed(t *testing.T, db *DB, content, owner string, audience ButlerTaskAud
 }
 
 func TestIndexNeedsPermissionMetadata(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	base := IndexDocument{
 		SourceKind: "conversation", SourceID: "bs-1", Owner: "sam",
 		Audience: ButlerAudienceShared, PermissionLabel: "sam", Content: "dinner is at seven",
@@ -53,7 +53,7 @@ func TestIndexNeedsPermissionMetadata(t *testing.T) {
 
 // Permissions filter in the candidate query, not over its results.
 func TestRetrievalFiltersBeforeRanking(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	indexed(t, db, "dinner is at seven on Thursday", "household", ButlerAudienceShared)
 	indexed(t, db, "sam has a hospital appointment on Thursday", "sam", ButlerAudiencePrivate)
 
@@ -93,7 +93,7 @@ func TestRetrievalFiltersBeforeRanking(t *testing.T) {
 // A volatile source is never an answer: it comes back flagged for a
 // live read, because the index knows what WAS true.
 func TestVolatileSourcesDemandLiveVerification(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	if _, err := db.IndexDocumentInto(IndexDocument{
 		SourceKind: "home-assistant", SourceID: "light.kitchen", Owner: "household",
 		Audience: ButlerAudienceShared, PermissionLabel: "household",
@@ -128,7 +128,7 @@ func TestVolatileSourcesDemandLiveVerification(t *testing.T) {
 // Deleting a source removes its entries AND the searchable text: a
 // revocation that leaves a ghost to match on has revoked nothing.
 func TestDeletionRemovesEntriesAndSearchableText(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	indexed(t, db, "the gate code is on the fridge", "household", ButlerAudienceShared)
 	if hits, _ := db.SearchIndex(IndexQuery{Reader: "household", Text: "gate code"}); len(hits) != 1 {
 		t.Fatalf("the chunk was not indexed: %+v", hits)
@@ -149,7 +149,7 @@ func TestDeletionRemovesEntriesAndSearchableText(t *testing.T) {
 // Forgetting a memory record takes its index entries and its summaries
 // with it.
 func TestForgottenMemoryLeavesTheIndex(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	memSeq, err := db.RecordMemory(MemoryRecord{
 		Kind: MemoryFact, Content: "the spare key is under the mat", Subject: "household",
 		Audience: ButlerAudienceShared, PermissionLabel: "household", Owner: "household",
@@ -209,7 +209,7 @@ func TestForgottenMemoryLeavesTheIndex(t *testing.T) {
 // Background work is background: it starts behind anything a person is
 // waiting on.
 func TestIndexJobsAreLocalFirstAndOrdered(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	if _, err := db.QueueIndexJob(IndexJobIndex, `{"source":"bs-1"}`, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestIndexJobsAreLocalFirstAndOrdered(t *testing.T) {
 // measures the keyword and hybrid strategies over the same corpus and
 // stores what it found, which is what makes the choice reviewable.
 func TestRetrievalQualityIsMeasuredAndRecorded(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 
 	// A small corpus with a known right answer per query. Embeddings are
 	// deterministic bag-of-words vectors, standing in for whatever local

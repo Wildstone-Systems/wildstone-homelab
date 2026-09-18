@@ -24,7 +24,7 @@ func butlerConsole(t *testing.T) *harness {
 			t.Fatal(err)
 		}
 	}
-	if err := h.s.DB.RecordButlerMember("sam", runtimedb.ProfileHousehold, ""); err != nil {
+	if err := h.s.DB.RecordButlerMember("sam", runtimedb.RoleMember, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.s.DB.AdmitButlerMember("sam", "root-admin"); err != nil {

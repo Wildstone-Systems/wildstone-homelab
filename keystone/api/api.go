@@ -644,7 +644,7 @@ func (s *Server) handle(verb principal.Verb, h handlerFunc) http.Handler {
 		body, st, err := h(r, id)
 		status = st
 		if err != nil {
-			s.writeError(w, st, err.Error())
+			s.writeErrorBody(w, st, err.Error(), body)
 			return
 		}
 		if body == nil {
@@ -706,6 +706,41 @@ type mintResponse struct {
 
 func (s *Server) writeError(w http.ResponseWriter, status int, msg string) {
 	s.writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// writeErrorBody is writeError for a failure that still has something to
+// hand back.
+//
+// Almost every failed request has nothing to say beyond why it failed,
+// and passes body nil to get exactly the old shape. One case is not like
+// that: a Butler turn can fail AFTER tools have already run, and the
+// session holding that durable work is the only way the caller reaches
+// it again. A surface with no server-side thread pointer — the Console
+// and the API, unlike chat — would otherwise retry, open a fresh task,
+// and repeat calls that already changed the house.
+//
+// The body's own fields are merged and "error" is added last, so it wins
+// over any field of that name rather than being silently dropped. A body
+// that cannot be rendered as an object degrades to the plain error
+// rather than failing the response: the caller is already being told
+// something went wrong, and that message is the part it cannot lose.
+func (s *Server) writeErrorBody(w http.ResponseWriter, status int, msg string, body any) {
+	if body == nil {
+		s.writeError(w, status, msg)
+		return
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		s.writeError(w, status, msg)
+		return
+	}
+	fields := map[string]any{}
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		s.writeError(w, status, msg)
+		return
+	}
+	fields["error"] = msg
+	s.writeJSON(w, status, fields)
 }
 
 func remoteHost(r *http.Request) string {

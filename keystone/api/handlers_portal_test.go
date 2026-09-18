@@ -366,7 +366,7 @@ func TestTheAssistantSurfaceIsHouseholdOnly(t *testing.T) {
 		}
 	}
 	for _, member := range []string{"sam", "giulia"} {
-		if err := h.s.DB.RecordButlerMember(member, runtimedb.ProfileHousehold, ""); err != nil {
+		if err := h.s.DB.RecordButlerMember(member, runtimedb.RoleMember, "", ""); err != nil {
 			t.Fatal(err)
 		}
 		if err := h.s.DB.AdmitButlerMember(member, "root-admin"); err != nil {

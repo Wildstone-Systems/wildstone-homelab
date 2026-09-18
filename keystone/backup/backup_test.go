@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
@@ -28,6 +29,17 @@ type recordedRun struct {
 	name string
 	spec resource.ContainerSpec
 }
+
+// migrated is the schema, built once for this whole test binary rather
+// than replayed into every database these tests open (#231). Each test
+// still gets its own file.
+var migrated = dbtemplate.New(func(path string) error {
+	db, err := runtimedb.Open(path)
+	if err != nil {
+		return err
+	}
+	return db.Close()
+})
 
 func (f *fakeRunner) RunContainer(_ context.Context, node, name string, spec resource.ContainerSpec) error {
 	f.mu.Lock()
@@ -66,7 +78,7 @@ func backupPlanResource(name string) resource.Resource {
 
 func newEngine(t *testing.T, run Runner) (*Engine, *runtimedb.DB, *statefile.Store) {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "db.sqlite"))
+	db, err := runtimedb.Open(migrated.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,8 +5,35 @@
 #
 # THE ROUTE. Actual sets a server password on first visit and its
 # apps sign in with it, so the proxy passes through (auth: none) on the
-# family_private class — the ntfy posture. Actual can also use OpenID
-# Connect ("Login with OpenID") once configured from its own settings.
+# family_private class — the ntfy posture. That stays true in both
+# login modes below: forward-auth in front of Actual would break the
+# desktop and mobile apps, which authenticate to the server directly
+# rather than through a browser session.
+#
+# TWO LOGIN MODES, and budget_login picks between them.
+#
+#   password (the default) — Actual's own server password, the posture
+#   this package shipped with. Nothing OIDC is set on the container.
+#
+#   oidc — "Login with OpenID" against Authelia, using the OidcClient
+#   below. ACTUAL_OPENID_ENFORCE is deliberately NOT set, so the server
+#   password keeps working alongside it: it is the way back in when the
+#   provider is unreachable, and the way the apps and any bank-sync
+#   tooling still sign in. Turning enforcement on is a one-way door —
+#   Actual has no config to undo it, only scripts/disable-openid.js run
+#   inside the container — which is not a state a param should be able
+#   to reach by accident.
+#
+# THE FIRST OIDC SIGN-IN TAKES OWNERSHIP. Whoever logs in first through
+# Authelia becomes Actual's server owner, and Actual's UI cannot hand
+# that over afterwards. Sign in as the person who should own it.
+#
+# The OidcClient below is registered ONLY in oidc mode. A registration
+# the app was never told about is half a login: Authelia holds a client
+# nothing redeems, and nothing in the package says which half is
+# missing. Switching modes is still a param change rather than a
+# re-provisioning — the client and its secret appear and disappear with
+# the env that uses them.
 #
 # Everything is one volume, backed up daily.
 #
@@ -16,15 +43,28 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: budget-actual
-  version: 1.0.0
+  version: 1.1.0
   capability: budget
   profile: actual
 requires:
+  # Required in both modes, because a requirement is a static
+  # declaration and cannot be made conditional on a param. The cost is
+  # real and worth naming: a household that wants Actual on its own
+  # password installs identity to get it. It is the same trade every
+  # app-OIDC package in this catalog already makes, and identity is
+  # what 26 other packages in this catalog need anyway.
+  - { trait: identity, mode: oidc }
   - { trait: ingress, mode: private }
 params:
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: budget_subdomain, default: budget, description: "The name this service appears under, e.g. budget." }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  # Anything other than "oidc" means the password posture. Spelled as a
+  # positive match rather than a rejected list because the failure modes
+  # are not symmetric: a typo that falls back to the password login is a
+  # login screen the household already knows, while a typo that falls
+  # forward into OIDC hands server ownership to whoever visits first.
+  - { name: budget_login, default: password, example: password, description: "How people sign in to the budget: \"password\" for Actual's own server password, or \"oidc\" to add a Login with OpenID button for household accounts. The server password keeps working either way." }
 policies:
   classifications: [family_private]
   dataSensitivity: high
@@ -53,6 +93,22 @@ templates:
       env:
         ACTUAL_PORT: "5006"
         ACTUAL_TRUSTED_PROXIES: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
+        {{- if eq .Params.budget_login "oidc" }}
+        # The discovery document, not the bare issuer: Actual's own
+        # documented value for this variable is the full well-known path.
+        ACTUAL_OPENID_DISCOVERY_URL: "{{ .Resolved.IssuerURL }}/.well-known/openid-configuration"
+        ACTUAL_OPENID_CLIENT_ID: actual
+        ACTUAL_OPENID_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
+        # OIDC rather than bare OAuth2, so Actual reads the ID token
+        # instead of asking a provider-specific userinfo shape.
+        ACTUAL_OPENID_AUTH_METHOD: openid
+        # Where the provider sends the browser back, and the one value
+        # here that must match what the BROWSER saw byte for byte —
+        # under the tailnet posture that is the node's certified name
+        # plus a port, not budget.<domain>. `origin` answers that
+        # question; concatenating params answers a different one.
+        ACTUAL_OPENID_SERVER_HOSTNAME: '{{ origin (printf "%s.%s" .Params.budget_subdomain .Params.public_domain) }}'
+        {{- end }}
       mounts:
         - { source: actual-data, target: /data }
       restart: unless-stopped
@@ -65,6 +121,37 @@ templates:
       upstream: "container/actual:5006"
       auth: none
       classification: family_private
+  # The OidcClient lives on THIS package's node, not on a separate
+  # identity node: the engine synthesises the client secret on the
+  # OidcClient's node, the container reads the same reference on its
+  # own node, and secrets are node-local — a split would leave the app
+  # unable to materialise a secret that exists one machine over. Keystone
+  # merges every node's OidcClients into the provider's clients file
+  # regardless of where they are declared.
+  #
+  # redirectUris are built from the declared host rather than `origin`,
+  # unlike the env value above: the reconciler adds the resolved form
+  # alongside the declared one.
+  #
+  # The whole document is inside the conditional, so in password mode
+  # this template renders to nothing and no client is registered —
+  # capability.Expand produces no resource for a template that renders
+  # empty. The client secret goes with it: the engine synthesises that
+  # Secret FROM the OidcClient, so there is no orphan left behind.
+  - |
+    {{- if eq .Params.budget_login "oidc" }}
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: actual, node: "{{ .Params.node }}" }
+    spec:
+      clientId: actual
+      clientName: Actual Budget
+      redirectUris:
+        - "https://{{ .Params.budget_subdomain }}.{{ .Params.public_domain }}/openid/callback"
+      scopes: [openid, profile, email]
+      authPolicy: two_factor
+      secretRef: "{{ .Resolved.OidcSecretRef }}"
+    {{- end }}
   - |
     apiVersion: wildstone.dev/v1
     kind: BackupPlan

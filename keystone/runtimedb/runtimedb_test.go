@@ -6,11 +6,34 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
 )
 
+// migrated is the schema, built once for this whole test binary. Every
+// open below gets its own copy of it rather than replaying the
+// migrations again — see the package comment on dbtemplate, and #231
+// for what the old arithmetic cost the -race suite.
+//
+// A stale template is slow, not wrong: Open still runs whatever
+// schema_migrations says is missing, so the worst a bad copy can do is
+// make a test migrate the rest of the way itself.
+//
+// Tests ABOUT a migration must not use this. They want the real thing
+// running against real prior data, which is what openUnmigrated and
+// migrateThrough are for.
+var migrated = dbtemplate.New(func(path string) error {
+	db, err := Open(path)
+	if err != nil {
+		return err
+	}
+	return db.Close()
+})
+
+// open returns a private, writable, fully migrated database.
 func open(t *testing.T) *DB {
 	t.Helper()
-	db, err := Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := Open(migrated.Path(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

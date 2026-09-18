@@ -16,6 +16,7 @@ import (
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -88,9 +89,20 @@ func readsFor(nodes ...string) *provider.ChatResponse {
 	return resp
 }
 
+// migrated is the schema, built once for this whole test binary rather
+// than replayed into every database these tests open (#231). Each test
+// still gets its own file.
+var migrated = dbtemplate.New(func(path string) error {
+	db, err := runtimedb.Open(path)
+	if err != nil {
+		return err
+	}
+	return db.Close()
+})
+
 func testLedger(t *testing.T, path string) (*runtimedb.DB, *Ledger) {
 	t.Helper()
-	db, err := runtimedb.Open(path)
+	db, err := runtimedb.Open(migrated.Into(t, path))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

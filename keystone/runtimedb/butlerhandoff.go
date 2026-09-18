@@ -168,9 +168,14 @@ func (db *DB) HandoffConversation(conversationID string, from, to ButlerSurface,
 	if !member.Active() {
 		return HandoffContext{}, ErrNotAdmitted
 	}
-	if to == ButlerSurfaceAdmin && member.Profile != ProfileOperator {
+	// The admin surface is the Owner surface. Before 0039 this asked
+	// whether the person's profile was 'operator'; that column now says
+	// role = 'owner' and means the same thing, because the migration
+	// mapped the one to the other. Members do not reach it (§3.2, and
+	// §18.1: "A Member cannot access Console").
+	if to == ButlerSurfaceAdmin && member.Role != RoleOwner {
 		return HandoffContext{}, fmt.Errorf(
-			"%w: %s is admitted to the household Butler, and household admission does not grant operator access (ADR-W030 A2.1)",
+			"%w: %s is a member of this household, and member admission does not grant owner access (ADR-W030 A2.1, design §3.2)",
 			ErrNotAdmitted, conv.Member)
 	}
 

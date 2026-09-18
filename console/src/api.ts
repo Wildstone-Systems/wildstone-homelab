@@ -158,6 +158,26 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    // The session a failed Butler turn left its work in, when there is
+    // one.
+    //
+    // A failed request normally has nothing but a message. A turn that
+    // failed AFTER running tools is the exception: some of those calls
+    // changed the house, the server keeps the durable task and names
+    // the session holding it, and a caller that drops the name retries
+    // into a fresh task and runs them again. So it travels on the error
+    // rather than being parsed out of the body at each call site, where
+    // one of them would eventually forget.
+    public sessionId?: string,
+    // Proposals the turn tried to make and the queue refused.
+    //
+    // These travel for the same reason sessionId does, and are the more
+    // urgent of the two. A plan that WAS created is visible on the
+    // Plans screen and in the thread; a refused one exists nowhere.
+    // ResourceYAML never reaches the stored transcript, so resuming the
+    // task cannot submit it either — the operator has to ask again, and
+    // will not know to unless this is shown.
+    public proposalErrors?: string[],
   ) {
     super(message);
   }
@@ -186,7 +206,13 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new ApiError(res.status, (data as { error?: string }).error ?? res.statusText);
+    const failed = data as { error?: string; sessionId?: string; proposalErrors?: string[] };
+    throw new ApiError(
+      res.status,
+      failed.error ?? res.statusText,
+      failed.sessionId,
+      failed.proposalErrors,
+    );
   }
   return data as T;
 }

@@ -1,17 +1,28 @@
 package report
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
+// migrated is the schema, built once for this whole test binary rather
+// than replayed into every database these tests open (#231). Each test
+// still gets its own file.
+var migrated = dbtemplate.New(func(path string) error {
+	db, err := runtimedb.Open(path)
+	if err != nil {
+		return err
+	}
+	return db.Close()
+})
+
 func testDB(t *testing.T) *runtimedb.DB {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Path(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

@@ -130,25 +130,31 @@ func (s *Server) butlersConfigured() bool {
 // two things to keep true.
 func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn, prior *turnContext) (any, int, error) {
 	ans, err := s.Butlers.Serve(ctx, turn)
-	switch {
-	case err == nil:
-	case errors.Is(err, runtimedb.ErrNoButlerAccess),
-		errors.Is(err, runtimedb.ErrNoButlerForAddress),
-		errors.Is(err, runtimedb.ErrNotFound):
-		// Indistinguishable on purpose, following the store's own note:
-		// "that is not yours" confirms the Butler exists and roughly
-		// what it is for.
-		return nil, http.StatusNotFound, fmt.Errorf("no butler answers there for you")
-	case errors.Is(err, runtimedb.ErrButlerUnreachable):
-		// A6. 503 rather than 502, and the difference is the whole
-		// decision: the Butler is real, it is not answering, and it
-		// will answer when its OWN model returns. Nothing retries this
-		// onto another one.
-		return nil, http.StatusServiceUnavailable, err
-	case errors.Is(err, runtimedb.ErrNotAdmitted):
-		return nil, http.StatusForbidden, err
-	default:
-		return nil, http.StatusBadGateway, fmt.Errorf("butler session: %w", err)
+	if err != nil {
+		// Serve returns the durable task id ALONGSIDE its error, and
+		// that is not an accident: by the time a provider fails, tools
+		// may already have run and some of them changed the house.
+		// Whatever work exists is kept before the error goes back.
+		preserved := s.preserveFailedTurn(turn, prior, ans)
+		switch {
+		case errors.Is(err, runtimedb.ErrNoButlerAccess),
+			errors.Is(err, runtimedb.ErrNoButlerForAddress),
+			errors.Is(err, runtimedb.ErrNotFound):
+			// Indistinguishable on purpose, following the store's own note:
+			// "that is not yours" confirms the Butler exists and roughly
+			// what it is for.
+			return preserved, http.StatusNotFound, fmt.Errorf("no butler answers there for you")
+		case errors.Is(err, runtimedb.ErrButlerUnreachable):
+			// A6. 503 rather than 502, and the difference is the whole
+			// decision: the Butler is real, it is not answering, and it
+			// will answer when its OWN model returns. Nothing retries this
+			// onto another one.
+			return preserved, http.StatusServiceUnavailable, err
+		case errors.Is(err, runtimedb.ErrNotAdmitted):
+			return preserved, http.StatusForbidden, err
+		default:
+			return preserved, http.StatusBadGateway, fmt.Errorf("butler session: %w", err)
+		}
 	}
 
 	// Proposals go through the ONE pipeline (ADR-W017 A3), as principal
@@ -231,4 +237,109 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 		PlanIDs:        planIDs,
 		ProposalErrors: proposalErrs,
 	}, http.StatusOK, nil
+}
+
+// preserveFailedTurn keeps the work a failed turn has already done, and
+// returns a handle the next turn can resume it through.
+//
+// Serve hands back the durable task id alongside its error on purpose.
+// A provider can fail after several tool calls have completed, and some
+// of those calls changed the house — a door unlocked, a light switched,
+// a message sent. Returning the error and dropping the answer leaves
+// that task attached to no conversation at all, and then the next
+// message on the thread (an adapter retry, or the person simply saying
+// "continue") opens a FRESH task and runs those same calls a second
+// time. Unlocking a door twice is not the same as unlocking it once.
+//
+// Recording the turn is what fixes that: it gives the task a
+// conversation to belong to, and ButlerTaskForSession is how the next
+// turn finds a task still in flight and resumes it instead of starting
+// over. The transcript keeps whichever calls did complete, so what
+// happened before the failure is answerable afterwards rather than only
+// inferable from the house.
+//
+// A failure to preserve is logged, never returned. The caller is already
+// on its way back with the provider's error, and replacing that with a
+// bookkeeping error would hide the thing that actually went wrong.
+func (s *Server) preserveFailedTurn(turn butlerlive.Turn, prior *turnContext, ans butlerlive.Answer) any {
+	// No task means the turn failed before any work could start —
+	// an unresolved Butler, a refused admission, a client that would
+	// not build. There is nothing to keep.
+	if ans.TaskID == "" {
+		return nil
+	}
+	// An accepted propose_change is submitted even though the turn
+	// failed, for the same reason as on the success path: a proposal is
+	// not an action. It lands as a plan record in state `proposed` and
+	// a human approve verb is still the only way forward (ADR-W017 A3).
+	//
+	// The alternative is losing it. ResourceYAML lives on the call and
+	// not in the stored transcript, and the resume path reconstructs
+	// only the tool RESULT — so a proposal carried through a failed turn
+	// arrives at the next successful one with nothing to submit, and the
+	// plan the person asked for disappears without anybody being told.
+	butlerID := principal.Identity{Name: butlerPrincipal, Role: runtimedb.RoleButler, ActingFor: turn.Member}
+	planIDs, proposalErrs := s.submitSessionProposals(butlerID, ans.Calls)
+
+	stored := storedTranscript{Provider: ans.Provider, PlanIDs: planIDs}
+	for _, call := range ans.Calls {
+		stored.Calls = append(stored.Calls, transcriptRecord{
+			Name: call.Name, Input: call.Input, Result: call.Result,
+			Error: call.Error, Rejected: call.Rejected,
+		})
+	}
+	transcriptJSON, merr := json.Marshal(stored)
+	if merr != nil {
+		s.Log.Error("encoding transcript for a failed turn", "task", ans.TaskID, "err", merr)
+		return nil
+	}
+	mode := runtimedb.ButlerModeFull
+	if ans.ReadOnly {
+		mode = runtimedb.ButlerModeQAOnly
+	}
+	// The assistant turn is deliberately absent: the Butler did not
+	// answer, and writing an empty one would put words in its mouth for
+	// whoever reads the thread later.
+	//
+	// The transcript rides on the TURN, not only on the session. A
+	// follow-up appends turns to an existing session and never touches
+	// the session-level fields, so a transcript set only there would
+	// survive a first turn and vanish on every later one — and this
+	// function would be claiming, in its own activity line, to have kept
+	// calls that were not written down anywhere.
+	failed := redact.String(string(transcriptJSON))
+	sessionID, serr := s.recordTurn(prior, runtimedb.ButlerSession{
+		Principal:      butlerPrincipal,
+		ActingFor:      turn.Member,
+		Provider:       ans.Provider,
+		Mode:           mode,
+		Surface:        ans.Surface,
+		Butler:         ans.Butler,
+		TranscriptJSON: failed,
+		Turns: []runtimedb.ButlerTurn{
+			// planIDs ride on the turn so the Console can show the
+			// proposal next to the question that caused it, the same
+			// way a successful assistant turn carries its own.
+			{Role: runtimedb.ButlerRoleUser, Text: redact.String(turn.Text),
+				TranscriptJSON: failed, PlanIDs: planIDs},
+		},
+	})
+	if serr != nil || sessionID == "" {
+		if serr != nil {
+			s.Log.Error("recording a failed turn", "task", ans.TaskID, "err", serr)
+		}
+		return nil
+	}
+	if lerr := s.DB.SetButlerTaskSession(ans.TaskID, sessionID); lerr != nil {
+		s.Log.Error("linking a failed turn's task to its conversation",
+			"task", ans.TaskID, "session", sessionID, "err", lerr)
+		return nil
+	}
+	s.event("butler.session.failed", "", principal.Identity{Name: butlerPrincipal, ActingFor: turn.Member},
+		fmt.Sprintf("session %s kept task %s after a failure: %d tool calls already ran, %d proposals",
+			sessionID, ans.TaskID, len(ans.Calls), len(planIDs)))
+	return askResponse{
+		SessionID: sessionID, Mode: string(mode),
+		PlanIDs: planIDs, ProposalErrors: proposalErrs,
+	}
 }

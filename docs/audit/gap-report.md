@@ -3,11 +3,7 @@
 Tracked by [#151](https://github.com/chickenrat17/wildstone-homelab/issues/151).
 See [`README.md`](README.md) for how to run a slice.
 
-**One file per slice, and no session writes into another's.** The
-slices run in parallel from independent sessions, so a single shared
-document would conflict on every merge — not because the sections
-overlap but because the file does. This page is an index and holds no
-findings of its own.
+**One file per slice, and no session writes into another's.** The audit slices were run independently so detailed evidence stays in per-slice files rather than one shared document.
 
 | Slice | Issue | Findings |
 |---|---|---|
@@ -18,44 +14,26 @@ findings of its own.
 | Secrets and privacy gateway | [#157](https://github.com/chickenrat17/wildstone-homelab/issues/157) | [`findings/157-secrets.md`](findings/157-secrets.md) |
 | Durable execution, delegation, lifecycle | [#158](https://github.com/chickenrat17/wildstone-homelab/issues/158) | [`findings/158-execution.md`](findings/158-execution.md) |
 
-Each file carries its own status in its header, so progress is read
-from the files rather than from a table six sessions would all want to
-edit at once.
+Each findings file carries its own audit status. This index holds no findings of its own.
 
 ---
 
 ## Finding identifiers
 
-`F-<issue>-<nn>` — `F-153-01`, `F-156-07`. The issue number namespaces
-them, so two slices cannot collide however they are scheduled, and one
-session owning one file means no collision inside it either. Numbering
-is a property of the layout rather than a convention anyone has to
-remember.
+`F-<issue>-<nn>` — for example `F-153-01` or `F-156-07`.
 
-**Never renumber.** A remediation issue may already cite an id, and a
-citation that silently comes to mean a different finding is worse than
-a gap in the sequence. Numbers increase; gaps are fine; withdrawn
-findings are struck through in place with a line saying why.
+**Never renumber findings.** Remediation issues may already cite them. Withdrawn findings should be struck through in place with the reason recorded.
 
 ## What the lint checks
 
-`testing/e2e/auditregister_test.go`, which CI runs:
+`testing/e2e/auditregister_test.go`, which CI runs, checks that:
 
-- every findings file declares an issue number matching its filename,
-  and a status from the closed set
-- finding ids are well formed, match their file's issue, are unique,
-  and only ever increase
-- every finding carries a status from
-  *implemented / partial / missing / unverified* and a non-empty
-  evidence line
-- this index links every findings file, and every findings file is
-  linked from this index
+- every findings file declares the expected issue number and a valid slice status
+- finding IDs are well formed, namespaced correctly, unique, and monotonically increasing
+- every finding carries a valid status and non-empty evidence
+- this index links every findings file and every findings file is represented here
 
-It deliberately does not check prose, table contents, or whether a
-finding is any good. It checks the things that break silently when six
-sessions write in parallel.
-
-Run it before committing:
+Run it before committing audit-register changes:
 
 ```bash
 cd testing/e2e && go test -run TestAuditRegister ./...
@@ -63,8 +41,59 @@ cd testing/e2e && go test -run TestAuditRegister ./...
 
 ---
 
-## Summary
+## Audit summary
 
-*Written once every slice is in, as the input to remediation planning:
-counts by state, the findings that block others, and the decisions
-needed before any of them can be scheduled.*
+The completed audit contains:
+
+| State | Count |
+|---|---:|
+| missing | 69 |
+| partial | 41 |
+| implemented | 8 |
+| unverified | 3 |
+| **total** | **121** |
+
+These numbers describe repository conformance at the time of the audit. They are evidence, not the architecture itself.
+
+## Design resolution after the audit
+
+The audit exposed several repeated architectural questions. Those questions were subsequently reviewed with the Owner and re-baselined in:
+
+- [`docs/agent-system-design.md`](../agent-system-design.md) — current clean design contract and detailed acceptance criteria
+- [`ADR-W033`](../decisions/ADR-W033-the-agent-design.md) — current architectural decisions, rationale, tradeoffs, and supersessions
+
+The earlier [`ADR-W033 review`](../decisions/ADR-W033-review.md) remains useful for the repository/schema observations it captured while reviewing the first draft. Where its design conclusions conflict with the final W033, the final W033 and design contract govern.
+
+The final W033 deliberately **does not duplicate the full 121-finding coverage matrix**. Detailed findings stay in this audit tree. Likewise, detailed implementation sequencing belongs in GitHub issues/planning rather than in the ADR.
+
+## Architectural dependency order
+
+The final W033 keeps only the high-level dependency order:
+
+1. Human identity and surfaces
+2. Service entitlements
+3. Agent classes and tools
+4. Connections and sessions
+5. Memory scopes and retrieval policy
+6. Secrets and privacy boundaries
+7. Plans and Owner Review Queue
+8. Routine execution
+9. Lifecycle and soft deletion
+10. Audit remediation, migrations, and rollout
+
+When remediation issues are created or updated, they should cite both the relevant finding IDs and the final W033/design-contract requirement they implement.
+
+## Important audit evidence that remains relevant
+
+Several repository-level observations from the first review remain important even though the architecture was later refined:
+
+- **F-156-08** demonstrated private-memory disclosure into a group-room path on the running deployment. Destination-aware filtering remains required by the final design.
+- **F-158-19** questions whether the current completion receipt is sufficiently independent evidence.
+- **F-158-21** questions whether the coordinator lease actually gates every durable-action dispatch path.
+- Schema and migration findings remain implementation evidence even where the final target schema changed after the review.
+
+These should be verified or remediated before implementation work relies on the affected guarantees.
+
+## Historical note
+
+This register was originally framed as an audit against the 10 September 2026 architecture baseline. That baseline remains the source that generated these findings, but it is no longer the current normative design where it conflicts with final ADR-W033. Do not rewrite historical findings merely because the target architecture evolved; instead, remediation should explain whether a finding is still applicable, superseded by the new design, or requires a differently shaped fix.

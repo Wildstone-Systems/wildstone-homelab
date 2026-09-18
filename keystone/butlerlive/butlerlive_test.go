@@ -11,7 +11,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +18,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
+	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -165,9 +165,20 @@ type fixture struct {
 	tools   map[string]*countingToolset
 }
 
+// migrated is the schema, built once for this whole test binary rather
+// than replayed into every database these tests open (#231). Each test
+// still gets its own file.
+var migrated = dbtemplate.New(func(path string) error {
+	db, err := runtimedb.Open(path)
+	if err != nil {
+		return err
+	}
+	return db.Close()
+})
+
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Path(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -183,10 +194,10 @@ func newFixture(t *testing.T) *fixture {
 			t.Fatalf("UpsertModel(%s): %v", r.Name, err)
 		}
 	}
-	for _, m := range []struct{ name, profile string }{
-		{"mika", runtimedb.ProfileOperator}, {"sam", runtimedb.ProfileHousehold},
+	for _, m := range []struct{ name, role string }{
+		{"mika", runtimedb.RoleOwner}, {"sam", runtimedb.RoleMember},
 	} {
-		if err := db.RecordButlerMember(m.name, m.profile, ""); err != nil {
+		if err := db.RecordButlerMember(m.name, m.role, "", ""); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.AdmitButlerMember(m.name, "root-admin"); err != nil {

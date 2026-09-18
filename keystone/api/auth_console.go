@@ -39,12 +39,13 @@ const (
 // it, reaching the Console required a bearer token minted by hand for
 // each person — which does not scale past the operator, has no expiry
 // story, and leaves a credential that outlives the directory account it
-// was minted for. Here, membership IS the permission: removing somebody
-// from the group revokes them on their next request, in the same place
-// an operator already manages access to every other service in the
-// house.
+// was minted for. Here, directory membership is what OFFERS the Console,
+// and the household's own record of the person is what can withdraw it.
+// (An earlier version of this comment said group membership alone was
+// the permission, on the grounds that removal revokes. This deployment
+// cannot remove anyone from a group — see forwardedUserMayHoldConsole.)
 //
-// Three conditions, each necessary:
+// Four conditions, each necessary:
 //
 //  1. The peer is the trusted ingress. A header anyone can set is not an
 //     authentication, and this one grants the whole control plane. With
@@ -73,10 +74,84 @@ func (s *Server) consoleForwardAuth(r *http.Request) (principal.Identity, bool) 
 	if !hasGroup(r.Header.Get(ConsoleGroupsHeader), ConsoleGroup) {
 		return principal.Identity{}, false
 	}
+	//  4. The household does not already know this person to be someone
+	//     who may not hold the Console.
+	if !s.forwardedUserMayHoldConsole(user) {
+		return principal.Identity{}, false
+	}
 	// ActingFor carries the person as well as Name so every audit row,
 	// every Butler grant and every plan approval reads their directory
 	// account rather than a shared administrator.
 	return principal.Identity{Name: user, Role: runtimedb.RoleAdmin, ActingFor: user}, true
+}
+
+// forwardedUserMayHoldConsole refuses a forwarded identity the household
+// has a record of and that record says must not administer it: someone
+// disabled, offboarded, un-admitted, or holding role 'member' rather
+// than 'owner' (design §3.2, §18.1 — "A Member cannot access Console",
+// "Demoting an Owner immediately invalidates Console access/session").
+//
+// The condition above it says group membership IS the permission,
+// because removing somebody from the group revokes them. That is not
+// true of this deployment. handlers_household_members.go states the
+// reason in its own words: "Groups may only be ADDED. The provisioning
+// job is additive ... and never removes either." So the one revocation
+// path that comment relies on is not reachable through any surface
+// Wildstone offers, and without this check a person who is demoted,
+// disabled or offboarded keeps the whole control plane.
+//
+// Why a name match is allowed to REFUSE when A2.1 forbids it granting.
+// Equal names are not proof of identity, so a handle may never be the
+// reason somebody is let in — and it is not: the three conditions above
+// still decide that. It is sound as a reason to keep somebody OUT,
+// because the two mistakes are not symmetrical. Refusing the wrong
+// person costs them a screen they can be given back. Admitting the
+// wrong person costs the household its control plane.
+//
+// What this deliberately does NOT do is require a trusted-ingress
+// identity link, which is what A2.1 would otherwise ask for and what
+// handlers_household_review.go does for its own surface. Links and
+// Person records are only ever created through the admin API, which
+// lives behind this very check — so requiring one would lock every
+// existing Console holder out of the surface they would need in order
+// to grant themselves the link. The design resolves that at §2.4, where
+// the installer creates the first Owner and their directory identity
+// before setup completes, and §2.6, where root CLI recovery exists as
+// the break-glass. Neither is built yet. Until they are, this closes
+// the hole it can close without a lockout it cannot undo: a Person the
+// household knows about is held to their role and lifecycle, and a
+// forwarded name with no Person record behind it is still governed by
+// the directory group alone.
+func (s *Server) forwardedUserMayHoldConsole(user string) bool {
+	// Matched case-INSENSITIVELY, and that is load-bearing rather than
+	// tidy. Handles are compared exactly everywhere else, so `Admin` and
+	// `admin` are two records (ADR-W032 A4, still open). An exact lookup
+	// here would miss the Person whenever the proxy asserted a different
+	// capitalisation, fall into the "no record" branch below, and hand
+	// the Console to somebody the household had just disabled. The
+	// permissive branch is the one an attacker would aim for, so nothing
+	// that reaches it may depend on spelling.
+	//
+	// Looser matching is only ever used to refuse. It cannot grant: no
+	// match at all still means the directory group decides, exactly as
+	// before.
+	people, err := s.DB.ButlerMembersByHandleFold(user)
+	if err != nil {
+		// A lookup that failed is not a lookup that passed.
+		return false
+	}
+	if len(people) == 0 {
+		return true
+	}
+	// Every match must qualify. With two records differing only by case
+	// there is no way to tell which one the proxy meant, and an
+	// authorization check that guesses is not a check.
+	for _, m := range people {
+		if !m.Active() || m.Role != runtimedb.RoleOwner {
+			return false
+		}
+	}
+	return true
 }
 
 // hasGroup reports whether a forwarded group list contains want.

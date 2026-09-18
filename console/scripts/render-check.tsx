@@ -349,13 +349,30 @@ const chatRow = (
   people: 2, connections: 1, toolsAllowed: 3, toolsAvailable: 4, ...row,
 });
 
+// anHourAgoButStillToday is the rail fixture's timestamp: an hour ago,
+// unless an hour ago was yesterday.
+//
+// "An hour ago" alone is wrong for one hour out of every day. Between
+// midnight and 01:00 it lands on the PREVIOUS date, the rail correctly
+// heads it "Yesterday", and a check asserting "Today" fails — on a
+// commit that passed an hour earlier and will pass again an hour later,
+// which is the worst kind of red because nothing in the diff explains
+// it.
+function anHourAgoButStillToday(): string {
+  const now = new Date();
+  const hourAgo = new Date(now.getTime() - 3600_000);
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  return (hourAgo < startOfToday ? now : hourAgo).toISOString();
+}
+
 const convoRail = renderToString(h(ConversationRail, {
   rows: [chatRow()], current: chatRow(), onPickButler: () => {}, onManage: () => {},
   openID: "s-today",
   // Dated against the REAL clock: ConversationRail buckets with its own
   // default `now`, so a fixture timestamp would name a different group
   // every day after the one it was written on.
-  sessions: { data: [session("s-today", new Date(Date.now() - 3600_000).toISOString())], error: null, loading: false },
+  sessions: { data: [session("s-today", anHourAgoButStillToday())], error: null, loading: false },
   onPick: () => {}, onNew: () => {}, onClose: () => {},
 }));
 check("the rail heads each day group", convoRail.includes("Today"), convoRail.slice(0, 400));

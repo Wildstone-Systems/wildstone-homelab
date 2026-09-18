@@ -19,7 +19,7 @@ func newSession(t *testing.T, db *DB, finalText string, turns []ButlerTurn) stri
 }
 
 func TestButlerTurnsAreStoredInOrder(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	id := newSession(t, db, "two", []ButlerTurn{
 		{Role: ButlerRoleUser, Text: "one"},
 		{Role: ButlerRoleAssistant, Text: "two", PlanIDs: []string{"plan-a", "plan-b"}},
@@ -48,7 +48,7 @@ func TestButlerTurnsAreStoredInOrder(t *testing.T) {
 // reader that predates turns — the CLI, the chat adapters, an audit
 // query — keeps showing the first thing the Butler ever said.
 func TestAppendButlerTurnsMovesFinalText(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	id := newSession(t, db, "two", []ButlerTurn{
 		{Role: ButlerRoleUser, Text: "one"},
 		{Role: ButlerRoleAssistant, Text: "two"},
@@ -81,7 +81,7 @@ func TestAppendButlerTurnsMovesFinalText(t *testing.T) {
 // A follow-up to a conversation that is not there is a bug in the
 // caller, not a new conversation.
 func TestAppendButlerTurnsRefusesAnUnknownSession(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	for _, id := range []string{"bs-999", "not-an-id"} {
 		if err := db.AppendButlerTurns(id, []ButlerTurn{{Role: ButlerRoleAssistant, Text: "x"}}); err == nil {
 			t.Fatalf("AppendButlerTurns(%q) succeeded, want ErrNotFound", id)
@@ -90,7 +90,7 @@ func TestAppendButlerTurnsRefusesAnUnknownSession(t *testing.T) {
 }
 
 func TestButlerTurnRoleIsClosed(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	_, err := db.InsertButlerSession(ButlerSession{
 		Principal: "butler", ActingFor: "mika", Surface: ButlerSurfaceAdmin,
 		Turns: []ButlerTurn{{Role: "system", Text: "no"}},

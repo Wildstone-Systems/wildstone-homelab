@@ -2,22 +2,11 @@ package runtimedb
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
 )
 
-func butlerTestDB(t *testing.T) *DB {
-	t.Helper()
-	db, err := Open(filepath.Join(t.TempDir(), "keystone.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
-}
-
 func TestButlerSessionRoundTrip(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 
 	id, err := db.InsertButlerSession(ButlerSession{
 		Principal:      "butler",
@@ -53,7 +42,7 @@ func TestButlerSessionRoundTrip(t *testing.T) {
 }
 
 func TestButlerSessionListOmitsTranscript(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	for i := 0; i < 3; i++ {
 		if _, err := db.InsertButlerSession(ButlerSession{
 			Principal: "butler", ActingFor: "op", Provider: "scripted",
@@ -80,7 +69,7 @@ func TestButlerSessionListOmitsTranscript(t *testing.T) {
 }
 
 func TestButlerSessionRequiresPrincipalBinding(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	// ADR-W001: no anonymous session record, ever.
 	if _, err := db.InsertButlerSession(ButlerSession{Principal: "butler", Surface: ButlerSurfaceAdmin}); err == nil {
 		t.Fatalf("insert without acting_for succeeded")
@@ -96,7 +85,7 @@ func TestButlerSessionRequiresPrincipalBinding(t *testing.T) {
 // hides an operator session from an audit of the Statefile — so there is
 // no default at all.
 func TestButlerSessionRequiresSurface(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	if _, err := db.InsertButlerSession(ButlerSession{Principal: "butler", ActingFor: "op"}); err == nil {
 		t.Fatalf("insert without a surface succeeded")
 	}
@@ -111,7 +100,7 @@ func TestButlerSessionRequiresSurface(t *testing.T) {
 // what the household's butler has been asked to do gets exactly that,
 // and the reverse (ADR-W026 A1).
 func TestButlerSessionListBySurface(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	for _, sfc := range []ButlerSurface{ButlerSurfaceAdmin, ButlerSurfaceFamily, ButlerSurfaceAdmin} {
 		if _, err := db.InsertButlerSession(ButlerSession{
 			Principal: "butler", ActingFor: "op", Provider: "scripted",
@@ -144,7 +133,7 @@ func TestButlerSessionListBySurface(t *testing.T) {
 }
 
 func TestButlerSessionNotFound(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 	if _, err := db.GetButlerSession("bs-99"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}

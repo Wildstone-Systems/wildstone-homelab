@@ -2,52 +2,57 @@
 
 Wildstone product documentation and ADRs.
 
-- `02-implementation-scope.md` — the implementation scope (epics E0–E13,
-  milestones M0–M5, sizing, cut line). Authoritative here.
+- `02-implementation-scope.md` — implementation scope (epics E0–E13, milestones M0–M5, sizing, cut line).
 - `decisions/` — Wildstone ADRs (W-series).
 
 User and operator docs (E13, ADR-W018):
 
-- `install.md` — installing Keystone, joining nodes, `wild`, Console,
-  Butler.
-- `concepts.md` — the mental model: Statefile, plans, reconcile,
-  principals, capabilities, secrets, backups, the Butler's ceiling.
-- `recovery.md` — the recovery contract and total-host-loss runbook
-  (executed weekly by `scripts/exit-drill.sh`).
-- `threat-model.md` — the threat model refreshed against as-built.
-- `vision.md` — why Wildstone exists: the home lab as household
-  infrastructure, the Butler as the counter-image of Alexa, the
-  two-butler arc, and the standing principles.
-- `migration.md` — the dogfood migration runbook and the two-masters
-  cutover rule.
-- `friction-log.md` — friction found while dogfooding, filed and
-  burned down before alpha exit.
+- `install.md` — installing Keystone, joining nodes, `wild`, Console, Butler.
+- `concepts.md` — Statefile, plans, reconcile, principals, capabilities, secrets, backups, and the Butler ceiling.
+- `recovery.md` — recovery contract and total-host-loss runbook.
+- `threat-model.md` — threat model refreshed against as-built behavior.
+- `vision.md` — product direction and standing principles.
+- `migration.md` — dogfood migration runbook and cutover rules.
+- `friction-log.md` — dogfood friction and alpha-exit cleanup.
 
-The design brief (`00-design-brief-v0.1.md`) and architecture proposal
-(`01-architecture-proposal.md`) remain in the reference deployment repo:
-`chickenrat17/homelab-config` → `docs/architecture/wildstone/`.
+The original design brief (`00-design-brief-v0.1.md`) and architecture proposal (`01-architecture-proposal.md`) remain in the reference deployment repo, `chickenrat17/homelab-config`, under `docs/architecture/wildstone/`.
 
-Agent / Butler architecture. **Start with the baseline** — it is the
-accepted statement of intent and supersedes conflicting ADR language:
+## Agent / Butler architecture
 
-- [Agent architecture baseline](agent-architecture-baseline.md) — accepted
-  2026-09-10. What a Butler is, shared memory with audiences, secrets and
-  the privacy gateway, routines, and the AC01–AC16 acceptance criteria.
-  Generated from a `.docx` original; regenerate with
-  `scripts/docx-to-md.py`. Tracked by
-  [#151](https://github.com/chickenrat17/wildstone-homelab/issues/151).
+Read these in this order:
 
-- [`audit/`](audit/) — the running audit of the repository against the
-  baseline: [how to run a slice](audit/README.md),
-  [reaching the live deployment](audit/runtime-access.md), and the
-  [gap report](audit/gap-report.md) the slices write into.
+1. [**Agent system design**](agent-system-design.md) — the current clean design contract. This is the best description of how the Wildstone Agent/Butler system is intended to work now, including detailed end-to-end acceptance criteria.
+2. [**ADR-W033: The Wildstone agent system**](decisions/ADR-W033-the-agent-design.md) — the current architectural decision record: rationale, tradeoffs, explicit supersessions of older decisions, and the short dependency-oriented implementation order.
+3. [**ADR-W033 review**](decisions/ADR-W033-review.md) — historical repository/schema review of the first W033 draft. Its repository findings remain useful evidence, but design conclusions that conflict with the final W033 are superseded.
+4. [**Agent architecture baseline**](agent-architecture-baseline.md) — the 10 September 2026 baseline that triggered the repository audit. It is retained as historical input, not as the current source of truth where it differs from the final W033/design contract.
+5. [`audit/`](audit/) — repository audit evidence and the [gap register](audit/gap-report.md). Individual finding files remain the detailed evidence base for implementation planning.
 
-Supporting, and older than the baseline:
+`Agent` and `Butler` mean the same architectural object. Product language may say Butler; technical language may say Agent.
 
-- [ADR-W030](decisions/ADR-W030-butler-continuity-durable-work-and-scoped-integrations.md) — continuity, durable work, and scoped integrations. A3's deferral of vector retrieval and W031 A4's per-Butler memory scope are both superseded by the baseline.
-- [ADR-W031](decisions/ADR-W031-butlers-are-user-created-specialists.md) — Butlers as user-created specialists.
-- [Capability and design brief](butler-capability-and-design-brief.md) — non-normative rationale, deployment examples, and delivery sequencing behind the ADR.
-- `butler-memory.md` — **notes, not a source.** Generated on 2026-09-10 by
-  reading existing code; its step ordering was invented and is what
-  deferred semantic recall. Kept for its accurate inventory of what
-  `runtimedb` already contains.
+### Current authority
+
+Where these documents disagree, use this precedence for the agent-system work:
+
+```text
+agent-system-design.md
+        +
+ADR-W033-the-agent-design.md
+        ↓
+current design
+
+older ADRs / 2026-09-10 baseline
+        ↓
+historical decision and audit context
+```
+
+Older ADRs are intentionally preserved as historical records. ADR-W033 Part G states the current amendments and supersessions instead of rewriting those records to make them appear to have always contained the final design.
+
+The detailed implementation sequence belongs in GitHub issues/planning. ADR-W033 keeps only the architectural dependency order, while `agent-system-design.md` carries the behavioral acceptance gates.
+
+## Supporting agent documents
+
+- [ADR-W030](decisions/ADR-W030-butler-continuity-durable-work-and-scoped-integrations.md) — historical continuity, durable-work, and scoped-integration decisions. See W033 Part G for current supersessions.
+- [ADR-W031](decisions/ADR-W031-butlers-are-user-created-specialists.md) — historical specialist-Butler design. See W033 Part G for the current Agent-class, model-chain, Connection, and memory model.
+- [ADR-W032](decisions/ADR-W032-who-may-open-the-console.md) — historical Console-access design. Final W033 makes Console strictly Owner-only and treats Child as a constrained Member profile rather than a third fundamental role.
+- [Capability and design brief](butler-capability-and-design-brief.md) — non-normative rationale and deployment examples.
+- `butler-memory.md` — notes generated from existing code, retained for repository inventory rather than as a normative source.

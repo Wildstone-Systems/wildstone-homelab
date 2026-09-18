@@ -15,7 +15,7 @@ import (
 // and two admitted people.
 func butlerFixture(t *testing.T) *DB {
 	t.Helper()
-	db := butlerTestDB(t)
+	db := open(t)
 	for _, r := range []Model{
 		{Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", ProviderModel: "llama",
 			Readiness: ModelReady, Enabled: true},
@@ -26,10 +26,10 @@ func butlerFixture(t *testing.T) *DB {
 			t.Fatalf("UpsertModel(%s): %v", r.Name, err)
 		}
 	}
-	for _, m := range []struct{ name, profile string }{
-		{"mika", ProfileOperator}, {"sam", ProfileHousehold},
+	for _, m := range []struct{ name, role string }{
+		{"mika", RoleOwner}, {"sam", RoleMember},
 	} {
-		if err := db.RecordButlerMember(m.name, m.profile, ""); err != nil {
+		if err := db.RecordButlerMember(m.name, m.role, "", ""); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.AdmitButlerMember(m.name, "root-admin"); err != nil {

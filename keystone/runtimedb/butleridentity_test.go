@@ -10,9 +10,9 @@ import (
 	"testing"
 )
 
-func admitted(t *testing.T, db *DB, member, profile string) {
+func admitted(t *testing.T, db *DB, member, role string) {
 	t.Helper()
-	if err := db.RecordButlerMember(member, profile, ""); err != nil {
+	if err := db.RecordButlerMember(member, role, "", ""); err != nil {
 		t.Fatalf("RecordButlerMember(%s): %v", member, err)
 	}
 	if err := db.AdmitButlerMember(member, "root-admin"); err != nil {
@@ -21,14 +21,14 @@ func admitted(t *testing.T, db *DB, member, profile string) {
 }
 
 func TestAdmissionIsRuntimeStateNotAName(t *testing.T) {
-	db := butlerTestDB(t)
+	db := open(t)
 
 	// An identity nobody linked resolves to nobody. Equal names are not
 	// proof of identity (ADR-W030 A2.1).
 	if _, err := db.ResolveSurfaceIdentity(LinkAPIPrincipal, "mika"); !errors.Is(err, ErrNotAdmitted) {
 		t.Fatalf("an unlinked principal resolved: %v", err)
 	}
-	admitted(t, db, "mika", ProfileOperator)
+	admitted(t, db, "mika", RoleOwner)
 	// Recorded and admitted, but still not linked to anything.
 	if _, err := db.ResolveSurfaceIdentity(LinkAPIPrincipal, "mika"); !errors.Is(err, ErrNotAdmitted) {
 		t.Fatalf("an admitted member with no link resolved: %v", err)
@@ -41,7 +41,7 @@ func TestAdmissionIsRuntimeStateNotAName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSurfaceIdentity: %v", err)
 	}
-	if m.Member != "mika" || m.Profile != ProfileOperator {
+	if m.Member != "mika" || m.Role != RoleOwner {
 		t.Fatalf("resolved = %+v", m)
 	}
 	// A link needs an approving administrator, and Butler cannot be one
@@ -51,15 +51,15 @@ func TestAdmissionIsRuntimeStateNotAName(t *testing.T) {
 	}
 	// One live link per external identity: a chat account belongs to one
 	// person at a time.
-	admitted(t, db, "sam", ProfileHousehold)
+	admitted(t, db, "sam", RoleMember)
 	if err := db.LinkSurfaceIdentity(LinkAPIPrincipal, "mika", "sam", "root-admin"); err == nil {
 		t.Fatal("one external identity was linked to two members")
 	}
 }
 
 func TestRevocationLandsAtTheNextCheck(t *testing.T) {
-	db := butlerTestDB(t)
-	admitted(t, db, "sam", ProfileHousehold)
+	db := open(t)
+	admitted(t, db, "sam", RoleMember)
 	if err := db.LinkSurfaceIdentity(LinkChatBinding, "7", "sam", "root-admin"); err != nil {
 		t.Fatal(err)
 	}
@@ -126,19 +126,19 @@ func TestRevocationLandsAtTheNextCheck(t *testing.T) {
 // cannot be admitted — the schema refuses it, so no console form or
 // future migration can produce one before that surface has its evidence.
 func TestChildRecordsExistButCannotBeAdmitted(t *testing.T) {
-	db := butlerTestDB(t)
-	if err := db.RecordButlerMember("kid", ProfileChild, ""); err == nil {
+	db := open(t)
+	if err := db.RecordButlerMember("kid", RoleMember, ProfileChild, ""); err == nil {
 		t.Fatal("a child record was written with no guardian")
 	}
-	if err := db.RecordButlerMember("kid", ProfileChild, "mika"); err != nil {
+	if err := db.RecordButlerMember("kid", RoleMember, ProfileChild, "mika"); err != nil {
 		t.Fatalf("RecordButlerMember(child): %v", err)
 	}
 	if err := db.AdmitButlerMember("kid", "root-admin"); err == nil {
 		t.Fatal("a child was admitted to the Butler")
 	}
 	if _, err := db.sql.Exec(
-		`INSERT INTO butler_members (member, profile, admitted, generation, created_at, guardian)
-		 VALUES ('kid2', 'child', 1, 1, 't', 'mika')`); err == nil {
+		`INSERT INTO butler_members (person_id, member, role, profile, admitted, generation, created_at, guardian)
+		 VALUES ('psn_kid2', 'kid2', 'member', 'child', 1, 1, 't', 'mika')`); err == nil {
 		t.Fatal("an admitted child was inserted directly")
 	}
 	m, err := db.GetButlerMember("kid")
@@ -153,8 +153,8 @@ func TestChildRecordsExistButCannotBeAdmitted(t *testing.T) {
 // The headline: an operator hands a live conversation from the household
 // bot to the operator bot, keeps the thread, and carries no privilege.
 func TestHandoffKeepsTheThreadAndCarriesNoPrivilege(t *testing.T) {
-	db := butlerTestDB(t)
-	admitted(t, db, "mika", ProfileOperator)
+	db := open(t)
+	admitted(t, db, "mika", RoleOwner)
 
 	conv, err := db.StartButlerConversation("mika", "the photos thing")
 	if err != nil {
@@ -246,8 +246,8 @@ func TestHandoffKeepsTheThreadAndCarriesNoPrivilege(t *testing.T) {
 // Household admission does not grant operator access, and a handoff is
 // not a way around that.
 func TestHouseholdMemberCannotHandOffToTheOperatorBot(t *testing.T) {
-	db := butlerTestDB(t)
-	admitted(t, db, "sam", ProfileHousehold)
+	db := open(t)
+	admitted(t, db, "sam", RoleMember)
 	conv, err := db.StartButlerConversation("sam", "dinner")
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +256,10 @@ func TestHouseholdMemberCannotHandOffToTheOperatorBot(t *testing.T) {
 		t.Fatalf("a household member reached the operator bot by handoff: %v", err)
 	}
 	// And a member who has been disabled cannot hand off at all.
-	admitted(t, db, "mika", ProfileOperator)
+	admitted(t, db, "mika", RoleOwner)
+	// A second Owner, so disabling mika below is not refused for
+	// leaving the household without one (design §2.5).
+	admitted(t, db, "dana", RoleOwner)
 	mine, err := db.StartButlerConversation("mika", "nodes")
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +275,7 @@ func TestHouseholdMemberCannotHandOffToTheOperatorBot(t *testing.T) {
 		t.Fatalf("a disabled member started a conversation: %v", err)
 	}
 	// And a handoff must actually move between the two bots.
-	admitted(t, db, "ops", ProfileOperator)
+	admitted(t, db, "ops", RoleOwner)
 	same, _ := db.StartButlerConversation("ops", "x")
 	if _, err := db.HandoffConversation(same, ButlerSurfaceAdmin, ButlerSurfaceAdmin, ""); err == nil {
 		t.Fatal("a handoff to the same surface was accepted")
@@ -281,8 +284,8 @@ func TestHouseholdMemberCannotHandOffToTheOperatorBot(t *testing.T) {
 
 // The handoff carries a thread, not a history.
 func TestHandoffIsBounded(t *testing.T) {
-	db := butlerTestDB(t)
-	admitted(t, db, "mika", ProfileOperator)
+	db := open(t)
+	admitted(t, db, "mika", RoleOwner)
 	conv, _ := db.StartButlerConversation("mika", "long one")
 
 	var turns []ButlerTurn

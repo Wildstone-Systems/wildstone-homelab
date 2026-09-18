@@ -27,7 +27,7 @@ func reviewHarness(t *testing.T) *harness {
 	// The review route is only reachable from the identity proxy, and
 	// httptest speaks from loopback.
 	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
-	if err := h.s.DB.RecordButlerMember("sam", runtimedb.ProfileHousehold, ""); err != nil {
+	if err := h.s.DB.RecordButlerMember("sam", runtimedb.RoleMember, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.s.DB.AdmitButlerMember("sam", "root-admin"); err != nil {
@@ -162,7 +162,7 @@ func TestReviewTokensAreBoundNotBearer(t *testing.T) {
 		planID := storePlan(t, h, resource.KindAutomation)
 		token, _ := issueToken(t, h, planID, "sam", "")
 		// Another admitted adult holding the same link approves nothing.
-		if err := h.s.DB.RecordButlerMember("mika", runtimedb.ProfileHousehold, ""); err != nil {
+		if err := h.s.DB.RecordButlerMember("mika", runtimedb.RoleMember, "", ""); err != nil {
 			t.Fatal(err)
 		}
 		if err := h.s.DB.AdmitButlerMember("mika", "root-admin"); err != nil {
