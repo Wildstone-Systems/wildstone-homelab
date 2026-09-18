@@ -25,6 +25,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
+	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
 )
 
 // Server serves the public plane. All fields are required except Log and
@@ -160,6 +161,13 @@ type Server struct {
 	// only for side-effect-free replay; cmd/keystone runs its loop. New
 	// wires one over the same DB and Statefile.
 	Automation *automation.Engine
+	// Upkeep, when set, answers where the household's commitments stand.
+	// An interface rather than the engine so the api package does not
+	// depend on the pass's timer, and so a test can hand it fixed
+	// answers.
+	Upkeep interface {
+		Evaluate() ([]upkeep.Standing, error)
+	}
 	// OnMeterReading, when set, is called after a reading is recorded, so
 	// the commitment pass can run again rather than leaving somebody who
 	// has just typed in a mileage to wait until tomorrow to be told what
@@ -587,6 +595,15 @@ func (s *Server) Handler() http.Handler {
 
 	// Activity: the household record, on the same surface as the front
 	// page because it is the same projection over a longer window.
+	// Answering a commitment from the household's own page (ADR-W034
+	// K5). Not a Plan: the same reasoning as a meter reading, and the
+	// same three things a person can say — I did it, I skipped it, I
+	// booked it — plus the number a meter wants.
+	mux.Handle("POST /api/v1/home/commitments/{name}/done", s.portal(surfaceHome, s.answerCommitment("done")))
+	mux.Handle("POST /api/v1/home/commitments/{name}/waived", s.portal(surfaceHome, s.answerCommitment("waived")))
+	mux.Handle("POST /api/v1/home/commitments/{name}/booked", s.portal(surfaceHome, s.answerCommitment("booked")))
+	mux.Handle("POST /api/v1/home/meters/{name}/readings", s.portal(surfaceHome, s.homeMeterReading))
+
 	mux.Handle("GET /activity/{$}", s.portal(surfaceHome, s.portalPage("activity")))
 	mux.Handle("GET /api/v1/activity", s.portal(surfaceHome, s.activityHistory))
 

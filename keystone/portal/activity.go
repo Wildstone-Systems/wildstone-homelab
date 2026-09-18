@@ -94,6 +94,23 @@ var lines = map[string]line{
 	"automation.suppressed":         {withSubject: "%s was asked to run and did not", without: "a routine was asked to run and did not", tone: ToneRefused},
 	"automation.escalation_skipped": {without: "a routine decided not to ask anybody", tone: ToneRefused},
 	"butler.household_session":      {withSubject: "%s asked the assistant something", without: "somebody asked the assistant something", tone: ToneOK},
+	// Commitments (ADR-W034). The entity carries which one, so these
+	// sentences say what happened to the household rather than naming
+	// the thing twice; the Needs you card is where a person reads WHICH.
+	//
+	// due_soon is deliberately absent. Every one of them has an item on
+	// Needs you, and a card that reports is not a card that asks (§7) —
+	// a row saying "the truck is nearly due" beside an item saying the
+	// same thing is the household being told twice and trusting both
+	// less.
+	"commitment.overdue":      {withSubject: "something of %s's went past its date", without: "something went past its date", tone: ToneWaiting},
+	"commitment.scheduled":    {withSubject: "%s's appointment was booked", without: "an appointment was booked", tone: ToneOK},
+	"commitment.satisfied":    {withSubject: "%s's was seen to", without: "something was seen to", tone: ToneOK},
+	"commitment.waived":       {withSubject: "%s's was skipped on purpose", without: "something was skipped on purpose", tone: ToneRefused},
+	"commitment.cycle_opened": {withSubject: "%s's starts again", without: "something starts again", tone: ToneOK},
+	// The meter nobody can read. Not a failure and not an all-clear: a
+	// request, which is exactly the distinction A11 turns on.
+	"commitment.unresolved": {withSubject: "a number of %s's needs reading", without: "a number needs reading", tone: ToneWaiting},
 }
 
 // Sentence renders one event as a household sentence and its tone.
@@ -149,7 +166,12 @@ const (
 // prefix appears under exactly one filter, which is what makes the
 // partition true rather than intended.
 var families = map[Filter][]string{
-	FilterHome:      {"person.", "presence.", "bins.", "calendar.", "automation.", "pantry.", "report."},
+	// Commitments sit under Home with the rest of what the house keeps
+	// track of. They are not a tab of their own: a household does not
+	// think of "the truck's oil" and "the bins went out" as different
+	// kinds of thing, and a tab per subsystem is how a dashboard grows
+	// into a filing cabinet.
+	FilterHome:      {"person.", "presence.", "bins.", "calendar.", "automation.", "pantry.", "report.", "commitment."},
 	FilterFiles:     {"filedrop."},
 	FilterAssistant: {"butler.", "domestic.", "tool."},
 }

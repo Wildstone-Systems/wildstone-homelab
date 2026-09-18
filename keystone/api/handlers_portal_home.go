@@ -135,6 +135,13 @@ type needsYouItem struct {
 	// Seq addresses the item for an answer. Notices only; an aggregate
 	// row carries no id because there is nothing to answer.
 	Seq int64 `json:"seq,omitempty"`
+	// Kind and Ref address the items a sequence number cannot. A notice
+	// is a row with an id; a commitment is a named resource, and the
+	// answer path for one is not the answer path for the other. Kind is
+	// empty for a notice, which is what every existing client already
+	// assumes it is.
+	Kind string `json:"kind,omitempty"`
+	Ref  string `json:"ref,omitempty"`
 	// Summary is household language and nothing else. Plan text, node
 	// names and statefile hashes are deliberately excluded (§7), which
 	// is why an owner-side item below says only how many and how long.
@@ -402,6 +409,22 @@ func (s *Server) homeNeedsYou(member string, now time.Time) needsYouCard {
 			Tone:        portal.ToneWaiting,
 		})
 	}
+	// The household's commitments. Only the ones asking for something:
+	// a commitment quietly counting down is not waiting on anybody, and
+	// filling the one card a household reads with things it does not
+	// have to do is how the card stops being read (ADR-W034 K5).
+	if commitments, cerr := s.commitmentItems(member, now); cerr != nil {
+		s.Log.Error("home needs-you commitments", "err", cerr)
+		// Same sentence as the notices failure, and for the same
+		// reason: not being able to tell must not look like an
+		// all-clear.
+		card.Problem = "Can't tell whether anything needs you — Wildstone isn't answering."
+		card.Available = false
+		return card
+	} else {
+		items = append(items, commitments...)
+	}
+
 	// The owner's side, as one row. Counted from the plan ledger, which
 	// is the same place the Console's Plans page reads.
 	// PlansInState rather than the newest fifty plans filtered

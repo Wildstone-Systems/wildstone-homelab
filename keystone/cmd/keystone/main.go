@@ -1268,6 +1268,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// once: a checkup with a sixty-day lead and an oil change with a
 	// three-hundred-mile lead are both indifferent to the minute.
 	upkeepEngine := &upkeep.Engine{DB: db, State: state, Loc: householdLoc, Log: log}
+	apiSrv.Upkeep = upkeepEngine
 	upkeepPoke := make(chan struct{}, 1)
 	apiSrv.OnMeterReading = func() {
 		// A reading can change an answer, so the pass runs again rather
