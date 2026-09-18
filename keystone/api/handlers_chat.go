@@ -40,6 +40,13 @@ type claimRequest struct {
 	Butler    string `json:"butler"`
 	Identity  string `json:"identity"`
 	Transport string `json:"transport"`
+	// Connection picks WHICH of that Agent's bots on the transport,
+	// by the address's external id, and is only needed when it has
+	// more than one. B7 allows exactly that, so without a field to say
+	// which, an Agent with two Telegram bots could be invited to
+	// neither: the refusal names the ids, and this is where one goes
+	// back.
+	Connection string `json:"connection,omitempty"`
 	// TTLSeconds overrides the default expiry; 0 uses it.
 	TTLSeconds int `json:"ttlSeconds,omitempty"`
 }
@@ -80,7 +87,7 @@ func (s *Server) issueChatClaim(r *http.Request, id principal.Identity) (any, in
 		return nil, http.StatusBadRequest,
 			fmt.Errorf("an invite names the butler it admits somebody to, and the transport it arrives on")
 	}
-	at, st, err := s.connectionNamed(butler, transport)
+	at, st, err := s.connectionNamed(butler, transport, strings.TrimSpace(req.Connection))
 	if err != nil {
 		return nil, st, err
 	}
@@ -123,13 +130,35 @@ func (s *Server) issueChatClaim(r *http.Request, id principal.Identity) (any, in
 }
 
 // connectionNamed resolves the Connection an operator asked for by
-// Agent and transport.
+// Agent and transport, with an optional external id picking between an
+// Agent's several bots on that transport.
 //
 // Ambiguity is an error rather than a choice: B7 lets an Agent hold
 // several Connections on one transport, and an invite issued for the
 // wrong one of somebody's two Telegram bots is an invite that works and
-// admits them somewhere they did not mean to go.
-func (s *Server) connectionNamed(butler, transport string) (runtimedb.Connection, int, error) {
+// admits them somewhere they did not mean to go. But an error the
+// caller cannot act on is a dead end, so the refusal names the ids and
+// externalID is how one of them comes back.
+//
+// The named address must belong to the named Agent. Taking the Agent
+// from the address instead would let a mistyped butler be silently
+// ignored, and the whole point of the pair is that the operator says
+// who they mean.
+func (s *Server) connectionNamed(butler, transport, externalID string) (runtimedb.Connection, int, error) {
+	if externalID != "" {
+		at, err := s.DB.ChatConnectionAt(transport, externalID)
+		switch {
+		case errors.Is(err, runtimedb.ErrNoConnection):
+			return runtimedb.Connection{}, http.StatusBadRequest, fmt.Errorf(
+				"no butler answers at %s on %s", externalID, transport)
+		case err != nil:
+			return runtimedb.Connection{}, http.StatusInternalServerError, err
+		case at.Butler != butler:
+			return runtimedb.Connection{}, http.StatusBadRequest, fmt.Errorf(
+				"%s is %s's bot, not %s's", externalID, at.Butler, butler)
+		}
+		return at, 0, nil
+	}
 	at, err := s.DB.ChatConnectionForButler(butler, transport)
 	switch {
 	case errors.Is(err, runtimedb.ErrNoConnection):
@@ -187,8 +216,8 @@ func (s *Server) checkClaimTarget(at runtimedb.Connection, identity string) (int
 	// names the bot whose credential this is.
 	if !s.adapterCredentialed(at.ExternalID) {
 		return http.StatusBadRequest, fmt.Errorf(
-			"the %s adapter %s has no Keystone token, so it cannot redeem a code: credential it first (wild chat adapter %s -node <node>)",
-			at.Transport, at.ExternalID, at.ExternalID)
+			"the %s adapter %s has no Keystone token, so it cannot redeem a code: credential it first (wild chat adapter %s -node <node> -butler %s)",
+			at.Transport, at.ExternalID, at.ExternalID, at.Butler)
 	}
 	return http.StatusOK, nil
 }
@@ -221,7 +250,12 @@ type redeemRequest struct {
 	// for a HUMAN caller only — an adapter's own credential is its
 	// Connection (ADR-W031 A7), so a bot that could name one could name
 	// somebody else's.
-	Butler      string `json:"butler,omitempty"`
+	Butler string `json:"butler,omitempty"`
+	// Connection picks between that Agent's several bots on the
+	// transport, by external id, for the same reason claimRequest
+	// carries one. An adapter never sends it: its credential already
+	// IS the connection.
+	Connection  string `json:"connection,omitempty"`
 	Transport   string `json:"transport"`
 	Account     string `json:"account"`
 	DisplayName string `json:"displayName,omitempty"`
@@ -294,7 +328,7 @@ func (s *Server) redeemingConnection(id principal.Identity, req redeemRequest) (
 			return runtimedb.Connection{}, http.StatusBadRequest, fmt.Errorf(
 				"a chat adapter cannot name a butler; the bot a code arrives at is the connection (ADR-W031 A7)")
 		}
-		at, err := s.DB.ChatConnectionByExternalID(capability)
+		at, err := s.adapterConnection(capability)
 		if errors.Is(err, runtimedb.ErrNoConnection) {
 			return runtimedb.Connection{}, http.StatusBadRequest, fmt.Errorf(
 				"no butler answers at %s: give one that address before anybody is invited to it", capability)
@@ -309,7 +343,7 @@ func (s *Server) redeemingConnection(id principal.Identity, req redeemRequest) (
 		return runtimedb.Connection{}, http.StatusBadRequest, fmt.Errorf(
 			"name the butler and transport: this credential is not a chat adapter, so there is no connection to resolve one from")
 	}
-	return s.connectionNamed(butler, transport)
+	return s.connectionNamed(butler, transport, strings.TrimSpace(req.Connection))
 }
 
 // trimDisplayName bounds the transport-supplied label. It is untrusted

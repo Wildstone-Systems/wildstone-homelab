@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Connections (ADR-W033 B7, design §8.1).
@@ -26,10 +27,11 @@ import (
 // same. This one is how a Person reaches an Agent.
 //
 // What replaced what: admission, claim codes, threads and the outbound
-// queue used to key on a SURFACE. A surface is a class of Agents, not
-// an Agent, so admitting an account to `admin` admitted it to every
-// Owner Agent at once — including ones created later. Migration 0042
-// pointed all four at the Connection instead.
+// queue used to key on a SURFACE, and so did the question ledger. A
+// surface is a class of Agents, not an Agent, so admitting an account
+// to `admin` admitted it to every Owner Agent at once — including ones
+// created later. Migration 0042 pointed all five at the Connection
+// instead.
 
 // ErrNoConnection is returned when no live Connection answers at an
 // address. A message arriving at a bot nothing is assigned to has no
@@ -59,20 +61,17 @@ type Connection struct {
 
 // ChatConnectionAt resolves the live Connection at one address — which is
 // what an inbound message has to hand: the bot it arrived at.
+//
+// BOTH halves are required, and a lookup on external_id alone would be
+// wrong: butler_addresses_live is unique on (transport, external_id),
+// not on external_id, and AddButlerAddress takes transport-local ids on
+// purpose. Two live addresses on different transports may share one, so
+// an external id alone can resolve an adapter to the wrong Agent — and
+// therefore to another Agent's queue.
 func (db *DB) ChatConnectionAt(transport, externalID string) (Connection, error) {
 	return scanChatConnection(db.sql.QueryRow(chatConnectionColumns+`
 		 WHERE a.transport = ? AND a.external_id = ? AND a.revoked_at = ''`,
 		transport, externalID))
-}
-
-// ChatConnectionByExternalID is ChatConnectionAt for a caller that knows only
-// the bot's own name. A chat adapter's credential carries the
-// capability it was minted for and nothing about which transport that
-// capability speaks, so the external id alone has to be enough — and it
-// is, because it is unique among live addresses.
-func (db *DB) ChatConnectionByExternalID(externalID string) (Connection, error) {
-	return scanChatConnection(db.sql.QueryRow(chatConnectionColumns+`
-		 WHERE a.external_id = ? AND a.revoked_at = ''`, externalID))
 }
 
 // ChatConnectionBySeq reads one by its seq, for a caller holding a stored
@@ -138,7 +137,17 @@ func (db *DB) ChatConnectionForButler(butler, transport string) (Connection, err
 	case 1:
 		return found[0], nil
 	default:
-		return Connection{}, fmt.Errorf("%w: %s has %d", ErrAmbiguousConnection, butler, len(found))
+		// The error NAMES the choices, because a caller that cannot see
+		// them cannot resolve the ambiguity: an operator told only
+		// "there is more than one" has been refused with no way
+		// forward. Every caller of this takes an external id to pick
+		// with, and these are the ids that work.
+		ids := make([]string, 0, len(found))
+		for _, c := range found {
+			ids = append(ids, c.ExternalID)
+		}
+		return Connection{}, fmt.Errorf("%w: %s answers on %d %s bots (%s) -- name which one",
+			ErrAmbiguousConnection, butler, len(found), transport, strings.Join(ids, ", "))
 	}
 }
 

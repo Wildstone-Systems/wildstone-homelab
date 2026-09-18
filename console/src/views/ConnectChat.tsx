@@ -568,7 +568,7 @@ export function InviteStep({
     setCopied(false);
     if (!transport) return;
     api
-      .issueChatClaim(butler, who, transport.transport)
+      .issueChatClaim(butler, who, transport.transport, transport.capability)
       .then(setClaim)
       .catch((e: Error) => setError(e.message))
       .finally(() => setBusy(false));

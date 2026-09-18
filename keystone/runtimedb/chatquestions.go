@@ -26,11 +26,16 @@ import (
 const ChatQuestionWindow = 4 * time.Hour
 
 // ChatQuestion is one question a household rule asked over chat.
+//
+// Connection rather than surface and transport (ADR-W033 B7). Both of
+// those name a CLASS of bot: on Telegram a direct chat's target is the
+// same user id at every bot, so with two member agents on the transport
+// a reply to one could close the other's question and answer a rule
+// that never asked.
 type ChatQuestion struct {
 	ID            int64
+	Connection    int64
 	CorrelationID string
-	Surface       ButlerSurface
-	Transport     string
 	Target        string
 	Rule          string
 	Subject       string
@@ -42,29 +47,32 @@ type ChatQuestion struct {
 // answer closes — which is what a person means when they answer the
 // message they can see.
 func (db *DB) RecordChatQuestion(q ChatQuestion) (int64, error) {
-	if q.CorrelationID == "" || q.Transport == "" || q.Target == "" {
-		return 0, fmt.Errorf("runtimedb: a chat question needs a correlation id, transport and target")
-	}
-	if !ValidButlerSurface(q.Surface) {
-		return 0, fmt.Errorf("runtimedb: chat question surface %q is not admin|family", q.Surface)
+	if q.CorrelationID == "" || q.Connection == 0 || q.Target == "" {
+		return 0, fmt.Errorf("runtimedb: a chat question needs a correlation id, connection and target")
 	}
 	res, err := db.sql.Exec(
-		`INSERT INTO chat_questions (correlation_id, surface, transport, target, rule, subject, asked_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		q.CorrelationID, string(q.Surface), q.Transport, q.Target, q.Rule, q.Subject, now())
+		`INSERT INTO chat_questions (connection, correlation_id, target, rule, subject, asked_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		q.Connection, q.CorrelationID, q.Target, q.Rule, q.Subject, now())
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: recording chat question: %w", err)
 	}
 	return res.LastInsertId()
 }
 
-// ClaimChatAnswer closes the newest open question for a conversation and
-// returns it, or ErrNotFound when there is none within the window.
+// ClaimChatAnswer closes the newest open question for a conversation on
+// ONE Connection and returns it, or ErrNotFound when there is none
+// within the window.
+//
+// The Connection is the bot the reply arrived at. Matching on transport
+// alone would let an answer sent to one Agent's bot close a question
+// another Agent asked, because a direct chat's target is the same user
+// id at both.
 //
 // Claiming is a single transaction that marks the row answered, so two
 // messages arriving together produce one answer rather than two — the
 // same at-most-once shape the automation engine's dispatch claim has.
-func (db *DB) ClaimChatAnswer(transport, target string, window time.Duration) (ChatQuestion, error) {
+func (db *DB) ClaimChatAnswer(at Connection, target string, window time.Duration) (ChatQuestion, error) {
 	if window <= 0 {
 		window = ChatQuestionWindow
 	}
@@ -76,13 +84,13 @@ func (db *DB) ClaimChatAnswer(transport, target string, window time.Duration) (C
 	defer tx.Rollback() //nolint:errcheck // rolled back unless committed
 
 	var q ChatQuestion
-	var surface, asked string
+	var asked string
 	err = tx.QueryRow(
-		`SELECT id, correlation_id, surface, transport, target, rule, subject, asked_at
+		`SELECT id, connection, correlation_id, target, rule, subject, asked_at
 		 FROM chat_questions
-		 WHERE transport = ? AND target = ? AND answered_at = '' AND asked_at >= ?
-		 ORDER BY id DESC LIMIT 1`, transport, target, cutoff).
-		Scan(&q.ID, &q.CorrelationID, &surface, &q.Transport, &q.Target, &q.Rule, &q.Subject, &asked)
+		 WHERE connection = ? AND target = ? AND answered_at = '' AND asked_at >= ?
+		 ORDER BY id DESC LIMIT 1`, at.Seq, target, cutoff).
+		Scan(&q.ID, &q.Connection, &q.CorrelationID, &q.Target, &q.Rule, &q.Subject, &asked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ChatQuestion{}, ErrNotFound
 	}
@@ -99,7 +107,6 @@ func (db *DB) ClaimChatAnswer(transport, target string, window time.Duration) (C
 	if err := tx.Commit(); err != nil {
 		return ChatQuestion{}, err
 	}
-	q.Surface = ButlerSurface(surface)
 	if q.AskedAt, err = time.Parse(time.RFC3339Nano, asked); err != nil {
 		return ChatQuestion{}, err
 	}

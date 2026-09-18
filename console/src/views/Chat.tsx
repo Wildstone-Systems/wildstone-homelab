@@ -65,7 +65,11 @@ export function ChatView({
 }) {
   const [butler, setButler] = useState("");
   const [identity, setIdentity] = useState("");
-  const [transport, setTransport] = useState("");
+  // The CAPABILITY, not the transport: an agent may hold several bots
+  // on one transport (ADR-W033 B7), and a select keyed on the transport
+  // would show them as two identical options and send an ambiguous
+  // request either way.
+  const [capability, setCapability] = useState("");
   const [issued, setIssued] = useState<ChatClaim | null>(null);
   const issue = useAction();
 
@@ -85,11 +89,13 @@ export function ChatView({
   useEffect(() => {
     setIssued(null);
     setIdentity((prev) => (identities.some((i) => i.value === prev) ? prev : identities[0]?.value ?? ""));
-    setTransport((prev) => (usable.some((t) => t.transport === prev) ? prev : usable[0]?.transport ?? ""));
+    setCapability((prev) =>
+      usable.some((t) => t.capability === prev) ? prev : usable[0]?.capability ?? "",
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [who, members, transports]);
 
-  const chosen = usable.find((t) => t.transport === transport);
+  const chosen = usable.find((t) => t.capability === capability);
 
   return (
     <>
@@ -130,26 +136,33 @@ export function ChatView({
             ))}
           </select>
           <select
-            value={transport}
+            value={capability}
             aria-label="transport"
             disabled={usable.length === 0}
-            onChange={(e) => setTransport(e.target.value)}
+            onChange={(e) => setCapability(e.target.value)}
           >
             {usable.length === 0 && <option value="">no adapter installed</option>}
             {usable.map((t) => (
-              <option key={t.capability} value={t.transport}>
+              <option key={t.capability} value={t.capability}>
                 {t.transport}
+                {/* Two bots on one transport are two options that would
+                    otherwise read identically, so the one that tells
+                    them apart is shown. */}
+                {usable.filter((o) => o.transport === t.transport).length > 1
+                  ? ` · ${t.capability}`
+                  : ""}
               </option>
             ))}
           </select>
           <button
             className="btn btn-primary"
             disabled={
-              issue.state.phase === "busy" || who === "" || identity === "" || transport === ""
+              issue.state.phase === "busy" || who === "" || identity === "" || !chosen
             }
             onClick={() =>
               issue.run(async () => {
-                setIssued(await api.issueChatClaim(who, identity, transport));
+                if (!chosen) return;
+                setIssued(await api.issueChatClaim(who, identity, chosen.transport, chosen.capability));
               }, "issued")
             }
           >
@@ -248,7 +261,7 @@ export function Prerequisites({
     );
   } else if (chosen && !chosen.credentialed) {
     notes.push(
-      `The ${chosen.transport} adapter (${chosen.capability}) has no Keystone token yet, so it cannot redeem a code. Give it one with \`wild chat adapter ${chosen.capability}\`.`,
+      `The ${chosen.transport} adapter (${chosen.capability}) has no Keystone token yet, so it cannot redeem a code. Give it one with \`wild chat adapter ${chosen.capability} -node <node> -butler ${butler}\`.`,
     );
   }
   if (notes.length === 0) return null;

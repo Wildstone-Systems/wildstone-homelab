@@ -19,11 +19,12 @@
 -- external_id), so "the bot a message arrives at IS the address"
 -- (ADR-W031 A7) — and an adapter's credential names the capability that
 -- address carries. So this migration does not invent the Connection. It
--- points the admission, the codes, the threads and the outbound queue at
--- the Connection that was already there, instead of at a surface.
+-- points the admission, the codes, the threads, the outbound queue and
+-- the question ledger at the Connection that was already there, instead
+-- of at a surface.
 --
 -- Forward-only (ADR-W007 A4). No foreign_keys=off: nothing REFERENCES
--- these four tables, so each rebuild runs under ordinary enforcement,
+-- these five tables, so each rebuild runs under ordinary enforcement,
 -- which checks the new connection columns as they are written.
 
 -- ---------------------------------------------------------------------
@@ -81,6 +82,58 @@ WHERE c.redeemed_at = '' AND c.transport <> ''
       SELECT 1 FROM butler_addresses a
       WHERE a.revoked_at = '' AND a.transport = c.transport
         AND a.external_id = 'chat-' || c.transport || '-' || c.surface)
+LIMIT 1;
+
+-- A message still waiting to be sent is the one row here that cannot be
+-- dropped quietly.
+--
+-- A live binding is visible — somebody would notice their bot stopped
+-- answering — and a claim code can be reissued. An undelivered
+-- chat_outbound row is neither: it is a reply or a household push that
+-- was accepted, is not yet delivered, and has not expired. Dropping it
+-- silently would lose a message the household was told had been sent,
+-- with nothing anywhere to say it went missing.
+--
+-- It can outlive its binding, which is why the two gates above do not
+-- cover it: revoking an account's binding leaves whatever was already
+-- queued for it in the table, so a deployment whose live bindings are
+-- all gone — and which therefore passes the gates above — can still
+-- have pending messages here.
+--
+-- Delivered and expired rows are not gated. PruneChatOutbound already
+-- deletes them, and they are history about a model that no longer
+-- exists.
+INSERT INTO connection_unassigned (problem)
+SELECT 'the ' || surface || '-surface ' || transport || ' connection has ' || COUNT(*) ||
+       ' message(s) still waiting to be sent, and no butler answers on it: nothing holds the address ' ||
+       quote('chat-' || transport || '-' || surface)
+FROM chat_outbound o
+WHERE o.delivered_at = ''
+  AND o.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+  AND NOT EXISTS (
+      SELECT 1 FROM butler_addresses a
+      WHERE a.revoked_at = '' AND a.transport = o.transport
+        AND a.external_id = 'chat-' || o.transport || '-' || o.surface)
+GROUP BY surface, transport
+LIMIT 1;
+
+-- An open question, for the same reason one step further on: a rule
+-- asked the household something, the answer is whatever they type next,
+-- and a dropped row turns that answer into an ordinary message the rule
+-- waiting on it never sees. Only questions still inside the answering
+-- window are gated; an older one can no longer be claimed.
+INSERT INTO connection_unassigned (problem)
+SELECT 'the ' || surface || '-surface ' || transport || ' connection has ' || COUNT(*) ||
+       ' unanswered question(s), and no butler answers on it: nothing holds the address ' ||
+       quote('chat-' || transport || '-' || surface)
+FROM chat_questions q
+WHERE q.answered_at = ''
+  AND q.asked_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-4 hours')
+  AND NOT EXISTS (
+      SELECT 1 FROM butler_addresses a
+      WHERE a.revoked_at = '' AND a.transport = q.transport
+        AND a.external_id = 'chat-' || q.transport || '-' || q.surface)
+GROUP BY surface, transport
 LIMIT 1;
 
 -- ---------------------------------------------------------------------
@@ -241,6 +294,48 @@ ALTER TABLE chat_outbound_v42 RENAME TO chat_outbound;
 
 CREATE UNIQUE INDEX chat_outbound_dedupe ON chat_outbound (dedupe_key);
 CREATE INDEX chat_outbound_pending ON chat_outbound (connection, seq);
+
+-- ---------------------------------------------------------------------
+-- chat_questions.
+--
+-- The fifth table, and the one it is easiest to forget: it holds no
+-- admission, so it did not look like reach. It is.
+--
+-- A question is answered by the next message from that conversation,
+-- and the claim matched (transport, target). On Telegram a direct
+-- chat's target is the same user id at EVERY bot, so with two member
+-- agents on Telegram a reply to one bot could close the other's newer
+-- question and record household.answered under its correlation id —
+-- the rule that asked never hears back, and a rule that did not ask
+-- does. The Connection is what separates them.
+CREATE TABLE chat_questions_v42 (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    connection     INTEGER NOT NULL REFERENCES butler_addresses(seq),
+    correlation_id TEXT NOT NULL,
+    target         TEXT NOT NULL,   -- conversation id: a direct chat or a group
+    rule           TEXT NOT NULL DEFAULT '',
+    subject        TEXT NOT NULL DEFAULT '',
+    asked_at       TEXT NOT NULL,
+    answered_at    TEXT NOT NULL DEFAULT ''
+);
+
+INSERT INTO chat_questions_v42 (id, connection, correlation_id, target, rule, subject,
+    asked_at, answered_at)
+SELECT q.id,
+       (SELECT a.seq FROM butler_addresses a
+        WHERE a.revoked_at = '' AND a.transport = q.transport
+          AND a.external_id = 'chat-' || q.transport || '-' || q.surface),
+       q.correlation_id, q.target, q.rule, q.subject, q.asked_at, q.answered_at
+FROM chat_questions q
+WHERE EXISTS (
+    SELECT 1 FROM butler_addresses a
+    WHERE a.revoked_at = '' AND a.transport = q.transport
+      AND a.external_id = 'chat-' || q.transport || '-' || q.surface);
+
+DROP TABLE chat_questions;
+ALTER TABLE chat_questions_v42 RENAME TO chat_questions;
+
+CREATE INDEX chat_questions_open ON chat_questions (connection, target, answered_at, id);
 
 DROP TRIGGER connection_unassigned_refuse;
 DROP TABLE connection_unassigned;

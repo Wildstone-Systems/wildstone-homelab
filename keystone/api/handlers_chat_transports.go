@@ -378,3 +378,25 @@ func butlerAt(s *Server, transport, capability string) string {
 	}
 	return at.Butler
 }
+
+// adapterConnection resolves the Connection a chat adapter's credential
+// stands for.
+//
+// The transport is DERIVED from the capability rather than left out of
+// the lookup. butler_addresses is unique on (transport, external_id),
+// not on external_id alone — AddButlerAddress takes transport-local ids
+// on purpose — so two live addresses on different transports may carry
+// the same one. Resolving on the id by itself would hand an
+// authenticated adapter whichever of them the query happened to return:
+// the wrong Agent, and with it the wrong queue to poll and the wrong
+// Butler to answer as.
+//
+// A capability whose name does not say its transport has no address to
+// resolve, which is ErrNoConnection rather than a guess.
+func (s *Server) adapterConnection(capability string) (runtimedb.Connection, error) {
+	transport, ok := capabilityTransport(capability)
+	if !ok {
+		return runtimedb.Connection{}, runtimedb.ErrNoConnection
+	}
+	return s.DB.ChatConnectionAt(transport, capability)
+}

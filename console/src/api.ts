@@ -1475,8 +1475,12 @@ export const api = {
   // An invite admits one Person to one Agent's bot (ADR-W033 B7). It
   // used to name a surface, which is a class of Agents: an invite to
   // `admin` admitted somebody to every Owner Agent at once.
-  issueChatClaim: (butler: string, identity: string, transport: string) =>
-    call<ChatClaim>("POST", "/api/v1/chat/claims", { butler, identity, transport }),
+  // connection is the bot's capability name. It is always sent, not
+  // only when it is needed: an agent may hold several bots on one
+  // transport (ADR-W033 B7), and this screen already knows which row
+  // the operator picked, so there is nothing for the server to guess.
+  issueChatClaim: (butler: string, identity: string, transport: string, connection: string) =>
+    call<ChatClaim>("POST", "/api/v1/chat/claims", { butler, identity, transport, connection }),
   revokeChatBinding: (id: number) =>
     call<unknown>("POST", `/api/v1/chat/bindings/${id}/revoke`),
   chatTransports: () => call<ChatTransport[]>("GET", "/api/v1/chat/transports"),

@@ -1285,6 +1285,32 @@ check("a binding that has never been used says never", chat2.includes("never"));
 const noneBound = renderToString(h(ChatView, { ...chatProps, bindings: [], showRevoked: false }));
 check("no bindings explains how one is made", noneBound.includes("send it to the bot"));
 
+// One agent, two bots on one transport (ADR-W033 B7). Keyed on the
+// transport, these were two options reading "telegram" and "telegram"
+// — indistinguishable to the operator, and either choice sent a
+// request the server had to refuse as ambiguous.
+const twoBots = renderToString(
+  h(ChatView, {
+    ...chatProps,
+    transports: [
+      { transport: "telegram", butler: "alfred", capability: "chat-telegram-admin", installed: true, credentialed: true, online: true },
+      { transport: "telegram", butler: "alfred", capability: "chat-telegram-spare", installed: true, credentialed: true, online: true },
+    ],
+    bindings: [],
+    showRevoked: false,
+  }),
+);
+// Asserted on the OPTION text, not on the capability appearing
+// anywhere: it appears in the prerequisite lines too, so a page-wide
+// includes() passes whether or not the two options can be told apart.
+const options = [...twoBots.matchAll(/<option[^>]*>(.*?)<\/option>/g)].map((m) => text(m[1]));
+check(
+  "two bots on one transport are told apart",
+  options.some((o) => o.includes("chat-telegram-admin")) &&
+    options.some((o) => o.includes("chat-telegram-spare")),
+  options.join(" | "),
+);
+
 // ---------------------------------------------------------- Identity
 // The code is read aloud or typed by hand, once. A misread character is
 // a lockout, so it gets display size — and no invented countdown: the

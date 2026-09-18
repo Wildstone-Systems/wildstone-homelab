@@ -165,39 +165,104 @@ func TestChatOutboundPrunesSettledMessages(t *testing.T) {
 // answer, and a question older than the window is not an answer to
 // today's "hello" (ADR-W026 A8, ADR-W024 H4).
 func TestChatQuestionClaimIsOnce(t *testing.T) {
-	db, _, _ := chatTestDB(t)
+	db, family, _ := chatTestDB(t)
 	if _, err := db.RecordChatQuestion(ChatQuestion{
-		CorrelationID: "corr-1", Surface: ButlerSurfaceFamily, Transport: "telegram",
+		CorrelationID: "corr-1", Connection: family.Seq,
 		Target: "12345", Rule: "mail-check", Subject: "sam",
 	}); err != nil {
 		t.Fatalf("RecordChatQuestion: %v", err)
 	}
 
-	q, err := db.ClaimChatAnswer("telegram", "12345", 0)
+	q, err := db.ClaimChatAnswer(family, "12345", 0)
 	if err != nil {
 		t.Fatalf("ClaimChatAnswer: %v", err)
 	}
 	if q.CorrelationID != "corr-1" || q.Rule != "mail-check" || q.Subject != "sam" {
 		t.Fatalf("claimed %+v", q)
 	}
-	if _, err := db.ClaimChatAnswer("telegram", "12345", 0); err != ErrNotFound {
+	if _, err := db.ClaimChatAnswer(family, "12345", 0); err != ErrNotFound {
 		t.Fatalf("second claim = %v, want ErrNotFound", err)
 	}
 
 	// A different conversation's question is not this one's to answer.
 	if _, err := db.RecordChatQuestion(ChatQuestion{
-		CorrelationID: "corr-2", Surface: ButlerSurfaceFamily, Transport: "telegram", Target: "99999",
+		CorrelationID: "corr-2", Connection: family.Seq, Target: "99999",
 	}); err != nil {
 		t.Fatalf("RecordChatQuestion: %v", err)
 	}
-	if _, err := db.ClaimChatAnswer("telegram", "12345", 0); err != ErrNotFound {
+	if _, err := db.ClaimChatAnswer(family, "12345", 0); err != ErrNotFound {
 		t.Fatalf("a question for another conversation was claimed")
 	}
 
 	// And an old question expires rather than swallowing a later message.
-	if _, err := db.ClaimChatAnswer("telegram", "99999", time.Nanosecond); err != ErrNotFound {
+	if _, err := db.ClaimChatAnswer(family, "99999", time.Nanosecond); err != ErrNotFound {
 		t.Fatalf("a question outside the window was claimed")
 	}
+}
+
+// An answer to one Agent's bot does not close another Agent's question
+// (ADR-W033 B7).
+//
+// The case the old key could not express at all. A Telegram direct
+// chat's target is the SAME user id at every bot, so a ledger keyed on
+// (transport, target) had one row set for both bots: sam's "yes" to
+// Robert would claim Alfred's newer question and file
+// household.answered under the rule Alfred asked for. The rule that did
+// ask never hears back, and the one that did not gets an answer it
+// cannot have wanted — both silently.
+func TestAnAnswerToOneBotDoesNotCloseAnothersQuestion(t *testing.T) {
+	db := chatQuestionDB(t)
+	alfred := connect(t, db, "alfred", "telegram", ButlerSurfaceAdmin, "chat-telegram-admin")
+	robert := connect(t, db, "robert", "telegram", ButlerSurfaceAdmin, "chat-telegram-second")
+
+	// The same person, in a direct chat, at both bots.
+	const target = "12345"
+	for _, q := range []ChatQuestion{
+		{CorrelationID: "corr-robert", Connection: robert.Seq, Target: target, Rule: "bins"},
+		{CorrelationID: "corr-alfred", Connection: alfred.Seq, Target: target, Rule: "mail-check"},
+	} {
+		if _, err := db.RecordChatQuestion(q); err != nil {
+			t.Fatalf("RecordChatQuestion(%s): %v", q.Rule, err)
+		}
+	}
+
+	// Alfred's is the NEWER row, which is what a ledger keyed on
+	// (transport, target) would hand back to either bot.
+	got, err := db.ClaimChatAnswer(robert, target, 0)
+	if err != nil {
+		t.Fatalf("ClaimChatAnswer at robert: %v", err)
+	}
+	if got.CorrelationID != "corr-robert" {
+		t.Fatalf("an answer at robert's bot claimed %q, want corr-robert", got.CorrelationID)
+	}
+
+	// And Alfred's question is still open, waiting for its own reply.
+	still, err := db.ClaimChatAnswer(alfred, target, 0)
+	if err != nil {
+		t.Fatalf("ClaimChatAnswer at alfred: %v", err)
+	}
+	if still.CorrelationID != "corr-alfred" {
+		t.Fatalf("alfred's question claimed %q, want corr-alfred", still.CorrelationID)
+	}
+}
+
+// chatQuestionDB is chatTestDB without its two connections, for a test
+// that makes its own.
+func chatQuestionDB(t *testing.T) *DB {
+	t.Helper()
+	db, err := Open(t.TempDir() + "/keystone.db")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := db.UpsertModel(Model{
+		Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", ProviderModel: "llama",
+		Readiness: ModelReady, Enabled: true,
+	}, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	record(t, db, "mika")
+	return db
 }
 
 // A body longer than the bound is cut on a rune boundary. Cutting

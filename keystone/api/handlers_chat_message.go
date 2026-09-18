@@ -239,7 +239,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// deterministic-backbone principle, applied to the one place chat
 	// could quietly have broken it.
 	if !at.AdmitsOwnersOnly() {
-		if body, answered := s.recordChatAnswer(binding, conversation, text); answered {
+		if body, answered := s.recordChatAnswer(at, binding, conversation, text); answered {
 			seq := s.queueChatReply(at, conversation, body, binding.ID, "",
 				chatDedupe(at, conversation, msg.MessageID, "answer", text))
 			s.settleInbound(claimKey, seq, &settled)
@@ -675,8 +675,7 @@ func (s *Server) AskOverChat(ctx context.Context, at runtimedb.Connection, targe
 	}
 	if _, err := s.DB.RecordChatQuestion(runtimedb.ChatQuestion{
 		CorrelationID: correlationID,
-		Surface:       at.Surface,
-		Transport:     at.Transport,
+		Connection:    at.Seq,
 		Target:        target,
 		Rule:          rule,
 		Subject:       subject,
@@ -718,8 +717,8 @@ func (s *Server) QueueChatPush(_ context.Context, at runtimedb.Connection, targe
 // A question nobody answers expires rather than waiting forever, and a
 // claimed question is claimed once: two messages arriving together
 // produce one answer, not two.
-func (s *Server) recordChatAnswer(binding runtimedb.ChatBinding, conversation, text string) (string, bool) {
-	question, err := s.DB.ClaimChatAnswer(binding.Transport, conversation, runtimedb.ChatQuestionWindow)
+func (s *Server) recordChatAnswer(at runtimedb.Connection, binding runtimedb.ChatBinding, conversation, text string) (string, bool) {
+	question, err := s.DB.ClaimChatAnswer(at, conversation, runtimedb.ChatQuestionWindow)
 	if err != nil {
 		return "", false // no open question: an ordinary message
 	}
@@ -815,7 +814,7 @@ func (s *Server) connectionForCaller(id principal.Identity, msg inboundMessage) 
 			return runtimedb.Connection{}, fmt.Errorf(
 				"a chat adapter cannot name a butler or a surface; the bot a message arrives at is the connection (ADR-W031 A7)")
 		}
-		at, err := s.DB.ChatConnectionByExternalID(capability)
+		at, err := s.adapterConnection(capability)
 		if errors.Is(err, runtimedb.ErrNoConnection) {
 			return runtimedb.Connection{}, fmt.Errorf(
 				"no butler answers at %s: give one that address before its bot is used", capability)
@@ -846,7 +845,7 @@ func (s *Server) connectionForCaller(id principal.Identity, msg inboundMessage) 
 // sharing one surface.
 func (s *Server) pollingConnection(r *http.Request, id principal.Identity) (runtimedb.Connection, error) {
 	if capability, isAdapter := butlerAddressFor(id); isAdapter {
-		at, err := s.DB.ChatConnectionByExternalID(capability)
+		at, err := s.adapterConnection(capability)
 		if errors.Is(err, runtimedb.ErrNoConnection) {
 			return runtimedb.Connection{}, fmt.Errorf("no butler answers at %s", capability)
 		}
@@ -859,6 +858,20 @@ func (s *Server) pollingConnection(r *http.Request, id principal.Identity) (runt
 	transport := strings.TrimSpace(r.URL.Query().Get("transport"))
 	if butler == "" {
 		return runtimedb.Connection{}, fmt.Errorf("name a butler: this credential is not a chat adapter")
+	}
+	// ?connection=<external id> picks between an Agent's several bots
+	// on one transport (B7). Without it, reading the queue of an Agent
+	// that has two is refused with no way to say which — and the
+	// refusal names the ids, so this is where one comes back.
+	if external := strings.TrimSpace(r.URL.Query().Get("connection")); external != "" {
+		at, err := s.DB.ChatConnectionAt(transport, external)
+		if err != nil {
+			return runtimedb.Connection{}, err
+		}
+		if at.Butler != butler {
+			return runtimedb.Connection{}, fmt.Errorf("%s is %s's bot, not %s's", external, at.Butler, butler)
+		}
+		return at, nil
 	}
 	return s.DB.ChatConnectionForButler(butler, transport)
 }

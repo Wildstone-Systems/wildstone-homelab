@@ -54,16 +54,21 @@ func runChat(args []string) int {
 
 func chatUsage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  wild chat code -butler <agent> -identity <person> -transport telegram [-ttl 15m]
+  wild chat code -butler <agent> -identity <person> -transport telegram [-connection <capability>] [-ttl 15m]
   wild chat bindings [-revoked] [-api URL]
   wild chat revoke <binding-id> [-api URL]
-  wild chat outbound -butler <agent> [-transport telegram] [-after N]
+  wild chat outbound -butler <agent> [-transport telegram] [-connection <capability>] [-after N]
   wild chat adapter <capability> -node <node> -butler <agent>
   wild chat transports [-api URL]
 
   -butler is the Agent the bot belongs to. One bot, one Agent: giving a
   capability its credential assigns it, and a bot that already answers
   for somebody else is refused rather than repointed.
+
+  -connection is only needed when one Agent has SEVERAL bots on a
+  transport, which it may (ADR-W033 B7). It is the capability name the
+  bot's address carries, and the refusal you get without it lists the
+  ones to choose from.
 
   -identity is a PERSON — an admitted household member this deployment
   has declared (see wild household members), not any name, and not a
@@ -82,6 +87,7 @@ func runChatCode(args []string) int {
 	butler := fs.String("butler", "", "the agent whose bot this code admits somebody to")
 	identity := fs.String("identity", "", "the household member to admit")
 	transport := fs.String("transport", "", "which of that agent's bots, e.g. telegram")
+	connection := fs.String("connection", "", "which bot, when that agent has several on the transport (the capability name)")
 	ttl := fs.Duration("ttl", 0, "how long the code stays redeemable (default: server default)")
 	fs.Parse(args) //nolint:errcheck // ExitOnError
 	if *butler == "" {
@@ -101,6 +107,9 @@ func runChatCode(args []string) int {
 		return 2
 	}
 	body := map[string]any{"butler": *butler, "identity": *identity, "transport": *transport}
+	if *connection != "" {
+		body["connection"] = *connection
+	}
 	if *ttl > 0 {
 		body["ttlSeconds"] = int(ttl.Seconds())
 	}
@@ -171,6 +180,7 @@ func runChatOutbound(args []string) int {
 	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
 	butler := fs.String("butler", "", "whose queue to read: the agent the bot belongs to")
 	transport := fs.String("transport", "", "which of that agent's bots")
+	connection := fs.String("connection", "", "which bot, when that agent has several on the transport (the capability name)")
 	after := fs.Int64("after", 0, "cursor: messages after this seq")
 	fs.Parse(args) //nolint:errcheck // ExitOnError
 	if *butler == "" {
@@ -184,6 +194,9 @@ func runChatOutbound(args []string) int {
 	q := url.Values{"butler": {*butler}, "after": {strconv.FormatInt(*after, 10)}}
 	if *transport != "" {
 		q.Set("transport", *transport)
+	}
+	if *connection != "" {
+		q.Set("connection", *connection)
 	}
 	return simpleCall("chat outbound", *apiBase, token, http.MethodGet,
 		"/api/v1/chat/outbound?"+q.Encode(), nil)

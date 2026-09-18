@@ -450,3 +450,71 @@ func TestHumanRedeemIsNotPinnedToABot(t *testing.T) {
 		}
 	}
 }
+
+// An Agent with two bots on one transport can be invited to either.
+//
+// B7 allows exactly this, and until the request carried a way to say
+// which, allowing it made BOTH unreachable: every claim for that Agent
+// and transport was ambiguous, and the refusal named no way forward, so
+// giving an Owner Agent a second Telegram bot silently ended invites to
+// its first one.
+func TestAnAgentWithTwoBotsOnOneTransportIsInvitedToOne(t *testing.T) {
+	h := newHarness(t)
+	h.ensureChatPrereqs(t, "admin", "mika", "telegram")
+	first := h.agentAt(t, "admin", "telegram")
+	// A second bot for the same Agent, which is what B7 permits. It
+	// gets its own credential, because each Connection has one and a
+	// code may only name a bot that can actually redeem it.
+	if _, err := h.s.DB.AddButlerAddress(first.Butler, "telegram", "chat-telegram-spare", "", "root-admin"); err != nil {
+		t.Fatalf("second address: %v", err)
+	}
+	h.adapterToken(t, "chat-telegram-spare")
+
+	// Without a selector it is refused — and the refusal says which
+	// ids would work, because a caller who cannot see them cannot
+	// answer it.
+	var refused struct {
+		Error string `json:"error"`
+	}
+	resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/claims", map[string]any{
+		"butler": first.Butler, "identity": "mika", "transport": "telegram",
+	}, &refused)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("ambiguous claim: status = %d, want 400", resp.StatusCode)
+	}
+	for _, want := range []string{first.ExternalID, "chat-telegram-spare"} {
+		if !strings.Contains(refused.Error, want) {
+			t.Fatalf("the refusal does not name %q: %s", want, refused.Error)
+		}
+	}
+
+	// Naming one issues the code for that bot and no other.
+	var out claimResponse
+	resp = h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/claims", map[string]any{
+		"butler": first.Butler, "identity": "mika", "transport": "telegram",
+		"connection": "chat-telegram-spare",
+	}, &out)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("named claim: status = %d, want 201", resp.StatusCode)
+	}
+	if out.Code == "" {
+		t.Fatal("no code came back")
+	}
+
+	// And a bot that is not that Agent's is refused rather than
+	// quietly deciding the operator meant its owner. The refusal has to
+	// SAY that is why: this request is refusable on several grounds at
+	// once — a family bot does not admit an owner-only identity either
+	// — and a status code alone cannot tell which one answered.
+	other := h.agentAt(t, "family", "telegram")
+	resp = h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/claims", map[string]any{
+		"butler": first.Butler, "identity": "mika", "transport": "telegram",
+		"connection": other.ExternalID,
+	}, &refused)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("another agent's bot: status = %d, want 400", resp.StatusCode)
+	}
+	if want := other.ExternalID + " is " + other.Butler + "'s bot, not " + first.Butler + "'s"; refused.Error != want {
+		t.Fatalf("refused with %q, want %q", refused.Error, want)
+	}
+}
