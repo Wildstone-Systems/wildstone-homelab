@@ -211,7 +211,7 @@ func TestAReadingNeedsMoreThanReadAccess(t *testing.T) {
 	h := newHarness(t)
 	odometer(t, h)
 	// The butler may read and propose, and may not record a number it
-	// was not given (ADR-W034 A13).
+	// was not given (ADR-W035 A13).
 	resp := h.do(runtimedb.RoleButler, "POST", "/api/v1/household/meters/f150-odometer/readings",
 		map[string]any{"value": 79300}, nil)
 	if resp.StatusCode != http.StatusForbidden {

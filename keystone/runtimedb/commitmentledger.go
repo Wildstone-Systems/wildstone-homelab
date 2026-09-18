@@ -1,6 +1,6 @@
 package runtimedb
 
-// The commitment ledger (ADR-W034 A6, A8): what the household has done,
+// The commitment ledger (ADR-W035 A6, A8): what the household has done,
 // and what it has arranged to do.
 //
 // Only completions and bookings are truth. Where a cycle stands is a

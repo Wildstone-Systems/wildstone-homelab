@@ -1,6 +1,6 @@
 package runtimedb
 
-// Meter readings (ADR-W034 A3): observations of the numbers a household
+// Meter readings (ADR-W035 A3): observations of the numbers a household
 // keeps, as distinct from the Meter resources that declare them.
 //
 // Two rules this file exists to hold, both from the ADR:

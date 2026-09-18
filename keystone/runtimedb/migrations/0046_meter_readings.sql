@@ -1,5 +1,5 @@
 -- Meter readings: what a number the household keeps was observed to be,
--- and when (ADR-W034 A3).
+-- and when (ADR-W035 A3).
 --
 -- NOT DESIRED STATE, DELIBERATELY. The Meter itself is a Statefile
 -- resource — what the number is, how stale it may get — but a reading is

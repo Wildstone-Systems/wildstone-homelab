@@ -50,7 +50,7 @@ func TestMeterStandingKeepsSilenceAndAllClearApart(t *testing.T) {
 		t.Errorf("built-in = %q", builtIn)
 	}
 	// A never-read meter must not report a number at all, least of all a
-	// zero — a meter nobody has read does not read zero (ADR-W034 A11).
+	// zero — a meter nobody has read does not read zero (ADR-W035 A11).
 	if strings.Contains(never, "0") {
 		t.Errorf("never-read standing %q contains a number", never)
 	}

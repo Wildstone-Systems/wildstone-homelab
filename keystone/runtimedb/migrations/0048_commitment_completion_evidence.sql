@@ -1,5 +1,5 @@
 -- Where a completion came from, so the same household fact closes a
--- cycle once (ADR-W034, `satisfiedBy`).
+-- cycle once (ADR-W035, `satisfiedBy`).
 --
 -- A commitment may name the household event that closes it — "the truck
 -- was serviced" rather than somebody tapping Done. The pass runs daily

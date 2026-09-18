@@ -14,7 +14,7 @@ func commitmentResource(spec CommitmentSpec) Resource {
 	}
 }
 
-func TestTheThreeShapesADRW034Describes(t *testing.T) {
+func TestTheThreeShapesADRW035Describes(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		spec CommitmentSpec

@@ -1,6 +1,6 @@
 package api
 
-// Meter readings (ADR-W034 K1): the intake for the numbers a household
+// Meter readings (ADR-W035 K1): the intake for the numbers a household
 // keeps, and the two reads that answer "where does this stand".
 //
 // WHY THIS IS NOT A PLAN. Every other write to what the household has
@@ -132,7 +132,7 @@ func (s *Server) meterMustBeDeclared(name string) error {
 		return fmt.Errorf("which meter?")
 	}
 	if name == commitment.MeterClock {
-		return fmt.Errorf("%q is the calendar and reads itself; it takes no readings (ADR-W034 A2)", name)
+		return fmt.Errorf("%q is the calendar and reads itself; it takes no readings (ADR-W035 A2)", name)
 	}
 	current, err := s.State.Load()
 	if err != nil {
@@ -156,7 +156,7 @@ type meterView struct {
 	StaleAfter  string `json:"staleAfter,omitempty"`
 	Estimate    string `json:"estimate,omitempty"`
 	// BuiltIn marks the calendar, which is declared nowhere and cannot be
-	// (ADR-W034 A2). It is listed because a household asking what meters
+	// (ADR-W035 A2). It is listed because a household asking what meters
 	// it has should be told about the one it did not have to create.
 	BuiltIn bool `json:"builtIn,omitempty"`
 	// Latest is the newest reading, absent when the meter has never been
@@ -221,7 +221,7 @@ func (s *Server) listMeterReadings(r *http.Request, _ principal.Identity) (any, 
 	return readings, http.StatusOK, nil
 }
 
-// --- commitments, owner side (ADR-W034 K6) ---------------------------
+// --- commitments, owner side (ADR-W035 K6) ---------------------------
 
 // listCommitments answers where every declared commitment stands.
 //
@@ -274,7 +274,7 @@ func (s *Server) commitmentHistory(r *http.Request, _ principal.Identity) (any, 
 	return map[string]any{"standing": found, "completions": completions}, http.StatusOK, nil
 }
 
-// MeterReadingSeam wires the family agent's reading door (ADR-W034 A3)
+// MeterReadingSeam wires the family agent's reading door (ADR-W035 A3)
 // to the same store and the same refusals every other door uses.
 //
 // IT IS THE HANDLER'S RULES, NOT A SECOND SET. The meter must be

@@ -33,7 +33,7 @@ func TestPackageImportsOnlyTheStandardLibrary(t *testing.T) {
 			t.Fatal(err)
 		}
 		if strings.Contains(string(data), "wildstone-homelab/") {
-			t.Errorf("%s imports another Wildstone package; this one is a leaf on the standard library (ADR-W034 K3)", name)
+			t.Errorf("%s imports another Wildstone package; this one is a leaf on the standard library (ADR-W035 K3)", name)
 		}
 	}
 }

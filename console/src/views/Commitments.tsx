@@ -4,7 +4,7 @@ import { ago, ErrorLine, useAction, useLoad, when } from "../lib";
 import { Kind, StatusPill } from "../ui/status";
 import { ProblemCard } from "../ui/ProblemCard";
 
-// Commitments (ADR-W034 K6): what the household owes itself, from the
+// Commitments (ADR-W035 K6): what the household owes itself, from the
 // operator's side.
 //
 // The household's own page shows the three things waiting on somebody

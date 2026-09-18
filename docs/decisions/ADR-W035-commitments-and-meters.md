@@ -1,12 +1,15 @@
-# ADR-W034: Commitments and meters — the household keeps track of what it owes itself
+# ADR-W035: Commitments and meters — the household keeps track of what it owes itself
 
 - **Status:** proposed, and built. K1 through K7 are implemented:
   `Meter` and `Commitment` resource kinds, the readings store and its
   four doors, the occurrence ledger, the daily pass, the household
   homepage's rows and answer paths, the Console screen, and the agent's
   two read tools. Every decision in Part A is made.
-- **Number:** W034. Taken after W032 and W033 landed on main (#228); the
-  earlier `WXXX` placeholder existed because both were then unmerged.
+- **Number:** W035. Renumbered from W034 when the calendar ADR landed on
+  main first and took that number (#245's merge, and the calendar work
+  alongside it). The earlier `WXXX` placeholder existed because W032 and
+  W033 were then unmerged, and this is the same hazard arriving a second
+  time: a number claimed on a branch is not a number until it merges.
 - **Relates to:** ADR-W024 (household events, the `Automation` resource,
   the domestic gateway — this builds directly on it), ADR-W033 A1/A4
   (Owner and Member, Console and the household plane), E2/E3 (Agents
@@ -868,7 +871,7 @@ Person core (#202). That settles:
   Owner-only (W033 A4), Plans go to an Owner Review Queue (E2, E3), and
   `child` is a Member profile rather than a role, so the earlier
   `[adults]` shorthand is withdrawn.
-- **The number.** W034, taken once W032 and W033 were no longer in
+- **The number.** W035, taken once W032 and W033 were no longer in
   flight.
 
 **The household homepage merged** as #238. A19, A20 and A22 were written

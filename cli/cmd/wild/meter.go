@@ -1,6 +1,6 @@
 package main
 
-// `wild meter` (ADR-W034 K1): the numbers a household keeps, from a
+// `wild meter` (ADR-W035 K1): the numbers a household keeps, from a
 // terminal.
 //
 // `read` is the one that matters and is deliberately the shortest thing
@@ -164,7 +164,7 @@ func runMeterList(args []string) int {
 }
 
 // meterStanding is the one line a person reads. Three cases, and the
-// difference between the last two is the whole point of ADR-W034 A11: a
+// difference between the last two is the whole point of ADR-W035 A11: a
 // meter nobody has read and a meter read too long ago must not look like
 // a meter that is fine.
 func meterStanding(m meterView) string {

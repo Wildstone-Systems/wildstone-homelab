@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// CommitmentSpec is the spec for kind Commitment (ADR-W034 A1): a thing
+// CommitmentSpec is the spec for kind Commitment (ADR-W035 A1): a thing
 // the household owes itself, due when a meter reaches a number.
 //
 // Keystone-owned like Meter and Automation: it lives in the Statefile, is
@@ -204,7 +204,7 @@ func validateCommitment(r *Resource) error {
 	}
 	if !commitmentRollovers[c.Rollover] {
 		return fail("spec.rollover", fmt.Sprintf(
-			"must be one of %s — there is no safe default, and a recurring commitment that silently became a one-off would be mentioned exactly once (ADR-W034 A9)",
+			"must be one of %s — there is no safe default, and a recurring commitment that silently became a one-off would be mentioned exactly once (ADR-W035 A9)",
 			strings.Join(CommitmentRollovers(), ", ")))
 	}
 	anchor, err := ParseCommitmentAnchor(c.Anchor)

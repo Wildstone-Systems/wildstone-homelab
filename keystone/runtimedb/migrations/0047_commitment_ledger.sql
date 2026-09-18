@@ -1,5 +1,5 @@
 -- What the household has actually done about its commitments, and what
--- it has arranged to do (ADR-W034 A6, A8).
+-- it has arranged to do (ADR-W035 A6, A8).
 --
 -- THREE TABLES, AND ONLY TWO OF THEM ARE TRUE. A completion and a booking
 -- are facts: somebody did the thing, or somebody made an appointment.

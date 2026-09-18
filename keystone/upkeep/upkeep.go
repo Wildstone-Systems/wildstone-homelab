@@ -1,5 +1,5 @@
 // Package upkeep is the daily pass over the household's commitments
-// (ADR-W034 A15, work package K4): it reads what the household declared,
+// (ADR-W035 A15, work package K4): it reads what the household declared,
 // what its meters have said and what has been done about it, works out
 // where each commitment stands, and records the changes on the household
 // timeline.

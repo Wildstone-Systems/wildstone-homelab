@@ -1045,7 +1045,7 @@ export interface RoutineDetail {
 // then refuse. Offering free text here would be worse than offering
 // nothing: a routine triggering on an event nothing emits never fires,
 // and nothing tells its author why.
-// Commitments (ADR-W034). A Standing is where one stands right now: the
+// Commitments (ADR-W035). A Standing is where one stands right now: the
 // declaration plus the occurrence the engine derived, which is why
 // nothing here is stored and everything is recomputed.
 export interface CommitmentRule {

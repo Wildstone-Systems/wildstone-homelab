@@ -1,6 +1,6 @@
 package api
 
-// Commitments on the household's own front page (ADR-W034 K5).
+// Commitments on the household's own front page (ADR-W035 K5).
 //
 // They get no surface of their own, which is the decision A19 turned on.
 // The Home page already has a card for "things waiting on somebody" and

@@ -94,7 +94,7 @@ var lines = map[string]line{
 	"automation.suppressed":         {withSubject: "%s was asked to run and did not", without: "a routine was asked to run and did not", tone: ToneRefused},
 	"automation.escalation_skipped": {without: "a routine decided not to ask anybody", tone: ToneRefused},
 	"butler.household_session":      {withSubject: "%s asked the assistant something", without: "somebody asked the assistant something", tone: ToneOK},
-	// Commitments (ADR-W034). The entity carries which one, so these
+	// Commitments (ADR-W035). The entity carries which one, so these
 	// sentences say what happened to the household rather than naming
 	// the thing twice; the Needs you card is where a person reads WHICH.
 	//

@@ -171,7 +171,7 @@ func NewToolGateway(store *statefile.Store, reader *AgentReader) *ToolGateway {
 		// stand. There is deliberately no third tool — an agent drafts
 		// and reads, and a household whose agent can close its own
 		// commitments has a tracker that agrees with itself and nothing
-		// else (ADR-W034 A13).
+		// else (ADR-W035 A13).
 		"get_commitment_schema": {Spec: commitmentSchemaSpec, Handler: handleGetCommitmentSchema},
 		"get_commitments":       {Spec: commitmentStandingSpec, Handler: handleGetCommitments},
 		// The dry run quotes household events back — subjects, payload

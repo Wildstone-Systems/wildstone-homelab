@@ -123,7 +123,7 @@ func validResourceOfKind(t *testing.T, k Kind) Resource {
 			Action:  AutomationAction{Tool: "notifications.notify", Tier: "domestic"}}
 	case KindMeter:
 		// A meter belongs to the household or a capability, for the same
-		// reason a rule does (ADR-W034 A1).
+		// reason a rule does (ADR-W035 A1).
 		r.Metadata.Owner = "household"
 		r.Meter = &MeterSpec{Description: "odometer", Unit: "miles"}
 	case KindCommitment:

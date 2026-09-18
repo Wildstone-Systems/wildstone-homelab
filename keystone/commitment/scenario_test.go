@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// The three things that prompted ADR-W034, walked through a year.
+// The three things that prompted ADR-W035, walked through a year.
 //
 // These are acceptance scenarios rather than unit tests: each one is a
 // story with dates, and what is being checked is that the sequence of
@@ -172,7 +172,7 @@ func TestScenarioTheFilterWithNoDateOnIt(t *testing.T) {
 	})
 }
 
-// TestScenarioTheTruckWithHomeAssistantIsTheSameTruck pins ADR-W034 A4:
+// TestScenarioTheTruckWithHomeAssistantIsTheSameTruck pins ADR-W035 A4:
 // an installed capability changes when the household is asked, and
 // changes nothing about the answer.
 func TestScenarioTheTruckWithHomeAssistantIsTheSameTruck(t *testing.T) {

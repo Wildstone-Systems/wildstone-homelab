@@ -1,6 +1,6 @@
 package butler
 
-// Recording a meter reading from the family surface (ADR-W034 A3, A13).
+// Recording a meter reading from the family surface (ADR-W035 A3, A13).
 //
 // A3 lists household chat as one of the four doors a reading may come
 // through, and this is that door. Until now it was the one door with no

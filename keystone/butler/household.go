@@ -166,7 +166,7 @@ type HouseholdSeams struct {
 	// conversation alone, which is what it did before memory existed.
 	Memory MemorySeams
 	// RecordReading writes down a number a person gave the agent
-	// (ADR-W034 A3's chat door). cmd/keystone wires it over the runtime
+	// (ADR-W035 A3's chat door). cmd/keystone wires it over the runtime
 	// DB; this package holds no storage. nil withholds the tool
 	// entirely, rather than advertising one that cannot write.
 	RecordReading func(ctx context.Context, c ReadingCall) (string, error)

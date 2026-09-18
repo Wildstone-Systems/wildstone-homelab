@@ -1090,7 +1090,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		butlerCfg = butlerConfig{Provider: stored.Provider, Model: stored.Model, Endpoint: stored.Endpoint}
 	}
 
-	// The commitment pass (ADR-W034 A15). Declared here because the
+	// The commitment pass (ADR-W035 A15). Declared here because the
 	// agent's read tool needs it just below and the timer starts it
 	// further down — one engine either way, so the household's answer to
 	// "what is due" is the same whoever asks.
@@ -1234,7 +1234,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		household := butler.HouseholdSeams{
 			Events:     api.HouseholdEventSeam(db, memberScoped),
 			Vocabulary: bgw.AutomationVocabulary,
-			// The chat door a meter reading may come through (ADR-W034
+			// The chat door a meter reading may come through (ADR-W035
 			// A3), over the same store and the same refusals as the HTTP
 			// intake. Wired unconditionally: the tracker works with no
 			// capabilities installed (A4), so its doors are not
@@ -1455,7 +1455,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Everything the engine needs is wired; start its loop.
 	go auto.Run(context.Background(), automationEvery)
 
-	// The household's commitments (ADR-W034 A15): once a day, work out
+	// The household's commitments (ADR-W035 A15): once a day, work out
 	// what has come due and record the changes on the household
 	// timeline. Nothing here notifies anybody — an Automation the
 	// household wrote decides who hears about a commitment.* fact, on

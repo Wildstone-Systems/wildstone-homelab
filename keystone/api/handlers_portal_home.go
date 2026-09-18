@@ -480,7 +480,7 @@ func (s *Server) homeNeedsYou(w who, desired []resource.Resource, now time.Time)
 	// The household's commitments. Only the ones asking for something:
 	// a commitment quietly counting down is not waiting on anybody, and
 	// filling the one card a household reads with things it does not
-	// have to do is how the card stops being read (ADR-W034 K5).
+	// have to do is how the card stops being read (ADR-W035 K5).
 	if commitments, cerr := s.commitmentItems(w, desired, now); cerr != nil {
 		s.Log.Error("home needs-you commitments", "err", cerr)
 		// Same sentence as the notices failure, and for the same

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// MeterSpec is the spec for kind Meter (ADR-W034 A1): a number the
+// MeterSpec is the spec for kind Meter (ADR-W035 A1): a number the
 // household keeps that only counts up — miles on a vehicle, hours on a
 // blower, gallons through a filter — against which commitments come due.
 //
@@ -24,7 +24,7 @@ import (
 // desired, the same arrangement Automation has. Readings are NOT part of
 // the resource — a reading is evidence recorded as it happens, not
 // desired state, and requiring a plan to write down a mileage would mean
-// nobody ever writes down a mileage (ADR-W034 A16).
+// nobody ever writes down a mileage (ADR-W035 A16).
 type MeterSpec struct {
 	// Description is the human sentence for the plan review and the
 	// Console: what this number is.
@@ -35,7 +35,7 @@ type MeterSpec struct {
 	// a commitment's threshold is always in its own meter's coordinates.
 	Unit string `yaml:"unit" json:"unit"`
 	// StaleAfter is how old the newest reading may be before this meter
-	// can no longer support the conclusion "not due yet" (ADR-W034 A11).
+	// can no longer support the conclusion "not due yet" (ADR-W035 A11).
 	// A Go duration; empty means it never goes stale, which is right for
 	// a meter something else keeps current and wrong for one a person
 	// reads off a dashboard.
@@ -48,7 +48,7 @@ type MeterSpec struct {
 }
 
 // MeterClock is the name of the built-in meter every household has
-// without declaring anything: the calendar (ADR-W034 A2).
+// without declaring anything: the calendar (ADR-W035 A2).
 //
 // It is RESERVED rather than shipped as a Meter resource, and a
 // declaration using this name is refused. A household that could declare
@@ -151,7 +151,7 @@ func validateMeter(r *Resource) error {
 	}
 	if r.Metadata.Name == MeterClock {
 		return fail("metadata.name", fmt.Sprintf(
-			"%q is the built-in calendar meter and cannot be declared: a household with two clocks has to decide which one is right (ADR-W034 A2)", MeterClock))
+			"%q is the built-in calendar meter and cannot be declared: a household with two clocks has to decide which one is right (ADR-W035 A2)", MeterClock))
 	}
 	if !HouseholdOwnerAllowed(r.Metadata.Owner) {
 		return fail("metadata.owner", "must be household, household/<member>, or capability/<name>")

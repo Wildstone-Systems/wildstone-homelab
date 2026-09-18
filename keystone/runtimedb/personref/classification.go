@@ -447,9 +447,9 @@ var Columns = []Column{
 
 	// ---- Actor: a person on one path, a machine principal on another ----
 	{"meter_readings", "recorded_by", Actor,
-		"a member when the reading came from the Console, the CLI or chat; the publishing principal when a capability sent it (ADR-W034 A3)"},
+		"a member when the reading came from the Console, the CLI or chat; the publishing principal when a capability sent it (ADR-W035 A3)"},
 	{"commitment_completions", "recorded_by", Actor,
-		"whoever recorded the work as done: a member today, and a capability's principal once an adapter can close a cycle (ADR-W034 A8)"},
+		"whoever recorded the work as done: a member today, and a capability's principal once an adapter can close a cycle (ADR-W035 A8)"},
 	{"commitment_bookings", "booked_by", Actor,
 		"whoever made the appointment; the same principal text as the rest of this family until the Person/principal split"},
 	{"commitment_bookings", "cancelled_by", Actor,

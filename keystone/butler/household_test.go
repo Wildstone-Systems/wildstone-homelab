@@ -89,7 +89,7 @@ func TestHouseholdGatewayHoldsNoInfrastructure(t *testing.T) {
 	// the reader and this Butler are permitted, ANDed in the SQL that
 	// finds candidates rather than filtered afterwards.
 	//
-	// RecordReading was added deliberately too (ADR-W034 A3): household
+	// RecordReading was added deliberately too (ADR-W035 A3): household
 	// chat is one of the four doors a meter reading may come through,
 	// and it was the one door with no hinge. The capability it adds is
 	// exactly one write, of one number, attributed to the member whose
@@ -536,7 +536,7 @@ func TestTheAgentStillCannotAnswerACommitment(t *testing.T) {
 		for _, forbidden := range []string{"satisf", "waive", "book", "complete", "commitment_done"} {
 			if strings.Contains(strings.ToLower(spec.Name), forbidden) {
 				t.Errorf("the family agent offers %q — an agent that can close its own commitments "+
-					"has a tracker that agrees with itself and nothing else (ADR-W034 A13)", spec.Name)
+					"has a tracker that agrees with itself and nothing else (ADR-W035 A13)", spec.Name)
 			}
 		}
 	}

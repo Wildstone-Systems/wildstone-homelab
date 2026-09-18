@@ -338,7 +338,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/household/events", s.handle(principal.VerbRead, s.listHouseholdEvents))
 	mux.Handle("POST /api/v1/household/publishers/{capability}", s.handle(principal.VerbManage, s.mintPublisher))
 	// Replay is a read: it evaluates and returns, writes nothing.
-	// Meters and their readings (ADR-W034 K1). The reading is an
+	// Meters and their readings (ADR-W035 K1). The reading is an
 	// ordinary authenticated write rather than a Plan: it is evidence,
 	// not authority, and an approval queue between a person and a
 	// mileage is how a household stops recording mileages.
@@ -621,7 +621,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Activity: the household record, on the same surface as the front
 	// page because it is the same projection over a longer window.
-	// Answering a commitment from the household's own page (ADR-W034
+	// Answering a commitment from the household's own page (ADR-W035
 	// K5). Not a Plan: the same reasoning as a meter reading, and the
 	// same three things a person can say — I did it, I skipped it, I
 	// booked it — plus the number a meter wants.

@@ -42,11 +42,11 @@ const (
 	// applied at no node, run by the automation engine.
 	KindAutomation Kind = "Automation"
 	// KindMeter is a number the household keeps that only counts up
-	// (ADR-W034 A1): Keystone-owned like Automation, applied at no node.
+	// (ADR-W035 A1): Keystone-owned like Automation, applied at no node.
 	// Its readings are not part of the resource — they are evidence, not
 	// desired state.
 	KindMeter Kind = "Meter"
-	// KindCommitment is a thing the household owes itself (ADR-W034 A1):
+	// KindCommitment is a thing the household owes itself (ADR-W035 A1):
 	// Keystone-owned, applied at no node. It declares when something
 	// comes due and whose answer it is; where each cycle stands is
 	// runtime state, because it changes without anybody declaring it.
@@ -911,13 +911,13 @@ var registry = map[Kind]kindEntry{
 		validate: validateAutomation,
 	},
 	KindMeter: {
-		// Keystone-owned for the same reason (ADR-W034 A1): the due-ness
+		// Keystone-owned for the same reason (ADR-W035 A1): the due-ness
 		// pass reads it from the Statefile. Nothing is applied anywhere.
 		newSpec:  func() any { return &MeterSpec{} },
 		validate: validateMeter,
 	},
 	KindCommitment: {
-		// Keystone-owned, beside the meter it reads (ADR-W034 A1).
+		// Keystone-owned, beside the meter it reads (ADR-W035 A1).
 		newSpec:  func() any { return &CommitmentSpec{} },
 		validate: validateCommitment,
 	},

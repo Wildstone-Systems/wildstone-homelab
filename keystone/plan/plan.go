@@ -223,7 +223,7 @@ var kindOrder = map[resource.Kind]int{
 	// Meter beside Automation and before it in the listing: a commitment
 	// reads a meter, and a household reading a plan wants the number
 	// declared before the thing that comes due against it. Keystone-owned,
-	// so this orders the listing and nothing else (ADR-W034 A1).
+	// so this orders the listing and nothing else (ADR-W035 A1).
 	resource.KindMeter: 8,
 	// Commitment after the Meter it reads, for the same reason: a
 	// household reading a plan wants the number declared before the
@@ -692,7 +692,7 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 		if action == ActionDelete {
 			return RiskMedium, "meter removed: every commitment measured against it can no longer say whether it is due"
 		}
-		return RiskLow, "a declaration of a number the household keeps; it acts on nothing by itself (ADR-W034 A1)"
+		return RiskLow, "a declaration of a number the household keeps; it acts on nothing by itself (ADR-W035 A1)"
 	case resource.KindCommitment:
 		// Approved once, then it asks on its own for as long as the
 		// household keeps it — which is the whole point, and the reason

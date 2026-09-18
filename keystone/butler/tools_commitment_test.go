@@ -27,7 +27,7 @@ func TestAnAgentHasNoToolThatAnswersACommitment(t *testing.T) {
 			"record_reading", "book_commitment", "record_meter",
 		} {
 			if name == forbidden {
-				t.Errorf("the gateway offers %q; those are writes by a person or a plan (ADR-W034 A13)", name)
+				t.Errorf("the gateway offers %q; those are writes by a person or a plan (ADR-W035 A13)", name)
 			}
 		}
 	}

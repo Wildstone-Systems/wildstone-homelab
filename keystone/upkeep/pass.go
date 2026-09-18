@@ -6,7 +6,7 @@ package upkeep
 // WHAT COUNTS AS A CHANGE is the whole design of this file. A commitment
 // that has been overdue for three weeks is overdue every morning, and a
 // household told so every morning stops reading its notifications — which
-// is the failure ADR-W034's own costs section names as the one a schema
+// is the failure ADR-W035's own costs section names as the one a schema
 // cannot fix. So the pass announces TRANSITIONS, against a cache of what
 // was last said, and says nothing at all on a quiet day.
 

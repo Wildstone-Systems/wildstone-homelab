@@ -474,7 +474,7 @@ until someone notices.
 ## Commitments: what the household owes itself
 
 Alongside rules that react to events there is a second household
-subsystem for things that come *due* (ADR-W034). A **`Meter`** is a
+subsystem for things that come *due* (ADR-W035). A **`Meter`** is a
 number that only counts up — miles on a vehicle, hours on a blower,
 gallons through a filter. A **`Commitment`** is a thing the household
 owes itself, due when a meter reaches a number.
