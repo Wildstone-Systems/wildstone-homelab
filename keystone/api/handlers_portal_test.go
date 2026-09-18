@@ -73,6 +73,15 @@ func (h *harness) member(method, path, user, groups string, body io.Reader, cont
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
+	// What a browser sends on a write from the portal's own page, and
+	// the reason it is HERE rather than in each test: a write without it
+	// is refused as cross-site, so a helper that omitted it would be
+	// testing a request no member can make. The refusal has its own
+	// test, which builds the request by hand.
+	if method != http.MethodGet && method != http.MethodHead {
+		req.Header.Set("Origin", h.srv.URL)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		h.t.Fatalf("%s %s: %v", method, path, err)

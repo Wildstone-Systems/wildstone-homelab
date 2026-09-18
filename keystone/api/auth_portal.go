@@ -48,6 +48,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
@@ -230,6 +231,18 @@ func (s *Server) portal(surface portalSurface, h portalFunc) http.Handler {
 		if !s.limiter.allow("portal:" + member) {
 			s.audit(r, member, http.StatusTooManyRequests)
 			s.writeError(w, http.StatusTooManyRequests, "rate limited")
+			return
+		}
+		// A write has to have come from the portal's own pages. This is
+		// AFTER the member is known so the audit row names the person
+		// whose session was being ridden, which is the only way an
+		// operator finds out it happened.
+		if err := sameSiteWrite(r); err != nil {
+			s.audit(r, member, http.StatusForbidden)
+			s.Log.Info("portal refused", "surface", surface.capability,
+				"path", r.URL.Path, "status", http.StatusForbidden, "reason", err.Error())
+			s.writeError(w, http.StatusForbidden,
+				"this request did not come from the household dashboard")
 			return
 		}
 		body, status, err := h(w, r, member, desired)
@@ -445,4 +458,77 @@ func (s *Server) forwardedUserIsStillAMember(user string) bool {
 	// reach it; holding them to `owner` here would refuse the family the
 	// dashboard was built for.
 	return true
+}
+
+// errPortalCrossSite is a write that did not come from the portal's own
+// pages.
+var errPortalCrossSite = errors.New("cross-site write")
+
+// sameSiteWrite refuses a state-changing request that a page other than
+// the portal's own caused a browser to send.
+//
+// THE DOOR ABOVE IS NOT ENOUGH ON ITS OWN, and the reason is the shape
+// of the session rather than a defect in the check. Authelia's cookie
+// is scoped to the whole SessionDomain (packages/identity), so every
+// sibling service under it shares the household's signed-in state. A
+// page on any one of them — a compromised container, an application
+// with a script injection, a service that renders somebody else's
+// markup — can make the browser POST here, and the browser will attach
+// that cookie because the request is same-SITE even though it is
+// cross-ORIGIN. The proxy then authenticates a real member and forwards
+// a real name. Every check in portalMember passes. The write happens.
+//
+// CORS does not stop it: it withholds the RESPONSE, and these are
+// operations whose damage is done by arriving — a delete, a forget, a
+// cleared banner. The page's own `form-action 'none'` does not stop it
+// either: that constrains markup WE serve, and the markup is theirs.
+//
+// So the request itself has to carry proof of where it came from, and a
+// browser supplies two such proofs that a cross-origin page cannot
+// forge — both are forbidden header names, settable by the browser and
+// never by script:
+//
+//   - Sec-Fetch-Site, which says same-origin in as many words. Sent by
+//     every browser this household can sign in from.
+//   - Origin, which every browser sends on a write. Its host must be
+//     the host this request was addressed to.
+//
+// A request carrying NEITHER is refused rather than admitted. A modern
+// browser always sends at least one, so the only callers that header
+// says nothing about are scripted ones — and a script that has got this
+// far is either the operator (who has the admin API and does not need
+// this door) or somebody replaying a stolen session, which is the case
+// this exists for.
+//
+// Reads are exempt because they change nothing, and because the two
+// framed widgets are GETs from a dashboard that may be served from
+// another origin entirely. Their own writes are unaffected: a fetch
+// from inside an iframe carries the IFRAME's origin, which is this one.
+func sameSiteWrite(r *http.Request) error {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return nil
+	}
+	if site := strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")); site != "" {
+		if site == "same-origin" {
+			return nil
+		}
+		return fmt.Errorf("%w: the browser reported Sec-Fetch-Site: %s", errPortalCrossSite, site)
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return fmt.Errorf("%w: the write carried neither Sec-Fetch-Site nor Origin", errPortalCrossSite)
+	}
+	// Compared by HOST rather than by whole URL: the scheme the browser
+	// used is the scheme the ingress terminated, and this handler is
+	// behind it on plain HTTP. The host is the part a cross-origin page
+	// cannot match without already being us.
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("%w: Origin %q is not a URL", errPortalCrossSite, origin)
+	}
+	if !strings.EqualFold(u.Host, r.Host) {
+		return fmt.Errorf("%w: Origin %s is not %s", errPortalCrossSite, u.Host, r.Host)
+	}
+	return nil
 }
