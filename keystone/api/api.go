@@ -139,6 +139,11 @@ type Server struct {
 	// down a function that returns three days of one collection.
 	CalendarEvents func(from, to time.Time) ([]CalendarCardEvent, error)
 
+	// CalendarBook backs the household's own calendar page (/calendar/):
+	// the same shared collection, read AND written. nil leaves the page
+	// saying the calendar has no sign-in yet, the card's state too.
+	CalendarBook CalendarBook
+
 	// Butlers serves conversations as named specialists (ADR-W031) —
 	// cmd/keystone wires it over butlerlive, butlerstore and the
 	// durable runner. nil leaves every conversation on the single
@@ -612,6 +617,14 @@ func (s *Server) Handler() http.Handler {
 	// Getting the calendar onto a phone (ADR-W034). The profile is the
 	// only path to the shared calendar on iOS; the details endpoint is
 	// what every other client needs.
+	// The household calendar page: the month, and adding, changing and
+	// removing events on the SHARED calendar. Gated on calendar_users,
+	// the calendar package's own group — see handlers_portal_calendarpage.go.
+	mux.Handle("GET /calendar/{$}", s.portal(surfaceCalendar, s.portalPage("calendar")))
+	mux.Handle("GET /api/v1/calendar/events", s.portal(surfaceCalendar, s.calendarPageEvents))
+	mux.Handle("POST /api/v1/calendar/events", s.portal(surfaceCalendar, s.calendarPageCreate))
+	mux.Handle("POST /api/v1/calendar/events/update", s.portal(surfaceCalendar, s.calendarPageUpdate))
+	mux.Handle("POST /api/v1/calendar/events/delete", s.portal(surfaceCalendar, s.calendarPageDelete))
 	mux.Handle("GET /api/v1/home/calendar/profile.mobileconfig", s.portal(surfaceHome, s.calendarProfile))
 	mux.Handle("GET /api/v1/home/calendar/setup", s.portal(surfaceHome, s.calendarSetupDetails))
 	mux.Handle("GET /api/v1/home/banner", s.portal(surfaceHome, s.homeBannerImage))
