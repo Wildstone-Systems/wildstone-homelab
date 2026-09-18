@@ -303,8 +303,7 @@ func TestRetainedAuditTextIsNotSurveyed(t *testing.T) {
 // could not.
 func TestColumnsThatMirrorAPersonAreClassifiedHuman(t *testing.T) {
 	want := map[string]bool{
-		"butler_index.owner":            true,
-		"integration_connections.owner": true,
+		"butler_index.owner": true,
 	}
 	for _, c := range personref.Columns {
 		key := c.Table + "." + c.Column
@@ -337,6 +336,9 @@ func TestColumnsWrittenByAnyPrincipalAreNotHuman(t *testing.T) {
 	writtenByActingMember := map[string]string{
 		"butler_task_feedback.author":             "api.addButlerTaskFeedback",
 		"butler_capability_requests.requested_by": "api.fileCapabilityRequest",
+		"integration_secrets.member":              "api.onboardIntegrationSecret (default)",
+		"member_notice_preferences.member":        "api.setNoticePreferences (default)",
+		"integration_connections.owner":           "api.createConnection (default), plus the literal `household`",
 	}
 	for _, c := range personref.Columns {
 		key := c.Table + "." + c.Column
