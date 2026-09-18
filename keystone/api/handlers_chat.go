@@ -145,26 +145,18 @@ func (s *Server) issueChatClaim(r *http.Request, id principal.Identity) (any, in
 // ignored, and the whole point of the pair is that the operator says
 // who they mean.
 func (s *Server) connectionNamed(butler, transport, externalID string) (runtimedb.Connection, int, error) {
-	if externalID != "" {
-		at, err := s.DB.ChatConnectionAt(transport, externalID)
-		switch {
-		case errors.Is(err, runtimedb.ErrNoConnection):
-			return runtimedb.Connection{}, http.StatusBadRequest, fmt.Errorf(
-				"no butler answers at %s on %s", externalID, transport)
-		case err != nil:
-			return runtimedb.Connection{}, http.StatusInternalServerError, err
-		case at.Butler != butler:
-			return runtimedb.Connection{}, http.StatusBadRequest, fmt.Errorf(
-				"%s is %s's bot, not %s's", externalID, at.Butler, butler)
-		}
-		return at, 0, nil
-	}
-	at, err := s.DB.ChatConnectionForButler(butler, transport)
+	at, err := s.DB.ChatConnectionForButler(butler, transport, externalID)
 	switch {
+	case errors.Is(err, runtimedb.ErrNoConnection) && externalID != "":
+		// Separated from the case below because the operator named a
+		// bot: "that is not one of theirs" is what they need to hear,
+		// not "they have none".
+		return runtimedb.Connection{}, http.StatusBadRequest, fmt.Errorf(
+			"%s is not one of %s's bots", externalID, butler)
 	case errors.Is(err, runtimedb.ErrNoConnection):
 		return runtimedb.Connection{}, http.StatusBadRequest, fmt.Errorf(
 			"%s has no %s connection: give it one first (`wild butler address`), then invite somebody to it",
-			butler, transport)
+			butler, orAny(transport))
 	case errors.Is(err, runtimedb.ErrAmbiguousConnection):
 		return runtimedb.Connection{}, http.StatusBadRequest, err
 	case err != nil:
@@ -205,15 +197,32 @@ func (s *Server) checkClaimTarget(at runtimedb.Connection, identity string) (int
 		}
 	}
 
-	// An adapter with no live Keystone token cannot redeem anything, so
-	// a code issued for its Connection is exactly the unredeemable
-	// invite this check exists to prevent. That state is reachable —
-	// installing through Services without credentialing, or a setup
-	// interrupted between the two.
+	// BOTH halves, because a code needs a bot that exists AND can talk
+	// to Keystone, and each half is separately reachable.
+	//
+	// Not installed: the capability was removed, or the address outlived
+	// it. An address is not revoked when its capability is disabled, and
+	// the adapter's principal is not deleted either, so a credential
+	// check alone would call a bot that is not running ready.
 	//
 	// The capability is the Connection's own external id: the bot a
 	// message arrives at IS the address (ADR-W031 A7), so the address
-	// names the bot whose credential this is.
+	// names the capability this Connection is.
+	enabled, err := s.enabledCapabilities()
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	if !enabled[at.ExternalID] {
+		return http.StatusBadRequest, fmt.Errorf(
+			"%s is not installed, so there is no bot for a code to be sent to: install it, then credential it for %s",
+			at.ExternalID, at.Butler)
+	}
+
+	// No live Keystone token: the adapter cannot redeem anything, so a
+	// code issued for its Connection is exactly the unredeemable invite
+	// this check exists to prevent. That state is reachable too —
+	// installing through Services without credentialing, or a setup
+	// interrupted between the two.
 	if !s.adapterCredentialed(at.ExternalID) {
 		return http.StatusBadRequest, fmt.Errorf(
 			"the %s adapter %s has no Keystone token, so it cannot redeem a code: credential it first (wild chat adapter %s -node <node> -butler %s)",
@@ -237,6 +246,9 @@ func (s *Server) householdMemberNames() (map[string]bool, error) {
 	return names, nil
 }
 
+// orAny keeps a refusal readable when no transport was named: "has no
+// connection" with a hole in it reads as a typo, which is what it looks
+// like to the person who has to act on it.
 func orAny(transport string) string {
 	if transport == "" {
 		return "chat"

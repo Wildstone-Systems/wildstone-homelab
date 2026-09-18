@@ -563,10 +563,13 @@ export function InviteStep({
   const ready = butler !== "" && !!transport?.installed;
 
   const invite = () => {
+    // Guard BEFORE the busy flag: returning after setting it and before
+    // the .finally that clears it left the step stuck on "Issuing…"
+    // with nothing to un-stick it.
+    if (!transport) return;
     setBusy(true);
     setError(null);
     setCopied(false);
-    if (!transport) return;
     api
       .issueChatClaim(butler, who, transport.transport, transport.capability)
       .then(setClaim)

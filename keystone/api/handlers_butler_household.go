@@ -145,14 +145,20 @@ func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any
 	// perfectly reachable Butler because a flag the deployment no longer
 	// uses was left at "off".
 	if s.butlersConfigured() {
-		return s.askNamedFamilyButler(r.Context(), message, named, id.Name, "", false, actingAsOwner(id), nil, butlerlive.ConnectionScope{})
+		// actingMember, not id.Name: a turn is had by a PERSON (#240),
+		// and a Console caller authenticates as a principal that ACTS
+		// FOR one. Passing the principal here named the credential as
+		// the member, which turnHasAPerson now refuses outright — and
+		// which, before it did, filed the household's memory and work
+		// under the credential.
+		return s.askNamedFamilyButler(r.Context(), message, named, actingMember(id), "", false, actingAsOwner(id), nil, butlerlive.ConnectionScope{})
 	}
 	host := s.ButlerHost
 	if !host.householdConfigured() {
 		return nil, http.StatusServiceUnavailable,
 			fmt.Errorf("household butler not configured (needs -butler-provider and a household surface)")
 	}
-	return s.runFamilyButlerSession(r.Context(), message, id.Name, "")
+	return s.runFamilyButlerSession(r.Context(), message, actingMember(id), "")
 }
 
 // askNamedFamilyButler answers on the family surface as a named Butler.

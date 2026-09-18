@@ -462,9 +462,18 @@ func TestAnAgentWithTwoBotsOnOneTransportIsInvitedToOne(t *testing.T) {
 	h := newHarness(t)
 	h.ensureChatPrereqs(t, "admin", "mika", "telegram")
 	first := h.agentAt(t, "admin", "telegram")
-	// A second bot for the same Agent, which is what B7 permits. It
-	// gets its own credential, because each Connection has one and a
-	// code may only name a bot that can actually redeem it.
+	// A second bot for the same Agent, which is what B7 permits. It is
+	// installed and credentialed like the first, because a code may
+	// only name a bot that exists and can actually redeem it.
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindVolume,
+		Metadata: resource.Metadata{
+			Name: "chat-telegram-spare-state", Owner: "capability/chat-telegram-spare", Node: "n1",
+		},
+		Volume: &resource.VolumeSpec{Name: "chat-telegram-spare-state"},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := h.s.DB.AddButlerAddress(first.Butler, "telegram", "chat-telegram-spare", "", "root-admin"); err != nil {
 		t.Fatalf("second address: %v", err)
 	}
@@ -514,7 +523,57 @@ func TestAnAgentWithTwoBotsOnOneTransportIsInvitedToOne(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("another agent's bot: status = %d, want 400", resp.StatusCode)
 	}
-	if want := other.ExternalID + " is " + other.Butler + "'s bot, not " + first.Butler + "'s"; refused.Error != want {
+	if want := other.ExternalID + " is not one of " + first.Butler + "'s bots"; refused.Error != want {
 		t.Fatalf("refused with %q, want %q", refused.Error, want)
+	}
+}
+
+// A code is refused for a bot whose capability is no longer installed.
+//
+// Both halves of "this bot can take a code" are separately reachable and
+// the check needs both. An address is not revoked when its capability is
+// removed, and the adapter's principal is not deleted either — so a
+// credential check on its own calls a bot that is not running ready, and
+// the operator hands somebody an invite that can never be redeemed. That
+// is the failure this check exists to prevent: it does not look like a
+// failure, it looks like the person ignoring you.
+func TestACodeIsRefusedForAnUninstalledBot(t *testing.T) {
+	h := newHarness(t)
+	h.ensureChatPrereqs(t, "family", "sam", "telegram")
+	at := h.agentAt(t, "family", "telegram")
+
+	// It works while the capability is installed.
+	var out claimResponse
+	if resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/claims", map[string]any{
+		"butler": at.Butler, "identity": "sam", "transport": "telegram",
+	}, &out); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+
+	// Remove the capability, leaving the address and the credential —
+	// which is what removing one actually does.
+	current, err := h.s.State.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range current {
+		if r.Metadata.Owner == "capability/"+at.ExternalID {
+			if err := h.s.State.Delete(r.Kind, r.Metadata.Name); err != nil {
+				t.Fatalf("removing %s: %v", r.Metadata.Name, err)
+			}
+		}
+	}
+
+	var refused struct {
+		Error string `json:"error"`
+	}
+	resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/claims", map[string]any{
+		"butler": at.Butler, "identity": "sam", "transport": "telegram",
+	}, &refused)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	if !strings.Contains(refused.Error, "is not installed") {
+		t.Fatalf("refused with %q, want it to say the bot is not installed", refused.Error)
 	}
 }

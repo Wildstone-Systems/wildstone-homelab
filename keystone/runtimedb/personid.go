@@ -57,24 +57,6 @@ func resolvePersonID(q personRower, member string) (string, error) {
 	return id, nil
 }
 
-// personHandle renders an identity back as the handle it currently
-// carries. Storage joins to butler_members for this in the same query
-// wherever it can; this is for the places that cannot.
-func personHandle(q personRower, id string) (string, error) {
-	if id == "" {
-		return "", nil
-	}
-	var member string
-	err := q.QueryRow(`SELECT member FROM butler_members WHERE person_id = ?`, id).Scan(&member)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("%w: person %q", ErrNoSuchPerson, id)
-	}
-	if err != nil {
-		return "", fmt.Errorf("runtimedb: reading the handle for person %q: %w", id, err)
-	}
-	return member, nil
-}
-
 // HouseholdOwner is the owner value that means the household itself
 // rather than any one person: the literal the `scoped` columns have
 // always taken, and what callers still pass and still read back.
@@ -95,15 +77,6 @@ func ownerPersonID(q personRower, owner string) (any, error) {
 		return nil, err
 	}
 	return id, nil
-}
-
-// ownerFromPersonID is ownerPersonID backwards, for reading a `scoped`
-// column out: a NULL owner is the household.
-func ownerFromPersonID(handle sql.NullString) string {
-	if !handle.Valid {
-		return HouseholdOwner
-	}
-	return handle.String
 }
 
 // personIDForRead resolves a handle for a READ and tolerates a name

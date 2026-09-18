@@ -102,6 +102,14 @@ func (s *Server) mintChatAdapter(r *http.Request, id principal.Identity) (any, i
 	// this call is about to place is that Agent's, and two Agents
 	// sharing one would make "which agent answered" unanswerable —
 	// which is the whole reason B7 binds a Connection to exactly one.
+	//
+	// This half only READS. The address is written further down, after
+	// every remaining refusal, because a write before them is a write
+	// the operator never agreed to: a 503 or a ceiling conflict would
+	// come back as a refusal while the bot had already been handed over
+	// — and handing a family package's bot to an Owner Agent is exactly
+	// what the ceiling conflict exists to prevent.
+	needsAddress := false
 	switch at, err := s.DB.ChatConnectionAt(transport, capName); {
 	case err == nil && at.Butler != agent.Name:
 		return nil, http.StatusConflict, fmt.Errorf(
@@ -110,12 +118,7 @@ func (s *Server) mintChatAdapter(r *http.Request, id principal.Identity) (any, i
 	case err != nil && !errors.Is(err, runtimedb.ErrNoConnection):
 		return nil, http.StatusInternalServerError, err
 	case errors.Is(err, runtimedb.ErrNoConnection):
-		// Assigning the bot IS part of credentialing it. Two steps would
-		// leave a credentialed bot answering for nobody, which reads as
-		// working right up until somebody sends it a message.
-		if _, err := s.DB.AddButlerAddress(agent.Name, transport, capName, "", actingMember(id)); err != nil {
-			return nil, http.StatusBadRequest, fmt.Errorf("giving %s the address %s: %w", agent.Name, capName, err)
-		}
+		needsAddress = true
 	}
 
 	// Everything the REQUEST can get wrong is answered before anything
@@ -142,6 +145,17 @@ func (s *Server) mintChatAdapter(r *http.Request, id principal.Identity) (any, i
 		return nil, http.StatusConflict, fmt.Errorf(
 			"principal %s exists with role %s, not %s — a chat adapter cannot change ceiling by re-minting",
 			name, existing.Role, role)
+	}
+
+	// Assigning the bot IS part of credentialing it, and now that
+	// nothing above can still refuse, this is where it happens. Two
+	// separate steps would leave a credentialed bot answering for
+	// nobody, which reads as working right up until somebody sends it a
+	// message.
+	if needsAddress {
+		if _, err := s.DB.AddButlerAddress(agent.Name, transport, capName, "", actingMember(id)); err != nil {
+			return nil, http.StatusBadRequest, fmt.Errorf("giving %s the address %s: %w", agent.Name, capName, err)
+		}
 	}
 
 	secretName := capability.AdapterSecretName(capName)

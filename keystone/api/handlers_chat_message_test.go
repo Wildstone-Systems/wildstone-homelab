@@ -507,3 +507,35 @@ func TestChatRateLimitIsPerAgent(t *testing.T) {
 		t.Fatalf("a flood on one agent's bot spent another agent's budget")
 	}
 }
+
+// A human reading an Agent's queue does not have to name a transport.
+//
+// -transport is documented as optional and an Agent with one bot has
+// nothing to disambiguate, but the resolver read an absent transport as
+// a transport named "" — which matches no address — so `wild chat
+// outbound -butler sandy` was refused for every Agent in every
+// deployment. The adapter path never hit it: an adapter's credential
+// resolves its own Connection and never reaches here.
+func TestReadingAQueueDoesNotRequireNamingTheTransport(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	h.ensureChatPrereqs(t, "family", "sam", "telegram")
+	at := h.agentAt(t, "family", "telegram")
+	if _, err := h.s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{
+		Connection: at.Seq, Target: "12345", Body: "the bins go out tonight",
+		Kind: "push", DedupeKey: "bins-1",
+	}); err != nil {
+		t.Fatalf("EnqueueChatOutbound: %v", err)
+	}
+
+	// A human holding read, naming only the Agent.
+	got := h.poll(t, runtimedb.RoleAdmin, "?butler="+at.Butler)
+	if len(got) != 1 || got[0].Body != "the bins go out tonight" {
+		t.Fatalf("polling %s without a transport returned %+v", at.Butler, got)
+	}
+
+	// Naming the transport still works, and names the same queue.
+	if same := h.poll(t, runtimedb.RoleAdmin, "?butler="+at.Butler+"&transport=telegram"); len(same) != 1 {
+		t.Fatalf("polling with the transport returned %+v", same)
+	}
+}

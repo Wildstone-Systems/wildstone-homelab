@@ -79,6 +79,11 @@ type inboundMessage struct {
 	// refused — its own credential IS the address (ADR-W031 A7), and a
 	// bot that could name a Butler could name somebody else's.
 	Butler string `json:"butler,omitempty"`
+	// Connection picks between that Butler's several bots (B7), by the
+	// address's external id, for the same read-holding human. An
+	// adapter never sends it either: its credential already IS the
+	// connection.
+	Connection string `json:"connection,omitempty"`
 }
 
 // inboundResponse tells the adapter what happened without telling it
@@ -89,49 +94,6 @@ type inboundResponse struct {
 	Bound    bool   `json:"bound"`
 	Queued   int64  `json:"queued,omitempty"`
 	Reason   string `json:"reason,omitempty"`
-}
-
-// surfaceForCaller decides which Butler this caller may reach.
-//
-//   - concierge → family, always. It has no other spelling.
-//   - valet     → admin, always. The admin adapter's own role, which is
-//     NOT the butler role every external agent already holds (ADR-W024
-//     A5): a chat verb there would have handed each of them this queue.
-//   - read-holding humans (admin/operator) → whichever they name, so the
-//     Console and `wild` can exercise the contract end to end.
-func surfaceForCaller(id principal.Identity, requested string) (runtimedb.ButlerSurface, error) {
-	if surface, isAdapter := adapterSurface(id); isAdapter {
-		if requested != "" && requested != string(surface) {
-			return "", fmt.Errorf("this credential serves the %s surface", surface)
-		}
-		return surface, nil
-	}
-	if !principal.Allowed(id.Role, principal.VerbRead) {
-		return "", fmt.Errorf("this credential cannot choose a surface")
-	}
-	surface := runtimedb.ButlerSurface(requested)
-	if !runtimedb.ValidButlerSurface(surface) {
-		return "", fmt.Errorf("surface must be admin or family")
-	}
-	return surface, nil
-}
-
-// adapterSurface reports the surface a CHAT ADAPTER's credential is
-// pinned to, and whether the caller is one at all.
-//
-// The distinction matters wherever a check exists to stop a bot acting
-// on the wrong surface: a human with the Console or `wild` is not a bot
-// pinned to one, and holding them to an adapter's constraint would only
-// stop an operator redeeming a code on behalf of somebody standing next
-// to them.
-func adapterSurface(id principal.Identity) (runtimedb.ButlerSurface, bool) {
-	switch id.Role {
-	case runtimedb.RoleConcierge:
-		return runtimedb.ButlerSurfaceFamily, true
-	case runtimedb.RoleValet:
-		return runtimedb.ButlerSurfaceAdmin, true
-	}
-	return "", false
 }
 
 // receiveChatMessage is the adapter's inbound door (ADR-W026 A8).
@@ -830,9 +792,11 @@ func (s *Server) connectionForCaller(id principal.Identity, msg inboundMessage) 
 		return runtimedb.Connection{}, fmt.Errorf(
 			"name a butler: this credential is not a chat adapter, so there is no connection to resolve one from")
 	}
-	at, err := s.DB.ChatConnectionForButler(butler, transport)
+	// transport and connection both narrow, and both are optional: an
+	// Agent with one bot needs neither.
+	at, err := s.DB.ChatConnectionForButler(butler, transport, strings.TrimSpace(msg.Connection))
 	if errors.Is(err, runtimedb.ErrNoConnection) {
-		return runtimedb.Connection{}, fmt.Errorf("%s has no %s connection", butler, transport)
+		return runtimedb.Connection{}, fmt.Errorf("%s has no %s connection", butler, orAny(transport))
 	}
 	return at, err
 }
@@ -859,19 +823,12 @@ func (s *Server) pollingConnection(r *http.Request, id principal.Identity) (runt
 	if butler == "" {
 		return runtimedb.Connection{}, fmt.Errorf("name a butler: this credential is not a chat adapter")
 	}
-	// ?connection=<external id> picks between an Agent's several bots
-	// on one transport (B7). Without it, reading the queue of an Agent
-	// that has two is refused with no way to say which — and the
-	// refusal names the ids, so this is where one comes back.
-	if external := strings.TrimSpace(r.URL.Query().Get("connection")); external != "" {
-		at, err := s.DB.ChatConnectionAt(transport, external)
-		if err != nil {
-			return runtimedb.Connection{}, err
-		}
-		if at.Butler != butler {
-			return runtimedb.Connection{}, fmt.Errorf("%s is %s's bot, not %s's", external, at.Butler, butler)
-		}
-		return at, nil
-	}
-	return s.DB.ChatConnectionForButler(butler, transport)
+	// Both narrowings are OPTIONAL. An Agent with a single bot needs
+	// neither, which is what the CLI documents; ?transport= picks
+	// between transports and ?connection=<external id> between an
+	// Agent's several bots on one (B7). Leaving either out used to
+	// match a transport named "" — nothing — so the queue of an Agent
+	// that had exactly one bot could not be read at all.
+	external := strings.TrimSpace(r.URL.Query().Get("connection"))
+	return s.DB.ChatConnectionForButler(butler, transport, external)
 }

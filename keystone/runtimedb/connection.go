@@ -74,10 +74,20 @@ func (db *DB) ChatConnectionAt(transport, externalID string) (Connection, error)
 		transport, externalID))
 }
 
-// ChatConnectionBySeq reads one by its seq, for a caller holding a stored
-// reference rather than an address.
+// ChatConnectionBySeq reads one by its seq, for a caller holding a
+// stored reference rather than an address.
+//
+// Live only, like its siblings. A binding, a queued message and a
+// question all keep the seq they were written with, and revoking an
+// address does not rewrite them — so without this a household rule
+// would resolve a recipient onto a bot nobody polls any more, queue the
+// message, and report success. The message would sit there until it
+// expired, with nothing anywhere saying it had not been sent. Refusing
+// is the honest answer: there is no longer a way to reach that person
+// at that Agent.
 func (db *DB) ChatConnectionBySeq(seq int64) (Connection, error) {
-	return scanChatConnection(db.sql.QueryRow(chatConnectionColumns+` WHERE a.seq = ?`, seq))
+	return scanChatConnection(db.sql.QueryRow(chatConnectionColumns+
+		` WHERE a.seq = ? AND a.revoked_at = ''`, seq))
 }
 
 const chatConnectionColumns = `SELECT a.seq, b.name, a.transport, a.external_id, a.label, b.surface
@@ -110,26 +120,56 @@ func (c Connection) AdmitsOwnersOnly() bool { return c.Surface == ButlerSurfaceA
 // that works and admits them somewhere they did not mean to go.
 var ErrAmbiguousConnection = errors.New("runtimedb: that agent has more than one connection on that transport")
 
-// ChatConnectionForButler resolves the live Connection an Agent answers on
-// for one transport.
-func (db *DB) ChatConnectionForButler(butler, transport string) (Connection, error) {
-	rows, err := db.sql.Query(chatConnectionColumns+`
-		 WHERE b.name = ? AND a.transport = ? AND a.revoked_at = ''
-		 ORDER BY a.seq`, butler, transport)
+// ChatConnectionsForButler lists the live Connections an Agent answers
+// on, for one transport or — with transport "" — for all of them.
+//
+// An empty transport means ANY rather than a transport named "": an
+// Agent with a single bot should not have to say which, and
+// `a.transport = ”` matches nothing, so the literal reading turned
+// "I did not need to say" into "no connection".
+func (db *DB) ChatConnectionsForButler(butler, transport string) ([]Connection, error) {
+	where := chatConnectionColumns + ` WHERE b.name = ? AND a.revoked_at = ''`
+	args := []any{butler}
+	if transport != "" {
+		where += ` AND a.transport = ?`
+		args = append(args, transport)
+	}
+	rows, err := db.sql.Query(where+` ORDER BY a.transport, a.seq`, args...)
 	if err != nil {
-		return Connection{}, fmt.Errorf("runtimedb: reading connections for %q: %w", butler, err)
+		return nil, fmt.Errorf("runtimedb: reading connections for %q: %w", butler, err)
 	}
 	defer rows.Close()
 	var found []Connection
 	for rows.Next() {
 		c, err := scanChatConnection(rows)
 		if err != nil {
-			return Connection{}, err
+			return nil, err
 		}
 		found = append(found, c)
 	}
-	if err := rows.Err(); err != nil {
+	return found, rows.Err()
+}
+
+// ChatConnectionForButler resolves the ONE live Connection an Agent
+// answers on, optionally narrowed to a transport and to a single bot by
+// its external id. An empty transport or id does not narrow.
+func (db *DB) ChatConnectionForButler(butler, transport, externalID string) (Connection, error) {
+	found, err := db.ChatConnectionsForButler(butler, transport)
+	if err != nil {
 		return Connection{}, err
+	}
+	if externalID != "" {
+		// Narrowing by id rather than looking the address up directly,
+		// because the answer has to be one of THIS Agent's: a bare
+		// (transport, external_id) lookup would resolve somebody else's
+		// bot and then need a second check to notice.
+		var narrowed []Connection
+		for _, c := range found {
+			if c.ExternalID == externalID {
+				narrowed = append(narrowed, c)
+			}
+		}
+		found = narrowed
 	}
 	switch len(found) {
 	case 0:
@@ -140,32 +180,13 @@ func (db *DB) ChatConnectionForButler(butler, transport string) (Connection, err
 		// The error NAMES the choices, because a caller that cannot see
 		// them cannot resolve the ambiguity: an operator told only
 		// "there is more than one" has been refused with no way
-		// forward. Every caller of this takes an external id to pick
-		// with, and these are the ids that work.
+		// forward. Each choice carries its transport too, since without
+		// one named they may differ.
 		ids := make([]string, 0, len(found))
 		for _, c := range found {
-			ids = append(ids, c.ExternalID)
+			ids = append(ids, c.Transport+"/"+c.ExternalID)
 		}
-		return Connection{}, fmt.Errorf("%w: %s answers on %d %s bots (%s) -- name which one",
-			ErrAmbiguousConnection, butler, len(found), transport, strings.Join(ids, ", "))
+		return Connection{}, fmt.Errorf("%w: %s answers on %d bots (%s) -- name which one",
+			ErrAmbiguousConnection, butler, len(found), strings.Join(ids, ", "))
 	}
-}
-
-// ListChatConnections returns every live Connection, newest last — the
-// operator's view of which Agent is reachable where.
-func (db *DB) ListChatConnections() ([]Connection, error) {
-	rows, err := db.sql.Query(chatConnectionColumns + ` WHERE a.revoked_at = '' ORDER BY b.name, a.transport, a.seq`)
-	if err != nil {
-		return nil, fmt.Errorf("runtimedb: listing connections: %w", err)
-	}
-	defer rows.Close()
-	var out []Connection
-	for rows.Next() {
-		c, err := scanChatConnection(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
 }
