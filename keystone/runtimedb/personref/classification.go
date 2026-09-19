@@ -303,6 +303,8 @@ var Columns = []Column{
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
 	{"butler_connection_scope", "revoked_by", Actor,
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
+	{"audience_members", "ref", PersonID,
+		"a person_id when kind = 'person', a group_id when kind = 'group' — the audience's members, keyed on the slice-6 namespace rather than on names (design §4, slice 7)"},
 	{"butler_debug_capture", "enabled_by", Actor,
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
 	{"butler_evaluations", "author", Actor,

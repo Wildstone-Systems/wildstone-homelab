@@ -256,9 +256,25 @@ func (r *Runner) label() string {
 	return r.PermissionLabel
 }
 
+// strictestAudience is the audience a run gets when it names none.
+//
+// Declared here rather than imported: this package does not depend on
+// keystone/runtimedb (see the note at the top — TaskLedger is an
+// interface defined here precisely so it does not), and one default
+// value is not worth inverting that.
+//
+// It MUST equal runtimedb.ButlerAudiencePrivate, and
+// TestTheDefaultAudienceMatchesTheStore fails if it stops doing so. Two
+// declarations of one value drift silently otherwise — and this one
+// drifts into writing an audience the schema does not know, which the
+// store refuses a long way from the line that chose it. Slice 7 turned
+// these from words into rows in `audiences`, which is how the literal
+// "private" that used to live here became wrong.
+const strictestAudience = "aud_owner"
+
 func (r *Runner) audience() string {
 	if r.Audience == "" {
-		return "private"
+		return strictestAudience
 	}
 	return r.Audience
 }

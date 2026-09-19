@@ -40,6 +40,7 @@ import (
 // and `created_at` mean the same thing wherever they appear, and a new
 // table reusing them needs no ceremony. A new name does.
 var dismissed = map[string]string{
+	"audience_id":         "names an audience — a disclosure rule, not a party; who it resolves to lives in audience_members.ref (design §10 layer 3)",
 	"group_id":            "names a group — a set of people, which is not itself a party; who is in it lives in person_group_members.person_id (design §4)",
 	"seed_key":            "names the ROLE a seeded group plays ('adults'), not a person and not the group's display name",
 	"butler":              "names a Butler — an agent, which is a different axis from a Person (#201 Decision 5)",

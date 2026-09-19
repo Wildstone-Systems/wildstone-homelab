@@ -25,6 +25,7 @@ import { groupServices, upstreamContainer , healthOf, GROUPS, groupOf, mappedCap
 import { healthOf as butlerHealthOf } from "../src/ui/status";
 import { eventKind } from "../src/ui/HourChart";
 import type { ConsoleSnapshot } from "../src/state";
+import { AUDIENCE_HOUSEHOLD, AUDIENCE_OWNER } from "../src/api";
 import type { BackupRun, ButlerSession, EventRow, Observed, PackageView, PlanRecord, ResourceView } from "../src/api";
 import { PlansView, PendingBand, PendingPlan, PlanSteps, ResolvedHistory } from "../src/views/Plans";
 import { Activity, ActivityView } from "../src/views/Activity";
@@ -1721,12 +1722,17 @@ check("it says why rather than offering a switch", goneTool.includes("has not wi
 // A4's crossover rule, which the store also enforces with a trigger.
 const priv = {
   seq: 1, name: "gym", adapter: "withings", ownership: "personal" as const, owner: "tom",
-  audience: "private" as const, actionsEnabled: false, indexingEnabled: true, cloudAllowed: false,
+  audience: AUDIENCE_OWNER, actionsEnabled: false, indexingEnabled: true, cloudAllowed: false,
   state: "ready" as const, leaseEpoch: 1,
 };
 check("a private connection is withheld from a household Butler", withheldFrom("family", priv).includes("private to tom"));
 check("an operator Butler may still be given it", withheldFrom("admin", priv) === "");
-check("a shared connection is offered to both", withheldFrom("family", { ...priv, audience: "shared" }) === "");
+check("a household connection is offered to both", withheldFrom("family", { ...priv, audience: AUDIENCE_HOUSEHOLD }) === "");
+// The vocabulary is open (slice 7): an audience nobody has seen before
+// is narrower than the household, so it is withheld rather than
+// offered. The old two-word check could not have caught this.
+check("an audience the Console does not know is withheld, not offered",
+  withheldFrom("family", { ...priv, audience: "aud_9f1c" }).includes("part of the household"));
 
 // WHAT BREAKS: counted, and every zero omitted.
 const lines = retireLines({

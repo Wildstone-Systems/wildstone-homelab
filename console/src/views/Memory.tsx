@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, type MemoryRecord } from "../api";
+import { api, audienceIsHousehold, audienceLabel, type MemoryRecord } from "../api";
 import { ErrorLine, useAction, useLoad, when } from "../lib";
 import { StatusPill } from "../ui/status";
 
@@ -100,7 +100,9 @@ function Record({ record, onChanged }: { record: MemoryRecord; onChanged: () => 
   const action = useAction();
   return (
     <li>
-      <StatusPill kind={record.audience === "shared" ? "ok" : "mute"}>{record.audience}</StatusPill>
+      <StatusPill kind={audienceIsHousehold(record.audience) ? "ok" : "mute"}>
+        {audienceLabel(record.audience)}
+      </StatusPill>
       <span>{record.content}</span>
       <span className="timeline-src">{record.kind}</span>
       <span className="timeline-src">
