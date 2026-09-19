@@ -10,21 +10,18 @@ import (
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/catalog"
+	"github.com/chickenrat17/wildstone-homelab/keystone/internal/fakesecret"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
-// Fake credentials, assembled at run time so no token-shaped literal
-// sits in the source for a secret scanner to find (and none is real).
+// Fake credentials with each platform's real prefix, built by
+// fakesecret so no token-shaped literal sits in the source.
 var (
-	telegramToken = fakeToken("123456:", "telegram")
-	slackBot      = fakeToken("xoxb-", "slack")
-	slackApp      = fakeToken("xapp-", "slack")
+	telegramToken = "123456:" + fakesecret.Token()
+	slackBot      = "xoxb-" + fakesecret.Token()
+	slackApp      = "xapp-" + fakesecret.Token()
 )
-
-func fakeToken(prefix, what string) string {
-	return prefix + "fake-" + what + "-" + strings.Repeat("0", 6)
-}
 
 // connectHarness is a one-machine household running the shipped catalog,
 // with a Member Agent (joan), an Owner Agent (alfred), an Owner (mika)

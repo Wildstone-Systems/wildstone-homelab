@@ -35,6 +35,10 @@ f663f34714f45f1cde50c73b37387960d5cf5ddb:keystone/redact/defectd_test.go:generic
 # credentials. They were invented and never valid. 52be9a5 assembles them
 # from obviously fake pieces at run time instead, so only this commit
 # carries them; each fingerprint pins one commit, file, rule and line.
+#
+# The shared helper this file asks for already existed
+# (keystone/internal/fakesecret) and bdd481a should have used it; the
+# tests use it now. The entries remain only because the commit does.
 bdd481ab8ce3d768772ba881e1977ea9bb4cc903:keystone/api/handlers_connections_test.go:generic-api-key:208
 bdd481ab8ce3d768772ba881e1977ea9bb4cc903:keystone/api/handlers_connections_test.go:generic-api-key:210
 bdd481ab8ce3d768772ba881e1977ea9bb4cc903:keystone/api/handlers_connections_test.go:generic-api-key:235
