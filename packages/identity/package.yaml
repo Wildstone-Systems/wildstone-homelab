@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: identity
-  version: 1.0.4
+  version: 1.0.5
   capability: identity
   profile: authelia-lldap
   exclusive: true
@@ -151,6 +151,12 @@ templates:
         # mailbox.
         LLDAP_LDAP_USER_EMAIL: "admin@{{ .Params.public_domain }}"
         LLDAP_LDAP_USER_PASS: "secret/lldap-admin-password"
+        # The secret is the source of truth for this password, and LLDAP
+        # otherwise reads it only when it first creates `admin`. The
+        # installer rotates the secret after the directory exists, so
+        # without this LLDAP keeps the old one and Authelia and the
+        # provisioning job are locked out.
+        LLDAP_FORCE_LDAP_USER_PASS_RESET: "always"
         LLDAP_JWT_SECRET: "secret/lldap-jwt-secret"
       mounts:
         - { source: lldap-data, target: /data }

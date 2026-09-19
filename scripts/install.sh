@@ -300,6 +300,7 @@ step_tailscale() {
 # The password is held in a variable for this run and never written to
 # the answers file: it is used to provision, and then forgotten.
 ADMIN_USER=""
+ADMIN_EMAIL=""
 ADMIN_PASS=""
 # Whether this install puts the Console behind the identity proxy.
 #
@@ -312,9 +313,15 @@ ADMIN_PASS=""
 # It follows the tailnet, because the package requires ingress:private
 # and that is the only ingress this installer offers.
 CONSOLE_BEHIND_PROXY=0
-# Where the proxy reaches Keystone, as address:port. Empty until the
-# tailnet address is known.
-KEYSTONE_ADDR=""
+# Where the proxy reaches Keystone's API, as address:port. Empty until
+# the tailnet address is known.
+#
+# NOT KEYSTONE_ADDR. That name is --keystone, the gateway a node joins,
+# and it is parsed before this line runs — so resetting it here emptied
+# it for every `--role node` run, including the one this installer makes
+# to pair its own host, and wardstoned started with `-keystone ` and no
+# value.
+KEYSTONE_API_ADDR=""
 step_admin() {
   echo
   echo "Now an account for you. This is what you will log in with, and"
@@ -344,6 +351,21 @@ step_admin() {
     esac
     break
   done
+  # LLDAP cannot create an account without an address, and Keystone
+  # refuses a member declared without one — so an installer that never
+  # asked stopped at the very step that makes somebody an Owner.
+  local e
+  while :; do
+    printf 'Email: ' >&2
+    read -r e </dev/tty || e=""
+    case "$e" in
+      *[[:space:]\"\\]*|"") echo "an email address is required" >&2; continue ;;
+      ?*@?*.?*) break ;;
+      *) echo "that does not look like an email address" >&2; continue ;;
+    esac
+  done
+  ADMIN_EMAIL="$e"
+  answers_save ADMIN_EMAIL "$e"
   while :; do
     printf 'Password: ' >&2; read -rs p1 </dev/tty; echo >&2
     printf 'Again:    ' >&2; read -rs p2 </dev/tty; echo >&2
@@ -389,7 +411,11 @@ step_summary() {
   echo "  - install the Wildstone control plane and node agent"
   [ "${WANT_TAILSCALE:-no}" = yes ] && echo "  - serve over your tailnet, with a certificate your browser trusts"
   echo "  - create your account '$ADMIN_USER'"
-  echo "  - install: identity, dashboard${SERVICES:+, $(echo "$SERVICES" | sed 's/media-jellyfin/jellyfin/g;s/photos-immich/photos/g;s/documents-paperless/documents/g;s/ /, /g')}"
+  # The household homepage needs the proxy, so it is only promised when
+  # there will be one.
+  local home=""
+  [ "${WANT_TAILSCALE:-no}" = yes ] && home=", household homepage"
+  echo "  - install: identity${home}${SERVICES:+, $(echo "$SERVICES" | sed 's/media-jellyfin/jellyfin/g;s/photos-immich/photos/g;s/documents-paperless/documents/g;s/ /, /g')}"
   echo
   echo "Approving here approves the plans this creates; they are recorded"
   echo "in the audit trail against your account."
@@ -824,6 +850,12 @@ wait_agent() {
 enable_capability() { # package params-json
   local r id st i
   r="$(api POST /api/v1/capabilities "{\"package\":\"$1\",\"params\":$2}")"
+  # A resumed install proposes what an earlier run already put in
+  # desired state. Keystone says so rather than making an empty plan,
+  # and that is this step already done, not a failure.
+  case "$r" in
+    *"no-op against current desired state"*) log "  $1: already installed"; return 0 ;;
+  esac
   id="$(echo "$r" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
   [ -n "$id" ] || fail "$1: $(echo "$r" | head -c 200)"
   api POST "/api/v1/plans/$id/approve" >/dev/null
@@ -916,7 +948,7 @@ lldap_login() { # username password
   docker run --rm --network "container:lldap" "$ALPINE_IMAGE" \
     wget -qO- --header 'Content-Type: application/json' \
       --post-data "{\"username\":\"$(json_escape "$1")\",\"password\":\"$(json_escape "$2")\"}" \
-      http://localhost:17170/auth/simple/login 2>/dev/null \
+      http://127.0.0.1:17170/auth/simple/login 2>/dev/null \
     | sed -n 's/.*"token":"\([^"]*\)".*/\1/p'
 }
 
@@ -936,7 +968,7 @@ set_owner_password() {
   [ -n "$token" ] || fail "could not log in to the directory to set '$ADMIN_USER' a password"
 
   docker exec -e LLDAP_USER_PASSWORD="$ADMIN_PASS" lldap \
-    /app/lldap_set_password --base-url http://localhost:17170 \
+    /app/lldap_set_password --base-url http://127.0.0.1:17170 \
     --token "$token" --username "$ADMIN_USER" >/dev/null 2>&1 \
     || fail "could not set the password for '$ADMIN_USER'"
 
@@ -968,6 +1000,38 @@ set_owner_password() {
 # The first Owner carries no permanent privilege afterwards. They are an
 # ordinary Owner, and the Last Owner invariant — not a flag — is what
 # keeps them irreplaceable until a second one exists (§2.4, §2.5).
+# The groups the first Owner is given behind the proxy: the Console's,
+# and the family homepage's.
+OWNER_GROUPS='"console_users","homepage_users"'
+
+# grant_owner_groups puts an ALREADY-declared first Owner in those
+# groups. A resumed install finds the account an earlier run created —
+# possibly before homepage-wildstone was installed, so without the group
+# that opens the page this install ends on. Not fatal: the account is
+# fine, and the Household screen can add the group; saying so beats
+# stopping an install that is otherwise done.
+grant_owner_groups() {
+  local r id st i
+  r="$(api PUT "/api/v1/household/members/$ADMIN_USER" "{\"groups\":[$OWNER_GROUPS]}" || true)"
+  case "$r" in
+    *"no-op against current desired state"*) return 0 ;;
+  esac
+  id="$(echo "$r" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+  if [ -z "$id" ]; then
+    log "WARNING: could not add '$ADMIN_USER' to $OWNER_GROUPS: $(echo "$r" | head -c 200)"
+    log "  add them on the Console's Household screen"
+    return 0
+  fi
+  api POST "/api/v1/plans/$id/approve" >/dev/null || fail "could not approve the group plan"
+  for i in $(seq 1 60); do
+    sleep 2
+    st="$(api GET "/api/v1/plans/$id" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+    [ "$st" = applied ] && { log "'$ADMIN_USER' added to $OWNER_GROUPS"; return 0; }
+    [ "$st" = failed ] && fail "the group plan for '$ADMIN_USER' failed; see journalctl -u keystone"
+  done
+  fail "the group plan for '$ADMIN_USER' did not apply in time"
+}
+
 create_first_owner() {
   log "creating the first owner '$ADMIN_USER'"
 
@@ -981,7 +1045,8 @@ create_first_owner() {
   declared="$(api GET /api/v1/household/members || true)"
   case "$declared" in
     *"\"username\":\"$ADMIN_USER\""*)
-      log "'$ADMIN_USER' is already declared; leaving the account as it is" ;;
+      log "'$ADMIN_USER' is already declared; leaving the account as it is"
+      [ "$CONSOLE_BEHIND_PROXY" = 1 ] && grant_owner_groups ;;
     *)
       # The group is requested only when the package that DECLARES it is
       # installed, and never otherwise.
@@ -994,12 +1059,16 @@ create_first_owner() {
       # Without the group, the first Owner reaches the Console on this
       # host and nowhere else; with it, they sign in through the proxy
       # as themselves.
+      #
+      # `homepage_users` is the same case: homepage-wildstone declares it,
+      # it too needs the proxy, and without it the first Owner lands on
+      # the family homepage the install just sent them to and is refused.
       local r id st i groups=""
       if [ "$CONSOLE_BEHIND_PROXY" = 1 ]; then
-        groups=',"groups":["console_users"]'
+        groups=",\"groups\":[$OWNER_GROUPS]"
       fi
       r="$(api POST /api/v1/household/members \
-        "{\"username\":\"$ADMIN_USER\",\"node\":\"$NODE_ID\"$groups}" || true)"
+        "{\"username\":\"$ADMIN_USER\",\"email\":\"$ADMIN_EMAIL\",\"node\":\"$NODE_ID\"$groups}" || true)"
       id="$(echo "$r" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
       [ -n "$id" ] || fail "could not propose the account for '$ADMIN_USER': $(echo "$r" | head -c 200)"
       api POST "/api/v1/plans/$id/approve" >/dev/null || fail "could not approve the account plan"
@@ -1097,7 +1166,9 @@ post_install() {
     log "installing ingress (tailnet, trusted certificate)"
     enable_capability ingress-tailnet-ts \
       "{\"node\":\"$NODE_ID\",\"tailnet_name\":\"$tsname\",\"listen_addr\":\"$tsaddr\"}"
-    DASHBOARD_URL="https://$tsname"
+    # The page itself, not the bare host: Keystone serves the Console at
+    # / and the household's homepage under /home/.
+    DASHBOARD_URL="https://$tsname/home/"
     # There is a proxy now, so the Console can sit behind it.
     #
     # The proxy reaches Keystone at this host's tailnet address, not at
@@ -1107,7 +1178,7 @@ post_install() {
     # across restarts, which a Docker bridge address is not guaranteed
     # to do.
     CONSOLE_BEHIND_PROXY=1
-    KEYSTONE_ADDR="$tsaddr:9441"
+    KEYSTONE_API_ADDR="$tsaddr:9441"
   else
     log "no tailnet: skipping ingress, services will be reachable on this host only"
     DASHBOARD_URL=""
@@ -1133,11 +1204,24 @@ post_install() {
   if [ "$CONSOLE_BEHIND_PROXY" = 1 ]; then
     log "installing the console route"
     enable_capability wildstone-console \
-      "{\"admin_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_ADDR\"}"
+      "{\"admin_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_API_ADDR\"}"
+    # The household's front door is Wildstone's own homepage, not the
+    # gethomepage profile of the same capability: that one only
+    # presents, and the family's own page — what needs a decision, what
+    # the house did, their files and their assistant — is served by
+    # Keystone (packages/homepage-wildstone). gethomepage stays in the
+    # catalog for a household that wants it.
+    #
+    # Here, with the Console, for the same two reasons: it needs the
+    # proxy in front of Keystone, and it declares homepage_users, which
+    # create_first_owner asks for. Without a tailnet there is no proxy,
+    # and no dashboard is installed — the old one was unreachable there
+    # too.
+    log "installing the household homepage"
+    enable_capability homepage-wildstone \
+      "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_API_ADDR\"}"
   fi
   create_first_owner
-  log "installing dashboard"
-  enable_capability dashboard "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\"}"
   for svc in $SERVICES; do
     log "installing $svc"
     enable_capability "$svc" "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\"}"
@@ -1244,7 +1328,7 @@ UNIT
     echo
     echo "Done."
     if [ -n "${DASHBOARD_URL:-}" ]; then
-      echo "  Your dashboard: $DASHBOARD_URL"
+      echo "  Your household's homepage: $DASHBOARD_URL"
       echo "  Sign in as '$ADMIN_USER' with the password you chose."
       if [ "$CONSOLE_BEHIND_PROXY" = 1 ]; then
         # Where the Console is, and the one way back in if the proxy
@@ -1265,7 +1349,7 @@ UNIT
       echo "  Tailscale to reach them from a browser."
     fi
     echo
-    echo "  Add family members from the dashboard's admin section."
+    echo "  Add family members on the Console's Household screen."
     exit 0
   fi
 

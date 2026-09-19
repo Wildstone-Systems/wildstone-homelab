@@ -52,8 +52,21 @@ func renderLdapUsers(desired []resource.Resource) []byte {
 		seen[u.Username] = true
 		groups := append([]string(nil), u.Groups...)
 		sort.Strings(groups)
+		// Never an empty field before the last. The job reads this with
+		// `IFS=<tab> read`, and tab is IFS whitespace, so two tabs in a
+		// row are ONE separator: an empty display name shifted the email
+		// into it, the groups into the email, and left no groups at all.
+		// The account was created with its group list as its address and
+		// was never put in a group, and the first Owner the installer
+		// created — who has no display name — was refused the homepage
+		// the install sent them to. The username is what LLDAP shows
+		// when there is no display name anyway.
+		display := u.DisplayName
+		if display == "" {
+			display = u.Username
+		}
 		lines = append(lines, strings.Join([]string{
-			u.Username, u.DisplayName, u.Email, strings.Join(groups, ","),
+			u.Username, display, u.Email, strings.Join(groups, ","),
 		}, "\t"))
 	}
 	sort.Strings(lines)

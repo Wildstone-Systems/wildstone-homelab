@@ -55,10 +55,17 @@ func authPolicyName(clientID string) string   { return clientID + "_groups" }
 // materialization; only Wardstone resolves references, on the node,
 // out of scope here.
 func renderAutheliaClients(desired []resource.Resource) []byte {
+	// Each client's policy is the one its posture enforces (see
+	// tailnetPolicy): the access rules and the OIDC clients must agree,
+	// or an app signs somebody in with a password that the page in front
+	// of it would not have. A copy, so desired state is not edited.
+	posture := ingressorigin.Of(desired)
 	clients := make([]*resource.OidcClientSpec, 0, len(desired))
 	for _, r := range desired {
 		if r.Kind == resource.KindOidcClient && r.OidcClient != nil {
-			clients = append(clients, r.OidcClient)
+			c := *r.OidcClient
+			c.AuthPolicy = tailnetPolicy(c.AuthPolicy, posture)
+			clients = append(clients, &c)
 		}
 	}
 	sort.Slice(clients, func(i, j int) bool { return clients[i].ClientId < clients[j].ClientId })

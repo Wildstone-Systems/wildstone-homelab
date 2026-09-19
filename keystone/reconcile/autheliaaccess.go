@@ -43,6 +43,30 @@ func accessPolicyFor(classification string) string {
 	}
 }
 
+// tailnetPolicy is the policy actually enforced under a posture.
+//
+// Under the tailnet posture a password is the whole sign-in: two_factor
+// becomes one_factor, everything else is unchanged ("deny" stays deny).
+//
+// Two reasons, and both are about that posture specifically. The
+// network is already a device factor: nothing reaches these ports but a
+// machine the household enrolled in its tailnet. And the posture cannot
+// honour a mixed policy anyway: every Route shares one hostname and
+// Authelia matches rules by hostname, so a single two_factor surface —
+// the Console — raised the family's homepage and every app to two_factor
+// with it. Enrolling a second factor then needs a one-time code the file
+// notifier writes to a file on the host that no family member can read,
+// so the household was locked out of its own front door.
+//
+// Every other posture has real hostnames, can tell surfaces apart, and
+// keeps the policy each package declared.
+func tailnetPolicy(policy string, posture ingressorigin.Posture) string {
+	if posture.TLS == "tailscale" && policy == "two_factor" {
+		return "one_factor"
+	}
+	return policy
+}
+
 // policyRank orders Authelia policies from most permissive to least, so
 // collapsing several Routes onto one domain can take the strictest.
 // Erring strict means a service can end up better protected than
@@ -86,6 +110,7 @@ func AccessPolicies(desired []resource.Resource) map[string]string {
 		default:
 			continue
 		}
+		policy = tailnetPolicy(policy, posture)
 		host := hostOf(r.Route.Host)
 		if stricter(policy, byDomain[host]) {
 			byDomain[host] = policy

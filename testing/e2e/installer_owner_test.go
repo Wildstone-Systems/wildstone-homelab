@@ -304,7 +304,8 @@ func TestInstallPutsTheConsoleBehindTheProxy(t *testing.T) {
 	}
 	// 3. The first Owner is put in the group, or they sign in through
 	// the proxy and Keystone refuses them.
-	if !strings.Contains(src, `"groups":["console_users"]`) {
+	if !strings.Contains(src, `OWNER_GROUPS='"console_users",`) ||
+		!strings.Contains(src, `"groups\":[$OWNER_GROUPS]`) {
 		t.Error("the first Owner is not put in console_users, so the proxy signs them " +
 			"in and the Console refuses them")
 	}
@@ -382,5 +383,138 @@ func TestTheConsolePackageIsInstalledBeforeTheFirstOwner(t *testing.T) {
 	if pkg > owner {
 		t.Error("wildstone-console is installed AFTER create_first_owner; the group " +
 			"it declares does not exist yet, so the Owner's proposal is refused")
+	}
+}
+
+// The install ends on the household's own homepage, not on gethomepage.
+//
+// Both are profiles of the one exclusive `dashboard` capability, so the
+// installer picks exactly one. It picks homepage-wildstone: the page
+// the family actually uses — what needs a decision, what the house did,
+// their files, their assistant — is served by Keystone, and gethomepage
+// only presents. The address it prints is that page, under /home/,
+// because Keystone serves the Console at /.
+func TestTheInstallLandsOnTheHouseholdHomepage(t *testing.T) {
+	src := installerSource(t)
+	if !strings.Contains(src, "enable_capability homepage-wildstone") {
+		t.Fatal("the household homepage is not installed")
+	}
+	if strings.Contains(src, "enable_capability dashboard ") {
+		t.Error("gethomepage is still installed by default; the two profiles are " +
+			"exclusive, so the household homepage would be refused")
+	}
+	if !strings.Contains(src, `DASHBOARD_URL="https://$tsname/home/"`) {
+		t.Error("the install does not send the operator to /home/; the bare host " +
+			"is the Console, not the family's page")
+	}
+	// Its group is requested for the first Owner, or the page the install
+	// just printed refuses the person who installed it.
+	if !strings.Contains(src, `OWNER_GROUPS='"console_users","homepage_users"'`) {
+		t.Error("the first Owner is not put in homepage_users")
+	}
+	// Installed before the Owner who is put in its group, for the reason
+	// TestTheConsolePackageIsInstalledBeforeTheFirstOwner gives.
+	pkg := strings.Index(src, "enable_capability homepage-wildstone")
+	owner := strings.LastIndex(src, "create_first_owner\n")
+	if owner < 0 || pkg > owner {
+		t.Error("homepage-wildstone is installed after create_first_owner, so " +
+			"homepage_users does not exist when the Owner asks for it")
+	}
+	// And only behind the proxy: it requires ingress, and its group must
+	// not be requested where it was never declared.
+	start := strings.LastIndex(src[:pkg], `if [ "$CONSOLE_BEHIND_PROXY" = 1 ]; then`)
+	if start < 0 || strings.Contains(src[start:pkg], "\n  fi\n") {
+		t.Error("homepage-wildstone is installed outside the CONSOLE_BEHIND_PROXY branch")
+	}
+}
+
+// LLDAP will not create an account without an email, and Keystone
+// refuses a member declared without one. An installer that never asked
+// stopped at the step that makes somebody an Owner, on every install.
+func TestTheInstallerAsksForTheOwnersEmail(t *testing.T) {
+	src := installerSource(t)
+	if !strings.Contains(src, `printf 'Email: '`) {
+		t.Error("the installer does not ask for the first Owner's email")
+	}
+	if !strings.Contains(src, `\"email\":\"$ADMIN_EMAIL\"`) {
+		t.Error("the first Owner's account is proposed without their email, " +
+			"which Keystone refuses")
+	}
+}
+
+// Resuming is a documented path (the answers file), and a resumed
+// install proposes what an earlier run already installed. Keystone
+// answers that with a no-op refusal, and treating it as a failure meant
+// no install could resume past its first finished step.
+func TestAResumedInstallSkipsWhatIsAlreadyInstalled(t *testing.T) {
+	src := installerSource(t)
+	idx := strings.Index(src, "enable_capability() {")
+	if idx < 0 {
+		t.Fatal("enable_capability is gone")
+	}
+	body := src[idx:]
+	if end := strings.Index(body, "\n}\n"); end > 0 {
+		body = body[:end]
+	}
+	if !strings.Contains(body, "no-op against current desired state") {
+		t.Error("enable_capability fails on a capability an earlier run installed")
+	}
+}
+
+// The directory is reached on 127.0.0.1, never "localhost". The helper
+// runs a busybox wget in LLDAP's network namespace, where localhost
+// resolves to ::1 first — and LLDAP listens on IPv4 only, so every
+// attempt was refused before a password was ever checked.
+func TestTheDirectoryIsReachedOverIPv4Loopback(t *testing.T) {
+	if strings.Contains(installerSource(t), "localhost:17170") {
+		t.Error("the installer reaches LLDAP as localhost, which resolves to ::1 " +
+			"where LLDAP is not listening")
+	}
+}
+
+// The installer rotates the directory's service password after LLDAP
+// has created `admin`, and LLDAP otherwise reads that password only at
+// creation. Without the forced reset the rotation never reaches the
+// directory, and Authelia and the provisioning job are locked out.
+func TestTheDirectoryAdoptsARotatedServicePassword(t *testing.T) {
+	raw, err := os.ReadFile("../../packages/identity/package.yaml")
+	if err != nil {
+		t.Fatalf("reading the identity package: %v", err)
+	}
+	if !strings.Contains(string(raw), `LLDAP_FORCE_LDAP_USER_PASS_RESET: "always"`) {
+		t.Error("LLDAP does not re-read its admin password at start, so the " +
+			"installer's rotation of secret/lldap-admin-password never takes")
+	}
+}
+
+// A variable a flag sets is never reset after the flags are parsed.
+//
+// The script is one flat file, so a top-level `NAME=""` placed below the
+// parsing loop silently discards whatever the operator passed. That is
+// how the Console's upstream address, declared as KEYSTONE_ADDR, emptied
+// --keystone for every `--role node` run: the installer paired its own
+// host with `-keystone ` and no value, and wardstoned refused to start.
+//
+// Only a bare re-assignment at column 0 counts. `NAME=$NAME` lines are
+// the env file the node role writes, which carries the flag through.
+func TestNoFlagIsResetAfterParsing(t *testing.T) {
+	src := installerSource(t)
+	loop := strings.Index(src, "while [ $# -gt 0 ]; do")
+	done := strings.Index(src[loop:], "\ndone\n")
+	if loop < 0 || done < 0 {
+		t.Fatal("could not find the flag-parsing loop")
+	}
+	parse, after := src[loop:loop+done], src[loop+done:]
+	for _, line := range strings.Split(parse, "\n") {
+		i := strings.Index(line, `="$2"`)
+		if i < 0 {
+			continue
+		}
+		name := strings.TrimSpace(line[strings.LastIndex(line[:i], " ")+1 : i])
+		for _, l := range strings.Split(after, "\n") {
+			if strings.HasPrefix(l, name+"=") && l != name+"=$"+name {
+				t.Errorf("%s is set by a flag and then reset after parsing: %q", name, l)
+			}
+		}
 	}
 }
