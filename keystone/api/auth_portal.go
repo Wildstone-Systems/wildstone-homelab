@@ -148,7 +148,7 @@ func (s *Server) portalMember(r *http.Request, surface portalSurface) (string, [
 	// proxy is refused before any header is read at all.
 	if !s.peerIsTrustedIngress(r) {
 		return "", nil, fmt.Errorf("%w: the request did not arrive from the identity proxy (peer %s, trusted %v)",
-			errPortalDenied, remoteHost(r), s.TrustedIngress)
+			errPortalDenied, remoteHost(r), s.TrustedIngressAddrs())
 	}
 	member := strings.TrimSpace(r.Header.Get(TrustedIngressHeader))
 	if member == "" {

@@ -43,7 +43,7 @@ func (h *harness) forwarded(method, path, user, groups string) *http.Response {
 // point: membership is managed where every other service's is.
 func TestTheConsoleGroupIsWhatGrantsTheConsole(t *testing.T) {
 	h := newHarness(t)
-	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 
 	if res := h.forwarded(http.MethodGet, "/api/v1/butlers", "giulia", ConsoleGroup); res.StatusCode != http.StatusOK {
 		t.Fatalf("a person in %s was refused the Console: %d", ConsoleGroup, res.StatusCode)
@@ -59,7 +59,7 @@ func TestTheConsoleGroupIsWhatGrantsTheConsole(t *testing.T) {
 // Every refusal, one condition at a time.
 func TestTheConsoleForwardAuthRefusesEverythingElse(t *testing.T) {
 	h := newHarness(t)
-	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 
 	for _, c := range []struct {
 		what, user, groups string
@@ -73,9 +73,9 @@ func TestTheConsoleForwardAuthRefusesEverythingElse(t *testing.T) {
 		{what: "the right headers from an untrusted peer", user: "mika", groups: ConsoleGroup, trusted: false},
 	} {
 		if !c.trusted {
-			h.s.TrustedIngress = nil
+			h.s.SetTrustedIngress(nil)
 		} else {
-			h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+			h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 		}
 		if res := h.forwarded(http.MethodGet, "/api/v1/butlers", c.user, c.groups); res.StatusCode != http.StatusUnauthorized {
 			t.Errorf("%s: got %d, want 401", c.what, res.StatusCode)
@@ -90,7 +90,7 @@ func TestTheConsoleForwardAuthRefusesEverythingElse(t *testing.T) {
 // than "this path trusts anybody".
 func TestTheConsoleForwardAuthIsOffUntilTheProxyIsNamed(t *testing.T) {
 	h := newHarness(t)
-	if len(h.s.TrustedIngress) != 0 {
+	if len(h.s.TrustedIngressAddrs()) != 0 {
 		t.Fatal("TrustedIngress is set by default; the header path would be live on a fresh install")
 	}
 	if res := h.forwarded(http.MethodGet, "/api/v1/butlers", "attacker", ConsoleGroup); res.StatusCode != http.StatusUnauthorized {
@@ -105,7 +105,7 @@ func TestTheConsoleForwardAuthIsOffUntilTheProxyIsNamed(t *testing.T) {
 // "console_users_readonly" everything "console_users" has.
 func TestTheConsoleGroupIsMatchedExactly(t *testing.T) {
 	h := newHarness(t)
-	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 
 	for _, groups := range []string{"console_users_readonly", "not_console_users", "console_user", "console_userss"} {
 		if res := h.forwarded(http.MethodGet, "/api/v1/butlers", "mika", groups); res.StatusCode != http.StatusUnauthorized {
@@ -126,7 +126,7 @@ func TestTheConsoleGroupIsMatchedExactly(t *testing.T) {
 // fallback.
 func TestABadTokenDoesNotFallThroughToTheHeaders(t *testing.T) {
 	h := newHarness(t)
-	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 
 	req, err := http.NewRequest(http.MethodGet, h.srv.URL+"/api/v1/butlers", nil)
 	if err != nil {
@@ -152,7 +152,7 @@ func TestABadTokenDoesNotFallThroughToTheHeaders(t *testing.T) {
 // is filed under one name.
 func TestAForwardedRequestIsAuditedUnderTheirOwnName(t *testing.T) {
 	h := newHarness(t)
-	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 
 	if res := h.forwarded(http.MethodGet, "/api/v1/butlers", "giulia", ConsoleGroup); res.StatusCode != http.StatusOK {
 		t.Fatalf("setup: %d", res.StatusCode)
@@ -272,7 +272,7 @@ func TestForwardedConsoleAuthRefusesAPersonWhoMayNotAdminister(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
-			h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+			h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 			tc.setup(t, h)
 			res := h.forwarded(http.MethodGet, "/api/v1/butlers", "consoleholder", ConsoleGroup)
 			if res.StatusCode != tc.want {
@@ -329,7 +329,7 @@ func TestForwardedConsoleAuthIsNotFooledByCapitalisation(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
-			h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+			h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 			// Recorded as a Member, so they may not hold the Console
 			// whatever the proxy spells them as.
 			if err := h.s.DB.RecordButlerMember(tc.recorded, runtimedb.RoleMember, "", ""); err != nil {
@@ -350,7 +350,7 @@ func TestForwardedConsoleAuthIsNotFooledByCapitalisation(t *testing.T) {
 // one the proxy meant, so the check refuses rather than guessing.
 func TestForwardedConsoleAuthRefusesAnAmbiguousHandle(t *testing.T) {
 	h := newHarness(t)
-	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 	for handle, role := range map[string]string{
 		"twin": runtimedb.RoleOwner,
 		"Twin": runtimedb.RoleMember,
@@ -552,7 +552,7 @@ func TestACredentialActingForNobodyIsUnaffected(t *testing.T) {
 // formalise.
 func TestTheBootstrapPathSurvivesRefusingUnknownNames(t *testing.T) {
 	h := newHarness(t)
-	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 
 	// Nothing provisioned: the group decides, so somebody can get in and
 	// create the first Owner.
@@ -597,7 +597,7 @@ func TestTheBootstrapPathSurvivesRefusingUnknownNames(t *testing.T) {
 // endpoint test above cannot tell the two apart. This one can.
 func TestAConsoleRefusalIsNotADegradedIdentity(t *testing.T) {
 	h := newHarness(t)
-	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 	// A Member who IS in the Console group: the central case, refused
 	// for who they are rather than for anything about the request.
 	if err := h.s.DB.RecordButlerMember("consoleholder", runtimedb.RoleMember, "", ""); err != nil {
@@ -645,14 +645,14 @@ func TestTheConsolePagesGateFollowsTheProxy(t *testing.T) {
 	}
 	req.RemoteAddr = "203.0.113.9:5555" // not the proxy
 
-	h.s.TrustedIngress = nil
+	h.s.SetTrustedIngress(nil)
 	if !h.s.ConsoleUIReachableFrom(req) {
 		t.Error("the Console's pages are gated with no identity proxy configured, " +
 			"which locks out every household that has none — the bearer token on " +
 			"the sign-in page is their only way in")
 	}
 
-	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 	if h.s.ConsoleUIReachableFrom(req) {
 		t.Error("the Console's pages are served to a peer that is not the proxy " +
 			"even though one is configured; the token path goes around Authelia")

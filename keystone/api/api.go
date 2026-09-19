@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
@@ -40,13 +41,22 @@ type Server struct {
 	State   *statefile.Store
 	Log     *slog.Logger
 
-	// TrustedIngress is the exact set of remote addresses the identity
+	// trustedIngress is the exact set of remote addresses the identity
 	// proxy speaks from (ADR-W030 A8.1). It gates the household review
-	// route, which trusts an identity header — and a header anyone can
-	// set is not an authentication. Empty means the household review
-	// path is unavailable rather than open: an unconfigured trust
-	// boundary must fail closed.
-	TrustedIngress []string
+	// route, the household portal and the Console — all of which trust
+	// an identity header, and a header anyone can set is not an
+	// authentication. Empty means those paths are unavailable rather
+	// than open: an unconfigured trust boundary must fail closed.
+	//
+	// Atomic, and unexported so it cannot be assigned past that, because
+	// it is no longer written once at startup. The reconciler refreshes
+	// it whenever the proxy's container address changes — Docker is free
+	// to hand a recreated container a different address, and a value
+	// fixed at install time would silently stop matching. Request
+	// goroutines read this on every call, so a plain field written by
+	// the reconcile loop would be a data race on the house's trust
+	// boundary.
+	trustedIngress atomic.Pointer[[]string]
 
 	// ProbeModel asks one model whether it can actually operate a tool,
 	// and is how a model earns the authority to do things (ADR-W017 A4).
@@ -925,4 +935,24 @@ func remoteHost(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// SetTrustedIngress replaces the addresses the identity proxy is
+// believed to speak from.
+//
+// Called at startup from the -household-ingress flag, and again by the
+// reconciler each time it learns the proxy container's address. The two
+// are the same act: this is the only statement about where the proxy
+// is, and the later one wins.
+func (s *Server) SetTrustedIngress(addrs []string) {
+	s.trustedIngress.Store(&addrs)
+}
+
+// TrustedIngressAddrs reports the current set, for logging and for the
+// refusal messages that name it. Callers must not mutate the result.
+func (s *Server) TrustedIngressAddrs() []string {
+	if v := s.trustedIngress.Load(); v != nil {
+		return *v
+	}
+	return nil
 }

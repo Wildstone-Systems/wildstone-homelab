@@ -400,6 +400,29 @@ message InspectContainerResult {
   // empty, which is indistinguishable from "no healthcheck defined" and
   // must be read as "no opinion" either way.
   string app_health = 6;
+
+  // The container's addresses on the Docker networks it is attached to
+  // (protocol minor 17), one per network, in no guaranteed order.
+  //
+  // This exists for exactly one caller and the field is narrow on
+  // purpose. Keystone must know which address the identity proxy will
+  // appear as, because a forwarded Remote-User is honoured only from
+  // that exact peer (ADR-W030 A8.1) — and an address pinned at install
+  // time goes stale the moment the reconciler recreates the container,
+  // which Docker is free to give a different address. A stale value
+  // does not degrade: forward-auth refuses everyone and the Console's
+  // own pages refuse everyone, so the household loses its control
+  // plane until somebody edits a flag by hand.
+  //
+  // Reported rather than inferred, because the alternatives are worse.
+  // A subnet would widen an exact-match trust boundary into a range,
+  // and a DNS name would let whatever answers the query decide who is
+  // trusted — both are the failure ADR-W030 A8.1 names.
+  //
+  // Empty from an agent older than minor 17, and empty is "unknown"
+  // rather than "no addresses": a reader must keep whatever it already
+  // had rather than concluding the proxy has gone.
+  repeated string ip_addresses = 7;
 }
 
 message PruneImages {}

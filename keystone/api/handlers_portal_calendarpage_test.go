@@ -44,7 +44,7 @@ func (f *fakeBook) DeleteEvent(_ context.Context, w caldav.EventWrite) (adapter.
 func calendarHarness(t *testing.T) (*harness, *fakeBook) {
 	t.Helper()
 	h := newHarness(t)
-	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 	if err := h.s.State.Put(resource.Resource{
 		ApiVersion: "wildstone.dev/v1", Kind: resource.KindLdapGroup,
 		Metadata:  resource.Metadata{Name: "calendar-users", Owner: "capability/calendar", Package: "calendar-radicale", Node: "n1"},
@@ -93,7 +93,7 @@ func TestTheCalendarPageIsForTheCalendarsGroup(t *testing.T) {
 	}
 
 	bare := newHarness(t)
-	bare.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	bare.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 	res := bare.member(http.MethodGet, "/calendar/", "mika", "calendar_users", nil, "")
 	res.Body.Close()
 	if res.StatusCode != http.StatusNotFound {

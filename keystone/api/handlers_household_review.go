@@ -586,14 +586,14 @@ func (s *Server) trustedIngressUser(r *http.Request) (string, bool) {
 // network, the list is short, and an exact match cannot be widened by a
 // DNS answer.
 func (s *Server) peerIsTrustedIngress(r *http.Request) bool {
-	if len(s.TrustedIngress) == 0 {
+	if len(s.TrustedIngressAddrs()) == 0 {
 		// Nothing configured means the household review path is not
 		// available, rather than available to everyone. An unconfigured
 		// trust boundary must fail closed.
 		return false
 	}
 	host := remoteHost(r)
-	for _, allowed := range s.TrustedIngress {
+	for _, allowed := range s.TrustedIngressAddrs() {
 		if allowed == host {
 			return true
 		}

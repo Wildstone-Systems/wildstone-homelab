@@ -241,7 +241,7 @@ func hasGroup(header, want string) bool {
 // deployments that cannot use Authelia. The gate arrives with the
 // proxy that makes it enforceable, and not before.
 func (s *Server) ConsoleUIReachableFrom(r *http.Request) bool {
-	if len(s.TrustedIngress) == 0 {
+	if len(s.TrustedIngressAddrs()) == 0 {
 		return true
 	}
 	return s.peerIsTrustedIngress(r)
