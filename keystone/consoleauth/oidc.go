@@ -148,8 +148,12 @@ func (p *Provider) AuthURL(ctx context.Context, state, nonce, challenge string, 
 		"code_challenge_method": {"S256"},
 	}
 	if forceLogin {
+		// prompt=login alone. max_age=0 reads as the same request, and is
+		// not: Authelia treats a zero max_age as "always sign in again",
+		// so even the sign-in it has just taken leaves the request
+		// unsatisfied, and the person is told it failed to confirm their
+		// identity after typing the right password (seen on 4.39.20).
 		q.Set("prompt", "login")
-		q.Set("max_age", "0")
 	} else if maxAge > 0 {
 		q.Set("max_age", fmt.Sprint(int64(maxAge/time.Second)))
 	}
