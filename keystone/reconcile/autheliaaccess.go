@@ -146,12 +146,16 @@ func renderAutheliaAccess(desired []resource.Resource) []byte {
 	// shares one hostname and differs by port, and Authelia matches
 	// `domain` against the hostname — so a port here would match nothing
 	// and we would have traded one silent deny for another.
-	type rule struct{ domain, policy string }
+	type rule struct {
+		domain, policy string
+		subjects       []string
+	}
 	byDomain := AccessPolicies(desired)
+	subjectsByDomain := AccessSubjects(desired)
 
 	rules := make([]rule, 0, len(byDomain))
 	for domain, policy := range byDomain {
-		rules = append(rules, rule{domain, policy})
+		rules = append(rules, rule{domain, policy, subjectsByDomain[domain]})
 	}
 	// Sorted so the file is a pure function of desired state: an
 	// unstable order would rewrite the file, and restart Authelia,
@@ -171,6 +175,109 @@ func renderAutheliaAccess(desired []resource.Resource) []byte {
 	for _, r := range rules {
 		b.WriteString("    - domain: " + r.domain + "\n")
 		b.WriteString("      policy: " + r.policy + "\n")
+		// A subject list turns "any authenticated household member" into
+		// "a member of one of these groups". Emitted ONLY where the
+		// capability declared directory groups, so a host that declared
+		// none behaves exactly as it did before slice 8.
+		//
+		// Authelia reads the subject list as OR, which is what an
+		// entitlement means: a capability may declare more than one
+		// group, and being in any of them admits you.
+		if len(r.subjects) > 0 {
+			b.WriteString("      subject:\n")
+			for _, subject := range r.subjects {
+				b.WriteString("        - 'group:" + subject + "'\n")
+			}
+		}
 	}
 	return []byte(b.String())
+}
+
+// AccessSubjects maps a served hostname to the directory groups that may
+// reach it (ADR-W033 design §4, slice 8).
+//
+// THE ENFORCEMENT #209 ASKS FOR, for forward-auth Routes. Until now a
+// rule carried a policy and no subject, so any household member Authelia
+// admitted at that factor reached every such app — access was whatever
+// the LDAP groups happened to say, and nothing said it.
+//
+// SILENT WHERE NOTHING WAS DECLARED, and that restraint is the whole
+// safety of it. A subject list on a host whose group is empty denies
+// EVERYONE, so the rule is emitted only for a capability that declared
+// directory groups of its own. A capability that declared none keeps the
+// behaviour it has today rather than being locked shut by an upgrade
+// that added a field.
+//
+// The groups come from the LdapGroup resources the capability owns —
+// the same derivation the membership projection uses, so what Authelia
+// demands and what the directory is given cannot disagree.
+func AccessSubjects(desired []resource.Resource) map[string][]string {
+	groupsByCapability := map[string][]string{}
+	for _, r := range desired {
+		if r.Kind != resource.KindLdapGroup || r.LdapGroup == nil || r.LdapGroup.Name == "" {
+			continue
+		}
+		if c, ok := strings.CutPrefix(r.Metadata.Owner, "capability/"); ok && c != "" {
+			groupsByCapability[c] = append(groupsByCapability[c], r.LdapGroup.Name)
+		}
+	}
+	if len(groupsByCapability) == 0 {
+		return nil
+	}
+
+	posture := ingressorigin.Of(desired)
+	out := map[string][]string{}
+	for _, r := range desired {
+		if r.Kind != resource.KindRoute || r.Route == nil {
+			continue
+		}
+		// Only forward-auth. `app_oidc` is gated by the OIDC client's
+		// own policy, `app_ldap` by the app's search filter, and
+		// `portal` bypasses Authelia because Keystone decides it
+		// in-process — a subject on any of those would be enforcement
+		// in the wrong place or none at all.
+		if r.Route.Auth != "authelia_oidc" {
+			continue
+		}
+		capability, ok := strings.CutPrefix(r.Metadata.Owner, "capability/")
+		if !ok {
+			continue
+		}
+		groups := groupsByCapability[capability]
+		if len(groups) == 0 {
+			continue
+		}
+		host := posture.SiteAddress(r.Route.Host)
+		if h, _, cut := strings.Cut(host, ":"); cut {
+			host = h
+		}
+		out[host] = append(out[host], groups...)
+	}
+	// Several Routes may share a hostname under the tailnet posture, so
+	// the lists merge — and a union is right: each Route's own
+	// capability admits its own people, and a host serving two services
+	// admits the union of them. Sorted and deduped so the file is a pure
+	// function of desired state and does not restart Authelia on ticks
+	// where nothing changed.
+	for host, groups := range out {
+		sort.Strings(groups)
+		out[host] = dedupeStrings(groups)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func dedupeStrings(sorted []string) []string {
+	if len(sorted) == 0 {
+		return nil
+	}
+	out := sorted[:1]
+	for _, s := range sorted[1:] {
+		if s != out[len(out)-1] {
+			out = append(out, s)
+		}
+	}
+	return out
 }

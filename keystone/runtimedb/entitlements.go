@@ -397,3 +397,26 @@ func scanEntitlements(rows *sql.Rows, service string) ([]Entitlement, error) {
 	}
 	return out, nil
 }
+
+// ServicesWithEntitlements lists every service any decision names,
+// dormant ones included.
+//
+// The dormant ones are the point: this is what the reconciling pass
+// compares against what is installed, and a service that has gone away
+// is exactly the one whose rows need marking inert.
+func (db *DB) ServicesWithEntitlements() ([]string, error) {
+	rows, err := db.sql.Query(`SELECT DISTINCT service FROM service_entitlements ORDER BY service`)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing services with entitlements: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, fmt.Errorf("runtimedb: listing services with entitlements: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}

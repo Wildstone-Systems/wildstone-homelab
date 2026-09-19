@@ -94,6 +94,7 @@ export interface LdapUserSpec {
   displayName?: string;
   email?: string;
   groups?: string[];
+  revoke?: string[];
 }
 
 export interface IngressSpec {

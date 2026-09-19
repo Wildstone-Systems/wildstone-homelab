@@ -303,6 +303,8 @@ var Columns = []Column{
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
 	{"butler_connection_scope", "revoked_by", Actor,
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
+	{"projected_memberships", "person_id", PersonID,
+		"the Person whose directory membership Wildstone placed; recorded as an identity because projection resolves a directory account to a Person by handle and must not store the name it matched on (design §4, slice 8)"},
 	{"service_entitlements", "subject", PersonID,
 		"a person_id when subject_kind = 'person', a group_id when subject_kind = 'group' — who an entitlement is about, keyed on the slice-6 namespace rather than on names (design §4, slice 8)"},
 	{"service_entitlements", "created_by", Actor,

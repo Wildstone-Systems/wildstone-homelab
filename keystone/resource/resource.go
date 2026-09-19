@@ -716,6 +716,22 @@ type LdapUserSpec struct {
 	DisplayName string   `yaml:"displayName,omitempty"`
 	Email       string   `yaml:"email,omitempty"`
 	Groups      []string `yaml:"groups,omitempty"`
+	// Revoke names memberships the provisioner must TAKE AWAY.
+	//
+	// DERIVED, NEVER DECLARED. A package must not write this and lint
+	// refuses one that does: it is set by the entitlement projection
+	// (slice 8) on a copy of desired state, and every name in it is a
+	// membership recorded in projected_memberships — one Wildstone
+	// placed itself and no longer wants.
+	//
+	// That restriction is the whole safety argument for reversing the
+	// additive-only posture. The objection this file records above is
+	// to a control plane removing what it did not add; a revocation
+	// list that can only ever name Wildstone's own assertions removes
+	// nothing a person put there. Your sister stays in photos_users,
+	// because nothing ever claimed her and so nothing can list her
+	// here.
+	Revoke []string `yaml:"revoke,omitempty"`
 }
 
 // backupSchedules is the closed set of BackupPlanSpec.Schedule values.
@@ -1491,6 +1507,26 @@ func validateLdapUser(r *Resource) error {
 		if !ldapGroupNameRegexp.MatchString(g) {
 			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.groups",
 				Msg: "group " + g + " is not a valid LLDAP group name"}
+		}
+	}
+	revoking := map[string]bool{}
+	for _, g := range r.LdapUser.Revoke {
+		if !ldapGroupNameRegexp.MatchString(g) {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.revoke",
+				Msg: "group " + g + " is not a valid LLDAP group name"}
+		}
+		revoking[g] = true
+	}
+	// Asking for a membership and its removal in one breath is not a
+	// precedence puzzle to settle at the far end, in a shell script, on
+	// a node. It is a projection that contradicted itself, and the only
+	// safe reading of it — do neither — is also the one that hides the
+	// bug. Refuse it here, where the contradiction is visible.
+	for _, g := range r.LdapUser.Groups {
+		if revoking[g] {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.revoke",
+				Msg: "group " + g + " is in both groups and revoke — one of them is wrong, and " +
+					"deciding which at the provisioner would make the contradiction invisible"}
 		}
 	}
 	if d := r.LdapUser.DisplayName; d != "" && !ldapDisplayNameRegexp.MatchString(d) {

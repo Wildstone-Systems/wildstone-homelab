@@ -1,10 +1,12 @@
 package pkgtool
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
@@ -195,5 +197,58 @@ func TestNoTwoCapabilitiesDeclareOneResource(t *testing.T) {
 					k.Kind, k.Name, cs[0].pkg, cs[0].capability, c.pkg, c.capability)
 			}
 		}
+	}
+}
+
+// Every profile of a capability declares the same audience (ADR-W033
+// design §4, slice 8).
+//
+// An entitlement is about the CAPABILITY, not the package: a household
+// that swaps one photos profile for another has not changed who may see
+// the photos. So the reconcile loop keeps one audience per capability
+// and never has to choose between profiles — and this is what makes
+// that a fact rather than an assumption.
+//
+// Two profiles disagreeing would not fail loudly. The loop would take
+// whichever the catalog walk reached last, so the household's access
+// would depend on a map iteration order, and switching profiles could
+// silently widen or narrow who may use the service. That is the kind of
+// difference nobody notices until somebody reaches something.
+//
+// A profile that declares nothing is not a disagreement: it has said
+// nothing, and the seeding pass treats an empty declaration as "this
+// service names no audience of its own".
+func TestProfilesOfACapabilityDeclareTheSameAudience(t *testing.T) {
+	byCapability := map[string]map[string]string{} // capability -> audience -> package
+	for _, dir := range packageDirs(t) {
+		pkg, err := pkgspec.Load(filepath.Join(dir, "package.yaml"))
+		if err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		if len(pkg.AccessGroups) == 0 {
+			continue
+		}
+		groups := append([]string(nil), pkg.AccessGroups...)
+		sort.Strings(groups)
+		audience := strings.Join(groups, ",")
+		if byCapability[pkg.Metadata.Capability] == nil {
+			byCapability[pkg.Metadata.Capability] = map[string]string{}
+		}
+		byCapability[pkg.Metadata.Capability][audience] = pkg.Metadata.Name
+	}
+	for capability, audiences := range byCapability {
+		if len(audiences) <= 1 {
+			continue
+		}
+		var said []string
+		for audience, pkg := range audiences {
+			said = append(said, fmt.Sprintf("%s says [%s]", pkg, audience))
+		}
+		sort.Strings(said)
+		t.Errorf("capability %q has profiles that disagree about who it is for: %s.\n"+
+			"An entitlement is keyed on the capability, so the loop keeps one "+
+			"audience for it and would take whichever the catalog walk reached "+
+			"last — making a household's access depend on map iteration order.",
+			capability, strings.Join(said, "; "))
 	}
 }

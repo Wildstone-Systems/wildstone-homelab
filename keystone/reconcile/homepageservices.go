@@ -365,6 +365,13 @@ type homepageEntry struct {
 	// name is the Route's resource name, kept only to disambiguate two
 	// services that resolve to the same title.
 	name string
+	// capability is what the Route belongs to, so a per-member surface
+	// can ask whether that member is entitled to it (slice 8).
+	//
+	// PRESENTATION ONLY where it is used. Hiding a card is not a
+	// refusal, and §18.2 requires a direct URL to be denied regardless
+	// of what the launcher drew.
+	capability string
 	// container and node are what the Route points at, and they are here
 	// for the Wildstone dashboard profile rather than for the rendered
 	// YAML: Homepage discovers whether an app answers by dialling it
@@ -479,9 +486,10 @@ func homepageEntries(desired []resource.Resource) []homepageEntry {
 		}
 
 		e := homepageEntry{
-			group: homepageGroup(r.Route.Classification),
-			href:  "https://" + routeSiteAddress(posture, r.Route.Host),
-			name:  r.Metadata.Name,
+			group:      homepageGroup(r.Route.Classification),
+			href:       "https://" + routeSiteAddress(posture, r.Route.Host),
+			name:       r.Metadata.Name,
+			capability: owner,
 		}
 		if card, portal := portalCardFor(r.Metadata.Package); portal {
 			// A household surface, not an application: the card's link

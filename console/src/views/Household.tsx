@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PersonGroups } from "./PersonGroups";
 import { CaretRight, Check } from "@phosphor-icons/react";
 import { api, HouseholdGroup, HouseholdMember, PackageView, PlanRecord } from "../api";
 import { ErrorLine, useLoad } from "../lib";
@@ -94,6 +95,11 @@ export function Household() {
           ))}
         </tbody>
       </table>
+      {/* The household's own groups, under the accounts they are about
+          and clearly apart from the directory groups in the table
+          above. */}
+      <PersonGroups members={(members.data ?? []).map((m) => m.username)} />
+
       {current && (
         <EditMember
           authOrigin={authOrigin}
