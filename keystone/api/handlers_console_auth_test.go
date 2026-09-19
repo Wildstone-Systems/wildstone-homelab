@@ -652,13 +652,52 @@ func TestTheConsolePagesGateFollowsTheProxy(t *testing.T) {
 			"the sign-in page is their only way in")
 	}
 
-	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
+	h.s.SetTrustedIngress([]string{"172.18.0.4"})
 	if h.s.ConsoleUIReachableFrom(req) {
 		t.Error("the Console's pages are served to a peer that is not the proxy " +
 			"even though one is configured; the token path goes around Authelia")
 	}
-	req.RemoteAddr = "127.0.0.1:5555" // the proxy
+	req.RemoteAddr = "172.18.0.4:5555" // the proxy
 	if !h.s.ConsoleUIReachableFrom(req) {
 		t.Error("the Console's pages are refused to the proxy itself")
+	}
+}
+
+// The host itself is always served, and this is the case that decides
+// whether the gate is a boundary or a lockout.
+//
+// -api-listen defaults to 127.0.0.1:9441, so on a default deployment
+// the Console answers only on loopback and NO container can reach it,
+// the proxy included. Gating on the proxy alone would refuse the local
+// browser and admit nobody through the proxy either — the Console
+// unreachable by any road, arriving the moment an ingress is installed,
+// because the reconciler now supplies the proxy's address by itself.
+//
+// The LAN case is asserted in the same test rather than separately,
+// because the two are one claim: loopback is let in precisely because
+// it is not the caller this defends against, and a client on an
+// -api-listen 0.0.0.0 port still is.
+func TestTheConsolePagesAreAlwaysServedToTheHostItself(t *testing.T) {
+	h := newHarness(t)
+	h.s.SetTrustedIngress([]string{"172.18.0.4"})
+
+	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, local := range []string{"127.0.0.1:5555", "[::1]:5555", "127.0.0.53:5555"} {
+		req.RemoteAddr = local
+		if !h.s.ConsoleUIReachableFrom(req) {
+			t.Errorf("refused the host itself (%s): with -api-listen on loopback "+
+				"nothing else can reach the Console at all", local)
+		}
+	}
+	// And the boundary still holds for everyone else.
+	for _, remote := range []string{"192.168.1.50:5555", "100.64.0.9:5555"} {
+		req.RemoteAddr = remote
+		if h.s.ConsoleUIReachableFrom(req) {
+			t.Errorf("served the Console to %s; on -api-listen 0.0.0.0 that is the "+
+				"direct LAN/tailnet reach ADR-W032 calls total if got wrong", remote)
+		}
 	}
 }
