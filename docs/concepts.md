@@ -688,3 +688,36 @@ point of the split:
 they arrive as packages, and each one is two separate bots against these
 two endpoints, never one bot deciding for itself which side of the house
 a message belongs to.
+
+## Themes belong to a person
+
+A household has a colour: `accentHue` in the dashboard capability's
+`settings.yaml`, which is desired state, which is where the house's own
+colour belongs.
+
+A **theme** is not that. It is the ground somebody reads on, and the
+people in one household do not agree about it. So a theme is chosen per
+person, stored against their `person_id`, and it follows them across
+every Wildstone screen — the household dashboard, the Assistant, Files,
+the calendar, the Console. Nobody else in the house sees it, and there
+is no administrative override: an Owner decides which themes *exist*,
+each person decides which one they read on (ADR-W036).
+
+Themes are [Omarchy](https://omarchy.org) palettes. Twenty-two ship in
+the Keystone binary — Tokyo Night, Catppuccin, Everforest, Gruvbox,
+Kanagawa, Nord, Rosé Pine and the rest — and an Owner can add any other
+by pasting its `colors.toml` (Console → the palette button in the rail →
+Add a theme). Nothing is cloned, fetched or executed: a theme is
+twenty-odd hex values, and the rest of an Omarchy theme configures
+programs Wildstone does not run.
+
+What a palette does not supply, Wildstone derives: card grounds, drawer
+grounds, muted ink, hairlines, status tints and shadow rings. Every pair
+that carries text is held to WCAG AA against every ground it appears on,
+and body copy to AAA — a palette that misses is nudged along its own hue
+until it clears, rather than refused. Status colours stay semantic
+whatever the palette calls them, because an operator has to be able to
+tell "this is fine" from "this is broken".
+
+Choosing nothing is the resting state, and it renders as Wildstone's own
+look: the household's hue, through the stylesheets that already ship.

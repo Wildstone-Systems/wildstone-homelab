@@ -9,6 +9,13 @@ token swap, one accent, and three status colours deliberately disjoint from
 it. Nothing is fetched at runtime — the font is bundled, because this is the
 screen you open when the house is broken.
 
+That token swap is also the seam a whole theme fits into (ADR-W036). The
+palette button in the rail footer sets the theme this person reads on, here
+and on the household dashboard both; `src/theme.ts` applies the block
+Keystone derives and deliberately computes no colour of its own, because the
+contrast floors behind those values are the ones `contrast-check.mjs` holds
+this sheet to and two implementations of a rule is one of them being wrong.
+
 ## Checks
 
 Neither needs a browser or a running control plane, and both run in CI:
