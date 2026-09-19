@@ -128,6 +128,7 @@ func main() {
 	defer stop()
 
 	a := &adapter{
+		guard:     newGuard(log),
 		keystone:  &keystoneClient{Base: *apiBase, Token: token},
 		transport: transport,
 		log:       log,
@@ -165,6 +166,8 @@ func newTransport(name string, pollWait time.Duration) (Transport, error) {
 // adapter is the whole program: two loops that never share state beyond
 // the client and the transport.
 type adapter struct {
+	// guard drops floods before they reach Keystone (guard.go).
+	guard     *guard
 	keystone  *keystoneClient
 	transport Transport
 	log       *slog.Logger
@@ -272,16 +275,24 @@ func (a *adapter) handle(ctx context.Context, m Incoming) {
 	if wasStart && strings.TrimSpace(text) == "" && !m.Group {
 		return
 	}
-	if code, ok := claimCodeIn(text); ok && !m.Group {
+	key, isKey := claimCodeIn(text)
+	isKey = isKey && !m.Group
+	if a.guard != nil && !a.guard.admit(m.Account, isKey) {
+		return
+	}
+	if code, ok := key, isKey; ok {
 		if err := a.keystone.redeem(ctx, a.transport.Name(), m.Account, m.DisplayName, m.Conversation, code); err != nil {
 			a.log.Info("claim refused", "account", m.Account)
 			return
+		}
+		if a.guard != nil {
+			a.guard.markKnown(m.Account)
 		}
 		a.reply(ctx, m.Conversation, "You're connected. Ask me something.")
 		a.log.Info("account bound", "account", m.Account)
 		return
 	}
-	if err := a.keystone.send(ctx, keystoneInbound{
+	bound, err := a.keystone.send(ctx, keystoneInbound{
 		Transport:    a.transport.Name(),
 		Account:      m.Account,
 		Conversation: m.Conversation,
@@ -290,7 +301,14 @@ func (a *adapter) handle(ctx context.Context, m Incoming) {
 		Text:         m.Text,
 		MessageID:    m.MessageID,
 		DisplayName:  m.DisplayName,
-	}); err != nil {
+	})
+	switch {
+	case err == nil && bound && a.guard != nil:
+		a.guard.markKnown(m.Account)
+	case err == nil && a.guard != nil:
+		a.guard.markUnknown(m.Account)
+	}
+	if err != nil {
 		// Logged, not said: the adapter cannot tell whether the sender is
 		// somebody the household knows, and a stranger learns nothing
 		// from an outage either.

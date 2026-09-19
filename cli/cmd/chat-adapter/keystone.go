@@ -55,9 +55,20 @@ type outboundMessage struct {
 	Body   string `json:"body"`
 }
 
-func (k *keystoneClient) send(ctx context.Context, msg keystoneInbound) error {
-	_, err := k.call(ctx, http.MethodPost, "/api/v1/chat/messages", msg)
-	return err
+// send relays one message and reports whether Keystone knows the
+// account: bound is false for somebody the household never introduced.
+func (k *keystoneClient) send(ctx context.Context, msg keystoneInbound) (bound bool, err error) {
+	data, err := k.call(ctx, http.MethodPost, "/api/v1/chat/messages", msg)
+	if err != nil {
+		return false, err
+	}
+	var out struct {
+		Bound bool `json:"bound"`
+	}
+	if json.Unmarshal(data, &out) != nil {
+		return false, nil
+	}
+	return out.Bound, nil
 }
 
 // redeem exchanges a claim code for a binding. It reports the DIRECT

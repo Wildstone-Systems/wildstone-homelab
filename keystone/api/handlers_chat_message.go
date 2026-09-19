@@ -151,6 +151,24 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// This is the automation engine's claim-before-dispatch shape
 	// (ADR-W024 H4), and the same deliberate trade: at-most-once, since
 	// a duplicated action is worse than a missed one.
+	// Who is this? Asked BEFORE the message is claimed, so a stranger's
+	// message costs a lookup and nothing else: no claim row, no session,
+	// no reply (ADR-W033 B9.1). What the household keeps is a note that
+	// somebody tried — at most one per account per ten minutes, and a
+	// bot being flooded by many accounts stops being noted at all past
+	// its own budget, so a flood cannot grow the database either.
+	binding, err := s.DB.LookupChatBinding(at, account)
+	if err != nil {
+		if s.limiter.take(fmt.Sprintf("\x00unknown:%d", at.Seq), unknownBurst, unknownPerSec) &&
+			s.limiter.take(fmt.Sprintf("\x00unknownnote:%d:%s", at.Seq, account), 1, 1.0/600) {
+			s.recordEvent("chat.unknown_account", at.ExternalID,
+				"a message from an account nobody introduced; nothing was said back",
+				map[string]string{"account": account, "agent": at.Butler})
+		}
+		return inboundResponse{Accepted: true, Bound: false,
+			Reason: "no admission for this account on this connection"}, http.StatusAccepted, nil
+	}
+
 	claimKey := chatDedupe(at, conversation, msg.MessageID, "inbound", text)
 	claimed, priorSeq, err := s.DB.ClaimChatInbound(claimKey, at.Surface)
 	if err != nil {
@@ -172,21 +190,6 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 			}
 		}
 	}()
-
-	binding, err := s.DB.LookupChatBinding(at, account)
-	if err != nil {
-		// Nothing at all, and no session row (ADR-W033 B9.1, amending
-		// ADR-W026 A4's one-line reply). A stranger learns nothing from
-		// the bot — not that it is a household's, not how to get in. The
-		// household can see that somebody tried: the account and the
-		// connection are recorded, never what they said.
-		s.recordEvent("chat.unknown_account", at.ExternalID,
-			"a message from an account nobody introduced; nothing was said back",
-			map[string]string{"account": account, "agent": at.Butler})
-		s.settleInbound(claimKey, 0, &settled)
-		return inboundResponse{Accepted: true, Bound: false,
-			Reason: "no admission for this account on this connection"}, http.StatusAccepted, nil
-	}
 
 	// Group rules (ADR-W026 A7). The operator surface refuses outright;
 	// the family surface answers, with the audience declared to it.
