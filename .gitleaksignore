@@ -28,3 +28,13 @@ f663f34714f45f1cde50c73b37387960d5cf5ddb:keystone/redact/defectd_test.go:generic
 # if a third entry is ever needed, that practice is not holding and the
 # answer is a shared helper, not another line in this file.
 9540e441bc6e301ccb932d7857f1c1f0415681f7:wardstone/internal/agent/materialize_test.go:private-key:279
+
+# Same class again (#269). bdd481a's connection tests wrote fake Slack
+# tokens ("xoxb-" / "xapp-" plus digits) beside keys named botToken and
+# appToken, to prove the connect form rejects swapped or missing Slack
+# credentials. They were invented and never valid. 52be9a5 assembles them
+# from obviously fake pieces at run time instead, so only this commit
+# carries them; each fingerprint pins one commit, file, rule and line.
+bdd481ab8ce3d768772ba881e1977ea9bb4cc903:keystone/api/handlers_connections_test.go:generic-api-key:208
+bdd481ab8ce3d768772ba881e1977ea9bb4cc903:keystone/api/handlers_connections_test.go:generic-api-key:210
+bdd481ab8ce3d768772ba881e1977ea9bb4cc903:keystone/api/handlers_connections_test.go:generic-api-key:235
