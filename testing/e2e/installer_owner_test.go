@@ -271,3 +271,84 @@ func TestTheDirectoryServiceAccountPasswordIsGenerated(t *testing.T) {
 		}
 	}
 }
+
+// The Console is put behind the identity proxy, and the four decisions
+// that make that true agree with each other.
+//
+// Each one alone is inert, and that is why they are asserted together.
+// The route needs a listener the proxy can dial; the group needs the
+// package that declares it; the first Owner needs the group; and every
+// one of them needs an ingress to exist at all. A change that keeps
+// three and drops the fourth produces an install that completes and a
+// Console that cannot be reached, with nothing on the way saying so.
+//
+// This is a structural test over a script that cannot be run here, so
+// it proves the pieces are present and consistent — not that they work.
+// The PR says the same in plainer words. #256 is the precedent and also
+// the warning: its shell changes drew ten review findings, three of
+// which would have broken every install, and none were reachable
+// without a host.
+func TestInstallPutsTheConsoleBehindTheProxy(t *testing.T) {
+	src := installerSource(t)
+
+	// 1. The listener moves where a container can dial it. Without this
+	// the rendered route points at the proxy's own loopback.
+	if !strings.Contains(src, "-api-listen 0.0.0.0:9441") {
+		t.Error("the API still listens only on loopback, so the proxy cannot reach it " +
+			"and the Console route can never connect")
+	}
+	// 2. The package that declares BOTH the group and the route.
+	if !strings.Contains(src, "enable_capability wildstone-console") {
+		t.Error("wildstone-console is not installed, so console_users and the route " +
+			"that puts Authelia in front of the Console do not exist")
+	}
+	// 3. The first Owner is put in the group, or they sign in through
+	// the proxy and Keystone refuses them.
+	if !strings.Contains(src, `"groups":["console_users"]`) {
+		t.Error("the first Owner is not put in console_users, so the proxy signs them " +
+			"in and the Console refuses them")
+	}
+
+	// 4. All of it is conditional on there being an ingress, and on the
+	// SAME condition. A host with no tailnet has no proxy to sit behind,
+	// and asking for an undeclared group there aborts the install — the
+	// defect #256 found and fixed by removing the request outright.
+	if strings.Count(src, "CONSOLE_BEHIND_PROXY") < 4 {
+		t.Error("the console-behind-proxy decision is not consistently applied; " +
+			"the route, the group and the summary must agree or the install " +
+			"completes with a Console nobody can open")
+	}
+	idx := strings.Index(src, "create_first_owner() {")
+	if idx < 0 {
+		t.Fatal("create_first_owner is gone")
+	}
+	body := src[idx:]
+	if end := strings.Index(body, "\n}\n"); end > 0 {
+		body = body[:end]
+	}
+	if !strings.Contains(body, "CONSOLE_BEHIND_PROXY") {
+		t.Error("the first Owner's group request is unconditional; on a host with no " +
+			"ingress the group is undeclared and the proposal is refused, which " +
+			"aborts the whole install")
+	}
+}
+
+// The package is installed before the Owner who is put in its group.
+//
+// Ordering, asserted as ordering rather than presence, because both
+// steps exist either way and the wrong sequence fails at a distance:
+// addHouseholdMember refuses a group nothing has declared yet, so the
+// install dies on the Owner step with an error naming a group, several
+// hundred lines from the install step that was supposed to create it.
+func TestTheConsolePackageIsInstalledBeforeTheFirstOwner(t *testing.T) {
+	src := installerSource(t)
+	pkg := strings.Index(src, "enable_capability wildstone-console")
+	owner := strings.LastIndex(src, "create_first_owner\n")
+	if pkg < 0 || owner < 0 {
+		t.Fatal("the console package install or the first-owner call is gone")
+	}
+	if pkg > owner {
+		t.Error("wildstone-console is installed AFTER create_first_owner; the group " +
+			"it declares does not exist yet, so the Owner's proposal is refused")
+	}
+}
