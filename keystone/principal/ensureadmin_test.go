@@ -1,6 +1,8 @@
 package principal
 
 import (
+	"time"
+
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -88,5 +90,27 @@ func TestEnsureAdminLeavesEarlierTokensValid(t *testing.T) {
 	}
 	if _, err := s.Authenticate(first); err != nil {
 		t.Errorf("the earlier token stopped working: %v", err)
+	}
+}
+
+// The installer's claim code is minted for the install and must not
+// outlive it (ADR-W033 A4.1): with a lifetime it stops authenticating.
+func TestEnsureAdminForExpires(t *testing.T) {
+	s := testStore(t)
+	tok, err := s.EnsureAdminFor("admin", time.Nanosecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stored times may be whole seconds; wait past the next one.
+	time.Sleep(1100 * time.Millisecond)
+	if _, err := s.Authenticate(tok); err == nil {
+		t.Fatal("an expired claim code still authenticates")
+	}
+	forever, err := s.EnsureAdminFor("admin", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Authenticate(forever); err != nil {
+		t.Fatalf("a claim code with no lifetime was refused: %v", err)
 	}
 }

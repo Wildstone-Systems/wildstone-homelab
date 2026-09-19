@@ -79,6 +79,19 @@ Console is the control plane. Only Owners may enter it. There is no delegated Me
 
 Console requires fresh or recent step-up authentication even when the household SSO session is still valid. Highly consequential administrative actions **require** a currently fresh Owner session — not "may require": an elevation window that expires without closing the action is not an administrative boundary. Wildstone does not require a new password or second factor for every individual click inside that window.
 
+### A4.1 Amendment (2026-09-19, #205): how freshness is established and what it gates
+
+Decided with the household owner while working #205. Where an older ADR says otherwise about Console sign-in, this amendment governs.
+
+- **The assertion is a signed token, not a header.** Authelia's forward-auth answers with `Remote-User`, `Remote-Groups`, `Remote-Name` and `Remote-Email` only; it has no authentication-time header to forward. So the Console signs in as an OpenID Connect client of Authelia, and Wildstone reads `auth_time` from the ID token after verifying its signature against Authelia's published keys. Nothing arriving in a request header can make a session fresh. Step-up is a new authorization request with `prompt=login`, which Authelia (4.39.0 and later) answers by making the person authenticate again. Passwords and second factors stay in Authelia, as decision 7 of #201 requires.
+- **The Console client is public with PKCE.** Keystone holds no client secret, keeping to the rule that Keystone never holds secret values.
+- **Two windows, both configurable.** Staying in the Console requires an authentication no older than **12 hours**. A consequential operation requires one no older than **15 minutes**. A future-dated `auth_time` is never fresh.
+- **Consequential means detrimental, and the list is deliberately short.** A household reaches its homelab over a network it controls, so the gate covers what is destructive or hard to undo, not every write: changing a Person's role, disabling or offboarding a Person, purge, deleting an Agent, restoring a backup and restore quarantine, removing access groups, rotating node secrets, Household-secret `manage` and `reveal`, and **minting any bearer credential** (Console and principal tokens, join tokens). Minting is on the list because bearer callers are exempt, so an ungated mint would let a stale session escape the gate. Admission, adding access groups, models and provider keys are ordinary.
+- **Bearer tokens are exempt.** The `wild` CLI, the installer and host recovery authenticate with bearer tokens and have no browser session. They are the host's own path (A7), not a browser session going stale. The gate applies to identities that arrive through the trusted ingress.
+- **A refused operation is resumed by the person, not replayed.** The response tells the Console to step up. After re-authenticating, the person comes back to the same action and confirms it with one click. A write is never replayed automatically after a redirect.
+- **Household SSO is long-lived: 30 days by default, configurable.** Homepage and household services keep a persistent session (A4, Homepage), independent of the Console's windows. Per-device credentials for native phone and TV apps are separate future work.
+- **Homepage shows Owners a link to Console.** Members do not see it, since they would only be refused. Without the link the Console has no discoverable entry point after installation.
+
 ## A5. Service access is group-based and enforced outside the UI
 
 Each app/package declares one or more Wildstone access groups, projected into the directory/SSO layer using the strongest compatible integration mechanism available to the service: OIDC, LDAP, or safe proxy/forward-auth where compatible.

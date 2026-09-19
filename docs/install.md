@@ -271,6 +271,20 @@ the steps you redo by hand.
   it, or pass `--keystone-arg <flag>` for any other keystone flag. The
   Console is served beside `/api` on the same listener — same API, same
   tokens.
+
+  **Signing in** (ADR-W033 A4.1). Behind the tailnet, the Console asks
+  Authelia who you are and when you last signed in. Open it from the
+  **Console** button at the top of the household dashboard. Only Owners
+  see that button. A family sign-in lasts 30 days (the identity
+  package's `session_days`). The Console is stricter: it sends you back
+  through Authelia once your sign-in is 12 hours old
+  (`-console-entry-window`). Drastic actions ask you to confirm your
+  password if you signed in more than 15 minutes ago
+  (`-console-stepup-window`). That covers removing or offboarding a
+  person, deleting an Agent, restoring a backup, taking away service
+  access, rotating a node secret and minting any credential. Bearer tokens (`wild`, the installer,
+  recovery from the host) are not affected. The installer's own token
+  lasts two hours and is deleted when the install finishes.
 - **Household automation** (ADR-W024): `-household-timezone` is the
   IANA zone the household's rules keep for time-of-day and weekday
   conditions (default `Local`); `-automation-interval` is how often the

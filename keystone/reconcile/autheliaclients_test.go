@@ -301,3 +301,24 @@ func TestTailnetRegistersTheServedCallbackToo(t *testing.T) {
 		t.Errorf("hostname posture changed the rendering:\n%s", plain)
 	}
 }
+
+// A public client (the Console's, ADR-W033 A4.1) has no secret to
+// render and authenticates at the token endpoint with none — the
+// client_secret line a confidential client carries must not appear, not
+// even as a reference.
+func TestAPublicClientRendersWithNoSecret(t *testing.T) {
+	got := string(renderAutheliaClients([]resource.Resource{
+		oidcClient("wildstone-console", func(s *resource.OidcClientSpec) {
+			s.Public, s.RequirePkce, s.SecretRef = true, true, ""
+		}),
+	}))
+	block := clientBlock(t, got, "wildstone-console")
+	for _, want := range []string{"public: true", "token_endpoint_auth_method: 'none'", "require_pkce: true", "pkce_challenge_method: 'S256'"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("public client lacks %q:\n%s", want, block)
+		}
+	}
+	if strings.Contains(block, "client_secret") {
+		t.Errorf("public client rendered a secret:\n%s", block)
+	}
+}

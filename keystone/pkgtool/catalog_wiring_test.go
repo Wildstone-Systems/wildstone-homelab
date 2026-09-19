@@ -219,7 +219,12 @@ func TestShippedOidcWiringIsCoherent(t *testing.T) {
 							r.Metadata.Name, raw, u.Host)
 					}
 				}
-				if !strings.Contains(told.String(), r.OidcClient.ClientId) {
+				// The Console's app is Keystone itself, which reads the client
+				// id from this very OidcClient in desired state (ADR-W033
+				// A4.1, keystone/api consoleSignInConfig) — agreement by
+				// construction, with no env or config file to carry it.
+				keystoneIsTheApp := sp.pkg.Metadata.Capability == "console" && r.OidcClient.Public
+				if !keystoneIsTheApp && !strings.Contains(told.String(), r.OidcClient.ClientId) {
 					t.Errorf("OidcClient %q registers client id %q, but nothing in this package's env or rendered "+
 						"config tells the app that id — the two halves of the login will not agree",
 						r.Metadata.Name, r.OidcClient.ClientId)

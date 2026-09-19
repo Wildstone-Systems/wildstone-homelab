@@ -18,7 +18,9 @@ import {
   SquaresFour,
   UsersThree,
 } from "@phosphor-icons/react";
-import { api, getToken, Identity, setOnUnauthorized, setToken } from "./api";
+import { api, clearToken, getToken, Identity, setOnStepUp, setOnUnauthorized, setToken } from "./api";
+import { Confirm } from "./ui/Confirm";
+import { Toast, useToast } from "./ui/Toast";
 import { ago, ErrorLine } from "./lib";
 import { ConsoleStateProvider, useConsoleState } from "./state";
 import { Dot, Kind, StatusPill } from "./ui/status";
@@ -126,6 +128,7 @@ export function App() {
   return (
     <ConsoleStateProvider>
       <Shell />
+      <StepUp />
     </ConsoleStateProvider>
   );
 }
@@ -209,6 +212,7 @@ export function Shell() {
           <span className="screen-title">{title}</span>
           <div className="meta">
             <Freshness />
+            <SignOut />
           </div>
         </div>
         <div className={FULL_BLEED.has(view) ? "screen screen-flush" : "screen"}>
@@ -344,5 +348,77 @@ export function TokenGate({ onDone }: { onDone: () => void }) {
         <ErrorLine error={error} />
       </div>
     </div>
+  );
+}
+
+// SignOut leaves the Console (ADR-W033 A4.1).
+//
+// Signed in through the proxy, it ends the Console session and then the
+// household one at the identity provider: leaving only the Console would
+// sign the person straight back in on their next visit. With a token it
+// forgets the token, which is all a token sign-in ever was.
+function SignOut() {
+  const [busy, setBusy] = useState(false);
+  const leave = async () => {
+    setBusy(true);
+    if (getToken() !== null) {
+      clearToken();
+      location.assign("/");
+      return;
+    }
+    const done = await api.consoleSignout().catch(() => ({}) as { signOut?: string });
+    location.assign(done.signOut ?? "/");
+  };
+  return (
+    <button className="btn btn-ghost" onClick={leave} disabled={busy}>
+      Sign out
+    </button>
+  );
+}
+
+
+const STEPPED_UP_KEY = "wst.console.stepped-up";
+
+// StepUp is the Console's half of ADR-W033 A4.1's consequential gate.
+//
+// A drastic operation refused because the sign-in behind it is more than
+// a few minutes old opens this: it says why, and sends the person to
+// confirm their password with the identity provider. They come back to
+// the same screen and press the button again. Nothing is replayed for
+// them: a write re-sent after a redirect is one they did not see
+// themselves make.
+function StepUp() {
+  const [url, setUrl] = useState<string | null>(null);
+  const { toast, say } = useToast();
+  useEffect(() => {
+    setOnStepUp((u) => setUrl(u));
+    if (sessionStorage.getItem(STEPPED_UP_KEY)) {
+      sessionStorage.removeItem(STEPPED_UP_KEY);
+      say("Password confirmed. Press the button again to finish.");
+    }
+  }, [say]);
+  return (
+    <>
+      {url && (
+        <Confirm
+          kind="warn"
+          icon={<ShieldCheck size={18} weight="fill" />}
+          title="Confirm your password"
+          body={
+            "This can't easily be undone, so the Console asks you to sign in again first. " +
+            "You'll come back to this screen; press the button again to finish."
+          }
+          confirmLabel="Confirm password"
+          cancelLabel="Not now"
+          onConfirm={() => {
+            sessionStorage.setItem(STEPPED_UP_KEY, "1");
+            const here = location.pathname + location.search + location.hash;
+            location.assign(`${url}&return=${encodeURIComponent(here)}`);
+          }}
+          onCancel={() => setUrl(null)}
+        />
+      )}
+      <Toast toast={toast} />
+    </>
   );
 }

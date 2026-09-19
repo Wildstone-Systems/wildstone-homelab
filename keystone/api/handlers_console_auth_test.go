@@ -11,6 +11,7 @@ package api
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -26,6 +27,10 @@ func (h *harness) forwarded(method, path, user, groups string) *http.Response {
 	}
 	if user != "" {
 		req.Header.Set(TrustedIngressHeader, user)
+		// Signed in to the Console just now, as a browser would be after
+		// the sign-in round trip (ADR-W033 A4.1). The freshness tests
+		// build their requests by hand instead.
+		req.AddCookie(&http.Cookie{Name: consoleSessionCookie, Value: h.s.StartConsoleSession(user, time.Now())})
 	}
 	if groups != "" {
 		req.Header.Set(ConsoleGroupsHeader, groups)

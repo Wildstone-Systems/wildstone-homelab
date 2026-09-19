@@ -86,6 +86,8 @@ func (s *Server) disableButlerMember(r *http.Request, id principal.Identity) (an
 		}
 		return nil, http.StatusBadRequest, err
 	}
+	// Their Console sessions end with their standing (ADR-W033 A6).
+	s.EndConsoleSessions(member)
 	return s.memberState(member)
 }
 
@@ -102,6 +104,7 @@ func (s *Server) offboardButlerMember(r *http.Request, id principal.Identity) (a
 		}
 		return nil, http.StatusBadRequest, err
 	}
+	s.EndConsoleSessions(member)
 	// Unfinished personal work is paused in the same breath, so an
 	// offboarding does not leave tasks retrying on behalf of someone who
 	// no longer has access (ADR-W030 A4).

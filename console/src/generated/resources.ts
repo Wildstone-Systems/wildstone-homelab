@@ -82,6 +82,7 @@ export interface OidcClientSpec {
   consentMode?: string;
   idTokenClaims?: string[];
   userinfoSigningAlg?: string;
+  public?: boolean;
   secretRef: string;
 }
 

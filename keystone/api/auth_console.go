@@ -46,7 +46,7 @@ const (
 // the permission, on the grounds that removal revokes. This deployment
 // cannot remove anyone from a group — see forwardedUserMayHoldConsole.)
 //
-// Four conditions, each necessary:
+// Five conditions, each necessary:
 //
 //  1. The peer is the trusted ingress. A header anyone can set is not an
 //     authentication, and this one grants the whole control plane. With
@@ -80,10 +80,20 @@ func (s *Server) consoleForwardAuth(r *http.Request) (principal.Identity, bool) 
 	if !s.forwardedUserMayHoldConsole(user) {
 		return principal.Identity{}, false
 	}
+	//  5. They signed in to the Console recently enough (ADR-W033 A4.1).
+	//     The four conditions above say who; this says when, and only a
+	//     session this process created from a verified ID token can say
+	//     it. No header is consulted for freshness at all, so there is
+	//     nothing a caller could forge to extend it.
+	sess, ok := s.consoleSessionFor(r, user)
+	if !ok {
+		return principal.Identity{}, false
+	}
+	at := sess.AuthTime
 	// ActingFor carries the person as well as Name so every audit row,
 	// every Butler grant and every plan approval reads their directory
 	// account rather than a shared administrator.
-	return principal.Identity{Name: user, Role: runtimedb.RoleAdmin, ActingFor: user}, true
+	return principal.Identity{Name: user, Role: runtimedb.RoleAdmin, ActingFor: user, AuthTime: &at}, true
 }
 
 // forwardedUserMayHoldConsole refuses a forwarded identity the household

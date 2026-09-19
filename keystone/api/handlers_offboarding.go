@@ -42,6 +42,7 @@ func (s *Server) offboardMember(r *http.Request, id principal.Identity) (any, in
 		}
 		return nil, http.StatusBadRequest, err
 	}
+	s.EndConsoleSessions(member)
 	records, err := s.DB.ListOffboardingRecords(member)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err

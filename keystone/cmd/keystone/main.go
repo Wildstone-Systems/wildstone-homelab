@@ -33,6 +33,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
 	"github.com/chickenrat17/wildstone-homelab/keystone/catalog"
+	"github.com/chickenrat17/wildstone-homelab/keystone/consoleauth"
 	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/gateway"
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingest"
@@ -98,6 +99,10 @@ func main() {
 	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W024 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
 	replyURL := flag.String("household-reply-url", "", "household event intake URL a notification's reply buttons post to, as a PHONE can reach it (not Keystone's loopback address); empty means notifications carry no reply buttons and a rule that asks for them fails loudly")
 	replyTTL := flag.Duration("household-reply-ttl", 12*time.Hour, "how long a notification's reply token stays valid")
+	// ADR-W033 A4.1: how old a Console sign-in may be to stay in the
+	// Console, and to perform a consequential operation.
+	consoleEntry := flag.Duration("console-entry-window", consoleauth.DefaultEntryWindow, "how long a Console sign-in lasts before Authelia is asked to authenticate again")
+	consoleStepUp := flag.Duration("console-stepup-window", consoleauth.DefaultStepUpWindow, "how recent a sign-in a consequential Console operation requires")
 	calendarURL := flag.String("calendar-url", "", "CalDAV collection the calendar.* household actions read and write, e.g. http://radicale:5232/wildstone-calendar/household/ (ADR-W034). Empty leaves them all unregistered, so a Butler does not offer the household a calendar this deployment has not got. The password comes ONLY from CALENDAR_PASSWORD, never a flag")
 	calendarUser := flag.String("calendar-user", "", "directory account the calendar actions sign in to the CalDAV collection as; its password comes from CALENDAR_PASSWORD")
 	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia). Empty fails closed. This names ONE trust boundary and it now gates TWO things: the household review page (ADR-W030 A8.1), and Console sign-in by forwarded identity (ADR-W032) — a request from one of these addresses carrying Remote-User and a Remote-Groups list containing console_users is authenticated as that person, with admin authority. Setting this does not by itself grant anyone the Console: they must also be in the console_users directory group, which packages/wildstone-console declares")
@@ -114,7 +119,8 @@ func main() {
 		Interval: *automationEvery, Timezone: *householdTZ,
 		NtfyURL: *ntfyURL, ReplyURL: *replyURL, ReplyTTL: *replyTTL,
 		CalendarURL: *calendarURL, CalendarUser: *calendarUser,
-		Ingress: splitNonEmpty(*householdIngress),
+		Ingress:            splitNonEmpty(*householdIngress),
+		ConsoleEntryWindow: *consoleEntry, ConsoleStepUpWindow: *consoleStepUp,
 	}
 	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, butlerCfg, householdCfg, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
@@ -152,6 +158,11 @@ func claimCode(args []string) error {
 	dataDir := fs.String("data-dir", "/var/lib/wildstone/keystone", "Keystone data directory (the service should be stopped)")
 	name := fs.String("name", "admin", "principal to mint for; created as an admin if absent")
 	out := fs.String("out", "", "file to write the token to (default <data-dir>/claim-code)")
+	// A token minted for one job should not outlive it. The installer
+	// asks for one that lasts the install: a claim code left behind with
+	// no expiry is a whole-control-plane credential sitting in a file,
+	// and bearer tokens do not need a fresh sign-in (ADR-W033 A4.1).
+	ttl := fs.Duration("ttl", 0, "how long the token is valid (0 = no expiry, for recovery by hand)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -166,7 +177,10 @@ func claimCode(args []string) error {
 	}
 	defer db.Close()
 
-	token, err := (&principal.Store{DB: db}).EnsureAdmin(*name)
+	if *ttl < 0 {
+		return fmt.Errorf("-ttl must not be negative")
+	}
+	token, err := (&principal.Store{DB: db}).EnsureAdminFor(*name, *ttl)
 	if err != nil {
 		return err
 	}
@@ -225,6 +239,9 @@ func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reco
 // householdConfig carries the household automation flags into serve
 // (ADR-W024 H3).
 type householdConfig struct {
+	// How old a Console sign-in may be to stay in the Console and to
+	// perform a consequential operation (ADR-W033 A4.1).
+	ConsoleEntryWindow, ConsoleStepUpWindow time.Duration
 	// Interval between engine ticks when no event pokes it.
 	Interval time.Duration
 	// Timezone is the IANA name the household's rules keep; "" or
@@ -964,6 +981,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Public plane. Plan approval pokes the reconcile service (R2a); a
 	// new household event pokes the automation engine.
 	apiSrv := api.New(principals, db, state, log)
+	apiSrv.ConsoleEntryWindow, apiSrv.ConsoleStepUpWindow = householdCfg.ConsoleEntryWindow, householdCfg.ConsoleStepUpWindow
 	apiSrv.HouseholdLoc = householdLoc
 	// The household review page is reachable only from the identity
 	// proxy. Exact addresses, not a CIDR or a hostname: the proxy is

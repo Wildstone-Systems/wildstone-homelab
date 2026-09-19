@@ -23,11 +23,19 @@
 # they do", by reading the forwarded group list. That is the right split
 # regardless of the posture: the control plane should not delegate its
 # own authorisation.
+#
+# AND AN OIDC CLIENT, FOR WHEN (1.1.0; ADR-W033 A4.1). Forward-auth says
+# who is asking but not when they signed in, and the Console needs both:
+# entering it needs a sign-in no older than 12 hours, and consequential
+# operations a fresh one. So the Console also signs in as an OpenID
+# Connect client of Authelia, and Keystone reads auth_time from the ID
+# token after verifying Authelia's signature. The client is PUBLIC with
+# PKCE because Keystone holds no secret values.
 apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: wildstone-console
-  version: 1.0.0
+  version: 1.1.0
   capability: console
   profile: wildstone
   exclusive: true
@@ -64,6 +72,33 @@ templates:
     metadata: { name: console-users, node: "{{ or .Params.identity_node .Params.node }}" }
     spec:
       name: console_users
+  # The Console's sign-in client (ADR-W033 A4.1). Keystone reads it from
+  # desired state — the public client this capability declares — and
+  # derives the issuer and callback from what is served, so nothing here
+  # is repeated as a Keystone flag and the client id cannot disagree.
+  #
+  # two_factor is what the Console asks for; under the tailnet posture
+  # the renderer relaxes every policy to one_factor, as it does for the
+  # Console route itself. implicit consent: this is the household's own
+  # control plane, and a consent screen for it would ask the Owner
+  # whether they trust themselves. preferred_username in the ID token is
+  # what binds the session to the account the proxy forwards.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: wildstone-console, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      clientId: wildstone-console
+      clientName: Wildstone Console
+      public: true
+      requirePkce: true
+      consentMode: implicit
+      redirectUris:
+        - "https://console.{{ .Params.admin_domain }}/api/v1/console/callback"
+      scopes: [openid, profile]
+      idTokenClaims: [preferred_username]
+      authPolicy: two_factor
+      requireGroups: [console_users]
   # The route.
   #
   # auth: authelia_oidc is what makes the proxy emit forward_auth and
