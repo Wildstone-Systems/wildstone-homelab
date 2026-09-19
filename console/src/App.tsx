@@ -101,12 +101,25 @@ const ICON = 19;
 const FULL_BLEED: ReadonlySet<View> = new Set<View>(["butler"]);
 
 export function App() {
-  const [authed, setAuthed] = useState(getToken() !== null);
+  // null while we find out. With no token of our own, the identity
+  // proxy may already have signed this person in (ADR-W032): ask the
+  // server who we are before offering the token gate, which is the way
+  // in only when the proxy is not the one asking.
+  const [authed, setAuthed] = useState<boolean | null>(getToken() !== null ? true : null);
 
   useEffect(() => {
     setOnUnauthorized(() => setAuthed(false));
+    if (getToken() === null) {
+      api
+        .whoami()
+        .then(() => setAuthed(true))
+        .catch(() => setAuthed(false));
+    }
   }, []);
 
+  if (authed === null) {
+    return null;
+  }
   if (!authed) {
     return <TokenGate onDone={() => setAuthed(true)} />;
   }
