@@ -54,6 +54,16 @@ func actingMember(id principal.Identity) string {
 // and A2 keeps the household's shared record shared. Private work is
 // visible to the person it belongs to and to the administrator
 // responsible for the deployment, and to nobody else.
+//
+// Since slice 7 an audience may also be a set — "adults only" — and
+// such a task falls through to the private branch below, so it reaches
+// its owner and the administrator and nobody else. That is narrower
+// than the audience says and deliberately so: widening it means
+// resolving the caller's handle to a person_id and asking the
+// resolver, which is WHO MAY READ rather than what the record says,
+// and #208 is explicit that this slice changes the vocabulary and not
+// the authorization model. Nothing creates a set-audience task today;
+// the memory and secret slices that will are where it belongs.
 func canSeeTask(task runtimedb.ButlerTask, id principal.Identity) bool {
 	if task.Audience == runtimedb.ButlerAudienceShared {
 		return true
@@ -126,7 +136,12 @@ func (s *Server) getButlerTask(r *http.Request, id principal.Identity) (any, int
 	entries := make([]timelineEntry, 0, len(trace))
 	withheld := 0
 	for _, e := range trace {
-		if e.Audience == runtimedb.ButlerAudiencePrivate && !private {
+		// Asked as "is it household-wide", not "is it the owner
+		// audience": slice 7 made the vocabulary open, so the list of
+		// narrow audiences is open too and an unrecognised one must be
+		// withheld rather than shown. A screen that listed the narrow
+		// ones would disclose every audience a household invented.
+		if e.Audience != runtimedb.ButlerAudienceShared && !private {
 			withheld++
 			continue
 		}
@@ -157,7 +172,7 @@ func (s *Server) getButlerTask(r *http.Request, id principal.Identity) (any, int
 	}
 	evidence := make([]runtimedb.ButlerTaskEvidence, 0, len(allEvidence))
 	for _, ev := range allEvidence {
-		if ev.Audience == runtimedb.ButlerAudiencePrivate && !private {
+		if ev.Audience != runtimedb.ButlerAudienceShared && !private {
 			withheld++
 			continue
 		}

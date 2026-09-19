@@ -377,6 +377,48 @@ export interface ButlerTurn {
 // and performs domestic actions, with no access to the home lab itself.
 export type ButlerSurface = "admin" | "family";
 
+// ---------------------------------------------------------------- audience
+
+// Who a record may be disclosed to (ADR-W033 design §10 layer 3).
+//
+// OPAQUE. It used to be the two words "private" and "shared", and this
+// screen compared against them; slice 7 replaced them with rows in an
+// `audiences` table, because two words cannot say "adults only". A
+// household names its own audiences, so the set is open and no code
+// may enumerate it.
+//
+// AN AUDIENCE IS NOT A PERMISSION. It is disclosure policy and never
+// widens the layers below it: somebody inside a record's audience is
+// still refused if they lack the resource-specific grant.
+export type AudienceID = string;
+
+// The two the migration maps the old words onto, and the only ids any
+// code may compare against a literal.
+export const AUDIENCE_OWNER: AudienceID = "aud_owner";
+export const AUDIENCE_HOUSEHOLD: AudienceID = "aud_household";
+
+// Whether an audience is the whole household.
+//
+// Asked this way round on purpose: "household" is the single widest
+// audience there is, and every other one — the owner alone, a group, a
+// named set — is narrower. Code that listed the narrow ones instead
+// would silently treat a household's own new audience as wide, which
+// is the direction that discloses too much.
+export function audienceIsHousehold(a: AudienceID): boolean {
+  return a === AUDIENCE_HOUSEHOLD;
+}
+
+// The household's word for an audience, for a screen to show.
+//
+// Only the two seeded ids have a word Wildstone chose; anything else
+// is a household's own audience, and showing its id is honest about
+// the Console not yet having asked what it is called.
+export function audienceLabel(a: AudienceID): string {
+  if (a === AUDIENCE_HOUSEHOLD) return "household";
+  if (a === AUDIENCE_OWNER) return "private";
+  return a;
+}
+
 // --- Chat bindings (ADR-W026 A4). A binding is the only way a chat
 // account reaches a Butler, and it exists only because somebody redeemed
 // a claim code.
@@ -535,7 +577,7 @@ export interface ButlerTask {
   owner: string;
   surface: string;
   profile: string;
-  audience: "private" | "shared";
+  audience: AudienceID;
   objective: string;
   completionCriteria: string;
   resultSummary?: string;
@@ -730,7 +772,7 @@ export interface MemoryRecord {
   kind: "fact" | "preference" | "inference" | "procedure";
   subject?: string;
   content: string;
-  audience: "private" | "shared";
+  audience: AudienceID;
   owner: string;
   sourceKind: string;
   sourceId: string;
@@ -781,7 +823,7 @@ export interface IntegrationConnection {
   endpoint?: string;
   ownership: "personal" | "household";
   owner: string;
-  audience: "private" | "shared";
+  audience: AudienceID;
   actionsEnabled: boolean;
   indexingEnabled: boolean;
   cloudAllowed: boolean;

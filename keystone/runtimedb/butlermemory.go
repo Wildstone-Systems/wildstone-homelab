@@ -129,8 +129,16 @@ func validateMemory(m MemoryRecord) error {
 	if m.PermissionLabel == "" {
 		return fmt.Errorf("runtimedb: a memory record needs a permission label (ADR-W030 A11)")
 	}
-	if m.Audience != ButlerAudiencePrivate && m.Audience != ButlerAudienceShared {
-		return fmt.Errorf("runtimedb: a memory record needs audience private|shared, got %q (ADR-W030 A2)", m.Audience)
+	// Non-empty, and no further. The closed set of two words moved into
+	// the `audiences` table in slice 7 precisely so a household could
+	// name its own — "adults only" was the capability the two words
+	// could not express — and a list written here would be a second,
+	// shorter answer to which audiences exist. The foreign key on
+	// butler_memory.audience is the backstop, and it is the right place
+	// for one: it refuses an audience that does not exist no matter
+	// which code path wrote the row.
+	if m.Audience == "" {
+		return fmt.Errorf("runtimedb: a memory record needs an audience — who it may be disclosed to (ADR-W030 A2, design §10 layer 3)")
 	}
 	if m.SourceKind == "" || m.SourceID == "" {
 		return fmt.Errorf("runtimedb: a memory record needs provenance: which kind of source, and which one (ADR-W030 A3)")
@@ -246,7 +254,12 @@ func (db *DB) DeriveMemory(m MemoryRecord, sources []int64) (int64, error) {
 	if len(sources) == 0 {
 		return 0, fmt.Errorf("runtimedb: a derivative needs the records it was derived from")
 	}
-	strictest := ButlerAudienceShared
+	// The audiences of every source, for the intersection below. The
+	// owner audience short-circuits it: it is already the narrowest
+	// thing an audience can be, and it travels with an owner, which no
+	// other kind does.
+	var audiences []string
+	anyOwnerAudience := false
 	label := m.PermissionLabel
 	owner := ""
 	butler := ""
@@ -269,10 +282,11 @@ func (db *DB) DeriveMemory(m MemoryRecord, sources []int64) (int64, error) {
 					butler, s.Butler)
 			}
 		}
+		audiences = append(audiences, string(s.Audience))
 		if s.Audience != ButlerAudiencePrivate {
 			continue
 		}
-		strictest = ButlerAudiencePrivate
+		anyOwnerAudience = true
 		// The OWNER travels with the audience, and this is the half that
 		// actually closes the leak. "Private, owned by the household" is
 		// not private at all: retrieval treats an owner match as
@@ -293,7 +307,19 @@ func (db *DB) DeriveMemory(m MemoryRecord, sources []int64) (int64, error) {
 		// route.
 		label = s.PermissionLabel
 	}
-	m.Audience = strictest
+	// The narrowest audience among the sources. An owner audience wins
+	// outright — one person is as narrow as disclosure gets — and
+	// otherwise the sets are compared, which is where "Adults and a
+	// household record makes an Adults derivative" comes from.
+	if anyOwnerAudience {
+		m.Audience = ButlerAudiencePrivate
+	} else {
+		strictest, err := db.StrictestAudience(audiences)
+		if err != nil {
+			return 0, err
+		}
+		m.Audience = ButlerTaskAudience(strictest)
+	}
 	if owner != "" {
 		m.Owner = owner
 	}
@@ -354,11 +380,29 @@ func (db *DB) CorrectMemory(seq int64, replacement MemoryRecord, actor string) (
 	}
 	// A correction cannot widen the audience of what it corrects. That
 	// would make "actually, it is X" a way to publish a private record.
-	if old.Audience == ButlerAudiencePrivate {
-		replacement.Audience = ButlerAudiencePrivate
-	}
+	//
+	// While there were two words this was one comparison: private beat
+	// shared. With sets it is the same subset test the derivation rule
+	// uses, so the two cannot disagree — and it CLAMPS rather than
+	// refuses, because a correction naming a wider audience is a caller
+	// who did not think about audiences, not one trying to publish.
+	// Incomparable audiences are refused, as they are everywhere else:
+	// there is no audience the correction could correctly have.
 	if replacement.Audience == "" {
 		replacement.Audience = old.Audience
+	}
+	if old.Audience == ButlerAudiencePrivate || replacement.Audience == ButlerAudiencePrivate {
+		// The owner audience resolves against the row, not against
+		// itself, and is already the narrowest thing there is — so it
+		// short-circuits here exactly as it does in DeriveMemory.
+		replacement.Audience = ButlerAudiencePrivate
+	} else if replacement.Audience != old.Audience {
+		narrowest, err := db.StrictestAudience(
+			[]string{string(old.Audience), string(replacement.Audience)})
+		if err != nil {
+			return 0, err
+		}
+		replacement.Audience = ButlerTaskAudience(narrowest)
 	}
 	if replacement.PermissionLabel == "" {
 		replacement.PermissionLabel = old.PermissionLabel
@@ -620,9 +664,12 @@ func (db *DB) RetrieveMemory(q MemoryQuery) ([]MemoryRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	where := ` WHERE r.forgotten_at = '' AND r.superseded_by IS NULL
-	           AND (r.audience = 'shared' OR r.owner_person_id = ?)`
-	args := []any{reader}
+	clause, audArgs, err := db.visibleAudienceClause("r.audience", "r.owner_person_id", reader)
+	if err != nil {
+		return nil, err
+	}
+	where := ` WHERE r.forgotten_at = '' AND r.superseded_by IS NULL AND ` + clause
+	args := append([]any{}, audArgs...)
 	// The Butler's scope is ANDed onto the reader's, in SQL, before any
 	// content loads. Both have to hold: this person may see it AND this
 	// Butler holds it.
@@ -679,10 +726,18 @@ func (db *DB) ExportMemoryFor(reader string) ([]MemoryRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	// An export is the same disclosure question as retrieval, so it asks
+	// it the same way. It differs only in also handing back the reader's
+	// OWN forgotten and superseded records, which are theirs to take.
+	audClause, audArgs, err := db.visibleAudienceClause("r.audience", "r.owner_person_id", readerID)
+	if err != nil {
+		return nil, err
+	}
+	args := append([]any{readerID}, audArgs...)
 	rows, err := db.sql.Query(
 		memoryColumns+` WHERE r.owner_person_id = ?
-		     OR (r.audience = 'shared' AND r.forgotten_at = '' AND r.superseded_by IS NULL)
-		   ORDER BY r.seq`, readerID)
+		     OR (`+audClause+` AND r.forgotten_at = '' AND r.superseded_by IS NULL)
+		   ORDER BY r.seq`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: exporting memory: %w", err)
 	}

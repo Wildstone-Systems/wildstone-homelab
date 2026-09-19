@@ -114,8 +114,11 @@ func (db *DB) AppendButlerTraceEvent(taskID string, e ButlerTraceEvent) error {
 	if e.PermissionLabel == "" {
 		return fmt.Errorf("runtimedb: butler trace event requires a permission label (ADR-W030 A11)")
 	}
-	if e.Audience != ButlerAudiencePrivate && e.Audience != ButlerAudienceShared {
-		return fmt.Errorf("runtimedb: butler trace event requires audience private|shared, got %q (ADR-W030 A2)", e.Audience)
+	// Named, and no more: the set of audiences is a table now, not a
+	// list in Go (see validateMemory). The foreign key refuses a name
+	// that means nothing, on every path into the column.
+	if e.Audience == "" {
+		return fmt.Errorf("runtimedb: butler trace event requires an audience — who it may be disclosed to (ADR-W030 A2, design §10 layer 3)")
 	}
 	for _, id := range e.SourceIDs {
 		if strings.Contains(id, ",") {
