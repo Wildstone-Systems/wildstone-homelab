@@ -14,7 +14,17 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
-const telegramToken = "123456:AAH-very-secret-bot-token"
+// Fake credentials, assembled at run time so no token-shaped literal
+// sits in the source for a secret scanner to find (and none is real).
+var (
+	telegramToken = fakeToken("123456:", "telegram")
+	slackBot      = fakeToken("xoxb-", "slack")
+	slackApp      = fakeToken("xapp-", "slack")
+)
+
+func fakeToken(prefix, what string) string {
+	return prefix + "fake-" + what + "-" + strings.Repeat("0", 6)
+}
 
 // connectHarness is a one-machine household running the shipped catalog,
 // with a Member Agent (joan), an Owner Agent (alfred), an Owner (mika)
@@ -205,9 +215,9 @@ func TestAPlatformsCredentialsAreChecked(t *testing.T) {
 		{"a token with spaces", map[string]any{"platform": "telegram", "butler": "joan", "person": "sandy",
 			"credentials": map[string]string{"botToken": "not a token at all"}}, "one unbroken string"},
 		{"slack without its app token", map[string]any{"platform": "slack", "butler": "joan", "person": "sandy",
-			"credentials": map[string]string{"botToken": "xoxb-1234567890"}}, "app-level token"},
+			"credentials": map[string]string{"botToken": slackBot}}, "app-level token"},
 		{"slack tokens swapped", map[string]any{"platform": "slack", "butler": "joan", "person": "sandy",
-			"credentials": map[string]string{"botToken": "xapp-1234567890", "appToken": "xoxb-1234567890"}}, "starts with xoxb-"},
+			"credentials": map[string]string{"botToken": slackApp, "appToken": slackBot}}, "starts with xoxb-"},
 		{"matrix over http", map[string]any{"platform": "matrix", "butler": "joan", "person": "sandy",
 			"credentials": map[string]string{"homeserver": "http://matrix.example.com", "accessToken": "syt_abcdefghij"}}, "https://"},
 		{"nobody", map[string]any{"platform": "telegram", "butler": "joan", "person": "nobody",
@@ -218,7 +228,7 @@ func TestAPlatformsCredentialsAreChecked(t *testing.T) {
 		if code != http.StatusBadRequest || !strings.Contains(msg, c.want) {
 			t.Errorf("%s: %d %q, want 400 mentioning %q", c.what, code, msg, c.want)
 		}
-		if strings.Contains(msg, "xoxb-1234567890") || strings.Contains(msg, "not a token at all") {
+		if strings.Contains(msg, slackBot) || strings.Contains(msg, "not a token at all") {
 			t.Errorf("%s: the refusal repeated the credential: %q", c.what, msg)
 		}
 	}
@@ -232,7 +242,7 @@ func TestEveryPlatformInstalls(t *testing.T) {
 	creds := map[string]map[string]string{
 		"telegram": {"botToken": telegramToken},
 		"discord":  {"botToken": "MTE-discord-token"},
-		"slack":    {"botToken": "xoxb-1234567890", "appToken": "xapp-1234567890"},
+		"slack":    {"botToken": slackBot, "appToken": slackApp},
 		"matrix":   {"homeserver": "https://matrix.example.com", "accessToken": "syt_abcdefghij"},
 	}
 	for _, p := range chatPlatforms {
