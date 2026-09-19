@@ -1335,6 +1335,11 @@ export const api = {
   // Asks a model whether it can actually operate a tool, and stores the
   // verdict. This is how a model earns the authority to do things — an
   // unprobed one answers questions and nothing more.
+  // Register one model a provider serves (PUT /butler/models). This is
+  // how a provider comes to exist here: Keystone has no provider row, a
+  // provider is the server behind the models registered from it.
+  upsertModel: (m: { name: string; kind: "local" | "cloud"; provider: string; model: string; endpoint: string; enabled: boolean }) =>
+    call<{ name: string; note?: string }>("PUT", "/api/v1/butler/models", m),
   probeModel: (name: string) =>
     call<{ model: Model }>(
       "POST",

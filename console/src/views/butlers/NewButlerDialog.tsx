@@ -31,12 +31,14 @@ export function NewButlerDialog({
   say,
   onClose,
   onCreated,
+  onOpenProviders,
 }: {
   routes: Model[];
   existing: string[];
   say: Say;
   onClose: () => void;
   onCreated: (name: string, tab?: string) => void;
+  onOpenProviders?: () => void;
 }) {
   // The endpoints this house knows about; the models come from
   // whichever is picked, not from what has been configured here.
@@ -212,6 +214,16 @@ export function NewButlerDialog({
                   </option>
                 ))}
               </select>
+            )}
+            {endpoints.length === 0 && (
+              <div className="muted">
+                No model provider yet, so there is no model to choose.{" "}
+                {onOpenProviders && (
+                  <button className="btn btn-small" onClick={onOpenProviders}>
+                    Add a model provider
+                  </button>
+                )}
+              </div>
             )}
             <ErrorLine error={offered.error} />
             {offered.loading && <div className="muted">Asking {endpoint} what it serves…</div>}
