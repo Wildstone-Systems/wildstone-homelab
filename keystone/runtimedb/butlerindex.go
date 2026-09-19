@@ -98,8 +98,9 @@ func (db *DB) IndexDocumentInto(d IndexDocument) (int64, error) {
 	if d.Owner == "" || d.PermissionLabel == "" {
 		return 0, fmt.Errorf("runtimedb: an indexed chunk needs an owner and a permission label — retrieval filters on them before it ranks (ADR-W030 A3)")
 	}
-	if d.Audience != ButlerAudiencePrivate && d.Audience != ButlerAudienceShared {
-		return 0, fmt.Errorf("runtimedb: an indexed chunk needs audience private|shared, got %q", d.Audience)
+	// See validateMemory: named only, with the foreign key as backstop.
+	if d.Audience == "" {
+		return 0, fmt.Errorf("runtimedb: an indexed chunk needs an audience — who it may be disclosed to (design §10 layer 3)")
 	}
 	var memory any
 	if d.MemorySeq != 0 {
@@ -239,6 +240,10 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
 	if err != nil {
 		return nil, err
 	}
+	audClause, audArgs, err := db.visibleAudienceClause("i.audience", "i.owner_person_id", reader)
+	if err != nil {
+		return nil, err
+	}
 	query := `SELECT i.seq, i.source_kind, i.source_id, COALESCE(i.memory, 0),
 		        COALESCE(io.member, 'household'), i.audience,
 		        i.permission_label, i.content, i.observed_at, i.indexed_at, i.volatile,
@@ -247,14 +252,15 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
 		 JOIN butler_index i ON i.seq = butler_index_fts.rowid
 		 LEFT JOIN butler_members io ON io.person_id = i.owner_person_id
 		 WHERE butler_index_fts MATCH ?
-		   AND (i.audience = 'aud_household' OR i.owner_person_id = ?)
+		   AND ` + audClause + `
 		   AND NOT EXISTS (
 		       SELECT 1 FROM butler_memory m WHERE m.seq = i.memory
 		         AND (m.forgotten_at <> '' OR m.superseded_by IS NOT NULL))` +
 		scope + `
 		 ORDER BY bm25(butler_index_fts)
 		 LIMIT ?`
-	args := append([]any{ftsQuery(q.Text), reader}, scopeArgs...)
+	args := append([]any{ftsQuery(q.Text)}, audArgs...)
+	args = append(args, scopeArgs...)
 	args = append(args, fetch)
 	rows, err := db.sql.Query(query, args...)
 	if err != nil {

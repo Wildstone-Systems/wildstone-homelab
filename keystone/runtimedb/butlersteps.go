@@ -596,8 +596,11 @@ func validateEvidence(e ButlerTaskEvidence) (string, error) {
 	if e.PermissionLabel == "" {
 		return "", fmt.Errorf("runtimedb: butler evidence requires a permission label (ADR-W030 A11)")
 	}
-	if e.Audience != ButlerAudiencePrivate && e.Audience != ButlerAudienceShared {
-		return "", fmt.Errorf("runtimedb: butler evidence requires audience private|shared, got %q (ADR-W030 A2)", e.Audience)
+	// Non-empty only, for the reason validateMemory gives: the closed
+	// set of audiences lives in the `audiences` table now, and the
+	// foreign key on this column is the backstop.
+	if e.Audience == "" {
+		return "", fmt.Errorf("runtimedb: butler evidence requires an audience — who it may be disclosed to (ADR-W030 A2, design §10 layer 3)")
 	}
 	return jsonObjectOrEmpty(e.PayloadJSON, "evidence payload")
 }

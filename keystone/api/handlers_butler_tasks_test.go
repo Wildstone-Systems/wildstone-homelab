@@ -196,6 +196,66 @@ func TestWithheldRowsAreCountedNotHidden(t *testing.T) {
 	}
 }
 
+// A trace row whose audience the reader does not hold is withheld, even
+// when that audience is one nobody has seen before (#208).
+//
+// The old check asked "is it the private audience", which was the whole
+// list of narrow audiences while there were two. Slice 7 made the
+// vocabulary open: a household may name its own, and a filter that
+// listed the narrow ones would show every one of them to a reader who
+// is in none. The question is therefore "is it household-wide", and
+// anything else is withheld.
+func TestAnAudienceTheFilterDoesNotRecogniseIsWithheld(t *testing.T) {
+	h := newHarness(t)
+	h.person("sam")
+	id, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
+		Kind: runtimedb.ButlerTaskConversation, Author: "sam", Owner: "sam",
+		Surface: runtimedb.ButlerSurfaceAdmin, Profile: "operator",
+		Audience:  runtimedb.ButlerAudienceShared,
+		Objective: "shared work", CompletionCriteria: "done",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adults, err := h.s.DB.CreateAudienceForGroups("Adults only", adultsGroupID(t, h))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, aud := range []runtimedb.ButlerTaskAudience{
+		runtimedb.ButlerAudienceShared,
+		runtimedb.ButlerTaskAudience(adults.ID),
+	} {
+		if err := h.s.DB.AppendButlerTraceEvent(id, runtimedb.ButlerTraceEvent{
+			Type: "tool.result", PermissionLabel: "operator", Audience: aud, Redacted: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var body struct {
+		Timeline []map[string]any `json:"timeline"`
+		Withheld int              `json:"withheld"`
+	}
+	res := h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/butler/tasks/"+id, nil, &body)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET shared task = %d", res.StatusCode)
+	}
+	if len(body.Timeline) != 1 || body.Withheld != 1 {
+		t.Fatalf("timeline = %d entries, withheld = %d; want 1 and 1 — an audience "+
+			"the filter does not recognise must be withheld, not shown",
+			len(body.Timeline), body.Withheld)
+	}
+}
+
+// adultsGroupID is the slice-6 Adults group, by seed key.
+func adultsGroupID(t *testing.T, h *harness) string {
+	t.Helper()
+	g, err := h.s.DB.GroupBySeedKey(runtimedb.SeedAdults)
+	if err != nil {
+		t.Fatalf("GroupBySeedKey(adults): %v", err)
+	}
+	return g.ID
+}
+
 // A reviewed failure becomes a version-pinned evaluation that records
 // the shape of what happened and none of its content.
 func TestReviewedFailureBecomesAnEvaluation(t *testing.T) {

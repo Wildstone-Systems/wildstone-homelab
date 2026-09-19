@@ -195,8 +195,9 @@ func (db *DB) InsertButlerTask(t ButlerTask) (string, error) {
 	if t.Profile == "" {
 		return "", fmt.Errorf("runtimedb: butler task requires a profile (ADR-W030 A1)")
 	}
-	if t.Audience != ButlerAudiencePrivate && t.Audience != ButlerAudienceShared {
-		return "", fmt.Errorf("runtimedb: butler task requires audience private|shared, got %q (ADR-W030 A2)", t.Audience)
+	// See validateMemory: named only, with the foreign key as backstop.
+	if t.Audience == "" {
+		return "", fmt.Errorf("runtimedb: butler task requires an audience — who it may be disclosed to (ADR-W030 A2, design §10 layer 3)")
 	}
 	if t.Objective == "" {
 		return "", fmt.Errorf("runtimedb: butler task requires an objective (ADR-W030 A4)")

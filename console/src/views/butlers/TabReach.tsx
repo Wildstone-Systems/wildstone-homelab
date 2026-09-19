@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Check } from "@phosphor-icons/react";
 import {
   api,
+  AUDIENCE_OWNER,
+  audienceIsHousehold,
   type ButlerAddress,
   type ButlerRow,
   type ButlerScope,
@@ -21,8 +23,16 @@ import { Say } from "./ButlerDrawer";
 // a control that fails — but the copy up here is one that can be read,
 // and checked, on its own.
 export function withheldFrom(surface: ButlerSurface, c: IntegrationConnection): string {
-  if (surface === "family" && c.audience === "private") {
-    return `private to ${c.owner} — a household Butler cannot be given it`;
+  // Asked as "is it household-wide", not "is it one of the narrow
+  // ones", because a household may name audiences of its own and the
+  // list of narrow ones is therefore open. The trigger reads the same
+  // way (`kind <> 'household'`), so the two copies cannot drift apart
+  // the next time somebody adds an audience.
+  if (surface === "family" && !audienceIsHousehold(c.audience)) {
+    if (c.audience === AUDIENCE_OWNER) {
+      return `private to ${c.owner} — a household Butler cannot be given it`;
+    }
+    return `shared with only part of the household — a household Butler cannot be given it`;
   }
   return "";
 }
