@@ -32,6 +32,10 @@ type telegram struct {
 	// offset is Telegram's own cursor: updates are acknowledged by
 	// asking for the next one.
 	offset int64
+	// botID and botUsername are who this bot is, learned from getMe,
+	// so a group message can be recognised as addressed to it.
+	botID       int64
+	botUsername string
 	// started is false until the first poll has taken a cursor.
 	//
 	// Telegram holds undelivered updates for 24 hours and hands the whole
@@ -79,7 +83,14 @@ type telegramUpdate struct {
 	Message  *struct {
 		MessageID int64  `json:"message_id"`
 		Text      string `json:"text"`
-		From      struct {
+		// ReplyTo is the message this one answers, if any: replying to
+		// the bot addresses it in a group without an @mention.
+		ReplyTo *struct {
+			From struct {
+				ID int64 `json:"id"`
+			} `json:"from"`
+		} `json:"reply_to_message"`
+		From struct {
 			ID        int64  `json:"id"`
 			Username  string `json:"username"`
 			FirstName string `json:"first_name"`
@@ -100,6 +111,7 @@ func (t *telegram) Identify(ctx context.Context) (string, string, error) {
 		OK          bool   `json:"ok"`
 		Description string `json:"description"`
 		Result      struct {
+			ID        int64  `json:"id"`
 			Username  string `json:"username"`
 			FirstName string `json:"first_name"`
 		} `json:"result"`
@@ -113,6 +125,7 @@ func (t *telegram) Identify(ctx context.Context) (string, string, error) {
 	if envelope.Result.Username == "" {
 		return "", "", fmt.Errorf("telegram getMe returned no username")
 	}
+	t.botID, t.botUsername = envelope.Result.ID, envelope.Result.Username
 	return envelope.Result.Username, envelope.Result.FirstName, nil
 }
 
@@ -159,11 +172,22 @@ func (t *telegram) Receive(ctx context.Context) ([]Incoming, error) {
 		if u.Message == nil || strings.TrimSpace(u.Message.Text) == "" {
 			continue // a photo, a sticker, a join event: nothing to relay
 		}
+		group := u.Message.Chat.Type != "private"
+		text, addressed := u.Message.Text, !group
+		if group {
+			// Until registration has learned who this bot is, nothing in
+			// a group is addressed to it: silence is the safe answer.
+			text, addressed = t.addressedIn(u.Message.Text)
+			if u.Message.ReplyTo != nil && t.botID != 0 && u.Message.ReplyTo.From.ID == t.botID {
+				addressed = true
+			}
+		}
 		out = append(out, Incoming{
 			Account:      strconv.FormatInt(u.Message.From.ID, 10),
 			Conversation: strconv.FormatInt(u.Message.Chat.ID, 10),
-			Group:        u.Message.Chat.Type != "private",
-			Text:         u.Message.Text,
+			Group:        group,
+			Addressed:    addressed,
+			Text:         text,
 			MessageID:    strconv.FormatInt(u.Message.MessageID, 10),
 			DisplayName:  displayName(u.Message.From.Username, u.Message.From.FirstName),
 		})
@@ -289,4 +313,13 @@ func (t *telegram) do(req *http.Request, out any) error {
 		return fmt.Errorf("telegram: %s", res.Status)
 	}
 	return json.Unmarshal(data, out)
+}
+
+// addressedIn reports whether a group message mentions this bot
+// (@username, any case) and returns the text without the mention.
+func (t *telegram) addressedIn(text string) (string, bool) {
+	if t.botUsername == "" {
+		return text, false
+	}
+	return stripMention(text, "@"+t.botUsername)
 }

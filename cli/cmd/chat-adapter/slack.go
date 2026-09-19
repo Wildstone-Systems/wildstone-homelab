@@ -191,8 +191,20 @@ func (s *slack) event(ctx context.Context, raw json.RawMessage) {
 	if e.Subtype != "" || e.BotID != "" || self || e.User == "" || strings.TrimSpace(e.Text) == "" {
 		return
 	}
-	in := Incoming{Account: e.User, Conversation: e.Channel, Group: e.ChannelType != "im",
-		Text: e.Text, MessageID: e.TS, DisplayName: e.User}
+	group := e.ChannelType != "im"
+	text, addressed := e.Text, !group
+	if group {
+		s.mu.Lock()
+		botID := s.botID
+		s.mu.Unlock()
+		if botID == "" {
+			addressed = false
+		} else {
+			text, addressed = stripMention(e.Text, "<@"+botID+">")
+		}
+	}
+	in := Incoming{Account: e.User, Conversation: e.Channel, Group: group, Addressed: addressed,
+		Text: text, MessageID: e.TS, DisplayName: e.User}
 	select {
 	case s.events <- in:
 	case <-ctx.Done():

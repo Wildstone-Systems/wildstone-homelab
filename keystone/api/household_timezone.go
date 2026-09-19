@@ -70,7 +70,7 @@ func (s *Server) ProposeHouseholdTimezone(_ context.Context, zone, reason, propo
 	if err != nil {
 		return "", current, err
 	}
-	s.appendEvent("household.timezone_proposed", "", zone, proposedBy)
+	s.recordEvent("household.timezone_proposed", id, summary, map[string]string{"zone": zone, "by": proposedBy})
 	return id, current, nil
 }
 
@@ -100,4 +100,12 @@ func (s *Server) applySettingPlan(planID string, stored storedProposal, id princ
 		return nil, http.StatusInternalServerError, err
 	}
 	return viewPlan(rec), http.StatusOK, nil
+}
+
+// recordEvent appends one event to the stream, saying what happened in
+// its own words (appendEvent is the secrets code's, and names a secret).
+func (s *Server) recordEvent(typ, name, message string, attrs map[string]string) {
+	if _, err := s.DB.AppendEvent(runtimedb.Event{Type: typ, Name: name, Message: message, Attrs: attrs}); err != nil {
+		s.Log.Error("event append failed", "type", typ, "err", err)
+	}
 }

@@ -243,7 +243,10 @@ func (d *discord) dispatch(ctx context.Context, f discordFrame) {
 			ChannelID string `json:"channel_id"`
 			GuildID   string `json:"guild_id"`
 			Content   string `json:"content"`
-			Author    struct {
+			Mentions  []struct {
+				ID string `json:"id"`
+			} `json:"mentions"`
+			Author struct {
 				ID         string `json:"id"`
 				Username   string `json:"username"`
 				GlobalName string `json:"global_name"`
@@ -254,8 +257,9 @@ func (d *discord) dispatch(ctx context.Context, f discordFrame) {
 			return
 		}
 		d.mu.Lock()
-		self := m.Author.ID == d.botID
+		botID := d.botID
 		d.mu.Unlock()
+		self := m.Author.ID == botID
 		// Its own replies, and other bots, are not people talking to it.
 		if self || m.Author.Bot || strings.TrimSpace(m.Content) == "" {
 			return
@@ -264,8 +268,25 @@ func (d *discord) dispatch(ctx context.Context, f discordFrame) {
 		if name == "" {
 			name = m.Author.Username
 		}
-		in := Incoming{Account: m.Author.ID, Conversation: m.ChannelID, Group: m.GuildID != "",
-			Text: m.Content, MessageID: m.ID, DisplayName: name}
+		group := m.GuildID != ""
+		text, addressed := m.Content, !group
+		if group && botID != "" {
+			mentioned := false
+			for _, u := range m.Mentions {
+				if u.ID == botID {
+					mentioned = true
+				}
+			}
+			for _, tag := range []string{"<@" + botID + ">", "<@!" + botID + ">"} {
+				var hit bool
+				if text, hit = stripMention(text, tag); hit {
+					mentioned = true
+				}
+			}
+			addressed = mentioned
+		}
+		in := Incoming{Account: m.Author.ID, Conversation: m.ChannelID, Group: group, Addressed: addressed,
+			Text: text, MessageID: m.ID, DisplayName: name}
 		select {
 		case d.events <- in:
 		case <-ctx.Done():

@@ -86,8 +86,12 @@ type syncResponse struct {
 					EventID string `json:"event_id"`
 					Sender  string `json:"sender"`
 					Content struct {
-						MsgType string `json:"msgtype"`
-						Body    string `json:"body"`
+						MsgType       string `json:"msgtype"`
+						Body          string `json:"body"`
+						FormattedBody string `json:"formatted_body"`
+						Mentions      struct {
+							UserIDs []string `json:"user_ids"`
+						} `json:"m.mentions"`
 					} `json:"content"`
 				} `json:"events"`
 			} `json:"timeline"`
@@ -146,16 +150,35 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 			if strings.TrimSpace(ev.Content.Body) == "" {
 				continue
 			}
+			group := room.Summary.JoinedMemberCount != 2
+			text, addressed := ev.Content.Body, !group
+			if group {
+				// Addressed by the m.mentions list, a pill link to the
+				// bot, or its user id in the text (ADR-W033 B9.1).
+				for _, id := range ev.Content.Mentions.UserIDs {
+					if id == m.userID {
+						addressed = true
+					}
+				}
+				if strings.Contains(ev.Content.FormattedBody, "matrix.to/#/"+m.userID) {
+					addressed = true
+				}
+				var hit bool
+				if text, hit = stripMention(text, m.userID); hit {
+					addressed = true
+				}
+			}
 			out = append(out, Incoming{
 				Account:      ev.Sender,
 				Conversation: roomID,
+				Addressed:    addressed,
 				// Matrix has no flag for "this is a DM": a room is one by
 				// convention when it holds two people. Erring toward
 				// GROUP is the safe direction — the group rules are more
 				// careful, not less (ADR-W026 A7) — so a room whose
 				// membership we cannot read is treated as shared.
-				Group:       room.Summary.JoinedMemberCount != 2,
-				Text:        ev.Content.Body,
+				Group:       group,
+				Text:        text,
 				MessageID:   ev.EventID,
 				DisplayName: ev.Sender,
 			})
