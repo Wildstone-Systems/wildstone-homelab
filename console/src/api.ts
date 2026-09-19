@@ -1376,6 +1376,15 @@ export interface ReplayResult {
 
 export const api = {
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
+  // The theme this person reads on, shared with the household portal:
+  // one row, one resolver, so the two surfaces cannot disagree.
+  appearance: () => call<Appearance>("GET", "/api/v1/appearance"),
+  setTheme: (theme: string) => call<Appearance>("PUT", "/api/v1/appearance", { theme }),
+  // An Owner's acts: which themes the household can choose from.
+  importTheme: (name: string, colors: string) =>
+    call<ThemeSummary>("POST", "/api/v1/appearance/themes", { name, colors }),
+  removeTheme: (name: string) =>
+    call<{ removed: string }>("DELETE", `/api/v1/appearance/themes/${encodeURIComponent(name)}`),
   // What one provider serves. `provider` picks how to ask (Ollama's
   // /api/tags, an OpenAI-compatible /models, Anthropic's /v1/models);
   // omitted, it is Ollama, as it always was.
@@ -1959,6 +1968,33 @@ export interface ConnectionCreated {
   plan?: string;
   invite: number;
   note: string;
+}
+
+// ------------------------------------------------------------ appearance
+
+// One theme, as the picker draws it. The swatch is the DERIVED
+// palette — what the surfaces will actually render, contrast repair
+// included — not the colours the theme's author typed.
+export interface ThemeSummary {
+  name: string;
+  label: string;
+  imported: boolean;
+  dark: boolean;
+  swatch: { background: string; surface: string; text: string; accent: string };
+}
+
+// What this person is on, and what else there is.
+//
+// `tokens` is the themed block, derived server-side. There is no second
+// copy of that derivation here on purpose: the contrast floors it
+// enforces are the same floors scripts/contrast-check.mjs holds the
+// shipped sheet to, and two implementations of a rule is one of them
+// being wrong.
+export interface Appearance {
+  theme: string;
+  tokens?: Record<string, string>;
+  dark: boolean;
+  themes: ThemeSummary[];
 }
 
 // An open invite, as its own Person sees it.
