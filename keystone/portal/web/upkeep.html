@@ -68,7 +68,17 @@
       <h1>Coming up</h1>
       <div class="muted">What the house is keeping track of</div>
     </div>
+    <div class="asks">
+      <button class="hbtn hbtn-primary" id="add-thing" type="button">Track something new</button>
+      <button class="hbtn hbtn-secondary" id="add-task" type="button">Add a reminder</button>
+    </div>
   </div>
+
+  <!-- Adding is a few questions in the order a person thinks of them:
+       the THING first, then what you want to keep up with on it. The
+       second is where the meter pays for itself — adding tyres to a
+       truck the house already knows about skips the first half. -->
+  <div id="form" hidden></div>
 
   <!-- One box across every section. It lives OUTSIDE the results, so a
        search matching nothing cannot take away the only control that
@@ -223,6 +233,7 @@
           (res.j.row.bookedFor ? " — " + when(res.j.row.bookedFor) : "")));
         if (!res.j.cycles.length) {
           body.appendChild(make("div", "muted", "Nothing recorded yet."));
+          body.appendChild(removeRow(row));
           return;
         }
         var t = make("table", "hist");
@@ -246,6 +257,7 @@
           t.appendChild(tr);
         });
         body.appendChild(t);
+        body.appendChild(removeRow(row));
       })
       .catch(function () {
         clear(body);
@@ -253,10 +265,184 @@
       });
   }
 
+  // Stopping tracking is offered one level down, with the history, so
+  // it is never a tap away from a list somebody is skimming.
+  function removeRow(row) {
+    var wrap = make("div", "asks");
+    wrap.style.marginTop = "var(--space-3)";
+    var b = make("button", "hbtn hbtn-ghost", "Stop tracking this");
+    b.type = "button";
+    b.addEventListener("click", function () {
+      if (!window.confirm("Stop tracking \u201c" + (row.description || row.name) +
+                          "\u201d? What has already been recorded is kept.")) { return; }
+      post("DELETE", "/api/v1/home/commitments/" + encodeURIComponent(row.name), null, b);
+    });
+    wrap.appendChild(b);
+    return wrap;
+  }
+
   function when(iso) {
     var d = new Date(iso);
     return isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined,
       { day: "numeric", month: "short", year: "numeric" });
+  }
+
+
+  // ---- adding and removing --------------------------------------------
+
+  function field(label, id, opts) {
+    var wrap = make("label", "stack");
+    wrap.style.gap = "var(--space-2)";
+    wrap.appendChild(make("span", "muted", label));
+    var input = make("input", "hinput");
+    input.id = id;
+    input.type = (opts && opts.type) || "text";
+    if (opts && opts.placeholder) { input.placeholder = opts.placeholder; }
+    if (opts && opts.value) { input.value = opts.value; }
+    wrap.appendChild(input);
+    return wrap;
+  }
+
+  function picker(label, id, options) {
+    var wrap = make("label", "stack");
+    wrap.style.gap = "var(--space-2)";
+    wrap.appendChild(make("span", "muted", label));
+    var sel = make("select", "hbtn hbtn-secondary");
+    sel.id = id;
+    options.forEach(function (o) {
+      var opt = make("option", "", o.label);
+      opt.value = o.value;
+      sel.appendChild(opt);
+    });
+    wrap.appendChild(sel);
+    return wrap;
+  }
+
+  function closeForm() {
+    var f = el("form");
+    f.hidden = true;
+    clear(f);
+  }
+
+  function openForm(title, build, submit) {
+    var f = el("form");
+    clear(f);
+    f.hidden = false;
+    var card = make("section", "wid");
+    card.appendChild(make("h2", "", title));
+    var stack = make("div", "stack");
+    build(stack);
+    card.appendChild(stack);
+    var row = make("div", "asks");
+    row.style.marginTop = "var(--space-4)";
+    var save = make("button", "hbtn hbtn-primary", "Save");
+    save.type = "button";
+    var cancel = make("button", "hbtn hbtn-ghost", "Cancel");
+    cancel.type = "button";
+    cancel.addEventListener("click", closeForm);
+    save.addEventListener("click", function () { submit(save); });
+    row.appendChild(save);
+    row.appendChild(cancel);
+    card.appendChild(row);
+    f.appendChild(card);
+    f.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function val(id) { return (el(id) && el(id).value || "").trim(); }
+
+  // A rollover is the one thing a household has to choose deliberately,
+  // so it is offered in words rather than as the engine's three names.
+  var rollovers = [
+    { value: "fromCompletion", label: "Every so often, measured from when it was last done" },
+    { value: "fromSchedule", label: "On a fixed schedule, whenever it actually happens" },
+    { value: "once", label: "Just the once" },
+  ];
+
+  function taskFields(stack, meters) {
+    stack.appendChild(field("What do you want to keep up with?", "f-desc",
+      { placeholder: "Oil and filter" }));
+    if (meters && meters.length) {
+      var opts = [{ value: "", label: "The calendar" }];
+      meters.forEach(function (m) { opts.push({ value: m.name, label: m.description || m.name }); });
+      stack.appendChild(picker("Measured against", "f-meter", opts));
+    }
+    stack.appendChild(field("How often?", "f-every", { placeholder: "5000, or 3mo" }));
+    stack.appendChild(field("Start asking this early", "f-lead", { placeholder: "300, or 14d" }));
+    stack.appendChild(picker("Does it come round again?", "f-rollover", rollovers));
+  }
+
+  function taskBody() {
+    var body = {
+      description: val("f-desc"),
+      every: val("f-every"),
+      lead: val("f-lead"),
+      rollover: val("f-rollover") || "fromCompletion"
+    };
+    var m = el("f-meter");
+    if (m && m.value) { body.meter = m.value; }
+    return body;
+  }
+
+  function post(method, path, body, btn, done) {
+    btn.disabled = true;
+    fetch(path, {
+      method: method,
+      headers: { "Content-Type": "application/json" },
+      body: body === null ? undefined : JSON.stringify(body)
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, code: r.status, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "that didn't go through"); }
+        if (done) { done(res.j); } else { closeForm(); load(); }
+      })
+      .catch(function (err) {
+        btn.disabled = false;
+        var said = btn.parentNode.querySelector(".asks-said");
+        if (!said) { said = make("span", "asks-said", ""); btn.parentNode.appendChild(said); }
+        said.textContent = String(err.message || err);
+      });
+  }
+
+  function meterList() {
+    return (page && page.tracked || []).map(function (g) { return g.meter; });
+  }
+
+  el("add-thing").addEventListener("click", function () {
+    openForm("Track something new", function (stack) {
+      stack.appendChild(field("What is it?", "f-mdesc", { placeholder: "F-150 odometer" }));
+      stack.appendChild(field("What does it count?", "f-unit", { placeholder: "miles" }));
+      stack.appendChild(field("What does it read now?", "f-reading", { type: "number" }));
+      stack.appendChild(make("div", "muted", "And the first thing to keep up with — you can add more later."));
+      taskFields(stack, null);
+    }, function (btn) {
+      var body = { meter: { description: val("f-mdesc"), unit: val("f-unit") } };
+      var n = parseFloat(val("f-reading"));
+      if (!isNaN(n)) { body.reading = n; }
+      if (val("f-desc")) { body.commitment = taskBody(); }
+      post("POST", "/api/v1/home/tracked", body, btn);
+    });
+  });
+
+  el("add-task").addEventListener("click", function () {
+    openForm("Add a reminder", function (stack) {
+      taskFields(stack, meterList());
+    }, function (btn) {
+      post("POST", "/api/v1/home/commitments", taskBody(), btn);
+    });
+  });
+
+  // Removing a meter names what stops working, and asks again. The
+  // commitments keep their schedules and lose the number they measure
+  // against — that is the one destructive act here, and it is a
+  // member's to make knowingly rather than an Owner's to gate.
+  function removeMeter(meter, btn) {
+    post("DELETE", "/api/v1/home/meters/" + encodeURIComponent(meter), null, btn, function (j) {
+      if (!j.confirm) { closeForm(); load(); return; }
+      btn.disabled = false;
+      if (window.confirm(j.consequence + "\n\nStop keeping it anyway?")) {
+        post("DELETE", "/api/v1/home/meters/" + encodeURIComponent(meter) + "?confirm=yes", null, btn);
+      }
+    });
   }
 
   // ---- the three sections ---------------------------------------------
@@ -302,6 +488,10 @@
     boxInput.style.maxWidth = "9rem";
     ask.appendChild(boxInput);
     ask.appendChild(saveBtn(g.meter.name, boxInput));
+    var drop = make("button", "hbtn hbtn-ghost", "Stop keeping this");
+    drop.type = "button";
+    drop.addEventListener("click", function () { removeMeter(g.meter.name, drop); });
+    ask.appendChild(drop);
     wrap.appendChild(ask);
 
     var rows = g.commitments.filter(function (r) { return matches(r) && keep("tracked", r); });
