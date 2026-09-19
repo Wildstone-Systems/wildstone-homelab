@@ -112,6 +112,21 @@ func (h *harness) person(handles ...string) {
 	}
 }
 
+// owner puts a household member on record as an Owner and admits them.
+// The Console is the Owner surface, so a fixture for a Console caller
+// needs one.
+func (h *harness) owner(handles ...string) {
+	h.t.Helper()
+	for _, handle := range handles {
+		if err := h.s.DB.RecordButlerMember(handle, runtimedb.RoleOwner, "", ""); err != nil {
+			h.t.Fatalf("recording owner %q: %v", handle, err)
+		}
+		if err := h.s.DB.AdmitButlerMember(handle, "fixture"); err != nil {
+			h.t.Fatalf("admitting %q: %v", handle, err)
+		}
+	}
+}
+
 // console records handle as a household member and returns a token for
 // role that ACTS FOR them — a Console caller.
 //
@@ -122,7 +137,20 @@ func (h *harness) person(handles ...string) {
 // every fixture that asks a Butler mints one of these instead.
 func (h *harness) console(role runtimedb.Role, handle string) string {
 	h.t.Helper()
-	h.person(handle)
+	// A RoleAdmin caller IS a Console holder, and the Console is the
+	// Owner surface (design §3.2), so the person behind one is recorded
+	// as an Owner. Anything else — an operator token, a concierge — is
+	// a Member by default, which is what those credentials act for.
+	//
+	// The pairing is not decoration. Since slice 3 the door re-derives
+	// the acting person's standing on every request, so a fixture that
+	// minted the Console's own credential for a Member would be
+	// describing a caller the deployment refuses.
+	if role == runtimedb.RoleAdmin {
+		h.owner(handle)
+	} else {
+		h.person(handle)
+	}
 	tok, err := h.s.Principals.Mint(principalNameFor(h.t, role), handle, 0)
 	if err != nil {
 		h.t.Fatalf("minting a %s token acting for %q: %v", role, handle, err)

@@ -238,6 +238,11 @@ type notification struct {
 type calendarCard struct {
 	homeCard
 	OpenAt string `json:"openAt,omitempty"`
+	// Page is Wildstone's own calendar page, present when Keystone can
+	// read and write the shared calendar. The card opens THIS rather
+	// than OpenAt when it has it: Radicale's web UI manages calendars,
+	// not events, so it is not where anybody goes to add one.
+	Page string `json:"page,omitempty"`
 	// AddToPhone is the configuration profile link, present only when
 	// this household runs Wildstone's own calendar. It is the whole
 	// answer to "how do I get this on my phone" and there is no other
@@ -839,6 +844,9 @@ func (s *Server) homeCalendar(member string, desired []resource.Resource, now ti
 			card.Problem = "Installed, but this dashboard hasn't been given the calendar's sign-in yet, " +
 				"so it can't show what's on. You can still add it to your phone."
 			return card
+		}
+		if s.CalendarBook != nil {
+			card.Page = "/calendar/"
 		}
 		events, err := s.CalendarEvents(now, now.AddDate(0, 0, calendarCardDays))
 		if err != nil {

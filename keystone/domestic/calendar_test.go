@@ -834,3 +834,21 @@ func TestATimeInItsOwnZoneKeepsItsHour(t *testing.T) {
 		}
 	}
 }
+
+// Every calendar tool says what it takes. A family Butler reaches these
+// through one generic tool, so this text is the only place a model sees
+// "date (today | tomorrow | YYYY-MM-DD)" before it has to send one.
+func TestEveryCalendarToolDescribesItsInputs(t *testing.T) {
+	g := &Gateway{}
+	for _, e := range (&Calendar{}).Executors() {
+		g.Register(e)
+	}
+	for tool := range CalendarTools {
+		if u := g.Usage(CalendarCapability + "." + tool); u == "" {
+			t.Errorf("calendar.%s has no usage text", tool)
+		}
+	}
+	if g.Usage("calendar.no_such_tool") != "" {
+		t.Error("an unregistered tool reported a usage")
+	}
+}
