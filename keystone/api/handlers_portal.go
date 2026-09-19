@@ -80,12 +80,18 @@ func frameAncestors(desired []resource.Resource) []string {
 
 // portalPage serves one embedded page.
 func (s *Server) portalPage(name string) portalFunc {
-	return func(w http.ResponseWriter, r *http.Request, _ string, desired []resource.Resource) (any, int, error) {
+	return func(w http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
 		body, ok := portal.Page(name)
 		if !ok {
 			return nil, http.StatusNotFound, fmt.Errorf("no such page")
 		}
-		portal.WritePage(w, body, frameAncestors(desired))
+		// The viewer's theme is rendered INTO the page rather than
+		// fetched by it. Keystone already knows who is asking — the
+		// door resolved them before this handler ran — so a second
+		// round trip would buy nothing and cost a visible flash of the
+		// default palette on every navigation, on the wall tablet,
+		// where somebody is standing watching it.
+		portal.WritePage(w, portal.InjectTheme(body, s.themeCSS(member)), frameAncestors(desired))
 		return nil, http.StatusOK, nil
 	}
 }

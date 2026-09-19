@@ -35,6 +35,8 @@ import { ago, ErrorLine } from "./lib";
 import { ConsoleStateProvider, useConsoleState } from "./state";
 import { Dot, Kind, StatusPill } from "./ui/status";
 import { Rail, RailItem } from "./ui/Rail";
+import { ThemePicker } from "./ui/ThemePicker";
+import { adopt } from "./theme";
 import { Activity } from "./views/Activity";
 import { Backups } from "./views/Backups";
 import { Butler } from "./views/Butler";
@@ -151,6 +153,11 @@ export function Shell() {
 
   useEffect(() => {
     api.whoami().then(setWho).catch(() => {});
+    // The theme this person chose, which the cached block already
+    // guessed at before React mounted (theme.ts). Corrected here on
+    // every load, so a choice made on the household dashboard — or on
+    // another machine — is showing by the time the shell paints.
+    api.appearance().then(adopt).catch(() => {});
   }, []);
 
   // Pips are the whole point of an icon rail: they say which screen has
@@ -205,11 +212,18 @@ export function Shell() {
         }}
         mark={<ShieldCheck size={22} weight="fill" />}
         footer={
-          who && (
-            <div className="avatar" title={`${who.name} · ${who.role}`}>
-              {initials(who.name)}
-            </div>
-          )
+          <>
+            {/* Adding a theme changes what the whole household can
+                choose from, so it is offered to the role that
+                administers the deployment. Choosing one is offered to
+                everybody, because it is nobody else's business. */}
+            <ThemePicker canImport={who?.role === "admin"} />
+            {who && (
+              <div className="avatar" title={`${who.name} · ${who.role}`}>
+                {initials(who.name)}
+              </div>
+            )}
+          </>
         }
       />
       <main className="main">

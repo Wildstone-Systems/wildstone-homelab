@@ -520,6 +520,23 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/notices/preferences", s.handle(principal.VerbRead, s.getNoticePreferences))
 	mux.Handle("PUT /api/v1/notices/preferences", s.handle(principal.VerbRead, s.setNoticePreferences))
 	mux.Handle("PUT /api/v1/notices/kinds", s.handle(principal.VerbManage, s.setNoticeKind))
+	// Appearance. Reading and setting are a READ verb because the theme
+	// a person reads on is their own setting and changes nothing about
+	// the deployment — the same reasoning as their notice preferences
+	// above. Adding or removing a theme is VerbManage: it changes what
+	// the whole household can choose from, and it is the one path by
+	// which text somebody pasted reaches the control plane's database.
+	mux.Handle("GET /api/v1/appearance", s.handle(principal.VerbRead, s.getAppearance))
+	mux.Handle("PUT /api/v1/appearance", s.handle(principal.VerbRead, s.setAppearance))
+	mux.Handle("POST /api/v1/appearance/themes", s.handle(principal.VerbManage, s.importTheme))
+	mux.Handle("DELETE /api/v1/appearance/themes/{name}", s.handle(principal.VerbManage, s.removeTheme))
+	// The picture a theme brings. VerbManage for the same reason the
+	// palette is: it changes what the whole household sees, and it is
+	// the one path by which an image file somebody downloaded reaches
+	// the control plane. The Console never DRAWS one — it has no read
+	// route for the bytes at all — it only manages them.
+	mux.Handle("PUT /api/v1/appearance/themes/{name}/background", s.handle(principal.VerbManage, s.themeBackgroundSet))
+	mux.Handle("DELETE /api/v1/appearance/themes/{name}/background", s.handle(principal.VerbManage, s.themeBackgroundClear))
 	mux.Handle("GET /api/v1/butler/models", s.handle(principal.VerbRead, s.listModels))
 	mux.Handle("PUT /api/v1/butler/models", s.handle(principal.VerbManage, s.upsertModel))
 
@@ -676,6 +693,17 @@ func (s *Server) Handler() http.Handler {
 	// Clearing takes no seq: see homeClearNotices. It can only ever
 	// reach the caller's own notifications.
 	mux.Handle("POST /api/v1/home/notices/clear", s.portal(surfaceHome, s.homeClearNotices))
+	// The theme a member reads on, shared with the Console: one row,
+	// one resolver, so the tablet in the kitchen and the Console on a
+	// laptop cannot disagree about what somebody chose. Choosing only —
+	// ADDING a theme is an Owner's act on the Console.
+	mux.Handle("GET /api/v1/home/appearance", s.portal(surfaceHome, s.homeAppearance))
+	mux.Handle("POST /api/v1/home/appearance", s.portal(surfaceHome, s.homeSetAppearance))
+	// The wallpaper itself, which is drawn HERE and nowhere else. Any
+	// theme's picture is readable by any member on this surface: every
+	// theme in the catalogue is one they may choose, so a picker that
+	// previews them shows nothing picking them would not.
+	mux.Handle("GET /api/v1/home/appearance/themes/{name}/background", s.portal(surfaceHome, s.homeThemeBackground))
 
 	// The household's banner photo. Setting it and framing it are
 	// separate writes: the framing is chosen once the picture is on

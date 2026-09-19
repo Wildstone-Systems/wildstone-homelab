@@ -2002,3 +2002,70 @@ tr[aria-pressed="true"] { box-shadow: inset 2px 0 0 var(--color-accent); }
   border: 1px solid var(--color-border); box-shadow: 0 6px 24px color-mix(in srgb, var(--color-text) 18%, transparent);
   z-index: 50; max-width: min(92vw, 640px); font-size: 13px;
 }
+
+/* ------------------------------------------------------- appearance */
+
+/* The theme picker. Every rule here names a token and no colour, which
+ * is the same discipline the rest of this sheet keeps — and here it is
+ * load-bearing twice over, because the panel itself is drawn in the
+ * theme it is used to choose. */
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.theme-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: var(--space-2);
+  border: 0;
+  background: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  color: var(--color-text);
+  font: inherit;
+  box-shadow: 0 0 0 1px transparent;
+  transition: box-shadow 0.12s, background 0.12s;
+}
+.theme-tile:hover { background: var(--faint); }
+/* The selected tile is ringed rather than filled: a fill would tint the
+ * swatch it sits around, which is the one thing on this screen that has
+ * to show its own colours truthfully. */
+.theme-tile.on { box-shadow: 0 0 0 2px var(--color-accent); }
+.theme-tile .theme-name { font-size: 13px; line-height: 1.25; }
+.theme-tile .muted { font-size: 11px; line-height: 1.25; }
+
+/* A miniature of the thing itself — a ground, a card on it, and two
+ * lines of content — rather than a row of colour chips. A chip row says
+ * which colours a theme contains; this says what a screen will look
+ * like, which is the question somebody choosing is actually asking. */
+.theme-swatch {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  display: flex;
+  align-items: flex-end;
+  padding: 5px;
+  overflow: hidden;
+}
+.theme-swatch-card {
+  width: 100%;
+  border-radius: 3px;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.theme-swatch-line { height: 3px; border-radius: 2px; width: 100%; opacity: 0.85; }
+.theme-swatch-line.short { width: 55%; opacity: 1; }
+
+/* The mark on a theme that brings a wallpaper. The Console does not
+ * wear one — this says the picture exists and where it appears. */
+.theme-name { display: inline-flex; align-items: center; gap: 4px; }
+.theme-haspic { color: var(--muted); flex: none; }
