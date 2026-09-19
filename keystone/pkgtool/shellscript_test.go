@@ -98,6 +98,9 @@ type fakeLldap struct {
 	// and the first version of this script silently found no token in
 	// it. That bug is the reason this knob exists.
 	spaced bool
+	// revocations records every RemoveUserFromGroup the script asked
+	// for, as "<user>-x<groupID>" — the counterpart of memberships.
+	revocations []string
 }
 
 func (f *fakeLldap) write(w http.ResponseWriter, v any) {
@@ -161,6 +164,16 @@ func (f *fakeLldap) handler(password string) http.Handler {
 				f.memberships = append(f.memberships, fmt.Sprintf("%s->%d", user, int(gid)))
 				f.mu.Unlock()
 				f.write(w, map[string]any{"data": map[string]any{"addUserToGroup": map[string]bool{"ok": true}}})
+				return
+			}
+			if strings.Contains(query, "RemoveUserFromGroup") {
+				vars, _ := body["variables"].(map[string]any)
+				user, _ := vars["u"].(string)
+				gid, _ := vars["g"].(float64)
+				f.mu.Lock()
+				f.revocations = append(f.revocations, fmt.Sprintf("%s-x%d", user, int(gid)))
+				f.mu.Unlock()
+				f.write(w, map[string]any{"data": map[string]any{"removeUserFromGroup": map[string]bool{"ok": true}}})
 				return
 			}
 			// A single user's memberships, which the script reads before
@@ -434,5 +447,122 @@ func TestProvisionerCreatesUsers(t *testing.T) {
 	}
 	if len(fake.memberships) != 1 || !strings.HasPrefix(fake.memberships[0], "bob->") {
 		t.Errorf("want exactly one membership add for bob, got %v\n%s", fake.memberships, out)
+	}
+}
+
+// The provisioner removes a membership Wildstone placed, and leaves one
+// it did not (ADR-W033 design §4, slice 8).
+//
+// The two halves are one decision seen from both sides, and the second
+// is the one that made reversing the additive-only posture acceptable
+// at all. LdapUserSpec used to record the objection in so many words:
+//
+//	a system that thinks it does is one that removes your sister from
+//	photos_users because a YAML file did not mention her.
+//
+// She is `media_users` here. Nothing claimed her, so nothing lists her
+// in the revoke column, so this script cannot touch her however the
+// directory looks — and it says so out loud rather than staying silent
+// about access Wildstone did not grant.
+func TestProvisionerRevokesOnlyWhatWildstonePlaced(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	script := provisionerScript(t)
+	fake := &fakeLldap{
+		existingUsers: []string{"alice"},
+		// alice is in both. One is Wildstone's, one a human's.
+		existingMembers: map[string][]string{"alice": {"photos_users", "media_users"}},
+	}
+	srv := httptest.NewServer(fake.handler("pw"))
+	defer srv.Close()
+
+	out, code := runProvisionerWithUsers(t, script, srv.URL, "pw",
+		[]string{"photos_users", "media_users"},
+		// Nothing to add; photos_users to take back. media_users appears
+		// in neither column, which is what "wildstone never placed it"
+		// looks like in this file.
+		[]string{"alice\tAlice Example\talice@example.com\t-\tphotos_users"})
+	if code != 0 {
+		t.Fatalf("provisioner exited %d:\n%s", code, out)
+	}
+
+	if len(fake.revocations) != 1 {
+		t.Fatalf("want exactly one revocation, got %v\n%s", fake.revocations, out)
+	}
+	if !strings.Contains(out, "alice: revoked photos_users") {
+		t.Errorf("the claimed membership was not revoked:\n%s", out)
+	}
+	// The one nobody claimed is untouched, and reported.
+	if strings.Contains(out, "revoked media_users") {
+		t.Error("the script removed a membership Wildstone never placed — the " +
+			"bound on the revoke column is the entire safety argument for this")
+	}
+	if !strings.Contains(out, "alice: in media_users, which wildstone did not place") {
+		t.Errorf("a hand-made membership went unreported; a household should be "+
+			"able to see access Wildstone did not grant:\n%s", out)
+	}
+}
+
+// A user with nothing to add is still processed.
+//
+// The loop used to `continue` when the groups column was empty, which
+// was right when the file could only add. It is now how the person who
+// lost their LAST entitlement would keep it forever.
+func TestProvisionerRevokesForAUserWithNothingToAdd(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	script := provisionerScript(t)
+	fake := &fakeLldap{
+		existingUsers:   []string{"alice"},
+		existingMembers: map[string][]string{"alice": {"photos_users"}},
+	}
+	srv := httptest.NewServer(fake.handler("pw"))
+	defer srv.Close()
+
+	out, code := runProvisionerWithUsers(t, script, srv.URL, "pw",
+		[]string{"photos_users"},
+		[]string{"alice\tAlice Example\talice@example.com\t-\tphotos_users"})
+	if code != 0 {
+		t.Fatalf("provisioner exited %d:\n%s", code, out)
+	}
+	if len(fake.revocations) != 1 {
+		t.Errorf("a user with an empty groups column was skipped, so the "+
+			"revocation never happened: %v\n%s", fake.revocations, out)
+	}
+}
+
+// Revoking a membership the directory does not have is a no-op, not a
+// failure.
+//
+// The claim is recorded before the job runs, so a claim can legitimately
+// name a membership LLDAP never got — a previous pass that failed
+// halfway, or a human who removed it first. Treating that as an error
+// would leave the job failing forever over work already done.
+func TestRevokingAMembershipThatIsNotThereSucceeds(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	script := provisionerScript(t)
+	fake := &fakeLldap{
+		existingUsers:   []string{"alice"},
+		existingMembers: map[string][]string{"alice": {}},
+	}
+	srv := httptest.NewServer(fake.handler("pw"))
+	defer srv.Close()
+
+	out, code := runProvisionerWithUsers(t, script, srv.URL, "pw",
+		[]string{"photos_users"},
+		[]string{"alice\tAlice Example\talice@example.com\t-\tphotos_users"})
+	if code != 0 {
+		t.Fatalf("provisioner exited %d — a revocation with nothing to revoke "+
+			"must not fail the job:\n%s", code, out)
+	}
+	if len(fake.revocations) != 0 {
+		t.Errorf("it asked LLDAP to remove a membership that was not there: %v", fake.revocations)
+	}
+	if !strings.Contains(out, "alice: not in photos_users, nothing to revoke") {
+		t.Errorf("the no-op was not reported:\n%s", out)
 	}
 }

@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: identity
-  version: 1.0.5
+  version: 1.1.0
   capability: identity
   profile: authelia-lldap
   exclusive: true
@@ -567,9 +567,19 @@ templates:
         # created here exists and is in their groups, and cannot log in
         # until they claim.
         #
-        # Additive in both directions, like groups: never deletes a user,
-        # never removes a membership. This file is what Wildstone was
-        # asked to ensure, not a roster of who is in a group.
+        # Never deletes a USER. Memberships are a different matter
+        # since slice 8: the fifth field names ones to remove, and
+        # every name in it is a membership Wildstone placed itself and
+        # no longer wants (projected_memberships records which).
+        #
+        # That bound is the whole reason this is safe to do at all.
+        # The objection to a control plane removing memberships is that
+        # it removes the ones a person added themselves in LLDAP's own
+        # UI — your sister in photos_users, who no YAML file mentions.
+        # She can never appear
+        # in this field, because Wildstone never claimed her. So this
+        # file is still not a roster of who is in a group: it is what
+        # Wildstone asserted, plus what it is taking back.
         USERS="${USERS_FILE:-/etc/wildstone/lldap/users}"
         if [ -f "$USERS" ]; then
           # Re-read groups: the ids needed below include any created a
@@ -580,7 +590,7 @@ templates:
           # Tab-separated; see keystone/reconcile/lldapusers.go. Fields
           # are validated to a closed charset before they reach here
           # (LdapUserSpec), which is what makes this interpolation safe.
-          while IFS="$(printf '\t')" read -r uname udisplay uemail ugroups; do
+          while IFS="$(printf '\t')" read -r uname udisplay uemail ugroups urevoke; do
             case "$uname" in ''|'#'*) continue ;; esac
 
             case "$USERS_NOW" in
@@ -598,7 +608,18 @@ templates:
                 esac ;;
             esac
 
-            [ -n "$ugroups" ] || continue
+            # Not `[ -n "$ugroups" ] || continue`: a user with nothing
+            # to ADD may still have something to revoke, and skipping
+            # here is how a withdrawn entitlement would never be acted
+            # on for the person who lost their last one.
+            # "-" is an empty list. It is written as a character rather
+            # than as an empty field because tab is IFS whitespace: two
+            # tabs in a row are ONE separator to `read`, so an empty
+            # groups column would shift the revocations into it and this
+            # script would ADD every membership it was told to remove.
+            if [ "$ugroups" = "-" ]; then ugroups=""; fi
+            if [ "$urevoke" = "-" ]; then urevoke=""; fi
+            { [ -n "$ugroups" ] || [ -n "$urevoke" ]; } || continue
             MEMBER_OF=$(post /api/graphql "$AUTH" \
               "{\"query\":\"{user(userId: \\\"$uname\\\") {groups {displayName}}}\"}" | squeeze)
 
@@ -633,6 +654,70 @@ templates:
               IFS=,
             done
             IFS=$OLDIFS
+            # ---- Revocations (slice 8).
+            #
+            # Only names Wildstone placed itself reach this field; the
+            # projection subtracts everything else before writing the
+            # file. So this loop cannot remove a membership somebody
+            # created directly in the directory, however it looks.
+            #
+            # MEMBER_OF was read before the additions above, so a group
+            # just added is not in it — which is correct and not a
+            # staleness bug: a name cannot be in both columns at once
+            # (LdapUserSpec refuses that outright), so nothing added
+            # this pass can also be revoked this pass.
+            OLDIFS=$IFS; IFS=,
+            for g in $urevoke; do
+              IFS=$OLDIFS
+              [ -n "$g" ] || continue
+              case "$MEMBER_OF" in
+                *"\"displayName\":\"$g\""*) ;;
+                *) echo "user $uname: not in $g, nothing to revoke"; IFS=,; continue ;;
+              esac
+              gid=$(printf '%s' "$GROUPS_NOW" | tr '{' '\n' \
+                | grep "\"displayName\":\"$g\"" \
+                | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)
+              if [ -z "$gid" ]; then
+                echo "user $uname: group $g does not exist in the directory" >&2; rc=1; IFS=,; continue
+              fi
+              RESP=$(post /api/graphql "$AUTH" \
+                "{\"query\":\"mutation RemoveUserFromGroup(\$u: String!, \$g: Int!) {removeUserFromGroup(userId: \$u, groupId: \$g) {ok}}\",\"operationName\":\"RemoveUserFromGroup\",\"variables\":{\"u\":\"$uname\",\"g\":$gid}}") || {
+                  echo "user $uname: revoking $g failed" >&2; rc=1; IFS=,; continue; }
+              case "$RESP" in
+                *'"errors"'*) echo "user $uname -x $g: $RESP" >&2; rc=1 ;;
+                *)            echo "user $uname: revoked $g" ;;
+              esac
+              IFS=,
+            done
+            IFS=$OLDIFS
+
+            # ---- Report what Wildstone did not place.
+            #
+            # A membership in neither column was created by a person
+            # directly in LLDAP. It is NOT removed — that is the whole
+            # boundary this slice keeps — but it is said out loud, so a
+            # household can see that the directory holds access
+            # Wildstone does not know about and did not grant.
+            # `|| [ -n "$have" ]` below because the last line carries
+            # no trailing newline: `read` sets the variable and still
+            # returns non-zero at EOF, so a plain `while read` drops it.
+            # The group it drops is whichever LLDAP returned last, which
+            # is exactly the kind of omission nobody notices — the first
+            # version of this reported one of two hand-made memberships
+            # and looked like it worked.
+            #
+            # No comments inside the pipeline: a line continuation
+            # cannot be followed by one, and the shell reports it as
+            # `Syntax error: "|" unexpected` forty lines further down.
+            printf '%s' "$MEMBER_OF" | tr '{' '\n' \
+              | sed -n 's/.*"displayName":"\([^"]*\)".*/\1/p' \
+              | while read -r have || [ -n "$have" ]; do
+                [ -n "$have" ] || continue
+                case ",$ugroups,$urevoke," in
+                  *",$have,"*) continue ;;
+                esac
+                echo "user $uname: in $have, which wildstone did not place — left alone"
+              done
           done < "$USERS"
         fi
 

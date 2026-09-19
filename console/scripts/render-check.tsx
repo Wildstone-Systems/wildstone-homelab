@@ -2497,5 +2497,80 @@ check(
 );
 check("and the other is not", activityTabs.includes('tabindex="-1"'));
 
+// ---- Entitlements (ADR-W033 design §4, §18.2; slice 8).
+//
+// The load-bearing check is the empty one. A service with no decision
+// on record reaches NOBODY, and a screen that said nothing at all there
+// would read as "everyone" — which is the opposite of what the resolver
+// does and the opposite of what is safe.
+import { ServiceAccessView } from "../src/views/ServiceAccess";
+import { PersonGroupsView } from "../src/views/PersonGroups";
+import type { PersonGroup, ServiceAccess } from "../src/api";
+
+const groupsFixture: PersonGroup[] = [
+  { id: "grp_1", name: "Family", seedKey: "family", members: ["tom", "sam"] },
+  { id: "grp_2", name: "Adults", seedKey: "adults", members: ["tom"] },
+  { id: "grp_3", name: "Media", members: [] },
+];
+
+const undecided: ServiceAccess = {
+  capability: "photos", groups: [], people: [], reaches: [],
+};
+const undecidedOut = renderToString(
+  h(ServiceAccessView, { access: undecided, groups: groupsFixture, onChanged: () => {} }),
+);
+check("a service nobody decided about says it reaches nobody",
+  undecidedOut.includes("Nobody"), undecidedOut);
+check("and says that is the safe way round rather than a fault",
+  undecidedOut.includes("waiting for you rather than broken"));
+check("it offers a group to allow", undecidedOut.includes("Let a group use this"));
+
+const decided: ServiceAccess = {
+  capability: "photos",
+  declared: ["family"],
+  groups: [{ id: "grp_1", name: "Family", effect: "allow" }],
+  people: [{ id: "psn_b", name: "sam", effect: "restrict" }],
+  reaches: ["tom"],
+};
+const decidedOut = renderToString(
+  h(ServiceAccessView, { access: decided, groups: groupsFixture, onChanged: () => {} }),
+);
+// The ANSWER comes before the rules: who it reaches is what an Owner
+// needs, and "Adults may use this" still leaves them working out who
+// that is today.
+check("the resolved answer is shown", decidedOut.includes("tom"));
+check("an allowed group reads as may use", decidedOut.includes("may use"));
+check("a restricted person reads as refused", decidedOut.includes("refused"));
+check("the answer appears before the rules",
+  decidedOut.indexOf("Who may use this") < decidedOut.indexOf("Rules"));
+check("the declared audience is named as where the rules came from",
+  decidedOut.includes("This service says it is for"));
+// Both verbs are offered, because removing a rule and refusing somebody
+// are different things and a household must be able to say either.
+check("a rule can be removed", decidedOut.includes("Remove"));
+check("a rule can be flipped", decidedOut.includes("Refuse"));
+
+const dormant = renderToString(
+  h(ServiceAccessView, {
+    access: { ...decided, dormant: true }, groups: groupsFixture, onChanged: () => {},
+  }),
+);
+check("an uninstalled service says its rules are kept",
+  dormant.includes("not installed") && dormant.includes("come back if you install it again"));
+
+// Groups grant nothing by themselves, and the screen has to say so: a
+// list of groups with toggles looks exactly like a permissions screen.
+const groupsOut = renderToString(
+  h(PersonGroupsView, { groups: groupsFixture, members: ["tom", "sam"], onChanged: () => {} }),
+);
+check("the groups screen says membership grants nothing",
+  groupsOut.includes("grants nothing on its own"), groupsOut);
+check("it points at where access IS decided", groupsOut.includes("under Services"));
+check("a seeded group shows the role its rules reference",
+  groupsOut.includes("role: adults"));
+check("a household's own group shows no role",
+  !groupsOut.includes("role: media"));
+check("membership is a toggle per person", groupsOut.includes('aria-pressed="true"'));
+
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

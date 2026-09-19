@@ -491,6 +491,52 @@ export interface HouseholdGroup {
   node: string;
 }
 
+// --- The household's own groups and what they reach (ADR-W033 design
+// §4, slice 8).
+//
+// Not to be confused with HouseholdGroup above, which is a DIRECTORY
+// group a package declared. These are Wildstone's own: a directory
+// group is where a membership is projected TO, and a PersonGroup is
+// what the household decided. Blurring them in a screen is how somebody
+// edits one believing they edited the other.
+
+export interface PersonGroup {
+  id: string;
+  name: string;
+  // Set on the three groups the design names, empty on a group the
+  // household made itself. It names the ROLE and does not follow a
+  // rename, which is why code may look a group up by it and may not
+  // look one up by name.
+  seedKey?: string;
+  // Handles of the ACTIVE people in it. Resolved on every read, never
+  // stored, so renaming a Person re-points nothing.
+  members: string[];
+}
+
+// One decision about who may reach a service.
+export interface AccessDecision {
+  // The group_id or person_id a write names.
+  id: string;
+  // The household's word for it, resolved for display only.
+  name: string;
+  effect: "allow" | "restrict";
+}
+
+export interface ServiceAccess {
+  capability: string;
+  // What the package says it is for, which is where the rows came from.
+  declared?: string[];
+  groups: AccessDecision[];
+  people: AccessDecision[];
+  // Who the rules resolve to right now. The ANSWER, not the rules: an
+  // Owner reading "Adults may use this" still has to work out who that
+  // is today, and getting it wrong is the whole cost of a permission
+  // model.
+  reaches: string[];
+  // The service is not installed, so its decisions are inert and kept.
+  dormant?: boolean;
+}
+
 // --- Chat transports (ADR-W026 A3). What an invite may name: the
 // adapters this deployment actually has, not a free-text guess.
 export interface ChatTransport {
@@ -1715,6 +1761,24 @@ export const api = {
   principals: () => call<Principal[]>("GET", "/api/v1/principals"),
   householdMembers: () => call<HouseholdMember[]>("GET", "/api/v1/household/members"),
   householdGroups: () => call<HouseholdGroup[]>("GET", "/api/v1/household/groups"),
+  // The household's own groups (slice 8). Membership grants nothing by
+  // itself — what a group reaches is whatever the entitlement rows say.
+  personGroups: () => call<PersonGroup[]>("GET", "/api/v1/household/person-groups"),
+  setPersonGroup: (group: string, member: string, inGroup: boolean) =>
+    call<PersonGroup[]>(
+      "POST",
+      `/api/v1/household/person-groups/${encodeURIComponent(group)}/members`,
+      { member, in: inGroup },
+    ),
+  // Who may reach a service. Not a proposal: an entitlement changes no
+  // node, so there is nothing for a plan to apply, and the reconcile
+  // loop projects it on its next tick.
+  serviceAccess: (capability: string) =>
+    call<ServiceAccess>("GET", `/api/v1/services/${encodeURIComponent(capability)}/access`),
+  // effect "" removes the decision, which returns the subject to
+  // whatever their groups say — not the same as refusing them.
+  setServiceAccess: (capability: string, d: { subjectKind: "group" | "person"; subject: string; effect: "" | "allow" | "restrict" }) =>
+    call<ServiceAccess>("POST", `/api/v1/services/${encodeURIComponent(capability)}/access`, d),
   // Adding a member proposes a plan; the account exists once a human
   // approves it on the Plans screen.
   addHouseholdMember: (m: {

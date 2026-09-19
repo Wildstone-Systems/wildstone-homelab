@@ -385,6 +385,18 @@ func (s *Server) Handler() http.Handler {
 	// and in audit.
 	mux.Handle("PUT /api/v1/household/members/{username}", s.handle(principal.VerbPropose, s.updateHouseholdMember))
 	mux.Handle("GET /api/v1/household/groups", s.handle(principal.VerbRead, s.listHouseholdGroups))
+	// The household's OWN groups and what they reach (ADR-W033 design
+	// §4, slice 8). Distinct from /household/groups above, which lists
+	// the DIRECTORY groups packages declare: one is where a membership
+	// is projected TO, the other is what the household decided.
+	//
+	// Manage rather than Propose: these change no node, so there is
+	// nothing for a plan to apply. The reconcile loop projects them on
+	// its next tick.
+	mux.Handle("GET /api/v1/household/person-groups", s.handle(principal.VerbRead, s.listPersonGroups))
+	mux.Handle("POST /api/v1/household/person-groups/{group}/members", s.handle(principal.VerbManage, s.setPersonGroup))
+	mux.Handle("GET /api/v1/services/{capability}/access", s.handle(principal.VerbRead, s.listServiceAccess))
+	mux.Handle("POST /api/v1/services/{capability}/access", s.handle(principal.VerbManage, s.setServiceAccess))
 
 	// Butler (ADR-W017 A2): ask carries the read verb — conversing is not
 	// a write; a session's proposals enter through the same submitProposal

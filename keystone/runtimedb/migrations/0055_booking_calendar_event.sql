@@ -1,4 +1,4 @@
--- 0054: a booking remembers the calendar event it made.
+-- 0055: a booking remembers the calendar event it made.
 --
 -- "Booked it" used to record a date in commitment_bookings and nothing
 -- else, so an appointment the household tracked never reached the
