@@ -141,8 +141,17 @@ func (s *Server) gatherFacts() deploymentFacts {
 		return f
 	}
 	f.keystoneURL = s.APIURL
-	if s.APIURL != "" {
-		f.intakeURL = strings.TrimSuffix(s.APIURL, "/") + "/api/v1/household/events"
+	if f.keystoneURL == "" {
+		// Keystone advertises an address only when started with -hosts,
+		// which the installer does not pass. But it does give the Console
+		// route the address the proxy — a container — reaches the API
+		// at, and anything else in a container reaches it the same way.
+		// Without this a chat bot could not be connected on a stock
+		// install (ADR-W033 B7.1).
+		f.keystoneURL = consoleUpstreamURL(current)
+	}
+	if f.keystoneURL != "" {
+		f.intakeURL = strings.TrimSuffix(f.keystoneURL, "/") + "/api/v1/household/events"
 	}
 	if s.HouseholdTimezone != "Local" {
 		f.timezone = s.HouseholdTimezone
@@ -966,4 +975,19 @@ func installOwner(pkg *pkgspec.Package, rendered []resource.Resource) string {
 		}
 	}
 	return "capability/" + pkg.Metadata.Capability
+}
+
+// consoleUpstreamURL is the API as the identity proxy's container
+// reaches it, from the Console route's upstream, or "".
+func consoleUpstreamURL(current []resource.Resource) string {
+	for _, r := range current {
+		if r.Kind == resource.KindRoute && r.Route != nil && r.Metadata.Owner == "capability/console" {
+			up := r.Route.Upstream
+			if up == "" || strings.Contains(up, "/") {
+				return "" // a container/<name> upstream is not an address
+			}
+			return "http://" + up
+		}
+	}
+	return ""
 }

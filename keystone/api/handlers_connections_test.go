@@ -302,3 +302,35 @@ func TestAPlatformIsInstalledWhenABotIs(t *testing.T) {
 		t.Error("slack counts as installed because telegram is")
 	}
 }
+
+// A stock install passes no -hosts, so Keystone advertises no address of
+// its own. The Console route's upstream — where the proxy's container
+// reaches the API — is where a bot's container reaches it too, and a
+// connection must not fail for want of it.
+func TestABotReachesKeystoneWhereTheProxyDoes(t *testing.T) {
+	h, _ := connectHarness(t)
+	h.s.APIURL = ""
+	if code, out := h.connect(t, telegramFor("joan", "sandy")); code != http.StatusBadRequest {
+		t.Fatalf("with no address at all = %d %v, want a refusal that says so", code, out)
+	}
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindRoute,
+		Metadata: resource.Metadata{Name: "wildstone-console", Owner: "capability/console", Node: "n1"},
+		Route:    &resource.RouteSpec{Host: "console.home.test", Upstream: "100.70.0.9:9441", Auth: "authelia_oidc", Classification: "admin_tailscale"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := h.connect(t, telegramFor("joan", "sandy")); code != http.StatusCreated {
+		t.Fatalf("connect = %d %v", code, out)
+	}
+	current, _ := h.s.State.Load()
+	for _, r := range current {
+		if r.Kind == resource.KindContainer && r.Metadata.Name == "chat-telegram-joan" {
+			if got := r.Container.Env["KEYSTONE_API"]; got != "http://100.70.0.9:9441" {
+				t.Errorf("the bot reaches Keystone at %q", got)
+			}
+			return
+		}
+	}
+	t.Fatal("no bot container")
+}
