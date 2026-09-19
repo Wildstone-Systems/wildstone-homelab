@@ -12,6 +12,7 @@ import { ErrorLine, useAction, useLoad } from "../lib";
 import { Group, GROUPS, groupOf, hostOf, RANK } from "../services";
 import { Dot, Kind, StatusPill } from "../ui/status";
 import { Drawer } from "../ui/Drawer";
+import { ServiceAccessPanel } from "./ServiceAccess";
 
 // Services (ADR-W021 A5, ADR-W027): the catalog, and installing from it.
 //
@@ -581,6 +582,11 @@ export function InstalledDetail({
       ) : (
         <div className="muted">Nothing is recorded as owned by this package.</div>
       )}
+
+      {/* Who may use it, beside where it answers and what it owns —
+          the third thing an Owner asks about an installed service, and
+          until slice 8 the one Wildstone could not answer. */}
+      <ServiceAccessPanel capability={pkg.capability} />
 
       <div className="row" style={{ marginTop: "var(--space-8)" }}>
         <button className="btn btn-secondary" onClick={onReconfigure}>

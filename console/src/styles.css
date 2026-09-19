@@ -1950,3 +1950,27 @@ tr.correlated { background: var(--faint); }
 /* A selected row on the household stream. Distinct from .correlated:
    one row is the one you picked, the others are its story. */
 tr[aria-pressed="true"] { box-shadow: inset 2px 0 0 var(--color-accent); }
+
+/* Entitlement rules (slice 8). A chip that is also a control, and a
+   list of decisions with the two verbs that change one. */
+.chip-btn {
+  cursor: pointer;
+  background: none;
+  font: inherit;
+}
+.chip-btn:hover:not(:disabled) { background: var(--faint); }
+.chip-btn:disabled { opacity: 0.5; cursor: default; }
+.chip-on {
+  border-color: color-mix(in srgb, var(--st-ok) 60%, transparent);
+  background: color-mix(in srgb, var(--st-ok) 14%, transparent);
+  color: var(--mark);
+}
+.rules { list-style: none; margin: 0; padding: 0; }
+.rule {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--hair);
+}
+.rule:last-child { border-bottom: none; }

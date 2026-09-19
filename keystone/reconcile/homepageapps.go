@@ -51,6 +51,14 @@ type App struct {
 	// Route is the Route resource's own name, which is what makes two
 	// cards that resolved to the same title distinguishable.
 	Route string `json:"route,omitempty"`
+	// Capability is what this card belongs to, so a per-member surface
+	// can ask whether that member is entitled to it (slice 8).
+	//
+	// Not rendered anywhere. It exists so the launcher can leave out a
+	// card for a service somebody cannot use — which is PRESENTATION,
+	// and never the gate: §18.2 requires a direct URL to be denied
+	// regardless of what was drawn.
+	Capability string `json:"capability,omitempty"`
 }
 
 // Groups is the group order a dashboard should present: the household's
@@ -80,14 +88,15 @@ func Apps(desired []resource.Resource) []App {
 	apps := make([]App, 0, len(entries))
 	for _, e := range entries {
 		apps = append(apps, App{
-			Group:     e.group,
-			Title:     e.title,
-			Desc:      e.desc,
-			Href:      e.href,
-			Icon:      e.icon,
-			Container: e.container,
-			Node:      e.node,
-			Route:     e.name,
+			Group:      e.group,
+			Title:      e.title,
+			Desc:       e.desc,
+			Href:       e.href,
+			Icon:       e.icon,
+			Container:  e.container,
+			Node:       e.node,
+			Route:      e.name,
+			Capability: e.capability,
 		})
 	}
 	return apps

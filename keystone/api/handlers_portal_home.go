@@ -437,7 +437,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 	resp.Activity = s.homeActivity(member, now)
 	resp.Notifications = s.homeNotifications(member)
 	resp.Calendar = s.homeCalendar(member, desired, now)
-	resp.Apps, resp.AppStatus, resp.StatusKnown = s.homeApps(desired)
+	resp.Apps, resp.AppStatus, resp.StatusKnown = s.homeApps(member, desired)
 	resp.Machines = s.homeMachines(r.Context(), now)
 	// Last, because it reads the launcher's own answers rather than
 	// asking the same questions again.
@@ -1034,15 +1034,31 @@ func upstreamContainer(upstream string) string {
 // and the third is load-bearing: a Route that names an address rather
 // than a container, or a container nothing has observed, is UNKNOWN. §7
 // forbids rendering that as down.
-func (s *Server) homeApps(desired []resource.Resource) ([]reconcile.App, map[string]string, bool) {
+func (s *Server) homeApps(member string, desired []resource.Resource) ([]reconcile.App, map[string]string, bool) {
 	// The household's own surfaces are the two widgets at the top of
 	// this page, so their launcher cards are dropped rather than shown
 	// a second time — from the LIST as well as from the group order,
 	// or search would still find a card that opens the card above it.
 	all := reconcile.Apps(desired)
+	reach := s.launcherReach(member, desired)
 	apps := make([]reconcile.App, 0, len(all))
 	for _, a := range all {
 		if a.Group == reconcile.PortalGroup {
+			continue
+		}
+		// A card for a service this member cannot use is left out.
+		//
+		// PRESENTATION ONLY, and the distinction is the whole of §18.2:
+		// this is the launcher deciding what to draw, never a gate. The
+		// gate is Authelia's access rule, or the OIDC client's policy,
+		// or Keystone's own check on a portal surface — and a direct
+		// URL meets it whatever was drawn here.
+		// Absence means DRAW IT: reach holds an entry only for a
+		// capability whose package declared an audience, so a service
+		// nobody decided about keeps its card. Reading a missing key as
+		// false would empty the launcher of everything undeclared,
+		// which is most of the catalog.
+		if entitled, decided := reach[a.Capability]; decided && !entitled {
 			continue
 		}
 		apps = append(apps, a)
@@ -1312,4 +1328,57 @@ func householdGroups() []string {
 		out = append(out, g)
 	}
 	return out
+}
+
+// launcherReach answers, for one member, which capabilities to draw a
+// card for (ADR-W033 design §4, §18.2; slice 8).
+//
+// nil means "draw everything", and every path that cannot give a
+// trustworthy answer returns it. That default is deliberate and is the
+// opposite of what an authorization check would do: hiding a card the
+// household CAN use is a bug they will report as the app disappearing,
+// while showing one they cannot is a link that politely refuses. Only
+// one of those is recoverable from the page it happens on.
+//
+// SILENT WHERE NOTHING WAS DECLARED, matching AccessSubjects: a
+// capability whose package named no audience keeps its card for
+// everybody, so an upgrade that added a field does not empty a
+// household's launcher.
+//
+// The member's name resolves through the same refusal projection uses —
+// an ambiguous handle resolves to nobody — and here that yields nil
+// rather than an empty set, because a launcher that silently emptied
+// itself over a name collision would be a household staring at a blank
+// page with nothing to act on.
+func (s *Server) launcherReach(member string, desired []resource.Resource) map[string]bool {
+	if s.DB == nil || member == "" {
+		return nil
+	}
+	declared := map[string]bool{}
+	for _, r := range desired {
+		if r.Kind != resource.KindLdapGroup || r.LdapGroup == nil || r.LdapGroup.Name == "" {
+			continue
+		}
+		if c, ok := strings.CutPrefix(r.Metadata.Owner, "capability/"); ok && c != "" {
+			declared[c] = true
+		}
+	}
+	if len(declared) == 0 {
+		return nil
+	}
+	personID, ambiguous, err := s.DB.PersonForDirectoryAccount(member)
+	if err != nil || ambiguous || personID == "" {
+		return nil
+	}
+	reach := map[string]bool{}
+	for capability := range declared {
+		ok, err := s.DB.EntitledTo(personID, capability)
+		if err != nil {
+			// One unreadable answer must not hide every card. Draw it,
+			// and let the door decide.
+			return nil
+		}
+		reach[capability] = ok
+	}
+	return reach
 }
