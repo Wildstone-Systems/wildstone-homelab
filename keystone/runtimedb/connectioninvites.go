@@ -131,3 +131,46 @@ func closeInvitesOnBinding(tx *sql.Tx, connection int64, person string) error {
 		now(), connection, person)
 	return err
 }
+
+// RecordConnectionCredential notes which credential a bot runs on, by
+// fingerprint (migration 0057).
+func (db *DB) RecordConnectionCredential(connection int64, fingerprint string) error {
+	if connection == 0 || fingerprint == "" {
+		return fmt.Errorf("runtimedb: a credential record names a connection and a fingerprint")
+	}
+	_, err := db.sql.Exec(
+		`INSERT INTO connection_credentials (connection, fingerprint, created_at) VALUES (?, ?, ?)
+		 ON CONFLICT (connection) DO UPDATE SET fingerprint = excluded.fingerprint, created_at = excluded.created_at`,
+		connection, fingerprint, now())
+	return err
+}
+
+// ConnectionUsingCredential is the live bot already running on this
+// credential, if any.
+func (db *DB) ConnectionUsingCredential(fingerprint string) (Connection, bool, error) {
+	var seq int64
+	err := db.sql.QueryRow(
+		`SELECT c.connection FROM connection_credentials c
+		 JOIN butler_addresses a ON a.seq = c.connection
+		 WHERE c.fingerprint = ? AND a.revoked_at = '' LIMIT 1`, fingerprint).Scan(&seq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Connection{}, false, nil
+	}
+	if err != nil {
+		return Connection{}, false, err
+	}
+	at, err := db.ChatConnectionBySeq(seq)
+	if err != nil {
+		return Connection{}, false, err
+	}
+	return at, true, nil
+}
+
+// WithdrawInvitesOn closes every open invite on a Connection, when its
+// bot is removed.
+func (db *DB) WithdrawInvitesOn(connection int64, reason string) error {
+	_, err := db.sql.Exec(
+		`UPDATE connection_invites SET closed_at = ?, closed_reason = ? WHERE connection = ? AND closed_at = ''`,
+		now(), reason, connection)
+	return err
+}

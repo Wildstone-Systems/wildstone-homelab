@@ -374,6 +374,8 @@ var Columns = []Column{
 	{"connection_invites", "invited_by", Actor,
 		"the Owner who made the Connection, as actingMember records them"},
 	{"connection_invites", "closed_at", NotAPerson, "a timestamp"},
+	{"connection_credentials", "fingerprint", NotAPerson, "a SHA-256 of a bot's platform credential"},
+	{"connection_credentials", "created_at", NotAPerson, "a timestamp"},
 	{"connection_invites", "closed_reason", NotAPerson, "why the invite closed: 'bound' or an Owner's withdrawal reason"},
 	{"deletion_journal", "actor", Actor,
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},

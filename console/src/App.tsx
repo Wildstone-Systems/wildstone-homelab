@@ -30,7 +30,6 @@ import { Backups } from "./views/Backups";
 import { Butler } from "./views/Butler";
 import { ButlerAuthority } from "./views/ButlerAuthority";
 import { Chat } from "./views/Chat";
-import { ConnectChat } from "./views/ConnectChat";
 import { Home } from "./views/Home";
 import { Household } from "./views/Household";
 import { Integrations } from "./views/Integrations";
@@ -58,7 +57,6 @@ type View =
   | "butlers"
   | "chat"
   | "household"
-  | "connect"
   | "plans"
   | "activity"
   | "backups"
@@ -86,7 +84,6 @@ const TITLES: Record<View, [string, string]> = {
   butlers: ["Who answers", "Butlers"],
   chat: ["Access", "Chat"],
   household: ["People", "Household"],
-  connect: ["Setup", "Connect chat"],
   plans: ["Approvals", "Plans"],
   activity: ["Stream", "Activity"],
   backups: ["Standing duty", "Backups"],
@@ -170,7 +167,6 @@ export function Shell() {
       { id: "commitments", label: "Commitments", icon: <CalendarCheck size={ICON} /> },
       { id: "chat", label: "Chat", icon: <ChatsCircle size={ICON} /> },
       { id: "household", label: "Household", icon: <UsersThree size={ICON} /> },
-      { id: "connect", label: "Connect chat", icon: <PlugsConnected size={ICON} /> },
       { id: "plans", label: "Plans", icon: <SealCheck size={ICON} />, pip: plansPip },
       { id: "activity", label: "Activity", icon: <Pulse size={ICON} /> },
       { id: "backups", label: "Backups", icon: <Archive size={ICON} /> },
@@ -229,7 +225,6 @@ export function Shell() {
           {view === "butlers" && <Butlers />}
           {view === "chat" && <Chat />}
           {view === "household" && <Household />}
-          {view === "connect" && <ConnectChat />}
           {view === "plans" && <Plans onNavigate={setView} />}
           {view === "activity" && (
             <Activity

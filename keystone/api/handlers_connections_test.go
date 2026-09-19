@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/catalog"
 	"github.com/chickenrat17/wildstone-homelab/keystone/internal/fakesecret"
@@ -152,16 +153,81 @@ func TestConnectingAPersonTakesThreeAnswers(t *testing.T) {
 	}
 }
 
-// A second bot for the same Agent is a second instance, not the first
-// one re-pointed.
-func TestASecondBotIsItsOwnInstance(t *testing.T) {
+// A second person for the same Agent goes onto the bot it already has:
+// no token, no new bot. One bot serves many people.
+func TestASecondPersonJoinsTheExistingBot(t *testing.T) {
+	h, _ := connectHarness(t)
+	if code, out := h.connect(t, telegramFor("joan", "sandy")); code != http.StatusCreated {
+		t.Fatalf("first = %d %v", code, out)
+	}
+	code, out := h.connect(t, map[string]any{"platform": "telegram", "butler": "joan", "person": "mika"})
+	if code != http.StatusCreated || out["capability"] != "chat-telegram-joan" || out["reused"] != true {
+		t.Fatalf("second person = %d %v", code, out)
+	}
+	current, _ := h.s.State.Load()
+	for _, r := range current {
+		if r.Kind == resource.KindContainer && strings.HasPrefix(r.Metadata.Name, "chat-telegram-joan-") {
+			t.Errorf("inviting a second person made another bot: %s", r.Metadata.Name)
+		}
+	}
+	if invites, _ := h.s.DB.OpenInvitesFor("mika"); len(invites) != 1 || invites[0].Capability != "chat-telegram-joan" {
+		t.Errorf("mika's invites = %+v", invites)
+	}
+}
+
+// One token is one bot. Two installs polling it would each steal the
+// other's messages, so the second is refused; a different token makes a
+// genuinely separate bot.
+func TestOneTokenMakesOneBot(t *testing.T) {
 	h, _ := connectHarness(t)
 	if code, out := h.connect(t, telegramFor("joan", "sandy")); code != http.StatusCreated {
 		t.Fatalf("first = %d %v", code, out)
 	}
 	code, out := h.connect(t, telegramFor("joan", "mika"))
-	if code != http.StatusCreated || out["capability"] != "chat-telegram-joan-2" {
-		t.Fatalf("second = %d %v", code, out)
+	if code != http.StatusConflict || !strings.Contains(out["error"].(string), "leave the token empty") {
+		t.Fatalf("the same token again = %d %v", code, out)
+	}
+	if strings.Contains(out["error"].(string), telegramToken) {
+		t.Error("the refusal repeated the token")
+	}
+	other := map[string]any{"platform": "telegram", "butler": "joan", "person": "mika",
+		"credentials": map[string]string{"botToken": "654321:" + fakesecret.Token()}}
+	if code, out := h.connect(t, other); code != http.StatusCreated || out["capability"] != "chat-telegram-joan-2" {
+		t.Fatalf("a second token = %d %v", code, out)
+	}
+}
+
+// Removing a bot uninstalls it and ends everything that pointed at it:
+// the Agent's address, the bot's own credential, and open invites.
+func TestRemovingABotEndsItsConnection(t *testing.T) {
+	h, _ := connectHarness(t)
+	if code, out := h.connect(t, telegramFor("joan", "sandy")); code != http.StatusCreated {
+		t.Fatalf("connect = %d %v", code, out)
+	}
+	var out map[string]any
+	resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/connections/chat-telegram-joan/remove", nil, &out)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("remove = %d %v", resp.StatusCode, out)
+	}
+	if _, err := h.s.DB.ChatConnectionAt("telegram", "chat-telegram-joan"); err == nil {
+		t.Error("the Agent still answers at the removed bot")
+	}
+	if p, err := h.s.DB.GetPrincipal("chat-chat-telegram-joan"); err != nil || !p.Disabled {
+		t.Errorf("the bot's credential = %+v %v, want disabled", p, err)
+	}
+	if invites, _ := h.s.DB.OpenInvitesFor("sandy"); len(invites) != 0 {
+		t.Errorf("invites to a removed bot are still open: %+v", invites)
+	}
+	current, _ := h.s.State.Load()
+	for _, r := range current {
+		if r.Metadata.Owner == "capability/chat-telegram-joan" && r.Kind == resource.KindContainer {
+			t.Error("the bot's container is still desired")
+		}
+	}
+	// Its token is free again, for a new bot under a fresh name: the
+	// removed one's credential stays disabled rather than revived.
+	if code, out := h.connect(t, telegramFor("joan", "sandy")); code != http.StatusCreated || out["capability"] != "chat-telegram-joan-2" {
+		t.Errorf("reusing a removed bot's token = %d %v", code, out)
 	}
 }
 
@@ -208,7 +274,7 @@ func TestAPlatformsCredentialsAreChecked(t *testing.T) {
 		want string
 	}{
 		{"an unknown platform", map[string]any{"platform": "irc", "butler": "joan", "person": "sandy"}, "platform must be"},
-		{"no token", map[string]any{"platform": "telegram", "butler": "joan", "person": "sandy"}, "needs its bot token"},
+		{"no token and no bot yet", map[string]any{"platform": "telegram", "butler": "joan", "person": "sandy"}, "has no Telegram bot yet"},
 		{"a token with spaces", map[string]any{"platform": "telegram", "butler": "joan", "person": "sandy",
 			"credentials": map[string]string{"botToken": "not a token at all"}}, "one unbroken string"},
 		{"slack without its app token", map[string]any{"platform": "slack", "butler": "joan", "person": "sandy",
@@ -262,8 +328,10 @@ func TestEveryPlatformInstalls(t *testing.T) {
 // instanced package cannot be removed without saying which instance.
 func TestRemovingOneBotLeavesTheOthers(t *testing.T) {
 	h, _ := connectHarness(t)
-	for _, who := range []string{"sandy", "mika"} {
-		if code, out := h.connect(t, telegramFor("joan", who)); code != http.StatusCreated {
+	for i, who := range []string{"sandy", "mika"} {
+		body := telegramFor("joan", who)
+		body["credentials"] = map[string]string{"botToken": fmt.Sprintf("%d:", 100000+i) + fakesecret.Token()}
+		if code, out := h.connect(t, body); code != http.StatusCreated {
 			t.Fatalf("connect %s = %d %v", who, code, out)
 		}
 	}
@@ -333,4 +401,32 @@ func TestABotReachesKeystoneWhereTheProxyDoes(t *testing.T) {
 		}
 	}
 	t.Fatal("no bot container")
+}
+
+// Making a bot mints a credential and removing one ends people's way to
+// an Agent, so both ask for a fresh sign-in (A4.1). Inviting somebody
+// to a bot that exists is admission, which is ordinary.
+func TestOnlyMakingOrRemovingABotAsksForAFreshSignIn(t *testing.T) {
+	h, _ := connectHarness(t)
+	stale := sessionCookie(h.s.StartConsoleSession("mika", time.Now().Add(-time.Hour)))
+	body := func(m map[string]any) string { b, _ := json.Marshal(m); return string(b) }
+
+	code, out := h.sessionRequest(http.MethodPost, "/api/v1/connections", body(telegramFor("joan", "sandy")), "mika", stale)
+	if code != http.StatusForbidden || out["stepUp"] == nil {
+		t.Fatalf("a new bot on a stale sign-in = %d %v, want a step-up", code, out)
+	}
+	// Made on a fresh sign-in, then invited to on the stale one.
+	fresh := sessionCookie(h.s.StartConsoleSession("mika", time.Now()))
+	if code, out := h.sessionRequest(http.MethodPost, "/api/v1/connections", body(telegramFor("joan", "sandy")), "mika", fresh); code != http.StatusCreated {
+		t.Fatalf("a new bot on a fresh sign-in = %d %v", code, out)
+	}
+	code, out = h.sessionRequest(http.MethodPost, "/api/v1/connections",
+		body(map[string]any{"platform": "telegram", "butler": "joan", "person": "mika"}), "mika", stale)
+	if code != http.StatusCreated || out["stepUp"] != nil {
+		t.Errorf("inviting to an existing bot on a stale sign-in = %d %v, want no challenge", code, out)
+	}
+	code, out = h.sessionRequest(http.MethodPost, "/api/v1/connections/chat-telegram-joan/remove", "", "mika", stale)
+	if code != http.StatusForbidden || out["stepUp"] == nil {
+		t.Errorf("removing a bot on a stale sign-in = %d %v, want a step-up", code, out)
+	}
 }

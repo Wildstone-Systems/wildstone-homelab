@@ -359,8 +359,13 @@ distroless image, pinned by digest, with that directory mounted
 read-only, so there is no image of Wildstone's to host and no registry
 credential to give a node.
 
-**From the Console: Connect chat.** Pick the app, the Agent and the
-person, and paste the bot's credential:
+**From the Console: Chat.** One screen lists each Agent's bots, connects
+people, shows who is bound and lets you revoke an account or remove a
+bot. To connect someone, pick the app, the Agent and the person. If the
+Agent already has a bot on that app they are simply invited to it: one
+bot serves many people, and a token already running another bot is
+refused, because two bots polling one token steal each other's messages.
+For a new bot, paste its credential:
 
 | App | What you paste | Where it comes from |
 |---|---|---|
@@ -396,12 +401,11 @@ where a Wildstone credential authenticates you. A chat account is
 protected by the vendor's account recovery, which Wildstone does not
 control.
 
-`wild chat bindings` is the access list, and `wild chat revoke <id>`
-takes effect on that account's next message. To remove a bot entirely:
-
-```sh
-wild capability disable chat-telegram -instance joan
-```
+Revoking an account on the Chat screen (or `wild chat revoke <id>`)
+takes effect on its next message. **Remove…** beside a bot uninstalls
+it, revokes the Agent's address and the bot's own credential, and
+withdraws its open invites. Removing a bot asks you to confirm your
+password if you signed in more than 15 minutes ago.
 
 The adapter **dials out**: Telegram and Matrix are polled, and Discord
 and Slack hold a WebSocket open. So this adds no port, no Route and

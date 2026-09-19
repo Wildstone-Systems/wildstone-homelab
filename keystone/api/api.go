@@ -588,7 +588,11 @@ func (s *Server) Handler() http.Handler {
 	// for themselves (ADR-W033 B7.1). Creating one mints the adapter's
 	// credential, so it is consequential (A4.1).
 	mux.Handle("GET /api/v1/connections/platforms", s.handle(principal.VerbRead, s.listChatPlatforms))
-	mux.Handle("POST /api/v1/connections", s.handle(principal.VerbManage, s.consequential(s.createConnection)))
+	// Making a new bot mints a credential and asks for a fresh sign-in
+	// inside the handler; inviting somebody to an existing bot does not.
+	mux.Handle("POST /api/v1/connections", s.handle(principal.VerbManage, s.createConnection))
+	mux.Handle("GET /api/v1/connections", s.handle(principal.VerbRead, s.listConnections))
+	mux.Handle("POST /api/v1/connections/{capability}/remove", s.handle(principal.VerbManage, s.consequential(s.removeConnection)))
 	mux.Handle("GET /api/v1/connections/invites", s.handle(principal.VerbRead, s.consoleInvites))
 	mux.Handle("POST /api/v1/connections/invites/{seq}/key", s.handle(principal.VerbRead, s.consoleInviteKey))
 	mux.Handle("POST /api/v1/chat/bindings/redeem", s.handle(principal.VerbConverse, s.redeemChatClaim))

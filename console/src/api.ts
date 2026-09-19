@@ -1808,7 +1808,11 @@ export const api = {
     person: string;
     credentials: Record<string, string>;
     node?: string;
+    bot?: string;
   }) => call<ConnectionCreated>("POST", "/api/v1/connections", req),
+  chatBots: () => call<{ bots: ChatBot[] }>("GET", "/api/v1/connections"),
+  removeChatBot: (capability: string) =>
+    call<{ capability: string; plan: string }>("POST", `/api/v1/connections/${encodeURIComponent(capability)}/remove`),
   myInvites: () => call<{ invites: ConnectionInvite[] }>("GET", "/api/v1/connections/invites"),
   myInviteKey: (seq: number) => call<InviteKey>("POST", `/api/v1/connections/invites/${seq}/key`),
   householdGroups: () => call<HouseholdGroup[]>("GET", "/api/v1/household/groups"),
@@ -1900,14 +1904,23 @@ export interface ChatPlatform {
   fields: { key: string; label: string; hint: string; prefix?: string }[];
 }
 
+// One installed chat bot and the Agent it answers for.
+export interface ChatBot {
+  capability: string;
+  platform: string;
+  label: string;
+  butler: string;
+}
+
 export interface ConnectionCreated {
   capability: string;
-  instance: string;
+  reused?: boolean;
+  instance?: string;
   platform: string;
   butler: string;
   person: string;
-  node: string;
-  plan: string;
+  node?: string;
+  plan?: string;
   invite: number;
   note: string;
 }

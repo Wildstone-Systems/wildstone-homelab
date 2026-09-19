@@ -17,7 +17,7 @@ import { renderToString } from "react-dom/server";
 import { createElement as h } from "react";
 import { Services, InstallForm } from "../src/views/Services";
 import { Butler, bucket, ConversationRail, EmptyState, StatusCard, SURFACES, Thread, ThreadBar, ToolTrace, Turn } from "../src/views/Butler";
-import { Chat, IssuedCode } from "../src/views/Chat";
+import { BotList, Chat, ConnectForm } from "../src/views/Chat";
 import { Freshness, Shell, TokenGate } from "../src/App";
 import { HomeView, buildProblems } from "../src/views/Home";
 import { ServicesView, InstalledTile, CatalogCard, InstalledDetail, AppLogo, tileKind, matching, RemoveForm, ownerCounts, ownedByPackage } from "../src/views/Services";
@@ -66,7 +66,6 @@ const store = new Map<string, string>();
   key: () => null,
   length: 0,
 } as Storage;
-import { Prerequisites } from "../src/views/Chat";
 import { Household, AddMember, EditMember } from "../src/views/Household";
 import { AttentionBanner, Butlers, NoButlers, NoMatches, RosterRow, needsAttention, reachLine, select, toolLine } from "../src/views/Butlers";
 import { HouseholdActions, Tool } from "../src/views/butlers/TabTools";
@@ -79,7 +78,6 @@ import { RouteList } from "../src/views/butlers/TabModel";
 import { Confirm } from "../src/ui/Confirm";
 import { Tabs } from "../src/ui/Tabs";
 import type { ButlerRow as ButlerRosterRow, Model } from "../src/api";
-import { ConnectChat } from "../src/views/ConnectChat";
 
 // Exactly what GET /api/v1/packages serves, copied from the live VM.
 const pkg = {
@@ -443,16 +441,6 @@ check("Chat renders without throwing", chat.length > 0);
 check("chat screen says bindings are per agent", chat.includes("per\n        agent") || chat.includes("per agent"));
 check("chat screen says chat cannot approve", chat.includes("approve"));
 
-const code = renderToString(
-  h(IssuedCode, {
-    claim: {
-      code: "K7QP-3XMR-9TWD", butler: "alfred", transport: "telegram", identity: "sam",
-      expiresAt: "2026-09-06T18:00:00Z", note: "Send this code to the telegram bot.",
-    },
-  }),
-);
-check("issued code is shown", code.includes("K7QP-3XMR-9TWD"));
-check("issued code warns it is shown once", code.includes("only time it is shown"), code);
 
 // ------------------------------------------------- shared components
 // The redesign's vocabulary (ADR-W027). These are shared by every
@@ -571,9 +559,10 @@ check("gate labels its input", gate.includes('aria-label="API token"'), gate);
 const shell = renderToString(h(ConsoleStateProvider, { children: h(Shell) }));
 check("shell renders with no data yet", shell.length > 0);
 check("shell shows the icon rail", shell.includes('aria-label="Console sections"'), shell);
-for (const label of ["Home", "Services", "Butler", "Chat", "Household", "Connect chat", "Plans", "Activity", "Backups", "Commitments", "Nodes", "Secrets", "Identity"]) {
+for (const label of ["Home", "Services", "Butler", "Chat", "Household", "Plans", "Activity", "Backups", "Commitments", "Nodes", "Secrets", "Identity"]) {
   check(`rail offers ${label}`, shell.includes(`aria-label="${label}"`));
 }
+check("the rail has no separate Connect chat screen", !shell.includes('aria-label="Connect chat"'));
 check("shell names the screen you are on", shell.includes("Household"), shell);
 check("empty shell claims no freshness it cannot prove", !shell.includes(">live<"), shell);
 
@@ -1327,11 +1316,22 @@ const TRANSPORTS: ChatTransport[] = [
   { transport: "telegram", butler: "alfred", capability: "chat-telegram-admin", installed: true, credentialed: true, online: true },
 ];
 const chatProps = {
-  transports: TRANSPORTS,
-  members: [{ value: "sam", label: "sam · Sam" }],
   onToggleRevoked: () => {},
   reload: () => {},
 };
+// The bot list says whose each bot is and whether its adapter has
+// checked in, and offers removal behind a second click.
+const botList = renderToString(h(BotList, {
+  bots: [
+    { capability: "chat-telegram-hobson", platform: "telegram", label: "Telegram", butler: "hobson" },
+    { capability: "chat-telegram-alfred", platform: "telegram", label: "Telegram", butler: "alfred" },
+  ],
+  transports: TRANSPORTS.map((t, i) => ({ ...t, capability: i === 0 ? "chat-telegram-hobson" : "chat-telegram-alfred", online: i === 0 })),
+  onChanged: () => {},
+}));
+check("each bot names its agent", botList.includes("hobson") && botList.includes("alfred"));
+check("a bot that has not checked in says so", botList.includes("not checked in") && botList.includes("online"));
+check("removing a bot takes a second click", botList.includes("Remove…") && !botList.includes("Remove bot"));
 const chat2 = renderToString(h(ChatView, { ...chatProps, bindings: BINDINGS, showRevoked: true }));
 // The agent by NAME. A class — "Household", "Operator" — would file
 // every owner agent's bindings under one label, and the whole point of a
@@ -1341,33 +1341,8 @@ check("a binding names the agent it reaches", chat2.includes("hobson") && chat2.
 check("a revoked binding is shown as revoked, not hidden", chat2.includes("revoked"));
 check("a binding that has never been used says never", chat2.includes("never"));
 const noneBound = renderToString(h(ChatView, { ...chatProps, bindings: [], showRevoked: false }));
-check("no bindings explains how one is made", noneBound.includes("send it to the bot"));
+check("no bindings explains how one is made", noneBound.includes("send their key to the bot"));
 
-// One agent, two bots on one transport (ADR-W033 B7). Keyed on the
-// transport, these were two options reading "telegram" and "telegram"
-// — indistinguishable to the operator, and either choice sent a
-// request the server had to refuse as ambiguous.
-const twoBots = renderToString(
-  h(ChatView, {
-    ...chatProps,
-    transports: [
-      { transport: "telegram", butler: "alfred", capability: "chat-telegram-admin", installed: true, credentialed: true, online: true },
-      { transport: "telegram", butler: "alfred", capability: "chat-telegram-spare", installed: true, credentialed: true, online: true },
-    ],
-    bindings: [],
-    showRevoked: false,
-  }),
-);
-// Asserted on the OPTION text, not on the capability appearing
-// anywhere: it appears in the prerequisite lines too, so a page-wide
-// includes() passes whether or not the two options can be told apart.
-const options = [...twoBots.matchAll(/<option[^>]*>(.*?)<\/option>/g)].map((m) => text(m[1]));
-check(
-  "two bots on one transport are told apart",
-  options.some((o) => o.includes("chat-telegram-admin")) &&
-    options.some((o) => o.includes("chat-telegram-spare")),
-  options.join(" | "),
-);
 
 // ---------------------------------------------------------- Identity
 // The code is read aloud or typed by hand, once. A misread character is
@@ -1379,30 +1354,6 @@ check("the identity code says when it was read", text(idCode).includes("read 1m 
 check("the identity screen invents no expiry", !idCode.includes("expires"), idCode);
 const noCode = renderToString(h(IdentityCode, { note: { note: "" }, readAt: new Date() }));
 check("no code waiting says what to do", noCode.includes("Ask the person to request one"));
-// An invite needs a person to invite and a bot to send the code to. An
-// empty dropdown is not an answer, so the screen says which is missing
-// and where it is fixed.
-const missing = renderToString(
-  h(Prerequisites, {
-    butler: "", usable: [], chosen: undefined, allTransports: [
-      { transport: "telegram", capability: "chat-telegram-family", installed: false, credentialed: false, online: false },
-    ], haveIdentities: false,
-  }),
-);
-check("no members points at the Household screen", missing.includes("Household screen"));
-check("a bot with no agent names the package to give away", missing.includes("chat-telegram-family"));
-
-// Installed but never given a token: the bot is running and cannot
-// redeem anything, which looks identical to a working one.
-const uncredentialed = renderToString(
-  h(Prerequisites, {
-    butler: "hobson",
-    usable: [{ transport: "telegram", butler: "hobson", capability: "chat-telegram-family", installed: true, credentialed: false, online: true }],
-    chosen: { transport: "telegram", butler: "hobson", capability: "chat-telegram-family", installed: true, credentialed: false, online: true },
-    allTransports: [], haveIdentities: true,
-  }),
-);
-check("an adapter with no token is called out", uncredentialed.includes("wild chat adapter"));
 
 // Household members (ADR-W020 A3). The screen has to say the two things
 // an operator would otherwise assume wrongly: adding somebody proposes a
@@ -1440,31 +1391,19 @@ const twoNodes = renderToString(
 );
 check("two directories are disambiguated", twoNodes.includes("directory node"));
 
-// Connect someone to an Agent over chat (ADR-W033 B7.1). Three answers
-// — the agent, the person and the platform's credential — and nothing a
-// household has no way to know: no image, no package, no "family" or
-// "admin" bot.
-const connect = renderToString(h(ConnectChat));
-check("Connect screen renders without throwing", connect.length > 0);
-check("connect screen says what a connection is", connect.includes("lets one person talk to one of your agents"), connect.slice(0, 600));
-check("connect screen asks for no adapter image", !/adapter_image|adapter image/i.test(connect));
-check("connect screen names no family or admin bot", !/chat-(telegram|matrix)-(family|admin)/.test(connect));
-check("connect screen says the person collects the key", connect.includes("collect their"), connect.slice(0, 600));
+// Chat is one screen now (ADR-W033 B7.1): the bots, connecting
+// somebody, the people bound and the Owner's own invites. Connecting
+// asks for nothing a household has no way to know: no image, no
+// package, no "family" or "admin" bot.
+const connect = renderToString(h(ConnectForm, { bots: [], onDone: () => {} }));
+check("Connect form renders without throwing", connect.length > 0);
+check("connect form asks for no adapter image", !/adapter_image|adapter image/i.test(connect));
+check("connect form names no family or admin bot", !/chat-(telegram|matrix)-(family|admin)/.test(connect));
+check("connect form says the person collects the key", connect.includes("collect their one-time key"), connect.slice(0, 600));
+const chatPage = renderToString(h(Chat));
+check("the chat screen lists bots and connects people in one place",
+  chatPage.includes("Bots") && chatPage.includes("Connect someone") && chatPage.includes("People on chat"), chatPage.slice(0, 600));
 
-// The link replaces the code when there is one: two things to hand over
-// invites handing over the wrong one.
-const linked = renderToString(
-  h(IssuedCode, {
-    claim: {
-      code: "K7QP-3XMR-9TWD", butler: "hobson", transport: "telegram", identity: "sam",
-      expiresAt: "2026-09-07T18:00:00Z", note: "Send this link to sam.",
-      handle: "wildstone_house_bot",
-      link: "https://t.me/wildstone_house_bot?start=K7QP-3XMR-9TWD",
-    },
-  }),
-);
-check("the link is what is shown", linked.includes("t.me/wildstone_house_bot?start=K7QP-3XMR-9TWD"));
-check("the raw code is not shown beside it", !linked.includes(">K7QP-3XMR-9TWD<"));
 
 // ----------------------------------------------------------- Butlers
 //

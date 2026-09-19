@@ -31,6 +31,8 @@ package api
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -117,6 +119,11 @@ type connectRequest struct {
 	// Node is which machine runs the bot. Optional: a household with one
 	// machine is not asked.
 	Node string `json:"node,omitempty"`
+	// Bot names one of the Agent's existing bots to invite the Person to,
+	// when it has several on this platform. With no credentials given,
+	// the Person is invited to the Agent's existing bot instead of a new
+	// one being made.
+	Bot string `json:"bot,omitempty"`
 }
 
 var nonInstanceRune = regexp.MustCompile(`[^a-z0-9]+`)
@@ -159,9 +166,29 @@ func (s *Server) createConnection(r *http.Request, id principal.Identity) (any, 
 		return nil, http.StatusBadRequest, fmt.Errorf(
 			"%s is an Owner Agent, and its Connections admit Owners only; %s is a Member (ADR-W033 B9)", agent.Name, person)
 	}
+	// No credential: invite them to the bot the Agent already has. One
+	// bot serves many people; a second bot on the same token would be
+	// the same bot polled twice, each stealing the other's messages.
+	if !anyCredential(req.Credentials) {
+		return s.inviteToExistingBot(r, id, agent, platform, person, strings.TrimSpace(req.Bot))
+	}
+	// A new bot mints a credential, which is consequential (A4.1);
+	// inviting somebody to an existing one is not.
+	if body, code, err := s.stepUpRefusal(id); err != nil {
+		return body, code, err
+	}
 	values, params, err := platformValues(platform, req.Credentials)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
+	}
+	fingerprint := credentialFingerprint(platform.Name, values)
+	switch at, used, err := s.DB.ConnectionUsingCredential(fingerprint); {
+	case err != nil:
+		return nil, http.StatusInternalServerError, err
+	case used:
+		return nil, http.StatusConflict, fmt.Errorf(
+			"that token is already %s's %s bot (%s). To connect another person to it, leave the token empty",
+			at.Butler, platform.Label, at.ExternalID)
 	}
 	node, keystoneURL, err := s.connectionPlacement(req.Node)
 	if err != nil {
@@ -212,6 +239,9 @@ func (s *Server) createConnection(r *http.Request, id principal.Identity) (any, 
 	at, err := s.DB.ChatConnectionAt(platform.Name, capName)
 	if err != nil {
 		return nil, http.StatusInternalServerError, fmt.Errorf("finding the new Connection: %w", err)
+	}
+	if err := s.DB.RecordConnectionCredential(at.Seq, fingerprint); err != nil {
+		return nil, http.StatusInternalServerError, err
 	}
 	invite, err := s.DB.InviteToConnection(at.Seq, person, actingMember(id))
 	if err != nil {
@@ -314,6 +344,12 @@ func (s *Server) instanceFor(pkg *pkgspec.Package, transport, agent string) (str
 		capName, err := pkg.CapabilityFor(map[string]string{pkgspec.InstanceParam: inst})
 		if err != nil {
 			return "", err
+		}
+		// A removed bot's name stays taken: its Keystone credential was
+		// disabled on removal, and bringing it back would revive that
+		// credential rather than mint a fresh one.
+		if p, perr := s.DB.GetPrincipal(chatAdapterPrincipalPrefix + capName); perr == nil && p.Disabled {
+			continue
 		}
 		at, err := s.DB.ChatConnectionAt(transport, capName)
 		switch {
@@ -486,4 +522,170 @@ func (s *Server) consoleInviteKey(r *http.Request, id principal.Identity) (any, 
 		return nil, http.StatusBadRequest, err
 	}
 	return s.issueInviteKey(id.ActingFor, seq, runtimedb.ButlerSurfaceAdmin)
+}
+
+func anyCredential(given map[string]string) bool {
+	for _, v := range given {
+		if strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// credentialFingerprint identifies a bot's credential without holding it
+// (migration 0057): SHA-256 over the platform and its secret values in
+// a fixed order.
+func credentialFingerprint(platform string, secrets map[string]string) string {
+	keys := make([]string, 0, len(secrets))
+	for k := range secrets {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	h.Write([]byte(platform))
+	for _, k := range keys {
+		h.Write([]byte{0})
+		h.Write([]byte(k + "=" + secrets[k]))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// agentBots is an Agent's installed bots on one platform.
+func (s *Server) agentBots(agent, platform string) ([]runtimedb.Connection, error) {
+	all, err := s.DB.ChatConnectionsForButler(agent, platform)
+	if err != nil && !errors.Is(err, runtimedb.ErrNoConnection) {
+		return nil, err
+	}
+	enabled, err := s.enabledCapabilities()
+	if err != nil {
+		return nil, err
+	}
+	var out []runtimedb.Connection
+	for _, at := range all {
+		if enabled[at.ExternalID] {
+			out = append(out, at)
+		}
+	}
+	return out, nil
+}
+
+// inviteToExistingBot connects a Person to a bot the Agent already has.
+func (s *Server) inviteToExistingBot(_ *http.Request, id principal.Identity, agent runtimedb.Butler, platform chatPlatform,
+	person, bot string) (any, int, error) {
+	bots, err := s.agentBots(agent.Name, platform.Name)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	var at runtimedb.Connection
+	switch {
+	case bot != "":
+		found := false
+		for _, b := range bots {
+			if b.ExternalID == bot {
+				at, found = b, true
+			}
+		}
+		if !found {
+			return nil, http.StatusBadRequest, fmt.Errorf("%s is not one of %s's %s bots", bot, agent.Name, platform.Label)
+		}
+	case len(bots) == 1:
+		at = bots[0]
+	case len(bots) == 0:
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"%s has no %s bot yet: paste the bot's token to make one", agent.Name, platform.Label)
+	default:
+		return nil, http.StatusBadRequest, fmt.Errorf("%s has %d %s bots: choose which one", agent.Name, len(bots), platform.Label)
+	}
+	invite, err := s.DB.InviteToConnection(at.Seq, person, actingMember(id))
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	where := "your household dashboard"
+	if agent.Surface == runtimedb.ButlerSurfaceAdmin {
+		where = "the Console"
+	}
+	s.tellInvitee(invite, agent.Name, platform.Label, where)
+	s.event("chat.connection_invited", person, id, fmt.Sprintf("%s on %s (%s) for %s", agent.Name, platform.Label, at.ExternalID, person))
+	return map[string]any{
+		"capability": at.ExternalID, "platform": platform.Name, "butler": agent.Name, "person": person,
+		"invite": invite.Seq, "reused": true,
+		"note": fmt.Sprintf("%s is invited to %s's %s bot. They'll find their invite on %s, and get their key there.",
+			person, agent.Name, platform.Label, where),
+	}, http.StatusCreated, nil
+}
+
+// botView is one installed chat bot, for the Connect screen.
+type botView struct {
+	Capability string `json:"capability"`
+	Platform   string `json:"platform"`
+	Label      string `json:"label"`
+	Butler     string `json:"butler"`
+}
+
+// listConnections is GET /api/v1/connections: every installed chat bot
+// and whose it is.
+func (s *Server) listConnections(_ *http.Request, _ principal.Identity) (any, int, error) {
+	enabled, err := s.enabledCapabilities()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	out := []botView{}
+	for c := range enabled {
+		transport, ok := capabilityTransport(c)
+		if !ok {
+			continue
+		}
+		p, known := chatPlatformNamed(transport)
+		if !known {
+			continue
+		}
+		at, err := s.DB.ChatConnectionAt(transport, c)
+		if err != nil {
+			continue // installed but never given to an Agent
+		}
+		out = append(out, botView{Capability: c, Platform: transport, Label: p.Label, Butler: at.Butler})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Capability < out[j].Capability })
+	return map[string]any{"bots": out}, http.StatusOK, nil
+}
+
+// removeConnection is POST /api/v1/connections/{capability}/remove: the
+// bot is uninstalled, its address revoked (so its bindings stop
+// resolving), its Keystone credential disabled and its open invites
+// withdrawn. Consequential (A4.1): the people on it lose that way to
+// reach the Agent.
+func (s *Server) removeConnection(r *http.Request, id principal.Identity) (any, int, error) {
+	capName := r.PathValue("capability")
+	transport, ok := capabilityTransport(capName)
+	if !ok {
+		return nil, http.StatusBadRequest, fmt.Errorf("%q is not a chat bot", capName)
+	}
+	instance := strings.TrimPrefix(capName, chatCapabilityPrefix+transport+"-")
+	at, atErr := s.DB.ChatConnectionAt(transport, capName)
+
+	proposed, code, err := s.subcall(r, id, s.disableCapability,
+		map[string]any{"package": chatCapabilityPrefix + transport, "instance": instance}, nil)
+	if err != nil {
+		return nil, code, fmt.Errorf("removing %s: %w", capName, err)
+	}
+	planID, _ := proposed["id"].(string)
+	if planID != "" {
+		if _, code, err := s.subcall(r, id, s.approvePlan, nil, map[string]string{"id": planID}); err != nil {
+			return nil, code, fmt.Errorf("approving the removal: %w", err)
+		}
+	}
+	if atErr == nil {
+		if err := s.DB.WithdrawInvitesOn(at.Seq, "bot removed"); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		if err := s.DB.RevokeButlerAddress(transport, capName, actingMember(id)); err != nil && !errors.Is(err, runtimedb.ErrNotFound) {
+			return nil, http.StatusInternalServerError, err
+		}
+	}
+	if err := s.DB.SetPrincipalDisabled(chatAdapterPrincipalPrefix+capName, true); err != nil && !errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, http.StatusInternalServerError, err
+	}
+	s.event("chat.connection_removed", "", id, fmt.Sprintf("%s removed, plan %s", capName, planID))
+	return map[string]any{"capability": capName, "plan": planID}, http.StatusOK, nil
 }
