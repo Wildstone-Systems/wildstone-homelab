@@ -41,13 +41,6 @@ import (
 // afternoon is two answers rather than one.
 const chatFallbackWindow = 10 * time.Minute
 
-// unboundReply is the ONLY thing an unbound account is told (ADR-W026
-// A4). It names no member, confirms no account, and describes nothing
-// about the deployment: someone messaging a bot they found should learn
-// only that there is a process, not that they guessed right.
-const unboundReply = "I can only talk to people the household has introduced me to. " +
-	"Ask whoever runs this home lab for a claim code, then send it to me on its own."
-
 // adminGroupReply is what the operator surface says in a group chat: it
 // answers in a direct message and nowhere else (ADR-W026 A7).
 const adminGroupReply = "I answer operator questions in a direct message only, never in a group."
@@ -61,6 +54,10 @@ type inboundMessage struct {
 	Conversation string `json:"conversation"`
 	// Group marks a shared audience (ADR-W026 A7).
 	Group bool `json:"group,omitempty"`
+	// Addressed is the adapter's word that a group message was FOR this
+	// bot — a mention, or a reply to it (ADR-W033 B9.1). A direct
+	// message is addressed by being direct.
+	Addressed bool `json:"addressed,omitempty"`
 	// MessageID is the transport's own id for this message. It is the
 	// dedupe key's source, so a transport that redelivers — Telegram
 	// after a lost ack, a websocket reconnect — does not produce two
@@ -120,6 +117,13 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		// Bounded before anything else looks at it (ADR-W026 A6).
 		return nil, http.StatusRequestEntityTooLarge, fmt.Errorf("message exceeds %d bytes", maxAskBytes)
 	}
+	// In a group, only what is addressed to the bot is the bot's to act
+	// on (ADR-W033 B9.1). The adapter drops the rest; this is the
+	// backstop for one that does not, and it answers nothing.
+	if msg.Group && !msg.Addressed {
+		return inboundResponse{Accepted: false, Reason: "a group message not addressed to this bot"},
+			http.StatusAccepted, nil
+	}
 	at, err := s.connectionForCaller(id, msg)
 	if err != nil {
 		return nil, http.StatusForbidden, err
@@ -171,11 +175,16 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 
 	binding, err := s.DB.LookupChatBinding(at, account)
 	if err != nil {
-		// One reply, no detail, no session row (ADR-W026 A4).
-		seq := s.queueChatReply(at, conversation, unboundReply, 0, "",
-			chatDedupe(at, conversation, msg.MessageID, "unbound", text))
-		s.settleInbound(claimKey, seq, &settled)
-		return inboundResponse{Accepted: true, Bound: false, Queued: seq,
+		// Nothing at all, and no session row (ADR-W033 B9.1, amending
+		// ADR-W026 A4's one-line reply). A stranger learns nothing from
+		// the bot — not that it is a household's, not how to get in. The
+		// household can see that somebody tried: the account and the
+		// connection are recorded, never what they said.
+		s.recordEvent("chat.unknown_account", at.ExternalID,
+			"a message from an account nobody introduced; nothing was said back",
+			map[string]string{"account": account, "agent": at.Butler})
+		s.settleInbound(claimKey, 0, &settled)
+		return inboundResponse{Accepted: true, Bound: false,
 			Reason: "no admission for this account on this connection"}, http.StatusAccepted, nil
 	}
 

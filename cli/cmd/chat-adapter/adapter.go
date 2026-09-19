@@ -38,6 +38,11 @@ type Incoming struct {
 	Conversation string
 	// Group marks a shared audience (ADR-W026 A7).
 	Group bool
+	// Addressed says the message is FOR this bot: always true in a
+	// direct message, and in a group only when the bot was mentioned or
+	// replied to (ADR-W033 B9.1). The transport decides, because only it
+	// can read its own mention syntax, and removes the mention from Text.
+	Addressed bool
 	// Text is what they said.
 	Text string
 	// MessageID is the transport's own id for this message; it becomes
@@ -250,19 +255,25 @@ func (a *adapter) receiveLoop(ctx context.Context) {
 // adapter knows. Everything else is relayed verbatim — an adapter that
 // interprets messages is an adapter with opinions about the household.
 func (a *adapter) handle(ctx context.Context, m Incoming) {
+	// A bot answers only what is addressed to it (ADR-W033 B9.1). In a
+	// group that means a mention or a reply to the bot; everything else
+	// said there is other people's conversation, and never leaves this
+	// process — not even to Keystone.
+	if m.Group && !m.Addressed {
+		return
+	}
+	// Somebody the household has not introduced gets as little as
+	// possible: no greeting, no "that code did not work", no "try
+	// again". Each of those told a stranger this is a household's
+	// assistant and how to get in. The one reply an unknown account can
+	// earn is "you're connected", by sending a valid key — which only a
+	// Person the household invited has.
 	text, wasStart := withoutStartCommand(m.Text)
 	if wasStart && strings.TrimSpace(text) == "" && !m.Group {
-		// Somebody opened the bot and pressed Start with no invite. It
-		// is the first thing anyone does, and silence here reads as a
-		// broken bot.
-		a.reply(ctx, m.Conversation, "Hello. I need an invite before we can talk — ask whoever runs the house for one.")
 		return
 	}
 	if code, ok := claimCodeIn(text); ok && !m.Group {
 		if err := a.keystone.redeem(ctx, a.transport.Name(), m.Account, m.DisplayName, m.Conversation, code); err != nil {
-			// The refusal is deliberately vague — Keystone does not say
-			// why, and neither does this.
-			a.reply(ctx, m.Conversation, "That code did not work. Ask for a fresh one.")
 			a.log.Info("claim refused", "account", m.Account)
 			return
 		}
@@ -275,14 +286,15 @@ func (a *adapter) handle(ctx context.Context, m Incoming) {
 		Account:      m.Account,
 		Conversation: m.Conversation,
 		Group:        m.Group,
+		Addressed:    m.Addressed,
 		Text:         m.Text,
 		MessageID:    m.MessageID,
 		DisplayName:  m.DisplayName,
 	}); err != nil {
+		// Logged, not said: the adapter cannot tell whether the sender is
+		// somebody the household knows, and a stranger learns nothing
+		// from an outage either.
 		a.log.Error("relaying message", "account", m.Account, "err", err)
-		// Say something rather than swallowing it: silence from a bot
-		// is indistinguishable from being ignored.
-		a.reply(ctx, m.Conversation, "I could not reach the house just now. Try again in a moment.")
 	}
 }
 
@@ -392,3 +404,27 @@ func claimCodeIn(text string) (string, bool) {
 }
 
 var errNotConfigured = errors.New("transport is not configured")
+
+// stripMention reports whether text contains mention (case-insensitive)
+// and returns it with every occurrence removed and the spacing tidied,
+// so the Agent reads the question rather than its own name.
+func stripMention(text, mention string) (string, bool) {
+	if mention == "" {
+		return text, false
+	}
+	var b strings.Builder
+	found := false
+	for i := 0; i < len(text); {
+		if i+len(mention) <= len(text) && strings.EqualFold(text[i:i+len(mention)], mention) {
+			found = true
+			i += len(mention)
+			continue
+		}
+		b.WriteByte(text[i])
+		i++
+	}
+	if !found {
+		return text, false
+	}
+	return strings.TrimLeft(strings.Join(strings.Fields(b.String()), " "), ",:; "), true
+}

@@ -43,9 +43,11 @@ func (h *harness) poll(t *testing.T, role runtimedb.Role, query string) []runtim
 	return msgs
 }
 
-// An unbound account gets exactly one reply, no detail, and no session
-// row (ADR-W026 A4).
-func TestChatUnboundAccountGetsOneReply(t *testing.T) {
+// An unbound account gets nothing at all and opens no session
+// (ADR-W033 B9.1, amending ADR-W026 A4's one-line reply): a stranger
+// learns nothing from the bot. The household can still see that
+// somebody tried, by account and bot — never what they said.
+func TestChatUnboundAccountGetsNothing(t *testing.T) {
 	h := newHarness(t)
 	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
 	// The Agent's bot exists; this account is simply not admitted to it.
@@ -57,13 +59,24 @@ func TestChatUnboundAccountGetsOneReply(t *testing.T) {
 	if resp.StatusCode != http.StatusAccepted || out.Bound {
 		t.Fatalf("status = %d, out = %+v", resp.StatusCode, out)
 	}
-	queued := h.poll(t, runtimedb.RoleConcierge, "")
-	if len(queued) != 1 || !strings.Contains(queued[0].Body, "claim code") {
-		t.Fatalf("queued = %+v, want one guidance reply", queued)
+	if queued := h.poll(t, runtimedb.RoleConcierge, ""); len(queued) != 0 {
+		t.Fatalf("queued = %+v, want nothing said to a stranger", queued)
 	}
-	// It names no member and confirms nothing about the deployment.
-	if strings.Contains(queued[0].Body, "sam") || strings.Contains(queued[0].Body, "surface") {
-		t.Fatalf("guidance reply leaks detail: %q", queued[0].Body)
+	events, err := h.s.DB.EventsAfter(0, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tried := false
+	for _, e := range events {
+		if e.Type == "chat.unknown_account" {
+			tried = true
+			if strings.Contains(e.Message+e.Name+e.Attrs["account"], "hello?") || e.Attrs["account"] != "99999" {
+				t.Errorf("the record carries what the stranger said: %+v", e)
+			}
+		}
+	}
+	if !tried {
+		t.Error("an unknown account's message left no record")
 	}
 	var sessions []runtimedb.ButlerSession
 	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &sessions)
@@ -174,7 +187,7 @@ func TestChatGroupRules(t *testing.T) {
 
 	// Admin surface, group: one refusal, no session.
 	resp, out := h.send(runtimedb.RoleValet, map[string]any{
-		"transport": "telegram", "account": "555", "conversation": "group-1", "group": true,
+		"transport": "telegram", "account": "555", "conversation": "group-1", "group": true, "addressed": true,
 		"text": "how is the disk?", "messageId": "g-1",
 	})
 	if resp.StatusCode != http.StatusAccepted || !strings.Contains(out.Reason, "direct messages only") {
@@ -190,10 +203,21 @@ func TestChatGroupRules(t *testing.T) {
 		t.Fatalf("an admin group message opened a session: %+v", sessions)
 	}
 
-	// Family surface, group: answered, and the model was told it is a
-	// shared audience.
+	// Family surface, group, NOT addressed to the bot: somebody talking
+	// to the room, not to Joan (ADR-W033 B9.1). Nothing runs and nothing
+	// is said, even though the sender is somebody Joan knows.
 	resp, out = h.send(runtimedb.RoleConcierge, map[string]any{
 		"transport": "telegram", "account": "777", "conversation": "group-1", "group": true,
+		"text": "dinner at six everyone", "messageId": "g-0",
+	})
+	if resp.StatusCode != http.StatusAccepted || out.Accepted || p.i != 0 {
+		t.Fatalf("an unaddressed group message was acted on: status = %d, out = %+v", resp.StatusCode, out)
+	}
+
+	// Family surface, group, addressed: answered, and the model was told
+	// it is a shared audience.
+	resp, out = h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "777", "conversation": "group-1", "group": true, "addressed": true,
 		"text": "whose turn is it for the bins?", "messageId": "g-2",
 	})
 	if resp.StatusCode != http.StatusAccepted || !out.Bound {

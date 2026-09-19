@@ -237,9 +237,10 @@ func TestClaimCodeDetection(t *testing.T) {
 	}
 }
 
-// A claim code is redeemed rather than relayed as a question — and a
-// refused one produces a vague reply, because Keystone does not say why
-// and neither should the adapter (ADR-W026 A4).
+// A claim code is redeemed rather than relayed as a question. A good one
+// is answered "you're connected"; a refused one is answered with nothing
+// at all, because whoever sent it is not somebody the household knows
+// (ADR-W033 B9.1).
 func TestAdapterRedeemsClaimCodes(t *testing.T) {
 	ks := &fakeKeystone{rejectID: "ZZZZ-ZZZZ-ZZZZ"}
 	tr := &fakeTransport{incoming: [][]Incoming{
@@ -259,7 +260,7 @@ func TestAdapterRedeemsClaimCodes(t *testing.T) {
 		ks.mu.Lock()
 		redeemed := len(ks.redeems)
 		ks.mu.Unlock()
-		return redeemed >= 2 && len(tr.sentMessages()) >= 2
+		return redeemed >= 2 && len(tr.sentMessages()) >= 1
 	})
 
 	ks.mu.Lock()
@@ -280,25 +281,22 @@ func TestAdapterRedeemsClaimCodes(t *testing.T) {
 		t.Fatalf("a claim code was also relayed as a question: %+v", ks.inbound)
 	}
 	sent := tr.sentMessages()
-	if len(sent) != 2 {
-		t.Fatalf("sent = %+v, want one reply per code", sent)
-	}
-	if !strings.Contains(sent[0].body, "connected") {
-		t.Fatalf("successful redeem reply = %q", sent[0].body)
-	}
-	if !strings.Contains(sent[1].body, "did not work") || strings.Contains(strings.ToLower(sent[1].body), "expired") {
-		t.Fatalf("refusal reply says too much: %q", sent[1].body)
+	if len(sent) != 1 || !strings.Contains(sent[0].body, "connected") {
+		t.Fatalf("sent = %+v, want only the successful redeem answered", sent)
 	}
 }
 
-// A claim code sent in a GROUP is not redeemed: everyone in the room can
-// read it, and binding on it would bind whoever typed it in front of an
-// audience.
-func TestAdapterIgnoresClaimCodesInGroups(t *testing.T) {
+// In a group only what is addressed to the bot leaves the adapter
+// (ADR-W033 B9.1): other people's conversation never reaches Keystone.
+// And a claim code there is not redeemed even when addressed: everyone
+// in the room can read it, and binding on it would bind whoever typed it
+// in front of an audience.
+func TestAGroupMessageReachesKeystoneOnlyWhenAddressed(t *testing.T) {
 	ks := &fakeKeystone{}
-	tr := &fakeTransport{incoming: [][]Incoming{{{
-		Account: "12345", Conversation: "group-1", Group: true, Text: "K7QP-3XMR-9TWD", MessageID: "m-1",
-	}}}}
+	tr := &fakeTransport{incoming: [][]Incoming{
+		{{Account: "12345", Conversation: "group-1", Group: true, Text: "anyone for dinner?", MessageID: "m-1"}},
+		{{Account: "12345", Conversation: "group-1", Group: true, Addressed: true, Text: "K7QP-3XMR-9TWD", MessageID: "m-2"}},
+	}}
 	a, done := newTestAdapter(t, ks, tr)
 	defer done()
 
@@ -315,8 +313,11 @@ func TestAdapterIgnoresClaimCodesInGroups(t *testing.T) {
 	if len(ks.redeems) != 0 {
 		t.Fatalf("a code in a group was redeemed: %+v", ks.redeems)
 	}
-	if len(ks.inbound) != 1 || !ks.inbound[0].Group {
-		t.Fatalf("inbound = %+v, want it relayed as an ordinary group message", ks.inbound)
+	if len(ks.inbound) != 1 || ks.inbound[0].MessageID != "m-2" || !ks.inbound[0].Addressed {
+		t.Fatalf("inbound = %+v, want only the addressed message, marked addressed", ks.inbound)
+	}
+	if sent := tr.sentMessages(); len(sent) != 0 {
+		t.Fatalf("the adapter itself answered in a group: %+v", sent)
 	}
 }
 
@@ -386,10 +387,10 @@ func TestTappedInviteLinkRedeems(t *testing.T) {
 	}
 }
 
-// Pressing Start with no invite is the first thing anybody does. It has
-// to say something: silence from a bot is indistinguishable from a
-// broken one.
-func TestBareStartIsAnswered(t *testing.T) {
+// Pressing Start with no invite gets nothing (ADR-W033 B9.1): whoever
+// does it is nobody the household has introduced, and a greeting tells
+// them what the bot is.
+func TestBareStartGetsNoReply(t *testing.T) {
 	ks := &fakeKeystone{}
 	tr := &fakeTransport{incoming: [][]Incoming{{{
 		Account: "12345", Conversation: "12345", Text: "/start", MessageID: "m-1",
@@ -397,13 +398,12 @@ func TestBareStartIsAnswered(t *testing.T) {
 	a, done := newTestAdapter(t, ks, tr)
 	defer done()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	runUntil(ctx, a, func() bool { return len(tr.sentMessages()) > 0 })
 
-	sent := tr.sentMessages()
-	if len(sent) != 1 || !strings.Contains(sent[0].body, "invite") {
-		t.Fatalf("sent = %+v, want an explanation of what is missing", sent)
+	if sent := tr.sentMessages(); len(sent) != 0 {
+		t.Fatalf("sent = %+v, want silence to a stranger", sent)
 	}
 	ks.mu.Lock()
 	defer ks.mu.Unlock()

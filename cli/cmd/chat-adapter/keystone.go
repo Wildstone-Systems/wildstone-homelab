@@ -40,6 +40,7 @@ type keystoneInbound struct {
 	Account      string `json:"account"`
 	Conversation string `json:"conversation,omitempty"`
 	Group        bool   `json:"group,omitempty"`
+	Addressed    bool   `json:"addressed,omitempty"`
 	Text         string `json:"text"`
 	MessageID    string `json:"messageId,omitempty"`
 	DisplayName  string `json:"displayName,omitempty"`

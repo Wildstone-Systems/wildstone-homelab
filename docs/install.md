@@ -413,8 +413,13 @@ password if you signed in more than 15 minutes ago.
 
 The adapter **dials out**: Telegram and Matrix are polled, and Discord
 and Slack hold a WebSocket open. So this adds no port, no Route and
-nothing at your edge. Messages in a group or server channel are refused
-(ADR-W033 B9). A bot talks to one person at a time.
+nothing at your edge.
+
+**A bot says nothing to people it doesn't know**: no greeting, no "wrong
+code", nothing. Keystone records that an unknown account tried, without
+what it said. **In a group or server channel, a bot answers only when
+addressed**: mention it (`@joan_bot`) or reply to one of its messages.
+Everything else said there never reaches Keystone (ADR-W033 B9.1).
 
 Once a person is bound, a household rule can ask through the bot, since
 `send` is a `domestic` action like `notifications.notify`. Their reply

@@ -238,6 +238,14 @@ Unknown or unbound external identities are refused before model inference.
 
 Owner-Agent Connections admit Owners only. Configuration and runtime both enforce this.
 
+### B9.1 Amendment (2026-09-19): strangers get nothing; groups need the bot addressed
+
+Decided with the household owner.
+
+- **An unknown account gets as little as possible: nothing.** Before this, a stranger's message got a one-line reply ("I can only talk to people the household has introduced me to…"), a bare `/start` got a greeting, and a wrong key got "that code did not work". Each of those told a stranger that the bot is a household's assistant and how to get in. Now the bot says nothing to an account it does not know, not even during an outage. The one reply such an account can earn is "you're connected", for sending a valid key in a direct message, which only a Person the household invited has. Keystone records that an unknown account wrote to a bot (the account and the bot, never the text), so the household can see a bot being probed. This amends ADR-W026 A4.
+- **A group or server channel is allowed, but only what is addressed to the bot is the bot's.** A message there reaches the Agent only when it mentions the bot or replies to it: `@bot` on Telegram, a mention on Discord and Slack, `m.mentions` or the bot's id on Matrix. Everything else said in the room never leaves the adapter, and Keystone refuses an unaddressed group message as a backstop. The mention is removed before the Agent reads the message. Admission is unchanged: an addressed message from an account that is not bound is still silence, and the Agent is told it is speaking in front of a shared audience. An Owner Agent still answers in direct messages only.
+- **This relaxes B9's "group destinations fail closed in MVP"** for Member Agents, on the owner's decision: a Person the household admitted may talk to their Agent in a group they are in, when they address it. The disclosure concern B9 names still holds, and the audience note is how the Agent is told about it. Full group semantics, such as speaker-aware disclosure and per-destination policy, remain future work (#212).
+
 ## B10. Conversations follow Person + Agent, not transport
 
 A session is fundamentally associated with:
