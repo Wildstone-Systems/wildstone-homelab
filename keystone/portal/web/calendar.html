@@ -54,6 +54,7 @@
   .evrow:hover { background: color-mix(in srgb, var(--color-accent) 8%, transparent); }
   .evrow .when { color: var(--muted); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums;
                  min-width: 88px; }
+  .evmeta { display: block; color: var(--muted); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
   .editor { padding: var(--space-6); margin-top: var(--space-6); }
   .editor h2 { margin-top: 0; }
   .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
@@ -135,6 +136,10 @@
         <div class="fld wide">
           <label for="ev-where">Where (optional)</label>
           <input class="hinput" id="ev-where" type="text" maxlength="200" autocomplete="off">
+        </div>
+        <div class="fld wide">
+          <label for="ev-notes">Notes (optional)</label>
+          <textarea class="hinput" id="ev-notes" rows="3" maxlength="2000"></textarea>
         </div>
       </div>
       <div id="ed-note"></div>
@@ -298,7 +303,13 @@
       var row = make("button", "evrow");
       row.type = "button";
       row.appendChild(make("span", "when", whenOf(e)));
-      row.appendChild(make("span", "grow", e.title));
+      var what = make("span", "grow");
+      what.appendChild(make("span", null, e.title));
+      // The place and the note under the title, so what somebody wrote
+      // down is on the page rather than only in the form.
+      if (e.location) { what.appendChild(make("span", "evmeta", e.location)); }
+      if (e.notes) { what.appendChild(make("span", "evmeta", e.notes)); }
+      row.appendChild(what);
       row.addEventListener("click", function () { openEditor(e); });
       list.appendChild(row);
     });
@@ -322,7 +333,8 @@
     el("ev-start").value = e && e.startTime ? e.startTime : "18:00";
     el("ev-end").value = e && e.endTime ? e.endTime : "19:00";
     el("ev-enddate").value = e && e.allDay && e.lastDay !== e.day ? e.lastDay : "";
-    el("ev-where").value = "";
+    el("ev-where").value = e && e.location ? e.location : "";
+    el("ev-notes").value = e && e.notes ? e.notes : "";
     el("delete").hidden = !e;
     showNote(el("ed-note"), "", "");
     syncAllDay();
@@ -364,7 +376,8 @@
       title: el("ev-title").value,
       date: el("ev-date").value,
       allDay: all,
-      location: el("ev-where").value
+      location: el("ev-where").value,
+      notes: el("ev-notes").value
     };
     if (all) {
       if (el("ev-enddate").value) { body.endDate = el("ev-enddate").value; }

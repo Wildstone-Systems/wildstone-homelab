@@ -297,13 +297,23 @@ func applyChanges(current string, req EventWrite, start, end, now time.Time) (st
 	if req.Description != nil {
 		replacements["DESCRIPTION"] = "DESCRIPTION:" + escapeICS(*req.Description)
 	}
+	// An empty place or note CLEARS it: the property is removed, rather
+	// than rewritten as an empty "LOCATION:" some clients show as a blank
+	// place.
+	cleared := map[string]bool{}
+	for key, v := range map[string]*string{"LOCATION": req.Location, "DESCRIPTION": req.Description} {
+		if v != nil && strings.TrimSpace(*v) == "" {
+			cleared[key] = true
+			delete(replacements, key)
+		}
+	}
 	if !start.IsZero() {
 		replacements["DTSTART"] = icsTimeProperty("DTSTART", start, req.AllDay)
 	}
 	if !end.IsZero() {
 		replacements["DTEND"] = icsTimeProperty("DTEND", end, req.AllDay)
 	}
-	if len(replacements) == 0 {
+	if len(replacements) == 0 && len(cleared) == 0 {
 		return current, false
 	}
 
@@ -338,6 +348,10 @@ func applyChanges(current string, req EventWrite, start, end, now time.Time) (st
 		}
 		if len(stack) == 0 || stack[len(stack)-1] != "VEVENT" {
 			out = append(out, line)
+			continue
+		}
+		if cleared[key] {
+			changed = true
 			continue
 		}
 		if repl, want := replacements[key]; want {

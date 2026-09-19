@@ -108,6 +108,12 @@ type Event struct {
 	Start   time.Time `json:"start"`
 	End     time.Time `json:"end,omitzero"`
 	AllDay  bool      `json:"allDay,omitempty"`
+	// Location and Description are the event's place and notes, as a
+	// person typed them. Read so that "anything else about it?" has an
+	// answer: without them a Butler could only ever repeat a title and
+	// a time, while the note that mattered sat in the event.
+	Location    string `json:"location,omitempty"`
+	Description string `json:"description,omitempty"`
 	// Href is where this event lives in the collection, relative to the
 	// server root, as the server itself reported it.
 	//
@@ -229,6 +235,14 @@ func parseICS(data string, loc *time.Location) []Event {
 		case "SUMMARY":
 			if cur != nil {
 				cur.Summary = unescapeICS(value)
+			}
+		case "LOCATION":
+			if cur != nil {
+				cur.Location = unescapeICS(value)
+			}
+		case "DESCRIPTION":
+			if cur != nil {
+				cur.Description = unescapeICS(value)
 			}
 		case "DTSTART":
 			if cur != nil {
