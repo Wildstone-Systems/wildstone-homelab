@@ -623,3 +623,42 @@ func TestAConsoleRefusalIsNotADegradedIdentity(t *testing.T) {
 		t.Fatalf("a refusal produced an identity: %+v", id)
 	}
 }
+
+// The pages gate opens when there is no proxy to gate on.
+//
+// This is the half that prevents a lockout rather than creating one,
+// and it is asserted separately because it is the branch nobody would
+// think to write a test for: a household with no identity proxy has no
+// way in but the bearer token on the sign-in page, so refusing direct
+// access there would lock out precisely the deployments that cannot
+// use Authelia at all.
+//
+// Both directions, because each alone is a different defect. Gating
+// with nothing configured is a lockout; not gating with a proxy
+// configured is the open port the whole slice exists to close.
+func TestTheConsolePagesGateFollowsTheProxy(t *testing.T) {
+	h := newHarness(t)
+
+	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.RemoteAddr = "203.0.113.9:5555" // not the proxy
+
+	h.s.TrustedIngress = nil
+	if !h.s.ConsoleUIReachableFrom(req) {
+		t.Error("the Console's pages are gated with no identity proxy configured, " +
+			"which locks out every household that has none — the bearer token on " +
+			"the sign-in page is their only way in")
+	}
+
+	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	if h.s.ConsoleUIReachableFrom(req) {
+		t.Error("the Console's pages are served to a peer that is not the proxy " +
+			"even though one is configured; the token path goes around Authelia")
+	}
+	req.RemoteAddr = "127.0.0.1:5555" // the proxy
+	if !h.s.ConsoleUIReachableFrom(req) {
+		t.Error("the Console's pages are refused to the proxy itself")
+	}
+}

@@ -455,7 +455,12 @@ func newButlerProvider(cfg butlerConfig) (provider.Provider, butlerBackend, erro
 // serves a file from dir, falling back to index.html for client-side
 // routes (the SPA convention). Path traversal is handled by
 // http.ServeFile/FileServer's own cleaning.
-func withConsole(apiHandler http.Handler, dir string) http.Handler {
+// uiReachable decides whether this peer may be served the Console's
+// own pages. It is a parameter rather than a direct call into the API
+// server so the refusal can be tested without one, and nil means the
+// pages are served to everyone — the behaviour before this gate, and
+// what a caller with no trust boundary to enforce wants.
+func withConsole(apiHandler http.Handler, dir string, uiReachable func(*http.Request) bool) http.Handler {
 	fileServer := http.FileServer(http.Dir(dir))
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiHandler)
@@ -468,6 +473,19 @@ func withConsole(apiHandler http.Handler, dir string) http.Handler {
 		mux.Handle(prefix, apiHandler)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Refused before any file is considered, including /assets.
+		// Gating index.html alone would still hand out the bundle, and
+		// the bundle is the Console — a copy served to a browser that
+		// reached this port directly would talk to /api with a bearer
+		// token and never involve the proxy, which is the arrangement
+		// this gate exists to end.
+		if uiReachable != nil && !uiReachable(r) {
+			http.Error(w,
+				"the Console is served through this household's identity proxy; "+
+					"reach it at the Console's own address and sign in there",
+				http.StatusForbidden)
+			return
+		}
 		if r.URL.Path != "/" {
 			if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(path.Clean(r.URL.Path), "/")))); err == nil {
 				// Everything under /assets carries a content hash in its
@@ -1514,8 +1532,22 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 
 	var publicHandler http.Handler = apiSrv.Handler()
 	if consoleDir != "" {
-		publicHandler = withConsole(publicHandler, consoleDir)
-		log.Info("serving console", "dir", consoleDir)
+		publicHandler = withConsole(publicHandler, consoleDir, apiSrv.ConsoleUIReachableFrom)
+		// Which of the two postures this is, said out loud. The gated
+		// one refuses a browser that reaches this port directly, and
+		// that refusal is the kind an operator cannot diagnose from the
+		// outside — the page simply stops loading, with the proxy still
+		// insisting they are signed in.
+		if len(apiSrv.TrustedIngress) == 0 {
+			log.Info("serving console", "dir", consoleDir,
+				"reachable", "anyone who can reach this port; sign-in is a bearer token",
+				"note", "set -household-ingress to serve it only through the identity proxy")
+		} else {
+			log.Info("serving console", "dir", consoleDir,
+				"reachable", "the identity proxy only",
+				"proxy", apiSrv.TrustedIngress,
+				"recovery", "keystone owner, on this host, if the proxy is broken")
+		}
 	}
 	go func() {
 		log.Info("public API listening", "addr", apiLis.Addr().String())
