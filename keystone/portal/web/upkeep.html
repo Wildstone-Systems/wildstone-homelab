@@ -441,7 +441,14 @@
     return { y: y, m: m, d: Math.min(t.d, daysIn(y, m)) };
   }
 
+  // newMeter is set while the form is declaring a meter and its first
+  // reminder together ("Track something new"): that reminder is measured
+  // against the meter being added, so it asks in that meter's numbers,
+  // never in dates.
+  var newMeter = false;
+
   function selectedMeter(meters) {
+    if (newMeter) { return { name: "", unit: val("f-unit") }; }
     var m = el("f-meter");
     var name = m && m.value;
     if (!name) { return null; }
@@ -450,7 +457,21 @@
 
   // The part of the form that depends on the two choices above it,
   // rebuilt whenever either changes.
+  // drawWhen rebuilds the timing fields, keeping anything already typed
+  // in a field that is still there: a unit typed above, or a switch of
+  // rollover, must not wipe the numbers below it.
   function drawWhen(box, meters) {
+    var kept = {};
+    Array.prototype.forEach.call(box.querySelectorAll("input, select"), function (i) {
+      if (i.id) { kept[i.id] = i.value; }
+    });
+    drawTiming(box, meters);
+    Array.prototype.forEach.call(box.querySelectorAll("input, select"), function (i) {
+      if (i.id && kept[i.id] !== undefined && kept[i.id] !== "") { i.value = kept[i.id]; }
+    });
+  }
+
+  function drawTiming(box, meters) {
     clear(box);
     var roll = val("f-rollover") || "fromCompletion";
     var meter = selectedMeter(meters);
@@ -474,7 +495,8 @@
     box.appendChild(amount("Start reminding me", "f-lead", leadUnits, { placeholder: "2", after: "before" }));
   }
 
-  function taskFields(stack, meters) {
+  function taskFields(stack, meters, declaringMeter) {
+    newMeter = !!declaringMeter;
     stack.appendChild(field("What do you want to keep up with?", "f-desc",
       { placeholder: "Oil and filter" }));
     // Who it is about. A child's checkup is theirs, not the household's:
@@ -517,9 +539,21 @@
     book.appendChild(cb);
     book.appendChild(make("span", "muted", "It needs an appointment booked (it keeps asking until one is)"));
     stack.appendChild(book);
+    // Looked up in the form being built, NOT with el(): openForm calls
+    // this before the card is in the document, so a document lookup
+    // finds nothing, no listener is attached, and the form silently
+    // stops adapting — the date fields stayed up with a meter chosen.
+    // The meter being declared lives in the same stack, above this.
     ["f-meter", "f-rollover"].forEach(function (id) {
-      if (el(id)) { el(id).addEventListener("change", function () { drawWhen(timing, meters); }); }
+      var input = stack.querySelector("#" + id);
+      if (input) { input.addEventListener("change", function () { drawWhen(timing, meters); }); }
     });
+    // The unit of a meter being declared labels its reminder ("Every how
+    // many miles?"), so the labels follow what is typed above.
+    var unitBox = newMeter && stack.querySelector("#f-unit");
+    if (unitBox) {
+      unitBox.addEventListener("input", function () { drawWhen(timing, meters); });
+    }
   }
 
   // span reads a number box and its unit into the engine's spelling, or
@@ -548,8 +582,10 @@
     if (el("f-booking") && el("f-booking").checked) { body.requiresBooking = true; }
     if (!body.description) { return { error: "say what you want to keep up with" }; }
     var m = el("f-meter");
-    var meter = m && m.value;
-    if (meter) { body.meter = meter; }
+    var meter = newMeter || (m && m.value);
+    // A meter being declared in the same request is named by the server,
+    // so its reminder carries no meter of its own.
+    if (meter && !newMeter) { body.meter = m.value; }
 
     var lead = span("f-lead", meter ? "" : undefined);
     if (lead.err) { return { error: "start reminding: " + lead.err }; }
@@ -633,7 +669,7 @@
       stack.appendChild(field("What does it count?", "f-unit", { placeholder: "miles" }));
       stack.appendChild(field("What does it read now?", "f-reading", { type: "number" }));
       stack.appendChild(make("div", "muted", "And the first thing to keep up with — you can add more later."));
-      taskFields(stack, null);
+      taskFields(stack, null, true);
     }, function (btn) {
       var body = { meter: { description: val("f-mdesc"), unit: val("f-unit") } };
       var n = parseFloat(val("f-reading"));
@@ -649,7 +685,7 @@
 
   el("add-task").addEventListener("click", function () {
     openForm("Add a reminder", function (stack) {
-      taskFields(stack, meterList());
+      taskFields(stack, meterList(), false);
     }, function (btn) {
       var body = taskBody();
       if (body.error) { complain(btn, body.error); return; }

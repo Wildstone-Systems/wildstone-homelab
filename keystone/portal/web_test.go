@@ -901,6 +901,13 @@ func TestTheTrackerFormSpeaksInDates(t *testing.T) {
 		`body.at = fmtDay(date)`,           // a one-off sends an absolute date
 		`body.requiresBooking = true`,      // "needs booking" can be said
 		`step(date, -every.n, every.unit)`, // fixed schedules walk back one gap
+		// The form adapts: its listeners are found in the form being built,
+		// which is not in the document yet, so el() found nothing and the
+		// date fields stayed up with a meter chosen.
+		`stack.querySelector("#" + id)`,
+		// A meter declared with its first reminder is measured against it,
+		// so that reminder asks in the meter's numbers, not in dates.
+		`taskFields(stack, null, true)`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the tracker form no longer has %s", want)
