@@ -67,6 +67,9 @@ export interface PlanRecord {
   state: string;
   basedOnHead?: string;
   plan?: Plan;
+  // A household setting the plan changes instead of desired state: an
+  // Agent's proposal an Owner decides on (ADR-W033 E2).
+  setting?: { timezone?: string; reason?: string };
   resolvedBy?: string;
   resolvedAt?: string;
 }
@@ -195,9 +198,38 @@ export class ApiError extends Error {
 
 // onStepUp is installed by the app shell: a consequential operation
 // refused for want of a fresh sign-in offers one (ADR-W033 A4.1).
-export let onStepUp: (url: string) => void = () => {};
-export function setOnStepUp(fn: (url: string) => void) {
+export let onStepUp: (url: string, method: string, path: string) => void = () => {};
+export function setOnStepUp(fn: (url: string, method: string, path: string) => void) {
   onStepUp = fn;
+}
+
+// The action a step-up interrupted, kept across the round trip to the
+// identity provider so the screen can put the person back at it — its
+// final confirmation open — rather than leave them to find the button
+// again (ADR-W033 A4.1: resumed by one click, never replayed).
+const STEPUP_PENDING_KEY = "wst.console.stepup-pending";
+
+export function rememberStepUp(method: string, path: string) {
+  sessionStorage.setItem(STEPUP_PENDING_KEY, JSON.stringify({ method, path }));
+}
+
+export function pendingStepUp(): { method: string; path: string } | null {
+  try {
+    return JSON.parse(sessionStorage.getItem(STEPUP_PENDING_KEY) ?? "null");
+  } catch {
+    return null;
+  }
+}
+
+// isPendingStepUp is whether this exact action is the one a step-up
+// interrupted.
+export function isPendingStepUp(method: string, path: string): boolean {
+  const p = pendingStepUp();
+  return p !== null && p.method === method && p.path === path;
+}
+
+export function clearStepUp() {
+  sessionStorage.removeItem(STEPUP_PENDING_KEY);
 }
 
 // onUnauthorized is installed by the app shell: a 401 anywhere returns
@@ -245,7 +277,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     // A4.1). The shell offers the step-up; the caller still gets the
     // error, so nothing on the screen pretends the operation happened.
     if (res.status === 403 && failed.stepUp) {
-      onStepUp(failed.stepUp);
+      onStepUp(failed.stepUp, method, path);
     }
     throw new ApiError(
       res.status,
@@ -253,6 +285,10 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
       failed.sessionId,
       failed.proposalErrors,
     );
+  }
+  // The interrupted action has now been done.
+  if (isPendingStepUp(method, path)) {
+    clearStepUp();
   }
   return data as T;
 }
@@ -845,6 +881,7 @@ export interface CapabilityRequest {
 // Butler admission, which is runtime state and not LDAP membership.
 export interface ButlerMemberRecord {
   member: string;
+  role?: "owner" | "member";
   profile: string;
   admitted: boolean;
   generation: number;
@@ -1799,6 +1836,21 @@ export const api = {
     ),
   principals: () => call<Principal[]>("GET", "/api/v1/principals"),
   householdMembers: () => call<HouseholdMember[]>("GET", "/api/v1/household/members"),
+  // Chat Connections in one step (ADR-W033 B7.1).
+  chatPlatforms: () => call<{ platforms: ChatPlatform[] }>("GET", "/api/v1/connections/platforms"),
+  createConnection: (req: {
+    platform: string;
+    butler: string;
+    person: string;
+    credentials: Record<string, string>;
+    node?: string;
+    bot?: string;
+  }) => call<ConnectionCreated>("POST", "/api/v1/connections", req),
+  chatBots: () => call<{ bots: ChatBot[] }>("GET", "/api/v1/connections"),
+  removeChatBot: (capability: string) =>
+    call<{ capability: string; plan: string }>("POST", `/api/v1/connections/${encodeURIComponent(capability)}/remove`),
+  myInvites: () => call<{ invites: ConnectionInvite[] }>("GET", "/api/v1/connections/invites"),
+  myInviteKey: (seq: number) => call<InviteKey>("POST", `/api/v1/connections/invites/${seq}/key`),
   householdGroups: () => call<HouseholdGroup[]>("GET", "/api/v1/household/groups"),
   // The household's own groups (slice 8). Membership grants nothing by
   // itself — what a group reaches is whatever the entitlement rows say.
@@ -1880,3 +1932,52 @@ export const api = {
       `/api/v1/nodes/${encodeURIComponent(node)}/secrets/${encodeURIComponent(name)}/rotate`,
     ),
 };
+
+// A chat platform, and what the Owner gives it (ADR-W033 B7.1).
+export interface ChatPlatform {
+  name: string;
+  label: string;
+  fields: { key: string; label: string; hint: string; prefix?: string }[];
+}
+
+// One installed chat bot and the Agent it answers for.
+export interface ChatBot {
+  capability: string;
+  platform: string;
+  label: string;
+  butler: string;
+}
+
+export interface ConnectionCreated {
+  capability: string;
+  reused?: boolean;
+  instance?: string;
+  platform: string;
+  butler: string;
+  person: string;
+  node?: string;
+  plan?: string;
+  invite: number;
+  note: string;
+}
+
+// An open invite, as its own Person sees it.
+export interface ConnectionInvite {
+  seq: number;
+  butler: string;
+  platform: string;
+  label: string;
+  invitedBy: string;
+}
+
+// A single-use key, minted for the Person who asked for it.
+export interface InviteKey {
+  code: string;
+  link?: string;
+  handle?: string;
+  carriesCode: boolean;
+  butler: string;
+  platform: string;
+  expiresAt: string;
+  note: string;
+}

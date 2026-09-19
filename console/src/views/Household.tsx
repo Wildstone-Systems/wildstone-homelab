@@ -44,6 +44,7 @@ export function Household() {
       </div>
       <ErrorLine error={members.error ?? groups.error} />
 
+      <HouseholdTimeZone />
       <AddMember groups={groups.data ?? []} members={members.data ?? []} onDone={members.reload} />
 
       <div className="sect" style={{ marginTop: "var(--space-8)" }}>
@@ -444,6 +445,73 @@ export function AddMember({
         The email is how the sign-in page reaches them for a password reset, and LLDAP requires
         one. No password is set here — a credential never lives in declared state.
       </div>
+    </div>
+  );
+}
+
+// HouseholdTimeZone is where the household lives, in time (ADR-W033 E2).
+// Agents read "3pm" and "tomorrow" in it, and so do the calendar and
+// household rules. An Owner sets it here; an agent that hears it is wrong
+// proposes the right one, and that proposal waits on the Plans screen.
+export function HouseholdTimeZone() {
+  const loaded = useLoad(() => api.butlerSettings(), []);
+  const [zone, setZone] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const current = loaded.data?.settings.timezone ?? "";
+  const zones: string[] =
+    typeof Intl !== "undefined" && "supportedValuesOf" in Intl
+      ? (Intl as unknown as { supportedValuesOf: (k: string) => string[] }).supportedValuesOf("timeZone")
+      : [];
+  const save = () => {
+    if (!loaded.data) return;
+    setBusy(true);
+    setError(null);
+    api
+      .setButlerSettings({ ...loaded.data.settings, timezone: zone.trim() })
+      .then(() => {
+        setSaved(true);
+        setZone("");
+        loaded.reload();
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="card">
+      <h3>Time zone</h3>
+      <div className="muted">
+        Agents, the calendar and household rules read times in this zone
+        {current ? (
+          <>
+            : now <strong>{current}</strong>
+          </>
+        ) : null}
+        .{current === "UTC" && " UTC is almost never where a household lives — set yours."}
+      </div>
+      <div className="row">
+        <input
+          aria-label="Time zone"
+          list="household-zones"
+          placeholder="e.g. America/Chicago"
+          value={zone}
+          onChange={(e) => {
+            setZone(e.target.value);
+            setSaved(false);
+          }}
+        />
+        <datalist id="household-zones">
+          {zones.map((z) => (
+            <option key={z} value={z} />
+          ))}
+        </datalist>
+        <button className="btn btn-primary" disabled={busy || zone.trim() === "" || zone.trim() === current} onClick={save}>
+          {busy ? "Saving…" : "Set time zone"}
+        </button>
+      </div>
+      <ErrorLine error={error ?? loaded.error} />
+      {saved && <div className="muted">Saved. Agents use it from their next message.</div>}
     </div>
   );
 }

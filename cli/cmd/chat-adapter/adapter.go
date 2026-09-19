@@ -93,7 +93,7 @@ func main() {
 	// carries a credential — those are env-only, always (see below).
 	fs := flag.NewFlagSet("chat-adapter", flag.ExitOnError)
 	apiBase := fs.String("api", envOr("KEYSTONE_API", "http://127.0.0.1:9441"), "Keystone public API base URL")
-	transportName := fs.String("transport", envOr("CHAT_TRANSPORT", "telegram"), "which transport to run: telegram | matrix")
+	transportName := fs.String("transport", envOr("CHAT_TRANSPORT", "telegram"), "which transport to run: telegram | matrix | discord | slack")
 	pollWait := fs.Duration("poll-wait", 25*time.Second, "how long to long-poll each side")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	fs.Parse(os.Args[1:]) //nolint:errcheck // ExitOnError
@@ -148,8 +148,12 @@ func newTransport(name string, pollWait time.Duration) (Transport, error) {
 		return newTelegram(os.Getenv("TELEGRAM_BOT_TOKEN"), pollWait)
 	case "matrix":
 		return newMatrix(os.Getenv("MATRIX_HOMESERVER"), os.Getenv("MATRIX_ACCESS_TOKEN"), pollWait)
+	case "discord":
+		return newDiscord(os.Getenv("DISCORD_BOT_TOKEN"), pollWait)
+	case "slack":
+		return newSlack(os.Getenv("SLACK_BOT_TOKEN"), os.Getenv("SLACK_APP_TOKEN"), pollWait)
 	default:
-		return nil, fmt.Errorf("unknown transport %q (telegram|matrix)", name)
+		return nil, fmt.Errorf("unknown transport %q (telegram|matrix|discord|slack)", name)
 	}
 }
 

@@ -19,10 +19,10 @@ budget-actual 1.1.0 68f1dfdf247433cc
 calendar-radicale 2.0.3 2494b32f58a01814
 cameras-frigate 1.0.1 0ac585beb5876da1
 captcha-flaresolverr 1.0.1 6420402a747e2ee5
-chat-matrix-admin 1.0.3 79c98d8ce2aafe03
-chat-matrix-family 1.0.3 498001d22dd17af9
-chat-telegram-admin 1.0.3 7af6584f75ffe23a
-chat-telegram-family 1.0.3 043ce5b37febd488
+chat-discord 2.0.0 f18460627b32cd15
+chat-matrix 2.0.0 ecc85c0ff5b1a5d0
+chat-slack 2.0.0 26174531dec4cc1d
+chat-telegram 2.0.0 84b38bec04e10fc1
 code-gitea 1.0.1 44a8494cd02dee51
 dashboard 1.0.1 c0a5ca5341926568
 dashboard-homarr 1.0.3 d6ad61a6afaacde0
@@ -36,7 +36,7 @@ files-filebrowser 1.0.1 39f776ac3cd55073
 home-assistant 1.1.1 61f41ec056cd74c0
 home-automation 1.0.3 08e9b3aa603b35a1
 homepage-wildstone 1.0.1 743bd19598b58400
-identity 1.1.0 e62ef99c1ff87df1
+identity 1.2.0 a0464ffe5909a85a
 indexers-prowlarr 1.0.2 9dfa451d4d3ec5ba
 ingress 1.0.2 4bbd2bd5e6db1d92
 ingress-tailnet 1.0.1 59e7276e5bb0a51c
@@ -66,5 +66,5 @@ sync-syncthing 1.0.2 5a20ec6bdab54726
 tools-it-tools 1.0.0 08d30d25834cb937
 tv-sonarr 1.0.2 acb8a17adf7fac6d
 vpn-gluetun 1.0.1 6e37d2b00dace21f
-wildstone-console 1.0.0 5def65ed438d0106
+wildstone-console 1.1.0 cb9c6f5dad6d36e7
 zigbee-zigbee2mqtt 1.0.1 2f0135d03c348743

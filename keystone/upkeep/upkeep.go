@@ -21,6 +21,7 @@ package upkeep
 
 import (
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
 	"log/slog"
 	"slices"
 	"sort"
@@ -65,7 +66,10 @@ type Engine struct {
 	// local day of the month, so this is not decoration (ADR-W029: a
 	// household has one timezone).
 	Loc *time.Location
-	Log *slog.Logger
+	// Zone, when set, is the household's live timezone and wins over
+	// Location, so an approved change applies without a restart.
+	Zone *householdtz.Zone
+	Log  *slog.Logger
 	// Now is overridable so a test can run a year in an afternoon.
 	Now func() time.Time
 }
@@ -78,6 +82,9 @@ func (e *Engine) now() time.Time {
 }
 
 func (e *Engine) loc() *time.Location {
+	if l := e.Zone.Location(); l != nil {
+		return l
+	}
 	if e.Loc != nil {
 		return e.Loc
 	}

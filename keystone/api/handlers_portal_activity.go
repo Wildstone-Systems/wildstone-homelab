@@ -78,7 +78,7 @@ func (s *Server) activityHistory(_ http.ResponseWriter, r *http.Request, member 
 		before = n
 	}
 
-	loc := s.HouseholdLoc
+	loc := s.householdLoc()
 	if loc == nil {
 		loc = time.Local
 	}

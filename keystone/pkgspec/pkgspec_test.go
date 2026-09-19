@@ -367,30 +367,3 @@ func TestProvidedSecretsComeFromThePackage(t *testing.T) {
 		t.Fatalf("ProvidedSecrets = %v, want only the provided one", got)
 	}
 }
-
-// Every chat package in the shipped catalog declares exactly the two
-// provided secrets the Console's connect flow collects and mints: the
-// vendor's token, and the adapter's own Keystone credential.
-func TestShippedChatPackagesDeclareTheirSecrets(t *testing.T) {
-	for _, name := range []string{
-		"chat-telegram-family", "chat-telegram-admin", "chat-matrix-family", "chat-matrix-admin",
-	} {
-		pkg, err := Load(filepath.Join("..", "..", "packages", name, "package.yaml"))
-		if err != nil {
-			t.Fatalf("loading %s: %v", name, err)
-		}
-		got := ProvidedSecrets(pkg)
-		if len(got) != 2 {
-			t.Fatalf("%s: provided secrets = %v, want the vendor token and the adapter credential", name, got)
-		}
-		var vendor []string
-		for _, s := range got {
-			if s != name+"-adapter" {
-				vendor = append(vendor, s)
-			}
-		}
-		if len(vendor) != 1 {
-			t.Fatalf("%s: could not tell the vendor token from the adapter credential in %v", name, got)
-		}
-	}
-}

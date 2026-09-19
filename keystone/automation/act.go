@@ -133,7 +133,7 @@ func (e *Engine) act(ctx context.Context, d Decision, ev runtimedb.HouseholdEven
 		return nil // decisions recorded, nothing wired to act on them
 	}
 
-	params, rerr := RenderParams(rule.Automation.Action.Params, ev, d.Rule, e.Location)
+	params, rerr := RenderParams(rule.Automation.Action.Params, ev, d.Rule, e.loc())
 	if rerr != nil {
 		return e.recordFollowUp(d, ev, TypeActionFailed, "err", map[string]any{
 			"tool": d.Action, "tier": d.Tier, "error": rerr.Error(), "stage": "render",

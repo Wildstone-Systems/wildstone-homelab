@@ -38,6 +38,7 @@ package butlerlive
 import (
 	"errors"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
 	"log/slog"
 	"strings"
 	"sync"
@@ -224,7 +225,10 @@ type Butlers struct {
 	// without it a model has no "today" but a tool's say-so, and no way
 	// at all to turn "this weekend" into dates.
 	Location *time.Location
-	Now      func() time.Time
+	// Zone, when set, is the household's live timezone and wins over
+	// Location, so an approved change applies without a restart.
+	Zone *householdtz.Zone
+	Now  func() time.Time
 
 	// mu guards clients.
 	mu sync.Mutex

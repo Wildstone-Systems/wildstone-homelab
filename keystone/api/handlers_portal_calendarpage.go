@@ -97,8 +97,8 @@ type calendarPageEvent struct {
 }
 
 func (s *Server) calendarLoc() *time.Location {
-	if s.HouseholdLoc != nil {
-		return s.HouseholdLoc
+	if l := s.householdLoc(); l != nil {
+		return l
 	}
 	return time.UTC
 }

@@ -35,6 +35,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
 	"io"
 	"net/http"
 	"strings"
@@ -65,6 +66,9 @@ type Upstream struct {
 	// means. A calendar question answered in UTC is wrong for most of
 	// the day in most of the world.
 	Location *time.Location
+	// Zone, when set, is the household's live timezone and wins over
+	// Location, so an approved change applies without a restart.
+	Zone *householdtz.Zone
 	// Writable turns the action capabilities on. Off by default, and
 	// off is the honest posture for an adapter nobody has decided to
 	// widen — see the package comment for why this is a second copy of
@@ -85,6 +89,9 @@ func (u *Upstream) now() time.Time {
 }
 
 func (u *Upstream) location() *time.Location {
+	if l := u.Zone.Location(); l != nil {
+		return l
+	}
 	if u.Location != nil {
 		return u.Location
 	}

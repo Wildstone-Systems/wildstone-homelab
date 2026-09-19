@@ -202,6 +202,18 @@ Each Connection has its own lifecycle, credential or secret reference, admission
 
 Disabling a Connection does not pause the Agent.
 
+### B7.1 Amendment (2026-09-19, #246 and chat connections): how a chat Connection is made
+
+Decided with the household owner. Where an older ADR (W026, W031) says otherwise about chat adapters or bots, this amendment governs.
+
+- **A chat Connection connects a Person to an Agent, and nothing else.** There are no "family" and "admin" bots. What a Connection may admit follows the Agent's class and the Person's role (B2, B9): an Owner-class Agent's Connections admit Owners only. The transport package does not encode an audience.
+- **One package per platform, installed once per bot.** The chat packages are `chat-telegram`, `chat-matrix`, `chat-discord` and `chat-slack`. Each is *instanced* (#246): an install carries an instance name, its resources and settings belong to that instance, and a household can install as many as it has bots. The instance name defaults to the Agent's name. B7 allows several bots per Agent on one platform, so the name is suffixed when taken.
+- **One token is one bot, and one bot serves many people.** Connecting a second Person to an Agent that already has a bot on the platform invites them to that bot; no credential is asked for. A credential already running another live bot is refused, by a SHA-256 fingerprint Keystone records in place of the value, because two installs polling one bot steal each other's messages. Making a new bot mints a credential and removing one ends people's way to the Agent, so both are consequential (A4.1). Inviting to an existing bot is admission, which is ordinary. Removing a bot revokes its address and its own credential and withdraws its invites. A removed bot's name is not reused, so its credential is never revived.
+- **The Owner supplies only what cannot be derived:** the Agent, the Person, and the platform's credential. Telegram and Discord take a bot token. Slack takes a bot token and an app-level token, because Socket Mode needs both. Matrix takes a homeserver address and the bot account's access token. The machine defaults to the Keystone host, and the Keystone address is derived. The adapter's image is not asked for.
+- **The adapter ships with the release, not through a registry.** The release already builds the `chat-adapter` program for each architecture. The installer places it on every host, and a chat package runs it in a public, digest-pinned distroless base image with the program bind-mounted read-only and run as a non-root user. Nothing of Wildstone's is published to a container registry, which keeps a private repository private and needs no registry credentials on a node.
+- **The Agent delivers the invite (A2's authenticated enrolment).** When the Owner creates a Connection for a Person, the Agent leaves that Person a notice where they are already signed in: the household dashboard for a Member-class Agent, the Console for an Owner-class one. The notice says a Connection is waiting and carries nothing secret. On that page the Person presses **Get my key**, and only then is the single-use key minted, for them, and stored only as a hash. It is never kept in readable form, and the Owner who made the Connection never sees it. The Person sends the key to the bot, and the first account to present it becomes the Person's binding on that Connection, which also closes the invite. A key sent in chat proves possession of the chat account, which is what enrolment needs. Collecting it on their own signed-in page is what makes it the right Person's key.
+- **The reverse, a Person typing their platform user ID, is deferred.** An ID typed on a dashboard proves nothing about who holds that chat account, so the bot would have to confirm with the account first. Most platforms do not let a bot message someone who has never messaged it, which brings the flow back to a key sent by the Person. It can be added later as a convenience on top of that confirmation. It is not a way around it.
+
 ## B8. Homepage is a first-class trusted Connection
 
 Homepage is not a special bypass around the Connection model.
@@ -504,6 +516,14 @@ Owner Agents may draft and submit Member- or Owner-class Plans.
 No Agent may approve or activate its own Plan. A human Owner must approve the exact executable version.
 
 This supersedes the previous standing-grant design that allowed some Agent-created routines to self-activate.
+
+### E2.1 Amendment (2026-09-19, #269): household settings an Agent can propose
+
+The household's time zone is the first household setting an Agent can propose, and the pattern is meant for the rest.
+
+- **The time zone is a setting, not a startup flag.** It lives with the household's other runtime settings (the zone quiet hours already used). The `-household-timezone` flag only seeds it while it has never been set, and the installer asks for it. Everything that keeps the household's time reads it live: the Agent's "it is now", calendar tools, household rules, upkeep and the household pages. A change applies to the next thing that asks, with no restart. It was a flag defaulting to the host's clock, and a VM running UTC told the household's Agent that UTC was the household's clock, so "3pm" landed five hours early.
+- **An Agent proposes; an Owner decides.** An Agent that hears the clock is wrong calls `household.propose_timezone`. That records a Plan carrying the setting change and nothing else, which waits on the Plans screen like any proposal. Approving it applies the setting. The Agent changes nothing itself, and tells the person so.
+- **An Owner may also set it directly**, on the Household screen. It is not a consequential operation under A4.1.
 
 ## E3. Submitted Plans enter an Owner Review Queue and notify a designated Owner
 

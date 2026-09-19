@@ -114,7 +114,7 @@ func (e *Engine) gatherFacts(rule resource.Resource, ev runtimedb.HouseholdEvent
 		}
 		facts = append(facts, Fact{
 			Label:   factLabel(cx, ev),
-			Content: renderFacts(events, ev.Seq, limit, e.Location),
+			Content: renderFacts(events, ev.Seq, limit, e.loc()),
 		})
 	}
 	return facts, nil

@@ -18,9 +18,19 @@ import {
   SquaresFour,
   UsersThree,
 } from "@phosphor-icons/react";
-import { api, clearToken, getToken, Identity, setOnStepUp, setOnUnauthorized, setToken } from "./api";
+import {
+  api,
+  clearStepUp,
+  clearToken,
+  getToken,
+  Identity,
+  pendingStepUp,
+  rememberStepUp,
+  setOnStepUp,
+  setOnUnauthorized,
+  setToken,
+} from "./api";
 import { Confirm } from "./ui/Confirm";
-import { Toast, useToast } from "./ui/Toast";
 import { ago, ErrorLine } from "./lib";
 import { ConsoleStateProvider, useConsoleState } from "./state";
 import { Dot, Kind, StatusPill } from "./ui/status";
@@ -30,7 +40,6 @@ import { Backups } from "./views/Backups";
 import { Butler } from "./views/Butler";
 import { ButlerAuthority } from "./views/ButlerAuthority";
 import { Chat } from "./views/Chat";
-import { ConnectChat } from "./views/ConnectChat";
 import { Home } from "./views/Home";
 import { Household } from "./views/Household";
 import { Integrations } from "./views/Integrations";
@@ -58,7 +67,6 @@ type View =
   | "butlers"
   | "chat"
   | "household"
-  | "connect"
   | "plans"
   | "activity"
   | "backups"
@@ -86,7 +94,6 @@ const TITLES: Record<View, [string, string]> = {
   butlers: ["Who answers", "Butlers"],
   chat: ["Access", "Chat"],
   household: ["People", "Household"],
-  connect: ["Setup", "Connect chat"],
   plans: ["Approvals", "Plans"],
   activity: ["Stream", "Activity"],
   backups: ["Standing duty", "Backups"],
@@ -170,7 +177,6 @@ export function Shell() {
       { id: "commitments", label: "Commitments", icon: <CalendarCheck size={ICON} /> },
       { id: "chat", label: "Chat", icon: <ChatsCircle size={ICON} /> },
       { id: "household", label: "Household", icon: <UsersThree size={ICON} /> },
-      { id: "connect", label: "Connect chat", icon: <PlugsConnected size={ICON} /> },
       { id: "plans", label: "Plans", icon: <SealCheck size={ICON} />, pip: plansPip },
       { id: "activity", label: "Activity", icon: <Pulse size={ICON} /> },
       { id: "backups", label: "Backups", icon: <Archive size={ICON} /> },
@@ -229,7 +235,6 @@ export function Shell() {
           {view === "butlers" && <Butlers />}
           {view === "chat" && <Chat />}
           {view === "household" && <Household />}
-          {view === "connect" && <ConnectChat />}
           {view === "plans" && <Plans onNavigate={setView} />}
           {view === "activity" && (
             <Activity
@@ -377,48 +382,61 @@ function SignOut() {
 }
 
 
-const STEPPED_UP_KEY = "wst.console.stepped-up";
-
 // StepUp is the Console's half of ADR-W033 A4.1's consequential gate.
 //
 // A drastic operation refused because the sign-in behind it is more than
 // a few minutes old opens this: it says why, and sends the person to
-// confirm their password with the identity provider. They come back to
-// the same screen and press the button again. Nothing is replayed for
-// them: a write re-sent after a redirect is one they did not see
+// confirm their password with the identity provider. The action is
+// remembered, and when they come back the screen that owns it reopens
+// its final confirmation, so finishing is one click. Nothing is replayed
+// for them: a write re-sent after a redirect is one they did not see
 // themselves make.
+//
+// The note that they are back stays until they dismiss it. It used to be
+// a toast gone in three seconds, which on a two-click action left
+// somebody on the right page with no idea what to press.
 function StepUp() {
-  const [url, setUrl] = useState<string | null>(null);
-  const { toast, say } = useToast();
+  const [asked, setAsked] = useState<{ url: string; method: string; path: string } | null>(null);
+  const [back, setBack] = useState(() => pendingStepUp() !== null);
   useEffect(() => {
-    setOnStepUp((u) => setUrl(u));
-    if (sessionStorage.getItem(STEPPED_UP_KEY)) {
-      sessionStorage.removeItem(STEPPED_UP_KEY);
-      say("Password confirmed. Press the button again to finish.");
-    }
-  }, [say]);
+    setOnStepUp((url, method, path) => setAsked({ url, method, path }));
+  }, []);
   return (
     <>
-      {url && (
+      {asked && (
         <Confirm
           kind="warn"
           icon={<ShieldCheck size={18} weight="fill" />}
           title="Confirm your password"
           body={
             "This can't easily be undone, so the Console asks you to sign in again first. " +
-            "You'll come back to this screen; press the button again to finish."
+            "You'll come back to this screen with it ready to finish."
           }
           confirmLabel="Confirm password"
           cancelLabel="Not now"
           onConfirm={() => {
-            sessionStorage.setItem(STEPPED_UP_KEY, "1");
+            rememberStepUp(asked.method, asked.path);
             const here = location.pathname + location.search + location.hash;
-            location.assign(`${url}&return=${encodeURIComponent(here)}`);
+            location.assign(`${asked.url}&return=${encodeURIComponent(here)}`);
           }}
-          onCancel={() => setUrl(null)}
+          onCancel={() => setAsked(null)}
         />
       )}
-      <Toast toast={toast} />
+      {back && (
+        <div className="stepup-back" role="status">
+          <ShieldCheck size={16} weight="fill" />
+          <span>Password confirmed. Nothing was done while you were away: confirm it once more to finish.</span>
+          <button
+            className="btn btn-ghost"
+            onClick={() => {
+              clearStepUp();
+              setBack(false);
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
     </>
   );
 }

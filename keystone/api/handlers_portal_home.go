@@ -648,7 +648,7 @@ const maxActivityScan = 200
 // specifically the answer to "what did the house do while I was out".
 func (s *Server) homeActivity(member string, now time.Time) activityCard {
 	card := activityCard{Rows: []activityRow{}}
-	loc := s.HouseholdLoc
+	loc := s.householdLoc()
 	if loc == nil {
 		loc = time.Local
 	}
