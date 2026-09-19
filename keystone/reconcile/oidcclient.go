@@ -53,8 +53,12 @@ func renderOidcClientFragment(spec *resource.OidcClientSpec) []byte {
 	b.WriteString("    clients:\n")
 	fmt.Fprintf(&b, "      - client_id: %s\n", spec.ClientId)
 	fmt.Fprintf(&b, "        client_name: %s\n", spec.ClientName)
-	fmt.Fprintf(&b, "        client_secret: DIGEST-PLACEHOLDER:%s\n", spec.SecretRef)
-	b.WriteString("        public: false\n")
+	if spec.Public {
+		b.WriteString("        public: true\n")
+	} else {
+		fmt.Fprintf(&b, "        client_secret: DIGEST-PLACEHOLDER:%s\n", spec.SecretRef)
+		b.WriteString("        public: false\n")
+	}
 	fmt.Fprintf(&b, "        authorization_policy: %s\n", spec.AuthPolicy)
 	b.WriteString("        redirect_uris:\n")
 	for _, u := range spec.RedirectUris {

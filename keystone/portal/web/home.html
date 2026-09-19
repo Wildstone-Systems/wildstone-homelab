@@ -138,6 +138,7 @@
       </div>
       <div class="spread">
         <div class="avatar" id="initials" title="Signed in"></div>
+        <a class="hbtn hbtn-ghost" id="console-link" href="#" style="font-size: 12.5px" hidden>Console</a>
         <a class="hbtn hbtn-ghost" id="signout" href="#" style="font-size: 12.5px" hidden>Sign out</a>
       </div>
     </div>
@@ -576,6 +577,13 @@
     if (d.signOut) {
       el("signout").href = d.signOut;
       el("signout").hidden = false;
+    }
+    // The Console, for an Owner only: the server sends its address to
+    // nobody else. One link, not an admin panel — this stays the
+    // household's page (ADR-W033 A4).
+    if (d.console) {
+      el("console-link").href = d.console;
+      el("console-link").hidden = false;
     }
     text("greeting", greetingFor(asOf.getHours()) + (member ? ", " + member : ""));
     document.title = d.household || "Home";

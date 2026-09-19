@@ -418,6 +418,7 @@ func oidcClientEqual(a, b *resource.OidcClientSpec) bool {
 	return a.ClientId == b.ClientId &&
 		a.ClientName == b.ClientName &&
 		a.AuthPolicy == b.AuthPolicy &&
+		a.Public == b.Public &&
 		a.SecretRef == b.SecretRef &&
 		stringSliceEqual(a.RedirectUris, b.RedirectUris) &&
 		stringSliceEqual(a.Scopes, b.Scopes)

@@ -373,6 +373,11 @@ type homeSummaryResponse struct {
 	// deployment has no login page — in which case the page hides the
 	// control rather than offering one that does nothing.
 	SignOut string `json:"signOut,omitempty"`
+	// Console is where the Console is served, for a viewer who may enter
+	// it, and empty for everybody else (ADR-W033 A4.1). Homepage stays a
+	// household page even for an Owner (A4): this is one link, not an
+	// administrative dashboard, and a Member never receives the address.
+	Console string `json:"console,omitempty"`
 	// Surfaces names which household surfaces are installed, so the
 	// page knows whether to draw the Files and Assistant cards at all.
 	// An absent capability must not leave an empty frame on the page.
@@ -422,6 +427,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 		Household: name,
 		AccentHue: hue,
 		SignOut:   signOutURL(desired),
+		Console:   s.consoleLinkFor(r, member, desired),
 		Banner:    s.bannerFor(),
 		Surfaces: map[string]bool{
 			// Asked of desired state, not of configuration: a surface
@@ -1381,4 +1387,22 @@ func (s *Server) launcherReach(member string, desired []resource.Resource) map[s
 		reach[capability] = ok
 	}
 	return reach
+}
+
+// consoleLinkFor is the Console's address when this viewer would be let
+// in, and "" otherwise.
+//
+// The same three conditions the Console's own door checks before any
+// sign-in: it is installed behind the proxy, the proxy puts the viewer
+// in its group, and the household's record of them says they may hold
+// it. Offering the link to anybody else would send them to a refusal.
+func (s *Server) consoleLinkFor(r *http.Request, member string, desired []resource.Resource) string {
+	addr := consoleAddress(desired)
+	if addr == "" || !hasGroup(r.Header.Get(ConsoleGroupsHeader), ConsoleGroup) {
+		return ""
+	}
+	if !s.forwardedUserMayHoldConsole(member) {
+		return ""
+	}
+	return addr
 }

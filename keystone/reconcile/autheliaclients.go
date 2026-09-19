@@ -275,8 +275,13 @@ func renderClient(b *strings.Builder, c *resource.OidcClientSpec, served func(st
 	// value against it, while the app must send that same value in the
 	// clear — one secret, two representations, derived at the one place
 	// that holds the secret rather than stored twice.
-	fmt.Fprintf(b, "        client_secret: 'pbkdf2:%s'\n", c.SecretRef)
-	b.WriteString("        public: false\n")
+	if c.Public {
+		// No secret to render: a public client proves itself with PKCE.
+		b.WriteString("        public: true\n")
+	} else {
+		fmt.Fprintf(b, "        client_secret: 'pbkdf2:%s'\n", c.SecretRef)
+		b.WriteString("        public: false\n")
+	}
 
 	// A group-gated client points at its own named policy; an ungated one
 	// carries the bare policy value.
@@ -317,6 +322,9 @@ func renderClient(b *strings.Builder, c *resource.OidcClientSpec, served func(st
 // The three per-client defaults, in one place so the renderer and any
 // future validation cannot disagree about what empty means.
 func effectiveTokenAuthMethod(c *resource.OidcClientSpec) string {
+	if c.Public {
+		return "none"
+	}
 	if c.TokenAuthMethod == "" {
 		return "client_secret_basic"
 	}

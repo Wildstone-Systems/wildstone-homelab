@@ -37,6 +37,11 @@ type Identity struct {
 	Name      string         `json:"name"`
 	Role      runtimedb.Role `json:"role"`
 	ActingFor string         `json:"actingFor,omitempty"`
+	// AuthTime is when a person signed in to the Console, for an identity
+	// that arrived through the trusted ingress with a Console session
+	// (ADR-W033 A4.1). Nil for a bearer token, which has no sign-in to
+	// be fresh or stale.
+	AuthTime *time.Time `json:"authTime,omitempty"`
 }
 
 // Store wraps the runtime DB with the identity semantics.
@@ -154,6 +159,11 @@ func (s *Store) Bootstrap() (string, error) {
 // access join tokens already rest on (ADR-W003). Nothing new is trusted;
 // an existing assumption is simply made recoverable.
 func (s *Store) EnsureAdmin(name string) (string, error) {
+	return s.EnsureAdminFor(name, 0)
+}
+
+// EnsureAdminFor is EnsureAdmin with a token lifetime; 0 means no expiry.
+func (s *Store) EnsureAdminFor(name string, ttl time.Duration) (string, error) {
 	if name == "" {
 		name = "admin"
 	}
@@ -165,7 +175,7 @@ func (s *Store) EnsureAdmin(name string) (string, error) {
 			return "", err
 		}
 	}
-	return s.Mint(name, "", 0)
+	return s.Mint(name, "", ttl)
 }
 
 func hashSecret(secret string) string {

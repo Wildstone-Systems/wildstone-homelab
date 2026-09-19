@@ -566,3 +566,40 @@ func TestBackupPlanValidateAndRoundTrip(t *testing.T) {
 		t.Fatal("empty volume list accepted")
 	}
 }
+
+// A public client is PKCE and nothing else: no secret, no secret-based
+// token auth method, and PKCE required — each refused on its own.
+func TestValidateOidcPublicClient(t *testing.T) {
+	base := func() Resource {
+		return Resource{
+			Kind:     KindOidcClient,
+			Metadata: Metadata{Name: "wildstone-console", Owner: "capability/console", Node: "node-a"},
+			OidcClient: &OidcClientSpec{
+				ClientId: "wildstone-console", ClientName: "Console", AuthPolicy: "two_factor",
+				RedirectUris: []string{"https://console.example.com/api/v1/console/callback"},
+				Public:       true, RequirePkce: true,
+			},
+		}
+	}
+	if err := func() error { r := base(); return r.Validate() }(); err != nil {
+		t.Fatalf("a well-formed public client was refused: %v", err)
+	}
+	for field, mutate := range map[string]func(*OidcClientSpec){
+		"spec.secretRef":       func(s *OidcClientSpec) { s.SecretRef = "secret/console-oidc" },
+		"spec.requirePkce":     func(s *OidcClientSpec) { s.RequirePkce = false },
+		"spec.tokenAuthMethod": func(s *OidcClientSpec) { s.TokenAuthMethod = "client_secret_basic" },
+	} {
+		r := base()
+		mutate(r.OidcClient)
+		ve, ok := r.Validate().(*ValidationError)
+		if !ok || ve.Field != field {
+			t.Errorf("%s: got %v", field, r.Validate())
+		}
+	}
+	// And a confidential client still needs its secret reference.
+	r := base()
+	r.OidcClient.Public = false
+	if ve, ok := r.Validate().(*ValidationError); !ok || ve.Field != "spec.secretRef" {
+		t.Errorf("a confidential client with no secret: %v", r.Validate())
+	}
+}

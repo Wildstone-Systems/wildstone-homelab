@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: identity
-  version: 1.1.0
+  version: 1.2.0
   capability: identity
   profile: authelia-lldap
   exclusive: true
@@ -66,6 +66,12 @@ params:
   # agree — LLDAP's own env and Authelia's authentication_backend — so it
   # is a param rather than a literal repeated twice.
   - { name: ldap_base_dn, default: "dc=wildstone,dc=internal", description: "The directory’s root name. The default is fine unless you know you need otherwise." }
+  # How long a family sign-in lasts (ADR-W033 A4.1): the household SSO
+  # session behind Homepage and every service. The Console does NOT
+  # inherit it — Keystone holds the Console to its own 12-hour window and
+  # asks Authelia to authenticate again when that passes — so this can be
+  # long without making the control plane any easier to walk into.
+  - { name: session_days, default: "30", description: "How many days a family sign-in lasts before asking for the password again." }
 policies:
   classifications: [family_public, admin_tailscale]
   dataSensitivity: high
@@ -260,6 +266,13 @@ templates:
         session:
           name: authelia_session
           secret: secret/authelia-session-secret
+          # A family sign-in lasts session_days whether or not "remember
+          # me" was ticked, and survives that long idle (ADR-W033 A4.1).
+          # Authelia's own defaults — an hour, five minutes idle — asked
+          # a household for passwords all day long.
+          expiration: {{ .Params.session_days }}d
+          inactivity: {{ .Params.session_days }}d
+          remember_me: {{ .Params.session_days }}d
           # Sessions live in Redis, not in Authelia's memory. This is not
           # about scale — one homelab has one Authelia — it is about what
           # a restart costs. A managed config change now replaces this

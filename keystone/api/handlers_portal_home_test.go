@@ -818,3 +818,45 @@ func TestThePageAndTheRendererAgreeOnGroupNames(t *testing.T) {
 		}
 	}
 }
+
+// The dashboard links an Owner to the Console and nobody else
+// (ADR-W033 A4.1): the address is sent only to a viewer the Console's
+// own door would let in.
+func TestTheDashboardLinksOnlyOwnersToTheConsole(t *testing.T) {
+	h := homeHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: "wildstone.dev/v1", Kind: resource.KindRoute,
+		Metadata: resource.Metadata{Name: "wildstone-console", Owner: "capability/console", Package: "wildstone-console", Node: "n1"},
+		Route:    &resource.RouteSpec{Host: "console.home.test", Upstream: "127.0.0.1:9441", Auth: "authelia_oidc", Classification: "admin_tailscale"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for member, role := range map[string]string{"mika": runtimedb.RoleOwner, "sandy": runtimedb.RoleMember} {
+		if err := h.s.DB.RecordButlerMember(member, role, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.s.DB.AdmitButlerMember(member, "root-admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := func(user, groups string) string {
+		res := h.member(http.MethodGet, "/api/v1/home/summary", user, groups, nil, "")
+		defer res.Body.Close()
+		var got homeSummaryResponse
+		if err := json.NewDecoder(res.Body).Decode(&got); err != nil || res.StatusCode != http.StatusOK {
+			t.Fatalf("summary for %s: %d %v", user, res.StatusCode, err)
+		}
+		return got.Console
+	}
+	if got := link("mika", "homepage_users,"+ConsoleGroup); got != "https://console.home.test/" {
+		t.Errorf("the Owner's Console link = %q", got)
+	}
+	// A Member, even one somebody put in the directory group.
+	if got := link("sandy", "homepage_users,"+ConsoleGroup); got != "" {
+		t.Errorf("a Member was given the Console's address: %q", got)
+	}
+	// An Owner the proxy does not put in the group would be refused.
+	if got := link("mika", "homepage_users"); got != "" {
+		t.Errorf("an Owner outside %s was given the link: %q", ConsoleGroup, got)
+	}
+}

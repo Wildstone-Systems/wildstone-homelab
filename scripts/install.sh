@@ -823,7 +823,11 @@ admin_token() {
   # The offline mint, not the journal: journalctl outlives a reinstall and
   # returns a token per install the host has ever had (F66).
   systemctl stop keystone
-  "$BIN_DIR/keystone" claim-code --data-dir /var/lib/wildstone/keystone >/dev/null \
+  # Two hours, not forever: this token drives the install and nothing
+  # else, and a bearer token needs no fresh sign-in to use the Console's
+  # most consequential operations (ADR-W033 A4.1). If the install dies
+  # before forget_admin_token runs, what it leaves behind expires.
+  "$BIN_DIR/keystone" claim-code --data-dir /var/lib/wildstone/keystone --ttl 2h >/dev/null \
     || fail "could not mint an admin token"
   systemctl start keystone
   WILD_TOKEN="$(tr -d '[:space:]' < /var/lib/wildstone/keystone/claim-code)"
@@ -833,6 +837,15 @@ admin_token() {
     sleep 2
   done
   fail "keystone did not accept the minted token"
+}
+
+# forget_admin_token deletes the installer's claim code once the install
+# is done with it. Nothing after this needs it: the Owner signs in with
+# the account they just created, and recovery is `keystone owner` or a
+# new `keystone claim-code` from this host (design §2.6).
+forget_admin_token() {
+  rm -f /var/lib/wildstone/keystone/claim-code
+  WILD_TOKEN=""
 }
 
 wait_agent() {
@@ -1337,6 +1350,7 @@ UNIT
   if [ "$INTERACTIVE" = 1 ]; then
     admin_token
     post_install
+    forget_admin_token
     echo
     echo "Done."
     if [ -n "${DASHBOARD_URL:-}" ]; then
@@ -1349,8 +1363,10 @@ UNIT
         # anything but the proxy and this host, so an operator who
         # tries its old address gets a refusal with no explanation.
         echo
-        echo "  The Console is behind that same sign-in — find it on the"
-        echo "  dashboard, or on the Services screen under 'console'."
+        echo "  The Console is behind that same sign-in: open it from the"
+        echo "  Console button at the top of the dashboard. It asks you to"
+        echo "  sign in again every 12 hours, and to confirm your password"
+        echo "  before anything drastic, like removing a person."
         echo "  It is no longer served to anything but the proxy and this"
         echo "  machine, so reach it there rather than by address."
         echo "  If the proxy ever fails, run 'keystone owner list' on this"

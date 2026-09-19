@@ -11,6 +11,9 @@ export interface Identity {
   name: string;
   role: string;
   actingFor?: string;
+  // When a person signed in to the Console (ADR-W033 A4.1); absent for
+  // a token.
+  authTime?: string;
 }
 
 export interface ResourceView {
@@ -154,6 +157,13 @@ export function clearToken() {
   sessionStorage.removeItem(TOKEN_KEY);
 }
 
+const SIGNIN_KEY = "wst.console.signin-at";
+
+function recentlySentToSignIn(): boolean {
+  const at = Number(sessionStorage.getItem(SIGNIN_KEY) ?? 0);
+  return Date.now() - at < 30_000;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -183,6 +193,13 @@ export class ApiError extends Error {
   }
 }
 
+// onStepUp is installed by the app shell: a consequential operation
+// refused for want of a fresh sign-in offers one (ADR-W033 A4.1).
+export let onStepUp: (url: string) => void = () => {};
+export function setOnStepUp(fn: (url: string) => void) {
+  onStepUp = fn;
+}
+
 // onUnauthorized is installed by the app shell: a 401 anywhere returns
 // to the token gate (ADR-W016 A3).
 export let onUnauthorized: () => void = () => {};
@@ -204,13 +221,32 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (res.status === 401) {
+    const refused = (await res.json().catch(() => ({}))) as { signIn?: string };
+    // Signed in to the household but not recently enough to the Console
+    // (ADR-W033 A4.1): go round the sign-in and come back to this page.
+    // Never with a token of our own — a token decides for itself — and
+    // never twice in quick succession, so a sign-in that cannot succeed
+    // ends at the gate rather than bouncing the browser forever.
+    if (refused.signIn && getToken() === null && !recentlySentToSignIn()) {
+      sessionStorage.setItem(SIGNIN_KEY, String(Date.now()));
+      const here = location.pathname + location.search + location.hash;
+      location.assign(`${refused.signIn}?return=${encodeURIComponent(here)}`);
+      // The page is leaving; nothing after this should render a refusal.
+      return new Promise<T>(() => {});
+    }
     clearToken();
     onUnauthorized();
     throw new ApiError(401, "unauthenticated");
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const failed = data as { error?: string; sessionId?: string; proposalErrors?: string[] };
+    const failed = data as { error?: string; sessionId?: string; proposalErrors?: string[]; stepUp?: string };
+    // A consequential operation with a sign-in too old for it (ADR-W033
+    // A4.1). The shell offers the step-up; the caller still gets the
+    // error, so nothing on the screen pretends the operation happened.
+    if (res.status === 403 && failed.stepUp) {
+      onStepUp(failed.stepUp);
+    }
     throw new ApiError(
       res.status,
       failed.error ?? res.statusText,
@@ -1664,6 +1700,9 @@ export const api = {
   enableCapability: (pkg: string, params: Record<string, string>) =>
     call<PlanRecord>("POST", "/api/v1/capabilities", { package: pkg, params }),
   whoami: () => call<Identity>("GET", "/api/v1/whoami"),
+  // Ends the Console session; signOut is the identity provider's logout,
+  // where the browser goes next to finish signing out.
+  consoleSignout: () => call<{ signOut?: string }>("POST", "/api/v1/console/signout"),
   resources: () => call<ResourceView[]>("GET", "/api/v1/resources"),
   observed: () => call<Observed[]>("GET", "/api/v1/observed"),
   events: (after: number, limit = 100) =>

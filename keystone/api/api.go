@@ -219,6 +219,21 @@ type Server struct {
 	BackupRun     func(ctx context.Context, plan string) error
 	BackupRestore func(ctx context.Context, plan string) error
 
+	// ConsoleEntryWindow and ConsoleStepUpWindow are how old a Console
+	// authentication may be to stay in the Console, and to perform a
+	// consequential operation (ADR-W033 A4.1). Zero means the defaults,
+	// 12 hours and 15 minutes.
+	ConsoleEntryWindow  time.Duration
+	ConsoleStepUpWindow time.Duration
+	// ConsoleSignInHTTP is the client used to reach the sign-in provider;
+	// nil means a default with a timeout. Tests point it at a fake.
+	ConsoleSignInHTTP *http.Client
+	// Now is the clock the Console's freshness checks read; nil means
+	// time.Now. Tests move it.
+	Now func() time.Time
+
+	console consoleAuth
+
 	limiter *limiter
 	// hostFacts caches the machines card's live readings, so a house
 	// full of tablets does not cost one agent round trip each
@@ -280,6 +295,12 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	mux.Handle("GET /api/v1/whoami", s.handle(principal.VerbRead, s.whoami))
+	// Console sign-in (ADR-W033 A4.1). Not behind s.handle: these are
+	// how a forwarded person GETS a Console session, so they cannot
+	// require one. Each checks the trusted-ingress peer itself.
+	mux.HandleFunc("GET "+consoleSigninPath, s.consoleSignin)
+	mux.HandleFunc("GET "+consoleCallbackPath, s.consoleCallback)
+	mux.HandleFunc("POST /api/v1/console/signout", s.consoleSignout)
 	mux.Handle("GET /api/v1/resources", s.handle(principal.VerbRead, s.listResources))
 	mux.Handle("GET /api/v1/resources/{kind}/{name}", s.handle(principal.VerbRead, s.getResource))
 	mux.Handle("GET /api/v1/observed", s.handle(principal.VerbRead, s.listObserved))
@@ -301,10 +322,10 @@ func (s *Server) Handler() http.Handler {
 	// Admin-only: the pending one-time code is a credential in flight.
 	mux.Handle("GET /api/v1/nodes/{node}/identity/code", s.handle(principal.VerbManage, s.identityCode))
 	mux.Handle("GET /api/v1/principals", s.handle(principal.VerbManage, s.listPrincipals))
-	mux.Handle("POST /api/v1/principals", s.handle(principal.VerbManage, s.createPrincipal))
-	mux.Handle("POST /api/v1/principals/{name}/disable", s.handle(principal.VerbManage, s.setPrincipalDisabled(true)))
+	mux.Handle("POST /api/v1/principals", s.handle(principal.VerbManage, s.consequential(s.createPrincipal)))
+	mux.Handle("POST /api/v1/principals/{name}/disable", s.handle(principal.VerbManage, s.consequential(s.setPrincipalDisabled(true))))
 	mux.Handle("POST /api/v1/principals/{name}/enable", s.handle(principal.VerbManage, s.setPrincipalDisabled(false)))
-	mux.Handle("POST /api/v1/principals/{name}/tokens", s.handle(principal.VerbManage, s.mintToken))
+	mux.Handle("POST /api/v1/principals/{name}/tokens", s.handle(principal.VerbManage, s.consequential(s.mintToken)))
 
 	// Node inventory (#30): the one route that does not need a node name
 	// up front — everything else under /nodes/{node} does.
@@ -312,7 +333,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Pairing (ADR-W014 A3): admin mints a single-use join token + CA
 	// fingerprint for a node install.
-	mux.Handle("POST /api/v1/join-tokens", s.handle(principal.VerbManage, s.mintJoinToken))
+	mux.Handle("POST /api/v1/join-tokens", s.handle(principal.VerbManage, s.consequential(s.mintJoinToken)))
 
 	// Secrets (ADR-W012 W2): admin-only, name-level only — values transit
 	// the set endpoint once and are never persisted, logged, or readable
@@ -322,7 +343,7 @@ func (s *Server) Handler() http.Handler {
 	// to the prefixes a bind mount may name.
 	mux.Handle("GET /api/v1/nodes/{node}/directories", s.handle(principal.VerbRead, s.listDirectories))
 	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}", s.handle(principal.VerbManage, s.setSecret))
-	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}/rotate", s.handle(principal.VerbManage, s.rotateSecret))
+	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}/rotate", s.handle(principal.VerbManage, s.consequential(s.rotateSecret)))
 
 	// Onboarding validation probes (ADR-W016 A2, E10-U2): dial-or-read
 	// only on the agent side, so the whole family carries read.
@@ -341,7 +362,7 @@ func (s *Server) Handler() http.Handler {
 	// Butler's propose-only role cannot trigger them.
 	mux.Handle("GET /api/v1/backups", s.handle(principal.VerbRead, s.listBackups))
 	mux.Handle("POST /api/v1/backups/{plan}/run", s.handle(principal.VerbApprove, s.runBackup))
-	mux.Handle("POST /api/v1/backups/{plan}/restore", s.handle(principal.VerbApprove, s.restoreBackup))
+	mux.Handle("POST /api/v1/backups/{plan}/restore", s.handle(principal.VerbApprove, s.consequential(s.restoreBackup)))
 
 	// Morning report (ADR-W017 A5): deterministic digest, read verb.
 	mux.Handle("GET /api/v1/reports/morning", s.handle(principal.VerbRead, s.morningReport))
@@ -351,7 +372,7 @@ func (s *Server) Handler() http.Handler {
 	// (manage).
 	mux.Handle("POST /api/v1/household/events", s.handle(principal.VerbEmit, s.emitHouseholdEvent))
 	mux.Handle("GET /api/v1/household/events", s.handle(principal.VerbRead, s.listHouseholdEvents))
-	mux.Handle("POST /api/v1/household/publishers/{capability}", s.handle(principal.VerbManage, s.mintPublisher))
+	mux.Handle("POST /api/v1/household/publishers/{capability}", s.handle(principal.VerbManage, s.consequential(s.mintPublisher)))
 	// Replay is a read: it evaluates and returns, writes nothing.
 	// Meters and their readings (ADR-W035 K1). The reading is an
 	// ordinary authenticated write rather than a Plan: it is evidence,
@@ -468,8 +489,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/butler/members", s.handle(principal.VerbRead, s.listButlerMembers))
 	mux.Handle("POST /api/v1/butler/members", s.handle(principal.VerbManage, s.recordButlerMember))
 	mux.Handle("POST /api/v1/butler/members/{member}/admit", s.handle(principal.VerbManage, s.admitButlerMember))
-	mux.Handle("POST /api/v1/butler/members/{member}/disable", s.handle(principal.VerbManage, s.disableButlerMember))
-	mux.Handle("POST /api/v1/butler/members/{member}/offboard", s.handle(principal.VerbManage, s.offboardButlerMember))
+	mux.Handle("POST /api/v1/butler/members/{member}/disable", s.handle(principal.VerbManage, s.consequential(s.disableButlerMember)))
+	mux.Handle("POST /api/v1/butler/members/{member}/offboard", s.handle(principal.VerbManage, s.consequential(s.offboardButlerMember)))
 	mux.Handle("POST /api/v1/butler/members/{member}/links", s.handle(principal.VerbManage, s.linkButlerIdentity))
 	mux.Handle("POST /api/v1/butler/links/revoke", s.handle(principal.VerbManage, s.unlinkButlerIdentity))
 	mux.Handle("POST /api/v1/butler/conversations", s.handle(principal.VerbRead, s.startButlerConversation))
@@ -482,10 +503,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/butler/tasks/{id}/cancel", s.handle(principal.VerbManage, s.cancelButlerTask))
 	mux.Handle("GET /api/v1/butler/evaluations", s.handle(principal.VerbRead, s.listButlerEvaluations))
 	mux.Handle("GET /api/v1/butler/debug", s.handle(principal.VerbRead, s.listButlerDebugCaptures))
-	mux.Handle("POST /api/v1/butler/members/{member}/offboarding", s.handle(principal.VerbManage, s.offboardMember))
+	mux.Handle("POST /api/v1/butler/members/{member}/offboarding", s.handle(principal.VerbManage, s.consequential(s.offboardMember)))
 	mux.Handle("GET /api/v1/restore", s.handle(principal.VerbRead, s.getRestoreState))
-	mux.Handle("POST /api/v1/restore/quarantine", s.handle(principal.VerbManage, s.enterRestoreQuarantine))
-	mux.Handle("POST /api/v1/restore/reconcile", s.handle(principal.VerbManage, s.reconcileRestore))
+	mux.Handle("POST /api/v1/restore/quarantine", s.handle(principal.VerbManage, s.consequential(s.enterRestoreQuarantine)))
+	mux.Handle("POST /api/v1/restore/reconcile", s.handle(principal.VerbManage, s.consequential(s.reconcileRestore)))
 	mux.Handle("GET /api/v1/notices", s.handle(principal.VerbRead, s.listNotices))
 	mux.Handle("POST /api/v1/notices/acknowledge", s.handle(principal.VerbRead, s.acknowledgeNotice))
 	mux.Handle("POST /api/v1/notices/answer", s.handle(principal.VerbRead, s.answerNotice))
@@ -516,7 +537,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/butlers/{name}/connection", s.handle(principal.VerbManage, s.setButlerConnection))
 	mux.Handle("PUT /api/v1/butlers/{name}/tool", s.handle(principal.VerbManage, s.setButlerTool))
 	mux.Handle("PUT /api/v1/butlers/{name}/address", s.handle(principal.VerbManage, s.setButlerAddress))
-	mux.Handle("DELETE /api/v1/butlers/{name}", s.handle(principal.VerbManage, s.retireButler))
+	mux.Handle("DELETE /api/v1/butlers/{name}", s.handle(principal.VerbManage, s.consequential(s.retireButler)))
 	// Restore and duplicate are manage for the same reason retiring is:
 	// each decides standing configuration. Impact is a read, and it is
 	// the one a retire dialog needs BEFORE anybody has decided.
@@ -581,7 +602,7 @@ func (s *Server) Handler() http.Handler {
 	// A chat capability's own credential (ADR-W026 A3): the role it gets
 	// is decided by the surface, so a family adapter can never hold more
 	// than converse.
-	mux.Handle("POST /api/v1/chat/adapters/{capability}", s.handle(principal.VerbManage, s.mintChatAdapter))
+	mux.Handle("POST /api/v1/chat/adapters/{capability}", s.handle(principal.VerbManage, s.consequential(s.mintChatAdapter)))
 	mux.Handle("POST /api/v1/chat/messages", s.handle(principal.VerbConverse, s.receiveChatMessage))
 	mux.Handle("GET /api/v1/chat/outbound", s.handle(principal.VerbConverse, s.pollChatOutbound))
 	mux.Handle("POST /api/v1/chat/outbound/{seq}/ack", s.handle(principal.VerbConverse, s.ackChatOutbound))
@@ -724,7 +745,10 @@ func (s *Server) handle(verb principal.Verb, h handlerFunc) http.Handler {
 				return
 			}
 			w.Header().Set("WWW-Authenticate", `Bearer realm="wildstone"`)
-			s.writeError(w, http.StatusUnauthorized, "unauthenticated")
+			// A person the proxy signed in who has no fresh Console
+			// session is told where to get one, so the Console can send
+			// them there instead of showing a refusal.
+			s.writeErrorBody(w, http.StatusUnauthorized, "unauthenticated", s.consoleSigninHint(r))
 			return
 		}
 

@@ -144,6 +144,14 @@ func (s *Server) setServiceAccess(r *http.Request, id principal.Identity) (any, 
 	if req.Subject == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("subject required")
 	}
+	// Restricting, or removing a decision that may be the one granting
+	// access, can take a service away from somebody: consequential
+	// (ADR-W033 A4.1). Allowing is ordinary.
+	if req.Effect != "allow" {
+		if body, code, err := s.stepUpRefusal(id); err != nil {
+			return body, code, err
+		}
+	}
 	if req.Effect == "" {
 		if err := s.DB.RemoveEntitlement(capability, req.SubjectKind, req.Subject); err != nil {
 			return nil, http.StatusInternalServerError, err
@@ -248,6 +256,13 @@ func (s *Server) setPersonGroup(r *http.Request, id principal.Identity) (any, in
 	}
 	if personID == "" {
 		return nil, http.StatusNotFound, fmt.Errorf("no active person called %q", req.Member)
+	}
+	// Taking somebody out of a group can take away every service it
+	// grants: consequential (ADR-W033 A4.1). Adding them is ordinary.
+	if !req.In {
+		if body, code, err := s.stepUpRefusal(id); err != nil {
+			return body, code, err
+		}
 	}
 	if req.In {
 		err = s.DB.AddPersonToGroup(groupID, personID, actingMember(id))

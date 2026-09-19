@@ -347,8 +347,16 @@ type OidcClientSpec struct {
 	// Immich's profileSigningAlgorithm is the other half of this pair, and
 	// the two are configured in files the renderer writes separately.
 	UserinfoSigningAlg string `yaml:"userinfoSigningAlg,omitempty"`
+	// Public registers a client with no secret: one that proves itself
+	// with PKCE instead (RFC 7636). It is for a client that has nowhere
+	// safe to keep a secret, and for one that must not hold secret values
+	// at all — Keystone's own Console sign-in (ADR-W033 A4.1), since
+	// Keystone never holds secret values. A public client requires PKCE
+	// and has no SecretRef.
+	Public bool `yaml:"public,omitempty"`
 	// SecretRef is a *reference* to the client secret, e.g.
 	// "secret/immich-oidc" — never a literal secret value (ADR-W005 A2).
+	// Empty exactly when Public is set.
 	// Only Wardstone resolves it to a real value at materialization, out of
 	// scope here; the rendered fragment carries a placeholder derived from
 	// this reference, never the secret itself.
@@ -1349,6 +1357,21 @@ func validateOidcClient(r *Resource) error {
 			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.idTokenClaims[%d]", i),
 				Msg: "must be one of groups, email, email_verified, name, preferred_username"}
 		}
+	}
+	if r.OidcClient.Public {
+		// A public client that sent a secret would be misconfigured in a
+		// way that fails at the token endpoint, and one without PKCE
+		// would have nothing binding the code to the browser that asked.
+		if r.OidcClient.SecretRef != "" {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.secretRef", Msg: "must be empty for a public client: a public client has no secret"}
+		}
+		if !r.OidcClient.RequirePkce {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.requirePkce", Msg: "must be true for a public client: PKCE is what stands in for the secret"}
+		}
+		if r.OidcClient.TokenAuthMethod != "" {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.tokenAuthMethod", Msg: "must be empty for a public client, which authenticates with none"}
+		}
+		return nil
 	}
 	if !secretRefRegexp.MatchString(r.OidcClient.SecretRef) {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.secretRef", Msg: "must be a reference of the form secret/<name> (ADR-W005 A2), never a literal secret value"}
