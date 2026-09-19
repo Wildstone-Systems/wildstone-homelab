@@ -104,8 +104,9 @@ export function NewButlerDialog({
       await api.createButler({
         name,
         directive: draft.directive.trim(),
-        surface: draft.surface,
-        profile: draft.surface === "admin" ? "operator" : "household",
+        // The class alone. The server derives the surface from it, so
+        // the form cannot send a pair that disagrees with itself.
+        agentClass: draft.surface === "admin" ? "owner" : "member",
         providerModel: draft.model,
         provider,
         endpoint,

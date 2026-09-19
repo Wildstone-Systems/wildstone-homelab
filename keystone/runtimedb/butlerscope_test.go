@@ -253,7 +253,7 @@ func TestAButlersToolsOnlyNarrow(t *testing.T) {
 	}
 	// A tool the profile itself disabled stays disabled: the narrowing
 	// was never what was holding it.
-	if err := db.SetToolControl(ProfileHousehold, "unlock_door", ToolDisabled,
+	if err := db.SetToolControl(AgentClassMember, "unlock_door", ToolDisabled,
 		"root-admin", "not on this surface"); err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +438,7 @@ func TestEditingAScopedRecordKeepsItScoped(t *testing.T) {
 func TestAButlerCannotBeNamedTheEveryButlerSentinel(t *testing.T) {
 	db := butlerFixture(t)
 	if _, err := db.CreateButler(Butler{
-		Name: AllButlers, Surface: ButlerSurfaceFamily, Profile: ProfileHousehold,
+		Name: AllButlers, Surface: ButlerSurfaceFamily, AgentClass: AgentClassMember,
 		Model: "kitchen-box",
 	}, "mika"); err == nil {
 		t.Fatal("a butler was created with the name that means every butler")

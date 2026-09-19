@@ -261,7 +261,7 @@ func (gw *ToolGateway) dispatch(ctx context.Context, name string, input map[stri
 	// Administrative authority is checked before the handler runs, so a
 	// disabled tool is refused even when a saved task or a cached
 	// manifest still lists it (ADR-W030 A7).
-	if d := authorize(gw.Authorizer, string(ProfileOperator), name, true,
+	if d := authorize(gw.Authorizer, string(AgentClassOwner), name, true,
 		entry.GrantRequired, gw.SessionTask, ""); !d.Allowed {
 		return finishOutcome(refusal(name, d), false, gw.MaxContentBytes), nil
 	}

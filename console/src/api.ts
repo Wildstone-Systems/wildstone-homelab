@@ -453,6 +453,21 @@ export interface ButlerTurn {
 // and performs domestic actions, with no access to the home lab itself.
 export type ButlerSurface = "admin" | "family";
 
+// What an AGENT may reach (ADR-W033 design §5.2). Not a person's role
+// and not a machine credential's: one Agent serves several people at
+// once, so this says nothing about who is talking to it.
+//
+// It always agrees with the surface — owner is admin, member is family —
+// and the two move together or not at all. The surface is what enforces
+// the ceiling; this is the word the design uses for it.
+export type AgentClass = "owner" | "member";
+
+// agentClassLabel is what a person reads. The stored words are the
+// design's; "Owner agent" is what appears on a screen.
+export function agentClassLabel(c: AgentClass): string {
+  return c === "owner" ? "Owner agent" : "Member agent";
+}
+
 // ---------------------------------------------------------------- audience
 
 // Who a record may be disclosed to (ADR-W033 design §10 layer 3).
@@ -713,7 +728,7 @@ export interface ButlerTask {
   author: string;
   owner: string;
   surface: string;
-  profile: string;
+  agentClass: string;
   audience: AudienceID;
   objective: string;
   completionCriteria: string;
@@ -849,11 +864,11 @@ export interface ButlerSettingsView {
 
 // ---------------------------------------------------------------- tool authority
 
-// An administrator's switch for one profile and tool (ADR-W030 A7). A
-// control can turn an existing capability off and on; it can never add
+// An administrator's switch for one agent class and tool (ADR-W030 A7).
+// A control can turn an existing capability off and on; it can never add
 // one, because the surface's tool map is the structural ceiling.
 export interface ToolControl {
-  profile: string;
+  agentClass: AgentClass;
   tool: string;
   state: "enabled" | "disabled";
   updatedAt: string;
@@ -868,7 +883,7 @@ export interface CapabilityRequest {
   seq: number;
   kind: "supported-tool" | "development";
   requestedBy: string;
-  profile: string;
+  agentClass: AgentClass;
   tool?: string;
   description: string;
   state: "open" | "approved" | "declined" | "implemented";
@@ -1043,7 +1058,7 @@ export interface Butler {
   name: string;
   directive?: string;
   surface: ButlerSurface;
-  profile: string;
+  agentClass: AgentClass;
   // model is the assigned model, by name. providerModel is what the
   // provider itself calls it, which is a different and often more
   // specific string: assigned "kitchen-box", answered by "qwen3.5:4b".
@@ -1092,7 +1107,7 @@ export interface ButlerRow {
   people: number;
   connections: number;
   // toolsAvailable is what this deployment actually wired for the
-  // profile, NOT the whole ceiling: "5 of 6" is what this Butler can do
+  // class, NOT the whole ceiling: "5 of 6" is what this Butler can do
   // here, where "5 of 13" would count tools nobody ever set up.
   toolsAllowed: number;
   toolsAvailable: number;
@@ -1144,7 +1159,7 @@ export interface CapabilityTool {
 // screen cannot show a tool as on that a dispatch would refuse.
 export interface ButlerTools {
   butler: string;
-  profile: string;
+  agentClass: AgentClass;
   surface: ButlerSurface;
   modelVerdict: string;
   tools: CapabilityTool[] | null;
@@ -1424,8 +1439,10 @@ export const api = {
   createButler: (b: {
     name: string;
     directive?: string;
-    surface: string;
-    profile: string;
+    // The surface is derived server-side from the class: they are one
+    // fact (design §5.2), and sending both would let a form send a
+    // contradiction.
+    agentClass: AgentClass;
     // Either an already-configured model by name, or one the provider
     // offers plus where it comes from. The server decides the kind.
     model?: string;
@@ -1653,13 +1670,23 @@ export const api = {
     call<{ note: string }>("POST", "/api/v1/butler/memory/forget", { seq }),
   memoryDigest: () =>
     call<{ entries: MemoryDigestEntry[] | null }>("GET", "/api/v1/butler/memory/digest"),
-  butlerToolControls: (profile?: string) =>
+  butlerToolControls: (agentClass?: AgentClass) =>
     call<{ controls: ToolControl[] | null }>(
       "GET",
-      `/api/v1/butler/tools${profile ? `?profile=${encodeURIComponent(profile)}` : ""}`,
+      `/api/v1/butler/tools${agentClass ? `?agentClass=${encodeURIComponent(agentClass)}` : ""}`,
     ),
-  setButlerToolControl: (c: { profile: string; tool: string; state: string; reason: string }) =>
-    call<{ note?: string }>("PUT", "/api/v1/butler/tools", c),
+  setButlerToolControl: (c: {
+    agentClass: AgentClass;
+    tool: string;
+    state: string;
+    reason: string;
+  }) => call<{ note?: string }>("PUT", "/api/v1/butler/tools", c),
+  setButlerAgentClass: (name: string, agentClass: AgentClass) =>
+    call<{ butler: string; agentClass: AgentClass; surface: ButlerSurface; grantsRevoked: number }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/class`,
+      { agentClass },
+    ),
   capabilityRequests: (state?: string) =>
     call<{ requests: CapabilityRequest[] | null }>(
       "GET",

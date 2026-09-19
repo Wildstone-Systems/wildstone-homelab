@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { api, type CapabilityRequest, type ToolControl } from "../api";
+import {
+  agentClassLabel,
+  api,
+  type AgentClass,
+  type CapabilityRequest,
+  type ToolControl,
+} from "../api";
 import { ErrorLine, useAction, useLoad, when } from "../lib";
 import { StatusPill } from "../ui/status";
 
@@ -234,11 +240,13 @@ function Members() {
   );
 }
 
-const PROFILES = ["operator", "household"];
+// The two agent classes (ADR-W033 design §5.2), in the design's own
+// words rather than the pre-0058 person vocabulary this used to borrow.
+const AGENT_CLASSES: AgentClass[] = ["owner", "member"];
 
 function ToolControls() {
   const controls = useLoad(() => api.butlerToolControls());
-  const [profile, setProfile] = useState(PROFILES[0]);
+  const [agentClass, setAgentClass] = useState<AgentClass>(AGENT_CLASSES[0]);
   const [tool, setTool] = useState("");
   const [reason, setReason] = useState("");
   const [note, setNote] = useState<string | null>(null);
@@ -247,7 +255,7 @@ function ToolControls() {
   const rows: ToolControl[] = controls.data?.controls ?? [];
   const set = (state: string) =>
     action.run(async () => {
-      const res = await api.setButlerToolControl({ profile, tool, state, reason });
+      const res = await api.setButlerToolControl({ agentClass, tool, state, reason });
       setNote(res.note ?? null);
       setTool("");
       setReason("");
@@ -265,10 +273,10 @@ function ToolControls() {
       )}
       <ul className="work-evidence">
         {rows.map((c) => (
-          <li key={`${c.profile}/${c.tool}`}>
+          <li key={`${c.agentClass}/${c.tool}`}>
             <StatusPill kind={c.state === "disabled" ? "bad" : "ok"}>{c.state}</StatusPill>
             <strong>{c.tool}</strong>
-            <span className="timeline-src">{c.profile}</span>
+            <span className="timeline-src">{agentClassLabel(c.agentClass)}</span>
             {c.reason && <span className="timeline-src">{c.reason}</span>}
             <span className="timeline-src">
               {c.updatedBy} · {when(c.updatedAt)}
@@ -278,7 +286,7 @@ function ToolControls() {
               onClick={() =>
                 action.run(async () => {
                   await api.setButlerToolControl({
-                    profile: c.profile,
+                    agentClass: c.agentClass,
                     tool: c.tool,
                     state: "",
                     reason: "",
@@ -293,10 +301,13 @@ function ToolControls() {
         ))}
       </ul>
       <div className="work-form">
-        <select value={profile} onChange={(e) => setProfile(e.target.value)}>
-          {PROFILES.map((p) => (
-            <option key={p} value={p}>
-              {p}
+        <select
+          value={agentClass}
+          onChange={(e) => setAgentClass(e.target.value as AgentClass)}
+        >
+          {AGENT_CLASSES.map((c) => (
+            <option key={c} value={c}>
+              {agentClassLabel(c)}
             </option>
           ))}
         </select>
@@ -338,7 +349,7 @@ function Requests() {
             <strong>{r.tool || r.kind}</strong>
             <span>{r.description}</span>
             <span className="timeline-src">
-              for {r.requestedBy} · {r.profile}
+              for {r.requestedBy} · {agentClassLabel(r.agentClass)}
             </span>
             {r.state === "open" && (
               <span className="work-form">

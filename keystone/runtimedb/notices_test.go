@@ -358,7 +358,7 @@ func TestExpiredNoticeDoesNotReopenACompletedTask(t *testing.T) {
 	db := openWith(t, "sam")
 	taskID, err := db.InsertButlerTask(ButlerTask{
 		Kind: ButlerTaskConversation, Author: "sam", Owner: "sam",
-		Surface: ButlerSurfaceFamily, Profile: ProfileHousehold,
+		Surface: ButlerSurfaceFamily, AgentClass: AgentClassMember,
 		Audience: ButlerAudiencePrivate, Objective: "book the thing", CompletionCriteria: "booked",
 	})
 	if err != nil {

@@ -167,10 +167,17 @@ var dismissed = map[string]string{
 	"probe_mode":          "an enum or classification, not a party",
 	"probed_at":           "a timestamp",
 	"profile":             "an enum or classification, not a party",
-	"promoted_at":         "a timestamp",
-	"promoted_from":       "the coordinator process that was fenced — a machine party, never a person",
-	"prompt_version":      "an enum or classification, not a party",
-	"provider":            "names a machine, service or artifact, not a person",
+	// 0058 split the Agent's ceiling out of the Person's vocabulary
+	// (design §5.2). An agent class says which gateway an AGENT reaches
+	// and names nobody: one Agent serves several people at once (§5.3),
+	// so reading a person out of this column is the exact mistake the
+	// rename exists to prevent.
+	"agent_class":    "an agent's ceiling, not a party — one agent serves many people",
+	"former_profile": "what an agent's class used to be spelled as, kept as migration evidence",
+	"promoted_at":    "a timestamp",
+	"promoted_from":  "the coordinator process that was fenced — a machine party, never a person",
+	"prompt_version": "an enum or classification, not a party",
+	"provider":       "names a machine, service or artifact, not a person",
 	// It is the sentence a notice asked, e.g. "Delete 'Dentist for Sam'
 	// from Fri 18 Sep?". It can MENTION a person, the way any free text
 	// can, and that is not the same as being a reference to one: nothing

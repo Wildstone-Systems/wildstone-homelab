@@ -26,7 +26,7 @@ func failedTurnTask(t *testing.T, h *harness) string {
 	t.Helper()
 	id, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: "sam", Owner: "sam",
-		Surface: runtimedb.ButlerSurfaceFamily, Profile: runtimedb.ProfileHousehold,
+		Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember,
 		Audience:  runtimedb.ButlerAudiencePrivate,
 		Objective: "unlock the back door", CompletionCriteria: "done",
 		Retention: runtimedb.ButlerRetentionConversation,

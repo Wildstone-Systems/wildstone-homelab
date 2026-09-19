@@ -8,7 +8,7 @@ package runtimedb
 //
 // The order of the checks is the design:
 //
-//   1. Structural. If the profile's gateway does not register the tool,
+//   1. Structural. If the class's gateway does not register the tool,
 //      nothing here can conjure it. A grant that could widen the ceiling
 //      would make the structural boundary advisory, and the reason it
 //      was built structurally is that it is not.
@@ -51,34 +51,38 @@ const (
 	RequestImplemented = "implemented"
 )
 
-// ToolControl is an administrator's switch for one profile and tool.
+// ToolControl is an administrator's switch for one agent class and tool.
 type ToolControl struct {
-	Profile   string    `json:"profile"`
-	Tool      string    `json:"tool"`
-	State     string    `json:"state"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	UpdatedBy string    `json:"updatedBy"`
-	Reason    string    `json:"reason,omitempty"`
+	AgentClass string    `json:"agentClass"`
+	Tool       string    `json:"tool"`
+	State      string    `json:"state"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+	UpdatedBy  string    `json:"updatedBy"`
+	Reason     string    `json:"reason,omitempty"`
 }
 
-// SetToolControl records a switch. Setting a control for a profile that
+// SetToolControl records a switch. Setting a control for a class that
 // does not structurally have the tool is refused by the caller, not
 // here: this table describes intent, and intent about a tool that does
 // not exist on a surface is a mistake worth naming at the API.
-func (db *DB) SetToolControl(profile, tool, state, by, reason string) error {
+func (db *DB) SetToolControl(class, tool, state, by, reason string) error {
 	if state != ToolEnabled && state != ToolDisabled {
 		return fmt.Errorf("runtimedb: tool control state must be enabled|disabled, got %q", state)
+	}
+	if !ValidAgentClass(class) {
+		return fmt.Errorf("runtimedb: a tool control names an agent class, must be %s|%s, got %q (design §5.2)",
+			AgentClassOwner, AgentClassMember, class)
 	}
 	if by == "" {
 		return fmt.Errorf("runtimedb: a tool control requires the administrator who set it (ADR-W030 A7)")
 	}
 	_, err := db.sql.Exec(
-		`INSERT INTO butler_tool_controls (profile, tool, state, updated_at, updated_by, reason)
+		`INSERT INTO butler_tool_controls (agent_class, tool, state, updated_at, updated_by, reason)
 		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(profile, tool) DO UPDATE SET
+		 ON CONFLICT(agent_class, tool) DO UPDATE SET
 		   state = excluded.state, updated_at = excluded.updated_at,
 		   updated_by = excluded.updated_by, reason = excluded.reason`,
-		profile, tool, state, now(), by, reason)
+		class, tool, state, now(), by, reason)
 	if err != nil {
 		return fmt.Errorf("runtimedb: setting tool control: %w", err)
 	}
@@ -86,24 +90,24 @@ func (db *DB) SetToolControl(profile, tool, state, by, reason string) error {
 }
 
 // ClearToolControl removes a switch, returning the tool to its default.
-func (db *DB) ClearToolControl(profile, tool string) error {
-	_, err := db.sql.Exec(`DELETE FROM butler_tool_controls WHERE profile = ? AND tool = ?`, profile, tool)
+func (db *DB) ClearToolControl(class, tool string) error {
+	_, err := db.sql.Exec(`DELETE FROM butler_tool_controls WHERE agent_class = ? AND tool = ?`, class, tool)
 	if err != nil {
 		return fmt.Errorf("runtimedb: clearing tool control: %w", err)
 	}
 	return nil
 }
 
-// ListToolControls returns every switch for a profile ("" for all).
-func (db *DB) ListToolControls(profile string) ([]ToolControl, error) {
+// ListToolControls returns every switch for a class ("" for all).
+func (db *DB) ListToolControls(class string) ([]ToolControl, error) {
 	where, args := "", []any{}
-	if profile != "" {
-		where = " WHERE profile = ?"
-		args = append(args, profile)
+	if class != "" {
+		where = " WHERE agent_class = ?"
+		args = append(args, class)
 	}
 	rows, err := db.sql.Query(
-		`SELECT profile, tool, state, updated_at, updated_by, reason
-		 FROM butler_tool_controls`+where+` ORDER BY profile, tool`, args...)
+		`SELECT agent_class, tool, state, updated_at, updated_by, reason
+		 FROM butler_tool_controls`+where+` ORDER BY agent_class, tool`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing tool controls: %w", err)
 	}
@@ -112,7 +116,7 @@ func (db *DB) ListToolControls(profile string) ([]ToolControl, error) {
 	for rows.Next() {
 		var c ToolControl
 		var updated string
-		if err := rows.Scan(&c.Profile, &c.Tool, &c.State, &updated, &c.UpdatedBy, &c.Reason); err != nil {
+		if err := rows.Scan(&c.AgentClass, &c.Tool, &c.State, &updated, &c.UpdatedBy, &c.Reason); err != nil {
 			return nil, err
 		}
 		if c.UpdatedAt, err = time.Parse(time.RFC3339Nano, updated); err != nil {
@@ -130,10 +134,15 @@ const MaxGrantWindow = 24 * time.Hour
 
 // ToolGrant is one temporary permission bound to a piece of work.
 type ToolGrant struct {
-	Seq         int64     `json:"seq"`
-	Scope       string    `json:"scope"`
-	ScopeID     string    `json:"scopeId"`
-	Profile     string    `json:"profile"`
+	Seq        int64  `json:"seq"`
+	Scope      string `json:"scope"`
+	ScopeID    string `json:"scopeId"`
+	AgentClass string `json:"agentClass"`
+	// Butler is WHOSE grant this is, by butlers.seq. Zero means the
+	// pre-0058 class-level shape, which a deployment with no Butlers
+	// still uses; see the column comment in 0058 for why those rows are
+	// kept rather than attributed to a guess.
+	Butler      int64     `json:"butler,omitempty"`
 	Tool        string    `json:"tool"`
 	GrantedAt   time.Time `json:"grantedAt"`
 	GrantedBy   string    `json:"grantedBy"`
@@ -152,6 +161,26 @@ func (db *DB) GrantTool(g ToolGrant, window time.Duration) (int64, error) {
 	if g.ScopeID == "" || g.Tool == "" || g.GrantedBy == "" {
 		return 0, fmt.Errorf("runtimedb: a grant requires a scope id, a tool, and who granted it (ADR-W030 A8)")
 	}
+	if !ValidAgentClass(g.AgentClass) {
+		return 0, fmt.Errorf("runtimedb: a grant names an agent class, must be %s|%s, got %q (design §5.2)",
+			AgentClassOwner, AgentClassMember, g.AgentClass)
+	}
+	// A grant that names an Agent must name one that exists, and one
+	// whose class matches the grant's. Without the second check a grant
+	// could be issued at the owner class against a Member Agent, and it
+	// would then be invisible to that Agent's resolution and immune to
+	// its downgrade — a permission belonging to nobody.
+	if g.Butler != 0 {
+		b, err := db.GetButlerBySeq(g.Butler)
+		if err != nil {
+			return 0, fmt.Errorf("runtimedb: cannot grant against butler %d: %w", g.Butler, err)
+		}
+		if b.AgentClass != g.AgentClass {
+			return 0, fmt.Errorf(
+				"runtimedb: cannot issue a %s grant to %s, which is a %s agent (design §5.2)",
+				g.AgentClass, b.Name, b.AgentClass)
+		}
+	}
 	if window <= 0 || window > MaxGrantWindow {
 		return 0, fmt.Errorf("runtimedb: a grant window must be between 0 and %s, got %s", MaxGrantWindow, window)
 	}
@@ -164,10 +193,10 @@ func (db *DB) GrantTool(g ToolGrant, window time.Duration) (int64, error) {
 		}
 	}
 	res, err := db.sql.Exec(
-		`INSERT INTO butler_tool_grants (scope, scope_id, profile, tool, granted_at, granted_by,
+		`INSERT INTO butler_tool_grants (scope, scope_id, agent_class, butler, tool, granted_at, granted_by,
 		     expires_at, reason, cleanup_plan)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		g.Scope, g.ScopeID, g.Profile, g.Tool, now(), g.GrantedBy,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		g.Scope, g.ScopeID, g.AgentClass, nullableSeq(g.Butler), g.Tool, now(), g.GrantedBy,
 		time.Now().UTC().Add(window).Format(time.RFC3339Nano), g.Reason, g.CleanupPlan)
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: granting tool: %w", err)
@@ -213,7 +242,7 @@ func (db *DB) RevokeGrantsForScope(scope, scopeID, by string) (int, error) {
 // including expired and revoked ones — the audit view.
 func (db *DB) ListToolGrants(scope, scopeID string) ([]ToolGrant, error) {
 	rows, err := db.sql.Query(
-		`SELECT seq, scope, scope_id, profile, tool, granted_at, granted_by, expires_at,
+		`SELECT seq, scope, scope_id, agent_class, butler, tool, granted_at, granted_by, expires_at,
 		        revoked_at, revoked_by, reason, cleanup_plan
 		 FROM butler_tool_grants WHERE scope = ? AND scope_id = ? ORDER BY seq DESC`, scope, scopeID)
 	if err != nil {
@@ -234,10 +263,12 @@ func (db *DB) ListToolGrants(scope, scopeID string) ([]ToolGrant, error) {
 func scanGrant(row rowScanner) (ToolGrant, error) {
 	var g ToolGrant
 	var granted, expires, revoked string
-	if err := row.Scan(&g.Seq, &g.Scope, &g.ScopeID, &g.Profile, &g.Tool, &granted, &g.GrantedBy,
+	var butler sql.NullInt64
+	if err := row.Scan(&g.Seq, &g.Scope, &g.ScopeID, &g.AgentClass, &butler, &g.Tool, &granted, &g.GrantedBy,
 		&expires, &revoked, &g.RevokedBy, &g.Reason, &g.CleanupPlan); err != nil {
 		return ToolGrant{}, err
 	}
+	g.Butler = butler.Int64
 	var err error
 	if g.GrantedAt, err = time.Parse(time.RFC3339Nano, granted); err != nil {
 		return ToolGrant{}, err
@@ -262,9 +293,9 @@ func scanGrant(row rowScanner) (ToolGrant, error) {
 // that reports them identically produces a household that cannot tell a
 // missing capability from a withdrawn one.
 type ToolAuthority struct {
-	Tool    string `json:"tool"`
-	Profile string `json:"profile"`
-	Allowed bool   `json:"allowed"`
+	Tool       string `json:"tool"`
+	AgentClass string `json:"agentClass"`
+	Allowed    bool   `json:"allowed"`
 	// Source names which rule decided: "structural", "disabled",
 	// "enabled", "grant", or "default".
 	Source string `json:"source"`
@@ -280,9 +311,13 @@ type ToolAuthority struct {
 // caller supplies the structural facts because only the gateway knows
 // them, and the store supplies the administrative ones.
 type ToolQuery struct {
-	Profile string
-	Tool    string
-	// Structural is whether the profile's gateway registers this tool at
+	AgentClass string
+	// Butler scopes a grant to one Agent. Zero means no Agent scope, and
+	// only the class-level grants of the pre-0058 shape can then apply —
+	// never another Agent's.
+	Butler int64
+	Tool   string
+	// Structural is whether the class's gateway registers this tool at
 	// all. False is the end of the conversation.
 	Structural bool
 	// GrantRequired is the tool's own metadata: a tool that needs an
@@ -298,7 +333,7 @@ type ToolQuery struct {
 // ResolveToolAuthority is the effective-authority resolver every
 // dispatch goes through.
 func (db *DB) ResolveToolAuthority(q ToolQuery) (ToolAuthority, error) {
-	a := ToolAuthority{Tool: q.Tool, Profile: q.Profile}
+	a := ToolAuthority{Tool: q.Tool, AgentClass: q.AgentClass}
 
 	// 1. Structural. Nothing below can widen this.
 	if !q.Structural {
@@ -314,8 +349,8 @@ func (db *DB) ResolveToolAuthority(q ToolQuery) (ToolAuthority, error) {
 	var state, reason string
 	explicitlyEnabled := false
 	err := db.sql.QueryRow(
-		`SELECT state, reason FROM butler_tool_controls WHERE profile = ? AND tool = ?`,
-		q.Profile, q.Tool).Scan(&state, &reason)
+		`SELECT state, reason FROM butler_tool_controls WHERE agent_class = ? AND tool = ?`,
+		q.AgentClass, q.Tool).Scan(&state, &reason)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -394,13 +429,17 @@ func (db *DB) liveGrant(q ToolQuery) (ToolGrant, bool, error) {
 				continue
 			}
 		}
+		// The Agent is part of the key, not a filter applied afterwards.
+		// A query with no Agent scope matches only the class-level rows
+		// of the pre-0058 shape; it must never fall through to another
+		// Agent's grant, which is the whole reason the column exists.
 		row := db.sql.QueryRow(
-			`SELECT seq, scope, scope_id, profile, tool, granted_at, granted_by, expires_at,
+			`SELECT seq, scope, scope_id, agent_class, butler, tool, granted_at, granted_by, expires_at,
 			        revoked_at, revoked_by, reason, cleanup_plan
 			 FROM butler_tool_grants
-			 WHERE scope = ? AND scope_id = ? AND profile = ? AND tool = ?
-			   AND revoked_at = '' AND expires_at > ?
-			 ORDER BY seq DESC LIMIT 1`, c.scope, c.id, q.Profile, q.Tool, stamp)
+			 WHERE scope = ? AND scope_id = ? AND agent_class = ? AND tool = ?
+			   AND butler IS ? AND revoked_at = '' AND expires_at > ?
+			 ORDER BY seq DESC LIMIT 1`, c.scope, c.id, q.AgentClass, q.Tool, nullableSeq(q.Butler), stamp)
 		g, err := scanGrant(row)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
@@ -418,7 +457,7 @@ type CapabilityRequest struct {
 	Seq          int64     `json:"seq"`
 	Kind         string    `json:"kind"`
 	RequestedBy  string    `json:"requestedBy"`
-	Profile      string    `json:"profile"`
+	AgentClass   string    `json:"agentClass"`
 	Tool         string    `json:"tool,omitempty"`
 	Description  string    `json:"description"`
 	State        string    `json:"state"`
@@ -439,9 +478,9 @@ func (db *DB) FileCapabilityRequest(r CapabilityRequest) (int64, error) {
 		return 0, fmt.Errorf("runtimedb: a capability request needs who it is for and what is being asked for (ADR-W030 A7)")
 	}
 	res, err := db.sql.Exec(
-		`INSERT INTO butler_capability_requests (kind, requested_by, profile, tool, description, state, created_at)
+		`INSERT INTO butler_capability_requests (kind, requested_by, agent_class, tool, description, state, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		r.Kind, r.RequestedBy, r.Profile, r.Tool, r.Description, RequestOpen, now())
+		r.Kind, r.RequestedBy, r.AgentClass, r.Tool, r.Description, RequestOpen, now())
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: filing capability request: %w", err)
 	}
@@ -484,7 +523,7 @@ func (db *DB) ListCapabilityRequests(state string) ([]CapabilityRequest, error) 
 		args = append(args, state)
 	}
 	rows, err := db.sql.Query(
-		`SELECT seq, kind, requested_by, profile, tool, description, state, created_at,
+		`SELECT seq, kind, requested_by, agent_class, tool, description, state, created_at,
 		        decided_at, decided_by, decision_note
 		 FROM butler_capability_requests`+where+` ORDER BY seq DESC`, args...)
 	if err != nil {
@@ -495,7 +534,7 @@ func (db *DB) ListCapabilityRequests(state string) ([]CapabilityRequest, error) 
 	for rows.Next() {
 		var r CapabilityRequest
 		var created, decided string
-		if err := rows.Scan(&r.Seq, &r.Kind, &r.RequestedBy, &r.Profile, &r.Tool, &r.Description,
+		if err := rows.Scan(&r.Seq, &r.Kind, &r.RequestedBy, &r.AgentClass, &r.Tool, &r.Description,
 			&r.State, &created, &decided, &r.DecidedBy, &r.DecisionNote); err != nil {
 			return nil, err
 		}

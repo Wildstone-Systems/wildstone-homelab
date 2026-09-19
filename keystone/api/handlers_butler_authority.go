@@ -20,59 +20,66 @@ import (
 )
 
 func (s *Server) listButlerToolControls(r *http.Request, _ principal.Identity) (any, int, error) {
-	controls, err := s.DB.ListToolControls(r.URL.Query().Get("profile"))
+	controls, err := s.DB.ListToolControls(r.URL.Query().Get("agentClass"))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	return map[string]any{"controls": controls}, http.StatusOK, nil
 }
 
-// setButlerToolControl turns a tool on or off for one profile.
+// setButlerToolControl turns a tool on or off for one agent class.
 //
-// It cannot widen a profile's structural ceiling and does not pretend
-// to: enabling a tool the surface does not register stores an intent
-// that the resolver will keep refusing. The response says so rather than
+// It cannot widen a class's structural ceiling and does not pretend to:
+// enabling a tool the surface does not register stores an intent that
+// the resolver will keep refusing. The response says so rather than
 // letting an administrator believe they granted something.
 func (s *Server) setButlerToolControl(r *http.Request, id principal.Identity) (any, int, error) {
 	var req struct {
-		Profile string `json:"profile"`
-		Tool    string `json:"tool"`
-		State   string `json:"state"`
-		Reason  string `json:"reason"`
+		AgentClass string `json:"agentClass"`
+		Tool       string `json:"tool"`
+		State      string `json:"state"`
+		Reason     string `json:"reason"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
 	}
 	if req.State == "" {
-		if err := s.DB.ClearToolControl(req.Profile, req.Tool); err != nil {
+		if err := s.DB.ClearToolControl(req.AgentClass, req.Tool); err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
 		return map[string]any{"cleared": true}, http.StatusOK, nil
 	}
-	if err := s.DB.SetToolControl(req.Profile, req.Tool, req.State, actingMember(id), req.Reason); err != nil {
+	if err := s.DB.SetToolControl(req.AgentClass, req.Tool, req.State, actingMember(id), req.Reason); err != nil {
 		return nil, http.StatusBadRequest, err
 	}
-	out := map[string]any{"profile": req.Profile, "tool": req.Tool, "state": req.State}
-	if req.State == runtimedb.ToolEnabled && !s.toolExistsOnProfile(req.Profile, req.Tool) {
+	out := map[string]any{"agentClass": req.AgentClass, "tool": req.Tool, "state": req.State}
+	if req.State == runtimedb.ToolEnabled && !s.toolExistsOnClass(req.AgentClass, req.Tool) {
 		out["note"] = fmt.Sprintf(
-			"%s is not a tool the %s Butler has, so this switch does nothing: a control cannot add a capability, only turn an existing one off and on",
-			req.Tool, req.Profile)
+			"%s is not a tool a %s agent has, so this switch does nothing: a control cannot add a capability, only turn an existing one off and on",
+			req.Tool, req.AgentClass)
 	}
 	return out, http.StatusOK, nil
 }
 
-// toolExistsOnProfile asks the gateways themselves rather than a list,
-// so the answer cannot drift from what is actually registered.
+// toolExistsOnClass asks the gateways themselves rather than a list, so
+// the answer cannot drift from what is actually registered.
 //
-// The gateways are built bare: the question is which tools a profile HAS
+// The gateways are built bare: the question is which tools a class HAS
 // registered, not which are wired on this deployment or permitted right
 // now, and a bare gateway answers exactly that.
-func (s *Server) toolExistsOnProfile(profile, tool string) bool {
+//
+// This is where "a Member Agent cannot be configured with an Owner tool"
+// (design §18.3) is answered: the member gateway does not register an
+// owner tool, so the question comes back false and the control is stored
+// as the inert intent it is. The refusal is structural — the tool is
+// absent, not switched off — which is why no list here has to be kept in
+// step with anything.
+func (s *Server) toolExistsOnClass(class, tool string) bool {
 	var manifest butler.CapabilityManifest
-	switch profile {
-	case runtimedb.ProfileOperator:
+	switch class {
+	case runtimedb.AgentClassOwner:
 		manifest = butler.NewToolGateway(nil, nil).Capabilities(false)
-	case runtimedb.ProfileHousehold:
+	case runtimedb.AgentClassMember:
 		manifest = butler.NewHouseholdGateway("", butler.HouseholdSeams{}).Capabilities(false)
 	default:
 		return false
@@ -103,7 +110,8 @@ func (s *Server) grantButlerTool(r *http.Request, id principal.Identity) (any, i
 	var req struct {
 		Scope       string `json:"scope"`
 		ScopeID     string `json:"scopeId"`
-		Profile     string `json:"profile"`
+		AgentClass  string `json:"agentClass"`
+		Butler      string `json:"butler"`
 		Tool        string `json:"tool"`
 		Minutes     int    `json:"minutes"`
 		Reason      string `json:"reason"`
@@ -115,10 +123,28 @@ func (s *Server) grantButlerTool(r *http.Request, id principal.Identity) (any, i
 	if req.Minutes <= 0 {
 		req.Minutes = 60
 	}
-	seq, err := s.DB.GrantTool(runtimedb.ToolGrant{
-		Scope: req.Scope, ScopeID: req.ScopeID, Profile: req.Profile, Tool: req.Tool,
+	// A grant names the Agent it belongs to, by name at the edge and by
+	// row id underneath. Naming it is what makes a later downgrade able
+	// to strip THIS Agent's grants without touching another's (§18.3).
+	// Omitting it is still allowed, and still means the class-level
+	// shape — a deployment with no Butlers has no Agent to name.
+	grant := runtimedb.ToolGrant{
+		Scope: req.Scope, ScopeID: req.ScopeID, AgentClass: req.AgentClass, Tool: req.Tool,
 		GrantedBy: actingMember(id), Reason: req.Reason, CleanupPlan: req.CleanupPlan,
-	}, time.Duration(req.Minutes)*time.Minute)
+	}
+	if req.Butler != "" {
+		b, err := s.DB.GetButler(req.Butler)
+		if err != nil {
+			return nil, http.StatusNotFound, fmt.Errorf("no butler called %q", req.Butler)
+		}
+		grant.Butler = b.Seq
+		// The class follows the Agent rather than the request. A caller
+		// who names both could otherwise issue an owner grant against a
+		// Member Agent, and the row would belong to nobody: invisible to
+		// that Agent's resolution and untouched by its downgrade.
+		grant.AgentClass = b.AgentClass
+	}
+	seq, err := s.DB.GrantTool(grant, time.Duration(req.Minutes)*time.Minute)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
@@ -155,7 +181,7 @@ func (s *Server) listCapabilityRequests(r *http.Request, _ principal.Identity) (
 func (s *Server) fileCapabilityRequest(r *http.Request, id principal.Identity) (any, int, error) {
 	var req struct {
 		Kind        string `json:"kind"`
-		Profile     string `json:"profile"`
+		AgentClass  string `json:"agentClass"`
 		Tool        string `json:"tool"`
 		Description string `json:"description"`
 	}
@@ -163,7 +189,7 @@ func (s *Server) fileCapabilityRequest(r *http.Request, id principal.Identity) (
 		return nil, code, err
 	}
 	seq, err := s.DB.FileCapabilityRequest(runtimedb.CapabilityRequest{
-		Kind: req.Kind, RequestedBy: actingMember(id), Profile: req.Profile,
+		Kind: req.Kind, RequestedBy: actingMember(id), AgentClass: req.AgentClass,
 		Tool: req.Tool, Description: req.Description,
 	})
 	if err != nil {

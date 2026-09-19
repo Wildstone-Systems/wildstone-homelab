@@ -249,24 +249,18 @@ func TestMigrationCarriesAConnectionThatNamesAPerson(t *testing.T) {
 	// An Agent answering on that bot, because 0045 refuses a binding
 	// with no Agent behind it. This is what an Owner does before
 	// upgrading. Written through the store rather than in raw SQL:
-	// 0044 and 0045 leave the models, butlers and addresses tables
-	// alone, so the current code speaks that half of the schema
-	// correctly and only the chat tables need writing by hand.
+	// The models and addresses tables are untouched between this
+	// snapshot's point and head, so the current code speaks them
+	// correctly. `butlers` is not: 0058 renames its profile column, so
+	// that row is written the way the schema of this vintage spells it.
 	if err := old.UpsertModel(Model{
 		Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", ProviderModel: "llama",
 		Readiness: ModelReady, Enabled: true,
 	}, "root-admin"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := old.CreateButler(Butler{
-		Name: "sandy", Directive: "look after the house", Surface: ButlerSurfaceFamily,
-		Profile: ProfileHousehold, Model: "kitchen-box",
-	}, "sam"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := old.AddButlerAddress("sandy", "telegram", "chat-telegram-family", "", "sam"); err != nil {
-		t.Fatal(err)
-	}
+	sandy := seedButlerAtOldSchema(t, old, "sandy", ButlerSurfaceFamily, "household")
+	seedButlerAddressAtOldSchema(t, old, sandy, "telegram", "chat-telegram-family")
 	old.Close()
 
 	db, err := Open(path)
@@ -343,14 +337,14 @@ func connect(t *testing.T, db *DB, butler, transport string, surface ButlerSurfa
 	t.Helper()
 	// The profile is the ceiling within the surface, and the two have
 	// to agree (ADR-W031 A3).
-	profile := ProfileHousehold
+	profile := AgentClassMember
 	if surface == ButlerSurfaceAdmin {
-		profile = ProfileOperator
+		profile = AgentClassOwner
 	}
 	if _, err := db.GetButler(butler); err != nil {
 		if _, err := db.CreateButler(Butler{
 			Name: butler, Directive: "look after the house", Surface: surface,
-			Profile: profile, Model: "kitchen-box",
+			AgentClass: profile, Model: "kitchen-box",
 		}, "mika"); err != nil {
 			t.Fatalf("CreateButler(%s): %v", butler, err)
 		}

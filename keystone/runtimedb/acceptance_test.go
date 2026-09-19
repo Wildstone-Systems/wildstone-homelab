@@ -63,7 +63,7 @@ func TestPartCAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.GrantTool(ToolGrant{
-		Scope: GrantScopeTask, ScopeID: personal, Profile: ProfileHousehold,
+		Scope: GrantScopeTask, ScopeID: personal, AgentClass: AgentClassMember,
 		Tool: "restricted", GrantedBy: "root-admin",
 	}, time.Hour); err != nil {
 		t.Fatal(err)
@@ -297,11 +297,11 @@ func TestPartCAcceptance(t *testing.T) {
 	// ---- 5. The standing refusals still hold, end to end.
 	t.Run("the standing refusals hold", func(t *testing.T) {
 		// A household tool ceiling cannot be widened by a control.
-		if err := db.SetToolControl(ProfileHousehold, "propose_change", ToolEnabled, "root-admin", ""); err != nil {
+		if err := db.SetToolControl(AgentClassMember, "propose_change", ToolEnabled, "root-admin", ""); err != nil {
 			t.Fatal(err)
 		}
 		d, err := db.ResolveToolAuthority(ToolQuery{
-			Profile: ProfileHousehold, Tool: "propose_change", Structural: false,
+			AgentClass: AgentClassMember, Tool: "propose_change", Structural: false,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -325,7 +325,7 @@ func TestPartCAcceptance(t *testing.T) {
 			{"in-house", "kitchen-box"}, {"outside", "cloud"},
 		} {
 			if _, err := db.CreateButler(Butler{
-				Name: b.name, Surface: ButlerSurfaceFamily, Profile: ProfileHousehold, Model: b.route,
+				Name: b.name, Surface: ButlerSurfaceFamily, AgentClass: AgentClassMember, Model: b.route,
 			}, admin); err != nil {
 				t.Fatal(err)
 			}
@@ -374,13 +374,13 @@ func TestPartCAcceptance(t *testing.T) {
 
 func newAcceptanceTask(t *testing.T, db *DB, owner string, audience ButlerTaskAudience, objective string) string {
 	t.Helper()
-	surface, profile := ButlerSurfaceFamily, ProfileHousehold
+	surface, profile := ButlerSurfaceFamily, AgentClassMember
 	if owner == "mika" {
-		surface, profile = ButlerSurfaceAdmin, ProfileOperator
+		surface, profile = ButlerSurfaceAdmin, AgentClassOwner
 	}
 	id, err := db.InsertButlerTask(ButlerTask{
 		Kind: ButlerTaskConversation, Author: owner, Owner: owner,
-		Surface: surface, Profile: profile, Audience: audience,
+		Surface: surface, AgentClass: profile, Audience: audience,
 		Objective: objective, CompletionCriteria: "done",
 	})
 	if err != nil {

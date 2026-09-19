@@ -43,7 +43,7 @@ func TestTheRosterSaysWhereEachButlersWordsGo(t *testing.T) {
 	var created map[string]any
 	res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
 		"name": "health", "directive": "look after the gym and sleep logs",
-		"surface": "family", "profile": "household", "model": "kitchen-box",
+		"agentClass": "member", "model": "kitchen-box",
 	}, &created)
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("creating a butler = %d", res.StatusCode)
@@ -53,7 +53,7 @@ func TestTheRosterSaysWhereEachButlersWordsGo(t *testing.T) {
 	}
 
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
-		"name": "nutrition", "surface": "family", "profile": "household", "model": "cloud",
+		"name": "nutrition", "agentClass": "member", "model": "cloud",
 	}, nil); res.StatusCode != http.StatusCreated {
 		t.Fatalf("creating the cloud butler = %d", res.StatusCode)
 	}
@@ -87,7 +87,7 @@ func TestTheRosterSaysWhereEachButlersWordsGo(t *testing.T) {
 func TestSwitchingAModelAppliesAtOnceAndWarnsOnTheCrossing(t *testing.T) {
 	h := butlerConsole(t)
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
-		"name": "health", "surface": "family", "profile": "household", "model": "kitchen-box",
+		"name": "health", "agentClass": "member", "model": "kitchen-box",
 	}, nil); res.StatusCode != http.StatusCreated {
 		t.Fatalf("create = %d", res.StatusCode)
 	}
@@ -131,7 +131,7 @@ func TestSwitchingAModelAppliesAtOnceAndWarnsOnTheCrossing(t *testing.T) {
 func TestShapingAButlerNeedsManage(t *testing.T) {
 	h := butlerConsole(t)
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
-		"name": "health", "surface": "family", "profile": "household", "model": "kitchen-box",
+		"name": "health", "agentClass": "member", "model": "kitchen-box",
 	}, nil); res.StatusCode != http.StatusCreated {
 		t.Fatalf("create = %d", res.StatusCode)
 	}
@@ -140,7 +140,7 @@ func TestShapingAButlerNeedsManage(t *testing.T) {
 		body         any
 	}{
 		{http.MethodPost, "/api/v1/butlers", map[string]any{
-			"name": "other", "surface": "family", "profile": "household", "model": "cloud"}},
+			"name": "other", "agentClass": "member", "model": "cloud"}},
 		{http.MethodPut, "/api/v1/butlers/health/model", map[string]any{"model": "cloud"}},
 		{http.MethodPut, "/api/v1/butlers/health/access", map[string]any{"member": "sam", "allow": true}},
 		{http.MethodPut, "/api/v1/butlers/health/tool", map[string]any{"tool": "send_message", "allow": false}},
@@ -158,7 +158,7 @@ func TestShapingAButlerNeedsManage(t *testing.T) {
 func TestButlerScopeAnswersInOneCall(t *testing.T) {
 	h := butlerConsole(t)
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
-		"name": "health", "surface": "family", "profile": "household", "model": "kitchen-box",
+		"name": "health", "agentClass": "member", "model": "kitchen-box",
 	}, nil); res.StatusCode != http.StatusCreated {
 		t.Fatalf("create = %d", res.StatusCode)
 	}
@@ -217,17 +217,17 @@ func TestButlerScopeAnswersInOneCall(t *testing.T) {
 func TestButlerToolsComeFromTheGatewayNotTheClient(t *testing.T) {
 	h := butlerConsole(t)
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
-		"name": "health", "surface": "family", "profile": "household", "model": "kitchen-box",
+		"name": "health", "agentClass": "member", "model": "kitchen-box",
 	}, nil); res.StatusCode != http.StatusCreated {
 		t.Fatalf("create = %d", res.StatusCode)
 	}
 
 	type toolsView struct {
-		Butler  string `json:"butler"`
-		Profile string `json:"profile"`
-		Surface string `json:"surface"`
-		Verdict string `json:"modelVerdict"`
-		Tools   []struct {
+		Butler     string `json:"butler"`
+		AgentClass string `json:"agentClass"`
+		Surface    string `json:"surface"`
+		Verdict    string `json:"modelVerdict"`
+		Tools      []struct {
 			Name      string `json:"name"`
 			Summary   string `json:"summary"`
 			Available bool   `json:"available"`
@@ -245,7 +245,7 @@ func TestButlerToolsComeFromTheGatewayNotTheClient(t *testing.T) {
 	}
 
 	before := read()
-	if before.Profile != runtimedb.ProfileHousehold || before.Surface != string(runtimedb.ButlerSurfaceFamily) {
+	if before.AgentClass != runtimedb.AgentClassMember || before.Surface != string(runtimedb.ButlerSurfaceFamily) {
 		t.Fatalf("tools view = %+v", before)
 	}
 	// The family gateway's own registry, not a list this package keeps.
@@ -304,8 +304,8 @@ func TestButlerToolsComeFromTheGatewayNotTheClient(t *testing.T) {
 func TestButlerToolsAreTheSurfacesOwn(t *testing.T) {
 	h := butlerConsole(t)
 	for _, b := range []map[string]any{
-		{"name": "health", "surface": "family", "profile": "household", "model": "kitchen-box"},
-		{"name": "ops", "surface": "admin", "profile": "operator", "model": "kitchen-box"},
+		{"name": "health", "agentClass": "member", "model": "kitchen-box"},
+		{"name": "ops", "agentClass": "owner", "model": "kitchen-box"},
 	} {
 		if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", b, nil); res.StatusCode != http.StatusCreated {
 			t.Fatalf("create %v = %d", b["name"], res.StatusCode)
@@ -350,7 +350,7 @@ func TestButlerToolsAreTheSurfacesOwn(t *testing.T) {
 func TestAModelInUseCannotBeDeleted(t *testing.T) {
 	h := butlerConsole(t)
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
-		"name": "health", "surface": "family", "profile": "household", "model": "kitchen-box",
+		"name": "health", "agentClass": "member", "model": "kitchen-box",
 	}, nil); res.StatusCode != http.StatusCreated {
 		t.Fatalf("create = %d", res.StatusCode)
 	}

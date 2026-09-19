@@ -46,8 +46,8 @@ func connectHarness(t *testing.T) (*harness, *secretsFakeAgent) {
 		t.Fatal(err)
 	}
 	for _, b := range []runtimedb.Butler{
-		{Name: "joan", Directive: "look after the house", Surface: runtimedb.ButlerSurfaceFamily, Profile: runtimedb.ProfileHousehold, Model: "kitchen-box"},
-		{Name: "alfred", Directive: "run the homelab", Surface: runtimedb.ButlerSurfaceAdmin, Profile: runtimedb.ProfileOperator, Model: "kitchen-box"},
+		{Name: "joan", Directive: "look after the house", Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember, Model: "kitchen-box"},
+		{Name: "alfred", Directive: "run the homelab", Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: runtimedb.AgentClassOwner, Model: "kitchen-box"},
 	} {
 		if _, err := h.s.DB.CreateButler(b, "root-admin"); err != nil {
 			t.Fatal(err)

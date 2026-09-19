@@ -248,9 +248,12 @@ func (db *DB) ResolveButlerTool(butler string, q ToolQuery) (ToolAuthority, erro
 		return ToolAuthority{}, err
 	}
 	// The Butler's own ceiling comes from its record, never from the
-	// caller: a query that could name its own profile would be a query
-	// that could name a wider one.
-	q.Profile = b.Profile
+	// caller: a query that could name its own class would be a query
+	// that could name a wider one. The same goes for the Agent itself —
+	// set here rather than trusted from the query, so a session cannot
+	// reach for a grant issued to a different Agent.
+	q.AgentClass = b.AgentClass
+	q.Butler = b.Seq
 
 	var reason string
 	err = db.sql.QueryRow(
@@ -258,7 +261,7 @@ func (db *DB) ResolveButlerTool(butler string, q ToolQuery) (ToolAuthority, erro
 		b.Seq, q.Tool).Scan(&reason)
 	switch {
 	case err == nil:
-		a := ToolAuthority{Tool: q.Tool, Profile: q.Profile, Source: "butler"}
+		a := ToolAuthority{Tool: q.Tool, AgentClass: q.AgentClass, Source: "butler"}
 		a.Reason = fmt.Sprintf("%s does not have %s", b.Name, q.Tool)
 		if reason != "" {
 			a.Reason += ": " + reason
