@@ -154,7 +154,13 @@ func ownerCreate(args []string) error {
 	defer db.Close()
 
 	actor := hostActor()
+	// wasFound, rather than reading the outer `err` further down. Both
+	// blocks below shadow `err`, so a later `err == nil` would be
+	// testing this lookup's leftover value while reading as "the call
+	// above succeeded" — right today only because RecordButlerMember
+	// hardcodes RoleOwner, and silently wrong the day it does not.
 	existing, err := db.GetButlerMember(member)
+	wasFound := err == nil
 	switch {
 	case errors.Is(err, runtimedb.ErrNotFound):
 		if err := db.RecordButlerMember(member, runtimedb.RoleOwner, "", ""); err != nil {
@@ -174,7 +180,7 @@ func ownerCreate(args []string) error {
 	// Member being repaired into an Owner is the ordinary case here, not
 	// an exception: it is what a Console holder who was recorded as the
 	// wrong thing needs.
-	if err == nil && existing.Role != runtimedb.RoleOwner {
+	if wasFound && existing.Role != runtimedb.RoleOwner {
 		if err := db.SetButlerMemberRole(member, runtimedb.RoleOwner, actor); err != nil {
 			return fmt.Errorf("making %s an owner: %w", member, err)
 		}

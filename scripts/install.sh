@@ -318,8 +318,13 @@ step_admin() {
     # the DEFAULT here, which is exactly how the old defect hid: the
     # account the installer really operated on and the one it named
     # happened to be the same.
-    case "$u" in
-      admin|Admin|ADMIN)
+    # Folded before matching. The first version listed admin|Admin|ADMIN,
+    # which is 3 of the 32 ways to spell it — `ADmin` walked straight
+    # through a guard whose whole purpose is that no spelling of this
+    # name gets through. A guard against a name has to be a guard
+    # against the name, not against three of its spellings.
+    case "$(printf '%s' "$u" | tr '[:upper:]' '[:lower:]')" in
+      admin)
         echo "'admin' is the directory's own service account; please choose another name" >&2
         continue ;;
     esac

@@ -183,6 +183,62 @@ func TestInstallerSetsTheOperatorsPasswordOnTheirOwnAccount(t *testing.T) {
 	}
 }
 
+// The refusal of `admin` covers every spelling of it, not a list of
+// three.
+//
+// The first version matched `admin|Admin|ADMIN`, which is 3 of the 32
+// ways to type the name, so `ADmin` walked through a guard whose entire
+// purpose is that this name does not get through — and the structural
+// tests above said nothing, because they asked whether a refusal
+// existed and not whether it was complete.
+//
+// Asserted as "folds case before matching" rather than by listing
+// spellings, because a test that enumerates permutations is the same
+// mistake as the code it is checking: both are complete only until
+// somebody thinks of a case neither listed.
+func TestInstallerRefusesEverySpellingOfAdmin(t *testing.T) {
+	src := installerSource(t)
+	idx := strings.Index(src, "step_admin() {")
+	if idx < 0 {
+		t.Fatal("step_admin is gone")
+	}
+	body := src[idx:]
+	if end := strings.Index(body, "\n}\n"); end > 0 {
+		body = body[:end]
+	}
+	// Comments stripped, for the reason the sibling test below records:
+	// the first run of THIS test failed on the comment explaining why
+	// the spelling list was wrong, which names the list. A test that
+	// reads prose reports on the documentation, not the code — and it
+	// caught me one function after I had written that warning down.
+	var code strings.Builder
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		code.WriteString(line)
+		code.WriteString("\n")
+	}
+	body = code.String()
+	if !strings.Contains(body, "admin") {
+		t.Fatal("step_admin no longer refuses the directory's service account")
+	}
+	// Either fold the subject before matching, or turn matching
+	// case-insensitive. Both are correct; listing spellings is not.
+	folds := strings.Contains(body, "tr '[:upper:]' '[:lower:]'") ||
+		strings.Contains(body, "tr 'A-Z' 'a-z'") ||
+		strings.Contains(body, "nocasematch") ||
+		strings.Contains(body, "${u,,}")
+	if !folds {
+		t.Error("the `admin` refusal matches spellings rather than folding case: " +
+			"`ADmin` and 28 others get through")
+	}
+	// And the enumeration does not come back alongside the fold.
+	if strings.Contains(body, "admin|Admin|ADMIN") {
+		t.Error("the spelling list is back; it was never complete")
+	}
+}
+
 // The directory's own admin stays a service account: generated, never
 // typed, never the thing a person signs in as.
 //
