@@ -276,13 +276,29 @@ step_tailscale() {
 }
 
 
-# Step 5: the admin account (ADR-W023 A3).
+# Step 5: the first Owner's name (design §2.4, ADR-W023 A3).
 #
 # Captured here rather than on a Console first-run screen, because
-# reaching the Console requires an admin, which is the thing being
-# created. The password is held in a variable for this run and never
-# written to the answers file — credentials do not live in state
-# (ADR-W020 A4).
+# reaching the Console requires an Owner, which is the thing being
+# created.
+#
+# The name and the password both, and both are USED — which is the fix.
+#
+# This step used to ask for a password and then set it on LLDAP's
+# built-in `admin`, never creating the account it named. An operator who
+# typed "mika" was told "create your account 'mika'", got no such
+# account, and signed in as `admin` with the password they had chosen for
+# somebody who did not exist. It only ever looked right because the
+# default was `admin`.
+#
+# Now the name creates a real directory user, the password is set on
+# THAT user, and they can sign in to the Console the moment the installer
+# finishes (ADR-W033; ADR-W020 A4 said the credential is never
+# Wildstone's and is superseded where the two conflict — see the note in
+# that ADR).
+#
+# The password is held in a variable for this run and never written to
+# the answers file: it is used to provision, and then forgotten.
 ADMIN_USER=""
 ADMIN_PASS=""
 step_admin() {
@@ -291,10 +307,27 @@ step_admin() {
   echo "what you will use to add everyone else later."
   local u p1 p2
   while :; do
-    printf 'Username [admin]: ' >&2
+    printf 'Username: ' >&2
     read -r u </dev/tty || u=""
-    [ -z "$u" ] && u="admin"
+    [ -z "$u" ] && { echo "a username is required" >&2; continue; }
     case "$u" in *[!a-zA-Z0-9._-]*) echo "letters, digits, dot, dash and underscore only" >&2; continue ;; esac
+    # `admin` is LLDAP's own service account — the identity Authelia
+    # binds with to read and modify the directory. Taking that name
+    # would set the operator's password on the service credential and
+    # break the whole identity stack at the next restart. It used to be
+    # the DEFAULT here, which is exactly how the old defect hid: the
+    # account the installer really operated on and the one it named
+    # happened to be the same.
+    # Folded before matching. The first version listed admin|Admin|ADMIN,
+    # which is 3 of the 32 ways to spell it — `ADmin` walked straight
+    # through a guard whose whole purpose is that no spelling of this
+    # name gets through. A guard against a name has to be a guard
+    # against the name, not against three of its spellings.
+    case "$(printf '%s' "$u" | tr '[:upper:]' '[:lower:]')" in
+      admin)
+        echo "'admin' is the directory's own service account; please choose another name" >&2
+        continue ;;
+    esac
     break
   done
   while :; do
@@ -779,24 +812,218 @@ enable_capability() { # package params-json
   fail "$1: plan $id did not apply in time"
 }
 
-# The operator's chosen password becomes LLDAP's admin password. LLDAP
-# applies the config-provided password at startup ("Successfully (re)set
-# password for admin" in its own log), so setting the secret and
-# restarting is the whole mechanism.
+# LLDAP's built-in `admin` is a SERVICE account, and its password is
+# generated here rather than chosen.
 #
-# The result is VERIFIED rather than assumed: if the bind fails the
-# installer says so, because an install that reports success and leaves
-# the operator unable to log in is the worst outcome available.
+# It used to be the operator's own password, which conflated two
+# different things: the credential Authelia binds with to read and
+# modify the directory, and the credential a person signs in with. They
+# have different lifetimes, different blast radius, and only one of them
+# belongs to a human. Nobody signs in as `admin` now — the first Owner
+# is a real directory user (see create_first_owner) — so this is a
+# machine credential and is treated like one: generated, stored as a
+# Secret, never printed.
+#
+# LLDAP applies the config-provided password at startup ("Successfully
+# (re)set password for admin" in its own log), so setting the secret and
+# restarting is the whole mechanism.
+LLDAP_ADMIN_PASS=""
 set_admin_password() {
-  api POST "/api/v1/nodes/$NODE_ID/secrets/lldap-admin-password" "{\"value\":\"$ADMIN_PASS\"}" >/dev/null \
-    || fail "could not set the admin password"
+  # 32 hex characters from the kernel. No operator ever types this, and
+  # it is kept in a variable only for the rest of this run: creating the
+  # first Owner's password needs an admin token, and Secrets are
+  # write-only by design, so there is no reading it back afterwards.
+  LLDAP_ADMIN_PASS="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  [ "${#LLDAP_ADMIN_PASS}" -eq 32 ] || fail "could not generate the directory's service password"
+  api POST "/api/v1/nodes/$NODE_ID/secrets/lldap-admin-password" "{\"value\":\"$LLDAP_ADMIN_PASS\"}" >/dev/null \
+    || fail "could not set the directory's service password"
   docker restart lldap >/dev/null 2>&1 || true
   local i
   for i in $(seq 1 30); do
     sleep 2
     if docker exec lldap /bin/sh -c 'exit 0' 2>/dev/null; then break; fi
   done
-  log "admin account '$ADMIN_USER' ready"
+  log "directory ready"
+}
+
+# ALPINE is the same pinned image the identity package's provisioning job
+# uses, for the same reason: an empty ENTRYPOINT and a busybox wget built
+# with long options. Kept in step with packages/identity/package.yaml.
+ALPINE_IMAGE="alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"
+
+# set_owner_password gives the first Owner the password they chose.
+#
+# LLDAP stores passwords through an OPAQUE registration, so there is no
+# GraphQL mutation for it and no way to do it from SQL or a config file:
+# its schema has createUser and updateUser and nothing that takes a
+# password. The only thing that can perform the exchange is
+# `lldap_set_password`, which ships in the LLDAP image at /app.
+#
+# Two containers, because neither can do it alone. The token comes from
+# a throwaway alpine sharing LLDAP's network namespace — the LLDAP image
+# has no HTTP client — and the exchange runs inside LLDAP, where the
+# binary is. `--network container:lldap` rather than a network name so
+# this does not have to know what Wildstone called the network.
+#
+# VERIFIED rather than assumed, the way set_admin_password's bind was:
+# an install that reports success and leaves the operator unable to log
+# in is the worst outcome available, and it is the exact outcome this
+# whole step exists to stop.
+# json_escape makes a shell value safe to interpolate into a JSON string.
+#
+# Only the two characters JSON itself reserves. The password is checked
+# for length and nothing else, so a backslash or a quote in it would
+# otherwise produce a malformed body — and the visible symptom would be
+# "cannot sign in with the password just set" on a password that was in
+# fact set correctly, because the env var path has no such problem.
+json_escape() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+# lldap_login returns an admin-or-user token, or empty.
+#
+# Separated so the caller decides what a failure means, and assigned
+# with `|| true` at the call site: under `set -e` a failing command
+# substitution aborts the script before the `|| fail` beside it can say
+# anything, so the operator sees the install die mid-step with no
+# message. That is the worst possible shape for a step whose whole job
+# is to be verifiable.
+lldap_login() { # username password
+  docker run --rm --network "container:lldap" "$ALPINE_IMAGE" \
+    wget -qO- --header 'Content-Type: application/json' \
+      --post-data "{\"username\":\"$(json_escape "$1")\",\"password\":\"$(json_escape "$2")\"}" \
+      http://localhost:17170/auth/simple/login 2>/dev/null \
+    | sed -n 's/.*"token":"\([^"]*\)".*/\1/p'
+}
+
+set_owner_password() {
+  local token
+  # Retried, because the service password was set moments ago and the
+  # directory adopts it when the reconciler re-creates the container
+  # with the new Secret rendered in — not the instant the Secret is
+  # written. A single attempt here would race that, and would fail on
+  # timing rather than on anything being wrong.
+  local i
+  for i in $(seq 1 30); do
+    token="$(lldap_login admin "$LLDAP_ADMIN_PASS" || true)"
+    [ -n "$token" ] && break
+    sleep 2
+  done
+  [ -n "$token" ] || fail "could not log in to the directory to set '$ADMIN_USER' a password"
+
+  docker exec -e LLDAP_USER_PASSWORD="$ADMIN_PASS" lldap \
+    /app/lldap_set_password --base-url http://localhost:17170 \
+    --token "$token" --username "$ADMIN_USER" >/dev/null 2>&1 \
+    || fail "could not set the password for '$ADMIN_USER'"
+
+  # Prove it: log in as them. Without this the install could report
+  # success on a password that silently did not take.
+  local proof
+  proof="$(lldap_login "$ADMIN_USER" "$ADMIN_PASS" || true)"
+  [ -n "$proof" ] || fail "'$ADMIN_USER' cannot sign in with the password just set"
+  log "password set for '$ADMIN_USER'"
+}
+
+# The first Owner (design §2.4). Installation does not complete without
+# one, and that is a failure rather than a warning.
+#
+# Three things, in an order that matters:
+#
+#   1. The directory user, so there is an account to sign in with. It
+#      goes through the ordinary proposal path — the same plan a Console
+#      holder would approve — because a first Owner created by a private
+#      back door is one the audit trail cannot explain.
+#   2. The Person, recorded and admitted as an Owner. This is what
+#      Wildstone is authoritative for (decision 1 of #201); the directory
+#      holds the credential and nothing else.
+#   3. The check. An install that reported success and left a household
+#      with no Owner would hand the operator a Console that admits
+#      whoever the directory says — which is the state slice 3 exists to
+#      end.
+#
+# The first Owner carries no permanent privilege afterwards. They are an
+# ordinary Owner, and the Last Owner invariant — not a flag — is what
+# keeps them irreplaceable until a second one exists (§2.4, §2.5).
+create_first_owner() {
+  log "creating the first owner '$ADMIN_USER'"
+
+  # Re-runs are a documented path — the installer resumes from an
+  # answers file — and re-declaring an existing member is refused with a
+  # 409, because Keystone reads it as a rename rather than an add. So
+  # the account step is skipped when they are already declared, and the
+  # rest still runs: the Person half below is idempotent, and a run that
+  # got half way through is exactly when it needs to.
+  local declared
+  declared="$(api GET /api/v1/household/members || true)"
+  case "$declared" in
+    *"\"username\":\"$ADMIN_USER\""*)
+      log "'$ADMIN_USER' is already declared; leaving the account as it is" ;;
+    *)
+      # NO GROUPS, and that is not an omission.
+      #
+      # `console_users` is declared by the `console` capability, which
+      # this installer does not install — the Console is served by
+      # Keystone itself and reached on this host. Asking for an
+      # undeclared group is refused outright (addHouseholdMember checks
+      # declaredGroups), so requesting it here aborted every interactive
+      # install. An operator who later puts the Console behind the
+      # ingress adds the group then, on the Household screen, when the
+      # group exists to be added to.
+      local r id st i
+      r="$(api POST /api/v1/household/members \
+        "{\"username\":\"$ADMIN_USER\",\"node\":\"$NODE_ID\"}" || true)"
+      id="$(echo "$r" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+      [ -n "$id" ] || fail "could not propose the account for '$ADMIN_USER': $(echo "$r" | head -c 200)"
+      api POST "/api/v1/plans/$id/approve" >/dev/null || fail "could not approve the account plan"
+      st=""
+      for i in $(seq 1 60); do
+        sleep 2
+        st="$(api GET "/api/v1/plans/$id" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+        [ "$st" = applied ] && break
+        [ "$st" = failed ] && fail "the account plan failed; see journalctl -u keystone"
+      done
+      [ "$st" = applied ] || fail "the account for '$ADMIN_USER' did not apply in time" ;;
+  esac
+
+  # Their password, set on the account just created.
+  set_owner_password
+
+  # The Person, as an Owner, admitted. Role is stated rather than left to
+  # default: recordButlerMember defaults to member on purpose, so an
+  # omission here would stage the first Owner as a Member and leave the
+  # household with none.
+  #
+  # The responses are READ rather than trusted to a `|| fail`. api()
+  # runs curl without -f, so an HTTP 4xx still exits 0 and every
+  # `|| fail` beside one of these calls was dead — which meant a failed
+  # admit produced a successful install and a recorded-but-unadmitted
+  # Owner: precisely the lockout `keystone owner create` exists to
+  # repair, created by the step meant to prevent it.
+  local rec adm
+  rec="$(api POST /api/v1/butler/members "{\"member\":\"$ADMIN_USER\",\"role\":\"owner\"}" || true)"
+  case "$rec" in
+    *'"error"'*) fail "could not record '$ADMIN_USER' as an owner: $(echo "$rec" | head -c 200)" ;;
+  esac
+  adm="$(api POST "/api/v1/butler/members/$ADMIN_USER/admit" || true)"
+  case "$adm" in
+    *'"error"'*) fail "could not admit '$ADMIN_USER': $(echo "$adm" | head -c 200)" ;;
+  esac
+
+  # And the check that makes this a requirement rather than an intention.
+  # ADMITTED as well as owner: a recorded Owner who was never let in is
+  # not an active Owner, and checking only the role would call that
+  # household done.
+  local row
+  row="$(api GET /api/v1/butler/members | tr '{' '\n' | grep "\"member\":\"$ADMIN_USER\"" || true)"
+  case "$row" in
+    *'"role":"owner"'*) ;;
+    *) fail "'$ADMIN_USER' is not an owner after setup; refusing to report success (design §2.4)" ;;
+  esac
+  case "$row" in
+    *'"admitted":true'*) ;;
+    *) fail "'$ADMIN_USER' is an owner but was never admitted; refusing to report success (design §2.4)" ;;
+  esac
+  log "first owner '$ADMIN_USER' recorded and admitted"
 }
 
 post_install() {
@@ -852,6 +1079,7 @@ post_install() {
   log "installing identity"
   enable_capability identity "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\"}"
   set_admin_password
+  create_first_owner
   log "installing dashboard"
   enable_capability dashboard "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\"}"
   for svc in $SERVICES; do

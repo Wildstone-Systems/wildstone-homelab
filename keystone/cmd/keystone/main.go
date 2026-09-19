@@ -66,6 +66,16 @@ func main() {
 		}
 		return
 	}
+	// Host recovery (design §2.6). Here rather than on `wild` because
+	// `wild` is an API client, and the whole point of this one is that
+	// it works when the API will not let anybody in.
+	if len(os.Args) > 1 && os.Args[1] == "owner" {
+		if err := ownerCommand(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "keystone owner:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	showVersion := flag.Bool("version", false, "print version and exit")
 	listen := flag.String("listen", ":9440", "agent gateway listen address")
