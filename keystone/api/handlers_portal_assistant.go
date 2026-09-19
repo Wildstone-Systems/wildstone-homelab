@@ -34,7 +34,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -75,7 +77,7 @@ type assistantAgent struct {
 // ButlersFor is the access list, Live() is enabled-and-not-retired, and
 // the surface test is below. The client may hide entries for UX; it is
 // never what decides.
-func (s *Server) assistantAgents(_ http.ResponseWriter, _ *http.Request, member string, _ []resource.Resource) (any, int, error) {
+func (s *Server) assistantAgents(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
 	if s.DB == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("no assistant is configured on this deployment")
 	}
@@ -96,7 +98,72 @@ func (s *Server) assistantAgents(_ http.ResponseWriter, _ *http.Request, member 
 			CarriesActions: b.CarriesActionAuthority(),
 		})
 	}
-	return map[string]any{"agents": agents, "member": member}, http.StatusOK, nil
+	out := map[string]any{"agents": agents, "member": member}
+	if len(agents) == 0 {
+		out["setup"] = s.assistantSetup(r, member, desired)
+	}
+	return out, http.StatusOK, nil
+}
+
+// assistantSetupState is what an empty assistant card says, and to whom.
+type assistantSetupState struct {
+	// Needed is true when the household has no assistant at all, as
+	// opposed to having one that has not been shared with this member.
+	Needed bool `json:"needed"`
+	// CanConfigure is whether this member can do something about it:
+	// they are in the Console's group.
+	CanConfigure bool `json:"canConfigure"`
+	// Console is the Console's address, offered only to somebody who
+	// can use it.
+	Console string `json:"console,omitempty"`
+	Message string `json:"message"`
+}
+
+// assistantSetup explains an empty assistant card.
+//
+// A fresh install has the assistant widget and no assistant: Butlers
+// are created in the Console, each with its own model (ADR-W031), and
+// nothing does that for the household. "No assistant has been shared
+// with you yet" was true and useless — it named no next step and no
+// place to take it. The card now says what is missing and, to somebody
+// who can fix it, where.
+func (s *Server) assistantSetup(r *http.Request, member string, desired []resource.Resource) assistantSetupState {
+	exists := false
+	if s.DB != nil {
+		if all, err := s.DB.ListButlers(); err == nil {
+			for _, b := range all {
+				if b.Live() && portalMayReach(b) {
+					exists = true
+					break
+				}
+			}
+		}
+	}
+	st := assistantSetupState{Needed: !exists, CanConfigure: slices.Contains(forwardedGroups(r), ConsoleGroup)}
+	switch {
+	case exists:
+		st.Message = "No assistant has been shared with you yet — ask whoever looks after Wildstone to share one with you."
+	case st.CanConfigure:
+		st.Console = consoleAddress(desired)
+		st.Message = "The assistant needs a model to think with. In the Console, open Butlers, add one for the " +
+			"household and give it a model provider (your own Ollama server, for example). It answers here as soon as it has one."
+	default:
+		st.Message = "The assistant isn't set up yet. Whoever looks after Wildstone can give it a model in the Console."
+	}
+	return st
+}
+
+// consoleAddress is where the Console is served, or "" when it is not
+// behind the proxy: the Console route's host as a browser reaches it,
+// which under the tailnet posture is the node's name and a port.
+func consoleAddress(desired []resource.Resource) string {
+	posture := ingressorigin.Of(desired)
+	for _, res := range desired {
+		if res.Kind == resource.KindRoute && res.Route != nil && strings.HasPrefix(res.Route.Host, "console.") {
+			return "https://" + posture.SiteAddress(res.Route.Host) + "/"
+		}
+	}
+	return ""
 }
 
 // portalMayReach is the Homepage connection ceiling, as one function.

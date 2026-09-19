@@ -1683,6 +1683,21 @@
   // =========================================================== assistant
   var agents = [], session = "", agent = "";
 
+  // setupNote is an empty assistant's explanation, from the server:
+  // what is missing and, to somebody who can fix it, a link to where.
+  function setupNote(tag, setup) {
+    setup = setup || {};
+    var box = make(tag, "muted", setup.message ||
+      "No assistant is set up yet. The owner turns one on, chooses what it may do, and it appears here.");
+    if (setup.console) {
+      var a = make("a", "", " Open the Console → Butlers");
+      a.href = setup.console;
+      a.target = "_top";
+      box.appendChild(a);
+    }
+    return box;
+  }
+
   function loadAssistant() {
     fetch("/api/v1/assistant/agents", { headers: { accept: "application/json" } })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
@@ -1693,9 +1708,7 @@
         if (!agents.length) {
           el("ask").disabled = true;
           el("send").disabled = true;
-          el("thread").appendChild(make("div", "muted",
-            "No assistant is set up yet. The owner turns one on, chooses what it may do, " +
-            "and it appears here."));
+          el("thread").appendChild(setupNote("div", res.j.setup));
           text("m-assistant-sub", "Not set up yet");
           return;
         }

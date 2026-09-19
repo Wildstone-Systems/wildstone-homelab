@@ -455,3 +455,15 @@ func TestRenameNormalisesAndRefusesToOverwrite(t *testing.T) {
 		t.Error("blank rename was allowed")
 	}
 }
+
+// A root that does not exist yet is created on first use, not an error
+// on every upload. The default root is a path some other package may or
+// may not have made, and a household that installed files without a
+// media server was the one without it.
+func TestAMissingRootIsCreatedOnFirstUse(t *testing.T) {
+	s := &FileStore{Root: filepath.Join(t.TempDir(), "srv", "wildstone", "media")}
+	got := save(t, s, "shared", "first.txt", "hello")
+	if _, err := os.Stat(filepath.Join(s.Root, "Shared", got.Name)); err != nil {
+		t.Fatalf("the first upload did not land: %v", err)
+	}
+}

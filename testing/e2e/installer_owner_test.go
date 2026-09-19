@@ -23,6 +23,7 @@ package e2e
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -409,7 +410,7 @@ func TestTheInstallLandsOnTheHouseholdHomepage(t *testing.T) {
 	}
 	// Its group is requested for the first Owner, or the page the install
 	// just printed refuses the person who installed it.
-	if !strings.Contains(src, `OWNER_GROUPS='"console_users","homepage_users"'`) {
+	if !regexp.MustCompile(`OWNER_GROUPS='[^']*"homepage_users"`).MatchString(src) {
 		t.Error("the first Owner is not put in homepage_users")
 	}
 	// Installed before the Owner who is put in its group, for the reason
@@ -515,6 +516,38 @@ func TestNoFlagIsResetAfterParsing(t *testing.T) {
 			if strings.HasPrefix(l, name+"=") && l != name+"=$"+name {
 				t.Errorf("%s is set by a flag and then reset after parsing: %q", name, l)
 			}
+		}
+	}
+}
+
+// The homepage arrives with its two widgets, and the first Owner can see
+// both. Neither needs configuring to be installed: files creates its
+// folder on first use, and the assistant's card says how to give it a
+// model. A dashboard that never offered them left the household nothing
+// to find.
+func TestTheHomepageArrivesWithItsWidgets(t *testing.T) {
+	src := installerSource(t)
+	owner := strings.LastIndex(src, "create_first_owner\n")
+	for _, w := range []struct{ pkg, group string }{
+		{"filedrop-wildstone", "filedrop_users"},
+		{"assistant-wildstone", "assistant_users"},
+	} {
+		at := strings.Index(src, "enable_capability "+w.pkg)
+		if at < 0 {
+			t.Errorf("%s is not installed", w.pkg)
+			continue
+		}
+		// Before the Owner who is put in its group, and behind the proxy
+		// that serves it.
+		if owner < 0 || at > owner {
+			t.Errorf("%s is installed after create_first_owner, so %s does not exist yet", w.pkg, w.group)
+		}
+		start := strings.LastIndex(src[:at], `if [ "$CONSOLE_BEHIND_PROXY" = 1 ]; then`)
+		if start < 0 || strings.Contains(src[start:at], "\n  fi\n") {
+			t.Errorf("%s is installed outside the CONSOLE_BEHIND_PROXY branch", w.pkg)
+		}
+		if !regexp.MustCompile(`OWNER_GROUPS='[^']*"` + w.group + `"`).MatchString(src) {
+			t.Errorf("the first Owner is not put in %s, so the widget is installed and hidden from them", w.group)
 		}
 	}
 }

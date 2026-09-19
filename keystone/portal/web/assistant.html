@@ -267,6 +267,21 @@
     if (asked) { session = asked; }
   } catch (e) {}
 
+  // setupNote is an empty assistant's explanation, from the server:
+  // what is missing and, to somebody who can fix it, a link to where.
+  function setupNote(tag, setup) {
+    setup = setup || {};
+    var box = make(tag, "muted", setup.message ||
+      "No assistant is set up yet. The owner turns one on, chooses what it may do, and it appears here.");
+    if (setup.console) {
+      var a = make("a", "", " Open the Console → Butlers");
+      a.href = setup.console;
+      a.target = "_top";
+      box.appendChild(a);
+    }
+    return box;
+  }
+
   function start() {
     // The digests are filled before anything is fetched, so a shut
     // panel never reads as blank while the page loads.
@@ -284,9 +299,7 @@
           el("ask").disabled = true;
           el("send").disabled = true;
           el("asks").hidden = true;
-          el("thread").appendChild(make("p", "muted",
-            "No assistant is set up yet. The owner turns one on, chooses what it may do, " +
-            "and it appears here."));
+          el("thread").appendChild(setupNote("p", res.j.setup));
           return;
         }
         agent = agents[0].name;
