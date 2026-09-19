@@ -1,6 +1,6 @@
 package runtimedb
 
-// A person's chosen theme, and the themes a household pasted in (0058).
+// A person's chosen theme, and the themes a household pasted in (0060).
 //
 // THE STORE HOLDS A NAME, NOT A LOOK. Resolving a name to colours is
 // keystone/theme's job and happens on read, so a later fix to the

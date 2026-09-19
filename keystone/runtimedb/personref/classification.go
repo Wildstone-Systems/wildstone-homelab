@@ -380,7 +380,7 @@ var Columns = []Column{
 		"the Owner who added the picture, as actingMember records them"},
 	{"theme_backgrounds", "updated_at", NotAPerson, "a timestamp"},
 	{"person_theme", "person_id", PersonID,
-		"the Person whose chosen theme this is (0058)"},
+		"the Person whose chosen theme this is (0060)"},
 	{"person_theme", "theme", NotAPerson, "a theme's name, not a person's"},
 	{"person_theme", "updated_at", NotAPerson, "a timestamp"},
 	{"household_themes", "name", NotAPerson, "a theme's name, not a person's"},

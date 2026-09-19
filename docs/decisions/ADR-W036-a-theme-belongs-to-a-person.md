@@ -1,7 +1,7 @@
 # ADR-W036: A theme belongs to a person, not to the household
 
 - **Status:** accepted, and built. Everything in Part A is implemented:
-  `keystone/theme`, migrations 0058 and 0059, `handlers_appearance.go`,
+  `keystone/theme`, migrations 0060 and 0061, `handlers_appearance.go`,
   the Console's rail picker and the household dashboard's.
 - **Number:** W036.
 - **Relates to:** ADR-W027 (the Console redesign, and the token block
@@ -38,7 +38,7 @@ thermostat, not of a preference.
 So: the hue stays declarative, and a person's theme lives in the runtime
 database, beside the other things a person chose for themselves
 (`member_notice_preferences` is the same shape for the same reason).
-Migration 0058 keys it on `person_id`, per 0043, so a rename moves the
+Migration 0060 keys it on `person_id`, per 0043, so a rename moves the
 label and detaches nothing.
 
 **Consequence.** There is deliberately no administrative override. An
@@ -86,7 +86,7 @@ So a household supplies its own, uploaded from the theme's
 `backgrounds/` directory — the same act as pasting the `colors.toml`,
 one file further, and still nothing fetched by the control plane.
 
-A picture attaches **by theme name**, in its own table (migration 0059),
+A picture attaches **by theme name**, in its own table (migration 0061),
 independent of whether the palette ships in the binary or was pasted.
 Otherwise putting a wallpaper behind Nord would mean re-pasting Nord's
 palette first.

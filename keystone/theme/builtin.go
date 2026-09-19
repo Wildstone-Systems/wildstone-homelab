@@ -45,7 +45,7 @@ type Theme struct {
 	Swatch Swatch `json:"swatch"`
 	// Background is true when this theme brings a picture. The bytes
 	// are not in this package: palettes ship in the binary, pictures
-	// are megabytes a household supplies (migration 0059), so what a
+	// are megabytes a household supplies (migration 0061), so what a
 	// Theme carries is whether there is one and which version.
 	Background bool `json:"background,omitempty"`
 	// BackgroundVersion changes when the picture does, and a surface

@@ -1,4 +1,4 @@
--- 0058: a person's chosen theme, and the themes a household pasted in.
+-- 0060: a person's chosen theme, and the themes a household pasted in.
 --
 -- WHY PER PERSON AND NOT PER HOUSEHOLD. The household already has a
 -- colour: `accentHue` in the dashboard package's settings.yaml, which

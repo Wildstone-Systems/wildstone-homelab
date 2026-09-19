@@ -1,4 +1,4 @@
--- 0059: the picture a theme brings with it.
+-- 0061: the picture a theme brings with it.
 --
 -- An Omarchy theme is not only a palette. Every one of them ships a
 -- `backgrounds/` directory — tokyo-night has eight wallpapers in it —
