@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -561,5 +562,72 @@ func TestReadingAQueueDoesNotRequireNamingTheTransport(t *testing.T) {
 	// Naming the transport still works, and names the same queue.
 	if same := h.poll(t, runtimedb.RoleAdmin, "?butler="+at.Butler+"&transport=telegram"); len(same) != 1 {
 		t.Fatalf("polling with the transport returned %+v", same)
+	}
+}
+
+// A stranger flooding a bot costs Keystone a lookup per message and
+// nothing more: no reply, no session, and at most one note that they
+// tried (ADR-W033 B9.1).
+func TestAStrangerFloodingABotWritesAlmostNothing(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	h.agentAt(t, "family", "telegram")
+	for i := 0; i < 40; i++ {
+		h.send(runtimedb.RoleConcierge, map[string]any{
+			"transport": "telegram", "account": "66666", "text": fmt.Sprintf("spam %d", i), "messageId": fmt.Sprintf("s-%d", i),
+		})
+	}
+	if queued := h.poll(t, runtimedb.RoleConcierge, ""); len(queued) != 0 {
+		t.Fatalf("a flood got %d replies", len(queued))
+	}
+	events, _ := h.s.DB.EventsAfter(0, 500)
+	notes := 0
+	for _, e := range events {
+		if e.Type == "chat.unknown_account" {
+			notes++
+		}
+	}
+	if notes != 1 {
+		t.Errorf("the flood left %d notes, want 1", notes)
+	}
+}
+
+// Many accounts at once are bounded as a whole for the bot: past its
+// budget, not even the note is written.
+func TestManyStrangersAreBoundedTogether(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	h.agentAt(t, "family", "telegram")
+	for i := 0; i < 200; i++ {
+		h.send(runtimedb.RoleConcierge, map[string]any{
+			"transport": "telegram", "account": fmt.Sprintf("acct-%d", i), "text": "hi", "messageId": fmt.Sprintf("m-%d", i),
+		})
+	}
+	events, _ := h.s.DB.EventsAfter(0, 1000)
+	notes := 0
+	for _, e := range events {
+		if e.Type == "chat.unknown_account" {
+			notes++
+		}
+	}
+	if notes > unknownBurst+2 {
+		t.Errorf("200 strangers left %d notes, want at most about %d", notes, unknownBurst)
+	}
+}
+
+// Guessing keys: a few attempts per account, then 429, and the refusals
+// are noted once, not once per guess.
+func TestKeyGuessingIsLimited(t *testing.T) {
+	h := newHarness(t)
+	h.agentAt(t, "family", "telegram")
+	codes := []int{}
+	for i := 0; i < 6; i++ {
+		resp := h.do(runtimedb.RoleConcierge, http.MethodPost, "/api/v1/chat/bindings/redeem", map[string]any{
+			"transport": "telegram", "account": "44444", "code": fmt.Sprintf("ZZZZ-ZZZZ-ZZZ%d", i),
+		}, nil)
+		codes = append(codes, resp.StatusCode)
+	}
+	if codes[0] != http.StatusForbidden || codes[redeemBurst] != http.StatusTooManyRequests {
+		t.Errorf("attempt statuses = %v, want 403s then 429 after %d", codes, int(redeemBurst))
 	}
 }
