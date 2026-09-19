@@ -153,3 +153,22 @@ func TestNamesACredential(t *testing.T) {
 		}
 	}
 }
+
+// A calendar event's address is its file name, and its file name is a
+// UID. Under the calendarEvent key it survives; the same token anywhere
+// else, or dressed as a full URL under that key, is still redacted.
+func TestCalendarEventAddressPreserved(t *testing.T) {
+	const path = "/GROUPS/Y2FsZW5kYXJfdXNlcnM%3D/wildstone-8f14e45fceea167a5a36dedd4bea2543.ics"
+	body := `{"events":[{"calendarEvent":"` + path + `","title":"Work Day"}]}`
+	if got := String(body); got != body {
+		t.Errorf("the event's address was changed:\n got %s\nwant %s", got, body)
+	}
+	for _, leak := range []string{
+		`{"href":"` + path + `"}`,
+		`{"calendarEvent":"8f14e45fceea167a5a36dedd4bea2543"}`,
+	} {
+		if got := String(leak); !strings.Contains(got, Placeholder) {
+			t.Errorf("%s was not redacted: %s", leak, got)
+		}
+	}
+}

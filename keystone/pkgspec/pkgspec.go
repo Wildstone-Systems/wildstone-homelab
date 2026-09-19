@@ -826,6 +826,30 @@ func Routes(pkg *Package) []RouteDecl {
 	return out
 }
 
+// ResourceKey names one resource a package declares: its kind and its
+// metadata name, which together are its identity in desired state.
+type ResourceKey struct {
+	Kind string
+	Name string
+}
+
+// ResourceKeys are the resources a package declares, rendered with its
+// param defaults. A name that renders empty under the defaults is left
+// out: it has no identity until an operator supplies one.
+func ResourceKeys(pkg *Package) []ResourceKey {
+	seen := map[ResourceKey]bool{}
+	var out []ResourceKey
+	for _, doc := range packageDocs(pkg) {
+		k := ResourceKey{Kind: docString(doc, "kind"), Name: docString(doc, "metadata", "name")}
+		if k.Kind == "" || k.Name == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	return out
+}
+
 // ContainerNames are the Container resources a package declares.
 //
 // Several packages can provide one capability — the four ingress

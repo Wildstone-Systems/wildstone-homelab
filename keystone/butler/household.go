@@ -319,7 +319,9 @@ var householdEventsSpec = provider.Tool{
 	Description: "Look up recent facts on the household timeline — what a person or device did, " +
 		"what an app recorded. Narrow the lookup: name the event type you care about, and the " +
 		"person or device if the question is about one. Returns the newest first. This is the " +
-		"only way to find out what HAPPENED — what was recorded by the house. It is not the " +
+		"only way to find out what HAPPENED — what was recorded by the house. It is not a " +
+		"calendar: appointments and plans are household actions (calendar.get_agenda and its " +
+		"siblings, when a calendar is installed), and this timeline does not hold them. It is not the " +
 		"same as what you were told: use recall for that, when it is offered.",
 	InputSchema: map[string]any{
 		"type": "object",
@@ -386,9 +388,40 @@ func (gw *HouseholdGateway) Specs() []provider.Tool {
 	sort.Strings(names)
 	specs := make([]provider.Tool, 0, len(names))
 	for _, name := range names {
-		specs = append(specs, gw.tools[name].Spec)
+		spec := gw.tools[name].Spec
+		if name == "do_household_action" {
+			spec = gw.withActions(spec)
+		}
+		specs = append(specs, spec)
 	}
 	return specs
+}
+
+// withActions names, in do_household_action's own description, the
+// actions this household has wired and what each takes.
+//
+// A model deciding which tool answers "is anything on the calendar"
+// reads the tool list, not a list it would first have to ask for. With
+// the actions one call away, it reached for get_household_events — the
+// timeline — reported it empty, and told a member the calendar had
+// nothing on it while three events sat there. Putting the actions in
+// the description makes the calendar visible where the choice is made.
+func (gw *HouseholdGateway) withActions(spec provider.Tool) provider.Tool {
+	actions, err := gw.availableActions()
+	if err != nil || len(actions) == 0 {
+		return spec
+	}
+	var b strings.Builder
+	b.WriteString(spec.Description)
+	b.WriteString("\n\nActions available in this household:")
+	for _, a := range actions {
+		fmt.Fprintf(&b, "\n- %s", a.Tool)
+		if a.Usage != "" {
+			fmt.Fprintf(&b, ": %s", a.Usage)
+		}
+	}
+	spec.Description = b.String()
+	return spec
 }
 
 // wired reports whether the seam behind a tool exists on this
@@ -565,7 +598,11 @@ func handleListHouseholdActions(_ context.Context, gw *HouseholdGateway, _ map[s
 	var b strings.Builder
 	b.WriteString("Household actions available here:\n")
 	for _, a := range actions {
-		fmt.Fprintf(&b, "- %s (tier %s)\n", a.Tool, a.Tier)
+		fmt.Fprintf(&b, "- %s (tier %s)", a.Tool, a.Tier)
+		if a.Usage != "" {
+			fmt.Fprintf(&b, ": %s", a.Usage)
+		}
+		b.WriteString("\n")
 	}
 	return ToolOutcome{Content: b.String()}, nil
 }
@@ -742,7 +779,11 @@ What you can do, and it is the whole list:
   - list_household_actions tells you what this household has wired up.
   - do_household_action performs one of those actions. It happens
     immediately and someone sees the result, so do it when you have been
-    asked to, not to find out what it does.
+    asked to, not to find out what it does. Reading is an action too:
+    when the household has a calendar, "what's on", "am I free" and
+    "is there anything this weekend" are calendar.get_agenda,
+    calendar.search_events and calendar.check_availability — not the
+    timeline, which records what happened and holds no appointments.
   - remember keeps one thing somebody asks you to remember, and recall
     looks it back up in a later conversation. Both are offered only where
     this household has turned memory on. Keep what a person actually
