@@ -75,9 +75,15 @@ func (s *Server) HouseholdActivitySeam() func(context.Context, butler.ActivityLo
 				break
 			}
 			if !q.Since.IsZero() && e.OccurredAt.Before(q.Since) {
-				// The stream is newest first, so the first row outside
-				// the window ends the walk.
-				break
+				// SKIPPED, NOT A STOP. The stream is newest first by
+				// SEQUENCE — the order things were recorded — and a
+				// publisher that reports late carries an OccurredAt
+				// older than the rows around it. Ending the walk on the
+				// first out-of-window row would let one late delivery
+				// hide everything behind it, so the whole bounded
+				// window is read and the window filter is applied per
+				// row.
+				continue
 			}
 			if s.withholdFromMember(e.Type, e.Subject, q.Member, q.GroupSafe) {
 				continue

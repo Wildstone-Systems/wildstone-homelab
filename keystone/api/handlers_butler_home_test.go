@@ -23,7 +23,7 @@ func TestActivitySeamWithholdsAnotherMembersFacts(t *testing.T) {
 	for _, e := range []runtimedb.HouseholdEvent{
 		{EventID: "e1", Source: "test", Type: "presence.arrived", Subject: "robin", OccurredAt: now.Add(-3 * time.Minute)},
 		{EventID: "e2", Source: "test", Type: "presence.arrived", Subject: "sam", OccurredAt: now.Add(-2 * time.Minute)},
-		{EventID: "e3", Source: "test", Type: "backup.completed", OccurredAt: now.Add(-time.Minute)},
+		{EventID: "e3", Source: "test", Type: "bins.collected", OccurredAt: now.Add(-time.Minute)},
 	} {
 		if _, _, err := h.s.DB.AppendHouseholdEvent(e); err != nil {
 			t.Fatal(err)
@@ -177,4 +177,40 @@ func renderLines(lines []butler.ActivityLine) string {
 		parts = append(parts, l.Sentence)
 	}
 	return strings.Join(parts, " | ")
+}
+
+// A publisher that reports late must not hide the rows behind it.
+//
+// The stream comes back newest first by SEQUENCE — the order things were
+// recorded — so an event delivered now with an OccurredAt from last week
+// sits among today's rows. Ending the walk at the first row outside the
+// window let one late delivery truncate the answer.
+func TestActivitySeamDoesNotStopAtALateDelivery(t *testing.T) {
+	h := homeHarness(t)
+	now := time.Now()
+	// Recorded in this order; the middle one happened a week ago.
+	for _, e := range []runtimedb.HouseholdEvent{
+		{EventID: "a", Source: "test", Type: "bins.collected", OccurredAt: now.Add(-10 * time.Minute)},
+		{EventID: "b", Source: "test", Type: "bins.collected", OccurredAt: now.Add(-7 * 24 * time.Hour)},
+		{EventID: "c", Source: "test", Type: "bins.collected", OccurredAt: now.Add(-5 * time.Minute)},
+	} {
+		if _, _, err := h.s.DB.AppendHouseholdEvent(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lines, err := h.s.HouseholdActivitySeam()(context.Background(), butler.ActivityLookup{
+		Member: "sam", Since: now.Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("activity seam: %v", err)
+	}
+	// Both in-window rows, and not the week-old one.
+	if len(lines) != 2 {
+		t.Fatalf("lines = %d, want the two inside the window: %+v", len(lines), lines)
+	}
+	for _, l := range lines {
+		if l.At.Before(now.Add(-time.Hour)) {
+			t.Errorf("a row outside the window was returned: %+v", l)
+		}
+	}
 }
