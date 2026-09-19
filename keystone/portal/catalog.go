@@ -62,11 +62,14 @@ var operatorOnly = map[string]bool{
 	"movie-automation": true,
 	"tv-automation":    true,
 	"music-automation": true,
-	// The operator's own chat bots. The FAMILY ones are requestable —
-	// they are how a household talks to its assistant — but the admin
-	// pair drive the homelab and are not a member's to ask for.
-	"chat-matrix-admin":   true,
-	"chat-telegram-admin": true,
+	// Chat bots. A Connection joins one Person to one Agent, and only an
+	// Owner makes one, in the Console, with the platform's credential
+	// in hand (ADR-W033 B7.1) — there is nothing here a member could
+	// usefully ask for.
+	"chat-telegram": true,
+	"chat-matrix":   true,
+	"chat-discord":  true,
+	"chat-slack":    true,
 	// Wildstone's own surfaces. A member cannot request the dashboard
 	// they are standing on, or the drop box behind its Files card.
 	"dashboard": true,
@@ -137,11 +140,9 @@ var categoryOf = map[string]string{
 	"file-sync": "files",
 	"pdf-tools": "files",
 	// Talking, and the assistant.
-	"mail":                 "talk",
-	"ai-chat":              "talk",
-	"language-models":      "talk",
-	"chat-matrix-family":   "talk",
-	"chat-telegram-family": "talk",
+	"mail":            "talk",
+	"ai-chat":         "talk",
+	"language-models": "talk",
 	// Everything else, named rather than defaulted, so a capability
 	// landing in "other" is a gap in this table rather than a decision.
 	"code":      "other",
@@ -207,7 +208,7 @@ func SensitivityNote(level string) string {
 // will leave.
 func LeavesTheHouse(capability string) bool {
 	switch strings.TrimSpace(strings.ToLower(capability)) {
-	case "mail", "chat-matrix-family", "chat-telegram-family", "ai-chat":
+	case "mail", "chat-telegram", "chat-matrix", "chat-discord", "chat-slack", "ai-chat":
 		return true
 	}
 	return false

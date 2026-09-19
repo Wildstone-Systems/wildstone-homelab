@@ -79,7 +79,7 @@ import { RouteList } from "../src/views/butlers/TabModel";
 import { Confirm } from "../src/ui/Confirm";
 import { Tabs } from "../src/ui/Tabs";
 import type { ButlerRow as ButlerRosterRow, Model } from "../src/api";
-import { ConnectChat, InstallStep, InviteStep, vendorSecret } from "../src/views/ConnectChat";
+import { ConnectChat } from "../src/views/ConnectChat";
 
 // Exactly what GET /api/v1/packages serves, copied from the live VM.
 const pkg = {
@@ -817,7 +817,7 @@ const stale_ = mappedCapabilities().filter((c) => !shippedCapabilities.includes(
 check("the group map names no capability the catalog dropped",
   stale_.length === 0, `no longer shipped: ${stale_.join(", ")}`);
 for (const [cap, want] of [["media", "Media"], ["photos", "Media"], ["dns", "Network"], ["zigbee", "Home"],
-                           ["identity", "Identity"], ["ai-chat", "AI"], ["chat-matrix-family", "Chat"],
+                           ["identity", "Identity"], ["ai-chat", "AI"], ["chat-matrix", "Chat"],
                            ["documents", "Documents"], ["monitoring", "Ops"]] as const) {
   check(`${cap} files under ${want}`, groupOf({ capability: cap }) === want);
 }
@@ -1440,124 +1440,16 @@ const twoNodes = renderToString(
 );
 check("two directories are disambiguated", twoNodes.includes("directory node"));
 
-// Connect a chat app (ADR-W026 A2/A3). The steps are read from the
-// deployment, and the payoff is a link that carries the code.
+// Connect someone to an Agent over chat (ADR-W033 B7.1). Three answers
+// — the agent, the person and the platform's credential — and nothing a
+// household has no way to know: no image, no package, no "family" or
+// "admin" bot.
 const connect = renderToString(h(ConnectChat));
 check("Connect screen renders without throwing", connect.length > 0);
-// A bot belongs to one agent (ADR-W033 B7). The screen used to derive
-// which butler a bot served by parsing chat-<transport>-<surface>, which
-// could only ever name a CLASS: Alfred and Robert are both admin agents,
-// so it could not tell one owner agent's bot from the other's.
-check("connect screen says a bot belongs to one agent", connect.includes("belongs to exactly one agent"));
-check("connect screen does not name a surface a bot serves", !connect.includes("-surface"), connect.slice(0, 600));
-
-// The install form is generated from the PACKAGE. chat-matrix-* asks
-// for a homeserver_url that chat-telegram-* does not, and a form that
-// sent only Telegram's params had every Matrix install rejected for a
-// missing required param before a plan could exist.
-const matrixPkg = {
-  name: "chat-matrix-family", version: "1.0.0", capability: "chat-matrix-family", enabled: false,
-  params: [
-    { name: "node", required: true },
-    { name: "adapter_image", required: true },
-    { name: "keystone_url", required: true },
-    { name: "homeserver_url", required: true },
-  ],
-  providedSecrets: ["chat-matrix-family-token", "chat-matrix-family-adapter"],
-};
-const install = renderToString(
-  h(InstallStep, { pkg: matrixPkg as never, node: "n1", nodes: [], done: false, onDone: () => {} }),
-);
-check("install form asks for every package param", install.includes("homeserver_url") && install.includes("adapter_image"));
-check("the node is not asked for twice", !install.includes(">node<"));
-// #108 made the agent's pull carry registry auth from a node secret,
-// and updated the packages and the install guide. This screen still
-// said credentials were impossible, which is the shape of copy that
-// rots silently: it is a sentence, not a type. Assert the correction so
-// the next change to that behaviour has to come past here.
-check("the install step does not claim credentials are impossible",
-  !/NO credentials|carries no registry auth/.test(install), install.slice(0, 400));
-check("the install step says a private registry needs a node secret",
-  install.includes("secret named after the registry"), install.slice(0, 400));
-
-// A param the deployment can enumerate is a choice, not a blank —
-// retyping a node id from memory is how a capability lands on a machine
-// that does not exist. The Services form has always done this; this
-// screen asked for free text even when the answer was known.
-const sourced = renderToString(h(InstallStep, {
-  pkg: {
-    name: "chat-telegram-family", version: "1.0.1", capability: "chat-telegram-family", enabled: false,
-    params: [
-      { name: "node", required: true },
-      { name: "adapter_image", required: true, suggested: "reg:5000/chat-adapter@sha256:abc" },
-      { name: "keystone_url", required: true, suggested: "http://100.64.0.1:9441" },
-      { name: "extra", required: true, options: ["one", "two"] },
-    ],
-  } as never,
-  node: "n1", nodes: [], done: false, onDone: () => {},
-}));
-check("an enumerable param renders as a picker", /<select[^>]*aria-label="extra"/.test(sourced), sourced.slice(0, 600));
-check("the picker offers what the deployment knows", sourced.includes(">one<") && sourced.includes(">two<"));
-// A known answer must be IN the field, not grey placeholder text behind
-// it: that is how an operator ends up believing it is theirs to work out.
-check("a suggested answer is prefilled, not merely hinted",
-  sourced.includes('value="http://100.64.0.1:9441"'), sourced.slice(0, 900));
-check("a suggested image is prefilled too",
-  sourced.includes('value="reg:5000/chat-adapter@sha256:abc"'), sourced.slice(0, 900));
-// And with nothing suggested the field stays empty and gates the button.
-check("an unanswerable param still gates the install", install.includes("fill in"), install.slice(0, 300));
-check("propose is gated until the required params are filled", install.includes("fill in"));
-
-// The operator-supplied secret is read from the package, never guessed:
-// Telegram declares <capability>-bot and Matrix <capability>-token, and
-// a guessed name writes the token into a secret nothing reads.
-check("matrix vendor secret", vendorSecret(matrixPkg as never) === "chat-matrix-family-token");
-check("telegram vendor secret", vendorSecret({
-  capability: "chat-telegram-family",
-  providedSecrets: ["chat-telegram-family-bot", "chat-telegram-family-adapter"],
-} as never) === "chat-telegram-family-bot");
-
-const online = {
-  transport: "telegram", butler: "hobson", capability: "chat-telegram-family",
-  installed: true, credentialed: true, handle: "wildstone_house_bot", online: true,
-};
-const invite = renderToString(
-  h(InviteStep, {
-    butler: "hobson", transport: online,
-    members: [{ username: "sam", displayName: "Sam", groups: [], owner: "system", node: "n1" }],
-  }),
-);
-check("invite offers the declared member", invite.includes("Sam"));
-check("invite asks for a link, not a code", invite.includes("Get invite link"));
-check("invite names the agent the binding reaches", invite.includes("hobson"), invite.slice(0, 600));
-
-// An owner agent admits owners only (ADR-W033 B9). Keystone refuses the
-// rest, and a screen that offers the whole household without saying so
-// sends the operator to a refusal it could have predicted.
-const ownerOnly = renderToString(
-  h(InviteStep, {
-    butler: "alfred", ownersOnly: true, transport: online,
-    members: [{ username: "sam", displayName: "Sam", groups: [], owner: "system", node: "n1" }],
-  }),
-);
-check("an owner agent's invite says only an owner is admitted", ownerOnly.includes("only an owner can be admitted"), ownerOnly.slice(0, 900));
-
-// A bot nobody has been given has nowhere for an invite to land, and
-// saying so is cheaper than a claim that cannot be redeemed.
-const unassigned = renderToString(
-  h(InviteStep, {
-    butler: "", transport: online,
-    members: [{ username: "sam", displayName: "Sam", groups: [], owner: "system", node: "n1" }],
-  }),
-);
-check("a bot with no agent says to assign one first", unassigned.includes("not been given to an agent"), unassigned.slice(0, 900));
-
-// With nobody declared there is nothing to invite, and the screen says
-// where that is fixed rather than showing an empty dropdown.
-const nobody = renderToString(
-  h(InviteStep, { butler: "hobson", transport: online, members: [] }),
-);
-check("no members points at the Household screen", nobody.includes("Household screen"));
+check("connect screen says what a connection is", connect.includes("lets one person talk to one of your agents"), connect.slice(0, 600));
+check("connect screen asks for no adapter image", !/adapter_image|adapter image/i.test(connect));
+check("connect screen names no family or admin bot", !/chat-(telegram|matrix)-(family|admin)/.test(connect));
+check("connect screen says the person collects the key", connect.includes("collect their"), connect.slice(0, 600));
 
 // The link replaces the code when there is one: two things to hand over
 // invites handing over the wrong one.

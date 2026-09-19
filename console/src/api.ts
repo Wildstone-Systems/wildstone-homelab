@@ -845,6 +845,7 @@ export interface CapabilityRequest {
 // Butler admission, which is runtime state and not LDAP membership.
 export interface ButlerMemberRecord {
   member: string;
+  role?: "owner" | "member";
   profile: string;
   admitted: boolean;
   generation: number;
@@ -1799,6 +1800,17 @@ export const api = {
     ),
   principals: () => call<Principal[]>("GET", "/api/v1/principals"),
   householdMembers: () => call<HouseholdMember[]>("GET", "/api/v1/household/members"),
+  // Chat Connections in one step (ADR-W033 B7.1).
+  chatPlatforms: () => call<{ platforms: ChatPlatform[] }>("GET", "/api/v1/connections/platforms"),
+  createConnection: (req: {
+    platform: string;
+    butler: string;
+    person: string;
+    credentials: Record<string, string>;
+    node?: string;
+  }) => call<ConnectionCreated>("POST", "/api/v1/connections", req),
+  myInvites: () => call<{ invites: ConnectionInvite[] }>("GET", "/api/v1/connections/invites"),
+  myInviteKey: (seq: number) => call<InviteKey>("POST", `/api/v1/connections/invites/${seq}/key`),
   householdGroups: () => call<HouseholdGroup[]>("GET", "/api/v1/household/groups"),
   // The household's own groups (slice 8). Membership grants nothing by
   // itself — what a group reaches is whatever the entitlement rows say.
@@ -1880,3 +1892,43 @@ export const api = {
       `/api/v1/nodes/${encodeURIComponent(node)}/secrets/${encodeURIComponent(name)}/rotate`,
     ),
 };
+
+// A chat platform, and what the Owner gives it (ADR-W033 B7.1).
+export interface ChatPlatform {
+  name: string;
+  label: string;
+  fields: { key: string; label: string; hint: string; prefix?: string }[];
+}
+
+export interface ConnectionCreated {
+  capability: string;
+  instance: string;
+  platform: string;
+  butler: string;
+  person: string;
+  node: string;
+  plan: string;
+  invite: number;
+  note: string;
+}
+
+// An open invite, as its own Person sees it.
+export interface ConnectionInvite {
+  seq: number;
+  butler: string;
+  platform: string;
+  label: string;
+  invitedBy: string;
+}
+
+// A single-use key, minted for the Person who asked for it.
+export interface InviteKey {
+  code: string;
+  link?: string;
+  handle?: string;
+  carriesCode: boolean;
+  butler: string;
+  platform: string;
+  expiresAt: string;
+  note: string;
+}

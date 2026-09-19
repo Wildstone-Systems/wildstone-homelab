@@ -584,6 +584,13 @@ func (s *Server) Handler() http.Handler {
 	// administration. Redeeming is `converse`, because the caller is an
 	// adapter, and a concierge holds that verb and nothing else.
 	mux.Handle("POST /api/v1/chat/claims", s.handle(principal.VerbManage, s.issueChatClaim))
+	// Chat Connections in one step, and the invite keys a Person fetches
+	// for themselves (ADR-W033 B7.1). Creating one mints the adapter's
+	// credential, so it is consequential (A4.1).
+	mux.Handle("GET /api/v1/connections/platforms", s.handle(principal.VerbRead, s.listChatPlatforms))
+	mux.Handle("POST /api/v1/connections", s.handle(principal.VerbManage, s.consequential(s.createConnection)))
+	mux.Handle("GET /api/v1/connections/invites", s.handle(principal.VerbRead, s.consoleInvites))
+	mux.Handle("POST /api/v1/connections/invites/{seq}/key", s.handle(principal.VerbRead, s.consoleInviteKey))
 	mux.Handle("POST /api/v1/chat/bindings/redeem", s.handle(principal.VerbConverse, s.redeemChatClaim))
 	mux.Handle("GET /api/v1/chat/bindings", s.handle(principal.VerbManage, s.listChatBindings))
 	// What an invite may name: the chat adapters this deployment has,
@@ -653,6 +660,8 @@ func (s *Server) Handler() http.Handler {
 	// The one write the page has: a member answering the question they
 	// were asked. Whose question it is, is settled in the database.
 	mux.Handle("POST /api/v1/home/notices/answer", s.portal(surfaceHome, s.homeAnswerNotice))
+	mux.Handle("GET /api/v1/home/connections", s.portal(surfaceHome, s.homeInvites))
+	mux.Handle("POST /api/v1/home/connections/{seq}/key", s.portal(surfaceHome, s.homeInviteKey))
 	// Clearing takes no seq: see homeClearNotices. It can only ever
 	// reach the caller's own notifications.
 	mux.Handle("POST /api/v1/home/notices/clear", s.portal(surfaceHome, s.homeClearNotices))

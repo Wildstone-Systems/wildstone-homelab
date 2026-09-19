@@ -120,10 +120,10 @@ const GROUP_OF: Record<string, Group> = {
   // already manages who may reach what.
   console: "Identity",
 
-  "chat-matrix-admin": "Chat",
-  "chat-matrix-family": "Chat",
-  "chat-telegram-admin": "Chat",
-  "chat-telegram-family": "Chat",
+  "chat-discord": "Chat",
+  "chat-matrix": "Chat",
+  "chat-slack": "Chat",
+  "chat-telegram": "Chat",
 
   "ai-chat": "AI",
   "language-models": "AI",

@@ -1,0 +1,87 @@
+# Chat (Matrix) for one Agent: one bot, connecting the household's
+# people to that Agent (ADR-W033 B7, amended B7.1).
+#
+# ONE INSTALL, ONE BOT. This package is INSTANCED (#246): every install
+# is its own bot with its own name, token and container, named
+# "chat-matrix-<instance>". The instance defaults to the Agent's name. Install
+# it as many times as there are bots to run. Nothing here says "family"
+# or "admin": who a bot admits follows the Agent it belongs to (an
+# Owner-class Agent admits Owners only), not the package.
+#
+# YOU DO NOT INSTALL THIS BY HAND. The Console's Connect screen does it:
+# the Owner picks the Agent, the Person and pastes the credential, and
+# Keystone mints the adapter's Keystone token, stores the platform
+# credential as this instance's provided secret, installs the instance
+# and has the Agent hand the Person their invite key (B7.1).
+#
+# WHAT THIS RUNS. The chat adapter (cli/cmd/chat-adapter), which speaks
+# Matrix on one side and Keystone's chat contract on the other. Its
+# Keystone token holds the converse verb and nothing else, so a
+# compromised adapter can relay messages for accounts a human already
+# bound, and cannot read the house, propose anything, or approve
+# anything.
+#
+# NO IMAGE OF OURS, NO REGISTRY. The adapter program ships with every
+# release and the installer puts it on each host at
+# /srv/wildstone/bin/chat-adapter. This package runs it in Google's
+# public distroless static image, pinned by digest (ADR-W003 A4.2), with
+# that directory bind-mounted read-only. The directory rather than the
+# file, so an upgrade that replaces the program is seen by the container
+# the next time it starts; a file mount would keep the old one. It is
+# under /srv/wildstone because Wardstone mounts nothing from anywhere
+# else. Distroless has the CA
+# certificates the adapter needs, no shell and no package manager, and
+# runs as a non-root user. A private repository stays private and a
+# node needs no registry credential.
+#
+# NO INGRESS. The adapter dials out; there is no Route and no port.
+#
+# THE BOT ACCOUNT. An ordinary Matrix account on your homeserver, used
+# as the bot. The Owner gives its homeserver address and its access
+# token.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: chat-matrix
+  version: 2.0.0
+  capability: chat-matrix
+  profile: matrix
+  instanced: true
+params:
+  - { name: instance, required: true, description: "This bot's name within the household; defaults to its Agent's name." }
+  - { name: node, required: true, source: node, description: "Which machine runs the adapter." }
+  - name: keystone_url
+    required: true
+    source: keystone_url
+    description: "The Keystone API as the ADAPTER can reach it — usually the tailnet address, not 127.0.0.1."
+    example: "http://100.64.0.1:9441"
+  - { name: homeserver_url, required: true, example: "https://matrix.example.com", description: "The homeserver the bot account lives on." }
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: "{{ .Capability }}-token", node: "{{ .Params.node }}" }
+    spec: { name: "{{ .Capability }}-token", provided: true }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: "{{ .Capability }}-adapter", node: "{{ .Params.node }}" }
+    spec: { name: "{{ .Capability }}-adapter", provided: true }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: "{{ .Capability }}", node: "{{ .Params.node }}" }
+    spec:
+      image: "gcr.io/distroless/static-debian12@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab"
+      command: ["/opt/wildstone/bin/chat-adapter"]
+      mounts:
+        - { source: /srv/wildstone/bin, target: /opt/wildstone/bin, readOnly: true }
+      env:
+        CHAT_TRANSPORT: matrix
+        KEYSTONE_API: "{{ .Params.keystone_url }}"
+        MATRIX_HOMESERVER: "{{ .Params.homeserver_url }}"
+        MATRIX_ACCESS_TOKEN: "secret/{{ .Capability }}-token"
+        KEYSTONE_TOKEN: "secret/{{ .Capability }}-adapter"
+      restart: unless-stopped
+agentTools:
+  - { name: send, risk: domestic }

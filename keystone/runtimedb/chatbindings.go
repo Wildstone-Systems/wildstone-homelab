@@ -172,6 +172,12 @@ func (db *DB) RedeemChatClaimCode(hash string, at Connection, account, displayNa
 	if err != nil {
 		return ChatBinding{}, fmt.Errorf("runtimedb: inserting binding: %w", err)
 	}
+	// The invite this fulfils is done: the Person is on the Connection
+	// (ADR-W033 B7.1). Same transaction, so a binding never leaves an
+	// invite open behind it.
+	if err := closeInvitesOnBinding(tx, at.Seq, person); err != nil {
+		return ChatBinding{}, fmt.Errorf("runtimedb: closing the invite: %w", err)
+	}
 	id, err := res.LastInsertId()
 	if err != nil {
 		return ChatBinding{}, err

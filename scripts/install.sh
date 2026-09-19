@@ -670,13 +670,31 @@ install_packages() {
 }
 
 fetch_binary() {
-  # fetch_binary <name>: obtain and verify <name>_linux_<arch>.tar.gz,
-  # extract, install to BIN_DIR.
-  local name="$1" artifact="$1_linux_${ARCH}.tar.gz"
+  # fetch_binary <name> [dir]: obtain and verify
+  # <name>_linux_<arch>.tar.gz, extract, install to dir (BIN_DIR by
+  # default).
+  local name="$1" artifact="$1_linux_${ARCH}.tar.gz" dest="${2:-$BIN_DIR}"
   fetch_asset "$artifact"
   tar -xzf "$WORK/$artifact" -C "$WORK" "$name"
-  install -m 0755 "$WORK/$name" "$BIN_DIR/$name"
-  log "installed $BIN_DIR/$name"
+  install -d -m 0755 "$dest"
+  install -m 0755 "$WORK/$name" "$dest/$name"
+  log "installed $dest/$name"
+}
+
+# install_chat_adapter puts the chat adapter program where the chat
+# packages mount it from (ADR-W033 B7.1). Every node gets it, because a
+# chat bot runs as a container on whichever node the Owner chose, in a
+# public distroless image with this directory bind-mounted read-only —
+# so no image of Wildstone's is published anywhere, and a node needs no
+# registry credential. /srv/wildstone because Wardstone mounts nothing
+# from outside /etc/wildstone and /srv/wildstone. A release from before
+# the adapter shipped simply has no chat.
+install_chat_adapter() {
+  release_has "chat-adapter_linux_${ARCH}.tar.gz" || {
+    log "this release has no chat-adapter; chat connections will not run on this node"
+    return 0
+  }
+  fetch_binary chat-adapter /srv/wildstone/bin
 }
 
 install_console() {
@@ -1403,6 +1421,7 @@ fetch_binary wardstoned
 install -d -m 0755 /etc/wildstone
 install -d -m 0700 /var/lib/wildstone/wardstone
 install -d -m 0755 /srv/wildstone
+install_chat_adapter
 
 # The node identity and secret store used to live at
 # /etc/wildstone/wardstone — inside the managed prefix the ingress

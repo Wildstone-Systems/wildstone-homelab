@@ -34,6 +34,9 @@ var imageArgv0 = map[string]string{
 	"caddy":                  "caddy", // no ENTRYPOINT — command is the whole argv
 	"cloudflare/cloudflared": "",      // ENTRYPOINT ["cloudflared","--no-autoupdate"]
 	"binwiederhier/ntfy":     "",      // ENTRYPOINT ["ntfy"]
+	// No ENTRYPOINT: the chat packages run the adapter program the
+	// installer puts on the host, mounted at /opt/wildstone/bin.
+	"gcr.io/distroless/static-debian12": "/opt/wildstone/bin/chat-adapter",
 
 	// Caddy with the caddy-dns/cloudflare module compiled in, for the
 	// DNS-01 profile (ADR-W019 A9). Same shape as stock caddy, and

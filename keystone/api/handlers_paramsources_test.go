@@ -12,16 +12,14 @@ import (
 // and discover that 127.0.0.1 means the container itself.
 func TestResolveParamsFillsWhatTheDeploymentKnows(t *testing.T) {
 	facts := deploymentFacts{
-		nodes:            []string{"n1"},
-		domain:           "home.arpa",
-		keystoneURL:      "http://100.64.0.1:9441",
-		chatAdapterImage: "reg:5000/chat-adapter@sha256:abc",
+		nodes:       []string{"n1"},
+		domain:      "home.arpa",
+		keystoneURL: "http://100.64.0.1:9441",
 	}
 	got := resolveParams([]pkgspec.ParamDecl{
 		{Name: "node", Source: "node"},
 		{Name: "public_domain", Source: "domain"},
 		{Name: "keystone_url", Source: "keystone_url"},
-		{Name: "adapter_image", Source: "chat_adapter_image"},
 		{Name: "freeform"},
 	}, facts, nil)
 
@@ -39,9 +37,6 @@ func TestResolveParamsFillsWhatTheDeploymentKnows(t *testing.T) {
 	if by["keystone_url"].Suggested != "http://100.64.0.1:9441" {
 		t.Fatalf("keystone_url = %+v", by["keystone_url"])
 	}
-	if by["adapter_image"].Suggested != "reg:5000/chat-adapter@sha256:abc" {
-		t.Fatalf("adapter_image = %+v", by["adapter_image"])
-	}
 	// A param with no source is the operator's to answer, and must not
 	// acquire a suggestion from somewhere.
 	if by["freeform"].Suggested != "" || len(by["freeform"].Options) != 0 {
@@ -55,7 +50,6 @@ func TestResolveParamsFillsWhatTheDeploymentKnows(t *testing.T) {
 func TestResolveParamsSuggestsNothingItDoesNotKnow(t *testing.T) {
 	got := resolveParams([]pkgspec.ParamDecl{
 		{Name: "keystone_url", Source: "keystone_url"},
-		{Name: "adapter_image", Source: "chat_adapter_image"},
 		{Name: "public_domain", Source: "domain"},
 	}, deploymentFacts{}, nil)
 	for _, v := range got {
@@ -71,12 +65,11 @@ func TestResolveParamsSuggestsNothingItDoesNotKnow(t *testing.T) {
 // Otherwise a package can name a source that silently does nothing.
 func TestEveryDeclaredParamSourceIsResolved(t *testing.T) {
 	facts := deploymentFacts{
-		nodes:            []string{"n1"},
-		domain:           "home.arpa",
-		keystoneURL:      "http://n1:9441",
-		chatAdapterImage: "reg/img@sha256:abc",
-		timezone:         "Europe/London",
-		intakeURL:        "http://n1:9441/api/v1/household/events",
+		nodes:       []string{"n1"},
+		domain:      "home.arpa",
+		keystoneURL: "http://n1:9441",
+		timezone:    "Europe/London",
+		intakeURL:   "http://n1:9441/api/v1/household/events",
 	}
 	for source := range pkgspec.ParamSources {
 		got := resolveParams([]pkgspec.ParamDecl{{Name: "p", Source: source}}, facts, nil)
