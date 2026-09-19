@@ -86,9 +86,18 @@ var butlerTaskTransitions = map[ButlerTaskState][]ButlerTaskState{
 // never be safely shown, so it is never written.
 type ButlerTaskAudience string
 
+// The two audiences every record had before slice 7, now expressed as
+// rows in `audiences` rather than as words.
+//
+// The values are audience ids; the names are kept because these are the
+// same two concepts the design names — "the owning Person alone" and
+// "the household" — and renaming 130 call sites in the slice that
+// changes what they MEAN would bury the change that matters in a
+// rename. An audience naming a group is not one of these: it is a row
+// somebody created, reached by id.
 const (
-	ButlerAudiencePrivate ButlerTaskAudience = "private"
-	ButlerAudienceShared  ButlerTaskAudience = "shared"
+	ButlerAudiencePrivate ButlerTaskAudience = "aud_owner"
+	ButlerAudienceShared  ButlerTaskAudience = "aud_household"
 )
 
 // ButlerTaskRetention is the configured lifetime of the task record.

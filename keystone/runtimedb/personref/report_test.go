@@ -108,6 +108,25 @@ func legacyTask(t *testing.T, db *runtimedb.DB, author, owner string) {
 	}
 }
 
+// legacyConnection writes a connection at the pre-0043 shape.
+//
+// These fixtures open the database through 0039 on purpose — the report
+// is about rows the current schema can no longer produce — so they
+// cannot go through CreateConnection, which writes the audience the
+// CURRENT schema expects. That coupling was invisible until slice 7
+// changed the audience vocabulary and this file started failing on a
+// CHECK from four migrations ago.
+func legacyConnection(t *testing.T, db *runtimedb.DB, name, ownership, owner, audience string) {
+	t.Helper()
+	if _, err := db.ExecForTest(
+		`INSERT INTO integration_connections (name, adapter, endpoint, ownership, owner,
+		     audience, state, created_at, created_by, updated_at)
+		 VALUES (?, 'imap', 'imap://mail.example.com', ?, ?, ?, 'configured', 't', ?, 't')`,
+		name, ownership, owner, audience, owner); err != nil {
+		t.Fatalf("recording a legacy %s connection owned by %q: %v", ownership, owner, err)
+	}
+}
+
 // The core negative case: a dry run is a read.
 func TestTheSurveyWritesNothing(t *testing.T) {
 	var before []byte
@@ -570,12 +589,7 @@ func TestAPersonalConnectionOwnedByAPrincipalDoesNotBlock(t *testing.T) {
 			t.Fatalf("CreatePrincipal: %v", err)
 		}
 		people(t, db, "mika")
-		if _, err := db.CreateConnection(runtimedb.IntegrationConnection{
-			Name: "mail", Adapter: "imap", Endpoint: "imap://mail.example.com",
-			Ownership: runtimedb.OwnershipPersonal, Owner: "root-admin", CreatedBy: "root-admin",
-		}); err != nil {
-			t.Fatalf("CreateConnection: %v", err)
-		}
+		legacyConnection(t, db, "mail", "personal", "root-admin", "private")
 	})
 
 	for _, h := range rep.Blocking() {
@@ -593,12 +607,7 @@ func TestAPersonalConnectionOwnedByAPrincipalDoesNotBlock(t *testing.T) {
 func TestAHouseholdConnectionDoesNotBlock(t *testing.T) {
 	rep, _ := surveyed(t, func(db *runtimedb.DB) {
 		people(t, db, "mika")
-		if _, err := db.CreateConnection(runtimedb.IntegrationConnection{
-			Name: "calendar", Adapter: "caldav", Endpoint: "https://cal.example.com",
-			Ownership: runtimedb.OwnershipHousehold, Owner: "household", CreatedBy: "mika",
-		}); err != nil {
-			t.Fatalf("CreateConnection: %v", err)
-		}
+		legacyConnection(t, db, "calendar", "household", "household", "shared")
 	})
 	if len(rep.Blocking()) != 0 {
 		t.Fatalf("a household-owned connection blocks: %+v", rep.Blocking())

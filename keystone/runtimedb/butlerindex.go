@@ -247,7 +247,7 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
 		 JOIN butler_index i ON i.seq = butler_index_fts.rowid
 		 LEFT JOIN butler_members io ON io.person_id = i.owner_person_id
 		 WHERE butler_index_fts MATCH ?
-		   AND (i.audience = 'shared' OR i.owner_person_id = ?)
+		   AND (i.audience = 'aud_household' OR i.owner_person_id = ?)
 		   AND NOT EXISTS (
 		       SELECT 1 FROM butler_memory m WHERE m.seq = i.memory
 		         AND (m.forgotten_at <> '' OR m.superseded_by IS NOT NULL))` +

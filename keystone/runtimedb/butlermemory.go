@@ -621,7 +621,7 @@ func (db *DB) RetrieveMemory(q MemoryQuery) ([]MemoryRecord, error) {
 		return nil, err
 	}
 	where := ` WHERE r.forgotten_at = '' AND r.superseded_by IS NULL
-	           AND (r.audience = 'shared' OR r.owner_person_id = ?)`
+	           AND (r.audience = 'aud_household' OR r.owner_person_id = ?)`
 	args := []any{reader}
 	// The Butler's scope is ANDed onto the reader's, in SQL, before any
 	// content loads. Both have to hold: this person may see it AND this
@@ -681,7 +681,7 @@ func (db *DB) ExportMemoryFor(reader string) ([]MemoryRecord, error) {
 	}
 	rows, err := db.sql.Query(
 		memoryColumns+` WHERE r.owner_person_id = ?
-		     OR (r.audience = 'shared' AND r.forgotten_at = '' AND r.superseded_by IS NULL)
+		     OR (r.audience = 'aud_household' AND r.forgotten_at = '' AND r.superseded_by IS NULL)
 		   ORDER BY r.seq`, readerID)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: exporting memory: %w", err)

@@ -147,7 +147,7 @@ func newTask(t *testing.T, db *runtimedb.DB) string {
 func runner(ts *countingToolset, l *Ledger) *butler.Runner {
 	return &butler.Runner{
 		Gateway: ts, Ledger: l, MaxSliceRounds: 12,
-		PermissionLabel: "operator", Audience: "private", Actor: "butler",
+		PermissionLabel: "operator", Audience: string(runtimedb.ButlerAudiencePrivate), Actor: "butler",
 		// Long enough that nothing in these tests goes stale, so a
 		// repeated dispatch means the ledger failed rather than that a
 		// reading aged out. TestStaleObservationsAreRefreshed sets it

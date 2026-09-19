@@ -87,7 +87,7 @@ func TestPoisonedMemoryCannotCreateAuthority(t *testing.T) {
 	if _, err := db.sql.Exec(
 		`INSERT INTO butler_memory (kind, content, audience, permission_label, owner,
 		    source_kind, source_id, created_at, author, envelope_version)
-		 VALUES ('permission', 'x', 'shared', 'household', 'household', 'c', '1', 't', 'a', 1)`,
+		 VALUES ('permission', 'x', 'aud_household', 'household', 'household', 'c', '1', 't', 'a', 1)`,
 	); err == nil {
 		t.Fatal("a 'permission' memory kind was accepted")
 	}
@@ -152,7 +152,7 @@ func TestDerivativesCannotWidenAudience(t *testing.T) {
 		}
 	}
 	// And it cannot be widened afterwards by an update.
-	if _, err := db.sql.Exec(`UPDATE butler_memory SET audience = 'shared' WHERE seq = ?`, derived); err == nil {
+	if _, err := db.sql.Exec(`UPDATE butler_memory SET audience = 'aud_household' WHERE seq = ?`, derived); err == nil {
 		t.Fatal("private memory was widened to shared by an update")
 	}
 	// Its owner travelled with its audience, which is the half that

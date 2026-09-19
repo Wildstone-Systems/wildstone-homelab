@@ -221,7 +221,7 @@ func TestButlerTaskCompletionIsRefusedBySchemaWithoutEvidence(t *testing.T) {
 	if _, err := db.sql.Exec(
 		`INSERT INTO butler_tasks (created_at, updated_at, kind, state, author, owner, surface,
 		     profile, audience, objective, completion_criteria, retention, envelope_version)
-		 VALUES ('t','t','conversation','completed','a','a','admin','operator','private','o','c','manual',1)`,
+		 VALUES ('t','t','conversation','completed','a','a','admin','operator','aud_owner','o','c','manual',1)`,
 	); err == nil {
 		t.Fatal("a task was inserted already completed")
 	}

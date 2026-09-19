@@ -193,7 +193,7 @@ func TestForgottenMemoryLeavesTheIndex(t *testing.T) {
 	if _, err := db.ExecForTest(
 		`INSERT INTO butler_index (source_kind, source_id, memory, owner_person_id, audience,
 		     permission_label, content, observed_at, indexed_at, volatile, tokens)
-		 VALUES ('memory', 'stray', ?, NULL, 'shared', 'household',
+		 VALUES ('memory', 'stray', ?, NULL, 'aud_household', 'household',
 		     'the spare key is under the mat', '', ?, 0, 7)`,
 		memSeq, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
