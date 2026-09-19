@@ -56,6 +56,10 @@ export function ProvidersDrawer({
   const [endpoint, setEndpoint] = useState("");
   const [offered, setOffered] = useState<OfferedModel[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // Models picked to add, by name. Several are added in one go: a server
+  // usually serves a handful, and adding them one button at a time made
+  // it easy to lose track of which had been added.
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const registered = new Set(models.map((m) => `${m.endpoint} ${m.providerModel ?? m.name}`));
 
@@ -66,6 +70,7 @@ export function ProvidersDrawer({
     setBusy("connect");
     setError(null);
     setOffered(null);
+    setPicked(new Set());
     try {
       const res = await api.offeredModels(e);
       setEndpoint(res.endpoint || e);
@@ -77,26 +82,42 @@ export function ProvidersDrawer({
     }
   };
 
-  const add = async (m: OfferedModel) => {
-    setBusy(m.name);
+  const addable = (offered ?? []).filter((m) => !registered.has(`${endpoint} ${m.name}`));
+  const toggle = (name: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  const allPicked = addable.length > 0 && addable.every((m) => picked.has(m.name));
+
+  const addSelected = async () => {
+    const chosen = addable.filter((m) => picked.has(m.name));
+    if (chosen.length === 0) return;
+    setBusy("add");
     setError(null);
-    try {
-      // Named as the provider names it, exactly as assigning a model
-      // from New Butler registers one — so the two paths agree.
-      await api.upsertModel({
-        name: m.name,
-        kind: m.local ? "local" : "cloud",
-        provider: TYPED_PROVIDER,
-        model: m.name,
-        endpoint,
-        enabled: true,
-      });
-      onChanged();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(null);
+    const failed: string[] = [];
+    for (const m of chosen) {
+      try {
+        // Named as the provider names it, exactly as assigning a model
+        // from New Butler registers one — so the two paths agree.
+        await api.upsertModel({
+          name: m.name,
+          kind: m.local ? "local" : "cloud",
+          provider: TYPED_PROVIDER,
+          model: m.name,
+          endpoint,
+          enabled: true,
+        });
+      } catch (err) {
+        failed.push(`${m.name}: ${(err as Error).message}`);
+      }
     }
+    setBusy(null);
+    setPicked(new Set());
+    if (failed.length) setError(`Not added — ${failed.join("; ")}`);
+    onChanged();
   };
 
   return (
@@ -128,9 +149,9 @@ export function ProvidersDrawer({
                 <strong>{p.endpoint}</strong>
                 <span className="chip">{p.provider}</span>
               </div>
-              <div className="stack" style={{ marginTop: "var(--space-2)" }}>
+              <div className="model-rows" style={{ marginTop: "var(--space-2)" }}>
                 {p.models.map((m) => (
-                  <div key={m.name} className="row" style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
+                  <div key={m.name} className="model-row">
                     <Dot kind={readinessKind(m.readiness)} />
                     <span>{m.providerModel ?? m.name}</span>
                     <span className="muted">
@@ -179,29 +200,47 @@ export function ProvidersDrawer({
                 <div className="muted">{endpoint} answered, but serves no models yet.</div>
               )}
               {offered && offered.length > 0 && (
-                <div className="stack" style={{ marginTop: "var(--space-3)" }}>
-                  <div className="eyebrow">WHAT {endpoint} SERVES</div>
-                  {offered.map((m) => {
-                    const have = registered.has(`${endpoint} ${m.name}`);
-                    return (
-                      <div key={m.name} className="row" style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
-                        <Dot kind={m.local ? "ok" : "warn"} />
-                        <span>{m.name}</span>
-                        <span className="muted">
-                          {m.local ? "on your hardware" : "outside the house"}
-                          {m.parameters ? ` · ${m.parameters}` : ""}
-                        </span>
-                        <button
-                          className="btn btn-small"
-                          style={{ marginLeft: "auto" }}
-                          disabled={have || busy !== null}
-                          onClick={() => add(m)}
-                        >
-                          {have ? "Added" : busy === m.name ? "Adding…" : "Add"}
-                        </button>
-                      </div>
-                    );
-                  })}
+                <div style={{ marginTop: "var(--space-3)" }}>
+                  <div className="model-rows-head">
+                    <label className="model-pick">
+                      <input
+                        type="checkbox"
+                        checked={allPicked}
+                        disabled={addable.length === 0 || busy !== null}
+                        onChange={() => setPicked(allPicked ? new Set() : new Set(addable.map((m) => m.name)))}
+                      />
+                      <span className="eyebrow">WHAT {endpoint} SERVES</span>
+                    </label>
+                    <span className="muted">{picked.size} selected</span>
+                  </div>
+                  <div className="model-rows">
+                    {offered.map((m) => {
+                      const have = registered.has(`${endpoint} ${m.name}`);
+                      return (
+                        <label key={m.name} className={`model-row model-pick${have ? " model-row-done" : ""}`}>
+                          <input
+                            type="checkbox"
+                            checked={have || picked.has(m.name)}
+                            disabled={have || busy !== null}
+                            onChange={() => toggle(m.name)}
+                            aria-label={`Add ${m.name}`}
+                          />
+                          <Dot kind={m.local ? "ok" : "warn"} />
+                          <strong>{m.name}</strong>
+                          <span className="muted">
+                            {m.local ? "on your hardware" : "outside the house"}
+                            {m.parameters ? ` · ${m.parameters}` : ""}
+                          </span>
+                          {have && <span className="chip model-row-end">Added</span>}
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <div className="row" style={{ display: "flex", justifyContent: "flex-end", marginTop: "var(--space-3)" }}>
+                    <button className="btn btn-primary" onClick={addSelected} disabled={picked.size === 0 || busy !== null}>
+                      {busy === "add" ? "Adding…" : `Add selected (${picked.size})`}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

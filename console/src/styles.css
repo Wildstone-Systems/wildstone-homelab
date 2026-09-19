@@ -1950,3 +1950,18 @@ tr.correlated { background: var(--faint); }
 /* A selected row on the household stream. Distinct from .correlated:
    one row is the one you picked, the others are its story. */
 tr[aria-pressed="true"] { box-shadow: inset 2px 0 0 var(--color-accent); }
+
+/* The provider drawer's model lists: one model per row, a hairline
+   between rows so it is clear which name a checkbox belongs to. */
+.model-rows > .model-row {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2) 0; border-bottom: 1px solid var(--hair);
+}
+.model-rows > .model-row:last-child { border-bottom: none; }
+.model-rows-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-bottom: var(--space-2); border-bottom: 1px solid var(--hair);
+}
+.model-pick { cursor: pointer; display: flex; align-items: center; gap: var(--space-2); }
+.model-row-done { cursor: default; }
+.model-row-end { margin-left: auto; }
