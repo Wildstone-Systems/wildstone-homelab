@@ -927,7 +927,24 @@
         }
       }
       if (c.problem) { note(body, "warn", c.problem); }
-      if (c.openAt) { el("m-calendar").href = c.openAt; }
+      // Wildstone's own calendar page when there is one — the month,
+      // and adding an event — and Radicale only when there is not.
+      // Radicale's web UI manages calendars, not events.
+      if (c.page) {
+        el("m-calendar").href = c.page;
+        var open_ = make("a", "hbtn hbtn-ghost", "Open Calendar");
+        open_.href = c.page;
+        open_.appendChild(icon("arrow-right"));
+        body.appendChild(open_);
+      } else if (c.openAt) {
+        el("m-calendar").href = c.openAt;
+        var ext_ = make("a", "hbtn hbtn-ghost", "Open Calendar");
+        ext_.href = c.openAt;
+        ext_.target = "_blank";
+        ext_.rel = "noopener";
+        ext_.appendChild(icon("arrow-square-out"));
+        body.appendChild(ext_);
+      }
     } else {
       text("cal-sum", "needs your sign-in");
       text("m-calendar-sub", c.problem || "nothing upcoming");

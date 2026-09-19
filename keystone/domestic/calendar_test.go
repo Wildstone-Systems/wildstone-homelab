@@ -178,7 +178,7 @@ func TestAgendaReadsAsAnAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Today", "2 things", "08:00 School run", "18:30 Dinner with Sam"} {
+	for _, want := range []string{"Today", "2 things", "08:00-08:30 School run", "18:30-20:00 Dinner with Sam"} {
 		if !strings.Contains(got.Summary, want) {
 			t.Errorf("the agenda summary does not contain %q — a model reads this back to the household:\n%s",
 				want, got.Summary)
@@ -779,5 +779,94 @@ func TestOrdinaryTiersAreNotAskedAbout(t *testing.T) {
 	}
 	if len(c.asked) != 0 {
 		t.Errorf("read/domestic actions asked %d confirmation questions", len(c.asked))
+	}
+}
+
+// The live case, 2026-09-18 in Chicago: one all-day Work Day on the 19th,
+// and a Butler asked "what's on today" told a member it was today. The
+// DATE was read as midnight UTC — seven in the evening on the 18th here —
+// and the server's own time-range filter, matching dates as UTC too,
+// handed it back for the 18th. (The fake returns every event whatever
+// window is asked for, as Radicale effectively did.)
+func TestAnAllDayEventIsOnTheHouseholdsDay(t *testing.T) {
+	workDay := strings.Join([]string{
+		"BEGIN:VEVENT", "UID:w", "SUMMARY:Work Day",
+		"DTSTART;VALUE=DATE:20260919", "DTEND;VALUE=DATE:20260920", "END:VEVENT",
+	}, "\r\n")
+	f := newFakeCalendar(t, workDay)
+	c := calendarUnder(f) // now is 03:00 on Friday the 18th in Chicago
+
+	today, err := run(t, c, CalToolAgenda, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(today.Summary, "Work Day") {
+		t.Errorf("tomorrow's all-day event was reported for today:\n%s", today.Summary)
+	}
+	tomorrow, err := run(t, c, CalToolAgenda, map[string]string{"date": "tomorrow"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(tomorrow.Summary, "Work Day") || !strings.Contains(tomorrow.Summary, "1 thing") {
+		t.Errorf("the all-day event is missing from its own day:\n%s", tomorrow.Summary)
+	}
+}
+
+// A phone writes local times with a TZID. Read as UTC, a six o'clock
+// dinner in Chicago became one in the afternoon.
+func TestATimeInItsOwnZoneKeepsItsHour(t *testing.T) {
+	dinner := strings.Join([]string{
+		"BEGIN:VEVENT", "UID:d", "SUMMARY:Dinner",
+		"DTSTART;TZID=America/Chicago:20260918T180000", "DTEND;TZID=America/Chicago:20260918T190000", "END:VEVENT",
+	}, "\r\n")
+	floating := strings.Join([]string{
+		"BEGIN:VEVENT", "UID:f", "SUMMARY:Piano",
+		"DTSTART:20260918T160000", "DTEND:20260918T163000", "END:VEVENT",
+	}, "\r\n")
+	got, err := run(t, calendarUnder(newFakeCalendar(t, dinner, floating)), CalToolAgenda, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"18:00-19:00 Dinner", "16:00-16:30 Piano"} {
+		if !strings.Contains(got.Summary, want) {
+			t.Errorf("want %q in the agenda (a TZID time in its zone, a floating time on the household's clock):\n%s",
+				want, got.Summary)
+		}
+	}
+}
+
+// Every calendar tool says what it takes. A family Butler reaches these
+// through one generic tool, so this text is the only place a model sees
+// "date (today | tomorrow | YYYY-MM-DD)" before it has to send one.
+func TestEveryCalendarToolDescribesItsInputs(t *testing.T) {
+	g := &Gateway{}
+	for _, e := range (&Calendar{}).Executors() {
+		g.Register(e)
+	}
+	for tool := range CalendarTools {
+		if u := g.Usage(CalendarCapability + "." + tool); u == "" {
+			t.Errorf("calendar.%s has no usage text", tool)
+		}
+	}
+	if g.Usage("calendar.no_such_tool") != "" {
+		t.Error("an unregistered tool reported a usage")
+	}
+}
+
+// The agenda a Butler reads back carries the end, the place and the
+// note: the Work Day conversation ended with Joan saying title and start
+// time were all it could see, while the note sat in the event.
+func TestTheAgendaCarriesTheEndThePlaceAndTheNote(t *testing.T) {
+	workDay := strings.Join([]string{
+		"BEGIN:VEVENT", "UID:w", "SUMMARY:Work Day",
+		"DTSTART:20260918T110000Z", "DTEND:20260919T000000Z",
+		"LOCATION:Office", "DESCRIPTION:Need to take out the trash.", "END:VEVENT",
+	}, "\r\n")
+	got, err := run(t, calendarUnder(newFakeCalendar(t, workDay)), CalToolAgenda, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "06:00-19:00 Work Day (at: Office) [notes: Need to take out the trash.]"; !strings.Contains(got.Summary, want) {
+		t.Errorf("want %q in:\n%s", want, got.Summary)
 	}
 }

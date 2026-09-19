@@ -181,6 +181,31 @@ func (g *Gateway) Register(e Executor) {
 	g.executors[e.Name()] = e
 }
 
+// UsageDescriber is an executor that can say what it takes, in general
+// (Describer, below, says what one particular call would do). Optional:
+// an executor without it is still dispatched, it is just offered to a
+// model by name alone.
+type UsageDescriber interface {
+	// Usage is one line of plain text naming the params and their
+	// shapes, written for a model deciding what to send.
+	Usage() string
+}
+
+// Usage returns what a registered tool takes, or "" when the tool is
+// not registered or does not describe itself.
+//
+// It exists because a family Butler is handed ONE tool that performs
+// any household action, and the actions' inputs lived only in comments.
+// A model that cannot see "date (today | tomorrow | YYYY-MM-DD)" guesses
+// — and on the first day of the calendar it guessed the household
+// timeline instead, and told a member the calendar was empty.
+func (g *Gateway) Usage(tool string) string {
+	if d, ok := g.executors[tool].(UsageDescriber); ok {
+		return d.Usage()
+	}
+	return ""
+}
+
 // Tools lists the registered tool names, sorted.
 func (g *Gateway) Tools() []string {
 	out := make([]string, 0, len(g.executors))

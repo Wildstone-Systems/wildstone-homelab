@@ -108,6 +108,12 @@ type Event struct {
 	Start   time.Time `json:"start"`
 	End     time.Time `json:"end,omitzero"`
 	AllDay  bool      `json:"allDay,omitempty"`
+	// Location and Description are the event's place and notes, as a
+	// person typed them. Read so that "anything else about it?" has an
+	// answer: without them a Butler could only ever repeat a title and
+	// a time, while the note that mattered sat in the event.
+	Location    string `json:"location,omitempty"`
+	Description string `json:"description,omitempty"`
 	// Href is where this event lives in the collection, relative to the
 	// server root, as the server itself reported it.
 	//
@@ -183,7 +189,7 @@ type multistatus struct {
 // The fields a household question needs are four, the unfolding rule is
 // one line, and a full parser would be a large surface reading text
 // written by anyone who can put an event in the calendar.
-func parseEvents(raw string) ([]Event, error) {
+func parseEvents(raw string, loc *time.Location) ([]Event, error) {
 	var ms multistatus
 	if err := xml.Unmarshal([]byte(raw), &ms); err != nil {
 		return nil, fmt.Errorf("caldav: parsing the calendar response: %w", err)
@@ -191,7 +197,7 @@ func parseEvents(raw string) ([]Event, error) {
 	var events []Event
 	for _, r := range ms.Response {
 		for _, ps := range r.Propstat {
-			for _, ev := range parseICS(ps.Prop.CalendarData) {
+			for _, ev := range parseICS(ps.Prop.CalendarData, loc) {
 				ev.Href = strings.TrimSpace(r.Href)
 				events = append(events, ev)
 			}
@@ -200,7 +206,7 @@ func parseEvents(raw string) ([]Event, error) {
 	return events, nil
 }
 
-func parseICS(data string) []Event {
+func parseICS(data string, loc *time.Location) []Event {
 	var out []Event
 	var cur *Event
 	for _, line := range unfold(data) {
@@ -230,13 +236,21 @@ func parseICS(data string) []Event {
 			if cur != nil {
 				cur.Summary = unescapeICS(value)
 			}
+		case "LOCATION":
+			if cur != nil {
+				cur.Location = unescapeICS(value)
+			}
+		case "DESCRIPTION":
+			if cur != nil {
+				cur.Description = unescapeICS(value)
+			}
 		case "DTSTART":
 			if cur != nil {
-				cur.Start, cur.AllDay = parseICSTime(value, params)
+				cur.Start, cur.AllDay = parseICSTime(value, params, loc)
 			}
 		case "DTEND":
 			if cur != nil {
-				cur.End, _ = parseICSTime(value, params)
+				cur.End, _ = parseICSTime(value, params, loc)
 			}
 		}
 	}
@@ -275,19 +289,47 @@ func unescapeICS(v string) string {
 	return r.Replace(strings.TrimSpace(v))
 }
 
-func parseICSTime(value, params string) (time.Time, bool) {
+func parseICSTime(value, params string, loc *time.Location) (time.Time, bool) {
+	if loc == nil {
+		loc = time.UTC
+	}
 	v := strings.TrimSpace(value)
-	if strings.Contains(strings.ToUpper(params), "VALUE=DATE") {
-		if t, err := time.Parse("20060102", v); err == nil {
+	upper := strings.ToUpper(params)
+	// A DATE is a calendar day, and a calendar day is the HOUSEHOLD's:
+	// midnight here, not midnight UTC, which is the evening before in
+	// the Americas.
+	if strings.Contains(upper, "VALUE=DATE") && !strings.Contains(upper, "VALUE=DATE-TIME") || len(v) == 8 {
+		if t, err := time.ParseInLocation("20060102", v, loc); err == nil {
 			return t, true
 		}
 	}
-	for _, layout := range []string{"20060102T150405Z", "20060102T150405", "20060102"} {
-		if t, err := time.Parse(layout, v); err == nil {
-			return t, layout == "20060102"
+	if t, err := time.Parse("20060102T150405Z", v); err == nil {
+		return t, false
+	}
+	// A local time is in its TZID when it names one — what a phone
+	// writes — and otherwise floating, which RFC 5545 defines as the
+	// wall clock of whoever reads it: here, the household.
+	zone := loc
+	if tzid := icsParam(params, "TZID"); tzid != "" {
+		if z, err := time.LoadLocation(tzid); err == nil {
+			zone = z
 		}
 	}
+	if t, err := time.ParseInLocation("20060102T150405", v, zone); err == nil {
+		return t, false
+	}
 	return time.Time{}, false
+}
+
+// icsParam returns one property parameter's value, unquoted.
+func icsParam(params, name string) string {
+	for _, p := range strings.Split(params, ";") {
+		k, v, ok := strings.Cut(p, "=")
+		if ok && strings.EqualFold(strings.TrimSpace(k), name) {
+			return strings.Trim(strings.TrimSpace(v), `"`)
+		}
+	}
+	return ""
 }
 
 // Events reads the events overlapping [from, to).
@@ -300,7 +342,40 @@ func (u *Upstream) Events(ctx context.Context, from, to time.Time) ([]Event, err
 	if err != nil {
 		return nil, err
 	}
-	return parseEvents(raw)
+	events, err := parseEvents(raw, u.location())
+	if err != nil {
+		return nil, err
+	}
+	return within(events, from, to), nil
+}
+
+// within keeps the events that overlap [from, to), judged on the times
+// as parsed here rather than on the server's own time-range filter.
+//
+// The server's filter is not enough on its own. An all-day event is a
+// DATE, which has no zone, and Radicale matches it as if it were UTC —
+// so asked for the household's today (05:00Z to 05:00Z in Chicago), it
+// also returned tomorrow's all-day event, whose midnight-UTC falls
+// inside that window. A Butler then told a member the Work Day on the
+// 19th was on the 18th.
+func within(events []Event, from, to time.Time) []Event {
+	out := events[:0]
+	for _, e := range events {
+		end := e.End
+		if !end.After(e.Start) {
+			if e.AllDay {
+				end = e.Start.AddDate(0, 0, 1)
+			} else {
+				end = e.Start
+			}
+		}
+		// An instant event (end == start) is in the window when it
+		// starts in it; anything longer, when it overlaps it.
+		if e.Start.Before(to) && (end.After(from) || (end.Equal(e.Start) && !e.Start.Before(from))) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // Capabilities verifies against the live collection.

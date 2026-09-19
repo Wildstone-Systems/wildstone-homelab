@@ -1,0 +1,425 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calendar</title>
+<link rel="stylesheet" href="/portal/assets/nocturne.css">
+<!--
+  The household's shared calendar: the month, and adding, changing and
+  removing events on it.
+
+  IT IS THE SHARED CALENDAR, and says so under the heading. Keystone
+  holds the calendar service's own credential and nobody's personal one,
+  so a member's own calendars are on their phone and not here — a page
+  that let that go unsaid would read as "my events vanished".
+
+  TIMES ARE THE HOUSEHOLD'S. The server answers each event with its day
+  and wall-clock times already in the household's zone, and takes dates
+  and times back the same way, so a tablet whose clock is set elsewhere
+  neither files dinner under the wrong day nor moves it an hour.
+
+  ON A PHONE THE GRID IS A PICKER. Seven columns of titles do not fit
+  390px, so the cells keep a dot per event and the chosen day's list
+  below the grid carries the words — the same list a desktop shows, so
+  there is one way to open an event, not two.
+-->
+<style>
+  .calnav { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-4); flex-wrap: wrap; }
+  .calnav h2 { margin: 0 var(--space-2); min-width: 0; }
+  .cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px;
+         background: var(--hair); border: 1px solid var(--hair); border-radius: var(--radius-md); overflow: hidden; }
+  .wkd { background: var(--color-bg); color: var(--muted); font-size: 11.5px; text-align: center;
+         padding: var(--space-2) 0; text-transform: uppercase; letter-spacing: 0.04em; }
+  .cell { background: var(--color-surface); border: 0; color: inherit; font: inherit; text-align: left;
+          min-height: 92px; padding: var(--space-2); cursor: pointer; display: flex; flex-direction: column;
+          gap: 3px; min-width: 0; }
+  .cell:hover { background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface)); }
+  .cell.other { color: var(--muted); background: var(--color-bg); }
+  .cell.sel { box-shadow: inset 0 0 0 2px var(--color-accent); }
+  .num { font-size: 12.5px; font-variant-numeric: tabular-nums; width: 24px; height: 24px; line-height: 24px;
+         text-align: center; border-radius: 50%; }
+  .cell.today .num { background: var(--color-accent); color: var(--color-bg); font-weight: 600; }
+  .chip { font-size: 11.5px; line-height: 1.3; padding: 1px 5px; border-radius: var(--radius-sm);
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+          background: color-mix(in srgb, var(--color-accent) 16%, transparent); }
+  .chip.timed { background: none; padding-left: 2px; }
+  .more { font-size: 11px; color: var(--muted); }
+  .dots { display: none; gap: 3px; flex-wrap: wrap; }
+  .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); display: block; }
+  .dayhead { display: flex; align-items: baseline; gap: var(--space-3); margin: var(--space-6) 0 var(--space-3); }
+  .dayhead h2 { margin: 0; }
+  .evrow { display: flex; gap: var(--space-4); align-items: baseline; width: 100%; padding: var(--space-3) var(--space-4);
+           border: 0; border-bottom: 1px solid var(--faint); background: none; color: inherit; font: inherit;
+           text-align: left; cursor: pointer; }
+  .evrow:last-child { border-bottom: 0; }
+  .evrow:hover { background: color-mix(in srgb, var(--color-accent) 8%, transparent); }
+  .evrow .when { color: var(--muted); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums;
+                 min-width: 88px; }
+  .evmeta { display: block; color: var(--muted); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .editor { padding: var(--space-6); margin-top: var(--space-6); }
+  .editor h2 { margin-top: 0; }
+  .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+  .fields .wide { grid-column: 1 / -1; }
+  .fld { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+  .fld label { font-size: 12.5px; color: var(--muted); }
+  .fld .hinput { width: 100%; box-sizing: border-box; font-size: 14px; }
+  .check { display: flex; align-items: center; gap: var(--space-2); font-size: 13.5px; }
+  .actions { display: flex; gap: var(--space-2); margin-top: var(--space-6); flex-wrap: wrap; }
+  @media (max-width: 720px) {
+    .cell { min-height: 52px; align-items: center; padding: var(--space-2) 2px; }
+    .chip, .more { display: none; }
+    .dots { display: flex; justify-content: center; }
+    .fields { grid-template-columns: minmax(0, 1fr); }
+    .evrow { flex-wrap: wrap; gap: var(--space-2); }
+    .evrow .when { min-width: 0; width: 100%; }
+  }
+</style>
+
+<main class="page">
+  <div class="spread" style="margin-bottom: var(--space-6)">
+    <a class="hbtn hbtn-ghost" href="/home/"><i class="ph ph-arrow-left" aria-hidden="true"></i> Home</a>
+    <span class="fade" aria-hidden="true"></span>
+  </div>
+
+  <div class="row-between" style="margin-bottom: var(--space-6)">
+    <div>
+      <h1>Calendar</h1>
+      <div class="muted">The household's shared calendar</div>
+    </div>
+    <button type="button" class="hbtn hbtn-primary" id="add"><i class="ph ph-plus" aria-hidden="true"></i> Add event</button>
+  </div>
+
+  <div class="calnav">
+    <button type="button" class="hbtn hbtn-secondary" id="prev" aria-label="Previous month"><i class="ph ph-caret-left" aria-hidden="true"></i></button>
+    <button type="button" class="hbtn hbtn-secondary" id="next" aria-label="Next month"><i class="ph ph-caret-right" aria-hidden="true"></i></button>
+    <h2 id="month"></h2>
+    <span class="fade" aria-hidden="true"></span>
+    <button type="button" class="hbtn hbtn-secondary" id="today">Today</button>
+  </div>
+
+  <div id="note"></div>
+  <div class="cal" id="grid" role="grid" aria-labelledby="month"></div>
+
+  <div class="dayhead">
+    <h2 id="day-title"></h2>
+    <span class="fade" aria-hidden="true"></span>
+    <span class="muted" id="day-count"></span>
+  </div>
+  <section class="surface" id="day-list"></section>
+
+  <section class="surface editor" id="editor" hidden>
+    <h2 id="ed-title">Add event</h2>
+    <form id="form">
+      <div class="fields">
+        <div class="fld wide">
+          <label for="ev-title">What</label>
+          <input class="hinput" id="ev-title" type="text" maxlength="200" required autocomplete="off">
+        </div>
+        <div class="fld">
+          <label for="ev-date">Date</label>
+          <input class="hinput" id="ev-date" type="date" required>
+        </div>
+        <div class="fld">
+          <label class="check" for="ev-allday"><input id="ev-allday" type="checkbox"> All day</label>
+        </div>
+        <div class="fld" id="f-start">
+          <label for="ev-start">Starts</label>
+          <input class="hinput" id="ev-start" type="time" value="18:00">
+        </div>
+        <div class="fld" id="f-end">
+          <label for="ev-end">Ends</label>
+          <input class="hinput" id="ev-end" type="time" value="19:00">
+        </div>
+        <div class="fld" id="f-enddate" hidden>
+          <label for="ev-enddate">Last day</label>
+          <input class="hinput" id="ev-enddate" type="date">
+        </div>
+        <div class="fld wide">
+          <label for="ev-where">Where (optional)</label>
+          <input class="hinput" id="ev-where" type="text" maxlength="200" autocomplete="off">
+        </div>
+        <div class="fld wide">
+          <label for="ev-notes">Notes (optional)</label>
+          <textarea class="hinput" id="ev-notes" rows="3" maxlength="2000"></textarea>
+        </div>
+      </div>
+      <div id="ed-note"></div>
+      <div class="actions">
+        <button type="submit" class="hbtn hbtn-primary" id="save"><i class="ph ph-check" aria-hidden="true"></i> Save</button>
+        <button type="button" class="hbtn hbtn-secondary" id="cancel">Cancel</button>
+        <span class="fade" aria-hidden="true"></span>
+        <button type="button" class="hbtn hbtn-ghost" id="delete" hidden><i class="ph ph-trash" aria-hidden="true"></i> Delete</button>
+      </div>
+    </form>
+  </section>
+
+  <footer class="muted" style="margin-top: var(--space-8); font-size: 12px">
+    Everyone in the household's calendar group sees and can change these events. Your own calendars are on your phone.
+  </footer>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  function el(id) { return document.getElementById(id); }
+  function text(id, v) { var n = el(id); if (n) { n.textContent = v; } }
+  function clear(n) { while (n && n.firstChild) { n.removeChild(n.firstChild); } }
+  function make(tag, cls, content) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (content !== undefined && content !== null) { n.textContent = String(content); }
+    return n;
+  }
+  function icon(name) {
+    var i = make("i", "ph ph-" + name);
+    i.setAttribute("aria-hidden", "true");
+    return i;
+  }
+  function showNote(box, cls, msg) {
+    clear(box);
+    if (!msg) { return; }
+    var n = make("div", "note " + cls);
+    n.appendChild(icon("warning-circle"));
+    n.appendChild(make("span", null, msg));
+    box.appendChild(n);
+  }
+
+  // Days are "YYYY-MM-DD" strings throughout, and arithmetic happens at
+  // local noon so a daylight-saving change can never move a day.
+  function pad(n) { return String(n).padStart(2, "0"); }
+  function key(d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+  function parse(k) { return new Date(k + "T12:00:00"); }
+  function addDays(k, n) { var d = parse(k); d.setDate(d.getDate() + n); return key(d); }
+  function longDay(k) {
+    return parse(k).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+  }
+  function clock(hhmm) {
+    if (!hhmm) { return ""; }
+    var p = hhmm.split(":");
+    var d = new Date(2000, 0, 1, parseInt(p[0], 10), parseInt(p[1], 10));
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+
+  var today = key(new Date()), month = today.slice(0, 7), selected = today;
+  var byDay = {}, editing = null;
+
+  function whenOf(e) {
+    if (e.allDay) {
+      return e.lastDay && e.lastDay !== e.day ? "All day, until " + longDay(e.lastDay) : "All day";
+    }
+    return e.endTime ? clock(e.startTime) + " – " + clock(e.endTime) : clock(e.startTime);
+  }
+
+  function gridStart() {
+    // Weeks start on Sunday, as the household's other calendars do.
+    var first = parse(month + "-01");
+    return addDays(key(first), -first.getDay());
+  }
+
+  function load() {
+    var from = gridStart(), to = addDays(from, 41);
+    text("month", parse(month + "-01").toLocaleDateString([], { month: "long", year: "numeric" }));
+    fetch("/api/v1/calendar/events?from=" + from + "&to=" + to, { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "Can't read the calendar right now."); }
+        showNote(el("note"), "", "");
+        today = res.j.today || today;
+        byDay = {};
+        (res.j.events || []).forEach(function (e) {
+          // A multi-day event is on every day it spans.
+          var d = e.day, last = e.lastDay || e.day, guard = 0;
+          while (d <= last && guard < 62) {
+            (byDay[d] = byDay[d] || []).push(e);
+            d = addDays(d, 1);
+            guard++;
+          }
+        });
+        paint();
+      })
+      .catch(function (err) {
+        // Never an empty month, which reads as a free one.
+        showNote(el("note"), "note-bad", String(err.message || err));
+        byDay = {};
+        paint();
+      });
+  }
+
+  function paint() {
+    var grid = el("grid");
+    clear(grid);
+    ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].forEach(function (w) {
+      var h = make("div", "wkd", w);
+      h.setAttribute("role", "columnheader");
+      grid.appendChild(h);
+    });
+    var d = gridStart();
+    for (var i = 0; i < 42; i++) {
+      grid.appendChild(cell(d));
+      d = addDays(d, 1);
+    }
+    paintDay();
+  }
+
+  function cell(k) {
+    var evs = byDay[k] || [];
+    var b = make("button", "cell");
+    b.type = "button";
+    b.setAttribute("role", "gridcell");
+    if (k.slice(0, 7) !== month) { b.className += " other"; }
+    if (k === today) { b.className += " today"; }
+    if (k === selected) { b.className += " sel"; }
+    b.setAttribute("aria-label", longDay(k) + (evs.length ? ", " + evs.length + (evs.length === 1 ? " event" : " events") : ""));
+    b.appendChild(make("span", "num", parseInt(k.slice(8), 10)));
+    evs.slice(0, 3).forEach(function (e) {
+      var c = make("span", e.allDay ? "chip" : "chip timed", (e.allDay ? "" : clock(e.startTime) + " ") + e.title);
+      b.appendChild(c);
+    });
+    if (evs.length > 3) { b.appendChild(make("span", "more", "+" + (evs.length - 3) + " more")); }
+    if (evs.length) {
+      var dots = make("span", "dots");
+      evs.slice(0, 4).forEach(function () { dots.appendChild(make("i")); });
+      b.appendChild(dots);
+    }
+    b.addEventListener("click", function () {
+      selected = k;
+      if (k.slice(0, 7) !== month) { month = k.slice(0, 7); load(); return; }
+      paint();
+    });
+    return b;
+  }
+
+  function paintDay() {
+    var evs = byDay[selected] || [];
+    text("day-title", selected === today ? "Today" : longDay(selected));
+    text("day-count", evs.length === 1 ? "1 event" : evs.length ? evs.length + " events" : "");
+    var list = el("day-list");
+    clear(list);
+    if (!evs.length) {
+      var empty = make("div", "evrow muted", "Nothing on. ");
+      list.appendChild(empty);
+    }
+    evs.forEach(function (e) {
+      var row = make("button", "evrow");
+      row.type = "button";
+      row.appendChild(make("span", "when", whenOf(e)));
+      var what = make("span", "grow");
+      what.appendChild(make("span", null, e.title));
+      // The place and the note under the title, so what somebody wrote
+      // down is on the page rather than only in the form.
+      if (e.location) { what.appendChild(make("span", "evmeta", e.location)); }
+      if (e.notes) { what.appendChild(make("span", "evmeta", e.notes)); }
+      row.appendChild(what);
+      row.addEventListener("click", function () { openEditor(e); });
+      list.appendChild(row);
+    });
+  }
+
+  // ---- The editor. One form for adding and changing; Delete appears
+  // only for an event that exists.
+  function syncAllDay() {
+    var all = el("ev-allday").checked;
+    el("f-start").hidden = all;
+    el("f-end").hidden = all;
+    el("f-enddate").hidden = !all;
+  }
+
+  function openEditor(e) {
+    editing = e || null;
+    text("ed-title", e ? "Change event" : "Add event");
+    el("ev-title").value = e ? e.title : "";
+    el("ev-date").value = e ? e.day : selected;
+    el("ev-allday").checked = e ? !!e.allDay : false;
+    el("ev-start").value = e && e.startTime ? e.startTime : "18:00";
+    el("ev-end").value = e && e.endTime ? e.endTime : "19:00";
+    el("ev-enddate").value = e && e.allDay && e.lastDay !== e.day ? e.lastDay : "";
+    el("ev-where").value = e && e.location ? e.location : "";
+    el("ev-notes").value = e && e.notes ? e.notes : "";
+    el("delete").hidden = !e;
+    showNote(el("ed-note"), "", "");
+    syncAllDay();
+    el("editor").hidden = false;
+    el("editor").scrollIntoView({ block: "nearest" });
+    el("ev-title").focus();
+  }
+
+  function closeEditor() {
+    editing = null;
+    el("editor").hidden = true;
+  }
+
+  function send(url, body) {
+    el("save").disabled = true;
+    el("delete").disabled = true;
+    return fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(body)
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "That didn't go through."); }
+        closeEditor();
+        load();
+      })
+      .catch(function (err) { showNote(el("ed-note"), "note-bad", String(err.message || err)); })
+      .then(function () {
+        el("save").disabled = false;
+        el("delete").disabled = false;
+      });
+  }
+
+  el("form").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var all = el("ev-allday").checked;
+    var body = {
+      title: el("ev-title").value,
+      date: el("ev-date").value,
+      allDay: all,
+      location: el("ev-where").value,
+      notes: el("ev-notes").value
+    };
+    if (all) {
+      if (el("ev-enddate").value) { body.endDate = el("ev-enddate").value; }
+    } else {
+      body.startTime = el("ev-start").value;
+      body.endTime = el("ev-end").value;
+    }
+    if (editing) {
+      body.href = editing.calendarEvent;
+      send("/api/v1/calendar/events/update", body);
+    } else {
+      send("/api/v1/calendar/events", body);
+    }
+    selected = body.date;
+    month = body.date.slice(0, 7);
+  });
+
+  el("delete").addEventListener("click", function () {
+    if (!editing) { return; }
+    if (!confirm("Remove “" + editing.title + "” from the household calendar?")) { return; }
+    send("/api/v1/calendar/events/delete", { href: editing.calendarEvent, title: editing.title });
+  });
+
+  el("ev-allday").addEventListener("change", syncAllDay);
+  el("cancel").addEventListener("click", closeEditor);
+  el("add").addEventListener("click", function () { openEditor(null); });
+  el("prev").addEventListener("click", function () {
+    month = addDays(month + "-01", -1).slice(0, 7);
+    selected = month + "-01";
+    load();
+  });
+  el("next").addEventListener("click", function () {
+    month = addDays(month + "-28", 7).slice(0, 7);
+    selected = month + "-01";
+    load();
+  });
+  el("today").addEventListener("click", function () {
+    month = today.slice(0, 7);
+    selected = today;
+    load();
+  });
+
+  load();
+})();
+</script>

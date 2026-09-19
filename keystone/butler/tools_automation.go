@@ -33,6 +33,9 @@ import (
 type HouseholdAction struct {
 	Tool string
 	Tier string
+	// Usage is what the action takes, in plain words, when its executor
+	// describes itself; "" otherwise.
+	Usage string
 }
 
 // HouseholdVocabulary is the deployment-specific half of the authoring

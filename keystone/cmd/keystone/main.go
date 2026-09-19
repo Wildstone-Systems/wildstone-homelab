@@ -1064,6 +1064,8 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			}
 			return out, nil
 		}
+		// The calendar page writes through the very same upstream.
+		apiSrv.CalendarBook = calendarActions.Upstream
 		calendarActions.Handoff = func(member string) (domestic.CalendarHandoff, bool, error) {
 			h, ok, herr := apiSrv.CalendarHandoffFor(member)
 			if herr != nil || !ok {
@@ -1187,7 +1189,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 						tier = declared
 					}
 				}
-				v.Actions = append(v.Actions, butler.HouseholdAction{Tool: tool, Tier: tier})
+				v.Actions = append(v.Actions, butler.HouseholdAction{Tool: tool, Tier: tier, Usage: actions.Usage(tool)})
 			}
 			return v, nil
 		}
@@ -1311,6 +1313,9 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				DB:     db,
 				Ledger: ledger,
 				Log:    log,
+				// Every Butler is told the date and time in the
+				// household's zone; see butlerlive.clockLine.
+				Location: householdLoc,
 				// The provider is built from the MODEL the Butler was
 				// assigned, and from nothing else. There is no argument
 				// here that could come from a message: this function is

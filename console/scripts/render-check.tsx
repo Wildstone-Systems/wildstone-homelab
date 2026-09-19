@@ -68,7 +68,7 @@ const store = new Map<string, string>();
 import { Prerequisites } from "../src/views/Chat";
 import { Household, AddMember, EditMember } from "../src/views/Household";
 import { AttentionBanner, Butlers, NoButlers, NoMatches, RosterRow, needsAttention, reachLine, select, toolLine } from "../src/views/Butlers";
-import { Tool } from "../src/views/butlers/TabTools";
+import { HouseholdActions, Tool } from "../src/views/butlers/TabTools";
 import { ButlerPicker, matches, openingFor, preferred } from "../src/views/butler/picker";
 import { BlockedStrip } from "../src/views/Butler";
 import { withheldFrom } from "../src/views/butlers/TabReach";
@@ -1694,6 +1694,28 @@ const goneTool = renderToString(h(Tool, {
   busy: false, onSet: () => {},
 }));
 check("a tool nothing wired reads as unavailable", goneTool.includes("unavailable"), goneTool);
+
+// Household actions: a family Butler reaches the calendar through one
+// tool, and the Tools tab has to show what that tool reaches.
+const calendarActions = [
+  { tool: "calendar.get_agenda", tier: "read" },
+  { tool: "calendar.create_event", tier: "domestic" },
+  { tool: "calendar.delete_event", tier: "confirm" },
+  { tool: "chat-telegram-family.send", tier: "domestic" },
+];
+const actionGate = { name: "do_household_action", summary: "Runs one domestic action.", mutating: true, available: true };
+const reach = renderToString(h(HouseholdActions, { actions: calendarActions, gate: actionGate, gateOff: false }));
+check("every household action is listed by name", calendarActions.every((a) => reach.includes(a.tool)), reach);
+check("the actions are grouped by the package that brings them", reach.includes("2 packages") && reach.includes(">calendar<"), reach);
+check("a delete says it asks first", reach.includes("asks first"), reach);
+check("a read says it only looks", reach.includes("looks only"), reach);
+check("reachable actions name the tool they go through", reach.includes("do_household_action") && !reach.includes("not reachable"), reach);
+
+const actionsOff = renderToString(h(HouseholdActions, { actions: calendarActions, gate: actionGate, gateOff: true }));
+check("switching off do_household_action marks every action unreachable", actionsOff.includes("not reachable") && actionsOff.includes("switched off"), actionsOff);
+
+const none = renderToString(h(HouseholdActions, { actions: [], gate: actionGate, gateOff: false }));
+check("a Butler with no household actions draws no section", none === "", none);
 check("it says why rather than offering a switch", goneTool.includes("has not wired the source") && !goneTool.includes("tri"), goneTool);
 
 // A4's crossover rule, which the store also enforces with a trigger.
