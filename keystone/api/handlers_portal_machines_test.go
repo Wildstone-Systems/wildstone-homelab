@@ -179,3 +179,34 @@ func TestTheMachinesCardCarriesNoHostname(t *testing.T) {
 		}
 	}
 }
+
+// The card says what each percentage is OF — cores, memory and disk —
+// and an idle machine the agent MEASURED at 0% keeps its CPU reading.
+// Before the agent could say "measured", a quiet machine rounded to 0
+// and the card dropped its CPU line.
+func TestTheMachineCardSaysWhatEachReadingIsOf(t *testing.T) {
+	const gb = 1 << 30
+	a := &factsApplier{facts: &wsv1.HostFactsResult{
+		NumCpu: 8, CpuBusyPercent: 0, CpuMeasured: true,
+		MemTotalBytes: 16 * gb, MemAvailableBytes: 8 * gb,
+		RootDiskTotalBytes: 96 * gb, RootDiskFreeBytes: 60 * gb,
+	}}
+	h := machineHarness(t, a)
+	got := h.summary(t, "sandy").Machines.Stats
+	if !got.CPUKnown || got.CPU != 0 {
+		t.Errorf("a measured idle CPU = %d known=%v, want 0 and known", got.CPU, got.CPUKnown)
+	}
+	if got.Cores != 8 || got.MemoryTotal != 16*gb || got.DiskTotal != 96*gb {
+		t.Errorf("totals = %d cores, %d mem, %d disk", got.Cores, got.MemoryTotal, got.DiskTotal)
+	}
+}
+
+// From an agent too old to say it measured, zero is still "not
+// measured": never an idle bar the machine did not report.
+func TestAnOlderAgentsZeroCPUIsStillUnknown(t *testing.T) {
+	a := &factsApplier{facts: &wsv1.HostFactsResult{NumCpu: 4, CpuBusyPercent: 0, MemTotalBytes: 1 << 30, MemAvailableBytes: 1 << 29}}
+	h := machineHarness(t, a)
+	if got := h.summary(t, "sandy").Machines.Stats; got.CPUKnown {
+		t.Errorf("an unmeasured zero was taken as a reading: %+v", got)
+	}
+}

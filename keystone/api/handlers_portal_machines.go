@@ -48,6 +48,11 @@ type machineStats struct {
 	MemKnown  bool `json:"memoryKnown"`
 	Disk      int  `json:"disk"`
 	DiskKnown bool `json:"diskKnown"`
+	// What each percentage is OF: "42%" alone does not say whether the
+	// machine has 4 GB or 64. Zero when the agent did not report it.
+	Cores       int    `json:"cores,omitempty"`
+	MemoryTotal uint64 `json:"memoryTotalBytes,omitempty"`
+	DiskTotal   uint64 `json:"diskTotalBytes,omitempty"`
 	// Node is not sent to the household surface — §7 gives that card no
 	// hostnames — but it is kept here so the cache can tell two
 	// machines apart.
@@ -101,8 +106,12 @@ func (s *Server) machineReadings(ctx context.Context, node string) (machineStats
 		return machineStats{}, false
 	}
 
-	got := machineStats{node: node}
-	if p := facts.GetCpuBusyPercent(); p > 0 {
+	got := machineStats{node: node, Cores: int(facts.GetNumCpu()),
+		MemoryTotal: facts.GetMemTotalBytes(), DiskTotal: facts.GetRootDiskTotalBytes()}
+	// A measured 0% is a reading — an idle machine — and an agent that
+	// says so is believed. From an agent too old to say, zero still means
+	// "not measured" (wsv1.HostFactsResult.cpu_measured).
+	if p := facts.GetCpuBusyPercent(); p > 0 || facts.GetCpuMeasured() {
 		got.CPU, got.CPUKnown = int(p), true
 	}
 	if total, avail := facts.GetMemTotalBytes(), facts.GetMemAvailableBytes(); total > 0 && avail > 0 && avail <= total {
