@@ -132,7 +132,10 @@ func commitmentAsks(st upkeep.Standing, may bool, units map[string]string) ([]ne
 	// card asks for both; only the first kind blocks the write, which is
 	// why a household that ignores the box can still answer the item.
 	var needs []needsYouMeter
-	for _, meter := range append(upkeep.Missing(st, nil), upkeep.Wanted(st, nil)...) {
+	for _, meter := range upkeep.Missing(st, nil) {
+		needs = append(needs, needsYouMeter{Meter: meter, Unit: units[meter], Required: true})
+	}
+	for _, meter := range upkeep.Wanted(st, nil) {
 		needs = append(needs, needsYouMeter{Meter: meter, Unit: units[meter]})
 	}
 	// Saving the number without closing anything is its own answer, and

@@ -55,6 +55,15 @@ type authored struct {
 	Put     []resource.Resource
 	Delete  []plan.DeletionRef
 	Summary string
+	// BasedOn is the Statefile head this change was computed against —
+	// `basedOnHead(r)`, the head the portal read the member's view of
+	// the house at. Apply refuses to commit if the head has moved since.
+	//
+	// There is no "unset" value. "" is what Head() reports for a
+	// household whose Statefile has no commits yet, so treating it as
+	// "skip the check" would turn the very first race into the silent
+	// overwrite this field exists to stop.
+	BasedOn string
 }
 
 // apply runs the household's change through the same checks a proposal
@@ -143,9 +152,26 @@ func (s *Server) applyAuthored(member string, ch authored) (int, error) {
 		}
 		docs = append(docs, string(doc))
 	}
+	// NOBODY WAITS, AND NOBODY LOSES A WRITE SILENTLY. Dropping the
+	// approval step dropped the check that came with it: the Plans path
+	// refuses to commit a plan whose Statefile moved since it was
+	// computed, and this path had nothing. Two members editing the same
+	// commitment both read, both wrote, and whichever landed last
+	// overwrote the other — with a 200 for the one whose change
+	// vanished.
+	//
+	// This is optimistic rather than a lock: the window narrows from the
+	// whole request to these few statements, and a caller who loses is
+	// told to look and try again rather than told they succeeded. A lock
+	// over the Statefile is the real answer and is not this PR's to
+	// introduce.
 	head, err := s.State.Head()
 	if err != nil {
 		return http.StatusInternalServerError, err
+	}
+	if head != ch.BasedOn {
+		return http.StatusConflict, fmt.Errorf(
+			"somebody else changed what the house tracks while you were editing; take another look and try again")
 	}
 	stored, err := json.Marshal(storedProposal{
 		BasedOnHead: head, Summary: ch.Summary,
@@ -382,6 +408,7 @@ func (s *Server) homeTrack(_ http.ResponseWriter, r *http.Request, member string
 			},
 		}},
 		Summary: member + " started tracking " + req.Meter.Description,
+		BasedOn: basedOnHead(r),
 	}
 	var commitmentName string
 	if req.Commitment != nil {
@@ -426,6 +453,7 @@ func (s *Server) homeAddCommitment(_ http.ResponseWriter, r *http.Request, membe
 	if code, err := s.applyAuthored(member, authored{
 		Put:     []resource.Resource{res},
 		Summary: member + " added " + f.Description,
+		BasedOn: basedOnHead(r),
 	}); err != nil {
 		return nil, code, err
 	}
@@ -568,6 +596,7 @@ func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, memb
 	}
 	if code, err := s.applyAuthored(member, authored{
 		Put: []resource.Resource{res}, Summary: member + " changed " + f.Description,
+		BasedOn: basedOnHead(r),
 	}); err != nil {
 		return nil, code, err
 	}
@@ -593,6 +622,7 @@ func (s *Server) homeRemoveCommitment(_ http.ResponseWriter, r *http.Request, me
 	if code, err := s.applyAuthored(member, authored{
 		Delete:  []plan.DeletionRef{{Kind: string(resource.KindCommitment), Name: name}},
 		Summary: member + " stopped tracking " + st.Description,
+		BasedOn: basedOnHead(r),
 	}); err != nil {
 		return nil, code, err
 	}
@@ -681,6 +711,7 @@ func (s *Server) homeRemoveMeter(_ http.ResponseWriter, r *http.Request, member 
 	if code, err := s.applyAuthored(member, authored{
 		Delete:  []plan.DeletionRef{{Kind: string(resource.KindMeter), Name: name}},
 		Summary: member + " stopped keeping " + found.Meter.Description,
+		BasedOn: basedOnHead(r),
 	}); err != nil {
 		return nil, code, err
 	}

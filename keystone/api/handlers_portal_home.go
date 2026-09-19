@@ -180,13 +180,17 @@ type needsYouItem struct {
 // meter, in the order they were first asked for.
 func distinctNeeds(items []needsYouItem) []needsYouMeter {
 	var out []needsYouMeter
-	seen := map[string]bool{}
+	seen := map[string]int{}
 	for _, it := range items {
 		for _, n := range it.Needs {
-			if seen[n.Meter] {
+			if i, ok := seen[n.Meter]; ok {
+				// One box, and it is required if ANYTHING here needs
+				// it: the card's copy only decides how the box looks.
+				// What each answer insists on is that item's own Needs.
+				out[i].Required = out[i].Required || n.Required
 				continue
 			}
-			seen[n.Meter] = true
+			seen[n.Meter] = len(out)
 			out = append(out, n)
 		}
 	}
@@ -197,6 +201,14 @@ func distinctNeeds(items []needsYouItem) []needsYouMeter {
 type needsYouMeter struct {
 	Meter string `json:"meter"`
 	Unit  string `json:"unit,omitempty"`
+	// Required is whether the answer is REFUSED without this number, as
+	// opposed to merely being better with it. A8 is three-way — typed,
+	// approximated from a stale reading, or refused — and the card has
+	// to carry that distinction or it re-collapses it to two: the first
+	// version greyed out Done until every box was full, so a household
+	// that could not read the filter hours could not tick off the oil
+	// change either, on a commitment the server would have accepted.
+	Required bool `json:"required,omitempty"`
 }
 
 // needsYouAsk is one answer a member can give from the card.

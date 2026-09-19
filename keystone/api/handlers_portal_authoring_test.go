@@ -619,3 +619,71 @@ func TestANoteOnACompletionIsActuallyRecorded(t *testing.T) {
 		t.Errorf("note = %q — stored, typed, rendered and never written", page.Cycles[0].Note)
 	}
 }
+
+// A write that lost a race is refused, not silently applied.
+//
+// Dropping the approval step dropped the check that came with it: the
+// Plans path refuses a plan whose Statefile moved since it was
+// computed, and this path had nothing. Two members editing the same
+// commitment both read, both wrote, and whichever landed last
+// overwrote the other — with a 200 for the one whose change vanished.
+func TestAWriteThatLostARaceIsRefusedRatherThanSilentlyWinning(t *testing.T) {
+	h := commitmentHarness(t)
+	h.declareCommitment(t, "filter", resource.CommitmentSpec{
+		Description: "Furnace filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: "2024-01-01",
+		Due:    []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "3mo", Lead: "14d"}},
+	}, "household")
+
+	// Sandy's edit is computed against the head as it is now.
+	basedOn, err := h.s.State.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mika's lands first, moving the head.
+	if code, _ := h.authored(t, http.MethodPut, "/api/v1/home/commitments/filter", "mika", map[string]any{
+		"description": "Furnace filter (Mika)", "every": "3mo", "lead": "14d",
+		"rollover": resource.RolloverFromCompletion,
+	}); code != http.StatusOK {
+		t.Fatalf("the first edit did not land: %d", code)
+	}
+	moved, err := h.s.State.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved == basedOn {
+		t.Fatal("the head did not move, so this test proves nothing")
+	}
+	// Sandy's now conflicts. It must be refused rather than overwrite.
+	code, err := h.s.applyAuthored("sandy", authored{
+		Put: []resource.Resource{{
+			ApiVersion: resource.ApiVersion, Kind: resource.KindCommitment,
+			Metadata: resource.Metadata{Name: "filter", Owner: "household"},
+			Commitment: &resource.CommitmentSpec{
+				Description: "Furnace filter (Sandy)", Rollover: resource.RolloverFromCompletion,
+				Anchor: "2024-01-01",
+				Due:    []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "6mo", Lead: "14d"}},
+			},
+		}},
+		Summary: "sandy's edit",
+		BasedOn: basedOn,
+	})
+	if code != http.StatusConflict || err == nil {
+		t.Fatalf("a losing write gave (%d, %v), want 409 — the member whose change vanished "+
+			"should not be told it worked", code, err)
+	}
+	// And Mika's is still what is there.
+	current, lerr := h.s.State.Load()
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	for _, res := range current {
+		if res.Kind == resource.KindCommitment && res.Metadata.Name == "filter" {
+			if res.Commitment.Description != "Furnace filter (Mika)" {
+				t.Errorf("description = %q, want the write that won", res.Commitment.Description)
+			}
+			return
+		}
+	}
+	t.Fatal("the commitment vanished")
+}

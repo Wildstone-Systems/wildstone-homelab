@@ -563,6 +563,51 @@ func TestTheNeedsCardCanAnswerACommitmentAndNotOnlyANotice(t *testing.T) {
 	}
 }
 
+// The card collects two kinds of number and must not treat them alike.
+//
+// A8 is three-way — a number typed, a number approximated from a
+// reading too old to rely on, or a refusal — and the first version of
+// the answer row collapsed it back to two: it required EVERY box on
+// the commitment before it would post. So a household that knew the
+// odometer but not the filter hours could not tick off the oil change,
+// on a commitment the server would have accepted with the odometer
+// alone. The affordance was stricter than the rule it was meant to
+// mirror, which is the same failure as offering one the rule refuses,
+// pointed the other way.
+//
+// And the answer has somewhere to say why. The ledger has carried a
+// note since migration 0050 and nothing in the household's reach could
+// write one: the column existed and only the engine could fill it.
+func TestAnAnswerBlocksOnlyOnTheNumbersItCannotBeGivenWithout(t *testing.T) {
+	body, ok := Page("home")
+	if !ok {
+		t.Fatal("home is not served")
+	}
+	page := string(body)
+
+	for _, want := range []struct{ frag, why string }{
+		{"n.required", "the answer row does not read which numbers actually block it, " +
+			"so an approximable one is being demanded like a missing one"},
+		{"if (n.required) { missing.push(n.meter); }",
+			"an empty box refuses the answer whether or not the server would have"},
+		{"function noteBox(", "there is no way to say anything alongside an answer"},
+		{"body.note = typed", "what the note box collects never reaches the write"},
+		{"row.appendChild(noteWanted)", "the note box is built and never rendered"},
+	} {
+		if !strings.Contains(page, want.frag) {
+			t.Errorf("home is missing %q: %s", want.frag, want.why)
+		}
+	}
+
+	// The optional box is still SENT when it was filled in. Not
+	// blocking on a number is not the same as discarding it: a typed
+	// odometer is what the next cycle gets measured from, and dropping
+	// it would make every answer given with one start from an estimate.
+	if !strings.Contains(page, "meters[n.meter] = v;") {
+		t.Error("home does not submit a number that was typed into an optional box")
+	}
+}
+
 // browserGlobals are the things a page may call without defining: the
 // platform. Everything else a page calls, it must define.
 //
@@ -806,14 +851,25 @@ func TestNoPageHelperIsShadowedByALocal(t *testing.T) {
 					"like working code", name, m[1], m[1])
 			}
 		}
-		// The same for parameters, which is how the first one happened.
+		// The same for parameters, which is how the first one happened —
+		// and for EVERY way a parameter can be written. The first draft
+		// of this loop read only `function (...)` lists, so
+		// `.forEach(mine => ...)` beside `function mine(...)` would have
+		// passed undetected: the exact class the guard exists for,
+		// sailing through the guard. The "defined" half above already
+		// reads both forms; this half now matches it.
 		params := map[string]bool{}
-		for _, m := range jsFuncParams.FindAllStringSubmatch(src, -1) {
-			for _, p := range strings.Split(m[1], ",") {
-				if p = strings.TrimSpace(p); p != "" {
-					params[p] = true
+		for _, re := range []*regexp.Regexp{jsFuncParams, jsArrowParams} {
+			for _, m := range re.FindAllStringSubmatch(src, -1) {
+				for _, p := range strings.Split(m[1], ",") {
+					if p = strings.TrimSpace(p); p != "" {
+						params[p] = true
+					}
 				}
 			}
+		}
+		for _, m := range jsArrowOne.FindAllStringSubmatch(src, -1) {
+			params[m[2]] = true
 		}
 		for p := range params {
 			if helpers[p] && !reported[p] {

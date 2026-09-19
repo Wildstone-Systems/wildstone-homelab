@@ -743,13 +743,15 @@
         row = make("div", "asks indent");
         var dateWanted = wantsBooking(i.asks) ? dateBox() : null;
         if (dateWanted) { row.appendChild(dateWanted); }
+        var noteWanted = noteBox();
+        row.appendChild(noteWanted);
         // Each answer submits only the numbers ITS OWN commitment
         // measures against, out of the boxes the card collected. A
         // completion's positions are what the next cycle is measured
         // from, so the water filter has no business on the truck's oil.
         i.asks.forEach(function (a, n) {
           if (a.verb === "reading") { return; }
-          row.appendChild(answerBtn(i.ref, a, boxesFor(boxes, i.needs), dateWanted,
+          row.appendChild(answerBtn(i.ref, a, boxesFor(boxes, i.needs), dateWanted, noteWanted,
             n === 0 ? "hbtn hbtn-primary" : "hbtn hbtn-secondary"));
         });
       }
@@ -807,6 +809,22 @@
     return box;
   }
 
+  // noteBox is the sentence that goes with the answer: "used the cheap
+  // filter", "shop said the rear pads are next". The ledger has carried
+  // a note since 0050 and nothing could put one there — the column was
+  // written by the engine and reachable by nobody, which is a record
+  // the household cannot add to about their own house.
+  //
+  // Optional, always. An answer with no note is the normal answer.
+  function noteBox() {
+    var box = make("input", "hinput grow");
+    box.type = "text";
+    box.maxLength = 500;
+    box.placeholder = "Add a note (optional)";
+    box.setAttribute("aria-label", "A note to keep with this answer");
+    return box;
+  }
+
   function dateBox() {
     var box = make("input", "hinput");
     box.type = "date";
@@ -835,9 +853,11 @@
   // shadowed this function and every answer button threw. Second time
   // on this page; the class now has a test.
   function boxesFor(boxes, needs) {
-    var out = {};
+    var out = [];
     (needs || []).forEach(function (n) {
-      if (boxes[n.meter]) { out[n.meter] = boxes[n.meter]; }
+      if (boxes[n.meter]) {
+        out.push({ meter: n.meter, input: boxes[n.meter], required: !!n.required });
+      }
     });
     return out;
   }
@@ -876,15 +896,24 @@
   // answerBtn records one answer to a commitment: a completion, a
   // waive, or an appointment. The verb IS the route's last segment, so
   // the page never holds a second list of what the answers are called.
-  function answerBtn(ref, ask, boxes, dateInput, cls) {
+  function answerBtn(ref, ask, needed, dateInput, noteInput, cls) {
     var b = make("button", cls, ask.label);
     b.type = "button";
     b.addEventListener("click", function () {
+      // ONLY WHAT THE WRITE PATH WOULD REFUSE WITHOUT. A8 is three-way:
+      // a number typed, a number approximated from a reading too old to
+      // rely on, or a refusal. The server marks which needs are which,
+      // and insisting on all of them here would turn "we can work this
+      // one out" into "you cannot answer this" — blocking a completion
+      // the server was willing to accept.
       var meters = {}, missing = [];
-      Object.keys(boxes).forEach(function (name) {
-        var v = parseFloat(boxes[name].value);
-        if (isNaN(v) || v < 0) { missing.push(name); return; }
-        meters[name] = v;
+      needed.forEach(function (n) {
+        var v = parseFloat(n.input.value);
+        if (isNaN(v) || v < 0) {
+          if (n.required) { missing.push(n.meter); }
+          return;
+        }
+        meters[n.meter] = v;
       });
       if (missing.length) {
         answerFailed(b, "what does " + missing.join(" and ") + " say?");
@@ -892,6 +921,8 @@
       }
       var body = {};
       if (Object.keys(meters).length) { body.meters = meters; }
+      var typed = noteInput && noteInput.value.trim();
+      if (typed) { body.note = typed; }
       if (ask.verb === "booked") {
         var at = endOfDay(dateInput && dateInput.value);
         if (!at) {

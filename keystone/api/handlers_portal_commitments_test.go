@@ -801,3 +801,103 @@ func TestACompletionRecordsOnlyItsOwnMeters(t *testing.T) {
 		t.Errorf("positions = %+v, want the odometer", done[0].Positions)
 	}
 }
+
+// The card has to tell the two kinds of number apart, because A8 does.
+//
+// A completion is three-way: a number typed, a number approximated from
+// a reading too old to rely on, or a refusal. The card collects boxes
+// for both of the first two and the page greys Done out until they are
+// all filled — so unless the card says WHICH ones actually block the
+// write, the page is stricter than the engine, and a household that can
+// answer is told it cannot.
+func TestTheCardSaysWhichNumbersActuallyBlockAnAnswer(t *testing.T) {
+	h := commitmentHarness(t)
+	for _, m := range []struct{ name, unit, stale string }{
+		{"f150-odometer", "miles", "24h"},
+		{"well-filter", "gallons", ""},
+	} {
+		if err := h.s.State.Put(resource.Resource{
+			ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+			Metadata: resource.Metadata{Name: m.name, Owner: "household"},
+			Meter:    &resource.MeterSpec{Description: m.name, Unit: m.unit, StaleAfter: m.stale},
+		}); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+	h.declareCommitment(t, "well-cartridge", resource.CommitmentSpec{
+		Description: "Well filter cartridge", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "well-filter", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+
+	// An odometer read two days ago, on a meter that goes stale after
+	// one. The engine will approximate from it rather than refuse.
+	if _, _, err := h.s.DB.AppendMeterReading(runtimedb.MeterReading{
+		Meter: "f150-odometer", Value: 84210, At: time.Now().Add(-48 * time.Hour),
+		RecordedBy: "mika", Source: runtimedb.ReadingByPerson}); err != nil {
+		t.Fatalf("AppendMeterReading: %v", err)
+	}
+
+	items := h.needsYou(t, "mika")
+	want := map[string]bool{"f150-odometer": false, "well-filter": true}
+	seen := map[string]bool{}
+	for _, ref := range []string{"f150-oil", "well-cartridge"} {
+		it, ok := commitmentItem(items, ref)
+		if !ok {
+			t.Fatalf("%s is not on the card", ref)
+		}
+		if len(it.Needs) != 1 {
+			t.Fatalf("%s asks for %+v, want one number", ref, it.Needs)
+		}
+		n := it.Needs[0]
+		seen[n.Meter] = true
+		if n.Required != want[n.Meter] {
+			t.Errorf("%s: %s required = %v, want %v — the page blocks on exactly this, "+
+				"so a stale-but-usable number reported as required grounds an answer "+
+				"the engine would have taken", ref, n.Meter, n.Required, want[n.Meter])
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("saw %v, want both meters", seen)
+	}
+
+	// And the engine agrees with what the card just said: the one marked
+	// optional closes with nothing typed.
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika",
+		nil); got != http.StatusCreated {
+		t.Errorf("status = %d, want 201: the card called this number optional", got)
+	}
+}
+
+// A note is the household's own words about what they did, and until
+// now nothing they could reach could write one.
+//
+// Migration 0050 added the column and the engine filled it on a
+// harvested completion. A member tapping Done had no way to say "used
+// the cheap filter" — the record existed and the people whose record it
+// is could not add to it.
+func TestTheWordsAMemberPutsWithAnAnswerAreKept(t *testing.T) {
+	h := commitmentHarness(t)
+	h.declareCommitment(t, "filter", resource.CommitmentSpec{
+		Description: "Furnace filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "3mo", Lead: "14d"}},
+	}, "household/mika")
+
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/filter/done", "mika",
+		map[string]any{"note": "used the cheap one, swap next time"}); got != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", got)
+	}
+	done, err := h.s.DB.ListCommitmentCompletions("filter")
+	if err != nil {
+		t.Fatalf("ListCommitmentCompletions: %v", err)
+	}
+	if len(done) != 1 || done[0].Note != "used the cheap one, swap next time" {
+		t.Errorf("completion = %+v, want the member's own sentence kept with it", done)
+	}
+}
