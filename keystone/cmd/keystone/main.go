@@ -1086,6 +1086,28 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		}
 		return out
 	}
+	// The household drop box's actions (packages/filedrop-wildstone).
+	//
+	// Wired here rather than at the gateway's construction because both
+	// its seams are the API server's methods, which is the same reason
+	// the chat executors are below — keystone/domestic learns neither
+	// the runtime DB nor the package format.
+	//
+	// UNCONDITIONAL REGISTRATION, GATED PER CALL. The storage root is a
+	// ConfigFile the capability renders, so it arrives in desired state
+	// weeks after this process started; reading it once here would pin
+	// the answer to whatever was true before the household installed
+	// anything. Enabled is the install gate (ADR-W026 A8's posture),
+	// and the domestic gateway's declaration check is in front of both.
+	if cat != nil {
+		filedrop := &domestic.Filedrop{
+			Settings: apiSrv.FiledropSettings,
+			Enabled:  func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.FiledropCapability) },
+		}
+		for _, e := range filedrop.Executors() {
+			actions.Register(e)
+		}
+	}
 	// Wire the chat delivery executors now that the API server exists:
 	// both seams are its methods, so keystone/domestic learns neither
 	// the runtime DB nor a chat vendor (ADR-W026 G6).
@@ -1280,7 +1302,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			// deployment has not installed will promise the household
 			// something that cannot happen (ADR-W026 A8).
 			for _, tool := range actions.Tools() {
-				if capName, _, ok := strings.Cut(tool, "."); ok && strings.HasPrefix(capName, "chat-") {
+				// filedrop is registered from the catalog too, and is
+				// gated on the install for the same reason: a Butler
+				// that lists "find_file" to a household with no drop
+				// box has promised them something that cannot happen.
+				if capName, _, ok := strings.Cut(tool, "."); ok &&
+					(strings.HasPrefix(capName, "chat-") || capName == domestic.FiledropCapability) {
 					on, cerr := apiSrv.CapabilityEnabled(capName)
 					if cerr != nil {
 						return v, cerr
@@ -1353,6 +1380,26 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		household := butler.HouseholdSeams{
 			Events:     api.HouseholdEventSeam(db, memberScoped),
 			Vocabulary: bgw.AutomationVocabulary,
+			// The Home page's four readings, for a member who is in a
+			// conversation rather than in front of the page
+			// (keystone/butler/tools_home.go). All four are reads of
+			// something KEYSTONE owns — the commitment pass, the
+			// household timeline rendered, the notices table, the node
+			// agent — which is why they are wired here rather than
+			// declared by a package: they work on a deployment with no
+			// capabilities installed at all.
+			//
+			// Wired unconditionally, for the reason RecordReading is:
+			// a reading a household has to switch on is a reading
+			// nobody switches on. Each seam still reports its own
+			// unavailability honestly, and an Owner can turn any of
+			// the tools off per agent through the ordinary control.
+			Upkeep: func(context.Context) ([]butler.CommitmentLine, error) {
+				return commitmentStandings{engine: upkeepEngine}.Describe()
+			},
+			Activity:      apiSrv.HouseholdActivitySeam(),
+			Notifications: apiSrv.HouseholdNotificationsSeam(),
+			Machines:      apiSrv.HouseholdMachinesSeam(),
 			// The chat door a meter reading may come through (ADR-W035
 			// A3), over the same store and the same refusals as the HTTP
 			// intake. Wired unconditionally: the tracker works with no

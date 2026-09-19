@@ -106,7 +106,23 @@ func TestHouseholdGatewayHoldsNoInfrastructure(t *testing.T) {
 	for i := 0; i < seamType.NumField(); i++ {
 		seams = append(seams, seamType.Field(i).Name)
 	}
-	want := []string{"Events", "Actions", "Vocabulary", "Memory", "RecordReading", "MaxContentBytes"}
+	// The four Home-page readings were added deliberately (tools_home.go):
+	// the Home page already answered "what needs me", "what happened",
+	// "what did I miss" and "are the machines all right" for a member
+	// looking at it, and a member in chat could get none of them. Each
+	// is a READ of something Keystone itself owns — the commitment pass,
+	// the household timeline rendered, the notices table, the node agent
+	// — which is why they are seams rather than agentTools on a package:
+	// they work on a deployment with no capabilities installed at all.
+	//
+	// None of them widens what an agent may DECIDE, which is the same
+	// line ADR-W035 A13 draws for the tracker. There is no tool here
+	// that closes a commitment, clears a notification, answers a
+	// question for somebody, or touches a machine.
+	want := []string{
+		"Events", "Actions", "Vocabulary", "Memory", "RecordReading",
+		"Upkeep", "Activity", "Notifications", "Machines", "MaxContentBytes",
+	}
 	if !reflect.DeepEqual(seams, want) {
 		t.Fatalf("HouseholdSeams fields = %v, want %v — a new seam is a new capability and needs its own decision", seams, want)
 	}

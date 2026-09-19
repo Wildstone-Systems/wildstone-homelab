@@ -26,7 +26,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: filedrop-wildstone
-  version: 1.0.1
+  version: 1.1.0
   capability: filedrop
   profile: wildstone
   # One drop box per household. A second profile would want the same
@@ -131,3 +131,43 @@ templates:
       upstream: "{{ .Params.keystone_addr }}"
       auth: authelia_oidc
       classification: family_private
+# The household actions this capability offers (ADR-W001, ADR-W024 A5).
+# The domestic gateway dispatches these and nothing else, at exactly
+# these tiers — a rule or a Butler naming anything else is refused
+# before any executor sees it. keystone/domestic.FiledropTools is the
+# other half of this list, and
+# TestFiledropToolsAreDeclaredByThePackage fails if the two ever drift:
+# a tool declared here with no executor is a promise the household is
+# told about and cannot have.
+#
+# THEY ARE ON THE MOMENT THIS CAPABILITY IS. Unlike the calendar's,
+# these need no second deployment step: the storage root is already in
+# the ConfigFile above, and Keystone reads it out of desired state — so
+# a household that installed the drop box can ask about it in chat the
+# same day.
+#
+# NOTHING HERE HANDS OVER BYTES, and the absence is the design rather
+# than a phase. There is no read-the-file tool and no upload tool: a
+# drop box holds the household's documents, and piping them through a
+# model's context is a disclosure nobody asked for. An agent can say
+# what is there, find it by name, tidy it up, and — with the person's
+# yes — remove it. Reading it is what the Files page is for.
+#
+# "me" is resolved from the session's member, never from a parameter,
+# so there is no spelling of "somebody else's private folder" even for
+# a model that wants one.
+agentTools:
+  - { name: list_recent, risk: read }
+  - { name: list_files, risk: read }
+  - { name: find_file, risk: read }
+  # Renaming is `domestic` and not `confirm`: the file is still there,
+  # under a name the same tool can put back.
+  - { name: rename_file, risk: domestic }
+  # Deleting asks first, and `confirm` is the tier that says so
+  # (ADR-W024 A5.1). A drop box holds the only copy of what people put
+  # in it. Two things follow: a rule firing at 3am cannot carry it at
+  # all, because there would be nobody to ask; and a person in chat
+  # gets a question naming the actual file — "Delete "receipt.pdf" from
+  # Shared (2.1 MB, added yesterday)?" — which they answer on the Home
+  # page. The yes is bound to THAT call, so it authorises nothing else.
+  - { name: delete_file, risk: confirm }
