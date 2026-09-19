@@ -32,8 +32,28 @@ jobs:
       #
       # Nothing may reuse this file between jobs, so deleting it is only
       # ever discarding a half-written download.
+      #
+      # THE PATH IS NOT $RUNNER_TEMP. The action resolves it with node's
+      # `os.tmpdir()`, which reads TMPDIR and falls back to /tmp — and
+      # this runner sets TMPDIR to its own `_tmp` while RUNNER_TEMP
+      # points at `_work/_temp`. A first attempt at this cleared
+      # RUNNER_TEMP, ran green as a step, and changed nothing. So ask
+      # node the same question the action asks, and only guess if node
+      # is somehow not on PATH.
       - name: clear a half-written gitleaks download from a killed job
-        run: rm -f "$RUNNER_TEMP/gitleaks.tmp"
+        shell: bash
+        run: |
+          set -u
+          tmp="${TMPDIR:-/tmp}"
+          if command -v node >/dev/null 2>&1; then
+            tmp="$(node -p 'require("os").tmpdir()')"
+          fi
+          for d in "$tmp" "$RUNNER_TEMP"; do
+            if [ -e "$d/gitleaks.tmp" ]; then
+              echo "removing stale $d/gitleaks.tmp"
+              rm -f "$d/gitleaks.tmp"
+            fi
+          done
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
