@@ -211,6 +211,9 @@ type householdEntry struct {
 	Handler   householdHandler
 	// GrantRequired: see toolEntry. No household tool sets it in v1.
 	GrantRequired bool
+	// OptIn: see toolEntry (ADR-W033 design §6.2). No household tool
+	// sets it in v1 either.
+	OptIn bool
 	// Describe is the self-capability variant (ADR-W030 P2): the one
 	// tool whose answer depends on the session's own constraints, kept
 	// out of the ordinary handler signature for the reason the operator

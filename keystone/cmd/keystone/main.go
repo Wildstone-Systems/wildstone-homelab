@@ -321,10 +321,15 @@ func agentToolSources(cat *catalog.Catalog) []domestic.AgentToolSource {
 			continue
 		}
 		tools := map[string]string{}
+		optIn := map[string]bool{}
 		for _, t := range p.AgentTools {
 			tools[t.Name] = t.Risk
+			if t.OptIn {
+				optIn[t.Name] = true
+			}
 		}
-		out = append(out, domestic.AgentToolSource{Capability: p.Metadata.Capability, Tools: tools})
+		out = append(out, domestic.AgentToolSource{
+			Capability: p.Metadata.Capability, Tools: tools, OptIn: optIn})
 	}
 	return out
 }

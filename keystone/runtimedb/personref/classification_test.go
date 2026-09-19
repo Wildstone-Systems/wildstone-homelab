@@ -46,6 +46,8 @@ var dismissed = map[string]string{
 	"service":             "names a capability ('photos') — a thing the household runs, not a party (design §4, slice 8)",
 	"ldap_group":          "names a DIRECTORY group — a set of people, which is not itself a party; who is in it lives in projected_memberships.person_id (design §4)",
 	"placed_at":           "a timestamp",
+	"assigned_at":         "a timestamp",
+	"since":               "a timestamp — when an agent became default-deny",
 	"effect":              "an enum: whether an entitlement allows or restricts",
 	"dormant_at":          "a timestamp",
 	"butler":              "names a Butler — an agent, which is a different axis from a Person (#201 Decision 5)",

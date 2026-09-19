@@ -378,6 +378,18 @@ type ExternalConfigDecl struct {
 type AgentToolSpec struct {
 	Name string `yaml:"name"`
 	Risk string `yaml:"risk"`
+	// OptIn marks an unusually consequential tool (ADR-W033 design
+	// §6.2): excluded from a service bundle and from a new Agent's
+	// defaults even when its class matches, and reached only by being
+	// named.
+	//
+	// Distinct from Risk, which says how careful the HOUSEHOLD must be
+	// about one call — whether it needs confirming. This says how a tool
+	// is handed out in the first place. A `confirm`-tier tool that every
+	// Agent has is ordinary; an opt-in tool nobody has until somebody
+	// says so is a different question, and collapsing them would mean
+	// raising a tool's risk tier silently narrowed who could hold it.
+	OptIn bool `yaml:"optIn,omitempty"`
 }
 
 // Package is the parsed, in-memory form of a Package document (ADR-W005

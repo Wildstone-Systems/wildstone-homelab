@@ -332,6 +332,15 @@ type ToolQuery struct {
 	// explicit, work-bound grant even when it is structurally present
 	// and not disabled.
 	GrantRequired bool
+	// Service is the capability the tool belongs to — ServiceSystem for
+	// Keystone's own. ToolClass is the class the TOOL requires. Both are
+	// what a bundle matches on (§6.3), and both are supplied by the
+	// gateway because only it knows which tool it registered and why.
+	Service   string
+	ToolClass string
+	// OptIn is the tool's own metadata (§6.2): excluded from bundles and
+	// from a new Agent's defaults, reachable only by being named.
+	OptIn bool
 	// TaskID scopes a task-bound grant; RoutineName a routine-bound one.
 	// Both may be empty, in which case no grant can apply.
 	TaskID      string

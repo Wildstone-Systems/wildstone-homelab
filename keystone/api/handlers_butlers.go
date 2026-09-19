@@ -123,6 +123,19 @@ func (s *Server) listButlers(_ *http.Request, _ principal.Identity) (any, int, e
 // bound — the per-Butler half is subtracted by the caller, from a read
 // it already has.
 func (s *Server) availableTools(class string, readOnly bool) map[string]bool {
+	set := map[string]bool{}
+	for _, t := range s.availableToolDetails(class, readOnly) {
+		if t.Available {
+			set[t.Name] = true
+		}
+	}
+	return set
+}
+
+// availableToolDetails is the same inventory with each tool's metadata
+// kept — which is what §6.4's default set needs, because "except opt-in
+// tools" cannot be answered from a list of names.
+func (s *Server) availableToolDetails(class string, readOnly bool) []butler.CapabilityTool {
 	var manifest butler.CapabilityManifest
 	switch class {
 	case runtimedb.AgentClassMember:
@@ -134,15 +147,46 @@ func (s *Server) availableTools(class string, readOnly bool) map[string]bool {
 		}
 		manifest = live.Scoped(nil).Capabilities(readOnly)
 	default:
-		return map[string]bool{}
+		return nil
 	}
-	set := map[string]bool{}
-	for _, tool := range manifest.Tools {
-		if tool.Available {
-			set[tool.Name] = true
+	return manifest.Tools
+}
+
+// seedAgentTools gives a newly created Agent its default tools and
+// enrolls it in the assigned-tools model (design §6.4).
+//
+// "A newly created Owner Agent receives all currently available Member
+// and Owner tools by default except opt-in tools. A Member Agent can
+// receive only Member tools." Both halves are read off the gateways, so
+// the default set is what this deployment actually wired rather than a
+// list somebody keeps in step.
+//
+// ASSIGNMENTS FIRST, GOVERNANCE LAST, and the order is the safety
+// argument: an Agent governed before its tools were written would be
+// default-deny with nothing assigned, so a failure between the two steps
+// would leave an Agent that can do nothing. The other way round, the
+// same failure leaves an ungoverned Agent with some assignments, which
+// behaves exactly as every pre-0059 Agent does and is harmless.
+func (s *Server) seedAgentTools(b runtimedb.Butler, by string) error {
+	classes := []string{runtimedb.AgentClassMember}
+	if b.AgentClass == runtimedb.AgentClassOwner {
+		classes = append(classes, runtimedb.AgentClassOwner)
+	}
+	inventory := s.ToolInventory
+	if inventory == nil {
+		inventory = s.availableToolDetails
+	}
+	for _, class := range classes {
+		for _, tool := range inventory(class, false) {
+			if !tool.Available || tool.OptIn {
+				continue
+			}
+			if err := s.DB.AssignTool(b.Seq, tool.Name, by); err != nil {
+				return err
+			}
 		}
 	}
-	return set
+	return s.DB.GovernAgent(b.Seq, by)
 }
 
 // createButler makes a new Butler.
@@ -191,6 +235,13 @@ func (s *Server) createButler(r *http.Request, id principal.Identity) (any, int,
 			return nil, http.StatusNotFound, err
 		}
 		return nil, http.StatusBadRequest, err
+	}
+	created, err := s.DB.GetButler(name)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if err := s.seedAgentTools(created, actingMember(id)); err != nil {
+		return nil, http.StatusInternalServerError, err
 	}
 	b, err := s.DB.GetButler(name)
 	if err != nil {
