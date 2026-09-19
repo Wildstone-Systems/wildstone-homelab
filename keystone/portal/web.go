@@ -3,6 +3,7 @@ package portal
 // The two surfaces as files a browser can be given.
 
 import (
+	"bytes"
 	"embed"
 	"net/http"
 	"path"
@@ -46,6 +47,33 @@ func Page(name string) ([]byte, bool) {
 // malicious page can put in front of a signed-in household member and
 // drive with their session. An empty list means nobody but this origin,
 // which is what an install with no dashboard should get.
+// themeMarker is where a page says the household's theme belongs.
+//
+// A marker in each page rather than "before </head>" found by search:
+// the pages are hand-written documents with inline <style> blocks of
+// their own, and the token block has to land AFTER the design system's
+// stylesheet link (so it wins on document order) and BEFORE the page's
+// own rules (so a page that sets a colour from a token reads the
+// themed one). Exactly one position satisfies both, and the page is the
+// only thing that knows where it is.
+const themeMarker = "<!--wildstone:theme-->"
+
+// InjectTheme puts a themed token block into a page at its marker.
+//
+// css is produced by keystone/theme, whose parser has already proved
+// every value in it is a #rrggbb colour — see the tests there. Nothing
+// a household can paste reaches this function as anything else, which
+// is what makes writing it into a <style> element safe. A page with no
+// marker is returned unchanged rather than patched somewhere else,
+// because a token block in the wrong place is worse than none.
+func InjectTheme(body []byte, css string) []byte {
+	if css == "" || !bytes.Contains(body, []byte(themeMarker)) {
+		return body
+	}
+	return bytes.Replace(body, []byte(themeMarker),
+		[]byte("<style>\n"+css+"</style>"), 1)
+}
+
 func WritePage(w http.ResponseWriter, body []byte, frameAncestors []string) {
 	ancestors := "'self'"
 	if len(frameAncestors) > 0 {
