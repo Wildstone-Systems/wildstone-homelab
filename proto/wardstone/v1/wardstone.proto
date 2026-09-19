@@ -637,6 +637,12 @@ message HostFactsResult {
   // a percentage, and dividing it by the core count produces a number
   // that looks like a utilisation and is not one.
   uint32 cpu_busy_percent = 10;
+  // cpu_measured says cpu_busy_percent is a reading, zero included. A
+  // quiet machine really is under 1% busy over the sample, which rounds
+  // to 0 and read as "not measured" — so the household's card lost its
+  // CPU line whenever the machine was idle. An agent from before this
+  // field never sets it; zero with it unset still means "not measured".
+  bool cpu_measured = 11;
 }
 
 message Health {}

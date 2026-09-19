@@ -3996,8 +3996,14 @@ type HostFactsResult struct {
 	// a percentage, and dividing it by the core count produces a number
 	// that looks like a utilisation and is not one.
 	CpuBusyPercent uint32 `protobuf:"varint,10,opt,name=cpu_busy_percent,json=cpuBusyPercent,proto3" json:"cpu_busy_percent,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// cpu_measured says cpu_busy_percent is a reading, zero included. A
+	// quiet machine really is under 1% busy over the sample, which rounds
+	// to 0 and read as "not measured" — so the household's card lost its
+	// CPU line whenever the machine was idle. An agent from before this
+	// field never sets it; zero with it unset still means "not measured".
+	CpuMeasured   bool `protobuf:"varint,11,opt,name=cpu_measured,json=cpuMeasured,proto3" json:"cpu_measured,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *HostFactsResult) Reset() {
@@ -4098,6 +4104,13 @@ func (x *HostFactsResult) GetCpuBusyPercent() uint32 {
 		return x.CpuBusyPercent
 	}
 	return 0
+}
+
+func (x *HostFactsResult) GetCpuMeasured() bool {
+	if x != nil {
+		return x.CpuMeasured
+	}
+	return false
 }
 
 type Health struct {
@@ -6133,7 +6146,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x15ReadManagedFileResult\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\fR\acontent\x12*\n" +
 	"\x11source_sha256_hex\x18\x02 \x01(\tR\x0fsourceSha256Hex\"\v\n" +
-	"\tHostFacts\"\xf9\x02\n" +
+	"\tHostFacts\"\x9c\x03\n" +
 	"\x0fHostFactsResult\x12\x1a\n" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x0e\n" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x16\n" +
@@ -6145,7 +6158,8 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\ragent_version\x18\b \x01(\tR\fagentVersion\x12.\n" +
 	"\x13mem_available_bytes\x18\t \x01(\x04R\x11memAvailableBytes\x12(\n" +
 	"\x10cpu_busy_percent\x18\n" +
-	" \x01(\rR\x0ecpuBusyPercent\"\b\n" +
+	" \x01(\rR\x0ecpuBusyPercent\x12!\n" +
+	"\fcpu_measured\x18\v \x01(\bR\vcpuMeasured\"\b\n" +
 	"\x06Health\"6\n" +
 	"\fHealthResult\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x16\n" +

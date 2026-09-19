@@ -233,6 +233,7 @@ func (s *Server) HouseholdMachinesSeam() func(context.Context) ([]butler.Machine
 			reading.CPU, reading.CPUKnown = stats.CPU, stats.CPUKnown
 			reading.Memory, reading.MemKnown = stats.Memory, stats.MemKnown
 			reading.Disk, reading.DiskKnown = stats.Disk, stats.DiskKnown
+			reading.Cores, reading.MemoryTotal, reading.DiskTotal = stats.Cores, stats.MemoryTotal, stats.DiskTotal
 			out = append(out, reading)
 		}
 		return out, nil
