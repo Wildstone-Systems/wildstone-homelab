@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChatsCircle, Prohibit } from "@phosphor-icons/react";
 import {
   api,
+  isPendingStepUp,
   ButlerRow,
   ChatBinding,
   ChatBot,
@@ -85,7 +86,11 @@ export function BotList({
 
 function BotRow({ bot, status, onChanged }: { bot: ChatBot; status?: ChatTransport; onChanged: () => void }) {
   const remove = useAction();
-  const [confirming, setConfirming] = useState(false);
+  // Back from confirming a password for exactly this removal: the final
+  // confirmation is already open, one click from done.
+  const [confirming, setConfirming] = useState(() =>
+    isPendingStepUp("POST", `/api/v1/connections/${encodeURIComponent(bot.capability)}/remove`),
+  );
   return (
     <div className="row">
       <span style={{ flex: 1 }}>

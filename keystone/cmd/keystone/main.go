@@ -921,6 +921,17 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	if err != nil {
 		return fmt.Errorf("-household-timezone %q: %w", householdCfg.Timezone, err)
 	}
+	// "Local" on a host whose clock is UTC is almost never the household's
+	// zone — servers and VMs run on UTC — and nothing else says so: the
+	// Butler is told UTC is the household's clock, and "3pm" lands five
+	// hours off for a family in Chicago. Said at every start until set.
+	if householdCfg.Timezone == "Local" {
+		if name, offset := time.Now().Zone(); offset == 0 {
+			log.Warn("the household timezone is this host's clock, which is UTC: times the household says "+
+				"(\"3pm\", \"tomorrow\") are read as UTC. Set -household-timezone to where the household lives",
+				"host_zone", name, "example", "-household-timezone America/Chicago")
+		}
+	}
 	// The calendar's household actions (ADR-W034 phase 4).
 	//
 	// Registered whenever a collection is configured, which is the human

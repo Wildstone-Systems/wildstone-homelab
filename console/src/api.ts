@@ -195,9 +195,38 @@ export class ApiError extends Error {
 
 // onStepUp is installed by the app shell: a consequential operation
 // refused for want of a fresh sign-in offers one (ADR-W033 A4.1).
-export let onStepUp: (url: string) => void = () => {};
-export function setOnStepUp(fn: (url: string) => void) {
+export let onStepUp: (url: string, method: string, path: string) => void = () => {};
+export function setOnStepUp(fn: (url: string, method: string, path: string) => void) {
   onStepUp = fn;
+}
+
+// The action a step-up interrupted, kept across the round trip to the
+// identity provider so the screen can put the person back at it — its
+// final confirmation open — rather than leave them to find the button
+// again (ADR-W033 A4.1: resumed by one click, never replayed).
+const STEPUP_PENDING_KEY = "wst.console.stepup-pending";
+
+export function rememberStepUp(method: string, path: string) {
+  sessionStorage.setItem(STEPUP_PENDING_KEY, JSON.stringify({ method, path }));
+}
+
+export function pendingStepUp(): { method: string; path: string } | null {
+  try {
+    return JSON.parse(sessionStorage.getItem(STEPUP_PENDING_KEY) ?? "null");
+  } catch {
+    return null;
+  }
+}
+
+// isPendingStepUp is whether this exact action is the one a step-up
+// interrupted.
+export function isPendingStepUp(method: string, path: string): boolean {
+  const p = pendingStepUp();
+  return p !== null && p.method === method && p.path === path;
+}
+
+export function clearStepUp() {
+  sessionStorage.removeItem(STEPUP_PENDING_KEY);
 }
 
 // onUnauthorized is installed by the app shell: a 401 anywhere returns
@@ -245,7 +274,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     // A4.1). The shell offers the step-up; the caller still gets the
     // error, so nothing on the screen pretends the operation happened.
     if (res.status === 403 && failed.stepUp) {
-      onStepUp(failed.stepUp);
+      onStepUp(failed.stepUp, method, path);
     }
     throw new ApiError(
       res.status,
@@ -253,6 +282,10 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
       failed.sessionId,
       failed.proposalErrors,
     );
+  }
+  // The interrupted action has now been done.
+  if (isPendingStepUp(method, path)) {
+    clearStepUp();
   }
   return data as T;
 }

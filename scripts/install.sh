@@ -377,6 +377,41 @@ step_admin() {
   answers_save ADMIN_USER "$u"   # the NAME is a choice; the password is not stored
 }
 
+# Step 5b: where the household lives, in time (ADR-W033; #269).
+#
+# Asked, not assumed. Servers and VMs run on UTC, and Keystone's default
+# is the host's clock — so without this a family in Chicago had its
+# agent told it was UTC, and "3pm" put the Fish Fry on the calendar at
+# 10am. The host's zone is offered when it is not UTC, since then
+# somebody set it on purpose; otherwise the question has no default.
+HOUSEHOLD_TZ=""
+step_timezone() {
+  if [ -n "${HOUSEHOLD_TZ_ANSWERED:-}" ]; then
+    HOUSEHOLD_TZ="$HOUSEHOLD_TZ_ANSWERED"
+    log "household timezone chosen previously: $HOUSEHOLD_TZ"
+    return 0
+  fi
+  local guess="" tz
+  guess="$(timedatectl show -p Timezone --value 2>/dev/null || true)"
+  case "$guess" in UTC|Etc/UTC|Etc/Universal|"") guess="" ;; esac
+  echo
+  echo "Which time zone does your household live in? Your agents read"
+  echo "\"3pm\" and \"tomorrow\" in this zone. Examples: America/Chicago,"
+  echo "Europe/London, Australia/Sydney."
+  while :; do
+    if [ -n "$guess" ]; then printf 'Time zone [%s]: ' "$guess" >&2; else printf 'Time zone: ' >&2; fi
+    read -r tz </dev/tty || tz=""
+    tz="${tz:-$guess}"
+    # A zone name is a path under the zoneinfo database, and nothing else:
+    # no leading slash, no "..", and a file that exists.
+    case "$tz" in ""|/*|*..*|*[!A-Za-z0-9/_+-]*) echo "a zone name like America/Chicago, please" >&2; continue ;; esac
+    if [ -f "/usr/share/zoneinfo/$tz" ]; then break; fi
+    echo "no time zone called '$tz' on this machine" >&2
+  done
+  HOUSEHOLD_TZ="$tz"
+  answers_save HOUSEHOLD_TZ_ANSWERED "$tz"
+}
+
 # Step 6: what to install.
 #
 # The catalog decides the list, not this script — a package added to the
@@ -411,6 +446,7 @@ step_summary() {
   echo "  - install the Wildstone control plane and node agent"
   [ "${WANT_TAILSCALE:-no}" = yes ] && echo "  - serve over your tailnet, with a certificate your browser trusts"
   echo "  - create your account '$ADMIN_USER'"
+  [ -n "${HOUSEHOLD_TZ:-}" ] && echo "  - keep the household's time in $HOUSEHOLD_TZ"
   # The household homepage needs the proxy, so it is only promised when
   # there will be one.
   local home=""
@@ -532,6 +568,7 @@ if [ "$INTERACTIVE" = 1 ]; then
   step_docker
   step_tailscale
   step_admin
+  step_timezone
   step_services
   step_summary
 elif [ -n "$TAILSCALE_AUTHKEY" ]; then
@@ -1328,6 +1365,10 @@ if [ "$ROLE" = keystone ]; then
   # flag package takes the LAST occurrence and reports nothing, so the
   # override would not even announce itself — the audit instance would
   # simply come up on the wrong interface.
+  if [ -n "${HOUSEHOLD_TZ:-}" ] && ! keystone_arg_named -household-timezone; then
+    KEYSTONE_ARGS="$KEYSTONE_ARGS -household-timezone $HOUSEHOLD_TZ"
+    KEYSTONE_ARGS_SET=1
+  fi
   if tailscale ip -4 >/dev/null 2>&1 && ! keystone_arg_named -api-listen; then
     KEYSTONE_ARGS="$KEYSTONE_ARGS -api-listen 0.0.0.0:9441"
     KEYSTONE_ARGS_SET=1
