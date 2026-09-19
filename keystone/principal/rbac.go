@@ -48,6 +48,10 @@ var roleVerbs = map[runtimedb.Role]map[Verb]bool{
 		VerbRead: true, VerbPropose: true, VerbApprove: true, VerbManage: true,
 		VerbEmit: true, VerbConverse: true,
 	},
+	// A MACHINE credential, not an Owner and not an Owner Agent. See the
+	// constant's own comment in runtimedb/principals.go for the three
+	// axes this is not: nothing here says anything about what a person
+	// may do, or about which gateway an Agent reaches.
 	runtimedb.RoleOperator: {
 		VerbRead: true, VerbPropose: true, VerbApprove: true, VerbConverse: true,
 	},

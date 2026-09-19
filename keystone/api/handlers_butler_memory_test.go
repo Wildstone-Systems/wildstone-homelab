@@ -219,7 +219,7 @@ func TestTheMemoryViewShowsNamedButlerRecords(t *testing.T) {
 	}
 	if _, err := h.s.DB.CreateButler(runtimedb.Butler{
 		Name: "health", Surface: runtimedb.ButlerSurfaceFamily,
-		Profile: runtimedb.ProfileHousehold, Model: "kitchen-box",
+		AgentClass: runtimedb.AgentClassMember, Model: "kitchen-box",
 	}, "root-admin"); err != nil {
 		t.Fatal(err)
 	}

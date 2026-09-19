@@ -130,7 +130,7 @@ func TestWithdrawnAuthorityBlocksContinuation(t *testing.T) {
 	t.Run("expired deadline", func(t *testing.T) {
 		id, err := db.InsertButlerTask(runtimedb.ButlerTask{
 			Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
-			Surface: runtimedb.ButlerSurfaceAdmin, Profile: "operator",
+			Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: "operator",
 			Audience:  runtimedb.ButlerAudiencePrivate,
 			Objective: "slow question", CompletionCriteria: "answered",
 			// Waiting does not extend the clock: the absolute deadline

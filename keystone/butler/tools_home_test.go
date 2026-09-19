@@ -274,3 +274,20 @@ func TestActivityIsBounded(t *testing.T) {
 		t.Errorf("an unspecified limit reached the seam as %d, want %d", asked[1], defaultActivityLines)
 	}
 }
+
+// Joan says what a reading is a share of, and keeps "can't read" apart
+// from "idle" while still naming the total.
+func TestMachineReadingsSayWhatTheyAreOf(t *testing.T) {
+	if got := percentOf("memory", 42, true, SizeGB(16<<30)); got != "memory 42% of 16 GB" {
+		t.Errorf("known = %q", got)
+	}
+	if got := percentOf("memory", 0, false, SizeGB(4<<30)); got != "memory can't read (4.0 GB)" {
+		t.Errorf("unknown = %q", got)
+	}
+	if got := percentOf("processor", 3, true, "8 cores"); got != "processor 3% of 8 cores" {
+		t.Errorf("cpu = %q", got)
+	}
+	if got := percentOf("disk", 36, true, ""); got != "disk 36%" {
+		t.Errorf("no total = %q", got)
+	}
+}

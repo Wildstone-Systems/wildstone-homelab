@@ -143,7 +143,7 @@ func (ts *countingToolset) SystemPrompt() string { return "operator surface" }
 
 func (ts *countingToolset) Capabilities(bool) butler.CapabilityManifest {
 	return butler.CapabilityManifest{
-		Profile: butler.ProfileOperator, ModelVerdict: butler.VerdictFull,
+		AgentClass: butler.AgentClassOwner, ModelVerdict: butler.VerdictFull,
 		Tools: []butler.CapabilityTool{{Name: "get_health", Available: true}},
 	}
 }
@@ -209,7 +209,7 @@ func newFixture(t *testing.T) *fixture {
 	} {
 		if _, err := db.CreateButler(runtimedb.Butler{
 			Name: b.name, Directive: "look after the " + b.name + " things",
-			Surface: runtimedb.ButlerSurfaceAdmin, Profile: runtimedb.ProfileOperator,
+			Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: runtimedb.AgentClassOwner,
 			Model: b.route,
 		}, "mika"); err != nil {
 			t.Fatalf("CreateButler(%s): %v", b.name, err)
@@ -633,7 +633,7 @@ func TestAnUnpinnedCallerReachesEitherSurface(t *testing.T) {
 	f := newFixture(t)
 	if _, err := f.db.CreateButler(runtimedb.Butler{
 		Name: "sandy", Directive: "look after the household things",
-		Surface: runtimedb.ButlerSurfaceFamily, Profile: runtimedb.ProfileHousehold,
+		Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember,
 		Model: "kitchen-box",
 	}, "mika"); err != nil {
 		t.Fatalf("CreateButler(sandy): %v", err)

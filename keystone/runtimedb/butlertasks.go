@@ -19,7 +19,7 @@ package runtimedb
 //     refuses the transition if there is none — so a crash between the
 //     two leaves work to finish, never a lie about finished work.
 //   - Authority metadata is mandatory. A task with no owner, surface,
-//     profile or audience cannot be permission-filtered later, so it is
+//     class or audience cannot be permission-filtered later, so it is
 //     refused at write time.
 //
 // This file stores work; it does not run it. The runner refactor is P3.
@@ -114,7 +114,7 @@ const (
 // ButlerTask is one durable unit of work.
 //
 // Author never changes; Owner does, when offboarding transfers a shared
-// task to the administrator. Surface and Profile are snapshotted at
+// task to the administrator. Surface and AgentClass are snapshotted at
 // admission: a resume rechecks authority against what the task claimed,
 // which is only meaningful if the claim was written down.
 type ButlerTask struct {
@@ -128,9 +128,9 @@ type ButlerTask struct {
 	Author string `json:"author"`
 	Owner  string `json:"owner"`
 
-	Surface  ButlerSurface      `json:"surface"`
-	Profile  string             `json:"profile"`
-	Audience ButlerTaskAudience `json:"audience"`
+	Surface    ButlerSurface      `json:"surface"`
+	AgentClass string             `json:"agentClass"`
+	Audience   ButlerTaskAudience `json:"audience"`
 
 	// Session and OriginTurn point at the existing conversation store.
 	// Nothing in butler_sessions is rewritten to carry a task id: the
@@ -178,7 +178,7 @@ func parseButlerTaskID(id string) (int64, error) {
 // InsertButlerTask records a new task and returns its "bt-<seq>" id.
 //
 // It refuses a task missing any of the fields a later permission check
-// needs — owner, author, surface, profile, audience, objective — because
+// needs — owner, author, surface, class, audience, objective — because
 // the alternative is a row that cannot be filtered, shown, or resumed.
 // State is always pending: a task that begins life finished is the
 // partial-write failure this schema exists to prevent.
@@ -192,8 +192,8 @@ func (db *DB) InsertButlerTask(t ButlerTask) (string, error) {
 	if !ValidButlerSurface(t.Surface) {
 		return "", fmt.Errorf("runtimedb: butler task requires a valid surface (admin|family), got %q (ADR-W026 A1)", t.Surface)
 	}
-	if t.Profile == "" {
-		return "", fmt.Errorf("runtimedb: butler task requires a profile (ADR-W030 A1)")
+	if t.AgentClass == "" {
+		return "", fmt.Errorf("runtimedb: butler task requires an agent class (ADR-W030 A1, design §5.2)")
 	}
 	// See validateMemory: named only, with the foreign key as backstop.
 	if t.Audience == "" {
@@ -252,12 +252,12 @@ func (db *DB) InsertButlerTask(t ButlerTask) (string, error) {
 	}
 	res, err := tx.Exec(
 		`INSERT INTO butler_tasks (created_at, updated_at, kind, state, author_person_id, owner_person_id,
-		     surface, profile, audience, session, origin_turn, correlation_id, objective,
+		     surface, agent_class, audience, session, origin_turn, correlation_id, objective,
 		     completion_criteria, grants_json, budget_json, deadline_at, next_wakeup_at,
 		     lease_epoch, uncertainty, result_summary, retention, envelope_version)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?)`,
 		stamp, stamp, string(t.Kind), string(ButlerTaskPending), author, owner,
-		string(t.Surface), t.Profile, string(t.Audience), session, originTurn,
+		string(t.Surface), t.AgentClass, string(t.Audience), session, originTurn,
 		t.CorrelationID, t.Objective, t.CompletionCriteria, grants, budget,
 		timeText(t.DeadlineAt), timeText(t.NextWakeupAt),
 		string(t.Retention), TaskEnvelopeVersion)
@@ -360,7 +360,7 @@ func (db *DB) ButlerTaskForSession(sessionID string) (ButlerTask, error) {
 // a task reads the same after either of them is renamed.
 const butlerTaskColumns = `SELECT t.seq, t.created_at, t.updated_at, t.kind, t.state,
 	 a.member, o.member,
-	 t.surface, t.profile, t.audience, t.session, t.origin_turn, t.correlation_id, t.objective,
+	 t.surface, t.agent_class, t.audience, t.session, t.origin_turn, t.correlation_id, t.objective,
 	 t.completion_criteria, t.grants_json, t.budget_json, t.deadline_at, t.next_wakeup_at,
 	 t.lease_epoch, t.uncertainty, t.result_summary, t.retention, t.envelope_version
 	 FROM butler_tasks t
@@ -374,7 +374,7 @@ func scanButlerTask(row rowScanner) (ButlerTask, error) {
 	var session sql.NullInt64
 	var originTurn sql.NullInt64
 	err := row.Scan(&t.Seq, &created, &updated, &kind, &state, &t.Author, &t.Owner,
-		&surface, &t.Profile, &audience, &session, &originTurn, &t.CorrelationID,
+		&surface, &t.AgentClass, &audience, &session, &originTurn, &t.CorrelationID,
 		&t.Objective, &t.CompletionCriteria, &t.GrantsJSON, &t.BudgetJSON,
 		&deadline, &wakeup, &t.LeaseEpoch, &t.Uncertainty, &t.ResultSummary,
 		&retention, &t.EnvelopeVersion)

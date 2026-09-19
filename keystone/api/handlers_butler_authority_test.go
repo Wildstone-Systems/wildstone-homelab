@@ -16,7 +16,7 @@ func TestEnablingAToolAProfileLacksSaysSo(t *testing.T) {
 		Note string `json:"note"`
 	}
 	res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butler/tools",
-		map[string]any{"profile": "household", "tool": "propose_change", "state": "enabled"}, &body)
+		map[string]any{"agentClass": "member", "tool": "propose_change", "state": "enabled"}, &body)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("PUT tools = %d", res.StatusCode)
 	}
@@ -26,7 +26,7 @@ func TestEnablingAToolAProfileLacksSaysSo(t *testing.T) {
 	// Enabling one it does have is quiet.
 	body.Note = ""
 	h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butler/tools",
-		map[string]any{"profile": "household", "tool": "get_household_events", "state": "enabled"}, &body)
+		map[string]any{"agentClass": "member", "tool": "get_household_events", "state": "enabled"}, &body)
 	if body.Note != "" {
 		t.Fatalf("enabling a real household tool warned: %q", body.Note)
 	}
@@ -42,7 +42,7 @@ func TestCapabilityRequestPermissionsAndSeparation(t *testing.T) {
 	}
 	if res := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/butler/requests",
 		map[string]any{
-			"kind": "supported-tool", "profile": "operator", "tool": "get_calendar",
+			"kind": "supported-tool", "agentClass": "owner", "tool": "get_calendar",
 			"description": "to answer what is on today",
 		}, &filed,
 	); res.StatusCode != http.StatusOK {
@@ -84,14 +84,14 @@ func TestGrantEndpointsAreBoundAndRevocable(t *testing.T) {
 	h.person("root-admin")
 	taskID, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: "root-admin", Owner: "root-admin",
-		Surface: runtimedb.ButlerSurfaceAdmin, Profile: "operator",
+		Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: "operator",
 		Audience: runtimedb.ButlerAudiencePrivate, Objective: "work", CompletionCriteria: "done",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := map[string]any{
-		"scope": "task", "scopeId": taskID, "profile": "operator",
+		"scope": "task", "scopeId": taskID, "agentClass": "owner",
 		"tool": "restricted_tool", "minutes": 30, "reason": "one lookup",
 	}
 	if res := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/butler/grants", body, nil); res.StatusCode != http.StatusForbidden {
@@ -105,7 +105,7 @@ func TestGrantEndpointsAreBoundAndRevocable(t *testing.T) {
 	}
 	// Against a task that does not exist, it is refused rather than
 	// becoming a permission nothing can expire.
-	bad := map[string]any{"scope": "task", "scopeId": "bt-999", "profile": "operator", "tool": "x"}
+	bad := map[string]any{"scope": "task", "scopeId": "bt-999", "agentClass": "owner", "tool": "x"}
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/grants", bad, nil); res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("a grant against a missing task = %d, want 400", res.StatusCode)
 	}

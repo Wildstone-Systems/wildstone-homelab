@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { api, type ButlerRow, type ButlerTools, type CapabilityTool } from "../../api";
+import {
+  agentClassLabel,
+  api,
+  type ButlerRow,
+  type ButlerTools,
+  type CapabilityTool,
+} from "../../api";
 import { ErrorLine } from "../../lib";
 import { StatusPill } from "../../ui/status";
 import { Say } from "./ButlerDrawer";
@@ -16,8 +22,8 @@ import { Say } from "./ButlerDrawer";
 // matters — a person believing they had turned something off.
 //
 // The control is on/off because that is what the engine has. A Butler
-// narrows its profile and never widens it, so "give it back" returns a
-// tool to whatever the profile allows rather than granting it outright.
+// narrows its class and never widens it, so "give it back" returns a
+// tool to whatever the class allows rather than granting it outright.
 // There is deliberately no third "ask first" state: the Butler loop has
 // no such thing, and a control the engine ignores is worse than no
 // control at all.
@@ -68,11 +74,14 @@ export function TabTools({
         <div className="eyebrow">
           TOOLS — {on} of {rows.length} allowed
         </div>
-        <div className="muted tools-profile">{tools?.profile} profile</div>
+        <div className="muted tools-profile">
+          {tools ? agentClassLabel(tools.agentClass) : ""}
+        </div>
       </div>
       <div className="note">
-        These are the {tools?.profile ?? ""} surface's tools. A switch here can take one away and
-        give it back; it can never add one this surface does not have.
+        These are the tools a {tools ? agentClassLabel(tools.agentClass).toLowerCase() : "agent"}{" "}
+        has. A switch here can take one away and give it back; it can never add one this class does
+        not have.
       </div>
 
       <ErrorLine error={loadError} />

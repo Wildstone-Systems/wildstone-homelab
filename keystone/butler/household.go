@@ -568,7 +568,7 @@ func (gw *HouseholdGateway) dispatch(ctx context.Context, name string, input map
 	// arriving here is not in the map, so it never reaches this line —
 	// and a control row for one could not switch it on if it did
 	// (ADR-W030 A7).
-	if d := authorize(gw.Authorizer, string(ProfileHousehold), name, true,
+	if d := authorize(gw.Authorizer, string(AgentClassMember), name, true,
 		entry.GrantRequired, gw.SessionTask, ""); !d.Allowed {
 		return finishOutcome(refusal(name, d), false, gw.seams.MaxContentBytes), nil
 	}

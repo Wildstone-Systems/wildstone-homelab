@@ -43,7 +43,7 @@ func newButler(t *testing.T, db *DB, name, route string) {
 	t.Helper()
 	if _, err := db.CreateButler(Butler{
 		Name: name, Directive: "look after " + name, Surface: ButlerSurfaceFamily,
-		Profile: ProfileHousehold, Model: route,
+		AgentClass: AgentClassMember, Model: route,
 	}, "mika"); err != nil {
 		t.Fatalf("CreateButler(%s): %v", name, err)
 	}
@@ -84,17 +84,17 @@ func TestAButlerCarriesItsOwnNameAndModel(t *testing.T) {
 	// later: an unnamed Butler cannot be assigned a routine, and one
 	// with no model has nowhere to run.
 	if _, err := db.CreateButler(Butler{
-		Surface: ButlerSurfaceFamily, Profile: ProfileHousehold, Model: "kitchen-box",
+		Surface: ButlerSurfaceFamily, AgentClass: AgentClassMember, Model: "kitchen-box",
 	}, "mika"); err == nil {
 		t.Fatal("a butler was created with no name")
 	}
 	if _, err := db.CreateButler(Butler{
-		Name: "nameless-model", Surface: ButlerSurfaceFamily, Profile: ProfileHousehold,
+		Name: "nameless-model", Surface: ButlerSurfaceFamily, AgentClass: AgentClassMember,
 	}, "mika"); err == nil {
 		t.Fatal("a butler was created with no model route")
 	}
 	if _, err := db.CreateButler(Butler{
-		Name: "ghost", Surface: ButlerSurfaceFamily, Profile: ProfileHousehold,
+		Name: "ghost", Surface: ButlerSurfaceFamily, AgentClass: AgentClassMember,
 		Model: "no-such-route",
 	}, "mika"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a butler was created against a route that does not exist: %v", err)
@@ -119,7 +119,7 @@ func TestAButlersCeilingCannotMove(t *testing.T) {
 	// And the two have to agree at creation, or the ceiling written on
 	// the record is not the one the gateway enforces.
 	if _, err := db.CreateButler(Butler{
-		Name: "mismatched", Surface: ButlerSurfaceFamily, Profile: ProfileOperator,
+		Name: "mismatched", Surface: ButlerSurfaceFamily, AgentClass: AgentClassOwner,
 		Model: "kitchen-box",
 	}, "mika"); err == nil {
 		t.Fatal("an operator-profile butler was created on the family surface")
@@ -310,7 +310,7 @@ func TestAButlerCannotBeAssignedADisabledRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.CreateButler(Butler{
-		Name: "stranded", Surface: ButlerSurfaceFamily, Profile: ProfileHousehold,
+		Name: "stranded", Surface: ButlerSurfaceFamily, AgentClass: AgentClassMember,
 		Model: "retired-box",
 	}, "mika"); err == nil {
 		t.Fatal("a butler was created against a disabled route")

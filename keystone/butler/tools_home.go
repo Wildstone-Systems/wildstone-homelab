@@ -150,6 +150,10 @@ type MachineReading struct {
 	MemKnown  bool
 	Disk      int
 	DiskKnown bool
+	// What the percentages are of; zero when not reported.
+	Cores       int
+	MemoryTotal uint64
+	DiskTotal   uint64
 	// Problem is why this machine could not be read, when it could not.
 	Problem string
 }
@@ -369,10 +373,14 @@ func handleGetMachineStats(ctx context.Context, gw *HouseholdGateway, _ map[stri
 				fmt.Fprintf(&b, " (%s)", m.Problem)
 			}
 		default:
+			cores := ""
+			if m.Cores > 0 {
+				cores = fmt.Sprintf("%d cores", m.Cores)
+			}
 			parts := []string{
-				percentOrUnknown("processor", m.CPU, m.CPUKnown),
-				percentOrUnknown("memory", m.Memory, m.MemKnown),
-				percentOrUnknown("disk", m.Disk, m.DiskKnown),
+				percentOf("processor", m.CPU, m.CPUKnown, cores),
+				percentOf("memory", m.Memory, m.MemKnown, SizeGB(m.MemoryTotal)),
+				percentOf("disk", m.Disk, m.DiskKnown, SizeGB(m.DiskTotal)),
 			}
 			b.WriteString(strings.Join(parts, ", "))
 		}
@@ -381,6 +389,34 @@ func handleGetMachineStats(ctx context.Context, gw *HouseholdGateway, _ map[stri
 	b.WriteString("\n\"can't read\" means the machine did not report that number, which is not the " +
 		"same as it being at zero.\n")
 	return ToolOutcome{Content: b.String()}, nil
+}
+
+// SizeGB is "15.6 GB" for a total in bytes, or "" when there is none.
+// Gigabytes are counted the way df and a system monitor count them
+// (1024³), so the number matches what an owner sees at the machine.
+func SizeGB(total uint64) string {
+	if total == 0 {
+		return ""
+	}
+	gb := float64(total) / (1 << 30)
+	if gb < 10 {
+		return fmt.Sprintf("%.1f GB", gb)
+	}
+	return fmt.Sprintf("%.0f GB", gb)
+}
+
+// percentOf is one reading with what it is a share of: "memory 42% of
+// 15.6 GB", or "memory can't read (15.6 GB)" when the share is unknown.
+func percentOf(what string, v int, known bool, of string) string {
+	line := percentOrUnknown(what, v, known)
+	switch {
+	case of == "":
+		return line
+	case known:
+		return line + " of " + of
+	default:
+		return line + " (" + of + ")"
+	}
 }
 
 // percentOrUnknown is the line that keeps "not measured" and "idle"

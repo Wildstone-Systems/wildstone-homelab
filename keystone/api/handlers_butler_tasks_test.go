@@ -20,7 +20,7 @@ func seedTracedTask(t *testing.T, h *harness, owner string, audience runtimedb.B
 	t.Helper()
 	id, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: owner, Owner: owner,
-		Surface: runtimedb.ButlerSurfaceAdmin, Profile: "operator", Audience: audience,
+		Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: "operator", Audience: audience,
 		Objective: "why is photos unhealthy?", CompletionCriteria: "root cause named",
 	})
 	if err != nil {
@@ -165,7 +165,7 @@ func TestWithheldRowsAreCountedNotHidden(t *testing.T) {
 	h.person("sam")
 	id, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: "sam", Owner: "sam",
-		Surface: runtimedb.ButlerSurfaceAdmin, Profile: "operator",
+		Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: "operator",
 		Audience:  runtimedb.ButlerAudienceShared,
 		Objective: "shared work", CompletionCriteria: "done",
 	})
@@ -210,7 +210,7 @@ func TestAnAudienceTheFilterDoesNotRecogniseIsWithheld(t *testing.T) {
 	h.person("sam")
 	id, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: "sam", Owner: "sam",
-		Surface: runtimedb.ButlerSurfaceAdmin, Profile: "operator",
+		Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: "operator",
 		Audience:  runtimedb.ButlerAudienceShared,
 		Objective: "shared work", CompletionCriteria: "done",
 	})

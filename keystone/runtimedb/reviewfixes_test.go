@@ -157,13 +157,13 @@ func TestPlacementDoesNotClearAnUnprovenRemoval(t *testing.T) {
 // per-work authorization that made it grant-required (A7).
 func TestEnablingAToolDoesNotBypassARequiredGrant(t *testing.T) {
 	db := open(t)
-	if err := db.SetToolControl(ProfileHousehold, "send_message", ToolEnabled,
+	if err := db.SetToolControl(AgentClassMember, "send_message", ToolEnabled,
 		"the family surface may message", "root-admin"); err != nil {
 		t.Fatal(err)
 	}
 
 	a, err := db.ResolveToolAuthority(ToolQuery{
-		Tool: "send_message", Profile: ProfileHousehold, Structural: true,
+		Tool: "send_message", AgentClass: AgentClassMember, Structural: true,
 		GrantRequired: true, TaskID: "bt-1",
 	})
 	if err != nil {
@@ -178,7 +178,7 @@ func TestEnablingAToolDoesNotBypassARequiredGrant(t *testing.T) {
 
 	// A tool that needs no grant is still allowed by the enable.
 	b, err := db.ResolveToolAuthority(ToolQuery{
-		Tool: "send_message", Profile: ProfileHousehold, Structural: true,
+		Tool: "send_message", AgentClass: AgentClassMember, Structural: true,
 	})
 	if err != nil {
 		t.Fatal(err)

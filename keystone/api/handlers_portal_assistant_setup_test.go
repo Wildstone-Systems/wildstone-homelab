@@ -60,7 +60,7 @@ func TestAnEmptyAssistantSaysHowToSetItUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := h.s.DB.CreateButler(runtimedb.Butler{Name: "sandy", Surface: runtimedb.ButlerSurfaceFamily,
-		Profile: runtimedb.ProfileHousehold, Model: "box"}, "mika"); err != nil {
+		AgentClass: runtimedb.AgentClassMember, Model: "box"}, "mika"); err != nil {
 		t.Fatal(err)
 	}
 	if got := h.assistantSetupFor(t, "kai", "assistant_users"); got.Needed || !strings.Contains(got.Message, "shared") {

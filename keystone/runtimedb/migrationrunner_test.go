@@ -352,7 +352,18 @@ func TestRealMigrationSetDeclaresTheDirectiveOnlyWhereIntended(t *testing.T) {
 	// several of them reference each other (butler_index.memory names
 	// butler_memory, butler_task_evidence.task names butler_tasks), so
 	// enforcement cannot hold while the shadow tables exist.
-	want := []string{"0039_person_core.sql", "0043_person_id_references.sql", "0052_audiences.sql"}
+	//
+	// 0058 rebuilds `butlers`, which six other tables reference by seq
+	// (butler_access, butler_addresses, butler_tool_scope,
+	// butler_connection_scope, butler_pool_disclosures and the grants
+	// table it adds the column to). The row ids are carried across
+	// unchanged, so the references are still valid on the other side —
+	// but they cannot be enforced against a table that is being
+	// replaced underneath them.
+	want := []string{
+		"0039_person_core.sql", "0043_person_id_references.sql",
+		"0052_audiences.sql", "0058_agent_class.sql",
+	}
 	if len(declared) != len(want) {
 		t.Fatalf("migrations declaring foreign_keys=off = %v, want %v", declared, want)
 	}

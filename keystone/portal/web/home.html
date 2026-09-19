@@ -1571,34 +1571,25 @@
     // naming a node, and this card carries no hostnames or addresses.
     machine.appendChild(make("div", "eyebrow", m.nodes > 1 ? "The machines" : "This machine"));
     var st = m.stats || {};
-    if (st.cpuKnown || st.memoryKnown || st.diskKnown) {
-      var meters = make("div", "spread");
-      meters.style.gap = "var(--space-6)";
-      meters.style.alignItems = "stretch";
-      // Only the readings that exist get a bar. A figure the agent
-      // could not measure is absent, never drawn at zero — §7: a bar at
-      // zero reads as an idle machine rather than a missing reading.
-      [["CPU", st.cpu, st.cpuKnown],
-       ["Memory", st.memory, st.memoryKnown],
-       ["Disk /", st.disk, st.diskKnown]].forEach(function (row) {
-        if (row[2]) { meters.appendChild(meter(row[0], row[1])); }
-      });
-      machine.appendChild(meters);
-    } else if (m.metrics && m.metrics.available === false) {
-      // The design's three bars are not drawn, because nothing here can
-      // source them — and never a bar at zero, which reads as an idle
-      // machine rather than a missing reading.
-      var line2 = make("div", "spread");
-      var pulse = icon("pulse");
-      pulse.style.fontSize = "19px";
-      pulse.style.color = "var(--muted)";
-      line2.appendChild(pulse);
-      var d2 = make("div");
-      d2.appendChild(make("div", null, m.metrics.problem || "Can't read machine stats"));
-      d2.appendChild(make("div", "muted",
-        (m.nodes === 1 ? "1 machine" : (m.nodes || 0) + " machines") + ", answering"));
-      line2.appendChild(d2);
-      machine.appendChild(line2);
+    // All three readings, always, each with what it is a share of: "42%"
+    // alone does not say whether the machine has 4 GB or 64. A reading
+    // the agent could not take keeps its row and says so in words —
+    // never a bar at zero, which reads as an idle machine (§7).
+    var meters = make("div", "spread");
+    meters.style.gap = "var(--space-6)";
+    meters.style.alignItems = "stretch";
+    [["CPU", st.cpu, st.cpuKnown, st.cores ? st.cores + (st.cores === 1 ? " core" : " cores") : ""],
+     ["Memory", st.memory, st.memoryKnown, sizeGB(st.memoryTotalBytes)],
+     ["Disk /", st.disk, st.diskKnown, sizeGB(st.diskTotalBytes)]].forEach(function (row) {
+      meters.appendChild(meter(row[0], row[2] ? row[1] : null, row[3]));
+    });
+    machine.appendChild(meters);
+    if (m.metrics && m.metrics.available === false) {
+      var why = make("div", "muted", (m.metrics.problem || "Can't read machine stats") + " · " +
+        (m.nodes === 1 ? "1 machine" : (m.nodes || 0) + " machines") + ", answering");
+      why.style.marginTop = "var(--space-3)";
+      why.style.fontSize = "12px";
+      machine.appendChild(why);
     }
     box.appendChild(machine);
   }
@@ -1607,24 +1598,40 @@
   // One labelled bar. Amber above 80 and red above 90, which is the
   // design's threshold and the point at which a household should be
   // told rather than reassured.
-  function meter(label, pct) {
+  function meter(label, pct, of) {
     var wrap = make("div", "grow");
     var top = make("div", "spread");
     top.style.justifyContent = "space-between";
     top.style.fontSize = "12px";
     top.appendChild(make("span", "muted", label));
-    top.appendChild(make("span", "tnum", pct + "%"));
+    var known = typeof pct === "number";
+    // "42% of 15.6 GB"; a CPU reads "12% of 4 cores". Unmeasured says so,
+    // and still names the total when there is one.
+    var figure = known ? pct + "%" + (of ? " of " + of : "")
+                       : "not measured" + (of ? " · " + of : "");
+    top.appendChild(make("span", known ? "tnum" : "tnum muted", figure));
     wrap.appendChild(top);
     var bar = make("div", "bar");
     bar.style.marginTop = "5px";
-    var fill = make("span");
-    fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
-    fill.style.background = pct >= 90 ? "var(--st-bad)"
-                          : pct >= 80 ? "var(--st-warn)" : "var(--st-ok)";
-    bar.appendChild(fill);
+    if (known) {
+      var fill = make("span");
+      fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+      fill.style.background = pct >= 90 ? "var(--st-bad)"
+                            : pct >= 80 ? "var(--st-warn)" : "var(--st-ok)";
+      bar.appendChild(fill);
+    }
     wrap.appendChild(bar);
     return wrap;
   }
+
+  // sizeGB is "15.6 GB" for a byte count, counted the way df and a system
+  // monitor count (1024³) so it matches the machine; "" when unknown.
+  function sizeGB(n) {
+    if (!n) { return ""; }
+    var gb = n / 1073741824;
+    return (gb < 10 ? gb.toFixed(1) : Math.round(gb)) + " GB";
+  }
+
 
   var filesCaps = null;
   // How many uploads are mid-flight. A refresh leaves the recent list

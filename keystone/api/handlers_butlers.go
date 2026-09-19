@@ -92,10 +92,10 @@ func (s *Server) listButlers(_ *http.Request, _ principal.Identity) (any, int, e
 		view["connections"] = len(conns)
 
 		readOnly := !b.CarriesActionAuthority()
-		key := fmt.Sprintf("%s/%t", b.Profile, readOnly)
+		key := fmt.Sprintf("%s/%t", b.AgentClass, readOnly)
 		set, ok := available[key]
 		if !ok {
-			set = s.availableTools(b.Profile, readOnly)
+			set = s.availableTools(b.AgentClass, readOnly)
 			available[key] = set
 		}
 		// Allowed is available minus this Butler's own narrowings, and
@@ -116,18 +116,18 @@ func (s *Server) listButlers(_ *http.Request, _ principal.Identity) (any, int, e
 	return map[string]any{"butlers": out}, http.StatusOK, nil
 }
 
-// availableTools is the set of tool names a profile can actually use on
-// this deployment, before any one Butler's narrowings.
+// availableTools is the set of tool names an agent class can actually
+// use on this deployment, before any one Butler's narrowings.
 //
 // It asks the gateway rather than a list, with no Butler authority
 // bound — the per-Butler half is subtracted by the caller, from a read
 // it already has.
-func (s *Server) availableTools(profile string, readOnly bool) map[string]bool {
+func (s *Server) availableTools(class string, readOnly bool) map[string]bool {
 	var manifest butler.CapabilityManifest
-	switch profile {
-	case runtimedb.ProfileHousehold:
+	switch class {
+	case runtimedb.AgentClassMember:
 		manifest = butler.NewHouseholdGateway("", s.ButlerHost.householdSeams()).Capabilities(readOnly)
-	case runtimedb.ProfileOperator:
+	case runtimedb.AgentClassOwner:
 		_, live, _, _, _ := s.ButlerHost.Current()
 		if live == nil {
 			live = butler.NewToolGateway(nil, nil)
@@ -154,9 +154,13 @@ func (s *Server) createButler(r *http.Request, id principal.Identity) (any, int,
 	var req struct {
 		Name      string `json:"name"`
 		Directive string `json:"directive"`
-		Surface   string `json:"surface"`
-		Profile   string `json:"profile"`
-		Model     string `json:"model"`
+		// AgentClass is the one the caller picks. The surface is DERIVED
+		// from it rather than accepted alongside it: the two are one
+		// fact (design §5.2), and a request carrying both could carry a
+		// contradiction — at which point the API has to decide which of
+		// the caller's two answers it meant.
+		AgentClass string `json:"agentClass"`
+		Model      string `json:"model"`
 		// The same pair the assignment path takes, for the same reason:
 		// a person making a Butler picks from what the provider has, not
 		// from what somebody configured here first.
@@ -180,7 +184,8 @@ func (s *Server) createButler(r *http.Request, id principal.Identity) (any, int,
 	name := strings.TrimSpace(req.Name)
 	if _, err := s.DB.CreateButler(runtimedb.Butler{
 		Name: name, Directive: req.Directive,
-		Surface: runtimedb.ButlerSurface(req.Surface), Profile: req.Profile, Model: req.Model,
+		Surface:    runtimedb.SurfaceForAgentClass(req.AgentClass),
+		AgentClass: req.AgentClass, Model: req.Model,
 	}, actingMember(id)); err != nil {
 		if errors.Is(err, runtimedb.ErrNotFound) {
 			return nil, http.StatusNotFound, err
@@ -690,7 +695,7 @@ func (s *Server) butlerStatus(r *http.Request, _ principal.Identity) (any, int, 
 		out["reason"] = why
 	}
 	tools := []string{}
-	for name := range s.availableTools(b.Profile, !b.CarriesActionAuthority()) {
+	for name := range s.availableTools(b.AgentClass, !b.CarriesActionAuthority()) {
 		tools = append(tools, name)
 	}
 	sort.Strings(tools)
@@ -733,12 +738,12 @@ func (s *Server) butlerTools(r *http.Request, _ principal.Identity) (any, int, e
 	authority := &butlerstore.Authority{DB: s.DB, Butler: b.Name}
 
 	var manifest butler.CapabilityManifest
-	switch b.Profile {
-	case runtimedb.ProfileHousehold:
+	switch b.AgentClass {
+	case runtimedb.AgentClassMember:
 		gw := butler.NewHouseholdGateway("", s.ButlerHost.householdSeams())
 		gw.SetAuthorizer(authority)
 		manifest = gw.Capabilities(readOnly)
-	case runtimedb.ProfileOperator:
+	case runtimedb.AgentClassOwner:
 		// The host's gateway, because its seams are what this
 		// deployment actually wired — a bare one would report every
 		// tool as unavailable and call it structure. Scoped, never
@@ -750,7 +755,7 @@ func (s *Server) butlerTools(r *http.Request, _ principal.Identity) (any, int, e
 		manifest = live.Scoped(authority).Capabilities(readOnly)
 	default:
 		return nil, http.StatusBadRequest, fmt.Errorf(
-			"%s runs on the %s profile, which has no tool surface", b.Name, b.Profile)
+			"%s is a %s agent, which has no tool surface", b.Name, b.AgentClass)
 	}
 
 	// The narrowings come back alongside the manifest rather than being
@@ -764,7 +769,7 @@ func (s *Server) butlerTools(r *http.Request, _ principal.Identity) (any, int, e
 	}
 	return map[string]any{
 		"butler":        b.Name,
-		"profile":       b.Profile,
+		"agentClass":    b.AgentClass,
 		"surface":       b.Surface,
 		"modelVerdict":  manifest.ModelVerdict,
 		"tools":         manifest.Tools,
@@ -807,4 +812,50 @@ func (s *Server) setButlerAddress(r *http.Request, id principal.Identity) (any, 
 		return nil, http.StatusInternalServerError, err
 	}
 	return map[string]any{"butler": name, "addresses": addresses}, http.StatusOK, nil
+}
+
+// setButlerAgentClass moves an Agent between the two classes (design
+// §5.2, §18.3).
+//
+// CONSEQUENTIAL, under A4.1, in both directions. A downgrade withdraws
+// authority — it revokes this Agent's live owner-class grants — and an
+// upgrade widens the gateway the Agent reaches. Neither is a preference,
+// and the entitlement writes slice 8 put on the same list are the same
+// shape: a change to who may reach what, made from the Console.
+//
+// Not Plan-mediated, for the reason handlers_entitlements.go gives: a
+// plan changes a NODE, and an Agent's class changes no node. The
+// reconcile loop needs to hear nothing about it.
+func (s *Server) setButlerAgentClass(r *http.Request, id principal.Identity) (any, int, error) {
+	if s.DB == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("no assistant database is configured")
+	}
+	name := r.PathValue("name")
+	var req struct {
+		AgentClass string `json:"agentClass"`
+	}
+	if code, err := decodeStrict(r, &req); err != nil {
+		return nil, code, err
+	}
+	revoked, err := s.DB.SetAgentClass(name, req.AgentClass, actingMember(id))
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, http.StatusNotFound, err
+	}
+	if err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	b, err := s.DB.GetButler(name)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	// The count is returned rather than logged, because "this took four
+	// permissions away" is the part of a downgrade an Owner needs to see
+	// at the moment they do it. Zero is a real answer too, and a
+	// different one from "nothing happened".
+	return map[string]any{
+		"butler":        b.Name,
+		"agentClass":    b.AgentClass,
+		"surface":       b.Surface,
+		"grantsRevoked": revoked,
+	}, http.StatusOK, nil
 }

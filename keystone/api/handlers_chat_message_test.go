@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -598,11 +599,16 @@ func TestManyStrangersAreBoundedTogether(t *testing.T) {
 	h := newHarness(t)
 	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
 	h.agentAt(t, "family", "telegram")
+	started := time.Now()
 	for i := 0; i < 200; i++ {
 		h.send(runtimedb.RoleConcierge, map[string]any{
 			"transport": "telegram", "account": fmt.Sprintf("acct-%d", i), "text": "hi", "messageId": fmt.Sprintf("m-%d", i),
 		})
 	}
+	// The budget refills while the test runs, so the ceiling is the burst
+	// plus what the elapsed time is worth. Asserting the burst alone made
+	// this fail on a slow run, which is the bucket working.
+	allowed := unknownBurst + time.Since(started).Seconds()*unknownPerSec + 2
 	events, _ := h.s.DB.EventsAfter(0, 1000)
 	notes := 0
 	for _, e := range events {
@@ -610,8 +616,8 @@ func TestManyStrangersAreBoundedTogether(t *testing.T) {
 			notes++
 		}
 	}
-	if notes > unknownBurst+2 {
-		t.Errorf("200 strangers left %d notes, want at most about %d", notes, unknownBurst)
+	if float64(notes) > allowed {
+		t.Errorf("200 strangers left %d notes, want at most %.0f", notes, allowed)
 	}
 }
 

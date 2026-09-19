@@ -12,7 +12,24 @@ import (
 type Role string
 
 const (
-	RoleAdmin    Role = "admin"
+	RoleAdmin Role = "admin"
+	// RoleOperator IS NOT AN AGENT CLASS AND IS NOT A PERSON'S ROLE. It
+	// is a MACHINE credential's role on the public plane — the third and
+	// oldest of three axes that all use the word "operator" or "owner"
+	// for something different (epic #201 decision 6):
+	//
+	//   principals.role      admin | operator | butler | …
+	//                        what an API CREDENTIAL may call
+	//   butler_members.role  owner | member
+	//                        what a PERSON is in the household (§2)
+	//   butlers.agent_class  owner | member
+	//                        what an AGENT may reach (§5.2)
+	//
+	// Before 0058 the second and third shared a vocabulary, and the
+	// confusion that produced is why they no longer do. This one was
+	// deliberately left alone rather than renamed in the same change:
+	// it is on the credential path, every minted token carries it, and
+	// moving it is its own piece of work. Tracked, not done here.
 	RoleOperator Role = "operator"
 	RoleButler   Role = "butler"
 	// RolePublisher may emit household events and nothing else
