@@ -143,8 +143,13 @@ func TestTheAuthorizationRequestCarriesTheWindow(t *testing.T) {
 		t.Errorf("entry request = %s", u)
 	}
 	u, _ = p.AuthURL(ctx, "s", "n", "c", 12*time.Hour, true)
-	if !strings.Contains(u, "prompt=login") || !strings.Contains(u, "max_age=0") {
+	if !strings.Contains(u, "prompt=login") {
 		t.Errorf("step-up request = %s", u)
+	}
+	// Never max_age alongside it: Authelia reads max_age=0 as a sign-in
+	// that can never be recent enough, so the step-up could not finish.
+	if strings.Contains(u, "max_age") {
+		t.Errorf("step-up request carries max_age, which Authelia can never satisfy at 0: %s", u)
 	}
 }
 

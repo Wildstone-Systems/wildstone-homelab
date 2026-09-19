@@ -141,8 +141,12 @@ than installing it silently, and offers to set up Tailscale — printing a
 sign-in link to open in any browser, which is also the path to take if
 you have no Tailscale account yet.
 
-It then asks for the account you will log in with, which services you
-want, and shows a summary before doing anything. Approving that summary
+It then asks for the account you will log in with, the household's time
+zone, which services you want, and shows a summary before doing anything.
+The time zone matters more than it looks: servers usually run on UTC, and
+your agents read "3pm" and "tomorrow" in whatever zone the household keeps.
+You can change it later on the Console's Household screen, and an agent
+that hears it is wrong will propose the right one for you to approve. Approving that summary
 is the approval for every plan the install creates (ADR-W023 A2) — they
 are recorded in the audit trail against your account.
 
@@ -344,179 +348,84 @@ the steps you redo by hand.
   session's proposals appear on **Plans** as `proposed`, and approving
   them is still a human verb.
 
-## 4b. Optional: talk to the Butler from a chat app
+## 4b. Optional: talk to an Agent from a chat app
 
-The Butler answers on two surfaces (ADR-W026), and they are two
-different jobs rather than one with a volume knob:
+A **connection** lets one person talk to one of your Agents from
+Telegram, Discord, Slack or Matrix (ADR-W033 B7, amended B7.1). Each
+connection is a bot of its own: one Agent can have several, and a bot
+answers for exactly one Agent. Who a bot may admit follows the Agent, not
+the bot: an owner agent's bots admit Owners only.
 
-| | operator | household |
+Nothing needs building or publishing. Every release ships the chat
+adapter, and the installer puts it on each machine at
+`/srv/wildstone/bin/chat-adapter`. A bot runs it in Google's public
+distroless image, pinned by digest, with that directory mounted
+read-only, so there is no image of Wildstone's to host and no registry
+credential to give a node.
+
+**From the Console: Chat.** One screen lists each Agent's bots, connects
+people, shows who is bound and lets you revoke an account or remove a
+bot. To connect someone, pick the app, the Agent and the person. If the
+Agent already has a bot on that app they are simply invited to it: one
+bot serves many people, and a token already running another bot is
+refused, because two bots polling one token steal each other's messages.
+For a new bot, paste its credential:
+
+| App | What you paste | Where it comes from |
 |---|---|---|
-| Reads | the Statefile, plans, health, diagnosis | the household timeline |
-| Writes | proposes a plan a human approves | one `domestic`-tier action |
-| Cannot | approve or apply anything | see or touch the home lab at all |
+| Telegram | bot token | @BotFather → /newbot |
+| Discord | bot token | discord.com/developers → Bot → Reset Token. Turn on **Message Content Intent** there too, or the bot receives messages with their text removed. |
+| Slack | bot token (`xoxb-…`) and app-level token (`xapp-…`) | api.slack.com/apps. Turn on Socket Mode; the bot needs `chat:write`, `im:history` and the `message.im` event, and the app token needs `connections:write`. |
+| Matrix | homeserver address and access token | an ordinary account on your homeserver, used as the bot |
 
-Both are reachable from a chat app, and **each surface is its own bot
-with its own credential**. That is not tidiness: one bot serving both is
-one compromised phone away from being an infrastructure console.
+Keystone then does the rest:
+1. It gives the bot its own Keystone credential, which holds the
+   `converse` verb and nothing else.
+2. It stores your credential on the machine.
+3. It installs the bot as its own instance (`chat-telegram-joan`,
+   `chat-telegram-joan-2`, …).
+4. The Agent tells the person there's a connection waiting.
 
-Approving is never available over chat, for anyone. Ask the operator bot
+Creating a connection mints a credential, so the Console asks you to
+confirm your password if you signed in more than 15 minutes ago.
+
+**The person collects their own key.** The Agent's message appears on
+their household dashboard, or in the Console for an owner agent. There
+they press **Get my key**, and a single-use key is made for them there
+and then. On Telegram it is a link that opens the bot with the key
+already in it. Elsewhere it is a short code they send the bot in a direct
+message. The first account to send it becomes theirs on that bot. The key
+is never stored in readable form, and the Owner who set up the
+connection never sees it.
+
+Approving is never available over chat, for anyone. Ask an owner agent
 to change something and it replies with a plan id and "nothing has
-changed yet" — you approve in the Console or with `wild plan approve`,
+changed yet". You approve in the Console or with `wild plan approve`,
 where a Wildstone credential authenticates you. A chat account is
 protected by the vendor's account recovery, which Wildstone does not
 control.
 
-**From the Console: Connect chat.** The screen walks the same steps in
-order and reads each one back from the deployment — credential minted,
-bot token set, capability installed, bot checked in — so you can leave
-and come back, and a half-finished setup says which half. It ends with
-an invite **link**: on Telegram it opens the bot with the code already
-in it, so the person taps once and types nothing. (The link carries the
-code, so forwarding the link is forwarding the invite.) The one step it
-cannot do for you is the image, below.
+Revoking an account on the Chat screen (or `wild chat revoke <id>`)
+takes effect on its next message. **Remove…** beside a bot uninstalls
+it, revokes the Agent's address and the bot's own credential, and
+withdraws its open invites. Removing a bot asks you to confirm your
+password if you signed in more than 15 minutes ago.
 
-The same thing from the command line, using Telegram's household bot as
-the example:
+The adapter **dials out**: Telegram and Matrix are polled, and Discord
+and Slack hold a WebSocket open. So this adds no port, no Route and
+nothing at your edge.
 
-```sh
-# 1. Build the adapter image and push it, then MAKE THE REPOSITORY
-#    PUBLIC and prove an anonymous pull works — or keep it private and
-#    give the node the credential once with
-#    `wild secret set registry.ghcr.io -node <node>` (value:
-#    username:password). See "Picking a registry" below.
-docker buildx build --platform linux/amd64 \
-  -f cli/cmd/chat-adapter/Dockerfile \
-  -t ghcr.io/<you>/chat-adapter:1.0.0 . --push
-docker buildx imagetools inspect ghcr.io/<you>/chat-adapter:1.0.0   # prints the digest
+**A bot says nothing to people it doesn't know**: no greeting, no "wrong
+code", nothing. Keystone records that an unknown account tried, without
+what it said. **In a group or server channel, a bot answers only when
+addressed**: mention it (`@joan_bot`) or reply to one of its messages.
+Everything else said there never reaches Keystone (ADR-W033 B9.1).
 
-#    On GHCR a newly published package is PRIVATE. Make it public once:
-#    github.com/users/<you>/packages/container/chat-adapter/settings
-#    -> Danger Zone -> Change visibility -> Public. (One way: a public
-#    package cannot be made private again.) Then verify as the node sees
-#    it, with no credentials:
-docker logout ghcr.io
-docker pull ghcr.io/<you>/chat-adapter@sha256:<digest>
-
-# 2. Make the bot (Telegram: talk to @BotFather) and keep its token. A
-#    bot belongs to ONE agent (ADR-W033 B7), so an agent that should
-#    answer separately needs a bot of its own.
-
-# 3. Mint the adapter's Keystone credential and give the bot to an agent
-#    — one act, because two would leave a credentialed bot answering for
-#    nobody. The AGENT decides the role: a member agent -> concierge, an
-#    owner agent -> valet. Both hold the `converse` verb and nothing
-#    else. A bot already answering for another agent is refused rather
-#    than repointed; revoke its address first.
-wild chat adapter chat-telegram-family -node <node> -butler <agent>
-
-# 4. Set the bot token, then enable the capability with the image digest.
-wild secret set chat-telegram-family-bot -node <node>
-wild capability enable chat-telegram-family \
-  -set node=<node> \
-  -set keystone_url=http://<tailnet-ip>:9441 \
-  -set adapter_image=<registry>/chat-adapter@sha256:<digest>
-
-# 5. Introduce someone. Nobody can talk to the bot until you do. The
-#    identity is a PERSON this household has declared, and an owner
-#    agent's bot admits owners only.
-wild chat code -butler <agent> -identity <member> -transport telegram
-```
-
-Read the code out; they send it to the bot on its own, once. It works
-once, expires, and can only ever create the binding it names. After that
-`wild chat bindings` is the access list and `wild chat revoke <id>`
-takes effect on that account's next message.
-
-The adapter reports which bot it is (`wild chat transports` shows the
-handle and whether it has checked in recently), and that is what lets
-the Console hand you `https://t.me/<bot>?start=<code>` instead of a code
-to read aloud. Keystone builds that URL itself from the handle — an
-adapter supplies the handle, never the link, because a link the operator
-trusts and a compromised adapter chose is how an invite ends up in
-somebody else's bot.
-
-The adapter **dials out** — Telegram's and Matrix's APIs are polled — so
-this adds no port, no Route and nothing at your edge. `chat-matrix-*` is
-the same shape against a homeserver you can run yourself; the operator
-variants are `chat-telegram-admin` and `chat-matrix-admin`, installed
-the same way with `-surface admin` and a second bot.
-
-### Picking a registry
-
-Wildstone publishes no adapter image. The release pipeline builds
-binaries, not images, so you build this one yourself — and where you put
-it is constrained by one thing worth knowing before you choose.
-
-**A public repository is the simplest answer, and a private one works
-too** — it just needs a credential on the node first. Keystone pulls the
-image before every container start and a failed pull stops the step, so
-whichever you choose, the node must be able to pull it unattended.
-
-For a **private** registry, give the node the credential once:
-
-```sh
-# The secret is named after the registry: registry.<host>, with any
-# port's colon written as an underscore (registry.example.com:5000 ->
-# registry.registry.example.com_5000 — an underscore because it cannot
-# appear in a host, so no two registries can name one secret). The value
-# is username:password — on GHCR, your GitHub username and a
-# read:packages token.
-wild secret set registry.ghcr.io -node <node>
-```
-
-The agent looks that up on the node at pull time and sends it as the
-registry credential. It never leaves the node and Keystone can never
-read it back (ADR-W012), and a credential is used **only** for the
-registry its name matches — a package naming an image on another host
-gets an anonymous pull, not your token.
-
-Two things this does not change. **Side-loading** with `docker load` on
-the node still does not work: the pull runs regardless. And a **missing**
-credential still reads as "not found" rather than "unauthorized", which
-is the confusing failure — if a private pull fails on the node, check
-the secret exists on that node and is `username:password`.
-
-On GHCR this is easy to trip over, because **a package you publish there
-is private until you say otherwise**. Your own `docker push` and
-`imagetools inspect` are authenticated and succeed, so nothing looks
-wrong until the pull on the node fails. Either set
-`registry.ghcr.io` as above, or flip the package public under its
-settings -> Danger Zone -> Change visibility -> Public (one-way: a
-public package cannot be made private again).
-
-**A public repository under your own account costs you nothing here.**
-The image is one static binary built from open source on a `scratch`
-base — no secrets are baked into it, and every credential (bot token,
-Keystone token) arrives as an environment variable at runtime from your
-secret store.
-
-Three things to get right:
-
-- **Check the pull the way the node will.** For a public repository,
-  `docker logout <registry>` and then pull the digest: if that works
-  from a machine holding no credentials, it will work on the node. For a
-  private one, the equivalent check is that `wild secret set
-  registry.<host>` has been run against THAT node — the credential is
-  per-node, because it lives in the node's own secret store.
-- **Match your node's architecture.** `docker build` produces your
-  laptop's; if the node is a Pi, pass `--platform linux/arm64`. Building
-  the wrong one fails at start with an exec-format error.
-- **Pass the digest, not the tag.** `adapter_image` is digest-pinned
-  like every image Wildstone runs (ADR-W003 A4.2); `docker buildx
-  imagetools inspect` prints it.
-
-If you would rather nothing were public, the options are a registry on
-your tailnet — which needs each node's Docker daemon configured for it,
-outside Wildstone's management — or adding registry auth to the agent's
-pull, which is recorded as F94 and is a small feature rather than a
-workaround.
-
-Once a household bot is bound, a household rule can ask through it —
-`chat-telegram-family.send` is a `domestic` action like `notifications.notify`
-— and the member's reply lands back on the household timeline as
-`household.answered`, correlated to the rule that asked. Recording an
-answer involves no model, so that loop keeps working with no Butler
-provider configured at all.
+Once a person is bound, a household rule can ask through the bot, since
+`send` is a `domestic` action like `notifications.notify`. Their reply
+lands back on the household timeline as `household.answered`, correlated
+to the rule that asked. Recording an answer involves no model, so that
+loop keeps working with no Butler provider configured at all.
 
 ## 5. First workload
 

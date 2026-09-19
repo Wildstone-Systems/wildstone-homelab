@@ -171,7 +171,7 @@ func TestTodayWithholdsAnotherMembersFactsInAGroup(t *testing.T) {
 	var out inboundResponse
 	resp := h.do(runtimedb.RoleConcierge, "POST", "/api/v1/chat/messages", map[string]any{
 		"transport": "telegram", "account": "12345", "conversation": "room-1",
-		"group": true, "text": "/today", "messageId": "g-1",
+		"group": true, "addressed": true, "text": "/today", "messageId": "g-1",
 	}, &out)
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("group /today: status = %d", resp.StatusCode)

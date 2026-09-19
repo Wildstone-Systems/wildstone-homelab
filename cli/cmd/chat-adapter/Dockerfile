@@ -1,13 +1,13 @@
-# The chat adapter image (ADR-W026 G4).
+# A standalone image of the chat adapter, for running it outside
+# Wildstone or testing it on its own.
 #
-# Built from this repository, published by nobody: which registry a
-# household trusts is its own decision (ADR-W010's closed-registry
-# posture), so the chat packages take a digest-pinned `adapter_image`
-# param and this file is how you produce one.
+# Wildstone itself does not use this. The release ships the adapter
+# binary, the installer puts it on every node at /srv/wildstone/bin,
+# and the chat packages run it in a public distroless image with that
+# directory mounted read-only (ADR-W033 B7.1), so no image is published
+# and a node needs no registry credential.
 #
-#   docker build -f cli/cmd/chat-adapter/Dockerfile -t <registry>/chat-adapter:1.0.0 .
-#   docker push <registry>/chat-adapter:1.0.0
-#   # then pass the digest — never the tag — as adapter_image.
+#   docker build -f cli/cmd/chat-adapter/Dockerfile -t chat-adapter .
 #
 # Static, scratch-based, non-root: the adapter opens two outbound HTTPS
 # connections and needs nothing else. No shell, no package manager, and

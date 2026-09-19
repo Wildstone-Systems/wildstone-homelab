@@ -549,7 +549,7 @@ func (s *Server) chatToday(c chatCommandCtx) (string, error) {
 	// Midnight where the HOUSEHOLD is, not where the process thinks it
 	// is. Around either zone's midnight the two disagree about which
 	// day it is, and the household's answer is the right one.
-	loc := s.HouseholdLoc
+	loc := s.householdLoc()
 	if loc == nil {
 		loc = time.Local
 	}

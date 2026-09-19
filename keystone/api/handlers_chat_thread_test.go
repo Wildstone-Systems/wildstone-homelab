@@ -156,7 +156,7 @@ func TestGroupMembersKeepSeparateThreads(t *testing.T) {
 	} {
 		resp, out := h.send(runtimedb.RoleConcierge, map[string]any{
 			"transport": "telegram", "account": m.account, "conversation": "room-1",
-			"group": true, "text": m.text, "messageId": string(rune('a' + i)),
+			"group": true, "addressed": true, "text": m.text, "messageId": string(rune('a' + i)),
 		})
 		if resp.StatusCode != http.StatusAccepted || !out.Bound {
 			t.Fatalf("message %d: status = %d out = %+v", i, resp.StatusCode, out)

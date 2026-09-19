@@ -1992,3 +1992,13 @@ tr[aria-pressed="true"] { box-shadow: inset 2px 0 0 var(--color-accent); }
    drawer rather than pushing Apply off the screen. */
 .model-rows-scroll { max-height: 22rem; overflow-y: auto; }
 .attention-note { font-size: 13px; }
+
+/* Back from a step-up (ADR-W033 A4.1): stays until dismissed. */
+.stepup-back {
+  position: fixed; left: 50%; bottom: var(--space-6); transform: translateX(-50%);
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-3) var(--space-4); border-radius: var(--radius-md, 10px);
+  background: var(--color-surface-raised, var(--color-surface)); color: var(--color-text);
+  border: 1px solid var(--color-border); box-shadow: 0 6px 24px color-mix(in srgb, var(--color-text) 18%, transparent);
+  z-index: 50; max-width: min(92vw, 640px); font-size: 13px;
+}

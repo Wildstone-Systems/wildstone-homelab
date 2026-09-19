@@ -41,13 +41,6 @@ import (
 // afternoon is two answers rather than one.
 const chatFallbackWindow = 10 * time.Minute
 
-// unboundReply is the ONLY thing an unbound account is told (ADR-W026
-// A4). It names no member, confirms no account, and describes nothing
-// about the deployment: someone messaging a bot they found should learn
-// only that there is a process, not that they guessed right.
-const unboundReply = "I can only talk to people the household has introduced me to. " +
-	"Ask whoever runs this home lab for a claim code, then send it to me on its own."
-
 // adminGroupReply is what the operator surface says in a group chat: it
 // answers in a direct message and nowhere else (ADR-W026 A7).
 const adminGroupReply = "I answer operator questions in a direct message only, never in a group."
@@ -61,6 +54,10 @@ type inboundMessage struct {
 	Conversation string `json:"conversation"`
 	// Group marks a shared audience (ADR-W026 A7).
 	Group bool `json:"group,omitempty"`
+	// Addressed is the adapter's word that a group message was FOR this
+	// bot — a mention, or a reply to it (ADR-W033 B9.1). A direct
+	// message is addressed by being direct.
+	Addressed bool `json:"addressed,omitempty"`
 	// MessageID is the transport's own id for this message. It is the
 	// dedupe key's source, so a transport that redelivers — Telegram
 	// after a lost ack, a websocket reconnect — does not produce two
@@ -120,6 +117,13 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		// Bounded before anything else looks at it (ADR-W026 A6).
 		return nil, http.StatusRequestEntityTooLarge, fmt.Errorf("message exceeds %d bytes", maxAskBytes)
 	}
+	// In a group, only what is addressed to the bot is the bot's to act
+	// on (ADR-W033 B9.1). The adapter drops the rest; this is the
+	// backstop for one that does not, and it answers nothing.
+	if msg.Group && !msg.Addressed {
+		return inboundResponse{Accepted: false, Reason: "a group message not addressed to this bot"},
+			http.StatusAccepted, nil
+	}
 	at, err := s.connectionForCaller(id, msg)
 	if err != nil {
 		return nil, http.StatusForbidden, err
@@ -147,6 +151,24 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// This is the automation engine's claim-before-dispatch shape
 	// (ADR-W024 H4), and the same deliberate trade: at-most-once, since
 	// a duplicated action is worse than a missed one.
+	// Who is this? Asked BEFORE the message is claimed, so a stranger's
+	// message costs a lookup and nothing else: no claim row, no session,
+	// no reply (ADR-W033 B9.1). What the household keeps is a note that
+	// somebody tried — at most one per account per ten minutes, and a
+	// bot being flooded by many accounts stops being noted at all past
+	// its own budget, so a flood cannot grow the database either.
+	binding, err := s.DB.LookupChatBinding(at, account)
+	if err != nil {
+		if s.limiter.take(fmt.Sprintf("\x00unknown:%d", at.Seq), unknownBurst, unknownPerSec) &&
+			s.limiter.take(fmt.Sprintf("\x00unknownnote:%d:%s", at.Seq, account), 1, 1.0/600) {
+			s.recordEvent("chat.unknown_account", at.ExternalID,
+				"a message from an account nobody introduced; nothing was said back",
+				map[string]string{"account": account, "agent": at.Butler})
+		}
+		return inboundResponse{Accepted: true, Bound: false,
+			Reason: "no admission for this account on this connection"}, http.StatusAccepted, nil
+	}
+
 	claimKey := chatDedupe(at, conversation, msg.MessageID, "inbound", text)
 	claimed, priorSeq, err := s.DB.ClaimChatInbound(claimKey, at.Surface)
 	if err != nil {
@@ -168,16 +190,6 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 			}
 		}
 	}()
-
-	binding, err := s.DB.LookupChatBinding(at, account)
-	if err != nil {
-		// One reply, no detail, no session row (ADR-W026 A4).
-		seq := s.queueChatReply(at, conversation, unboundReply, 0, "",
-			chatDedupe(at, conversation, msg.MessageID, "unbound", text))
-		s.settleInbound(claimKey, seq, &settled)
-		return inboundResponse{Accepted: true, Bound: false, Queued: seq,
-			Reason: "no admission for this account on this connection"}, http.StatusAccepted, nil
-	}
 
 	// Group rules (ADR-W026 A7). The operator surface refuses outright;
 	// the family surface answers, with the audience declared to it.

@@ -34,6 +34,14 @@ const (
 	// adapter re-sending one conversation cannot loop.
 	chatBurst  = 8
 	chatPerSec = 0.2
+	// Messages from accounts nobody introduced, for one bot as a whole
+	// (ADR-W033 B9.1): each costs a lookup, and past this budget not even
+	// the note that somebody tried is written.
+	unknownBurst  = 30
+	unknownPerSec = 0.5
+	// Invite-key attempts by one account on one bot.
+	redeemBurst  = 3
+	redeemPerSec = 1.0 / 120
 )
 
 func newLimiter() *limiter {

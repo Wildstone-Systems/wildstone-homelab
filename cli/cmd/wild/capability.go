@@ -46,6 +46,7 @@ func runCapability(args []string) int {
 	fs.Var(&catalogs, "catalog", "ignored; requires now resolve against what Keystone has enabled (ADR-W021 A4)")
 	version := fs.String("version", "", "package version; omit when the catalog holds one (enable only)")
 	dryRun := fs.Bool("dry-run", false, "render and check without proposing: prints the plan and the secrets you must supply (enable only)")
+	instance := fs.String("instance", "", "which install of an instanced package, such as one chat bot (#246); for enable it is the same as -set instance=<name>")
 	fs.Parse(rest) //nolint:errcheck // ExitOnError
 	token, ok := requireToken("capability")
 	if !ok {
@@ -54,9 +55,12 @@ func runCapability(args []string) int {
 
 	switch sub {
 	case "enable":
+		if *instance != "" {
+			sets = append(sets, "instance="+*instance)
+		}
 		return capabilityEnable(*apiBase, token, target, *version, sets, catalogs, *dryRun)
 	case "disable":
-		return capabilityDisable(*apiBase, token, target)
+		return capabilityDisable(*apiBase, token, target, *instance)
 	default:
 		capabilityUsage()
 		return 2
@@ -110,8 +114,11 @@ func capabilityEnable(apiBase, token, target, version string, sets, catalogs mul
 // and cannot see what a package DECLARES. Only the control plane holds
 // the catalog and the recorded install params, so only it can answer
 // "what would the sibling still need". This is a client of that answer.
-func capabilityDisable(apiBase, token, name string) int {
+func capabilityDisable(apiBase, token, name, instance string) int {
 	body := map[string]any{"package": name}
+	if instance != "" {
+		body["instance"] = instance
+	}
 	return simpleCall("capability", apiBase, token, http.MethodPost, "/api/v1/capabilities/disable", body)
 }
 
@@ -123,8 +130,8 @@ func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
 func capabilityUsage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  wild capability enable <package> [-set k=v ...] [-version v] [-dry-run] [-api URL]
-  wild capability disable <package> [-api URL]
+  wild capability enable <package> [-set k=v ...] [-instance name] [-version v] [-dry-run] [-api URL]
+  wild capability disable <package> [-instance name] [-api URL]
   wild pkg list                                    (what the catalog holds)
 The package is named from Keystone's catalog; expansion happens there.
 -dry-run renders and checks without proposing, and prints the secrets

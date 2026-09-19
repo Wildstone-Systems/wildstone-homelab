@@ -103,12 +103,10 @@ type paramView struct {
 type deploymentFacts struct {
 	nodes  []string
 	domain string
-	// keystoneURL is the public API as something on a node reaches it,
-	// and chatAdapterImage is the adapter image already installed here.
-	// Both are empty when the deployment cannot answer, which the form
+	// keystoneURL is the public API as something on a node reaches it.
+	// It is empty when the deployment cannot answer, which the form
 	// renders as an ordinary blank rather than a guess.
-	keystoneURL      string
-	chatAdapterImage string
+	keystoneURL string
 	// intakeURL is the household event endpoint, base plus path.
 	intakeURL string
 	// timezone is the household's clock, as Keystone was started with.
@@ -143,26 +141,26 @@ func (s *Server) gatherFacts() deploymentFacts {
 		return f
 	}
 	f.keystoneURL = s.APIURL
-	if s.APIURL != "" {
-		f.intakeURL = strings.TrimSuffix(s.APIURL, "/") + "/api/v1/household/events"
+	if f.keystoneURL == "" {
+		// Keystone advertises an address only when started with -hosts,
+		// which the installer does not pass. But it does give the Console
+		// route the address the proxy — a container — reaches the API
+		// at, and anything else in a container reaches it the same way.
+		// Without this a chat bot could not be connected on a stock
+		// install (ADR-W033 B7.1).
+		f.keystoneURL = consoleUpstreamURL(current)
 	}
-	if s.HouseholdTimezone != "Local" {
+	if f.keystoneURL != "" {
+		f.intakeURL = strings.TrimSuffix(f.keystoneURL, "/") + "/api/v1/household/events"
+	}
+	if s.HouseholdZone != nil {
+		f.timezone = s.HouseholdZone.Location().String()
+	} else if s.HouseholdTimezone != "Local" {
 		f.timezone = s.HouseholdTimezone
 	}
 
 	counts := map[string]int{}
-	// The adapter image an installed chat capability already runs. Two
-	// installed adapters are resolved by the lowest resource NAME, so
-	// the answer is stable rather than dependent on statefile order.
-	adapterFrom := ""
 	for _, r := range current {
-		if r.Kind == resource.KindContainer && r.Container != nil &&
-			strings.HasPrefix(r.Metadata.Owner, "capability/"+chatCapabilityPrefix) &&
-			r.Container.Image != "" {
-			if adapterFrom == "" || r.Metadata.Name < adapterFrom {
-				adapterFrom, f.chatAdapterImage = r.Metadata.Name, r.Container.Image
-			}
-		}
 		if r.Kind != resource.KindRoute || r.Route == nil || r.Route.Host == "" {
 			continue
 		}
@@ -196,8 +194,6 @@ func resolveParams(decls []pkgspec.ParamDecl, f deploymentFacts, installed map[s
 			}
 		case "keystone_url":
 			v.Suggested = f.keystoneURL
-		case "chat_adapter_image":
-			v.Suggested = f.chatAdapterImage
 		case "household_intake_url":
 			v.Suggested = f.intakeURL
 		case "timezone":
@@ -360,8 +356,15 @@ func (s *Server) installedFromPlans() (versions map[string]string, params map[st
 			continue
 		}
 		versions[stored.Origin.Package] = stored.Origin.Version
+		// One entry per install: an instance's params are its own, not
+		// its package's, and must not overwrite another instance's
+		// (#246).
+		key := stored.Origin.Package
+		if inst := stored.Origin.Params[pkgspec.InstanceParam]; inst != "" {
+			key += "#" + inst
+		}
 		if len(stored.Origin.Params) > 0 {
-			params[stored.Origin.Package] = stored.Origin.Params
+			params[key] = stored.Origin.Params
 		}
 	}
 	return versions, params
@@ -447,7 +450,7 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 // claim is refused. Resources with no capability owner — written by
 // hand — are left to the operator, as they always were.
 func claimedByAnotherCapability(pkg *pkgspec.Package, current, rendered []resource.Resource) error {
-	mine := "capability/" + pkg.Metadata.Capability
+	mine := installOwner(pkg, rendered)
 	type key struct{ kind, name string }
 	held := map[key]string{}
 	for _, r := range current {
@@ -506,7 +509,7 @@ func claimedByAnotherCapability(pkg *pkgspec.Package, current, rendered []resour
 // when it does, the deletions are named in the plan rather than
 // happening as a side effect of an install nobody read as a removal.
 func droppedByUpgrade(pkg *pkgspec.Package, current, rendered []resource.Resource) []plan.DeletionRef {
-	owner := "capability/" + pkg.Metadata.Capability
+	owner := installOwner(pkg, rendered)
 	type key struct{ kind, name string }
 	produced := map[key]bool{}
 	for _, r := range rendered {
@@ -518,7 +521,9 @@ func droppedByUpgrade(pkg *pkgspec.Package, current, rendered []resource.Resourc
 	// packageIsTheInstalledOne already answers for the Console, and the
 	// same heuristic, so a legacy deployment upgrades as it always did
 	// and a legacy SIBLING is still left alone.
-	legacyIsMine := packageIsTheInstalledOne(pkg, current)
+	// An instanced package postdates unstamped resources, so it has no
+	// legacy to claim.
+	legacyIsMine := !pkg.Metadata.Instanced && packageIsTheInstalledOne(pkg, current)
 	var out []plan.DeletionRef
 	for _, r := range current {
 		if r.Metadata.Owner != owner {
@@ -596,7 +601,23 @@ func (s *Server) CapabilityEnabled(name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return enabled[name], nil
+	if enabled[name] {
+		return true, nil
+	}
+	// An instanced package is installed as "<capability>-<instance>"
+	// (#246), never under its own name, so it is installed when any
+	// instance of it is. Only for a package the catalog says is
+	// instanced: "chat" must not count as installed because "chat-x" is.
+	if s.Catalog != nil {
+		if pkg, err := s.Catalog.Get(name, ""); err == nil && pkg.Metadata.Instanced {
+			for c := range enabled {
+				if strings.HasPrefix(c, name+"-") {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
 }
 
 type enableRequest struct {
@@ -673,9 +694,10 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 		docs = append(docs, string(data))
 	}
 
+	capName, _ := pkg.CapabilityFor(req.Params) // Expand has already refused a bad instance
 	return s.submitProposalOpts(id, proposalRequest{
 		Summary: fmt.Sprintf("enable capability %s (package %s %s)",
-			pkg.Metadata.Capability, pkg.Metadata.Name, pkg.Metadata.Version),
+			capName, pkg.Metadata.Name, pkg.Metadata.Version),
 		Put:    docs,
 		Delete: droppedByUpgrade(pkg, current, rendered),
 	}, proposalOpts{
@@ -702,7 +724,10 @@ func (s *Server) withVersion(pkg *pkgspec.Package, d capabilityDetail, versions 
 
 type disableRequest struct {
 	Package string `json:"package"`
-	DryRun  bool   `json:"dryRun,omitempty"`
+	// Instance names which install of an instanced package to remove
+	// (#246). Required for one, refused for any other.
+	Instance string `json:"instance,omitempty"`
+	DryRun   bool   `json:"dryRun,omitempty"`
 }
 
 // disableCapability removes what ONE PACKAGE produced.
@@ -759,7 +784,14 @@ func (s *Server) disableCapability(r *http.Request, id principal.Identity) (any,
 		}
 		return nil, http.StatusNotFound, err
 	}
-	owner := "capability/" + pkg.Metadata.Capability
+	if req.Instance != "" && !pkg.Metadata.Instanced {
+		return nil, http.StatusBadRequest, fmt.Errorf("%s is installed once, not per instance: remove it without naming one", pkg.Metadata.Name)
+	}
+	capName, err := pkg.CapabilityFor(map[string]string{pkgspec.InstanceParam: req.Instance})
+	if err != nil {
+		return nil, http.StatusBadRequest, fmt.Errorf("%v — name the instance to remove", err)
+	}
+	owner := "capability/" + capName
 
 	// What a surviving sibling still needs. Expanded from its own
 	// recorded params, so this is what it WOULD render today, not what
@@ -771,6 +803,11 @@ func (s *Server) disableCapability(r *http.Request, id principal.Identity) (any,
 	}
 	survives := map[[2]string]bool{}
 	for _, sib := range s.Catalog.List() {
+		// Another instance is another capability, with its own owner, so
+		// deletesForDisable already leaves it alone.
+		if pkg.Metadata.Instanced {
+			break
+		}
 		if sib.Metadata.Name == pkg.Metadata.Name || sib.Metadata.Capability != pkg.Metadata.Capability {
 			continue
 		}
@@ -794,11 +831,11 @@ func (s *Server) disableCapability(r *http.Request, id principal.Identity) (any,
 
 	deletes := deletesForDisable(pkg.Metadata.Name, owner, current, survives)
 	if len(deletes) == 0 {
-		return nil, http.StatusBadRequest, fmt.Errorf("package %q has nothing installed to remove", req.Package)
+		return nil, http.StatusBadRequest, fmt.Errorf("%s has nothing installed to remove", capName)
 	}
 
 	return s.submitProposalOpts(id, proposalRequest{
-		Summary: fmt.Sprintf("disable %s (%d resource(s) removed)", pkg.Metadata.Name, len(deletes)),
+		Summary: fmt.Sprintf("disable %s (%d resource(s) removed)", capName, len(deletes)),
 		Delete:  deletes,
 	}, proposalOpts{DryRun: req.DryRun})
 }
@@ -824,6 +861,17 @@ func packagesUnder(capName string, current []resource.Resource) []string {
 // present — the same question packageIsTheInstalledOne answers, asked of
 // a sibling rather than of the package being acted on.
 func packageIsInstalled(pkg *pkgspec.Package, current []resource.Resource) bool {
+	// An instanced package names its containers per instance, so there
+	// is no fixed name to look for; any resource it stamped is an
+	// instance of it.
+	if pkg.Metadata.Instanced {
+		for _, r := range current {
+			if r.Metadata.Package == pkg.Metadata.Name {
+				return true
+			}
+		}
+		return false
+	}
 	names := pkgspec.ContainerNames(pkg)
 	if len(names) > 0 {
 		// A package that RUNS something is installed when that thing is
@@ -917,4 +965,31 @@ func deletesForDisable(pkgName, owner string, current []resource.Resource, survi
 		return out[i].Name < out[j].Name
 	})
 	return out
+}
+
+// installOwner is the owner an install's resources carry: taken from
+// what it rendered, which already names the instance for an instanced
+// package, or the package's capability when it rendered nothing.
+func installOwner(pkg *pkgspec.Package, rendered []resource.Resource) string {
+	for _, r := range rendered {
+		if r.Metadata.Owner != "" {
+			return r.Metadata.Owner
+		}
+	}
+	return "capability/" + pkg.Metadata.Capability
+}
+
+// consoleUpstreamURL is the API as the identity proxy's container
+// reaches it, from the Console route's upstream, or "".
+func consoleUpstreamURL(current []resource.Resource) string {
+	for _, r := range current {
+		if r.Kind == resource.KindRoute && r.Route != nil && r.Metadata.Owner == "capability/console" {
+			up := r.Route.Upstream
+			if up == "" || strings.Contains(up, "/") {
+				return "" // a container/<name> upstream is not an address
+			}
+			return "http://" + up
+		}
+	}
+	return ""
 }

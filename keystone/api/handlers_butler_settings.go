@@ -70,6 +70,11 @@ func (s *Server) setButlerSettings(r *http.Request, id principal.Identity) (any,
 		// exactly what the form needs to say.
 		return nil, http.StatusBadRequest, err
 	}
+	// The household's clock follows at once: the timezone is a setting,
+	// not a startup flag (ADR-W033 B7.1 amendment's timezone note).
+	if s.HouseholdZone != nil {
+		s.HouseholdZone.Set(settings.Location())
+	}
 	stored, _, err := s.DB.GetButlerSettings()
 	if err != nil {
 		return nil, http.StatusInternalServerError, err

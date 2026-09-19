@@ -366,14 +366,29 @@ export function PendingPlan({
         )
       }
       body={
-        <>
-          Proposed by {plan.principal}
-          {plan.actingFor ? ` acting for ${plan.actingFor}` : ""}
-          {plan.basedOnHead ? `, against statefile ${plan.basedOnHead.slice(0, 8)}` : ""}.{" "}
-          {done
-            ? "Nothing else is waiting on you for this one."
-            : "Approving records who approved it and hands the plan to the reconciler."}
-        </>
+        plan.setting ? (
+          // A setting, not desired state: there is no reconciler step to
+          // read, so say exactly what approving changes.
+          <>
+            An agent proposed this{plan.actingFor ? ` after ${plan.actingFor} asked` : ""}.{" "}
+            {plan.setting.timezone && (
+              <>
+                Approving sets the household's time zone to <strong>{plan.setting.timezone}</strong>: agents,
+                the calendar and household rules read times in it from then on.
+              </>
+            )}
+            {plan.setting.reason && <> They said: “{plan.setting.reason}”.</>}
+          </>
+        ) : (
+          <>
+            Proposed by {plan.principal}
+            {plan.actingFor ? ` acting for ${plan.actingFor}` : ""}
+            {plan.basedOnHead ? `, against statefile ${plan.basedOnHead.slice(0, 8)}` : ""}.{" "}
+            {done
+              ? "Nothing else is waiting on you for this one."
+              : "Approving records who approved it and hands the plan to the reconciler."}
+          </>
+        )
       }
       actions={
         <>

@@ -51,6 +51,48 @@ type Metadata struct {
 	// visible — the deletions appear in the plan, to be read before the
 	// install is approved.
 	Exclusive bool `yaml:"exclusive,omitempty"`
+	// Instanced says the package may be installed more than once, each
+	// install an INSTANCE with its own name (#246; ADR-W033 B7.1). A chat
+	// platform is the case that needs it: one package, one bot per
+	// install, as many bots as the household has Agents to give them.
+	//
+	// An instance is a capability of its own, named
+	// "<capability>-<instance>" — so its resources, its owner, its
+	// settings and its removal are separate from every other instance's,
+	// through the same machinery a single-install package already uses.
+	// The instance name is the package's required `instance` param, and
+	// templates name their resources from .Capability so two instances
+	// never render the same resource.
+	Instanced bool `yaml:"instanced,omitempty"`
+}
+
+// InstanceParam is the param an instanced package's install is named by.
+const InstanceParam = "instance"
+
+// instanceNameRegexp bounds an instance name: short enough that
+// "<capability>-<instance>" stays a valid capability name, and nothing
+// but lowercase letters, digits and inner dashes.
+var instanceNameRegexp = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$`)
+
+// maxCapabilityName is the longest capability name the API accepts.
+const maxCapabilityName = 52
+
+// CapabilityFor is the capability an install of this package with these
+// params is: the package's own for a single-install package, and
+// "<capability>-<instance>" for an instanced one.
+func (p *Package) CapabilityFor(params map[string]string) (string, error) {
+	if !p.Metadata.Instanced {
+		return p.Metadata.Capability, nil
+	}
+	inst := params[InstanceParam]
+	if !instanceNameRegexp.MatchString(inst) {
+		return "", fmt.Errorf("%s: instance %q must be lowercase letters, digits and dashes, 1–24 characters", p.Metadata.Name, inst)
+	}
+	c := p.Metadata.Capability + "-" + inst
+	if len(c) > maxCapabilityName {
+		return "", fmt.Errorf("%s: instance %q makes the capability name %q longer than %d characters", p.Metadata.Name, inst, c, maxCapabilityName)
+	}
+	return c, nil
 }
 
 // Requirement is one entry of a package's `requires` list: a trait the
@@ -173,12 +215,6 @@ var ParamSources = map[string]bool{
 	// constraint visible, since a path outside those prefixes is refused
 	// at apply time and a picker simply never offers one.
 	"directory": true,
-	// The chat adapter image this deployment already runs, read from an
-	// installed chat capability's Container. Nothing publishes this
-	// image — the operator builds and pushes it — so the second adapter
-	// should not have to be told a digest the first one is already
-	// using.
-	"chat_adapter_image": true,
 	// Where household events are POSTed: the API's address plus the
 	// intake path, as something running ON A NODE reaches it.
 	//
@@ -473,6 +509,22 @@ func (p *Package) Validate() error {
 	}
 	if p.Metadata.Capability == "" {
 		return &ValidationError{Field: "metadata.capability", Msg: "must not be empty"}
+	}
+	if p.Metadata.Instanced {
+		// Replacing a sibling makes no sense for a package whose point
+		// is to run beside copies of itself.
+		if p.Metadata.Exclusive {
+			return &ValidationError{Field: "metadata.instanced", Msg: "an instanced package cannot also be exclusive"}
+		}
+		named := false
+		for _, param := range p.Params {
+			if param.Name == InstanceParam && param.Required {
+				named = true
+			}
+		}
+		if !named {
+			return &ValidationError{Field: "params", Msg: "an instanced package must declare a required \"instance\" param"}
+		}
 	}
 
 	for i, param := range p.Params {
@@ -873,6 +925,14 @@ type ResourceKey struct {
 // param defaults. A name that renders empty under the defaults is left
 // out: it has no identity until an operator supplies one.
 func ResourceKeys(pkg *Package) []ResourceKey {
+	// An instanced package's names come from .Capability, which is
+	// different for every instance and every package; unrendered they
+	// are all "-bot", which is no name at all. Its instances cannot
+	// collide with each other or with anything else by construction,
+	// and a lint renders them to check exactly that.
+	if pkg.Metadata.Instanced {
+		return nil
+	}
 	seen := map[ResourceKey]bool{}
 	var out []ResourceKey
 	for _, doc := range packageDocs(pkg) {
@@ -894,6 +954,12 @@ func ResourceKeys(pkg *Package) []ResourceKey {
 // that distinguishes them: caddy-tailnet-ts exists on a node running
 // that profile and caddy-tailnet does not.
 func ContainerNames(pkg *Package) []string {
+	// An instanced package names these per instance, from .Capability,
+	// so there is no one name to report: the instance's own rendered
+	// resources are the answer, and callers ask those instead.
+	if pkg.Metadata.Instanced {
+		return nil
+	}
 	seen := map[string]bool{}
 	var out []string
 	for _, doc := range packageDocs(pkg) {
@@ -920,6 +986,12 @@ func ContainerNames(pkg *Package) []string {
 // absent, and produce a container the reconciler correctly refuses to
 // start — with the screen showing the step as done.
 func ProvidedSecrets(pkg *Package) []string {
+	// An instanced package names these per instance, from .Capability,
+	// so there is no one name to report: the instance's own rendered
+	// resources are the answer, and callers ask those instead.
+	if pkg.Metadata.Instanced {
+		return nil
+	}
 	seen := map[string]bool{}
 	var out []string
 	for _, doc := range packageDocs(pkg) {

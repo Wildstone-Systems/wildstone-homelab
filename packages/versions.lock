@@ -19,10 +19,10 @@ budget-actual 1.1.0 68f1dfdf247433cc
 calendar-radicale 2.0.3 2494b32f58a01814
 cameras-frigate 1.0.1 0ac585beb5876da1
 captcha-flaresolverr 1.0.1 6420402a747e2ee5
-chat-matrix-admin 1.0.3 79c98d8ce2aafe03
-chat-matrix-family 1.0.3 498001d22dd17af9
-chat-telegram-admin 1.0.3 7af6584f75ffe23a
-chat-telegram-family 1.0.3 043ce5b37febd488
+chat-discord 2.0.0 f18460627b32cd15
+chat-matrix 2.0.0 ecc85c0ff5b1a5d0
+chat-slack 2.0.0 26174531dec4cc1d
+chat-telegram 2.0.0 84b38bec04e10fc1
 code-gitea 1.0.1 44a8494cd02dee51
 dashboard 1.0.1 c0a5ca5341926568
 dashboard-homarr 1.0.3 d6ad61a6afaacde0

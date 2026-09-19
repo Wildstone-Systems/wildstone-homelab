@@ -26,9 +26,14 @@ type MissingParamError struct {
 	// Unknown is true when Param was supplied but not declared by the
 	// package (rather than a required-but-missing param).
 	Unknown bool
+	// Reason, when set, is why a supplied value was refused.
+	Reason string
 }
 
 func (e *MissingParamError) Error() string {
+	if e.Reason != "" {
+		return "capability: " + e.Reason
+	}
 	if e.Unknown {
 		return fmt.Sprintf("capability: package %s: unknown param %q", e.Package, e.Param)
 	}
@@ -151,9 +156,15 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 	if err != nil {
 		return nil, err
 	}
-	wantOwner := "capability/" + pkg.Metadata.Capability
+	// The capability THIS install is: the package's own, or one instance
+	// of it (#246). Everything the install owns is owned by that name.
+	capName, err := pkg.CapabilityFor(merged)
+	if err != nil {
+		return nil, &MissingParamError{Package: pkg.Metadata.Name, Param: pkgspec.InstanceParam, Reason: err.Error()}
+	}
+	wantOwner := "capability/" + capName
 
-	ctx := templateContext{Params: merged, Resolved: resolved}
+	ctx := templateContext{Params: merged, Resolved: resolved, Capability: capName, Instance: merged[pkgspec.InstanceParam]}
 	var current []resource.Resource
 	if catalog != nil {
 		current = catalog.current
@@ -304,6 +315,13 @@ func AdapterSecretName(capability string) string {
 type templateContext struct {
 	Params   map[string]string
 	Resolved map[string]string
+	// Capability is the capability this install is — the package's own,
+	// or "<capability>-<instance>" for an instanced package (#246). An
+	// instanced package names its resources from it, so two instances
+	// never render the same resource.
+	Capability string
+	// Instance is the instance name, or "" for a single-install package.
+	Instance string
 }
 
 func mergeParams(pkg *pkgspec.Package, params map[string]string) (map[string]string, error) {

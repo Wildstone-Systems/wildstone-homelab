@@ -413,7 +413,7 @@ func (bs *Butlers) providerFor(b runtimedb.Butler) (provider.Provider, error) {
 // "I'm in America Chicago and it's only 18 SEP 2026" was doing this
 // line's job.
 func (bs *Butlers) clockLine() string {
-	loc := bs.Location
+	loc := bs.Zone.Or(bs.Location)
 	if loc == nil {
 		return ""
 	}

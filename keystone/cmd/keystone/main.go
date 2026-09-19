@@ -36,6 +36,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/consoleauth"
 	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/gateway"
+	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingest"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
@@ -313,7 +314,8 @@ func agentToolSources(cat *catalog.Catalog) []domestic.AgentToolSource {
 	if cat == nil {
 		return nil
 	}
-	var out []domestic.AgentToolSource
+	// Keystone's own household actions, declared like a package's.
+	out := append([]domestic.AgentToolSource(nil), domestic.BuiltinAgentTools...)
 	for _, p := range cat.List() {
 		if len(p.AgentTools) == 0 {
 			continue
@@ -921,6 +923,37 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	if err != nil {
 		return fmt.Errorf("-household-timezone %q: %w", householdCfg.Timezone, err)
 	}
+	// The household's timezone is a SETTING (ButlerSettings.Timezone),
+	// which an Owner can change — in the Console, or by approving an
+	// Agent's proposal — and everything that keeps the household's time
+	// reads it live through householdZone. -household-timezone seeds it
+	// when it has never been set (no row, or still the UTC default).
+	householdZone := householdtz.New(householdLoc)
+	if settings, stored, serr := db.GetButlerSettings(); serr != nil {
+		return fmt.Errorf("reading the household timezone: %w", serr)
+	} else if explicit := householdCfg.Timezone != "" && householdCfg.Timezone != "Local"; explicit &&
+		(!stored || settings.Timezone == "UTC") && settings.Timezone != householdCfg.Timezone {
+		settings.Timezone = householdCfg.Timezone
+		settings.UpdatedBy = "keystone -household-timezone"
+		if err := db.SetButlerSettings(settings); err != nil {
+			return fmt.Errorf("seeding the household timezone: %w", err)
+		}
+		householdZone.Set(householdLoc)
+	} else if stored && settings.Timezone != "UTC" {
+		householdZone.Set(settings.Location())
+	}
+	// A household clock that is UTC because nobody said otherwise is
+	// almost never where the household lives — servers and VMs run on
+	// UTC — and nothing else says so: the Butler is told UTC is the
+	// household's clock, and "3pm" lands five hours off for a family in
+	// Chicago. Said at every start until it is set.
+	zoneName := householdZone.Location().String()
+	if _, offset := time.Now().In(householdZone.Location()).Zone(); zoneName == "UTC" || zoneName == "Etc/UTC" ||
+		(zoneName == "Local" && offset == 0) {
+		log.Warn("the household timezone is UTC: times the household says (\"3pm\", \"tomorrow\") are read as UTC. "+
+			"Set it in the Console (Butler settings), or with -household-timezone, to where the household lives",
+			"zone", householdZone.Location().String(), "example", "America/Chicago")
+	}
 	// The calendar's household actions (ADR-W034 phase 4).
 	//
 	// Registered whenever a collection is configured, which is the human
@@ -939,6 +972,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				Username:      householdCfg.CalendarUser,
 				Password:      os.Getenv("CALENDAR_PASSWORD"),
 				Location:      householdLoc,
+				Zone:          householdZone,
 				// Writable because the tools are the point. The read
 				// tools work without it; the three write ones would
 				// register and refuse, which is a Butler offering the
@@ -946,6 +980,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				Writable: true,
 			},
 			Location: householdLoc,
+			Zone:     householdZone,
 		}
 		for _, e := range cal.Executors() {
 			actions.Register(e)
@@ -972,7 +1007,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		automationEvery = 15 * time.Second
 	}
 	auto := &automation.Engine{
-		DB: db, State: state, Log: log, Location: householdLoc, Actions: actions,
+		DB: db, State: state, Log: log, Location: householdLoc, Zone: householdZone, Actions: actions,
 	}
 	// Run starts below, once the Butler wiring has had its chance to
 	// install the escalator: the engine's fields are read by its loop,
@@ -983,6 +1018,10 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv := api.New(principals, db, state, log)
 	apiSrv.ConsoleEntryWindow, apiSrv.ConsoleStepUpWindow = householdCfg.ConsoleEntryWindow, householdCfg.ConsoleStepUpWindow
 	apiSrv.HouseholdLoc = householdLoc
+	apiSrv.HouseholdZone = householdZone
+	// An Agent that hears the household's clock is wrong can propose the
+	// right zone; an Owner approves it (ADR-W033 E2).
+	actions.Register(&domestic.TimezoneProposer{Propose: apiSrv.ProposeHouseholdTimezone})
 	// The household review page is reachable only from the identity
 	// proxy. Exact addresses, not a CIDR or a hostname: the proxy is
 	// one container on one network, and an exact match cannot be
@@ -1235,7 +1274,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// agent's read tool needs it just below and the timer starts it
 	// further down — one engine either way, so the household's answer to
 	// "what is due" is the same whoever asks.
-	upkeepEngine := &upkeep.Engine{DB: db, State: state, Loc: householdLoc, Log: log}
+	upkeepEngine := &upkeep.Engine{DB: db, State: state, Loc: householdLoc, Zone: householdZone, Log: log}
 
 	if bp, backend, err := newButlerProvider(butlerCfg); err != nil {
 		return err
@@ -1470,6 +1509,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				// Every Butler is told the date and time in the
 				// household's zone; see butlerlive.clockLine.
 				Location: householdLoc,
+				Zone:     householdZone,
 				// The provider is built from the MODEL the Butler was
 				// assigned, and from nothing else. There is no argument
 				// here that could come from a message: this function is

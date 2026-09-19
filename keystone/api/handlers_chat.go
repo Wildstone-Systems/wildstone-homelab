@@ -305,13 +305,23 @@ func (s *Server) redeemChatClaim(r *http.Request, id principal.Identity) (any, i
 	if err != nil {
 		return nil, st, err
 	}
+	// A key is the one thing a stranger may send, and guessing is
+	// hopeless, but each attempt is still a lookup: a few per account,
+	// then one every two minutes (ADR-W033 B9.1).
+	if !s.limiter.take(fmt.Sprintf("\x00redeem:%d:%s", at.Seq, account), redeemBurst, redeemPerSec) {
+		return nil, http.StatusTooManyRequests, fmt.Errorf("too many attempts; wait a while")
+	}
 	binding, err := s.Principals.RedeemChatClaim(req.Code, at, account,
 		trimDisplayName(req.DisplayName), strings.TrimSpace(req.Conversation))
 	if errors.Is(err, runtimedb.ErrClaimCode) {
 		// One refusal for every reason (unknown, expired, spent, wrong
 		// transport): an adapter relaying codes for strangers must not be
 		// able to tell them apart.
-		s.event("chat.claim_refused", "", id, fmt.Sprintf("claim refused for %s account", at.Transport))
+		// Noted once per account per ten minutes, so failed guesses
+		// cannot grow the stream.
+		if s.limiter.take(fmt.Sprintf("\x00redeemnote:%d:%s", at.Seq, account), 1, 1.0/600) {
+			s.event("chat.claim_refused", "", id, fmt.Sprintf("claim refused for %s account", at.Transport))
+		}
 		return nil, http.StatusForbidden, fmt.Errorf("that code is not valid")
 	}
 	if err != nil {

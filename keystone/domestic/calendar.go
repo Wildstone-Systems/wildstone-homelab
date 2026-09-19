@@ -37,6 +37,7 @@ package domestic
 import (
 	"context"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
 	"sort"
 	"strconv"
 	"strings"
@@ -118,6 +119,9 @@ type Calendar struct {
 	// and how a wall-clock time with no offset is read; a calendar
 	// answered in UTC is wrong for most of the day in most of the world.
 	Location *time.Location
+	// Zone, when set, is the household's live timezone and wins over
+	// Location, so an approved change applies without a restart.
+	Zone *householdtz.Zone
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 	// Handoff answers "where is the calendar and how do I add it", for
@@ -153,6 +157,9 @@ func (c *Calendar) now() time.Time {
 }
 
 func (c *Calendar) location() *time.Location {
+	if l := c.Zone.Location(); l != nil {
+		return l
+	}
 	if c.Location != nil {
 		return c.Location
 	}
