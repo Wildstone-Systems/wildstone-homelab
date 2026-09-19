@@ -20,7 +20,7 @@ package butler
 // one: the capability is absent, not guarded (structural_test.go pins
 // the field set).
 //
-// Its three tools are:
+// Its three core tools are:
 //
 //   - get_household_events — targeted reads of the household timeline
 //     (ADR-W024 A2), always through the injected Events seam. Attacker-
@@ -33,6 +33,20 @@ package butler
 //     spirit as the policy/gateway pair: this gateway refuses to ASK for
 //     anything above the domestic tier, and the domestic gateway refuses
 //     to RUN it.
+//
+// Registered beside them, each ONLY where its seam is wired, are
+// describe_capabilities (the self-capability tool, manifest.go), recall
+// and remember (memory.go), record_meter_reading (tools_reading.go, the
+// one household write that is not an action) and the Home page's four
+// readings — get_upkeep, get_activity, get_notifications and
+// get_machine_stats (tools_home.go). Every one of the last four is a
+// read of something KEYSTONE owns rather than an installed capability,
+// which is why they are seams here instead of agentTools on a package:
+// they work on a deployment with no capabilities installed at all.
+//
+// None of them widens the ceiling. There is no tool on this surface
+// that closes a commitment, clears a notification, answers a question
+// on somebody's behalf, or touches a machine.
 //
 // A gateway is bound to ONE member for the life of one session
 // (NewHouseholdGateway takes the member). That is what makes the audit
@@ -170,6 +184,19 @@ type HouseholdSeams struct {
 	// DB; this package holds no storage. nil withholds the tool
 	// entirely, rather than advertising one that cannot write.
 	RecordReading func(ctx context.Context, c ReadingCall) (string, error)
+	// The four Home-page readings (tools_home.go). Each is Keystone's
+	// own — the commitment pass, the household timeline rendered, the
+	// notices table, the node agent — rather than an installed
+	// capability's, which is why they are seams here instead of
+	// agentTools on some package. None of them writes anything.
+	//
+	// nil withholds the tool, as everywhere else on this surface: a
+	// Butler that answers "the machines are fine" from a seam nobody
+	// wired has told the household something it does not know.
+	Upkeep        func(ctx context.Context) ([]CommitmentLine, error)
+	Activity      func(ctx context.Context, q ActivityLookup) ([]ActivityLine, error)
+	Notifications func(ctx context.Context, q NotificationLookup) (NotificationDigest, error)
+	Machines      func(ctx context.Context) ([]MachineReading, error)
 	// MaxContentBytes bounds one tool result. <= 0 uses the package
 	// default.
 	MaxContentBytes int
@@ -271,6 +298,33 @@ func NewHouseholdGateway(member string, seams HouseholdSeams) *HouseholdGateway 
 		gw.tools["record_meter_reading"] = householdEntry{
 			Spec: recordReadingSpec, Mutating: true, Handler: handleRecordReading,
 		}
+	}
+	// The Home page's own readings (tools_home.go). All four are reads,
+	// so none carries Mutating and a QA-only session keeps every one of
+	// them: a model the household has not been shown to work can still
+	// answer "is anything overdue".
+	//
+	// Untrusted where the text was written by somebody else. An
+	// activity line names a subject a publisher supplied, and a
+	// notification's question was phrased from a call's own parameters,
+	// so both carry the envelope exactly as timeline events do. Upkeep
+	// and machine readings do not: a commitment's description came from
+	// a resource a human approved, and a percentage is a number.
+	if seams.Upkeep != nil {
+		gw.tools["get_upkeep"] = householdEntry{Spec: upkeepSpec, Handler: handleGetUpkeep}
+	}
+	if seams.Activity != nil {
+		gw.tools["get_activity"] = householdEntry{
+			Spec: activitySpec, Untrusted: true, Handler: handleGetActivity,
+		}
+	}
+	if seams.Notifications != nil {
+		gw.tools["get_notifications"] = householdEntry{
+			Spec: notificationsSpec, Untrusted: true, Handler: handleGetNotifications,
+		}
+	}
+	if seams.Machines != nil {
+		gw.tools["get_machine_stats"] = householdEntry{Spec: machineStatsSpec, Handler: handleGetMachineStats}
 	}
 	// Registered only when the seam is wired. A tool that always answers
 	// "memory is not turned on" is one the manifest should not advertise
@@ -438,6 +492,14 @@ func (gw *HouseholdGateway) wired(name string) bool {
 		return gw.seams.Memory.Remember != nil
 	case "record_meter_reading":
 		return gw.seams.RecordReading != nil
+	case "get_upkeep":
+		return gw.seams.Upkeep != nil
+	case "get_activity":
+		return gw.seams.Activity != nil
+	case "get_notifications":
+		return gw.seams.Notifications != nil
+	case "get_machine_stats":
+		return gw.seams.Machines != nil
 	case "describe_capabilities":
 		// Reads only what the gateway already holds, so it is wired
 		// wherever the surface is.
@@ -784,6 +846,14 @@ What you can do, and it is the whole list:
     "is there anything this weekend" are calendar.get_agenda,
     calendar.search_events and calendar.check_availability — not the
     timeline, which records what happened and holds no appointments.
+  - The Home page's own four readings, where this household has them:
+    get_upkeep is what is due, overdue or waiting on a number;
+    get_activity is what has happened around the house, in sentences;
+    get_notifications is what the person you are talking to has missed
+    and what is still waiting on their answer; get_machine_stats is how
+    the machines are doing. All four only READ. You cannot mark upkeep
+    done, clear a notification, answer a question on somebody's behalf,
+    or touch a machine — so never say you have.
   - remember keeps one thing somebody asks you to remember, and recall
     looks it back up in a later conversation. Both are offered only where
     this household has turned memory on. Keep what a person actually

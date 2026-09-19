@@ -51,6 +51,41 @@ This is enforced structurally, not by convention or code review:
 | `explain_resource` | read | Statefile lookup + `resource.Marshal` |
 | `propose_change` | **write (plan-mediated only)** | builds the resource, `plan.Diff`, `policyValidate` — returns a `Plan`, never applies |
 
+## The family surface's tools
+
+The operator table above is `ToolGateway`. `HouseholdGateway`
+(`household.go`) is the other surface, and it registers a tool only
+where its seam is wired — a deployment that has not wired one withholds
+it rather than advertising a reading the Butler cannot take.
+
+| Tool | Kind | Backed by |
+|---|---|---|
+| `get_household_events` | read (untrusted) | the household timeline, narrowed |
+| `list_household_actions` | read | the deployment's own action vocabulary |
+| `do_household_action` | **write (domestic tier only)** | `keystone/domestic`, tier-checked twice |
+| `describe_capabilities` | read | this surface's own manifest |
+| `recall` / `remember` | read / write | memory (ADR-W030 A3), where turned on |
+| `record_meter_reading` | write | one number a person said out loud (ADR-W035 A3) |
+| `get_upkeep` | read | the commitment pass — what is due, overdue or unresolved |
+| `get_activity` | read (untrusted) | the household timeline as the Activity page's sentences |
+| `get_notifications` | read (untrusted) | the notices table, for the SESSION's member only |
+| `get_machine_stats` | read | one live probe per node; no hostnames reach this surface |
+
+The last four (`tools_home.go`) are the Home page's own cards, for a
+member who is in a conversation rather than in front of the page. They
+are seams rather than `agentTools` on a package because each reads
+something **Keystone** owns — the commitment pass, the household
+timeline, the notices table, the node agent — and works on a deployment
+with no capabilities installed at all. A reading that comes from an
+INSTALLED capability is declared by that capability's package and
+dispatched through `do_household_action` instead, so that the gateway's
+declaration check stops a Butler offering the household something it
+has not got. `calendar.*` and `filedrop.*` are that road.
+
+None of the four widens the ceiling: there is no tool on this surface
+that closes a commitment, clears a notification, answers a question on
+somebody's behalf, or touches a machine.
+
 ## Redaction: centralized, not per-tool
 
 Every tool result — regardless of which handler produced it — passes

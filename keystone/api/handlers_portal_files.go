@@ -353,3 +353,28 @@ func (s *Server) filedropRename(_ http.ResponseWriter, r *http.Request, member s
 	// nobody in the family is served by.
 	return map[string]any{"name": final, "namespace": ns, "renamed": final != to}, http.StatusOK, nil
 }
+
+// FiledropSettings reports where the household's drop box is, from
+// current desired state, for a caller that is not serving a request.
+//
+// It exists for the agent tools (keystone/domestic.Filedrop): those run
+// on a household session or a rule rather than on an HTTP request, so
+// they have no `desired` in hand and must not keep one — the storage
+// root is a ConfigFile a capability renders, and an install that
+// happens after Keystone started must reach them.
+//
+// It returns no member and takes none. Which folder "mine" is stays the
+// store's question, answered from the call's own subject, so there is
+// no path here through which one member's space could be resolved for
+// another.
+func (s *Server) FiledropSettings() (string, int64, error) {
+	if s == nil || s.State == nil {
+		return "", 0, fmt.Errorf("this control plane cannot read desired state")
+	}
+	desired, err := s.State.Load()
+	if err != nil {
+		return "", 0, err
+	}
+	store := filedropStore(desired, "")
+	return store.Root, store.MaxUpload, nil
+}
