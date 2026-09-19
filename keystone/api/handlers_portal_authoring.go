@@ -460,6 +460,32 @@ func (s *Server) homeAddCommitment(_ http.ResponseWriter, r *http.Request, membe
 	return map[string]any{"commitment": name}, http.StatusCreated, nil
 }
 
+// clockSpanProblem refuses the family page a calendar interval shorter
+// than a day.
+//
+// Validation accepts Go's h/m/s spans for the clock, and "m" is minutes
+// there, so "6m" — what a person types for six months — was a reminder
+// every six minutes, accepted without a word. Nothing a household keeps
+// up with through this page recurs in hours, so the page's door names
+// the units that exist for it instead, and says what "m" would have
+// meant. Counters and other callers are untouched.
+func clockSpanProblem(meter string, fields map[string]string) error {
+	if meter != "" && meter != resource.MeterClock {
+		return nil
+	}
+	for _, name := range []string{"every", "lead"} {
+		v := strings.TrimSpace(fields[name])
+		unit := strings.TrimLeft(v, "0123456789.")
+		switch unit {
+		case "h", "s", "ms", "us", "ns":
+			return fmt.Errorf("%s %q is shorter than a day: use days (d), weeks (w), months (mo) or years (yr)", name, v)
+		case "m":
+			return fmt.Errorf("%s %q would be minutes — for months, write %smo", name, v, strings.TrimSuffix(v, "m"))
+		}
+	}
+	return nil
+}
+
 // commitmentResource builds the document from typed fields. Nothing a
 // member sends becomes a Kind.
 func (s *Server) commitmentResource(f commitmentFields, member, meter string) (resource.Resource, string, int, error) {
@@ -471,6 +497,9 @@ func (s *Server) commitmentResource(f commitmentFields, member, meter string) (r
 			fmt.Errorf("does this come round again? (%s)", strings.Join(resource.CommitmentRollovers(), ", "))
 	}
 	f.Meter = meter
+	if err := clockSpanProblem(meter, map[string]string{"every": f.Every, "lead": f.Lead}); err != nil {
+		return resource.Resource{}, "", http.StatusBadRequest, err
+	}
 	if f.Anchor == "" {
 		// Tracking starts today unless somebody says otherwise. A
 		// commitment with no anchor is refused by validation, and "when
@@ -579,6 +608,9 @@ func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, memb
 	}
 	if edited.Meter == "" {
 		edited.Meter = resource.MeterClock
+	}
+	if err := clockSpanProblem(edited.Meter, map[string]string{"every": edited.Every, "lead": edited.Lead}); err != nil {
+		return nil, http.StatusBadRequest, err
 	}
 	if len(spec.Due) == 0 {
 		spec.Due = []resource.CommitmentDue{edited}

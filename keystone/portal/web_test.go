@@ -880,3 +880,37 @@ func TestNoPageHelperIsShadowedByALocal(t *testing.T) {
 		}
 	}
 }
+
+// The tracker's form asks for dates, and never for minutes.
+//
+// It used to offer one free-text box for "how often" ("5000, or 3mo"),
+// where "6m" was six minutes, and no date at all — so "last done in
+// July", "due every 1 March" and "renew by next spring" could not be
+// said, and tracking silently started today.
+func TestTheTrackerFormSpeaksInDates(t *testing.T) {
+	body, ok := Page("upkeep")
+	if !ok {
+		t.Fatal("the tracker page is not served")
+	}
+	page := string(body)
+	for _, want := range []string{
+		`type: "date"`,                     // a real date picker
+		`"When was it last done?"`,         // fromCompletion's anchor
+		`"When is the next one due?"`,      // fromSchedule's first due date
+		`"When is it due?"`,                // a one-off's at
+		`body.at = fmtDay(date)`,           // a one-off sends an absolute date
+		`body.requiresBooking = true`,      // "needs booking" can be said
+		`step(date, -every.n, every.unit)`, // fixed schedules walk back one gap
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the tracker form no longer has %s", want)
+		}
+	}
+	units := regexp.MustCompile(`(?s)var calendarUnits = \[(.*?)\];\s*var leadUnits = \[(.*?)\];`).FindStringSubmatch(page)
+	if units == nil {
+		t.Fatal("the unit pickers are gone")
+	}
+	if regexp.MustCompile(`value: "(m|h|s)"`).MatchString(units[1] + units[2]) {
+		t.Error("a unit picker offers minutes, hours or seconds, which no household reminder counts in")
+	}
+}

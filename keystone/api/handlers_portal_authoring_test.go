@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -686,4 +687,58 @@ func TestAWriteThatLostARaceIsRefusedRatherThanSilentlyWinning(t *testing.T) {
 		}
 	}
 	t.Fatal("the commitment vanished")
+}
+
+// "6m" is not six minutes on the family page.
+//
+// Validation reads Go's units, where m is minutes, so a household typing
+// "every 6m" for six months got a reminder every six minutes, accepted
+// silently. The page's door refuses anything shorter than a day on the
+// calendar and says what m would have meant — on add and on edit.
+func TestTheCalendarDoesNotCountInMinutes(t *testing.T) {
+	h := commitmentHarness(t)
+	for _, c := range []struct{ every, lead, want string }{
+		{"6m", "", "for months, write 6mo"},
+		{"1yr", "2m", "for months, write 2mo"},
+		{"36h", "", "shorter than a day"},
+	} {
+		code, out := h.authored(t, http.MethodPost, "/api/v1/home/commitments", "mika", map[string]any{
+			"description": "Filter", "every": c.every, "lead": c.lead, "rollover": resource.RolloverFromCompletion,
+		})
+		if code == http.StatusCreated {
+			t.Errorf("every %q lead %q was accepted", c.every, c.lead)
+			continue
+		}
+		if !strings.Contains(fmt.Sprint(out), c.want) {
+			t.Errorf("every %q lead %q: refusal %v does not say %q", c.every, c.lead, out, c.want)
+		}
+	}
+	// What the page actually sends still works.
+	if code, out := h.authored(t, http.MethodPost, "/api/v1/home/commitments", "mika", map[string]any{
+		"description": "Registration", "every": "1yr", "lead": "2w", "anchor": "2026-03-01",
+		"rollover": resource.RolloverFromSchedule,
+	}); code != http.StatusCreated {
+		t.Fatalf("a calendar reminder in years was refused: %d %+v", code, out)
+	}
+
+	h.declareCommitment(t, "filter", resource.CommitmentSpec{
+		Description: "Furnace filter", Rollover: resource.RolloverFromCompletion, Anchor: "2024-01-01",
+		Due: []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "3mo"}},
+	}, "household")
+	if code, _ := h.authored(t, http.MethodPut, "/api/v1/home/commitments/filter", "mika", map[string]any{
+		"description": "Furnace filter", "every": "3m", "rollover": resource.RolloverFromCompletion,
+	}); code == http.StatusOK {
+		t.Error("an edit to every 3m (minutes) was accepted")
+	}
+}
+
+// A one-off with a date is what the page sends for "just the once": an
+// absolute due date and no interval.
+func TestAOneOffOnTheCalendarTakesADate(t *testing.T) {
+	h := commitmentHarness(t)
+	if code, out := h.authored(t, http.MethodPost, "/api/v1/home/commitments", "mika", map[string]any{
+		"description": "Renew passport", "at": "2027-03-01", "lead": "2mo", "rollover": resource.RolloverOnce,
+	}); code != http.StatusCreated {
+		t.Fatalf("a dated one-off was refused: %d %+v", code, out)
+	}
 }
