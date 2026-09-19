@@ -105,6 +105,12 @@ export function TabTools({
         ))}
       </div>
 
+      <HouseholdActions
+        actions={tools?.actions ?? []}
+        gate={rows.find((t) => t.name === "do_household_action")}
+        gateOff={narrowed["do_household_action"] !== undefined}
+      />
+
       {unwired.length > 0 && (
         <div className="tool-locked-section">
           <div className="eyebrow">
@@ -181,6 +187,85 @@ export function Tool({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// What a household Butler can reach through do_household_action.
+//
+// A family Butler is not handed calendar.create_event as a tool of its
+// own: it has one tool that performs a household action, and the
+// actions are what the installed packages declare. Listing only the
+// tools therefore showed Sandy with four generic switches and no sign
+// of the calendar the house had just installed. The server already
+// sends the actions beside the tools; this draws them.
+//
+// No switch per action, because the engine has none — narrowing
+// do_household_action is how a Butler is kept out of them, and a
+// control the engine ignores is worse than no control. What each row
+// carries instead is its tier, which is the thing that decides whether
+// the Butler just does it or asks first.
+const tierLabel: Record<string, { text: string; kind: "ok" | "warn" | "mute" }> = {
+  read: { text: "looks only", kind: "ok" },
+  domestic: { text: "does something", kind: "warn" },
+  confirm: { text: "asks first", kind: "warn" },
+};
+
+export function HouseholdActions({
+  actions,
+  gate,
+  gateOff,
+}: {
+  actions: { tool: string; tier: string }[];
+  gate?: CapabilityTool;
+  gateOff: boolean;
+}) {
+  if (actions.length === 0) {
+    return null;
+  }
+  const reachable = !gateOff && !!gate?.available;
+  const groups = new Map<string, { tool: string; tier: string }[]>();
+  for (const a of actions) {
+    const cap = a.tool.includes(".") ? a.tool.slice(0, a.tool.indexOf(".")) : a.tool;
+    groups.set(cap, [...(groups.get(cap) ?? []), a]);
+  }
+  return (
+    <div className="tool-locked-section">
+      <div className="eyebrow">
+        {`HOUSEHOLD ACTIONS — ${actions.length} from ${groups.size} ${groups.size === 1 ? "package" : "packages"}`}
+      </div>
+      <div className="note">
+        {reachable ? (
+          <>
+            Reached through <code>do_household_action</code>. They come from the packages this house
+            has installed; to keep this Butler out of all of them, switch that tool off.
+          </>
+        ) : (
+          <>
+            <StatusPill kind="mute">not reachable</StatusPill> <code>do_household_action</code> is{" "}
+            {gateOff ? "switched off" : "unavailable"} for this Butler, so none of these can be used
+            until it is back.
+          </>
+        )}
+      </div>
+      {[...groups.entries()].map(([cap, list]) => (
+        <div className="tool-list" key={cap}>
+          <div className="muted">{cap}</div>
+          {list.map((a) => {
+            const tier = tierLabel[a.tier] ?? { text: a.tier, kind: "mute" as const };
+            return (
+              <div className={`tool-row${reachable ? "" : " tool-locked"}`} key={a.tool}>
+                <div className="cell">
+                  <div className="row tool-name">
+                    <code>{a.tool}</code>
+                    <StatusPill kind={tier.kind}>{tier.text}</StatusPill>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }
