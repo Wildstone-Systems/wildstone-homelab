@@ -724,6 +724,16 @@ read_keystone_args() {
 #
 # A flag's value is the following token ONLY when that token is not itself
 # a flag, which keeps a boolean flag from swallowing the next flag's name.
+# keystone_arg_named reports whether a flag is already set for this run,
+# either on this invocation's --keystone-arg or in the env file a
+# previous run wrote. Both matter: the operator may have named it just
+# now, or named it once and expect it to stick.
+keystone_arg_named() { # flag
+  case " $KEYSTONE_ARGS " in *" $1 "*) return 0 ;; esac
+  case " $(read_keystone_args) " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+
 merge_keystone_args() {
   local existing="$1" new="$2" names=" " tok out="" drop=0
   # Unquoted $existing / $new is deliberate — word splitting is the whole
@@ -1182,7 +1192,16 @@ if [ "$ROLE" = keystone ]; then
   # a question: the non-interactive path joins a tailnet without ever
   # setting WANT_TAILSCALE, and a flag that disagreed with reality here
   # would bind the wrong interface on exactly the hosts that need it.
-  if tailscale ip -4 >/dev/null 2>&1; then
+  #
+  # Never over an operator who named one. An explicit -api-listen is a
+  # deliberate choice about where a control plane answers, the same kind
+  # of choice --console-dir is treated as a few lines above, and
+  # docs/audit/runtime-access.md documents a second Keystone on
+  # `-api-listen 127.0.0.1:19441` that this would quietly hijack. Go's
+  # flag package takes the LAST occurrence and reports nothing, so the
+  # override would not even announce itself — the audit instance would
+  # simply come up on the wrong interface.
+  if tailscale ip -4 >/dev/null 2>&1 && ! keystone_arg_named -api-listen; then
     KEYSTONE_ARGS="$KEYSTONE_ARGS -api-listen 0.0.0.0:9441"
     KEYSTONE_ARGS_SET=1
   fi

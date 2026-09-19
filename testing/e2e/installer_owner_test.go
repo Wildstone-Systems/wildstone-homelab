@@ -333,6 +333,38 @@ func TestInstallPutsTheConsoleBehindTheProxy(t *testing.T) {
 	}
 }
 
+// An operator who named -api-listen keeps it.
+//
+// Binding 0.0.0.0 is something the installer does FOR a household that
+// has an ingress, never something it does TO one that made its own
+// choice. docs/audit/runtime-access.md documents a second Keystone on
+// `-api-listen 127.0.0.1:19441`, and Go's flag package takes the last
+// occurrence and reports nothing — so an unguarded append would move
+// that instance to a different interface without a word anywhere.
+//
+// The installer already treats --console-dir this way and says so at
+// the call site; this is the same rule, and the test exists because the
+// guard is one line and reads like a nicety rather than the thing that
+// keeps an explicit choice explicit.
+func TestInstallDoesNotOverrideAnOperatorsApiListen(t *testing.T) {
+	src := installerSource(t)
+	idx := strings.Index(src, "-api-listen 0.0.0.0:9441")
+	if idx < 0 {
+		t.Fatal("the installer no longer binds the API where the proxy can reach it")
+	}
+	// The guard sits on the branch that sets it, not merely somewhere in
+	// the file: a check elsewhere would satisfy a looser test while the
+	// append still ran unconditionally.
+	start := strings.LastIndex(src[:idx], "\n  if ")
+	if start < 0 {
+		t.Fatal("could not find the condition guarding the api-listen append")
+	}
+	guard := src[start:idx]
+	if !strings.Contains(guard, "keystone_arg_named -api-listen") {
+		t.Errorf("the api-listen append is not guarded by an operator's own choice:\n%s", guard)
+	}
+}
+
 // The package is installed before the Owner who is put in its group.
 //
 // Ordering, asserted as ordering rather than presence, because both
