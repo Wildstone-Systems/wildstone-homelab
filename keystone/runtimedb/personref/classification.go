@@ -444,6 +444,8 @@ var Columns = []Column{
 		"an RFC3339 timestamp: when the appointment was made"},
 	{"commitment_bookings", "cancelled_at", NotAPerson,
 		"an RFC3339 timestamp, empty while the booking stands"},
+	{"commitment_bookings", "calendar_event", NotAPerson,
+		"the CalDAV href of the event the booking made — an address in the household calendar, not somebody"},
 	{"commitment_completions", "commitment", NotAPerson,
 		"the metadata.name of a Commitment resource"},
 	{"commitment_completions", "positions", NotAPerson,

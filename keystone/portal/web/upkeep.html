@@ -477,6 +477,22 @@
   function taskFields(stack, meters) {
     stack.appendChild(field("What do you want to keep up with?", "f-desc",
       { placeholder: "Oil and filter" }));
+    // Who it is about. A child's checkup is theirs, not the household's:
+    // it is titled with their name on the calendar, and only the people
+    // who look after them are asked about it. Suggestions, not a closed
+    // list, and empty is the whole household.
+    var about = field("Who is it for? (leave empty for the whole household)", "f-about",
+      { placeholder: "Kai" });
+    var list = make("datalist", "");
+    list.id = "f-about-people";
+    ((page && page.people) || []).forEach(function (p) {
+      var o = make("option", "");
+      o.value = p;
+      list.appendChild(o);
+    });
+    about.querySelector("input").setAttribute("list", list.id);
+    about.appendChild(list);
+    stack.appendChild(about);
     if (meters && meters.length) {
       var opts = [{ value: "", label: "The calendar" }];
       meters.forEach(function (m) { opts.push({ value: m.name, label: m.description || m.name }); });
@@ -523,6 +539,12 @@
   function taskBody() {
     var roll = val("f-rollover") || "fromCompletion";
     var body = { description: val("f-desc"), rollover: roll };
+    var who = val("f-about").toLowerCase();
+    if (who) {
+      // The same shape the server takes after household/ (nameRegexp).
+      if (!/^[a-z0-9]([a-z0-9._-]{0,61}[a-z0-9])?$/.test(who)) { return { error: "who it is for is one name, like kai" }; }
+      body.about = who;
+    }
     if (el("f-booking") && el("f-booking").checked) { body.requiresBooking = true; }
     if (!body.description) { return { error: "say what you want to keep up with" }; }
     var m = el("f-meter");

@@ -1122,6 +1122,21 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		}
 		// The calendar page writes through the very same upstream.
 		apiSrv.CalendarBook = calendarActions.Upstream
+		// Bookings follow the calendar events they made: an appointment
+		// moved or deleted on a phone moves or cancels the booking here.
+		// Every two minutes, because a household that moves the dentist
+		// and then looks at Coming up should see it moved, and one read
+		// per linked booking is cheap.
+		go func() {
+			for {
+				time.Sleep(2 * time.Minute)
+				if n, serr := apiSrv.SyncCalendarBookings(context.Background()); serr != nil {
+					log.Warn("calendar bookings sync", "err", serr)
+				} else if n > 0 {
+					log.Info("calendar bookings sync", "changed", n)
+				}
+			}
+		}()
 		calendarActions.Handoff = func(member string) (domestic.CalendarHandoff, bool, error) {
 			h, ok, herr := apiSrv.CalendarHandoffFor(member)
 			if herr != nil || !ok {

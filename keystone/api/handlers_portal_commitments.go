@@ -286,10 +286,15 @@ func commitmentTone(st upkeep.Standing) portal.Tone {
 type commitmentAnswer struct {
 	// Done, Waived and Booked are the three things a member can say.
 	// Exactly one per request; the route says which.
-	At     *time.Time         `json:"at,omitempty"`
-	Reason string             `json:"reason,omitempty"`
-	Note   string             `json:"note,omitempty"`
-	Meters map[string]float64 `json:"meters,omitempty"`
+	At *time.Time `json:"at,omitempty"`
+	// AllDay and Minutes shape the calendar event a booking makes: a
+	// day with no time is an all-day event, a time is an appointment
+	// lasting Minutes (an hour when unsaid).
+	AllDay  bool               `json:"allDay,omitempty"`
+	Minutes int                `json:"minutes,omitempty"`
+	Reason  string             `json:"reason,omitempty"`
+	Note    string             `json:"note,omitempty"`
+	Meters  map[string]float64 `json:"meters,omitempty"`
 }
 
 // answerCommitment records that a member did it, skipped it, or booked
@@ -339,14 +344,7 @@ func (s *Server) answerCommitment(what string) portalFunc {
 			if req.At == nil {
 				return nil, http.StatusBadRequest, fmt.Errorf("when is the appointment?")
 			}
-			seq, err := s.DB.RecordCommitmentBooking(runtimedb.CommitmentBooking{
-				Commitment: name, At: at, BookedBy: member, Note: req.Note,
-			})
-			if err != nil {
-				return nil, http.StatusInternalServerError, err
-			}
-			s.pokeUpkeep()
-			return map[string]any{"seq": seq}, http.StatusCreated, nil
+			return s.bookCommitment(r.Context(), st, member, at, req)
 		}
 		return nil, http.StatusBadRequest, fmt.Errorf("unknown answer %q", what)
 	}

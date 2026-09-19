@@ -742,7 +742,13 @@
       } else if (i.decidable && i.ref && i.asks && i.asks.length) {
         row = make("div", "asks indent");
         var dateWanted = wantsBooking(i.asks) ? dateBox() : null;
-        if (dateWanted) { row.appendChild(dateWanted); }
+        if (dateWanted) {
+          row.appendChild(dateWanted);
+          // The time is optional: a day alone is an all-day event on the
+          // household calendar, a time is an hour-long appointment.
+          dateWanted.timeInput = timeBox();
+          row.appendChild(dateWanted.timeInput);
+        }
         var noteWanted = noteBox();
         row.appendChild(noteWanted);
         // Each answer submits only the numbers ITS OWN commitment
@@ -830,6 +836,21 @@
     box.type = "date";
     box.setAttribute("aria-label", "When is the appointment");
     return box;
+  }
+
+  function timeBox() {
+    var box = make("input", "hinput");
+    box.type = "time";
+    box.setAttribute("aria-label", "What time (optional)");
+    return box;
+  }
+
+  // atTime is a local date and time as an instant, or null.
+  function atTime(ymd, hm) {
+    var p = String(ymd || "").split("-"), t = String(hm || "").split(":");
+    if (p.length !== 3 || t.length < 2) { return null; }
+    var d = new Date(+p[0], +p[1] - 1, +p[2], +t[0], +t[1], 0);
+    return isNaN(d.getTime()) ? null : d.toISOString();
   }
 
   // A DATE IS A DAY, AND A DAY IS NOT OVER AT MIDNIGHT. `new Date("2026-10-14")`
@@ -924,12 +945,14 @@
       var typed = noteInput && noteInput.value.trim();
       if (typed) { body.note = typed; }
       if (ask.verb === "booked") {
-        var at = endOfDay(dateInput && dateInput.value);
+        var hm = dateInput && dateInput.timeInput && dateInput.timeInput.value;
+        var at = hm ? atTime(dateInput.value, hm) : endOfDay(dateInput && dateInput.value);
         if (!at) {
           answerFailed(b, "when is the appointment?");
           return;
         }
         body.at = at;
+        if (!hm) { body.allDay = true; }
       }
       b.disabled = true;
       postAnswer("/api/v1/home/commitments/" + encodeURIComponent(ref) + "/" +

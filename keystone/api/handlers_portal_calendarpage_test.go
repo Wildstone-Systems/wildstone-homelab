@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -20,6 +21,10 @@ type fakeBook struct {
 	events  []caldav.Event
 	writes  []caldav.EventWrite
 	deletes []string
+	// stored is what EventAt reads back; readErr stands in for an
+	// unreachable calendar.
+	stored  map[string]caldav.Event
+	readErr error
 }
 
 func (f *fakeBook) Events(context.Context, time.Time, time.Time) ([]caldav.Event, error) {
@@ -27,7 +32,33 @@ func (f *fakeBook) Events(context.Context, time.Time, time.Time) ([]caldav.Event
 }
 func (f *fakeBook) CreateEvent(_ context.Context, w caldav.EventWrite) (adapter.Answer, error) {
 	f.writes = append(f.writes, w)
-	return adapter.Answer{Data: map[string]any{"uid": "new"}}, nil
+	href := fmt.Sprintf("%snew-%d.ics", testCollection, len(f.writes))
+	if f.stored == nil {
+		f.stored = map[string]caldav.Event{}
+	}
+	start, _ := time.Parse(time.RFC3339, w.Start)
+	if w.AllDay {
+		start, _ = time.Parse("2006-01-02", w.Start)
+	}
+	f.stored[href] = caldav.Event{Href: href, Summary: deref(w.Summary), Start: start, AllDay: w.AllDay}
+	return adapter.Answer{Data: map[string]any{"uid": "new", "href": href}}, nil
+}
+func (f *fakeBook) EventAt(_ context.Context, href string) (*caldav.Event, error) {
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
+	ev, ok := f.stored[href]
+	if !ok {
+		return nil, nil
+	}
+	return &ev, nil
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 func (f *fakeBook) UpdateEvent(_ context.Context, w caldav.EventWrite) (adapter.Answer, error) {
 	f.writes = append(f.writes, w)
@@ -35,6 +66,7 @@ func (f *fakeBook) UpdateEvent(_ context.Context, w caldav.EventWrite) (adapter.
 }
 func (f *fakeBook) DeleteEvent(_ context.Context, w caldav.EventWrite) (adapter.Answer, error) {
 	f.deletes = append(f.deletes, w.Href)
+	delete(f.stored, w.Href)
 	return adapter.Answer{Data: map[string]any{"href": w.Href}}, nil
 }
 

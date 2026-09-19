@@ -58,6 +58,9 @@ type CalendarBook interface {
 	CreateEvent(ctx context.Context, req caldav.EventWrite) (adapter.Answer, error)
 	UpdateEvent(ctx context.Context, req caldav.EventWrite) (adapter.Answer, error)
 	DeleteEvent(ctx context.Context, req caldav.EventWrite) (adapter.Answer, error)
+	// EventAt reads one event by the address a create returned; nil when
+	// it has been deleted. It is how a booking follows its appointment.
+	EventAt(ctx context.Context, href string) (*caldav.Event, error)
 }
 
 // maxCalendarPageDays bounds one read. A month view with its leading
