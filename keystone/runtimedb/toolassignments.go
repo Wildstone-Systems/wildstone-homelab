@@ -3,9 +3,14 @@ package runtimedb
 // What an Agent is assigned (ADR-W033 design §6.2, §6.3, §6.4).
 //
 // A governed Agent reaches exactly what it is assigned: an explicit tool
-// by name, or a tool a live bundle covers. An Agent that is not governed
-// is not touched by any of this and behaves as it did before 0059 —
-// everything its gateway registers, minus its narrowings.
+// by name, or a tool a live bundle covers. Every Agent is governed —
+// new ones when they are created, ones that predate 0059 on the first
+// start afterwards — so the unenrolled state is a window during an
+// upgrade rather than a second model anybody runs on.
+//
+// It still has to behave correctly, because that window is real: an
+// unenrolled Agent reaches what it always did. Failing open there is
+// deliberate, and it is the only place in this file that does.
 //
 // OPT-IN NEVER ARRIVES BY BUNDLE. §6.2 exists so an unusually
 // consequential tool can sit inside a service without being swept up by

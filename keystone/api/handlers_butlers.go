@@ -152,8 +152,49 @@ func (s *Server) availableToolDetails(class string, readOnly bool) []butler.Capa
 	return manifest.Tools
 }
 
-// seedAgentTools gives a newly created Agent its default tools and
-// enrolls it in the assigned-tools model (design §6.4).
+// BackfillAgentTools brings every Agent that predates 0059 onto the
+// assigned-tools model (design §6.3, §6.4).
+//
+// Run once at startup, and idempotent: an Agent already enrolled is
+// skipped entirely, so an Owner who has since removed a tool does not
+// find it back the next time the process restarts. That skip is the
+// whole reason enrollment is its own record rather than something
+// inferred from having assignments.
+//
+// WHY A BACKFILL AND NOT A MIGRATION. The default set is "all currently
+// available tools", and what is available is a fact about the gateways
+// this deployment wired — which SQL cannot see. A migration could only
+// have guessed, and guessing in the widening direction is how an Agent
+// ends up holding something nobody chose.
+//
+// The window between the migration and this call is the one moment the
+// old model is still in force. That is the safe direction to fail in: an
+// unenrolled Agent reaches what it always did, rather than nothing.
+func (s *Server) BackfillAgentTools() error {
+	if s.DB == nil {
+		return nil
+	}
+	butlers, err := s.DB.ListButlers()
+	if err != nil {
+		return err
+	}
+	for _, b := range butlers {
+		governed, err := s.DB.AgentIsGoverned(b.Seq)
+		if err != nil {
+			return err
+		}
+		if governed {
+			continue
+		}
+		if err := s.seedAgentTools(b, "system"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// seedAgentTools gives an Agent its default tools and enrolls it in the
+// assigned-tools model (design §6.4).
 //
 // "A newly created Owner Agent receives all currently available Member
 // and Owner tools by default except opt-in tools. A Member Agent can

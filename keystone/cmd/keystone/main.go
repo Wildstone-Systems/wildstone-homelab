@@ -1021,6 +1021,14 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Public plane. Plan approval pokes the reconcile service (R2a); a
 	// new household event pokes the automation engine.
 	apiSrv := api.New(principals, db, state, log)
+	// Every Agent is on the assigned-tools model (ADR-W033 design §6.3,
+	// §6.4). Agents made before 0059 are brought onto it here, once,
+	// because the default set is read off the gateways and a migration
+	// cannot see them. Idempotent: an already-enrolled Agent is skipped,
+	// so a tool an Owner removed does not come back on a restart.
+	if err := apiSrv.BackfillAgentTools(); err != nil {
+		return fmt.Errorf("backfilling agent tools: %w", err)
+	}
 	apiSrv.ConsoleEntryWindow, apiSrv.ConsoleStepUpWindow = householdCfg.ConsoleEntryWindow, householdCfg.ConsoleStepUpWindow
 	apiSrv.HouseholdLoc = householdLoc
 	apiSrv.HouseholdZone = householdZone

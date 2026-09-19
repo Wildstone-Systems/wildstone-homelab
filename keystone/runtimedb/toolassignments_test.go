@@ -150,12 +150,15 @@ func TestRemovingTheLastAssignmentDoesNotWidenTheAgent(t *testing.T) {
 	}
 }
 
-// NEGATIVE: an Agent that was never enrolled is untouched.
+// The upgrade window fails open.
 //
-// This is the whole migration-safety argument for shipping two models.
-// If it fails, 0059 silently took tools away from every Agent in every
-// existing household.
-func TestAnUngovernedAgentKeepsThePreviousModel(t *testing.T) {
+// Every Agent ends up governed, but there is a moment between 0059
+// applying and BackfillAgentTools running when one is not. An Agent
+// caught in it must reach what it always did rather than nothing — a
+// restart that left every Agent unable to act until a backfill finished
+// would be an outage, and this is the one place in the model that
+// deliberately fails open.
+func TestAnUnenrolledAgentStillWorksDuringTheUpgradeWindow(t *testing.T) {
 	db := agentFixture(t)
 	hobson, err := db.GetButler("hobson")
 	if err != nil {
@@ -179,7 +182,8 @@ func TestAnUngovernedAgentKeepsThePreviousModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !got.Allowed {
-		t.Errorf("an ungoverned agent lost a tool it could reach before 0059: %s", got.Reason)
+		t.Errorf("an agent caught mid-upgrade lost a tool it could reach before 0059: %s — "+
+			"the window before the backfill must fail open", got.Reason)
 	}
 
 	// And its narrowings still work, which is the model it is still on.
@@ -194,7 +198,7 @@ func TestAnUngovernedAgentKeepsThePreviousModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Allowed {
-		t.Error("a narrowing stopped working for an ungoverned agent")
+		t.Error("a narrowing stopped working for an agent caught mid-upgrade")
 	}
 }
 

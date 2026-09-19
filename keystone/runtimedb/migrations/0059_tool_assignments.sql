@@ -9,20 +9,22 @@
 -- the Agent could already reach. A bundle only means something when the
 -- default is deny.
 --
--- SO THE DEFAULT CHANGES, BUT ONLY FOR AGENTS THAT OPT INTO IT. An Agent
--- listed in butler_tool_governance is default-deny and reaches exactly
--- what is assigned to it; an Agent that is not listed behaves exactly as
--- it did before this migration. Nothing here changes what any existing
--- household's Agents can do — the governed set starts empty, and only
--- Agents created after this migration are enrolled.
+-- SO THE DEFAULT CHANGES, FOR EVERY AGENT. An Agent listed in
+-- butler_tool_governance is default-deny and reaches exactly what is
+-- assigned to it, and every Agent ends up listed: new ones when they are
+-- created, existing ones on the first start after this migration, by
+-- api.BackfillAgentTools.
 --
--- Two models coexisting is a real cost, and it is the one being paid
--- deliberately. The alternative was backfilling an assignment for every
--- tool every existing Agent can currently reach and then flipping the
--- default — and a backfill that missed a tool would silently take it
--- away from a working household, with the loss showing up as an Agent
--- that has quietly stopped being able to do something nobody was
--- watching.
+-- THE BACKFILL IS NOT IN THIS FILE, and cannot be. The default set is
+-- "all currently available tools" (§6.4), and what is available is a
+-- fact about the gateways this deployment wired — which SQL cannot see.
+-- A migration could only have guessed, and guessing in the widening
+-- direction is how an Agent ends up holding something nobody chose.
+--
+-- The window between this migration and that call is the one moment the
+-- old model is still in force, and it fails in the safe direction: an
+-- Agent nobody has enrolled yet reaches what it always did, rather than
+-- nothing.
 
 -- butler_tool_governance is the marker, and it exists SEPARATELY from
 -- the assignments on purpose.

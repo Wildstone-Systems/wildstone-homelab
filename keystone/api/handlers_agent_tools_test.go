@@ -145,3 +145,86 @@ func TestNewMemberAgentGetsOnlyMemberTools(t *testing.T) {
 		t.Error("a new member agent was given the opt-in member tool")
 	}
 }
+
+// The one-time backfill brings pre-0059 Agents onto the model.
+//
+// An Agent made before the migration has no assignments and is not
+// enrolled. It must end up with both, or the two-model coexistence this
+// slice deliberately removed comes back as a permanent state nobody
+// chose.
+func TestTheBackfillEnrollsEveryExistingAgent(t *testing.T) {
+	h := butlerConsole(t)
+	h.s.ToolInventory = fakeInventory
+
+	// Made through the database, the way an Agent that predates 0059
+	// exists: no assignments, no enrollment.
+	if _, err := h.s.DB.CreateButler(runtimedb.Butler{
+		Name: "oldtimer", Directive: "from before",
+		Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: runtimedb.AgentClassOwner,
+		Model: "kitchen-box",
+	}, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	old, err := h.s.DB.GetButler("oldtimer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if governed, _ := h.s.DB.AgentIsGoverned(old.Seq); governed {
+		t.Fatal("an agent created straight through the database was already enrolled")
+	}
+
+	if err := h.s.BackfillAgentTools(); err != nil {
+		t.Fatalf("BackfillAgentTools: %v", err)
+	}
+
+	governed, err := h.s.DB.AgentIsGoverned(old.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !governed {
+		t.Error("the backfill left an existing agent unenrolled, so the old model is " +
+			"still in force for it")
+	}
+	got := assignedNames(t, h.s.DB, "oldtimer")
+	if !got["read_the_calendar"] || !got["read_the_statefile"] {
+		t.Error("the backfill did not give an existing owner agent its default tools")
+	}
+	if got["empty_the_house"] || got["rotate_every_secret"] {
+		t.Error("the backfill handed out opt-in tools — §6.2 keeps them out of defaults " +
+			"whether an agent is new or being migrated")
+	}
+}
+
+// NEGATIVE: the backfill does not undo an Owner's removals.
+//
+// It runs at every start, so it has to be idempotent in the direction
+// that matters: a tool somebody deliberately took away must not come
+// back on the next restart. That is what the enrollment record buys,
+// and without this test the backfill could be written to re-seed every
+// agent every time and look correct.
+func TestTheBackfillDoesNotRestoreARemovedTool(t *testing.T) {
+	h := butlerConsole(t)
+	h.s.ToolInventory = fakeInventory
+
+	var made map[string]any
+	res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers",
+		map[string]any{"name": "alfred", "agentClass": "owner", "model": "kitchen-box"}, &made)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("creating = %d", res.StatusCode)
+	}
+	b, err := h.s.DB.GetButler("alfred")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.UnassignTool(b.Seq, "read_the_statefile", "mika"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.s.BackfillAgentTools(); err != nil {
+		t.Fatalf("BackfillAgentTools: %v", err)
+	}
+	if assignedNames(t, h.s.DB, "alfred")["read_the_statefile"] {
+		t.Error("a restart gave back a tool an Owner had removed — the backfill must skip " +
+			"an agent that is already enrolled, not re-seed it")
+	}
+}
