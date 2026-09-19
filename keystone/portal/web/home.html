@@ -3,6 +3,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Home</title>
 <link rel="stylesheet" href="/portal/assets/nocturne.css">
+<!--wildstone:theme-->
 <!--
   The household's front page.
 
@@ -26,12 +27,19 @@
   .mlink rows take their place, which is the design's answer to a phone:
   a condensed widget is worse than a door to the real page.
 
-  ONE THING DELIBERATELY LEFT OUT. The theme swatches are in the mockup,
-  and §7 says why they should not ship — "shown here for review; in
-  production they belong in household settings, not on the dashboard."
-  The household's hue is desired state now, so a picker here would
-  either not persist or would change the house for everyone from the
-  wall tablet. The .theme-strip stays, carrying the search.
+  THE THEME PICKER IS A REAL ONE NOW. It shipped for a while as five hue
+  swatches that previewed in this browser and nowhere else, because §7
+  was right that a picker on the dashboard would "change the house for
+  everyone from the wall tablet" — the household's hue is desired state,
+  and a control that quietly rewrote it, or that quietly rewrote
+  nothing, were the only two options.
+
+  A theme is not the household's hue. It is per person, it is stored
+  against the person rather than the house, and the page arrives already
+  wearing it (keystone/theme, keystone/api/handlers_appearance.go). So
+  the objection does not apply: choosing here changes what YOU read on,
+  on this page and in the Console, and changes nothing for anybody else.
+  The household's hue stays exactly where it was.
 
   EVERY VALUE IS WRITTEN WITH textContent. Filenames, member names,
   notice titles, household sentences and model replies all come from
@@ -172,8 +180,20 @@
       <i class="ph ph-arrow-square-out" aria-hidden="true"></i>
     </a>
     <span class="themebits" style="width: 1px; height: 22px; background: var(--hair); flex: none" aria-hidden="true"></span>
-    <span class="eyebrow themebits">Theme</span>
-    <div class="themebits" id="hues" style="display: flex; align-items: center; gap: var(--space-3)"></div>
+    <div class="themebits themewrap">
+      <button type="button" class="hbtn hbtn-secondary" id="theme-open"
+              aria-haspopup="true" aria-expanded="false" aria-controls="themes">
+        <i class="ph ph-circle" aria-hidden="true"></i>
+        <span id="theme-now">Theme</span>
+      </button>
+      <div class="themepop" id="themes" hidden>
+        <p class="muted" style="margin: 0 0 var(--space-3)">
+          Yours, on every Wildstone screen. Nobody else in the house sees it.
+        </p>
+        <div class="themegrid" id="themelist"></div>
+        <p class="muted" id="theme-problem" hidden></p>
+      </div>
+    </div>
   </div>
 
   <!-- The greeting band. On a good day it collapses to this one line and
@@ -632,16 +652,11 @@
   function render(d, isRefresh) {
     asOf = d.as ? new Date(d.as) : new Date();
     member = d.member || "";
-    // The household's hue comes from desired state; a viewer may be
-    // previewing another. The preview wins for this browser only.
-    serverHue = d.accentHue;
-    var hue = serverHue;
-    try {
-      var saved = localStorage.getItem("home.hue");
-      if (saved !== null && !isNaN(parseInt(saved, 10))) { hue = parseInt(saved, 10); }
-    } catch (e) {}
-    document.documentElement.style.setProperty("--hue", String(hue));
-    paintHues(hue);
+    // The household's hue, from desired state. It is the house's
+    // colour and it is what a member with no theme of their own reads
+    // on; anyone who has chosen a theme is already wearing it, set on
+    // the document before this script ran.
+    document.documentElement.style.setProperty("--hue", String(d.accentHue));
     text("household", d.household || "Home");
     text("initials", initialsOf(member));
     el("initials").title = member + " — signed in";
@@ -1947,45 +1962,198 @@
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
 
-  // ---- the palette. A PREVIEW, per viewer, and it says so: the
-  // household's real hue is desired state, rendered by Keystone from the
-  // capability's settings. A picker that quietly rewrote that would be
-  // the browser-local theme §9 rejects; one that did nothing would be a
-  // control that lies. This is the third thing — a way to see the
-  // palette move before asking the owner to set it.
-  var HUES = [[289, "Blurple"], [218, "Tide"], [152, "Moss"], [32, "Ember"], [332, "Orchid"]];
-  var serverHue = 267;
+  // ---- the palette. A real choice now, stored against the person and
+  // applied everywhere they go — see the header comment. The page
+  // ARRIVES wearing it: Keystone knows who asked and renders the token
+  // block into the document, so nothing here runs before the first
+  // paint and there is no flash of the default palette on a tablet
+  // somebody is standing in front of.
+  //
+  // What this code does is offer the choice and record it. Applying it
+  // to the page already open is a nicety on top: the tokens come back
+  // with the answer, so pressing a swatch changes the page under your
+  // hand rather than on the next load.
+  var themes = [];
+  var chosen = "";
 
-  function paintHues(active) {
-    var box = el("hues");
+  function paintThemes() {
+    var box = el("themelist");
     if (!box) { return; }
     clear(box);
-    var all = HUES.slice();
-    // The household's own colour is always offered, even when it is not
-    // one of the five: otherwise the swatch showing what is actually
-    // configured is the one a member cannot pick.
-    if (!all.some(function (h) { return h[0] === serverHue; })) {
-      all.unshift([serverHue, "The household's colour"]);
-    }
-    all.forEach(function (h) {
-      var b = make("button", "sw" + (h[0] === active ? " on" : ""));
+    var all = [{
+      name: "",
+      label: "Wildstone",
+      note: "the household's own colour",
+      swatch: null
+    }].concat(themes);
+    all.forEach(function (t) {
+      var b = make("button", "themetile" + (t.name === chosen ? " on" : ""));
       b.type = "button";
-      b.style.background = "oklch(0.734 0.125 " + h[0] + ")";
-      b.title = h[1] + (h[0] === serverHue
-        ? " — the household's colour"
-        : " — a preview in this browser only");
-      b.setAttribute("aria-label", h[1]);
-      b.addEventListener("click", function () {
-        document.documentElement.style.setProperty("--hue", String(h[0]));
-        try {
-          if (h[0] === serverHue) { localStorage.removeItem("home.hue"); }
-          else { localStorage.setItem("home.hue", String(h[0])); }
-        } catch (e) {}
-        paintHues(h[0]);
-      });
+      b.setAttribute("aria-pressed", t.name === chosen ? "true" : "false");
+      // A miniature of a screen — a ground with a card on it — rather
+      // than a row of colour chips: what somebody choosing wants to
+      // know is what it will look like, not which colours are in it.
+      var sw = make("span", "themesw");
+      sw.setAttribute("aria-hidden", "true");
+      var card = make("span", "themecard");
+      var line = make("span", "themeline");
+      var short = make("span", "themeline short");
+      if (t.swatch) {
+        sw.style.background = t.swatch.background;
+        // A theme that brings a wallpaper previews AS the wallpaper,
+        // with the palette's card still drawn on top — which is what
+        // the page will actually look like. The ground stays behind it
+        // so a picture that fails to load leaves a themed tile rather
+        // than an empty box.
+        if (t.background) {
+          sw.style.backgroundImage = "url('" + themeBackgroundURL(t) + "')";
+          sw.style.backgroundSize = "cover";
+          sw.style.backgroundPosition = "center";
+        }
+        card.style.background = t.swatch.surface;
+        line.style.background = t.swatch.text;
+        short.style.background = t.swatch.accent;
+      } else {
+        // The default tile is drawn from the tokens in force, so it
+        // shows the household's own colour rather than a guess at it.
+        sw.style.background = "var(--color-bg)";
+        card.style.background = "var(--color-surface)";
+        line.style.background = "var(--color-text)";
+        short.style.background = "var(--color-accent)";
+      }
+      card.appendChild(line);
+      card.appendChild(short);
+      sw.appendChild(card);
+      b.appendChild(sw);
+      b.appendChild(make("span", "themename", t.label));
+      if (t.note) { b.appendChild(make("span", "muted", t.note)); }
+      b.addEventListener("click", function () { chooseTheme(t); });
       box.appendChild(b);
     });
+    var now = el("theme-now");
+    if (now) {
+      var picked = null;
+      for (var i = 0; i < themes.length; i++) {
+        if (themes[i].name === chosen) { picked = themes[i]; }
+      }
+      now.textContent = picked ? picked.label : "Theme";
+    }
   }
+
+  function themeProblem(msg) {
+    var p = el("theme-problem");
+    if (!p) { return; }
+    p.textContent = msg || "";
+    p.hidden = !msg;
+  }
+
+  // applyTheme puts a token block on the document.
+  //
+  // The tokens are set as inline custom properties, which outrank every
+  // rule in the stylesheet with no selector to match — the same reason
+  // the Console does it this way. data-theme goes with them, because
+  // the sheet still keys some rules off it and it must agree with the
+  // ground the tokens actually paint.
+  var themedNames = [];
+
+  // Where a theme's picture is served. The version busts the browser's
+  // copy: same URL, new bytes.
+  function themeBackgroundURL(t) {
+    return "/api/v1/home/appearance/themes/" + encodeURIComponent(t.name) +
+      "/background?v=" + encodeURIComponent(t.backgroundVersion || 0);
+  }
+
+  function applyTheme(a) {
+    var root = document.documentElement;
+    var tokens = a && a.tokens;
+    themedNames.forEach(function (name) {
+      if (!tokens || !(name in tokens)) { root.style.removeProperty(name); }
+    });
+    themedNames = [];
+    // The wallpaper is a layer in the page's own background stack
+    // (nocturne.css), so switching theme is two properties rather than
+    // a reload. Cleared first, so a theme with no picture cannot
+    // inherit the last one's.
+    root.style.removeProperty("--wallpaper");
+    if (!tokens) {
+      root.removeAttribute("data-theme");
+      return;
+    }
+    Object.keys(tokens).forEach(function (name) {
+      root.style.setProperty(name, tokens[name]);
+      themedNames.push(name);
+    });
+    if (a.background) {
+      root.style.setProperty("--wallpaper",
+        "url('" + themeBackgroundURL({ name: a.theme, backgroundVersion: a.backgroundVersion }) + "')");
+    }
+    root.setAttribute("data-theme", a.dark === false ? "light" : "dark");
+  }
+
+  function chooseTheme(t) {
+    var previous = chosen;
+    chosen = t.name;
+    themeProblem("");
+    paintThemes();
+    fetch("/api/v1/home/appearance", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ theme: t.name })
+    })
+      .then(function (r) {
+        if (!r.ok) { throw new Error(String(r.status)); }
+        return r.json();
+      })
+      .then(function (a) {
+        applyTheme(a);
+        chosen = a.theme || "";
+        paintThemes();
+      })
+      .catch(function () {
+        // Put the row back rather than leave a highlight on a choice
+        // that was not recorded.
+        chosen = previous;
+        paintThemes();
+        themeProblem("That didn't save — the page couldn't reach Wildstone. It keeps the look you had.");
+      });
+  }
+
+  function loadThemes() {
+    fetch("/api/v1/home/appearance", { headers: { accept: "application/json" } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (a) {
+        if (!a) { return; }
+        themes = a.themes || [];
+        chosen = a.theme || "";
+        paintThemes();
+      })
+      .catch(function () {
+        // The picker simply does not open. The page is already wearing
+        // the right theme, so there is nothing broken to report.
+      });
+  }
+
+  (function wireThemePicker() {
+    var open = el("theme-open");
+    var pop = el("themes");
+    if (!open || !pop) { return; }
+    function shut() {
+      pop.hidden = true;
+      open.setAttribute("aria-expanded", "false");
+    }
+    open.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var showing = !pop.hidden;
+      pop.hidden = showing;
+      open.setAttribute("aria-expanded", showing ? "false" : "true");
+      if (!showing && themes.length === 0) { loadThemes(); }
+    });
+    pop.addEventListener("click", function (e) { e.stopPropagation(); });
+    document.addEventListener("click", shut);
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !pop.hidden) { shut(); open.focus(); }
+    });
+  })();
 
   // ---- the banner picture.
   var banner = { custom: false, positionX: 50, positionY: 50 };
