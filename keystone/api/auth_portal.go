@@ -45,6 +45,7 @@ package api
 // that the member is still a member.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -132,27 +133,38 @@ func portalGroup(desired []resource.Resource, capability string) (string, bool) 
 // request, and returns the desired state it read on the way — every
 // portal handler needs both, and loading it twice per request would be
 // two answers to "what is installed" from one request.
-func (s *Server) portalMember(r *http.Request, surface portalSurface) (string, []resource.Resource, error) {
+func (s *Server) portalMember(r *http.Request, surface portalSurface) (string, string, []resource.Resource, error) {
 	if s.State == nil {
-		return "", nil, errPortalNotInstalled
+		return "", "", nil, errPortalNotInstalled
+	}
+	// THE HEAD IS READ BEFORE THE STATE, NOT AFTER, and the order is the
+	// whole safety of it. A write computed from this read commits only
+	// if the head is still this one (see applyAuthored). Reading the
+	// head second would mean a commit landing in between made a STALE
+	// read look current — the silent overwrite this is here to stop.
+	// Read first, and the same race only ever makes a CURRENT read look
+	// stale, which costs somebody a retry and loses nobody's work.
+	at, err := s.State.Head()
+	if err != nil {
+		return "", "", nil, fmt.Errorf("reading statefile head: %w", err)
 	}
 	desired, err := s.State.Load()
 	if err != nil {
-		return "", nil, fmt.Errorf("reading desired state: %w", err)
+		return "", "", nil, fmt.Errorf("reading desired state: %w", err)
 	}
 	group, installed := portalGroup(desired, surface.capability)
 	if !installed {
-		return "", nil, errPortalNotInstalled
+		return "", "", nil, errPortalNotInstalled
 	}
 	// The peer test first, so that an attempt from anywhere but the
 	// proxy is refused before any header is read at all.
 	if !s.peerIsTrustedIngress(r) {
-		return "", nil, fmt.Errorf("%w: the request did not arrive from the identity proxy (peer %s, trusted %v)",
+		return "", "", nil, fmt.Errorf("%w: the request did not arrive from the identity proxy (peer %s, trusted %v)",
 			errPortalDenied, remoteHost(r), s.TrustedIngress)
 	}
 	member := strings.TrimSpace(r.Header.Get(TrustedIngressHeader))
 	if member == "" {
-		return "", nil, fmt.Errorf("%w: the proxy forwarded no %s header",
+		return "", "", nil, fmt.Errorf("%w: the proxy forwarded no %s header",
 			errPortalDenied, TrustedIngressHeader)
 	}
 	// CANONICALISED HERE, ONCE, and this is the layer that has to do it.
@@ -173,7 +185,7 @@ func (s *Server) portalMember(r *http.Request, surface portalSurface) (string, [
 		// Named in the log like every other refusal, because "they were
 		// offboarded last week" is the one explanation an operator will
 		// otherwise spend an afternoon not finding.
-		return member, nil, fmt.Errorf("%w: %s is not an active member of this household",
+		return member, "", nil, fmt.Errorf("%w: %s is not an active member of this household",
 			errPortalDenied, member)
 	}
 	member = canonical
@@ -185,10 +197,28 @@ func (s *Server) portalMember(r *http.Request, surface portalSurface) (string, [
 		// member added to a group after they signed in arrives with the
 		// list their session was built from, and this line is the
 		// difference between seeing that and guessing at it.
-		return member, nil, fmt.Errorf("%w: %s is in [%s], which does not include %s",
+		return member, "", nil, fmt.Errorf("%w: %s is in [%s], which does not include %s",
 			errPortalDenied, member, forwarded, group)
 	}
-	return member, desired, nil
+	return member, at, desired, nil
+}
+
+// basedOnKey carries the Statefile head a portal request's desired
+// state was read against.
+type basedOnKey struct{}
+
+// basedOnHead is the Statefile head this request's view of the house
+// was read at. A change computed from that view commits only while the
+// head is still this one, so two members editing the same commitment
+// cannot both be told they succeeded.
+//
+// It is "" on a household whose Statefile has no commits yet, which is
+// a real head and not a missing one: Head() reports an unborn branch
+// that way, so "" must compare equal to "" rather than mean "skip the
+// check".
+func basedOnHead(r *http.Request) string {
+	at, _ := r.Context().Value(basedOnKey{}).(string)
+	return at
 }
 
 // portalFunc is a portal handler: the authenticated member, the desired
@@ -220,7 +250,7 @@ type portalFunc func(w http.ResponseWriter, r *http.Request, member string, desi
 // operator action, with the person who dropped the file in it.
 func (s *Server) portal(surface portalSurface, h portalFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		member, desired, err := s.portalMember(r, surface)
+		member, at, desired, err := s.portalMember(r, surface)
 		if err != nil {
 			status := http.StatusForbidden
 			msg := fmt.Sprintf("%s is not available to you", surface.title)
@@ -260,6 +290,11 @@ func (s *Server) portal(surface portalSurface, h portalFunc) http.Handler {
 				"this request did not come from the household dashboard")
 			return
 		}
+		// The head travels on the request rather than in the handler
+		// signature: only the two authoring handlers need it, and every
+		// other portal handler would otherwise carry a parameter it
+		// ignores.
+		r = r.WithContext(context.WithValue(r.Context(), basedOnKey{}, at))
 		body, status, err := h(w, r, member, desired)
 		s.audit(r, member, status)
 		if err != nil {
@@ -340,7 +375,7 @@ func (s *Server) portalAsset(h portalFunc) http.Handler {
 		var desired []resource.Resource
 		var lastErr error
 		for _, surface := range portalSurfaces {
-			m, d, err := s.portalMember(r, surface)
+			m, _, d, err := s.portalMember(r, surface)
 			if err == nil {
 				member, desired = m, d
 				lastErr = nil

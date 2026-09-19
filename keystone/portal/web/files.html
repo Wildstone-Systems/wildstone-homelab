@@ -305,8 +305,8 @@
     // table here: the personal one says who can see it, because "Mine"
     // on its own would be read as a promise the machine's administrator
     // can break.
-    var row = (caps.namespaces || []).filter(function (n) { return n.key === key; })[0];
-    text("nsnote", (row && row.note) || "");
+    var chosen = (caps.namespaces || []).filter(function (n) { return n.key === key; })[0];
+    text("nsnote", (chosen && chosen.note) || "");
     text("dropmsg", "Drop files here to add them to /files/" + key);
     list();
   }
@@ -385,7 +385,7 @@
     var tr = make("tr");
     if (selected[f.name]) { tr.className = "sel"; }
 
-    var pick = make("td");
+    var check = make("td");
     var cb = document.createElement("input");
     cb.type = "checkbox";
     cb.checked = !!selected[f.name];
@@ -395,8 +395,8 @@
       tr.className = cb.checked ? "sel" : "";
       paintSelection();
     });
-    pick.appendChild(cb);
-    tr.appendChild(pick);
+    check.appendChild(cb);
+    tr.appendChild(check);
 
     var name = make("td", "name");
     var cell = make("div", "nmcell");

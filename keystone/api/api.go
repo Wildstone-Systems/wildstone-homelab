@@ -638,6 +638,20 @@ func (s *Server) Handler() http.Handler {
 	// K5). Not a Plan: the same reasoning as a meter reading, and the
 	// same three things a person can say — I did it, I skipped it, I
 	// booked it — plus the number a meter wants.
+	// The tracker page and one commitment's history. Reads, so they sit
+	// with the other portal GETs; the answer paths below are unchanged.
+	mux.Handle("GET /upkeep/{$}", s.portal(surfaceHome, s.portalPage("upkeep")))
+	mux.Handle("GET /api/v1/home/upkeep", s.portal(surfaceHome, s.homeUpkeep))
+	mux.Handle("GET /api/v1/home/commitments/{name}", s.portal(surfaceHome, s.homeCommitmentHistory))
+	// The household authors its own tracker (ADR-W035 A20, extended).
+	// These write the Statefile without waiting for an Owner, because
+	// applying a Meter or a Commitment is a no-op — see
+	// handlers_portal_authoring.go for why that is the whole argument.
+	mux.Handle("POST /api/v1/home/tracked", s.portal(surfaceHome, s.homeTrack))
+	mux.Handle("POST /api/v1/home/commitments", s.portal(surfaceHome, s.homeAddCommitment))
+	mux.Handle("PUT /api/v1/home/commitments/{name}", s.portal(surfaceHome, s.homeEditCommitment))
+	mux.Handle("DELETE /api/v1/home/commitments/{name}", s.portal(surfaceHome, s.homeRemoveCommitment))
+	mux.Handle("DELETE /api/v1/home/meters/{name}", s.portal(surfaceHome, s.homeRemoveMeter))
 	mux.Handle("POST /api/v1/home/commitments/{name}/done", s.portal(surfaceHome, s.answerCommitment("done")))
 	mux.Handle("POST /api/v1/home/commitments/{name}/waived", s.portal(surfaceHome, s.answerCommitment("waived")))
 	mux.Handle("POST /api/v1/home/commitments/{name}/booked", s.portal(surfaceHome, s.answerCommitment("booked")))

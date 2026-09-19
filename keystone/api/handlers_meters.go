@@ -185,22 +185,9 @@ func (s *Server) listMeters(_ *http.Request, _ principal.Identity) (any, int, er
 		if res.Kind != resource.KindMeter || res.Meter == nil {
 			continue
 		}
-		v := meterView{
-			Name: res.Metadata.Name, Description: res.Meter.Description,
-			Unit: res.Meter.Unit, Owner: res.Metadata.Owner,
-			StaleAfter: res.Meter.StaleAfter, Estimate: res.Meter.Estimate,
-		}
-		latest, err := s.DB.LatestMeterReading(res.Metadata.Name)
-		switch {
-		case err == nil:
-			v.Latest = &latest
-			if window, perr := resource.MeterStaleAfter(res.Meter.StaleAfter); perr == nil && window > 0 {
-				v.Stale = time.Since(latest.At) > window
-			}
-		case errors.Is(err, runtimedb.ErrNotFound):
-			// Never read. Left absent rather than filled with a zero.
-		default:
-			return nil, http.StatusInternalServerError, err
+		v, verr := s.meterView(res)
+		if verr != nil {
+			return nil, http.StatusInternalServerError, verr
 		}
 		out = append(out, v)
 	}
@@ -311,4 +298,29 @@ func (s *Server) MeterReadingSeam() func(context.Context, butler.ReadingCall) (s
 		}
 		return fmt.Sprintf("Recorded: %s is at %g (#%d).", c.Meter, c.Value, seq), nil
 	}
+}
+
+// meterView is one declared meter with where it stands, built in one
+// place so the Console and the family page cannot disagree about
+// whether a number is still worth anything.
+func (s *Server) meterView(res resource.Resource) (meterView, error) {
+	v := meterView{
+		Name: res.Metadata.Name, Description: res.Meter.Description,
+		Unit: res.Meter.Unit, Owner: res.Metadata.Owner,
+		StaleAfter: res.Meter.StaleAfter, Estimate: res.Meter.Estimate,
+	}
+	latest, err := s.DB.LatestMeterReading(res.Metadata.Name)
+	switch {
+	case err == nil:
+		v.Latest = &latest
+		if window, perr := resource.MeterStaleAfter(res.Meter.StaleAfter); perr == nil && window > 0 {
+			v.Stale = time.Since(latest.At) > window
+		}
+	case errors.Is(err, runtimedb.ErrNotFound):
+		// Never read. Left absent rather than filled with a zero: a
+		// meter nobody has read does not read zero (A11).
+	default:
+		return meterView{}, err
+	}
+	return v, nil
 }

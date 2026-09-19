@@ -19,6 +19,41 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # A HOSTED RUNNER GETS A FRESH _temp EVERY JOB; A SELF-HOSTED ONE
+      # DOES NOT. gitleaks-action downloads its release tarball to
+      # $RUNNER_TEMP/gitleaks.tmp and REFUSES to overwrite an existing
+      # file there, with "Destination file path ... already exists" — it
+      # retries twice and then throws. So a single job killed mid-download
+      # (a runner restart, a cancelled run) leaves a stub behind that
+      # fails this job on every subsequent run, on every branch, until
+      # somebody removes it by hand. That is a check wedged red with no
+      # commit able to fix it, which is exactly what happened when #258
+      # moved these jobs onto self-hosted runners.
+      #
+      # Nothing may reuse this file between jobs, so deleting it is only
+      # ever discarding a half-written download.
+      #
+      # THE PATH IS NOT $RUNNER_TEMP. The action resolves it with node's
+      # `os.tmpdir()`, which reads TMPDIR and falls back to /tmp — and
+      # this runner sets TMPDIR to its own `_tmp` while RUNNER_TEMP
+      # points at `_work/_temp`. A first attempt at this cleared
+      # RUNNER_TEMP, ran green as a step, and changed nothing. So ask
+      # node the same question the action asks, and only guess if node
+      # is somehow not on PATH.
+      - name: clear a half-written gitleaks download from a killed job
+        shell: bash
+        run: |
+          set -u
+          tmp="${TMPDIR:-/tmp}"
+          if command -v node >/dev/null 2>&1; then
+            tmp="$(node -p 'require("os").tmpdir()')"
+          fi
+          for d in "$tmp" "$RUNNER_TEMP"; do
+            if [ -e "$d/gitleaks.tmp" ]; then
+              echo "removing stale $d/gitleaks.tmp"
+              rm -f "$d/gitleaks.tmp"
+            fi
+          done
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

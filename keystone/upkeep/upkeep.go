@@ -376,13 +376,20 @@ func Wanted(st Standing, given map[string]float64) []string {
 // among them whose position came from a reading too old to rely on, and
 // the meters it could supply nothing for at all.
 func evidence(st Standing, given map[string]float64) (positions map[string]float64, approx, missing []string) {
+	// ONLY THE METERS THIS COMMITMENT MEASURES AGAINST. `given` is
+	// whatever a client sent, and the card now collects numbers per
+	// METER rather than per commitment — so a page holding one truck's
+	// odometer and one water filter could reasonably hand the same map
+	// to every answer on it.
+	//
+	// `positions` is documented as what the NEXT cycle is measured
+	// from, and a tyre rotation carrying the water filter's gallons is
+	// a record that means something it does not. Copying the map
+	// wholesale let a client decide what a completion claims.
 	positions = map[string]float64{}
-	for k, v := range given {
-		positions[k] = v
-	}
 	if st.Rollover == resource.RolloverOnce {
 		// Nothing is measured from a one-off's completion, because
-		// nothing follows it.
+		// nothing follows it — so it records nothing either.
 		return positions, nil, nil
 	}
 	for _, rule := range st.Occurrence.Rules {
@@ -391,8 +398,9 @@ func evidence(st Standing, given map[string]float64) (positions map[string]float
 		if rule.Calendar || rule.Meter == resource.MeterClock {
 			continue
 		}
-		if _, ok := positions[rule.Meter]; ok {
+		if v, ok := given[rule.Meter]; ok {
 			// Somebody typed it. Nothing beats that.
+			positions[rule.Meter] = v
 			continue
 		}
 		if !rule.Known {
