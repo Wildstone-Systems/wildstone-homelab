@@ -24,7 +24,12 @@ import (
 // in front of this handler and has to know which paths are not the
 // Console's. Without it the dashboard's iframe renders the Console's
 // index.html, which is a blank screen and a very confusing bug report.
-var PortalPrefixes = []string{"/filedrop/", "/assistant/", "/home/", "/portal/", "/activity/", "/catalog/", "/calendar/"}
+//
+// Every portal page registered in api.go must be under one of these, and
+// TestEveryPortalPageIsOutsideTheConsole holds that: /upkeep/ was added
+// as a route and never here, so the homepage's "Coming up" link opened
+// the Console and asked a family member for a bearer token.
+var PortalPrefixes = []string{"/filedrop/", "/assistant/", "/home/", "/portal/", "/activity/", "/catalog/", "/calendar/", "/upkeep/"}
 
 // dashboardCapabilities are the capabilities whose Routes serve a
 // household dashboard — the pages entitled to frame a portal surface.

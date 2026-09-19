@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { X } from "@phosphor-icons/react";
 import { api, type ButlerSurface, type Model, type OfferedModel } from "../../api";
-import { ErrorLine, useLoad } from "../../lib";
+import { ErrorLine } from "../../lib";
 import { Dot } from "../../ui/status";
 import { ModelList } from "./TabModel";
 import { Say } from "./ButlerDrawer";
@@ -31,22 +31,33 @@ export function NewButlerDialog({
   say,
   onClose,
   onCreated,
+  onOpenProviders,
 }: {
   routes: Model[];
   existing: string[];
   say: Say;
   onClose: () => void;
   onCreated: (name: string, tab?: string) => void;
+  onOpenProviders?: () => void;
 }) {
   // The endpoints this house knows about; the models come from
   // whichever is picked, not from what has been configured here.
   const endpoints = Array.from(new Set(routes.map((r) => r.endpoint).filter(Boolean) as string[]));
   const [endpoint, setEndpoint] = useState(endpoints[0] ?? "");
   const provider = routes.find((r) => r.endpoint === endpoint)?.provider ?? "";
-  const offered = useLoad(
-    () => (endpoint ? api.offeredModels(endpoint) : Promise.resolve(null)),
-    [endpoint],
-  );
+  // The models on offer are the ones the house REGISTERED from this
+  // server (Model providers), not everything it serves: that drawer is
+  // where a household decides what is available, and a hosted provider
+  // serves hundreds. Assigning a registered model needs no listing.
+  const offered = {
+    loading: false,
+    error: null as string | null,
+    data: {
+      models: routes
+        .filter((r) => r.endpoint === endpoint && r.enabled)
+        .map((r): OfferedModel => ({ name: r.providerModel ?? r.name, local: r.kind === "local" })),
+    },
+  };
   const [draft, setDraft] = useState<Draft>({
     name: "",
     directive: "",
@@ -212,6 +223,16 @@ export function NewButlerDialog({
                   </option>
                 ))}
               </select>
+            )}
+            {endpoints.length === 0 && (
+              <div className="muted">
+                No model provider yet, so there is no model to choose.{" "}
+                {onOpenProviders && (
+                  <button className="btn btn-small" onClick={onOpenProviders}>
+                    Add a model provider
+                  </button>
+                )}
+              </div>
             )}
             <ErrorLine error={offered.error} />
             {offered.loading && <div className="muted">Asking {endpoint} what it serves…</div>}

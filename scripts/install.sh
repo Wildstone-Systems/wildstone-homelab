@@ -414,7 +414,7 @@ step_summary() {
   # The household homepage needs the proxy, so it is only promised when
   # there will be one.
   local home=""
-  [ "${WANT_TAILSCALE:-no}" = yes ] && home=", household homepage"
+  [ "${WANT_TAILSCALE:-no}" = yes ] && home=", household homepage (with files and the assistant)"
   echo "  - install: identity${home}${SERVICES:+, $(echo "$SERVICES" | sed 's/media-jellyfin/jellyfin/g;s/photos-immich/photos/g;s/documents-paperless/documents/g;s/ /, /g')}"
   echo
   echo "Approving here approves the plans this creates; they are recorded"
@@ -1002,7 +1002,7 @@ set_owner_password() {
 # keeps them irreplaceable until a second one exists (§2.4, §2.5).
 # The groups the first Owner is given behind the proxy: the Console's,
 # and the family homepage's.
-OWNER_GROUPS='"console_users","homepage_users"'
+OWNER_GROUPS='"console_users","homepage_users","filedrop_users","assistant_users"'
 
 # grant_owner_groups puts an ALREADY-declared first Owner in those
 # groups. A resumed install finds the account an earlier run created —
@@ -1219,6 +1219,18 @@ post_install() {
     # too.
     log "installing the household homepage"
     enable_capability homepage-wildstone \
+      "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_API_ADDR\"}"
+    # Its two widgets, installed with it rather than left for somebody to
+    # discover. Both are served by Keystone and need nothing on day one:
+    # files keeps uploads under /srv/wildstone/media, created on first
+    # use, and the assistant has no model until one is given to a Butler
+    # in the Console — which its own card says, to whoever can do it.
+    # Arriving in that state is the point: the dashboard is where the
+    # household finds out what is left to set up.
+    log "installing the homepage's files and assistant"
+    enable_capability filedrop-wildstone \
+      "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_API_ADDR\"}"
+    enable_capability assistant-wildstone \
       "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_API_ADDR\"}"
   fi
   create_first_owner

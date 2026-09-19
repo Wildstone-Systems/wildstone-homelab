@@ -49,6 +49,11 @@ type upkeepPage struct {
 	// commitment never lands here — it opens its next cycle instead, and
 	// its history lives on its own row.
 	Done []commitmentRow `json:"done"`
+	// People are who a new commitment can be about: the household's
+	// admitted members, children included, by the handle `about` takes.
+	// Offered as suggestions, not a closed list — a commitment about
+	// somebody the household has not declared is still a commitment.
+	People []string `json:"people"`
 }
 
 // trackedMeter is one number the household keeps, and the things
@@ -106,7 +111,7 @@ type commitmentRow struct {
 func (s *Server) homeUpkeep(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
 	page := upkeepPage{
 		homeCard: homeCard{Available: true},
-		Tracked:  []trackedMeter{}, Calendar: []commitmentRow{}, Done: []commitmentRow{},
+		Tracked:  []trackedMeter{}, Calendar: []commitmentRow{}, Done: []commitmentRow{}, People: []string{},
 	}
 	if s.Upkeep == nil {
 		// The same sentence every card on this surface uses for "cannot
@@ -182,7 +187,29 @@ func (s *Server) homeUpkeep(_ http.ResponseWriter, r *http.Request, member strin
 	})
 	page.Calendar = sortRows(page.Calendar)
 	page.Done = sortRows(page.Done)
+	page.People = s.householdPeople()
 	return page, http.StatusOK, nil
+}
+
+// householdPeople is every admitted, current member's handle, sorted.
+// A failure to read them costs the form its suggestions, not the page.
+func (s *Server) householdPeople() []string {
+	out := []string{}
+	if s.DB == nil {
+		return out
+	}
+	members, err := s.DB.ListButlerMembers()
+	if err != nil {
+		s.Log.Warn("home upkeep: listing people", "err", err)
+		return out
+	}
+	for _, m := range members {
+		if m.Admitted && m.OffboardedAt.IsZero() && m.DisabledAt.IsZero() && m.Member != "" {
+			out = append(out, m.Member)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // finishedForever is a commitment that has been answered and will not

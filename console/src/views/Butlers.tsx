@@ -5,6 +5,7 @@ import { ErrorLine, useLoad, when } from "../lib";
 import { Dot, healthOf, StatusPill } from "../ui/status";
 import { Toast, useToast } from "../ui/Toast";
 import { ButlerDrawer } from "./butlers/ButlerDrawer";
+import { ProvidersDrawer } from "./butlers/ProvidersDrawer";
 import { NewButlerDialog } from "./butlers/NewButlerDialog";
 
 // The household's Butlers (ADR-W031, work package B6).
@@ -101,6 +102,10 @@ export function Butlers() {
   const [open, setOpen] = useState<string | null>(null);
   const [openTab, setOpenTab] = useState<string | undefined>(undefined);
   const [creating, setCreating] = useState(false);
+  // The provider drawer: which model servers the house has (see
+  // ProvidersDrawer). Opened from the header, from the "no provider"
+  // notice, and from New Butler when there is nothing to choose.
+  const [providersOpen, setProvidersOpen] = useState(false);
   const { toast, say } = useToast();
 
   const rows = butlers.data?.butlers ?? [];
@@ -123,6 +128,9 @@ export function Butlers() {
           </div>
         </div>
         <div className="row">
+          <button className="btn" onClick={() => setProvidersOpen(true)}>
+            Model providers
+          </button>
           <button className="btn btn-primary" onClick={() => setCreating(true)}>
             <Plus size={15} /> New Butler
           </button>
@@ -131,6 +139,16 @@ export function Butlers() {
 
       <ErrorLine error={butlers.error} />
       <ErrorLine error={models.error} />
+
+      {models.data && modelRows.every((m) => !m.endpoint) && (
+        <div className="card attention">
+          <strong>No model provider yet.</strong> A Butler needs a model to think with, and a model comes
+          from a provider — your own Ollama server, for example. Add one first, then make a Butler on it.{" "}
+          <button className="btn btn-primary btn-small" onClick={() => setProvidersOpen(true)}>
+            Add a model provider
+          </button>
+        </div>
+      )}
 
       {attention.length > 0 && filter !== "attention" && (
         <AttentionBanner rows={attention} routes={modelRows} onShow={() => setFilter("attention")} />
@@ -213,12 +231,24 @@ export function Butlers() {
           existing={rows.map((r) => r.butler.name)}
           say={say}
           onClose={() => setCreating(false)}
+          onOpenProviders={() => {
+            setCreating(false);
+            setProvidersOpen(true);
+          }}
           onCreated={(name, tab) => {
             butlers.reload();
             setCreating(false);
             setOpen(name);
             setOpenTab(tab);
           }}
+        />
+      )}
+
+      {providersOpen && (
+        <ProvidersDrawer
+          models={modelRows}
+          onClose={() => setProvidersOpen(false)}
+          onChanged={models.reload}
         />
       )}
 

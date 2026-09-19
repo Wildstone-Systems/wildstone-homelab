@@ -153,8 +153,10 @@ flags are the DEFAULT; stored config, once set, wins. An operator who
 has never opened the Console is unaffected, and one who has is not
 overruled at the next restart.
 
-**API keys stay in the environment, unchanged.** A4's rule is not
-relaxed: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are read from the
+**API keys stay in the environment, unchanged.** (Amended by A10,
+2026-09-19: a key may now also be ENTERED in the Console, write-only;
+everything below about what a key must never do still holds.) A4's rule
+is not relaxed: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are read from the
 process environment and are never accepted over the API, never stored in
 the runtime DB, and never returned by a status endpoint. What becomes
 editable is which provider to use and which model to ask — never the
@@ -183,3 +185,48 @@ the API already reads.
 the line to paste.** It solves the discovery half — which model exists —
 and leaves the operator editing a systemd environment file to act on the
 answer. The Console would be showing someone what they cannot do.
+
+### A10. A provider key may be entered in the Console, write-only (2026-09-19)
+
+**Why.** With models per Butler (ADR-W031) and hosted providers offered
+in the Console's provider drawer, "keys come only from the environment"
+meant an Owner had to reach the machine's shell and edit
+`/etc/wildstone/keystone.env` to connect OpenAI — the one step of setting
+up an assistant the Console could not do. The rule was protecting a set
+of properties, not the shell: a key is never read back, never replicated
+into the places Wildstone copies (the runtime DB, the Statefile and its
+git history, plans), never logged, never returned. None of those needs
+the key to be typed on the host.
+
+**Decision.**
+
+- `PUT /api/v1/butler/providers/{name}/key` accepts a hosted provider's
+  key (`VerbManage` — an Owner in `console_users` through the identity
+  proxy, or an admin token); `DELETE` forgets it. Neither returns it.
+- It is stored in `<data-dir>/provider-keys.json`, mode 0600, written
+  atomically — outside the runtime DB, the Statefile, plans and every
+  backup. A restore re-enters it, as the secrets path already requires
+  (ADR-W012).
+- Each provider has its own key (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
+  `ANTHROPIC_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`), so OpenAI and
+  OpenRouter can be used side by side. **An environment variable still
+  wins**: an operator who manages keys in the environment is never
+  overruled from a browser, and the Console says so.
+- `GET /api/v1/butler/providers` reports `keySet` and `keySource`
+  (`environment` | `console`) — presence and origin, never the value.
+- Setting or removing one is an event (`provider.key_set`,
+  `provider.key_removed`) naming the provider and who; the API audit
+  record carries method and path only. The value travels in the request
+  body and nowhere else, and a malformed key is refused without being
+  echoed.
+- A key change applies to the next turn, not the next restart: cached
+  provider clients are keyed on the key generation.
+
+**What this does not change.** Keys are still never returned by any
+endpoint, never stored in the runtime DB or Statefile, and never in a
+flag. Somebody who can open the Console as an Owner can REPLACE a key,
+not read one — the same power they already had over which model answers.
+The residual exposure is the moment of entry: the key crosses the
+browser and the identity proxy once, over the tailnet's TLS, as any
+secret typed into a form does.
+

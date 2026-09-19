@@ -1,0 +1,13 @@
+-- 0055: a booking remembers the calendar event it made.
+--
+-- "Booked it" used to record a date in commitment_bookings and nothing
+-- else, so an appointment the household tracked never reached the
+-- calendar it actually reads, and moving or cancelling it there changed
+-- nothing here. The booking now keeps the event's address (the href a
+-- CalDAV create returned), which is what lets Keystone follow the
+-- appointment: moved on the calendar, the booking moves; deleted there,
+-- the booking is cancelled and the commitment asks again.
+--
+-- Empty for every booking made before this, and for one made while the
+-- household had no calendar: those are dates with nothing to follow.
+ALTER TABLE commitment_bookings ADD COLUMN calendar_event TEXT NOT NULL DEFAULT '';

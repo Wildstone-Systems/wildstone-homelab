@@ -405,48 +405,49 @@ func butlerProviderFor(b runtimedb.Butler) (provider.Provider, error) {
 // provider when the Butler is off. API keys come ONLY from the provider's
 // environment variable (ADR-W017 A4) — there is deliberately no key flag.
 func newButlerProvider(cfg butlerConfig) (provider.Provider, butlerBackend, error) {
-	switch cfg.Provider {
-	case "", "off":
+	if cfg.Provider == "" || cfg.Provider == "off" {
 		return nil, butlerBackend{}, nil
-	case "anthropic":
-		key := os.Getenv("ANTHROPIC_API_KEY")
-		if key == "" {
-			return nil, butlerBackend{}, fmt.Errorf("-butler-provider anthropic requires ANTHROPIC_API_KEY in the environment")
+	}
+	// The catalog decides which kinds exist, which client each speaks
+	// and which environment variable holds its key (provider.Kinds).
+	kind, ok := provider.LookupKind(cfg.Provider)
+	if !ok {
+		names := []string{"off"}
+		for _, k := range provider.Kinds {
+			names = append(names, k.Name)
 		}
+		return nil, butlerBackend{}, fmt.Errorf("unknown -butler-provider %q (want %s)", cfg.Provider, strings.Join(names, "|"))
+	}
+	key := kind.Key()
+	if kind.KeyRequired && key == "" {
+		return nil, butlerBackend{}, fmt.Errorf("provider %s requires %s in the environment", kind.Name, kind.KeyEnv)
+	}
+	endpoint := kind.Endpoint(cfg.Endpoint)
+	switch kind.Client {
+	case "anthropic":
 		p := provider.NewAnthropicProvider(key)
 		if cfg.Model != "" {
 			p.Model = cfg.Model
 		}
-		if cfg.Endpoint != "" {
-			p.BaseURL = cfg.Endpoint
+		if endpoint != "" {
+			p.BaseURL = endpoint
 		}
 		return p, butlerBackend{Model: p.Model, Endpoint: p.BaseURL}, nil
 	case "openai":
-		key := os.Getenv("OPENAI_API_KEY")
-		if key == "" {
-			return nil, butlerBackend{}, fmt.Errorf("-butler-provider openai requires OPENAI_API_KEY in the environment")
+		if endpoint == "" {
+			return nil, butlerBackend{}, fmt.Errorf("provider %s needs an endpoint: the server's OpenAI-compatible base URL, ending in /v1", kind.Name)
 		}
-		base := cfg.Endpoint
-		if base == "" {
-			base = "https://api.openai.com/v1"
-		}
-		p := provider.NewOpenAIProvider(base, key)
+		p := provider.NewOpenAIProvider(endpoint, key)
 		if cfg.Model != "" {
 			p.Model = cfg.Model
 		}
 		return p, butlerBackend{Model: p.Model, Endpoint: p.BaseURL}, nil
-	case "ollama":
-		host := cfg.Endpoint
-		if host == "" {
-			host = "http://localhost:11434"
-		}
-		p := provider.NewOllamaProvider(host)
+	default: // ollama
+		p := provider.NewOllamaProvider(endpoint)
 		if cfg.Model != "" {
 			p.Model = cfg.Model
 		}
 		return p, butlerBackend{Model: p.Model, Endpoint: p.Host}, nil
-	default:
-		return nil, butlerBackend{}, fmt.Errorf("unknown -butler-provider %q (want off|anthropic|openai|ollama)", cfg.Provider)
 	}
 }
 
@@ -523,6 +524,14 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// The indirection is safe without synchronisation: the gateway cannot
 	// deliver a node event before gw.Serve, which is the last statement in
 	// this function, long after the assignment.
+	// Provider keys entered in the Console live beside the runtime DB,
+	// root-only, and are loaded before anything can build a provider
+	// client (ADR-W017 A10). A file that cannot be read is logged and
+	// left alone — the environment still works — rather than stopping
+	// the control plane over an optional convenience.
+	if err := provider.UseKeyFile(filepath.Join(dataDir, "provider-keys.json")); err != nil {
+		log.Error("provider keys", "err", err)
+	}
 	var recordNode func(gateway.NodeEvent)
 	gw, err := gateway.New(gateway.Config{
 		JoinTokens: splitNonEmpty(joinTokens),
@@ -1131,6 +1140,21 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		}
 		// The calendar page writes through the very same upstream.
 		apiSrv.CalendarBook = calendarActions.Upstream
+		// Bookings follow the calendar events they made: an appointment
+		// moved or deleted on a phone moves or cancels the booking here.
+		// Every two minutes, because a household that moves the dentist
+		// and then looks at Coming up should see it moved, and one read
+		// per linked booking is cheap.
+		go func() {
+			for {
+				time.Sleep(2 * time.Minute)
+				if n, serr := apiSrv.SyncCalendarBookings(context.Background()); serr != nil {
+					log.Warn("calendar bookings sync", "err", serr)
+				} else if n > 0 {
+					log.Info("calendar bookings sync", "changed", n)
+				}
+			}
+		}()
 		calendarActions.Handoff = func(member string) (domestic.CalendarHandoff, bool, error) {
 			h, ok, herr := apiSrv.CalendarHandoffFor(member)
 			if herr != nil || !ok {

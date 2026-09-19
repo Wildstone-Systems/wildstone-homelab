@@ -30,6 +30,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -434,6 +435,39 @@ func (u *Upstream) do(req *http.Request) (*http.Response, error) {
 	return res, nil
 }
 
+// ErrNoEvent is a read of an address that holds no event: it was
+// deleted, or was never there.
+var ErrNoEvent = errors.New("caldav: there is no event")
+
+// EventAt reads the one event at href, as a read reported it or a
+// create returned it. A missing event is (nil, nil) rather than an
+// error: to a caller following an appointment it links to, "somebody
+// deleted it" is an answer, and "the calendar did not respond" is not.
+func (u *Upstream) EventAt(ctx context.Context, href string) (*Event, error) {
+	href = strings.TrimSpace(href)
+	if href == "" {
+		return nil, fmt.Errorf("caldav: reading an event needs its address")
+	}
+	href, err := u.resolveHref(EventWrite{Href: href})
+	if err != nil {
+		return nil, err
+	}
+	raw, _, err := u.get(ctx, href)
+	if errors.Is(err, ErrNoEvent) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	events := parseICS(raw, u.location())
+	if len(events) == 0 {
+		return nil, fmt.Errorf("%w: %s holds no VEVENT", adapter.ErrUnavailable, href)
+	}
+	ev := events[0]
+	ev.Href = href
+	return &ev, nil
+}
+
 func (u *Upstream) get(ctx context.Context, href string) (string, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, href, nil)
 	if err != nil {
@@ -446,7 +480,7 @@ func (u *Upstream) get(ctx context.Context, href string) (string, string, error)
 	}
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusNotFound {
-		return "", "", fmt.Errorf("caldav: there is no event at %s", href)
+		return "", "", fmt.Errorf("%w at %s", ErrNoEvent, href)
 	}
 	if res.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(res.Body, 256))

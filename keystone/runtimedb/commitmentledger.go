@@ -153,6 +153,10 @@ type CommitmentBooking struct {
 	Note        string    `json:"note,omitempty"`
 	CancelledAt time.Time `json:"cancelledAt,omitzero"`
 	CancelledBy string    `json:"cancelledBy,omitempty"`
+	// CalendarEvent is the address of the calendar event this booking
+	// made, empty when it made none. It is how the appointment is
+	// followed after it leaves this page: see SyncCalendarBookings.
+	CalendarEvent string `json:"calendarEvent,omitempty"`
 }
 
 // Live reports whether this booking still stands.
@@ -186,9 +190,9 @@ func (db *DB) RecordCommitmentBooking(b CommitmentBooking) (int64, error) {
 		bookedAt = b.BookedAt.UTC().Format(time.RFC3339Nano)
 	}
 	res, err := db.sql.Exec(
-		`INSERT INTO commitment_bookings (commitment, at, booked_at, booked_by, note)
-		 VALUES (?, ?, ?, ?, ?)`,
-		b.Commitment, b.At.UTC().Format(time.RFC3339Nano), bookedAt, b.BookedBy, b.Note)
+		`INSERT INTO commitment_bookings (commitment, at, booked_at, booked_by, note, calendar_event)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		b.Commitment, b.At.UTC().Format(time.RFC3339Nano), bookedAt, b.BookedBy, b.Note, b.CalendarEvent)
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: recording booking: %w", err)
 	}
@@ -223,13 +227,48 @@ func (db *DB) CancelCommitmentBooking(seq int64, by string) error {
 // choice because the two states mean different things to a person.
 func (db *DB) LatestCommitmentBooking(commitment string) (CommitmentBooking, error) {
 	row := db.sql.QueryRow(
-		`SELECT seq, commitment, at, booked_at, booked_by, note, cancelled_at, cancelled_by
+		`SELECT `+bookingColumns+`
 		 FROM commitment_bookings WHERE commitment = ? ORDER BY booked_at DESC, seq DESC LIMIT 1`, commitment)
-	var b CommitmentBooking
-	var at, bookedAt, cancelledAt string
-	err := row.Scan(&b.Seq, &b.Commitment, &at, &bookedAt, &b.BookedBy, &b.Note, &cancelledAt, &b.CancelledBy)
+	b, err := scanBooking(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CommitmentBooking{}, ErrNotFound
+	}
+	return b, err
+}
+
+const bookingColumns = `seq, commitment, at, booked_at, booked_by, note, cancelled_at, cancelled_by, calendar_event`
+
+// LiveLinkedCommitmentBookings is every booking the calendar should be
+// checked against: the most recently made booking of each commitment,
+// when it still stands and made a calendar event. Older bookings of the
+// same commitment are history, not appointments, and are not followed.
+func (db *DB) LiveLinkedCommitmentBookings() ([]CommitmentBooking, error) {
+	rows, err := db.sql.Query(`SELECT ` + bookingColumns + ` FROM commitment_bookings b
+		WHERE b.calendar_event <> '' AND b.cancelled_at = ''
+		  AND b.seq = (SELECT b2.seq FROM commitment_bookings b2 WHERE b2.commitment = b.commitment
+		               ORDER BY b2.booked_at DESC, b2.seq DESC LIMIT 1)
+		ORDER BY b.seq`)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing linked bookings: %w", err)
+	}
+	defer rows.Close()
+	var out []CommitmentBooking
+	for rows.Next() {
+		b, err := scanBooking(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+func scanBooking(row interface{ Scan(...any) error }) (CommitmentBooking, error) {
+	var b CommitmentBooking
+	var at, bookedAt, cancelledAt string
+	err := row.Scan(&b.Seq, &b.Commitment, &at, &bookedAt, &b.BookedBy, &b.Note, &cancelledAt, &b.CancelledBy, &b.CalendarEvent)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CommitmentBooking{}, err
 	}
 	if err != nil {
 		return CommitmentBooking{}, fmt.Errorf("runtimedb: scanning booking: %w", err)

@@ -259,6 +259,17 @@ func (s *FileStore) open(ns Namespace) (*os.Root, error) {
 	// Opened before anything is created, so every step below — the
 	// existence test, the mkdir, the chmod — is a step the kernel has
 	// already confined.
+	// The root is created on first use. It is a setting with a default
+	// (/srv/wildstone/media), and whether that folder exists depended on
+	// whether some OTHER package happened to mount it: a household that
+	// installed the files widget without a media server got an error on
+	// every upload. Only the root itself is made here — everything below
+	// it still goes through os.Root.
+	if _, err := os.Stat(s.Root); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(s.Root, 0o755); err != nil {
+			return nil, fmt.Errorf("portal: creating the storage root: %w", err)
+		}
+	}
 	base, err := os.OpenRoot(s.Root)
 	if err != nil {
 		return nil, fmt.Errorf("portal: opening the storage root: %w", err)

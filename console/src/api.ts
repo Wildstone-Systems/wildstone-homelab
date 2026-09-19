@@ -194,7 +194,11 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   const res = await fetch(path, {
     method,
     headers: {
-      Authorization: `Bearer ${getToken() ?? ""}`,
+      // Only when there IS a token. The server lets any Bearer header
+      // decide, an empty one included, so sending "Bearer " with no token
+      // refused every Owner who arrived signed in through the identity
+      // proxy — their forwarded identity was never consulted.
+      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -569,6 +573,21 @@ export interface IdentityNotification {
   code?: string;
   body?: string;
   note: string;
+}
+
+// A kind of model provider (keystone/butler/provider catalog).
+export interface ProviderKind {
+  name: string;
+  label: string;
+  defaultEndpoint?: string;
+  keyEnv?: string;
+  keyRequired: boolean;
+  hosted: boolean;
+  client: string;
+  keySet: boolean;
+  // Where the key comes from: keystone's environment, the Console
+  // (ADR-W017 A10), or nowhere yet.
+  keySource?: "environment" | "console";
 }
 
 export interface OfferedModel {
@@ -1284,16 +1303,44 @@ export interface ReplayResult {
 
 export const api = {
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
-  offeredModels: (endpoint?: string) =>
-    call<{ endpoint: string; models: OfferedModel[] }>(
+  // What one provider serves. `provider` picks how to ask (Ollama's
+  // /api/tags, an OpenAI-compatible /models, Anthropic's /v1/models);
+  // omitted, it is Ollama, as it always was.
+  offeredModels: (endpoint?: string, provider?: string) => {
+    const q = new URLSearchParams();
+    if (endpoint) q.set("endpoint", endpoint);
+    if (provider) q.set("provider", provider);
+    const qs = q.toString();
+    return call<{ endpoint: string; models: OfferedModel[] }>(
       "GET",
-      `/api/v1/butler/models/offered${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ""}`,
+      `/api/v1/butler/models/offered${qs ? `?${qs}` : ""}`,
+    );
+  },
+  // Which provider kinds a Butler can think with, and whether keystone
+  // holds each hosted one's key — never the key itself (ADR-W017 A9).
+  providerKinds: () => call<{ providers: ProviderKind[] }>("GET", "/api/v1/butler/providers"),
+  // Write-only (ADR-W017 A10): the key goes in, and only "set, from
+  // where" ever comes back.
+  setProviderKey: (name: string, key: string) =>
+    call<{ keySet: boolean; keySource?: string; note?: string }>(
+      "PUT",
+      `/api/v1/butler/providers/${encodeURIComponent(name)}/key`,
+      { key },
+    ),
+  removeProviderKey: (name: string) =>
+    call<{ keySet: boolean; keySource?: string }>(
+      "DELETE",
+      `/api/v1/butler/providers/${encodeURIComponent(name)}/key`,
     ),
   models: () =>
     call<{ models: { model: Model; carriesActions: boolean; leavesTheHouse: boolean }[] | null }>(
       "GET",
       "/api/v1/butler/models",
     ),
+  // Remove a registered model. The server refuses (409) while a Butler
+  // is assigned to it, and says so.
+  deleteModel: (name: string) =>
+    call<unknown>("DELETE", `/api/v1/butler/models/${encodeURIComponent(name)}`),
   setModelEnabled: (name: string, enabled: boolean) =>
     call<{ enabled: boolean }>(
       "POST",
@@ -1377,6 +1424,11 @@ export const api = {
   // Asks a model whether it can actually operate a tool, and stores the
   // verdict. This is how a model earns the authority to do things — an
   // unprobed one answers questions and nothing more.
+  // Register one model a provider serves (PUT /butler/models). This is
+  // how a provider comes to exist here: Keystone has no provider row, a
+  // provider is the server behind the models registered from it.
+  upsertModel: (m: { name: string; kind: "local" | "cloud"; provider: string; model: string; endpoint: string; enabled: boolean }) =>
+    call<{ name: string; note?: string }>("PUT", "/api/v1/butler/models", m),
   probeModel: (name: string) =>
     call<{ model: Model }>(
       "POST",

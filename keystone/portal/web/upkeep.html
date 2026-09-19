@@ -358,34 +358,278 @@
 
   // A rollover is the one thing a household has to choose deliberately,
   // so it is offered in words rather than as the engine's three names.
+  // It is asked FIRST because it decides what the rest of the form asks:
+  // a one-off has a date, a repeating thing has a gap, and "when was it
+  // last done" and "when is the next one due" are different questions.
   var rollovers = [
     { value: "fromCompletion", label: "Every so often, measured from when it was last done" },
     { value: "fromSchedule", label: "On a fixed schedule, whenever it actually happens" },
     { value: "once", label: "Just the once" },
   ];
 
-  function taskFields(stack, meters) {
+  // Units in words. The engine's own spellings stay out of the form:
+  // "m" is minutes to it, and "6m" is what a person types for six months.
+  var calendarUnits = [
+    { value: "mo", label: "months" }, { value: "w", label: "weeks" },
+    { value: "d", label: "days" }, { value: "yr", label: "years" },
+  ];
+  var leadUnits = [
+    { value: "d", label: "days" }, { value: "w", label: "weeks" }, { value: "mo", label: "months" },
+  ];
+
+  // amount is a number box beside a unit picker, on one line.
+  function amount(label, id, units, opts) {
+    var wrap = make("label", "stack");
+    wrap.style.gap = "var(--space-2)";
+    wrap.appendChild(make("span", "muted", label));
+    var row = make("div", "");
+    row.style.display = "flex";
+    row.style.gap = "var(--space-2)";
+    row.style.alignItems = "center";
+    var n = make("input", "hinput");
+    n.id = id + "-n";
+    n.type = "number";
+    n.min = "1";
+    n.step = "1";
+    n.style.maxWidth = "7rem";
+    if (opts && opts.placeholder) { n.placeholder = opts.placeholder; }
+    row.appendChild(n);
+    if (units) {
+      var sel = make("select", "hbtn hbtn-secondary");
+      sel.id = id + "-u";
+      units.forEach(function (u) {
+        var o = make("option", "", u.label);
+        o.value = u.value;
+        sel.appendChild(o);
+      });
+      row.appendChild(sel);
+    } else if (opts && opts.unit) {
+      row.appendChild(make("span", "muted", opts.unit));
+    }
+    if (opts && opts.after) { row.appendChild(make("span", "muted", opts.after)); }
+    wrap.appendChild(row);
+    return wrap;
+  }
+
+  // ---- dates, as the engine counts them -------------------------------
+  //
+  // Plain calendar dates (2026-09-19), never instants: the household's
+  // timezone is applied when the reminder is evaluated, not here.
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function today() {
+    var d = new Date();
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+  }
+  function parseDay(s) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || "");
+    return m ? { y: +m[1], m: +m[2], d: +m[3] } : null;
+  }
+  function fmtDay(t) { return t.y + "-" + pad(t.m) + "-" + pad(t.d); }
+  function daysIn(y, m) { return new Date(Date.UTC(y, m, 0)).getUTCDate(); }
+  // step moves a date by n units, clamping to the month's last day the
+  // way the engine's addMonths does: 31 January plus a month is the end
+  // of February, not 3 March.
+  function step(t, n, unit) {
+    if (unit === "d" || unit === "w") {
+      var ms = Date.UTC(t.y, t.m - 1, t.d) + n * (unit === "w" ? 7 : 1) * 86400000;
+      var r = new Date(ms);
+      return { y: r.getUTCFullYear(), m: r.getUTCMonth() + 1, d: r.getUTCDate() };
+    }
+    var months = unit === "yr" ? 12 * n : n;
+    var idx = t.y * 12 + (t.m - 1) + months;
+    var y = Math.floor(idx / 12), m = idx % 12 + 1;
+    return { y: y, m: m, d: Math.min(t.d, daysIn(y, m)) };
+  }
+
+  // newMeter is set while the form is declaring a meter and its first
+  // reminder together ("Track something new"): that reminder is measured
+  // against the meter being added, so it asks in that meter's numbers,
+  // never in dates.
+  var newMeter = false;
+
+  function selectedMeter(meters) {
+    if (newMeter) { return { name: "", unit: val("f-unit") }; }
+    var m = el("f-meter");
+    var name = m && m.value;
+    if (!name) { return null; }
+    return (meters || []).filter(function (x) { return x.name === name; })[0] || { name: name };
+  }
+
+  // The part of the form that depends on the two choices above it,
+  // rebuilt whenever either changes.
+  // drawWhen rebuilds the timing fields, keeping anything already typed
+  // in a field that is still there: a unit typed above, or a switch of
+  // rollover, must not wipe the numbers below it.
+  function drawWhen(box, meters) {
+    var kept = {};
+    Array.prototype.forEach.call(box.querySelectorAll("input, select"), function (i) {
+      if (i.id) { kept[i.id] = i.value; }
+    });
+    drawTiming(box, meters);
+    Array.prototype.forEach.call(box.querySelectorAll("input, select"), function (i) {
+      if (i.id && kept[i.id] !== undefined && kept[i.id] !== "") { i.value = kept[i.id]; }
+    });
+  }
+
+  function drawTiming(box, meters) {
+    clear(box);
+    var roll = val("f-rollover") || "fromCompletion";
+    var meter = selectedMeter(meters);
+    if (meter) {
+      var unit = meter.unit || "";
+      if (roll === "once") {
+        box.appendChild(amount("At what reading is it due?", "f-at", null, { unit: unit, placeholder: "60000" }));
+      } else {
+        box.appendChild(amount("Every how many " + (unit || "units") + "?", "f-every", null, { unit: unit, placeholder: "5000" }));
+      }
+      box.appendChild(amount("Start asking this early", "f-lead", null, { unit: unit, placeholder: "300", after: "before" }));
+      return;
+    }
+    if (roll !== "once") {
+      box.appendChild(amount("How often?", "f-every", calendarUnits, { placeholder: "6" }));
+    }
+    var label = { fromCompletion: "When was it last done?", fromSchedule: "When is the next one due?", once: "When is it due?" }[roll];
+    var date = field(label, "f-date", { type: "date", value: roll === "fromCompletion" ? today() : "" });
+    if (roll === "fromCompletion") { date.querySelector("input").max = today(); }
+    box.appendChild(date);
+    box.appendChild(amount("Start reminding me", "f-lead", leadUnits, { placeholder: "2", after: "before" }));
+  }
+
+  function taskFields(stack, meters, declaringMeter) {
+    newMeter = !!declaringMeter;
     stack.appendChild(field("What do you want to keep up with?", "f-desc",
       { placeholder: "Oil and filter" }));
+    // Who it is about. A child's checkup is theirs, not the household's:
+    // it is titled with their name on the calendar, and only the people
+    // who look after them are asked about it. Suggestions, not a closed
+    // list, and empty is the whole household.
+    var about = field("Who is it for? (leave empty for the whole household)", "f-about",
+      { placeholder: "Kai" });
+    var list = make("datalist", "");
+    list.id = "f-about-people";
+    ((page && page.people) || []).forEach(function (p) {
+      var o = make("option", "");
+      o.value = p;
+      list.appendChild(o);
+    });
+    about.querySelector("input").setAttribute("list", list.id);
+    about.appendChild(list);
+    stack.appendChild(about);
     if (meters && meters.length) {
       var opts = [{ value: "", label: "The calendar" }];
       meters.forEach(function (m) { opts.push({ value: m.name, label: m.description || m.name }); });
       stack.appendChild(picker("Measured against", "f-meter", opts));
     }
-    stack.appendChild(field("How often?", "f-every", { placeholder: "5000, or 3mo" }));
-    stack.appendChild(field("Start asking this early", "f-lead", { placeholder: "300, or 14d" }));
     stack.appendChild(picker("Does it come round again?", "f-rollover", rollovers));
+    var timing = make("div", "stack");
+    timing.style.gap = "var(--space-3)";
+    stack.appendChild(timing);
+    drawWhen(timing, meters);
+    // A checkup is not done by being due: it goes on asking until an
+    // appointment exists, and "Booked it" on the home page records one.
+    // The engine has always had this (requiresBooking); the form had no
+    // way to say it.
+    var book = make("label", "");
+    book.style.display = "flex";
+    book.style.gap = "var(--space-2)";
+    book.style.alignItems = "center";
+    var cb = make("input", "");
+    cb.type = "checkbox";
+    cb.id = "f-booking";
+    book.appendChild(cb);
+    book.appendChild(make("span", "muted", "It needs an appointment booked (it keeps asking until one is)"));
+    stack.appendChild(book);
+    // Looked up in the form being built, NOT with el(): openForm calls
+    // this before the card is in the document, so a document lookup
+    // finds nothing, no listener is attached, and the form silently
+    // stops adapting — the date fields stayed up with a meter chosen.
+    // The meter being declared lives in the same stack, above this.
+    ["f-meter", "f-rollover"].forEach(function (id) {
+      var input = stack.querySelector("#" + id);
+      if (input) { input.addEventListener("change", function () { drawWhen(timing, meters); }); }
+    });
+    // The unit of a meter being declared labels its reminder ("Every how
+    // many miles?"), so the labels follow what is typed above.
+    var unitBox = newMeter && stack.querySelector("#f-unit");
+    if (unitBox) {
+      unitBox.addEventListener("input", function () { drawWhen(timing, meters); });
+    }
   }
 
+  // span reads a number box and its unit into the engine's spelling, or
+  // "" when the box is empty.
+  function span(id, fixedUnit) {
+    var n = val(id + "-n");
+    if (!n) { return { v: "" }; }
+    var num = Number(n);
+    if (!(num > 0) || Math.floor(num) !== num) { return { err: "use a whole number above zero" }; }
+    var unit = fixedUnit !== undefined ? fixedUnit : val(id + "-u");
+    return { v: n + unit, n: num, unit: unit };
+  }
+
+  // taskBody turns the form into the request, or into the one sentence
+  // that says what is missing. Everything the engine would refuse is
+  // caught here in the household's words first.
   function taskBody() {
-    var body = {
-      description: val("f-desc"),
-      every: val("f-every"),
-      lead: val("f-lead"),
-      rollover: val("f-rollover") || "fromCompletion"
-    };
+    var roll = val("f-rollover") || "fromCompletion";
+    var body = { description: val("f-desc"), rollover: roll };
+    var who = val("f-about").toLowerCase();
+    if (who) {
+      // The same shape the server takes after household/ (nameRegexp).
+      if (!/^[a-z0-9]([a-z0-9._-]{0,61}[a-z0-9])?$/.test(who)) { return { error: "who it is for is one name, like kai" }; }
+      body.about = who;
+    }
+    if (el("f-booking") && el("f-booking").checked) { body.requiresBooking = true; }
+    if (!body.description) { return { error: "say what you want to keep up with" }; }
     var m = el("f-meter");
-    if (m && m.value) { body.meter = m.value; }
+    var meter = newMeter || (m && m.value);
+    // A meter being declared in the same request is named by the server,
+    // so its reminder carries no meter of its own.
+    if (meter && !newMeter) { body.meter = m.value; }
+
+    var lead = span("f-lead", meter ? "" : undefined);
+    if (lead.err) { return { error: "start reminding: " + lead.err }; }
+    if (lead.v) { body.lead = lead.v; }
+
+    if (meter) {
+      if (roll === "once") {
+        var at = Number(val("f-at-n"));
+        if (!(at > 0)) { return { error: "say at what reading it is due" }; }
+        body.atValue = at;
+      } else {
+        var ev = span("f-every", "");
+        if (ev.err || !ev.v) { return { error: "say how often, as a number" }; }
+        body.every = ev.v;
+      }
+      return body;
+    }
+
+    var date = parseDay(val("f-date"));
+    if (roll === "once") {
+      if (!date) { return { error: "pick the date it is due" }; }
+      body.at = fmtDay(date);
+      return body;
+    }
+    var every = span("f-every");
+    if (every.err || !every.v) { return { error: "say how often" }; }
+    body.every = every.v;
+    if (roll === "fromCompletion") {
+      // Tracking starts when it was last done; the first reminder is one
+      // gap after that. An empty box is "today", as before.
+      if (date) { body.anchor = fmtDay(date); }
+      return body;
+    }
+    // fromSchedule: the engine's first due date is the anchor plus one
+    // gap, so the anchor is the next due date minus one. Month steps
+    // clamp at month ends, so walking back and forward again does not
+    // always land where it started (a monthly schedule on the 31st); the
+    // household is told rather than handed a schedule that drifts.
+    if (!date) { return { error: "pick when the next one is due" }; }
+    var anchor = step(date, -every.n, every.unit);
+    if (fmtDay(step(anchor, every.n, every.unit)) !== fmtDay(date)) {
+      return { error: "that day is not in every month, so the schedule would drift — pick the 28th or earlier" };
+    }
+    body.anchor = fmtDay(anchor);
     return body;
   }
 
@@ -425,21 +669,27 @@
       stack.appendChild(field("What does it count?", "f-unit", { placeholder: "miles" }));
       stack.appendChild(field("What does it read now?", "f-reading", { type: "number" }));
       stack.appendChild(make("div", "muted", "And the first thing to keep up with — you can add more later."));
-      taskFields(stack, null);
+      taskFields(stack, null, true);
     }, function (btn) {
       var body = { meter: { description: val("f-mdesc"), unit: val("f-unit") } };
       var n = parseFloat(val("f-reading"));
       if (!isNaN(n)) { body.reading = n; }
-      if (val("f-desc")) { body.commitment = taskBody(); }
+      if (val("f-desc")) {
+        var task = taskBody();
+        if (task.error) { complain(btn, task.error); return; }
+        body.commitment = task;
+      }
       post("POST", "/api/v1/home/tracked", body, btn);
     });
   });
 
   el("add-task").addEventListener("click", function () {
     openForm("Add a reminder", function (stack) {
-      taskFields(stack, meterList());
+      taskFields(stack, meterList(), false);
     }, function (btn) {
-      post("POST", "/api/v1/home/commitments", taskBody(), btn);
+      var body = taskBody();
+      if (body.error) { complain(btn, body.error); return; }
+      post("POST", "/api/v1/home/commitments", body, btn);
     });
   });
 

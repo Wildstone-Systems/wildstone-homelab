@@ -130,7 +130,8 @@
   const load = async () => {
     const r = await fetch("/api/v1/assistant/agents", { headers: { accept: "application/json" } });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
-    agents = (await r.json()).agents || [];
+    const body = await r.json();
+    agents = body.agents || [];
     const select = el("agent");
     select.replaceChildren();
     for (const a of agents) {
@@ -141,8 +142,20 @@
     }
     if (!agents.length) {
       el("text").disabled = el("send").disabled = true;
-      say("No assistant has been shared with you yet", true);
+      // What is missing, and — to somebody who can fix it — where. A
+      // fresh install arrives here: the widget is installed and no
+      // Butler has a model yet.
+      const setup = body.setup || {};
+      say(setup.message || "No assistant has been shared with you yet", true);
       el("prompt").textContent = "";
+      if (setup.console) {
+        const a = document.createElement("a");
+        a.href = setup.console;
+        a.target = "_top";
+        a.textContent = "Open the Console → Butlers";
+        a.className = "setup-link";
+        el("prompt").append(a);
+      }
       return;
     }
     const chosen = agents[0];
