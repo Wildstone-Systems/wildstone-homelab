@@ -381,8 +381,11 @@ func (bs *Butlers) providerFor(b runtimedb.Butler) (provider.Provider, error) {
 	if bs.Providers == nil {
 		return nil, fmt.Errorf("no provider factory is wired")
 	}
-	key := fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s",
-		b.ModelSeq, b.Provider, b.Model, b.ProviderModel, b.Endpoint)
+	// The key generation is part of it too: a provider key entered or
+	// replaced in the Console must reach the next turn, not the next
+	// restart (ADR-W017 A10).
+	key := fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s\x00%d",
+		b.ModelSeq, b.Provider, b.Model, b.ProviderModel, b.Endpoint, provider.KeyGeneration())
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	if p, ok := bs.clients[key]; ok {

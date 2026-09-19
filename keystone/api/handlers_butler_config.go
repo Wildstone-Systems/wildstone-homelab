@@ -15,6 +15,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"io"
@@ -68,6 +69,10 @@ func (s *Server) listOfferedModels(r *http.Request, _ principal.Identity) (any, 
 type providerKindView struct {
 	provider.Kind
 	KeySet bool `json:"keySet"`
+	// KeySource is where the key comes from: "environment", "console"
+	// or "". The Console can replace a "console" key and must say that
+	// an "environment" one is changed where it was set.
+	KeySource string `json:"keySource,omitempty"`
 }
 
 // listProviderKinds answers which providers a Butler can think with and,
@@ -78,9 +83,53 @@ type providerKindView struct {
 func (s *Server) listProviderKinds(_ *http.Request, _ principal.Identity) (any, int, error) {
 	out := make([]providerKindView, 0, len(provider.Kinds))
 	for _, k := range provider.Kinds {
-		out = append(out, providerKindView{Kind: k, KeySet: k.KeySet()})
+		out = append(out, providerKindView{Kind: k, KeySet: k.KeySet(), KeySource: k.KeySource()})
 	}
 	return map[string]any{"providers": out}, http.StatusOK, nil
+}
+
+// setProviderKey stores a hosted provider's key entered in the Console
+// (ADR-W017 A10). Write-only: the answer says the key is set and from
+// where, never what it is; the event names the provider and who, never
+// the value; and the request body is the only place the value travels.
+func (s *Server) setProviderKey(r *http.Request, id principal.Identity) (any, int, error) {
+	kind, ok := provider.LookupKind(r.PathValue("name"))
+	if !ok {
+		return nil, http.StatusNotFound, fmt.Errorf("no provider called %q", r.PathValue("name"))
+	}
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 8<<10)).Decode(&req); err != nil {
+		// Never the decoder's own message: it can quote the body.
+		return nil, http.StatusBadRequest, fmt.Errorf("send the key as {\"key\": \"...\"}")
+	}
+	if err := provider.SetKey(kind, req.Key); err != nil {
+		if errors.Is(err, provider.ErrNoKeyStore) {
+			return nil, http.StatusServiceUnavailable, err
+		}
+		return nil, http.StatusBadRequest, err
+	}
+	s.appendEvent("provider.key_set", "", kind.Name, actingMember(id))
+	out := map[string]any{"name": kind.Name, "keySet": true, "keySource": kind.KeySource()}
+	if kind.KeySource() == "environment" {
+		out["note"] = kind.KeyEnv + " is set in keystone's environment, and that one is used until it is removed there"
+	}
+	return out, http.StatusOK, nil
+}
+
+// removeProviderKey forgets a key entered in the Console. One set in the
+// environment is not the Console's to remove, and stays.
+func (s *Server) removeProviderKey(r *http.Request, id principal.Identity) (any, int, error) {
+	kind, ok := provider.LookupKind(r.PathValue("name"))
+	if !ok {
+		return nil, http.StatusNotFound, fmt.Errorf("no provider called %q", r.PathValue("name"))
+	}
+	if err := provider.RemoveKey(kind); err != nil {
+		return nil, http.StatusServiceUnavailable, err
+	}
+	s.appendEvent("provider.key_removed", "", kind.Name, actingMember(id))
+	return map[string]any{"name": kind.Name, "keySet": kind.KeySet(), "keySource": kind.KeySource()}, http.StatusOK, nil
 }
 
 // offeredModels asks one provider what it serves.

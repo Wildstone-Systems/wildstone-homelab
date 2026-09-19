@@ -524,6 +524,14 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// The indirection is safe without synchronisation: the gateway cannot
 	// deliver a node event before gw.Serve, which is the last statement in
 	// this function, long after the assignment.
+	// Provider keys entered in the Console live beside the runtime DB,
+	// root-only, and are loaded before anything can build a provider
+	// client (ADR-W017 A10). A file that cannot be read is logged and
+	// left alone — the environment still works — rather than stopping
+	// the control plane over an optional convenience.
+	if err := provider.UseKeyFile(filepath.Join(dataDir, "provider-keys.json")); err != nil {
+		log.Error("provider keys", "err", err)
+	}
 	var recordNode func(gateway.NodeEvent)
 	gw, err := gateway.New(gateway.Config{
 		JoinTokens: splitNonEmpty(joinTokens),

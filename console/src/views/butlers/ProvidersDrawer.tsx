@@ -17,9 +17,8 @@ import { Dot, type Kind } from "../../ui/status";
 //
 // Which kinds exist, and whether each hosted one has its key, comes from
 // the server's catalog (GET /butler/providers) — the same list the
-// factory builds from. Keys are never typed here: each provider reads its
-// own environment variable (ADR-W017 A4/A9), and the drawer says which
-// one and whether it is set.
+// factory builds from. A hosted provider's key is entered here, write-
+// only, or set in keystone's environment, which wins (ADR-W017 A10).
 
 type Provider = { endpoint: string; provider: string; models: Model[] };
 
@@ -44,22 +43,100 @@ function fallbackKind(name: string): ProviderKind {
   return { name, label: name, keyRequired: false, hosted: false, client: name, keySet: true };
 }
 
-// KeyNote says where a provider's key comes from, and whether it is there.
-function KeyNote({ kind }: { kind: ProviderKind }) {
+// KeyControl is a provider's key: whether keystone has one and from
+// where, and — unless it comes from keystone's environment, which wins
+// and is changed there — a write-only field to enter or replace it
+// (ADR-W017 A10). The key is sent once and the field cleared; nothing
+// ever shows it again.
+function KeyControl({ kind, onChanged }: { kind: ProviderKind; onChanged: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   if (!kind.keyEnv) return null;
-  if (kind.keySet) {
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setProviderKey(kind.name, value.trim());
+      setValue("");
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.removeProviderKey(kind.name);
+      onChanged();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (kind.keySource === "environment") {
     return (
       <div className="muted">
-        <Dot kind="ok" /> Key found in <code>{kind.keyEnv}</code>.
+        <Dot kind="ok" /> Key set in keystone&apos;s environment (<code>{kind.keyEnv}</code>) — change it there.
+      </div>
+    );
+  }
+  if (kind.keySet && !editing) {
+    return (
+      <div className="row" style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
+        <span className="muted">
+          <Dot kind="ok" /> Key set here. It is never shown again.
+        </span>
+        <button className="btn btn-ghost btn-small" onClick={() => setEditing(true)} disabled={busy}>
+          Replace
+        </button>
+        <button className="btn btn-ghost btn-small" onClick={remove} disabled={busy}>
+          Remove
+        </button>
+        <ErrorLine error={error} />
       </div>
     );
   }
   return (
-    <div className={kind.keyRequired ? "attention-note" : "muted"}>
-      <Dot kind={kind.keyRequired ? "warn" : "ok"} />{" "}
-      {kind.keyRequired ? "Needs its key: " : "Optional key: "}add <code>{kind.keyEnv}=…</code> to{" "}
-      <code>/etc/wildstone/keystone.env</code> on the Wildstone machine and restart keystone. Keys are never
-      entered here.
+    <div className="stack" style={{ gap: "var(--space-1)" }}>
+      <div className="row" style={{ display: "flex", gap: "var(--space-2)" }}>
+        <input
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          aria-label={`${kind.label} API key`}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && value.trim()) {
+              e.preventDefault();
+              save();
+            }
+          }}
+          placeholder={`${kind.label} API key`}
+        />
+        <button className="btn btn-primary btn-small" onClick={save} disabled={busy || !value.trim()}>
+          {busy ? "Saving…" : "Save key"}
+        </button>
+        {editing && (
+          <button className="btn btn-ghost btn-small" onClick={() => setEditing(false)} disabled={busy}>
+            Cancel
+          </button>
+        )}
+      </div>
+      <div className="muted">
+        {kind.keyRequired ? "Needed to connect. " : "Optional. "}Kept on the Wildstone machine, readable only by
+        root, and never shown again. (Or set <code>{kind.keyEnv}</code> in keystone&apos;s environment.)
+      </div>
+      <ErrorLine error={error} />
     </div>
   );
 }
@@ -336,7 +413,7 @@ export function ProvidersDrawer({
                     {managing === key ? "Close" : "Manage models"}
                   </button>
                 </div>
-                <KeyNote kind={k} />
+                <KeyControl kind={k} onChanged={kinds.reload} />
                 {managing === key ? (
                   <ModelPicker
                     kind={k}
@@ -390,7 +467,7 @@ export function ProvidersDrawer({
                     </option>
                   ))}
                 </select>
-                <KeyNote kind={kind} />
+                <KeyControl kind={kind} onChanged={kinds.reload} />
                 <div className="row" style={{ display: "flex", gap: "var(--space-2)" }}>
                   <input
                     aria-label="Provider address"

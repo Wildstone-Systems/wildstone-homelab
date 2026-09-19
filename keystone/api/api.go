@@ -396,6 +396,8 @@ func (s *Server) Handler() http.Handler {
 	// able to make.
 	mux.Handle("GET /api/v1/butler/models/offered", s.handle(principal.VerbManage, s.listOfferedModels))
 	mux.Handle("GET /api/v1/butler/providers", s.handle(principal.VerbManage, s.listProviderKinds))
+	mux.Handle("PUT /api/v1/butler/providers/{name}/key", s.handle(principal.VerbManage, s.setProviderKey))
+	mux.Handle("DELETE /api/v1/butler/providers/{name}/key", s.handle(principal.VerbManage, s.removeProviderKey))
 	mux.Handle("GET /api/v1/butler/config", s.handle(principal.VerbManage, s.getButlerConfig))
 	mux.Handle("PUT /api/v1/butler/config", s.handle(principal.VerbManage, s.setButlerConfig))
 	// The administrator's side of integrations. Every one needs manage.

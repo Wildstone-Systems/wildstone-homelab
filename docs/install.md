@@ -302,9 +302,12 @@ the steps you redo by hand.
   `-household-reply-ttl` bounds how long a reply token stays valid
   (default 12h).
 - **Butler** (ADR-W017): `-butler-provider anthropic|openai|ollama`,
-  with `-butler-model`/`-butler-endpoint` as needed. API keys come ONLY
-  from `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` environment variables —
-  there is deliberately no key flag. At startup the provider runs a
+  with `-butler-model`/`-butler-endpoint` as needed. There is
+  deliberately no key flag: a hosted provider's key is either entered in
+  the Console (Butlers → Model providers; write-only, kept root-only on
+  this machine — ADR-W017 A10) or set in keystone's environment, which
+  wins — `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, or
+  `OPENAI_COMPATIBLE_API_KEY`. At startup the provider runs a
   tool-reliability probe; a model that fails it runs read-only
   (QA-only). `-butler-provider off` (the default) leaves the ask
   endpoint answering 503; everything else, including the morning

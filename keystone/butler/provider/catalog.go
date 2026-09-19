@@ -16,9 +16,10 @@ import (
 //
 // ONE KEY PER PROVIDER. Each hosted kind reads its own environment
 // variable, so OpenAI and OpenRouter — both spoken to with the OpenAI
-// client — can be used side by side. Keys still come only from the
-// environment, never the API (ADR-W017 A4/A9): KeySet reports whether one
-// is there, and nothing anywhere returns it.
+// client — can be used side by side. A key comes from the environment
+// or is entered in the Console (ADR-W017 A10, keystore.go), and the
+// environment wins. Either way it is never returned: KeySet and
+// KeySource report whether one is there and from where, nothing more.
 type Kind struct {
 	Name  string `json:"name"`
 	Label string `json:"label"`
@@ -63,12 +64,16 @@ func LookupKind(name string) (Kind, bool) {
 	return Kind{}, false
 }
 
-// Key is this provider's key from the environment, or "".
+// Key is this provider's key: its environment variable, or else the one
+// entered in the Console (keystore.go), or "". The environment wins.
 func (k Kind) Key() string {
 	if k.KeyEnv == "" {
 		return ""
 	}
-	return strings.TrimSpace(os.Getenv(k.KeyEnv))
+	if v := strings.TrimSpace(os.Getenv(k.KeyEnv)); v != "" {
+		return v
+	}
+	return storedKey(k.Name)
 }
 
 // KeySet reports whether the key is present, never what it is.

@@ -539,6 +539,9 @@ export interface ProviderKind {
   hosted: boolean;
   client: string;
   keySet: boolean;
+  // Where the key comes from: keystone's environment, the Console
+  // (ADR-W017 A10), or nowhere yet.
+  keySource?: "environment" | "console";
 }
 
 export interface OfferedModel {
@@ -1270,6 +1273,19 @@ export const api = {
   // Which provider kinds a Butler can think with, and whether keystone
   // holds each hosted one's key — never the key itself (ADR-W017 A9).
   providerKinds: () => call<{ providers: ProviderKind[] }>("GET", "/api/v1/butler/providers"),
+  // Write-only (ADR-W017 A10): the key goes in, and only "set, from
+  // where" ever comes back.
+  setProviderKey: (name: string, key: string) =>
+    call<{ keySet: boolean; keySource?: string; note?: string }>(
+      "PUT",
+      `/api/v1/butler/providers/${encodeURIComponent(name)}/key`,
+      { key },
+    ),
+  removeProviderKey: (name: string) =>
+    call<{ keySet: boolean; keySource?: string }>(
+      "DELETE",
+      `/api/v1/butler/providers/${encodeURIComponent(name)}/key`,
+    ),
   models: () =>
     call<{ models: { model: Model; carriesActions: boolean; leavesTheHouse: boolean }[] | null }>(
       "GET",
