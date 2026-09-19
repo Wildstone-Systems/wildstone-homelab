@@ -25,6 +25,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -166,18 +167,25 @@ func (db *DB) GrantTool(g ToolGrant, window time.Duration) (int64, error) {
 			AgentClassOwner, AgentClassMember, g.AgentClass)
 	}
 	// A grant that names an Agent must name one that exists, and one
-	// whose class matches the grant's. Without the second check a grant
-	// could be issued at the owner class against a Member Agent, and it
-	// would then be invisible to that Agent's resolution and immune to
-	// its downgrade — a permission belonging to nobody.
+	// whose class ADMITS the grant's. An ordering, not an equality
+	// (§6.1): member tools may be assigned to Member or Owner Agents,
+	// owner tools only to Owner Agents. Requiring equality here would
+	// refuse an Owner Agent the member tools §6.4 says it gets by
+	// default, which is most of what any Agent actually does.
+	//
+	// The refusal that matters is the other direction: an owner-class
+	// grant against a Member Agent would be a permission belonging to
+	// nobody — invisible to that Agent's resolution, because the member
+	// gateway does not register the tool, and immune to a downgrade it
+	// will never have.
 	if g.Butler != 0 {
 		b, err := db.GetButlerBySeq(g.Butler)
 		if err != nil {
 			return 0, fmt.Errorf("runtimedb: cannot grant against butler %d: %w", g.Butler, err)
 		}
-		if b.AgentClass != g.AgentClass {
+		if !AgentClassAdmits(b.AgentClass, g.AgentClass) {
 			return 0, fmt.Errorf(
-				"runtimedb: cannot issue a %s grant to %s, which is a %s agent (design §5.2)",
+				"runtimedb: cannot issue a %s grant to %s, which is a %s agent (design §6.1)",
 				g.AgentClass, b.Name, b.AgentClass)
 		}
 	}
@@ -399,6 +407,26 @@ func (db *DB) ResolveToolAuthority(q ToolQuery) (ToolAuthority, error) {
 	return a, nil
 }
 
+// admittedGrantClasses is every grant class an Agent of this class may
+// use, widest first.
+//
+// An Owner Agent admits both; a Member Agent admits only member. The
+// ordering in §6.1 read from the resolver's side.
+func admittedGrantClasses(agentClass string) []any {
+	if agentClass == AgentClassOwner {
+		return []any{AgentClassOwner, AgentClassMember}
+	}
+	return []any{AgentClassMember}
+}
+
+// placeholders builds "?, ?, ?" for an IN clause of n values.
+func placeholders(n int) string {
+	if n <= 0 {
+		return "NULL"
+	}
+	return strings.Repeat("?, ", n-1) + "?"
+}
+
 // liveGrant finds an unrevoked, unexpired grant on this query's work
 // whose task, if it names one, is still going.
 //
@@ -433,13 +461,23 @@ func (db *DB) liveGrant(q ToolQuery) (ToolGrant, bool, error) {
 		// A query with no Agent scope matches only the class-level rows
 		// of the pre-0058 shape; it must never fall through to another
 		// Agent's grant, which is the whole reason the column exists.
+		//
+		// The CLASS is matched by what the Agent ADMITS, not by equality
+		// (§6.1). A grant's agent_class is the class the TOOL requires,
+		// not a label for the Agent, so an Owner Agent legitimately
+		// holds member-class grants — and after an upgrade it holds the
+		// ones §6.4 says are preserved. Equality here would leave those
+		// rows present but unreachable, which is worse than revoking
+		// them: the grant looks preserved and refuses anyway.
+		admitted := admittedGrantClasses(q.AgentClass)
 		row := db.sql.QueryRow(
 			`SELECT seq, scope, scope_id, agent_class, butler, tool, granted_at, granted_by, expires_at,
 			        revoked_at, revoked_by, reason, cleanup_plan
 			 FROM butler_tool_grants
-			 WHERE scope = ? AND scope_id = ? AND agent_class = ? AND tool = ?
+			 WHERE scope = ? AND scope_id = ? AND agent_class IN (`+placeholders(len(admitted))+`) AND tool = ?
 			   AND butler IS ? AND revoked_at = '' AND expires_at > ?
-			 ORDER BY seq DESC LIMIT 1`, c.scope, c.id, q.AgentClass, q.Tool, nullableSeq(q.Butler), stamp)
+			 ORDER BY seq DESC LIMIT 1`,
+			append(append([]any{c.scope, c.id}, admitted...), q.Tool, nullableSeq(q.Butler), stamp)...)
 		g, err := scanGrant(row)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue

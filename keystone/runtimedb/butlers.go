@@ -52,6 +52,20 @@ func ValidAgentClass(s string) bool {
 	return s == AgentClassOwner || s == AgentClassMember
 }
 
+// AgentClassAdmits reports whether an Agent of class `agent` may hold
+// something that requires class `required` (design §6.1).
+//
+// Member tools may be assigned to Member OR Owner Agents; Owner tools
+// only to Owner Agents. So this is an ordering, not an equality — an
+// equality would refuse an Owner Agent the member tools §6.4 says it
+// gets by default, which is most of what any Agent does.
+func AgentClassAdmits(agent, required string) bool {
+	if required == AgentClassMember {
+		return agent == AgentClassMember || agent == AgentClassOwner
+	}
+	return agent == AgentClassOwner && required == AgentClassOwner
+}
+
 // SurfaceForAgentClass is the surface a class must run on.
 //
 // One function rather than a comparison spelled out at each call site:
@@ -283,14 +297,18 @@ func nullableSeq(seq int64) any {
 // THE ASYMMETRY IS THE POINT, and it is worth stating at the one place
 // that implements it:
 //
-//   - Downgrading owner -> member REVOKES this Agent's live owner-class
-//     grants. The Agent is about to stop being able to reach those tools
-//     structurally, and a grant that outlived the class would come back
-//     the moment somebody upgraded the Agent again — an old permission
-//     reappearing without anyone deciding it should.
-//   - Upgrading member -> owner adds NOTHING. A wider gateway with no
-//     grants on it is a wider gateway nobody can use yet, which is
-//     exactly what makes the upgrade safe to allow at all.
+//   - Downgrading owner -> member REVOKES every one of this Agent's live
+//     grants, not only the owner-class ones. §6.4 is explicit — "strips
+//     all existing tool grants, after which appropriate Member grants
+//     can be reapplied" — and the wider rule is the safer one to have
+//     written down: a downgrade is a decision that this Agent should be
+//     trusted with less, so it starts from nothing and an Owner puts
+//     back what they meant, rather than keeping whatever happened to be
+//     member-class already.
+//   - Upgrading member -> owner PRESERVES the member grants it already
+//     had and adds no owner tools (§6.4). A wider gateway with nothing
+//     new on it is a wider gateway nobody can use yet, which is exactly
+//     what makes the upgrade safe to allow at all.
 //
 // Revoked rather than deleted: a grant that was in force is evidence of
 // what this Agent could do yesterday, and revoking keeps that while
@@ -339,8 +357,8 @@ func (db *DB) SetAgentClass(name, class, by string) (revoked int, err error) {
 	if b.AgentClass == AgentClassOwner && class == AgentClassMember {
 		res, err := tx.Exec(
 			`UPDATE butler_tool_grants SET revoked_at = ?, revoked_by = ?
-			 WHERE butler = ? AND agent_class = ? AND revoked_at = ''`,
-			now(), by, b.Seq, AgentClassOwner)
+			 WHERE butler = ? AND revoked_at = ''`,
+			now(), by, b.Seq)
 		if err != nil {
 			return 0, fmt.Errorf("runtimedb: stripping owner grants: %w", err)
 		}

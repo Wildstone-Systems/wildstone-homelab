@@ -39,8 +39,21 @@ func agentFixture(t *testing.T) *DB {
 	return db
 }
 
-// grantFor issues a live grant to one Agent against a task of its own.
+// grantFor issues a live grant to one Agent against a task of its own,
+// at the Agent's own class.
 func grantFor(t *testing.T, db *DB, butler, tool string) (grantSeq int64, taskID string) {
+	t.Helper()
+	b, err := db.GetButler(butler)
+	if err != nil {
+		t.Fatalf("GetButler(%s): %v", butler, err)
+	}
+	return grantForAt(t, db, butler, b.AgentClass, tool)
+}
+
+// grantForAt is the same, at a class the caller names — so a test can
+// give an Owner Agent a MEMBER grant, which §6.1 allows and §6.4's
+// downgrade has to take away along with everything else.
+func grantForAt(t *testing.T, db *DB, butler, class, tool string) (grantSeq int64, taskID string) {
 	t.Helper()
 	b, err := db.GetButler(butler)
 	if err != nil {
@@ -59,7 +72,7 @@ func grantFor(t *testing.T, db *DB, butler, tool string) (grantSeq int64, taskID
 		t.Fatalf("InsertButlerTask: %v", err)
 	}
 	grantSeq, err = db.GrantTool(ToolGrant{
-		Scope: GrantScopeTask, ScopeID: taskID, AgentClass: b.AgentClass,
+		Scope: GrantScopeTask, ScopeID: taskID, AgentClass: class,
 		Butler: b.Seq, Tool: tool, GrantedBy: "root-admin",
 	}, time.Hour)
 	if err != nil {
@@ -134,6 +147,17 @@ func TestMemberAgentCannotBeConfiguredWithAnOwnerTool(t *testing.T) {
 		t.Errorf("the refusal does not say why: %v", err)
 	}
 
+	//    But the rule is an ORDERING, not an equality (§6.1): "member
+	//    tools may be assigned to Member or Owner Agents". An Owner
+	//    Agent holding a member-class grant is the ordinary case — §6.4
+	//    gives it every member tool by default — and refusing it would
+	//    break most of what any Agent does.
+	if _, _ = grantForAt(t, db, "alfred", AgentClassMember, "get_household_events"); true {
+		// grantForAt fatals on refusal, so reaching here is the
+		// assertion: an equality check would have failed above.
+		_ = hobson
+	}
+
 	// 3. And a control naming the member class cannot conjure a tool the
 	//    member gateway does not register. The control stores fine —
 	//    it is an intent — but the resolver still refuses, because
@@ -159,25 +183,38 @@ func TestMemberAgentCannotBeConfiguredWithAnOwnerTool(t *testing.T) {
 	}
 }
 
-// Downgrading strips this Agent's owner grants (§18.3).
+// Downgrading strips ALL of this Agent's grants (§18.3, §6.4).
+//
+// All, not only the owner-class ones. §6.4 is explicit — "strips all
+// existing tool grants, after which appropriate Member grants can be
+// reapplied" — and the wider rule is the safer one: a downgrade is a
+// decision that this Agent should be trusted with less, so it starts
+// from nothing and an Owner puts back what they meant.
 func TestDowngradingAnOwnerAgentStripsOwnerToolGrants(t *testing.T) {
 	db := agentFixture(t)
-	grant, _ := grantFor(t, db, "alfred", "propose_change")
-	if !live(t, db, grant) {
-		t.Fatal("the fixture's grant was not live to begin with")
+	ownerGrant, _ := grantFor(t, db, "alfred", "propose_change")
+	memberGrant, _ := grantForAt(t, db, "alfred", AgentClassMember, "get_household_events")
+	if !live(t, db, ownerGrant) || !live(t, db, memberGrant) {
+		t.Fatal("the fixture's grants were not live to begin with")
 	}
 
 	revoked, err := db.SetAgentClass("alfred", AgentClassMember, "mika")
 	if err != nil {
 		t.Fatalf("SetAgentClass: %v", err)
 	}
-	if revoked != 1 {
-		t.Errorf("the downgrade reported %d grants revoked, want 1", revoked)
+	if revoked != 2 {
+		t.Errorf("the downgrade reported %d grants revoked, want 2 — §6.4 strips ALL "+
+			"existing grants, not only the owner-class ones", revoked)
 	}
-	if live(t, db, grant) {
+	if live(t, db, ownerGrant) {
 		t.Error("an owner-class grant survived the downgrade — the agent can no longer " +
 			"reach that tool structurally, and a grant that outlives the class comes " +
 			"back the moment somebody upgrades the agent again")
+	}
+	if live(t, db, memberGrant) {
+		t.Error("a member-class grant survived the downgrade — §6.4 says a downgrade is " +
+			"a clean slate, so an Owner reapplies what they meant rather than the " +
+			"agent keeping whatever happened to be member-class already")
 	}
 
 	// The surface moved with the class, or the record says one thing and
@@ -247,10 +284,27 @@ func TestUpgradingAMemberAgentDoesNotAutoAddOwnerTools(t *testing.T) {
 		t.Error("an upgraded agent holds an owner tool it was never granted")
 	}
 
-	// And a Member Agent upgraded for the first time starts with none
-	// either — the case with no history to revive.
+	// And a Member Agent upgraded for the first time gains no owner
+	// tools — but KEEPS the member grants it already had. §6.4 is
+	// explicit about both halves, and they pull in opposite directions:
+	// an upgrade that stripped member grants would punish the agent for
+	// being promoted.
+	kept, keptTask := grantFor(t, db, "hobson", "get_household_events")
 	if _, err := db.SetAgentClass("hobson", AgentClassOwner, "mika"); err != nil {
 		t.Fatal(err)
+	}
+	if !live(t, db, kept) {
+		t.Error("upgrading a member agent revoked the member grants it already held — " +
+			"§6.4 preserves those; only the owner tools are withheld")
+	}
+	stillWorks, err := db.ResolveButlerTool("hobson", ToolQuery{
+		Tool: "get_household_events", Structural: true, GrantRequired: true, TaskID: keptTask,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stillWorks.Allowed {
+		t.Errorf("the preserved grant no longer resolves: %s", stillWorks.Reason)
 	}
 	grants, err := db.ListToolGrants(GrantScopeTask, taskID)
 	if err != nil {
