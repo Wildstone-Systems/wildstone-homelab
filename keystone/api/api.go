@@ -742,9 +742,109 @@ func (s *Server) authenticate(r *http.Request) (principal.Identity, bool) {
 		if err != nil {
 			return principal.Identity{}, false
 		}
+		if !s.actingPersonMayStillHold(id) {
+			return principal.Identity{}, false
+		}
 		return id, true
 	}
 	return s.consoleForwardAuth(r)
+}
+
+// actingPersonMayStillHold re-derives the standing of the PERSON a token
+// acts for, on every request (design §3.2, §10.1; §18.1 "Demoting an
+// Owner immediately invalidates Console access/session").
+//
+// A token is minted once and then presented. Authenticate asks whether
+// it was revoked, whether it expired, and whether its principal is
+// disabled — three questions about the credential, none about the human
+// behind it. So an Owner could mint themselves an admin token, be
+// demoted, and keep the whole control plane until it expired. The
+// forward-auth door already refuses them on their next request; without
+// this, demotion locked the door and left the window open.
+//
+// It sits HERE rather than in butler.authorize() for the reason slice 3
+// gives: authorize() returns {Allowed: structural} when no authorizer is
+// configured, because it models administrative state. A Person's role
+// and lifecycle are not administrative state, so the check goes in front
+// of that seam, unconditionally, on the one path every authenticated
+// request passes through.
+//
+// Two deliberate limits, each matching forwardedUserMayHoldConsole:
+//
+//   - A name with no Person behind it passes. Person records are created
+//     through an API that lives behind this check, so refusing here would
+//     lock out a deployment that has provisioned none. The design closes
+//     that at §2.4 (installer creates the first Owner) and §2.6 (root CLI
+//     recovery); neither is built yet (#206).
+//   - Only the CONSOLE's own role requires Owner. RoleAdmin is what
+//     consoleForwardAuth mints, so a RoleAdmin token is the Console's
+//     authority in another wrapper and is held to the Console's rule.
+//     The verb table is deliberately not consulted: RoleOperator also
+//     holds approve, and it is the legacy MACHINE axis that decision 6
+//     of #201 keeps explicitly separate from Owner/Member — keying an
+//     Owner requirement off its verbs would merge the two axes this
+//     epic is taking apart. Narrowing the legacy role is its own slice
+//     (#210).
+//
+// Lifecycle applies to EVERY acting credential, elevated or not.
+// Offboarding somebody stops their chat reach as surely as their
+// Console, and a concierge acting for a Member must keep working while
+// they are active — that is what a family Butler is.
+func (s *Server) actingPersonMayStillHold(id principal.Identity) bool {
+	// ActingFor, not actingMember(id), and the difference is a real gap
+	// that belongs to another slice.
+	//
+	// actingMember falls back to the principal's own NAME when a token
+	// acts for nobody, so a machine principal named after a person's
+	// handle writes their memory and their work under them. Checking
+	// that name here would revoke such a credential — but it would do it
+	// by treating a `principals` row and a `butler_members` row as the
+	// same person because they share a string, which merges the two
+	// registries decision 6 of #201 keeps apart. `root-admin` the
+	// credential and `root-admin` the household member are not the same
+	// subject, and a name collision must not make them one.
+	//
+	// The real defect is the fallback itself: a machine principal's name
+	// is not a person handle, and every actingMember call site inherits
+	// that. Narrowing the legacy machine axis is #210, which is where it
+	// can be fixed once rather than papered over here.
+	if id.ActingFor == "" {
+		return true
+	}
+	// Case-insensitively, and for the same reason the Console door is:
+	// handles are compared exactly everywhere else, so an exact lookup
+	// would miss the Person whenever a different capitalisation was
+	// recorded and fall into the permissive "no record" branch — turning
+	// a data-hygiene defect into a way to keep a revoked credential.
+	people, err := s.DB.ButlerMembersByHandleFold(id.ActingFor)
+	if err != nil {
+		// A lookup that failed is not a lookup that passed.
+		return false
+	}
+	if len(people) == 0 {
+		// No Person of that name, so there is no lifecycle to check.
+		// This is the ordinary case for a machine credential —
+		// root-admin, an adapter, the node agent — and it must stay
+		// permissive: resolving "names nobody" to "refused" would fail
+		// the whole control plane closed. It is NOT the Console door's
+		// rule, which refuses an unknown name once the household has an
+		// Owner; a forwarded human identity and a machine credential are
+		// different questions.
+		return true
+	}
+	console := id.Role == runtimedb.RoleAdmin
+	// Every match must qualify. With two records differing only by case
+	// there is no way to tell which one was meant, and an authorization
+	// check that guesses is not a check.
+	for _, m := range people {
+		if !m.Active() {
+			return false
+		}
+		if console && m.Role != runtimedb.RoleOwner {
+			return false
+		}
+	}
+	return true
 }
 
 // writeJSON is the ONLY response encoder on the public plane: it redacts

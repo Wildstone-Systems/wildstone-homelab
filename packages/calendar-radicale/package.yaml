@@ -194,7 +194,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: calendar-radicale
-  version: 2.0.0
+  version: 2.0.2
   capability: calendar
   profile: radicale
 requires:
@@ -458,7 +458,15 @@ templates:
             # Ownership, every run: the job is root and Radicale is uid
             # 1000, so a directory created here is one the server cannot
             # write into unless it is handed over.
-            chown -R 1000:1000 "/var/lib/radicale/collections/collection-root/GROUPS"
+            #
+            # The WHOLE collections tree, not just GROUPS. On a fresh
+            # volume this job runs before Radicale ever has, so the
+            # mkdir -p above is what creates collections/ and
+            # collection-root/ — as root, and 0700 under the umask. 2.0.1
+            # handed over only GROUPS, and Radicale died at startup on
+            # "Cannot create storage path .../collection-root (Permission
+            # denied)", restarting for ever behind a Route that answered 502.
+            chown -R 1000:1000 /var/lib/radicale/collections
         env:
           SERVICE_PASSWORD: "secret/calendar-service-password"
           # The group's name, base64-encoded, which is how Radicale
@@ -490,10 +498,15 @@ templates:
         - { source: /etc/wildstone/calendar, target: /etc/wildstone/calendar, readOnly: true }
       restart: unless-stopped
   # ---- The door.
+  #
+  # Named "radicale", NOT "calendar", for the same reason the host label
+  # above is "cal": mail-roundcube's Davis already has Route/calendar. A
+  # resource is its kind and name, so 2.0.0's Route/calendar did not add
+  # a second door — it re-pointed Davis's at Radicale and re-owned it.
   - |
     apiVersion: wildstone.dev/v1
     kind: Route
-    metadata: { name: calendar, node: "{{ .Params.node }}" }
+    metadata: { name: radicale, node: "{{ .Params.node }}" }
     spec:
       host: "{{ .Params.calendar_subdomain }}.{{ .Params.public_domain }}"
       upstream: "container/radicale:5232"
