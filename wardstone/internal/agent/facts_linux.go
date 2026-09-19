@@ -28,6 +28,7 @@ func (a *Agent) hostFacts() (*wsv1.OpResult_HostFacts, *wsv1.OpError) {
 		diskFree = st.Bavail * uint64(st.Bsize)
 	}
 	total, available := memBytes()
+	busy, measured := cpuBusyPercent()
 	return &wsv1.OpResult_HostFacts{HostFacts: &wsv1.HostFactsResult{
 		Hostname:           hostname,
 		Os:                 runtime.GOOS,
@@ -35,7 +36,8 @@ func (a *Agent) hostFacts() (*wsv1.OpResult_HostFacts, *wsv1.OpError) {
 		NumCpu:             uint32(runtime.NumCPU()),
 		MemTotalBytes:      total,
 		MemAvailableBytes:  available,
-		CpuBusyPercent:     cpuBusyPercent(),
+		CpuBusyPercent:     busy,
+		CpuMeasured:        measured,
 		RootDiskTotalBytes: diskTotal,
 		RootDiskFreeBytes:  diskFree,
 		AgentVersion:       a.cfg.Version,
@@ -65,28 +67,31 @@ const cpuSampleWindow = 200 * time.Millisecond
 // Returns 0 when it cannot read, and the caller must treat 0 as "not
 // measured" rather than "idle" — which is why the household surface
 // draws no bar at all rather than an empty one.
-func cpuBusyPercent() uint32 {
+//
+// measured is false when there was nothing to read, which is different
+// from a machine that is genuinely idle: that one is measured at 0.
+func cpuBusyPercent() (busyPercent uint32, measured bool) {
 	first, ok := cpuJiffies()
 	if !ok {
-		return 0
+		return 0, false
 	}
 	time.Sleep(cpuSampleWindow)
 	second, ok := cpuJiffies()
 	if !ok {
-		return 0
+		return 0, false
 	}
 	totalDelta := second.total - first.total
 	idleDelta := second.idle - first.idle
 	if totalDelta == 0 || idleDelta > totalDelta {
 		// A counter that did not move, or went backwards across a
 		// suspend. No reading is better than a wrong one.
-		return 0
+		return 0, false
 	}
 	busy := (totalDelta - idleDelta) * 100 / totalDelta
 	if busy > 100 {
 		busy = 100
 	}
-	return uint32(busy)
+	return uint32(busy), true
 }
 
 type cpuTicks struct{ total, idle uint64 }
