@@ -240,6 +240,13 @@ export function setOnUnauthorized(fn: () => void) {
 }
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  // A Blob body IS the bytes — a theme's wallpaper, on its way to the
+  // one endpoint that takes an image. It goes up unencoded and without
+  // a declared type, because the server decides the media type from the
+  // bytes and never from what the upload claimed; announcing
+  // application/json over a PNG would be a lie in both directions.
+  // Still one fetch path (ADR-W016 A3), which is the point.
+  const raw = body instanceof Blob;
   const res = await fetch(path, {
     method,
     headers: {
@@ -248,9 +255,9 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
       // refused every Owner who arrived signed in through the identity
       // proxy — their forwarded identity was never consulted.
       ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(body !== undefined && !raw ? { "Content-Type": "application/json" } : {}),
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: body === undefined ? undefined : raw ? (body as Blob) : JSON.stringify(body),
   });
   if (res.status === 401) {
     const refused = (await res.json().catch(() => ({}))) as { signIn?: string };
@@ -1385,6 +1392,16 @@ export const api = {
     call<ThemeSummary>("POST", "/api/v1/appearance/themes", { name, colors }),
   removeTheme: (name: string) =>
     call<{ removed: string }>("DELETE", `/api/v1/appearance/themes/${encodeURIComponent(name)}`),
+  // The wallpaper a theme brings. The body IS the image: a multipart
+  // request carries the caller's own description of what it sent, and
+  // the server decides the media type from the bytes regardless.
+  setThemeBackground: (name: string, file: Blob) =>
+    call<ThemeSummary>("PUT", `/api/v1/appearance/themes/${encodeURIComponent(name)}/background`, file),
+  clearThemeBackground: (name: string) =>
+    call<{ cleared: string }>(
+      "DELETE",
+      `/api/v1/appearance/themes/${encodeURIComponent(name)}/background`,
+    ),
   // What one provider serves. `provider` picks how to ask (Ollama's
   // /api/tags, an OpenAI-compatible /models, Anthropic's /v1/models);
   // omitted, it is Ollama, as it always was.
@@ -1981,6 +1998,13 @@ export interface ThemeSummary {
   imported: boolean;
   dark: boolean;
   swatch: { background: string; surface: string; text: string; accent: string };
+  // Whether the theme brings a wallpaper, and which version of it. The
+  // Console never draws one — it is the screen you open when the house
+  // is broken, and its density is drawn on a flat ground on purpose —
+  // so this is a fact the picker reports, not an image it fetches. The
+  // picture appears on the household dashboard.
+  background?: boolean;
+  backgroundVersion?: number;
 }
 
 // What this person is on, and what else there is.
@@ -1994,6 +2018,8 @@ export interface Appearance {
   theme: string;
   tokens?: Record<string, string>;
   dark: boolean;
+  background?: boolean;
+  backgroundVersion?: number;
   themes: ThemeSummary[];
 }
 

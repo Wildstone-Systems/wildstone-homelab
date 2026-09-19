@@ -703,6 +703,11 @@ the calendar, the Console. Nobody else in the house sees it, and there
 is no administrative override: an Owner decides which themes *exist*,
 each person decides which one they read on (ADR-W036).
 
+Members choose from the household dashboard itself — the portal door
+holds no API permission, so switching theme needs no Console account —
+and whoever is on the Console chooses there. Adding a theme, or a
+picture for one, is an Owner's act on the Console.
+
 Themes are [Omarchy](https://omarchy.org) palettes. Twenty-two ship in
 the Keystone binary — Tokyo Night, Catppuccin, Everforest, Gruvbox,
 Kanagawa, Nord, Rosé Pine and the rest — and an Owner can add any other
@@ -710,6 +715,20 @@ by pasting its `colors.toml` (Console → the palette button in the rail →
 Add a theme). Nothing is cloned, fetched or executed: a theme is
 twenty-odd hex values, and the rest of an Omarchy theme configures
 programs Wildstone does not run.
+
+A theme can also bring a **picture**. Omarchy themes ship a
+`backgrounds/` directory, and an Owner can upload one of those
+wallpapers for any theme; it becomes the background of the household
+dashboard for everybody who reads on that theme. The wallpapers are not
+vendored — they are megabytes of other people's art, where a palette is
+a few dozen hex values — so the household supplies the one it likes.
+
+Because the page is then drawn over an arbitrary photograph, the theme's
+ground stays in front of it at a fixed opacity and every ink is derived
+against the lightest and darkest thing that picture can put underneath.
+A theme with a wallpaper therefore has slightly brighter ink than the
+same theme without one. The Console never wears a wallpaper: it is the
+screen you open when the house is broken.
 
 What a palette does not supply, Wildstone derives: card grounds, drawer
 grounds, muted ink, hairlines, status tints and shadow rings. Every pair

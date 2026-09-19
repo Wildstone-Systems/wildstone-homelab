@@ -28,6 +28,30 @@ type PersonTheme struct {
 	UpdatedAt time.Time `json:"updatedAt,omitzero"`
 }
 
+// MaxThemeBackgroundBytes bounds one theme's picture.
+//
+// Six megabytes: comfortably above the wallpapers Omarchy themes
+// actually ship (half a megabyte to a megabyte and a half), and low
+// enough that the row is a row rather than a reason to think about
+// streaming. A household that wants something larger on its wall is
+// describing a picture the browser will scale into a 172px band anyway.
+const MaxThemeBackgroundBytes = 6 << 20
+
+// ThemeBackground is the picture a theme brings with it.
+type ThemeBackground struct {
+	Name      string    `json:"name"`
+	Image     []byte    `json:"-"`
+	MediaType string    `json:"mediaType"`
+	SetBy     string    `json:"setBy,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt,omitzero"`
+}
+
+// Version is what a page hangs on the image URL so a browser holding
+// the previous picture stops showing it. The same device the household
+// banner uses, and for the same reason: the URL does not change when
+// the bytes do.
+func (b ThemeBackground) Version() int64 { return b.UpdatedAt.UnixNano() }
+
 // HouseholdTheme is one theme a household pasted in.
 type HouseholdTheme struct {
 	Name      string    `json:"name"`
@@ -147,6 +171,14 @@ func (db *DB) SaveHouseholdTheme(name, colors, by string) error {
 // the Owner pastes the theme back tomorrow, everybody who had it has it
 // again — which is what somebody who removed a theme by mistake wants.
 func (db *DB) DeleteHouseholdTheme(name string) (bool, error) {
+	// The picture goes with it. Unlike a person's choice — which is a
+	// few bytes of text that re-attaches by itself if the theme comes
+	// back — an orphaned wallpaper is megabytes that nothing lists and
+	// nothing can remove, because every surface that could offer to
+	// remove it works from the list of themes that exist.
+	if _, err := db.sql.Exec(`DELETE FROM theme_backgrounds WHERE name = ?`, name); err != nil {
+		return false, fmt.Errorf("runtimedb: removing the picture for %q: %w", name, err)
+	}
 	res, err := db.sql.Exec(`DELETE FROM household_themes WHERE name = ?`, name)
 	if err != nil {
 		return false, fmt.Errorf("runtimedb: removing the theme %q: %w", name, err)
@@ -154,6 +186,92 @@ func (db *DB) DeleteHouseholdTheme(name string) (bool, error) {
 	n, err := res.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("runtimedb: removing the theme %q: %w", name, err)
+	}
+	return n > 0, nil
+}
+
+// ---------------------------------------------------- theme backgrounds
+
+// SetThemeBackground stores the picture for a theme, replacing any the
+// theme already had.
+//
+// The name is validated and the media type is decided from the bytes by
+// the caller, for the same reason SaveHouseholdTheme's palette is: the
+// store enforces shape, the layer above enforces meaning.
+func (db *DB) SetThemeBackground(name string, image []byte, mediaType, by string) error {
+	switch {
+	case name == "":
+		return fmt.Errorf("runtimedb: a background needs a theme to belong to")
+	case len(image) == 0:
+		return fmt.Errorf("runtimedb: a background needs an image")
+	case len(image) > MaxThemeBackgroundBytes:
+		return fmt.Errorf("runtimedb: that picture is larger than %d bytes", MaxThemeBackgroundBytes)
+	case mediaType == "":
+		return fmt.Errorf("runtimedb: a background needs a media type")
+	}
+	_, err := db.sql.Exec(
+		`INSERT INTO theme_backgrounds (name, image, media_type, set_by, updated_at) VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT (name) DO UPDATE SET
+		   image = excluded.image, media_type = excluded.media_type,
+		   set_by = excluded.set_by, updated_at = excluded.updated_at`,
+		name, image, mediaType, by, now())
+	if err != nil {
+		return fmt.Errorf("runtimedb: storing the picture for %q: %w", name, err)
+	}
+	return nil
+}
+
+// GetThemeBackground reads one theme's picture, bytes and all.
+func (db *DB) GetThemeBackground(name string) (ThemeBackground, error) {
+	var b ThemeBackground
+	var updated string
+	err := db.sql.QueryRow(
+		`SELECT name, image, media_type, set_by, updated_at FROM theme_backgrounds WHERE name = ?`, name).
+		Scan(&b.Name, &b.Image, &b.MediaType, &b.SetBy, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ThemeBackground{}, sql.ErrNoRows
+	}
+	if err != nil {
+		return ThemeBackground{}, fmt.Errorf("runtimedb: reading the picture for %q: %w", name, err)
+	}
+	b.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
+	return b, nil
+}
+
+// ThemeBackgroundVersions is which themes have a picture, and the
+// version of each.
+//
+// Deliberately WITHOUT the bytes. This answers the theme list, which
+// every surface reads on every load, and a catalogue that dragged six
+// megabytes per theme out of the database to report a boolean would be
+// the most expensive read in the product.
+func (db *DB) ThemeBackgroundVersions() (map[string]int64, error) {
+	rows, err := db.sql.Query(`SELECT name, updated_at FROM theme_backgrounds`)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing theme pictures: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var name, updated string
+		if err := rows.Scan(&name, &updated); err != nil {
+			return nil, fmt.Errorf("runtimedb: reading a theme picture: %w", err)
+		}
+		at, _ := time.Parse(time.RFC3339Nano, updated)
+		out[name] = at.UnixNano()
+	}
+	return out, rows.Err()
+}
+
+// DeleteThemeBackground removes one theme's picture.
+func (db *DB) DeleteThemeBackground(name string) (bool, error) {
+	res, err := db.sql.Exec(`DELETE FROM theme_backgrounds WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("runtimedb: removing the picture for %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("runtimedb: removing the picture for %q: %w", name, err)
 	}
 	return n > 0, nil
 }

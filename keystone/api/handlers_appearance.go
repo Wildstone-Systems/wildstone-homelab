@@ -24,8 +24,10 @@ package api
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -47,6 +49,12 @@ type appearance struct {
 	// Dark says which ground the resolved theme sits on, so a surface
 	// can set color-scheme and data-theme before it paints.
 	Dark bool `json:"dark"`
+	// Background says the resolved theme brings a picture, and which
+	// version of it. The surface turns that into a URL of its own —
+	// the two doors serve the same bytes at different addresses — and
+	// the block's --wallpaper-veil is already sized for it.
+	Background        bool  `json:"background,omitempty"`
+	BackgroundVersion int64 `json:"backgroundVersion,omitempty"`
 	// Themes is everything this household can choose from.
 	Themes []theme.Theme `json:"themes"`
 }
@@ -101,6 +109,20 @@ func (s *Server) themeCatalog() []theme.Theme {
 			out = append(out, t)
 		}
 	}
+	// Pictures attach by NAME, to shipped themes as readily as to
+	// pasted ones — otherwise putting a wallpaper behind Nord would
+	// mean re-pasting Nord's palette first. One query for the whole
+	// catalogue, and deliberately without the bytes: this list is read
+	// on every load of every surface.
+	if s.DB != nil {
+		if versions, err := s.DB.ThemeBackgroundVersions(); err == nil {
+			for i := range out {
+				if v, ok := versions[out[i].Name]; ok {
+					out[i] = out[i].WithBackground(v)
+				}
+			}
+		}
+	}
 	return out
 }
 
@@ -132,8 +154,10 @@ func (s *Server) resolveAppearance(member string) appearance {
 	}
 	a.Theme = chosen
 	if t, ok := s.lookupTheme(chosen); ok {
-		a.Tokens = t.Palette().Tokens().Map()
+		a.Tokens = t.Tokens().Map()
 		a.Dark = t.Dark
+		a.Background = t.Background
+		a.BackgroundVersion = t.BackgroundVersion
 	}
 	return a
 }
@@ -290,7 +314,22 @@ func (s *Server) themeCSS(member string) string {
 	if !ok {
 		return ""
 	}
-	return t.Palette().Tokens().CSS()
+	tokens := t.Tokens()
+	if t.Background {
+		// The URL is added HERE rather than in the derivation because
+		// it is the one token that differs between the two doors: the
+		// Console and the portal serve the same picture at different
+		// addresses. The version is a decimal integer from the
+		// database and the name has been through theme.ValidName, so
+		// there is nothing in this string a household chose the shape
+		// of.
+		tokens = append(tokens, theme.Token{
+			Name: "--wallpaper",
+			Value: fmt.Sprintf("url(%q)",
+				fmt.Sprintf("/api/v1/home/appearance/themes/%s/background?v=%d", t.Name, t.BackgroundVersion)),
+		})
+	}
+	return tokens.CSS()
 }
 
 // -------------------------------------------------------------- portal
@@ -318,4 +357,132 @@ func (s *Server) homeSetAppearance(_ http.ResponseWriter, r *http.Request, membe
 		return nil, code, err
 	}
 	return s.resolveAppearance(member), http.StatusOK, nil
+}
+
+// ------------------------------------------------------- the picture
+
+// THE ONE PLACE A THEME ACCEPTS BYTES, and it is careful for exactly
+// the reasons handlers_portal_banner.go is: what comes in is an image
+// somebody found on the internet, and what goes out is served from the
+// same origin as the pages that hold everybody's session. So the media
+// type is decided from the BYTES and never from what the upload
+// claimed, and anything that is not a format a browser will draw is
+// refused rather than stored and served back as something the browser
+// has to guess about.
+
+// themeBackgroundSet stores the picture for a theme.
+//
+// The body IS the image, as the banner's is: a multipart request
+// carries the caller's own description of what it sent, and here that
+// description decides nothing anyway.
+//
+// A picture may attach to a SHIPPED theme as readily as to a pasted
+// one. It is keyed on the name, in its own table, so putting a
+// wallpaper behind Nord does not mean re-pasting Nord's palette first.
+func (s *Server) themeBackgroundSet(r *http.Request, id principal.Identity) (any, int, error) {
+	if s.DB == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("this is not ready yet")
+	}
+	name := r.PathValue("name")
+	if !theme.ValidName(name) {
+		return nil, http.StatusNotFound, fmt.Errorf("there is no theme called %q", name)
+	}
+	if _, ok := s.lookupTheme(name); !ok {
+		return nil, http.StatusNotFound, fmt.Errorf("there is no theme called %q", name)
+	}
+	if r.ContentLength > runtimedb.MaxThemeBackgroundBytes {
+		return nil, http.StatusRequestEntityTooLarge,
+			fmt.Errorf("that picture is too big — the limit is %d MB", runtimedb.MaxThemeBackgroundBytes>>20)
+	}
+	defer r.Body.Close()
+	// One byte over the limit is still read, so a body that lied about
+	// its length is caught by the same bound rather than by trusting
+	// Content-Length twice.
+	image, err := io.ReadAll(io.LimitReader(r.Body, runtimedb.MaxThemeBackgroundBytes+1))
+	if err != nil {
+		return nil, http.StatusBadRequest, fmt.Errorf("that picture didn't arrive in one piece")
+	}
+	if len(image) > runtimedb.MaxThemeBackgroundBytes {
+		return nil, http.StatusRequestEntityTooLarge,
+			fmt.Errorf("that picture is too big — the limit is %d MB", runtimedb.MaxThemeBackgroundBytes>>20)
+	}
+	mediaType, ok := portal.ImageType(image)
+	if !ok {
+		return nil, http.StatusUnsupportedMediaType,
+			fmt.Errorf("that file isn't a picture a browser will draw — PNG, JPEG, WebP, GIF or SVG-free formats only")
+	}
+	if err := s.DB.SetThemeBackground(name, image, mediaType, actingMember(id)); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	s.recordThemeEvent("theme.background", id,
+		fmt.Sprintf("%s set the picture behind the theme %q", actingMember(id), name))
+	t, _ := s.lookupTheme(name)
+	return t, http.StatusOK, nil
+}
+
+// themeBackgroundClear takes the picture away and leaves the palette.
+func (s *Server) themeBackgroundClear(r *http.Request, id principal.Identity) (any, int, error) {
+	if s.DB == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("this is not ready yet")
+	}
+	name := r.PathValue("name")
+	if !theme.ValidName(name) {
+		return nil, http.StatusNotFound, fmt.Errorf("there is no theme called %q", name)
+	}
+	removed, err := s.DB.DeleteThemeBackground(name)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if !removed {
+		return nil, http.StatusNotFound, fmt.Errorf("%q has no picture", name)
+	}
+	s.recordThemeEvent("theme.background", id,
+		fmt.Sprintf("%s removed the picture behind the theme %q", actingMember(id), name))
+	return map[string]any{"cleared": name}, http.StatusOK, nil
+}
+
+// writeThemeBackground serves one theme's picture.
+//
+// ON THE PORTAL ONLY. The Console does not draw wallpapers — it is the
+// screen somebody opens when the house is broken, and ADR-W027's dense
+// operator layout is drawn on a flat ground on purpose — so it has no
+// reason to fetch a megabyte of somebody's art. Its picker says a theme
+// brings a picture; the dashboard is where the picture is.
+//
+// NOT SCOPED TO THE CALLER'S OWN THEME, deliberately: every theme in
+// the catalogue is one this person may choose, so a picker showing what
+// each one looks like is showing them nothing they could not see by
+// picking it. Scoping it would buy no privacy and would cost the
+// preview.
+func (s *Server) writeThemeBackground(w http.ResponseWriter, r *http.Request) (any, int, error) {
+	if s.DB == nil {
+		return nil, http.StatusNotFound, fmt.Errorf("no picture")
+	}
+	name := r.PathValue("name")
+	if !theme.ValidName(name) {
+		return nil, http.StatusNotFound, fmt.Errorf("no picture")
+	}
+	b, err := s.DB.GetThemeBackground(name)
+	if err != nil {
+		// Absent is a 404 and the page falls back to the flat ground,
+		// which is a theme without a picture rather than an error.
+		return nil, http.StatusNotFound, fmt.Errorf("no picture")
+	}
+	w.Header().Set("Content-Type", b.MediaType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// Cacheable, unlike the household banner: a theme's wallpaper is
+	// art the whole household can already see in the picker, not a
+	// photograph of somebody's home, and the version in the URL changes
+	// when the bytes do. A megabyte re-fetched on every page load would
+	// be the most expensive thing on the dashboard.
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(b.Image)
+	return nil, http.StatusOK, nil
+}
+
+// homeThemeBackground serves the same bytes to the household portal,
+// which is where a wallpaper is actually drawn.
+func (s *Server) homeThemeBackground(w http.ResponseWriter, r *http.Request, _ string, _ []resource.Resource) (any, int, error) {
+	return s.writeThemeBackground(w, r)
 }

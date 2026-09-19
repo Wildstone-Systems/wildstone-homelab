@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Palette } from "@phosphor-icons/react";
+import { useEffect, useRef, useState } from "react";
+import { Image as ImageIcon, Palette } from "@phosphor-icons/react";
 import { api, Appearance, ThemeSummary } from "../api";
 import { adopt } from "../theme";
 import { Drawer } from "./Drawer";
@@ -84,6 +84,8 @@ function AppearancePanel({ canImport }: { canImport: boolean }) {
   if (error && !state) return <ErrorLine error={error} />;
   if (!state) return <div className="muted">Reading…</div>;
 
+  const selected = state.themes.find((t) => t.name === state.theme);
+
   return (
     <>
       <div className="drawer-head">
@@ -113,6 +115,7 @@ function AppearancePanel({ canImport }: { canImport: boolean }) {
             label={t.label}
             note={t.imported ? "added by this household" : undefined}
             swatch={t.swatch}
+            picture={!!t.background}
             on={state.theme === t.name}
             onPick={() => void choose(t.name)}
           />
@@ -124,6 +127,14 @@ function AppearancePanel({ canImport }: { canImport: boolean }) {
           You are on <strong>{state.theme}</strong>, which this household no
           longer has. Wildstone's own look is showing until it comes back.
         </p>
+      )}
+
+      {canImport && state.theme !== "" && selected && (
+        <PictureRow
+          theme={selected}
+          onDone={() => void load()}
+          onError={(m) => setError(m)}
+        />
       )}
 
       {canImport && (
@@ -152,12 +163,18 @@ function ThemeTile({
   label,
   note,
   swatch,
+  picture,
   on,
   onPick,
 }: {
   name: string;
   label: string;
   note?: string;
+  // The theme brings a wallpaper. Marked rather than drawn: the
+  // Console does not wear one, and fetching a megabyte of art to
+  // decorate a 104px tile on a screen that will never show it is not a
+  // trade worth making. The mark says where it does appear.
+  picture?: boolean;
   // null is Wildstone's own look, which is not a palette and is drawn
   // from the tokens currently in force rather than from a swatch.
   swatch: ThemeSummary["swatch"] | null;
@@ -184,7 +201,17 @@ function ThemeTile({
           <span className="theme-swatch-line short" style={{ background: colours.accent }} />
         </span>
       </span>
-      <span className="theme-name">{label}</span>
+      <span className="theme-name">
+        {label}
+        {picture && (
+          <ImageIcon
+            size={12}
+            weight="fill"
+            className="theme-haspic"
+            aria-label="brings a picture for the dashboard"
+          />
+        )}
+      </span>
       {note && <span className="muted">{note}</span>}
     </button>
   );
@@ -264,6 +291,95 @@ function ImportForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => 
         <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>
           Cancel
         </button>
+      </div>
+    </div>
+  );
+}
+
+// The picture behind a theme, for whoever administers the deployment.
+//
+// PER THEME, NOT PER PERSON. The wallpaper belongs to the skin: adding
+// one to Gruvbox gives it to everybody in the house who reads on
+// Gruvbox, and to nobody who does not. It attaches by name, so a theme
+// that ships in the binary takes one as readily as a pasted one.
+//
+// It is uploaded rather than fetched, for the reason the palette is
+// pasted rather than cloned (ADR-W036 A2): the control plane runs the
+// house, and it should not be reaching out to somebody's repository for
+// a megabyte of art. The wallpapers are in the theme's `backgrounds/`
+// directory; the household downloads the one it likes and puts it here.
+function PictureRow({
+  theme,
+  onDone,
+  onError,
+}: {
+  theme: ThemeSummary;
+  onDone: () => void;
+  onError: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+
+  const upload = async (file: File) => {
+    setBusy(true);
+    try {
+      await api.setThemeBackground(theme.name, file);
+      onDone();
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+      // So choosing the same file again still fires a change event.
+      if (input.current) input.current.value = "";
+    }
+  };
+
+  const clear = async () => {
+    setBusy(true);
+    try {
+      await api.clearThemeBackground(theme.name);
+      onDone();
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ marginTop: "var(--space-6)" }}>
+      <div className="row" style={{ alignItems: "baseline" }}>
+        <strong>{theme.label}</strong>
+        <span className="muted">
+          {theme.background
+            ? "brings a picture — it is the background of the household dashboard"
+            : "no picture; the dashboard uses the theme's flat ground"}
+        </span>
+      </div>
+      <input
+        ref={input}
+        type="file"
+        accept="image/*"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void upload(file);
+        }}
+      />
+      <div className="row">
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={busy}
+          onClick={() => input.current?.click()}
+        >
+          {busy ? "Working…" : theme.background ? "Replace picture" : "Add a picture"}
+        </button>
+        {theme.background && (
+          <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void clear()}>
+            Remove picture
+          </button>
+        )}
       </div>
     </div>
   );

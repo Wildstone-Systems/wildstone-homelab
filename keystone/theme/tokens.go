@@ -37,6 +37,43 @@ import (
 	"strings"
 )
 
+// Veil is how much of the page ground stays in front of a wallpaper.
+//
+// A theme's picture is the page's ground, not a decoration on it, so
+// everything the surface draws directly on the page — headings, the
+// muted labels between cards, the eyebrow rows — is drawn over an
+// arbitrary photograph. A photograph has no contrast floor. It can be
+// white where the ink is white and black where the ink is black, in
+// the same image.
+//
+// So the ground stays: the picture shows THROUGH the page colour at
+// this opacity, and every ink is then derived against the two extremes
+// that veil can produce — the ground over a white pixel and the ground
+// over a black one. Both are computed below and both are handed to the
+// same repair every other token goes through. The consequence is
+// visible and worth stating: a person who chooses a theme with a
+// picture gets slightly brighter ink than the same theme without one,
+// because that is what it costs to stay legible over an unknown image.
+//
+// The number itself is a judgement, and the only one here. Lower shows
+// more of the picture and pushes the inks further; higher is a flatter
+// ground that looks more like the theme without its wallpaper. This is
+// the one line to change to trade those off.
+const Veil = 0.86
+
+// veilMargin is how much weaker than Veil the repair pretends the veil
+// is.
+//
+// The browser composites rgba(ground, Veil) over the photograph at run
+// time, in whatever precision it uses, and the difference between that
+// and the arithmetic here lands in the second decimal place of a
+// contrast ratio — which is exactly where a pair repaired to land
+// EXACTLY on 4.50 falls off. So the inks are repaired against a
+// slightly thinner veil than the one that ships. What the browser
+// actually draws is then strictly easier to read than what was
+// checked, with headroom rather than a coin toss.
+const veilMargin = 0.02
+
 // Token is one CSS custom property, ready to write.
 type Token struct {
 	Name  string `json:"name"`
@@ -124,14 +161,26 @@ func statusBase(fallback rgb, lo, hi float64, values ...string) rgb {
 	return fallback
 }
 
-// Tokens derives the full themed block.
+// Options is what the surfaces know about a theme that the palette
+// does not say.
+type Options struct {
+	// Wallpaper is true when this theme has a picture behind the page.
+	// It widens every ink repair to cover what the picture can put
+	// under the ground, and adds the veil the picture shows through.
+	Wallpaper bool
+}
+
+// Tokens derives the block for a theme with no picture.
+func (p Palette) Tokens() Tokens { return p.TokensWith(Options{}) }
+
+// TokensWith derives the full themed block.
 //
 // Every ratio named below is WCAG AA on the grounds the token is
 // actually drawn on, and the repair that enforces it is in color.go.
 // The one exception is --mark, which carries no text: it marks
 // sparkline bars and tile glyphs, so it is held to the 3:1 graphical
 // floor instead of the 4.5:1 text one.
-func (p Palette) Tokens() Tokens {
+func (p Palette) TokensWith(o Options) Tokens {
 	dark := p.Dark()
 	pole := white
 	if !dark {
@@ -158,6 +207,15 @@ func (p Palette) Tokens() Tokens {
 	}
 
 	grounds := []rgb{bg, surface, elevated}
+	// With a picture behind the page, the page ground is no longer one
+	// colour: it is the ground veiled over whatever the photograph has
+	// there. Only the two extremes need checking — a repair that holds
+	// against a white pixel and a black one holds against everything
+	// between, because luminance is monotonic along the blend.
+	if o.Wallpaper {
+		thin := Veil - veilMargin
+		grounds = append(grounds, mix(white, bg, thin).quantise(), mix(black, bg, thin).quantise())
+	}
 
 	// Body copy, held to AAA rather than AA. Every screen in both
 	// surfaces is mostly this token, the current design clears it
@@ -178,7 +236,7 @@ func (p Palette) Tokens() Tokens {
 	// a pale tint on a pale ground disappears, which is the same
 	// reasoning the light Console theme records for taking the 800 step
 	// where dark takes the 300.
-	mark := ensureContrast(mix(accent, pole, 0.35), 3, bg, surface)
+	mark := ensureContrast(mix(accent, pole, 0.35), 3, grounds...)
 
 	ok := statusBase(semanticOK, 70, 175, p.Green, p.BrightGreen)
 	warn := statusBase(semanticWarn, 25, 70, p.Yellow, p.Orange, p.BrightYellow)
@@ -188,9 +246,13 @@ func (p Palette) Tokens() Tokens {
 	// it, and the word on top is then held to 4.5:1 against that tint
 	// as well as against the page.
 	okBG, warnBG, badBG := mix(bg, ok, 0.18), mix(bg, warn, 0.18), mix(bg, bad, 0.18)
-	ok = ensureContrast(ok, 4.5, bg, surface, okBG)
-	warn = ensureContrast(warn, 4.5, bg, surface, warnBG)
-	bad = ensureContrast(bad, 4.5, bg, surface, badBG)
+	// A status word appears on the page as well as on its own pill, so
+	// it is held to every ground the page can be — the veiled extremes
+	// included, when there is a picture behind it.
+	onPageAnd := func(extra rgb) []rgb { return append(append([]rgb{}, grounds...), extra) }
+	ok = ensureContrast(ok, 4.5, onPageAnd(okBG)...)
+	warn = ensureContrast(warn, 4.5, onPageAnd(warnBG)...)
+	bad = ensureContrast(bad, 4.5, onPageAnd(badBG)...)
 
 	// Shadow rings. The design draws elevation as a hairline first and
 	// a drop second, so the ring is a mix of ink into the ground and
@@ -213,7 +275,7 @@ func (p Palette) Tokens() Tokens {
 		scheme = "light"
 	}
 
-	return Tokens{
+	block := Tokens{
 		{"color-scheme", scheme},
 
 		{"--color-bg", bg.hex()},
@@ -252,6 +314,17 @@ func (p Palette) Tokens() Tokens {
 		{"--shadow-md", fmt.Sprintf("0 0 0 1px %s, 0 6px 18px %s", ring(0.36), drop(0.55))},
 		{"--shadow-lg", fmt.Sprintf("0 0 0 1px %s, 0 16px 40px %s", ring(0.52), drop(0.65))},
 	}
+	if o.Wallpaper {
+		// A gradient rather than a colour, because it is a background
+		// LAYER: it sits in the same stack as the picture, one step in
+		// front of it. Two identical stops is how CSS spells "a flat
+		// wash" in a slot that wants an image.
+		block = append(block, Token{
+			"--wallpaper-veil",
+			fmt.Sprintf("linear-gradient(%s, %s)", bg.rgba(Veil), bg.rgba(Veil)),
+		})
+	}
+	return block
 }
 
 // Swatch is the handful of colours a picker draws a theme as, so a

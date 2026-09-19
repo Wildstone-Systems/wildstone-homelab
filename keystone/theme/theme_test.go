@@ -74,6 +74,73 @@ func TestEveryShippedThemeIsLegible(t *testing.T) {
 	}
 }
 
+// The same floors, with a picture behind the page. Every ink is drawn
+// over the ground veiled across an unknown photograph, so it has to
+// hold against the lightest and darkest thing that photograph can put
+// under it — otherwise a theme's wallpaper silently takes its own
+// headings away.
+func TestEveryShippedThemeIsLegibleOverAnyWallpaper(t *testing.T) {
+	for _, theme := range Builtin() {
+		t.Run(theme.Name, func(t *testing.T) {
+			p := theme.Palette()
+			m := p.TokensWith(Options{Wallpaper: true}).Map()
+			bg := tokenColour(t, m, "--color-bg")
+
+			// The two grounds the veil can produce: the page colour at
+			// Veil over a white pixel, and over a black one.
+			// The veil that actually ships, not the slightly thinner
+			// one the repair allows itself — so this measures what the
+			// browser draws and the margin shows up as headroom.
+			overWhite := mix(white, bg, Veil).quantise()
+			overBlack := mix(black, bg, Veil).quantise()
+
+			for _, c := range []struct {
+				token string
+				floor float64
+			}{
+				{"--color-text", 7},
+				{"--muted", 4.5},
+				{"--icon", 4.5},
+				{"--color-accent", 4.5},
+				{"--st-ok", 4.5},
+				{"--st-warn", 4.5},
+				{"--st-bad", 4.5},
+			} {
+				ink := tokenColour(t, m, c.token)
+				for where, ground := range map[string]rgb{
+					"the palest the picture can make the page":  overWhite,
+					"the darkest the picture can make the page": overBlack,
+				} {
+					if got := contrast(ink, ground); got < c.floor {
+						t.Errorf("%s on %s is %.2f:1, below %.1f", c.token, where, got, c.floor)
+					}
+				}
+			}
+
+			// And the veil itself is in the block, or the picture would
+			// be drawn with nothing in front of it.
+			if m["--wallpaper-veil"] == "" {
+				t.Error("a wallpapered theme carries no veil")
+			}
+		})
+	}
+}
+
+// A theme with no picture is derived exactly as it was. The wallpaper
+// work must not quietly retune everybody else's screen.
+func TestAThemeWithoutAPictureIsUnchanged(t *testing.T) {
+	for _, theme := range Builtin() {
+		plain := theme.Palette().Tokens().CSS()
+		same := theme.Palette().TokensWith(Options{}).CSS()
+		if plain != same {
+			t.Errorf("%s: Tokens() and TokensWith(Options{}) disagree", theme.Name)
+		}
+		if strings.Contains(plain, "--wallpaper-veil") {
+			t.Errorf("%s: a theme with no picture carries a veil", theme.Name)
+		}
+	}
+}
+
 // A card has to be distinguishable from the page it sits on, or the
 // whole layout flattens into one field of colour.
 func TestEveryShippedThemeSeparatesItsGrounds(t *testing.T) {

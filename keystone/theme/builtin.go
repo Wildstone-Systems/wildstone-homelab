@@ -43,8 +43,33 @@ type Theme struct {
 	Dark bool `json:"dark"`
 	// Swatch previews it.
 	Swatch Swatch `json:"swatch"`
+	// Background is true when this theme brings a picture. The bytes
+	// are not in this package: palettes ship in the binary, pictures
+	// are megabytes a household supplies (migration 0059), so what a
+	// Theme carries is whether there is one and which version.
+	Background bool `json:"background,omitempty"`
+	// BackgroundVersion changes when the picture does, and a surface
+	// hangs it on the image URL. Without it a browser holding the
+	// previous wallpaper keeps drawing it: same URL, same bytes as far
+	// as it knows.
+	BackgroundVersion int64 `json:"backgroundVersion,omitempty"`
 
 	palette Palette
+}
+
+// WithBackground returns the theme with a picture attached.
+func (t Theme) WithBackground(version int64) Theme {
+	t.Background, t.BackgroundVersion = true, version
+	return t
+}
+
+// Tokens derives this theme's block, accounting for its picture.
+//
+// The one place both surfaces should ask, so that "this theme has a
+// wallpaper" and "this theme's inks are repaired for a wallpaper"
+// cannot come apart.
+func (t Theme) Tokens() Tokens {
+	return t.palette.TokensWith(Options{Wallpaper: t.Background})
 }
 
 // Palette returns the theme's colours.

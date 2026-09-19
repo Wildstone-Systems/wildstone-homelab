@@ -156,10 +156,36 @@ body {
   font-family: var(--font-body);
   font-size: 14px;
   line-height: 1.55;
+  /* Five layers, front to back: the two glows the design draws over the
+     ground, then the veil, then the theme's picture, then the ground
+     itself.
+   *
+   * THE PICTURE IS THE GROUND, NOT A DECORATION. A theme that brings a
+   * wallpaper sets --wallpaper and --wallpaper-veil (keystone/theme);
+   * with no picture both fall back to a transparent wash and the stack
+   * is exactly the three layers it has always been. So a household that
+   * never chooses a wallpapered theme renders byte-identically.
+   *
+   * The veil is what keeps the page readable over an arbitrary
+   * photograph, and the inks are derived against the palest and darkest
+   * grounds it can produce — see keystone/theme/tokens.go, which owns
+   * that reasoning and the one number behind it.
+   *
+   * Sizes and positions are spelled out per layer because the picture
+   * needs `cover` and `center` and the gradients must keep the corner
+   * origins they were drawn with. Left to one shorthand, `center` would
+   * move both glows. */
   background:
     radial-gradient(1100px 520px at 8% -12%, var(--glow-soft), transparent 68%),
     radial-gradient(900px 640px at 96% 8%, color-mix(in srgb, var(--glow) 16%, transparent), transparent 70%),
+    var(--wallpaper-veil, linear-gradient(transparent, transparent)),
+    var(--wallpaper, linear-gradient(transparent, transparent)),
     var(--color-bg);
+  background-size: auto, auto, auto, cover, auto;
+  background-position: 0 0, 0 0, 0 0, center, 0 0;
+  background-repeat: no-repeat;
+  /* Fixed, so the picture behaves like a wallpaper the page moves over
+     rather than a long sheet that scrolls with it. */
   background-attachment: fixed;
 }
 a { color: var(--color-accent-300); text-decoration: none; text-underline-offset: 3px; }

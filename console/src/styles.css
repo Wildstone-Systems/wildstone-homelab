@@ -2064,3 +2064,8 @@ tr[aria-pressed="true"] { box-shadow: inset 2px 0 0 var(--color-accent); }
 }
 .theme-swatch-line { height: 3px; border-radius: 2px; width: 100%; opacity: 0.85; }
 .theme-swatch-line.short { width: 55%; opacity: 1; }
+
+/* The mark on a theme that brings a wallpaper. The Console does not
+ * wear one — this says the picture exists and where it appears. */
+.theme-name { display: inline-flex; align-items: center; gap: 4px; }
+.theme-haspic { color: var(--muted); flex: none; }

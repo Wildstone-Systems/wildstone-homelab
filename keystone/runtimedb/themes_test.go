@@ -185,3 +185,93 @@ func TestAThemeNeedsANameAndColours(t *testing.T) {
 		t.Error("a colourless theme was stored")
 	}
 }
+
+// A theme's picture is the theme's, and it attaches by name — to one
+// that ships in the binary as readily as to a pasted one.
+func TestAThemesPictureAttachesByName(t *testing.T) {
+	db := open(t)
+	png := []byte("\x89PNG\r\n\x1a\nnot really a png")
+
+	if err := db.SetThemeBackground("nord", png, "image/png", "mika"); err != nil {
+		t.Fatalf("SetThemeBackground: %v", err)
+	}
+	// No palette row was invented on the way.
+	all, err := db.ListHouseholdThemes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 0 {
+		t.Errorf("storing a picture invented %d theme(s)", len(all))
+	}
+
+	got, err := db.GetThemeBackground("nord")
+	if err != nil {
+		t.Fatalf("GetThemeBackground: %v", err)
+	}
+	if string(got.Image) != string(png) || got.MediaType != "image/png" || got.SetBy != "mika" {
+		t.Errorf("the picture came back changed: %+v", got)
+	}
+	if got.Version() == 0 {
+		t.Error("the picture has no version, so a browser would keep the old one")
+	}
+
+	// The catalogue query answers "which themes have one" without
+	// dragging the bytes out of the database.
+	versions, err := db.ThemeBackgroundVersions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if versions["nord"] != got.Version() {
+		t.Errorf("versions = %v, want nord at %d", versions, got.Version())
+	}
+	if len(versions) != 1 {
+		t.Errorf("%d themes reported a picture, want 1", len(versions))
+	}
+}
+
+func TestReplacingAndRemovingAThemesPicture(t *testing.T) {
+	db := open(t)
+	first := []byte("\x89PNG\r\n\x1a\nfirst")
+	second := []byte("\x89PNG\r\n\x1a\nsecond")
+
+	if err := db.SetThemeBackground("nord", first, "image/png", "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetThemeBackground("nord", second, "image/png", "sandy"); err != nil {
+		t.Fatalf("replacing: %v", err)
+	}
+	got, err := db.GetThemeBackground("nord")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got.Image) != string(second) || got.SetBy != "sandy" {
+		t.Error("replacing a picture did not replace it")
+	}
+
+	removed, err := db.DeleteThemeBackground("nord")
+	if err != nil || !removed {
+		t.Fatalf("DeleteThemeBackground = %v, %v", removed, err)
+	}
+	if again, err := db.DeleteThemeBackground("nord"); err != nil || again {
+		t.Errorf("removing it twice = %v, %v", again, err)
+	}
+}
+
+func TestAPictureNeedsBytesAndAType(t *testing.T) {
+	db := open(t)
+	png := []byte("\x89PNG\r\n\x1a\n")
+	for _, c := range []struct {
+		what            string
+		name, mediaType string
+		image           []byte
+	}{
+		{"no theme", "", "image/png", png},
+		{"no bytes", "nord", "image/png", nil},
+		{"no type", "nord", "", png},
+		{"larger than the bound", "nord", "image/png", make([]byte, MaxThemeBackgroundBytes+1)},
+	} {
+		if err := db.SetThemeBackground(c.name, c.image, c.mediaType, "mika"); err == nil {
+			t.Errorf("a picture with %s was stored", c.what)
+		}
+	}
+}

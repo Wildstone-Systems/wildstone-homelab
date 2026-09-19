@@ -1993,6 +1993,16 @@
       var short = make("span", "themeline short");
       if (t.swatch) {
         sw.style.background = t.swatch.background;
+        // A theme that brings a wallpaper previews AS the wallpaper,
+        // with the palette's card still drawn on top — which is what
+        // the page will actually look like. The ground stays behind it
+        // so a picture that fails to load leaves a themed tile rather
+        // than an empty box.
+        if (t.background) {
+          sw.style.backgroundImage = "url('" + themeBackgroundURL(t) + "')";
+          sw.style.backgroundSize = "cover";
+          sw.style.backgroundPosition = "center";
+        }
         card.style.background = t.swatch.surface;
         line.style.background = t.swatch.text;
         short.style.background = t.swatch.accent;
@@ -2039,12 +2049,25 @@
   // ground the tokens actually paint.
   var themedNames = [];
 
-  function applyTheme(tokens, dark) {
+  // Where a theme's picture is served. The version busts the browser's
+  // copy: same URL, new bytes.
+  function themeBackgroundURL(t) {
+    return "/api/v1/home/appearance/themes/" + encodeURIComponent(t.name) +
+      "/background?v=" + encodeURIComponent(t.backgroundVersion || 0);
+  }
+
+  function applyTheme(a) {
     var root = document.documentElement;
+    var tokens = a && a.tokens;
     themedNames.forEach(function (name) {
       if (!tokens || !(name in tokens)) { root.style.removeProperty(name); }
     });
     themedNames = [];
+    // The wallpaper is a layer in the page's own background stack
+    // (nocturne.css), so switching theme is two properties rather than
+    // a reload. Cleared first, so a theme with no picture cannot
+    // inherit the last one's.
+    root.style.removeProperty("--wallpaper");
     if (!tokens) {
       root.removeAttribute("data-theme");
       return;
@@ -2053,7 +2076,11 @@
       root.style.setProperty(name, tokens[name]);
       themedNames.push(name);
     });
-    root.setAttribute("data-theme", dark === false ? "light" : "dark");
+    if (a.background) {
+      root.style.setProperty("--wallpaper",
+        "url('" + themeBackgroundURL({ name: a.theme, backgroundVersion: a.backgroundVersion }) + "')");
+    }
+    root.setAttribute("data-theme", a.dark === false ? "light" : "dark");
   }
 
   function chooseTheme(t) {
@@ -2071,7 +2098,7 @@
         return r.json();
       })
       .then(function (a) {
-        applyTheme(a.tokens, a.dark);
+        applyTheme(a);
         chosen = a.theme || "";
         paintThemes();
       })

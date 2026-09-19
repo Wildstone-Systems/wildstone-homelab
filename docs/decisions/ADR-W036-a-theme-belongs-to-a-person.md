@@ -1,8 +1,8 @@
 # ADR-W036: A theme belongs to a person, not to the household
 
 - **Status:** accepted, and built. Everything in Part A is implemented:
-  `keystone/theme`, migration 0058, `handlers_appearance.go`, the
-  Console's rail picker and the household dashboard's.
+  `keystone/theme`, migrations 0058 and 0059, `handlers_appearance.go`,
+  the Console's rail picker and the household dashboard's.
 - **Number:** W036.
 - **Relates to:** ADR-W027 (the Console redesign, and the token block
   this depends on existing), ADR-W016 A1/A3 (one fetch path, no
@@ -65,6 +65,69 @@ Twenty-two palettes are vendored into the binary
 (`keystone/theme/themes/`, see its `NOTICE.md`), because a household
 with no route off its own network is a posture this project supports and
 a theme that needs the internet is a theme that is not available.
+
+## A2.1 A theme's picture is the household's to supply
+
+An Omarchy theme is not only a palette: every one of them ships a
+`backgrounds/` directory, and tokyo-night has eight wallpapers in it. A
+theme without its picture is half a skin, so themes here carry one too.
+
+The pictures are **not** vendored, and the palettes are, and the
+difference is size and provenance. A palette is twenty-six hex values —
+a few kilobytes for all twenty-two, and a list of colours is not
+somebody's artwork. The wallpapers run between half a megabyte and a
+megabyte and a half **each**: one per shipped theme would add fifteen
+megabytes to a binary that gets downloaded onto home servers, and the
+full sets over a hundred. They are also art by various hands, which is
+the call `packages/dashboard/README.md` already declines to make
+incidentally about third-party logos.
+
+So a household supplies its own, uploaded from the theme's
+`backgrounds/` directory — the same act as pasting the `colors.toml`,
+one file further, and still nothing fetched by the control plane.
+
+A picture attaches **by theme name**, in its own table (migration 0059),
+independent of whether the palette ships in the binary or was pasted.
+Otherwise putting a wallpaper behind Nord would mean re-pasting Nord's
+palette first.
+
+**Consequence.** Removing a pasted theme removes its picture too —
+unlike a person's choice, which is a few bytes of text that re-attach by
+themselves, an orphaned wallpaper is megabytes that nothing lists and
+nothing can remove.
+
+## A2.2 The picture is the page's ground, and the inks are derived for it
+
+The wallpaper is the **background of the household dashboard**, not its
+banner: a layer in the page's own background stack, fixed, covering,
+behind everything. The household banner is a separate thing and is
+untouched.
+
+That means everything drawn directly on the page — headings, the muted
+labels between cards, the eyebrow rows — is drawn over an arbitrary
+photograph, and a photograph has no contrast floor. It can be white
+where the ink is white and black where the ink is black, in one image.
+
+So the page colour stays in front of the picture at a fixed opacity
+(`theme.Veil`), and every ink is derived against the two extremes that
+veil can produce — the ground over a white pixel and the ground over a
+black one. Checking the extremes is sufficient because luminance is
+monotonic along the blend, and the repair is given a slightly thinner
+veil than the one that ships, so run-time compositing rounds into
+headroom rather than out of it.
+
+**Consequence, worth stating because it is visible.** A person who
+chooses a theme *with* a picture gets slightly brighter ink than the same
+theme without one. That is what it costs to stay legible over an unknown
+image, and `TestEveryShippedThemeIsLegibleOverAnyWallpaper` is what holds
+it. The veil is one number and it is the only judgement in the
+derivation: lower shows more picture and pushes the inks further.
+
+Cards stay fully opaque, so everything inside one is exactly as it was.
+The Console gets no wallpaper at all — it is the screen somebody opens
+when the house is broken, and ADR-W027's density is drawn on a flat
+ground on purpose. It has no read route for the bytes; it only manages
+them.
 
 ## A3. A palette gives colours; a design system gives relationships
 
@@ -146,6 +209,18 @@ is one of them being wrong.
 dashboard card and painted to match that card, from a `?theme=` the
 dashboard sets. A person's theme there would fight the panel it sits on.
 
+## A9. Choosing is a Member's act, on the surface a Member has
+
+A household Member has no Console — that is ADR-W032 and ADR-W033 A1,
+and nothing here changes it. So the picker is on the **household
+dashboard**, reachable through the portal door, which holds no RBAC verb
+at all: a Member switches theme from the page they already use, with no
+Console account and no Owner in the loop.
+
+The Console's picker is the same choice for whoever is on the Console,
+plus the Owner-only acts — adding a theme, and adding or removing its
+picture — because those change what the whole household can choose from.
+
 ## What this does not do
 
 - **No per-surface themes.** One choice, every Wildstone screen. Two
@@ -154,6 +229,8 @@ dashboard sets. A person's theme there would fight the panel it sits on.
 - **No fonts, spacing or radii from a theme.** A palette says nothing
   about them, and letting a theme move them would let a theme break a
   layout.
+- **No wallpaper on the Console, and none on the embedded widgets.**
+  See A2.2 and A8.
 - **No theme in desired state.** A restore does not need to reproduce
   what each person likes to read on, and a statefile diff should not
   churn because somebody tried Nord for an afternoon.
