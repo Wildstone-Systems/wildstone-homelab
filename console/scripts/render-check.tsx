@@ -1884,6 +1884,33 @@ const otherNode = renderToString(h(EditMember, {
 }));
 check("a group on another directory is not offered", !otherNode.includes("elsewhere_users"), otherNode.slice(0, 600));
 check("and it says why there is nothing to pick", text(otherNode).includes("No groups are declared"), text(otherNode));
+// Passwords. The drawer must never look like it can set one — Wildstone
+// does not hold it and cannot (LLDAP stores passwords through an OPAQUE
+// exchange, ADR-W020 A4) — and must say where the code comes out, since
+// there is no mail relay and a reset that silently writes to a file is
+// indistinguishable from one that did nothing.
+const withAuth = renderToString(h(EditMember, {
+  member: memberRow,
+  groups: [],
+  authOrigin: "https://auth.example.ts.net:7443",
+  onClose: () => {}, onDone: () => {},
+}));
+check("the reset points at the identity provider's own page",
+  withAuth.includes("https://auth.example.ts.net:7443/reset-password/step1"), withAuth.slice(0, 900));
+check("and says where the one-time code comes out",
+  text(withAuth).includes("Identity"), text(withAuth));
+// No password field, ever: the whole point is that this screen cannot
+// set one, and an input here would promise what the directory refuses.
+check("the drawer offers no password field",
+  !withAuth.includes('type="password"'), withAuth.slice(0, 900));
+// Without identity installed there is nowhere to send anybody, and
+// rendering a dead link would be worse than saying so.
+const noAuth = renderToString(h(EditMember, {
+  member: memberRow, groups: [], onClose: () => {}, onDone: () => {},
+}));
+check("with no sign-in service it says so instead of linking nowhere",
+  text(noAuth).includes("No sign-in service is installed") && !noAuth.includes("reset-password"),
+  text(noAuth));
 // ---------------------------------------------------------- Routines
 //
 // The list's job is two distinctions: what state a routine is in, and

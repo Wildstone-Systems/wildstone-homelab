@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { CaretRight, Check } from "@phosphor-icons/react";
-import { api, HouseholdGroup, HouseholdMember, PlanRecord } from "../api";
+import { api, HouseholdGroup, HouseholdMember, PackageView, PlanRecord } from "../api";
 import { ErrorLine, useLoad } from "../lib";
 import { Drawer } from "../ui/Drawer";
 
@@ -21,6 +21,16 @@ import { Drawer } from "../ui/Drawer";
 export function Household() {
   const members = useLoad<HouseholdMember[]>(() => api.householdMembers());
   const groups = useLoad<HouseholdGroup[]>(() => api.householdGroups());
+  // Where the identity provider answers, read from the catalog rather
+  // than rebuilt here. Keystone already resolves a Route's browsable
+  // origin for the Services screen, and the tailnet posture makes that
+  // a port on the node's name rather than the host in the spec — so a
+  // URL assembled in the Console would be wrong on exactly the
+  // deployments this household runs.
+  const pkgs = useLoad<PackageView[]>(() => api.packages());
+  const authOrigin = (pkgs.data ?? [])
+    .find((p) => p.capability === "identity" && p.enabled)
+    ?.addresses?.find((a) => a.route === "auth")?.url;
   const [open, setOpen] = useState<string | null>(null);
   const current = (members.data ?? []).find((m) => m.username === open);
 
@@ -86,6 +96,7 @@ export function Household() {
       </table>
       {current && (
         <EditMember
+          authOrigin={authOrigin}
           member={current}
           groups={groups.data ?? []}
           onClose={() => setOpen(null)}
@@ -126,11 +137,15 @@ export function Household() {
 export function EditMember({
   member,
   groups,
+  authOrigin,
   onClose,
   onDone,
 }: {
   member: HouseholdMember;
   groups: HouseholdGroup[];
+  // Where the identity provider answers, or undefined when identity is
+  // not installed or serves no route yet.
+  authOrigin?: string;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -197,6 +212,43 @@ export function EditMember({
           <div>
             <label htmlFor="member-email">Email</label>
             <input id="member-email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          </div>
+
+          <div>
+            <div className="eyebrow">PASSWORD</div>
+            {/*
+              A link, not a button, and deliberately so. Wildstone never
+              holds this password: LLDAP stores it through an OPAQUE
+              registration that neither a shell script nor Keystone can
+              perform, so the directory's own client is the only thing
+              positioned to change it (ADR-W020 A4). The one documented
+              exception is the first Owner at install time, which exists
+              because nothing can be signed into before there is one.
+
+              So the reset is started by the person themselves, and this
+              screen's job is to tell an Owner where to send them and
+              where the code will come out — which is the part that was
+              missing, not the mechanism. Authelia writes the code to a
+              file rather than emailing it (there is no relay and there
+              will not be one, ADR-W020 A6), and an Owner reads it back
+              on Identity.
+            */}
+            {authOrigin ? (
+              <div className="note">
+                {member.username} sets their own password:{" "}
+                <a href={`${authOrigin}/reset-password/step1`} target="_blank" rel="noreferrer">
+                  the sign-in page&rsquo;s &ldquo;Forgot password?&rdquo;
+                </a>
+                . There is no mail relay here, so the one-time code is written to a file instead of
+                sent — read it on <strong>Identity</strong> and hand it over in person, or on a
+                channel you already trust.
+              </div>
+            ) : (
+              <div className="muted">
+                No sign-in service is installed yet, so there is nowhere to reset a password.
+                Install identity first.
+              </div>
+            )}
           </div>
 
           <div>
