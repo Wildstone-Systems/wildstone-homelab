@@ -395,7 +395,7 @@ SUMMARY:Dinner
 DTSTART:20260925T233000Z
 END:VEVENT</C:calendar-data></prop></propstat>
  </response>
-</multistatus>`)
+</multistatus>`, time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,7 +491,7 @@ func TestLongLinesFoldAndUnfoldBackToThemselves(t *testing.T) {
 			t.Errorf("a %d-octet line was written unfolded: %q", len(line), line)
 		}
 	}
-	events := parseICS(written)
+	events := parseICS(written, time.UTC)
 	if len(events) != 1 {
 		t.Fatalf("the written object did not parse back to one event (%d)", len(events))
 	}
