@@ -395,8 +395,66 @@ func (db *DB) AdmitButlerMember(member, admittedBy string) error {
 		generation+1, stamp, admittedBy, member); err != nil {
 		return fmt.Errorf("runtimedb: admitting butler member: %w", err)
 	}
+	// The new Member inherits the household's default access group
+	// (ADR-W033 design §18.2, slice 8). In the same transaction as the
+	// admission, because a Person who is admitted but in no group is a
+	// state with no meaning: entitlements default to deny, so they would
+	// be a member of the household who can reach nothing, and nothing
+	// would ever come back to finish the job.
+	//
+	// Membership still grants nothing by itself (§4). What `Family`
+	// reaches is whatever the entitlement rows say about it, and this
+	// line has no opinion on that.
+	if err := addToDefaultGroupTx(tx, member, admittedBy, stamp); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("runtimedb: admitting butler member: %w", err)
+	}
+	return nil
+}
+
+// addToDefaultGroupTx is AddPersonToDefaultGroup inside a transaction,
+// keyed on the handle the caller already has.
+//
+// A household with no `Family` group is not an error. 0051 seeds it, so
+// its absence means somebody removed it deliberately, and refusing to
+// admit anybody until they put it back would be a strange thing for that
+// to cause.
+func addToDefaultGroupTx(tx *sql.Tx, member, actor, stamp string) error {
+	var personID string
+	if err := tx.QueryRow(`SELECT person_id FROM butler_members WHERE member = ?`, member).
+		Scan(&personID); err != nil {
+		return fmt.Errorf("runtimedb: reading the person admitted: %w", err)
+	}
+	// Asked of the schema rather than inferred from a failed query. A
+	// database below 0051 has no groups at all, and "no such table"
+	// arrives as a generic SQL error indistinguishable from a real one
+	// — folding those together is the mistake GroupBySeedKey already
+	// made once (TestAFailedGroupLookupIsNotAMissingGroup).
+	var hasGroups int
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'person_groups'`).
+		Scan(&hasGroups); err != nil {
+		return fmt.Errorf("runtimedb: checking for the group namespace: %w", err)
+	}
+	if hasGroups == 0 {
+		return nil
+	}
+	var groupID string
+	err := tx.QueryRow(`SELECT group_id FROM person_groups WHERE seed_key = ?`, SeedFamily).Scan(&groupID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("runtimedb: looking up the default access group: %w", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO person_group_members (group_id, person_id, added_at, added_by)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT (group_id, person_id) DO NOTHING`,
+		groupID, personID, stamp, actor); err != nil {
+		return fmt.Errorf("runtimedb: adding %q to the default access group: %w", member, err)
 	}
 	return nil
 }

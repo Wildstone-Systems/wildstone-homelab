@@ -22,7 +22,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: documents-paperless
-  version: 1.0.2
+  version: 1.0.3
   capability: documents
   profile: paperless
 requires:
@@ -39,6 +39,14 @@ params:
   # explicitly when identity runs elsewhere.
   - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
   - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+# The household group this service is for (ADR-W033 design §4).
+#
+# `family` faithfully restates what the app's existing directory group
+# already means: it names household members with no distinction among
+# them. Narrowing it to `adults` would be a new restriction on a
+# household that never asked for one, and that decision is theirs to
+# make in the Console rather than a package author's to ship.
+accessGroups: [family]
 policies:
   classifications: [family_public]
   dataSensitivity: high

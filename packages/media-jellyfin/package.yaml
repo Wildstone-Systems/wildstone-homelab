@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: media-jellyfin
-  version: 1.0.2
+  version: 1.0.3
   capability: media
   profile: jellyfin
 requires:
@@ -39,6 +39,14 @@ params:
   # managed prefix (default prefixes: /etc/wildstone, /srv/wildstone).
   - { name: media_path, default: /srv/wildstone/media, description: "Folder on this machine holding your films and television.", source: directory }
   - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+# The household group this service is for (ADR-W033 design §4).
+#
+# `family` faithfully restates what the app's existing directory group
+# already means: it names household members with no distinction among
+# them. Narrowing it to `adults` would be a new restriction on a
+# household that never asked for one, and that decision is theirs to
+# make in the Console rather than a package author's to ship.
+accessGroups: [family]
 policies:
   classifications: [family_public]
   dataSensitivity: medium

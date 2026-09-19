@@ -21,7 +21,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: assistant-wildstone
-  version: 1.0.0
+  version: 1.0.1
   capability: assistant
   profile: wildstone
   exclusive: true
@@ -34,6 +34,14 @@ params:
   - { name: node, required: true, description: "Which machine runs the control plane.", source: node }
   - { name: keystone_addr, required: true, example: "192.168.1.10:9441", description: "Where Keystone's API answers, as address:port. This is what the proxy forwards to." }
   - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
+# The household group this service is for (ADR-W033 design §4).
+#
+# `family` faithfully restates what the app's existing directory group
+# already means: it names household members with no distinction among
+# them. Narrowing it to `adults` would be a new restriction on a
+# household that never asked for one, and that decision is theirs to
+# make in the Console rather than a package author's to ship.
+accessGroups: [family]
 policies:
   # Household material by definition: what a family member types to an
   # assistant is about the house and the people in it.
