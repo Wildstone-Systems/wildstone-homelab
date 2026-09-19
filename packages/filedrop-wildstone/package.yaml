@@ -26,7 +26,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: filedrop-wildstone
-  version: 1.0.0
+  version: 1.0.1
   capability: filedrop
   profile: wildstone
   # One drop box per household. A second profile would want the same
@@ -59,6 +59,14 @@ params:
   # LdapGroup is rendered into. Defaults to this package's own node,
   # which is right for a single-node homelab.
   - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
+# The household group this service is for (ADR-W033 design §4).
+#
+# `family` faithfully restates what the app's existing directory group
+# already means: it names household members with no distinction among
+# them. Narrowing it to `adults` would be a new restriction on a
+# household that never asked for one, and that decision is theirs to
+# make in the Console rather than a package author's to ship.
+accessGroups: [family]
 policies:
   # The family's own surface. It holds what the household uploads, which
   # is ordinary household material rather than the operator's.

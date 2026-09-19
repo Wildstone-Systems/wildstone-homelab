@@ -10,13 +10,13 @@
 # name  version  sha256(package.yaml)[:16]
 ai-ollama 1.0.0 f6b24b7aed67c8ea
 ai-open-webui 1.0.1 b0f5146b6ee76626
-assistant-wildstone 1.0.0 9eece57dd846f884
+assistant-wildstone 1.0.1 75fe068a57dbe4c9
 audiobooks-audiobookshelf 1.0.2 da71af39bb90704c
 bookmarks-linkding 1.0.1 7e6b58723ddbc0c6
 books-calibre-web 1.0.2 b202d14553db085e
 books-kavita 1.0.2 b3fde26c0d2b3b05
 budget-actual 1.1.0 68f1dfdf247433cc
-calendar-radicale 2.0.2 4342862789968f48
+calendar-radicale 2.0.3 2494b32f58a01814
 cameras-frigate 1.0.1 0ac585beb5876da1
 captcha-flaresolverr 1.0.1 6420402a747e2ee5
 chat-matrix-admin 1.0.3 79c98d8ce2aafe03
@@ -28,14 +28,14 @@ dashboard 1.0.1 c0a5ca5341926568
 dashboard-homarr 1.0.3 d6ad61a6afaacde0
 dns-adguard 1.0.1 64b38a3352ca358e
 dns-pihole 1.0.1 580d2adc5d34c138
-documents-paperless 1.0.2 a258d873b4e143bc
+documents-paperless 1.0.3 597f5924c2330085
 downloads-qbittorrent 1.0.2 663381e9d95edce0
 feeds-freshrss 1.0.1 8a75bb28ea9c6465
-filedrop-wildstone 1.0.0 f84c246072790c52
+filedrop-wildstone 1.0.1 964368c9ec905d39
 files-filebrowser 1.0.1 39f776ac3cd55073
 home-assistant 1.1.1 61f41ec056cd74c0
 home-automation 1.0.3 08e9b3aa603b35a1
-homepage-wildstone 1.0.0 c3ac5ce97e85c21a
+homepage-wildstone 1.0.1 743bd19598b58400
 identity 1.0.5 673a20682c3e9544
 indexers-prowlarr 1.0.2 9dfa451d4d3ec5ba
 ingress 1.0.2 4bbd2bd5e6db1d92
@@ -44,7 +44,7 @@ ingress-tailnet-public 1.0.1 16dea82d8a073bdf
 ingress-tailnet-ts 1.1.1 61c1e5cfa0848b4b
 inventory-homebox 1.1.0 d1e66d5bca1ebdb5
 mail-roundcube 1.0.3 263209fecaf58b8d
-media-jellyfin 1.0.2 b1a5557b5043f296
+media-jellyfin 1.0.3 c1c73df7add23280
 media-plex 1.0.2 5b792e3919a95d8a
 metrics-grafana 1.0.2 a6451806df20268c
 metrics-prometheus 1.0.0 9a93297824a6b973

@@ -379,10 +379,14 @@ func TestAnInactivePersonIsNotResolved(t *testing.T) {
 		t.Errorf("resolved %v, want only the active Owner — a disabled person "+
 			"counted as an adult is the failure this ordering avoids", people)
 	}
-	// The record survives, because it is a record.
+	// The record survives, because it is a record. Counted in the
+	// ADULTS group specifically: since slice 8 an admitted Person is
+	// also in `Family`, and a count over every group would pass on the
+	// wrong row.
 	var n int
 	if err := db.sql.QueryRow(
-		`SELECT COUNT(*) FROM person_group_members WHERE person_id = ?`, leaver).Scan(&n); err != nil {
+		`SELECT COUNT(*) FROM person_group_members WHERE person_id = ? AND group_id = ?`,
+		leaver, adults).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != 1 {
@@ -460,25 +464,69 @@ func TestTheGroupsArriveEmptyOnAnUpgradeToo(t *testing.T) {
 	}
 	defer db.Close()
 
-	for _, key := range []string{SeedFamily, SeedAdults, SeedKids} {
+	// Read the raw rows rather than the resolver throughout: the
+	// resolver hides an un-admitted child behind its standing filter,
+	// and this test is about what the MIGRATIONS wrote, not about what
+	// resolves.
+	count := func(key string) int {
+		t.Helper()
 		g, err := db.GroupBySeedKey(key)
 		if err != nil {
 			t.Fatalf("GroupBySeedKey(%s) after upgrade: %v", key, err)
 		}
-		// Read the raw rows rather than the resolver: the resolver hides
-		// an un-admitted child behind its standing filter, and this test
-		// is about what the MIGRATION wrote, not about what resolves.
 		var n int
 		if err := db.sql.QueryRow(
 			`SELECT COUNT(*) FROM person_group_members WHERE group_id = ?`, g.ID).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
-		if n != 0 {
+		return n
+	}
+
+	// The property slice 6 defended, unchanged: no migration may infer
+	// a DISTINCTION between household members. `Kids` is the one this
+	// was written for — a migration seeding it from the child preset
+	// passes every fresh-install test and breaks §18.1 on exactly the
+	// households that have children.
+	for _, key := range []string{SeedAdults, SeedKids} {
+		if n := count(key); n != 0 {
 			t.Errorf("upgrading put %d people in %s; who is in a group is the "+
 				"household's to say, and a migration that infers membership from "+
 				"the child preset breaks §18.1 on every deployment that already "+
 				"has members", n, key)
 		}
+	}
+
+	// `Family` is the exception, and slice 8 is why. §18.2 makes it the
+	// group a Member inherits, and 0053 backfills the households that
+	// already existed.
+	//
+	// This is not the inference the loop above refuses. That one reads
+	// a preset and concludes something about a person; this one puts
+	// every member of the household in the group that means "member of
+	// the household", which distinguishes nobody from anybody. The
+	// reason it is not merely tidy: entitlements default to deny, so an
+	// upgrade leaving `Family` empty would mean every existing
+	// household holds no inherited entitlement and loses access to
+	// everything the moment projection lands — a silent lockout caused
+	// by a migration that looked like it only added a table.
+	//
+	// ACTIVE PEOPLE ONLY, which this fixture tests by construction: sam
+	// was recorded but never admitted, so a backfill that ignored
+	// standing would put two people here.
+	if n := count(SeedFamily); n != 1 {
+		t.Errorf("the default group holds %d people, want 1 — the backfill takes "+
+			"every ACTIVE member and sam was never admitted", n)
+	}
+	var who string
+	if err := db.sql.QueryRow(
+		`SELECT b.member FROM person_group_members m
+		   JOIN butler_members b ON b.person_id = m.person_id
+		   JOIN person_groups g ON g.group_id = m.group_id
+		  WHERE g.seed_key = ?`, SeedFamily).Scan(&who); err != nil {
+		t.Fatal(err)
+	}
+	if who != "mika" {
+		t.Errorf("the default group holds %q, want the admitted member", who)
 	}
 }
 

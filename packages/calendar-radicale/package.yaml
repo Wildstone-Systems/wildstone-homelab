@@ -194,7 +194,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: calendar-radicale
-  version: 2.0.2
+  version: 2.0.3
   capability: calendar
   profile: radicale
 requires:
@@ -218,6 +218,14 @@ params:
   # Radicale went on reading the file written from the old one.
   - { name: service_account_generation, default: "1", description: "Bump this after rotating the directory password, to rewrite the credential file Radicale reads." }
   - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+# The household group this service is for (ADR-W033 design §4).
+#
+# `family` faithfully restates what the app's existing directory group
+# already means: it names household members with no distinction among
+# them. Narrowing it to `adults` would be a new restriction on a
+# household that never asked for one, and that decision is theirs to
+# make in the Console rather than a package author's to ship.
+accessGroups: [family]
 policies:
   # A calendar is where a household writes down where its people will be
   # and when. Private by classification and high by sensitivity, which is

@@ -22,7 +22,11 @@ import (
 // Issue is one lint finding. Lint returns findings rather than stopping
 // at the first failure — a package author fixes a batch at a time.
 type Issue struct {
-	Rule string // "spec", "expand", "trait", "params", "classification", "container-env-ref", "policy", "manual-step", "seed-volume"
+	// Rule names the check that fired. The list was kept in this
+	// comment and had already fallen four rules behind the code, so it
+	// is no longer kept here: `grep 'Rule: "' keystone/pkgtool` is the
+	// list, and it cannot go stale.
+	Rule string
 	Msg  string
 }
 
@@ -111,6 +115,7 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 	// about the package having contradicted itself.
 	issues = append(issues, paramShapeIssues(pkg)...)
 	issues = append(issues, selfURLFromDomain(pkg)...)
+	issues = append(issues, accessGroupIssues(pkg)...)
 
 	rendered, err := capability.NewEngine().Expand(pkg, params, catalog)
 	if err != nil {

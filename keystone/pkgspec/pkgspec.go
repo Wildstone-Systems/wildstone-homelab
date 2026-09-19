@@ -368,6 +368,26 @@ type Package struct {
 	ExternalConfig []ExternalConfigDecl `yaml:"externalConfig,omitempty"`
 	// ImageSets group images that must be upgraded together.
 	ImageSets []ImageSet `yaml:"imageSets,omitempty"`
+	// AccessGroups names the household groups this service is for
+	// (ADR-W033 design §4, slice 8).
+	//
+	// A DECLARATION, NOT A ROSTER. It says which of the household's
+	// groups the service is meant for — `adults` for the password
+	// manager, `family` for the media library — and the household
+	// decides who is in those groups. A package author has never met
+	// them and must not be naming people.
+	//
+	// SEED KEYS ONLY, and the closed set is checked by lint rather than
+	// here (ADR-W025: this package must still LOAD a manifest written
+	// against a newer vocabulary). The three seeded roles are the only
+	// groups a package can name at all, because a household's own
+	// groups have no name an author could have known — those are
+	// assigned in the Console, against a group id.
+	//
+	// Empty means the service names no audience of its own. That is not
+	// the same as "everyone": what it grants is decided by the
+	// entitlement rows, which default to deny.
+	AccessGroups []string `yaml:"accessGroups,omitempty" json:"accessGroups,omitempty"`
 }
 
 // ImageSet names images whose versions are not independent — refreshing
@@ -527,6 +547,22 @@ func (p *Package) Validate() error {
 		if err := validatePublishes(p.Publishes); err != nil {
 			return err
 		}
+	}
+
+	// accessGroups: shape only — non-empty and not repeated. WHICH
+	// group names exist is vocabulary, and vocabulary is lint's
+	// (ADR-W025), so a manifest naming a group this binary has never
+	// heard of still loads.
+	seenGroup := map[string]bool{}
+	for i, g := range p.AccessGroups {
+		field := fmt.Sprintf("accessGroups[%d]", i)
+		if strings.TrimSpace(g) == "" {
+			return &ValidationError{Field: field, Msg: "must not be empty"}
+		}
+		if seenGroup[g] {
+			return &ValidationError{Field: field, Msg: fmt.Sprintf("%q declared twice", g)}
+		}
+		seenGroup[g] = true
 	}
 
 	seenExternal := map[string]bool{}
