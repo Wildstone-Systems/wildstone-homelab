@@ -1,7 +1,9 @@
 # ADR-W020: Identity onboarding — the first admin, and how a household gets accounts
 
-- **Status:** proposed
-- **Relates to:** ADR-W007 (principals, bootstrap token), ADR-W012
+- **Status:** proposed; A4 superseded in part by ADR-W033 (see the note
+  on A4 — the first Owner's password is set directly by the installer)
+- **Relates to:** ADR-W033 (the agent design, which supersedes this
+  where they conflict), ADR-W007 (principals, bootstrap token), ADR-W012
   (secrets never read back), ADR-W016 (Console IA), ADR-W019 A5
   (legibility over scheduling), ADR-W005 A2 (`.Resolved` stays small)
 - **Audience:** decision record AND implementation spec for the identity
@@ -105,6 +107,35 @@ user as a side effect of a spec change, for the reason ADR-W012 gives
 about destroying things a control plane cannot recreate.
 
 ### A4. Credentials are never declarative
+
+> **Superseded in part by ADR-W033, for the FIRST OWNER only.**
+>
+> The second paragraph below is wrong as a universal rule, and the
+> installer is where it was wrong. A4 says the first credential is always
+> a claim code the person exchanges for a password of their own. Applied
+> to the first Owner that is circular: the claim surface is served by the
+> ingress, the ingress is installed by a control plane that has no Owner
+> yet, and §2.4 of the agent-system design requires an active Owner
+> before installation can complete. A rule that cannot be satisfied at
+> bootstrap is not a rule, and what the installer actually did instead
+> was worse than either option — it collected a password, set it on
+> LLDAP's built-in `admin`, and told the operator it had created an
+> account under the name they typed. No such account existed.
+>
+> So for the first Owner, the installer collects a username and a
+> password, creates the directory user, and sets that password on it
+> directly. The password is held for the length of the run and never
+> written to the answers file or to a spec.
+>
+> The FIRST paragraph stands unchanged and is the part that mattered: a
+> password still cannot live in a spec, and `LdapUser` still carries
+> existence and membership and never a credential. Nothing about this
+> puts a credential in the Statefile.
+>
+> Everyone after the first Owner is unchanged: they get a claim code, and
+> A5–A7 describe their path exactly as written.
+>
+> Per ADR-W033, which supersedes every earlier ADR it conflicts with.
 
 A password cannot live in a spec, because specs live in the Statefile
 and the Statefile is replicated, restored and read. `LdapUser` therefore
