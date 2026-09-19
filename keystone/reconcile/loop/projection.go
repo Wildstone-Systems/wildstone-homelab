@@ -254,3 +254,64 @@ func dedupe(sorted []string) []string {
 	}
 	return out
 }
+
+// seedCapabilityEntitlements keeps the entitlement table in step with
+// what is installed (§17.3).
+//
+// Done here, from desired state, rather than in the install handler —
+// because enabling a capability only PROPOSES a plan, and a plan may
+// never be approved. Seeding at proposal time would create entitlements
+// for a service that was never installed. Desired state is what the
+// household actually committed to, and reading it every tick makes
+// install, uninstall and reinstall one mechanism instead of three hooks.
+//
+// accessGroups is capability -> the seed keys its manifest declares,
+// supplied by the caller because the loop holds no catalog. A catalog
+// conformance test asserts every profile of a capability declares the
+// same audience, so one entry per capability is a complete answer rather
+// than a guess about which profile is running.
+func seedCapabilityEntitlements(db *runtimedb.DB, accessGroups map[string][]string, desired []resource.Resource) error {
+	if db == nil {
+		return nil
+	}
+	installed := map[string]bool{}
+	for _, r := range desired {
+		if capability, ok := strings.CutPrefix(r.Metadata.Owner, "capability/"); ok && capability != "" {
+			installed[capability] = true
+		}
+	}
+	// Nothing in desired state at all is a loop that has not loaded yet,
+	// not a household that uninstalled everything. Making every service
+	// dormant on the strength of it would withdraw all access on the
+	// first tick after a restart with an unreadable statefile.
+	if len(installed) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(installed))
+	for c := range installed {
+		names = append(names, c)
+	}
+	sort.Strings(names)
+	for _, c := range names {
+		if err := db.SeedServiceEntitlements(c, accessGroups[c], "system"); err != nil {
+			return err
+		}
+	}
+
+	// And a capability that has entitlements but is no longer installed
+	// goes dormant rather than losing them (§17.3, §17.4).
+	known, err := db.ServicesWithEntitlements()
+	if err != nil {
+		return err
+	}
+	for _, c := range known {
+		if installed[c] {
+			continue
+		}
+		if err := db.MakeServiceDormant(c); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -430,3 +430,115 @@ func TestARevocationIsAlwaysSomethingWildstonePlaced(t *testing.T) {
 		}
 	}
 }
+
+// Installing a capability creates its entitlements; removing it makes
+// them dormant; reinstalling brings them back (§17.3, §18.2).
+//
+// The whole lifecycle in one test, because the three are one mechanism:
+// desired state is read every tick, and what is in it decides.
+func TestACapabilitysEntitlementsFollowItsInstallation(t *testing.T) {
+	_, _, db, _ := harness(t)
+	person, desired := household(t, db, "mika")
+	// A second capability, so that uninstalling photos is
+	// distinguishable from a desired set that has not loaded. With one
+	// capability the two look identical, and the pass deliberately does
+	// nothing in that case rather than withdrawing everything.
+	desired = append(desired, resource.Resource{
+		Kind:      resource.KindLdapGroup,
+		Metadata:  resource.Metadata{Name: "docs-users", Owner: "capability/documents", Node: "n1"},
+		LdapGroup: &resource.LdapGroupSpec{Name: "docs_users"},
+	})
+	accessGroups := map[string][]string{
+		"photos":    {runtimedb.SeedFamily},
+		"documents": {runtimedb.SeedFamily},
+	}
+
+	// Installed: the declared audience becomes an entitlement, and the
+	// Person admission put in `Family` reaches it.
+	if err := seedCapabilityEntitlements(db, accessGroups, desired); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := db.EntitledTo(person, "photos"); err != nil || !ok {
+		t.Fatalf("the declared audience did not become an entitlement (%v, %v)", ok, err)
+	}
+
+	// The household restricts somebody by name — a decision no manifest
+	// could have stated.
+	other := personOfHandle(t, db, "giulia")
+	if err := db.SetEntitlement("photos", runtimedb.EntitlementSubjectPerson,
+		other, runtimedb.EntitlementRestrict, "mika"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Uninstalled: nothing in desired state owns the capability any
+	// more. The rows go dormant rather than away.
+	var withoutPhotos []resource.Resource
+	for _, r := range desired {
+		if r.Metadata.Owner != "capability/photos" {
+			withoutPhotos = append(withoutPhotos, r)
+		}
+	}
+	if err := seedCapabilityEntitlements(db, accessGroups, withoutPhotos); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := db.EntitledTo(person, "photos"); err != nil || ok {
+		t.Error("an uninstalled service still admitted somebody")
+	}
+	rows, err := db.ListEntitlements("photos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("uninstalling left %d rows, want both kept as dormant", len(rows))
+	}
+
+	// Reinstalled: both decisions come back, the household's included.
+	if err := seedCapabilityEntitlements(db, accessGroups, desired); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := db.EntitledTo(person, "photos"); err != nil || !ok {
+		t.Error("reinstalling did not restore the group's assignment")
+	}
+	if ok, err := db.EntitledTo(other, "photos"); err != nil || ok {
+		t.Error("reinstalling un-restricted a Person the household had refused")
+	}
+}
+
+// An empty desired set withdraws nothing.
+//
+// A loop that has not loaded yet, or a statefile that momentarily reads
+// empty, must not look like a household that uninstalled everything —
+// that would make every service dormant and withdraw all access on one
+// tick.
+func TestAnEmptyDesiredSetDoesNotUninstallEverything(t *testing.T) {
+	_, _, db, _ := harness(t)
+	person, desired := household(t, db, "mika")
+	accessGroups := map[string][]string{"photos": {runtimedb.SeedFamily}}
+	if err := seedCapabilityEntitlements(db, accessGroups, desired); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := seedCapabilityEntitlements(db, accessGroups, nil); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := db.EntitledTo(person, "photos"); err != nil || !ok {
+		t.Error("an empty resource set made every service dormant; nothing loaded " +
+			"is not the same as nothing installed")
+	}
+}
+
+// personOfHandle records and admits a Person, returning their id.
+func personOfHandle(t *testing.T, db *runtimedb.DB, handle string) string {
+	t.Helper()
+	if err := db.RecordButlerMember(handle, runtimedb.RoleMember, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AdmitButlerMember(handle, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	members, err := db.ButlerMembersByHandleFold(handle)
+	if err != nil || len(members) != 1 {
+		t.Fatalf("looking up %s: %v %v", handle, members, err)
+	}
+	return members[0].PersonID
+}

@@ -60,11 +60,45 @@ func renderAutheliaClients(desired []resource.Resource) []byte {
 	// or an app signs somebody in with a password that the page in front
 	// of it would not have. A copy, so desired state is not edited.
 	posture := ingressorigin.Of(desired)
+	// The directory groups each capability declared, for the clients
+	// that have not stated their own audience (slice 8).
+	groupsByCapability := map[string][]string{}
+	for _, r := range desired {
+		if r.Kind != resource.KindLdapGroup || r.LdapGroup == nil || r.LdapGroup.Name == "" {
+			continue
+		}
+		if c, ok := strings.CutPrefix(r.Metadata.Owner, "capability/"); ok && c != "" {
+			groupsByCapability[c] = append(groupsByCapability[c], r.LdapGroup.Name)
+		}
+	}
 	clients := make([]*resource.OidcClientSpec, 0, len(desired))
 	for _, r := range desired {
 		if r.Kind == resource.KindOidcClient && r.OidcClient != nil {
 			c := *r.OidcClient
 			c.AuthPolicy = tailnetPolicy(c.AuthPolicy, posture)
+			// An app that runs its own OIDC flow is gated by the token
+			// the IdP will or will not issue, and RequireGroups is what
+			// makes that a refusal rather than a login with no
+			// permissions (see renderAuthorizationPolicies below). It
+			// has been implementable since it was written and no package
+			// set it; the capability's declared groups are the answer,
+			// and §4's "OIDC where supported" is this.
+			//
+			// A spec that named its own groups keeps them: the package
+			// said something more specific than the capability did, and
+			// the derivation must not overrule it. And a capability that
+			// declared no directory groups gets nothing, for the reason
+			// AccessSubjects gives — a gate over an empty group refuses
+			// everyone, so an upgrade that added a field must not close
+			// an app nobody decided to close.
+			if len(c.RequireGroups) == 0 {
+				if cap, ok := strings.CutPrefix(r.Metadata.Owner, "capability/"); ok {
+					if groups := groupsByCapability[cap]; len(groups) > 0 {
+						c.RequireGroups = append([]string(nil), groups...)
+						sort.Strings(c.RequireGroups)
+					}
+				}
+			}
 			clients = append(clients, &c)
 		}
 	}

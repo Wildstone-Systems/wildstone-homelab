@@ -628,6 +628,21 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		fmt.Fprintf(bootstrapOut, "first start: admin principal created; API token (shown once):\n%s\n", bootstrap)
 	}
 
+	// The catalog, loaded BEFORE the reconcile loop starts rather than
+	// beside the gateway where it used to sit. The loop reads the access
+	// groups every package declares (slice 8), and `go svc.Run` is a few
+	// lines below — assigning the field after that is a data race on the
+	// house's access rules, which is not a place to have one.
+	var cat *catalog.Catalog
+	if catalogDir != "" {
+		loaded, cerr := catalog.LoadDir(catalogDir)
+		if cerr != nil {
+			return cerr
+		}
+		cat = loaded
+		log.Info("catalog loaded", "dir", catalogDir, "packages", len(cat.List()))
+	}
+
 	// Reconcile service (ADR-W008): converges approved plans and drift.
 	// Providers (Cloudflare DnsRecord) are wired when the owner supplies
 	// a token — an E6 configuration step; until then a DnsRecord in
@@ -635,6 +650,9 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	svc := &loop.Loop{
 		State: state,
 		DB:    db,
+		// Capability -> the household groups its manifest declares it
+		// is for. Plain data, so the loop needs no catalog of its own.
+		AccessGroups: accessGroupsByCapability(cat),
 		Rec: &reconcile.Reconciler{
 			Applier:       &reconcile.GatewayApplier{Gateway: gw},
 			ManagedPrefix: managedPrefix,
@@ -727,15 +745,6 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Loaded before the household engine because the domestic gateway
 	// checks every household action against the agentTools its owning
 	// package declares (ADR-W024 A5).
-	var cat *catalog.Catalog
-	if catalogDir != "" {
-		loaded, cerr := catalog.LoadDir(catalogDir)
-		if cerr != nil {
-			return cerr
-		}
-		cat = loaded
-		log.Info("catalog loaded", "dir", catalogDir, "packages", len(cat.List()))
-	}
 
 	// Domestic gateway (ADR-W024 A5, H4): the only way a household rule
 	// acts. Executors are registered here and nowhere else; a rule that
@@ -1726,4 +1735,29 @@ func chatTransportFor(capability string) string {
 		return rest[:i]
 	}
 	return rest
+}
+
+// accessGroupsByCapability is the one fact the reconcile loop needs from
+// each package: which household groups the service is for (ADR-W033
+// design §4, slice 8).
+//
+// Keyed on the CAPABILITY, because that is what an entitlement is about
+// — a household that swaps one photos profile for another has not
+// changed who may see the photos. A catalog conformance test asserts
+// every profile of a capability declares the same audience, so there is
+// one right answer here rather than a choice between profiles.
+//
+// A nil catalog yields a nil map, and seeding then does nothing: a
+// deployment with no catalog has no manifests to read an audience from.
+func accessGroupsByCapability(cat *catalog.Catalog) map[string][]string {
+	if cat == nil {
+		return nil
+	}
+	out := map[string][]string{}
+	for _, pkg := range cat.List() {
+		if c := pkg.Metadata.Capability; c != "" && len(pkg.AccessGroups) > 0 {
+			out[c] = pkg.AccessGroups
+		}
+	}
+	return out
 }

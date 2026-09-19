@@ -55,6 +55,15 @@ type Loop struct {
 	Connected func(node string) bool
 	Log       *slog.Logger
 
+	// AccessGroups maps a capability to the household groups its
+	// manifest declares it is for (ADR-W033 design §4, slice 8).
+	//
+	// Plain data rather than a catalog handle: the loop needs one fact
+	// about each package and should not grow a dependency on the thing
+	// that parses them. nil disables seeding entirely, which is the
+	// posture every existing test is in.
+	AccessGroups map[string][]string
+
 	// allowMediumHigh is consulted by the Approve callback installed on
 	// Rec: true only while a plan tick is executing human-approved
 	// changes (ADR-W008 A2). Loop is the only driver of Rec, so this is
@@ -154,6 +163,12 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	// 8). Every tick, recomputed from scratch, so a hand-removed
 	// membership comes back and a withdrawn entitlement goes away
 	// without either waiting for an event nobody sends.
+	// Entitlements first exist here: a capability installed gets the
+	// rows its manifest declares, and one uninstalled has its rows made
+	// dormant rather than deleted (§17.3).
+	if err := seedCapabilityEntitlements(l.DB, l.AccessGroups, desired); err != nil {
+		return TickOutcome{}, fmt.Errorf("loop: seeding entitlements: %w", err)
+	}
 	desired, membershipDrift, err := projectEntitlements(l.DB, desired)
 	if err != nil {
 		return TickOutcome{}, fmt.Errorf("loop: projecting entitlements: %w", err)
