@@ -233,6 +233,16 @@ type Reconciler struct {
 	// call lands in a later E-series work package.
 	ReloadAutheliaFn func(ctx context.Context) error
 
+	// NoteIngressAddrs reports the addresses the identity proxy's
+	// container answers from, observed fresh on every tick.
+	//
+	// A seam rather than a direct call into the API server, matching
+	// ReloadFn and Approve above: the reconciler has no business knowing
+	// what a trust boundary is, and a test should be able to watch this
+	// fire without standing one up. nil never observes anything, which
+	// keeps every existing caller exactly as it was.
+	NoteIngressAddrs func(nodeID string, addrs []string)
+
 	// JobGateAttempts and JobGateBackoff bound the wait for a Job's
 	// container to reach a terminal state. Zero uses the defaults in
 	// job.go, which are far longer than the container health gate on
@@ -439,6 +449,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	r.mu.Lock()
 	r.posture = postureOf(desired)
 	r.mu.Unlock()
+
+	// Before the plan rather than after it, because this must stay right
+	// whether or not there is anything to apply — and because Reconcile
+	// returns early on a pending approval or a failed step, which are
+	// exactly the ticks where an address must not go stale.
+	r.refreshIngressAddrs(ctx, nodeID, desired)
 
 	wsDesired := make([]resource.Resource, 0, len(desired))
 	providerDesired := make([]resource.Resource, 0, len(desired))

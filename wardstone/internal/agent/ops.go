@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
@@ -770,6 +771,20 @@ func (a *Agent) inspectContainer(ctx context.Context, op *wsv1.InspectContainer)
 				return ""
 			}
 			return ci.State.Health.Status
+		}(),
+		// Sorted, because Docker's map iterates in no order and an
+		// unsorted list would make Keystone see the proxy's addresses
+		// "change" on every poll — churning a trust boundary that has
+		// not actually moved.
+		IpAddresses: func() []string {
+			var out []string
+			for _, n := range ci.NetworkSettings.Networks {
+				if n.IPAddress != "" {
+					out = append(out, n.IPAddress)
+				}
+			}
+			sort.Strings(out)
+			return out
 		}(),
 	}}, nil
 }

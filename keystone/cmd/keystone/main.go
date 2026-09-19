@@ -455,7 +455,12 @@ func newButlerProvider(cfg butlerConfig) (provider.Provider, butlerBackend, erro
 // serves a file from dir, falling back to index.html for client-side
 // routes (the SPA convention). Path traversal is handled by
 // http.ServeFile/FileServer's own cleaning.
-func withConsole(apiHandler http.Handler, dir string) http.Handler {
+// uiReachable decides whether this peer may be served the Console's
+// own pages. It is a parameter rather than a direct call into the API
+// server so the refusal can be tested without one, and nil means the
+// pages are served to everyone — the behaviour before this gate, and
+// what a caller with no trust boundary to enforce wants.
+func withConsole(apiHandler http.Handler, dir string, uiReachable func(*http.Request) bool) http.Handler {
 	fileServer := http.FileServer(http.Dir(dir))
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiHandler)
@@ -468,6 +473,19 @@ func withConsole(apiHandler http.Handler, dir string) http.Handler {
 		mux.Handle(prefix, apiHandler)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Refused before any file is considered, including /assets.
+		// Gating index.html alone would still hand out the bundle, and
+		// the bundle is the Console — a copy served to a browser that
+		// reached this port directly would talk to /api with a bearer
+		// token and never involve the proxy, which is the arrangement
+		// this gate exists to end.
+		if uiReachable != nil && !uiReachable(r) {
+			http.Error(w,
+				"the Console is served through this household's identity proxy; "+
+					"reach it at the Console's own address and sign in there",
+				http.StatusForbidden)
+			return
+		}
 		if r.URL.Path != "/" {
 			if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(path.Clean(r.URL.Path), "/")))); err == nil {
 				// Everything under /assets carries a content hash in its
@@ -933,18 +951,56 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// proxy. Exact addresses, not a CIDR or a hostname: the proxy is
 	// one container on one network, and an exact match cannot be
 	// widened by a DNS answer (ADR-W030 A8.1).
-	apiSrv.TrustedIngress = householdCfg.Ingress
-	if len(apiSrv.TrustedIngress) == 0 {
-		log.Info("household review page unavailable, and Console sign-in by forwarded " +
-			"identity is off: -household-ingress is not set, so routine approvals happen " +
-			"in the Console and the Console itself needs a bearer token")
+	apiSrv.SetTrustedIngress(householdCfg.Ingress)
+	// Observed, unless the operator pinned it.
+	//
+	// An explicit -household-ingress is a decision about a trust
+	// boundary and discovery must not quietly overrule it — someone who
+	// names an address has a reason, and finding the Console trusting a
+	// different peer than the flag says would be the worst kind of
+	// surprise. With the flag unset, the reconciler supplies the value
+	// instead, which is what keeps it right after the proxy's container
+	// is recreated with a new address.
+	if len(householdCfg.Ingress) == 0 {
+		var lastIngress string
+		svc.Rec.NoteIngressAddrs = func(nodeID string, addrs []string) {
+			// Only on a change. This fires every reconcile tick, and a
+			// log line per tick would bury the one that matters — the
+			// tick where the address actually moved, which is the only
+			// event anybody debugging a locked-out Console wants.
+			key := nodeID + " " + strings.Join(addrs, ",")
+			if key == lastIngress {
+				return
+			}
+			lastIngress = key
+			apiSrv.SetTrustedIngress(addrs)
+			log.Info("identity proxy address observed",
+				"node", nodeID, "addresses", addrs,
+				"gates", "household review page, household portal, and the Console")
+		}
+	} else {
+		log.Info("identity proxy address pinned by -household-ingress",
+			"addresses", householdCfg.Ingress,
+			"note", "discovery is off; update the flag if the proxy container is recreated with a new address")
+	}
+	if len(apiSrv.TrustedIngressAddrs()) == 0 {
+		// A starting state, not a verdict. With the flag unset the
+		// reconciler supplies the address on its first tick against a
+		// node that has an ingress, so this says "not yet" rather than
+		// "not ever" — the previous wording promised a permanence that
+		// is no longer true, and an operator who read it would go
+		// looking for a flag they do not need to set.
+		log.Info("no identity proxy address yet: the household review page and Console " +
+			"sign-in by forwarded identity are off until one is observed, so the Console " +
+			"needs a bearer token for now. A household with no ingress installed stays " +
+			"this way, which is the supported posture, not a fault")
 	} else {
 		// Said out loud because this address list is now the boundary
 		// for an ADMIN identity, not only for a household member's
 		// routine approval. An operator who set it for the review page
 		// should learn here that it does more.
 		log.Info("trusted identity proxy configured",
-			"addresses", apiSrv.TrustedIngress,
+			"addresses", apiSrv.TrustedIngressAddrs(),
 			"gates", "household review page, and Console sign-in for members of "+api.ConsoleGroup)
 	}
 	// Probing one model, for the Console's assignment and Re-check.
@@ -1514,8 +1570,27 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 
 	var publicHandler http.Handler = apiSrv.Handler()
 	if consoleDir != "" {
-		publicHandler = withConsole(publicHandler, consoleDir)
-		log.Info("serving console", "dir", consoleDir)
+		publicHandler = withConsole(publicHandler, consoleDir, apiSrv.ConsoleUIReachableFrom)
+		// Which of the two postures this is, said out loud. The gated
+		// one refuses a browser that reaches this port directly, and
+		// that refusal is the kind an operator cannot diagnose from the
+		// outside — the page simply stops loading, with the proxy still
+		// insisting they are signed in.
+		// A snapshot of the posture at startup, and it can change under
+		// discovery: the gate itself is evaluated per request, so the
+		// behaviour is always current even when this line is not. Said
+		// anyway, because it is the first thing anybody checks when the
+		// Console stops loading.
+		if len(apiSrv.TrustedIngressAddrs()) == 0 {
+			log.Info("serving console", "dir", consoleDir,
+				"reachable", "anyone who can reach this port; sign-in is a bearer token",
+				"note", "this tightens to proxy-only once an identity proxy address is observed")
+		} else {
+			log.Info("serving console", "dir", consoleDir,
+				"reachable", "the identity proxy only",
+				"proxy", apiSrv.TrustedIngressAddrs(),
+				"recovery", "keystone owner, on this host, if the proxy is broken")
+		}
 	}
 	go func() {
 		log.Info("public API listening", "addr", apiLis.Addr().String())

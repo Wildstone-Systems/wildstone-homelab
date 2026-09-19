@@ -14,6 +14,7 @@ package api
 // in one screen without the routing table around it.
 
 import (
+	"net"
 	"net/http"
 	"strings"
 
@@ -210,4 +211,73 @@ func hasGroup(header, want string) bool {
 		}
 	}
 	return false
+}
+
+// ConsoleUIReachableFrom reports whether the Console's own pages may be
+// served to this peer.
+//
+// This is the other half of consoleForwardAuth, and without it that
+// function is a lock on a door standing open beside it. Forward-auth
+// decides who the API believes; this decides who is handed the pages
+// that call it. packages/wildstone-console says the requirement in its
+// own words, next to the Route it renders: "the listener this points at
+// must not also be reachable directly. A trusted header on an open port
+// is not authentication." Nothing enforced that until now, so a
+// household that put the Console behind Authelia still served the whole
+// Console to anyone who could reach Keystone's port, where the sign-in
+// page offers a bearer token and the proxy is never consulted.
+//
+// It gates the PAGES, not the API. /api stays reachable with a token,
+// on purpose and not by omission: `wild` is an API client, the
+// installer drives the same endpoints, and recovery after a broken
+// proxy depends on them. Closing that too would turn a misconfigured
+// ingress into a house nobody can administer, and the recovery path
+// (`keystone owner`, design §2.6) deliberately does not go through the
+// API at all.
+//
+// With no trusted ingress configured it serves everyone, and that is
+// the deliberate half rather than an oversight. A household with no
+// proxy in front has no other way in — the sign-in page's bearer token
+// IS the way in there — so refusing would lock out precisely the
+// deployments that cannot use Authelia. The gate arrives with the
+// proxy that makes it enforceable, and not before.
+func (s *Server) ConsoleUIReachableFrom(r *http.Request) bool {
+	if len(s.TrustedIngressAddrs()) == 0 {
+		return true
+	}
+	// The host itself is always served, and this carve-out is what keeps
+	// the gate from being a lockout rather than a boundary.
+	//
+	// -api-listen defaults to 127.0.0.1:9441, so on a default deployment
+	// the Console answers ONLY on loopback and no container can reach it
+	// — including the proxy. Gating on the proxy alone would then refuse
+	// the local browser and admit nobody through the proxy either, and
+	// the Console would be unreachable by any road the moment an ingress
+	// was installed. That is not a hypothetical ordering: the reconciler
+	// now supplies the proxy's address on its own, so the gate arms
+	// itself on exactly the households that may never have exposed this
+	// listener.
+	//
+	// It gives nothing away. A request from loopback is a person on the
+	// host, and a person on the host already has the data directory and
+	// `keystone owner` — they are not a caller this boundary was ever
+	// defending against. A LAN or tailnet client reaching an
+	// -api-listen 0.0.0.0 port still arrives as its own address and is
+	// still refused, which is the case ADR-W032 names as total if it is
+	// got wrong.
+	if isLoopback(remoteHost(r)) {
+		return true
+	}
+	return s.peerIsTrustedIngress(r)
+}
+
+// isLoopback reports whether a remote host is this machine.
+//
+// Parsed rather than string-compared: "127.0.0.1", "::1" and
+// "127.0.0.53" are all loopback and a list of literals would miss the
+// third, while a prefix match on "127." would miss "::1" and admit a
+// hostname that merely began with it.
+func isLoopback(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

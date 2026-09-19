@@ -301,6 +301,20 @@ step_tailscale() {
 # the answers file: it is used to provision, and then forgotten.
 ADMIN_USER=""
 ADMIN_PASS=""
+# Whether this install puts the Console behind the identity proxy.
+#
+# One decision, read in four places: whether to bind the API where a
+# container can reach it, whether to install wildstone-console, whether
+# the first Owner may be put in console_users, and what to print at the
+# end. They have to agree — a route to a listener nobody exposed, or a
+# group nothing declared, each fails somewhere far from the cause.
+#
+# It follows the tailnet, because the package requires ingress:private
+# and that is the only ingress this installer offers.
+CONSOLE_BEHIND_PROXY=0
+# Where the proxy reaches Keystone, as address:port. Empty until the
+# tailnet address is known.
+KEYSTONE_ADDR=""
 step_admin() {
   echo
   echo "Now an account for you. This is what you will log in with, and"
@@ -710,6 +724,16 @@ read_keystone_args() {
 #
 # A flag's value is the following token ONLY when that token is not itself
 # a flag, which keeps a boolean flag from swallowing the next flag's name.
+# keystone_arg_named reports whether a flag is already set for this run,
+# either on this invocation's --keystone-arg or in the env file a
+# previous run wrote. Both matter: the operator may have named it just
+# now, or named it once and expect it to stick.
+keystone_arg_named() { # flag
+  case " $KEYSTONE_ARGS " in *" $1 "*) return 0 ;; esac
+  case " $(read_keystone_args) " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+
 merge_keystone_args() {
   local existing="$1" new="$2" names=" " tok out="" drop=0
   # Unquoted $existing / $new is deliberate — word splitting is the whole
@@ -959,19 +983,23 @@ create_first_owner() {
     *"\"username\":\"$ADMIN_USER\""*)
       log "'$ADMIN_USER' is already declared; leaving the account as it is" ;;
     *)
-      # NO GROUPS, and that is not an omission.
+      # The group is requested only when the package that DECLARES it is
+      # installed, and never otherwise.
       #
-      # `console_users` is declared by the `console` capability, which
-      # this installer does not install — the Console is served by
-      # Keystone itself and reached on this host. Asking for an
+      # `console_users` comes from wildstone-console, which needs an
+      # ingress and so exists only on a tailnet install. Asking for an
       # undeclared group is refused outright (addHouseholdMember checks
-      # declaredGroups), so requesting it here aborted every interactive
-      # install. An operator who later puts the Console behind the
-      # ingress adds the group then, on the Household screen, when the
-      # group exists to be added to.
-      local r id st i
+      # declaredGroups), and that refusal once aborted every interactive
+      # install — so the condition here is load-bearing, not tidiness.
+      # Without the group, the first Owner reaches the Console on this
+      # host and nowhere else; with it, they sign in through the proxy
+      # as themselves.
+      local r id st i groups=""
+      if [ "$CONSOLE_BEHIND_PROXY" = 1 ]; then
+        groups=',"groups":["console_users"]'
+      fi
       r="$(api POST /api/v1/household/members \
-        "{\"username\":\"$ADMIN_USER\",\"node\":\"$NODE_ID\"}" || true)"
+        "{\"username\":\"$ADMIN_USER\",\"node\":\"$NODE_ID\"$groups}" || true)"
       id="$(echo "$r" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
       [ -n "$id" ] || fail "could not propose the account for '$ADMIN_USER': $(echo "$r" | head -c 200)"
       api POST "/api/v1/plans/$id/approve" >/dev/null || fail "could not approve the account plan"
@@ -1070,6 +1098,16 @@ post_install() {
     enable_capability ingress-tailnet-ts \
       "{\"node\":\"$NODE_ID\",\"tailnet_name\":\"$tsname\",\"listen_addr\":\"$tsaddr\"}"
     DASHBOARD_URL="https://$tsname"
+    # There is a proxy now, so the Console can sit behind it.
+    #
+    # The proxy reaches Keystone at this host's tailnet address, not at
+    # 127.0.0.1: the upstream is dialled from inside a container, where
+    # loopback is the container's own. The address is the one the
+    # operator already uses to reach this node and tailscale keeps it
+    # across restarts, which a Docker bridge address is not guaranteed
+    # to do.
+    CONSOLE_BEHIND_PROXY=1
+    KEYSTONE_ADDR="$tsaddr:9441"
   else
     log "no tailnet: skipping ingress, services will be reachable on this host only"
     DASHBOARD_URL=""
@@ -1079,6 +1117,24 @@ post_install() {
   log "installing identity"
   enable_capability identity "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\"}"
   set_admin_password
+  # The Console's own package: the console_users group, and the route
+  # that puts Authelia in front of it. Nothing else declares either, so
+  # without this the Console has no group to grant it and no address
+  # but this host's — which is why forward-auth, written and tested,
+  # had never once engaged on a real deployment.
+  #
+  # BEFORE create_first_owner, because that step asks for the group and
+  # a group must be declared before anybody can be put in it.
+  #
+  # Only with an ingress. The package requires ingress:private, and on a
+  # host without a tailnet there is no proxy to sit in front, so this is
+  # skipped rather than failed: a Console reached on localhost is the
+  # supported posture for such a household, not a broken one.
+  if [ "$CONSOLE_BEHIND_PROXY" = 1 ]; then
+    log "installing the console route"
+    enable_capability wildstone-console \
+      "{\"admin_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_ADDR\"}"
+  fi
   create_first_owner
   log "installing dashboard"
   enable_capability dashboard "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\"}"
@@ -1112,6 +1168,41 @@ if [ "$ROLE" = keystone ]; then
   if [ -n "$CATALOG_DIR" ]; then
     [ -d "$CATALOG_DIR" ] || fail "--catalog-dir $CATALOG_DIR does not exist"
     KEYSTONE_ARGS="$KEYSTONE_ARGS -catalog-dir $CATALOG_DIR"
+    KEYSTONE_ARGS_SET=1
+  fi
+  # Reachable by the proxy, on a host that will have one.
+  #
+  # -api-listen defaults to 127.0.0.1:9441, and a container dialling
+  # that reaches its OWN loopback. So the route wildstone-console
+  # renders could never connect, and the Console could never be served
+  # through Authelia — the listener has to be somewhere the proxy can
+  # dial before the route pointing at it means anything.
+  #
+  # This widens the API to the LAN and the tailnet, which ADR-W032
+  # names as the risk of the forwarded-header design, so the compensating
+  # control is the thing that makes it safe rather than an afterthought:
+  # Keystone serves the Console's own pages ONLY to the proxy or to
+  # loopback (ConsoleUIReachableFrom), and consoleForwardAuth honours
+  # Remote-User from the proxy's address alone, so a client reaching
+  # this port directly can set any header it likes and be nobody. What
+  # it can still do is present a bearer token, which is the same
+  # authority `wild` has always carried over the same network.
+  #
+  # Tested on the tailnet actually being up rather than on the answer to
+  # a question: the non-interactive path joins a tailnet without ever
+  # setting WANT_TAILSCALE, and a flag that disagreed with reality here
+  # would bind the wrong interface on exactly the hosts that need it.
+  #
+  # Never over an operator who named one. An explicit -api-listen is a
+  # deliberate choice about where a control plane answers, the same kind
+  # of choice --console-dir is treated as a few lines above, and
+  # docs/audit/runtime-access.md documents a second Keystone on
+  # `-api-listen 127.0.0.1:19441` that this would quietly hijack. Go's
+  # flag package takes the LAST occurrence and reports nothing, so the
+  # override would not even announce itself — the audit instance would
+  # simply come up on the wrong interface.
+  if tailscale ip -4 >/dev/null 2>&1 && ! keystone_arg_named -api-listen; then
+    KEYSTONE_ARGS="$KEYSTONE_ARGS -api-listen 0.0.0.0:9441"
     KEYSTONE_ARGS_SET=1
   fi
   if [ "$KEYSTONE_ARGS_SET" = 0 ] && [ -f "$KEYSTONE_ENV" ]; then
@@ -1155,6 +1246,20 @@ UNIT
     if [ -n "${DASHBOARD_URL:-}" ]; then
       echo "  Your dashboard: $DASHBOARD_URL"
       echo "  Sign in as '$ADMIN_USER' with the password you chose."
+      if [ "$CONSOLE_BEHIND_PROXY" = 1 ]; then
+        # Where the Console is, and the one way back in if the proxy
+        # is the thing that breaks. Both are worth a line here because
+        # neither is guessable: the Console is no longer served to
+        # anything but the proxy and this host, so an operator who
+        # tries its old address gets a refusal with no explanation.
+        echo
+        echo "  The Console is behind that same sign-in — find it on the"
+        echo "  dashboard, or on the Services screen under 'console'."
+        echo "  It is no longer served to anything but the proxy and this"
+        echo "  machine, so reach it there rather than by address."
+        echo "  If the proxy ever fails, run 'keystone owner list' on this"
+        echo "  host: the recovery commands do not go through it."
+      fi
     else
       echo "  Services are running but have no ingress; re-run and choose"
       echo "  Tailscale to reach them from a browser."

@@ -101,7 +101,7 @@ func TestTheFrontPageRefusesAMemberOutsideItsGroup(t *testing.T) {
 // A header anyone can set is not an authentication.
 func TestTheFrontPageRefusesAnUntrustedPeer(t *testing.T) {
 	h := homeHarness(t)
-	h.s.TrustedIngress = nil // an unconfigured trust boundary must fail closed
+	h.s.SetTrustedIngress(nil) // an unconfigured trust boundary must fail closed
 	res := h.member(http.MethodGet, "/api/v1/home/summary", "sandy", "homepage_users", nil, "")
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusForbidden {

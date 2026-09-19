@@ -32,3 +32,24 @@ cd proto && protoc \
   --go-grpc_out=. --go-grpc_opt=module=github.com/chickenrat17/wildstone-homelab/proto \
   wardstone/v1/wardstone.proto
 ```
+
+`protoc` is a C++ binary and is often not installable where the code is.
+`buf` is pure Go, so `go install` reaches it anywhere the module proxy
+does, and it drives the same plugins:
+
+```sh
+go install github.com/bufbuild/buf/cmd/buf@latest
+cd proto && buf generate --path wardstone/v1/wardstone.proto --template \
+  '{"version":"v1","plugins":[{"plugin":"go","out":".","opt":["module=github.com/chickenrat17/wildstone-homelab/proto"]}]}' .
+```
+
+Pass the DIRECTORY as the input and select the file with `--path`. Given
+the file as the input, buf roots it at its own parent, and the generated
+code registers the descriptor as `wardstone.proto` instead of
+`wardstone/v1/wardstone.proto` — renaming every internal symbol and
+changing the name the file occupies in `protoregistry`. Add
+`protoc-gen-go-grpc` to the plugin list only when a `service` changed;
+regenerating the grpc file otherwise is pure diff noise.
+
+Either way the version line in the header records the generator that ran,
+so a `protoc (unknown)` in a diff means buf produced it.

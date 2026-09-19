@@ -26,7 +26,7 @@ func reviewHarness(t *testing.T) *harness {
 	h := newHarness(t)
 	// The review route is only reachable from the identity proxy, and
 	// httptest speaks from loopback.
-	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 	if err := h.s.DB.RecordButlerMember("sam", runtimedb.RoleMember, "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -182,11 +182,11 @@ func TestReviewTokensAreBoundNotBearer(t *testing.T) {
 		token, _ := issueToken(t, h, planID, "sam", "")
 		// A header anyone can set is not an authentication. With no
 		// trusted peer configured the route is not there at all.
-		h.s.TrustedIngress = nil
+		h.s.SetTrustedIngress(nil)
 		if res := h.review(t, "sam@example.com", token, true); res.StatusCode != http.StatusNotFound {
 			t.Fatalf("the review route answered with no trusted ingress configured: %d", res.StatusCode)
 		}
-		h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+		h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 		// And with no asserted identity at all.
 		if res := h.review(t, "", token, true); res.StatusCode != http.StatusNotFound {
 			t.Fatalf("the review route answered an unauthenticated request: %d", res.StatusCode)

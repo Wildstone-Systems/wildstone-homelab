@@ -29,7 +29,7 @@ import (
 func portalHarness(t *testing.T) (*harness, string) {
 	t.Helper()
 	h := newHarness(t)
-	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 	root := t.TempDir()
 
 	for _, r := range []resource.Resource{
@@ -171,7 +171,7 @@ func TestTheDoorRefusesEveryoneItShould(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			h.s.TrustedIngress = c.trusted
+			h.s.SetTrustedIngress(c.trusted)
 			h.unthrottled()
 			res := h.member(http.MethodPost,
 				"/api/v1/filedrop/upload?namespace=shared&name="+url.QueryEscape(c.name+".txt"),
@@ -210,7 +210,7 @@ func TestAPortalMemberIsNotAPrincipal(t *testing.T) {
 // difference.
 func TestAnUninstalledSurfaceIsAbsent(t *testing.T) {
 	h := newHarness(t)
-	h.s.TrustedIngress = []string{"127.0.0.1", "::1"}
+	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 
 	for _, path := range []string{
 		"/filedrop/", "/filedrop/widget", "/api/v1/filedrop/recent",
