@@ -405,48 +405,49 @@ func butlerProviderFor(b runtimedb.Butler) (provider.Provider, error) {
 // provider when the Butler is off. API keys come ONLY from the provider's
 // environment variable (ADR-W017 A4) — there is deliberately no key flag.
 func newButlerProvider(cfg butlerConfig) (provider.Provider, butlerBackend, error) {
-	switch cfg.Provider {
-	case "", "off":
+	if cfg.Provider == "" || cfg.Provider == "off" {
 		return nil, butlerBackend{}, nil
-	case "anthropic":
-		key := os.Getenv("ANTHROPIC_API_KEY")
-		if key == "" {
-			return nil, butlerBackend{}, fmt.Errorf("-butler-provider anthropic requires ANTHROPIC_API_KEY in the environment")
+	}
+	// The catalog decides which kinds exist, which client each speaks
+	// and which environment variable holds its key (provider.Kinds).
+	kind, ok := provider.LookupKind(cfg.Provider)
+	if !ok {
+		names := []string{"off"}
+		for _, k := range provider.Kinds {
+			names = append(names, k.Name)
 		}
+		return nil, butlerBackend{}, fmt.Errorf("unknown -butler-provider %q (want %s)", cfg.Provider, strings.Join(names, "|"))
+	}
+	key := kind.Key()
+	if kind.KeyRequired && key == "" {
+		return nil, butlerBackend{}, fmt.Errorf("provider %s requires %s in the environment", kind.Name, kind.KeyEnv)
+	}
+	endpoint := kind.Endpoint(cfg.Endpoint)
+	switch kind.Client {
+	case "anthropic":
 		p := provider.NewAnthropicProvider(key)
 		if cfg.Model != "" {
 			p.Model = cfg.Model
 		}
-		if cfg.Endpoint != "" {
-			p.BaseURL = cfg.Endpoint
+		if endpoint != "" {
+			p.BaseURL = endpoint
 		}
 		return p, butlerBackend{Model: p.Model, Endpoint: p.BaseURL}, nil
 	case "openai":
-		key := os.Getenv("OPENAI_API_KEY")
-		if key == "" {
-			return nil, butlerBackend{}, fmt.Errorf("-butler-provider openai requires OPENAI_API_KEY in the environment")
+		if endpoint == "" {
+			return nil, butlerBackend{}, fmt.Errorf("provider %s needs an endpoint: the server's OpenAI-compatible base URL, ending in /v1", kind.Name)
 		}
-		base := cfg.Endpoint
-		if base == "" {
-			base = "https://api.openai.com/v1"
-		}
-		p := provider.NewOpenAIProvider(base, key)
+		p := provider.NewOpenAIProvider(endpoint, key)
 		if cfg.Model != "" {
 			p.Model = cfg.Model
 		}
 		return p, butlerBackend{Model: p.Model, Endpoint: p.BaseURL}, nil
-	case "ollama":
-		host := cfg.Endpoint
-		if host == "" {
-			host = "http://localhost:11434"
-		}
-		p := provider.NewOllamaProvider(host)
+	default: // ollama
+		p := provider.NewOllamaProvider(endpoint)
 		if cfg.Model != "" {
 			p.Model = cfg.Model
 		}
 		return p, butlerBackend{Model: p.Model, Endpoint: p.Host}, nil
-	default:
-		return nil, butlerBackend{}, fmt.Errorf("unknown -butler-provider %q (want off|anthropic|openai|ollama)", cfg.Provider)
 	}
 }
 

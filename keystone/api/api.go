@@ -395,6 +395,7 @@ func (s *Server) Handler() http.Handler {
 	// inside the control plane, which is not a read a viewer should be
 	// able to make.
 	mux.Handle("GET /api/v1/butler/models/offered", s.handle(principal.VerbManage, s.listOfferedModels))
+	mux.Handle("GET /api/v1/butler/providers", s.handle(principal.VerbManage, s.listProviderKinds))
 	mux.Handle("GET /api/v1/butler/config", s.handle(principal.VerbManage, s.getButlerConfig))
 	mux.Handle("PUT /api/v1/butler/config", s.handle(principal.VerbManage, s.setButlerConfig))
 	// The administrator's side of integrations. Every one needs manage.

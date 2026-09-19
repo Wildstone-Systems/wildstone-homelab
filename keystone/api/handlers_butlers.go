@@ -33,6 +33,8 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+
+	providerpkg "github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 )
 
 // butlerView is one Butler as a Console renders it.
@@ -292,16 +294,23 @@ func (s *Server) ensureModel(ctx context.Context, providerModel, provider, endpo
 			return m.Name, nil
 		}
 	}
-	if endpoint == "" || provider == "" {
+	if provider == "" {
 		return "", fmt.Errorf(
 			"%s is not configured here yet, so assigning it needs the provider and endpoint it comes from", providerModel)
+	}
+	// A hosted provider has a known address; an empty one means it.
+	if kind, ok := providerpkg.LookupKind(provider); ok {
+		endpoint = kind.Endpoint(endpoint)
+	}
+	if endpoint == "" {
+		return "", fmt.Errorf("%s needs the endpoint of the %s server it comes from", providerModel, provider)
 	}
 	// The kind comes from the provider's own listing, with the real
 	// size, never from the caller and never from the name alone. If the
 	// endpoint cannot be reached, nothing is created: a model whose
 	// destination could not be established is not one to assign a
 	// Butler to on a guess.
-	offered, _, _, err := offeredModels(ctx, endpoint)
+	offered, _, _, err := offeredModels(ctx, provider, endpoint)
 	if err != nil {
 		return "", fmt.Errorf("could not ask %s what it serves, so %s cannot be assigned yet: %w",
 			endpoint, providerModel, err)

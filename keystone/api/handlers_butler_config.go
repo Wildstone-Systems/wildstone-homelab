@@ -17,6 +17,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -24,6 +26,8 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 )
 
 // butlerModel is one model a backend reports.
@@ -45,32 +49,82 @@ type butlerModel struct {
 // question.
 func (s *Server) listOfferedModels(r *http.Request, _ principal.Identity) (any, int, error) {
 	endpoint := r.URL.Query().Get("endpoint")
-	if endpoint == "" && s.ButlerHost != nil {
+	prov := r.URL.Query().Get("provider")
+	if endpoint == "" && prov == "" && s.ButlerHost != nil {
 		endpoint = s.ButlerHost.Endpoint
 	}
-	if endpoint == "" {
+	if endpoint == "" && prov == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("endpoint required (no Butler endpoint is configured to fall back to)")
 	}
-	out, resolved, code, err := offeredModels(r.Context(), endpoint)
+	out, resolved, code, err := offeredModels(r.Context(), prov, endpoint)
 	if err != nil {
 		return nil, code, err
 	}
 	return map[string]any{"endpoint": resolved, "models": out}, http.StatusOK, nil
 }
 
-// offeredModels asks one provider endpoint what it serves.
+// providerKindView is one provider kind as the Console offers it:
+// the catalog entry, and whether its key is present. Never the key.
+type providerKindView struct {
+	provider.Kind
+	KeySet bool `json:"keySet"`
+}
+
+// listProviderKinds answers which providers a Butler can think with and,
+// for each hosted one, whether keystone has its key (ADR-W017 A9: a
+// provider without its key reports that, and the key never leaves the
+// environment). The Console's provider drawer is built from this, so it
+// offers exactly what the factory can build.
+func (s *Server) listProviderKinds(_ *http.Request, _ principal.Identity) (any, int, error) {
+	out := make([]providerKindView, 0, len(provider.Kinds))
+	for _, k := range provider.Kinds {
+		out = append(out, providerKindView{Kind: k, KeySet: k.KeySet()})
+	}
+	return map[string]any{"providers": out}, http.StatusOK, nil
+}
+
+// offeredModels asks one provider what it serves.
 //
 // Shared by the listing the Console renders and by the assignment path,
 // so a model's local/cloud verdict is drawn from the same evidence in
-// both — the provider's own listing, with the real size. A second
-// implementation is a second chance to be wrong about the one fact that
-// decides whether material leaves the house.
-func offeredModels(ctx context.Context, endpoint string) ([]butlerModel, string, int, error) {
+// both — the provider's own listing. A second implementation is a
+// second chance to be wrong about the one fact that decides whether
+// material leaves the house.
+//
+// Each kind lists the way it speaks (provider.Kinds): Ollama's
+// /api/tags, an OpenAI-compatible server's /models, Anthropic's
+// /v1/models — the hosted ones with the key from the environment, which
+// is sent to the provider and nowhere else. An empty provider is Ollama,
+// which is what every caller meant before there was a choice.
+func offeredModels(ctx context.Context, providerName, endpoint string) ([]butlerModel, string, int, error) {
+	if strings.TrimSpace(providerName) == "" {
+		providerName = "ollama"
+	}
+	kind, ok := provider.LookupKind(providerName)
+	if !ok {
+		return nil, "", http.StatusBadRequest, fmt.Errorf("unknown provider %q", providerName)
+	}
+	endpoint = kind.Endpoint(endpoint)
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return nil, "", http.StatusBadRequest, fmt.Errorf("endpoint must be an http(s) URL, got %q", endpoint)
 	}
+	if kind.KeyRequired && !kind.KeySet() {
+		return nil, "", http.StatusBadRequest, fmt.Errorf(
+			"%s needs its key: set %s in keystone's environment (/etc/wildstone/keystone.env) and restart keystone", kind.Label, kind.KeyEnv)
+	}
+	switch kind.Client {
+	case "openai":
+		return listOpenAIModels(ctx, kind, u)
+	case "anthropic":
+		return listAnthropicModels(ctx, kind, u)
+	default:
+		return listOllamaModels(ctx, u)
+	}
+}
 
+// listOllamaModels asks an Ollama server what it has pulled.
+func listOllamaModels(ctx context.Context, u *url.URL) ([]butlerModel, string, int, error) {
 	// Bounded: an operator typing an address should get an answer or a
 	// clear failure, not a hung Console tab.
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -116,6 +170,111 @@ func offeredModels(ctx context.Context, endpoint string) ([]butlerModel, string,
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, u.String(), http.StatusOK, nil
+}
+
+// listOpenAIModels asks an OpenAI-compatible server (OpenAI, OpenRouter,
+// LM Studio, vLLM…) what it serves: GET <base>/models.
+//
+// A hosted kind's models are all cloud. A self-hosted OpenAI-compatible
+// server is local when its address is on this network — the one fact the
+// listing cannot state, so it is drawn from where the server is.
+func listOpenAIModels(ctx context.Context, kind provider.Kind, u *url.URL) ([]butlerModel, string, int, error) {
+	var body struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	headers := map[string]string{}
+	if key := kind.Key(); key != "" {
+		headers["Authorization"] = "Bearer " + key
+	}
+	if code, err := getProviderJSON(ctx, kind, strings.TrimRight(u.String(), "/")+"/models", headers, &body); err != nil {
+		return nil, "", code, err
+	}
+	local := !kind.Hosted && privateHost(u.Hostname())
+	out := make([]butlerModel, 0, len(body.Data))
+	for _, m := range body.Data {
+		if m.ID != "" {
+			out = append(out, butlerModel{Name: m.ID, Local: local})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, u.String(), http.StatusOK, nil
+}
+
+// listAnthropicModels asks Anthropic what it serves: GET /v1/models.
+func listAnthropicModels(ctx context.Context, kind provider.Kind, u *url.URL) ([]butlerModel, string, int, error) {
+	var body struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	headers := map[string]string{"x-api-key": kind.Key(), "anthropic-version": "2023-06-01"}
+	if code, err := getProviderJSON(ctx, kind, strings.TrimRight(u.String(), "/")+"/v1/models?limit=1000", headers, &body); err != nil {
+		return nil, "", code, err
+	}
+	out := make([]butlerModel, 0, len(body.Data))
+	for _, m := range body.Data {
+		if m.ID != "" {
+			out = append(out, butlerModel{Name: m.ID})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, u.String(), http.StatusOK, nil
+}
+
+// getProviderJSON is one bounded GET to a provider, decoded into into.
+// The status it returns is the one this API should answer with: a
+// provider that refuses the key is the operator's to fix (401 from the
+// provider becomes a 400 naming the variable), anything else is a
+// gateway failure.
+func getProviderJSON(ctx context.Context, kind provider.Kind, target string, headers map[string]string, into any) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	for k, v := range headers {
+		if v != "" {
+			req.Header.Set(k, v)
+		}
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return http.StatusBadGateway, fmt.Errorf("could not reach %s from this machine: %w", req.URL.Host, err)
+	}
+	defer res.Body.Close()
+	switch {
+	case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden:
+		if kind.KeyEnv != "" {
+			return http.StatusBadRequest, fmt.Errorf("%s refused the key in %s (%s)", kind.Label, kind.KeyEnv, res.Status)
+		}
+		return http.StatusBadRequest, fmt.Errorf("%s wants a key (%s)", req.URL.Host, res.Status)
+	case res.StatusCode != http.StatusOK:
+		return http.StatusBadGateway, fmt.Errorf("%s answered %s when asked for its models", req.URL.Host, res.Status)
+	}
+	if err := json.NewDecoder(io.LimitReader(res.Body, 8<<20)).Decode(into); err != nil {
+		return http.StatusBadGateway, fmt.Errorf("%s did not answer with a model list: %w", req.URL.Host, err)
+	}
+	return http.StatusOK, nil
+}
+
+// privateHost reports whether a host is on this machine or this network:
+// loopback, RFC 1918, link-local, the tailnet's CGNAT range, or a
+// single-label or .local/.lan name. Wrong in the safe direction: an
+// unrecognised public name is not private.
+func privateHost(host string) bool {
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+			return true
+		}
+		_, cgnat, _ := net.ParseCIDR("100.64.0.0/10")
+		return cgnat.Contains(ip)
+	}
+	h := strings.ToLower(host)
+	return h == "localhost" || !strings.Contains(h, ".") || strings.HasSuffix(h, ".local") ||
+		strings.HasSuffix(h, ".lan") || strings.HasSuffix(h, ".internal") || strings.HasSuffix(h, ".ts.net")
 }
 
 // looksLocal distinguishes a model that runs on this hardware from one
@@ -222,7 +381,15 @@ func (s *Server) setButlerConfig(r *http.Request, id principal.Identity) (any, i
 	return map[string]any{"stored": true, "config": out}, http.StatusOK, nil
 }
 
-var butlerProviders = map[string]bool{"off": true, "anthropic": true, "openai": true, "ollama": true}
+// butlerProviders is every provider a choice may name: "off" and the
+// catalog (provider.Kinds).
+var butlerProviders = func() map[string]bool {
+	m := map[string]bool{"off": true}
+	for _, k := range provider.Kinds {
+		m[k.Name] = true
+	}
+	return m
+}()
 
 // credentialField names the rejected field when an unknown-field error
 // is about something credential-shaped, so the refusal can say what to

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Warning } from "@phosphor-icons/react";
 import { api, modelLabel, type AskResponse, type ButlerRow, type Model, type OfferedModel } from "../../api";
-import { ago, ErrorLine, useLoad } from "../../lib";
+import { ago, ErrorLine } from "../../lib";
 import { Confirm } from "../../ui/Confirm";
 import { Dot, Kind } from "../../ui/status";
 import { Say } from "./ButlerDrawer";
@@ -51,10 +51,19 @@ export function TabModel({
     new Set([b.endpoint, ...configured.map((m) => m.endpoint)].filter(Boolean) as string[]),
   );
   const [endpoint, setEndpoint] = useState(endpoints[0] ?? "");
-  const offered = useLoad(
-    () => (endpoint ? api.offeredModels(endpoint) : Promise.resolve(null)),
-    [endpoint],
-  );
+  // The models on offer are the ones the house REGISTERED from this
+  // server (Model providers), not everything it serves: that drawer is
+  // where a household decides what is available, and a hosted provider
+  // serves hundreds. Assigning a registered model needs no listing.
+  const offered = {
+    loading: false,
+    error: null as string | null,
+    data: {
+      models: configured
+        .filter((m) => m.endpoint === endpoint && (m.enabled || m.name === b.model))
+        .map((m): OfferedModel => ({ name: m.providerModel ?? m.name, local: m.kind === "local" })),
+    },
+  };
   // What this Butler answers on, in the provider's own vocabulary —
   // which is what the list below is in. Its configured NAME may be
   // something else entirely.
