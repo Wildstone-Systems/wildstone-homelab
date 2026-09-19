@@ -685,12 +685,33 @@
     }
     if (!c.items.length) {
       text("needs-sum", "Nothing needs you right now.");
+      // The way through to everything the house tracks is offered even
+      // when nothing is asking — ESPECIALLY then. A tracker you can
+      // only reach when it is already nagging you is one you cannot
+      // check.
+      box.appendChild(trackerLink());
       return;
     }
-    var mine = c.items.filter(function (i) { return i.decidable; }).length;
-    text("needs-sum", mine ? (mine === 1 ? "1 thing for you" : mine + " things for you")
-                           : "waiting on somebody else");
+    var forYou = c.items.filter(function (i) { return i.decidable; }).length;
+    text("needs-sum", forYou ? (forYou === 1 ? "1 thing for you" : forYou + " things for you")
+                             : "waiting on somebody else");
+    // THE NUMBERS ONCE, ABOVE THE THINGS THEY DECIDE. A meter is a
+    // number the household keeps and a commitment is a thing measured
+    // against it, so one truck's odometer feeds the oil, the tyres and
+    // the brakes. Rendering a box per commitment asked one question
+    // three times.
     var stack = make("div", "stack");
+    var boxes = {};
+    if ((c.needs || []).length) {
+      var ask = make("div", "asks");
+      c.needs.forEach(function (n) {
+        ask.appendChild(make("span", "muted nowrap", "What does " + n.meter + " say?"));
+        boxes[n.meter] = numberBox(n);
+        ask.appendChild(boxes[n.meter]);
+      });
+      ask.appendChild(readingBtn(c.needs, boxes));
+      stack.appendChild(ask);
+    }
     c.items.forEach(function (i) {
       var wrap = make("div", "stack");
       wrap.style.gap = "var(--space-2)";
@@ -720,19 +741,17 @@
         row.appendChild(decideBtn(i.seq, "no", "No", "hbtn hbtn-secondary"));
       } else if (i.decidable && i.ref && i.asks && i.asks.length) {
         row = make("div", "asks indent");
-        // The numbers first, ONCE, whatever the household then does with
-        // them. Typing the odometer to record it and typing it again to
-        // close the cycle is the same question asked twice.
-        var boxes = {};
-        (i.needs || []).forEach(function (n) {
-          row.appendChild(make("span", "muted nowrap", "What does " + n.meter + " say?"));
-          boxes[n.meter] = numberBox(n);
-          row.appendChild(boxes[n.meter]);
-        });
-        var when = wantsBooking(i.asks) ? dateBox() : null;
-        if (when) { row.appendChild(when); }
+        var dateWanted = wantsBooking(i.asks) ? dateBox() : null;
+        if (dateWanted) { row.appendChild(dateWanted); }
+        var noteWanted = noteBox();
+        row.appendChild(noteWanted);
+        // Each answer submits only the numbers ITS OWN commitment
+        // measures against, out of the boxes the card collected. A
+        // completion's positions are what the next cycle is measured
+        // from, so the water filter has no business on the truck's oil.
         i.asks.forEach(function (a, n) {
-          row.appendChild(answerBtn(i.ref, a, boxes, when,
+          if (a.verb === "reading") { return; }
+          row.appendChild(answerBtn(i.ref, a, boxesFor(boxes, i.needs), dateWanted, noteWanted,
             n === 0 ? "hbtn hbtn-primary" : "hbtn hbtn-secondary"));
         });
       }
@@ -753,6 +772,23 @@
     });
     box.appendChild(stack);
     if (c.more) { box.appendChild(make("div", "muted", "and " + c.more + " more")); }
+    box.appendChild(trackerLink());
+  }
+
+  // THE CARD IS NOT A LINK. It keeps its rows and its buttons; this is
+  // a way through to the rest, the way "All activity" is under Today at
+  // home. A Needs-you card that degraded to "3 things need you →" would
+  // be exactly the tracker A19 refuses: one you have to remember to
+  // visit.
+  function trackerLink() {
+    var row = make("div", "spread");
+    row.style.marginTop = "var(--space-4)";
+    var a = make("a", "hbtn hbtn-ghost", "Everything the house tracks");
+    a.href = "/upkeep/";
+    a.appendChild(icon("arrow-right"));
+    row.appendChild(make("span", "fade"));
+    row.appendChild(a);
+    return row;
   }
 
   function wantsBooking(asks) {
@@ -770,6 +806,22 @@
     box.placeholder = need.unit || "number";
     box.setAttribute("aria-label", "What does " + need.meter + " say, in " + (need.unit || "numbers"));
     box.style.maxWidth = "9rem";
+    return box;
+  }
+
+  // noteBox is the sentence that goes with the answer: "used the cheap
+  // filter", "shop said the rear pads are next". The ledger has carried
+  // a note since 0050 and nothing could put one there — the column was
+  // written by the engine and reachable by nobody, which is a record
+  // the household cannot add to about their own house.
+  //
+  // Optional, always. An answer with no note is the normal answer.
+  function noteBox() {
+    var box = make("input", "hinput grow");
+    box.type = "text";
+    box.maxLength = 500;
+    box.placeholder = "Add a note (optional)";
+    box.setAttribute("aria-label", "A note to keep with this answer");
     return box;
   }
 
@@ -793,36 +845,86 @@
     return isNaN(d.getTime()) ? null : d.toISOString();
   }
 
-  // answerBtn records one answer to a commitment: the numbers on their
-  // own, or a completion, a waive, or an appointment. The verb IS the
-  // route's last segment, so the page never holds a second list of what
-  // the answers are called.
-  function answerBtn(ref, ask, boxes, when, cls) {
+  // boxesFor narrows the card's boxes to the meters one commitment
+  // measures against.
+  //
+  // Named for what it does rather than "mine", which is what a local
+  // count in renderNeeds was already called — a `var` of that name
+  // shadowed this function and every answer button threw. Second time
+  // on this page; the class now has a test.
+  function boxesFor(boxes, needs) {
+    var out = [];
+    (needs || []).forEach(function (n) {
+      if (boxes[n.meter]) {
+        out.push({ meter: n.meter, input: boxes[n.meter], required: !!n.required });
+      }
+    });
+    return out;
+  }
+
+  // readingBtn saves the numbers without answering anything.
+  //
+  // It belongs with the boxes rather than with a commitment: a
+  // household that reads the odometer and finds nothing is due yet has
+  // answered the card's real question, and nothing needs closing.
+  function readingBtn(needs, boxes) {
+    var b = make("button", "hbtn hbtn-primary", "Save");
+    b.type = "button";
+    b.addEventListener("click", function () {
+      // WHATEVER WAS TYPED, not all or nothing. A member who knows the
+      // odometer and not the filter hours should be able to record the
+      // one they know; refusing both because one box is empty throws
+      // away a number somebody was standing there holding.
+      var values = {};
+      needs.forEach(function (n) {
+        var v = parseFloat(boxes[n.meter].value);
+        if (!isNaN(v) && v >= 0) { values[n.meter] = v; }
+      });
+      if (!Object.keys(values).length) {
+        answerFailed(b, "what does " + needs.map(function (n) { return n.meter; }).join(" or ") + " say?");
+        return;
+      }
+      b.disabled = true;
+      Object.keys(values).forEach(function (name) {
+        postAnswer("/api/v1/home/meters/" + encodeURIComponent(name) + "/readings",
+                   { value: values[name] }, b);
+      });
+    });
+    return b;
+  }
+
+  // answerBtn records one answer to a commitment: a completion, a
+  // waive, or an appointment. The verb IS the route's last segment, so
+  // the page never holds a second list of what the answers are called.
+  function answerBtn(ref, ask, needed, dateInput, noteInput, cls) {
     var b = make("button", cls, ask.label);
     b.type = "button";
     b.addEventListener("click", function () {
+      // ONLY WHAT THE WRITE PATH WOULD REFUSE WITHOUT. A8 is three-way:
+      // a number typed, a number approximated from a reading too old to
+      // rely on, or a refusal. The server marks which needs are which,
+      // and insisting on all of them here would turn "we can work this
+      // one out" into "you cannot answer this" — blocking a completion
+      // the server was willing to accept.
       var meters = {}, missing = [];
-      Object.keys(boxes).forEach(function (meter) {
-        var v = parseFloat(boxes[meter].value);
-        if (isNaN(v) || v < 0) { missing.push(meter); return; }
-        meters[meter] = v;
+      needed.forEach(function (n) {
+        var v = parseFloat(n.input.value);
+        if (isNaN(v) || v < 0) {
+          if (n.required) { missing.push(n.meter); }
+          return;
+        }
+        meters[n.meter] = v;
       });
       if (missing.length) {
         answerFailed(b, "what does " + missing.join(" and ") + " say?");
         return;
       }
-      if (ask.verb === "reading") {
-        b.disabled = true;
-        Object.keys(meters).forEach(function (meter) {
-          postAnswer("/api/v1/home/meters/" + encodeURIComponent(meter) + "/readings",
-                     { value: meters[meter] }, b);
-        });
-        return;
-      }
       var body = {};
       if (Object.keys(meters).length) { body.meters = meters; }
+      var typed = noteInput && noteInput.value.trim();
+      if (typed) { body.note = typed; }
       if (ask.verb === "booked") {
-        var at = endOfDay(when && when.value);
+        var at = endOfDay(dateInput && dateInput.value);
         if (!at) {
           answerFailed(b, "when is the appointment?");
           return;

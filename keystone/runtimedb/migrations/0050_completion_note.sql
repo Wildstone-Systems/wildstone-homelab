@@ -1,0 +1,13 @@
+-- What was actually done, in the household's own words.
+--
+-- A completion already records WHEN, BY WHOM and AT WHAT NUMBER, which
+-- is everything the engine needs to measure the next cycle from. It is
+-- not everything a household wants to remember: "oil and filter, $89 at
+-- Joe's, they flagged the rear brakes" is the line that makes a
+-- maintenance history worth keeping rather than a list of dates.
+--
+-- Separate from `reason`, which is why a cycle was SKIPPED. A note says
+-- what happened; a reason says why nothing did. Reusing one column for
+-- both would make "we decided not to" and "here is what they found"
+-- indistinguishable a year later.
+ALTER TABLE commitment_completions ADD COLUMN note TEXT NOT NULL DEFAULT '';

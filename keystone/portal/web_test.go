@@ -18,7 +18,7 @@ import (
 )
 
 // pages are the surfaces Page serves.
-var pages = []string{"home", "files", "assistant", "activity", "files-widget", "assistant-widget", "calendar"}
+var pages = []string{"home", "files", "assistant", "activity", "upkeep", "calendar", "files-widget", "assistant-widget"}
 
 // classAttr finds every class="..." in a page.
 var classAttr = regexp.MustCompile(`class="([^"{}]+)"`)
@@ -541,7 +541,9 @@ func TestTheNeedsCardCanAnswerACommitmentAndNotOnlyANotice(t *testing.T) {
 		{"/api/v1/home/commitments/", "the card cannot reach the commitment answer path"},
 		{"/api/v1/home/meters/", "the card cannot record the number it is asking for"},
 		{"encodeURIComponent(ask.verb)", "the page names the answers itself instead of using the server's"},
-		{"i.needs", "the card does not collect the numbers the server said it needs"},
+		{"c.needs", "the card does not collect its numbers once per meter — a box per " +
+			"commitment asks one truck's odometer three times"},
+		{"boxesFor(boxes, i.needs)", "an answer submits every number on the card rather than its own"},
 		// A date is a day, and a day is not over at midnight. Building
 		// the instant from parts is what keeps an appointment made for
 		// today from being announced as already missed.
@@ -558,6 +560,51 @@ func TestTheNeedsCardCanAnswerACommitmentAndNotOnlyANotice(t *testing.T) {
 	// its place would leave them tapping a button that keeps failing.
 	if !strings.Contains(page, "res.j.error") {
 		t.Error("home does not surface the server's own refusal sentence")
+	}
+}
+
+// The card collects two kinds of number and must not treat them alike.
+//
+// A8 is three-way — a number typed, a number approximated from a
+// reading too old to rely on, or a refusal — and the first version of
+// the answer row collapsed it back to two: it required EVERY box on
+// the commitment before it would post. So a household that knew the
+// odometer but not the filter hours could not tick off the oil change,
+// on a commitment the server would have accepted with the odometer
+// alone. The affordance was stricter than the rule it was meant to
+// mirror, which is the same failure as offering one the rule refuses,
+// pointed the other way.
+//
+// And the answer has somewhere to say why. The ledger has carried a
+// note since migration 0050 and nothing in the household's reach could
+// write one: the column existed and only the engine could fill it.
+func TestAnAnswerBlocksOnlyOnTheNumbersItCannotBeGivenWithout(t *testing.T) {
+	body, ok := Page("home")
+	if !ok {
+		t.Fatal("home is not served")
+	}
+	page := string(body)
+
+	for _, want := range []struct{ frag, why string }{
+		{"n.required", "the answer row does not read which numbers actually block it, " +
+			"so an approximable one is being demanded like a missing one"},
+		{"if (n.required) { missing.push(n.meter); }",
+			"an empty box refuses the answer whether or not the server would have"},
+		{"function noteBox(", "there is no way to say anything alongside an answer"},
+		{"body.note = typed", "what the note box collects never reaches the write"},
+		{"row.appendChild(noteWanted)", "the note box is built and never rendered"},
+	} {
+		if !strings.Contains(page, want.frag) {
+			t.Errorf("home is missing %q: %s", want.frag, want.why)
+		}
+	}
+
+	// The optional box is still SENT when it was filled in. Not
+	// blocking on a number is not the same as discarding it: a typed
+	// odometer is what the next cycle gets measured from, and dropping
+	// it would make every answer given with one start from an estimate.
+	if !strings.Contains(page, "meters[n.meter] = v;") {
+		t.Error("home does not submit a number that was typed into an optional box")
 	}
 }
 
@@ -669,6 +716,167 @@ func TestEveryHelperThePagesCallIsDefined(t *testing.T) {
 			reported[called] = true
 			t.Errorf("%s calls %s(), which the page does not define and which is not a browser global — "+
 				"a renamed helper with a call site left behind throws at the click, not at the build", name, called)
+		}
+	}
+}
+
+// The tracker page holds both levels of disclosure and a search that
+// survives its own no-match.
+//
+// Both properties have their own scars on this surface. `discloseRows`
+// exists because a list with no cap grows without bound; the count it
+// offers is the REMAINDER, because a member who has just read "12
+// tracked" should not then be offered "12 more". And the filter box
+// lives outside the results because a no-match that takes the box with
+// it strands whoever typed into it.
+func TestTheTrackerPageDisclosesAndCanBeSearched(t *testing.T) {
+	body, ok := Page("upkeep")
+	if !ok {
+		t.Fatal("the tracker page is not served")
+	}
+	page := stripComments(string(body))
+
+	// Level one: how many rows a card opens with.
+	if !strings.Contains(page, "function discloseRows(") {
+		t.Fatal("no first level of disclosure: a household with forty tracked things gets a page a mile long")
+	}
+	for _, call := range []string{
+		"discloseRows(list, groups,", // the meters
+		"discloseRows(list, rows,",   // the commitments under one meter
+		"discloseRows(list, keepers,",
+	} {
+		if !strings.Contains(page, call) {
+			t.Errorf("a list is rendered without the first level: %s", call)
+		}
+	}
+	if !strings.Contains(page, `"Show " + rest.length + " more"`) {
+		t.Error(`"show more" does not count the remainder`)
+	}
+
+	// Level two: how much one row says.
+	if !strings.Contains(page, `head.setAttribute("aria-expanded"`) {
+		t.Error("a commitment row does not disclose, so its history has nowhere to go")
+	}
+	if !strings.Contains(page, "/api/v1/home/commitments/") {
+		t.Error("the page cannot read a commitment's history")
+	}
+
+	// Search, and the way back out of it.
+	if !strings.Contains(page, `el("q").addEventListener`) {
+		t.Error("the page has no search")
+	}
+	if !strings.Contains(page, "Nothing here matches.") {
+		t.Error("a search matching nothing says nothing")
+	}
+	if !strings.Contains(page, `el("qclear")`) {
+		t.Error("a no-match offers no control to clear the search")
+	}
+	// The box is in the document, not built inside the results — which
+	// is what keeps a no-match from taking it away.
+	if !strings.Contains(string(body), `<input id="q" type="search"`) {
+		t.Error("the search box is rendered with the results and would vanish with them")
+	}
+}
+
+// The card links to the page, and does not become one.
+//
+// A19's argument survives the page existing: a tracker you have to
+// remember to visit is one nobody visits. So Needs you keeps its rows
+// and its buttons, and the link is a way through to the rest — the way
+// "All activity" is under Today at home.
+func TestTheNeedsCardLinksToTheTrackerWithoutBecomingALink(t *testing.T) {
+	body, ok := Page("home")
+	if !ok {
+		t.Fatal("home is not served")
+	}
+	page := stripComments(string(body))
+
+	if !strings.Contains(page, `a.href = "/upkeep/"`) {
+		t.Error("the card offers no way through to everything the house tracks")
+	}
+	// Offered even when nothing is asking — especially then.
+	if !regexp.MustCompile(`(?s)Nothing needs you right now.{0,300}?trackerLink\(\)`).MatchString(page) {
+		t.Error("the link is absent when nothing needs you, which is when a household would go looking")
+	}
+	// And the rows still carry their own answers.
+	if !strings.Contains(page, "answerBtn(i.ref,") {
+		t.Error("the card no longer answers anything itself")
+	}
+}
+
+// jsLocalDecl finds a local binding: `var x =`, `let x =`, `const x =`.
+var jsLocalDecl = regexp.MustCompile(`\b(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=`)
+
+// TestNoPageHelperIsShadowedByALocal is the scope-aware half of the
+// call audit, and it exists because the same bug shipped twice.
+//
+// `answerBtn` called `answer(...)` after the helper was renamed to
+// `postAnswer`, and the call resolved to `decideBtn`'s PARAMETER of that
+// name rather than failing loudly. Two commits later `mine(boxes, ...)`
+// resolved to a `var mine` holding a row count, and every answer button
+// on the Needs-you card threw a TypeError.
+//
+// TestEveryHelperThePagesCallIsDefined cannot see either: both names
+// ARE defined, just not as the thing being called. A static check
+// cannot do real scope analysis, but it does not need to — it only
+// needs the page to have no two things by one name. That is a rule
+// worth keeping on its own merits, and it is the rule both bugs broke.
+func TestNoPageHelperIsShadowedByALocal(t *testing.T) {
+	for _, name := range pages {
+		body, found := Page(name)
+		if !found {
+			t.Errorf("%s is not served", name)
+			continue
+		}
+		var js strings.Builder
+		for _, m := range jsScript.FindAllStringSubmatch(string(body), -1) {
+			js.WriteString(m[1])
+			js.WriteString("\n")
+		}
+		src := js.String()
+		for _, re := range []*regexp.Regexp{jsBlockComment, jsLineComment, jsDoubleQuoted, jsSingleQuoted, jsTemplate} {
+			src = re.ReplaceAllString(src, " ")
+		}
+
+		helpers := map[string]bool{}
+		for _, m := range jsFuncDecl.FindAllStringSubmatch(src, -1) {
+			helpers[m[1]] = true
+		}
+		reported := map[string]bool{}
+		for _, m := range jsLocalDecl.FindAllStringSubmatch(src, -1) {
+			if helpers[m[1]] && !reported[m[1]] {
+				reported[m[1]] = true
+				t.Errorf("%s declares a local %q and a function %q — a call to it resolves to "+
+					"whichever is nearer, which is how two shipped bugs on this surface both looked "+
+					"like working code", name, m[1], m[1])
+			}
+		}
+		// The same for parameters, which is how the first one happened —
+		// and for EVERY way a parameter can be written. The first draft
+		// of this loop read only `function (...)` lists, so
+		// `.forEach(mine => ...)` beside `function mine(...)` would have
+		// passed undetected: the exact class the guard exists for,
+		// sailing through the guard. The "defined" half above already
+		// reads both forms; this half now matches it.
+		params := map[string]bool{}
+		for _, re := range []*regexp.Regexp{jsFuncParams, jsArrowParams} {
+			for _, m := range re.FindAllStringSubmatch(src, -1) {
+				for _, p := range strings.Split(m[1], ",") {
+					if p = strings.TrimSpace(p); p != "" {
+						params[p] = true
+					}
+				}
+			}
+		}
+		for _, m := range jsArrowOne.FindAllStringSubmatch(src, -1) {
+			params[m[2]] = true
+		}
+		for p := range params {
+			if helpers[p] && !reported[p] {
+				reported[p] = true
+				t.Errorf("%s has a parameter %q and a function %q — inside that function, "+
+					"a call to the helper reaches the parameter", name, p, p)
+			}
 		}
 	}
 }

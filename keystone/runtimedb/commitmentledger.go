@@ -47,6 +47,10 @@ type CommitmentCompletion struct {
 	// a mileage is a mileage, and a household reading its own maintenance
 	// history deserves to know which ones were guessed.
 	Approximate []string `json:"approximate,omitempty"`
+	// Note is what was done, in the household's own words. Separate
+	// from Reason, which is why a cycle was skipped: a note says what
+	// happened, a reason says why nothing did.
+	Note string `json:"note,omitempty"`
 }
 
 // RecordCommitmentCompletion closes a cycle, with its evidence, in one
@@ -80,11 +84,11 @@ func (db *DB) RecordCommitmentCompletion(c CommitmentCompletion) (seq int64, dup
 		positions = string(encoded)
 	}
 	res, err := db.sql.Exec(
-		`INSERT INTO commitment_completions (commitment, at, recorded_at, recorded_by, waived, reason, positions, external_id, approximate)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO commitment_completions (commitment, at, recorded_at, recorded_by, waived, reason, positions, external_id, approximate, note)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (commitment, external_id) WHERE external_id <> '' DO NOTHING`,
 		c.Commitment, c.At.UTC().Format(time.RFC3339Nano), now(), c.RecordedBy,
-		boolToInt(c.Waived), c.Reason, positions, c.ExternalID, strings.Join(c.Approximate, ","))
+		boolToInt(c.Waived), c.Reason, positions, c.ExternalID, strings.Join(c.Approximate, ","), c.Note)
 	if err != nil {
 		return 0, false, fmt.Errorf("runtimedb: recording completion: %w", err)
 	}
@@ -98,7 +102,7 @@ func (db *DB) RecordCommitmentCompletion(c CommitmentCompletion) (seq int64, dup
 	return seq, false, err
 }
 
-const completionColumns = `SELECT seq, commitment, at, recorded_at, recorded_by, waived, reason, positions, external_id, approximate
+const completionColumns = `SELECT seq, commitment, at, recorded_at, recorded_by, waived, reason, positions, external_id, approximate, note
 	 FROM commitment_completions`
 
 // ListCommitmentCompletions returns a commitment's closed cycles, oldest
@@ -114,7 +118,7 @@ func (db *DB) ListCommitmentCompletions(commitment string) ([]CommitmentCompleti
 		var c CommitmentCompletion
 		var at, recorded, positions, approximate string
 		var waived int
-		if err := rows.Scan(&c.Seq, &c.Commitment, &at, &recorded, &c.RecordedBy, &waived, &c.Reason, &positions, &c.ExternalID, &approximate); err != nil {
+		if err := rows.Scan(&c.Seq, &c.Commitment, &at, &recorded, &c.RecordedBy, &waived, &c.Reason, &positions, &c.ExternalID, &approximate, &c.Note); err != nil {
 			return nil, fmt.Errorf("runtimedb: scanning completion: %w", err)
 		}
 		c.Waived = waived == 1
@@ -308,4 +312,29 @@ func (db *DB) ForgetCommitmentState(commitment string) error {
 		return fmt.Errorf("runtimedb: forgetting announced state: %w", err)
 	}
 	return nil
+}
+
+// CommitmentCycleCounts is how many cycles each commitment has closed.
+//
+// One query rather than a ListCommitmentCompletions per commitment: the
+// tracker page renders every commitment a household has, and a count
+// per row would make the page's cost grow with the household's
+// diligence.
+func (db *DB) CommitmentCycleCounts() (map[string]int, error) {
+	rows, err := db.sql.Query(
+		`SELECT commitment, COUNT(*) FROM commitment_completions GROUP BY commitment`)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: counting completions: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var name string
+		var n int
+		if err := rows.Scan(&name, &n); err != nil {
+			return nil, fmt.Errorf("runtimedb: scanning completion count: %w", err)
+		}
+		out[name] = n
+	}
+	return out, rows.Err()
 }
