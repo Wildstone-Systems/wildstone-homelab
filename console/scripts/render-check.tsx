@@ -340,7 +340,7 @@ const chatRow = (
 ): ButlerRosterRow => ({
   butler: {
     name: "health", directive: "keeps track of training and sleep", surface: "family",
-    profile: "household", model: "qwen3.5:4b", modelKind: "local", providerModel: "qwen3.5:4b",
+    agentClass: "member", model: "qwen3.5:4b", modelKind: "local", providerModel: "qwen3.5:4b",
     provider: "ollama", readiness: "ready", modelEnabled: true, enabled: true,
     createdAt: "2026-03-14T09:00:00Z", createdBy: "tom", updatedAt: "2026-09-09T09:00:00Z",
     ...over,
@@ -407,7 +407,7 @@ check("an unconfigured backend says so in the header", barOff.includes("Not conf
 
 // The opening: the asks are here and nowhere else, so a suggested
 // question cannot be pressed halfway through a conversation.
-const opsRow = chatRow({ name: "ops", surface: "admin", profile: "operator" });
+const opsRow = chatRow({ name: "ops", surface: "admin", agentClass: "owner" });
 const opening = renderToString(h(EmptyState, { row: opsRow, busy: false, onSend: () => {} }));
 for (const ask of SURFACES.admin.asks) {
   check(`the opening offers "${ask}"`, opening.includes(ask), opening.slice(0, 300));
@@ -1433,7 +1433,7 @@ const OFF = localModel({ name: "gpt-4o", kind: "cloud", provider: "openai", enab
 const bRow = (over: Partial<ButlerRosterRow["butler"]> = {}, row: Partial<ButlerRosterRow> = {}): ButlerRosterRow => ({
   butler: {
     name: "health", directive: "keeps track of training and sleep", surface: "family",
-    profile: "household", model: "llama3.1:8b", modelKind: "local", provider: "ollama",
+    agentClass: "member", model: "llama3.1:8b", modelKind: "local", provider: "ollama",
     readiness: "ready", modelEnabled: true, enabled: true,
     createdAt: "2026-03-14T09:00:00Z", createdBy: "tom", updatedAt: "2026-09-09T09:00:00Z",
     ...over,
@@ -1489,7 +1489,7 @@ check("retired outranks unreachable — it is not answering on purpose",
 const roster = [
   bRow(),
   bRow({ name: "nutrition", directive: "meal planning", model: "claude-sonnet", modelKind: "cloud" }, { leavesTheHouse: true, reachable: false }),
-  bRow({ name: "ops", directive: "diagnoses services", surface: "admin", profile: "operator" }, { carriesActions: false }),
+  bRow({ name: "ops", directive: "diagnoses services", surface: "admin", agentClass: "owner" }, { carriesActions: false }),
   bRow({ name: "old", directive: "retired job", retiredAt: "2026-08-12T00:00:00Z" }),
 ];
 check("All hides retired Butlers", select(roster, { filter: "all", query: "", sort: "name" }).length === 3);
@@ -1656,7 +1656,7 @@ check("it states the model rule before any data arrives", screen.includes("sends
 const pickerRows = [
   chatRow(),
   chatRow({ name: "kitchen", directive: "timers and the freezer" }),
-  chatRow({ name: "ops", surface: "admin", profile: "operator" }),
+  chatRow({ name: "ops", surface: "admin", agentClass: "owner" }),
   chatRow({ name: "old", retiredAt: "2026-08-12T00:00:00Z" }),
 ];
 const picker = renderToString(h(ButlerPicker, {

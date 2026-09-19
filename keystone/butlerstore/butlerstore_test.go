@@ -49,7 +49,7 @@ func (ts *countingToolset) SystemPrompt() string { return "test" }
 
 func (ts *countingToolset) Capabilities(readOnly bool) butler.CapabilityManifest {
 	return butler.CapabilityManifest{
-		Profile: butler.ProfileOperator, ModelVerdict: butler.VerdictFull,
+		AgentClass: butler.AgentClassOwner, ModelVerdict: butler.VerdictFull,
 		Tools: []butler.CapabilityTool{{Name: "get_health", Available: true}},
 	}
 }
@@ -134,7 +134,7 @@ func newTask(t *testing.T, db *runtimedb.DB) string {
 	t.Helper()
 	id, err := db.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
-		Surface: runtimedb.ButlerSurfaceAdmin, Profile: "operator",
+		Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: "operator",
 		Audience:  runtimedb.ButlerAudiencePrivate,
 		Objective: "why is photos unhealthy?", CompletionCriteria: "root cause named",
 	})
@@ -557,7 +557,7 @@ func chatConnection(t *testing.T, db *runtimedb.DB, butler string) runtimedb.Con
 	if _, err := db.GetButler(butler); err != nil {
 		if _, err := db.CreateButler(runtimedb.Butler{
 			Name: butler, Directive: "look after the house", Surface: runtimedb.ButlerSurfaceAdmin,
-			Profile: runtimedb.ProfileOperator, Model: "kitchen-box",
+			AgentClass: runtimedb.AgentClassOwner, Model: "kitchen-box",
 		}, "mika"); err != nil {
 			t.Fatalf("CreateButler(%s): %v", butler, err)
 		}

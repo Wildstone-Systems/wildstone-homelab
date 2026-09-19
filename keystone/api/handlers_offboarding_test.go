@@ -24,7 +24,7 @@ func TestOffboardingReportsPerStore(t *testing.T) {
 	}
 	if _, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: "sam", Owner: "sam",
-		Surface: runtimedb.ButlerSurfaceFamily, Profile: runtimedb.ProfileHousehold,
+		Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember,
 		Audience: runtimedb.ButlerAudienceShared, Objective: "book it", CompletionCriteria: "booked",
 	}); err != nil {
 		t.Fatal(err)

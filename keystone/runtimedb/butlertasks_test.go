@@ -16,7 +16,7 @@ func newTask(t *testing.T, db *DB, mutate func(*ButlerTask)) string {
 	t.Helper()
 	task := ButlerTask{
 		Kind: ButlerTaskConversation, Author: "mika", Owner: "mika",
-		Surface: ButlerSurfaceAdmin, Profile: "operator", Audience: ButlerAudiencePrivate,
+		Surface: ButlerSurfaceAdmin, AgentClass: "operator", Audience: ButlerAudiencePrivate,
 		Objective: "find out why n2 is offline", CompletionCriteria: "node reachable or cause named",
 	}
 	if mutate != nil {
@@ -115,7 +115,7 @@ func TestButlerTaskRequiresAuthorityMetadata(t *testing.T) {
 	db := open(t)
 	base := ButlerTask{
 		Kind: ButlerTaskConversation, Author: "mika", Owner: "mika",
-		Surface: ButlerSurfaceAdmin, Profile: "operator", Audience: ButlerAudiencePrivate,
+		Surface: ButlerSurfaceAdmin, AgentClass: "operator", Audience: ButlerAudiencePrivate,
 		Objective: "check the disk",
 	}
 	for name, mutate := range map[string]func(*ButlerTask){
@@ -123,7 +123,7 @@ func TestButlerTaskRequiresAuthorityMetadata(t *testing.T) {
 		"no author":    func(x *ButlerTask) { x.Author = "" },
 		"no surface":   func(x *ButlerTask) { x.Surface = "" },
 		"bad surface":  func(x *ButlerTask) { x.Surface = "root" },
-		"no profile":   func(x *ButlerTask) { x.Profile = "" },
+		"no profile":   func(x *ButlerTask) { x.AgentClass = "" },
 		"no audience":  func(x *ButlerTask) { x.Audience = "" },
 		"bad audience": func(x *ButlerTask) { x.Audience = "everyone" },
 		"no objective": func(x *ButlerTask) { x.Objective = "" },

@@ -33,14 +33,18 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
-// CapabilityProfile names which Butler a manifest describes (ADR-W030
-// A1). The set is closed and is decided by the gateway type, never by a
-// request field: a HouseholdGateway reports household because it is one.
-type CapabilityProfile string
+// AgentClass names which Agent a manifest describes (ADR-W033 design
+// §5.2). The set is closed and is decided by the gateway type, never by
+// a request field: a HouseholdGateway reports member because it is one.
+//
+// Spelled out here rather than imported from runtimedb because this
+// package holds no database — but the two vocabularies are the same two
+// strings on purpose, and a change to one is a change to both.
+type AgentClass string
 
 const (
-	ProfileOperator  CapabilityProfile = "operator"
-	ProfileHousehold CapabilityProfile = "household"
+	AgentClassOwner  AgentClass = "owner"
+	AgentClassMember AgentClass = "member"
 )
 
 // Model verdicts (ADR-W017 A4). "qa-only" is the reduced surface a model
@@ -79,9 +83,9 @@ type CapabilityAction struct {
 // CapabilityManifest is one surface's effective inventory for one
 // session's constraints.
 type CapabilityManifest struct {
-	Profile      CapabilityProfile `json:"profile"`
-	ModelVerdict string            `json:"modelVerdict"`
-	Tools        []CapabilityTool  `json:"tools"`
+	AgentClass   AgentClass       `json:"agentClass"`
+	ModelVerdict string           `json:"modelVerdict"`
+	Tools        []CapabilityTool `json:"tools"`
 	// ProposableKinds is the resource-kind registry as the propose path
 	// accepts it, and is empty on any surface or session that has no
 	// propose path — a QA-only operator session included. Advertising a
@@ -112,7 +116,7 @@ func (m CapabilityManifest) Fingerprint() string {
 // — names, flags, kinds, tiers — are hashed.
 func (m CapabilityManifest) render() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "profile=%s verdict=%s\n", m.Profile, m.ModelVerdict)
+	fmt.Fprintf(&b, "class=%s verdict=%s\n", m.AgentClass, m.ModelVerdict)
 	for _, t := range m.Tools {
 		fmt.Fprintf(&b, "tool %s available=%t mutating=%t\n", t.Name, t.Available, t.Mutating)
 	}
@@ -129,7 +133,7 @@ func (m CapabilityManifest) render() string {
 // available, what is not and why, and what it can propose or perform.
 func (m CapabilityManifest) Describe() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Profile: %s (model verdict: %s, manifest %s)\n", m.Profile, m.ModelVerdict, m.Fingerprint())
+	fmt.Fprintf(&b, "Class: %s (model verdict: %s, manifest %s)\n", m.AgentClass, m.ModelVerdict, m.Fingerprint())
 
 	var available, withheld []CapabilityTool
 	for _, t := range m.Tools {
@@ -202,7 +206,7 @@ func verdict(readOnly bool) string {
 // registry the propose path validates against — and are omitted entirely
 // for a QA-only session, which has no propose path to use them with.
 func (gw *ToolGateway) Capabilities(readOnly bool) CapabilityManifest {
-	m := CapabilityManifest{Profile: ProfileOperator, ModelVerdict: verdict(readOnly)}
+	m := CapabilityManifest{AgentClass: AgentClassOwner, ModelVerdict: verdict(readOnly)}
 	names := make([]string, 0, len(gw.tools))
 	for name := range gw.tools {
 		names = append(names, name)
@@ -229,7 +233,7 @@ func (gw *ToolGateway) Capabilities(readOnly bool) CapabilityManifest {
 			// The manifest reports what the resolver would actually
 			// allow, so a description and an enforcement point cannot
 			// disagree about the same tool (ADR-W030 P7).
-			if d := authorize(gw.Authorizer, string(ProfileOperator), name, true,
+			if d := authorize(gw.Authorizer, string(AgentClassOwner), name, true,
 				entry.GrantRequired, gw.SessionTask, ""); !d.Allowed {
 				tool.Available = false
 				tool.Reason = d.Reason
@@ -279,7 +283,7 @@ func (gw *ToolGateway) operatorWired(name string) bool {
 // same Vocabulary seam list_household_actions uses, so the manifest and
 // the action list cannot drift.
 func (gw *HouseholdGateway) Capabilities(readOnly bool) CapabilityManifest {
-	m := CapabilityManifest{Profile: ProfileHousehold, ModelVerdict: verdict(readOnly)}
+	m := CapabilityManifest{AgentClass: AgentClassMember, ModelVerdict: verdict(readOnly)}
 	names := make([]string, 0, len(gw.tools))
 	for name := range gw.tools {
 		names = append(names, name)
@@ -303,7 +307,7 @@ func (gw *HouseholdGateway) Capabilities(readOnly bool) CapabilityManifest {
 			tool.Available = false
 			tool.Reason = "this deployment has not wired the source behind it"
 		default:
-			if d := authorize(gw.Authorizer, string(ProfileHousehold), name, true,
+			if d := authorize(gw.Authorizer, string(AgentClassMember), name, true,
 				entry.GrantRequired, gw.SessionTask, ""); !d.Allowed {
 				tool.Available = false
 				tool.Reason = d.Reason

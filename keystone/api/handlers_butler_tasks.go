@@ -310,11 +310,11 @@ func (s *Server) exportButlerEvaluation(r *http.Request, id principal.Identity) 
 		}
 	}
 	fixture, err := json.Marshal(map[string]any{
-		"objective": task.Objective,
-		"surface":   string(task.Surface),
-		"profile":   task.Profile,
-		"steps":     fixtureSteps,
-		"outcome":   string(task.State),
+		"objective":  task.Objective,
+		"surface":    string(task.Surface),
+		"agentClass": task.AgentClass,
+		"steps":      fixtureSteps,
+		"outcome":    string(task.State),
 	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err

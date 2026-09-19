@@ -43,8 +43,8 @@ func TestHouseholdCannotDiscoverOperatorTools(t *testing.T) {
 	only := operatorOnlyTools(t)
 
 	m := gw.Capabilities(false)
-	if m.Profile != ProfileHousehold {
-		t.Fatalf("profile = %q, want household", m.Profile)
+	if m.AgentClass != AgentClassMember {
+		t.Fatalf("profile = %q, want household", m.AgentClass)
 	}
 	rendered := m.Describe()
 	for _, name := range only {

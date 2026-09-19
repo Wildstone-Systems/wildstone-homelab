@@ -42,8 +42,8 @@ type ToolDecision struct {
 // the structural facts because only it knows them; the store supplies
 // the administrative ones.
 type ToolAuthorityQuery struct {
-	Profile string
-	Tool    string
+	AgentClass string
+	Tool       string
 	// Structural is whether this gateway registers the tool at all.
 	Structural bool
 	// GrantRequired is the tool's own metadata.
@@ -60,10 +60,10 @@ type ToolAuthorizer interface {
 	AuthorizeTool(q ToolAuthorityQuery) (ToolDecision, error)
 }
 
-// authorize runs the seam for one tool on one profile, failing closed if
+// authorize runs the seam for one tool on one agent class, failing closed if
 // the resolver itself errors: a control plane that cannot say whether
 // something is permitted has not said yes.
-func authorize(a ToolAuthorizer, profile, tool string, structural, grantRequired bool, taskID, routine string) ToolDecision {
+func authorize(a ToolAuthorizer, class, tool string, structural, grantRequired bool, taskID, routine string) ToolDecision {
 	if a == nil {
 		// No administrative controls configured. Structural is still
 		// the boundary; a tool the gateway does not register was already
@@ -71,7 +71,7 @@ func authorize(a ToolAuthorizer, profile, tool string, structural, grantRequired
 		return ToolDecision{Allowed: structural}
 	}
 	d, err := a.AuthorizeTool(ToolAuthorityQuery{
-		Profile: profile, Tool: tool, Structural: structural,
+		AgentClass: class, Tool: tool, Structural: structural,
 		GrantRequired: grantRequired, TaskID: taskID, RoutineName: routine,
 	})
 	if err != nil {

@@ -33,6 +33,53 @@ import (
 	"testing"
 )
 
+// seedButlerAtOldSchema writes a Butler row the way the schema at this
+// snapshot's point in history spells one: a `profile` column holding
+// 'operator' or 'household'.
+//
+// Raw SQL rather than CreateButler, and that is the point of the test
+// rather than an inconvenience. A snapshot is only realistic if it is
+// built the way a real deployment of that vintage was, and CreateButler
+// speaks TODAY's schema — after 0058 it writes agent_class, a column
+// that does not exist yet at this point, so seeding through it would
+// either fail or quietly test the migration against a database no
+// household ever had.
+func seedButlerAtOldSchema(t *testing.T, db *DB, name string, surface ButlerSurface, profile string) int64 {
+	t.Helper()
+	var model int64
+	if err := db.sql.QueryRow(`SELECT seq FROM models WHERE name = ?`, "kitchen-box").Scan(&model); err != nil {
+		t.Fatalf("finding the seeded model: %v", err)
+	}
+	stamp := now()
+	if _, err := db.sql.Exec(
+		`INSERT INTO butlers (name, directive, surface, profile, model, enabled,
+		     created_at, created_by, updated_at, updated_by)
+		 VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+		name, "look after the house", string(surface), profile, model,
+		stamp, "root-admin", stamp, "root-admin"); err != nil {
+		t.Fatalf("seeding butler %s: %v", name, err)
+	}
+	var seq int64
+	if err := db.sql.QueryRow(`SELECT seq FROM butlers WHERE name = ?`, name).Scan(&seq); err != nil {
+		t.Fatalf("reading back butler %s: %v", name, err)
+	}
+	return seq
+}
+
+// seedButlerAddressAtOldSchema is the same story one table along:
+// AddButlerAddress reads the Butler back through GetButler, which
+// selects agent_class, so it cannot run against a pre-0058 database
+// either.
+func seedButlerAddressAtOldSchema(t *testing.T, db *DB, butler int64, transport, externalID string) {
+	t.Helper()
+	if _, err := db.sql.Exec(
+		`INSERT INTO butler_addresses (butler, transport, external_id, label, created_at, created_by)
+		 VALUES (?, ?, ?, '', ?, ?)`,
+		butler, transport, externalID, now(), "root-admin"); err != nil {
+		t.Fatalf("seeding address %s/%s: %v", transport, externalID, err)
+	}
+}
+
 // theMigrationBefore is the last migration that ships ahead of this
 // slice's three. Named once: a snapshot is only realistic if it is built
 // at exactly the point a real deployment would be.
@@ -82,7 +129,7 @@ func TestTheIdentityMigrationIsCleanOnARealisticSnapshot(t *testing.T) {
 	for table, cols := range before {
 		gone := []string{}
 		for _, c := range cols {
-			if !contains(after[table], c) && !deliberatelyDropped[table+"."+c] {
+			if !survived(table, c, after[table]) {
 				gone = append(gone, c)
 			}
 		}
@@ -105,6 +152,37 @@ func TestTheIdentityMigrationIsCleanOnARealisticSnapshot(t *testing.T) {
 	//    purpose. Counting rows proves nothing arrived nowhere; this
 	//    proves it arrived at the right person.
 	assertLandedOnTheRightPeople(t, db)
+}
+
+// renamedTo is every column a migration RENAMES rather than removes,
+// mapped to what replaced it.
+//
+// Separate from deliberatelyDropped, and stricter, because the two mean
+// different things: a drop says "this fact is gone", a rename says "this
+// fact is over there now". Listing a rename here is not a way of
+// silencing the guard — survived() below still fails if the replacement
+// is missing, so getting the new name wrong, or forgetting the column in
+// one of the five tables, fails exactly as a plain drop would.
+var renamedTo = map[string]string{
+	// 0058: an Agent's class is not a Person's profile (design §5.2).
+	"butlers.profile":                    "agent_class",
+	"butler_tasks.profile":               "agent_class",
+	"butler_tool_controls.profile":       "agent_class",
+	"butler_tool_grants.profile":         "agent_class",
+	"butler_capability_requests.profile": "agent_class",
+}
+
+// survived reports whether a column is still accounted for after a
+// migration: present under its own name, renamed to a column that is
+// present, or deliberately dropped.
+func survived(table, col string, after []string) bool {
+	if contains(after, col) {
+		return true
+	}
+	if to, ok := renamedTo[table+"."+col]; ok {
+		return contains(after, to)
+	}
+	return deliberatelyDropped[table+"."+col]
 }
 
 // deliberatelyDropped is every column the three migrations remove ON
@@ -213,21 +291,13 @@ func seedRealisticHousehold(t *testing.T, db *DB) {
 		surface ButlerSurface
 		profile string
 	}{
-		{"alfred", ButlerSurfaceAdmin, ProfileOperator},
-		{"hobson", ButlerSurfaceFamily, ProfileHousehold},
+		{"alfred", ButlerSurfaceAdmin, "operator"},
+		{"hobson", ButlerSurfaceFamily, "household"},
 	} {
-		if _, err := db.CreateButler(Butler{
-			Name: b.name, Directive: "look after the house",
-			Surface: b.surface, Profile: b.profile, Model: "kitchen-box",
-		}, "root-admin"); err != nil {
-			t.Fatalf("seeding butler %s: %v", b.name, err)
-		}
+		seq := seedButlerAtOldSchema(t, db, b.name, b.surface, b.profile)
 		// The bot each Agent answers at, named the way a chat
 		// capability is, because that name is how 0045 finds it.
-		if _, err := db.AddButlerAddress(
-			b.name, "telegram", "chat-telegram-"+string(b.surface), "", "root-admin"); err != nil {
-			t.Fatalf("addressing %s: %v", b.name, err)
-		}
+		seedButlerAddressAtOldSchema(t, db, seq, "telegram", "chat-telegram-"+string(b.surface))
 	}
 
 	exec("access", `INSERT INTO butler_access (butler, member, granted_at, granted_by)

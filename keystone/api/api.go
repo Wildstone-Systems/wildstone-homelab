@@ -543,6 +543,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/butlers/{name}/connection", s.handle(principal.VerbManage, s.setButlerConnection))
 	mux.Handle("PUT /api/v1/butlers/{name}/tool", s.handle(principal.VerbManage, s.setButlerTool))
 	mux.Handle("PUT /api/v1/butlers/{name}/address", s.handle(principal.VerbManage, s.setButlerAddress))
+	mux.Handle("PUT /api/v1/butlers/{name}/class", s.handle(principal.VerbManage, s.consequential(s.setButlerAgentClass)))
 	mux.Handle("DELETE /api/v1/butlers/{name}", s.handle(principal.VerbManage, s.consequential(s.retireButler)))
 	// Restore and duplicate are manage for the same reason retiring is:
 	// each decides standing configuration. Impact is a read, and it is

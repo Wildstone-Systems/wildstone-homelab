@@ -29,6 +29,55 @@ import (
 	"time"
 )
 
+// Agent classes (ADR-W033 design §5.2). The ceiling an AGENT runs
+// under — the tool surface it is allowed to reach.
+//
+// Two values and no more. 'child' is not among them and never was an
+// Agent class: it reached butlers.profile only because that column
+// borrowed butler_members' vocabulary wholesale. See ProfileChild in
+// butleridentity.go for the axis it actually belongs to.
+//
+// THE CLASS NAMES THE CEILING; THE SURFACE ENFORCES IT. An Owner Agent
+// runs on the admin surface and a Member Agent on the family one, and
+// 0058's paired CHECK refuses any row where those disagree. The two
+// columns are one fact written twice, deliberately: the gateway is what
+// actually refuses a tool, and the class is the word §5.2 uses for it.
+const (
+	AgentClassOwner  = "owner"
+	AgentClassMember = "member"
+)
+
+// ValidAgentClass reports whether s is one of the two classes.
+func ValidAgentClass(s string) bool {
+	return s == AgentClassOwner || s == AgentClassMember
+}
+
+// AgentClassAdmits reports whether an Agent of class `agent` may hold
+// something that requires class `required` (design §6.1).
+//
+// Member tools may be assigned to Member OR Owner Agents; Owner tools
+// only to Owner Agents. So this is an ordering, not an equality — an
+// equality would refuse an Owner Agent the member tools §6.4 says it
+// gets by default, which is most of what any Agent does.
+func AgentClassAdmits(agent, required string) bool {
+	if required == AgentClassMember {
+		return agent == AgentClassMember || agent == AgentClassOwner
+	}
+	return agent == AgentClassOwner && required == AgentClassOwner
+}
+
+// SurfaceForAgentClass is the surface a class must run on.
+//
+// One function rather than a comparison spelled out at each call site:
+// the pairing is an invariant, and an invariant written six times is one
+// that will eventually be written five times.
+func SurfaceForAgentClass(class string) ButlerSurface {
+	if class == AgentClassOwner {
+		return ButlerSurfaceAdmin
+	}
+	return ButlerSurfaceFamily
+}
+
 // ErrButlerUnreachable reports that a Butler exists but cannot answer:
 // retired, disabled, or its model is not available.
 //
@@ -54,7 +103,9 @@ type Butler struct {
 	// instructs and authorises nothing (A9).
 	Directive string        `json:"directive,omitempty"`
 	Surface   ButlerSurface `json:"surface"`
-	Profile   string        `json:"profile"`
+	// AgentClass is 'owner' or 'member' (design §5.2). It always agrees
+	// with Surface; see the constants above for why both exist.
+	AgentClass string `json:"agentClass"`
 	// Model is the assigned model, by name. ModelKind is "local" or
 	// "cloud" — the data boundary, and what a local-to-cloud warning
 	// keys off. ProviderModel is what the provider itself calls it,
@@ -111,7 +162,7 @@ func (b Butler) CarriesActionAuthority() bool {
 // meaningful with its model resolved — a Butler whose model you have to
 // look up separately is one a caller will eventually forget to look up.
 const butlerColumns = `
-	SELECT b.seq, b.name, b.directive, b.surface, b.profile,
+	SELECT b.seq, b.name, b.directive, b.surface, b.agent_class,
 	       m.name, m.seq, m.kind, m.model, m.provider, m.endpoint, m.readiness, m.enabled,
 	       b.enabled, b.created_at, b.created_by, b.updated_at, b.updated_by,
 	       b.retired_at, b.retired_by
@@ -122,7 +173,7 @@ func scanButler(s interface{ Scan(...any) error }) (Butler, error) {
 	var surface string
 	var enabled, modelEnabled int
 	var created, updated, retired string
-	if err := s.Scan(&b.Seq, &b.Name, &b.Directive, &surface, &b.Profile,
+	if err := s.Scan(&b.Seq, &b.Name, &b.Directive, &surface, &b.AgentClass,
 		&b.Model, &b.ModelSeq, &b.ModelKind, &b.ProviderModel, &b.Provider, &b.Endpoint, &b.Readiness, &modelEnabled,
 		&enabled, &created, &b.CreatedBy, &updated, &b.UpdatedBy,
 		&retired, &b.RetiredBy); err != nil {
@@ -167,17 +218,16 @@ func (db *DB) CreateButler(b Butler, by string) (int64, error) {
 	case b.Model == "":
 		return 0, fmt.Errorf("runtimedb: a butler needs an assigned model route — which model answers is not a field to fill in later (ADR-W031 A2)")
 	}
-	switch b.Profile {
-	case ProfileHousehold, ProfileOperator, ProfileChild:
-	default:
-		return 0, fmt.Errorf("runtimedb: a butler's profile must be household|operator|child, got %q", b.Profile)
+	if !ValidAgentClass(b.AgentClass) {
+		return 0, fmt.Errorf("runtimedb: an agent class must be %s|%s, got %q (design §5.2)",
+			AgentClassOwner, AgentClassMember, b.AgentClass)
 	}
-	// The surface and the profile have to agree, or the ceiling stated
-	// on the record is not the ceiling the gateway enforces.
-	if (b.Profile == ProfileOperator) != (b.Surface == ButlerSurfaceAdmin) {
+	// The surface and the class have to agree, or the ceiling stated on
+	// the record is not the ceiling the gateway enforces.
+	if SurfaceForAgentClass(b.AgentClass) != b.Surface {
 		return 0, fmt.Errorf(
-			"runtimedb: profile %q does not belong on the %s surface — the profile is the ceiling and the surface is what enforces it (ADR-W031 A3)",
-			b.Profile, b.Surface)
+			"runtimedb: a %s agent does not belong on the %s surface — the class names the ceiling and the surface enforces it (ADR-W033 design §5.2)",
+			b.AgentClass, b.Surface)
 	}
 
 	var modelSeq int64
@@ -191,10 +241,10 @@ func (db *DB) CreateButler(b Butler, by string) (int64, error) {
 
 	stamp := now()
 	res, err := db.sql.Exec(
-		`INSERT INTO butlers (name, directive, surface, profile, model, enabled,
+		`INSERT INTO butlers (name, directive, surface, agent_class, model, enabled,
 		     created_at, created_by, updated_at, updated_by)
 		 VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
-		name, b.Directive, string(b.Surface), b.Profile, modelSeq, stamp, by, stamp, by)
+		name, b.Directive, string(b.Surface), b.AgentClass, modelSeq, stamp, by, stamp, by)
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: creating a butler: %w", err)
 	}
@@ -211,6 +261,118 @@ func (db *DB) GetButler(name string) (Butler, error) {
 		return Butler{}, fmt.Errorf("runtimedb: reading butler %q: %w", name, err)
 	}
 	return b, nil
+}
+
+// GetButlerBySeq reads one Butler by its row id.
+//
+// The seq is what a grant names, because a name can be reused after a
+// Butler is retired and a grant must not follow the name onto whatever
+// is created next.
+func (db *DB) GetButlerBySeq(seq int64) (Butler, error) {
+	b, err := scanButler(db.sql.QueryRow(butlerColumns+` WHERE b.seq = ?`, seq))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Butler{}, ErrNotFound
+	}
+	if err != nil {
+		return Butler{}, fmt.Errorf("runtimedb: reading butler %d: %w", seq, err)
+	}
+	return b, nil
+}
+
+// nullableSeq turns a zero row id into a SQL NULL.
+//
+// Zero is not a valid butlers.seq, and storing it would make a grant
+// reference a Butler that cannot exist. NULL says what is actually true:
+// this grant names no Agent.
+func nullableSeq(seq int64) any {
+	if seq == 0 {
+		return nil
+	}
+	return seq
+}
+
+// SetAgentClass moves an Agent between classes, taking its surface with
+// it, and strips what the move must not leave behind (design §18.3).
+//
+// THE ASYMMETRY IS THE POINT, and it is worth stating at the one place
+// that implements it:
+//
+//   - Downgrading owner -> member REVOKES every one of this Agent's live
+//     grants, not only the owner-class ones. §6.4 is explicit — "strips
+//     all existing tool grants, after which appropriate Member grants
+//     can be reapplied" — and the wider rule is the safer one to have
+//     written down: a downgrade is a decision that this Agent should be
+//     trusted with less, so it starts from nothing and an Owner puts
+//     back what they meant, rather than keeping whatever happened to be
+//     member-class already.
+//   - Upgrading member -> owner PRESERVES the member grants it already
+//     had and adds no owner tools (§6.4). A wider gateway with nothing
+//     new on it is a wider gateway nobody can use yet, which is exactly
+//     what makes the upgrade safe to allow at all.
+//
+// Revoked rather than deleted: a grant that was in force is evidence of
+// what this Agent could do yesterday, and revoking keeps that while
+// making the row permanently inert — revoked_at is never cleared, so no
+// later upgrade can revive it.
+//
+// Only THIS Agent's grants. A class-level row (the pre-0058 shape, with
+// no Agent named) belongs to no Agent and is left alone; another Agent's
+// rows are not this one's to touch. That is the whole reason 0058 added
+// the column.
+func (db *DB) SetAgentClass(name, class, by string) (revoked int, err error) {
+	if !ValidAgentClass(class) {
+		return 0, fmt.Errorf("runtimedb: an agent class must be %s|%s, got %q (design §5.2)",
+			AgentClassOwner, AgentClassMember, class)
+	}
+	if by == "" {
+		return 0, fmt.Errorf("runtimedb: changing an agent's class needs who changed it")
+	}
+	b, err := db.GetButler(name)
+	if err != nil {
+		return 0, err
+	}
+	if b.AgentClass == class {
+		// Not an error: asking for the class it already has is a
+		// no-op, and reporting it as a failure would make a retry of a
+		// half-finished change look like a new problem.
+		return 0, nil
+	}
+
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: changing agent class: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Both columns in one statement. The 0058 trigger refuses them
+	// moving apart, so this is not merely tidy: two statements would be
+	// two aborts.
+	if _, err := tx.Exec(
+		`UPDATE butlers SET agent_class = ?, surface = ?, updated_at = ?, updated_by = ?
+		 WHERE seq = ?`,
+		class, string(SurfaceForAgentClass(class)), now(), by, b.Seq); err != nil {
+		return 0, fmt.Errorf("runtimedb: changing agent class: %w", err)
+	}
+
+	if b.AgentClass == AgentClassOwner && class == AgentClassMember {
+		res, err := tx.Exec(
+			`UPDATE butler_tool_grants SET revoked_at = ?, revoked_by = ?
+			 WHERE butler = ? AND revoked_at = ''`,
+			now(), by, b.Seq)
+		if err != nil {
+			return 0, fmt.Errorf("runtimedb: stripping owner grants: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		revoked = int(n)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("runtimedb: changing agent class: %w", err)
+	}
+	return revoked, nil
 }
 
 // AnyButlers reports whether this deployment has created a Butler.
@@ -574,7 +736,7 @@ func (db *DB) DuplicateButler(name, newName, by string) (int64, error) {
 	}
 	seq, err := db.CreateButler(Butler{
 		Name: newName, Directive: src.Directive, Surface: src.Surface,
-		Profile: src.Profile, Model: src.Model,
+		AgentClass: src.AgentClass, Model: src.Model,
 	}, by)
 	if err != nil {
 		return 0, err

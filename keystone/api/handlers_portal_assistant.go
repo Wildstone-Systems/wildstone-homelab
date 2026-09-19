@@ -180,7 +180,11 @@ func consoleAddress(desired []resource.Resource) string {
 // applied only when building a list is a filter a hand-written request
 // skips — which is precisely the acceptance criterion #198 states.
 func portalMayReach(b runtimedb.Butler) bool {
-	return b.Surface == runtimedb.ButlerSurfaceFamily && b.Profile != runtimedb.ProfileOperator
+	// Both halves, still, even though 0058's paired CHECK now makes them
+	// agree by construction. A defence that is correct only because of
+	// an invariant elsewhere stops being a defence the day the invariant
+	// is relaxed, and this one is checked on every message.
+	return b.Surface == runtimedb.ButlerSurfaceFamily && b.AgentClass != runtimedb.AgentClassOwner
 }
 
 // assistantAsk runs one turn.

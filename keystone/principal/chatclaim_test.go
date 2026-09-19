@@ -40,15 +40,15 @@ func agent(t *testing.T, s *Store, name string, surface runtimedb.ButlerSurface)
 	}, "root-admin"); err != nil {
 		t.Fatal(err)
 	}
-	profile := runtimedb.ProfileHousehold
+	profile := runtimedb.AgentClassMember
 	if surface == runtimedb.ButlerSurfaceAdmin {
-		profile = runtimedb.ProfileOperator
+		profile = runtimedb.AgentClassOwner
 	}
 	capability := "chat-telegram-" + string(surface)
 	if _, err := s.DB.GetButler(name); err != nil {
 		if _, err := s.DB.CreateButler(runtimedb.Butler{
 			Name: name, Directive: "look after the house", Surface: surface,
-			Profile: profile, Model: "kitchen-box",
+			AgentClass: profile, Model: "kitchen-box",
 		}, "root-admin"); err != nil {
 			t.Fatalf("CreateButler(%s): %v", name, err)
 		}

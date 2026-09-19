@@ -311,13 +311,13 @@ func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool,
 		// owns the BUTLER (A10); they do not own what someone else said
 		// to it, and recording them as the owner here would move a
 		// household member's conversation into the operator's lane.
-		Author:    t.Member,
-		Owner:     t.Member,
-		Surface:   b.Surface,
-		Profile:   b.Profile,
-		Audience:  audience,
-		SessionID: t.SessionID,
-		Objective: conversationObjective(b.Name, t.Text),
+		Author:     t.Member,
+		Owner:      t.Member,
+		Surface:    b.Surface,
+		AgentClass: b.AgentClass,
+		Audience:   audience,
+		SessionID:  t.SessionID,
+		Objective:  conversationObjective(b.Name, t.Text),
 		// A conversation's retention follows the conversation, so
 		// reaping a thread reaps the work that belonged to it rather
 		// than leaving orphaned tasks nobody will ever resume.

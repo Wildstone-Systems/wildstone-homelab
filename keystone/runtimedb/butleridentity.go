@@ -44,23 +44,21 @@ const (
 	RoleMember = "member"
 )
 
-// Butler capability profiles (ADR-W030 A1). The ceiling a BUTLER runs
-// under — the tool surface it is allowed to reach.
+// ProfileChild is the only profile preset a PERSON can carry (design
+// §2.3). It is a constrained Member, not a third role: a child is a
+// Member whose profile is 'child', and the schema refuses any other
+// combination. It is stored so guardian relationships can be recorded,
+// and cannot be admitted until that surface has its own evidence.
 //
-// Until 0039 butler_members.profile borrowed these same two strings to
-// describe a PERSON, which is what conflated "demote an Owner" with
-// "restrict a child". A person's role now lives in role, and the only
-// profile a person can carry is ProfileChild.
-const (
-	ProfileHousehold = "household"
-	ProfileOperator  = "operator"
-	// ProfileChild is a constrained Member preset (design §2.3), not a
-	// third role: a child is a Member whose profile is 'child', and the
-	// schema refuses any other combination. It is stored so guardian
-	// relationships can be recorded, and cannot be admitted until that
-	// surface has its own evidence.
-	ProfileChild = "child"
-)
+// THIS IS A PERSON'S AXIS AND NOTHING ELSE'S. Until 0058 this constant
+// block also held 'household' and 'operator', which described a BUTLER's
+// ceiling, and butlers.profile borrowed the whole vocabulary — so one
+// symbol meant "a constraint on a child" in one table and "which gateway
+// an Agent reaches" in another. An Agent's ceiling now lives in
+// AgentClass (butlers.go), and 'child' never belonged there: what a
+// child may do is a fact about the person, not about the Agent they are
+// talking to, and one Agent serves several people at once (§5.3).
+const ProfileChild = "child"
 
 // ErrLastOwner is returned when an operation would leave the household
 // with no active Owner (design §2.5, §18.1).

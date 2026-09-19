@@ -77,7 +77,7 @@ func TestButlerAdmissionAndHandoffThroughTheAPI(t *testing.T) {
 	// Offboarding denies immediately and pauses unfinished personal work.
 	taskID, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: "root-admin", Owner: "root-admin",
-		Surface: runtimedb.ButlerSurfaceAdmin, Profile: "operator",
+		Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: "operator",
 		Audience:  runtimedb.ButlerAudiencePrivate,
 		Objective: "keep looking", CompletionCriteria: "answered",
 	})

@@ -75,7 +75,7 @@ func TestPoisonedMemoryCannotCreateAuthority(t *testing.T) {
 		t.Fatalf("RecordMemory: %v", err)
 	}
 	d, err := db.ResolveToolAuthority(ToolQuery{
-		Profile: ProfileHousehold, Tool: "unlock_front_door", Structural: false,
+		AgentClass: AgentClassMember, Tool: "unlock_front_door", Structural: false,
 	})
 	if err != nil {
 		t.Fatal(err)

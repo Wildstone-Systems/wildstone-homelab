@@ -134,13 +134,13 @@ func (h *harness) agentAt(t *testing.T, surface, transport string) runtimedb.Con
 		}, "root-admin"); err != nil {
 			t.Fatal(err)
 		}
-		profile := runtimedb.ProfileHousehold
+		profile := runtimedb.AgentClassMember
 		if surface == "admin" {
-			profile = runtimedb.ProfileOperator
+			profile = runtimedb.AgentClassOwner
 		}
 		if _, err := h.s.DB.CreateButler(runtimedb.Butler{
 			Name: butler, Directive: "look after the house",
-			Surface: runtimedb.ButlerSurface(surface), Profile: profile, Model: "kitchen-box",
+			Surface: runtimedb.ButlerSurface(surface), AgentClass: profile, Model: "kitchen-box",
 		}, "root-admin"); err != nil {
 			t.Fatalf("CreateButler(%s): %v", butler, err)
 		}

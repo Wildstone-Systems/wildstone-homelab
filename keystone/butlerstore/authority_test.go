@@ -37,12 +37,12 @@ func TestStructuralCeilingCannotBeWidened(t *testing.T) {
 
 	// Even with the switch explicitly ON and a live grant, a
 	// structurally absent tool is refused.
-	if err := db.SetToolControl(runtimedb.ProfileHousehold, "propose_change",
+	if err := db.SetToolControl(runtimedb.AgentClassMember, "propose_change",
 		runtimedb.ToolEnabled, "root-admin", "please"); err != nil {
 		t.Fatal(err)
 	}
 	d, err := auth.AuthorizeTool(butler.ToolAuthorityQuery{
-		Profile: runtimedb.ProfileHousehold, Tool: "propose_change", Structural: false,
+		AgentClass: runtimedb.AgentClassMember, Tool: "propose_change", Structural: false,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +89,7 @@ func TestDisableWinsOverManifestsAndGrants(t *testing.T) {
 		t.Fatal("a permitted tool was not offered")
 	}
 
-	if err := db.SetToolControl(runtimedb.ProfileOperator, "get_system_overview",
+	if err := db.SetToolControl(runtimedb.AgentClassOwner, "get_system_overview",
 		runtimedb.ToolDisabled, "root-admin", "noisy"); err != nil {
 		t.Fatal(err)
 	}
@@ -116,13 +116,13 @@ func TestDisableWinsOverManifestsAndGrants(t *testing.T) {
 	// the guarantee.
 	id := newAuthTask(t, db)
 	if _, err := db.GrantTool(runtimedb.ToolGrant{
-		Scope: runtimedb.GrantScopeTask, ScopeID: id, Profile: runtimedb.ProfileOperator,
+		Scope: runtimedb.GrantScopeTask, ScopeID: id, AgentClass: runtimedb.AgentClassOwner,
 		Tool: "get_system_overview", GrantedBy: "root-admin",
 	}, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	d, err := auth.AuthorizeTool(butler.ToolAuthorityQuery{
-		Profile: runtimedb.ProfileOperator, Tool: "get_system_overview",
+		AgentClass: runtimedb.AgentClassOwner, Tool: "get_system_overview",
 		Structural: true, GrantRequired: true, TaskID: id,
 	})
 	if err != nil {
@@ -146,7 +146,7 @@ func newAuthTask(t *testing.T, db *runtimedb.DB) string {
 	t.Helper()
 	id, err := db.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
-		Surface: runtimedb.ButlerSurfaceAdmin, Profile: runtimedb.ProfileOperator,
+		Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: runtimedb.AgentClassOwner,
 		Audience: runtimedb.ButlerAudiencePrivate, Objective: "work", CompletionCriteria: "done",
 	})
 	if err != nil {
@@ -160,7 +160,7 @@ func newAuthTask(t *testing.T, db *runtimedb.DB) string {
 func TestGrantsExpireWithTheirWork(t *testing.T) {
 	query := func(id string) butler.ToolAuthorityQuery {
 		return butler.ToolAuthorityQuery{
-			Profile: runtimedb.ProfileOperator, Tool: "restricted_tool",
+			AgentClass: runtimedb.AgentClassOwner, Tool: "restricted_tool",
 			Structural: true, GrantRequired: true, TaskID: id,
 		}
 	}
@@ -181,7 +181,7 @@ func TestGrantsExpireWithTheirWork(t *testing.T) {
 		db, auth := authorityDB(t)
 		id := newAuthTask(t, db)
 		seq, err := db.GrantTool(runtimedb.ToolGrant{
-			Scope: runtimedb.GrantScopeTask, ScopeID: id, Profile: runtimedb.ProfileOperator,
+			Scope: runtimedb.GrantScopeTask, ScopeID: id, AgentClass: runtimedb.AgentClassOwner,
 			Tool: "restricted_tool", GrantedBy: "root-admin", Reason: "one lookup",
 		}, time.Hour)
 		if err != nil {
@@ -200,7 +200,7 @@ func TestGrantsExpireWithTheirWork(t *testing.T) {
 		db, auth := authorityDB(t)
 		id := newAuthTask(t, db)
 		if _, err := db.GrantTool(runtimedb.ToolGrant{
-			Scope: runtimedb.GrantScopeTask, ScopeID: id, Profile: runtimedb.ProfileOperator,
+			Scope: runtimedb.GrantScopeTask, ScopeID: id, AgentClass: runtimedb.AgentClassOwner,
 			Tool: "restricted_tool", GrantedBy: "root-admin",
 		}, time.Hour); err != nil {
 			t.Fatal(err)
@@ -218,7 +218,7 @@ func TestGrantsExpireWithTheirWork(t *testing.T) {
 		db, auth := authorityDB(t)
 		id := newAuthTask(t, db)
 		if _, err := db.GrantTool(runtimedb.ToolGrant{
-			Scope: runtimedb.GrantScopeTask, ScopeID: id, Profile: runtimedb.ProfileOperator,
+			Scope: runtimedb.GrantScopeTask, ScopeID: id, AgentClass: runtimedb.AgentClassOwner,
 			Tool: "restricted_tool", GrantedBy: "root-admin",
 		}, time.Hour); err != nil {
 			t.Fatal(err)
@@ -242,7 +242,7 @@ func TestGrantsExpireWithTheirWork(t *testing.T) {
 		db, auth := authorityDB(t)
 		id := newAuthTask(t, db)
 		if _, err := db.GrantTool(runtimedb.ToolGrant{
-			Scope: runtimedb.GrantScopeTask, ScopeID: id, Profile: runtimedb.ProfileOperator,
+			Scope: runtimedb.GrantScopeTask, ScopeID: id, AgentClass: runtimedb.AgentClassOwner,
 			Tool: "restricted_tool", GrantedBy: "root-admin",
 		}, time.Nanosecond); err != nil {
 			t.Fatal(err)
@@ -257,7 +257,7 @@ func TestGrantsExpireWithTheirWork(t *testing.T) {
 		db, auth := authorityDB(t)
 		id := newAuthTask(t, db)
 		if _, err := db.GrantTool(runtimedb.ToolGrant{
-			Scope: runtimedb.GrantScopeTask, ScopeID: id, Profile: runtimedb.ProfileOperator,
+			Scope: runtimedb.GrantScopeTask, ScopeID: id, AgentClass: runtimedb.AgentClassOwner,
 			Tool: "restricted_tool", GrantedBy: "root-admin",
 		}, time.Hour); err != nil {
 			t.Fatal(err)
@@ -275,14 +275,14 @@ func TestGrantsExpireWithTheirWork(t *testing.T) {
 	t.Run("a grant is bounded and needs real work", func(t *testing.T) {
 		db, _ := authorityDB(t)
 		if _, err := db.GrantTool(runtimedb.ToolGrant{
-			Scope: runtimedb.GrantScopeTask, ScopeID: "bt-999", Profile: runtimedb.ProfileOperator,
+			Scope: runtimedb.GrantScopeTask, ScopeID: "bt-999", AgentClass: runtimedb.AgentClassOwner,
 			Tool: "restricted_tool", GrantedBy: "root-admin",
 		}, time.Hour); err == nil {
 			t.Fatal("a grant was issued against a task that does not exist")
 		}
 		id := newAuthTask(t, db)
 		if _, err := db.GrantTool(runtimedb.ToolGrant{
-			Scope: runtimedb.GrantScopeTask, ScopeID: id, Profile: runtimedb.ProfileOperator,
+			Scope: runtimedb.GrantScopeTask, ScopeID: id, AgentClass: runtimedb.AgentClassOwner,
 			Tool: "restricted_tool", GrantedBy: "root-admin",
 		}, 72*time.Hour); err == nil {
 			t.Fatal("an unbounded grant window was accepted")
@@ -297,7 +297,7 @@ func TestCapabilityRequestGrantsNothing(t *testing.T) {
 
 	seq, err := db.FileCapabilityRequest(runtimedb.CapabilityRequest{
 		Kind: runtimedb.RequestSupportedTool, RequestedBy: "sam",
-		Profile: runtimedb.ProfileHousehold, Tool: "get_calendar",
+		AgentClass: runtimedb.AgentClassMember, Tool: "get_calendar",
 		Description: "so I can answer questions about what is on today",
 	})
 	if err != nil {
@@ -306,7 +306,7 @@ func TestCapabilityRequestGrantsNothing(t *testing.T) {
 	// A request needs someone it is for: the Butler asks on a person's
 	// behalf and has no wishes of its own.
 	if _, err := db.FileCapabilityRequest(runtimedb.CapabilityRequest{
-		Kind: runtimedb.RequestSupportedTool, Profile: runtimedb.ProfileHousehold,
+		Kind: runtimedb.RequestSupportedTool, AgentClass: runtimedb.AgentClassMember,
 		Tool: "get_calendar", Description: "please",
 	}); err == nil {
 		t.Fatal("an unattributed capability request was accepted")
@@ -322,7 +322,7 @@ func TestCapabilityRequestGrantsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	d, err := auth.AuthorizeTool(butler.ToolAuthorityQuery{
-		Profile: runtimedb.ProfileHousehold, Tool: "get_calendar", Structural: false,
+		AgentClass: runtimedb.AgentClassMember, Tool: "get_calendar", Structural: false,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -334,17 +334,17 @@ func TestCapabilityRequestGrantsNothing(t *testing.T) {
 	// Enabling is a separate, visible act — and even then it cannot
 	// widen the structural ceiling, only switch on something the surface
 	// already has.
-	if err := db.SetToolControl(runtimedb.ProfileHousehold, "get_calendar",
+	if err := db.SetToolControl(runtimedb.AgentClassMember, "get_calendar",
 		runtimedb.ToolEnabled, "root-admin", ""); err != nil {
 		t.Fatal(err)
 	}
 	if d, _ := auth.AuthorizeTool(butler.ToolAuthorityQuery{
-		Profile: runtimedb.ProfileHousehold, Tool: "get_calendar", Structural: false,
+		AgentClass: runtimedb.AgentClassMember, Tool: "get_calendar", Structural: false,
 	}); d.Allowed {
 		t.Fatal("enabling a control conjured a tool the surface does not have")
 	}
 	if d, _ := auth.AuthorizeTool(butler.ToolAuthorityQuery{
-		Profile: runtimedb.ProfileHousehold, Tool: "get_calendar", Structural: true,
+		AgentClass: runtimedb.AgentClassMember, Tool: "get_calendar", Structural: true,
 	}); !d.Allowed {
 		t.Fatal("a tool that exists and was enabled is still refused")
 	}

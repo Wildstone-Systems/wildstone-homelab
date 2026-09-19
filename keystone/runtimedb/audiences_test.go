@@ -454,7 +454,7 @@ func TestTheAudienceMigrationIsCleanOnARealisticSnapshot(t *testing.T) {
 	for table, cols := range shapeBefore {
 		var gone []string
 		for _, c := range cols {
-			if !contains(shapeAfter[table], c) {
+			if !survived(table, c, shapeAfter[table]) {
 				gone = append(gone, c)
 			}
 		}
@@ -512,10 +512,19 @@ func TestTheAudienceMigrationIsCleanOnARealisticSnapshot(t *testing.T) {
 			if col == "audience" {
 				continue // legitimately rewritten by this migration
 			}
+			// A renamed column is read under its new name on the way
+			// out. Skipping it instead would stop checking that its
+			// CONTENTS survived, which is the half of this test that
+			// catches an INSERT ... SELECT with a column in the wrong
+			// position.
+			after := col
+			if to, ok := renamedTo[table+"."+col]; ok {
+				after = to
+			}
 			want := populated(t, old2, table, col)
-			if got := populated(t, db, table, col); got != want {
+			if got := populated(t, db, table, after); got != want {
 				t.Errorf("%s.%s holds a value in %d rows, held one in %d — the column "+
-					"survived the rebuild and its contents did not", table, col, got, want)
+					"survived the rebuild and its contents did not", table, after, got, want)
 			}
 		}
 	}

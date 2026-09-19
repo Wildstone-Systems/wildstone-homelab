@@ -16,9 +16,11 @@ import (
 //
 // Butler names the specialist this session is running as (ADR-W031
 // A4/A9). When it is set, the Butler's own narrowings are consulted
-// first and the PROFILE comes from the Butler's record rather than from
+// first and the CLASS comes from the Butler's record rather than from
 // the query — so a session physically cannot ask about a wider ceiling
-// than the Butler it belongs to.
+// than the Butler it belongs to. The Butler's own row id is set there
+// too, which is what scopes a grant to this Agent rather than to every
+// Agent of its class.
 //
 // It is a field on the resolver rather than a member of the query for
 // the same reason. One Authority is built per session, bound to one
@@ -26,8 +28,10 @@ import (
 // a different one, which is a structural answer rather than a check
 // somebody has to remember to write.
 //
-// Empty means no Butler scope — the pre-W031 profile-level resolution,
-// which is what a deployment with no Butlers still runs.
+// Empty means no Butler scope — the pre-W031 class-level resolution,
+// which is what a deployment with no Butlers still runs. Such a session
+// reaches only the class-level grants of the pre-0058 shape, never
+// another Agent's.
 type Authority struct {
 	DB     *runtimedb.DB
 	Butler string
@@ -36,7 +40,7 @@ type Authority struct {
 // AuthorizeTool resolves one dispatch.
 func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecision, error) {
 	query := runtimedb.ToolQuery{
-		Profile:       q.Profile,
+		AgentClass:    q.AgentClass,
 		Tool:          q.Tool,
 		Structural:    q.Structural,
 		GrantRequired: q.GrantRequired,
