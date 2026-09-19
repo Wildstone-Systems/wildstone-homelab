@@ -313,9 +313,15 @@ ADMIN_PASS=""
 # It follows the tailnet, because the package requires ingress:private
 # and that is the only ingress this installer offers.
 CONSOLE_BEHIND_PROXY=0
-# Where the proxy reaches Keystone, as address:port. Empty until the
-# tailnet address is known.
-KEYSTONE_ADDR=""
+# Where the proxy reaches Keystone's API, as address:port. Empty until
+# the tailnet address is known.
+#
+# NOT KEYSTONE_ADDR. That name is --keystone, the gateway a node joins,
+# and it is parsed before this line runs — so resetting it here emptied
+# it for every `--role node` run, including the one this installer makes
+# to pair its own host, and wardstoned started with `-keystone ` and no
+# value.
+KEYSTONE_API_ADDR=""
 step_admin() {
   echo
   echo "Now an account for you. This is what you will log in with, and"
@@ -1172,7 +1178,7 @@ post_install() {
     # across restarts, which a Docker bridge address is not guaranteed
     # to do.
     CONSOLE_BEHIND_PROXY=1
-    KEYSTONE_ADDR="$tsaddr:9441"
+    KEYSTONE_API_ADDR="$tsaddr:9441"
   else
     log "no tailnet: skipping ingress, services will be reachable on this host only"
     DASHBOARD_URL=""
@@ -1198,7 +1204,7 @@ post_install() {
   if [ "$CONSOLE_BEHIND_PROXY" = 1 ]; then
     log "installing the console route"
     enable_capability wildstone-console \
-      "{\"admin_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_ADDR\"}"
+      "{\"admin_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_API_ADDR\"}"
     # The household's front door is Wildstone's own homepage, not the
     # gethomepage profile of the same capability: that one only
     # presents, and the family's own page — what needs a decision, what
@@ -1213,7 +1219,7 @@ post_install() {
     # too.
     log "installing the household homepage"
     enable_capability homepage-wildstone \
-      "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_ADDR\"}"
+      "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_API_ADDR\"}"
   fi
   create_first_owner
   for svc in $SERVICES; do

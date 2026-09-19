@@ -486,3 +486,35 @@ func TestTheDirectoryAdoptsARotatedServicePassword(t *testing.T) {
 			"installer's rotation of secret/lldap-admin-password never takes")
 	}
 }
+
+// A variable a flag sets is never reset after the flags are parsed.
+//
+// The script is one flat file, so a top-level `NAME=""` placed below the
+// parsing loop silently discards whatever the operator passed. That is
+// how the Console's upstream address, declared as KEYSTONE_ADDR, emptied
+// --keystone for every `--role node` run: the installer paired its own
+// host with `-keystone ` and no value, and wardstoned refused to start.
+//
+// Only a bare re-assignment at column 0 counts. `NAME=$NAME` lines are
+// the env file the node role writes, which carries the flag through.
+func TestNoFlagIsResetAfterParsing(t *testing.T) {
+	src := installerSource(t)
+	loop := strings.Index(src, "while [ $# -gt 0 ]; do")
+	done := strings.Index(src[loop:], "\ndone\n")
+	if loop < 0 || done < 0 {
+		t.Fatal("could not find the flag-parsing loop")
+	}
+	parse, after := src[loop:loop+done], src[loop+done:]
+	for _, line := range strings.Split(parse, "\n") {
+		i := strings.Index(line, `="$2"`)
+		if i < 0 {
+			continue
+		}
+		name := strings.TrimSpace(line[strings.LastIndex(line[:i], " ")+1 : i])
+		for _, l := range strings.Split(after, "\n") {
+			if strings.HasPrefix(l, name+"=") && l != name+"=$"+name {
+				t.Errorf("%s is set by a flag and then reset after parsing: %q", name, l)
+			}
+		}
+	}
+}
