@@ -148,6 +148,12 @@
 
   var page = null, query = "", filters = {};
 
+  function meterMatches(m) {
+    if (!query) { return true; }
+    return ((m.description || "") + " " + m.name + " " + (m.unit || ""))
+      .toLowerCase().indexOf(query) >= 0;
+  }
+
   function matches(row) {
     if (!query) { return true; }
     var hay = (row.description || "") + " " + row.name + " " + (row.detail || "");
@@ -156,23 +162,23 @@
 
   // keep applies a section's own chips. Everything, and two cuts that
   // do not overlap: things asking for something, and things in hand.
-  function keep(section, row) {
-    var f = filters[section] || "";
+  function keep(part, row) {
+    var f = filters[part] || "";
     if (f === "asking") { return (row.asks || []).length > 0 && row.tone !== "ok"; }
     if (f === "booked") { return !!row.bookedFor; }
     if (f === "fine") { return row.tone === "ok" && !row.bookedFor; }
     return true;
   }
 
-  function chips(section, defs, onPick) {
+  function chips(part, defs, onPick) {
     var seg = make("div", "seg");
     seg.setAttribute("role", "tablist");
     seg.style.marginBottom = "var(--space-4)";
     defs.forEach(function (d) {
-      var b = make("button", (filters[section] || "") === d.f ? "on" : "", d.label);
+      var b = make("button", (filters[part] || "") === d.f ? "on" : "", d.label);
       b.type = "button";
       b.addEventListener("click", function () {
-        filters[section] = d.f;
+        filters[part] = d.f;
         render();
       });
       seg.appendChild(b);
@@ -383,6 +389,11 @@
     return body;
   }
 
+  // `done` is given the whole answer, refusals included, because one of
+  // them is not a failure: removing a meter that something measures
+  // against comes back 409 with what will stop working, to be confirmed
+  // rather than reported. A helper that threw on every non-2xx turned
+  // that into "that didn't go through" and made the meter undeletable.
   function post(method, path, body, btn, done) {
     btn.disabled = true;
     fetch(path, {
@@ -392,14 +403,15 @@
     })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, code: r.status, j: j }; }); })
       .then(function (res) {
+        if (done) { done(res); return; }
         if (!res.ok) { throw new Error(res.j.error || "that didn't go through"); }
-        if (done) { done(res.j); } else { closeForm(); load(); }
+        closeForm(); load();
       })
       .catch(function (err) {
         btn.disabled = false;
-        var said = btn.parentNode.querySelector(".asks-said");
-        if (!said) { said = make("span", "asks-said", ""); btn.parentNode.appendChild(said); }
-        said.textContent = String(err.message || err);
+        var note = btn.parentNode.querySelector(".asks-said");
+        if (!note) { note = make("span", "asks-said", ""); btn.parentNode.appendChild(note); }
+        note.textContent = String(err.message || err);
       });
   }
 
@@ -436,10 +448,14 @@
   // against — that is the one destructive act here, and it is a
   // member's to make knowingly rather than an Owner's to gate.
   function removeMeter(meter, btn) {
-    post("DELETE", "/api/v1/home/meters/" + encodeURIComponent(meter), null, btn, function (j) {
-      if (!j.confirm) { closeForm(); load(); return; }
+    post("DELETE", "/api/v1/home/meters/" + encodeURIComponent(meter), null, btn, function (res) {
       btn.disabled = false;
-      if (window.confirm(j.consequence + "\n\nStop keeping it anyway?")) {
+      if (res.ok) { load(); return; }
+      if (!res.j || !res.j.confirm) {
+        complain(btn, (res.j && res.j.error) || "that didn't go through");
+        return;
+      }
+      if (window.confirm(res.j.consequence + "\n\nStop keeping it anyway?")) {
         post("DELETE", "/api/v1/home/meters/" + encodeURIComponent(meter) + "?confirm=yes", null, btn);
       }
     });
@@ -448,9 +464,14 @@
   // ---- the three sections ---------------------------------------------
 
   function renderTracked(box) {
+    // A METER IS A THING IN ITS OWN RIGHT, not a header for its
+    // commitments. Filtering the group by its children meant searching
+    // "odometer" hid the odometer, and a chip that matched none of the
+    // truck's jobs took away the box for entering its mileage — which
+    // is the one thing on this page a household came to do.
     var groups = page.tracked.filter(function (g) {
-      return g.commitments.some(function (r) { return matches(r) && keep("tracked", r); }) ||
-             (!query && !g.commitments.length);
+      return meterMatches(g.meter) ||
+             g.commitments.some(function (r) { return matches(r) && keep("tracked", r); });
     });
     var card = section("Things you track", "tracked", [
       { f: "", label: "Everything" },
@@ -494,7 +515,9 @@
     ask.appendChild(drop);
     wrap.appendChild(ask);
 
-    var rows = g.commitments.filter(function (r) { return matches(r) && keep("tracked", r); });
+    var rows = g.commitments.filter(function (r) {
+      return (meterMatches(g.meter) || matches(r)) && keep("tracked", r);
+    });
     var list = make("div", "");
     discloseRows(list, rows, commitmentRow);
     wrap.appendChild(list);
@@ -506,7 +529,7 @@
     b.type = "button";
     b.addEventListener("click", function () {
       var v = parseFloat(input.value);
-      if (isNaN(v) || v < 0) { said(b, "a meter counts up from zero"); return; }
+      if (isNaN(v) || v < 0) { complain(b, "a meter counts up from zero"); return; }
       b.disabled = true;
       fetch("/api/v1/home/meters/" + encodeURIComponent(meter) + "/readings", {
         method: "POST",
@@ -518,12 +541,12 @@
           if (!res.ok) { throw new Error(res.j.error || "that didn't go through"); }
           load();
         })
-        .catch(function (err) { b.disabled = false; said(b, String(err.message || err)); });
+        .catch(function (err) { b.disabled = false; complain(b, String(err.message || err)); });
     });
     return b;
   }
 
-  function said(b, why) {
+  function complain(b, why) {
     var n = b.parentNode.querySelector(".asks-said");
     if (!n) { n = make("span", "asks-said", ""); b.parentNode.appendChild(n); }
     n.textContent = why;

@@ -543,7 +543,7 @@ func TestTheNeedsCardCanAnswerACommitmentAndNotOnlyANotice(t *testing.T) {
 		{"encodeURIComponent(ask.verb)", "the page names the answers itself instead of using the server's"},
 		{"c.needs", "the card does not collect its numbers once per meter — a box per " +
 			"commitment asks one truck's odometer three times"},
-		{"mine(boxes, i.needs)", "an answer submits every number on the card rather than its own"},
+		{"boxesFor(boxes, i.needs)", "an answer submits every number on the card rather than its own"},
 		// A date is a day, and a day is not over at midnight. Building
 		// the instant from parts is what keeps an appointment made for
 		// today from being announced as already missed.
@@ -756,5 +756,71 @@ func TestTheNeedsCardLinksToTheTrackerWithoutBecomingALink(t *testing.T) {
 	// And the rows still carry their own answers.
 	if !strings.Contains(page, "answerBtn(i.ref,") {
 		t.Error("the card no longer answers anything itself")
+	}
+}
+
+// jsLocalDecl finds a local binding: `var x =`, `let x =`, `const x =`.
+var jsLocalDecl = regexp.MustCompile(`\b(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=`)
+
+// TestNoPageHelperIsShadowedByALocal is the scope-aware half of the
+// call audit, and it exists because the same bug shipped twice.
+//
+// `answerBtn` called `answer(...)` after the helper was renamed to
+// `postAnswer`, and the call resolved to `decideBtn`'s PARAMETER of that
+// name rather than failing loudly. Two commits later `mine(boxes, ...)`
+// resolved to a `var mine` holding a row count, and every answer button
+// on the Needs-you card threw a TypeError.
+//
+// TestEveryHelperThePagesCallIsDefined cannot see either: both names
+// ARE defined, just not as the thing being called. A static check
+// cannot do real scope analysis, but it does not need to — it only
+// needs the page to have no two things by one name. That is a rule
+// worth keeping on its own merits, and it is the rule both bugs broke.
+func TestNoPageHelperIsShadowedByALocal(t *testing.T) {
+	for _, name := range pages {
+		body, found := Page(name)
+		if !found {
+			t.Errorf("%s is not served", name)
+			continue
+		}
+		var js strings.Builder
+		for _, m := range jsScript.FindAllStringSubmatch(string(body), -1) {
+			js.WriteString(m[1])
+			js.WriteString("\n")
+		}
+		src := js.String()
+		for _, re := range []*regexp.Regexp{jsBlockComment, jsLineComment, jsDoubleQuoted, jsSingleQuoted, jsTemplate} {
+			src = re.ReplaceAllString(src, " ")
+		}
+
+		helpers := map[string]bool{}
+		for _, m := range jsFuncDecl.FindAllStringSubmatch(src, -1) {
+			helpers[m[1]] = true
+		}
+		reported := map[string]bool{}
+		for _, m := range jsLocalDecl.FindAllStringSubmatch(src, -1) {
+			if helpers[m[1]] && !reported[m[1]] {
+				reported[m[1]] = true
+				t.Errorf("%s declares a local %q and a function %q — a call to it resolves to "+
+					"whichever is nearer, which is how two shipped bugs on this surface both looked "+
+					"like working code", name, m[1], m[1])
+			}
+		}
+		// The same for parameters, which is how the first one happened.
+		params := map[string]bool{}
+		for _, m := range jsFuncParams.FindAllStringSubmatch(src, -1) {
+			for _, p := range strings.Split(m[1], ",") {
+				if p = strings.TrimSpace(p); p != "" {
+					params[p] = true
+				}
+			}
+		}
+		for p := range params {
+			if helpers[p] && !reported[p] {
+				reported[p] = true
+				t.Errorf("%s has a parameter %q and a function %q — inside that function, "+
+					"a call to the helper reaches the parameter", name, p, p)
+			}
+		}
 	}
 }

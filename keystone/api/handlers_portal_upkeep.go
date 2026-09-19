@@ -74,6 +74,11 @@ type commitmentRow struct {
 	Description string `json:"description"`
 	Owner       string `json:"owner,omitempty"`
 	Personal    bool   `json:"personal,omitempty"`
+	// Paused is a commitment the household told the engine to stop
+	// evaluating. It is shown rather than hidden: a tracker that
+	// silently omits something is one a household cannot trust to be
+	// complete.
+	Paused bool `json:"paused,omitempty"`
 	// Standing is the state in household words: "past its date",
 	// "coming up", "booked", "can't tell".
 	Standing string `json:"standing"`
@@ -289,22 +294,42 @@ func number(v float64) string {
 // fault that put "Done" on a card where the write path refused it.
 func (s *Server) commitmentRowFor(st upkeep.Standing, w who, units map[string]string, cycles int) commitmentRow {
 	row := commitmentRow{
-		Name: st.Name, Description: st.Description, Owner: st.Owner,
+		Name: st.Name, Description: st.Description, Owner: st.Owner, Paused: st.Disabled,
 		Personal: st.Scope == resource.CommitmentScopePersonal,
-		Standing: standingWords(st), Tone: commitmentTone(st),
+		Standing: standingWords(st), Tone: pausedTone(st),
 		Detail: standingDetail(st, units), Cycles: cycles,
 	}
 	if st.Booking != nil && st.Booking.Live() {
 		at := st.Booking.At
 		row.BookedFor = &at
 	}
-	row.Asks, row.Needs = commitmentAsks(st, mayComplete(st, w), units)
+	if !st.Disabled {
+		// Nothing to answer on something the house has been told to stop
+		// asking about. The affordance is absent, never
+		// present-and-refused — the same rule the Needs-you card follows.
+		row.Asks, row.Needs = commitmentAsks(st, mayComplete(st, w), units)
+	}
 	return row
+}
+
+// pausedTone keeps a paused commitment from wearing an alarm colour.
+func pausedTone(st upkeep.Standing) portal.Tone {
+	if st.Disabled {
+		return portal.ToneRefused
+	}
+	return commitmentTone(st)
 }
 
 // standingWords is the state in household language. The engine's own
 // state names — due_soon, overdue — are not what a family calls them.
 func standingWords(st upkeep.Standing) string {
+	// A paused commitment is not evaluated AT the household, so its
+	// verdict is whatever was true when it was paused. Rendering that as
+	// "past its date" tells somebody to act on a thing the house has
+	// been told to stop asking about.
+	if st.Disabled {
+		return "paused"
+	}
 	if len(st.Occurrence.Unresolved) > 0 && st.Occurrence.Trigger == "" {
 		return "can't tell"
 	}

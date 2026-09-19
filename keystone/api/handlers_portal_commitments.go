@@ -324,8 +324,8 @@ func (s *Server) answerCommitment(what string) portalFunc {
 			}
 			seq, _, err := s.DB.RecordCommitmentCompletion(runtimedb.CommitmentCompletion{
 				Commitment: name, At: at, RecordedBy: member,
-				Waived: what == "waived", Reason: req.Reason, Positions: positions,
-				Approximate: approx,
+				Waived: what == "waived", Reason: req.Reason, Note: req.Note,
+				Positions: positions, Approximate: approx,
 			})
 			if err != nil {
 				return nil, http.StatusInternalServerError, err

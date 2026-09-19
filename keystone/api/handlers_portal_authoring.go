@@ -231,6 +231,20 @@ func householdName(typed string, taken func(string) bool) string {
 	return name
 }
 
+// nameTaken reports whether a name is already spoken for — by a
+// resource that exists now, OR by history under that name.
+//
+// THE LEDGER KEEPS THE NAME. Removing a commitment deliberately leaves
+// its completions where they are: that is "stop asking me", not "this
+// never happened". But the name is how they are keyed, so a household
+// that removed "Furnace filter" and added it again would find the new
+// one already four cycles old, measuring its next from an oil change
+// that belonged to something else. The same for a meter, whose
+// readings outlive it.
+//
+// So a name with a past is taken, and the next one gets a -2. The
+// history stays findable and the new thing starts clean, which is what
+// somebody adding it a second time meant either way.
 func (s *Server) nameTaken(kind resource.Kind) func(string) bool {
 	current, err := s.State.Load()
 	if err != nil {
@@ -238,7 +252,25 @@ func (s *Server) nameTaken(kind resource.Kind) func(string) bool {
 		// fails loudly rather than colliding silently.
 		return func(string) bool { return true }
 	}
+	past := map[string]bool{}
+	switch kind {
+	case resource.KindCommitment:
+		if counts, cerr := s.DB.CommitmentCycleCounts(); cerr == nil {
+			for name := range counts {
+				past[name] = true
+			}
+		}
+	case resource.KindMeter:
+		if names, nerr := s.DB.MeterNames(); nerr == nil {
+			for _, name := range names {
+				past[name] = true
+			}
+		}
+	}
 	return func(name string) bool {
+		if past[name] {
+			return true
+		}
 		for _, res := range current {
 			if res.Kind == kind && res.Metadata.Name == name {
 				return true
@@ -457,7 +489,21 @@ func mayAuthor(st upkeep.Standing, w who) bool {
 }
 
 // homeEditCommitment changes one that already exists.
-func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, member string, _ []resource.Resource) (any, int, error) {
+//
+// IT MERGES ONTO THE DOCUMENT THAT IS THERE rather than rebuilding it
+// from the body, and that is not a refinement — the first version
+// rebuilt, and a rebuild silently destroyed everything the family page
+// does not show. Editing the F-150's oil would have dropped "or every
+// six months", because the page has one interval box and the
+// commitment has two rules. Earliest-wins is the centre of this design
+// and the edit path was quietly discarding half of it.
+//
+// So: the page owns what the page shows, and preserves the rest.
+// `disabled`, `anchorAt`, `satisfiedBy` and every due rule after the
+// first survive untouched, and a commitment whose scope the body does
+// not mention keeps the scope it had — otherwise correcting a typo on
+// a personal commitment would publish it to the household.
+func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
 	name := r.PathValue("name")
 	w := memberWho(r, member)
 	st, code, err := s.commitmentFor(name, w)
@@ -466,6 +512,15 @@ func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, memb
 	}
 	if !mayAuthor(st, w) {
 		return nil, http.StatusForbidden, fmt.Errorf("%q is not yours to change", name)
+	}
+	var existing *resource.Resource
+	for i := range desired {
+		if desired[i].Kind == resource.KindCommitment && desired[i].Metadata.Name == name {
+			existing = &desired[i]
+		}
+	}
+	if existing == nil || existing.Commitment == nil {
+		return nil, http.StatusNotFound, fmt.Errorf("no commitment named %q", name)
 	}
 	var f commitmentFields
 	if code, err := decodeAuthored(r, &f); err != nil {
@@ -477,16 +532,39 @@ func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, memb
 	if f.Rollover == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("does this come round again?")
 	}
-	if f.Anchor == "" {
-		// An edit keeps where tracking started. Silently moving the
-		// anchor to today would re-base every threshold measured from
-		// it, which is not what "fix the description" means.
-		f.Anchor = existingAnchor(st)
+	spec := *existing.Commitment
+	spec.Description = f.Description
+	spec.Rollover = f.Rollover
+	spec.RequiresBooking = f.RequiresBooking
+	spec.MayComplete = f.MayComplete
+	spec.Notify = f.Notify
+	if f.Scope != "" {
+		spec.Scope = f.Scope
+	}
+	if f.Anchor != "" {
+		spec.Anchor = f.Anchor
+	}
+	// The first rule is the one the page renders; the rest are not its
+	// to touch.
+	edited := resource.CommitmentDue{
+		Meter: f.Meter, Every: f.Every, Lead: f.Lead, At: f.At, AtValue: f.AtValue,
+	}
+	if edited.Meter == "" {
+		edited.Meter = resource.MeterClock
+	}
+	if len(spec.Due) == 0 {
+		spec.Due = []resource.CommitmentDue{edited}
+	} else {
+		spec.Due = append([]resource.CommitmentDue{edited}, spec.Due[1:]...)
+	}
+	owner := existing.Metadata.Owner
+	if strings.TrimSpace(f.About) != "" {
+		owner = f.owner(member)
 	}
 	res := resource.Resource{
 		ApiVersion: resource.ApiVersion, Kind: resource.KindCommitment,
-		Metadata:   resource.Metadata{Name: name, Owner: f.owner(member)},
-		Commitment: ptr(f.spec()),
+		Metadata:   resource.Metadata{Name: name, Owner: owner},
+		Commitment: &spec,
 	}
 	if code, err := s.applyAuthored(member, authored{
 		Put: []resource.Resource{res}, Summary: member + " changed " + f.Description,
@@ -494,15 +572,6 @@ func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, memb
 		return nil, code, err
 	}
 	return map[string]any{"commitment": name}, http.StatusOK, nil
-}
-
-// existingAnchor recovers where tracking started, so an edit that does
-// not mention it does not move it.
-func existingAnchor(st upkeep.Standing) string {
-	if !st.Occurrence.OpenedAt.IsZero() {
-		return st.Occurrence.OpenedAt.Format("2006-01-02")
-	}
-	return time.Now().Format("2006-01-02")
 }
 
 // homeRemoveCommitment stops tracking one.
@@ -538,27 +607,34 @@ func (s *Server) homeRemoveCommitment(_ http.ResponseWriter, r *http.Request, me
 // stops being able to say whether it is due. That is why the grade is
 // Medium while creating one is Low, and why this answer is offered
 // BEFORE the delete rather than as an error after it.
-func (s *Server) meterDependants(meter string, w who) ([]string, error) {
+func (s *Server) meterDependants(meter string, w who) ([]string, int, error) {
 	if s.Upkeep == nil {
-		return nil, nil
+		return nil, 0, nil
 	}
 	standings, err := s.Upkeep.Evaluate()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var out []string
+	hidden := 0
 	for _, st := range standings {
-		if !visibleTo(st, w) {
-			continue
-		}
+		measures := false
 		for _, rule := range st.Occurrence.Rules {
 			if rule.Meter == meter && !rule.Calendar {
-				out = append(out, st.Description)
+				measures = true
 				break
 			}
 		}
+		if !measures {
+			continue
+		}
+		if visibleTo(st, w) {
+			out = append(out, st.Description)
+			continue
+		}
+		hidden++
 	}
-	return out, nil
+	return out, hidden, nil
 }
 
 // homeRemoveMeter stops keeping a number.
@@ -566,7 +642,8 @@ func (s *Server) homeRemoveMeter(_ http.ResponseWriter, r *http.Request, member 
 	name := r.PathValue("name")
 	var found *resource.Resource
 	for i := range desired {
-		if desired[i].Kind == resource.KindMeter && desired[i].Metadata.Name == name {
+		if desired[i].Kind == resource.KindMeter && desired[i].Metadata.Name == name &&
+			desired[i].Meter != nil {
 			found = &desired[i]
 		}
 	}
@@ -574,19 +651,31 @@ func (s *Server) homeRemoveMeter(_ http.ResponseWriter, r *http.Request, member 
 		return nil, http.StatusNotFound, fmt.Errorf("no meter named %q", name)
 	}
 	w := memberWho(r, member)
-	dependants, err := s.meterDependants(name, w)
+	dependants, hidden, err := s.meterDependants(name, w)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	// Confirmed rather than forbidden. A member may do this — it is not
 	// an Owner's decision — but not by accident, and the sentence names
 	// exactly what stops working.
-	if len(dependants) > 0 && r.URL.Query().Get("confirm") != "yes" {
+	//
+	// INCLUDING WHAT THEY CANNOT SEE. Somebody else's personal
+	// commitment may measure against this meter, and naming it would
+	// leak what personal scope exists to hide. Counting it does not, and
+	// leaving it out entirely would let a member break a thing they were
+	// never told about — silently, which is the worst of the three.
+	if (len(dependants) > 0 || hidden > 0) && r.URL.Query().Get("confirm") != "yes" {
+		what := strings.Join(dependants, ", ")
+		switch {
+		case len(dependants) == 0:
+			what = plural(hidden, "thing that is not yours to see", "things that are not yours to see")
+		case hidden > 0:
+			what += ", and " + plural(hidden, "thing that is not yours to see", "things that are not yours to see")
+		}
 		return map[string]any{
-			"confirm": true, "dependants": dependants,
-			"consequence": fmt.Sprintf(
-				"%s will keep their schedules and lose the number they measure against, so none of them can say whether it is due.",
-				strings.Join(dependants, ", ")),
+			"confirm": true, "dependants": dependants, "hidden": hidden,
+			"consequence": what + " will keep their schedules and lose the number they measure " +
+				"against, so none of them can say whether it is due.",
 		}, http.StatusConflict, nil
 	}
 	if code, err := s.applyAuthored(member, authored{

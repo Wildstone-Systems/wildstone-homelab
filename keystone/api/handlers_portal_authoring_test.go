@@ -425,3 +425,197 @@ func TestAnsweringSomebodysPersonalThingIsNotRewritingIt(t *testing.T) {
 		t.Errorf("the owner could not remove their own: %d", code)
 	}
 }
+
+// An edit through the family page must not destroy what the page does
+// not show.
+//
+// The first version rebuilt the spec from the body, which silently
+// dropped every due rule after the first — so editing the F-150's oil
+// discarded "or every six months". Earliest-wins is the centre of this
+// design and the edit path was throwing half of it away.
+func TestAnEditKeepsWhatThePageDoesNotShow(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "F-150 odometer", Unit: "miles"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "Oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: "2025-01-01", Disabled: true,
+		AnchorAt: map[string]float64{"f150-odometer": 60000},
+		Due: []resource.CommitmentDue{
+			{Meter: "f150-odometer", Every: "5000", Lead: "300"},
+			{Meter: resource.MeterClock, Every: "6mo", Lead: "14d"},
+		},
+		SatisfiedBy: &resource.CommitmentSatisfiedBy{EventType: "vehicle.serviced", Entity: "f150"},
+		Scope:       resource.CommitmentScopePersonal,
+	}, "household/mika")
+
+	// An edit that says nothing about any of it.
+	if code, out := h.authored(t, http.MethodPut, "/api/v1/home/commitments/f150-oil", "mika", map[string]any{
+		"description": "Oil, filter and a look at the brakes",
+		"meter":       "f150-odometer", "every": "6000", "lead": "300",
+		"rollover": resource.RolloverFromCompletion,
+	}); code != http.StatusOK {
+		t.Fatalf("status %d: %+v", code, out)
+	}
+	current, err := h.s.State.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, res := range current {
+		if res.Kind != resource.KindCommitment || res.Metadata.Name != "f150-oil" {
+			continue
+		}
+		spec := res.Commitment
+		if spec.Description != "Oil, filter and a look at the brakes" {
+			t.Errorf("description was not applied: %q", spec.Description)
+		}
+		if len(spec.Due) != 2 {
+			t.Fatalf("due = %+v, want the edited rule AND the six-month one it never showed", spec.Due)
+		}
+		if spec.Due[0].Every != "6000" {
+			t.Errorf("the edited rule did not land: %+v", spec.Due[0])
+		}
+		if spec.Due[1].Meter != resource.MeterClock || spec.Due[1].Every != "6mo" {
+			t.Errorf("the second rule was lost or changed: %+v", spec.Due[1])
+		}
+		if spec.SatisfiedBy == nil || spec.SatisfiedBy.EventType != "vehicle.serviced" {
+			t.Errorf("satisfiedBy was dropped: %+v", spec.SatisfiedBy)
+		}
+		if spec.AnchorAt["f150-odometer"] != 60000 {
+			t.Errorf("anchorAt was dropped: %+v", spec.AnchorAt)
+		}
+		if !spec.Disabled {
+			t.Error("the edit un-paused a paused commitment")
+		}
+		if spec.Anchor != "2025-01-01" {
+			t.Errorf("anchor moved to %q — every threshold measured from it moved with it", spec.Anchor)
+		}
+		if spec.Scope != resource.CommitmentScopePersonal {
+			t.Errorf("scope = %q: an edit that did not mention scope published a personal commitment",
+				spec.Scope)
+		}
+		return
+	}
+	t.Fatal("the commitment vanished")
+}
+
+// Removing a meter must account for what the member cannot see.
+//
+// Naming somebody else's personal commitment would leak what personal
+// scope exists to hide; leaving it out entirely lets a member break a
+// thing they were never told about. Counting it does neither.
+func TestRemovingAMeterCountsWhatItCannotName(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "shared-meter", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Shared meter", Unit: "units"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.declareCommitment(t, "kai-private", resource.CommitmentSpec{
+		Description: "Kai's private thing", Rollover: resource.RolloverFromCompletion,
+		Anchor: "2026-01-01", Scope: resource.CommitmentScopePersonal,
+		Due: []resource.CommitmentDue{{Meter: "shared-meter", Every: "100", Lead: "10"}},
+	}, "household/kai")
+
+	code, out := h.authored(t, http.MethodDelete, "/api/v1/home/meters/shared-meter", "mika", nil)
+	if code != http.StatusConflict {
+		t.Fatalf("status = %d, want a confirmation: %+v", code, out)
+	}
+	if n, _ := out["hidden"].(float64); n != 1 {
+		t.Errorf("hidden = %v, want the one it may not name", out["hidden"])
+	}
+	consequence, _ := out["consequence"].(string)
+	if strings.Contains(consequence, "Kai") {
+		t.Errorf("the confirmation names a personal commitment: %q", consequence)
+	}
+	if !strings.Contains(consequence, "not yours to see") {
+		t.Errorf("consequence = %q, want it to account for what it cannot name", consequence)
+	}
+}
+
+// A name with a past is taken. The ledger keeps history under the name,
+// so re-adding the same thing must not inherit somebody else's cycles.
+func TestReAddingSomethingDoesNotInheritItsOldHistory(t *testing.T) {
+	h := commitmentHarness(t)
+	h.declareCommitment(t, "furnace-filter", resource.CommitmentSpec{
+		Description: "Furnace filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: "2024-01-01",
+		Due:    []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "3mo", Lead: "14d"}},
+	}, "household")
+	if code, _ := h.authored(t, http.MethodPost, "/api/v1/home/commitments/furnace-filter/done", "mika", nil); code != http.StatusCreated {
+		t.Fatal("closing it")
+	}
+	if code, _ := h.authored(t, http.MethodDelete, "/api/v1/home/commitments/furnace-filter", "mika", nil); code != http.StatusOK {
+		t.Fatal("removing it")
+	}
+	code, out := h.authored(t, http.MethodPost, "/api/v1/home/commitments", "mika", map[string]any{
+		"description": "Furnace filter", "every": "3mo", "lead": "14d",
+		"rollover": resource.RolloverFromCompletion,
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("status %d: %+v", code, out)
+	}
+	if out["commitment"] == "furnace-filter" {
+		t.Error("the new one took the old name and inherited four months of somebody else's history")
+	}
+	page := h.history(t, "mika", out["commitment"].(string))
+	if len(page.Cycles) != 0 {
+		t.Errorf("a newly added thing starts with %d closed cycles", len(page.Cycles))
+	}
+}
+
+// A paused commitment is shown, and shown as paused. Hiding it makes
+// the tracker incomplete; showing it as overdue tells somebody to act
+// on a thing the house was told to stop asking about.
+func TestAPausedCommitmentReadsAsPausedAndOffersNothing(t *testing.T) {
+	h := commitmentHarness(t)
+	h.declareCommitment(t, "paused-thing", resource.CommitmentSpec{
+		Description: "Something on hold", Rollover: resource.RolloverFromCompletion,
+		Anchor: "2024-01-01", Disabled: true,
+		Due: []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "3mo", Lead: "14d"}},
+	}, "household")
+
+	page := h.upkeep(t, "mika")
+	for _, row := range page.Calendar {
+		if row.Name != "paused-thing" {
+			continue
+		}
+		if !row.Paused || row.Standing != "paused" {
+			t.Errorf("row = %+v, want it to read as paused rather than overdue", row)
+		}
+		if len(row.Asks) != 0 {
+			t.Errorf("a paused commitment offers %+v to answer", row.Asks)
+		}
+		return
+	}
+	t.Error("a paused commitment vanished from the tracker entirely")
+}
+
+// The note is what makes a maintenance history worth keeping. It was
+// stored, typed, rendered — and never written.
+func TestANoteOnACompletionIsActuallyRecorded(t *testing.T) {
+	h := commitmentHarness(t)
+	h.declareCommitment(t, "filter", resource.CommitmentSpec{
+		Description: "Furnace filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: "2024-01-01",
+		Due:    []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "3mo", Lead: "14d"}},
+	}, "household")
+	if code, _ := h.authored(t, http.MethodPost, "/api/v1/home/commitments/filter/done", "mika",
+		map[string]any{"note": "the big one, $22 at the hardware shop"}); code != http.StatusCreated {
+		t.Fatal("closing it")
+	}
+	page := h.history(t, "mika", "filter")
+	if len(page.Cycles) != 1 {
+		t.Fatalf("cycles = %d", len(page.Cycles))
+	}
+	if page.Cycles[0].Note != "the big one, $22 at the hardware shop" {
+		t.Errorf("note = %q — stored, typed, rendered and never written", page.Cycles[0].Note)
+	}
+}
