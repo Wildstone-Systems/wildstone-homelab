@@ -65,6 +65,9 @@ type planView struct {
 	// Surfaced here because a plan the Console cannot attribute to a
 	// package and its params is back to describing consequences.
 	Origin *plan.CapabilityOrigin `json:"origin,omitempty"`
+	// Setting is a household setting the plan changes instead of desired
+	// state — an Agent's proposal an Owner decides on (ADR-W033 E2).
+	Setting *plan.SettingChange `json:"setting,omitempty"`
 }
 
 // viewPlan projects one record. A blob that will not parse is not fatal:
@@ -83,6 +86,7 @@ func viewPlan(rec runtimedb.PlanRecord) planView {
 	}
 	v.BasedOnHead, v.Plan, v.Put, v.Delete = stored.BasedOnHead, stored.Plan, stored.Put, stored.Delete
 	v.Origin = stored.Origin
+	v.Setting = stored.Setting
 	return v
 }
 
@@ -295,6 +299,12 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 	// A plan is only approvable against the exact desired state it was
 	// computed from; if the Statefile moved since, the risk grades and
 	// diff are stale — supersede and make the proposer re-propose.
+	// A household setting is not desired state: it applies directly and
+	// does not wait on the Statefile head (ADR-W033 E2).
+	if stored.Setting != nil && len(stored.Put) == 0 && len(stored.Delete) == 0 {
+		return s.applySettingPlan(planID, stored, id)
+	}
+
 	head, err := s.State.Head()
 	if err != nil {
 		return nil, http.StatusInternalServerError, err

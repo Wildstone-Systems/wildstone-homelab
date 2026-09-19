@@ -517,6 +517,14 @@ No Agent may approve or activate its own Plan. A human Owner must approve the ex
 
 This supersedes the previous standing-grant design that allowed some Agent-created routines to self-activate.
 
+### E2.1 Amendment (2026-09-19, #269): household settings an Agent can propose
+
+The household's time zone is the first household setting an Agent can propose, and the pattern is meant for the rest.
+
+- **The time zone is a setting, not a startup flag.** It lives with the household's other runtime settings (the zone quiet hours already used). The `-household-timezone` flag only seeds it while it has never been set, and the installer asks for it. Everything that keeps the household's time reads it live: the Agent's "it is now", calendar tools, household rules, upkeep and the household pages. A change applies to the next thing that asks, with no restart. It was a flag defaulting to the host's clock, and a VM running UTC told the household's Agent that UTC was the household's clock, so "3pm" landed five hours early.
+- **An Agent proposes; an Owner decides.** An Agent that hears the clock is wrong calls `household.propose_timezone`. That records a Plan carrying the setting change and nothing else, which waits on the Plans screen like any proposal. Approving it applies the setting. The Agent changes nothing itself, and tells the person so.
+- **An Owner may also set it directly**, on the Household screen. It is not a consequential operation under A4.1.
+
 ## E3. Submitted Plans enter an Owner Review Queue and notify a designated Owner
 
 The persistent Owner Review Queue is the source of truth and is visible to all Owners.

@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -305,6 +306,9 @@ type Engine struct {
 	// conditions. nil is UTC, which is almost never what a household
 	// means; cmd/keystone sets it from -household-timezone.
 	Location *time.Location
+	// Zone, when set, is the household's live timezone and wins over
+	// Location, so an approved change applies without a restart.
+	Zone *householdtz.Zone
 	// Now is the engine clock; nil means time.Now.
 	Now func() time.Time
 	// Actions, when set, performs a fired rule's action through the
@@ -439,7 +443,7 @@ func (e *Engine) Tick(ctx context.Context) (TickOutcome, error) {
 					Reason:    fmt.Sprintf("stale: trigger occurred %s ago, beyond the %s bound", age.Round(time.Minute), maxAge),
 				}
 			} else {
-				d, err = Evaluate(rule, ev, look, e.Location)
+				d, err = Evaluate(rule, ev, look, e.loc())
 				if err != nil {
 					return out, err
 				}
@@ -518,7 +522,7 @@ func (e *Engine) Replay(ctx context.Context, rules []resource.Resource, from, to
 			if !Matches(rule, ev) {
 				continue
 			}
-			d, err := Evaluate(rule, ev, look, e.Location)
+			d, err := Evaluate(rule, ev, look, e.loc())
 			if err != nil {
 				return decisions, err
 			}
@@ -563,3 +567,6 @@ func (e *Engine) Run(ctx context.Context, interval time.Duration) {
 		}
 	}
 }
+
+// loc is the household zone now.
+func (e *Engine) loc() *time.Location { return e.Zone.Or(e.Location) }

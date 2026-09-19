@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
 	"log/slog"
 	"net"
 	"net/http"
@@ -184,6 +185,11 @@ type Server struct {
 	// the control plane's process happens to think it is. nil falls
 	// back to the process's local zone.
 	HouseholdLoc *time.Location
+	// HouseholdZone, when set, is the household's live timezone and wins
+	// over HouseholdLoc: an Owner can change it (directly, or by
+	// approving an Agent's proposal) and the change applies with no
+	// restart.
+	HouseholdZone *householdtz.Zone
 	// MemberScoped reports whether a household event type is about a
 	// PERSON rather than about the house (ADR-W026 A7). Used to withhold
 	// one member's movements from a room the whole family is in; nil

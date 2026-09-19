@@ -1077,6 +1077,16 @@ check("the plan card shows every step's blast radius", card.includes("offline fo
 // the safer way is on a different screen and nobody will guess.
 check("a high-risk plan says to read the blast radius", card.includes("High risk"));
 check("a restoring plan offers the reversible route", text(card).includes("alongside the live data"), text(card).slice(0, 900));
+// An agent's proposed setting says what approving changes, in words:
+// there is no reconciler step to read for it (ADR-W033 E2).
+const tzPlan = renderToString(h(PendingPlan, {
+  plan: { ...PENDING, risk: "low", actingFor: "mika", plan: undefined,
+    summary: "change the household timezone from UTC to America/Chicago (asked by mika)",
+    setting: { timezone: "America/Chicago", reason: "we live in Chicago" } },
+  onResolved: () => {},
+}));
+check("a proposed time zone says what approving sets", tzPlan.includes("America/Chicago") && tzPlan.includes("time zone"), tzPlan.slice(0, 600));
+check("a proposed time zone says who asked and why", tzPlan.includes("mika") && tzPlan.includes("we live in Chicago"));
 const gentle = renderToString(h(PendingPlan, { plan: { ...PENDING, risk: "low", plan: { steps: [] } }, onResolved: () => {} }));
 check("a low-risk plan is not shouted at", !gentle.includes("High risk"));
 check("a plan with no steps says so", gentle.includes("carries no expanded steps"));
@@ -1360,6 +1370,7 @@ check("no code waiting says what to do", noCode.includes("Ask the person to requ
 // plan rather than creating an account, and no password is set here.
 const household = renderToString(h(Household));
 check("Household renders without throwing", household.length > 0);
+check("household screen offers the time zone", household.includes("Time zone") && household.includes("America/Chicago"));
 check("household screen says adding proposes a plan", household.includes("proposes a plan"));
 check("household screen says the password is not set here", household.includes("reset flow"));
 

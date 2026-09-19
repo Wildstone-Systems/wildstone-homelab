@@ -67,6 +67,9 @@ export interface PlanRecord {
   state: string;
   basedOnHead?: string;
   plan?: Plan;
+  // A household setting the plan changes instead of desired state: an
+  // Agent's proposal an Owner decides on (ADR-W033 E2).
+  setting?: { timezone?: string; reason?: string };
   resolvedBy?: string;
   resolvedAt?: string;
 }

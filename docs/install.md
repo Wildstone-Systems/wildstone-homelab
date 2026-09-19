@@ -141,8 +141,12 @@ than installing it silently, and offers to set up Tailscale — printing a
 sign-in link to open in any browser, which is also the path to take if
 you have no Tailscale account yet.
 
-It then asks for the account you will log in with, which services you
-want, and shows a summary before doing anything. Approving that summary
+It then asks for the account you will log in with, the household's time
+zone, which services you want, and shows a summary before doing anything.
+The time zone matters more than it looks: servers usually run on UTC, and
+your agents read "3pm" and "tomorrow" in whatever zone the household keeps.
+You can change it later on the Console's Household screen, and an agent
+that hears it is wrong will propose the right one for you to approve. Approving that summary
 is the approval for every plan the install creates (ADR-W023 A2) — they
 are recorded in the audit trail against your account.
 

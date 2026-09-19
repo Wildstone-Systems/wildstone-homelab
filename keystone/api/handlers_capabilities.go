@@ -153,7 +153,9 @@ func (s *Server) gatherFacts() deploymentFacts {
 	if f.keystoneURL != "" {
 		f.intakeURL = strings.TrimSuffix(f.keystoneURL, "/") + "/api/v1/household/events"
 	}
-	if s.HouseholdTimezone != "Local" {
+	if s.HouseholdZone != nil {
+		f.timezone = s.HouseholdZone.Location().String()
+	} else if s.HouseholdTimezone != "Local" {
 		f.timezone = s.HouseholdTimezone
 	}
 

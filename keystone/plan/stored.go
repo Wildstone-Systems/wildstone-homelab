@@ -41,6 +41,19 @@ type StoredProposal struct {
 	// Drift marks a proposal raised by the reconcile loop rather than by
 	// a proposer with an intent. Provenance only; nothing branches on it.
 	Drift bool `json:"drift,omitempty"`
+	// Setting is a household setting this proposal changes instead of
+	// desired state (ADR-W033 E2): an Agent proposes, an Owner approves,
+	// and approval applies it. A setting-only proposal carries no Put or
+	// Delete and does not depend on the Statefile head.
+	Setting *SettingChange `json:"setting,omitempty"`
+}
+
+// SettingChange is one household setting a proposal changes.
+type SettingChange struct {
+	// Timezone is the IANA zone the household keeps.
+	Timezone string `json:"timezone,omitempty"`
+	// Reason is why, in the proposer's words.
+	Reason string `json:"reason,omitempty"`
 }
 
 // DeletionRef names a resource a proposal removes from desired state.
