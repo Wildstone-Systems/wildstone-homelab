@@ -481,3 +481,52 @@ func TestTheGroupsArriveEmptyOnAnUpgradeToo(t *testing.T) {
 		}
 	}
 }
+
+// A lookup that failed is not a lookup that found nothing.
+//
+// My own review pass found this: GroupBySeedKey folded every error into
+// ErrNotFound, so a database that was briefly unreadable reported that
+// the adults group does not exist. The caller's reasonable response to
+// "not found" is to create one, which would leave a household with two
+// groups both claiming the same role — and the seed_key UNIQUE
+// constraint would then refuse the second, turning a transient read
+// failure into a permanent write failure somewhere else entirely.
+func TestAFailedGroupLookupIsNotAMissingGroup(t *testing.T) {
+	db := open(t)
+
+	// Closed, so the query fails for a reason that is not "no rows".
+	db.Close()
+
+	_, err := db.GroupBySeedKey(SeedAdults)
+	if err == nil {
+		t.Fatal("a lookup on a closed database succeeded")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Error("a failed lookup reported the group as missing; a caller that " +
+			"creates one on ErrNotFound would give the household two groups " +
+			"claiming the same role")
+	}
+}
+
+// The namespace cannot hold a membership for somebody who does not
+// exist.
+//
+// Enforced by the schema rather than by a check in Go, which is what
+// makes it true of every write path including a future one. Worth a
+// test because it depends on foreign_keys being ON — a pragma set in
+// the DSN, far from this file, and silently a no-op if it were ever
+// dropped.
+func TestAGroupCannotHoldAPersonWhoDoesNotExist(t *testing.T) {
+	db := open(t)
+	adults := groupID(t, db, SeedAdults)
+
+	if err := db.AddPersonToGroup(adults, "psn_nobody", "mika"); err == nil {
+		t.Error("a group accepted a person_id with no Person behind it; " +
+			"membership would then resolve to an identity nothing else knows")
+	}
+	// And the converse: a real Person cannot join a group that is gone.
+	person := personOf(t, db, "mika", RoleOwner)
+	if err := db.AddPersonToGroup("grp_nothing", person, "mika"); err == nil {
+		t.Error("a Person joined a group that does not exist")
+	}
+}

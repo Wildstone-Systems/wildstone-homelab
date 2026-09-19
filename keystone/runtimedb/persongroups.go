@@ -28,7 +28,9 @@ package runtimedb
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -202,8 +204,16 @@ func (db *DB) GroupBySeedKey(seedKey string) (Group, error) {
 		`SELECT group_id, name, COALESCE(seed_key, ''), created_at
 		   FROM person_groups WHERE seed_key = ?`, seedKey).
 		Scan(&g.ID, &g.Name, &g.SeedKey, &created)
-	if err != nil {
+	// A lookup that FAILED is not a lookup that found nothing. Folding
+	// both into ErrNotFound would tell a caller the adults group does
+	// not exist because the database was briefly unreadable — and the
+	// caller's reasonable response to "not found" is to create one,
+	// which would leave a household with two.
+	if errors.Is(err, sql.ErrNoRows) {
 		return Group{}, ErrNotFound
+	}
+	if err != nil {
+		return Group{}, fmt.Errorf("runtimedb: looking up the %q group: %w", seedKey, err)
 	}
 	g.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 	return g, nil
