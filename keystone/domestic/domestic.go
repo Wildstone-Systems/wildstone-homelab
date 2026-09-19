@@ -317,6 +317,12 @@ func DeclaredFromPackages(pkgs []AgentToolSource) func(capability, tool string) 
 // stays free of the package format.
 type AgentToolSource struct {
 	Capability string
+	// OptIn names the tools this package declared as opt-in (ADR-W033
+	// design §6.2). A separate map rather than a field on Tools so the
+	// risk-tier lookup every household call already does keeps its
+	// shape; this one is asked only when a bundle or a default is being
+	// worked out.
+	OptIn map[string]bool
 	// Tools maps a tool name to the risk tier its package declares.
 	Tools map[string]string
 }

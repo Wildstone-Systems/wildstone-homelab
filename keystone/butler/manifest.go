@@ -67,11 +67,25 @@ type CapabilityTool struct {
 	Mutating bool   `json:"mutating,omitempty"`
 	// GrantRequired marks a tool that needs a work-bound grant even when
 	// it is present and not disabled (ADR-W030 A8).
-	GrantRequired bool   `json:"grantRequired,omitempty"`
-	Untrusted     bool   `json:"untrusted,omitempty"`
-	Available     bool   `json:"available"`
-	Reason        string `json:"reason,omitempty"`
+	GrantRequired bool `json:"grantRequired,omitempty"`
+	Untrusted     bool `json:"untrusted,omitempty"`
+	// OptIn marks an unusually consequential tool (design §6.2). It is
+	// excluded from a service bundle and from a new Agent's defaults
+	// even when its class matches, and is reached only by being named.
+	OptIn bool `json:"optIn,omitempty"`
+	// Service is the capability this tool belongs to, and AgentClass the
+	// class it requires. Both are what a bundle matches on (§6.3), and
+	// both are reported so the Console and the resolver agree about a
+	// tool without deriving it twice.
+	Service    string     `json:"service,omitempty"`
+	AgentClass AgentClass `json:"agentClass,omitempty"`
+	Available  bool       `json:"available"`
+	Reason     string     `json:"reason,omitempty"`
 }
+
+// ServiceSystem is the service Keystone's own tools belong to. It
+// mirrors runtimedb.ServiceSystem, which this package cannot import.
+const ServiceSystem = "system"
 
 // CapabilityAction is one executor this deployment wired — a domestic
 // action a household session can actually ask for.
@@ -220,6 +234,9 @@ func (gw *ToolGateway) Capabilities(readOnly bool) CapabilityManifest {
 			Mutating:      entry.Mutating,
 			Untrusted:     entry.Untrusted,
 			GrantRequired: entry.GrantRequired,
+			OptIn:         entry.OptIn,
+			Service:       ServiceSystem,
+			AgentClass:    AgentClassOwner,
 			Available:     true,
 		}
 		switch {
@@ -297,6 +314,9 @@ func (gw *HouseholdGateway) Capabilities(readOnly bool) CapabilityManifest {
 			Mutating:      entry.Mutating,
 			Untrusted:     entry.Untrusted,
 			GrantRequired: entry.GrantRequired,
+			OptIn:         entry.OptIn,
+			Service:       ServiceSystem,
+			AgentClass:    AgentClassMember,
 			Available:     true,
 		}
 		switch {

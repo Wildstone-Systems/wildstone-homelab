@@ -60,6 +60,13 @@ type toolEntry struct {
 	// P12's and P13's write paths arrive, rather than being retrofitted
 	// through every call site then.
 	GrantRequired bool
+	// OptIn marks an unusually consequential tool (ADR-W033 design
+	// §6.2). It is a place to put such a tool without inventing a third
+	// Agent class: its authority class stays whatever it is, and what
+	// changes is that no broad grant picks it up — not a new Agent's
+	// defaults, not a service bundle. Somebody names it, or it is not
+	// there. No v1 tool sets it.
+	OptIn bool
 	// Describe is the variant for the self-capability tool, which is the
 	// one tool whose answer depends on the session's own constraints
 	// (ADR-W030 P2). Giving it a separate shape keeps readOnly out of

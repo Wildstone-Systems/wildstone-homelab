@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/catalog"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
@@ -174,6 +175,15 @@ type Server struct {
 	// cmd/keystone wires it from -butler-provider. nil leaves ask
 	// answering 503; session history stays readable.
 	ButlerHost *ButlerHost
+	// ToolInventory is what a class's tools are, for the purpose of
+	// §6.4's default assignment set. nil means ask the gateways, which
+	// is what a running deployment does.
+	//
+	// A seam rather than a direct call because "except opt-in tools" is
+	// only testable against an opt-in tool, and no shipped tool sets the
+	// flag. The alternative was marking a real one opt-in to make a test
+	// pass, which would change what every household's Agents are given.
+	ToolInventory func(class string, readOnly bool) []butler.CapabilityTool
 	// ApplyButlerConfig rebuilds the provider for a new choice and
 	// returns the probe's verdict for THAT provider and model (ADR-W017
 	// A9). cmd/keystone wires it; nil leaves the config endpoints

@@ -274,6 +274,49 @@ func (db *DB) ResolveButlerTool(butler string, q ToolQuery) (ToolAuthority, erro
 	default:
 		return ToolAuthority{}, fmt.Errorf("runtimedb: resolving a butler's tool: %w", err)
 	}
+	// A GOVERNED Agent reaches exactly what it is assigned (§6.3, §6.4).
+	//
+	// Only when the tool is structurally present: a tool this gateway
+	// does not register is ABSENT, and reporting it as "unassigned"
+	// would send an Owner looking for an assignment that could never
+	// help. Structural stays the first answer, given below.
+	//
+	// And only for an enrolled Agent. One that is not governed is the
+	// pre-0059 model — everything the gateway registers, minus its
+	// narrowings — which is every Agent any existing household has.
+	if q.Structural {
+		governed, err := db.AgentIsGoverned(b.Seq)
+		if err != nil {
+			return ToolAuthority{}, err
+		}
+		if governed {
+			ok, why, err := db.assignedTo(b.Seq, q)
+			if err != nil {
+				return ToolAuthority{}, err
+			}
+			if !ok {
+				a := ToolAuthority{Tool: q.Tool, AgentClass: q.AgentClass, Source: "assignment"}
+				switch why {
+				case "opt-in":
+					// Named as its own case so the sentence does not
+					// suggest a bundle would fix it. §6.2 is the whole
+					// point: this tool is reached by being named.
+					a.Reason = fmt.Sprintf(
+						"%s is an opt-in tool, so it is never included by a service bundle — "+
+							"it has to be given to %s by name", q.Tool, b.Name)
+				case "unclassified":
+					a.Reason = fmt.Sprintf(
+						"%s was offered without a service or a class, so no bundle could be "+
+							"matched against it and it was not run", q.Tool)
+				default:
+					a.Reason = fmt.Sprintf("%s has not been given %s", b.Name, q.Tool)
+				}
+				a.Requestable = true
+				return a, nil
+			}
+		}
+	}
+
 	return db.ResolveToolAuthority(q)
 }
 
