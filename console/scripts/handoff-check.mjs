@@ -21,8 +21,9 @@
 // far is this from the design, and why".
 import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
+import { fileURLToPath } from "url";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const DESIGN = join(ROOT, "..", "docs", "design", "butlers");
 
 function sources(dir, out = []) {
@@ -195,7 +196,7 @@ console.log("\nThe README's two hard rules");
 console.log("-".repeat(64));
 
 // "No colour literals below the token block in styles.css."
-const CSS = readFileSync(join(ROOT, "src", "styles.css"), "utf8");
+const CSS = stripComments(readFileSync(join(ROOT, "src", "styles.css"), "utf8"));
 const tokenBlockEnds = CSS.indexOf('[data-theme="light"]');
 const afterTokens = CSS.slice(CSS.indexOf("}", CSS.indexOf('[data-theme="light"]')));
 const literals = [...afterTokens.matchAll(/#[0-9a-fA-F]{3,8}\b/g)].map((m) => m[0]);
