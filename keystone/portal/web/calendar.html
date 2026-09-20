@@ -162,9 +162,14 @@
        about the calendar, folded shut, present for the next new phone
        in the house.
 
+       Asked for on THIS surface's own route. The dashboard's copy is
+       gated on homepage_users and this page is gated on the calendar
+       capability, so a member in calendar_users and not homepage_users
+       would have been shown nothing at all here.
+
        Nothing here is written down in the markup. Every address comes
-       from /api/v1/home/calendar/setup, which derives it from the
-       calendar Route in desired state — so a different household, on a
+       from /api/v1/calendar/setup, which derives it from the calendar
+       Route in desired state — so a different household, on a
        different name, reads its own. -->
   <section class="surface" id="setup" style="margin-top: var(--space-6); padding: var(--space-4)" hidden>
     <button type="button" id="setup-fold" aria-expanded="false" aria-controls="setup-body"
@@ -248,7 +253,7 @@
   // disclosure that opens onto "this household has no calendar to add"
   // is worse than no disclosure.
   function loadSetup() {
-    fetch("/api/v1/home/calendar/setup", { headers: { accept: "application/json" } })
+    fetch("/api/v1/calendar/setup", { headers: { accept: "application/json" } })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (s) {
         if (!s || !s.server) { return; }
