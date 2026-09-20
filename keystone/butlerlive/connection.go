@@ -18,7 +18,11 @@ package butlerlive
 // arrived through. The portal's ask handler sets it; the chat path and
 // the Console leave it empty and nothing is wrapped.
 
-import "github.com/chickenrat17/wildstone-homelab/keystone/butler"
+import (
+	"fmt"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
+)
 
 // connectionCeiling refuses tools a named connection denies, ahead of
 // the resolver it wraps.
@@ -49,14 +53,50 @@ func (c connectionCeiling) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.To
 		}, nil
 	}
 	if c.inner == nil {
-		// No resolver underneath means no administrative controls are
-		// configured, which is a real state and not the same as
-		// "everything is disabled" (see butler/authority.go). The
-		// ceiling has already had its say; the rest behaves as an
-		// unconfigured deployment does.
+		// No resolver underneath. On the ADMINISTRATIVE path that is a
+		// real state and not the same as "everything is disabled" (see
+		// butler/authority.go): the ceiling has already had its say,
+		// and the rest behaves as an unconfigured deployment does.
+		//
+		// On the PERSON-FACING path it is a denial, for the reason the
+		// seam gives: nobody has said this person may do this, and
+		// §10.1 answers that with no. Repeated here rather than left to
+		// the seam because this decorator answers in the seam's place
+		// once it is wrapped, and a ceiling that fell open underneath
+		// would be the permissive default surviving inside the one
+		// component whose entire job is to narrow.
+		if q.Caller == butler.CallerPersonFacing {
+			return butler.ToolDecision{
+				Allowed: false,
+				Reason: fmt.Sprintf(
+					"nothing on this deployment can say whether %s may use %s, so it was not run",
+					q.Person, q.Tool),
+			}, nil
+		}
 		return butler.ToolDecision{Allowed: q.Structural}, nil
 	}
 	return c.inner.AuthorizeTool(q)
+}
+
+// AdmitResource forwards layer 2 to the resolver underneath.
+//
+// A decorator has to carry it: the seam asks its authorizer whether it
+// can admit a resource, and a wrapper that did not implement the
+// interface would make every resource unreachable the moment a
+// connection ceiling was bound. Forwarding keeps the ceiling a ceiling
+// — it still cannot turn a no into a yes, because a tool the connection
+// refuses never reaches this far.
+func (c connectionCeiling) AdmitResource(q butler.ToolAuthorityQuery) (butler.ToolDecision, error) {
+	ra, ok := c.inner.(butler.ResourceAuthorizer)
+	if !ok {
+		return butler.ToolDecision{
+			Allowed: false,
+			Reason: fmt.Sprintf(
+				"%s reaches a %s, and nothing here decides who may reach one, so it was not run",
+				q.Tool, q.Resource.Kind),
+		}, nil
+	}
+	return ra.AdmitResource(q)
 }
 
 // WithConnection wraps an authorizer in a connection's ceiling. A nil

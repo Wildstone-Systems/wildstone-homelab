@@ -248,10 +248,12 @@ func (gw *ToolGateway) Capabilities(readOnly bool) CapabilityManifest {
 			tool.Reason = "this deployment has not wired the source behind it"
 		default:
 			// The manifest reports what the resolver would actually
-			// allow, so a description and an enforcement point cannot
-			// disagree about the same tool (ADR-W030 P7).
-			if d := authorize(gw.Authorizer, string(AgentClassOwner), name, true,
-				entry.GrantRequired, gw.SessionTask, ""); !d.Allowed {
+			// allow, THROUGH THE SAME CALL dispatch makes, so a
+			// description and an enforcement point cannot disagree
+			// about the same tool (ADR-W030 P7). That now includes the
+			// Person leg, which is the newest thing the two could have
+			// disagreed about.
+			if d := gw.checkTool(name, entry); !d.Allowed {
 				tool.Available = false
 				tool.Reason = d.Reason
 			}
@@ -327,8 +329,9 @@ func (gw *HouseholdGateway) Capabilities(readOnly bool) CapabilityManifest {
 			tool.Available = false
 			tool.Reason = "this deployment has not wired the source behind it"
 		default:
-			if d := authorize(gw.Authorizer, string(AgentClassMember), name, true,
-				entry.GrantRequired, gw.SessionTask, ""); !d.Allowed {
+			// The same call dispatch makes — see the operator
+			// manifest above.
+			if d := gw.checkTool(name, entry); !d.Allowed {
 				tool.Available = false
 				tool.Reason = d.Reason
 			}

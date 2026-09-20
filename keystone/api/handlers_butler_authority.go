@@ -78,9 +78,10 @@ func (s *Server) toolExistsOnClass(class, tool string) bool {
 	var manifest butler.CapabilityManifest
 	switch class {
 	case runtimedb.AgentClassOwner:
-		manifest = butler.NewToolGateway(nil, nil).Capabilities(false)
+		manifest = butler.NewToolGateway(nil, nil).ForAdministration().Capabilities(false)
 	case runtimedb.AgentClassMember:
-		manifest = butler.NewHouseholdGateway("", butler.HouseholdSeams{}).Capabilities(false)
+		manifest = butler.NewHouseholdGateway("", butler.HouseholdSeams{}).
+			ForAdministration().Capabilities(false)
 	default:
 		return false
 	}

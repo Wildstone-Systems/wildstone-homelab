@@ -79,7 +79,7 @@ func TestEnvelope_BreakoutNeutralized(t *testing.T) {
 // rather than a truncated body with a dangling opening tag that would
 // unterminate the envelope for the rest of the conversation.
 func TestDispatch_UntrustedEnvelopeSurvivesTruncation(t *testing.T) {
-	gw := NewToolGateway(newTestStore(t), nil)
+	gw := newTestToolGateway(newTestStore(t), nil)
 	gw.MaxContentBytes = 200
 	gw.tools["oversized"] = toolEntry{
 		Untrusted: true,
@@ -111,7 +111,7 @@ func TestDispatch_UntrustedEnvelopeSurvivesTruncation(t *testing.T) {
 func TestDispatchReadOnly_RefusesMutatingTool(t *testing.T) {
 	store := newTestStore(t)
 	seedResource(t, store, routeResource("photos", "photos.example.com", "container/immich:2283", "authelia_oidc", "family_public"))
-	gw := NewToolGateway(store, nil)
+	gw := newTestToolGateway(store, nil)
 
 	out, err := gw.DispatchReadOnly(context.Background(), "propose_change", map[string]any{
 		"kind": "Route", "node": "node-a", "name": "photos", "owner": "capability/photos",

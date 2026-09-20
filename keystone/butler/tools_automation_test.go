@@ -8,7 +8,7 @@ import (
 )
 
 func TestGetAutomationSchemaDescribesTheRealVocabularies(t *testing.T) {
-	gw := NewToolGateway(newTestStore(t), nil)
+	gw := newTestToolGateway(newTestStore(t), nil)
 	gw.AutomationVocabulary = func() (HouseholdVocabulary, error) {
 		return HouseholdVocabulary{
 			EventTypes: []string{"person.left_home", "person.arrived_home", "pantry.meal_logged"},
@@ -46,7 +46,7 @@ func TestGetAutomationSchemaDescribesTheRealVocabularies(t *testing.T) {
 }
 
 func TestGetAutomationSchemaWithoutADeployment(t *testing.T) {
-	gw := NewToolGateway(newTestStore(t), nil) // no vocabulary wired
+	gw := newTestToolGateway(newTestStore(t), nil) // no vocabulary wired
 	out, err := gw.Dispatch(context.Background(), "get_automation_schema", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +87,7 @@ func automationInput(name string) map[string]any {
 }
 
 func TestDryRunAutomation(t *testing.T) {
-	gw := NewToolGateway(newTestStore(t), nil)
+	gw := newTestToolGateway(newTestStore(t), nil)
 
 	// Unwired: says so plainly rather than pretending a rule was checked.
 	out, err := gw.Dispatch(context.Background(), "dry_run_automation", automationInput("mail-check"))
@@ -147,7 +147,7 @@ func TestDryRunAutomation(t *testing.T) {
 // A QA-only session may describe and dry-run a rule; it still cannot
 // propose one, which is the only step that produces a plan.
 func TestAuthoringToolsAreReadOnly(t *testing.T) {
-	gw := NewToolGateway(newTestStore(t), nil)
+	gw := newTestToolGateway(newTestStore(t), nil)
 	offered := map[string]bool{}
 	for _, spec := range gw.ReadOnlyToolSpecs() {
 		offered[spec.Name] = true

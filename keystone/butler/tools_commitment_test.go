@@ -19,7 +19,7 @@ func (f fakeStandings) Describe() ([]CommitmentLine, error) { return f.lines, f.
 // drafts and reads, and there is no tool here that closes a cycle,
 // records a number or moves a threshold.
 func TestAnAgentHasNoToolThatAnswersACommitment(t *testing.T) {
-	gw := NewToolGateway(newTestStore(t), nil)
+	gw := newTestToolGateway(newTestStore(t), nil)
 	for _, spec := range gw.ToolSpecs() {
 		name := spec.Name
 		for _, forbidden := range []string{
@@ -42,7 +42,7 @@ func TestTheSchemaToolNamesThisDeploymentsMeters(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	gw := NewToolGateway(store, nil)
+	gw := newTestToolGateway(store, nil)
 	out, err := handleGetCommitmentSchema(context.Background(), gw, nil)
 	if err != nil {
 		t.Fatalf("handleGetCommitmentSchema: %v", err)
@@ -67,7 +67,7 @@ func TestTheSchemaToolNamesThisDeploymentsMeters(t *testing.T) {
 }
 
 func TestTheSchemaToolSaysWhenThereAreNoCounterMeters(t *testing.T) {
-	gw := NewToolGateway(newTestStore(t), nil)
+	gw := newTestToolGateway(newTestStore(t), nil)
 	out, err := handleGetCommitmentSchema(context.Background(), gw, nil)
 	if err != nil {
 		t.Fatalf("handleGetCommitmentSchema: %v", err)
@@ -78,7 +78,7 @@ func TestTheSchemaToolSaysWhenThereAreNoCounterMeters(t *testing.T) {
 }
 
 func TestGetCommitmentsReportsStandingsAndExplainsCantTell(t *testing.T) {
-	gw := NewToolGateway(newTestStore(t), nil)
+	gw := newTestToolGateway(newTestStore(t), nil)
 	gw.Commitments = fakeStandings{lines: []CommitmentLine{
 		{Name: "kai-checkup", State: "overdue", Reason: "past 10 Sep 2026"},
 		{Name: "f150-oil", State: "can't tell", Reason: "the odometer needs reading"},
@@ -97,7 +97,7 @@ func TestGetCommitmentsReportsStandingsAndExplainsCantTell(t *testing.T) {
 }
 
 func TestGetCommitmentsWithNothingWired(t *testing.T) {
-	gw := NewToolGateway(newTestStore(t), nil)
+	gw := newTestToolGateway(newTestStore(t), nil)
 	out, err := handleGetCommitments(context.Background(), gw, nil)
 	if err != nil {
 		t.Fatalf("handleGetCommitments: %v", err)

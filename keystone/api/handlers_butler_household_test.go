@@ -17,6 +17,13 @@ import (
 // records what reached the domestic action seam.
 func (h *harness) wireHouseholdButler(turns []*provider.ChatResponse, mode runtimedb.ButlerSessionMode) *[]butler.HouseholdActionCall {
 	var dispatched []butler.HouseholdActionCall
+	// The operator credential these tests call with acts for the person
+	// "op", and a person-facing tool call is now refused for anyone
+	// with no Butler admission record (design §10.1). Admitting them
+	// here rather than in each test keeps the REFUSAL tests honest:
+	// without it, "no action was dispatched" would pass because the
+	// caller was unknown rather than because the tool was refused.
+	h.person("op")
 	h.s.ButlerHost = &ButlerHost{
 		Provider: &scriptedProvider{turns: turns},
 		Gateway:  butler.NewToolGateway(h.s.State, nil),

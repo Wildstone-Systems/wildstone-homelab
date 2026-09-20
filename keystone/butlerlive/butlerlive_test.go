@@ -113,11 +113,15 @@ func (w *witness) sawText(want string) bool {
 type countingToolset struct {
 	mu    sync.Mutex
 	calls map[string]int
-	// authorizer and task are what butlerlive bound onto this surface,
-	// captured so a test can assert the per-Butler scope was applied
+	// authorizer, task, caller, person and connection are what
+	// butlerlive bound onto this surface, captured so a test can assert
+	// the per-Butler scope and the person-facing identity were applied
 	// before anything ran.
 	authorizer butler.ToolAuthorizer
 	task       string
+	caller     butler.CallerKind
+	person     string
+	connection string
 }
 
 func newCountingToolset() *countingToolset {
@@ -126,6 +130,10 @@ func newCountingToolset() *countingToolset {
 
 func (ts *countingToolset) SetAuthorizer(a butler.ToolAuthorizer) { ts.authorizer = a }
 func (ts *countingToolset) SetSessionTask(id string)              { ts.task = id }
+
+func (ts *countingToolset) SetCaller(kind butler.CallerKind, person, connection string) {
+	ts.caller, ts.person, ts.connection = kind, person, connection
+}
 
 func (ts *countingToolset) OfferedSpecs(bool) []provider.Tool {
 	return []provider.Tool{{Name: "get_health", Description: "read a node's health"}}

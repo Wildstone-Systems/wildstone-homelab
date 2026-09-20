@@ -32,7 +32,7 @@ func TestInjectionRedTeam_ObedientModelStillBlocked(t *testing.T) {
 	// auth-protected, so a successful attack would show up as a diff.
 	seedResource(t, store, routeResource("photos", "photos.example.com", "container/immich:2283", "authelia_oidc", "family_public"))
 
-	gw := NewToolGateway(store, &AgentReader{Gateway: h.gw})
+	gw := newTestToolGateway(store, &AgentReader{Gateway: h.gw})
 	gw.DefaultNode = "node-a"
 	sess := &Session{Gateway: gw}
 

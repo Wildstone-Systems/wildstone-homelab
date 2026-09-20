@@ -241,6 +241,16 @@ type HouseholdGateway struct {
 	Authorizer ToolAuthorizer
 	// SessionTask scopes work-bound grants to this session's task.
 	SessionTask string
+
+	// caller and connection are the rest of the identity half of the
+	// authority seam (design §10.1); the Person is `member` above,
+	// which this surface has carried since ADR-W026 A1 and which is
+	// simply not passed to the seam today.
+	//
+	// caller is empty until somebody states it, and an unstated gateway
+	// refuses every tool. See ToolGateway.SetCaller.
+	caller     CallerKind
+	connection string
 }
 
 // SetAuthorizer binds the effective-authority resolver for one session.
@@ -249,6 +259,61 @@ func (gw *HouseholdGateway) SetAuthorizer(a ToolAuthorizer) { gw.Authorizer = a 
 
 // SetSessionTask scopes work-bound grants to one task.
 func (gw *HouseholdGateway) SetSessionTask(id string) { gw.SessionTask = id }
+
+// SetCaller states which path this gateway is on and which Connection
+// the session arrived over.
+//
+// The person argument is DELIBERATELY IGNORED on this surface. A family
+// gateway is bound to one member at construction and that binding is
+// what makes the audit trail mean something (see the package note
+// above); a setter that could re-point it would be the input through
+// which a session names somebody else. The signature keeps the
+// parameter so both gateways satisfy one interface, and drops the
+// value so they cannot mean different things by it.
+//
+// A gateway built for no member therefore has no Person, and a
+// person-facing check on it fails closed. That is right: a gateway with
+// nobody behind it is an inventory, not a session, and the inventory
+// endpoints say so with ForAdministration.
+func (gw *HouseholdGateway) SetCaller(kind CallerKind, _, connection string) {
+	gw.caller, gw.connection = kind, connection
+}
+
+// ForAdministration returns a copy of this gateway on the
+// administrative path — see ToolGateway.ForAdministration.
+func (gw *HouseholdGateway) ForAdministration() *HouseholdGateway {
+	if gw == nil {
+		return nil
+	}
+	out := *gw
+	out.caller, out.connection, out.SessionTask = CallerAdministrative, "", ""
+	return &out
+}
+
+// checkTool runs the seam on the path this gateway was told it is on.
+// It is the family surface's copy of ToolGateway.checkTool, and for the
+// same reason: dispatch and the manifest must not end up on different
+// paths.
+func (gw *HouseholdGateway) checkTool(tool string, entry householdEntry) ToolDecision {
+	q := ToolAuthorityQuery{
+		Person:     gw.member,
+		Connection: gw.connection,
+		AgentClass: string(AgentClassMember),
+		Tool:       tool,
+		// The structural ceiling is the tool map: an operator tool name
+		// arriving here is not in it, so it never reaches this line —
+		// and a control row for one could not switch it on if it did
+		// (ADR-W030 A7).
+		Structural:    true,
+		GrantRequired: entry.GrantRequired,
+		TaskID:        gw.SessionTask,
+	}
+	if gw.caller == CallerAdministrative {
+		return authorizeAdministrative(gw.Authorizer, q)
+	}
+	q.Caller = gw.caller
+	return runAuthority(gw.Authorizer, q)
+}
 
 // NewHouseholdGroupGateway builds a family gateway for a session whose
 // audience is a GROUP (ADR-W026 A7).
@@ -566,13 +631,7 @@ func (gw *HouseholdGateway) dispatch(ctx context.Context, name string, input map
 	if !ok {
 		return ToolOutcome{}, fmt.Errorf("butler: unknown household tool %q", name)
 	}
-	// The structural ceiling is the tool map above, and it is passed as
-	// the `structural` fact rather than assumed: an operator tool name
-	// arriving here is not in the map, so it never reaches this line —
-	// and a control row for one could not switch it on if it did
-	// (ADR-W030 A7).
-	if d := authorize(gw.Authorizer, string(AgentClassMember), name, true,
-		entry.GrantRequired, gw.SessionTask, ""); !d.Allowed {
+	if d := gw.checkTool(name, entry); !d.Allowed {
 		return finishOutcome(refusal(name, d), false, gw.seams.MaxContentBytes), nil
 	}
 	if entry.Describe != nil {

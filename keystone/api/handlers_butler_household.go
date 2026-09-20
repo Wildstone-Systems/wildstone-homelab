@@ -25,6 +25,7 @@ import (
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -84,6 +85,35 @@ func (h *ButlerHost) householdGateway(member string) *butler.HouseholdGateway {
 // events are never fetched.
 func (h *ButlerHost) householdGroupGateway(member string) *butler.HouseholdGateway {
 	return butler.NewHouseholdGroupGateway(member, h.Household)
+}
+
+// bindPersonAuthority makes the pair of per-session bindings every path that
+// serves a PERSON must make: where authority is resolved, and who is
+// asking over which Connection (design §10.1).
+//
+// It is one helper rather than three lines repeated at each session
+// opener because the three lines are a unit — an authorizer with no
+// person is a resolver that cannot answer layer 1, and a person with no
+// authorizer is an identity nothing checks. The named-Butler path makes
+// the same binding in butlerlive.Serve; this is the legacy
+// single-provider path's copy of it, and the two are the only places a
+// session is opened.
+//
+// A deployment with no runtime DB gets no authorizer, and the seam then
+// refuses every person-facing tool. That is the intended direction: the
+// wiring is the act (§10, and Ledger.AdmissionCheck's own note).
+type personFacingGateway interface {
+	SetAuthorizer(a butler.ToolAuthorizer)
+	SetCaller(kind butler.CallerKind, person, connection string)
+}
+
+func (s *Server) bindPersonAuthority(gw personFacingGateway, member, connection string) {
+	if s.DB != nil {
+		authority := &butlerstore.Authority{DB: s.DB}
+		authority.PersonAuthority = authority.PersonIsAdmitted()
+		gw.SetAuthorizer(authority)
+	}
+	gw.SetCaller(butler.CallerPersonFacing, member, connection)
 }
 
 // getHouseholdButlerStatus is the family surface's half of the status
@@ -151,26 +181,30 @@ func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any
 		// the member, which turnHasAPerson now refuses outright — and
 		// which, before it did, filed the household's memory and work
 		// under the credential.
-		return s.askNamedFamilyButler(r.Context(), message, named, actingMember(id), "", false, actingAsOwner(id), nil, butlerlive.ConnectionScope{})
+		return s.askNamedFamilyButler(r.Context(), message, named, actingMember(id), "", false, actingAsOwner(id), nil,
+			butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection})
 	}
 	host := s.ButlerHost
 	if !host.householdConfigured() {
 		return nil, http.StatusServiceUnavailable,
 			fmt.Errorf("household butler not configured (needs -butler-provider and a household surface)")
 	}
-	return s.runFamilyButlerSession(r.Context(), message, actingMember(id), "")
+	return s.runFamilyButlerSession(r.Context(), message, actingMember(id), "", butlerlive.ConsoleConnection)
 }
 
 // askNamedFamilyButler answers on the family surface as a named Butler.
 // It is the operator path's sibling and differs only in the ceiling it
 // requires, which is the difference ADR-W026 A1 draws between the two
 // surfaces and the one thing that must not be shared between them.
-// conn is the connection ceiling the request arrived through, and it is
-// an explicit parameter rather than a default because the three callers
-// genuinely differ: the chat adapters and the household ask endpoint
-// each already have their own ceiling, and only the dashboard has this
-// one. A zero ConnectionScope is no ceiling, which is what those two
-// pass — a name none of them chose would be a ceiling nobody chose.
+// conn is the Connection the request arrived through. Its NAME is now
+// required — §10.1 fails closed without one, and a Console turn that
+// left it empty would be indistinguishable from a caller that forgot.
+//
+// Its PERMITS are the ceiling, and they stay an explicit parameter
+// rather than a default because the three callers genuinely differ: the
+// chat adapters and the Console ask endpoint each already have their
+// own ceiling, and only the dashboard has this one. A nil Permits is no
+// ceiling — a ceiling none of them chose would be one nobody chose.
 func (s *Server) askNamedFamilyButler(ctx context.Context, message, named, member, systemExtra string, group, asOwner bool, prior *turnContext, conn butlerlive.ConnectionScope) (any, int, error) {
 	if named == "" {
 		b, err := s.Butlers.Sole(runtimedb.ButlerSurfaceFamily, member, asOwner)
@@ -207,14 +241,14 @@ func (s *Server) askNamedFamilyButler(ctx context.Context, message, named, membe
 // of it today. It can add a constraint to what the Butler SAYS; it
 // cannot add or remove a tool, because the tools come from the gateway
 // and the gateway is built from the member.
-func (s *Server) runFamilyButlerSession(ctx context.Context, message, member, systemExtra string) (any, int, error) {
-	return s.runFamilySession(ctx, message, member, systemExtra, false, nil)
+func (s *Server) runFamilyButlerSession(ctx context.Context, message, member, systemExtra, connection string) (any, int, error) {
+	return s.runFamilySession(ctx, message, member, systemExtra, connection, false, nil)
 }
 
 // runFamilySession is the shared body. group selects the narrowed
 // gateway (ADR-W026 A7) — the audience decides which CAPABILITIES the
 // session has, not merely what its prompt asks it to do.
-func (s *Server) runFamilySession(ctx context.Context, message, member, systemExtra string, group bool, prior *turnContext) (any, int, error) {
+func (s *Server) runFamilySession(ctx context.Context, message, member, systemExtra, connection string, group bool, prior *turnContext) (any, int, error) {
 	host := s.ButlerHost
 	// One snapshot for the whole session, as the operator surface takes
 	// (ADR-W017 A9): a model swapped in mid-session would produce a
@@ -228,6 +262,13 @@ func (s *Server) runFamilySession(ctx context.Context, message, member, systemEx
 	if group {
 		gateway = host.householdGroupGateway(member)
 	}
+	// The legacy single-provider path opens a session the same way the
+	// named path does, so it is told the same things: who is asking,
+	// which Connection they arrived on, and where authority is resolved
+	// (design §10.1). Before this it asked the seam nothing at all and
+	// ran on structural presence alone, which is precisely the
+	// permissive default this slice removes from person-facing work.
+	s.bindPersonAuthority(gateway, member, connection)
 	session := &butler.Session{
 		Gateway:  gateway,
 		ReadOnly: mode == runtimedb.ButlerModeQAOnly,

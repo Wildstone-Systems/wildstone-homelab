@@ -272,8 +272,13 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 			return nil, http.StatusForbidden, terr
 		}
 		turn := butlerlive.Turn{
-			Transport:      transport,
-			Address:        address,
+			Transport: transport,
+			Address:   address,
+			// The Connection the message arrived through, named so the
+			// authority seam has one to carry (§10.1). No Permits: a
+			// chat Connection's ceiling is its Agent's surface, which
+			// RequireSurface below already enforces.
+			Connection:     butlerlive.ConnectionScope{Name: at.Name()},
 			Butler:         named,
 			Member:         binding.Identity,
 			Text:           text,
@@ -286,9 +291,9 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		}
 		out, st, err = s.runNamedButlerSession(r.Context(), turn, prior)
 	} else if !at.AdmitsOwnersOnly() {
-		out, st, err = s.runFamilySession(r.Context(), text, binding.Identity, systemExtra, msg.Group, prior)
+		out, st, err = s.runFamilySession(r.Context(), text, binding.Identity, systemExtra, at.Name(), msg.Group, prior)
 	} else {
-		out, st, err = s.runAdminButlerSession(r.Context(), text, binding.Identity, prior)
+		out, st, err = s.runAdminButlerSession(r.Context(), text, binding.Identity, at.Name(), prior)
 	}
 	if err != nil {
 		// A turn can fail after tools have already run. When it did,

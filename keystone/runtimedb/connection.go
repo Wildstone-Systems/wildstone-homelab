@@ -59,6 +59,16 @@ type Connection struct {
 	Surface ButlerSurface `json:"surface"`
 }
 
+// Name identifies this Connection in an authority check and in a
+// refusal (design §10.1 carries it on every person-facing query).
+//
+// Transport and external id together, because that pair is what makes
+// one chat Connection distinct from another and it is what an inbound
+// message already has to hand. The label is deliberately not used: a
+// person can rename one, and an identifier that changes when somebody
+// edits a display name is not an identifier.
+func (c Connection) Name() string { return c.Transport + ":" + c.ExternalID }
+
 // ChatConnectionAt resolves the live Connection at one address — which is
 // what an inbound message has to hand: the bot it arrived at.
 //

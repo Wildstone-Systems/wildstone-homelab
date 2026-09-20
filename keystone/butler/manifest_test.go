@@ -17,13 +17,13 @@ import (
 // out, so a tool added there is covered here the day it lands.
 func operatorOnlyTools(t *testing.T) []string {
 	t.Helper()
-	family := NewHouseholdGateway("mika", HouseholdSeams{})
+	family := newTestHouseholdGateway("mika", HouseholdSeams{})
 	familyNames := map[string]bool{}
 	for name := range family.tools {
 		familyNames[name] = true
 	}
 	var out []string
-	for name := range NewToolGateway(nil, nil).tools {
+	for name := range newTestToolGateway(nil, nil).tools {
 		if !familyNames[name] {
 			out = append(out, name)
 		}
@@ -39,7 +39,7 @@ func operatorOnlyTools(t *testing.T) []string {
 // self-capability tool's rendered answer.
 func TestHouseholdCannotDiscoverOperatorTools(t *testing.T) {
 	seams, _ := householdSeams(t)
-	gw := NewHouseholdGateway("mika", seams)
+	gw := newTestHouseholdGateway("mika", seams)
 	only := operatorOnlyTools(t)
 
 	m := gw.Capabilities(false)
@@ -78,7 +78,7 @@ func TestHouseholdCannotDiscoverOperatorTools(t *testing.T) {
 // the capability is absent, not guarded.
 func TestHouseholdCannotDispatchOperatorTools(t *testing.T) {
 	seams, _ := householdSeams(t)
-	gw := NewHouseholdGateway("mika", seams)
+	gw := newTestHouseholdGateway("mika", seams)
 	for _, name := range operatorOnlyTools(t) {
 		if _, err := gw.Dispatch(context.Background(), name, map[string]any{}); err == nil {
 			t.Fatalf("family gateway dispatched the operator-only tool %q", name)
@@ -91,7 +91,7 @@ func TestHouseholdCannotDispatchOperatorTools(t *testing.T) {
 // describe a capability that structurally does not exist.
 func TestHouseholdManifestHasNoResourceKinds(t *testing.T) {
 	seams, _ := householdSeams(t)
-	gw := NewHouseholdGateway("mika", seams)
+	gw := newTestHouseholdGateway("mika", seams)
 	for _, readOnly := range []bool{false, true} {
 		if kinds := gw.Capabilities(readOnly).ProposableKinds; len(kinds) != 0 {
 			t.Fatalf("household manifest (readOnly=%t) lists kinds %v", readOnly, kinds)
@@ -103,7 +103,7 @@ func TestHouseholdManifestHasNoResourceKinds(t *testing.T) {
 // no mutating tools — the manifest agrees with the enforcement point
 // rather than describing the full surface it is not running.
 func TestQAOnlyManifestExcludesKindsAndMutatingTools(t *testing.T) {
-	gw := NewToolGateway(newTestStore(t), nil)
+	gw := newTestToolGateway(newTestStore(t), nil)
 
 	full := gw.Capabilities(false)
 	if len(full.ProposableKinds) != len(resource.KnownKinds()) {
@@ -143,8 +143,8 @@ func TestQAOnlyManifestExcludesKindsAndMutatingTools(t *testing.T) {
 // an entry without a tool would be a promise nothing can keep.
 func TestManifestCoversEveryRegisteredTool(t *testing.T) {
 	seams, _ := householdSeams(t)
-	admin := NewToolGateway(newTestStore(t), nil)
-	family := NewHouseholdGateway("mika", seams)
+	admin := newTestToolGateway(newTestStore(t), nil)
+	family := newTestHouseholdGateway("mika", seams)
 
 	for _, tc := range []struct {
 		name       string
@@ -203,7 +203,7 @@ func TestManifestActionsMatchWiredExecutors(t *testing.T) {
 			{Tool: "containers.restart", Tier: "infrastructure"},
 		}}, nil
 	}
-	gw := NewHouseholdGateway("mika", seams)
+	gw := newTestHouseholdGateway("mika", seams)
 	m := gw.Capabilities(false)
 	var got []string
 	for _, a := range m.Actions {
@@ -224,7 +224,7 @@ func TestManifestReportsAnUnreadableVocabulary(t *testing.T) {
 	seams.Vocabulary = func() (HouseholdVocabulary, error) {
 		return HouseholdVocabulary{}, context.DeadlineExceeded
 	}
-	gw := NewHouseholdGateway("mika", seams)
+	gw := newTestHouseholdGateway("mika", seams)
 	if !strings.Contains(gw.Capabilities(false).Describe(), "could not be read") {
 		t.Fatal("an unreadable action list was reported as no actions")
 	}
@@ -233,14 +233,14 @@ func TestManifestReportsAnUnreadableVocabulary(t *testing.T) {
 // The fingerprint is stable across calls and moves when the offered
 // surface does — it is the manifest_version a work trace records.
 func TestManifestFingerprintIsStableAndSensitive(t *testing.T) {
-	gw := NewToolGateway(newTestStore(t), nil)
+	gw := newTestToolGateway(newTestStore(t), nil)
 	first := gw.Capabilities(false).Fingerprint()
 	if first != gw.Capabilities(false).Fingerprint() {
 		t.Fatal("fingerprint is not stable across calls")
 	}
 	// Removing the Statefile changes what is available, and the
 	// fingerprint has to notice.
-	bare := NewToolGateway(nil, nil)
+	bare := newTestToolGateway(nil, nil)
 	if bare.Capabilities(false).Fingerprint() == first {
 		t.Fatal("fingerprint did not change when tools became unavailable")
 	}
@@ -249,11 +249,11 @@ func TestManifestFingerprintIsStableAndSensitive(t *testing.T) {
 // The operator log reader is offered, bounded, and reports honestly
 // when this deployment has no node read surface.
 func TestContainerLogsToolIsOperatorOnlyAndBounded(t *testing.T) {
-	family := NewHouseholdGateway("mika", HouseholdSeams{})
+	family := newTestHouseholdGateway("mika", HouseholdSeams{})
 	if _, ok := family.tools["get_container_logs"]; ok {
 		t.Fatal("the family surface registered the container log reader")
 	}
-	gw := NewToolGateway(newTestStore(t), nil)
+	gw := newTestToolGateway(newTestStore(t), nil)
 	out, err := gw.Dispatch(context.Background(), "get_container_logs", map[string]any{
 		"container": "immich-server", "node": "n1",
 	})
