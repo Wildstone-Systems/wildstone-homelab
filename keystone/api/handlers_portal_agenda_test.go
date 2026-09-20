@@ -198,7 +198,8 @@ func TestAMemberAddsARoutineFromTheDashboard(t *testing.T) {
 	h.child("maya", "sandy")
 
 	body := `{"description":"Make your bed","about":"maya","every":"1d",` +
-		`"partOfDay":"morning","rollover":"fromCompletion","scope":"personal"}`
+		`"anchor":"` + time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02") + `",` +
+		`"partOfDay":"morning","rollover":"fromSchedule","scope":"personal"}`
 	res := h.member(http.MethodPost, "/api/v1/home/commitments", "sandy", "homepage_users",
 		stringsNewReader(body), "application/json")
 	defer res.Body.Close()
@@ -239,13 +240,17 @@ func TestTheDaySortsMorningAfternoonEvening(t *testing.T) {
 	h.person("sandy")
 	h.child("maya", "sandy")
 
+	// Anchored yesterday so the first threshold is today, which is what
+	// the page's own anchor does for a daily routine.
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
 	for _, r := range []struct{ what, part string }{
 		{"Pyjamas on", "evening"},
 		{"Make your bed", "morning"},
 		{"Homework", "afternoon"},
 	} {
 		body := `{"description":"` + r.what + `","about":"maya","every":"1d",` +
-			`"partOfDay":"` + r.part + `","rollover":"fromCompletion","scope":"personal"}`
+			`"anchor":"` + yesterday + `",` +
+			`"partOfDay":"` + r.part + `","rollover":"fromSchedule","scope":"personal"}`
 		res := h.member(http.MethodPost, "/api/v1/home/commitments", "sandy", "homepage_users",
 			stringsNewReader(body), "application/json")
 		res.Body.Close()
@@ -291,3 +296,75 @@ func TestAChildIsOfferedAsSomebodyToNameOnACommitment(t *testing.T) {
 }
 
 func stringsNewReader(s string) *strings.Reader { return strings.NewReader(s) }
+
+// "Bins out every Thursday night" lands on Thursday, and on no other
+// day. A weekly routine with no weekday drifts to whatever day it was
+// created on, which is the bug this exists to prevent.
+func TestAWeeklyRoutineLandsOnItsOwnWeekday(t *testing.T) {
+	h := homeHarness(t)
+	h.s.Upkeep = &upkeep.Engine{DB: h.s.DB, State: h.s.State, Loc: time.UTC}
+	h.person("sandy")
+
+	// The next Thursday from today, which is what the page's anchor
+	// computes and what fromSchedule then repeats from.
+	now := time.Now().UTC()
+	ahead := (int(time.Thursday) - int(now.Weekday()) + 7) % 7
+	thursday := now.AddDate(0, 0, ahead)
+	// One interval before the first due date: the anchor opens the
+	// cycle and the threshold falls an interval later.
+	anchor := thursday.AddDate(0, 0, -7).Format("2006-01-02")
+
+	body := `{"description":"Bins out","about":"sandy","every":"1w","anchor":"` + anchor + `",` +
+		`"partOfDay":"evening","rollover":"fromSchedule","scope":"personal"}`
+	res := h.member(http.MethodPost, "/api/v1/home/commitments", "sandy", "homepage_users",
+		stringsNewReader(body), "application/json")
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("adding a weekly routine: status %d", res.StatusCode)
+	}
+
+	got := h.agenda(t, "sandy", "sandy")
+	var on []string
+	for _, d := range got.Days {
+		for _, it := range d.Items {
+			if it.Title == "Bins out" {
+				on = append(on, d.Date)
+			}
+		}
+	}
+	if len(on) != 1 {
+		t.Fatalf("Bins out appears on %v, want exactly the one Thursday", on)
+	}
+	day, err := time.Parse("2006-01-02", on[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if day.Weekday() != time.Thursday {
+		t.Errorf("Bins out landed on a %s, want Thursday", day.Weekday())
+	}
+	if day.Format("2006-01-02") != thursday.Format("2006-01-02") {
+		t.Errorf("landed on %s, want the Thursday %s", on[0], thursday.Format("2006-01-02"))
+	}
+}
+
+// A meter-driven commitment has no date of its own and still has to be
+// somewhere, or the agenda is quietly incomplete.
+func TestAnUndatedCommitmentStillLandsOnToday(t *testing.T) {
+	h := homeHarness(t)
+	h.s.Upkeep = &upkeep.Engine{DB: h.s.DB, State: h.s.State, Loc: time.UTC}
+	h.person("sandy")
+
+	body := `{"description":"Read the odometer","about":"sandy","every":"1d",` +
+		`"anchor":"` + time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02") + `",` +
+		`"rollover":"fromSchedule","scope":"personal"}`
+	res := h.member(http.MethodPost, "/api/v1/home/commitments", "sandy", "homepage_users",
+		stringsNewReader(body), "application/json")
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("adding: %d", res.StatusCode)
+	}
+	got := h.agenda(t, "sandy", "sandy")
+	if len(got.Days) == 0 || len(got.Days[0].Items) == 0 {
+		t.Fatal("today is empty; a daily routine anchored today should be on it")
+	}
+}

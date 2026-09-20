@@ -117,6 +117,20 @@
           <option value="1d">day</option>
           <option value="1w">week</option>
         </select>
+        <!-- WHICH DAY, for the weekly ones. "Bins out every Thursday"
+             is a Thursday fact, and a weekly routine with no weekday
+             lands on whatever day it happened to be created and drifts
+             from there. Shown only for a weekly routine because a daily
+             one has no weekday to choose. -->
+        <select class="hbtn hbtn-secondary" id="a-dow" hidden aria-label="Which day">
+          <option value="1">Monday</option>
+          <option value="2">Tuesday</option>
+          <option value="3">Wednesday</option>
+          <option value="4">Thursday</option>
+          <option value="5">Friday</option>
+          <option value="6">Saturday</option>
+          <option value="0">Sunday</option>
+        </select>
         <label for="a-part">When</label>
         <select class="hbtn hbtn-secondary" id="a-part">
           <option value="morning">morning</option>
@@ -229,15 +243,50 @@
   });
   el("a-cancel").addEventListener("click", function () { el("addform").hidden = true; });
 
+  function everyChanged() {
+    el("a-dow").hidden = el("a-every").value !== "1w";
+  }
+  el("a-every").addEventListener("change", everyChanged);
+  everyChanged();
+
+  // THE ANCHOR IS ONE INTERVAL BEFORE THE FIRST DUE DATE, and that is
+  // the whole subtlety here. The anchor opens the cycle and the
+  // threshold falls one interval later, so anchoring "bins out" to
+  // next Thursday makes it due the Thursday AFTER that. Anchor to the
+  // Thursday before the one you want and the first threshold lands on
+  // the right day; fromSchedule then repeats from there forever.
+  function firstDueAnchor() {
+    var d = new Date();
+    d.setHours(12, 0, 0, 0); // midday, so a timezone shift cannot move the date
+    if (el("a-every").value === "1w") {
+      // The next of that weekday, counting today as that day.
+      var want = parseInt(el("a-dow").value, 10);
+      d.setDate(d.getDate() + ((want - d.getDay() + 7) % 7));
+      d.setDate(d.getDate() - 7);
+    } else {
+      d.setDate(d.getDate() - 1); // due today
+    }
+    var mm = String(d.getMonth() + 1), dd = String(d.getDate());
+    if (mm.length < 2) { mm = "0" + mm; }
+    if (dd.length < 2) { dd = "0" + dd; }
+    return d.getFullYear() + "-" + mm + "-" + dd;
+  }
+
   el("a-save").addEventListener("click", function () {
     var what = el("a-what").value.trim();
     if (!what) { text("a-problem", "What is the routine?"); return; }
     text("a-problem", "");
     el("a-save").disabled = true;
     // The same typed fields the dashboard's own authoring door has
-    // always taken. rollover from-completion is what makes a chore come
-    // round again once it is ticked, rather than on a fixed schedule
-    // that marches on whether or not anybody did it.
+    // always taken.
+    //
+    // fromSchedule, not fromCompletion. A routine has a rhythm of its
+    // own: the bed wants making every morning and the bins go out every
+    // Thursday, whether or not yesterday's got done. fromCompletion
+    // measures from the last tick, so one late Saturday would move the
+    // bins to Saturdays forever. It is the right rollover for "ninety
+    // days after the filter was last changed" and the wrong one for
+    // anything a week has a fixed place for.
     fetch("/api/v1/home/commitments", {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
@@ -245,8 +294,9 @@
         description: what,
         about: el("a-who").value,
         every: el("a-every").value,
+        anchor: firstDueAnchor(),
         partOfDay: el("a-part").value,
-        rollover: "fromCompletion",
+        rollover: "fromSchedule",
         scope: "personal"
       })
     }).then(function (res) {

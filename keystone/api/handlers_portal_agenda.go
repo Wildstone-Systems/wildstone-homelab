@@ -288,10 +288,20 @@ func (s *Server) agendaCommitments(who string, asker who, today time.Time, loc *
 		if !s.agendaMaySee(st, asker, who) {
 			continue
 		}
-		// Undated commitments land on today: "this is outstanding" is
+		// ON THE DAY IT IS DUE. A weekly routine anchored to a Thursday
+		// is a Thursday thing, and showing it every day until somebody
+		// does it is how a chore chart becomes wallpaper. The calendar
+		// rule carries the date; a booking, where there is one, is more
+		// specific still and wins.
+		//
+		// Undated commitments — the meter-driven ones, due at a mileage
+		// rather than a date — land on today: "this is outstanding" is
 		// the honest place for something with no date of its own, and
 		// dropping it would make the agenda quietly incomplete.
 		at := today
+		if due, ok := calendarDue(st); ok {
+			at = due.In(loc)
+		}
 		if b := st.Booking; b != nil && !b.At.IsZero() {
 			at = b.At.In(loc)
 		}
@@ -316,6 +326,25 @@ func (s *Server) agendaCommitments(who string, asker who, today time.Time, loc *
 		}
 		byDay[key] = append(byDay[key], item)
 	}
+}
+
+// calendarDue is when a clock-driven commitment next falls due.
+//
+// The soonest calendar rule that knows its own position: a commitment
+// may watch several meters, and only the ones on the clock have a date
+// to put on a day. A rule that cannot say where it stands is skipped
+// rather than guessed at.
+func calendarDue(st upkeep.Standing) (time.Time, bool) {
+	var best time.Time
+	for _, rule := range st.Occurrence.Rules {
+		if !rule.Calendar || rule.DueTime.IsZero() {
+			continue
+		}
+		if best.IsZero() || rule.DueTime.Before(best) {
+			best = rule.DueTime
+		}
+	}
+	return best, !best.IsZero()
 }
 
 // commitmentOwner is the handle a commitment is about, with the
