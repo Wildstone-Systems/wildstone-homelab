@@ -164,6 +164,56 @@ func TestTaskLosesAuthorityAtItsNextBoundaryWhenTheConnectionIsRevoked(t *testin
 	g.refused(t, "connection")
 }
 
+// Re-adding a bot at the same address does not resurrect the authority
+// of work whose Connection was withdrawn.
+//
+// butler_addresses_live is unique only over the LIVE rows, so revoking
+// an address and inserting another with the same transport and id is
+// legal — and may point at a different Agent. Binding the task to the
+// ADDRESS therefore let a withdrawn Connection come back silently.
+// Found by a review bot on #287.
+//
+// Mutation: checking the address instead of the row makes this fail.
+func TestReaddingAnAddressDoesNotResurrectAWithdrawnConnection(t *testing.T) {
+	f := newDerivedFixture(t)
+
+	if err := f.db.RevokeButlerAddress("matrix", "!room:example.org", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	f.refused(t, "connection")
+
+	// The same address, added again. Under an address-keyed check this
+	// is indistinguishable from the original Connection; under a
+	// row-keyed one it is a different Connection, which is what it is.
+	if _, err := f.db.AddButlerAddress("alfred", "matrix", "!room:example.org", "back again", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	f.refused(t, "connection")
+
+	// And a task admitted over the NEW row is fine, so this is about
+	// identity rather than about refusing everything after a revocation.
+	fresh, err := f.db.ChatConnectionAt("matrix", "!room:example.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Seq == f.connRef {
+		t.Fatal("the re-added address reused the original row, so this proves nothing")
+	}
+	newTask, err := f.db.InsertButlerTask(runtimedb.ButlerTask{
+		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
+		Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember,
+		Audience:  runtimedb.ButlerAudiencePrivate,
+		SessionID: f.session, OriginConnection: fixtureConnection, OriginConnectionRef: fresh.Seq,
+		Objective: "new work", CompletionCriteria: "done",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.ledger.Authorize(newTask); err != nil {
+		t.Fatalf("work admitted over the new connection was refused: %v", err)
+	}
+}
+
 // A revoked grant refuses THAT TOOL, and does not stop the work.
 //
 // §10.1 names a grant among the things a Task derives from, and this is
