@@ -17,6 +17,8 @@ import (
 
 const resumeOfferLifetime = 10 * time.Minute
 
+const trustedSurfaceRedirect = "Please use the household dashboard."
+
 func (s *Server) sessionRecencyWindow() time.Duration {
 	settings, _, err := s.DB.GetButlerSettings()
 	if err != nil || settings.SessionRecency < 60 {
@@ -219,7 +221,7 @@ func (s *Server) resolveChatContinuation(c chatCommandCtx) (*turnContext, string
 	switch len(candidates) {
 	case 0:
 		if protected {
-			return nil, "Continue that conversation from the household dashboard. I can't show conversation details here.", nil
+			return nil, trustedSurfaceRedirect, nil
 		}
 		return nil, "", nil
 	case 1:

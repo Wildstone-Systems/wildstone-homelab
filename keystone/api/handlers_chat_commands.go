@@ -239,7 +239,7 @@ func (s *Server) chatSessions(c chatCommandCtx) (string, error) {
 		return "", err
 	}
 	if len(candidates) == 0 && protected {
-		return "Continue that conversation from the household dashboard. I can't show conversation details here.", nil
+		return trustedSurfaceRedirect, nil
 	}
 	return s.offerChatSessions(c, candidates, page)
 }

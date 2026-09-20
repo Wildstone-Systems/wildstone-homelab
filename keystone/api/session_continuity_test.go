@@ -68,6 +68,38 @@ func TestLegacyRepliesRecordBuiltInOutboundProvenance(t *testing.T) {
 	}
 }
 
+func TestZeroSafeCandidatesWithProtectedOnesFailsClosed(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	c := chatCommandCtx{At: at, Identity: "sam", Conversation: "12345"}
+	for i := 0; i < 3; i++ {
+		id := insertCandidateSession(t, h, at, "sam", "private subject")
+		if err := h.s.DB.NoteButlerSessionConnection(id, "inbound", butlerlive.ConsoleConnection, 0); err != nil {
+			t.Fatal(err)
+		}
+		// Both automatic continuation and /sessions must use the same
+		// generic redirect for one or several withheld candidates.
+		prior, automatic, err := h.s.resolveChatContinuation(c)
+		if err != nil || prior != nil {
+			t.Fatalf("protected continuation = %+v, %v", prior, err)
+		}
+		listed, err := h.s.chatSessions(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, body := range []string{automatic, listed} {
+			if body != "Please use the household dashboard." {
+				t.Fatalf("redirect must not refer to a session or hidden count: %q", body)
+			}
+		}
+	}
+	if calls := h.providerCalls(t); calls != 0 {
+		t.Fatalf("protected continuation ran the model %d times", calls)
+	}
+}
+
 func TestTrustedConversationExistenceIsHiddenFromExternalMessaging(t *testing.T) {
 	current := runtimedb.Connection{Seq: 7, Disclosure: runtimedb.Disclosure{
 		Reach: runtimedb.ReachExternal, Encryption: runtimedb.EncryptionTransport,
