@@ -440,6 +440,20 @@
     return "Good evening";
   }
 
+  // Has this device finished adding the calendar? Per device on
+  // purpose — see the hand-off in the calendar card for why — and
+  // never fatal: a browser with storage switched off simply keeps
+  // being offered the hand-off.
+  var calendarHandoffKey = "home.calendar.handoffDone";
+
+  function calendarHandoffDismissed() {
+    try { return localStorage.getItem(calendarHandoffKey) === "1"; } catch (e) { return false; }
+  }
+
+  function dismissCalendarHandoff() {
+    try { localStorage.setItem(calendarHandoffKey, "1"); } catch (e) {}
+  }
+
   function fold(key, btn, body, caret, openByDefault) {
     var open = openByDefault;
     try {
@@ -1140,16 +1154,41 @@
       // be added any other way — a phone only finds the calendars under
       // the principal it signed in as — so this button is not a
       // shortcut, it is the path.
-      if (c.addToPhone) {
+      //
+      // AND IT IS DONE ONCE. Setting up a phone is a one-afternoon job,
+      // and after it the instructions are two lines of address on a
+      // card the household reads every day forever. So it can be put
+      // away, and putting it away is remembered HERE, on this device:
+      // "add the calendar to your phone" is a thing you do per phone,
+      // and the wall tablet being finished says nothing about the phone
+      // that has not been set up yet. Same storage the folds use, same
+      // try/catch — a browser refusing storage means the hand-off stays
+      // visible, which is the safe way to be wrong.
+      //
+      // It never becomes unreachable: the Calendar page carries the
+      // same hand-off permanently, folded shut, and the line below says
+      // so on the way out.
+      if (c.addToPhone && !calendarHandoffDismissed()) {
+        var handoff = make("div", "");
         var add = make("a", "hbtn", "Add to your phone");
         add.href = c.addToPhone;
         add.appendChild(icon("arrow-square-out"));
-        body.appendChild(add);
+        handoff.appendChild(add);
         if (c.server) {
-          body.appendChild(make("div", "muted",
+          handoff.appendChild(make("div", "muted",
             "On a laptop: add a CalDAV account at " + c.server +
             ", signing in as " + (c.username || "you") + " with your household password."));
         }
+        var done = make("button", "hbtn hbtn-ghost", "Done — hide this");
+        done.type = "button";
+        done.addEventListener("click", function () {
+          dismissCalendarHandoff();
+          handoff.remove();
+        });
+        handoff.appendChild(done);
+        handoff.appendChild(make("div", "muted",
+          "You can find it again on the Calendar page."));
+        body.appendChild(handoff);
       }
       if (c.problem) { note(body, "warn", c.problem); }
       // Wildstone's own calendar page when there is one — the month,

@@ -153,6 +153,31 @@
     </form>
   </section>
 
+  <!-- Getting the calendar onto a device. THIS IS THE PERMANENT HOME
+       for it. The dashboard card carries the same hand-off, because on
+       an iPhone it is the only way the shared calendar can be added at
+       all — but that card is read every day by people who set their
+       phone up months ago, so it can be dismissed. Dismissing it has to
+       leave somewhere to go, and this is that somewhere: on the page
+       about the calendar, folded shut, present for the next new phone
+       in the house.
+
+       Nothing here is written down in the markup. Every address comes
+       from /api/v1/home/calendar/setup, which derives it from the
+       calendar Route in desired state — so a different household, on a
+       different name, reads its own. -->
+  <section class="surface" id="setup" style="margin-top: var(--space-6); padding: var(--space-4)" hidden>
+    <button type="button" id="setup-fold" aria-expanded="false" aria-controls="setup-body"
+            style="display: flex; align-items: center; gap: var(--space-3); width: 100%;
+                   background: none; border: 0; color: inherit; font: inherit; text-align: left;
+                   cursor: pointer; padding: 0">
+      <span class="eyebrow">Add this calendar to a device</span>
+      <span class="fade" aria-hidden="true"></span>
+      <i class="ph ph-caret-down" id="setup-caret" aria-hidden="true"></i>
+    </button>
+    <div id="setup-body" hidden style="margin-top: var(--space-4)"></div>
+  </section>
+
   <footer class="muted" style="margin-top: var(--space-8); font-size: 12px">
     Everyone in the household's calendar group sees and can change these events. Your own calendars are on your phone.
   </footer>
@@ -216,6 +241,64 @@
     var first = parse(month + "-01");
     return addDays(key(first), -first.getDay());
   }
+
+  // The device hand-off, fetched once and folded shut. Asked for on
+  // load rather than on the first expand so that a household with no
+  // calendar capability never sees the control at all — an empty
+  // disclosure that opens onto "this household has no calendar to add"
+  // is worse than no disclosure.
+  function loadSetup() {
+    fetch("/api/v1/home/calendar/setup", { headers: { accept: "application/json" } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) {
+        if (!s || !s.server) { return; }
+        var body = el("setup-body");
+        clear(body);
+
+        var profile = make("a", "hbtn hbtn-primary", "Add to an iPhone or iPad");
+        profile.href = s.profileURL;
+        profile.appendChild(icon("arrow-square-out"));
+        body.appendChild(profile);
+        body.appendChild(make("div", "muted",
+          "A phone only finds the calendars under the account it signed in as, so the shared " +
+          "household calendar cannot be added by hand there. This profile is the way."));
+
+        var rows = make("div", "");
+        rows.style.marginTop = "var(--space-4)";
+        rows.appendChild(make("div", "eyebrow", "Anything else"));
+        [
+          ["Server", s.server],
+          ["Username", s.username],
+          ["Password", s.password],
+          ["Your own calendars", s.ownCalendars],
+          ["The shared calendar", s.householdCalendar]
+        ].forEach(function (pair) {
+          if (!pair[1]) { return; }
+          var row = make("div", "frow");
+          var nm = make("span", "nm", pair[0]);
+          nm.style.flex = "none";
+          nm.style.minWidth = "9rem";
+          row.appendChild(nm);
+          var v = make("span", "grow muted", pair[1]);
+          v.style.wordBreak = "break-all";
+          row.appendChild(v);
+          rows.appendChild(row);
+        });
+        body.appendChild(rows);
+        if (s.householdNote) {
+          body.appendChild(make("div", "muted", s.householdNote));
+        }
+        el("setup").hidden = false;
+      })
+      .catch(function () { /* no hand-off to offer; the page is still a calendar */ });
+  }
+
+  el("setup-fold").addEventListener("click", function () {
+    var open = el("setup-body").hidden;
+    el("setup-body").hidden = !open;
+    el("setup-fold").setAttribute("aria-expanded", open ? "true" : "false");
+    el("setup-caret").className = "ph ph-caret-" + (open ? "up" : "down");
+  });
 
   function load() {
     var from = gridStart(), to = addDays(from, 41);
@@ -422,5 +505,6 @@
   });
 
   load();
+  loadSetup();
 })();
 </script>
