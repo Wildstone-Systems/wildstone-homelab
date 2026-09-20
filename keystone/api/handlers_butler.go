@@ -484,6 +484,7 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	s.noteBuiltInSessionReply(sessionID, connection)
 	s.event("butler.session", "", principal.Identity{Name: butlerPrincipal, ActingFor: actingFor},
 		fmt.Sprintf("session %s: %d tool calls, %d proposals", sessionID, len(tr.Audit.Calls), len(planIDs)))
 

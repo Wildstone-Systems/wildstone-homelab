@@ -63,6 +63,17 @@ func trustedBuiltInConnection(name string) bool {
 	return name == butlerlive.ConsoleConnection || name == portal.Connection
 }
 
+// Built-in replies leave synchronously with the recorded turn. External
+// transports record outbound provenance later, when their reply is queued.
+func (s *Server) noteBuiltInSessionReply(sessionID, connection string) {
+	if !trustedBuiltInConnection(connection) {
+		return
+	}
+	if err := s.DB.NoteButlerSessionConnection(sessionID, "outbound", connection, 0); err != nil {
+		s.Log.Error("recording built-in session outbound connection", "session", sessionID, "err", err)
+	}
+}
+
 // candidateOnConnection applies disclosure before selection. Returning false
 // hides the candidate's existence; callers must not let count or ordering from
 // the unfiltered set escape.

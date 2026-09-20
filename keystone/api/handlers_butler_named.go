@@ -213,10 +213,8 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 	}
 	// Inbound provenance was committed with the turn. Built-in synchronous
 	// replies also leave here; external chat records outbound when queued.
-	if turn.Connection.Name != "" && turn.Connection.Ref == 0 {
-		if err := s.DB.NoteButlerSessionConnection(sessionID, "outbound", turn.Connection.Name, turn.Connection.Ref); err != nil {
-			s.Log.Error("recording built-in session outbound connection", "session", sessionID, "err", err)
-		}
+	if turn.Connection.Ref == 0 {
+		s.noteBuiltInSessionReply(sessionID, turn.Connection.Name)
 	}
 	// Link the durable task to the conversation it belongs to. The
 	// ordering forces this to happen here rather than at creation: the

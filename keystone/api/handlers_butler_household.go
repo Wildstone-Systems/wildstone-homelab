@@ -351,6 +351,7 @@ func (s *Server) runFamilySession(ctx context.Context, message, member, systemEx
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	s.noteBuiltInSessionReply(sessionID, connection)
 	s.event("butler.session", "", principal.Identity{Name: butlerPrincipal, ActingFor: member},
 		fmt.Sprintf("household session %s: %d tool calls", sessionID, len(tr.Audit.Calls)))
 
