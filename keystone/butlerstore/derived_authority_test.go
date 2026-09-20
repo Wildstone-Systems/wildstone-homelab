@@ -467,9 +467,22 @@ func TestATransferredTaskIsItsNewOwnersToCarryOn(t *testing.T) {
 	// the Connection check then refused the first tool call for ever —
 	// nobody can continue that session, and every other path arrives
 	// somewhere else (#287).
-	if task.OriginConnection != "" || task.OriginConnectionRef != 0 || task.SessionID != "" {
-		t.Fatalf("the transfer kept the offboarded person's origin: conn=%q ref=%d session=%q",
-			task.OriginConnection, task.OriginConnectionRef, task.SessionID)
+	if task.OriginConnection != "" || task.OriginConnectionRef != 0 {
+		t.Fatalf("the transfer kept the offboarded person's connection: conn=%q ref=%d",
+			task.OriginConnection, task.OriginConnectionRef)
+	}
+	// The session STAYS. ButlerTaskForSession is the only production
+	// lookup back to this task, so clearing it would strand the
+	// verified ledger A4 transfers the work in order to preserve — and
+	// it is not what blocked, because derived authority asks whether
+	// the SESSION was withdrawn and offboarding withdraws the PERSON.
+	// An earlier version of this fix cleared it; a review bot on #287
+	// caught that, and this assertion is what would have.
+	if task.SessionID == "" {
+		t.Fatal("the transfer threw away the only way back to the task")
+	}
+	if _, err := f.db.ButlerTaskForSession(task.SessionID); err != nil {
+		t.Fatalf("the transferred task is no longer reachable from its session: %v", err)
 	}
 	fromConsole := query("sam")
 	fromConsole.Connection = "console"
