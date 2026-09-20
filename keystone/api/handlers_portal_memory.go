@@ -51,7 +51,8 @@ type memoryItem struct {
 	// Mine marks a record about this member, which is the only kind
 	// they may forget. Everything else is the household's and is shown
 	// with no control — marked "shared", never a button that refuses.
-	Mine bool `json:"mine"`
+	Mine       bool `json:"mine"`
+	Promotable bool `json:"promotable"`
 	// From is where it came from, in household words: a member should
 	// be able to see WHY the assistant believes something, not only
 	// that it does.
@@ -97,11 +98,12 @@ func (s *Server) assistantMemory(_ http.ResponseWriter, _ *http.Request, member 
 			continue
 		}
 		items = append(items, memoryItem{
-			Seq:     m.Seq,
-			Content: m.Content,
-			At:      m.ObservedAt,
-			Mine:    strings.EqualFold(m.Owner, member) && m.Audience != runtimedb.ButlerAudienceShared,
-			From:    memorySource(m),
+			Promotable: m.Scope == runtimedb.MemoryScopePersonal && m.PromotedTo == 0 && strings.EqualFold(m.Owner, member),
+			Seq:        m.Seq,
+			Content:    m.Content,
+			At:         m.ObservedAt,
+			Mine:       strings.EqualFold(m.Owner, member) && m.Audience != runtimedb.ButlerAudienceShared,
+			From:       memorySource(m),
 		})
 	}
 	return map[string]any{"items": items, "member": member}, http.StatusOK, nil
@@ -157,4 +159,24 @@ func (s *Server) assistantForget(_ http.ResponseWriter, r *http.Request, member 
 		return nil, http.StatusInternalServerError, fmt.Errorf("that didn't go through")
 	}
 	return map[string]any{"forgotten": seq}, http.StatusOK, nil
+}
+
+// The portal authenticates the Person and checks same-origin writes. This is
+// their consent, not an Owner's administrative approval or a model tool input.
+func (s *Server) assistantPromoteMemory(_ http.ResponseWriter, r *http.Request, member string, _ []resource.Resource) (any, int, error) {
+	if s.DB == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("memory unavailable")
+	}
+	seq, err := strconv.ParseInt(r.URL.Query().Get("seq"), 10, 64)
+	if err != nil || seq <= 0 {
+		return nil, http.StatusBadRequest, fmt.Errorf("which memory?")
+	}
+	promoted, err := s.DB.PromotePersonalMemory(seq, member)
+	if errors.Is(err, runtimedb.ErrNotFound) || errors.Is(err, runtimedb.ErrNotAdmitted) {
+		return nil, http.StatusNotFound, fmt.Errorf("there is no memory here to share")
+	}
+	if err != nil {
+		return nil, http.StatusConflict, fmt.Errorf("that memory cannot be shared: %w", err)
+	}
+	return map[string]any{"promoted": promoted}, http.StatusOK, nil
 }

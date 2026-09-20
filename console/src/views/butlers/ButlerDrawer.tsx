@@ -47,6 +47,7 @@ export function ButlerDrawer({
   const [confirm, setConfirm] = useState<{ kind: "retire" } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [transferMemoryTo, setTransferMemoryTo] = useState("");
   const [pointRoutines, setPointRoutines] = useState(false);
 
   const row = rows.find((r) => r.butler.name === name);
@@ -221,8 +222,8 @@ export function ButlerDrawer({
           onConfirm={() =>
             run(
               async () => {
-                await api.retireButler(b.name);
-                say(`${b.name} retired. Nothing was deleted.`, "warn");
+                await api.retireButler(b.name, transferMemoryTo);
+                say(`${b.name} retired.${transferMemoryTo ? ` Local memory transferred to ${transferMemoryTo}.` : " Nothing was deleted."}`, "warn");
               },
               () => {
                 setConfirm(null);
@@ -230,7 +231,17 @@ export function ButlerDrawer({
               },
             )
           }
-        />
+        >
+          <label htmlFor="transfer-agent-memory">Agent-local memory</label>
+          <select id="transfer-agent-memory" value={transferMemoryTo} disabled={busy}
+            onChange={(event) => setTransferMemoryTo(event.target.value)}>
+            <option value="">Keep with the retired agent</option>
+            {rows.filter((other) => other.butler.name !== b.name && !other.butler.retiredAt).map((other) => (
+              <option key={other.butler.name} value={other.butler.name}>Transfer to {other.butler.name}</option>
+            ))}
+          </select>
+          <p className="muted">Personal and Household memory remain available. Transfers preserve privacy and provenance; the destination agent may use a different model.</p>
+        </Confirm>
       )}
     </>
   );

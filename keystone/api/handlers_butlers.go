@@ -488,7 +488,13 @@ func (s *Server) probeModel(r *http.Request, _ principal.Identity) (any, int, er
 
 func (s *Server) retireButler(r *http.Request, id principal.Identity) (any, int, error) {
 	name := r.PathValue("name")
-	if err := s.DB.RetireButler(name, actingMember(id)); err != nil {
+	var err error
+	if destination := r.URL.Query().Get("transferMemoryTo"); destination != "" {
+		err = s.DB.RetireButlerWithMemoryTransfer(name, destination, actingMember(id))
+	} else {
+		err = s.DB.RetireButler(name, actingMember(id))
+	}
+	if err != nil {
 		if errors.Is(err, runtimedb.ErrNotFound) {
 			return nil, http.StatusNotFound, fmt.Errorf("no butler named %q, or it is already retired", name)
 		}

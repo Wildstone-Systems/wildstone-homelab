@@ -161,3 +161,24 @@ func (s *Server) listMemoryDigest(r *http.Request, _ principal.Identity) (any, i
 	}
 	return map[string]any{"entries": entries}, http.StatusOK, nil
 }
+
+func (s *Server) agentMemoryRestrictions(r *http.Request, _ principal.Identity) (any, int, error) {
+	scopes, err := s.DB.AgentMemoryRestrictions(r.PathValue("name"))
+	return map[string]any{"restricted": scopes}, http.StatusOK, err
+}
+
+// Both adding and removing a restriction change reach; Console requires fresh
+// Owner authentication through consequential. The store independently checks role.
+func (s *Server) setAgentMemoryRestriction(r *http.Request, id principal.Identity) (any, int, error) {
+	var req struct {
+		Scope      string `json:"scope"`
+		Restricted bool   `json:"restricted"`
+	}
+	if code, err := decodeStrict(r, &req); err != nil {
+		return nil, code, err
+	}
+	if err := s.DB.SetAgentMemoryRestriction(r.PathValue("name"), req.Scope, req.Restricted, actingMember(id)); err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	return map[string]any{"scope": req.Scope, "restricted": req.Restricted}, http.StatusOK, nil
+}

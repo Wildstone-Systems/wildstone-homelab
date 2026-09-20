@@ -66,6 +66,8 @@ var ErrSourceSuppressed = errors.New("runtimedb: this was forgotten from this so
 
 // MemoryRecord is one thing the Butler remembers.
 type MemoryRecord struct {
+	PromotedTo      int64              `json:"promotedTo,omitempty"`
+	Scope           string             `json:"scope"`
 	Seq             int64              `json:"seq"`
 	Kind            string             `json:"kind"`
 	Subject         string             `json:"subject,omitempty"`
@@ -73,16 +75,8 @@ type MemoryRecord struct {
 	Audience        ButlerTaskAudience `json:"audience"`
 	PermissionLabel string             `json:"permissionLabel"`
 	Owner           string             `json:"owner"`
-	// Butler is which Butler holds this record (ADR-W031 A4). It is a
-	// scope ON TOP OF Owner, never instead of it: the record still
-	// belongs to a person, and Butler decides which conversations it
-	// can come back out of. Empty is the shared pool.
-	//
-	// It lives on the record rather than being applied afterwards
-	// because every path that derives or replaces a record has to carry
-	// it, exactly as they already carry Owner and PermissionLabel — and
-	// a field that is set by a separate UPDATE is a field those paths
-	// will keep forgetting.
+	// Butler holds Agent-local memory. For Personal/Household records it is
+	// creation provenance, not an access boundary (ADR-W033 section 11).
 	Butler          string    `json:"butler,omitempty"`
 	SourceKind      string    `json:"sourceKind"`
 	SourceID        string    `json:"sourceId"`
@@ -110,6 +104,19 @@ func contentKey(content string) string {
 }
 
 func validateMemory(m MemoryRecord) error {
+	switch m.Scope {
+	case MemoryScopePersonal:
+		if m.Owner == HouseholdOwner {
+			return fmt.Errorf("personal memory requires a Person")
+		}
+	case MemoryScopeAgentLocal:
+		if m.Butler == "" {
+			return fmt.Errorf("Agent-local memory requires an Agent")
+		}
+	case MemoryScopeHousehold:
+	default:
+		return fmt.Errorf("invalid durable memory scope %q", m.Scope)
+	}
 	switch m.Kind {
 	case MemoryFact, MemoryPreference, MemoryInference, MemoryProcedure:
 	default:
@@ -157,6 +164,7 @@ func validateMemory(m MemoryRecord) error {
 // session transcript does — so this function's job is provenance and
 // permission, not sanitization.
 func (db *DB) RecordMemory(m MemoryRecord) (int64, error) {
+	defaultMemoryScope(&m)
 	if err := db.gate(GateIngestion); err != nil {
 		return 0, err
 	}
@@ -203,6 +211,13 @@ func (db *DB) RecordMemory(m MemoryRecord) (int64, error) {
 }
 
 func insertMemoryTx(tx *sql.Tx, m MemoryRecord) (int64, error) {
+	var suppressed int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM butler_memory_suppressed_sources WHERE source_kind=? AND source_id=? AND content_key=?`, m.SourceKind, m.SourceID, contentKey(m.Content)).Scan(&suppressed); err != nil {
+		return 0, err
+	}
+	if suppressed > 0 {
+		return 0, ErrSourceSuppressed
+	}
 	// Owner and author are stored as identities. The owner may be the
 	// household, which is NULL; the author is always a person, because
 	// a record nobody stated is not a record. Both resolve inside this
@@ -218,11 +233,11 @@ func insertMemoryTx(tx *sql.Tx, m MemoryRecord) (int64, error) {
 	res, err := tx.Exec(
 		`INSERT INTO butler_memory (kind, subject, content, audience, permission_label, owner_person_id,
 		     source_kind, source_id, observed_at, confidence, safety_relevant, created_at, author_person_id,
-		     envelope_version, butler)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		     envelope_version, butler, scope)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.Kind, m.Subject, m.Content, string(m.Audience), m.PermissionLabel, owner,
 		m.SourceKind, m.SourceID, timeText(m.ObservedAt), m.Confidence,
-		boolInt(m.SafetyRelevant), now(), author, TaskEnvelopeVersion, m.Butler)
+		boolInt(m.SafetyRelevant), now(), author, TaskEnvelopeVersion, m.Butler, m.Scope)
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: inserting memory: %w", err)
 	}
@@ -254,6 +269,11 @@ func (db *DB) DeriveMemory(m MemoryRecord, sources []int64) (int64, error) {
 	if len(sources) == 0 {
 		return 0, fmt.Errorf("runtimedb: a derivative needs the records it was derived from")
 	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: deriving memory: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 	// The audiences of every source, for the intersection below. The
 	// owner audience short-circuits it: it is already the narrowest
 	// thing an audience can be, and it travels with an owner, which no
@@ -264,16 +284,16 @@ func (db *DB) DeriveMemory(m MemoryRecord, sources []int64) (int64, error) {
 	owner := ""
 	butler := ""
 	for _, src := range sources {
-		s, err := db.GetMemory(src)
+		s, err := scanMemory(tx.QueryRow(memoryColumns+` WHERE r.seq=?`, src))
 		if err != nil {
 			return 0, fmt.Errorf("runtimedb: deriving from memory %d: %w", src, err)
 		}
-		// The Butler scope travels regardless of audience, and this
-		// check has to sit ABOVE the private-only branch below: a
-		// SHARED record held by the health Butler is still that
-		// Butler's, and a summary of it landing in the pool is that
-		// material reaching every other Butler's model (ADR-W031 A4).
-		if s.Butler != "" {
+		// Only Agent-local sources impose an Agent boundary. Personal and
+		// Household sources retain their independent audience constraints.
+		if !s.Eligible() {
+			return 0, fmt.Errorf("cannot derive from inactive memory")
+		}
+		if s.Scope == MemoryScopeAgentLocal {
 			if butler == "" {
 				butler = s.Butler
 			} else if s.Butler != butler {
@@ -283,7 +303,7 @@ func (db *DB) DeriveMemory(m MemoryRecord, sources []int64) (int64, error) {
 			}
 		}
 		audiences = append(audiences, string(s.Audience))
-		if s.Audience != ButlerAudiencePrivate {
+		if s.Audience != ButlerAudiencePrivate && s.Scope != MemoryScopePersonal {
 			continue
 		}
 		anyOwnerAudience = true
@@ -324,7 +344,13 @@ func (db *DB) DeriveMemory(m MemoryRecord, sources []int64) (int64, error) {
 		m.Owner = owner
 	}
 	m.PermissionLabel = label
-	m.Butler = butler
+	if butler != "" {
+		m.Butler, m.Scope = butler, MemoryScopeAgentLocal
+	}
+	defaultMemoryScope(&m)
+	if anyOwnerAudience && m.Scope == MemoryScopeHousehold {
+		m.Scope = MemoryScopePersonal
+	}
 	if err := validateMemory(m); err != nil {
 		return 0, err
 	}
@@ -332,17 +358,14 @@ func (db *DB) DeriveMemory(m MemoryRecord, sources []int64) (int64, error) {
 		m.Confidence = ConfidenceInferred
 	}
 
-	tx, err := db.sql.Begin()
-	if err != nil {
-		return 0, fmt.Errorf("runtimedb: deriving memory: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
 	seq, err := insertMemoryTx(tx, m)
 	if err != nil {
 		return 0, err
 	}
 	for _, src := range sources {
+		if err := inheritMemoryConstraints(tx, seq, src); err != nil {
+			return 0, err
+		}
 		if _, err := tx.Exec(
 			`INSERT INTO butler_memory_derivations (derivative, source) VALUES (?, ?)`,
 			seq, src); err != nil {
@@ -371,7 +394,15 @@ func (db *DB) CorrectMemory(seq int64, replacement MemoryRecord, actor string) (
 	if actor == "" {
 		return 0, fmt.Errorf("runtimedb: a correction needs the person making it")
 	}
-	old, err := db.GetMemory(seq)
+	// Read the source in the same snapshot as the replacement. Retirement
+	// can transfer its holding Agent, and a stale read could recreate local
+	// memory under the retired Agent after that transfer commits.
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: correcting memory: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	old, err := scanMemory(tx.QueryRow(memoryColumns+` WHERE r.seq=?`, seq))
 	if err != nil {
 		return 0, err
 	}
@@ -415,6 +446,8 @@ func (db *DB) CorrectMemory(seq int64, replacement MemoryRecord, actor string) (
 	// which is the same publication A4 forbids, arriving through the
 	// edit path rather than the read path.
 	replacement.Butler = old.Butler
+	replacement.Scope = old.Scope
+	replacement.Owner = old.Owner
 	if replacement.Kind == "" {
 		replacement.Kind = old.Kind
 	}
@@ -434,14 +467,11 @@ func (db *DB) CorrectMemory(seq int64, replacement MemoryRecord, actor string) (
 		replacement.Confidence = ConfidenceStated
 	}
 
-	tx, err := db.sql.Begin()
-	if err != nil {
-		return 0, fmt.Errorf("runtimedb: correcting memory: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
 	newSeq, err := insertMemoryTx(tx, replacement)
 	if err != nil {
+		return 0, err
+	}
+	if err := inheritMemoryConstraints(tx, newSeq, seq); err != nil {
 		return 0, err
 	}
 	if _, err := tx.Exec(`UPDATE butler_memory SET superseded_by = ? WHERE seq = ?`, newSeq, seq); err != nil {
@@ -451,7 +481,10 @@ func (db *DB) CorrectMemory(seq int64, replacement MemoryRecord, actor string) (
 	// summary of something that turned out to be wrong is also wrong.
 	if _, err := tx.Exec(
 		`UPDATE butler_memory SET forgotten_at = ?, forgotten_by = ?
-		 WHERE seq IN (SELECT derivative FROM butler_memory_derivations WHERE source = ?)
+		 WHERE seq IN (WITH RECURSIVE descendants(seq) AS (
+ SELECT derivative FROM butler_memory_derivations WHERE source = ?
+ UNION SELECT d.derivative FROM butler_memory_derivations d JOIN descendants a ON d.source=a.seq
+) SELECT seq FROM descendants)
 		   AND forgotten_at = ''`, now(), actor, seq); err != nil {
 		return 0, fmt.Errorf("runtimedb: invalidating derivatives: %w", err)
 	}
@@ -460,7 +493,10 @@ func (db *DB) CorrectMemory(seq int64, replacement MemoryRecord, actor string) (
 	// hit has not corrected anything.
 	if _, err := tx.Exec(
 		`DELETE FROM butler_index WHERE memory = ?
-		    OR memory IN (SELECT derivative FROM butler_memory_derivations WHERE source = ?)`,
+		    OR memory IN (WITH RECURSIVE descendants(seq) AS (
+ SELECT derivative FROM butler_memory_derivations WHERE source = ?
+ UNION SELECT d.derivative FROM butler_memory_derivations d JOIN descendants a ON d.source=a.seq
+) SELECT seq FROM descendants)`,
 		seq, seq); err != nil {
 		return 0, fmt.Errorf("runtimedb: removing corrected material from the index: %w", err)
 	}
@@ -514,7 +550,10 @@ func (db *DB) ForgetMemory(seq int64, actor string) error {
 	// correction.
 	if _, err := tx.Exec(
 		`UPDATE butler_memory SET forgotten_at = ?, forgotten_by = ?
-		 WHERE seq IN (SELECT derivative FROM butler_memory_derivations WHERE source = ?)
+		 WHERE seq IN (WITH RECURSIVE descendants(seq) AS (
+ SELECT derivative FROM butler_memory_derivations WHERE source = ?
+ UNION SELECT d.derivative FROM butler_memory_derivations d JOIN descendants a ON d.source=a.seq
+) SELECT seq FROM descendants)
 		   AND forgotten_at = ''`, stamp, actor, seq); err != nil {
 		return fmt.Errorf("runtimedb: invalidating derivatives: %w", err)
 	}
@@ -524,7 +563,10 @@ func (db *DB) ForgetMemory(seq int64, actor string) error {
 	// retrievable while its text is still a search hit.
 	if _, err := tx.Exec(
 		`DELETE FROM butler_index WHERE memory = ?
-		    OR memory IN (SELECT derivative FROM butler_memory_derivations WHERE source = ?)`,
+		    OR memory IN (WITH RECURSIVE descendants(seq) AS (
+ SELECT derivative FROM butler_memory_derivations WHERE source = ?
+ UNION SELECT d.derivative FROM butler_memory_derivations d JOIN descendants a ON d.source=a.seq
+) SELECT seq FROM descendants)`,
 		seq, seq); err != nil {
 		return fmt.Errorf("runtimedb: removing forgotten material from the index: %w", err)
 	}
@@ -535,6 +577,14 @@ func (db *DB) ForgetMemory(seq int64, actor string) error {
 			fmt.Sprintf("forgot: %s", m.Content), actor, m.SafetyRelevant); err != nil {
 			return err
 		}
+	}
+	if err := suppressMemoryDescendants(tx, seq, actor); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO deletion_journal(subject_kind,subject_id,action,at,actor,detail)
+ SELECT 'memory',?,'forgotten',?,?,'' WHERE NOT EXISTS
+ (SELECT 1 FROM deletion_journal WHERE subject_kind='memory' AND subject_id=? AND action='forgotten')`, fmt.Sprint(seq), stamp, actor, fmt.Sprint(seq)); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("runtimedb: forgetting memory: %w", err)
@@ -588,7 +638,8 @@ const memoryColumns = `SELECT r.seq, r.kind, r.subject, r.content, r.audience, r
 	 COALESCE(o.member, 'household'),
 	 r.source_kind, r.source_id, r.observed_at, r.confidence, r.safety_relevant, r.created_at,
 	 a.member,
-	 COALESCE(r.superseded_by, 0), r.forgotten_at, r.forgotten_by, r.envelope_version, r.butler
+	 COALESCE(r.superseded_by, 0), r.forgotten_at, r.forgotten_by, r.envelope_version, r.butler, r.scope,
+ COALESCE((SELECT memory FROM memory_scope_events WHERE source_memory=r.seq AND kind='promotion' ORDER BY seq LIMIT 1),0)
 	 FROM butler_memory r
 	 LEFT JOIN butler_members o ON o.person_id = r.owner_person_id
 	 JOIN butler_members a ON a.person_id = r.author_person_id`
@@ -599,7 +650,7 @@ func scanMemory(row rowScanner) (MemoryRecord, error) {
 	var safety int
 	err := row.Scan(&m.Seq, &m.Kind, &m.Subject, &m.Content, &audience, &m.PermissionLabel,
 		&m.Owner, &m.SourceKind, &m.SourceID, &observed, &m.Confidence, &safety, &created,
-		&m.Author, &m.SupersededBy, &forgotten, &m.ForgottenBy, &m.EnvelopeVersion, &m.Butler)
+		&m.Author, &m.SupersededBy, &forgotten, &m.ForgottenBy, &m.EnvelopeVersion, &m.Butler, &m.Scope, &m.PromotedTo)
 	if errors.Is(err, sql.ErrNoRows) {
 		return MemoryRecord{}, ErrNotFound
 	}
@@ -636,12 +687,10 @@ type MemoryQuery struct {
 	Subject string
 	Kind    string
 	Limit   int
-	// Butler is the scope: which Butler is asking. It narrows ON TOP OF
-	// the reader's permission and never instead of it — a Butler is not
-	// a way to read somebody else's private material (ADR-W031 A4).
-	//
-	// Empty means the shared pool alone, so a caller that forgets to
-	// name a Butler sees household facts and nothing specialised.
+	// Butler identifies the requesting Agent. Agent-local records must
+	// match it; Personal and Household records cross Agents, subject to
+	// ownership, audience and per-Agent restrictions (ADR-W031 A4).
+	// Empty excludes Agent-local records.
 	// AllButlers is the Console holder's view (A10).
 	Butler string
 }
@@ -668,12 +717,18 @@ func (db *DB) RetrieveMemory(q MemoryQuery) ([]MemoryRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	inherited, inheritedArgs, err := db.memoryConstraintClause("r", reader)
+	if err != nil {
+		return nil, err
+	}
+	clause += " AND " + inherited
+	audArgs = append(audArgs, inheritedArgs...)
 	where := ` WHERE r.forgotten_at = '' AND r.superseded_by IS NULL AND ` + clause
 	args := append([]any{}, audArgs...)
 	// The Butler's scope is ANDed onto the reader's, in SQL, before any
 	// content loads. Both have to hold: this person may see it AND this
 	// Butler holds it.
-	if clause, scopeArgs := scopeClause("r.butler", q.Butler); clause != "" {
+	if clause, scopeArgs := memoryScopeClause("r", q.Butler, reader); clause != "" {
 		where += clause
 		args = append(args, scopeArgs...)
 	}
@@ -733,10 +788,16 @@ func (db *DB) ExportMemoryFor(reader string) ([]MemoryRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	inherited, inheritedArgs, err := db.memoryConstraintClause("r", readerID)
+	if err != nil {
+		return nil, err
+	}
 	args := append([]any{readerID}, audArgs...)
+	args = append(args, readerID)
+	args = append(args, inheritedArgs...)
 	rows, err := db.sql.Query(
-		memoryColumns+` WHERE r.owner_person_id = ?
-		     OR (`+audClause+` AND r.forgotten_at = '' AND r.superseded_by IS NULL)
+		memoryColumns+` WHERE (r.owner_person_id = ?
+		     OR (`+audClause+` AND (r.scope <> 'personal' OR r.owner_person_id = ?) AND r.forgotten_at = '' AND r.superseded_by IS NULL)) AND `+inherited+`
 		   ORDER BY r.seq`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: exporting memory: %w", err)
@@ -769,13 +830,17 @@ type MemoryDigestEntry struct {
 // immediateOnly returns just the safety-relevant removals, which go out
 // now rather than with the next digest (A1).
 func (db *DB) PendingMemoryDigest(immediateOnly bool) ([]MemoryDigestEntry, error) {
-	where := ` WHERE delivered_at = ''`
+	// Re-check queued entries, including those written before scope migration.
+	// A household digest has no single Person/Agent authorization context.
+	where := ` WHERE d.delivered_at = '' AND r.scope = 'household'
+ AND r.audience = ? AND NOT EXISTS (
+ SELECT 1 FROM memory_constraints mc WHERE mc.memory=r.seq AND mc.audience <> ?)`
 	if immediateOnly {
-		where += ` AND immediate = 1`
+		where += ` AND d.immediate = 1`
 	}
 	rows, err := db.sql.Query(
-		`SELECT seq, memory, change, summary, actor, at, immediate FROM butler_memory_digest` +
-			where + ` ORDER BY seq`)
+		`SELECT d.seq, d.memory, d.change, d.summary, d.actor, d.at, d.immediate FROM butler_memory_digest d JOIN butler_memory r ON r.seq=d.memory`+
+			where+` ORDER BY d.seq`, ButlerAudienceShared, ButlerAudienceShared)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: reading memory digest: %w", err)
 	}

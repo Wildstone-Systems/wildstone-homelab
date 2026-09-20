@@ -7,14 +7,14 @@ package butlerstore
 // the reason this package exists at all: the Butler must not be able to
 // reach the store by following a field. Everything that decides who may
 // read a record — the reader, the owner, the audience, the permission
-// label and the Butler scope — is closed over HERE, from the session,
-// and none of it is a parameter of anything a model can reach.
+// label and Agent identity — is closed over HERE from the session.
+// A model may narrow its Personal note to Agent-local, never change its audience.
 //
 // It lives beside the ledger rather than in cmd/keystone because the
 // write path makes claims that have to be tested. A note is the
 // SPEAKER'S even when it is said in a room; missing permission metadata
-// is a refusal rather than a default; a note is held by one Butler and
-// never by the shared pool; and a record somebody forgot does not come
+// is a refusal rather than a default; a note defaults to Personal and
+// cannot become Household without the Person's approval; and a record somebody forgot does not come
 // back by being said again. None of that is provable from a closure in
 // a main function.
 
@@ -123,7 +123,15 @@ func MemorySeams(db *runtimedb.DB, butlerName, member string, log *slog.Logger) 
 			if n.SourceKind == "" || n.SourceID == "" {
 				return fmt.Errorf("butlerstore: a remembered note needs the conversation it came from (ADR-W030 A3.1)")
 			}
+			scope := n.Scope
+			if scope == "" {
+				scope = runtimedb.MemoryScopePersonal
+			}
+			if scope != runtimedb.MemoryScopePersonal && scope != runtimedb.MemoryScopeAgentLocal {
+				return fmt.Errorf("remember cannot create Household memory")
+			}
 			rec := runtimedb.MemoryRecord{
+				Scope:   scope,
 				Kind:    n.Kind,
 				Subject: n.Subject,
 				Content: n.Content,
@@ -140,11 +148,8 @@ func MemorySeams(db *runtimedb.DB, butlerName, member string, log *slog.Logger) 
 				// digest behind it (A1), not something a sentence in a
 				// conversation performs.
 				Audience: runtimedb.ButlerAudiencePrivate,
-				// This Butler, never the pool. Promotion to the shared
-				// pool is A5's separate, explicit act, and doing it
-				// silently is the failure A5 calls the worst kind: the
-				// property still looks true and the material has
-				// already left (ADR-W031 A4/A5).
+				// The stamp is provenance for Personal memory; only Agent-local
+				// records use it as an access boundary. Both remain Person-private.
 				Butler:          butlerName,
 				PermissionLabel: butlerName,
 				SourceKind:      n.SourceKind,

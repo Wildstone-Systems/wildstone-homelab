@@ -15,11 +15,10 @@ import { Say } from "./ButlerDrawer";
 // offboarding's job and a different act with different consequences.
 export function TabMemory({ row, say }: { row: ButlerRow; say: Say }) {
   const b = row.butler;
-  // This Butler's material, not every Butler's. The drawer says "what
-  // {name} remembers" and a record another Butler holds is not that —
-  // and after ADR-W031 A4 the scope is what decides which model ever
-  // sees it, so showing them together would misdescribe both.
+  // The active Person's Personal/Household material plus this Agent's
+  // local memory, subject to both audience and Agent restrictions.
   const memory = useLoad(() => api.butlerMemory({ butler: b.name }), [b.name]);
+  const restrictions = useLoad(() => api.agentMemoryRestrictions(b.name), [b.name]);
   const [correcting, setCorrecting] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -54,6 +53,22 @@ export function TabMemory({ row, say }: { row: ButlerRow; say: Say }) {
           ? `${b.name} has not been told anything worth remembering yet.`
           : `What ${b.name} remembers, and where each note came from. Correcting rewrites the note; forgetting removes it.`}
       </div>
+      <div className="card">
+        <h3>Memory access</h3>
+        <p className="muted">These limits apply in addition to each person's ownership and the record's audience.</p>
+        {["personal", "household"].map((scope) => (
+          <label key={scope} className="checkrow">
+            <input type="checkbox" disabled={busy || !!b.retiredAt || !restrictions.data}
+              checked={!(restrictions.data?.restricted ?? []).includes(scope)}
+              onChange={(event) => {
+                const restricted = !event.target.checked;
+                void run(() => api.setAgentMemoryRestriction(b.name, scope, restricted), "Memory access updated").then(() => restrictions.reload());
+              }} />
+            Allow {scope === "personal" ? "Personal" : "Household"} memory
+          </label>
+        ))}
+        <ErrorLine error={restrictions.error} />
+      </div>
       <ErrorLine error={memory.error} />
       <ErrorLine error={error} />
 
@@ -62,6 +77,7 @@ export function TabMemory({ row, say }: { row: ButlerRow; say: Say }) {
           <div key={m.seq} className="card memory-card">
             <div className="row memory-head">
               <span className="chip chip-static chip-subject">{m.subject || m.kind}</span>
+              <span className="muted">{m.scope === "agent_local" ? "Agent-local" : m.scope === "personal" ? "Personal" : "Household"}</span>
               <span className="muted tnum">{provenanceOf(m)}</span>
               <div className="row memory-actions">
                 <button

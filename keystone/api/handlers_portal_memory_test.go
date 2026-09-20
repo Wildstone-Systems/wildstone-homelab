@@ -11,6 +11,23 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
+func TestDashboardPromotionRequiresTheOwningPerson(t *testing.T) {
+	h := homeHarness(t)
+	h.person("sandy", "maya")
+	seq := remember(t, h, "sandy", "Sandy likes jasmine", runtimedb.ButlerAudiencePrivate)
+	path := "/api/v1/assistant/memory/promote?seq=" + strconv.FormatInt(seq, 10)
+	denied := h.member(http.MethodPost, path, "maya", "assistant_users", nil, "")
+	denied.Body.Close()
+	if denied.StatusCode != http.StatusNotFound {
+		t.Fatalf("another Person promoted memory: %d", denied.StatusCode)
+	}
+	approved := h.member(http.MethodPost, path, "sandy", "assistant_users", nil, "")
+	defer approved.Body.Close()
+	if approved.StatusCode != http.StatusOK {
+		t.Fatalf("owning Person promotion: %d", approved.StatusCode)
+	}
+}
+
 // remember records one memory and returns its sequence number.
 func remember(t *testing.T, h *harness, owner, content string, audience runtimedb.ButlerTaskAudience) int64 {
 	t.Helper()

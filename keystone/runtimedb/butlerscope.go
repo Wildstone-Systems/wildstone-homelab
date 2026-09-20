@@ -352,6 +352,9 @@ func (db *DB) RecordButlerMemory(butler string, m MemoryRecord) (int64, error) {
 	// the record into the SHARED POOL while returning an error — the
 	// leak arriving through the error path.
 	m.Butler = butler
+	if m.Scope == "" && butler != "" {
+		m.Scope = MemoryScopeAgentLocal
+	}
 	return db.RecordMemory(m)
 }
 
@@ -364,6 +367,9 @@ func (db *DB) RecordButlerMemory(butler string, m MemoryRecord) (int64, error) {
 // permitted to read it, and some of those send it out of the house —
 // so the act names them rather than happening quietly.
 func (db *DB) PromoteMemoryToSharedPool(seq int64, by string) (gains []Butler, leavesHouse bool, err error) {
+	if err := db.gate(GateIngestion); err != nil {
+		return nil, false, err
+	}
 	if by == "" {
 		return nil, false, fmt.Errorf("runtimedb: promoting memory needs who promoted it")
 	}
@@ -406,11 +412,33 @@ func (db *DB) PromoteMemoryToSharedPool(seq int64, by string) (gains []Butler, l
 		return nil, false, fmt.Errorf("runtimedb: promoting memory to the shared pool: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`UPDATE butler_memory SET butler = '' WHERE seq = ?`, seq); err != nil {
-		return nil, false, fmt.Errorf("runtimedb: promoting memory to the shared pool: %w", err)
+	person, err := activeMemoryActor(tx, by, true)
+	if err != nil {
+		return nil, false, err
 	}
-	if _, err := tx.Exec(`UPDATE butler_index SET butler = '' WHERE memory = ?`, seq); err != nil {
-		return nil, false, fmt.Errorf("runtimedb: promoting indexed memory to the shared pool: %w", err)
+	current, err := scanMemory(tx.QueryRow(memoryColumns+` WHERE r.seq=? AND r.scope='agent_local' AND r.forgotten_at='' AND r.superseded_by IS NULL`, seq))
+	if err != nil {
+		return nil, false, err
+	}
+	current.Scope = MemoryScopeHousehold
+	promoted, err := insertMemoryTx(tx, current)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := inheritMemoryConstraints(tx, promoted, seq); err != nil {
+		return nil, false, err
+	}
+	if _, err := tx.Exec(`INSERT INTO butler_memory_derivations(derivative,source) VALUES(?,?)`, promoted, seq); err != nil {
+		return nil, false, err
+	}
+	if _, err := tx.Exec(`INSERT INTO memory_scope_events(memory,kind,source_memory,actor_person_id,recorded_at) VALUES(?,'promotion',?,?,?)`, promoted, seq, person, now()); err != nil {
+		return nil, false, err
+	}
+	if _, err := tx.Exec(`UPDATE butler_memory SET superseded_by=? WHERE seq=?`, promoted, seq); err != nil {
+		return nil, false, err
+	}
+	if _, err := tx.Exec(`UPDATE butler_index SET memory=? WHERE memory=?`, promoted, seq); err != nil {
+		return nil, false, err
 	}
 	names, err := json.Marshal(struct {
 		Butlers []string `json:"butlers"`

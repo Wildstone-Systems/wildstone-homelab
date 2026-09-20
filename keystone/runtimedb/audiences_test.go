@@ -193,7 +193,7 @@ func TestAudienceDoesNotWidenResourceAuthority(t *testing.T) {
 		Kind: "fact", Subject: "house", Content: "the bins go out on tuesday",
 		Audience: ButlerAudienceShared, PermissionLabel: "household", Owner: "household",
 		SourceKind: "conversation", SourceID: "c-1", Author: "mika",
-		EnvelopeVersion: 1, Butler: "health",
+		EnvelopeVersion: 1, Butler: "health", Scope: MemoryScopeAgentLocal,
 	}); err != nil {
 		t.Fatalf("RecordMemory: %v", err)
 	}

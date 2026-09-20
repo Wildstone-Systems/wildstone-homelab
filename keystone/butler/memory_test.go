@@ -193,6 +193,14 @@ func aSession() memorySession {
 	return memorySession{speaker: "tom", conversation: "bt-1"}
 }
 
+func TestRememberCannotAutonomouslyCreateHouseholdMemory(t *testing.T) {
+	c := &captured{}
+	out := handleRemember(context.Background(), c.seams(), aSession(), map[string]any{"content": "Likes tea", "scope": "household"})
+	if !out.Rejected || len(c.notes) != 0 {
+		t.Fatal("unsupported Household scope was not explicitly refused")
+	}
+}
+
 // Nothing in a tool call decides who may read what it writes.
 //
 // This is remember's half of the property recall has: the schema offers
@@ -224,7 +232,7 @@ func TestRememberInputCannotDecideWhoMayReadIt(t *testing.T) {
 	fields := reflect.TypeOf(MemoryNote{})
 	for i := 0; i < fields.NumField(); i++ {
 		switch name := fields.Field(i).Name; name {
-		case "Kind", "Subject", "Content", "SourceKind", "SourceID":
+		case "Scope", "Kind", "Subject", "Content", "SourceKind", "SourceID":
 		default:
 			t.Fatalf("MemoryNote carries %q — who may read a record is the session's to decide, never the model's", name)
 		}

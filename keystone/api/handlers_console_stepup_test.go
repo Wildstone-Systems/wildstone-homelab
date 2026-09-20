@@ -32,6 +32,9 @@ var consequentialRoutes = []struct{ method, path, body string }{
 	{http.MethodPost, "/api/v1/restore/quarantine", `{}`},
 	{http.MethodPost, "/api/v1/restore/reconcile", `{}`},
 	{http.MethodDelete, "/api/v1/butlers/joan", ``},
+	{http.MethodDelete, "/api/v1/butlers/joan?transferMemoryTo=sandy", ``},
+	{http.MethodPut, "/api/v1/butlers/joan/memory-restrictions", `{"scope":"household","restricted":true}`},
+	{http.MethodPut, "/api/v1/butlers/joan/memory-restrictions", `{"scope":"household","restricted":false}`},
 	{http.MethodPost, "/api/v1/chat/adapters/chat-telegram-family", `{"node":"n1","butler":"joan"}`},
 	// Who a Connection admits (design §8.1; slice 11). Consequential in
 	// both directions — narrowing withdraws a way the household reaches

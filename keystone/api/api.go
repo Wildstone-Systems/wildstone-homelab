@@ -579,6 +579,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/butlers/{name}/tool", s.handle(principal.VerbManage, s.setButlerTool))
 	mux.Handle("PUT /api/v1/butlers/{name}/address", s.handle(principal.VerbManage, s.setButlerAddress))
 	mux.Handle("PUT /api/v1/butlers/{name}/class", s.handle(principal.VerbManage, s.consequential(s.setButlerAgentClass)))
+	mux.Handle("GET /api/v1/butlers/{name}/memory-restrictions", s.handle(principal.VerbRead, s.agentMemoryRestrictions))
+	mux.Handle("PUT /api/v1/butlers/{name}/memory-restrictions", s.handle(principal.VerbManage, s.consequential(s.setAgentMemoryRestriction)))
 	mux.Handle("DELETE /api/v1/butlers/{name}", s.handle(principal.VerbManage, s.consequential(s.retireButler)))
 	// Restore and duplicate are manage for the same reason retiring is:
 	// each decides standing configuration. Impact is a read, and it is
@@ -697,6 +699,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/assistant/memory", s.portal(surfaceAssistant, s.assistantMemory))
 	// Forgetting is gated in the handler, not the store: ForgetMemory
 	// takes a sequence number and trusts it.
+	mux.Handle("POST /api/v1/assistant/memory/promote", s.portal(surfaceAssistant, s.assistantPromoteMemory))
 	mux.Handle("POST /api/v1/assistant/memory/forget", s.portal(surfaceAssistant, s.assistantForget))
 	mux.Handle("POST /api/v1/assistant/ask", s.portal(surfaceAssistant, s.assistantAsk))
 	mux.Handle("GET /api/v1/assistant/conversations/{id}", s.portal(surfaceAssistant, s.assistantConversation))
