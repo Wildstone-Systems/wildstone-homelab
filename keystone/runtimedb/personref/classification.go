@@ -109,7 +109,9 @@
 //     operator token's own preferences are the machine axis leaking
 //     into a person concept, but nothing in W033 says preferences
 //     cannot be held per credential. Left to the Connections slice
-//     (#212), which owns delivery.
+//     (#212), which owns delivery — still open after that slice's
+//     admission half, which settled who may address an Agent and not
+//     where a notice is sent.
 //   - integration_secrets.member — §12.2 keeps the household secret
 //     store separate from the infrastructure one, and this column is in
 //     the second. Left to the secrets slice (#216).
