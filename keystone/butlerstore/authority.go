@@ -78,19 +78,8 @@ func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecis
 	// is asking (§18.6). Folding the two together is exactly how an
 	// Agent's grant becomes a person's permission.
 	if q.Caller == butler.CallerPersonFacing {
-		if a.PersonAuthority == nil {
-			return butler.ToolDecision{
-				Allowed: false,
-				Reason: fmt.Sprintf(
-					"nothing on this deployment can say whether %s may use %s, so it was not run",
-					q.Person, q.Tool),
-			}, nil
-		}
-		if err := a.PersonAuthority(q.Person); err != nil {
-			return butler.ToolDecision{
-				Allowed: false,
-				Reason:  fmt.Sprintf("%s, so %s was not run", err, q.Tool),
-			}, nil
+		if d, ok := a.personLayer(q); !ok {
+			return d, nil
 		}
 	}
 
@@ -120,6 +109,43 @@ func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecis
 		Requestable: res.Requestable,
 		GrantSeq:    res.GrantSeq,
 	}, nil
+}
+
+// AdmitPerson implements butler.PersonAuthorizer: layer 1, asked before
+// anything consults a resource or the Agent's reach.
+//
+// AuthorizeTool below keeps the same check rather than trusting that
+// this ran. Authority is a public type another caller may hold, and a
+// layer-1 guarantee that depends on callers asking in the right order
+// is not a guarantee.
+func (a *Authority) AdmitPerson(q butler.ToolAuthorityQuery) (butler.ToolDecision, error) {
+	if q.Caller != butler.CallerPersonFacing {
+		return butler.ToolDecision{Allowed: true}, nil
+	}
+	if d, ok := a.personLayer(q); !ok {
+		return d, nil
+	}
+	return butler.ToolDecision{Allowed: true}, nil
+}
+
+// personLayer is the one copy of layer 1, shared by AdmitPerson and
+// AuthorizeTool so the two can never drift.
+func (a *Authority) personLayer(q butler.ToolAuthorityQuery) (butler.ToolDecision, bool) {
+	if a.PersonAuthority == nil {
+		return butler.ToolDecision{
+			Allowed: false,
+			Reason: fmt.Sprintf(
+				"nothing on this deployment can say whether %s may use %s, so it was not run",
+				q.Person, q.Tool),
+		}, false
+	}
+	if err := a.PersonAuthority(q.Person); err != nil {
+		return butler.ToolDecision{
+			Allowed: false,
+			Reason:  fmt.Sprintf("%s, so %s was not run", err, q.Tool),
+		}, false
+	}
+	return butler.ToolDecision{}, true
 }
 
 // AdmitResource implements butler.ResourceAuthorizer: layer 2, one rule
@@ -163,4 +189,5 @@ func (a *Authority) PersonIsAdmitted() func(string) error {
 var (
 	_ butler.ToolAuthorizer     = (*Authority)(nil)
 	_ butler.ResourceAuthorizer = (*Authority)(nil)
+	_ butler.PersonAuthorizer   = (*Authority)(nil)
 )

@@ -35,6 +35,13 @@ func (permitAll) AuthorizeTool(q ToolAuthorityQuery) (ToolDecision, error) {
 	return ToolDecision{Allowed: q.Structural}, nil
 }
 
+// AdmitPerson answers layer 1. A double that could not would be refused
+// before it was ever asked anything else, which is the rule working
+// rather than a test needing an exemption.
+func (permitAll) AdmitPerson(ToolAuthorityQuery) (ToolDecision, error) {
+	return ToolDecision{Allowed: true}, nil
+}
+
 // newTestToolGateway builds an operator gateway as a session opens one.
 func newTestToolGateway(store *statefile.Store, reader *AgentReader) *ToolGateway {
 	gw := NewToolGateway(store, reader)

@@ -29,6 +29,10 @@ func (r *recordingAuthorizer) AuthorizeTool(q ToolAuthorityQuery) (ToolDecision,
 	return ToolDecision{Allowed: true}, nil
 }
 
+func (r *recordingAuthorizer) AdmitPerson(ToolAuthorityQuery) (ToolDecision, error) {
+	return ToolDecision{Allowed: true}, nil
+}
+
 // A person's tool call with no authorizer is REFUSED. This is the
 // permissive default dying where it matters, and it is the one test
 // this slice exists for.
@@ -174,14 +178,114 @@ func TestMissingConnectionFailsClosed(t *testing.T) {
 // carries a set of resource rules.
 type resourceAwareAuthorizer struct {
 	rules ResourceRules
+	// refusePerson makes layer 1 say no for one person, so a test can
+	// show which layer answered.
+	refusePerson string
 }
 
 func (r resourceAwareAuthorizer) AuthorizeTool(ToolAuthorityQuery) (ToolDecision, error) {
 	return ToolDecision{Allowed: true}, nil
 }
 
+// admits reports whether layer 1 lets the caller through at all. nil
+// means yes, which is what most of these tests want.
+func (r resourceAwareAuthorizer) AdmitPerson(q ToolAuthorityQuery) (ToolDecision, error) {
+	if r.refusePerson != "" && q.Person == r.refusePerson {
+		return ToolDecision{Allowed: false, Reason: r.refusePerson + " is no longer admitted"}, nil
+	}
+	return ToolDecision{Allowed: true}, nil
+}
+
 func (r resourceAwareAuthorizer) AdmitResource(q ToolAuthorityQuery) (ToolDecision, error) {
 	return r.rules.AdmitResource(q)
+}
+
+// Layer 1 answers before layer 2 is asked anything.
+//
+// §10 stacks the layers in order and a later one never widens an
+// earlier one — but ORDER is not only about widening. A person nobody
+// has admitted must be told they may not do work at all, not handed a
+// refusal that describes a resource: that answer says something about
+// the resource to somebody with no standing to hear it, and it means a
+// resource rule ran a lookup for a caller layer 1 had not admitted.
+//
+// The first version of this slice checked only that the Person FIELD
+// was filled in, and then ran the resource rule, and only reached the
+// real admission check inside the resolver afterwards. That is §10's
+// ordering inverted, in the one function whose whole job is the
+// ordering. Found by a review bot on #286.
+//
+// Mutation: moving the AdmitPerson call below the resource block makes
+// both halves of this fail.
+func TestLayerOneAnswersBeforeLayerTwoIsAsked(t *testing.T) {
+	const kind = "greenhouse_sensor"
+	var resourceRuleRan bool
+
+	a := resourceAwareAuthorizer{
+		refusePerson: "ghost",
+		rules: ResourceRules{
+			kind: func(ToolAuthorityQuery) (ToolDecision, error) {
+				resourceRuleRan = true
+				return ToolDecision{Allowed: true}, nil
+			},
+		},
+	}
+	q := ToolAuthorityQuery{
+		Person: "ghost", Connection: testConnection,
+		AgentClass: string(AgentClassOwner), Tool: "get_system_overview", Structural: true,
+		Resource: ResourceRef{Kind: kind, ID: "bed-3"},
+	}
+
+	d := authorizeForPerson(a, q)
+	if d.Allowed {
+		t.Fatal("a person layer 1 refused was allowed")
+	}
+	// The refusal is about the PERSON, not about the resource.
+	if strings.Contains(d.Reason, kind) {
+		t.Fatalf("an unadmitted caller was told about the resource: %q", d.Reason)
+	}
+	if !strings.Contains(d.Reason, "ghost") {
+		t.Fatalf("the refusal does not name the person: %q", d.Reason)
+	}
+	// And the resource's own rule never ran for them.
+	if resourceRuleRan {
+		t.Fatal("a resource rule ran for a caller layer 1 had not admitted")
+	}
+
+	// An admitted caller still reaches layer 2, so this is an ordering
+	// test rather than a test that layer 2 stopped working.
+	q.Person = "mika"
+	if d := authorizeForPerson(a, q); !d.Allowed {
+		t.Fatalf("an admitted caller was refused: %q", d.Reason)
+	}
+	if !resourceRuleRan {
+		t.Fatal("layer 2 was never reached for an admitted caller")
+	}
+}
+
+// A resolver that cannot answer layer 1 refuses every person-facing
+// call, the same way one with no resource rules admits no resource.
+//
+// Mutation: treating a resolver with no AdmitPerson as "layer 1 passes"
+// makes this fail — and that is the shape the code had before, where
+// the real check lived inside AuthorizeTool and anything reached
+// beforehand ran unguarded.
+func TestAResolverThatCannotAnswerLayerOneRefuses(t *testing.T) {
+	// Implements AuthorizeTool and nothing else.
+	var bare cannotAnswerLayerOne
+	d := authorizeForPerson(bare, ToolAuthorityQuery{
+		Person: "mika", Connection: testConnection,
+		AgentClass: string(AgentClassOwner), Tool: "get_system_overview", Structural: true,
+	})
+	if d.Allowed {
+		t.Fatal("a resolver that cannot answer layer 1 allowed a person's tool call")
+	}
+}
+
+type cannotAnswerLayerOne struct{}
+
+func (cannotAnswerLayerOne) AuthorizeTool(ToolAuthorityQuery) (ToolDecision, error) {
+	return ToolDecision{Allowed: true}, nil
 }
 
 // THE CLASS-CLOSURE TEST, and the most important one in the slice.
@@ -329,6 +433,10 @@ func TestTheOfferedListNeverNamesAToolDispatchWouldRefuse(t *testing.T) {
 
 // refuseOne permits everything except one named tool.
 type refuseOne struct{ tool string }
+
+func (r refuseOne) AdmitPerson(ToolAuthorityQuery) (ToolDecision, error) {
+	return ToolDecision{Allowed: true}, nil
+}
 
 func (r refuseOne) AuthorizeTool(q ToolAuthorityQuery) (ToolDecision, error) {
 	if q.Tool == r.tool {
