@@ -732,10 +732,18 @@ func (s *Server) setConnectionAdmission(r *http.Request, id principal.Identity) 
 	switch {
 	case errors.Is(err, runtimedb.ErrNoConnection):
 		return nil, http.StatusNotFound, fmt.Errorf("no agent answers on %s", capName)
+	case errors.Is(err, runtimedb.ErrUnknownAdmission):
+		// 400: the vocabulary is closed and this is not in it, which is
+		// a malformed request and nothing to do with this deployment.
+		// It was 409 alongside the case below until a review of #289
+		// separated them — a client told "conflict" about a typo goes
+		// looking for state that is perfectly fine.
+		return nil, http.StatusBadRequest, err
 	case err != nil:
 		// 409 rather than 400: the request is well formed and the
-		// deployment's state is what refuses it. An operator who reads
-		// "bad request" goes looking for a typo.
+		// deployment's state is what refuses it — an Owner Agent whose
+		// Connections admit Owners only. An operator who reads "bad
+		// request" for that goes looking for a typo.
 		return nil, http.StatusConflict, err
 	}
 	s.event("chat.connection_admission_set", capName, id,

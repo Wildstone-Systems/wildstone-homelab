@@ -130,12 +130,12 @@ func (db *DB) RedeemChatClaimCode(hash string, at Connection, account, displayNa
 	defer tx.Rollback() //nolint:errcheck // rolled back unless committed
 
 	var connection int64
-	var person, identity, redeemedAt, expiresAt, createdBy string
+	var person, identity, role, redeemedAt, expiresAt, createdBy string
 	err = tx.QueryRow(
-		`SELECT c.connection, c.person_id, m.member, c.redeemed_at, c.expires_at, c.created_by
+		`SELECT c.connection, c.person_id, m.member, m.role, c.redeemed_at, c.expires_at, c.created_by
 		 FROM chat_claim_codes c JOIN butler_members m ON m.person_id = c.person_id
 		 WHERE c.hash = ?`, hash).
-		Scan(&connection, &person, &identity, &redeemedAt, &expiresAt, &createdBy)
+		Scan(&connection, &person, &identity, &role, &redeemedAt, &expiresAt, &createdBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ChatBinding{}, ErrClaimCode
 	}
@@ -199,9 +199,15 @@ func (db *DB) RedeemChatClaimCode(hash string, at Connection, account, displayNa
 	if err != nil {
 		return ChatBinding{}, err
 	}
+	// Role comes from the claim's own joined member row, so a freshly
+	// redeemed binding describes itself exactly as a later read of it
+	// will. A review of #289 spotted this returning "" from
+	// POST /chat/bindings/redeem while a list of the same binding
+	// reported the real role -- the kind of disagreement that teaches
+	// whoever is reading the API that one of the two is lying.
 	return ChatBinding{
 		ID: id, Connection: at.Seq, Butler: at.Butler, Transport: at.Transport,
-		Account: account, Identity: identity, DisplayName: displayName,
+		Account: account, Identity: identity, Role: role, DisplayName: displayName,
 		Conversation: conversation, CreatedAt: created, CreatedBy: createdBy,
 	}, nil
 }

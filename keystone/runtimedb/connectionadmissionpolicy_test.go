@@ -194,6 +194,32 @@ func TestMalformedAdmissionConfigAdmitsNobodyAtAMemberAgent(t *testing.T) {
 			c.AdmissionSubject = AdmissionSubject("people")
 			return c
 		}},
+		{"an agent class this build cannot read", func(c Connection) Connection {
+			// THE CASE A REVIEW OF #289 FOUND, and the one the
+			// owner-agent table could not reach. `surface = 'family'`
+			// is perfectly valid; only the CLASS is unreadable. So
+			// OwnerAgent said no -- neither column literally says
+			// owner -- and control fell through to a policy saying
+			// 'household', which admitted a Member.
+			//
+			// That is the fail-open shape this slice removes, one
+			// field along from where it was removed. A class a newer
+			// schema adds is at least as likely to sit ABOVE member as
+			// below, and the runtime cannot know which.
+			c.AgentClass = "guest"
+			return c
+		}},
+		{"a surface this build cannot read", func(c Connection) Connection {
+			// The mirror. 'lounge' is not admin, so the old reading
+			// treated it as the household's.
+			c.Surface = ButlerSurface("lounge")
+			return c
+		}},
+		{"neither classification field readable", func(c Connection) Connection {
+			c.Surface = ButlerSurface("lounge")
+			c.AgentClass = "guest"
+			return c
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := tc.with(memberAgentConn())
