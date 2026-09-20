@@ -510,3 +510,34 @@ func TestAMemberEditsAndRemovesARoutine(t *testing.T) {
 		t.Error("the routine is still on the day after being removed")
 	}
 }
+
+// Selecting a subject grants no standing the reader did not hold
+// (ADR-W033 A10). The rule is about standing, not about hardware —
+// nothing tells the server whether a screen is being handed round, so
+// it has to hold identically in every session.
+func TestTheSubjectSelectorGrantsNoStanding(t *testing.T) {
+	h := homeHarness(t)
+	h.s.Upkeep = &upkeep.Engine{DB: h.s.DB, State: h.s.State, Loc: time.UTC}
+	h.person("sandy", "mika")
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+
+	// Mika's own personal routine.
+	body := `{"description":"Take the tablets","about":"mika","every":"1d","anchor":"` + yesterday + `",` +
+		`"partOfDay":"morning","rollover":"fromSchedule","scope":"personal"}`
+	res := h.member(http.MethodPost, "/api/v1/home/commitments", "mika", "homepage_users",
+		stringsNewReader(body), "application/json")
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("adding: %d", res.StatusCode)
+	}
+
+	// Mika sees it on his own day.
+	if !contains(agendaTitles(h.agenda(t, "mika", "mika")), "Take the tablets") {
+		t.Error("a member cannot see their own personal routine")
+	}
+	// Sandy, selecting Mika, does not — she is not his guardian and
+	// the picker is not a way to become one.
+	if contains(agendaTitles(h.agenda(t, "sandy", "mika")), "Take the tablets") {
+		t.Error("selecting another adult disclosed their personal routine")
+	}
+}

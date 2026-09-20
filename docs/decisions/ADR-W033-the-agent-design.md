@@ -134,7 +134,13 @@ So being a **subject** of household data and being a **principal** who acts are 
 
 A Person may be the first without being the second, and for a child that is the normal case rather than a degraded one.
 
-The record already has this shape. `butler_members` carries `profile` (`NULL` or `child`), a `guardian`, and `admitted`; `RecordButlerMember` requires a guardian for a child and refuses any role but Member; `AdmitButlerMember` refuses to admit a child record by any path, including a direct `INSERT`. An un-admitted child row is therefore already a Person who exists and cannot sign in. What was missing was the statement that this is a **supported, complete state** rather than a half-finished admission, and that household features may rely on it.
+The record already has most of this shape. `butler_members` carries `profile` (`NULL` or `child`), a `guardian`, and `admitted`; `RecordButlerMember` requires a guardian for a child and refuses any role but Member; `AdmitButlerMember` refuses to admit a child record by any path, including a direct `INSERT`. What was missing was the statement that an un-admitted child is a **supported, complete state** rather than a half-finished admission, and that household features may rely on it.
+
+**BEING UNADMITTED IS NOT THE SAME AS BEING UNABLE TO SIGN IN, and this section originally conflated them.** `admitted` governs Butler runtime membership and nothing else. Directory authentication and `principal.Store.Authenticate` do not consult a Person's profile — `ProfileChild` is read in exactly one place that gates anything, `AdmitButlerMember` — so a child Person who also holds an LLDAP account or an API principal can still authenticate. Inferring "cannot sign in" from the admission refusal was wrong.
+
+So it is required here rather than assumed. **A scheduled subject carries no authentication binding of any kind**: no directory account, no API principal, no chat binding, no session. Recording a Person as a child, or converting an existing Person to one, must remove any it already has; a deployment that cannot remove them must refuse the conversion rather than leave usable credentials behind a profile that claims there are none.
+
+Nothing enforces that today. `RecordButlerMember` checks the guardian and the role and looks at no identity link, so this is a decision with an open implementation, and the gap is named here so it is closed deliberately rather than discovered.
 
 **THIS IS NOT THE CHILD SURFACE, AND DOES NOT OPEN IT.** ADR-W030 Part C gates a future Child surface on its own bot credentials, principal and role, endpoint, structurally limited gateway, transport eligibility, and boundary tests, and states that no child deployment is authorized there. Every one of those is a requirement on a child **acting** — talking to an Agent, holding a credential, reaching a gateway. A child who is scheduled does none of them. The gate stands exactly as written, `AdmitButlerMember` keeps refusing, and nothing in this section may be read as evidence for that surface.
 
@@ -160,11 +166,17 @@ A sole guardian still cannot be removed while the child record is active — ADR
 
 The household's own screens are shared: a wall tablet in a kitchen, a phone handed round. A per-person agenda rendered there is not protected by the person it is about — it is protected by the door the household already came through.
 
-So a per-person agenda is a **household surface with a subject selector**, not a per-person authenticated one. "Whose day is this" chooses what to render; it does not establish who is asking. The portal's existing boundary — everyone through the door is the household — is the boundary the agenda inherits, and A9's guardian rule governs what may be assembled for a subject at all.
+So a per-person agenda is a **household surface with a subject selector**, not a per-person authenticated one. "Whose day is this" chooses what to render; it does not establish who is asking. The portal's existing boundary — everyone through the door is the household — is the boundary the agenda inherits.
 
-This is stated as a decision rather than left to the UI because it is a privacy claim. A household must not be able to conclude from "each person has their own agenda" that the agendas are private from each other on a shared device. Where a member does have their own session, their own agenda is theirs and personal-scope rules apply as they already do; the shared-screen case is the one that needs saying out loud.
+**THE SURFACE IS CLASSIFIED UNIFORMLY, because nothing can tell it apart.** An earlier draft of this section asked for adult personal items to be withheld "on a shared screen", which is not implementable and would have been quietly ignored or quietly wrong: a request carries an authenticated member and a surface, and no request, session, Connection or device attribute says whether the physical screen is currently being handed round a kitchen. A rule conditioned on a fact the server cannot observe is not a rule.
 
-The consequence worth accepting deliberately: a personal item belonging to an **adult** must not be assembled into an agenda rendered on a shared screen merely because somebody selected that adult. A9 gives a guardian standing over a child's records; it gives nobody standing over an adult's, and the subject selector is not a way to acquire it.
+The rule is therefore about standing, not about hardware, and holds identically in every session:
+
+- A reader may see a subject's **household-scope** records whenever they can open the surface.
+- A reader may see a subject's **personal-scope** records when they are that subject, when the commitment names them, or when A9's recorded guardian relationship makes the subject their child.
+- Nothing else. Selecting an adult from the picker grants no standing over that adult's personal records, in any session, on any device.
+
+The cost is accepted deliberately: an adult reading their **own** agenda on the kitchen tablet will see their own personal items there, because the surface cannot distinguish that tablet from their phone. A household that wants those unseen keeps them off a shared screen the same way it keeps anything else off one. What the design guarantees is the part it can: the selector never widens what a reader may be shown.
 
 
 # B. Agents, tools, models, and Connections
