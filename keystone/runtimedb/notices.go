@@ -389,6 +389,43 @@ func (db *DB) AcknowledgeNotice(seq int64) error {
 // the exclusion cannot be lost by a caller that forgets it.
 // Acknowledging one would take the decision off the member's page while
 // whatever waits on it still waits.
+// clearableNotices is what Clear touches: this member's, unread, still
+// deliverable, and not a question they have yet to answer.
+//
+// SHARED BY THE UPDATE AND THE COUNT, and it has to be. A surface that
+// decides whether to offer the button using a different predicate from
+// the one the button runs is a surface that offers a button which does
+// nothing — which is the failure this whole area keeps producing. One
+// string, two statements, no drift.
+//
+// Takes the recipient person id as its only parameter.
+const clearableNotices = `recipient_person_id = ? AND acknowledged_at = '' AND undelivered_at = ''
+	    AND NOT (asks = 1 AND answered_at = '')`
+
+// CountClearableNoticesFor is how many notices Clear would actually
+// acknowledge for this member.
+//
+// The card needs it to decide whether to offer the button at all. An
+// unread count is not the same number: a member whose only unread
+// notice is an unanswered question has something to see and nothing to
+// clear, and offering Clear there gives them a button that reports
+// success, changes nothing, and is indistinguishable from a broken one.
+func (db *DB) CountClearableNoticesFor(recipient string) (int, error) {
+	if recipient == "" {
+		return 0, nil
+	}
+	id, err := personIDForRead(db.sql, recipient)
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: counting clearable notices: %w", err)
+	}
+	var n int
+	if err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM notices WHERE `+clearableNotices, id).Scan(&n); err != nil {
+		return 0, fmt.Errorf("runtimedb: counting clearable notices: %w", err)
+	}
+	return n, nil
+}
+
 func (db *DB) AcknowledgeNoticesFor(recipient string) (int, error) {
 	if recipient == "" {
 		return 0, fmt.Errorf("runtimedb: clearing notices needs a recipient")
@@ -403,9 +440,7 @@ func (db *DB) AcknowledgeNoticesFor(recipient string) (int, error) {
 		return 0, fmt.Errorf("runtimedb: clearing notices: %w", err)
 	}
 	res, err := db.sql.Exec(
-		`UPDATE notices SET acknowledged_at = ?
-		  WHERE recipient_person_id = ? AND acknowledged_at = '' AND undelivered_at = ''
-		    AND NOT (asks = 1 AND answered_at = '')`, now(), id)
+		`UPDATE notices SET acknowledged_at = ? WHERE `+clearableNotices, now(), id)
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: clearing notices: %w", err)
 	}
