@@ -30,6 +30,13 @@
   rendered the way a date somebody set is.
 -->
 <style>
+  /* The cards are stacked, so the gap between them belongs to the
+   * container. .wid carries no margin of its own — on the dashboard it
+   * sits in .widgets, which is a grid with a gap — so appending two of
+   * them into #body put "Things you track" flush against "On the
+   * calendar" with nothing between the two shadows. Same gap .widgets
+   * uses, so a card is spaced the same on both pages. */
+  #body { display: flex; flex-direction: column; gap: var(--space-4); }
   .grp { margin-bottom: var(--space-6); }
   .grphead { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap;
              margin-bottom: var(--space-3); }
