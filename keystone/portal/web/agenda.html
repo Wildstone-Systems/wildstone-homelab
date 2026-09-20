@@ -201,6 +201,38 @@
     what.appendChild(make("div", "title", item.title));
     if (item.detail) { what.appendChild(make("div", "sub", item.detail)); }
     r.appendChild(what);
+    if (item.moved) {
+      what.appendChild(make("div", "sub", "moved this time"));
+    }
+    // MOVE JUST THIS ONE. A booking is per cycle — upkeep drops it
+    // once the cycle closes — so shifting the bins to Friday for a
+    // holiday week shifts this week and nothing after it. That is the
+    // whole reason this is a booking and not an edit to the schedule.
+    if (item.done && item.name) {
+      var move = make("button", "hbtn hbtn-ghost tick", "Move");
+      move.type = "button";
+      move.addEventListener("click", function () {
+        var when = window.prompt(
+          "Move \"" + item.title + "\" to which date, just this time? (YYYY-MM-DD)", "");
+        if (!when) { return; }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(when)) {
+          window.alert("Use a date like 2026-11-27.");
+          return;
+        }
+        move.disabled = true;
+        fetch("/api/v1/home/commitments/" + encodeURIComponent(item.name) + "/booked", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ at: when + "T12:00:00Z" })
+        }).then(function (res) {
+          if (!res.ok) { throw new Error("move: " + res.status); }
+          load(page.who);
+        }).catch(function () {
+          move.disabled = false;
+          move.textContent = "Wouldn't move";
+        });
+      });
+      r.appendChild(move);
+    }
     // Ticking off goes through the door the upkeep page already uses,
     // and is offered only where the server said this reader may.
     if (item.done && item.name) {

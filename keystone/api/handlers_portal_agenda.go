@@ -94,6 +94,11 @@ type agendaItem struct {
 	// Done reports whether this reader may tick it off. A day that
 	// offers a tick it will refuse is worse than one that offers none.
 	Done bool `json:"done,omitempty"`
+	// Moved marks a cycle that has been shifted off its usual day, so
+	// the row can say so. A chore silently appearing on the wrong day
+	// looks like a bug in the schedule rather than a decision somebody
+	// made.
+	Moved bool `json:"moved,omitempty"`
 	// sortAt orders the day. Unexported: the page draws what it is
 	// given, in the order it is given.
 	sortAt time.Time
@@ -299,11 +304,14 @@ func (s *Server) agendaCommitments(who string, asker who, today time.Time, loc *
 		// the honest place for something with no date of its own, and
 		// dropping it would make the agenda quietly incomplete.
 		at := today
-		if due, ok := calendarDue(st); ok {
-			at = due.In(loc)
+		scheduled, scheduledOK := calendarDue(st)
+		if scheduledOK {
+			at = scheduled.In(loc)
 		}
+		moved := false
 		if b := st.Booking; b != nil && !b.At.IsZero() {
 			at = b.At.In(loc)
+			moved = !scheduledOK || !sameDay(at, scheduled.In(loc))
 		}
 		if at.Before(today) {
 			at = today
@@ -318,8 +326,9 @@ func (s *Server) agendaCommitments(who string, asker who, today time.Time, loc *
 			Name: st.Name, PartOfDay: st.PartOfDay,
 			// The same predicate the upkeep page answers with, so a tick
 			// offered here is a tick that will be accepted there.
-			Done: mayComplete(st, asker) || s.isGuardianOf(asker.member, who),
-			rank: resource.PartOfDayRank(st.PartOfDay),
+			Done:  mayComplete(st, asker) || s.isGuardianOf(asker.member, who),
+			Moved: moved,
+			rank:  resource.PartOfDayRank(st.PartOfDay),
 		}
 		if item.Title == "" {
 			item.Title = st.Name
@@ -345,6 +354,14 @@ func calendarDue(st upkeep.Standing) (time.Time, bool) {
 		}
 	}
 	return best, !best.IsZero()
+}
+
+// sameDay compares two instants by the day they fall on, which is the
+// only comparison a chore's date deserves.
+func sameDay(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
 }
 
 // commitmentOwner is the handle a commitment is about, with the

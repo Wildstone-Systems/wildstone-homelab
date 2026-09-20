@@ -295,25 +295,41 @@ func (e *Engine) input(res resource.Resource, meters map[string]commitment.Meter
 		})
 	}
 
+	// A LIVE BOOKING IS READ FOR EVERY COMMITMENT, and fed to the engine
+	// only for the ones that require one.
+	//
+	// Those are two different questions and this used to answer only
+	// the second. `requiresBooking` means "an appointment is part of
+	// answering this" — the dentist. A booking on a commitment that
+	// does NOT require one means something simpler and just as real:
+	// this cycle is happening on a different day. The bins go out on a
+	// Thursday and this week, for the holiday, on the Friday.
+	//
+	// Reading it for everything is what lets a surface move one cycle
+	// without touching the schedule. Feeding it to the engine only when
+	// it is required is what keeps that from changing anybody's state:
+	// a chore does not become "booked" because somebody shifted it, and
+	// an overdue one does not stop being overdue.
 	var live *runtimedb.CommitmentBooking
-	if spec.RequiresBooking {
-		b, berr := e.DB.LatestCommitmentBooking(res.Metadata.Name)
-		switch {
-		case berr == nil && b.Live():
-			// A booking made for a cycle that has since closed is not
-			// this cycle's appointment. The ledger keeps it; the open
-			// cycle does not inherit it.
-			if len(in.History) == 0 || b.BookedAt.After(in.History[len(in.History)-1].At) {
-				live = &b
+	b, berr := e.DB.LatestCommitmentBooking(res.Metadata.Name)
+	switch {
+	case berr == nil && b.Live():
+		// A booking made for a cycle that has since closed is not
+		// this cycle's appointment. The ledger keeps it; the open
+		// cycle does not inherit it. That is also exactly what makes
+		// a one-week shift a one-week shift.
+		if len(in.History) == 0 || b.BookedAt.After(in.History[len(in.History)-1].At) {
+			live = &b
+			if spec.RequiresBooking {
 				in.Booking = &commitment.Booking{At: b.At, BookedAt: b.BookedAt, By: b.BookedBy}
 			}
-		case berr == nil:
-			// Cancelled. Deliberately not passed on: the household has
-			// no appointment, which is the whole question.
-		case berr == runtimedb.ErrNotFound:
-		default:
-			return commitment.Input{}, nil, fmt.Errorf("upkeep: commitment %q booking: %w", res.Metadata.Name, berr)
 		}
+	case berr == nil:
+		// Cancelled. Deliberately not passed on: the household has
+		// no appointment, which is the whole question.
+	case berr == runtimedb.ErrNotFound:
+	default:
+		return commitment.Input{}, nil, fmt.Errorf("upkeep: commitment %q booking: %w", res.Metadata.Name, berr)
 	}
 	return in, live, nil
 }

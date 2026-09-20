@@ -368,3 +368,78 @@ func TestAnUndatedCommitmentStillLandsOnToday(t *testing.T) {
 		t.Fatal("today is empty; a daily routine anchored today should be on it")
 	}
 }
+
+// A holiday week moves the bins and leaves the schedule alone.
+//
+// This is the whole reason a temporary change is a BOOKING and not an
+// edit: upkeep drops a booking once the cycle it was made for closes,
+// so the shift is spent on one week and Thursday comes back by itself.
+func TestMovingAChoreShiftsOneCycleAndNotTheSchedule(t *testing.T) {
+	h := homeHarness(t)
+	h.s.Upkeep = &upkeep.Engine{DB: h.s.DB, State: h.s.State, Loc: time.UTC}
+	h.person("sandy")
+
+	now := time.Now().UTC()
+	ahead := (int(time.Thursday) - int(now.Weekday()) + 7) % 7
+	thursday := now.AddDate(0, 0, ahead)
+	anchor := thursday.AddDate(0, 0, -7).Format("2006-01-02")
+
+	body := `{"description":"Bins out","about":"sandy","every":"1w","anchor":"` + anchor + `",` +
+		`"partOfDay":"evening","rollover":"fromSchedule","scope":"personal"}`
+	res := h.member(http.MethodPost, "/api/v1/home/commitments", "sandy", "homepage_users",
+		stringsNewReader(body), "application/json")
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("adding: %d", res.StatusCode)
+	}
+
+	dayOf := func(title string) (string, bool) {
+		got := h.agenda(t, "sandy", "sandy")
+		for _, d := range got.Days {
+			for _, it := range d.Items {
+				if it.Title == title {
+					return d.Date, it.Moved
+				}
+			}
+		}
+		return "", false
+	}
+
+	before, moved := dayOf("Bins out")
+	if before != thursday.Format("2006-01-02") {
+		t.Fatalf("starts on %s, want the Thursday %s", before, thursday.Format("2006-01-02"))
+	}
+	if moved {
+		t.Error("nothing has been moved yet and the row says it has")
+	}
+
+	// The holiday: this week it goes out on the Friday.
+	friday := thursday.AddDate(0, 0, 1)
+	move := `{"at":"` + friday.Format("2006-01-02") + `T12:00:00Z"}`
+	res = h.member(http.MethodPost, "/api/v1/home/commitments/bins-out/booked", "sandy", "homepage_users",
+		stringsNewReader(move), "application/json")
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
+		t.Fatalf("moving: %d", res.StatusCode)
+	}
+
+	after, movedNow := dayOf("Bins out")
+	if after != friday.Format("2006-01-02") {
+		t.Errorf("after moving it sits on %s, want the Friday %s", after, friday.Format("2006-01-02"))
+	}
+	if !movedNow {
+		t.Error("a moved cycle does not say it was moved, so it looks like a broken schedule")
+	}
+
+	// And the state is untouched: a chore does not become "booked"
+	// because somebody shifted it by a day.
+	standings, err := h.s.Upkeep.Evaluate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range standings {
+		if st.Name == "bins-out" && st.RequiresBooking {
+			t.Error("shifting a chore turned it into something that requires an appointment")
+		}
+	}
+}
