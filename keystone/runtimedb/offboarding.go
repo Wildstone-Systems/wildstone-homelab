@@ -124,8 +124,42 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 		if t.Audience == ButlerAudienceShared {
 			// Operational ownership moves; the author does not. The
 			// schema enforces the second half.
+			// THE CONNECTION goes with the person. The SESSION stays.
+			//
+			// A4 re-homes the work; it does not re-home the request
+			// that made it. The Connection was the offboarded person's
+			// — offboarding fences the Connections they own a few steps
+			// below — and leaving it here would bind the
+			// administrator's work to a withdrawn person's Connection
+			// and refuse its first tool call for ever: nobody can
+			// continue that session (continueButlerSession requires the
+			// caller BE its person) and every other path arrives over a
+			// different Connection. Cleared rather than repointed,
+			// because what the new owner will continue it over is not
+			// known here and must not be guessed.
+			//
+			// The session is a different thing and is KEPT. It is not
+			// what blocks — derived authority asks whether that session
+			// was withdrawn, and offboarding withdraws the PERSON, which
+			// the owner leg already covers. What it is, is the only way
+			// back to this task: ButlerTaskForSession is the single
+			// production lookup (butlerlive/serve.go), so clearing it
+			// would strand the verified ledger A4 transfers the work in
+			// order to preserve. An earlier version of this fix did
+			// exactly that; a review bot on #287 caught it.
+			//
+			// WHAT IS STILL MISSING, stated so the next slice finds it:
+			// preserving the handle is not the same as being able to
+			// USE it. An administrator has no way to resume transferred
+			// work — there is no resume-by-task path, and the session
+			// belongs to somebody who can no longer call. That is A4's
+			// to finish; §10.1's job here is not to make the gap worse,
+			// and keeping the association is what that takes.
 			if _, err := db.sql.Exec(
-				`UPDATE butler_tasks SET owner_person_id = ?, updated_at = ? WHERE seq = ?`,
+				`UPDATE butler_tasks
+				 SET owner_person_id = ?, origin_connection = '', origin_connection_ref = 0,
+				     updated_at = ?
+				 WHERE seq = ?`,
 				adminPerson, now(), t.Seq); err != nil {
 				return result, fmt.Errorf("runtimedb: transferring shared work: %w", err)
 			}

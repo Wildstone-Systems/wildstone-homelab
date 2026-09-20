@@ -300,6 +300,27 @@ func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool,
 			switch existing.State {
 			case runtimedb.ButlerTaskCompleted, runtimedb.ButlerTaskFailed:
 			default:
+				// THE CALLER MUST BE THE ORIGIN, checked here rather
+				// than only when a tool runs.
+				//
+				// withinOriginatingAuthority asks the same question in
+				// the resolver, but the resolver is reached from
+				// AuthorizeTool — so a turn that does not match could
+				// still be sent to the provider, and a tool-free answer
+				// would come back and complete normally. The model call
+				// is the disclosure; refusing afterwards is too late,
+				// which is the same shape as the revoked-person finding
+				// on #286. Found by a review bot on #287.
+				//
+				// An empty origin does not apply, as everywhere else: a
+				// routine has none, and A4's transfer clears the
+				// Connection deliberately so reviewed work can be
+				// carried on from somewhere else.
+				if existing.OriginConnection != "" && existing.OriginConnection != t.Connection.Name {
+					return runtimedb.ButlerTask{}, false, fmt.Errorf(
+						"butlerlive: %s belongs to work that arrived over %s and this request did not (design §10.1)",
+						existing.ID, existing.OriginConnection)
+				}
 				return existing, true, nil
 			}
 		case errorsIsNotFound(err):
@@ -327,7 +348,15 @@ func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool,
 		AgentClass: b.AgentClass,
 		Audience:   audience,
 		SessionID:  t.SessionID,
-		Objective:  conversationObjective(b.Name, t.Text),
+		// The Connection this request arrived over, snapshotted for the
+		// same reason the surface and the Butler are: derived authority
+		// is re-evaluated against what the task was ADMITTED UNDER, not
+		// against wherever the conversation happens to be next week
+		// (§10.1; a conversation follows Person + Agent rather than
+		// transport, B10, so the two genuinely differ).
+		OriginConnection:    t.Connection.Name,
+		OriginConnectionRef: t.Connection.Ref,
+		Objective:           conversationObjective(b.Name, t.Text),
 		// A conversation's retention follows the conversation, so
 		// reaping a thread reaps the work that belonged to it rather
 		// than leaving orphaned tasks nobody will ever resume.

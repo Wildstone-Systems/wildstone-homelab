@@ -407,19 +407,20 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 		if err := r.Ledger.Fence(); err != nil {
 			return tr, fmt.Errorf("butler runner: %w", err)
 		}
-		if err := r.Ledger.Authorize(taskID); err != nil {
-			// Cancellation stops new actions mid-run, not only between
-			// slices (A4).
-			r.trace(taskID, LedgerTraceEvent{
-				Type: TraceDenial, Payload: jsonPayload(map[string]any{"authority": "withdrawn mid-slice"}),
-			})
-			return tr, fmt.Errorf("butler runner: %w", err)
-		}
+		// modelRound checks before every attempt, including the first,
+		// so the round's own check lives there now rather than here.
 		answer, err := r.modelRound(ctx, p, taskID, manifest, messages, specs)
 		if err != nil {
 			return tr, err
 		}
 		if len(answer.ToolCalls) == 0 {
+			// Accepting an answer is a boundary too: completing the
+			// task writes evidence and a result summary the household
+			// reads, and doing that for a person whose authority went
+			// away mid-call would record work nobody was entitled to.
+			if err := r.stillAuthorized(taskID, "final answer"); err != nil {
+				return tr, err
+			}
 			tr.FinalText = answer.Text
 			return tr, r.complete(taskID, tr, steps, answer.Text)
 		}
@@ -443,6 +444,13 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 					toolsUsed)
 				return tr, r.Ledger.Wait(taskID, LedgerWaitBudgetExhausted,
 					fmt.Sprintf("%d tool calls used", toolsUsed))
+			}
+			// The dispatch boundary. Checked per call rather than per
+			// round because the model's answer arrived some time ago
+			// and may carry several calls, and because A2.1 names
+			// dispatch specifically.
+			if err := r.stillAuthorized(taskID, "tool dispatch"); err != nil {
+				return tr, err
 			}
 			rec, content, dispatched := r.toolCall(ctx, taskID, tc, verified)
 			// Only a call that actually went out spends budget. A
@@ -478,6 +486,32 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 	return tr, r.Ledger.Wait(taskID, LedgerWaitReply, "turn tool-call limit reached; awaiting continue")
 }
 
+// stillAuthorized re-evaluates the task's authority at one boundary and
+// traces the refusal.
+//
+// ADR-W030 A2.1 is "check current membership and link generation at
+// every retrieval and dispatch", and design §10.1 says derived
+// authority is "re-evaluated at every authorization boundary". A model
+// call is the slowest thing this runner does: a session or Connection
+// withdrawn while one is in flight would otherwise have its tool calls
+// dispatched anyway, because the last check happened before the call
+// went out. The gap is exactly as long as the model takes to answer.
+//
+// So the boundaries are: before the slice, before each model round,
+// before each tool call, and before a final answer is accepted. The
+// first two were already here; the last two were not, and were found by
+// a review bot on #287.
+func (r *Runner) stillAuthorized(taskID, at string) error {
+	if err := r.Ledger.Authorize(taskID); err != nil {
+		r.trace(taskID, LedgerTraceEvent{
+			Type:    TraceDenial,
+			Payload: jsonPayload(map[string]any{"authority": "withdrawn", "at": at}),
+		})
+		return fmt.Errorf("butler runner: %w", err)
+	}
+	return nil
+}
+
 // modelRound checkpoints one model call and retries a stalled or failed
 // provider inside the remaining budget before involving a person.
 //
@@ -495,6 +529,17 @@ func (r *Runner) modelRound(ctx context.Context, p provider.Provider, taskID str
 ) (*provider.ChatResponse, error) {
 	var lastErr error
 	for try := 0; try <= r.RetryLimit; try++ {
+		// EVERY attempt, not only the first. A retry follows a stall or
+		// a provider failure, so by definition time has passed since
+		// the round's own check — often the whole StallTimeout — and
+		// sending the conversation again after the Person, session,
+		// Connection or grant behind it was withdrawn is the same
+		// disclosure as sending it the first time. Found by a review
+		// bot on #287, which is the second time this slice put a
+		// boundary next to a gap rather than in it.
+		if err := r.stillAuthorized(taskID, "model attempt"); err != nil {
+			return nil, err
+		}
 		resp, err := r.modelAttempt(ctx, p, taskID, manifest, messages, specs)
 		if err == nil {
 			return resp, nil
@@ -620,6 +665,26 @@ func (r *Runner) toolCall(ctx context.Context, taskID string, tc provider.ToolCa
 	fp := callFingerprint(tc.Name, tc.Input)
 
 	if content, ok := verified[fp]; ok && fp != "" {
+		// A RETRIEVAL IS A BOUNDARY. ADR-W030 A2.1 is "at every
+		// retrieval and dispatch", and this is the only path that
+		// returns a tool's result without dispatching it — so it is the
+		// only place where authority withdrawn since the result was
+		// recorded would otherwise have no effect at all.
+		//
+		// It matters most for a grant: a revoked grant is refused per
+		// tool by the resolver, which Execute reaches and this path
+		// does not. Serving the cache would hand back exactly what the
+		// revocation was about. Found by a review bot on #287.
+		if allowed, why := r.Gateway.Permits(tc.Name, r.ReadOnly); !allowed {
+			r.trace(taskID, LedgerTraceEvent{
+				Type:      TraceDenial,
+				SourceIDs: []string{tc.Name},
+				Payload:   jsonPayload(map[string]any{"authority": "withdrawn", "at": "ledger retrieval"}),
+			})
+			rec.Rejected = true
+			rec.Result = why
+			return rec, why, false
+		}
 		// Already established. Re-reading it would not be harmless: a
 		// second reading at a different moment can disagree with the one
 		// the earlier part of this task was built on.

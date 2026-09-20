@@ -107,6 +107,17 @@ func (w *witness) sawText(want string) bool {
 	return false
 }
 
+// servedLedger wires a ledger the way cmd/keystone wires the one that
+// serves real conversations: all four legs of §10.1's derived Task
+// authority on. A ledger without them refuses any task that recorded an
+// origin it cannot confirm, which is a real deployment's answer too —
+// so a test that left them off would be testing the refusal rather than
+// whatever it meant to.
+func servedLedger(l *butlerstore.Ledger) *butlerstore.Ledger {
+	l.DerivedAuthorityChecks()
+	return l
+}
+
 // countingToolset records how many times each tool was really
 // dispatched — the measurement "resumes without repeating a dispatch"
 // rests on.
@@ -134,6 +145,8 @@ func (ts *countingToolset) SetSessionTask(id string)              { ts.task = id
 func (ts *countingToolset) SetCaller(kind butler.CallerKind, person, connection string) {
 	ts.caller, ts.person, ts.connection = kind, person, connection
 }
+
+func (ts *countingToolset) Permits(string, bool) (bool, string) { return true, "" }
 
 func (ts *countingToolset) OfferedSpecs(bool) []provider.Tool {
 	return []provider.Tool{{Name: "get_health", Description: "read a node's health"}}
@@ -243,7 +256,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	f.butlers = &Butlers{
 		DB:     db,
-		Ledger: butlerstore.New(db, lease),
+		Ledger: servedLedger(butlerstore.New(db, lease)),
 		Providers: func(b runtimedb.Butler) (provider.Provider, error) {
 			switch b.ModelKind {
 			case runtimedb.ModelLocal:
@@ -458,7 +471,7 @@ func (f *fixture) restart(t *testing.T) {
 	prior := f.butlers
 	f.butlers = &Butlers{
 		DB:        f.db,
-		Ledger:    butlerstore.New(f.db, lease),
+		Ledger:    servedLedger(butlerstore.New(f.db, lease)),
 		Providers: prior.Providers,
 		Gateways:  prior.Gateways,
 	}
@@ -780,5 +793,102 @@ func TestRepointingARouteAtAnotherModelReachesIt(t *testing.T) {
 	// which is the half of the defect that made it silent.
 	if ans.Model != "llama3" {
 		t.Fatalf("the answer reports %q, and llama3 is what answered", ans.Model)
+	}
+}
+
+// A task cannot be carried on over a Connection it did not arrive over,
+// and the refusal lands BEFORE the provider is called.
+//
+// withinOriginatingAuthority asks the same question in the resolver,
+// but the resolver is reached from AuthorizeTool — so a mismatched turn
+// could still be sent to the model, and a tool-free answer would come
+// back and complete normally. The model call is the disclosure;
+// refusing after it is too late, which is the same shape as the
+// revoked-person finding on #286. Found by a review bot on #287.
+//
+// Mutation: removing the comparison from Butlers.task makes this fail.
+func TestAResumedTaskIsRefusedOverADifferentConnection(t *testing.T) {
+	f := newFixture(t)
+
+	// The row reference matters as much as the name: ConnectionCheck
+	// refuses a named Connection it cannot identify.
+	conn, err := f.db.ChatConnectionAt("telegram", "chat-telegram-alfred")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chatScope := ConnectionScope{Name: conn.Name(), Ref: conn.Seq}
+
+	// An in-flight task that arrived over that chat Connection, built
+	// directly so it stays unfinished — a completed task opens fresh
+	// work by design, which would not exercise the resume path.
+	sessionID, err := f.db.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "butler", ActingFor: "mika", Provider: "ollama",
+		Mode: runtimedb.ButlerModeFull, Surface: runtimedb.ButlerSurfaceAdmin,
+		Butler: "alfred", FinalText: "earlier",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID, err := f.db.InsertButlerTask(runtimedb.ButlerTask{
+		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
+		Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: runtimedb.AgentClassOwner,
+		Audience:  runtimedb.ButlerAudiencePrivate,
+		SessionID: sessionID, OriginConnection: conn.Name(), OriginConnectionRef: conn.Seq,
+		Objective: "answer the earlier question", CompletionCriteria: "answered",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.SetTaskButler(taskID, "alfred"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The same person, the same session, arriving from the Console.
+	elsewhere := f.turn("alfred", "and why?")
+	elsewhere.SessionID = sessionID
+	elsewhere.Connection = ConnectionScope{Name: ConsoleConnection}
+	if _, err := f.butlers.Serve(context.Background(), elsewhere); err == nil {
+		t.Fatal("a task was carried on over a connection it never arrived through")
+	}
+
+	// And the SAME Connection still works, so this is about identity
+	// rather than about refusing every follow-up.
+	same := f.turn("alfred", "and why?")
+	same.SessionID = sessionID
+	same.Connection = chatScope
+	if _, err := f.butlers.Serve(context.Background(), same); err != nil {
+		t.Fatalf("a follow-up over the original connection was refused: %v", err)
+	}
+
+	// A task that recorded NO Connection has no leg to compare, and
+	// resumes from anywhere. That is a routine, a task from before the
+	// column existed, and — the case this must not break — work A4
+	// transferred, whose Connection is cleared on purpose so a reviewed
+	// transfer can be carried on from somewhere else.
+	bare, err := f.db.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "butler", ActingFor: "mika", Provider: "ollama",
+		Mode: runtimedb.ButlerModeFull, Surface: runtimedb.ButlerSurfaceAdmin,
+		Butler: "alfred", FinalText: "earlier",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bareTask, err := f.db.InsertButlerTask(runtimedb.ButlerTask{
+		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
+		Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: runtimedb.AgentClassOwner,
+		Audience: runtimedb.ButlerAudiencePrivate, SessionID: bare,
+		Objective: "work with no recorded connection", CompletionCriteria: "done",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.SetTaskButler(bareTask, "alfred"); err != nil {
+		t.Fatal(err)
+	}
+	anywhere := f.turn("alfred", "carry on")
+	anywhere.SessionID = bare
+	anywhere.Connection = ConnectionScope{Name: ConsoleConnection}
+	if _, err := f.butlers.Serve(context.Background(), anywhere); err != nil {
+		t.Fatalf("a task with no recorded connection was refused for not matching one: %v", err)
 	}
 }

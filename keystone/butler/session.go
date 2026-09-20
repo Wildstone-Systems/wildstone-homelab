@@ -72,6 +72,21 @@ type Toolset interface {
 	Execute(ctx context.Context, name string, input map[string]any, readOnly bool) (ToolOutcome, error)
 	// SystemPrompt is this surface's instruction hierarchy.
 	SystemPrompt() string
+	// Permits reports whether a tool would be allowed to run RIGHT NOW,
+	// without running it, and why not when it would not.
+	//
+	// It exists for the one path that returns a tool's result without
+	// dispatching it: a verified result served from the ledger on a
+	// resume. ADR-W030 A2.1 is "check current membership and link
+	// generation at every retrieval AND dispatch", and a cached
+	// retrieval is the retrieval half — the authority behind that
+	// result can have been withdrawn since it was recorded, and handing
+	// it back would be the withdrawal having no effect on the one path
+	// that never calls Execute. Found by a review bot on #287.
+	//
+	// It asks the same question dispatch asks, through the same call,
+	// so the two cannot answer differently.
+	Permits(name string, readOnly bool) (bool, string)
 	// Capabilities is this surface's effective inventory for a session
 	// with the given constraint (ADR-W030 P2). It is on the interface
 	// rather than beside it so a surface cannot ship tools it cannot

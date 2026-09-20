@@ -341,6 +341,8 @@ var Columns = []Column{
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
 	{"butler_runtime_settings", "updated_by", Actor,
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
+	{"butler_sessions", "revoked_by", Actor,
+		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
 	{"butler_sessions", "principal", Actor,
 		"a machine principal from the principals table — the legacy machine axis (#201 Decision 6, slice #210)"},
 	{"butler_sessions", "acting_for", Actor,

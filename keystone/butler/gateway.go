@@ -449,6 +449,33 @@ func (gw *ToolGateway) permitted(specs []provider.Tool) []provider.Tool {
 	return out
 }
 
+// Permits implements Toolset: the same question dispatch asks, without
+// running anything. See the interface for why it exists.
+func (gw *ToolGateway) Permits(name string, readOnly bool) (bool, string) {
+	entry, ok := gw.tools[name]
+	if !ok {
+		return false, fmt.Sprintf("%s is not a tool on this surface", name)
+	}
+	// Any MUTATING tool, which is what DispatchReadOnly refuses —
+	// not the one name that happens to be mutating today. Permits is
+	// the sole gate on the cached-retrieval path, so a second mutating
+	// tool would otherwise have its recorded result served into a
+	// read-only session that Execute would refuse.
+	if readOnly && entry.Mutating {
+		return false, fmt.Sprintf("tool %q is not available in this read-only session", name)
+	}
+	if d := gw.checkTool(name, entry); !d.Allowed {
+		// Through the same pipeline dispatch uses. A refusal can carry
+		// administrator-supplied text — butler_tool_scope.reason is
+		// appended to it — so it is content like any other, and
+		// ADR-W006 B3 puts redaction and the size bound in one place
+		// precisely "so a new tool cannot forget it". This path is new
+		// and forgot it; a review bot on #287 caught that.
+		return false, finishOutcome(refusal(name, d), false, gw.MaxContentBytes).Content
+	}
+	return true, ""
+}
+
 // Execute implements Toolset: dispatch with the session's read-only
 // constraint enforced at the execution boundary.
 func (gw *ToolGateway) Execute(ctx context.Context, name string, input map[string]any, readOnly bool) (ToolOutcome, error) {

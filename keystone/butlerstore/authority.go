@@ -83,6 +83,23 @@ func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecis
 		}
 	}
 
+	// A TASK NEVER EXCEEDS THE AUTHORITY OF ITS REQUEST (§10.1).
+	//
+	// When a check names a task, the person and Connection asking must
+	// be the ones that task was admitted under. This is the "can never
+	// widen" half of derived authority, and it belongs here rather than
+	// in the ledger because the ledger re-evaluates whether the ORIGIN
+	// still stands, while this asks whether the CALLER is that origin.
+	// A task whose work could be driven by somebody else's session
+	// would be a grant object after all — a bundle of authority that
+	// outlived the request and could be picked up by whoever named its
+	// id.
+	if q.TaskID != "" && q.Caller == butler.CallerPersonFacing {
+		if d, ok, err := a.withinOriginatingAuthority(q); err != nil || !ok {
+			return d, err
+		}
+	}
+
 	query := runtimedb.ToolQuery{
 		AgentClass:    q.AgentClass,
 		Tool:          q.Tool,
@@ -109,6 +126,73 @@ func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecis
 		Requestable: res.Requestable,
 		GrantSeq:    res.GrantSeq,
 	}, nil
+}
+
+// withinOriginatingAuthority checks the caller against the task's
+// recorded origin. It returns (decision, false, nil) when the answer is
+// already no.
+//
+// A leg the task did not record is not checked, for the reason the
+// ledger's derivedAuthority gives: an empty origin means the leg does
+// not apply, never that it passed. What it must not do is the reverse —
+// treat a RECORDED origin as satisfied by an empty caller — so each
+// comparison is against the task's value, not against whichever of the
+// two happens to be set.
+func (a *Authority) withinOriginatingAuthority(q butler.ToolAuthorityQuery) (butler.ToolDecision, bool, error) {
+	task, err := a.DB.ReadTaskOrigin(q.TaskID)
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		return butler.ToolDecision{
+			Allowed: false,
+			Reason: fmt.Sprintf(
+				"%s names work this deployment has no record of, so it was not run", q.Tool),
+		}, false, nil
+	}
+	if err != nil {
+		return butler.ToolDecision{}, false, err
+	}
+	// The task's own person: its CURRENT OWNER, which for every task
+	// but one is the author who asked for it.
+	//
+	// The one exception is the only thing that ever moves ownership:
+	// offboarding (runtimedb/offboarding.go, the sole writer of
+	// owner_person_id). ADR-W030 A4 designs that path deliberately —
+	// operational ownership moves to an administrator, "preserves
+	// original authorship", and the work PAUSES for grant and
+	// connection review before it may resume.
+	//
+	// Comparing the author instead would have made that path a dead
+	// end: a transferred task could be reviewed and moved back to
+	// running, and then refuse every tool call for ever, because the
+	// author it derives from is exactly the person who was offboarded.
+	// Found by a review bot on #287.
+	//
+	// It does not widen anything. A re-homing that pauses the work,
+	// strips its grants and waits for a human is a NEW bounded
+	// authorization, not a Task reaching past the one it had — and the
+	// grants A4 revokes on the way out stay revoked until somebody
+	// issues new ones, which the resolver enforces per tool on every
+	// call. (An earlier version of this comment credited a task-level
+	// grant leg that 552787c removed.)
+	//
+	// The author stays the immutable record of whose request this was;
+	// the schema enforces that half, and the work trace reads from it.
+	if task.Owner != q.Person {
+		return butler.ToolDecision{
+			Allowed: false,
+			Reason: fmt.Sprintf(
+				"%s belongs to work that is %s's to carry on, not %s's, so it was not run",
+				q.Tool, task.Owner, q.Person),
+		}, false, nil
+	}
+	if task.OriginConnection != "" && task.OriginConnection != q.Connection {
+		return butler.ToolDecision{
+			Allowed: false,
+			Reason: fmt.Sprintf(
+				"%s belongs to work that arrived over %s and this request did not, so it was not run",
+				q.Tool, task.OriginConnection),
+		}, false, nil
+	}
+	return butler.ToolDecision{}, true, nil
 }
 
 // AdmitPerson implements butler.PersonAuthorizer: layer 1, asked before
