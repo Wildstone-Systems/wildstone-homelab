@@ -26,7 +26,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/household"
@@ -44,6 +43,21 @@ const chatFallbackWindow = 10 * time.Minute
 // adminGroupReply is what the operator surface says in a group chat: it
 // answers in a direct message and nowhere else (ADR-W026 A7).
 const adminGroupReply = "I answer operator questions in a direct message only, never in a group."
+
+// groupRedirectReply is what EVERY Agent now says to a recognised
+// Person who addresses it from a room (design §8.3).
+//
+// IT IS A REDIRECT AND NOT A BARE REFUSAL, because #212 asks for one
+// and because the alternative teaches people the bot is broken. The
+// household member did nothing wrong; they are in the wrong place, and
+// the right place is one message away.
+//
+// It says nothing about WHY beyond the audience. "I can't see who else
+// is here" is true, is the actual reason, and does not describe the
+// household's admission model to a room that may contain people who
+// are not in it.
+const groupRedirectReply = "I only answer in a one-to-one chat — in a group I can't tell who else is reading. " +
+	"Message me directly and I'll pick this up there."
 
 type inboundMessage struct {
 	Transport string `json:"transport"`
@@ -191,18 +205,47 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		}
 	}()
 
-	// Group rules (ADR-W026 A7). The operator surface refuses outright;
-	// the family surface answers, with the audience declared to it.
-	systemExtra := ""
+	// GROUP AND MULTI-RECIPIENT DESTINATIONS FAIL CLOSED (design §8.3).
+	//
+	// This replaces ADR-W026 A7's split, where the operator surface
+	// refused and the family surface answered with an audience note in
+	// its prompt. The design supersedes it, and says why: "Person
+	// admission authenticates the SPEAKER, not everyone who will
+	// receive the reply... 'The sender is known' is not 'the audience
+	// is known'."
+	//
+	// The note it replaces was an instruction to a model to be
+	// discreet. It was a good instruction and it is not a boundary: a
+	// recognised Person could pull their own Personal memory into a
+	// room of unadmitted participants simply by asking for it, and
+	// every disclosure rule below would have been enforced against the
+	// wrong set of people. Refusal is the MVP answer until audience
+	// admission exists to make it safe, which is why §8.3 keeps group
+	// support as a seam rather than a feature.
+	//
+	// BEFORE THE ROOM IS RECORDED AND BEFORE ANY SESSION. No provider
+	// call, no context assembled, no memory read -- the refusal is the
+	// whole of the turn.
 	if msg.Group {
-		if at.AdmitsOwnersOnly() {
-			seq := s.queueChatReply(at, conversation, adminGroupReply, binding.ID, "",
-				chatDedupe(at, conversation, msg.MessageID, "admin-group", text))
-			s.settleInbound(claimKey, seq, &settled)
-			return inboundResponse{Accepted: true, Bound: true, Queued: seq,
-				Reason: "the operator surface answers in direct messages only"}, http.StatusAccepted, nil
+		// The room is noted first, because the OUTBOUND side has no
+		// other way to learn this destination is a room: a household
+		// rule queues to a target string, and a target string does not
+		// say whether it is one person or forty.
+		if rerr := s.DB.NoteChatRoom(at.Seq, conversation); rerr != nil {
+			s.Log.Error("noting a chat room", "err", rerr)
 		}
-		systemExtra = butler.HouseholdGroupNote
+		body, reason := groupRedirectReply, "this agent answers in a one-to-one chat only (design §8.3)"
+		if at.AdmitsOwnersOnly() {
+			// An Owner Agent keeps its own wording. It said this
+			// before the design did, and "operator questions" is more
+			// use to the person reading it than the general answer.
+			body, reason = adminGroupReply, "the operator surface answers in direct messages only"
+		}
+		seq := s.queueChatReply(at, conversation, body, binding.ID, "",
+			chatDedupe(at, conversation, msg.MessageID, "group-redirect", text))
+		s.settleInbound(claimKey, seq, &settled)
+		return inboundResponse{Accepted: true, Bound: true, Queued: seq,
+			Reason: reason}, http.StatusAccepted, nil
 	}
 
 	// Is this an ANSWER to something a household rule asked (ADR-W024
@@ -278,12 +321,15 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 			// authority seam has one to carry (§10.1). No Permits: a
 			// chat Connection's ceiling is its Agent's surface, which
 			// RequireSurface below already enforces.
-			Connection:     butlerlive.ConnectionScope{Name: at.Name(), Ref: at.Seq},
-			Butler:         named,
-			Member:         binding.Identity,
-			Text:           text,
-			Group:          msg.Group,
-			SystemExtra:    systemExtra,
+			Connection: butlerlive.ConnectionScope{Name: at.Name(), Ref: at.Seq},
+			Butler:     named,
+			Member:     binding.Identity,
+			Text:       text,
+			Group:      msg.Group,
+			// Nothing to add. The one caller that set this was the
+			// group-audience note, and a group never reaches here any
+			// more (design §8.3).
+			SystemExtra:    "",
 			RequireSurface: at.Surface,
 		}
 		if prior != nil {
@@ -291,7 +337,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		}
 		out, st, err = s.runNamedButlerSession(r.Context(), turn, prior)
 	} else if !at.AdmitsOwnersOnly() {
-		out, st, err = s.runFamilySession(r.Context(), text, binding.Identity, systemExtra, at.Name(), msg.Group, prior)
+		out, st, err = s.runFamilySession(r.Context(), text, binding.Identity, "", at.Name(), msg.Group, prior)
 	} else {
 		out, st, err = s.runAdminButlerSession(r.Context(), text, binding.Identity, at.Name(), prior)
 	}
@@ -610,6 +656,18 @@ func (s *Server) ChatRecipientFor(transport, member string) (target string, bind
 	if err != nil {
 		return "", 0, 0, err
 	}
+	// EVERY candidate, not the first one that matches.
+	//
+	// This loop used to return as soon as it found a match, and
+	// ListChatBindings orders newest first — so a household with two
+	// Member-Agent bots on one transport delivered a rule's message to
+	// whichever Connection had been bound most recently. That is a
+	// CROSS-CONNECTION DELIVERY FALLBACK, and §8.3 says one may
+	// "occur only when explicitly configured — never as a default".
+	// Nobody configured it, nobody could see it, and which Agent spoke
+	// for the house depended on the order of a list.
+	var candidates []runtimedb.ChatBinding
+	var conns []runtimedb.Connection
 	for _, b := range bindings {
 		// A household rule notifies the household, never an Owner
 		// Agent's private bot — which is also why the admin packages
@@ -623,20 +681,64 @@ func (s *Server) ChatRecipientFor(transport, member string) (target string, bind
 		if b.Transport != transport || b.Identity != member {
 			continue
 		}
-		// The direct conversation, not the account. On Telegram they are
-		// the same value and either would work; on Matrix the account is
-		// an MXID and only a room can be sent to, so addressing the
-		// account would queue a message that can never be delivered
-		// (ADR-W026 A8). A binding with no recorded conversation falls
-		// back to the account: right where they coincide, and honest
-		// where they do not — the send fails visibly rather than going
-		// quietly nowhere.
-		if b.Conversation != "" {
-			return b.Conversation, b.ID, b.Connection, nil
-		}
-		return b.Account, b.ID, b.Connection, nil
+		candidates = append(candidates, b)
+		conns = append(conns, at)
 	}
-	return "", 0, 0, fmt.Errorf("no live %s connection admits %q to a member agent", transport, member)
+	switch len(candidates) {
+	case 0:
+		return "", 0, 0, fmt.Errorf("no live %s connection admits %q to a member agent", transport, member)
+	case 1:
+		return recipientOf(candidates[0])
+	}
+	// More than one Connection could carry it. Exactly one may be
+	// marked as the one that accepts what was meant for another
+	// (§8.4's accepts_fallback; migration 0064) — and if none is, or
+	// several are, the house says nothing rather than choosing.
+	//
+	// REFUSING IS THE POINT. A message that went to the wrong Agent's
+	// bot arrives looking perfectly normal, so nobody finds out; a
+	// message that was not sent is a rule that visibly did not fire.
+	// This is the same answer ErrAmbiguousConnection already gives
+	// when an Agent has two bots and a caller names neither.
+	var chosen []runtimedb.ChatBinding
+	for i, at := range conns {
+		if at.Disclosure.AcceptsFallback {
+			chosen = append(chosen, candidates[i])
+		}
+	}
+	if len(chosen) == 1 {
+		return recipientOf(chosen[0])
+	}
+	names := make([]string, 0, len(conns))
+	for _, at := range conns {
+		names = append(names, at.Butler+" on "+at.Name())
+	}
+	sort.Strings(names)
+	return "", 0, 0, fmt.Errorf(
+		"%d live %s connections admit %q (%s) and %d is marked to take what was meant for another -- "+
+			"say which one should carry the household's messages (design §8.3)",
+		len(conns), transport, member, strings.Join(names, ", "), len(chosen))
+}
+
+// recipientOf is where a binding's messages go.
+//
+// The direct conversation, not the account. On Telegram they are the
+// same value and either would work; on Matrix the account is an MXID
+// and only a room can be sent to, so addressing the account would
+// queue a message that can never be delivered (ADR-W026 A8). A binding
+// with no recorded conversation falls back to the account: right where
+// they coincide, and honest where they do not — the send fails visibly
+// rather than going quietly nowhere.
+//
+// A binding never records a GROUP conversation (touchBinding drops
+// it), so this cannot return a room by that route. QueueChatPush
+// checks anyway, because "cannot happen by this route" is not the same
+// as "cannot happen".
+func recipientOf(b runtimedb.ChatBinding) (string, int64, int64, error) {
+	if b.Conversation != "" {
+		return b.Conversation, b.ID, b.Connection, nil
+	}
+	return b.Account, b.ID, b.Connection, nil
 }
 
 // AskOverChat queues a rule's message and, when it carries a correlation
@@ -672,6 +774,34 @@ func (s *Server) AskOverChat(ctx context.Context, at runtimedb.Connection, targe
 // executor; it is the same queue, so a push and a reply are delivered
 // and retried identically.
 func (s *Server) QueueChatPush(_ context.Context, at runtimedb.Connection, target string, bindingID int64, body, correlationID, dedupe string) (int64, error) {
+	// NO HOUSEHOLD OR PERSONAL CONTENT INTO A ROOM (design §8.3, and
+	// the shape of F-156-08, which was live on the deployment).
+	//
+	// This is the PUSH path: a household rule's question, a
+	// notification, anything the house says without being asked. Its
+	// body is assembled from household facts and from what the rule
+	// knows about a person, and it is the one outbound path whose
+	// destination is not a reply to a message somebody just sent.
+	//
+	// The inbound side already refuses rooms, so no reply is ever
+	// addressed to one. That makes this guard look redundant and it is
+	// not: the reason the inbound refusal works is that the adapter
+	// TELLS it `group: true`, and nothing tells this path anything. It
+	// is handed a target string, and a target string does not say
+	// whether it is one person or forty. chat_rooms is how it finds
+	// out, and this is the check that reads it.
+	//
+	// Queue-time rather than send-time, so the refusal is visible
+	// where the decision was made: a row that reached the queue and
+	// was dropped at delivery looks, to everything that reads the
+	// queue, exactly like a message that was sent.
+	if s.DB.IsChatRoom(at.Seq, target) {
+		s.recordEvent("chat.room_delivery_refused", at.ExternalID,
+			"a message the house initiated was addressed to a room, and was not sent",
+			map[string]string{"agent": at.Butler, "correlation": correlationID})
+		return 0, fmt.Errorf(
+			"%s is a room, and the house does not send what it knows into a room (design §8.3)", target)
+	}
 	if dedupe == "" {
 		dedupe = chatDedupe(at, target, "", "push", body+time.Now().UTC().Format(time.RFC3339Nano))
 	}

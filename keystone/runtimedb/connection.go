@@ -75,6 +75,12 @@ type Connection struct {
 	// AdmissionSubject is which KIND of subject that policy admits.
 	// MVP is Person; Group is a seam that admits nobody (§8.3).
 	AdmissionSubject AdmissionSubject `json:"admissionSubject"`
+
+	// Disclosure is what may be said over this Connection (design
+	// §8.4; migration 0064) — the other half of the boundary, and a
+	// separate object because admission is about the speaker and
+	// disclosure is about everybody who reads the reply.
+	Disclosure Disclosure `json:"disclosure"`
 }
 
 // Name identifies this Connection in an authority check and in a
@@ -127,16 +133,23 @@ func (db *DB) ChatConnectionBySeq(seq int64) (Connection, error) {
 // wrong with the address it was told about.
 const chatConnectionColumns = `SELECT a.seq, b.name, a.transport, a.external_id, a.label,
 	        b.surface, b.agent_class,
-	        COALESCE(ca.admits, ''), COALESCE(ca.subject_kind, '')
+	        COALESCE(ca.admits, ''), COALESCE(ca.subject_kind, ''),
+	        COALESCE(cd.reach, ''), COALESCE(cd.encryption, ''),
+	        COALESCE(cd.retention, ''), COALESCE(cd.surface, ''),
+	        COALESCE(cd.accepts_fallback, 0)
 	 FROM butler_addresses a
 	 JOIN butlers b ON b.seq = a.butler
-	 LEFT JOIN connection_admission ca ON ca.connection = a.seq`
+	 LEFT JOIN connection_admission ca ON ca.connection = a.seq
+	 LEFT JOIN connection_disclosure cd ON cd.connection = a.seq`
 
 func scanChatConnection(row rowScanner) (Connection, error) {
 	var c Connection
 	var surface, agentClass, admits, subject string
+	var reach, encryption, retention, discSurface string
+	var acceptsFallback int64
 	err := row.Scan(&c.Seq, &c.Butler, &c.Transport, &c.ExternalID, &c.Label,
-		&surface, &agentClass, &admits, &subject)
+		&surface, &agentClass, &admits, &subject,
+		&reach, &encryption, &retention, &discSurface, &acceptsFallback)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Connection{}, ErrNoConnection
 	}
@@ -147,6 +160,7 @@ func scanChatConnection(row rowScanner) (Connection, error) {
 	c.AgentClass = agentClass
 	c.Admission = parseAdmission(admits)
 	c.AdmissionSubject = parseAdmissionSubject(subject)
+	c.Disclosure = scanDisclosure(reach, encryption, retention, discSurface, acceptsFallback)
 	return c, nil
 }
 

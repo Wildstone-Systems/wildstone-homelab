@@ -177,8 +177,18 @@ func TestChatConnectionComesFromTheCredential(t *testing.T) {
 	}
 }
 
-// The operator surface refuses group chats; the family surface answers
-// one, with the audience declared in its prompt (ADR-W026 A7).
+// EVERY Agent refuses a room and directs the person to a one-to-one
+// chat (design §8.3). This supersedes ADR-W026 A7, under which the
+// operator surface refused and the family surface answered with an
+// audience note in its prompt.
+//
+// The note was an instruction to a model to be discreet. §8.3 is
+// blunter about why that is not a boundary: "Person admission
+// authenticates the speaker, not everyone who will receive the
+// reply... 'The sender is known' is not 'the audience is known'." A
+// recognised Person could ask for their own Personal memory and get
+// it, in front of people nobody had admitted, with the model following
+// its instructions faithfully throughout.
 func TestChatGroupRules(t *testing.T) {
 	h := newHarness(t)
 	p := &scriptedProvider{turns: []*provider.ChatResponse{{Text: "The bins go out tonight."}}}
@@ -187,7 +197,8 @@ func TestChatGroupRules(t *testing.T) {
 	h.bindAccount(t, "admin", "mika", "telegram", "555")
 	h.bindAccount(t, "family", "sam", "telegram", "777")
 
-	// Admin surface, group: one refusal, no session.
+	// Admin surface, group: one refusal, no session. It keeps its own
+	// wording, which is more use to the person reading it.
 	resp, out := h.send(runtimedb.RoleValet, map[string]any{
 		"transport": "telegram", "account": "555", "conversation": "group-1", "group": true, "addressed": true,
 		"text": "how is the disk?", "messageId": "g-1",
@@ -198,11 +209,6 @@ func TestChatGroupRules(t *testing.T) {
 	admin := h.poll(t, runtimedb.RoleValet, "")
 	if len(admin) != 1 || !strings.Contains(admin[0].Body, "direct message") {
 		t.Fatalf("admin group reply = %+v", admin)
-	}
-	var sessions []runtimedb.ButlerSession
-	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &sessions)
-	if len(sessions) != 0 {
-		t.Fatalf("an admin group message opened a session: %+v", sessions)
 	}
 
 	// Family surface, group, NOT addressed to the bot: somebody talking
@@ -216,8 +222,9 @@ func TestChatGroupRules(t *testing.T) {
 		t.Fatalf("an unaddressed group message was acted on: status = %d, out = %+v", resp.StatusCode, out)
 	}
 
-	// Family surface, group, addressed: answered, and the model was told
-	// it is a shared audience.
+	// Family surface, group, ADDRESSED: refused too, and REDIRECTED —
+	// the household member did nothing wrong, they are in the wrong
+	// place, and the right place is one message away.
 	resp, out = h.send(runtimedb.RoleConcierge, map[string]any{
 		"transport": "telegram", "account": "777", "conversation": "group-1", "group": true, "addressed": true,
 		"text": "whose turn is it for the bins?", "messageId": "g-2",
@@ -225,15 +232,27 @@ func TestChatGroupRules(t *testing.T) {
 	if resp.StatusCode != http.StatusAccepted || !out.Bound {
 		t.Fatalf("status = %d, out = %+v", resp.StatusCode, out)
 	}
-	if len(p.turns) == 0 || p.i == 0 {
-		t.Fatalf("the family group message never reached the provider")
-	}
-	if !strings.Contains(p.systems[0], "GROUP conversation") {
-		t.Fatalf("family group session ran without the audience note:\n%s", p.systems[0])
-	}
 	family := h.poll(t, runtimedb.RoleConcierge, "")
 	if len(family) != 1 || family[0].Target != "group-1" {
-		t.Fatalf("family group reply = %+v, want it addressed to the group", family)
+		t.Fatalf("family group reply = %+v, want one, addressed to the group", family)
+	}
+	// The redirect names where to go. A bare refusal teaches people the
+	// bot is broken.
+	if !strings.Contains(family[0].Body, "one-to-one") || !strings.Contains(family[0].Body, "directly") {
+		t.Fatalf("the group reply does not redirect: %q", family[0].Body)
+	}
+
+	// BEFORE INFERENCE, and that is the assertion that makes this a
+	// boundary rather than a well-behaved answer: the provider was
+	// never reached, for either surface, with a turn scripted and
+	// waiting.
+	if p.i != 0 {
+		t.Fatalf("a group message reached the model %d time(s)", p.i)
+	}
+	var sessions []runtimedb.ButlerSession
+	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &sessions)
+	if len(sessions) != 0 {
+		t.Fatalf("a group message opened a session: %+v", sessions)
 	}
 }
 
