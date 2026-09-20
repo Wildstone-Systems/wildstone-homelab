@@ -17,6 +17,7 @@ func TestButlerSettingsDefaultsAreReportedAsUnstored(t *testing.T) {
 		Settings struct {
 			HouseholdRounds int    `json:"householdRounds"`
 			OperatorRounds  int    `json:"operatorRounds"`
+			SessionRecency  int    `json:"sessionRecencySeconds"`
 			Timezone        string `json:"timezone"`
 		} `json:"settings"`
 	}
@@ -30,6 +31,9 @@ func TestButlerSettingsDefaultsAreReportedAsUnstored(t *testing.T) {
 	if body.Settings.HouseholdRounds != 16 || body.Settings.OperatorRounds != 24 {
 		t.Fatalf("defaults = %+v, want A4's 16 and 24", body.Settings)
 	}
+	if body.Settings.SessionRecency != 1800 {
+		t.Fatalf("default session recency = %d, want 1800", body.Settings.SessionRecency)
+	}
 }
 
 // A partial update changes only what it names, and an out-of-range value
@@ -42,10 +46,11 @@ func TestButlerSettingsValidateAndMerge(t *testing.T) {
 			HouseholdRounds int    `json:"householdRounds"`
 			OperatorRounds  int    `json:"operatorRounds"`
 			UpdatedBy       string `json:"updatedBy"`
+			SessionRecency  int    `json:"sessionRecencySeconds"`
 		} `json:"settings"`
 	}
 	res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butler/settings",
-		map[string]any{"operatorRounds": 32}, &body)
+		map[string]any{"operatorRounds": 32, "sessionRecencySeconds": 2700}, &body)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("PUT settings = %d", res.StatusCode)
 	}
@@ -54,6 +59,9 @@ func TestButlerSettingsValidateAndMerge(t *testing.T) {
 	}
 	if body.Settings.HouseholdRounds != 16 {
 		t.Fatalf("a partial update reset householdRounds to %d", body.Settings.HouseholdRounds)
+	}
+	if body.Settings.SessionRecency != 2700 {
+		t.Fatalf("sessionRecencySeconds = %d, want 2700", body.Settings.SessionRecency)
 	}
 	if body.Settings.UpdatedBy == "" {
 		t.Fatal("the change was recorded with no acting identity")

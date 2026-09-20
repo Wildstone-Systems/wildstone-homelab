@@ -44,8 +44,11 @@ func (f *failingButlers) Sole(runtimedb.ButlerSurface, string, bool) (runtimedb.
 func wireFailingButler(t *testing.T, h *harness) *failingButlers {
 	t.Helper()
 	f := &failingButlers{answer: butlerlive.Answer{
-		TaskID:   failedTurnTask(t, h),
-		Butler:   "alfred",
+		TaskID: failedTurnTask(t, h),
+		// This answer came through the family bot, whose Connection belongs
+		// to Sandy. A session is Person + Agent now; labelling it Alfred
+		// would model one Agent returning another Agent's answer.
+		Butler:   "sandy",
 		Surface:  runtimedb.ButlerSurfaceFamily,
 		Provider: "scripted",
 		Calls: []butler.ToolCallRecord{{

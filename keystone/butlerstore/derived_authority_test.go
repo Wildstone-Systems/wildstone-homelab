@@ -40,6 +40,7 @@ const fixtureConnection = "matrix:!room:example.org"
 func newDerivedFixture(t *testing.T) *derivedFixture {
 	t.Helper()
 	db, ledger := testLedger(t, t.TempDir()+"/derived.db")
+	t.Cleanup(func() { db.Close() })
 	for _, who := range []string{"mika", "sam"} {
 		if err := db.AdmitButlerMember(who, "root-admin"); err != nil {
 			t.Fatalf("admitting %q: %v", who, err)

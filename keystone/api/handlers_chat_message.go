@@ -336,13 +336,14 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// runs and nothing is proposed. An exact question deserves an exact
 	// answer, and these keep working when the Butler is off or the
 	// startup probe put it in qa-only.
-	if body, reason, handled := s.runChatCommand(chatCommandCtx{
+	commandCtx := chatCommandCtx{
 		At:           at,
 		Conversation: conversation,
 		Identity:     binding.Identity,
 		Binding:      binding,
 		Group:        msg.Group,
-	}, text); handled {
+	}
+	if body, reason, handled := s.runChatCommand(commandCtx, text); handled {
 		seq := s.queueChatReply(at, conversation, body, binding.ID, "",
 			chatDedupe(at, conversation, msg.MessageID, "command", text))
 		s.settleInbound(claimKey, seq, &settled)
@@ -360,7 +361,18 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// after an answer reached a Butler that had never heard the first
 	// question — the multi-turn work landed for the Console and left
 	// this path passing nil.
-	prior := s.chatThread(at, conversation, binding.Identity)
+	prior, continuationReply, cerr := s.resolveChatContinuation(commandCtx)
+	if cerr != nil {
+		return nil, http.StatusInternalServerError, cerr
+	}
+	if continuationReply != "" {
+		seq := s.queueChatReply(at, conversation, continuationReply, binding.ID, "",
+			chatDedupe(at, conversation, msg.MessageID, "session-choice", text))
+		s.settleInbound(claimKey, seq, &settled)
+		s.touchBinding(binding, conversation, msg.Group)
+		return inboundResponse{Accepted: true, Bound: true, Queued: seq,
+			Reason: "conversation continuation needs a safe choice"}, http.StatusAccepted, nil
+	}
 
 	var (
 		out any
@@ -463,6 +475,9 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 
 	ask, _ := out.(askResponse)
 	if ask.SessionID != "" {
+		if err := s.DB.NoteButlerSessionConnection(ask.SessionID, "outbound", at.Name(), at.Seq); err != nil {
+			s.Log.Error("recording session outbound connection", "session", ask.SessionID, "err", err)
+		}
 		if err := s.DB.SetChatThreadSession(
 			at, conversation, binding.Identity, ask.SessionID); err != nil {
 			// The answer already happened and is about to be sent. A
@@ -479,13 +494,6 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	return inboundResponse{Accepted: true, Bound: true, Queued: seq}, http.StatusAccepted, nil
 }
 
-// chatIdleWindow is how long a chat conversation stays open. A message
-// after this starts a new session rather than silently resuming one the
-// person has forgotten — and a Butler answering in the context of
-// yesterday's question is harder to understand than one that starts
-// clean.
-const chatIdleWindow = 30 * time.Minute
-
 // chatThread is the conversation this message continues, or nil for a
 // new one.
 //
@@ -495,34 +503,40 @@ const chatIdleWindow = 30 * time.Minute
 // surface, and those are the authority — a thread pointer that has
 // drifted (a binding revoked and reissued to somebody else on the same
 // chat id) must not hand a stranger the previous person's conversation.
-func (s *Server) chatThread(at runtimedb.Connection, conversation, identity string) *turnContext {
+func (s *Server) chatThread(at runtimedb.Connection, conversation, identity string) (*turnContext, bool) {
 	id, ok, err := s.DB.ChatThreadSession(at, conversation, identity)
 	if err != nil {
 		s.Log.Error("reading chat thread failed", "err", err)
-		return nil
+		return nil, false
 	}
 	if !ok {
-		return nil
+		return nil, false
 	}
-	sess, err := s.DB.GetButlerSession(id)
+	if err := s.DB.ButlerSessionActive(id); err != nil {
+		return nil, false
+	}
+	sess, allowed, err := s.loadChatContinuation(id, at)
 	if err != nil {
-		// Including ErrNotFound: a pointer to a session that is gone is
-		// a new conversation, not a failure.
-		return nil
+		return nil, !errors.Is(err, runtimedb.ErrNotFound) && !errors.Is(err, runtimedb.ErrSessionRevoked)
 	}
-	if sess.ActingFor != identity || sess.Surface != at.Surface {
+	if !allowed {
+		return nil, true
+	}
+	if sess.ActingFor != identity || sess.Surface != at.Surface ||
+		(sess.Butler != "" && sess.Butler != at.Butler) {
 		s.Log.Warn("chat thread pointed at another principal's session; starting fresh",
-			"session", id, "expected", identity, "got", sess.ActingFor)
-		return nil
+			"session", id, "expected_person", identity, "got_person", sess.ActingFor,
+			"expected_agent", at.Butler, "got_agent", sess.Butler)
+		return nil, false
 	}
 	// Age is measured from the conversation's newest turn, on ANY
 	// surface. Measuring it from the pointer would call a thread dead
 	// that was alive two minutes ago in the Console — the same
 	// conversation, carried on somewhere else.
-	if last := sess.LastTurnAt(); last.IsZero() || time.Since(last) > chatIdleWindow {
-		return nil
+	if last := sess.LastTurnAt(); last.IsZero() || time.Since(last) > s.sessionRecencyWindow() {
+		return nil, false
 	}
-	return &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}
+	return &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}, false
 }
 
 // chatReplyBody renders a completed session as the message a person

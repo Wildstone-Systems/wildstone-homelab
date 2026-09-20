@@ -1,12 +1,201 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
+
+func insertCandidateSession(t *testing.T, h *harness, at runtimedb.Connection, person, subject string) string {
+	t.Helper()
+	id, err := h.s.DB.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "butler", ActingFor: person, Provider: "test",
+		Mode: runtimedb.ButlerModeFull, Surface: at.Surface, Butler: at.Butler,
+		FinalText: "earlier answer", Turns: []runtimedb.ButlerTurn{
+			{Role: runtimedb.ButlerRoleUser, Text: subject},
+			{Role: runtimedb.ButlerRoleAssistant, Text: "earlier answer"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.NoteButlerSessionConnection(id, "inbound", at.Name(), at.Seq); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// A chat destination pointer is not conversation identity. With no pointer at
+// all, the same Person reaching the same Agent finds the sole recent session.
+func TestChatContinuesTheSolePersonAgentSession(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(answerTurns("continued answer"), runtimedb.ButlerModeFull)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+	want := insertCandidateSession(t, h, at, "sam", "the earlier question")
+
+	resp, _ := h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "12345", "text": "and now?", "messageId": "m-1",
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	sess, err := h.s.DB.GetButlerSession(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sess.Turns) != 4 {
+		t.Fatalf("turns = %d, want the sole Person+Agent candidate continued", len(sess.Turns))
+	}
+}
+
+// Two recent sessions are two contexts the Person kept apart. No context is
+// loaded and no model runs until an opaque /resume choice is spent.
+func TestAmbiguousChatContinuationOffersOpaqueChoicesBeforeInference(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(answerTurns("must not run"), runtimedb.ButlerModeFull)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+	insertCandidateSession(t, h, at, "sam", "first private subject")
+	insertCandidateSession(t, h, at, "sam", "second private subject")
+
+	_, out := h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "12345", "text": "continue", "messageId": "m-1",
+	})
+	if !strings.Contains(out.Reason, "safe choice") {
+		t.Fatalf("reason = %q", out.Reason)
+	}
+	if calls := h.providerCalls(t); calls != 0 {
+		t.Fatalf("ambiguous continuation loaded context and ran the model %d time(s)", calls)
+	}
+	queued := h.poll(t, runtimedb.RoleConcierge, "")
+	if len(queued) != 1 || !strings.Contains(queued[0].Body, "/resume ") ||
+		!strings.Contains(queued[0].Body, "first private subject") ||
+		!strings.Contains(queued[0].Body, "second private subject") {
+		t.Fatalf("choice prompt = %+v", queued)
+	}
+	if strings.Contains(queued[0].Body, "bs-") {
+		t.Fatalf("choice prompt exposed a raw session id: %q", queued[0].Body)
+	}
+}
+
+func TestSessionPagesDeliverEveryResumeChoiceWithoutTruncation(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(answerTurns("must not run"), runtimedb.ButlerModeFull)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+	want := make(map[string]bool)
+	for i := 0; i < 19; i++ {
+		// Four-byte runes exercise the queue's byte limit, not just a
+		// character limit. The first message follows the automatic path.
+		id := insertCandidateSession(t, h, at, "sam", strings.Repeat("😀", 80))
+		want[id] = true
+	}
+	protected := insertCandidateSession(t, h, at, "sam", "protected subject")
+	if err := h.s.DB.NoteButlerSessionConnection(protected, "inbound", "console", 0); err != nil {
+		t.Fatal(err)
+	}
+	tokens := regexp.MustCompile("`/resume ([A-Za-z0-9_-]+)`")
+	nextPage := regexp.MustCompile("Next page: `/sessions ([0-9]+)`")
+	seen := make(map[string]bool)
+	var after int64
+	text := "continue"
+	for page := 1; ; page++ {
+		if page > 19 {
+			t.Fatal("session pagination never ended")
+		}
+		h.send(runtimedb.RoleConcierge, map[string]any{
+			"transport": "telegram", "account": "12345", "text": text,
+			"messageId": fmt.Sprintf("page-%d", page),
+		})
+		queued := h.poll(t, runtimedb.RoleConcierge, fmt.Sprintf("?after=%d", after))
+		if len(queued) != 1 {
+			t.Fatalf("page %d queued %d messages", page, len(queued))
+		}
+		body := queued[0].Body
+		after = queued[0].Seq
+		if strings.Contains(body, "protected subject") || strings.Contains(body, "bs-") {
+			t.Fatalf("page disclosed protected metadata: %q", body)
+		}
+		choices := tokens.FindAllStringSubmatch(body, -1)
+		if len(choices) == 0 || len(body) > runtimedb.MaxChatBodyBytes {
+			t.Fatalf("invalid page: %q", body)
+		}
+		for _, choice := range choices {
+			id, err := h.s.DB.ConsumeSessionResumeOffer(resumeTokenHash(choice[1]), "sam", at.Butler, at.Seq)
+			if err != nil {
+				t.Fatalf("delivered token cannot be selected: %v", err)
+			}
+			if !want[id] || seen[id] {
+				t.Fatalf("page returned an unexpected or repeated session %q", id)
+			}
+			seen[id] = true
+		}
+		next := nextPage.FindStringSubmatch(body)
+		if next == nil {
+			break
+		}
+		text = "/sessions " + next[1]
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("only %d of %d safe sessions were reachable", len(seen), len(want))
+	}
+	if calls := h.providerCalls(t); calls != 0 {
+		t.Fatalf("listing choices ran the model %d times", calls)
+	}
+}
+
+func TestSessionPagesRejectInvalidAndUnavailablePages(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	insertCandidateSession(t, h, at, "sam", "recent conversation")
+	for _, page := range []string{"0", "-1", "2", "words", "1 2", "9223372036854775807", "999999999999999999999"} {
+		t.Run(page, func(t *testing.T) {
+			body, err := h.s.chatSessions(chatCommandCtx{At: at, Identity: "sam", Arg: page})
+			if err != nil || !strings.Contains(body, "/sessions") || strings.Contains(body, "/resume") {
+				t.Fatalf("invalid page response = %q, %v", body, err)
+			}
+		})
+	}
+}
+
+func TestRevokedChatThreadStartsFresh(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(answerTurns("fresh answer"), runtimedb.ButlerModeFull)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+	old := insertCandidateSession(t, h, at, "sam", "revoked conversation")
+	if err := h.s.DB.SetChatThreadSession(at, "12345", "sam", old); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.RevokeButlerSession(old, "sam"); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, _ := h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "12345", "text": "hello again", "messageId": "m-1",
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	oldSession, err := h.s.DB.GetButlerSession(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(oldSession.Turns) != 2 {
+		t.Fatalf("revoked session gained turns: %+v", oldSession.Turns)
+	}
+}
 
 // A conversation over chat is a conversation. Before ADR-W027 wired
 // this path, every inbound message opened a new session — so asking
@@ -81,11 +270,8 @@ func TestChatThreadsAreNotSharedAcrossSurfaces(t *testing.T) {
 	}
 }
 
-// One conversation, two front doors. A thread carried on in the Console
-// must not be called stale because Telegram has been quiet — they are
-// the same conversation, and idleness is a property of it rather than
-// of the transport that last touched it.
-func TestConsoleActivityKeepsAChatThreadAlive(t *testing.T) {
+// Trusted Console turns must not flow back through an existing external pointer.
+func TestConsoleActivityProtectsAnExistingChatThread(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(answerTurns("from telegram", "from the console", "back on telegram"), runtimedb.ButlerModeFull)
 	h.bindAccount(t, "admin", "mika", "telegram", "12345")
@@ -110,7 +296,7 @@ func TestConsoleActivityKeepsAChatThreadAlive(t *testing.T) {
 		t.Fatalf("console follow-up: status = %d", resp.StatusCode)
 	}
 
-	// Back to Telegram: still the same conversation.
+	// Back to Telegram: redirect before loading the protected history.
 	h.send(runtimedb.RoleValet, map[string]any{
 		"transport": "telegram", "account": "12345", "text": "third, on telegram",
 		"messageId": "m-2",
@@ -118,24 +304,15 @@ func TestConsoleActivityKeepsAChatThreadAlive(t *testing.T) {
 
 	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &sessions)
 	if len(sessions) != 1 {
-		t.Fatalf("sessions = %d, want the conversation to have survived the round trip", len(sessions))
+		t.Fatalf("sessions = %d, want the protected session preserved without starting another", len(sessions))
 	}
 	var full runtimedb.ButlerSession
 	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions/"+sessions[0].ID, nil, &full)
-	if len(full.Turns) != 6 {
-		t.Fatalf("turns = %d, want 6 across both surfaces", len(full.Turns))
+	if len(full.Turns) != 4 {
+		t.Fatalf("turns = %d, want 4 with no external continuation", len(full.Turns))
 	}
-	// And the last Telegram turn was told about the Console one.
-	convos := h.scripted(t).convos
-	last := convos[len(convos)-1]
-	var sawConsole bool
-	for _, m := range last {
-		if m.Text == "second, in the console" {
-			sawConsole = true
-		}
-	}
-	if !sawConsole {
-		t.Fatalf("the telegram follow-up did not replay the console turn: %+v", last)
+	if calls := h.providerCalls(t); calls != 2 {
+		t.Fatalf("model calls = %d, want only initial chat and Console turns", calls)
 	}
 }
 

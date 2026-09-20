@@ -258,7 +258,7 @@
     return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
   }
 
-  var member = "", agents = [], agent = "", session = "";
+  var member = "", agents = [], agent = "", session = "", fresh = false;
 
   // The session can be handed over from the front page's card, which is
   // what "Open conversation hands the same session to the full agent
@@ -479,6 +479,7 @@
 
   function newConversation() {
     session = "";
+    fresh = true;
     renderReceipts([]);
     clear(el("thread"));
     clear(el("note"));
@@ -497,6 +498,7 @@
       .then(function (res) {
         if (!res.ok) { throw new Error(res.j.error || "that conversation is not here any more"); }
         session = res.j.session || id;
+        fresh = false;
         if (res.j.agent) {
           agent = res.j.agent;
           if (el("agent-select").hidden) { text("agent-label", agent); }
@@ -676,7 +678,7 @@
     fetch("/api/v1/assistant/ask", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agent: agent, session: session, text: body })
+      body: JSON.stringify({ agent: agent, session: session, text: body, new: fresh })
     })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
@@ -684,6 +686,7 @@
         mine.style.opacity = "";
         if (!res.ok) { throw new Error(res.j.error || "I couldn't answer that one"); }
         session = res.j.session || session;
+        fresh = false;
         text("session-id", session);
         thread.appendChild(turn("assistant", res.j.reply || ""));
         if (res.j.proposals) {

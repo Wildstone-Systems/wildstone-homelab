@@ -862,6 +862,7 @@ export interface ButlerSettingsView {
   stallSeconds: number;
   retryLimit: number;
   observationTtlSeconds: number;
+  sessionRecencySeconds: number;
   quietStartMin: number;
   quietEndMin: number;
   timezone: string;
