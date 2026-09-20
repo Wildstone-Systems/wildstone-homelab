@@ -211,6 +211,22 @@ func (s *Server) offerChatSessions(c chatCommandCtx, candidates []safeSessionCan
 	return strings.Join(lines, "\n"), nil
 }
 
+// loadChatContinuation checks disclosure and loads history in the same database
+// snapshot, for both explicit pointers and newly selected sole candidates.
+func (s *Server) loadChatContinuation(id string, at runtimedb.Connection) (runtimedb.ButlerSession, bool, error) {
+	return s.DB.GetButlerSessionForContinuation(id, func(provenance []runtimedb.SessionConnection) bool {
+		for i := range provenance {
+			// Legacy runners saved only a name. Only the exact current
+			// Connection can resolve that spelling, never another origin.
+			if provenance[i].ConnectionRef == 0 && provenance[i].ConnectionName == at.Name() && !trustedBuiltInConnection(at.Name()) {
+				provenance[i].Connection = &at
+			}
+		}
+		_, visible := candidateOnConnection(runtimedb.SessionCandidate{SessionID: id, Provenance: provenance}, externalContinuationConnection(at))
+		return visible
+	})
+}
+
 // resolveChatContinuation decides without loading any candidate transcript.
 // Context is fetched only after the candidate set has become exactly one.
 func (s *Server) resolveChatContinuation(c chatCommandCtx) (*turnContext, string, error) {
@@ -233,9 +249,12 @@ func (s *Server) resolveChatContinuation(c chatCommandCtx) (*turnContext, string
 		}
 		return nil, "", nil
 	case 1:
-		sess, err := s.DB.GetButlerSession(candidates[0].SessionID)
+		sess, allowed, err := s.loadChatContinuation(candidates[0].SessionID, c.At)
 		if err != nil {
 			return nil, "", err
+		}
+		if !allowed {
+			return nil, trustedSurfaceRedirect, nil
 		}
 		return &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}, "", nil
 	default:

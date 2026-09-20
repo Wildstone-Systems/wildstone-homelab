@@ -515,28 +515,12 @@ func (s *Server) chatThread(at runtimedb.Connection, conversation, identity stri
 	if err := s.DB.ButlerSessionActive(id); err != nil {
 		return nil, false
 	}
-	// A pointer does not grant disclosure authority: recheck every origin
-	// before loading history, including for legacy sessions without keys.
-	provenance, err := s.DB.SessionConnectionProvenance(id)
+	sess, allowed, err := s.loadChatContinuation(id, at)
 	if err != nil {
+		return nil, !errors.Is(err, runtimedb.ErrNotFound) && !errors.Is(err, runtimedb.ErrSessionRevoked)
+	}
+	if !allowed {
 		return nil, true
-	}
-	for i := range provenance {
-		// Legacy runners saved only the Connection name. Resolve that
-		// spelling solely to the exact current Connection, never another
-		// origin or an unclassified Connection.
-		if provenance[i].ConnectionRef == 0 && provenance[i].ConnectionName == at.Name() && !trustedBuiltInConnection(at.Name()) {
-			provenance[i].Connection = &at
-		}
-	}
-	if _, visible := candidateOnConnection(runtimedb.SessionCandidate{SessionID: id, Provenance: provenance}, externalContinuationConnection(at)); !visible {
-		return nil, true
-	}
-	sess, err := s.DB.GetButlerSession(id)
-	if err != nil {
-		// Including ErrNotFound: a pointer to a session that is gone is
-		// a new conversation, not a failure.
-		return nil, false
 	}
 	if sess.ActingFor != identity || sess.Surface != at.Surface ||
 		(sess.Butler != "" && sess.Butler != at.Butler) {

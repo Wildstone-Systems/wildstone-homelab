@@ -5,6 +5,52 @@ import (
 	"time"
 )
 
+func TestContinuationSnapshotExcludesConcurrentlyCommittedTrustedTurn(t *testing.T) {
+	db := householdWith(t, "alice")
+	at := connect(t, db, "sandy", "telegram", ButlerSurfaceFamily)
+	id, err := db.InsertButlerSession(ButlerSession{
+		Principal: "butler", ActingFor: "alice", Provider: "test", Mode: ButlerModeFull,
+		Surface: ButlerSurfaceFamily, Butler: "sandy", InboundConnection: at.Name(), InboundConnectionRef: at.Seq,
+		Turns: []ButlerTurn{{Role: ButlerRoleUser, Text: "external question"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, allowed, err := db.GetButlerSessionForContinuation(id, func(origins []SessionConnection) bool {
+		if len(origins) != 1 || origins[0].Connection == nil || origins[0].Connection.Seq != at.Seq {
+			t.Fatalf("origins=%+v", origins)
+		}
+		// This writes through another pooled connection while the reader's
+		// WAL snapshot is open. The commit finishes before history is read.
+		if err := db.AppendButlerTurnsFrom(id, []ButlerTurn{{Role: ButlerRoleUser, Text: "trusted-only secret"}}, "console", 0); err != nil {
+			t.Fatal(err)
+		}
+		return true
+	})
+	if err != nil || !allowed {
+		t.Fatalf("load: allowed=%v err=%v", allowed, err)
+	}
+	if len(loaded.Turns) != 1 || loaded.Turns[0].Text != "external question" {
+		t.Fatalf("newly protected turn crossed snapshot: %+v", loaded.Turns)
+	}
+	latest, err := db.GetButlerSession(id)
+	if err != nil || len(latest.Turns) != 2 {
+		t.Fatalf("concurrent write did not commit: %+v err=%v", latest.Turns, err)
+	}
+	loaded, allowed, err = db.GetButlerSessionForContinuation(id, func(origins []SessionConnection) bool {
+		for _, origin := range origins {
+			if origin.ConnectionName == "console" {
+				return false
+			}
+		}
+		t.Fatal("new snapshot omitted committed trusted provenance")
+		return true
+	})
+	if err != nil || allowed || loaded.ID != "" || len(loaded.Turns) != 0 {
+		t.Fatalf("denied load returned history: %+v allowed=%v err=%v", loaded, allowed, err)
+	}
+}
+
 func TestSessionCandidatesArePersonAndAgentScoped(t *testing.T) {
 	db := householdWith(t, "alice", "bob")
 	connect(t, db, "sandy", "telegram", ButlerSurfaceFamily)

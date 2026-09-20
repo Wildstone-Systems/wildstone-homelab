@@ -273,7 +273,11 @@ func (db *DB) AppendButlerTurnsFrom(id string, turns []ButlerTurn, connection st
 
 // ListButlerTurns returns one session's conversation, oldest first.
 func (db *DB) ListButlerTurns(seq int64) ([]ButlerTurn, error) {
-	rows, err := db.sql.Query(
+	return listButlerTurns(db.sql, seq)
+}
+
+func listButlerTurns(q sessionReader, seq int64) ([]ButlerTurn, error) {
+	rows, err := q.Query(
 		`SELECT ordinal, role, text, created_at, capped, tool_json, plan_ids
 		 FROM butler_session_turns WHERE session = ? ORDER BY ordinal`, seq)
 	if err != nil {
@@ -392,11 +396,21 @@ func (db *DB) ListButlerSessions(limit int, f ButlerSessionFilter) ([]ButlerSess
 
 // GetButlerSession returns one session including its transcript.
 func (db *DB) GetButlerSession(id string) (ButlerSession, error) {
+	return getButlerSession(db.sql, id)
+}
+
+// sessionReader keeps all session reads on the caller's database snapshot.
+type sessionReader interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func getButlerSession(q sessionReader, id string) (ButlerSession, error) {
 	var seq int64
 	if _, err := fmt.Sscanf(id, "bs-%d", &seq); err != nil {
 		return ButlerSession{}, ErrNotFound
 	}
-	row := db.sql.QueryRow(
+	row := q.QueryRow(
 		`SELECT seq, created_at, principal, acting_for, person_id, agent_id, provider, mode, surface, butler, final_text, capped, transcript_json
 		 FROM butler_sessions WHERE seq = ?`, seq)
 	var s ButlerSession
@@ -419,7 +433,7 @@ func (db *DB) GetButlerSession(id string) (ButlerSession, error) {
 	if s.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
 		return ButlerSession{}, fmt.Errorf("runtimedb: parsing butler session created_at: %w", err)
 	}
-	if s.Turns, err = db.ListButlerTurns(s.Seq); err != nil {
+	if s.Turns, err = listButlerTurns(q, s.Seq); err != nil {
 		return ButlerSession{}, err
 	}
 	return s, nil

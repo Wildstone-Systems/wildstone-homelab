@@ -1,6 +1,7 @@
 package runtimedb
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -106,14 +107,55 @@ func (db *DB) RecentSessionCandidates(identity, agent string, since, after time.
 	return out, nil
 }
 
-// SessionConnectionProvenance reads only the disclosure origins of a pointed
+// GetButlerSessionForContinuation authorizes and loads history from one read
+// snapshot. A concurrent trusted turn cannot enter the returned history without
+// its provenance participating in the authorization decision. The callback must
+// only decide disclosure; no model work runs while the transaction is open.
+func (db *DB) GetButlerSessionForContinuation(id string, authorize func([]SessionConnection) bool) (ButlerSession, bool, error) {
+	tx, err := db.sql.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return ButlerSession{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var seq int64
+	if _, err := fmt.Sscanf(id, "bs-%d", &seq); err != nil {
+		return ButlerSession{}, false, ErrNotFound
+	}
+	var revoked string
+	if err := tx.QueryRow(`SELECT revoked_at FROM butler_sessions WHERE seq=?`, seq).Scan(&revoked); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			err = ErrNotFound
+		}
+		return ButlerSession{}, false, err
+	}
+	if revoked != "" {
+		return ButlerSession{}, false, ErrSessionRevoked
+	}
+	provenance, err := sessionConnectionProvenance(tx, id)
+	if err != nil {
+		return ButlerSession{}, false, err
+	}
+	if !authorize(provenance) {
+		return ButlerSession{}, false, nil
+	}
+	session, err := getButlerSession(tx, id)
+	if err != nil {
+		return ButlerSession{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ButlerSession{}, false, err
+	}
+	return session, true, nil
+}
+
+// sessionConnectionProvenance reads only the disclosure origins of a pointed
 // session. Legacy sessions may have explicit pointers without canonical keys.
-func (db *DB) SessionConnectionProvenance(sessionID string) ([]SessionConnection, error) {
+func sessionConnectionProvenance(q sessionReader, sessionID string) ([]SessionConnection, error) {
 	var seq int64
 	if _, err := fmt.Sscanf(sessionID, "bs-%d", &seq); err != nil {
 		return nil, ErrNotFound
 	}
-	rows, err := db.sql.Query(`SELECT DISTINCT connection_ref, connection_name FROM butler_session_connections WHERE session=? AND direction='inbound'`, seq)
+	rows, err := q.Query(`SELECT DISTINCT connection_ref, connection_name FROM butler_session_connections WHERE session=? AND direction='inbound'`, seq)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +176,7 @@ func (db *DB) SessionConnectionProvenance(sessionID string) ([]SessionConnection
 	}
 	for i := range sources {
 		if sources[i].ConnectionRef > 0 {
-			conn, err := db.ChatConnectionBySeq(sources[i].ConnectionRef)
+			conn, err := scanChatConnection(q.QueryRow(chatConnectionColumns+` WHERE a.seq = ? AND a.revoked_at = ''`, sources[i].ConnectionRef))
 			if err == nil {
 				sources[i].Connection = &conn
 			}
