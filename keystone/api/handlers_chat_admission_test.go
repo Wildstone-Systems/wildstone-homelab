@@ -307,3 +307,83 @@ func mustConnection(t *testing.T, h *harness, externalID string) runtimedb.Conne
 	}
 	return c
 }
+
+// A Connection may only ever NARROW (§10 layer 3). Narrowing a Member
+// Agent's bot to Owners says who may address it; it must not change
+// what the Agent behind it may do.
+//
+// THIS IS A REGRESSION TEST FOR A BUG THIS SLICE INTRODUCED AND A
+// SECURITY REVIEW CAUGHT. Connection.AdmitsOwnersOnly() briefly
+// answered `OwnerAgent() || Admission == AdmitOwners`, and one of its
+// call sites — the legacy branch in handlers_chat_message.go, taken
+// whenever s.Butlers is nil, which is every keystone replica that does
+// not hold the coordinator lease — uses it to choose WHICH GATEWAY THE
+// SESSION RUNS ON:
+//
+//	} else if !at.AdmitsOwnersOnly() {
+//	    runFamilySession(...)   // the household gateway
+//	} else {
+//	    runAdminButlerSession(...) // the operator gateway
+//	}
+//
+// `admits = 'owners'` is legal on a Member Agent — it is exactly the
+// narrowing §8.1 exists to allow — so an Owner messaging a narrowed
+// household bot would have been served the operator surface. An
+// admission change whose whole stated effect is "who may address this
+// bot" would have handed its Agent the operator's tools.
+//
+// The assertion is the SYSTEM PROMPT the provider actually saw, not
+// the endpoint or the session's recorded surface, for the reason
+// scriptedProvider records prompts at all: it is the only thing that
+// says which gateway really ran.
+func TestNarrowingAMemberAgentsBotDoesNotGiveItTheOperatorSurface(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(answerTurns("the pantry has eggs"), runtimedb.ButlerModeFull)
+	// s.Butlers stays nil, which is the legacy branch — and is a real
+	// deployment state, not a contrivance: a replica without the
+	// coordinator lease serves inbound chat through exactly this path.
+	if h.s.Butlers != nil {
+		t.Fatal("this test is about the legacy branch and the harness is not on it")
+	}
+	family := h.agentAt(t, "family", "telegram")
+	if family.Admission != runtimedb.AdmitHousehold {
+		t.Fatalf("a member agent's bot starts at %q", family.Admission)
+	}
+	h.person("mika", "sam")
+	// An OWNER, because a Member would be refused by admission before
+	// the routing question is ever reached — and then this test would
+	// pass without exercising the bug at all.
+	if err := h.s.DB.SetButlerMemberRole("mika", runtimedb.RoleOwner, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	h.bindAccount(t, "family", "mika", "telegram", "12345")
+
+	var out map[string]any
+	if resp := h.do(runtimedb.RoleAdmin, "POST",
+		"/api/v1/connections/"+family.ExternalID+"/admission",
+		map[string]any{"admits": "owners"}, &out); resp.StatusCode != http.StatusOK {
+		t.Fatalf("narrowing: status = %d, %v", resp.StatusCode, out)
+	}
+
+	if _, got := h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "12345",
+		"text": "what is in the pantry?", "messageId": "m-1",
+	}); !got.Bound {
+		t.Fatalf("the owner was not admitted to their own narrowed bot: %+v", got)
+	}
+
+	p, ok := h.s.ButlerHost.Provider.(*scriptedProvider)
+	if !ok || len(p.systems) == 0 {
+		t.Fatal("no session reached the provider, so this asserts nothing")
+	}
+	if !strings.Contains(p.systems[0], "member of the household") {
+		t.Fatalf("a narrowed member-agent bot ran on a surface that is not the household's:\n%s",
+			p.systems[0])
+	}
+	// Named directly, because "it is not the household prompt" and "it
+	// is the operator prompt" are different claims and only the second
+	// is the escalation.
+	if strings.Contains(p.systems[0], "operator assistant") {
+		t.Fatal("a narrowed member-agent bot was served the OPERATOR surface (§10 layer 3)")
+	}
+}

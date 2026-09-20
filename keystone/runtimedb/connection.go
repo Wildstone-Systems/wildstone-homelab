@@ -303,19 +303,36 @@ func (c Connection) OwnerAgent() bool {
 	return c.Surface == ButlerSurfaceAdmin || c.AgentClass == AgentClassOwner
 }
 
-// AdmitsOwnersOnly reports whether this Connection admits Owners and
-// nobody else (ADR-W033 B9, design 8.3).
+// AdmitsOwnersOnly reports whether the AGENT answering here is an
+// Owner Agent, whose Connections admit Owners and nobody else
+// (ADR-W033 B9, design 8.3).
 //
-// It is retained for the SURFACE BEHAVIOUR that reads it -- which
-// greeting a bot gives, whether it answers in a group at all, which
-// slash commands it offers -- where the question really is "is this
-// the operator's bot". It is NOT the admission check: use Admits,
-// which is total over roles and answers with a reason. A bool cannot
-// distinguish "admits the household" from "admits nobody, because
-// nothing says", and the difference is the whole of this slice.
-func (c Connection) AdmitsOwnersOnly() bool {
-	return c.OwnerAgent() || c.Admission == AdmitOwners
-}
+// IT IS THE AGENT'S CEILING AND DELIBERATELY NOT THE CONNECTION'S
+// POLICY, even though the name reads like it could be either. Its
+// callers ask "is this the operator's bot" and then decide SURFACE
+// BEHAVIOUR from the answer -- which greeting it gives, whether it
+// answers in a group, which slash commands it offers, whether a
+// household rule may notify there, and, on the legacy path in
+// handlers_chat_message.go, WHICH GATEWAY THE SESSION RUNS ON.
+//
+// That last one is why folding the Connection's policy in here was a
+// bug. `admits = 'owners'` is legal on a MEMBER Agent -- it is the
+// narrowing 8.1 exists to allow -- so a household bot narrowed to
+// Owners would have been routed to the OPERATOR gateway, and an
+// admission change whose whole stated effect is "who may address this
+// bot" would have widened what the Agent behind it may do. A
+// Connection may only ever narrow (10 layer 3); nothing about it may
+// raise the Agent's ceiling. Found by a security review of this
+// slice, and pinned by
+// TestNarrowingAMemberAgentsBotDoesNotGiveItTheOperatorSurface.
+//
+// So: this answers about the AGENT. For "may this Person be admitted
+// here", use Admits, which is total over roles, consults the
+// Connection's own policy, intersects it with this ceiling, and
+// answers with a reason. A bool cannot tell "admits the household"
+// from "admits nobody, because nothing says", and that difference is
+// the whole of this slice.
+func (c Connection) AdmitsOwnersOnly() bool { return c.OwnerAgent() }
 
 // ErrAmbiguousConnection is returned when an Agent has more than one
 // Connection on a transport and the caller named neither.
