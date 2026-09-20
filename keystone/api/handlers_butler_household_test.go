@@ -160,6 +160,75 @@ func TestHouseholdStatusAnswersForThePersonTheCallerActsFor(t *testing.T) {
 	}
 }
 
+// A person who is no longer admitted cannot have work done for them,
+// and is refused BEFORE their message reaches the provider.
+//
+// turnHasAPerson only ever checked that a row existed, which is true of
+// somebody disabled and of somebody offboarded. Binding the gateway's
+// authority is not enough on its own: that makes the tools refuse,
+// while a model answer carrying no tool call completes perfectly
+// happily — and by then the message has been sent, which on a cloud
+// route means a revoked person's words left the house. Found by a
+// review bot on #286.
+//
+// Mutations: dropping the Active() check from turnHasAPerson makes both
+// halves fail, and so does removing the call from runFamilySession —
+// the legacy path never had one.
+func TestARevokedPersonsMessageNeverReachesTheProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		disable func(h *harness)
+	}{
+		{"disabled", func(h *harness) {
+			if err := h.s.DB.DisableButlerMember("op", "root-admin"); err != nil {
+				h.t.Fatal(err)
+			}
+		}},
+		{"offboarded", func(h *harness) {
+			if _, err := h.s.DB.OffboardMember("op", "root-admin", "root-admin"); err != nil {
+				h.t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			// A provider that fails the test if it is ever called: the
+			// point is that nothing is sent, not that the answer is
+			// discarded afterwards.
+			called := false
+			h.wireHouseholdButler([]*provider.ChatResponse{{Text: "should never run"}},
+				runtimedb.ButlerModeFull)
+			h.s.ButlerHost.Provider = &callRecordingProvider{
+				inner:  h.s.ButlerHost.Provider,
+				called: &called,
+			}
+			tc.disable(h)
+
+			resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/household/butler/ask",
+				map[string]string{"message": "anything at all"}, nil)
+			if resp.StatusCode == http.StatusOK {
+				t.Fatalf("a revoked person's turn was answered: %d", resp.StatusCode)
+			}
+			if called {
+				t.Fatal("a revoked person's message was sent to the provider")
+			}
+		})
+	}
+}
+
+// callRecordingProvider records whether the provider was reached at all.
+type callRecordingProvider struct {
+	inner  provider.Provider
+	called *bool
+}
+
+func (p *callRecordingProvider) Name() string { return p.inner.Name() }
+
+func (p *callRecordingProvider) Chat(ctx context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+	*p.called = true
+	return p.inner.Chat(ctx, req)
+}
+
 // The family surface answers from the household timeline, records a
 // session stamped `family`, and produces no plans.
 func TestHouseholdButlerAskRecordsFamilySession(t *testing.T) {
