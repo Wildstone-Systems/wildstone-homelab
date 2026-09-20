@@ -154,12 +154,25 @@ func renderCandidate(c safeSessionCandidate, token string) string {
 	return fmt.Sprintf("%s — `/resume %s`", label, token)
 }
 
-func (s *Server) offerChatSessions(c chatCommandCtx, candidates []safeSessionCandidate) (string, error) {
+// Eight subjects of at most 72 four-byte runes, their timestamps and tokens,
+// plus the prompt and navigation, fit within runtimedb.MaxChatBodyBytes.
+const sessionChoicesPerPage = 8
+
+func (s *Server) offerChatSessions(c chatCommandCtx, candidates []safeSessionCandidate, page int) (string, error) {
 	if len(candidates) == 0 {
 		return "There are no recent conversations I can show here. Send a message to start one, or use /new.", nil
 	}
+	// Only the already-filtered candidates contribute to page boundaries
+	// or counts. Validate before multiplying so arbitrary page input cannot
+	// overflow the slice bounds.
+	pages := (len(candidates)-1)/sessionChoicesPerPage + 1
+	if page < 1 || page > pages {
+		return "That page is no longer available. Use /sessions for the current choices.", nil
+	}
+	start := (page - 1) * sessionChoicesPerPage
+	end := min(start+sessionChoicesPerPage, len(candidates))
 	lines := []string{"Your message was not processed. Choose a conversation below, then send it again — or use /new:"}
-	for _, candidate := range candidates {
+	for _, candidate := range candidates[start:end] {
 		token, err := newResumeToken()
 		if err != nil {
 			return "", err
@@ -169,6 +182,12 @@ func (s *Server) offerChatSessions(c chatCommandCtx, candidates []safeSessionCan
 			return "", err
 		}
 		lines = append(lines, renderCandidate(candidate, token))
+	}
+	if page > 1 {
+		lines = append(lines, fmt.Sprintf("Previous page: `/sessions %d`.", page-1))
+	}
+	if page < pages {
+		lines = append(lines, fmt.Sprintf("Next page: `/sessions %d`.", page+1))
 	}
 	return strings.Join(lines, "\n"), nil
 }
@@ -199,7 +218,7 @@ func (s *Server) resolveChatContinuation(c chatCommandCtx) (*turnContext, string
 		}
 		return &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}, "", nil
 	default:
-		body, err := s.offerChatSessions(c, candidates)
+		body, err := s.offerChatSessions(c, candidates, 1)
 		return nil, body, err
 	}
 }

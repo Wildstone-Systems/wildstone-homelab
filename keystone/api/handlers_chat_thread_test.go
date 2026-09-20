@@ -1,7 +1,9 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -80,6 +82,89 @@ func TestAmbiguousChatContinuationOffersOpaqueChoicesBeforeInference(t *testing.
 	}
 	if strings.Contains(queued[0].Body, "bs-") {
 		t.Fatalf("choice prompt exposed a raw session id: %q", queued[0].Body)
+	}
+}
+
+func TestSessionPagesDeliverEveryResumeChoiceWithoutTruncation(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(answerTurns("must not run"), runtimedb.ButlerModeFull)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+	want := make(map[string]bool)
+	for i := 0; i < 19; i++ {
+		// Four-byte runes exercise the queue's byte limit, not just a
+		// character limit. The first message follows the automatic path.
+		id := insertCandidateSession(t, h, at, "sam", strings.Repeat("😀", 80))
+		want[id] = true
+	}
+	protected := insertCandidateSession(t, h, at, "sam", "protected subject")
+	if err := h.s.DB.NoteButlerSessionConnection(protected, "inbound", "console", 0); err != nil {
+		t.Fatal(err)
+	}
+	tokens := regexp.MustCompile("`/resume ([A-Za-z0-9_-]+)`")
+	nextPage := regexp.MustCompile("Next page: `/sessions ([0-9]+)`")
+	seen := make(map[string]bool)
+	var after int64
+	text := "continue"
+	for page := 1; ; page++ {
+		if page > 19 {
+			t.Fatal("session pagination never ended")
+		}
+		h.send(runtimedb.RoleConcierge, map[string]any{
+			"transport": "telegram", "account": "12345", "text": text,
+			"messageId": fmt.Sprintf("page-%d", page),
+		})
+		queued := h.poll(t, runtimedb.RoleConcierge, fmt.Sprintf("?after=%d", after))
+		if len(queued) != 1 {
+			t.Fatalf("page %d queued %d messages", page, len(queued))
+		}
+		body := queued[0].Body
+		after = queued[0].Seq
+		if strings.Contains(body, "protected subject") || strings.Contains(body, "bs-") {
+			t.Fatalf("page disclosed protected metadata: %q", body)
+		}
+		choices := tokens.FindAllStringSubmatch(body, -1)
+		if len(choices) == 0 || len(body) > runtimedb.MaxChatBodyBytes {
+			t.Fatalf("invalid page: %q", body)
+		}
+		for _, choice := range choices {
+			id, err := h.s.DB.ConsumeSessionResumeOffer(resumeTokenHash(choice[1]), "sam", at.Butler, at.Seq)
+			if err != nil {
+				t.Fatalf("delivered token cannot be selected: %v", err)
+			}
+			if !want[id] || seen[id] {
+				t.Fatalf("page returned an unexpected or repeated session %q", id)
+			}
+			seen[id] = true
+		}
+		next := nextPage.FindStringSubmatch(body)
+		if next == nil {
+			break
+		}
+		text = "/sessions " + next[1]
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("only %d of %d safe sessions were reachable", len(seen), len(want))
+	}
+	if calls := h.providerCalls(t); calls != 0 {
+		t.Fatalf("listing choices ran the model %d times", calls)
+	}
+}
+
+func TestSessionPagesRejectInvalidAndUnavailablePages(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	insertCandidateSession(t, h, at, "sam", "recent conversation")
+	for _, page := range []string{"0", "-1", "2", "words", "1 2", "9223372036854775807", "999999999999999999999"} {
+		t.Run(page, func(t *testing.T) {
+			body, err := h.s.chatSessions(chatCommandCtx{At: at, Identity: "sam", Arg: page})
+			if err != nil || !strings.Contains(body, "/sessions") || strings.Contains(body, "/resume") {
+				t.Fatalf("invalid page response = %q, %v", body, err)
+			}
+		})
 	}
 }
 

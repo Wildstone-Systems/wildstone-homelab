@@ -505,7 +505,7 @@ export function HouseholdTimeZone() {
     setBusy(true);
     setError(null);
     api
-      .setButlerSettings({ ...loaded.data.settings, timezone: zone.trim() })
+      .setButlerSettings({ timezone: zone.trim() })
       .then(() => {
         setSaved(true);
         setZone("");

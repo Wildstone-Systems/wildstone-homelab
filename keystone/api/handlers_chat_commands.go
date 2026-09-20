@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,7 +77,7 @@ func init() {
 		{Name: "new", Help: "start a new conversation", Surfaces: bothSurfaces, Run: (*Server).chatNewConversation},
 		{Name: "reset", Help: "start a new conversation", Surfaces: bothSurfaces, Run: (*Server).chatNewConversation},
 		{Name: "clear", Help: "start a new conversation", Surfaces: bothSurfaces, Run: (*Server).chatNewConversation},
-		{Name: "sessions", Help: "recent conversations you can continue here", Surfaces: bothSurfaces, Run: (*Server).chatSessions},
+		{Name: "sessions", Arg: "[page]", Help: "recent conversations you can continue here", Surfaces: bothSurfaces, Run: (*Server).chatSessions},
 		{Name: "resume", Arg: "<choice>", Help: "continue a conversation from /sessions", Surfaces: bothSurfaces, Run: (*Server).chatResumeConversation},
 
 		{Name: "status", Help: "is anything wrong, and is anything waiting for you", Surfaces: adminOnly, Run: (*Server).chatStatus},
@@ -225,6 +226,14 @@ func (s *Server) chatNewConversation(c chatCommandCtx) (string, error) {
 }
 
 func (s *Server) chatSessions(c chatCommandCtx) (string, error) {
+	page := 1
+	if arg := strings.TrimSpace(c.Arg); arg != "" {
+		var err error
+		page, err = strconv.Atoi(arg)
+		if err != nil || page < 1 {
+			return "Use `/sessions` or `/sessions <page>` with a positive page number.", nil
+		}
+	}
 	candidates, protected, err := s.chatSessionCandidates(c)
 	if err != nil {
 		return "", err
@@ -232,7 +241,7 @@ func (s *Server) chatSessions(c chatCommandCtx) (string, error) {
 	if len(candidates) == 0 && protected {
 		return "Continue that conversation from the household dashboard. I can't show conversation details here.", nil
 	}
-	return s.offerChatSessions(c, candidates)
+	return s.offerChatSessions(c, candidates, page)
 }
 
 func (s *Server) chatResumeConversation(c chatCommandCtx) (string, error) {
