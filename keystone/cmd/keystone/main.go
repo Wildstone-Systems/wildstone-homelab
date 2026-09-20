@@ -1510,11 +1510,19 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		// degraded but honest.
 		if coordinating {
 			ledger := butlerstore.New(db, lease)
-			// Admission is wired explicitly rather than defaulted: "no
+			// Derived Task authority is wired explicitly rather than
+			// defaulted, for the reason admission always was: "no
 			// admission records exist yet" and "this person is not
 			// admitted" must not be the same answer, so turning it on
-			// is an act (ADR-W030 A2.1).
-			ledger.OwnerActive = ledger.AdmissionCheck()
+			// is an act (ADR-W030 A2.1, design §10.1).
+			//
+			// All four legs together — the Person, the session, the
+			// Connection and the grants a task was admitted under.
+			// Three of four is not three quarters of the rule; it is a
+			// rule with a hole, and a task that recorded an origin the
+			// deployment cannot check is refused rather than waved
+			// through.
+			ledger.DerivedAuthorityChecks()
 			butlers := &butlerlive.Butlers{
 				DB:     db,
 				Ledger: ledger,

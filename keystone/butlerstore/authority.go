@@ -94,6 +94,23 @@ func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecis
 		}
 	}
 
+	// A TASK NEVER EXCEEDS THE AUTHORITY OF ITS REQUEST (§10.1).
+	//
+	// When a check names a task, the person and Connection asking must
+	// be the ones that task was admitted under. This is the "can never
+	// widen" half of derived authority, and it belongs here rather than
+	// in the ledger because the ledger re-evaluates whether the ORIGIN
+	// still stands, while this asks whether the CALLER is that origin.
+	// A task whose work could be driven by somebody else's session
+	// would be a grant object after all — a bundle of authority that
+	// outlived the request and could be picked up by whoever named its
+	// id.
+	if q.TaskID != "" && q.Caller == butler.CallerPersonFacing {
+		if d, ok, err := a.withinOriginatingAuthority(q); err != nil || !ok {
+			return d, err
+		}
+	}
+
 	query := runtimedb.ToolQuery{
 		AgentClass:    q.AgentClass,
 		Tool:          q.Tool,
@@ -120,6 +137,52 @@ func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecis
 		Requestable: res.Requestable,
 		GrantSeq:    res.GrantSeq,
 	}, nil
+}
+
+// withinOriginatingAuthority checks the caller against the task's
+// recorded origin. It returns (decision, false, nil) when the answer is
+// already no.
+//
+// A leg the task did not record is not checked, for the reason the
+// ledger's derivedAuthority gives: an empty origin means the leg does
+// not apply, never that it passed. What it must not do is the reverse —
+// treat a RECORDED origin as satisfied by an empty caller — so each
+// comparison is against the task's value, not against whichever of the
+// two happens to be set.
+func (a *Authority) withinOriginatingAuthority(q butler.ToolAuthorityQuery) (butler.ToolDecision, bool, error) {
+	task, err := a.DB.GetButlerTask(q.TaskID)
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		return butler.ToolDecision{
+			Allowed: false,
+			Reason: fmt.Sprintf(
+				"%s names work this deployment has no record of, so it was not run", q.Tool),
+		}, false, nil
+	}
+	if err != nil {
+		return butler.ToolDecision{}, false, err
+	}
+	// The task's own person. Author rather than Owner: offboarding
+	// moves a shared task's owner to the administrator and "preserves
+	// original authorship" (0017), so the owner is who operates it now
+	// and the author is whose request it derives from. §10.1 is about
+	// the request.
+	if task.Author != q.Person {
+		return butler.ToolDecision{
+			Allowed: false,
+			Reason: fmt.Sprintf(
+				"%s belongs to work %s asked for, and %s cannot carry it on, so it was not run",
+				q.Tool, task.Author, q.Person),
+		}, false, nil
+	}
+	if task.OriginConnection != "" && task.OriginConnection != q.Connection {
+		return butler.ToolDecision{
+			Allowed: false,
+			Reason: fmt.Sprintf(
+				"%s belongs to work that arrived over %s and this request did not, so it was not run",
+				q.Tool, task.OriginConnection),
+		}, false, nil
+	}
+	return butler.ToolDecision{}, true, nil
 }
 
 // AdmitResource implements butler.ResourceAuthorizer: layer 2, one rule

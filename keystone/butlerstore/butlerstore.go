@@ -17,6 +17,7 @@ package butlerstore
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
@@ -37,6 +38,37 @@ type Ledger struct {
 	// mid-migration, or a test, can supply its own without this package
 	// deciding what admission means.
 	OwnerActive func(owner string) error
+
+	// SessionActive, ConnectionActive and GrantActive are the other
+	// three legs of design §10.1's derived Task authority: "If the
+	// Person, session, Connection or grant behind it later loses
+	// authority, the Task loses it too at its next boundary."
+	//
+	// OwnerActive above is the Person leg and predates them.
+	//
+	// THEY ARE NOT SEPARATE PERMISSIONS. Nothing is issued, held or
+	// revoked here — each one re-reads something that already existed
+	// and can only ever turn a task off. A Task is a narrowing of the
+	// request that created it, never a capability of its own.
+	//
+	// WHETHER A LEG APPLIES IS DECIDED BY THE TASK, NOT BY THE WIRING.
+	// A task that recorded no originating session has no session leg to
+	// re-evaluate; a routine has neither session nor Connection and is
+	// its own principal (§10.2). But a task that DID record one and
+	// finds the check unwired is refused, because an origin nobody can
+	// confirm is an origin §10.1 answers with no. That is the shape
+	// AdmissionCheck's note argues for — the wiring is the act — with
+	// the data rather than the deployment saying which acts are needed,
+	// so turning the rule on cannot retroactively refuse work that
+	// never had the origin in the first place.
+	SessionActive    func(sessionID string) error
+	ConnectionActive func(connection string) error
+	// GrantActive is given the task id rather than a grant id: the
+	// question §10.1 asks is whether the authority this work was
+	// admitted under still stands, and the grants that answer it are
+	// exactly the ones scoped to this task.
+	GrantActive func(taskID string) error
+
 	// Now is the ledger clock; nil means time.Now.
 	Now func() time.Time
 }
@@ -90,6 +122,55 @@ func (l *Ledger) Authorize(taskID string) error {
 			return fmt.Errorf("%w: %v", ErrAuthorityWithdrawn, err)
 		}
 	}
+	return l.derivedAuthority(task)
+}
+
+// derivedAuthority re-evaluates the rest of §10.1's originating
+// authority for one task, at one boundary.
+//
+// Every branch is a refusal. There is deliberately nothing here that
+// can turn a no into a yes, because a Task's authority is a NARROWING
+// of the request that created it — "there is no separate Task grant
+// object to issue, hold or revoke" — and a function that could widen
+// one would be that object by another name.
+//
+// The order is Person, session, Connection, grant: outermost first, so
+// the reason a person is given names the largest thing that went away
+// rather than an inner consequence of it.
+func (l *Ledger) derivedAuthority(task runtimedb.ButlerTask) error {
+	// The session the request was had in. A routine has none.
+	if task.SessionID != "" {
+		if l.SessionActive == nil {
+			return fmt.Errorf(
+				"%w: it was started in session %s and nothing here can say whether that session still stands",
+				ErrAuthorityWithdrawn, task.SessionID)
+		}
+		if err := l.SessionActive(task.SessionID); err != nil {
+			return fmt.Errorf("%w: %v", ErrAuthorityWithdrawn, err)
+		}
+	}
+	// The Connection the request arrived over. A routine has none, and
+	// a task created before 0062 has none recorded — in both cases the
+	// leg does not apply rather than silently passing.
+	if task.OriginConnection != "" {
+		if l.ConnectionActive == nil {
+			return fmt.Errorf(
+				"%w: it arrived over %s and nothing here can say whether that connection still admits it",
+				ErrAuthorityWithdrawn, task.OriginConnection)
+		}
+		if err := l.ConnectionActive(task.OriginConnection); err != nil {
+			return fmt.Errorf("%w: %v", ErrAuthorityWithdrawn, err)
+		}
+	}
+	// The grants this work was admitted under. Unlike the three above,
+	// there is no field saying whether the leg applies: a task either
+	// has grants scoped to it or it does not, and the check answers
+	// both cases without being told which it is.
+	if l.GrantActive != nil {
+		if err := l.GrantActive(task.ID); err != nil {
+			return fmt.Errorf("%w: %v", ErrAuthorityWithdrawn, err)
+		}
+	}
 	return nil
 }
 
@@ -114,6 +195,108 @@ func (l *Ledger) AdmissionCheck() func(string) error {
 		}
 		return nil
 	}
+}
+
+// SessionCheck, ConnectionCheck and GrantCheck wire the other three
+// legs of §10.1's derived authority to the runtime database.
+//
+// They are constructors rather than defaults for AdmissionCheck's
+// reason, restated: wiring is the act. DerivedAuthorityChecks below
+// turns all four on together, which is how a deployment should do it —
+// three of four legs is not three quarters of the rule, it is a rule
+// with a hole whose shape nobody wrote down.
+
+// SessionCheck refuses a task whose originating session was withdrawn.
+func (l *Ledger) SessionCheck() func(string) error {
+	return func(sessionID string) error { return l.db.ButlerSessionActive(sessionID) }
+}
+
+// ConnectionCheck refuses a task whose originating Connection no longer
+// admits it.
+//
+// WHAT IT CHECKS TODAY IS EXISTENCE, AND THAT IS THE WHOLE OF IT. Slice
+// 11 (#212) is what makes a Connection an admission boundary; until it
+// lands there is no rule about what a Connection admits, and inventing
+// one here would be this slice answering a question it was told to
+// leave open (#211: "State this split explicitly in the code, or #212
+// will find a Connection leg that looks finished and is not").
+//
+// The built-in surfaces are not rows and cannot be withdrawn: the
+// Console and the household dashboard are Connections a deployment HAS
+// rather than ones somebody added (§8.2), so they answer yes here and
+// their ceilings are enforced where they always were.
+func (l *Ledger) ConnectionCheck() func(string) error {
+	return func(connection string) error {
+		if connection == "" {
+			return errors.New("it arrived over no connection")
+		}
+		if builtInConnection(connection) {
+			return nil
+		}
+		transport, external, ok := strings.Cut(connection, ":")
+		if !ok {
+			return fmt.Errorf("%q is not a connection this deployment knows", connection)
+		}
+		if _, err := l.db.ChatConnectionAt(transport, external); err != nil {
+			if errors.Is(err, runtimedb.ErrNotFound) {
+				return fmt.Errorf("the %s connection it arrived over is gone", connection)
+			}
+			return err
+		}
+		return nil
+	}
+}
+
+// builtInConnection reports whether a name is one of the Connections a
+// deployment has rather than one somebody added.
+//
+// The names are duplicated from keystone/butlerlive and keystone/portal
+// rather than imported: butlerlive imports THIS package, and portal is
+// an HTTP surface the store has no business knowing. Two short strings
+// is what keeping that direction costs, and connectionNamesAgree in the
+// butlerlive tests pins them together.
+func builtInConnection(name string) bool {
+	return name == "console" || name == "household_portal"
+}
+
+// GrantCheck refuses a task whose grants have been withdrawn.
+//
+// A task that never held a grant is unaffected: most work is done with
+// tools nobody had to grant, and "no grants exist" is not "every grant
+// was taken away". What it catches is the case §10.1 names — work
+// admitted under a grant that an Owner has since revoked — and it
+// catches it at the next boundary rather than by hunting down running
+// tasks, because authority is evaluated at use time.
+//
+// EXPIRY IS NOT REVOCATION and is deliberately not treated as one. A
+// grant that ran out means the tool it covered is no longer permitted,
+// which the resolver already answers per tool; killing the whole task
+// for it would stop work that never needed the tool again.
+func (l *Ledger) GrantCheck() func(string) error {
+	return func(taskID string) error {
+		grants, err := l.db.ListToolGrants(runtimedb.GrantScopeTask, taskID)
+		if err != nil {
+			return err
+		}
+		if len(grants) == 0 {
+			return nil
+		}
+		for _, g := range grants {
+			if g.RevokedAt.IsZero() {
+				return nil
+			}
+		}
+		return errors.New("every tool grant it was admitted under has been revoked")
+	}
+}
+
+// DerivedAuthorityChecks turns on all four legs of §10.1's derived Task
+// authority. It is the one call a deployment makes.
+func (l *Ledger) DerivedAuthorityChecks() {
+	l.OwnerActive = l.AdmissionCheck()
+	l.SessionActive = l.SessionCheck()
+	l.ConnectionActive = l.ConnectionCheck()
+	l.GrantActive = l.GrantCheck()
 }
 
 // FenceAttempts implements butler.TaskLedger.

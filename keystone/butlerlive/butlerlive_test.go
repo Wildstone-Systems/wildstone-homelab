@@ -107,6 +107,17 @@ func (w *witness) sawText(want string) bool {
 	return false
 }
 
+// servedLedger wires a ledger the way cmd/keystone wires the one that
+// serves real conversations: all four legs of §10.1's derived Task
+// authority on. A ledger without them refuses any task that recorded an
+// origin it cannot confirm, which is a real deployment's answer too —
+// so a test that left them off would be testing the refusal rather than
+// whatever it meant to.
+func servedLedger(l *butlerstore.Ledger) *butlerstore.Ledger {
+	l.DerivedAuthorityChecks()
+	return l
+}
+
 // countingToolset records how many times each tool was really
 // dispatched — the measurement "resumes without repeating a dispatch"
 // rests on.
@@ -243,7 +254,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	f.butlers = &Butlers{
 		DB:     db,
-		Ledger: butlerstore.New(db, lease),
+		Ledger: servedLedger(butlerstore.New(db, lease)),
 		Providers: func(b runtimedb.Butler) (provider.Provider, error) {
 			switch b.ModelKind {
 			case runtimedb.ModelLocal:
@@ -458,7 +469,7 @@ func (f *fixture) restart(t *testing.T) {
 	prior := f.butlers
 	f.butlers = &Butlers{
 		DB:        f.db,
-		Ledger:    butlerstore.New(f.db, lease),
+		Ledger:    servedLedger(butlerstore.New(f.db, lease)),
 		Providers: prior.Providers,
 		Gateways:  prior.Gateways,
 	}
