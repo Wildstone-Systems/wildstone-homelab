@@ -71,6 +71,35 @@
   .mark-commitment { background: var(--mark, var(--color-accent-300)); }
   .mark-notice { background: var(--st-warn); }
   .empty { color: var(--muted); font-size: 13px; padding: var(--space-3) 0; }
+
+  /* Ticking something off is the one moment on this page worth
+     celebrating, and it is also the moment the row leaves the day —
+     a weekly chore reopens a week out, so Done makes it disappear from
+     today. Without an acknowledgement that reads as deletion. The
+     confetti is the receipt.
+   *
+   * No library: the portal's CSP allows no external script at all, and
+   * this is a dozen divs and one keyframe. pointer-events:none so it
+   * cannot swallow a tap on the way down, and above the theme strip's
+   * z-index so it falls in front of the page rather than behind a
+   * card. */
+  .confetti { position: fixed; inset: 0; z-index: 60; pointer-events: none; overflow: hidden; }
+  .confetti i {
+    position: absolute; top: -16px; width: 8px; height: 13px; border-radius: 1px;
+    animation-name: fall; animation-timing-function: cubic-bezier(.25,.6,.5,1);
+    animation-fill-mode: forwards;
+  }
+  @keyframes fall {
+    0%   { transform: translate3d(0, 0, 0) rotate(0deg); opacity: 1; }
+    100% { transform: translate3d(var(--drift, 0px), 104vh, 0) rotate(var(--spin, 540deg)); opacity: .9; }
+  }
+  /* SOMEBODY ASKED NOT TO BE MOVED AT. A wall tablet in a kitchen is
+     exactly where a household member with vestibular trouble meets an
+     animation they did not choose, and the tick still works without
+     it. */
+  @media (prefers-reduced-motion: reduce) {
+    .confetti { display: none; }
+  }
   .tick { flex: none; }
   .part { flex: none; font-size: 11px; color: var(--muted); text-transform: uppercase;
           letter-spacing: 0.1em; padding-top: 3px; width: 5rem; }
@@ -197,6 +226,38 @@
 
   var page = null;
 
+  // ---- the receipt for a tick.
+  function celebrate() {
+    try {
+      if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        return;
+      }
+    } catch (e) { /* no matchMedia: fall through and animate */ }
+    var box = make("div", "confetti");
+    box.setAttribute("aria-hidden", "true");
+    // The theme's own colours, so the celebration belongs to whatever
+    // skin the household chose rather than arriving in somebody
+    // else's palette.
+    var colours = ["var(--color-accent)", "var(--color-accent-300)", "var(--st-ok)",
+                   "var(--st-warn)", "var(--mark, var(--color-accent-200))"];
+    for (var i = 0; i < 26; i++) {
+      var bit = document.createElement("i");
+      bit.style.left = (Math.random() * 100) + "vw";
+      bit.style.background = colours[i % colours.length];
+      bit.style.setProperty("--drift", (Math.random() * 120 - 60).toFixed(0) + "px");
+      bit.style.setProperty("--spin", (360 + Math.random() * 720).toFixed(0) + "deg");
+      bit.style.animationDuration = (1.1 + Math.random() * 0.9).toFixed(2) + "s";
+      bit.style.animationDelay = (Math.random() * 0.25).toFixed(2) + "s";
+      bit.style.opacity = (0.7 + Math.random() * 0.3).toFixed(2);
+      box.appendChild(bit);
+    }
+    document.body.appendChild(box);
+    // Cleaned up rather than left in the document. A page that runs for
+    // a day on a wall tablet would otherwise accumulate one of these
+    // per chore, forever.
+    window.setTimeout(function () { box.remove(); }, 2600);
+  }
+
   function paintPeople() {
     var box = el("people");
     clear(box);
@@ -301,6 +362,7 @@
           method: "POST", headers: { "content-type": "application/json" }, body: "{}"
         }).then(function (res) {
           if (!res.ok) { throw new Error("done: " + res.status); }
+          celebrate();
           load(page.who);
         }).catch(function () {
           tick.disabled = false;

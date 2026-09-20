@@ -541,3 +541,57 @@ func TestTheSubjectSelectorGrantsNoStanding(t *testing.T) {
 		t.Error("selecting another adult disclosed their personal routine")
 	}
 }
+
+// Ticking off a weekly chore must not make it disappear.
+//
+// A weekly routine completed today reopens exactly a week out, and the
+// day window rendered today..today+6 — so Done dropped the bins off
+// the end of the agenda entirely. Not just invisible: the row is where
+// Edit and Remove live, so the household could not reach it at all.
+func TestCompletingAWeeklyRoutineDoesNotHideIt(t *testing.T) {
+	h := homeHarness(t)
+	h.s.Upkeep = &upkeep.Engine{DB: h.s.DB, State: h.s.State, Loc: time.UTC}
+	h.person("sandy")
+
+	// Anchored a week back, so it is due today and completing it opens
+	// the next cycle exactly agendaDays out — the boundary case.
+	anchor := time.Now().UTC().AddDate(0, 0, -7).Format("2006-01-02")
+	body := `{"description":"Bins out","about":"sandy","every":"1w","anchor":"` + anchor + `",` +
+		`"partOfDay":"evening","rollover":"fromSchedule","scope":"personal"}`
+	res := h.member(http.MethodPost, "/api/v1/home/commitments", "sandy", "homepage_users",
+		stringsNewReader(body), "application/json")
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("adding: %d", res.StatusCode)
+	}
+	if !contains(agendaTitles(h.agenda(t, "sandy", "sandy")), "Bins out") {
+		t.Fatal("not on the agenda before completing it")
+	}
+
+	res = h.member(http.MethodPost, "/api/v1/home/commitments/bins-out/done", "sandy", "homepage_users",
+		stringsNewReader(`{}`), "application/json")
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("completing: %d", res.StatusCode)
+	}
+
+	after := h.agenda(t, "sandy", "sandy")
+	if !contains(agendaTitles(after), "Bins out") {
+		t.Fatal("the routine vanished after being ticked off; there is now no way to edit or remove it")
+	}
+	// And it comes back a week out rather than sitting on today.
+	for _, d := range after.Days {
+		for _, it := range d.Items {
+			if it.Title != "Bins out" {
+				continue
+			}
+			day, err := time.Parse("2006-01-02", d.Date)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !day.After(time.Now().UTC().AddDate(0, 0, 5)) {
+				t.Errorf("the next cycle landed on %s, want about a week out", d.Date)
+			}
+		}
+	}
+}

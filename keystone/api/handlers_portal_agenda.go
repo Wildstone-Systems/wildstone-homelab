@@ -39,9 +39,17 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
 )
 
-// agendaDays is how far ahead a day view looks. Long enough that "later
-// this week" is answerable, short enough that it is still a day and not
-// a planner.
+// agendaDays is how far ahead a day view looks, counted from today and
+// INCLUSIVE of the last day. Long enough that "later this week" is
+// answerable, short enough that it is still a day and not a planner.
+//
+// Seven has to mean eight rendered days, today through today+7, and
+// that is not an off-by-one to tidy away. A weekly routine completed
+// today reopens exactly a week out; a window that stopped at today+6
+// dropped it on the floor, so ticking off the bins made them vanish
+// from the agenda entirely — no row, and therefore nowhere to edit or
+// remove them from either. A weekly rhythm needs a window that can
+// always hold the next one.
 const agendaDays = 7
 
 // maxAgendaNotices bounds the notice rows one person's day can carry.
@@ -147,7 +155,7 @@ func (s *Server) homeAgenda(_ http.ResponseWriter, r *http.Request, member strin
 	s.agendaCommitments(who, memberWho(r, member), today, loc, byDay)
 	s.agendaNotices(who, member, today, loc, byDay)
 
-	for i := 0; i < agendaDays; i++ {
+	for i := 0; i <= agendaDays; i++ {
 		d := today.AddDate(0, 0, i)
 		key := d.Format("2006-01-02")
 		items := byDay[key]
@@ -228,7 +236,7 @@ func (s *Server) agendaEvents(ctx context.Context, who string, today time.Time, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	events, err := s.CalendarBook.Events(ctx, today, today.AddDate(0, 0, agendaDays))
+	events, err := s.CalendarBook.Events(ctx, today, today.AddDate(0, 0, agendaDays+1))
 	if err != nil {
 		s.Log.Info("agenda events unavailable", "err", err)
 		return
@@ -320,6 +328,8 @@ func (s *Server) agendaCommitments(who string, asker who, today time.Time, loc *
 		if at.Before(today) {
 			at = today
 		}
+		// The same bound the render loop uses. These two disagreeing is
+		// how a row gets computed and then never drawn.
 		if at.After(today.AddDate(0, 0, agendaDays)) {
 			continue
 		}
