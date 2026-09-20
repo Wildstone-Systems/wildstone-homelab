@@ -60,7 +60,7 @@ func TestSessionCandidateDoesNotLoadTranscriptAndRevocationRemovesIt(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Connection == nil || got[0].Connection.Seq != at.Seq {
+	if len(got) != 1 || len(got[0].Provenance) != 1 || got[0].Provenance[0].Connection == nil || got[0].Provenance[0].Connection.Seq != at.Seq {
 		t.Fatalf("candidate provenance = %+v", got)
 	}
 	if err := db.RevokeButlerSession(id, "alice"); err != nil {

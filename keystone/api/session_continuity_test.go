@@ -3,12 +3,88 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
+
+func TestContinuationRetainsEarlierDisclosureRestrictions(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		encryption  string
+		retention   string
+		builtIn     bool
+		unresolved  bool
+		visible     bool
+		showSubject bool
+		showTime    bool
+	}{
+		{name: "protected subject", encryption: "end_to_end", retention: "provider", visible: true, showTime: true},
+		{name: "protected activity", encryption: "transport", retention: "none", visible: true, showSubject: true},
+		{name: "trusted origin", builtIn: true},
+		{name: "unresolved origin", unresolved: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.person("sam")
+			origin := h.agentAt(t, "family", "matrix")
+			current := h.agentAt(t, "family", "telegram")
+			if _, err := h.s.DB.ExecForTest(`UPDATE connection_disclosure SET reach='external', encryption='transport', retention='provider', surface='external_messaging' WHERE connection=?`, current.Seq); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			current, err = h.s.DB.ChatConnectionBySeq(current.Seq)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := insertCandidateSession(t, h, origin, "sam", "protected original subject")
+			switch {
+			case tc.builtIn:
+				err = h.s.DB.NoteButlerSessionConnection(id, "inbound", butlerlive.ConsoleConnection, 0)
+			case tc.unresolved:
+				_, err = h.s.DB.ExecForTest(`DELETE FROM connection_disclosure WHERE connection=?`, origin.Seq)
+			default:
+				_, err = h.s.DB.ExecForTest(`UPDATE connection_disclosure SET reach='external', encryption=?, retention=?, surface='external_messaging' WHERE connection=?`, tc.encryption, tc.retention, origin.Seq)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for turn := 0; turn < 3; turn++ {
+				if turn > 0 {
+					if err := h.s.DB.AppendButlerTurnsFrom(id, []runtimedb.ButlerTurn{{Role: runtimedb.ButlerRoleUser, Text: "continued on weaker connection"}}, current.Name(), current.Seq); err != nil {
+						t.Fatal(err)
+					}
+				}
+				candidates, protected, err := h.s.chatSessionCandidates(chatCommandCtx{At: current, Identity: "sam", Conversation: "12345"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !tc.visible {
+					if len(candidates) != 0 || !protected {
+						t.Fatalf("turn %d: protected origin became visible: %+v", turn, candidates)
+					}
+					continue
+				}
+				if len(candidates) != 1 {
+					t.Fatalf("turn %d: candidates = %+v", turn, candidates)
+				}
+				c := candidates[0]
+				if c.ShowSubject != tc.showSubject || c.ShowTime != tc.showTime {
+					t.Fatalf("turn %d: subject=%v time=%v", turn, c.ShowSubject, c.ShowTime)
+				}
+				if strings.Contains(renderCandidate(c, "choice"), "protected original subject") != tc.showSubject {
+					t.Fatalf("turn %d: rendered subject disclosure changed", turn)
+				}
+				if turn > 0 && len(c.Provenance) != 2 {
+					t.Fatalf("turn %d: distinct origins = %d", turn, len(c.Provenance))
+				}
+			}
+		})
+	}
+}
 
 func TestLegacyRepliesRecordBuiltInOutboundProvenance(t *testing.T) {
 	for _, tc := range []struct {
@@ -107,7 +183,7 @@ func TestTrustedConversationExistenceIsHiddenFromExternalMessaging(t *testing.T)
 	}}
 	candidate := runtimedb.SessionCandidate{
 		SessionID: "bs-42", Subject: "the private homepage conversation",
-		ConnectionRef: 0, ConnectionName: butlerlive.ConsoleConnection,
+		Provenance: []runtimedb.SessionConnection{{ConnectionRef: 0, ConnectionName: butlerlive.ConsoleConnection}},
 	}
 	if _, visible := candidateOnConnection(candidate, externalContinuationConnection(current)); visible {
 		t.Fatal("an external Connection learned that a trusted-UI conversation exists")
@@ -120,7 +196,7 @@ func TestUnresolvedCandidateDisclosureFailsClosed(t *testing.T) {
 		Retention: runtimedb.RetentionProvider, Surface: runtimedb.TrustExternalMessaging,
 	}}
 	origin := runtimedb.Connection{Seq: 8} // no readable classification
-	candidate := runtimedb.SessionCandidate{SessionID: "bs-42", ConnectionRef: 8, Connection: &origin}
+	candidate := runtimedb.SessionCandidate{SessionID: "bs-42", Provenance: []runtimedb.SessionConnection{{ConnectionRef: 8, Connection: &origin}}}
 	if _, visible := candidateOnConnection(candidate, externalContinuationConnection(current)); visible {
 		t.Fatal("an unreadable classification disclosed a session candidate")
 	}
@@ -135,7 +211,7 @@ func TestCandidateFieldsAreFilteredIndependently(t *testing.T) {
 		Reach: runtimedb.ReachExternal, Encryption: runtimedb.EncryptionEndToEnd,
 		Retention: runtimedb.RetentionProvider, Surface: runtimedb.TrustExternalMessaging,
 	}}
-	shown, visible := candidateOnConnection(runtimedb.SessionCandidate{Connection: &origin}, externalContinuationConnection(current))
+	shown, visible := candidateOnConnection(runtimedb.SessionCandidate{Provenance: []runtimedb.SessionConnection{{Connection: &origin}}}, externalContinuationConnection(current))
 	if !visible || shown.ShowSubject || !shown.ShowTime {
 		t.Fatalf("disclosure = visible %v subject %v time %v", visible, shown.ShowSubject, shown.ShowTime)
 	}

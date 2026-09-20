@@ -11,9 +11,15 @@ import (
 // It deliberately contains no transcript: candidate selection happens before
 // any candidate's context is loaded (design section 9).
 type SessionCandidate struct {
-	SessionID      string
-	Subject        string
-	LastTurnAt     time.Time
+	SessionID  string
+	Subject    string
+	LastTurnAt time.Time
+	Provenance []SessionConnection
+}
+
+// SessionConnection retains each inbound origin, even after continuation on a
+// different Connection. Later turns must not relax earlier disclosure limits.
+type SessionConnection struct {
 	ConnectionRef  int64
 	ConnectionName string
 	Connection     *Connection
@@ -44,16 +50,13 @@ func (db *DB) RecentSessionCandidates(identity, agent string, since, after time.
 		                  ORDER BY ordinal LIMIT 1), ''),
 		       COALESCE((SELECT MAX(created_at) FROM butler_session_turns
 		                  WHERE session = s.seq), ''),
-		       COALESCE((SELECT connection_ref FROM butler_session_connections
-		                  WHERE session = s.seq AND direction = 'inbound'
-		                  ORDER BY seq DESC LIMIT 1), -1),
-		       COALESCE((SELECT connection_name FROM butler_session_connections
-		                  WHERE session = s.seq AND direction = 'inbound'
-		                  ORDER BY seq DESC LIMIT 1), '')
+		       COALESCE(p.connection_ref, -1), COALESCE(p.connection_name, '')
 		  FROM butler_sessions s
+		  LEFT JOIN butler_session_connections p ON p.session = s.seq AND p.direction = 'inbound'
 		 WHERE s.person_id = ? AND s.agent_id = ? AND s.revoked_at = ''
 		   AND EXISTS (SELECT 1 FROM butler_session_turns t
 		                WHERE t.session = s.seq AND t.created_at > ?)
+		 GROUP BY s.seq, p.connection_ref, p.connection_name
 		 ORDER BY (SELECT MAX(created_at) FROM butler_session_turns
 		            WHERE session = s.seq) DESC, s.seq DESC`,
 		person, agentID, cutoff.UTC().Format(time.RFC3339Nano))
@@ -62,26 +65,45 @@ func (db *DB) RecentSessionCandidates(identity, agent string, since, after time.
 	}
 	defer rows.Close()
 	var out []SessionCandidate
+	indices := make(map[int64]int)
 	for rows.Next() {
 		var c SessionCandidate
+		var source SessionConnection
 		var seq int64
 		var last string
-		if err := rows.Scan(&seq, &c.Subject, &last, &c.ConnectionRef, &c.ConnectionName); err != nil {
+		if err := rows.Scan(&seq, &c.Subject, &last, &source.ConnectionRef, &source.ConnectionName); err != nil {
 			return nil, err
 		}
 		c.SessionID = butlerSessionID(seq)
 		if c.LastTurnAt, err = time.Parse(time.RFC3339Nano, last); err != nil {
 			return nil, fmt.Errorf("runtimedb: parsing candidate activity: %w", err)
 		}
-		if c.ConnectionRef > 0 {
-			conn, cerr := db.ChatConnectionBySeq(c.ConnectionRef)
-			if cerr == nil {
-				c.Connection = &conn
+		if index, exists := indices[seq]; exists {
+			out[index].Provenance = append(out[index].Provenance, source)
+		} else {
+			indices[seq] = len(out)
+			c.Provenance = []SessionConnection{source}
+			out = append(out, c)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		for j := range out[i].Provenance {
+			source := &out[i].Provenance[j]
+			if source.ConnectionRef > 0 {
+				conn, err := db.ChatConnectionBySeq(source.ConnectionRef)
+				if err == nil {
+					source.Connection = &conn
+				}
 			}
 		}
-		out = append(out, c)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // NoteButlerSessionConnection appends the Connection on which a completed

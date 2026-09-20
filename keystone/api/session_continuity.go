@@ -83,29 +83,35 @@ func candidateOnConnection(c runtimedb.SessionCandidate, current continuationCon
 	if current.Trusted {
 		return safeSessionCandidate{SessionCandidate: c, ShowSubject: true, ShowTime: true}, true
 	}
-	if c.ConnectionRef == 0 && trustedBuiltInConnection(c.ConnectionName) {
-		// A trusted-UI conversation is not announced over external
-		// messaging. Even a neutral placeholder would disclose existence.
+	shown := safeSessionCandidate{SessionCandidate: c, ShowSubject: true, ShowTime: true}
+	if len(c.Provenance) == 0 {
 		return safeSessionCandidate{}, false
 	}
-	if c.Connection == nil {
-		return safeSessionCandidate{}, false
+	for _, source := range c.Provenance {
+		if source.ConnectionRef == 0 && trustedBuiltInConnection(source.ConnectionName) {
+			// A trusted-UI conversation is not announced over external
+			// messaging. Even a neutral placeholder would disclose existence.
+			return safeSessionCandidate{}, false
+		}
+		if source.Connection == nil {
+			return safeSessionCandidate{}, false
+		}
+		a, b := source.Connection.Disclosure, current.Disclosure
+		resolved := a.Reach != runtimedb.ReachUnresolved && a.Surface != runtimedb.TrustUnresolved &&
+			a.Encryption != runtimedb.EncryptionUnresolved && a.Retention != runtimedb.RetentionUnresolved &&
+			b.Reach != runtimedb.ReachUnresolved && b.Surface != runtimedb.TrustUnresolved &&
+			b.Encryption != runtimedb.EncryptionUnresolved && b.Retention != runtimedb.RetentionUnresolved
+		// Existence, subject and activity are three disclosures. A common reach
+		// and surface permits the neutral candidate; encryption permits its
+		// subject; retention permits its activity timestamp.
+		existence := resolved && a.Reach == b.Reach && a.Surface == b.Surface
+		if !existence {
+			return safeSessionCandidate{}, false
+		}
+		shown.ShowSubject = shown.ShowSubject && a.Encryption == b.Encryption
+		shown.ShowTime = shown.ShowTime && a.Retention == b.Retention
 	}
-	a, b := c.Connection.Disclosure, current.Disclosure
-	resolved := a.Reach != runtimedb.ReachUnresolved && a.Surface != runtimedb.TrustUnresolved &&
-		a.Encryption != runtimedb.EncryptionUnresolved && a.Retention != runtimedb.RetentionUnresolved &&
-		b.Reach != runtimedb.ReachUnresolved && b.Surface != runtimedb.TrustUnresolved &&
-		b.Encryption != runtimedb.EncryptionUnresolved && b.Retention != runtimedb.RetentionUnresolved
-	// Existence, subject and activity are three disclosures. A common reach
-	// and surface permits the neutral candidate; encryption permits its
-	// subject; retention permits its activity timestamp.
-	existence := resolved && a.Reach == b.Reach && a.Surface == b.Surface
-	if !existence {
-		return safeSessionCandidate{}, false
-	}
-	return safeSessionCandidate{SessionCandidate: c,
-		ShowSubject: a.Encryption == b.Encryption,
-		ShowTime:    a.Retention == b.Retention}, true
+	return shown, true
 }
 
 func (s *Server) chatSessionCandidates(c chatCommandCtx) ([]safeSessionCandidate, bool, error) {
