@@ -214,6 +214,11 @@ type householdEntry struct {
 	// OptIn: see toolEntry (ADR-W033 design §6.2). No household tool
 	// sets it in v1 either.
 	OptIn bool
+	// Reaches names the resource kind this tool reaches (design §10
+	// layer 2): see toolEntry. No household tool sets it in v1 — the
+	// resources §10 means are defined by §11 and §12, and those slices
+	// bring both the tools and the rules.
+	Reaches string
 	// Describe is the self-capability variant (ADR-W030 P2): the one
 	// tool whose answer depends on the session's own constraints, kept
 	// out of the ordinary handler signature for the reason the operator
@@ -307,6 +312,7 @@ func (gw *HouseholdGateway) checkTool(tool string, entry householdEntry) ToolDec
 		Structural:    true,
 		GrantRequired: entry.GrantRequired,
 		TaskID:        gw.SessionTask,
+		Resource:      ResourceRef{Kind: entry.Reaches},
 	}
 	if gw.caller == CallerAdministrative {
 		return authorizeAdministrative(gw.Authorizer, q)
@@ -580,12 +586,15 @@ func (gw *HouseholdGateway) wired(name string) bool {
 // ADR-W017 A4 QA-only verdict) is offered the read tools only.
 func (gw *HouseholdGateway) OfferedSpecs(readOnly bool) []provider.Tool {
 	all := gw.Specs()
-	if !readOnly {
-		return all
-	}
 	out := make([]provider.Tool, 0, len(all))
 	for _, t := range all {
-		if gw.tools[t.Name].Mutating {
+		if readOnly && gw.tools[t.Name].Mutating {
+			continue
+		}
+		// The same question dispatch asks, through the same call. See
+		// ToolGateway.permitted for why the offered list and not only
+		// the manifest has to ask it.
+		if !gw.checkTool(t.Name, gw.tools[t.Name]).Allowed {
 			continue
 		}
 		out = append(out, t)

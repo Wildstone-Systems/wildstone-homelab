@@ -9,8 +9,12 @@ package butler
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 )
 
 // recordingAuthorizer answers yes to everything and remembers what it
@@ -250,6 +254,187 @@ func TestGeneralRuleRequiresResourceGrantsWithoutEnumeratingThem(t *testing.T) {
 	second.Resource.Kind = "beehive_scale"
 	if authorizeForPerson(admitted, second).Allowed {
 		t.Fatal("a rule for one resource kind admitted another")
+	}
+}
+
+// THE OFFERED LIST is what actually reaches a provider, and it must not
+// name a tool dispatch would refuse.
+//
+// This is a third place that has to agree, and the one the first
+// version of this slice missed: TestDescribingAndDispatchingAgree below
+// compared the MANIFEST against dispatch and passed, while
+// OfferedSpecs — Session.specs and Runner.Run both send it — still
+// returned the raw registry. A model was handed tools its person could
+// not use. Found by a review bot on #286, which is why the test that
+// should have caught it is written from the call the provider makes
+// rather than from the one that is easiest to reach.
+//
+// A name is itself a disclosure: a member restricted from a capability
+// should not learn it exists here from the tool list.
+//
+// Mutation: returning gw.ToolSpecs() from OfferedSpecs — the code as it
+// stood — makes this fail on the first tool.
+func TestTheOfferedListNeverNamesAToolDispatchWouldRefuse(t *testing.T) {
+	// A session that says who is asking and where from, with a resolver
+	// that refuses one specific tool. Nothing structural is withheld,
+	// so any tool missing from the offered list is missing because
+	// authority said so.
+	// A real Statefile: a gateway with none panics inside the read
+	// tools, and this test dispatches every tool it was offered.
+	store, err := statefile.New(filepath.Join(t.TempDir(), "statefile"))
+	if err != nil {
+		t.Fatalf("statefile.New: %v", err)
+	}
+	gw := NewToolGateway(store, nil)
+	gw.SetAuthorizer(refuseOne{tool: "get_system_overview"})
+	gw.SetCaller(CallerPersonFacing, "mika", testConnection)
+
+	offered := gw.OfferedSpecs(false)
+	if len(offered) == 0 {
+		t.Fatal("nothing was offered at all, so the comparison proves nothing")
+	}
+	for _, spec := range offered {
+		if spec.Name == "get_system_overview" {
+			t.Fatal("a refused tool was offered to the model by name")
+		}
+		out, err := gw.Dispatch(context.Background(), spec.Name, nil)
+		if err != nil {
+			t.Fatalf("Dispatch(%s): %v", spec.Name, err)
+		}
+		if out.Rejected {
+			t.Fatalf("%s was offered to the model and refused at dispatch: %q",
+				spec.Name, out.Content)
+		}
+	}
+
+	// The family surface answers the same way.
+	hh := NewHouseholdGateway("sam", HouseholdSeams{
+		Events: func(context.Context, HouseholdLookup) ([]HouseholdFact, error) { return nil, nil },
+	})
+	hh.SetAuthorizer(refuseOne{tool: "get_household_events"})
+	hh.SetCaller(CallerPersonFacing, "sam", testConnection)
+	for _, spec := range hh.OfferedSpecs(false) {
+		if spec.Name == "get_household_events" {
+			t.Fatal("a refused family tool was offered to the model by name")
+		}
+	}
+
+	// And a session nobody told who is asking offers nothing at all,
+	// rather than offering everything.
+	bare := NewToolGateway(nil, nil)
+	if got := bare.OfferedSpecs(false); len(got) != 0 {
+		t.Fatalf("an unstated session offered %d tool(s)", len(got))
+	}
+}
+
+// refuseOne permits everything except one named tool.
+type refuseOne struct{ tool string }
+
+func (r refuseOne) AuthorizeTool(q ToolAuthorityQuery) (ToolDecision, error) {
+	if q.Tool == r.tool {
+		return ToolDecision{Allowed: false, Reason: "an administrator turned that off"}, nil
+	}
+	return ToolDecision{Allowed: q.Structural}, nil
+}
+
+// No shipped tool reaches a §10 layer-2 resource yet, and the day one
+// does, it has to say so.
+//
+// The path from a tool's declaration through the query to the
+// resource's own rule is complete and tested; what does not exist is a
+// resource to put in it, because layer 2 is defined BY the resource
+// (memory §11, secrets §12) and those slices bring both the tools and
+// the rules. This test is what makes that a STATED fact rather than an
+// assumption: a tool that starts reaching a resource fails here until
+// somebody writes its rule.
+//
+// Mutation: declaring Reaches on any registered tool makes this fail,
+// which is the point — the failure is the prompt to add the rule.
+func TestNoShippedToolReachesAResourceWithoutARule(t *testing.T) {
+	for name, entry := range NewToolGateway(nil, nil).tools {
+		if entry.Reaches != "" {
+			t.Errorf("operator tool %s reaches a %s: give that kind a ResourceRule, "+
+				"then update this test to expect it", name, entry.Reaches)
+		}
+	}
+	for name, entry := range NewHouseholdGateway("sam", HouseholdSeams{}).tools {
+		if entry.Reaches != "" {
+			t.Errorf("family tool %s reaches a %s: give that kind a ResourceRule, "+
+				"then update this test to expect it", name, entry.Reaches)
+		}
+	}
+}
+
+// A tool that DECLARES a resource is checked against that resource's
+// own rule, and refused when there is none.
+//
+// This is the wire from a tool's declaration, through the query, to
+// layer 2. TestNoShippedToolReachesAResourceWithoutARule above says no
+// tool uses it yet; this one says it works, so "no tool sets it" is a
+// statement about the tools and not an excuse for untested plumbing.
+// The first version of this slice had the wire and no test for it, and
+// a mutation that cut it escaped.
+//
+// Mutation: dropping `Resource: ResourceRef{Kind: entry.Reaches}` from
+// the query builder makes the first case fail.
+func TestADeclaredResourceIsCheckedAgainstItsOwnRule(t *testing.T) {
+	const kind = "greenhouse_sensor"
+
+	withTool := func(a ToolAuthorizer) *ToolGateway {
+		gw := NewToolGateway(nil, nil)
+		// Registered here rather than shipped: the point is a tool that
+		// reaches a resource, and no shipped tool does yet.
+		gw.tools["read_greenhouse"] = toolEntry{
+			Spec:    provider.Tool{Name: "read_greenhouse", Description: "read a bed"},
+			Reaches: kind,
+			Handler: func(context.Context, *ToolGateway, map[string]any) (ToolOutcome, error) {
+				return ToolOutcome{Content: "23C"}, nil
+			},
+		}
+		gw.SetAuthorizer(a)
+		gw.SetCaller(CallerPersonFacing, "mika", testConnection)
+		return gw
+	}
+
+	// No rule for the kind: refused, and the refusal names the kind.
+	gw := withTool(resourceAwareAuthorizer{rules: ResourceRules{}})
+	d := gw.checkTool("read_greenhouse", gw.tools["read_greenhouse"])
+	if d.Allowed {
+		t.Fatal("a tool declaring a resource ran with no rule for that resource")
+	}
+	if !strings.Contains(d.Reason, kind) {
+		t.Fatalf("the refusal does not name the resource kind: %q", d.Reason)
+	}
+
+	// It is refused at dispatch and withheld from the offered list too,
+	// so the three places agree about it like any other refusal.
+	out, err := gw.Dispatch(context.Background(), "read_greenhouse", nil)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if !out.Rejected {
+		t.Fatalf("dispatch ran it anyway: %q", out.Content)
+	}
+	for _, spec := range gw.OfferedSpecs(false) {
+		if spec.Name == "read_greenhouse" {
+			t.Fatal("a tool refused for want of a resource rule was still offered")
+		}
+	}
+
+	// With the kind's own rule, it works — otherwise this would pass
+	// against an implementation that refuses every declared resource.
+	ok := withTool(resourceAwareAuthorizer{rules: ResourceRules{
+		kind: func(ToolAuthorityQuery) (ToolDecision, error) {
+			return ToolDecision{Allowed: true}, nil
+		},
+	}})
+	if d := ok.checkTool("read_greenhouse", ok.tools["read_greenhouse"]); !d.Allowed {
+		t.Fatalf("a resource its own rule admits was refused: %q", d.Reason)
+	}
+
+	// A tool that declares NO resource is untouched by any of it.
+	if !ok.checkTool("get_system_overview", ok.tools["get_system_overview"]).Allowed {
+		t.Fatal("a tool that reaches no resource was refused by the resource leg")
 	}
 }
 

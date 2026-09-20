@@ -60,6 +60,30 @@ type toolEntry struct {
 	// P12's and P13's write paths arrive, rather than being retrofitted
 	// through every call site then.
 	GrantRequired bool
+	// Reaches names the RESOURCE KIND this tool reaches, when it
+	// reaches one — a memory record, a secret, a file (design §10
+	// layer 2). Empty means the tool reaches no resource of its own,
+	// which is what every v1 tool does.
+	//
+	// It is declared here rather than inferred from a handler's inputs
+	// for the reason GrantRequired and OptIn are: the resolver needs
+	// something to READ, and a fact recovered by guessing at tool
+	// arguments is a fact that is wrong the first time somebody names
+	// an argument differently. Declaring it is what carries a tool into
+	// layer 2 — and a tool that declares a kind nothing has a rule for
+	// is refused, never admitted by the general rule (ResourceRules).
+	//
+	// No v1 tool sets it, and that is not an omission: §10's layer 2 is
+	// defined BY the resource — memory in §11, secrets in §12 — and
+	// those slices are what add both the tools that reach them and the
+	// rules that admit them. The path from this field to the refusal is
+	// complete and tested (TestGeneralRuleRequiresResourceGrantsWithout
+	// EnumeratingThem); what does not exist yet is a resource to put in
+	// it. Note that `explain_resource` reaches a STATEFILE resource —
+	// declarative desired state, readable by anyone who may use the
+	// tool at all — which is a different sense of the word and
+	// deliberately not this one.
+	Reaches string
 	// OptIn marks an unusually consequential tool (ADR-W033 design
 	// §6.2). It is a place to put such a tool without inventing a third
 	// Agent class: its authority class stays whatever it is, and what
@@ -161,6 +185,7 @@ func (gw *ToolGateway) query(tool string, entry toolEntry) ToolAuthorityQuery {
 		Structural:    true,
 		GrantRequired: entry.GrantRequired,
 		TaskID:        gw.SessionTask,
+		Resource:      ResourceRef{Kind: entry.Reaches},
 	}
 }
 
@@ -388,10 +413,40 @@ func finishOutcome(outcome ToolOutcome, untrusted bool, maxBytes int) ToolOutcom
 // OfferedSpecs implements Toolset (ADR-W026 A1): the operator surface's
 // offered tool set, narrowed to reads for a QA-only session.
 func (gw *ToolGateway) OfferedSpecs(readOnly bool) []provider.Tool {
+	all := gw.ToolSpecs()
 	if readOnly {
-		return gw.ReadOnlyToolSpecs()
+		all = gw.ReadOnlyToolSpecs()
 	}
-	return gw.ToolSpecs()
+	return gw.permitted(all)
+}
+
+// permitted drops the tools effective authority would refuse.
+//
+// OfferedSpecs is what actually reaches a provider (Session.specs,
+// Runner.Run), and ToolSpecs/Capabilities are inventories. Before the
+// Person leg existed the three could differ only about administrative
+// state, and offering a disabled tool cost a wasted round. Now they can
+// differ about WHO IS ASKING, and a name is itself a disclosure: a
+// member restricted from a capability should not learn from the tool
+// list that it exists here, and a model should not be handed a tool it
+// will be refused and invited to reason about why.
+//
+// ADR-W030 P7 says describing and dispatching must agree. This is the
+// third place that has to, and it agrees the only way that cannot
+// drift: by asking the same question through the same call.
+func (gw *ToolGateway) permitted(specs []provider.Tool) []provider.Tool {
+	out := make([]provider.Tool, 0, len(specs))
+	for _, spec := range specs {
+		entry, ok := gw.tools[spec.Name]
+		if !ok {
+			continue
+		}
+		if !gw.checkTool(spec.Name, entry).Allowed {
+			continue
+		}
+		out = append(out, spec)
+	}
+	return out
 }
 
 // Execute implements Toolset: dispatch with the session's read-only
