@@ -387,3 +387,141 @@ func TestNarrowingAMemberAgentsBotDoesNotGiveItTheOperatorSurface(t *testing.T) 
 		t.Fatal("a narrowed member-agent bot was served the OPERATOR surface (§10 layer 3)")
 	}
 }
+
+// TestARefusedMemberIsNotRecordedAsAnUnknownAccount — the audit half
+// of ErrNotAdmitted, which a review of #289 found being discarded at
+// the one place operators actually look.
+//
+// OUTWARDLY the two refusals must be identical: telling a turned-away
+// member why would tell a stranger that the account they guessed
+// exists. INWARDLY they are not the same event at all, and recording
+// both as chat.unknown_account asserts that nobody introduced an
+// account whose binding is sitting right there — sending whoever
+// investigates after a revocation that never happened.
+func TestARefusedMemberIsNotRecordedAsAnUnknownAccount(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(answerTurns("hello"), runtimedb.ButlerModeFull)
+	family := h.agentAt(t, "family", "telegram")
+	h.person("mika", "sam")
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+
+	// Narrow the bot so sam, a Member, is turned away by the Connection.
+	var out map[string]any
+	if resp := h.do(runtimedb.RoleAdmin, "POST",
+		"/api/v1/connections/"+family.ExternalID+"/admission",
+		map[string]any{"admits": "owners"}, &out); resp.StatusCode != http.StatusOK {
+		t.Fatalf("narrowing: status = %d, %v", resp.StatusCode, out)
+	}
+
+	// A stranger, so both events are in play in one deployment.
+	h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "99999", "text": "hello?", "messageId": "s-1",
+	})
+	// And the member the Connection now refuses.
+	_, got := h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "12345", "text": "what is for dinner?", "messageId": "m-1",
+	})
+	if got.Bound {
+		t.Fatalf("a narrowed connection still admitted the member: %+v", got)
+	}
+
+	events, err := h.s.DB.EventsAfter(0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refused, unknown []map[string]string
+	for _, e := range events {
+		switch e.Type {
+		case "chat.admission_refused":
+			refused = append(refused, e.Attrs)
+		case "chat.unknown_account":
+			unknown = append(unknown, e.Attrs)
+		}
+	}
+	if len(refused) != 1 || refused[0]["account"] != "12345" {
+		t.Fatalf("the refused member produced %+v, want one admission_refused for 12345", refused)
+	}
+	// The reason says which ceiling turned them away, which is what an
+	// operator needs and what the old event destroyed.
+	if !strings.Contains(refused[0]["reason"], "owners only") {
+		t.Fatalf("the refusal does not say why: %+v", refused[0])
+	}
+	// The STRANGER is still recorded as a stranger, and the member is
+	// not among them — the event kinds must not have simply swapped.
+	if len(unknown) != 1 || unknown[0]["account"] != "99999" {
+		t.Fatalf("unknown_account = %+v, want only the stranger", unknown)
+	}
+
+	// Outwardly indistinguishable: neither is answered.
+	if queued := h.poll(t, runtimedb.RoleConcierge, ""); len(queued) != 0 {
+		t.Fatalf("something was said back: %+v", queued)
+	}
+}
+
+// A freshly redeemed binding describes itself the way a later read of
+// it will. The redeem response reported role "" while a list of the
+// same binding reported the real one — the kind of disagreement that
+// teaches whoever reads the API that one of the two is lying.
+func TestARedeemedBindingReportsTheRoleItWasBoundWith(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	h.person("mika", "sam")
+	if err := h.s.DB.SetButlerMemberRole("mika", runtimedb.RoleOwner, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	member := h.bindAccount(t, "family", "sam", "telegram", "12345")
+	if member.Role != runtimedb.RoleMember {
+		t.Fatalf("a redeemed member binding reports role %q", member.Role)
+	}
+	owner := h.bindAccount(t, "admin", "mika", "telegram", "555")
+	if owner.Role != runtimedb.RoleOwner {
+		t.Fatalf("a redeemed owner binding reports role %q", owner.Role)
+	}
+
+	// And it agrees with what a later read says, which is the property
+	// that was broken rather than the field being empty as such.
+	var listed []runtimedb.ChatBinding
+	h.do(runtimedb.RoleAdmin, "GET", "/api/v1/chat/bindings", nil, &listed)
+	for _, b := range listed {
+		want := member.Role
+		if b.ID == owner.ID {
+			want = owner.Role
+		}
+		if b.Role != want {
+			t.Fatalf("binding %d lists role %q but redeem said %q", b.ID, b.Role, want)
+		}
+	}
+}
+
+// A policy outside the vocabulary is a malformed REQUEST; an Owner
+// Agent refusing 'household' is a well-formed request the deployment's
+// STATE declines. Both answered 409 until a review of #289 separated
+// them, and a client told "conflict" about a typo goes looking for
+// state that is perfectly fine.
+func TestAMalformedAdmissionValueIsABadRequestNotAConflict(t *testing.T) {
+	h := newHarness(t)
+	h.person("mika")
+	family := h.agentAt(t, "family", "telegram")
+	admin := h.agentAt(t, "admin", "telegram")
+
+	var out map[string]any
+	if resp := h.do(runtimedb.RoleAdmin, "POST",
+		"/api/v1/connections/"+family.ExternalID+"/admission",
+		map[string]any{"admits": "everyone"}, &out); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("an unknown policy value: status = %d, want 400", resp.StatusCode)
+	}
+	// The well-formed request the state refuses keeps its 409, or the
+	// fix has flattened both into one answer pointing the other way.
+	if resp := h.do(runtimedb.RoleAdmin, "POST",
+		"/api/v1/connections/"+admin.ExternalID+"/admission",
+		map[string]any{"admits": "household"}, &out); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("widening an owner agent's bot: status = %d, want 409", resp.StatusCode)
+	}
+	// And a bot nobody answers on is still a 404.
+	if resp := h.do(runtimedb.RoleAdmin, "POST",
+		"/api/v1/connections/chat-telegram-nobody/admission",
+		map[string]any{"admits": "owners"}, &out); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("an unknown bot: status = %d, want 404", resp.StatusCode)
+	}
+}

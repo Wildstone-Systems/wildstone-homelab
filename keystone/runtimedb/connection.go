@@ -270,6 +270,31 @@ func (c Connection) Admits(role string) (bool, string) {
 			"%s does not record what kind of subject it admits, so it admits nobody", c.Name())
 	}
 
+	// THE AGENT'S CLASSIFICATION MUST BE READABLE AT ALL, before the
+	// question of whether it is an Owner Agent is even asked.
+	//
+	// OwnerAgent answers a yes/no, and a row it cannot read answers
+	// NO -- which then falls through to the policy, and a policy
+	// saying 'household' admits a Member. So `surface = 'family'`
+	// with `agent_class = 'guest'` admitted the household, because
+	// neither column literally said owner. That is the fail-open shape
+	// this slice exists to remove, one field along from where it was
+	// removed, and a review of #289 found it.
+	//
+	// 'guest' cannot be written today -- 0058's CHECK forbids it --
+	// which is exactly the argument portalMayReach already rejects: a
+	// defence correct only because of an invariant elsewhere stops
+	// being a defence the day that invariant is relaxed. A newer
+	// schema is the likely author of such a row, and a class a newer
+	// schema adds is at least as likely to sit ABOVE member as below.
+	// The runtime cannot know which, and "cannot know" is not a reason
+	// to admit.
+	if !ValidButlerSurface(c.Surface) || !ValidAgentClass(c.AgentClass) {
+		return false, fmt.Sprintf(
+			"what kind of agent %s is cannot be read on this deployment, so it admits nobody",
+			c.Butler)
+	}
+
 	// The Agent's own ceiling first, so that the reason a Member is
 	// refused at an Owner Agent names the Agent rather than the policy
 	// row -- the policy row is not what they would have to change.
@@ -428,6 +453,17 @@ func (db *DB) ChatConnectionForButler(butler, transport, externalID string) (Con
 	}
 }
 
+// ErrUnknownAdmission is returned when a caller names a policy outside
+// the vocabulary.
+//
+// It is distinct from every other refusal this function makes, and the
+// distinction is the caller's to act on: a value outside the closed set
+// is a malformed REQUEST, while an Owner Agent refusing 'household' is
+// a well-formed request the deployment's STATE declines. A review of
+// #289 found both answering 409, which tells a client to go looking for
+// a conflict when what they have is a typo.
+var ErrUnknownAdmission = errors.New("runtimedb: unknown admission policy")
+
 // SetConnectionAdmission narrows or restores a Connection's admission
 // policy (design §8.1; migration 0063).
 //
@@ -455,8 +491,8 @@ func (db *DB) SetConnectionAdmission(transport, externalID string, admits Admiss
 	case AdmitOwners, AdmitHousehold:
 	default:
 		return Connection{}, fmt.Errorf(
-			"runtimedb: %q is not an admission policy; it is %q or %q",
-			string(admits), string(AdmitOwners), string(AdmitHousehold))
+			"%w: %q is not an admission policy; it is %q or %q",
+			ErrUnknownAdmission, string(admits), string(AdmitOwners), string(AdmitHousehold))
 	}
 	at, err := db.ChatConnectionAt(transport, externalID)
 	if err != nil {

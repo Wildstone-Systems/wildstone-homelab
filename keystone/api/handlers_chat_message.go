@@ -210,11 +210,45 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// its own budget, so a flood cannot grow the database either.
 	binding, err := s.DB.LookupChatBinding(at, account)
 	if err != nil {
-		if s.limiter.take(fmt.Sprintf("\x00unknown:%d", at.Seq), unknownBurst, unknownPerSec) &&
-			s.limiter.take(fmt.Sprintf("\x00unknownnote:%d:%s", at.Seq, account), 1, 1.0/600) {
-			s.recordEvent("chat.unknown_account", at.ExternalID,
-				"a message from an account nobody introduced; nothing was said back",
-				map[string]string{"account": account, "agent": at.Butler})
+		// TWO DIFFERENT EVENTS, ONE IDENTICAL SILENCE.
+		//
+		// A stranger and a household member their Connection turns
+		// away are both refused before inference, and outwardly they
+		// must look the same: telling the second one why would tell
+		// the first one that the account they guessed exists.
+		//
+		// INWARDLY they are not the same event at all, and recording
+		// both as chat.unknown_account was a false audit record -- it
+		// says nobody introduced the account, about somebody who is on
+		// record, whose binding is sitting right there, and who was
+		// turned away by a demotion or a narrowing somebody made on
+		// purpose. An operator reading that goes looking for a
+		// revocation that never happened, which is the exact failure
+		// ErrNotAdmitted was introduced to end. A review of #289
+		// caught it discarding the sentinel at the one place operators
+		// actually look.
+		//
+		// The refusal carries its reason, which the sentinel's wrapper
+		// already spells out: which ceiling, and what they would have
+		// to change.
+		switch {
+		case errors.Is(err, runtimedb.ErrNotAdmitted):
+			// Not rate-limited the way a stranger's note is. This one
+			// is bounded by the household's own size: it needs a live
+			// binding for an admitted Person, so it cannot be produced
+			// by anybody who is not already on record.
+			s.recordEvent("chat.admission_refused", at.ExternalID,
+				"a household member's message was refused by the connection; nothing was said back",
+				map[string]string{
+					"account": account, "agent": at.Butler, "reason": err.Error(),
+				})
+		default:
+			if s.limiter.take(fmt.Sprintf("\x00unknown:%d", at.Seq), unknownBurst, unknownPerSec) &&
+				s.limiter.take(fmt.Sprintf("\x00unknownnote:%d:%s", at.Seq, account), 1, 1.0/600) {
+				s.recordEvent("chat.unknown_account", at.ExternalID,
+					"a message from an account nobody introduced; nothing was said back",
+					map[string]string{"account": account, "agent": at.Butler})
+			}
 		}
 		return inboundResponse{Accepted: true, Bound: false,
 			Reason: "no admission for this account on this connection"}, http.StatusAccepted, nil
