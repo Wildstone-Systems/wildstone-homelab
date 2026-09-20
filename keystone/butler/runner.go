@@ -665,6 +665,26 @@ func (r *Runner) toolCall(ctx context.Context, taskID string, tc provider.ToolCa
 	fp := callFingerprint(tc.Name, tc.Input)
 
 	if content, ok := verified[fp]; ok && fp != "" {
+		// A RETRIEVAL IS A BOUNDARY. ADR-W030 A2.1 is "at every
+		// retrieval and dispatch", and this is the only path that
+		// returns a tool's result without dispatching it — so it is the
+		// only place where authority withdrawn since the result was
+		// recorded would otherwise have no effect at all.
+		//
+		// It matters most for a grant: a revoked grant is refused per
+		// tool by the resolver, which Execute reaches and this path
+		// does not. Serving the cache would hand back exactly what the
+		// revocation was about. Found by a review bot on #287.
+		if allowed, why := r.Gateway.Permits(tc.Name, r.ReadOnly); !allowed {
+			r.trace(taskID, LedgerTraceEvent{
+				Type:      TraceDenial,
+				SourceIDs: []string{tc.Name},
+				Payload:   jsonPayload(map[string]any{"authority": "withdrawn", "at": "ledger retrieval"}),
+			})
+			rec.Rejected = true
+			rec.Result = why
+			return rec, why, false
+		}
 		// Already established. Re-reading it would not be harmless: a
 		// second reading at a different moment can disagree with the one
 		// the earlier part of this task was built on.

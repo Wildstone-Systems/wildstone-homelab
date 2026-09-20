@@ -26,10 +26,23 @@ import (
 type countingToolset struct {
 	calls map[string]int
 	fail  map[string]bool
+	// refused is what authority says no to RIGHT NOW, so a test can
+	// withdraw a tool between a result being recorded and being served
+	// back from the ledger.
+	refused map[string]string
 }
 
 func newCountingToolset() *countingToolset {
-	return &countingToolset{calls: map[string]int{}, fail: map[string]bool{}}
+	return &countingToolset{
+		calls: map[string]int{}, fail: map[string]bool{}, refused: map[string]string{},
+	}
+}
+
+func (ts *countingToolset) Permits(name string, _ bool) (bool, string) {
+	if why, ok := ts.refused[name]; ok {
+		return false, why
+	}
+	return true, ""
 }
 
 func (ts *countingToolset) OfferedSpecs(bool) []provider.Tool {

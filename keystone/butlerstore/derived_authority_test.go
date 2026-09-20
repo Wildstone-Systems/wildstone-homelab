@@ -282,6 +282,80 @@ func TestARevokedGrantRefusesItsToolAndNotTheWork(t *testing.T) {
 	f.refused(t, "cancelled")
 }
 
+// A cached result is a retrieval, and a retrieval is a boundary.
+//
+// toolCall serves a verified result from the ledger WITHOUT calling
+// Execute, so it is the one path the resolver never sees. A grant
+// revoked between the result being recorded and the task resuming would
+// otherwise have no effect at all on that path — the cache would hand
+// back exactly what the revocation was about. ADR-W030 A2.1 says "at
+// every retrieval and dispatch"; this slice had only covered dispatch.
+// Found by a review bot on #287.
+//
+// Mutation: dropping the Permits call from the cached branch makes this
+// fail — the tool is served from the ledger and the model sees it.
+func TestACachedResultIsRefusedWhenItsAuthorityWentAway(t *testing.T) {
+	f := newDerivedFixture(t)
+	ts := newCountingToolset()
+	r := runner(ts, f.ledger)
+
+	// First slice: the read happens and is recorded as verified, then
+	// the provider dies so the task WAITS rather than completing — a
+	// completed task cannot be resumed, and resuming is the whole point.
+	first := &scriptedProvider{dieAt: 1, steps: []*provider.ChatResponse{readsFor("node-a")}}
+	if _, err := r.Run(context.Background(), first, f.taskID, "look at node-a"); err == nil {
+		t.Fatal("the first slice was expected to end on a provider failure")
+	}
+	if n := ts.calls["get_health/node-a"]; n != 1 {
+		t.Fatalf("the read was dispatched %d times, want 1", n)
+	}
+
+	// Authority for that tool goes away between slices.
+	ts.refused["get_health"] = "an administrator turned that off"
+
+	// Second slice asks for the same read. It must NOT come back from
+	// the ledger, and it must not be dispatched either.
+	// dieAt again so this slice waits too, leaving the task resumable
+	// for the third one below.
+	second := &scriptedProvider{dieAt: 1, steps: []*provider.ChatResponse{readsFor("node-a")}}
+	tr, _ := r.Run(context.Background(), second, f.taskID, "look again")
+	if n := ts.calls["get_health/node-a"]; n != 1 {
+		t.Fatalf("the read was dispatched again (%d total) despite being refused", n)
+	}
+	var served bool
+	for _, c := range tr.Audit.Calls {
+		if c.Name == "get_health" && !c.Rejected {
+			served = true
+		}
+	}
+	if served {
+		t.Fatal("a cached result was served after its authority was withdrawn")
+	}
+
+	// And with authority restored the cache works as it always did:
+	// served back, not dispatched again. Without this the test would
+	// pass against an implementation that refuses EVERY cached
+	// retrieval, which breaks the resume the ledger exists for.
+	delete(ts.refused, "get_health")
+	third := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{readsFor("node-a")}}
+	tr, terr := r.Run(context.Background(), third, f.taskID, "and again")
+	if terr != nil {
+		t.Fatalf("third slice: %v", terr)
+	}
+	if n := ts.calls["get_health/node-a"]; n != 1 {
+		t.Fatalf("the read was re-dispatched (%d total) instead of served from the ledger", n)
+	}
+	served = false
+	for _, c := range tr.Audit.Calls {
+		if c.Name == "get_health" && !c.Rejected {
+			served = true
+		}
+	}
+	if !served {
+		t.Fatal("a permitted cached result was not served from the ledger")
+	}
+}
+
 // A Task never exceeds the authority of the request that created it
 // (§18.1). Naming a task id does not let a different person, or the
 // same person on a different Connection, carry its work on.

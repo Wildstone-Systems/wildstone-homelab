@@ -608,6 +608,30 @@ func (gw *HouseholdGateway) OfferedSpecs(readOnly bool) []provider.Tool {
 // does not have.
 func (gw *HouseholdGateway) SystemPrompt() string { return HouseholdSystemPrompt }
 
+// Permits implements Toolset: the same question dispatch asks, without
+// running anything. See the interface for why it exists.
+func (gw *HouseholdGateway) Permits(name string, readOnly bool) (bool, string) {
+	entry, ok := gw.tools[name]
+	if !ok {
+		return false, fmt.Sprintf("%s is not a tool on this surface", name)
+	}
+	if readOnly && entry.Mutating {
+		return false, fmt.Sprintf("tool %q is not available in this read-only session", name)
+	}
+	d := gw.checkTool(name, entry)
+	if !d.Allowed {
+		reason := d.Reason
+		if reason == "" {
+			reason = fmt.Sprintf("%s is not available in this session", name)
+		}
+		return false, reason
+	}
+	if entry.Describe == nil && !gw.wired(name) {
+		return false, fmt.Sprintf("tool %q is not available on this deployment", name)
+	}
+	return true, ""
+}
+
 // Execute implements Toolset: run a tool, refusing mutating tools in a
 // read-only session at the dispatch boundary, not merely by withholding
 // the spec (ADR-W006 A4, the same enforcement the operator surface has).
