@@ -621,6 +621,16 @@ type botView struct {
 	Platform   string `json:"platform"`
 	Label      string `json:"label"`
 	Butler     string `json:"butler"`
+	// Admits is what this Connection admits (design §8.1). It is on
+	// the list because the list is where somebody decides whether to
+	// narrow one, and a setting invisible until you open a detail page
+	// is a setting nobody audits.
+	//
+	// An empty string means no policy on record, which admits nobody.
+	// Shown as it is rather than defaulted to a value in the
+	// vocabulary: a screen that renders a missing policy as "household"
+	// would tell an operator their bot is open when in fact it is shut.
+	Admits string `json:"admits"`
 }
 
 // listConnections is GET /api/v1/connections: every installed chat bot
@@ -644,7 +654,8 @@ func (s *Server) listConnections(_ *http.Request, _ principal.Identity) (any, in
 		if err != nil {
 			continue // installed but never given to an Agent
 		}
-		out = append(out, botView{Capability: c, Platform: transport, Label: p.Label, Butler: at.Butler})
+		out = append(out, botView{Capability: c, Platform: transport, Label: p.Label,
+			Butler: at.Butler, Admits: string(at.Admission)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Capability < out[j].Capability })
 	return map[string]any{"bots": out}, http.StatusOK, nil
@@ -688,4 +699,48 @@ func (s *Server) removeConnection(r *http.Request, id principal.Identity) (any, 
 	}
 	s.event("chat.connection_removed", "", id, fmt.Sprintf("%s removed, plan %s", capName, planID))
 	return map[string]any{"capability": capName, "plan": planID}, http.StatusOK, nil
+}
+
+// setConnectionAdmission is POST /api/v1/connections/{capability}/admission:
+// who may address the Agent over this bot (design §8.1, §8.3).
+//
+// CONSEQUENTIAL, and #201 asks every slice from here on to say why
+// rather than leave it to the default. Both directions are: narrowing
+// to owners withdraws a way the household reaches an Agent, exactly as
+// removeConnection does, and widening to the household hands people
+// access they did not have. A4.1's question is whether an operation
+// changes who may reach what, and this operation is nothing else.
+//
+// It never widens past the Agent class. That ceiling is enforced in
+// the database (0063's triggers) and again in Connection.Admits, and
+// this handler simply reports the refusal — there is no case here for
+// it to get right or wrong.
+func (s *Server) setConnectionAdmission(r *http.Request, id principal.Identity) (any, int, error) {
+	capName := r.PathValue("capability")
+	transport, ok := capabilityTransport(capName)
+	if !ok {
+		return nil, http.StatusBadRequest, fmt.Errorf("%q is not a chat bot", capName)
+	}
+	var req struct {
+		Admits string `json:"admits"`
+	}
+	if code, err := decodeStrict(r, &req); err != nil {
+		return nil, code, err
+	}
+	at, err := s.DB.SetConnectionAdmission(
+		transport, capName, runtimedb.Admission(strings.TrimSpace(req.Admits)), actingMember(id))
+	switch {
+	case errors.Is(err, runtimedb.ErrNoConnection):
+		return nil, http.StatusNotFound, fmt.Errorf("no agent answers on %s", capName)
+	case err != nil:
+		// 409 rather than 400: the request is well formed and the
+		// deployment's state is what refuses it. An operator who reads
+		// "bad request" goes looking for a typo.
+		return nil, http.StatusConflict, err
+	}
+	s.event("chat.connection_admission_set", capName, id,
+		fmt.Sprintf("%s now admits %s", at.Name(), string(at.Admission)))
+	return map[string]any{
+		"capability": capName, "butler": at.Butler, "admits": string(at.Admission),
+	}, http.StatusOK, nil
 }

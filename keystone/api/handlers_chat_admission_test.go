@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -201,4 +202,108 @@ func (h *harness) assistantAgentNames(t *testing.T, user, groups string) []strin
 		names = append(names, a.Name)
 	}
 	return names
+}
+
+// Who a Connection admits is CONFIGURATION (design §8.1), which means
+// somebody has to be able to change it — and be refused when the
+// change would cross the Agent's own ceiling.
+func TestAnOwnerCanNarrowAConnectionButNotWidenItPastItsAgent(t *testing.T) {
+	h := newHarness(t)
+	h.person("mika", "sam")
+	family := h.agentAt(t, "family", "telegram")
+	admin := h.agentAt(t, "admin", "telegram")
+
+	// It starts where the Agent class puts it, and the list says so —
+	// a setting nobody can see is a setting nobody audits.
+	if family.Admission != runtimedb.AdmitHousehold {
+		t.Fatalf("a member agent's bot starts at %q", family.Admission)
+	}
+
+	// sam is bound FIRST, while the bot still admits the household.
+	// Binding after the narrowing is refused by the claim path, which
+	// is the configuration half of B9 and is asserted separately at
+	// the end.
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+
+	// Narrowed by hand: the Agent is unchanged and its bot now admits
+	// Owners only. This is the configuration the derived model could
+	// not express at all.
+	var out map[string]any
+	resp := h.do(runtimedb.RoleAdmin, "POST",
+		"/api/v1/connections/"+family.ExternalID+"/admission",
+		map[string]any{"admits": "owners"}, &out)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("narrowing: status = %d, %v", resp.StatusCode, out)
+	}
+	if out["admits"] != "owners" {
+		t.Fatalf("narrowing reported %v", out)
+	}
+
+	// And it took effect on the way in, not merely in the row. sam's
+	// binding is untouched — the narrowing withdrew admission, it did
+	// not revoke what they claimed.
+	if _, err := h.s.DB.LookupChatBinding(
+		mustConnection(t, h, family.ExternalID), "12345"); !errors.Is(err, runtimedb.ErrNotAdmitted) {
+		t.Fatalf("a member still reached a bot narrowed to owners: %v", err)
+	}
+
+	// The CONFIGURATION half of B9: a code cannot be issued for
+	// somebody the bot would turn away. "The first thing an operator
+	// should learn about a narrowed bot is not that their bot answers
+	// nobody."
+	var claim map[string]any
+	if resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/chat/claims",
+		map[string]any{"identity": "sam", "butler": agentFor("family"), "transport": "telegram"},
+		&claim); resp.StatusCode == http.StatusCreated {
+		t.Fatal("a claim code was issued for a member the bot no longer admits")
+	}
+
+	// THE REFUSAL. An Owner Agent's Connection cannot be widened to the
+	// household, whatever an operator asks for. 409 rather than 400:
+	// the request is well formed and the deployment's state is what
+	// refuses it.
+	resp = h.do(runtimedb.RoleAdmin, "POST",
+		"/api/v1/connections/"+admin.ExternalID+"/admission",
+		map[string]any{"admits": "household"}, &out)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("widening an owner agent's bot: status = %d, want 409", resp.StatusCode)
+	}
+	after, err := h.s.DB.ChatConnectionAt("telegram", admin.ExternalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Admission != runtimedb.AdmitOwners {
+		t.Fatalf("a refused widening changed the policy anyway: %q", after.Admission)
+	}
+
+	// A value outside the vocabulary is refused rather than stored and
+	// later read back as "admits nobody" — a Connection that silently
+	// stopped working would be the worse failure of the two.
+	resp = h.do(runtimedb.RoleAdmin, "POST",
+		"/api/v1/connections/"+family.ExternalID+"/admission",
+		map[string]any{"admits": "everyone"}, &out)
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("an admission policy outside the vocabulary was accepted")
+	}
+
+	// Restoring it works, so narrowing is not a one-way door.
+	resp = h.do(runtimedb.RoleAdmin, "POST",
+		"/api/v1/connections/"+family.ExternalID+"/admission",
+		map[string]any{"admits": "household"}, &out)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("restoring: status = %d, %v", resp.StatusCode, out)
+	}
+	if _, err := h.s.DB.LookupChatBinding(
+		mustConnection(t, h, family.ExternalID), "12345"); err != nil {
+		t.Fatalf("sam did not get their agent back: %v", err)
+	}
+}
+
+func mustConnection(t *testing.T, h *harness, externalID string) runtimedb.Connection {
+	t.Helper()
+	c, err := h.s.DB.ChatConnectionAt("telegram", externalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

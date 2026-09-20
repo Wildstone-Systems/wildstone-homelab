@@ -396,3 +396,62 @@ func (db *DB) ChatConnectionForButler(butler, transport, externalID string) (Con
 			ErrAmbiguousConnection, butler, len(found), strings.Join(ids, ", "))
 	}
 }
+
+// SetConnectionAdmission narrows or restores a Connection's admission
+// policy (design §8.1; migration 0063).
+//
+// NARROWS OR RESTORES, never widens past the Agent. The Agent class is
+// the ceiling — an Owner Agent's Connection admits Owners only (§8.3)
+// — and 0063's trigger refuses the write that would cross it. The
+// error that comes back is turned into something an operator can act
+// on here rather than left as a raw constraint failure, because
+// "constraint failed" does not say which rule or what to do instead.
+//
+// There is no create: a Connection has a policy from the moment it
+// exists, written by the trigger on butler_addresses. This only
+// changes one, so a capability nobody has given to an Agent reports
+// ErrNoConnection rather than quietly inserting a policy for a bot
+// that answers nobody.
+func (db *DB) SetConnectionAdmission(transport, externalID string, admits Admission, by string) (Connection, error) {
+	if by == "" {
+		return Connection{}, fmt.Errorf("runtimedb: setting connection admission needs who set it")
+	}
+	// The vocabulary, checked before the database sees it. Unresolved
+	// is a READING, not a value somebody may store: "admits nobody" is
+	// what an unreadable row means, and offering it as a setting would
+	// make a Connection nobody can use and nobody can explain.
+	switch admits {
+	case AdmitOwners, AdmitHousehold:
+	default:
+		return Connection{}, fmt.Errorf(
+			"runtimedb: %q is not an admission policy; it is %q or %q",
+			string(admits), string(AdmitOwners), string(AdmitHousehold))
+	}
+	at, err := db.ChatConnectionAt(transport, externalID)
+	if err != nil {
+		return Connection{}, err
+	}
+	res, err := db.sql.Exec(
+		`UPDATE connection_admission SET admits = ?, set_at = ?, set_by = ? WHERE connection = ?`,
+		string(admits), now(), by, at.Seq)
+	if err != nil {
+		if strings.Contains(err.Error(), "owners only") {
+			return Connection{}, fmt.Errorf(
+				"%s answers on %s, and an owner agent's connections admit owners only -- "+
+					"change the agent's class, or give the household a member agent instead (ADR-W033 B9)",
+				at.Butler, at.Name())
+		}
+		return Connection{}, fmt.Errorf("runtimedb: setting admission on %s: %w", at.Name(), err)
+	}
+	// A Connection with no policy row. The trigger gives every new one
+	// a policy, so this is a row that was deleted or a database
+	// restored from before 0063 — and INSERTing one here would be this
+	// function deciding a policy nobody chose. Refusing says what is
+	// wrong while Admits keeps refusing everybody, which is the safe
+	// order for the two to fail in.
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Connection{}, fmt.Errorf(
+			"runtimedb: %s has no admission policy to change", at.Name())
+	}
+	return db.ChatConnectionAt(transport, externalID)
+}

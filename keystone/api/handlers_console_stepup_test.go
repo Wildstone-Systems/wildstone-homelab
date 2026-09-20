@@ -33,6 +33,10 @@ var consequentialRoutes = []struct{ method, path, body string }{
 	{http.MethodPost, "/api/v1/restore/reconcile", `{}`},
 	{http.MethodDelete, "/api/v1/butlers/joan", ``},
 	{http.MethodPost, "/api/v1/chat/adapters/chat-telegram-family", `{"node":"n1","butler":"joan"}`},
+	// Who a Connection admits (design §8.1; slice 11). Consequential in
+	// both directions — narrowing withdraws a way the household reaches
+	// an Agent, widening hands out access nobody had.
+	{http.MethodPost, "/api/v1/connections/chat-telegram-family/admission", `{"admits":"owners"}`},
 	// Removals, gated inside their handlers.
 	{http.MethodPost, "/api/v1/services/media/access", `{"subjectKind":"person","subject":"giulia","effect":"restrict"}`},
 	{http.MethodPost, "/api/v1/services/media/access", `{"subjectKind":"person","subject":"giulia","effect":""}`},

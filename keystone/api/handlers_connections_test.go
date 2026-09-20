@@ -85,6 +85,28 @@ func TestConnectingAPersonTakesThreeAnswers(t *testing.T) {
 	if code != http.StatusCreated || out["capability"] != "chat-telegram-joan" {
 		t.Fatalf("connect = %d %v", code, out)
 	}
+	// A new bot has an admission policy from the moment it exists
+	// (design §8.1; migration 0063), and the Console's list carries it
+	// — a setting nobody can see is a setting nobody audits. joan is a
+	// Member Agent, so hers starts at the household.
+	var bots struct {
+		Bots []botView `json:"bots"`
+	}
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/connections", nil, &bots); resp.StatusCode != http.StatusOK {
+		t.Fatalf("listing connections: %d", resp.StatusCode)
+	}
+	listed := false
+	for _, b := range bots.Bots {
+		if b.Capability == "chat-telegram-joan" {
+			listed = true
+			if b.Admits != "household" {
+				t.Errorf("a new member agent's bot admits %q", b.Admits)
+			}
+		}
+	}
+	if !listed {
+		t.Errorf("the new bot is not on the connection list: %+v", bots.Bots)
+	}
 	for _, name := range []string{"chat-telegram-joan-bot", "chat-telegram-joan-adapter"} {
 		if fake.secrets[name] == 0 {
 			t.Errorf("secret %s was not placed on the node", name)

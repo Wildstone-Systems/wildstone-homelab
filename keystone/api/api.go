@@ -627,6 +627,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/connections", s.handle(principal.VerbManage, s.createConnection))
 	mux.Handle("GET /api/v1/connections", s.handle(principal.VerbRead, s.listConnections))
 	mux.Handle("POST /api/v1/connections/{capability}/remove", s.handle(principal.VerbManage, s.consequential(s.removeConnection)))
+	// Consequential for the same reason removal is, in both directions:
+	// narrowing withdraws a way the household reaches an Agent, and
+	// widening hands out access nobody had (design §8.1; #201 asks each
+	// slice to say so rather than take the default).
+	mux.Handle("POST /api/v1/connections/{capability}/admission", s.handle(principal.VerbManage, s.consequential(s.setConnectionAdmission)))
 	mux.Handle("GET /api/v1/connections/invites", s.handle(principal.VerbRead, s.consoleInvites))
 	mux.Handle("POST /api/v1/connections/invites/{seq}/key", s.handle(principal.VerbRead, s.consoleInviteKey))
 	mux.Handle("POST /api/v1/chat/bindings/redeem", s.handle(principal.VerbConverse, s.redeemChatClaim))
