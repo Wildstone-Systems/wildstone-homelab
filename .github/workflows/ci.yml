@@ -99,6 +99,15 @@ jobs:
             || { echo "release.yml no longer produces packages.tar.gz"; exit 1; }
           grep -q 'packages\.tar\.gz' scripts/install.sh \
             || { echo "install.sh no longer fetches packages.tar.gz"; exit 1; }
+          grep -q 'wallpapers\.tar\.gz' .github/workflows/release.yml \
+            || { echo "release.yml no longer produces wallpapers.tar.gz"; exit 1; }
+          grep -q 'wallpapers\.tar\.gz' scripts/install.sh \
+            || { echo "install.sh no longer fetches wallpapers.tar.gz"; exit 1; }
+          # And the pictures themselves are still there to be packed: an
+          # empty wallpapers/ would produce a valid tarball of nothing
+          # and every theme would quietly lose its picture again.
+          [ "$(find wallpapers -maxdepth 1 -type f \( -name '*.webp' -o -name '*.jpg' -o -name '*.png' \) | wc -l)" -gt 0 ] \
+            || { echo "wallpapers/ has no pictures in it"; exit 1; }
 
   console:
     name: console (typecheck + build + checks, ADR-W016/W027)
