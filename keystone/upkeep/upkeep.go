@@ -101,10 +101,13 @@ func (e *Engine) log() *slog.Logger {
 // Standing is where one commitment stands, with everything a caller
 // needs to render it without asking a second question.
 type Standing struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Owner       string   `json:"owner,omitempty"`
-	Scope       string   `json:"scope,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Owner       string `json:"owner,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	// PartOfDay is when in the day a routine belongs, empty for the
+	// things that belong nowhere in particular.
+	PartOfDay   string   `json:"partOfDay,omitempty"`
 	MayComplete []string `json:"mayComplete,omitempty"`
 	Notify      []string `json:"notify,omitempty"`
 	Disabled    bool     `json:"disabled,omitempty"`
@@ -195,7 +198,7 @@ func (e *Engine) standing(res resource.Resource, meters map[string]commitment.Me
 	spec := res.Commitment
 	st := Standing{
 		Name: res.Metadata.Name, Description: spec.Description,
-		Owner: res.Metadata.Owner, Scope: spec.Scope,
+		Owner: res.Metadata.Owner, Scope: spec.Scope, PartOfDay: spec.PartOfDay,
 		MayComplete: spec.MayComplete, Notify: spec.Notify, Disabled: spec.Disabled,
 		Rollover: spec.Rollover, RequiresBooking: spec.RequiresBooking,
 	}

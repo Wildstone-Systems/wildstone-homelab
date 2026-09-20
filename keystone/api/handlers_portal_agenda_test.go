@@ -3,11 +3,13 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
 )
 
 // child records a Person who is scheduled and cannot sign in: the state
@@ -185,3 +187,107 @@ func contains(hay []string, needle string) bool {
 	}
 	return false
 }
+
+// The person who runs the kids' week is a Member, not an Owner, and she
+// enters routines from the dashboard. This is the whole usability claim:
+// no Console, no Owner, no Plan for somebody else to approve.
+func TestAMemberAddsARoutineFromTheDashboard(t *testing.T) {
+	h := homeHarness(t)
+	h.s.Upkeep = &upkeep.Engine{DB: h.s.DB, State: h.s.State, Loc: time.UTC}
+	h.person("sandy")
+	h.child("maya", "sandy")
+
+	body := `{"description":"Make your bed","about":"maya","every":"1d",` +
+		`"partOfDay":"morning","rollover":"fromCompletion","scope":"personal"}`
+	res := h.member(http.MethodPost, "/api/v1/home/commitments", "sandy", "homepage_users",
+		stringsNewReader(body), "application/json")
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("a member adding a routine: status %d, want 201", res.StatusCode)
+	}
+
+	// And it lands on the child's day, marked as a morning thing.
+	got := h.agenda(t, "sandy", "maya")
+	var found *agendaItem
+	for i := range got.Days {
+		for j := range got.Days[i].Items {
+			if got.Days[i].Items[j].Title == "Make your bed" {
+				found = &got.Days[i].Items[j]
+			}
+		}
+	}
+	if found == nil {
+		t.Fatalf("the routine is not on maya's day: %v", agendaTitles(got))
+	}
+	if found.PartOfDay != "morning" {
+		t.Errorf("partOfDay = %q, want morning", found.PartOfDay)
+	}
+	// The guardian may tick it off; that is A9 reaching the tick and not
+	// just the read.
+	if !found.Done {
+		t.Error("the guardian is not offered the tick on her own child's routine")
+	}
+	if found.Name == "" {
+		t.Error("no name on the row, so the page has nothing to tick off with")
+	}
+}
+
+// A day sorts the way a day happens, not by when a record was made.
+func TestTheDaySortsMorningAfternoonEvening(t *testing.T) {
+	h := homeHarness(t)
+	h.s.Upkeep = &upkeep.Engine{DB: h.s.DB, State: h.s.State, Loc: time.UTC}
+	h.person("sandy")
+	h.child("maya", "sandy")
+
+	for _, r := range []struct{ what, part string }{
+		{"Pyjamas on", "evening"},
+		{"Make your bed", "morning"},
+		{"Homework", "afternoon"},
+	} {
+		body := `{"description":"` + r.what + `","about":"maya","every":"1d",` +
+			`"partOfDay":"` + r.part + `","rollover":"fromCompletion","scope":"personal"}`
+		res := h.member(http.MethodPost, "/api/v1/home/commitments", "sandy", "homepage_users",
+			stringsNewReader(body), "application/json")
+		res.Body.Close()
+		if res.StatusCode != http.StatusCreated {
+			t.Fatalf("adding %q: %d", r.what, res.StatusCode)
+		}
+	}
+
+	got := h.agenda(t, "sandy", "maya")
+	if len(got.Days) == 0 {
+		t.Fatal("no days")
+	}
+	var order []string
+	for _, it := range got.Days[0].Items {
+		if it.PartOfDay != "" {
+			order = append(order, it.PartOfDay)
+		}
+	}
+	want := []string{"morning", "afternoon", "evening"}
+	if len(order) != 3 || order[0] != want[0] || order[1] != want[1] || order[2] != want[2] {
+		t.Errorf("today ran %v, want %v", order, want)
+	}
+}
+
+// A child can be named on a commitment. The upkeep page's suggestion
+// list said "children included" and filtered on admitted, which a child
+// can never be.
+func TestAChildIsOfferedAsSomebodyToNameOnACommitment(t *testing.T) {
+	h := homeHarness(t)
+	h.person("sandy")
+	h.child("maya", "sandy")
+
+	people := h.s.householdPeople()
+	var found bool
+	for _, p := range people {
+		if p == "maya" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("household people = %v, want maya among them", people)
+	}
+}
+
+func stringsNewReader(s string) *strings.Reader { return strings.NewReader(s) }

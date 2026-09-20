@@ -84,9 +84,22 @@ type agendaItem struct {
 	AllDay bool        `json:"allDay,omitempty"`
 	Detail string      `json:"detail,omitempty"`
 	Tone   portal.Tone `json:"tone,omitempty"`
+	// Name addresses a commitment, so the page can tick it off through
+	// the door that already exists (/home/commitments/{name}/done).
+	// Empty for the kinds that are not answerable.
+	Name string `json:"name,omitempty"`
+	// PartOfDay is "morning" | "afternoon" | "evening" for a routine
+	// that belongs somewhere in the day, empty otherwise.
+	PartOfDay string `json:"partOfDay,omitempty"`
+	// Done reports whether this reader may tick it off. A day that
+	// offers a tick it will refuse is worse than one that offers none.
+	Done bool `json:"done,omitempty"`
 	// sortAt orders the day. Unexported: the page draws what it is
 	// given, in the order it is given.
 	sortAt time.Time
+	// rank is the part-of-day order within a day, so a morning routine
+	// sits above an afternoon one even though neither has a clock time.
+	rank int
 }
 
 // homeAgenda answers one person's day.
@@ -135,7 +148,14 @@ func (s *Server) homeAgenda(_ http.ResponseWriter, r *http.Request, member strin
 		if len(items) == 0 && i > 1 {
 			continue
 		}
+		// A day is read top to bottom, so it sorts the way a day
+		// happens: by part of day first, then by clock time within it.
+		// An appointment at four o'clock and an after-dinner chore are
+		// both "evening", and the appointment has a time to place it.
 		sort.SliceStable(items, func(a, b int) bool {
+			if items[a].rank != items[b].rank {
+				return items[a].rank < items[b].rank
+			}
 			return items[a].sortAt.Before(items[b].sortAt)
 		})
 		page.Days = append(page.Days, agendaDay{Date: key, Label: agendaLabel(d, today), Items: items})
@@ -212,12 +232,30 @@ func (s *Server) agendaEvents(ctx context.Context, who string, today time.Time, 
 		key := start.Format("2006-01-02")
 		item := agendaItem{
 			Kind: "event", Title: e.Summary, AllDay: e.AllDay,
-			Detail: e.Location, sortAt: start,
+			Detail: e.Location, sortAt: start, rank: rankOfClock(start, e.AllDay),
 		}
 		if !e.AllDay {
 			item.At = start.Format("3:04 PM")
 		}
 		byDay[key] = append(byDay[key], item)
+	}
+}
+
+// rankOfClock places a timed event in the day's three parts, so an
+// appointment and a routine sort against each other instead of forming
+// two separate lists. Noon and six are where a household already draws
+// those lines.
+func rankOfClock(at time.Time, allDay bool) int {
+	if allDay {
+		return resource.PartOfDayRank(resource.PartOfDayMorning)
+	}
+	switch h := at.Hour(); {
+	case h < 12:
+		return resource.PartOfDayRank(resource.PartOfDayMorning)
+	case h < 18:
+		return resource.PartOfDayRank(resource.PartOfDayAfternoon)
+	default:
+		return resource.PartOfDayRank(resource.PartOfDayEvening)
 	}
 }
 
@@ -267,6 +305,11 @@ func (s *Server) agendaCommitments(who string, asker who, today time.Time, loc *
 		item := agendaItem{
 			Kind: "commitment", Title: st.Description, sortAt: at,
 			Detail: st.Occurrence.Reason, Tone: commitmentTone(st),
+			Name: st.Name, PartOfDay: st.PartOfDay,
+			// The same predicate the upkeep page answers with, so a tick
+			// offered here is a tick that will be accepted there.
+			Done: mayComplete(st, asker) || s.isGuardianOf(asker.member, who),
+			rank: resource.PartOfDayRank(st.PartOfDay),
 		}
 		if item.Title == "" {
 			item.Title = st.Name
@@ -338,7 +381,7 @@ func (s *Server) agendaNotices(who, reader string, today time.Time, loc *time.Lo
 	for _, n := range notices {
 		byDay[key] = append(byDay[key], agendaItem{
 			Kind: "notice", Title: s.noticeTitle(n.Kind),
-			Detail: n.Kind, sortAt: today,
+			Detail: n.Kind, sortAt: today, rank: resource.PartOfDayRank(""),
 		})
 	}
 }

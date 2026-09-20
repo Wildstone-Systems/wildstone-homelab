@@ -62,6 +62,12 @@
   .mark-commitment { background: var(--mark, var(--color-accent-300)); }
   .mark-notice { background: var(--st-warn); }
   .empty { color: var(--muted); font-size: 13px; padding: var(--space-3) 0; }
+  .tick { flex: none; }
+  .part { flex: none; font-size: 11px; color: var(--muted); text-transform: uppercase;
+          letter-spacing: 0.1em; padding-top: 3px; width: 5rem; }
+  .addbox { display: grid; gap: var(--space-3); }
+  .addrow { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center; }
+  .addrow label { font-size: 12px; color: var(--muted); }
   @media (max-width: 720px) {
     .arow .time { width: 4.25rem; font-size: 12px; }
   }
@@ -82,6 +88,50 @@
   </div>
 
   <div class="people" id="people" style="margin-bottom: var(--space-6)"></div>
+
+  <div class="row-between" style="margin-bottom: var(--space-4)">
+    <span class="eyebrow" id="addfor"></span>
+    <button type="button" class="hbtn hbtn-primary" id="addopen">
+      <i class="ph ph-plus" aria-hidden="true"></i> Add a routine
+    </button>
+  </div>
+
+  <!-- Authoring lives on the DASHBOARD, not the Console. A commitment
+       cannot act, so handlers_portal_authoring.go already lets a Member
+       add one without an Owner approving a Plan — which is the whole
+       reason the person who actually runs the kids' week can enter it
+       herself. This form sends the same typed fields that door has
+       always taken; it invents no new path to the Statefile. -->
+  <section class="wid" id="addform" hidden style="margin-bottom: var(--space-6)">
+    <h2 style="font-size: 15px">Add a routine</h2>
+    <div class="addbox">
+      <div class="addrow">
+        <input class="hinput" id="a-what" type="text" maxlength="200" style="flex: 1; min-width: 14rem"
+               placeholder="Make your bed" aria-label="What is the routine">
+      </div>
+      <div class="addrow">
+        <label for="a-who">For</label>
+        <select class="hbtn hbtn-secondary" id="a-who"></select>
+        <label for="a-every">Every</label>
+        <select class="hbtn hbtn-secondary" id="a-every">
+          <option value="1d">day</option>
+          <option value="1w">week</option>
+        </select>
+        <label for="a-part">When</label>
+        <select class="hbtn hbtn-secondary" id="a-part">
+          <option value="morning">morning</option>
+          <option value="afternoon">afternoon</option>
+          <option value="evening">evening</option>
+          <option value="">any time</option>
+        </select>
+      </div>
+      <div class="addrow">
+        <button type="button" class="hbtn hbtn-primary" id="a-save">Add it</button>
+        <button type="button" class="hbtn hbtn-ghost" id="a-cancel">Cancel</button>
+        <span class="muted" id="a-problem"></span>
+      </div>
+    </div>
+  </section>
 
   <div id="note"></div>
   <section id="body"></section>
@@ -124,15 +174,94 @@
     var r = make("div", "arow");
     r.appendChild(make("span", "mark mark-" + (item.kind || "event")));
     // All-day and undated rows say so in words rather than leaving the
-    // reader to work out why the time column is empty.
+    // reader to work out why the time column is empty. A routine has a
+    // part of day instead, which is the honest answer for a thing
+    // nobody does at 07:15.
     var when = item.at || (item.allDay ? "All day" : "");
-    r.appendChild(make("span", "time", when));
+    if (!when && item.partOfDay) {
+      r.appendChild(make("span", "part", item.partOfDay));
+    } else {
+      r.appendChild(make("span", "time", when));
+    }
     var what = make("div", "what");
     what.appendChild(make("div", "title", item.title));
     if (item.detail) { what.appendChild(make("div", "sub", item.detail)); }
     r.appendChild(what);
+    // Ticking off goes through the door the upkeep page already uses,
+    // and is offered only where the server said this reader may.
+    if (item.done && item.name) {
+      var tick = make("button", "hbtn hbtn-ghost tick", "Done");
+      tick.type = "button";
+      tick.addEventListener("click", function () {
+        tick.disabled = true;
+        fetch("/api/v1/home/commitments/" + encodeURIComponent(item.name) + "/done", {
+          method: "POST", headers: { "content-type": "application/json" }, body: "{}"
+        }).then(function (res) {
+          if (!res.ok) { throw new Error("done: " + res.status); }
+          load(page.who);
+        }).catch(function () {
+          tick.disabled = false;
+          tick.textContent = "Wouldn't save";
+        });
+      });
+      r.appendChild(tick);
+    }
     return r;
   }
+
+  // ---- adding a routine.
+  function paintAddWho() {
+    var sel = el("a-who");
+    clear(sel);
+    (page.people || []).forEach(function (p) {
+      var o = document.createElement("option");
+      o.value = p.handle;
+      o.textContent = p.handle + (p.child ? " (child)" : "");
+      if (p.handle === page.who) { o.selected = true; }
+      sel.appendChild(o);
+    });
+  }
+
+  el("addopen").addEventListener("click", function () {
+    var f = el("addform");
+    f.hidden = !f.hidden;
+    if (!f.hidden) { paintAddWho(); el("a-what").focus(); }
+  });
+  el("a-cancel").addEventListener("click", function () { el("addform").hidden = true; });
+
+  el("a-save").addEventListener("click", function () {
+    var what = el("a-what").value.trim();
+    if (!what) { text("a-problem", "What is the routine?"); return; }
+    text("a-problem", "");
+    el("a-save").disabled = true;
+    // The same typed fields the dashboard's own authoring door has
+    // always taken. rollover from-completion is what makes a chore come
+    // round again once it is ticked, rather than on a fixed schedule
+    // that marches on whether or not anybody did it.
+    fetch("/api/v1/home/commitments", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({
+        description: what,
+        about: el("a-who").value,
+        every: el("a-every").value,
+        partOfDay: el("a-part").value,
+        rollover: "fromCompletion",
+        scope: "personal"
+      })
+    }).then(function (res) {
+      return res.json().then(function (j) { return { ok: res.ok, j: j }; });
+    }).then(function (out) {
+      el("a-save").disabled = false;
+      if (!out.ok) { text("a-problem", out.j.error || "That didn't save."); return; }
+      el("a-what").value = "";
+      el("addform").hidden = true;
+      load(el("a-who").value);
+    }).catch(function () {
+      el("a-save").disabled = false;
+      text("a-problem", "That didn't save.");
+    });
+  });
 
   function paint() {
     var body = el("body");
@@ -147,6 +276,7 @@
     paintPeople();
     text("title", page.who);
     text("sub", "What the house has for " + page.who);
+    text("addfor", "Routines for " + page.who);
 
     (page.days || []).forEach(function (d) {
       var wrap = make("div", "day");

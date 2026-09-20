@@ -34,6 +34,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/commitment"
 	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
 )
 
@@ -204,7 +205,18 @@ func (s *Server) householdPeople() []string {
 		return out
 	}
 	for _, m := range members {
-		if m.Admitted && m.OffboardedAt.IsZero() && m.DisabledAt.IsZero() && m.Member != "" {
+		if m.Member == "" || !m.OffboardedAt.IsZero() || !m.DisabledAt.IsZero() {
+			continue
+		}
+		// ADMITTED, OR A CHILD. The doc comment above has always said
+		// "children included" and this filter could never include one:
+		// AdmitButlerMember refuses a child record by every path
+		// (ADR-W030 Part C), so a child is admitted=0 forever and was
+		// silently dropped here. A child is exactly the person a
+		// household wants to name on a commitment, and ADR-W033 A8 is
+		// the statement that being scheduled does not require being
+		// able to sign in.
+		if m.Admitted || m.Profile == runtimedb.ProfileChild {
 			out = append(out, m.Member)
 		}
 	}

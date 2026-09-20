@@ -334,6 +334,7 @@ type commitmentFields struct {
 	Anchor          string   `json:"anchor,omitempty"`
 	RequiresBooking bool     `json:"requiresBooking,omitempty"`
 	Scope           string   `json:"scope,omitempty"`
+	PartOfDay       string   `json:"partOfDay,omitempty"`
 	About           string   `json:"about,omitempty"`
 	MayComplete     []string `json:"mayComplete,omitempty"`
 	Notify          []string `json:"notify,omitempty"`
@@ -348,7 +349,7 @@ func (f commitmentFields) spec() resource.CommitmentSpec {
 	}
 	return resource.CommitmentSpec{
 		Description: f.Description, Rollover: f.Rollover, Anchor: f.Anchor,
-		RequiresBooking: f.RequiresBooking, Scope: f.Scope,
+		RequiresBooking: f.RequiresBooking, Scope: f.Scope, PartOfDay: f.PartOfDay,
 		MayComplete: f.MayComplete, Notify: f.Notify,
 		Due: []resource.CommitmentDue{due},
 	}
