@@ -199,6 +199,7 @@ func (s *Server) assistantAsk(_ http.ResponseWriter, r *http.Request, member str
 		Agent   string `json:"agent"`
 		Session string `json:"session"`
 		Text    string `json:"text"`
+		New     bool   `json:"new,omitempty"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
@@ -270,6 +271,16 @@ func (s *Server) assistantAsk(_ http.ResponseWriter, r *http.Request, member str
 	// is one, and this control plane is configured like so".
 	if !s.butlersConfigured() {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("no assistant is configured on this deployment")
+	}
+	if prior == nil && !req.New {
+		found, n, err := s.trustedContinuation(member, agent, portal.Connection)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		if n > 1 {
+			return nil, http.StatusConflict, continuationChoiceError(n)
+		}
+		prior = found
 	}
 
 	// asOwner is false, always. Everything else — tools, memory scope,

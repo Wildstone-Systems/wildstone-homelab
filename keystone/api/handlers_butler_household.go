@@ -331,14 +331,15 @@ func (s *Server) runFamilySession(ctx context.Context, message, member, systemEx
 	}
 	finalText := redact.String(tr.FinalText)
 	sessionID, err := s.recordTurn(prior, runtimedb.ButlerSession{
-		Principal:      butlerPrincipal,
-		ActingFor:      member,
-		Provider:       tr.Audit.Provider,
-		Mode:           mode,
-		Surface:        runtimedb.ButlerSurfaceFamily,
-		FinalText:      finalText,
-		Capped:         tr.CappedIterations,
-		TranscriptJSON: redact.String(string(transcriptJSON)),
+		Principal:         butlerPrincipal,
+		ActingFor:         member,
+		Provider:          tr.Audit.Provider,
+		Mode:              mode,
+		Surface:           runtimedb.ButlerSurfaceFamily,
+		InboundConnection: connection,
+		FinalText:         finalText,
+		Capped:            tr.CappedIterations,
+		TranscriptJSON:    redact.String(string(transcriptJSON)),
 		Turns: []runtimedb.ButlerTurn{
 			{Role: runtimedb.ButlerRoleUser, Text: redact.String(message)},
 			{

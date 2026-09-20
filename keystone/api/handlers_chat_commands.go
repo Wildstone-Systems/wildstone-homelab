@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -75,6 +76,8 @@ func init() {
 		{Name: "new", Help: "start a new conversation", Surfaces: bothSurfaces, Run: (*Server).chatNewConversation},
 		{Name: "reset", Help: "start a new conversation", Surfaces: bothSurfaces, Run: (*Server).chatNewConversation},
 		{Name: "clear", Help: "start a new conversation", Surfaces: bothSurfaces, Run: (*Server).chatNewConversation},
+		{Name: "sessions", Help: "recent conversations you can continue here", Surfaces: bothSurfaces, Run: (*Server).chatSessions},
+		{Name: "resume", Arg: "<choice>", Help: "continue a conversation from /sessions", Surfaces: bothSurfaces, Run: (*Server).chatResumeConversation},
 
 		{Name: "status", Help: "is anything wrong, and is anything waiting for you", Surfaces: adminOnly, Run: (*Server).chatStatus},
 		{Name: "plans", Help: "plans waiting for your approval", Surfaces: adminOnly, Run: (*Server).chatPlans},
@@ -215,10 +218,39 @@ func (s *Server) chatWhoami(c chatCommandCtx) (string, error) {
 }
 
 func (s *Server) chatNewConversation(c chatCommandCtx) (string, error) {
-	if err := s.DB.ClearChatThread(c.At, c.Conversation, c.Identity); err != nil {
+	if err := s.DB.BreakChatThread(c.At, c.Conversation, c.Identity); err != nil {
 		return "", err
 	}
 	return "Starting fresh. The previous conversation is still recorded — this one just won't build on it.", nil
+}
+
+func (s *Server) chatSessions(c chatCommandCtx) (string, error) {
+	candidates, protected, err := s.chatSessionCandidates(c)
+	if err != nil {
+		return "", err
+	}
+	if len(candidates) == 0 && protected {
+		return "Continue that conversation from the household dashboard. I can't show conversation details here.", nil
+	}
+	return s.offerChatSessions(c, candidates)
+}
+
+func (s *Server) chatResumeConversation(c chatCommandCtx) (string, error) {
+	token := strings.TrimSpace(c.Arg)
+	if token == "" {
+		return "Choose one of the private choices from /sessions: `/resume <choice>`.", nil
+	}
+	session, err := s.DB.ConsumeSessionResumeOffer(resumeTokenHash(token), c.Identity, c.At.Butler, c.At.Seq)
+	if err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return "That choice is invalid or has expired. Use /sessions for a new list.", nil
+		}
+		return "", err
+	}
+	if err := s.DB.SetChatThreadSession(c.At, c.Conversation, c.Identity, session); err != nil {
+		return "", err
+	}
+	return "Continuing that conversation. Send your message again when you're ready — the earlier message was not processed.", nil
 }
 
 // ---------------------------------------------------------- operator

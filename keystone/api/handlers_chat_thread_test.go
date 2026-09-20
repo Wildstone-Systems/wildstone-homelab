@@ -8,6 +8,110 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
+func insertCandidateSession(t *testing.T, h *harness, at runtimedb.Connection, person, subject string) string {
+	t.Helper()
+	id, err := h.s.DB.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "butler", ActingFor: person, Provider: "test",
+		Mode: runtimedb.ButlerModeFull, Surface: at.Surface, Butler: at.Butler,
+		FinalText: "earlier answer", Turns: []runtimedb.ButlerTurn{
+			{Role: runtimedb.ButlerRoleUser, Text: subject},
+			{Role: runtimedb.ButlerRoleAssistant, Text: "earlier answer"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.NoteButlerSessionConnection(id, "inbound", at.Name(), at.Seq); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// A chat destination pointer is not conversation identity. With no pointer at
+// all, the same Person reaching the same Agent finds the sole recent session.
+func TestChatContinuesTheSolePersonAgentSession(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(answerTurns("continued answer"), runtimedb.ButlerModeFull)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+	want := insertCandidateSession(t, h, at, "sam", "the earlier question")
+
+	resp, _ := h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "12345", "text": "and now?", "messageId": "m-1",
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	sess, err := h.s.DB.GetButlerSession(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sess.Turns) != 4 {
+		t.Fatalf("turns = %d, want the sole Person+Agent candidate continued", len(sess.Turns))
+	}
+}
+
+// Two recent sessions are two contexts the Person kept apart. No context is
+// loaded and no model runs until an opaque /resume choice is spent.
+func TestAmbiguousChatContinuationOffersOpaqueChoicesBeforeInference(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(answerTurns("must not run"), runtimedb.ButlerModeFull)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+	insertCandidateSession(t, h, at, "sam", "first private subject")
+	insertCandidateSession(t, h, at, "sam", "second private subject")
+
+	_, out := h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "12345", "text": "continue", "messageId": "m-1",
+	})
+	if !strings.Contains(out.Reason, "safe choice") {
+		t.Fatalf("reason = %q", out.Reason)
+	}
+	if calls := h.providerCalls(t); calls != 0 {
+		t.Fatalf("ambiguous continuation loaded context and ran the model %d time(s)", calls)
+	}
+	queued := h.poll(t, runtimedb.RoleConcierge, "")
+	if len(queued) != 1 || !strings.Contains(queued[0].Body, "/resume ") ||
+		!strings.Contains(queued[0].Body, "first private subject") ||
+		!strings.Contains(queued[0].Body, "second private subject") {
+		t.Fatalf("choice prompt = %+v", queued)
+	}
+	if strings.Contains(queued[0].Body, "bs-") {
+		t.Fatalf("choice prompt exposed a raw session id: %q", queued[0].Body)
+	}
+}
+
+func TestRevokedChatThreadStartsFresh(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(answerTurns("fresh answer"), runtimedb.ButlerModeFull)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+	old := insertCandidateSession(t, h, at, "sam", "revoked conversation")
+	if err := h.s.DB.SetChatThreadSession(at, "12345", "sam", old); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.RevokeButlerSession(old, "sam"); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, _ := h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "12345", "text": "hello again", "messageId": "m-1",
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	oldSession, err := h.s.DB.GetButlerSession(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(oldSession.Turns) != 2 {
+		t.Fatalf("revoked session gained turns: %+v", oldSession.Turns)
+	}
+}
+
 // A conversation over chat is a conversation. Before ADR-W027 wired
 // this path, every inbound message opened a new session — so asking
 // "why?" after an answer reached a Butler that had never heard the

@@ -31,6 +31,7 @@ func DefaultButlerSettings() ButlerSettings {
 		StallSeconds:    120,
 		RetryLimit:      2,
 		ObservationTTL:  300,
+		SessionRecency:  1800,
 		// No quiet hours until a household sets them. Defaulting to a
 		// window would silently hold notices on a deployment that never
 		// asked for one.
@@ -48,6 +49,7 @@ type ButlerSettings struct {
 	StallSeconds    int       `json:"stallSeconds"`
 	RetryLimit      int       `json:"retryLimit"`
 	ObservationTTL  int       `json:"observationTtlSeconds"`
+	SessionRecency  int       `json:"sessionRecencySeconds"`
 	QuietStartMin   int       `json:"quietStartMin"`
 	QuietEndMin     int       `json:"quietEndMin"`
 	Timezone        string    `json:"timezone"`
@@ -73,6 +75,7 @@ func (s ButlerSettings) Validate() error {
 		{"stallSeconds", s.StallSeconds, 5, 900},
 		{"retryLimit", s.RetryLimit, 0, 10},
 		{"observationTtlSeconds", s.ObservationTTL, 0, 86400},
+		{"sessionRecencySeconds", s.SessionRecency, 60, 604800},
 		{"quietStartMin", s.QuietStartMin, 0, 1439},
 		{"quietEndMin", s.QuietEndMin, 0, 1439},
 	} {
@@ -145,10 +148,10 @@ func (db *DB) GetButlerSettings() (ButlerSettings, bool, error) {
 	var updated string
 	err := db.sql.QueryRow(
 		`SELECT household_rounds, operator_rounds, max_tool_calls, stall_seconds, retry_limit,
-		        observation_ttl_seconds, quiet_start_min, quiet_end_min, timezone, updated_at, updated_by
+		        observation_ttl_seconds, session_recency_seconds, quiet_start_min, quiet_end_min, timezone, updated_at, updated_by
 		 FROM butler_runtime_settings WHERE id = 1`).
 		Scan(&s.HouseholdRounds, &s.OperatorRounds, &s.MaxToolCalls, &s.StallSeconds, &s.RetryLimit,
-			&s.ObservationTTL, &s.QuietStartMin, &s.QuietEndMin, &s.Timezone, &updated, &s.UpdatedBy)
+			&s.ObservationTTL, &s.SessionRecency, &s.QuietStartMin, &s.QuietEndMin, &s.Timezone, &updated, &s.UpdatedBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DefaultButlerSettings(), false, nil
 	}
@@ -168,9 +171,9 @@ func (db *DB) SetButlerSettings(s ButlerSettings) error {
 	}
 	_, err := db.sql.Exec(
 		`INSERT INTO butler_runtime_settings (id, household_rounds, operator_rounds, max_tool_calls,
-		     stall_seconds, retry_limit, observation_ttl_seconds, quiet_start_min, quiet_end_min,
+		     stall_seconds, retry_limit, observation_ttl_seconds, session_recency_seconds, quiet_start_min, quiet_end_min,
 		     timezone, updated_at, updated_by)
-		 VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   household_rounds = excluded.household_rounds,
 		   operator_rounds = excluded.operator_rounds,
@@ -178,13 +181,14 @@ func (db *DB) SetButlerSettings(s ButlerSettings) error {
 		   stall_seconds = excluded.stall_seconds,
 		   retry_limit = excluded.retry_limit,
 		   observation_ttl_seconds = excluded.observation_ttl_seconds,
+		   session_recency_seconds = excluded.session_recency_seconds,
 		   quiet_start_min = excluded.quiet_start_min,
 		   quiet_end_min = excluded.quiet_end_min,
 		   timezone = excluded.timezone,
 		   updated_at = excluded.updated_at,
 		   updated_by = excluded.updated_by`,
 		s.HouseholdRounds, s.OperatorRounds, s.MaxToolCalls, s.StallSeconds, s.RetryLimit,
-		s.ObservationTTL, s.QuietStartMin, s.QuietEndMin, s.Timezone, now(), s.UpdatedBy)
+		s.ObservationTTL, s.SessionRecency, s.QuietStartMin, s.QuietEndMin, s.Timezone, now(), s.UpdatedBy)
 	if err != nil {
 		return fmt.Errorf("runtimedb: writing butler settings: %w", err)
 	}

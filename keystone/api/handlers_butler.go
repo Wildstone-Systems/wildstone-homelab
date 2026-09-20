@@ -470,15 +470,16 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 		},
 	}
 	sessionID, err := s.recordTurn(prior, runtimedb.ButlerSession{
-		Principal:      butlerPrincipal,
-		ActingFor:      actingFor,
-		Provider:       tr.Audit.Provider,
-		Mode:           askMode,
-		Surface:        runtimedb.ButlerSurfaceAdmin,
-		FinalText:      finalText,
-		Capped:         tr.CappedIterations,
-		TranscriptJSON: redact.String(string(transcriptJSON)),
-		Turns:          turns,
+		Principal:         butlerPrincipal,
+		ActingFor:         actingFor,
+		Provider:          tr.Audit.Provider,
+		Mode:              askMode,
+		Surface:           runtimedb.ButlerSurfaceAdmin,
+		InboundConnection: connection,
+		FinalText:         finalText,
+		Capped:            tr.CappedIterations,
+		TranscriptJSON:    redact.String(string(transcriptJSON)),
+		Turns:             turns,
 	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -547,7 +548,7 @@ func (s *Server) recordTurn(prior *turnContext, sess runtimedb.ButlerSession) (s
 	if prior == nil {
 		return s.DB.InsertButlerSession(sess)
 	}
-	if err := s.DB.AppendButlerTurns(prior.SessionID, sess.Turns); err != nil {
+	if err := s.DB.AppendButlerTurnsFrom(prior.SessionID, sess.Turns, sess.InboundConnection, sess.InboundConnectionRef); err != nil {
 		return "", err
 	}
 	return prior.SessionID, nil

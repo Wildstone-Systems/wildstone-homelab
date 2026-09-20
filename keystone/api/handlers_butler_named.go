@@ -194,10 +194,12 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 		// none at all (the chat path lets the address decide), and a
 		// session filed under a name the caller supplied would be a
 		// conversation attributed to a Butler that did not hold it.
-		Butler:         ans.Butler,
-		FinalText:      finalText,
-		Capped:         ans.Capped,
-		TranscriptJSON: redact.String(string(transcriptJSON)),
+		Butler:               ans.Butler,
+		InboundConnection:    turn.Connection.Name,
+		InboundConnectionRef: turn.Connection.Ref,
+		FinalText:            finalText,
+		Capped:               ans.Capped,
+		TranscriptJSON:       redact.String(string(transcriptJSON)),
 		Turns: []runtimedb.ButlerTurn{
 			{Role: runtimedb.ButlerRoleUser, Text: redact.String(turn.Text)},
 			{
@@ -208,6 +210,13 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
+	}
+	// Inbound provenance was committed with the turn. Built-in synchronous
+	// replies also leave here; external chat records outbound when queued.
+	if turn.Connection.Name != "" && turn.Connection.Ref == 0 {
+		if err := s.DB.NoteButlerSessionConnection(sessionID, "outbound", turn.Connection.Name, turn.Connection.Ref); err != nil {
+			s.Log.Error("recording built-in session outbound connection", "session", sessionID, "err", err)
+		}
 	}
 	// Link the durable task to the conversation it belongs to. The
 	// ordering forces this to happen here rather than at creation: the
@@ -312,13 +321,15 @@ func (s *Server) preserveFailedTurn(turn butlerlive.Turn, prior *turnContext, an
 	// calls that were not written down anywhere.
 	failed := redact.String(string(transcriptJSON))
 	sessionID, serr := s.recordTurn(prior, runtimedb.ButlerSession{
-		Principal:      butlerPrincipal,
-		ActingFor:      turn.Member,
-		Provider:       ans.Provider,
-		Mode:           mode,
-		Surface:        ans.Surface,
-		Butler:         ans.Butler,
-		TranscriptJSON: failed,
+		Principal:            butlerPrincipal,
+		ActingFor:            turn.Member,
+		Provider:             ans.Provider,
+		Mode:                 mode,
+		Surface:              ans.Surface,
+		Butler:               ans.Butler,
+		InboundConnection:    turn.Connection.Name,
+		InboundConnectionRef: turn.Connection.Ref,
+		TranscriptJSON:       failed,
 		Turns: []runtimedb.ButlerTurn{
 			// planIDs ride on the turn so the Console can show the
 			// proposal next to the question that caused it, the same

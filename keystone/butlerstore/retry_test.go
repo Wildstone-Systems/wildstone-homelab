@@ -213,7 +213,7 @@ func TestStallNoticeDeduplicatesAndWaitsForQuietHours(t *testing.T) {
 
 	if err := db.SetButlerSettings(runtimedb.ButlerSettings{
 		HouseholdRounds: 16, OperatorRounds: 24, MaxToolCalls: 64,
-		StallSeconds: 120, RetryLimit: 2, ObservationTTL: 300,
+		StallSeconds: 120, RetryLimit: 2, ObservationTTL: 300, SessionRecency: 1800,
 		// 22:00 to 07:00, the shape a household actually configures.
 		QuietStartMin: 22 * 60, QuietEndMin: 7 * 60, Timezone: "UTC",
 	}); err != nil {

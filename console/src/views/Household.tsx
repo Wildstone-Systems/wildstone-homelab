@@ -45,6 +45,7 @@ export function Household() {
       <ErrorLine error={members.error ?? groups.error} />
 
       <HouseholdTimeZone />
+      <ConversationRecency />
       <AddMember groups={groups.data ?? []} members={members.data ?? []} onDone={members.reload} />
 
       <div className="sect" style={{ marginTop: "var(--space-8)" }}>
@@ -445,6 +446,41 @@ export function AddMember({
         The email is how the sign-in page reaches them for a password reset, and LLDAP requires
         one. No password is set here — a credential never lives in declared state.
       </div>
+    </div>
+  );
+}
+
+export function ConversationRecency() {
+  const loaded = useLoad(() => api.butlerSettings(), []);
+  const [minutes, setMinutes] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const current = Math.round((loaded.data?.settings.sessionRecencySeconds ?? 1800) / 60);
+  const save = () => {
+    const value = Number(minutes);
+    if (!loaded.data || !Number.isFinite(value)) return;
+    setBusy(true);
+    setError(null);
+    api.setButlerSettings({ sessionRecencySeconds: Math.round(value * 60) })
+      .then(() => { setMinutes(""); loaded.reload(); })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="card">
+      <h3>Conversation continuity</h3>
+      <div className="muted">
+        The same person and agent may continue one conversation across Connections for {current} minutes.
+      </div>
+      <div className="row">
+        <label htmlFor="session-recency">Recent for (minutes)</label>
+        <input id="session-recency" type="number" min="1" max="10080" value={minutes}
+          placeholder={String(current)} onChange={(e) => setMinutes(e.target.value)} />
+        <button className="btn btn-secondary" disabled={busy || minutes === ""} onClick={save}>
+          {busy ? "saving…" : "Save"}
+        </button>
+      </div>
+      <ErrorLine error={loaded.error ?? error} />
     </div>
   );
 }

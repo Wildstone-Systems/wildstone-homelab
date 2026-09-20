@@ -68,7 +68,12 @@ func (db *DB) SetChatThreadSession(at Connection, conversation, identity, sessio
 	if err != nil {
 		return fmt.Errorf("runtimedb: recording chat thread: %w", err)
 	}
-	_, err = db.sql.Exec(
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("runtimedb: recording chat thread: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.Exec(
 		`INSERT INTO chat_threads (connection, conversation, person_id, session_id, updated_at)
 		 VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT(connection, conversation, person_id)
@@ -78,7 +83,11 @@ func (db *DB) SetChatThreadSession(at Connection, conversation, identity, sessio
 	if err != nil {
 		return fmt.Errorf("runtimedb: recording chat thread: %w", err)
 	}
-	return nil
+	if _, err := tx.Exec(`DELETE FROM chat_thread_breaks WHERE connection = ? AND conversation = ? AND person_id = ?`,
+		at.Seq, conversation, person); err != nil {
+		return fmt.Errorf("runtimedb: clearing chat thread break: %w", err)
+	}
+	return tx.Commit()
 }
 
 // ClearChatThread forgets which session a conversation was on, so the

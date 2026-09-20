@@ -48,14 +48,23 @@ func ValidButlerSurface(s ButlerSurface) bool {
 // "what did it say" and would otherwise have to walk Turns to find out.
 // Turns is the whole conversation, oldest first (ADR-W027).
 type ButlerSession struct {
-	Seq       int64             `json:"seq"`
-	ID        string            `json:"id"` // "bs-<seq>"
-	CreatedAt time.Time         `json:"createdAt"`
-	Principal string            `json:"principal"`
-	ActingFor string            `json:"actingFor"`
-	Provider  string            `json:"provider"`
-	Mode      ButlerSessionMode `json:"mode"`
-	Surface   ButlerSurface     `json:"surface"`
+	Seq       int64     `json:"seq"`
+	ID        string    `json:"id"` // "bs-<seq>"
+	CreatedAt time.Time `json:"createdAt"`
+	Principal string    `json:"principal"`
+	ActingFor string    `json:"actingFor"`
+	// PersonID and AgentID are the structural identity of the
+	// conversation (ADR-W033 B10). ActingFor and Butler remain the audit
+	// labels a person reads; continuation never joins on those labels.
+	PersonID string `json:"-"`
+	AgentID  int64  `json:"-"`
+	// InboundConnection is written in the same transaction as this
+	// turn. Ref is zero for a built-in Connection.
+	InboundConnection    string            `json:"-"`
+	InboundConnectionRef int64             `json:"-"`
+	Provider             string            `json:"provider"`
+	Mode                 ButlerSessionMode `json:"mode"`
+	Surface              ButlerSurface     `json:"surface"`
 	// Butler names which specialist answered (ADR-W031 A1). Empty is a
 	// real value: a session recorded before Butlers existed, or one the
 	// engine phrased for itself, did not run as one. It is stamped from
@@ -117,17 +126,39 @@ func (db *DB) InsertButlerSession(s ButlerSession) (string, error) {
 	if s.TranscriptJSON == "" {
 		s.TranscriptJSON = "{}"
 	}
+	if s.Butler != "" {
+		// Old audit/import callers can write labels that no longer resolve.
+		// Preserve those records as history, but leave either structural
+		// leg empty so they can never become continuation candidates. The
+		// person-facing runtime validates both before it reaches this seam.
+		if person, err := resolvePersonID(db.sql, s.ActingFor); err == nil {
+			s.PersonID = person
+		}
+		if err := db.sql.QueryRow(`SELECT seq FROM butlers WHERE name = ?`, s.Butler).Scan(&s.AgentID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("runtimedb: resolving session agent: %w", err)
+		}
+	}
+	if s.InboundConnection != "" && s.Butler != "" && (s.PersonID == "" || s.AgentID == 0) {
+		return "", fmt.Errorf("runtimedb: an interactive session requires a canonical Person and Agent")
+	}
 	tx, err := db.sql.Begin()
 	if err != nil {
 		return "", fmt.Errorf("runtimedb: inserting butler session: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	var personArg, agentArg any
+	if s.PersonID != "" {
+		personArg = s.PersonID
+	}
+	if s.AgentID != 0 {
+		agentArg = s.AgentID
+	}
 	res, err := tx.Exec(
-		`INSERT INTO butler_sessions (created_at, principal, acting_for, provider, mode, surface, butler, final_text, capped, transcript_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO butler_sessions (created_at, principal, acting_for, provider, mode, surface, butler, final_text, capped, transcript_json, person_id, agent_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		now(), s.Principal, s.ActingFor, s.Provider, string(s.Mode), string(s.Surface), s.Butler, s.FinalText,
-		boolInt(s.Capped), s.TranscriptJSON)
+		boolInt(s.Capped), s.TranscriptJSON, personArg, agentArg)
 	if err != nil {
 		return "", fmt.Errorf("runtimedb: inserting butler session: %w", err)
 	}
@@ -140,6 +171,9 @@ func (db *DB) InsertButlerSession(s ButlerSession) (string, error) {
 	// no question, which is the state migration 0013 had to backfill
 	// around and should not be created again.
 	if err := insertTurns(tx, seq, 0, s.Turns); err != nil {
+		return "", err
+	}
+	if err := insertSessionConnection(tx, seq, "inbound", s.InboundConnection, s.InboundConnectionRef); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {
@@ -178,6 +212,11 @@ func insertTurns(tx *sql.Tx, session int64, base int, turns []ButlerTurn) error 
 // a follow-up to a conversation that is not there is a bug in the
 // caller, not a new conversation.
 func (db *DB) AppendButlerTurns(id string, turns []ButlerTurn) error {
+	return db.AppendButlerTurnsFrom(id, turns, "", 0)
+}
+
+// AppendButlerTurnsFrom appends a turn and its inbound Connection atomically.
+func (db *DB) AppendButlerTurnsFrom(id string, turns []ButlerTurn, connection string, connectionRef int64) error {
 	var seq int64
 	if _, err := fmt.Sscanf(id, "bs-%d", &seq); err != nil {
 		return ErrNotFound
@@ -206,6 +245,9 @@ func (db *DB) AppendButlerTurns(id string, turns []ButlerTurn) error {
 		return ErrNotFound
 	}
 	if err := insertTurns(tx, seq, next, turns); err != nil {
+		return err
+	}
+	if err := insertSessionConnection(tx, seq, "inbound", connection, connectionRef); err != nil {
 		return err
 	}
 	for _, t := range turns {
@@ -319,7 +361,7 @@ func (db *DB) ListButlerSessions(limit int, f ButlerSessionFilter) ([]ButlerSess
 	}
 	args = append(args, limit)
 	rows, err := db.sql.Query(
-		`SELECT seq, created_at, principal, acting_for, provider, mode, surface, butler, final_text, capped
+		`SELECT seq, created_at, principal, acting_for, person_id, agent_id, provider, mode, surface, butler, final_text, capped
 		 FROM butler_sessions`+where+` ORDER BY seq DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing butler sessions: %w", err)
@@ -330,9 +372,12 @@ func (db *DB) ListButlerSessions(limit int, f ButlerSessionFilter) ([]ButlerSess
 		var s ButlerSession
 		var created, mode, surface string
 		var capped int
-		if err := rows.Scan(&s.Seq, &created, &s.Principal, &s.ActingFor, &s.Provider, &mode, &surface, &s.Butler, &s.FinalText, &capped); err != nil {
+		var person sql.NullString
+		var agent sql.NullInt64
+		if err := rows.Scan(&s.Seq, &created, &s.Principal, &s.ActingFor, &person, &agent, &s.Provider, &mode, &surface, &s.Butler, &s.FinalText, &capped); err != nil {
 			return nil, err
 		}
+		s.PersonID, s.AgentID = person.String, agent.Int64
 		s.ID = butlerSessionID(s.Seq)
 		s.Mode = ButlerSessionMode(mode)
 		s.Surface = ButlerSurface(surface)
@@ -352,12 +397,14 @@ func (db *DB) GetButlerSession(id string) (ButlerSession, error) {
 		return ButlerSession{}, ErrNotFound
 	}
 	row := db.sql.QueryRow(
-		`SELECT seq, created_at, principal, acting_for, provider, mode, surface, butler, final_text, capped, transcript_json
+		`SELECT seq, created_at, principal, acting_for, person_id, agent_id, provider, mode, surface, butler, final_text, capped, transcript_json
 		 FROM butler_sessions WHERE seq = ?`, seq)
 	var s ButlerSession
 	var created, mode, surface string
 	var capped int
-	err := row.Scan(&s.Seq, &created, &s.Principal, &s.ActingFor, &s.Provider, &mode, &surface, &s.Butler, &s.FinalText, &capped, &s.TranscriptJSON)
+	var person sql.NullString
+	var agent sql.NullInt64
+	err := row.Scan(&s.Seq, &created, &s.Principal, &s.ActingFor, &person, &agent, &s.Provider, &mode, &surface, &s.Butler, &s.FinalText, &capped, &s.TranscriptJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ButlerSession{}, ErrNotFound
 	}
@@ -365,6 +412,7 @@ func (db *DB) GetButlerSession(id string) (ButlerSession, error) {
 		return ButlerSession{}, fmt.Errorf("runtimedb: reading butler session: %w", err)
 	}
 	s.ID = butlerSessionID(s.Seq)
+	s.PersonID, s.AgentID = person.String, agent.Int64
 	s.Mode = ButlerSessionMode(mode)
 	s.Surface = ButlerSurface(surface)
 	s.Capped = capped != 0
