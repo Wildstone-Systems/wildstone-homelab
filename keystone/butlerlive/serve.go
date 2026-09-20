@@ -333,8 +333,9 @@ func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool,
 		// against wherever the conversation happens to be next week
 		// (§10.1; a conversation follows Person + Agent rather than
 		// transport, B10, so the two genuinely differ).
-		OriginConnection: t.Connection.Name,
-		Objective:        conversationObjective(b.Name, t.Text),
+		OriginConnection:    t.Connection.Name,
+		OriginConnectionRef: t.Connection.Ref,
+		Objective:           conversationObjective(b.Name, t.Text),
 		// A conversation's retention follows the conversation, so
 		// reaping a thread reaps the work that belonged to it rather
 		// than leaving orphaned tasks nobody will ever resume.

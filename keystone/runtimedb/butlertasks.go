@@ -147,6 +147,11 @@ type ButlerTask struct {
 	// task may do. Empty means the leg does not apply — a routine runs
 	// unattended and borrows nobody's Connection (§10.2).
 	OriginConnection string `json:"originConnection,omitempty"`
+	// OriginConnectionRef is the Connection ROW it arrived over, which
+	// an address alone cannot identify: addresses are reusable, and a
+	// re-added bot would otherwise resurrect a withdrawn Connection's
+	// work. Zero means the leg does not apply — see migration 0062.
+	OriginConnectionRef int64 `json:"originConnectionRef,omitempty"`
 
 	// CorrelationID ties a routine run to the W024 household timeline.
 	// The timeline stays authoritative for deterministic outcomes;
@@ -262,13 +267,13 @@ func (db *DB) InsertButlerTask(t ButlerTask) (string, error) {
 	res, err := tx.Exec(
 		`INSERT INTO butler_tasks (created_at, updated_at, kind, state, author_person_id, owner_person_id,
 		     surface, agent_class, audience, session, origin_turn, origin_connection,
-		     correlation_id, objective,
+		     origin_connection_ref, correlation_id, objective,
 		     completion_criteria, grants_json, budget_json, deadline_at, next_wakeup_at,
 		     lease_epoch, uncertainty, result_summary, retention, envelope_version)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?)`,
 		stamp, stamp, string(t.Kind), string(ButlerTaskPending), author, owner,
 		string(t.Surface), t.AgentClass, string(t.Audience), session, originTurn,
-		t.OriginConnection,
+		t.OriginConnection, t.OriginConnectionRef,
 		t.CorrelationID, t.Objective, t.CompletionCriteria, grants, budget,
 		timeText(t.DeadlineAt), timeText(t.NextWakeupAt),
 		string(t.Retention), TaskEnvelopeVersion)
@@ -372,7 +377,7 @@ func (db *DB) ButlerTaskForSession(sessionID string) (ButlerTask, error) {
 const butlerTaskColumns = `SELECT t.seq, t.created_at, t.updated_at, t.kind, t.state,
 	 a.member, o.member,
 	 t.surface, t.agent_class, t.audience, t.session, t.origin_turn, t.origin_connection,
-	 t.correlation_id, t.objective,
+	 t.origin_connection_ref, t.correlation_id, t.objective,
 	 t.completion_criteria, t.grants_json, t.budget_json, t.deadline_at, t.next_wakeup_at,
 	 t.lease_epoch, t.uncertainty, t.result_summary, t.retention, t.envelope_version
 	 FROM butler_tasks t
@@ -387,7 +392,7 @@ func scanButlerTask(row rowScanner) (ButlerTask, error) {
 	var originTurn sql.NullInt64
 	err := row.Scan(&t.Seq, &created, &updated, &kind, &state, &t.Author, &t.Owner,
 		&surface, &t.AgentClass, &audience, &session, &originTurn, &t.OriginConnection,
-		&t.CorrelationID,
+		&t.OriginConnectionRef, &t.CorrelationID,
 		&t.Objective, &t.CompletionCriteria, &t.GrantsJSON, &t.BudgetJSON,
 		&deadline, &wakeup, &t.LeaseEpoch, &t.Uncertainty, &t.ResultSummary,
 		&retention, &t.EnvelopeVersion)

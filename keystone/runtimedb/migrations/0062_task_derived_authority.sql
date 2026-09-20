@@ -31,6 +31,27 @@
 
 ALTER TABLE butler_tasks ADD COLUMN origin_connection TEXT NOT NULL DEFAULT '';
 
+-- And the Connection ROW it was, not just the address it wore.
+--
+-- transport:external_id is an ADDRESS, and an address is reusable: a
+-- butler_addresses row can be revoked and another inserted with the
+-- same pair, even for a different Agent (butler_addresses_live is
+-- unique only over the LIVE rows, which is what makes that legal).
+-- Checking the address alone would let a task whose Connection was
+-- withdrawn become authorized again the moment somebody re-added the
+-- bot — silently, and possibly onto another Agent's Connection.
+--
+-- The seq is immutable and a new row always gets a new one, so a
+-- revoked Connection stays revoked for the work that derived from it.
+-- The address stays alongside it because that is what a refusal cites;
+-- an id is not something to show a person.
+--
+-- 0 means the leg does not apply: a routine, a built-in surface (the
+-- Console and the household dashboard are Connections a deployment HAS
+-- rather than rows somebody added), or a task created before this
+-- migration.
+ALTER TABLE butler_tasks ADD COLUMN origin_connection_ref INTEGER NOT NULL DEFAULT 0;
+
 -- Session revocation. butler_sessions has never had a lifecycle: a row
 -- is written when a turn finishes and is never withdrawn, so "the
 -- session behind this task lost authority" had nothing to read.

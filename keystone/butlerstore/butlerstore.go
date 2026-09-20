@@ -17,7 +17,6 @@ package butlerstore
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
@@ -62,7 +61,7 @@ type Ledger struct {
 	// so turning the rule on cannot retroactively refuse work that
 	// never had the origin in the first place.
 	SessionActive    func(sessionID string) error
-	ConnectionActive func(connection string) error
+	ConnectionActive func(connection OriginConnection) error
 	// GrantActive is given the task id rather than a grant id: the
 	// question §10.1 asks is whether the authority this work was
 	// admitted under still stands, and the grants that answer it are
@@ -158,7 +157,15 @@ func (l *Ledger) derivedAuthority(task runtimedb.ButlerTask) error {
 				"%w: it arrived over %s and nothing here can say whether that connection still admits it",
 				ErrAuthorityWithdrawn, task.OriginConnection)
 		}
-		if err := l.ConnectionActive(task.OriginConnection); err != nil {
+		// By ROW, with the address only for the refusal to cite. An
+		// address is reusable — a revoked butler_addresses row can be
+		// followed by a new one carrying the same transport and id,
+		// even for a different Agent — so checking the address would
+		// let a re-added bot resurrect the authority of work whose
+		// Connection was withdrawn. Found by a review bot on #287.
+		if err := l.ConnectionActive(OriginConnection{
+			Name: task.OriginConnection, Ref: task.OriginConnectionRef,
+		}); err != nil {
 			return fmt.Errorf("%w: %v", ErrAuthorityWithdrawn, err)
 		}
 	}
@@ -211,6 +218,18 @@ func (l *Ledger) SessionCheck() func(string) error {
 	return func(sessionID string) error { return l.db.ButlerSessionActive(sessionID) }
 }
 
+// OriginConnection is the Connection a task was admitted over: the row
+// it actually was, and the address it wore.
+//
+// Both, because they answer different questions. The REF decides — it
+// is immutable, and a new row always gets a new one — while the NAME is
+// what a refusal cites, because an id is not something to show a
+// person.
+type OriginConnection struct {
+	Name string
+	Ref  int64
+}
+
 // ConnectionCheck refuses a task whose originating Connection no longer
 // admits it.
 //
@@ -225,21 +244,25 @@ func (l *Ledger) SessionCheck() func(string) error {
 // Console and the household dashboard are Connections a deployment HAS
 // rather than ones somebody added (§8.2), so they answer yes here and
 // their ceilings are enforced where they always were.
-func (l *Ledger) ConnectionCheck() func(string) error {
-	return func(connection string) error {
-		if connection == "" {
+func (l *Ledger) ConnectionCheck() func(OriginConnection) error {
+	return func(c OriginConnection) error {
+		if c.Name == "" {
 			return errors.New("it arrived over no connection")
 		}
-		if builtInConnection(connection) {
+		if builtInConnection(c.Name) {
 			return nil
 		}
-		transport, external, ok := strings.Cut(connection, ":")
-		if !ok {
-			return fmt.Errorf("%q is not a connection this deployment knows", connection)
+		if c.Ref == 0 {
+			// A named Connection with no row behind it. That is a task
+			// recorded before 0062 carried the reference, and it cannot
+			// be confirmed — which §10.1 answers with no rather than
+			// falling back to the address it happens to name.
+			return fmt.Errorf(
+				"the %s connection it arrived over cannot be identified", c.Name)
 		}
-		if _, err := l.db.ChatConnectionAt(transport, external); err != nil {
+		if _, err := l.db.ChatConnectionBySeq(c.Ref); err != nil {
 			if errors.Is(err, runtimedb.ErrNotFound) {
-				return fmt.Errorf("the %s connection it arrived over is gone", connection)
+				return fmt.Errorf("the %s connection it arrived over is gone", c.Name)
 			}
 			return err
 		}
@@ -288,12 +311,38 @@ func (l *Ledger) GrantCheck() func(string) error {
 		if err != nil {
 			return err
 		}
+		// ListToolGrants keeps history: a revoked row stays, and is
+		// never removed or superseded in place. So "any revoked row
+		// stops the task" would stop it FOR EVER, including after an
+		// administrator reviewed a transferred task and issued the
+		// replacements A4's recovery path is built on. That was a real
+		// regression, found by a review bot on #287 one round after the
+		// same bot asked for the rule that caused it.
+		//
+		// The rule that satisfies both: a revocation stops the work
+		// UNTIL somebody grants again afterwards. Comparing the newest
+		// revocation against the newest live grant says exactly that in
+		// one line, and it is the shape of the act being modelled — an
+		// Owner takes permission away, and a human decides whether to
+		// give it back.
+		var newestRevoked, newestLive time.Time
+		var revokedTool string
 		for _, g := range grants {
-			if !g.RevokedAt.IsZero() {
-				return fmt.Errorf("the %s grant it was admitted under was revoked", g.Tool)
+			switch {
+			case !g.RevokedAt.IsZero():
+				if g.RevokedAt.After(newestRevoked) {
+					newestRevoked, revokedTool = g.RevokedAt, g.Tool
+				}
+			case g.GrantedAt.After(newestLive):
+				newestLive = g.GrantedAt
 			}
 		}
-		return nil
+		if newestRevoked.IsZero() || newestLive.After(newestRevoked) {
+			return nil
+		}
+		return fmt.Errorf(
+			"the %s grant it was admitted under was revoked and nothing has been granted since",
+			revokedTool)
 	}
 }
 

@@ -407,14 +407,8 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 		if err := r.Ledger.Fence(); err != nil {
 			return tr, fmt.Errorf("butler runner: %w", err)
 		}
-		if err := r.Ledger.Authorize(taskID); err != nil {
-			// Cancellation stops new actions mid-run, not only between
-			// slices (A4).
-			r.trace(taskID, LedgerTraceEvent{
-				Type: TraceDenial, Payload: jsonPayload(map[string]any{"authority": "withdrawn mid-slice"}),
-			})
-			return tr, fmt.Errorf("butler runner: %w", err)
-		}
+		// modelRound checks before every attempt, including the first,
+		// so the round's own check lives there now rather than here.
 		answer, err := r.modelRound(ctx, p, taskID, manifest, messages, specs)
 		if err != nil {
 			return tr, err
@@ -535,6 +529,17 @@ func (r *Runner) modelRound(ctx context.Context, p provider.Provider, taskID str
 ) (*provider.ChatResponse, error) {
 	var lastErr error
 	for try := 0; try <= r.RetryLimit; try++ {
+		// EVERY attempt, not only the first. A retry follows a stall or
+		// a provider failure, so by definition time has passed since
+		// the round's own check — often the whole StallTimeout — and
+		// sending the conversation again after the Person, session,
+		// Connection or grant behind it was withdrawn is the same
+		// disclosure as sending it the first time. Found by a review
+		// bot on #287, which is the second time this slice put a
+		// boundary next to a gap rather than in it.
+		if err := r.stillAuthorized(taskID, "model attempt"); err != nil {
+			return nil, err
+		}
 		resp, err := r.modelAttempt(ctx, p, taskID, manifest, messages, specs)
 		if err == nil {
 			return resp, nil

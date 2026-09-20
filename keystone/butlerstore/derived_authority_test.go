@@ -32,6 +32,7 @@ type derivedFixture struct {
 	ledger  *Ledger
 	taskID  string
 	session string
+	connRef int64
 }
 
 const fixtureConnection = "matrix:!room:example.org"
@@ -63,26 +64,30 @@ func newDerivedFixture(t *testing.T) *derivedFixture {
 	if _, err := db.AddButlerAddress("alfred", "matrix", "!room:example.org", "the kitchen", "root-admin"); err != nil {
 		t.Fatalf("AddButlerAddress: %v", err)
 	}
-	session, err := db.InsertButlerSession(runtimedb.ButlerSession{
+	conn, err := db.ChatConnectionAt("matrix", "!room:example.org")
+	if err != nil {
+		t.Fatalf("ChatConnectionAt: %v", err)
+	}
+	session, serr := db.InsertButlerSession(runtimedb.ButlerSession{
 		Principal: "butler", ActingFor: "mika", Provider: "test",
 		Mode: runtimedb.ButlerModeFull, Surface: runtimedb.ButlerSurfaceFamily,
 		TranscriptJSON: "{}",
 	})
-	if err != nil {
-		t.Fatalf("InsertButlerSession: %v", err)
+	if serr != nil {
+		t.Fatalf("InsertButlerSession: %v", serr)
 	}
-	taskID, err := db.InsertButlerTask(runtimedb.ButlerTask{
+	taskID, terr := db.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
 		Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember,
 		Audience:  runtimedb.ButlerAudiencePrivate,
-		SessionID: session, OriginConnection: fixtureConnection,
+		SessionID: session, OriginConnection: fixtureConnection, OriginConnectionRef: conn.Seq,
 		Objective: "answer the question", CompletionCriteria: "answered",
 	})
-	if err != nil {
-		t.Fatalf("InsertButlerTask: %v", err)
+	if terr != nil {
+		t.Fatalf("InsertButlerTask: %v", terr)
 	}
 	ledger.DerivedAuthorityChecks()
-	f := &derivedFixture{db: db, ledger: ledger, taskID: taskID, session: session}
+	f := &derivedFixture{db: db, ledger: ledger, taskID: taskID, session: session, connRef: conn.Seq}
 	// The fixture must be authorized BEFORE anything is revoked, or
 	// every test below would pass against an implementation that
 	// refuses unconditionally.
@@ -233,6 +238,96 @@ func TestTaskLosesAuthorityAtItsNextBoundaryWhenTheGrantIsRevoked(t *testing.T) 
 	}
 }
 
+// Re-adding a bot at the same address does not resurrect the authority
+// of work whose Connection was withdrawn.
+//
+// butler_addresses_live is unique only over the LIVE rows, so revoking
+// an address and inserting another with the same transport and id is
+// legal — and may point at a different Agent. Binding the task to the
+// ADDRESS therefore let a withdrawn Connection come back silently.
+// Found by a review bot on #287.
+//
+// Mutation: checking the address instead of the row makes this fail.
+func TestReaddingAnAddressDoesNotResurrectAWithdrawnConnection(t *testing.T) {
+	f := newDerivedFixture(t)
+
+	if err := f.db.RevokeButlerAddress("matrix", "!room:example.org", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	f.refused(t, "connection")
+
+	// The same address, added again. Under an address-keyed check this
+	// is indistinguishable from the original Connection; under a
+	// row-keyed one it is a different Connection, which is what it is.
+	if _, err := f.db.AddButlerAddress("alfred", "matrix", "!room:example.org", "back again", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	f.refused(t, "connection")
+
+	// And a task admitted over the NEW row is fine, so this is about
+	// identity rather than about refusing everything after a revocation.
+	fresh, err := f.db.ChatConnectionAt("matrix", "!room:example.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Seq == f.connRef {
+		t.Fatal("the re-added address reused the original row, so this proves nothing")
+	}
+	newTask, err := f.db.InsertButlerTask(runtimedb.ButlerTask{
+		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
+		Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember,
+		Audience:  runtimedb.ButlerAudiencePrivate,
+		SessionID: f.session, OriginConnection: fixtureConnection, OriginConnectionRef: fresh.Seq,
+		Objective: "new work", CompletionCriteria: "done",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.ledger.Authorize(newTask); err != nil {
+		t.Fatalf("work admitted over the new connection was refused: %v", err)
+	}
+}
+
+// A revocation stops the work until somebody grants again afterwards.
+//
+// ListToolGrants keeps history, so "any revoked row stops the task"
+// stopped it FOR EVER — including after an administrator reviewed a
+// transferred task and issued the replacements ADR-W030 A4's recovery
+// path is built on. That was a regression introduced one round after
+// the same bot asked for the rule that caused it (#287).
+//
+// Mutations, both directions: back to "any revoked row stops it" makes
+// the recovery case fail; back to "only when every grant is revoked"
+// makes the partial-revocation case in the test above fail.
+func TestAReviewedTaskRecoversWhenItIsGrantedAgain(t *testing.T) {
+	f := newDerivedFixture(t)
+
+	seq, err := f.db.GrantTool(runtimedb.ToolGrant{
+		Scope: runtimedb.GrantScopeTask, ScopeID: f.taskID,
+		AgentClass: runtimedb.AgentClassMember, Tool: "restricted_tool", GrantedBy: "root-admin",
+	}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.RevokeToolGrant(seq, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	f.refused(t, "revoked")
+
+	// An administrator reviews it and grants again. The revoked row is
+	// still there — it is history and is never removed — so a rule that
+	// looked only for its presence would refuse this for ever.
+	if _, err := f.db.GrantTool(runtimedb.ToolGrant{
+		Scope: runtimedb.GrantScopeTask, ScopeID: f.taskID,
+		AgentClass: runtimedb.AgentClassMember, Tool: "restricted_tool", GrantedBy: "root-admin",
+	}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.ledger.Authorize(f.taskID); err != nil {
+		t.Fatalf("a reviewed task that was granted again was still refused: %v", err)
+	}
+}
+
 // A Task never exceeds the authority of the request that created it
 // (§18.1). Naming a task id does not let a different person, or the
 // same person on a different Connection, carry its work on.
@@ -324,7 +419,7 @@ func TestATransferredTaskIsItsNewOwnersToCarryOn(t *testing.T) {
 		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
 		Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember,
 		Audience:  runtimedb.ButlerAudienceShared,
-		SessionID: f.session, OriginConnection: fixtureConnection,
+		SessionID: f.session, OriginConnection: fixtureConnection, OriginConnectionRef: f.connRef,
 		Objective: "the shared thing", CompletionCriteria: "done",
 	})
 	if err != nil {
@@ -436,6 +531,58 @@ func (p *revokingProvider) Chat(context.Context, provider.ChatRequest) (*provide
 		p.revoke = nil
 	}
 	return resp, nil
+}
+
+// failingThenRevokingProvider fails its first attempt and withdraws the
+// task's origin, so the RETRY is the dispatch under test.
+type failingThenRevokingProvider struct {
+	attempts int
+	revoke   func()
+}
+
+func (p *failingThenRevokingProvider) Name() string { return "flaky" }
+
+func (p *failingThenRevokingProvider) Chat(context.Context, provider.ChatRequest) (*provider.ChatResponse, error) {
+	p.attempts++
+	if p.attempts == 1 {
+		// The first attempt fails, and authority goes away while the
+		// runner is deciding to retry — which is exactly the window a
+		// stall leaves open, only faster.
+		if p.revoke != nil {
+			p.revoke()
+			p.revoke = nil
+		}
+		return nil, errors.New("provider unavailable")
+	}
+	return &provider.ChatResponse{Text: "second attempt"}, nil
+}
+
+// A retry is a dispatch, and it re-checks authority first.
+//
+// modelRound retried modelAttempt without re-authorizing, so a stall or
+// a provider failure — by definition some time after the round's own
+// check, often the whole StallTimeout — sent the conversation again
+// after its Person, session, Connection or grant had been withdrawn.
+// Found by a review bot on #287, one round after the same bot found the
+// tool-dispatch gap: the boundary had been put next to the hole rather
+// than in it.
+//
+// Mutation: moving the check back out of the attempt loop makes this
+// fail — the second attempt goes out and the provider sees two calls.
+func TestARetryReChecksAuthorityBeforeItGoesOut(t *testing.T) {
+	f := newDerivedFixture(t)
+	r := runner(newCountingToolset(), f.ledger)
+	r.RetryLimit = 1
+
+	p := &failingThenRevokingProvider{
+		revoke: func() { _ = f.db.RevokeButlerSession(f.session, "root-admin") },
+	}
+	if _, err := r.Run(context.Background(), p, f.taskID, "look at something"); err == nil {
+		t.Fatal("the run retried after its session was withdrawn")
+	}
+	if p.attempts != 1 {
+		t.Fatalf("the provider saw %d attempts; the retry went out after authority was withdrawn", p.attempts)
+	}
 }
 
 // Authority withdrawn during a model call stops the tool calls that
