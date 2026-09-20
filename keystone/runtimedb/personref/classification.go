@@ -395,6 +395,25 @@ var Columns = []Column{
 		"which ROLE a Connection admits ('owners' or 'household'), which names a " +
 			"class of people and never one of them"},
 	{"connection_admission", "set_at", NotAPerson, "a timestamp"},
+	{"connection_disclosure", "set_by", Actor,
+		"who classified the Connection: an Owner as actingMember records " +
+			"them, or 'migration:0064' for the conservative defaults"},
+	{"connection_disclosure", "reach", NotAPerson,
+		"whether the bytes leave the house ('local' or 'external')"},
+	{"connection_disclosure", "encryption", NotAPerson,
+		"what protects them in transit ('none', 'transport', 'end_to_end')"},
+	{"connection_disclosure", "retention", NotAPerson,
+		"who keeps a copy ('none', 'provider', 'unknown'), which names a " +
+			"service and never a person"},
+	{"connection_disclosure", "surface", NotAPerson,
+		"what the person is looking at ('trusted_ui' or 'external_messaging'), " +
+			"a property of the client and not of whoever holds it"},
+	{"connection_disclosure", "set_at", NotAPerson, "a timestamp"},
+	{"chat_rooms", "conversation", NotAPerson,
+		"a transport's own identifier for a ROOM -- the one destination that " +
+			"is by definition not one person (design 8.3)"},
+	{"chat_rooms", "first_seen_at", NotAPerson, "a timestamp"},
+	{"chat_rooms", "last_seen_at", NotAPerson, "a timestamp"},
 	{"theme_backgrounds", "name", NotAPerson, "a theme's name, not a person's"},
 	{"theme_backgrounds", "image", NotAPerson, "the wallpaper's bytes"},
 	{"theme_backgrounds", "media_type", NotAPerson, "an image media type, decided from the bytes"},

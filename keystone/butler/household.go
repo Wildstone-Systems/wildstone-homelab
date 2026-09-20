@@ -880,10 +880,33 @@ func householdParams(input map[string]any) (map[string]string, error) {
 	return out, nil
 }
 
-// HouseholdGroupNote is appended to the family prompt when the
-// conversation is a group rather than a direct message (ADR-W026 A7). It
-// constrains what the Butler SAYS; it cannot change what it can do —
-// the tools come from the gateway, which was built from the member
+// HouseholdGroupNote was appended to the family prompt when the
+// conversation was a group rather than a direct message (ADR-W026 A7).
+//
+// NOTHING SENDS IT ANY MORE, and that is the point of slice 11's
+// disclosure half. Design §8.3 supersedes A7: a group or
+// multi-recipient destination fails closed in MVP, so a recognised
+// Person addressing an Agent from a room is refused and redirected to
+// a one-to-one Connection rather than answered discreetly.
+//
+// It is kept, unsent, because it is the best statement in the tree of
+// WHY that had to change. Everything below is an instruction to a
+// model to be careful, and it is a good one — it was written knowing
+// exactly which disclosures a room invites. What it could never be is
+// a boundary: a recognised Person could ask for their own Personal
+// memory and get it, in front of an audience nobody had admitted, and
+// the model would have been following this text faithfully the whole
+// time. "Ask the model to be discreet" and "do not put the content
+// where the wrong people are" are different mechanisms, and only the
+// second survives somebody phrasing the request well.
+//
+// It becomes live again when audience admission exists (§8.3 keeps
+// group support as a seam for exactly that), and it should be read
+// then as what it is: the disclosure guidance that sits ON TOP of an
+// admitted audience, never in place of one.
+//
+// It constrains what the Butler SAYS; it cannot change what it can do
+// — the tools come from the gateway, which was built from the member
 // before this text was chosen.
 const HouseholdGroupNote = `Audience: this is a GROUP conversation. Several members of the household
 are reading, and people who are not members may be in the room too.

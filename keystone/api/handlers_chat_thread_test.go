@@ -139,18 +139,32 @@ func TestConsoleActivityKeepsAChatThreadAlive(t *testing.T) {
 	}
 }
 
-// A group room has several bound members speaking into one
-// conversation, and a session is principal-bound — Alice cannot
-// continue Bob's. With one pointer per room the speaker changing would
-// rewrite it, and BOTH of them would lose their thread on every
-// alternate message. Reported by Codex on #109.
-func TestGroupMembersKeepSeparateThreads(t *testing.T) {
+// A room opens no session for anybody (design §8.3).
+//
+// THIS TEST USED TO PROVE SOMETHING ELSE, and the thing it proved is
+// worth keeping sight of. A group room has several bound members
+// speaking into one conversation, and a session is principal-bound —
+// Alice cannot continue Bob's. With one thread pointer per ROOM the
+// speaker changing would rewrite it, and both of them would lose their
+// thread on every alternate message. Codex reported that on #109 and
+// the fix was to key the pointer on the person as well.
+//
+// Slice 11's disclosure half makes the room unreachable, so that bug
+// is no longer approachable from here — which is not the same as the
+// invariant no longer mattering. It still holds, in chat_threads'
+// primary key, and it is pinned where it lives now:
+// TestTwoPeopleInOneConversationKeepSeparateThreads in runtimedb.
+// What this test asserts is the new, stronger property that replaced
+// it: four addressed messages from two admitted members produce four
+// redirects and zero sessions.
+func TestAGroupRoomOpensNoSessionForAnybody(t *testing.T) {
 	h := newHarness(t)
 	h.wireHouseholdButler(answerTurns("a1", "b1", "a2", "b2"), runtimedb.ButlerModeFull)
 	h.bindAccount(t, "family", "alice", "telegram", "111")
 	h.bindAccount(t, "family", "bob", "telegram", "222")
 
-	// Alice, Bob, Alice, Bob — all in the same room.
+	// Alice, Bob, Alice, Bob — all in the same room, all addressed to
+	// the bot, all from people it knows.
 	for i, m := range []struct{ account, text string }{
 		{"111", "alice one"}, {"222", "bob one"}, {"111", "alice two"}, {"222", "bob two"},
 	} {
@@ -165,81 +179,18 @@ func TestGroupMembersKeepSeparateThreads(t *testing.T) {
 
 	var sessions []runtimedb.ButlerSession
 	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &sessions)
-	if len(sessions) != 2 {
-		t.Fatalf("sessions = %d, want one per member: %+v", len(sessions), sessions)
+	if len(sessions) != 0 {
+		t.Fatalf("a room opened %d session(s): %+v", len(sessions), sessions)
 	}
-	// Each member's second message continued their OWN first one.
-	for _, s := range sessions {
-		var full runtimedb.ButlerSession
-		h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions/"+s.ID, nil, &full)
-		if len(full.Turns) != 4 {
-			t.Fatalf("%s (%s) has %d turns; the other speaker took its thread",
-				s.ID, s.ActingFor, len(full.Turns))
-		}
-	}
-}
-
-// Without a way to say "start over", a fresh question inherits the
-// previous topic until the idle window expires.
-func TestChatResetStartsANewConversation(t *testing.T) {
-	h := newHarness(t)
-	h.wireHouseholdButler(answerTurns("first answer", "second answer"), runtimedb.ButlerModeFull)
-	h.bindAccount(t, "family", "sam", "telegram", "12345")
-
-	h.send(runtimedb.RoleConcierge, map[string]any{
-		"transport": "telegram", "account": "12345", "text": "first question", "messageId": "m-1",
-	})
-	_, out := h.send(runtimedb.RoleConcierge, map[string]any{
-		"transport": "telegram", "account": "12345", "text": "/new", "messageId": "m-2",
-	})
-	if out.Reason != "answered /new" {
-		t.Fatalf("reset reason = %q", out.Reason)
-	}
-	h.send(runtimedb.RoleConcierge, map[string]any{
-		"transport": "telegram", "account": "12345", "text": "second question", "messageId": "m-3",
-	})
-
-	var sessions []runtimedb.ButlerSession
-	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &sessions)
-	if len(sessions) != 2 {
-		t.Fatalf("sessions = %d, want the reset to have split them", len(sessions))
-	}
-	// The reset itself must not have reached the model.
-	if got := len(h.scripted(t).convos); got != 2 {
-		t.Fatalf("provider saw %d conversations; the reset was sent to it", got)
-	}
-	// And the reply says the earlier conversation is still recorded.
+	// Each speaker was redirected rather than ignored. Silence would
+	// read as a broken bot to two people who did nothing wrong.
 	queued := h.poll(t, runtimedb.RoleConcierge, "")
-	var reset string
-	for _, m := range queued {
-		if strings.Contains(m.Body, "Starting fresh") {
-			reset = m.Body
-		}
+	if len(queued) != 4 {
+		t.Fatalf("four addressed messages produced %d replies: %+v", len(queued), queued)
 	}
-	if reset == "" || !strings.Contains(reset, "still recorded") {
-		t.Fatalf("reset reply = %q", reset)
-	}
-}
-
-// A message that merely contains the word is a question, not a command.
-// Only a leading slash makes one, and the name has to match exactly.
-func TestChatCommandParsingIsExact(t *testing.T) {
-	for _, in := range []string{"new", "what is new?", "clear the cache", "reset the router", "", "  "} {
-		if _, _, ok := parseChatCommand(in); ok {
-			t.Errorf("parseChatCommand(%q) claimed a command", in)
-		}
-	}
-	for _, tc := range []struct{ in, name, arg string }{
-		{"/new", "new", ""},
-		{" /RESET ", "reset", ""},
-		{"/plan plan-0f3a91", "plan", "plan-0f3a91"},
-		// Telegram addresses a command in a group as /status@thebot.
-		{"/status@wildstone_bot", "status", ""},
-		{"/newsletter", "newsletter", ""},
-	} {
-		name, arg, ok := parseChatCommand(tc.in)
-		if !ok || name != tc.name || arg != tc.arg {
-			t.Errorf("parseChatCommand(%q) = (%q, %q, %v)", tc.in, name, arg, ok)
+	for _, q := range queued {
+		if q.Target != "room-1" || !strings.Contains(q.Body, "one-to-one") {
+			t.Fatalf("reply = %+v, want a redirect into the room", q)
 		}
 	}
 }

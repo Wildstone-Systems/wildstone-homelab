@@ -140,12 +140,19 @@ func TestWhoamiNamesTheSurfaceAndItsCeiling(t *testing.T) {
 	}
 }
 
-// A room hears about the house, not about the other person
-// (ADR-W026 A7). /today reads the timeline directly rather than through
-// the family seam, so it has to apply the same rule the seam does —
-// otherwise it discloses one member's movements to everyone in the
-// room. Reported by Codex on #110 as a P1.
-func TestTodayWithholdsAnotherMembersFactsInAGroup(t *testing.T) {
+// A room hears nothing (design §8.3, superseding ADR-W026 A7's "the
+// house, not the other person").
+//
+// /today is the case that shows why the MVP answer had to be refusal.
+// It reads the timeline DIRECTLY rather than through the family seam,
+// and no model runs — so the audience note in the family prompt could
+// never have constrained it, and it needed its own copy of the rule to
+// avoid disclosing one member's movements to the room (Codex reported
+// exactly that on #110 as a P1). Every deterministic path into a room
+// needs its own copy of every disclosure rule, forever, and each one
+// is a place to forget. Refusing the destination is one rule in one
+// place instead.
+func TestTodayDisclosesNothingIntoARoom(t *testing.T) {
 	h := newHarness(t)
 	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
 	h.s.MemberScoped = func(eventType string) bool { return eventType == "presence.arrived" }
@@ -167,7 +174,16 @@ func TestTodayWithholdsAnotherMembersFactsInAGroup(t *testing.T) {
 		t.Fatalf("direct /today withheld a fact it should show: %q", direct)
 	}
 
-	// In a room, robin's movements are not sam's to broadcast.
+	// In a room it answers nothing at all (design §8.3). This test used
+	// to assert the narrower rule — the house's own facts are the
+	// room's business, another member's movements are not — which was
+	// ADR-W026 A7's bargain, and slice 11's disclosure half ends it:
+	// a group destination fails closed in MVP, so the only thing said
+	// into a room is the redirect.
+	//
+	// The old assertion is kept as the first half of the new one:
+	// robin's movements still must not appear, and now neither does
+	// anything else.
 	var out inboundResponse
 	resp := h.do(runtimedb.RoleConcierge, "POST", "/api/v1/chat/messages", map[string]any{
 		"transport": "telegram", "account": "12345", "conversation": "room-1",
@@ -181,9 +197,15 @@ func TestTodayWithholdsAnotherMembersFactsInAGroup(t *testing.T) {
 	if strings.Contains(group, "robin") {
 		t.Fatalf("group /today disclosed another member's movements: %q", group)
 	}
-	// It still answers — the house's own facts are the room's business.
-	if !strings.Contains(group, "bins.collected") {
-		t.Fatalf("group /today withheld a fact about the house: %q", group)
+	// Nor the household's own facts, which a slash command would
+	// otherwise have handed to the room deterministically — no model
+	// involved, so no amount of prompt discretion was ever going to
+	// stop it.
+	if strings.Contains(group, "bins.collected") {
+		t.Fatalf("group /today disclosed the household's facts into a room: %q", group)
+	}
+	if !strings.Contains(group, "one-to-one") {
+		t.Fatalf("group /today did not redirect: %q", group)
 	}
 }
 
