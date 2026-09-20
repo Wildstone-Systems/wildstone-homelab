@@ -164,143 +164,27 @@ func TestTaskLosesAuthorityAtItsNextBoundaryWhenTheConnectionIsRevoked(t *testin
 	g.refused(t, "connection")
 }
 
-// The grants the work was admitted under are revoked.
+// A revoked grant refuses THAT TOOL, and does not stop the work.
 //
-// Mutation, both directions: treating "no grants at all" as "every
-// grant revoked" makes the second case fail — most work holds no grant
-// and must not be killed for it. Treating an EXPIRED grant as a
-// revocation makes the third fail, and would stop tasks that simply
-// finished with the tool.
-func TestTaskLosesAuthorityAtItsNextBoundaryWhenTheGrantIsRevoked(t *testing.T) {
+// §10.1 names a grant among the things a Task derives from, and this is
+// where that is enforced: in the resolver, per tool. Refusing the tool
+// is the whole of what the revocation said.
+//
+// A task-level version of this check lived here and was removed. Grant
+// rows are immutable and accumulate, so every predicate over them needs
+// a recovery rule and each recovery rule needs another — all-revoked,
+// then any-revoked, then newest-after-newest, three rounds on #287 with
+// each fix creating the next gap. Stopping the WORK is a state
+// transition, which is how A4 already does it: offboarding pauses
+// transferred work to paused-offboarded, and an Owner stopping a
+// routine cancels it.
+//
+// Mutations: making the revoked tool permitted fails the first case;
+// stopping the task on revocation fails the second.
+func TestARevokedGrantRefusesItsToolAndNotTheWork(t *testing.T) {
 	f := newDerivedFixture(t)
-	seq, err := f.db.GrantTool(runtimedb.ToolGrant{
-		Scope: runtimedb.GrantScopeTask, ScopeID: f.taskID,
-		AgentClass: runtimedb.AgentClassMember, Tool: "restricted_tool", GrantedBy: "root-admin",
-	}, time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Still fine while the grant stands.
-	if err := f.ledger.Authorize(f.taskID); err != nil {
-		t.Fatalf("a task with a live grant was refused: %v", err)
-	}
-	if err := f.db.RevokeToolGrant(seq, "root-admin"); err != nil {
-		t.Fatal(err)
-	}
-	f.refused(t, "revoked")
-
-	// ONE revocation is enough, even with another grant still live.
-	// Stopping only once every grant had gone was a threshold with no
-	// principle behind it: there is no reason a task should survive the
-	// first revocation and die on the last (#287).
-	two := newDerivedFixture(t)
-	first, err := two.db.GrantTool(runtimedb.ToolGrant{
-		Scope: runtimedb.GrantScopeTask, ScopeID: two.taskID,
-		AgentClass: runtimedb.AgentClassMember, Tool: "tool_one", GrantedBy: "root-admin",
-	}, time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := two.db.GrantTool(runtimedb.ToolGrant{
-		Scope: runtimedb.GrantScopeTask, ScopeID: two.taskID,
-		AgentClass: runtimedb.AgentClassMember, Tool: "tool_two", GrantedBy: "root-admin",
-	}, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	if err := two.ledger.Authorize(two.taskID); err != nil {
-		t.Fatalf("a task with two live grants was refused: %v", err)
-	}
-	if err := two.db.RevokeToolGrant(first, "root-admin"); err != nil {
-		t.Fatal(err)
-	}
-	two.refused(t, "tool_one")
-
-	// A task that never held a grant is untouched. "No grants exist" is
-	// not "a grant was taken away".
-	g := newDerivedFixture(t)
-	if err := g.ledger.Authorize(g.taskID); err != nil {
-		t.Fatalf("a task that holds no grant was refused: %v", err)
-	}
-
-	// And an expired grant is not a revocation: the tool it covered is
-	// no longer permitted, which the resolver answers per tool, but the
-	// work carries on. A one-nanosecond window is the shortest the
-	// store accepts and is already past by the time it returns.
-	h := newDerivedFixture(t)
-	if _, err := h.db.GrantTool(runtimedb.ToolGrant{
-		Scope: runtimedb.GrantScopeTask, ScopeID: h.taskID,
-		AgentClass: runtimedb.AgentClassMember, Tool: "restricted_tool", GrantedBy: "root-admin",
-	}, time.Nanosecond); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.ledger.Authorize(h.taskID); err != nil {
-		t.Fatalf("an expired grant killed the whole task: %v", err)
-	}
-}
-
-// Re-adding a bot at the same address does not resurrect the authority
-// of work whose Connection was withdrawn.
-//
-// butler_addresses_live is unique only over the LIVE rows, so revoking
-// an address and inserting another with the same transport and id is
-// legal — and may point at a different Agent. Binding the task to the
-// ADDRESS therefore let a withdrawn Connection come back silently.
-// Found by a review bot on #287.
-//
-// Mutation: checking the address instead of the row makes this fail.
-func TestReaddingAnAddressDoesNotResurrectAWithdrawnConnection(t *testing.T) {
-	f := newDerivedFixture(t)
-
-	if err := f.db.RevokeButlerAddress("matrix", "!room:example.org", "root-admin"); err != nil {
-		t.Fatal(err)
-	}
-	f.refused(t, "connection")
-
-	// The same address, added again. Under an address-keyed check this
-	// is indistinguishable from the original Connection; under a
-	// row-keyed one it is a different Connection, which is what it is.
-	if _, err := f.db.AddButlerAddress("alfred", "matrix", "!room:example.org", "back again", "root-admin"); err != nil {
-		t.Fatal(err)
-	}
-	f.refused(t, "connection")
-
-	// And a task admitted over the NEW row is fine, so this is about
-	// identity rather than about refusing everything after a revocation.
-	fresh, err := f.db.ChatConnectionAt("matrix", "!room:example.org")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fresh.Seq == f.connRef {
-		t.Fatal("the re-added address reused the original row, so this proves nothing")
-	}
-	newTask, err := f.db.InsertButlerTask(runtimedb.ButlerTask{
-		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
-		Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember,
-		Audience:  runtimedb.ButlerAudiencePrivate,
-		SessionID: f.session, OriginConnection: fixtureConnection, OriginConnectionRef: fresh.Seq,
-		Objective: "new work", CompletionCriteria: "done",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := f.ledger.Authorize(newTask); err != nil {
-		t.Fatalf("work admitted over the new connection was refused: %v", err)
-	}
-}
-
-// A revocation stops the work until somebody grants again afterwards.
-//
-// ListToolGrants keeps history, so "any revoked row stops the task"
-// stopped it FOR EVER — including after an administrator reviewed a
-// transferred task and issued the replacements ADR-W030 A4's recovery
-// path is built on. That was a regression introduced one round after
-// the same bot asked for the rule that caused it (#287).
-//
-// Mutations, both directions: back to "any revoked row stops it" makes
-// the recovery case fail; back to "only when every grant is revoked"
-// makes the partial-revocation case in the test above fail.
-func TestAReviewedTaskRecoversWhenItIsGrantedAgain(t *testing.T) {
-	f := newDerivedFixture(t)
+	auth := &Authority{DB: f.db}
+	auth.PersonAuthority = auth.PersonIsAdmitted()
 
 	seq, err := f.db.GrantTool(runtimedb.ToolGrant{
 		Scope: runtimedb.GrantScopeTask, ScopeID: f.taskID,
@@ -309,23 +193,43 @@ func TestAReviewedTaskRecoversWhenItIsGrantedAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	granted := butler.ToolAuthorityQuery{
+		Caller: butler.CallerPersonFacing, Person: "mika", Connection: fixtureConnection,
+		AgentClass: runtimedb.AgentClassMember, Tool: "restricted_tool",
+		Structural: true, GrantRequired: true, TaskID: f.taskID,
+	}
+	if d := mustAuthorize(t, auth, granted); !d.Allowed {
+		t.Fatalf("a live grant did not permit its tool: %q", d.Reason)
+	}
+
 	if err := f.db.RevokeToolGrant(seq, "root-admin"); err != nil {
 		t.Fatal(err)
 	}
-	f.refused(t, "revoked")
 
-	// An administrator reviews it and grants again. The revoked row is
-	// still there — it is history and is never removed — so a rule that
-	// looked only for its presence would refuse this for ever.
-	if _, err := f.db.GrantTool(runtimedb.ToolGrant{
-		Scope: runtimedb.GrantScopeTask, ScopeID: f.taskID,
-		AgentClass: runtimedb.AgentClassMember, Tool: "restricted_tool", GrantedBy: "root-admin",
-	}, time.Hour); err != nil {
+	// The tool is refused.
+	if mustAuthorize(t, auth, granted).Allowed {
+		t.Fatal("a revoked grant still permitted its tool")
+	}
+
+	// The work is not stopped: the task still has authority, and a tool
+	// that never needed the grant still runs. An Owner who wants the
+	// work stopped cancels it, which the state machine already answers.
+	if err := f.ledger.Authorize(f.taskID); err != nil {
+		t.Fatalf("revoking one tool's grant stopped the whole task: %v", err)
+	}
+	ungranted := granted
+	ungranted.Tool, ungranted.GrantRequired = "get_household_events", false
+	if d := mustAuthorize(t, auth, ungranted); !d.Allowed {
+		t.Fatalf("a tool that never needed the grant was refused: %q", d.Reason)
+	}
+
+	// And cancelling IS how the work stops, so nothing is lost.
+	if err := f.db.TransitionButlerTask(f.taskID, runtimedb.ButlerTaskCancelled,
+		"owner stopped it", "root-admin"); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.ledger.Authorize(f.taskID); err != nil {
-		t.Fatalf("a reviewed task that was granted again was still refused: %v", err)
-	}
+	f.refused(t, "cancelled")
 }
 
 // A Task never exceeds the authority of the request that created it
@@ -489,8 +393,9 @@ func TestATransferredTaskIsItsNewOwnersToCarryOn(t *testing.T) {
 	if d := mustAuthorize(t, auth, fromConsole); !d.Allowed {
 		t.Fatalf("the new owner could not carry the work on from the console: %q", d.Reason)
 	}
-	// The ledger agrees: nothing in derived authority refuses it now
-	// that its grants have been reissued. Offboarding revoked them.
+	// Offboarding revoked the task's grants on the way out, so the
+	// administrator issues what the reviewed work actually needs. That
+	// is A4's review, and the resolver is what enforces it per tool.
 	if _, err := f.db.GrantTool(runtimedb.ToolGrant{
 		Scope: runtimedb.GrantScopeTask, ScopeID: shared,
 		AgentClass: runtimedb.AgentClassMember, Tool: "restricted_tool", GrantedBy: "sam",

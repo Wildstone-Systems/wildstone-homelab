@@ -62,12 +62,25 @@ type Ledger struct {
 	// never had the origin in the first place.
 	SessionActive    func(sessionID string) error
 	ConnectionActive func(connection OriginConnection) error
-	// GrantActive is given the task id rather than a grant id: the
-	// question §10.1 asks is whether the authority this work was
-	// admitted under still stands, and the grants that answer it are
-	// exactly the ones scoped to this task.
-	GrantActive func(taskID string) error
 
+	// THERE IS DELIBERATELY NO GRANT LEG. §10.1 names a grant among the
+	// things a Task derives from, and a revoked grant is enforced — by
+	// the RESOLVER, per tool, which is where it belongs. Refusing the
+	// tool is the whole of what the revocation said.
+	//
+	// Stopping the WORK is a different act with its own mechanism: a
+	// state transition. A4 already does exactly that for transferred
+	// work (offboarding.go pauses it to paused-offboarded and its
+	// comment says it "waits for grant and connection review"), and an
+	// Owner stopping a routine cancels it.
+	//
+	// A task-level check derived from grant history was tried here and
+	// removed. Grant rows are immutable and accumulate, so every
+	// predicate over them needs a recovery rule, and each recovery rule
+	// needs another: all-revoked, then any-revoked, then
+	// newest-after-newest — three review rounds on #287, each fix
+	// creating the next gap. The signature of a rule that should not be
+	// derived from history at all.
 	// Now is the ledger clock; nil means time.Now.
 	Now func() time.Time
 }
@@ -166,15 +179,6 @@ func (l *Ledger) derivedAuthority(task runtimedb.ButlerTask) error {
 		if err := l.ConnectionActive(OriginConnection{
 			Name: task.OriginConnection, Ref: task.OriginConnectionRef,
 		}); err != nil {
-			return fmt.Errorf("%w: %v", ErrAuthorityWithdrawn, err)
-		}
-	}
-	// The grants this work was admitted under. Unlike the three above,
-	// there is no field saying whether the leg applies: a task either
-	// has grants scoped to it or it does not, and the check answers
-	// both cases without being told which it is.
-	if l.GrantActive != nil {
-		if err := l.GrantActive(task.ID); err != nil {
 			return fmt.Errorf("%w: %v", ErrAuthorityWithdrawn, err)
 		}
 	}
@@ -282,77 +286,16 @@ func builtInConnection(name string) bool {
 	return name == "console" || name == "household_portal"
 }
 
-// GrantCheck refuses a task when ANY grant it was admitted under has
-// been revoked.
+// DerivedAuthorityChecks turns on the legs of §10.1's derived Task
+// authority that a task can be re-evaluated against. It is the one call
+// a deployment makes.
 //
-// A task that never held a grant is unaffected: most work is done with
-// tools nobody had to grant, and "no grants exist" is not "a grant was
-// taken away". Those two cases are what this check distinguishes.
-//
-// ANY, NOT ALL. An earlier version stopped the task only once every
-// grant had been revoked, and that threshold had no principle behind
-// it — there is no reason a task should survive the first revocation
-// and die on the last. §10.1 is singular and unconditional: "if the
-// Person, session, Connection or grant behind it later loses
-// authority, the Task loses it too at its next boundary". Revoking a
-// grant is a deliberate act by an Owner on this specific work, and the
-// per-tool resolver refusing that one tool is not the same as the work
-// stopping. Found by a review bot on #287.
-//
-// EXPIRY IS NOT REVOCATION and is deliberately not treated as one. A
-// grant that ran out is the clock doing what it was set to do, not
-// somebody withdrawing permission; the tool it covered is no longer
-// permitted, which the resolver already answers per tool, and killing
-// the whole task for it would stop work that never needed the tool
-// again.
-func (l *Ledger) GrantCheck() func(string) error {
-	return func(taskID string) error {
-		grants, err := l.db.ListToolGrants(runtimedb.GrantScopeTask, taskID)
-		if err != nil {
-			return err
-		}
-		// ListToolGrants keeps history: a revoked row stays, and is
-		// never removed or superseded in place. So "any revoked row
-		// stops the task" would stop it FOR EVER, including after an
-		// administrator reviewed a transferred task and issued the
-		// replacements A4's recovery path is built on. That was a real
-		// regression, found by a review bot on #287 one round after the
-		// same bot asked for the rule that caused it.
-		//
-		// The rule that satisfies both: a revocation stops the work
-		// UNTIL somebody grants again afterwards. Comparing the newest
-		// revocation against the newest live grant says exactly that in
-		// one line, and it is the shape of the act being modelled — an
-		// Owner takes permission away, and a human decides whether to
-		// give it back.
-		var newestRevoked, newestLive time.Time
-		var revokedTool string
-		for _, g := range grants {
-			switch {
-			case !g.RevokedAt.IsZero():
-				if g.RevokedAt.After(newestRevoked) {
-					newestRevoked, revokedTool = g.RevokedAt, g.Tool
-				}
-			case g.GrantedAt.After(newestLive):
-				newestLive = g.GrantedAt
-			}
-		}
-		if newestRevoked.IsZero() || newestLive.After(newestRevoked) {
-			return nil
-		}
-		return fmt.Errorf(
-			"the %s grant it was admitted under was revoked and nothing has been granted since",
-			revokedTool)
-	}
-}
-
-// DerivedAuthorityChecks turns on all four legs of §10.1's derived Task
-// authority. It is the one call a deployment makes.
+// Three, not four: the grant leg is the resolver's, per tool. See the
+// note on the fields above.
 func (l *Ledger) DerivedAuthorityChecks() {
 	l.OwnerActive = l.AdmissionCheck()
 	l.SessionActive = l.SessionCheck()
 	l.ConnectionActive = l.ConnectionCheck()
-	l.GrantActive = l.GrantCheck()
 }
 
 // FenceAttempts implements butler.TaskLedger.
