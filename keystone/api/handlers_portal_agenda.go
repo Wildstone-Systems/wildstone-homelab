@@ -103,6 +103,21 @@ type agendaItem struct {
 	// form can open on what the routine actually says rather than on a
 	// guess the household then has to correct.
 	Every string `json:"every,omitempty"`
+	// Weekday is the day a weekly routine falls on, 0 = Sunday, and is
+	// set only for one that repeats weekly. The edit form opens on it,
+	// and compares against it to decide whether the schedule changed:
+	// without it every edit re-anchored, so correcting the wording of a
+	// Thursday routine moved it to Monday.
+	Weekday *int `json:"weekday,omitempty"`
+	// Editable is whether the agenda's routine form can round-trip this
+	// record. It CANNOT round-trip everything a commitment holds — the
+	// form knows about a description, an interval and a part of day,
+	// while homeEditCommitment replaces the first due rule and rewrites
+	// requiresBooking, mayComplete and notify from what it is sent. So
+	// a dentist appointment offered the same Edit button would quietly
+	// become a daily routine the moment somebody fixed its title. The
+	// button is offered only where nothing can be lost.
+	Editable bool `json:"editable,omitempty"`
 	// Done reports whether this reader may tick it off. A day that
 	// offers a tick it will refuse is worse than one that offers none.
 	Done bool `json:"done,omitempty"`
@@ -152,8 +167,8 @@ func (s *Server) homeAgenda(_ http.ResponseWriter, r *http.Request, member strin
 	byDay := map[string][]agendaItem{}
 
 	s.agendaEvents(r.Context(), who, today, loc, byDay)
-	s.agendaCommitments(who, memberWho(r, member), today, loc, byDay)
-	s.agendaNotices(who, member, today, loc, byDay)
+	s.agendaCommitments(who, s.who(r, member), today, loc, byDay)
+	s.agendaNotices(who, s.who(r, member), today, loc, byDay)
 
 	for i := 0; i <= agendaDays; i++ {
 		d := today.AddDate(0, 0, i)
@@ -181,11 +196,17 @@ func (s *Server) homeAgenda(_ http.ResponseWriter, r *http.Request, member strin
 }
 
 // agendaLabel names a day the way somebody standing in a kitchen would.
+//
+// BY CALENDAR DATE, NOT BY ELAPSED HOURS. Dividing the gap by
+// twenty-four is wrong twice a year: the local midnights either side
+// of a spring-forward are twenty-three hours apart, so tomorrow came
+// out as quotient zero and was labelled "Today" — on the one morning a
+// household is already confused about what time it is.
 func agendaLabel(d, today time.Time) string {
-	switch d.Sub(today) / (24 * time.Hour) {
-	case 0:
+	switch {
+	case sameDay(d, today):
 		return "Today"
-	case 1:
+	case sameDay(d, today.AddDate(0, 0, 1)):
 		return "Tomorrow"
 	}
 	return d.Format("Monday 2 January")
@@ -302,7 +323,7 @@ func (s *Server) agendaCommitments(who string, asker who, today time.Time, loc *
 		if commitmentOwner(st) != who || st.Disabled {
 			continue
 		}
-		if !s.agendaMaySee(st, asker, who) {
+		if !visibleTo(st, asker) {
 			continue
 		}
 		// ON THE DAY IT IS DUE. A weekly routine anchored to a Thursday
@@ -338,9 +359,13 @@ func (s *Server) agendaCommitments(who string, asker who, today time.Time, loc *
 			Kind: "commitment", Title: st.Description, sortAt: at,
 			Detail: st.Occurrence.Reason, Tone: commitmentTone(st),
 			Name: st.Name, PartOfDay: st.PartOfDay, Every: st.Every,
+			Weekday:  weeklyWeekday(st, at),
+			Editable: routineShaped(st),
 			// The same predicate the upkeep page answers with, so a tick
 			// offered here is a tick that will be accepted there.
-			Done:  mayComplete(st, asker) || s.isGuardianOf(asker.member, who),
+			// The same predicate the answer endpoint authorizes with, so
+			// a tick offered here is a tick that will be accepted.
+			Done:  mayComplete(st, asker),
 			Moved: moved,
 			rank:  resource.PartOfDayRank(st.PartOfDay),
 		}
@@ -370,6 +395,31 @@ func calendarDue(st upkeep.Standing) (time.Time, bool) {
 	return best, !best.IsZero()
 }
 
+// weeklyWeekday is the day of the week a weekly routine falls on, and
+// nil for anything that does not repeat weekly.
+func weeklyWeekday(st upkeep.Standing, at time.Time) *int {
+	if st.Every != "1w" {
+		return nil
+	}
+	d := int(at.Weekday())
+	return &d
+}
+
+// routineShaped reports whether the agenda's form can edit this record
+// without dropping anything the record holds.
+//
+// The form sends a description, an interval, a part of day, an owner
+// and a rollover. homeEditCommitment rewrites requiresBooking,
+// mayComplete and notify from its input and replaces the first due
+// rule, so anything carrying those is NOT editable here — the agenda
+// would silently strip them. Those records keep their own page.
+func routineShaped(st upkeep.Standing) bool {
+	return !st.RequiresBooking &&
+		len(st.MayComplete) == 0 &&
+		len(st.Notify) == 0 &&
+		st.Every != ""
+}
+
 // sameDay compares two instants by the day they fall on, which is the
 // only comparison a chore's date deserves.
 func sameDay(a, b time.Time) bool {
@@ -384,54 +434,21 @@ func commitmentOwner(st upkeep.Standing) string {
 	return strings.TrimPrefix(st.Owner, "household/")
 }
 
-// agendaMaySee applies ADR-W033 A9 on top of the existing rule.
-//
-// visibleTo already says a personal commitment is its owner's business.
-// A9 adds the one relationship that rule could not express: a child's
-// guardian has standing over the child's records. It is a RECORDED
-// relationship, never "the adults" — which is exactly the distinction
-// handlers_portal_commitments.go declined to invent for itself.
-func (s *Server) agendaMaySee(st upkeep.Standing, asker who, subject string) bool {
-	if visibleTo(st, asker) {
-		return true
-	}
-	return s.isGuardianOf(asker.member, subject)
-}
-
-// isGuardianOf reports whether this member is the recorded guardian of
-// that person.
-func (s *Server) isGuardianOf(guardian, child string) bool {
-	if guardian == "" || child == "" || guardian == child {
-		return false
-	}
-	members, err := s.DB.ListButlerMembers()
-	if err != nil {
-		return false
-	}
-	for _, m := range members {
-		if m.Member != child {
-			continue
-		}
-		// Only a child record confers it. An ordinary Member's records
-		// are their own however the column is filled in.
-		return m.Profile == runtimedb.ProfileChild &&
-			strings.TrimPrefix(m.Guardian, "household/") == guardian
-	}
-	return false
-}
-
 // agendaNotices adds the subject's own unread notices.
 //
 // Only their own, and only when the reader is entitled to them: a
 // notice is addressed to a person, and the selector is not a way to
 // read somebody else's post. A guardian may, for a child — the same
 // standing A9 gives over their other records.
-func (s *Server) agendaNotices(who, reader string, today time.Time, loc *time.Location, byDay map[string][]agendaItem) {
-	if who != reader && !s.isGuardianOf(reader, who) {
+func (s *Server) agendaNotices(subject string, reader who, today time.Time, loc *time.Location, byDay map[string][]agendaItem) {
+	// The parameter is `subject` and not `who`, because `who` is the
+	// type this file's authorization is expressed in and shadowing it
+	// here is how the guardian check got written against a string.
+	if subject != reader.member && !reader.guards(subject) {
 		return
 	}
 	notices, err := s.DB.ListNotices(maxNotifications, runtimedb.NoticeFilter{
-		Recipient: who, Deliverable: true, Unacknowledged: true,
+		Recipient: subject, Deliverable: true, Unacknowledged: true,
 	})
 	if err != nil {
 		s.Log.Info("agenda notices unavailable", "err", err)

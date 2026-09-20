@@ -145,6 +145,7 @@ function AppearancePanel({ canImport }: { canImport: boolean }) {
                 setAdding(false);
                 void load();
               }}
+              onRefresh={() => void load()}
               onCancel={() => setAdding(false)}
             />
           ) : (
@@ -226,7 +227,20 @@ function ThemeTile({
 // small text file of colours; everything else in one configures
 // programs Wildstone does not run. So the household copies that file
 // in, and nothing is fetched and nothing is executed.
-function ImportForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+function ImportForm({
+  onDone,
+  onRefresh,
+  onCancel,
+}: {
+  onDone: () => void;
+  // Reload the catalogue WITHOUT closing the form. A package whose
+  // palette imported and whose picture did not is a success with a
+  // note, and returning early from onDone left the new theme invisible
+  // until a remount — so the household would retry an upload that had
+  // already worked.
+  onRefresh: () => void;
+  onCancel: () => void;
+}) {
   const [name, setName] = useState("");
   const [colors, setColors] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -284,8 +298,12 @@ function ImportForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => 
     try {
       const out = await api.importThemePackage(file, name.trim() || undefined);
       if (out.pictureProblem) {
-        // Added, with a caveat. Not an error: the palette is the theme.
+        // Added, with a caveat. Not an error: the palette is the theme,
+        // so the catalogue is refreshed and the form stays open to say
+        // what did not come through.
         setNote(out.pictureProblem);
+        setPkg(null);
+        onRefresh();
         return;
       }
       onDone();

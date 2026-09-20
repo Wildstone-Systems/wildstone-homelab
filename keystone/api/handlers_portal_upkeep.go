@@ -121,7 +121,7 @@ func (s *Server) homeUpkeep(_ http.ResponseWriter, r *http.Request, member strin
 		page.Problem = "Can't tell what the house is keeping track of — Wildstone isn't answering."
 		return page, http.StatusOK, nil
 	}
-	w := memberWho(r, member)
+	w := s.who(r, member)
 	standings, err := s.Upkeep.Evaluate()
 	if err != nil {
 		s.Log.Error("home upkeep", "err", err)
@@ -423,7 +423,7 @@ type commitmentHistoryPage struct {
 // first, for a member who may see it.
 func (s *Server) homeCommitmentHistory(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
 	name := r.PathValue("name")
-	w := memberWho(r, member)
+	w := s.who(r, member)
 	st, code, err := s.commitmentFor(name, w)
 	if err != nil {
 		return nil, code, err

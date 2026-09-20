@@ -82,19 +82,19 @@ func TestAGuardianSeesTheirChildsDayAndAStrangerDoesNot(t *testing.T) {
 	h.person("mika", "sandy")
 	h.child("maya", "mika")
 
-	if !h.s.isGuardianOf("mika", "maya") {
+	if !h.s.who(nil, "mika").guards("maya") {
 		t.Error("the recorded guardian has no standing over the child")
 	}
-	if h.s.isGuardianOf("sandy", "maya") {
+	if h.s.who(nil, "sandy").guards("maya") {
 		t.Error("an unrelated adult has standing over somebody else's child")
 	}
 	// Asymmetric: the child never reaches the guardian.
-	if h.s.isGuardianOf("maya", "mika") {
+	if h.s.who(nil, "maya").guards("mika") {
 		t.Error("guardianship runs child to guardian; it must only run the other way")
 	}
 	// And it is not "the adults" — an adult is not a guardian of an
 	// adult, whatever the column says.
-	if h.s.isGuardianOf("mika", "sandy") {
+	if h.s.who(nil, "mika").guards("sandy") {
 		t.Error("an adult acquired standing over another adult")
 	}
 }
@@ -593,5 +593,119 @@ func TestCompletingAWeeklyRoutineDoesNotHideIt(t *testing.T) {
 				t.Errorf("the next cycle landed on %s, want about a week out", d.Date)
 			}
 		}
+	}
+}
+
+// A guardian can actually tick off their child's routine.
+//
+// The agenda offered the button and the answer endpoint refused it:
+// Done was computed with guardian standing and /done authorized on
+// mayComplete alone. And because a child cannot sign in, an
+// unnarrowed personal routine of theirs had NOBODY able to complete
+// it — the guarantee A9 makes, unimplemented on the write path.
+func TestAGuardianCanCompleteTheirChildsRoutine(t *testing.T) {
+	h := homeHarness(t)
+	h.s.Upkeep = &upkeep.Engine{DB: h.s.DB, State: h.s.State, Loc: time.UTC}
+	h.person("sandy")
+	h.child("maya", "sandy")
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+
+	body := `{"description":"Make your bed","about":"maya","every":"1d","anchor":"` + yesterday + `",` +
+		`"partOfDay":"morning","rollover":"fromSchedule","scope":"personal"}`
+	res := h.member(http.MethodPost, "/api/v1/home/commitments", "sandy", "homepage_users",
+		stringsNewReader(body), "application/json")
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("adding: %d", res.StatusCode)
+	}
+
+	// Offered...
+	var offered bool
+	for _, d := range h.agenda(t, "sandy", "maya").Days {
+		for _, it := range d.Items {
+			if it.Title == "Make your bed" {
+				offered = it.Done
+			}
+		}
+	}
+	if !offered {
+		t.Fatal("the guardian is not offered the tick")
+	}
+	// ...and accepted. This is the pair that was broken.
+	res = h.member(http.MethodPost, "/api/v1/home/commitments/make-your-bed/done",
+		"sandy", "homepage_users", stringsNewReader(`{}`), "application/json")
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("the guardian's tick was refused: %d — the agenda offers a button the API rejects", res.StatusCode)
+	}
+
+	// An unrelated adult still cannot.
+	h.person("bob")
+	res = h.member(http.MethodPost, "/api/v1/home/commitments/make-your-bed/done",
+		"bob", "homepage_users", stringsNewReader(`{}`), "application/json")
+	res.Body.Close()
+	if res.StatusCode == http.StatusCreated {
+		t.Error("an unrelated adult completed somebody else's child's routine")
+	}
+}
+
+// Edit is offered only where the routine form can put the record back.
+//
+// A commitment that requires a booking holds more than the form sends,
+// and homeEditCommitment rewrites those fields from its input — so a
+// dentist appointment offered the same Edit button would become a
+// daily routine the moment somebody corrected its title.
+func TestEditIsNotOfferedWhereItWouldLoseFields(t *testing.T) {
+	h := homeHarness(t)
+	h.s.Upkeep = &upkeep.Engine{DB: h.s.DB, State: h.s.State, Loc: time.UTC}
+	h.person("sandy")
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+
+	routine := `{"description":"Make bed","about":"sandy","every":"1d","anchor":"` + yesterday + `",` +
+		`"rollover":"fromSchedule","scope":"personal"}`
+	res := h.member(http.MethodPost, "/api/v1/home/commitments", "sandy", "homepage_users",
+		stringsNewReader(routine), "application/json")
+	res.Body.Close()
+
+	appointment := `{"description":"Dentist","about":"sandy","every":"1d","anchor":"` + yesterday + `",` +
+		`"rollover":"fromSchedule","scope":"personal","requiresBooking":true}`
+	res = h.member(http.MethodPost, "/api/v1/home/commitments", "sandy", "homepage_users",
+		stringsNewReader(appointment), "application/json")
+	res.Body.Close()
+
+	for _, d := range h.agenda(t, "sandy", "sandy").Days {
+		for _, it := range d.Items {
+			switch it.Title {
+			case "Make bed":
+				if !it.Editable {
+					t.Error("a plain routine is not editable, so the form is offered nowhere")
+				}
+			case "Dentist":
+				if it.Editable {
+					t.Error("a booking commitment is editable by the routine form, which would strip its booking")
+				}
+			}
+		}
+	}
+}
+
+// Day labels survive a clock change. The local midnights either side of
+// a spring-forward are 23 hours apart, and dividing by 24 made tomorrow
+// "Today".
+func TestDayLabelsSurviveADaylightSavingChange(t *testing.T) {
+	loc, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Skip("no tzdata:", err)
+	}
+	// 2026-03-08 is the US spring-forward.
+	today := time.Date(2026, 3, 7, 0, 0, 0, 0, loc)
+	if got := agendaLabel(today, today); got != "Today" {
+		t.Errorf("today = %q", got)
+	}
+	if got := agendaLabel(today.AddDate(0, 0, 1), today); got != "Tomorrow" {
+		t.Errorf("the day after a 23-hour night = %q, want Tomorrow", got)
+	}
+	if got := agendaLabel(today.AddDate(0, 0, 2), today); got == "Today" || got == "Tomorrow" {
+		t.Errorf("two days out = %q", got)
 	}
 }

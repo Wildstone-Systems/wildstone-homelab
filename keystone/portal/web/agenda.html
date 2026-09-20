@@ -206,7 +206,9 @@
   <section id="body"></section>
 
   <footer class="muted" style="margin-top: var(--space-8); font-size: 12px">
-    Anyone at this screen can see any of these days. A person's own private things are not here.
+    Anyone at this screen can see any of these days — including your own private things when
+    your own day is showing. Somebody else's private things are not here unless you are their
+    guardian.
   </footer>
 </main>
 
@@ -328,10 +330,18 @@
     // way to change a routine was the API, and the only way to remove
     // one was to go and find it on the tracker page.
     if (item.done && item.name && item.kind === "commitment") {
-      var edit = make("button", "hbtn hbtn-ghost tick", "Edit");
-      edit.type = "button";
-      edit.addEventListener("click", function () { openForm(item); });
-      acts.appendChild(edit);
+      // Only what this form can put back. A commitment carrying a
+      // booking requirement, a mayComplete list or notify list holds
+      // more than these four fields, and the PUT rewrites all of them
+      // from what it is sent — so editing a dentist appointment here
+      // would quietly turn it into a daily routine. The server says
+      // which records are safe; those keep the tracker page.
+      if (item.editable) {
+        var edit = make("button", "hbtn hbtn-ghost tick", "Edit");
+        edit.type = "button";
+        edit.addEventListener("click", function () { openForm(item); });
+        acts.appendChild(edit);
+      }
 
       var drop = make("button", "hbtn hbtn-ghost tick", "Remove");
       drop.type = "button";
@@ -396,11 +406,18 @@
 
   function openForm(item) {
     editing = item ? item.name : null;
-    editingWas = item ? { every: item.every || "1d", part: item.partOfDay || "" } : null;
+    // The weekday too, or an edit that only fixed the wording re-read
+    // the selector's untouched default and moved a Thursday routine to
+    // Monday.
+    var dow = item && typeof item.weekday === "number" ? String(item.weekday) : "";
+    editingWas = item
+      ? { every: item.every || "1d", part: item.partOfDay || "", dow: dow }
+      : null;
     paintAddWho();
     el("a-what").value = item ? item.title : "";
     el("a-every").value = (item && item.every) || "1d";
     el("a-part").value = (item && item.partOfDay) || "";
+    if (dow !== "") { el("a-dow").value = dow; }
     everyChanged();
     text("a-problem", "");
     el("a-title").textContent = item ? "Edit routine" : "Add a routine";
@@ -471,9 +488,13 @@
     // re-anchoring a routine whose text was the only thing edited would
     // silently restart its cycle — a chore that was due today quietly
     // becoming due next week because somebody fixed a typo.
+    // COMPARED, not inferred from the selector being on screen. The
+    // weekday picker is visible for every weekly routine, so keying on
+    // its visibility made every save a schedule change and re-anchored
+    // a Thursday routine to whatever the picker happened to read.
     var scheduleChanged = !editing ||
       editingWas.every !== el("a-every").value ||
-      (el("a-every").value === "1w" && !el("a-dow").hidden);
+      (el("a-every").value === "1w" && editingWas.dow !== el("a-dow").value);
     if (scheduleChanged) { payload.anchor = firstDueAnchor(); }
 
     fetch("/api/v1/home/commitments" + (editing ? "/" + encodeURIComponent(editing) : ""), {

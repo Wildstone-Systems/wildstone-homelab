@@ -563,7 +563,7 @@ func mayAuthor(st upkeep.Standing, w who) bool {
 // a personal commitment would publish it to the household.
 func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
 	name := r.PathValue("name")
-	w := memberWho(r, member)
+	w := s.who(r, member)
 	st, code, err := s.commitmentFor(name, w)
 	if err != nil {
 		return nil, code, err
@@ -651,7 +651,7 @@ func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, memb
 // left where they are rather than cascaded away.
 func (s *Server) homeRemoveCommitment(_ http.ResponseWriter, r *http.Request, member string, _ []resource.Resource) (any, int, error) {
 	name := r.PathValue("name")
-	w := memberWho(r, member)
+	w := s.who(r, member)
 	st, code, err := s.commitmentFor(name, w)
 	if err != nil {
 		return nil, code, err
@@ -720,7 +720,7 @@ func (s *Server) homeRemoveMeter(_ http.ResponseWriter, r *http.Request, member 
 	if found == nil {
 		return nil, http.StatusNotFound, fmt.Errorf("no meter named %q", name)
 	}
-	w := memberWho(r, member)
+	w := s.who(r, member)
 	dependants, hidden, err := s.meterDependants(name, w)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
