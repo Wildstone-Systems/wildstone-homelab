@@ -926,4 +926,39 @@ func TestClearLeavesAnUnansweredQuestionOnTheCard(t *testing.T) {
 	if after.Items[0].Source != "lock-up" {
 		t.Errorf("the surviving row is %q, want the unanswered question", after.Items[0].Source)
 	}
+	// And the button is withdrawn, because there is nothing left for it
+	// to do. Clear excludes unanswered questions, so offering it over
+	// one gives a control that reports success and changes nothing —
+	// the broken button this change exists to remove, reappearing one
+	// press later.
+	if after.Clearable != 0 {
+		t.Errorf("Clear is still offered over %d notices it would not clear", after.Clearable)
+	}
+	if after.Unread == 0 {
+		t.Error("the unanswered question stopped counting as unread; it is still waiting")
+	}
+}
+
+// Clearable counts what Clear would touch, which is not the unread
+// count. A member with both has one of each.
+func TestClearableIsNotTheUnreadCount(t *testing.T) {
+	h := homeHarness(t)
+	h.person("sandy")
+	if _, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
+		Kind: "washing-done", Recipient: "sandy", DedupeKey: "plain",
+	}, runtimedb.DefaultButlerSettings(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
+		Kind: "lock-up", Recipient: "sandy", DedupeKey: "asks", Asks: true,
+	}, runtimedb.DefaultButlerSettings(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got := h.summary(t, "sandy").Notifications
+	if got.Unread != 2 {
+		t.Errorf("unread = %d, want both", got.Unread)
+	}
+	if got.Clearable != 1 {
+		t.Errorf("clearable = %d, want only the one Clear would acknowledge", got.Clearable)
+	}
 }

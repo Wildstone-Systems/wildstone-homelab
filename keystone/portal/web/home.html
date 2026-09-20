@@ -1237,7 +1237,14 @@
     // empty card.
     el("notif-count").hidden = !c.unread;
     if (c.unread) { text("notif-count", c.unread + " new"); }
-    el("notif-clear").hidden = !c.items.length;
+    // Offered only when there is something it would actually clear. An
+    // unanswered question is unread, is shown, and is deliberately left
+    // alone by Clear — so keying the button on "are there any rows"
+    // meant that clearing everything else left the button sitting over
+    // a question, where every further press returned success, cleared
+    // nothing, and looked exactly like the broken button this whole
+    // change is about.
+    el("notif-clear").hidden = !c.clearable;
     // Re-enabled on the way back in. The click handler disables it to
     // stop a second press mid-flight; nothing re-enabled it on success,
     // so the button went grey and stayed grey.

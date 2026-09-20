@@ -318,6 +318,14 @@ type notificationsCard struct {
 	homeCard
 	Items  []notification `json:"items"`
 	Unread int            `json:"unread"`
+	// Clearable is how many of this member's notices Clear would
+	// actually acknowledge. NOT the same number as Unread: an
+	// unanswered question is unread and is deliberately not cleared, so
+	// a member with nothing but questions waiting has something to read
+	// and nothing to clear. The card offers the button on this and not
+	// on Unread, or it offers one that reports success and changes
+	// nothing.
+	Clearable int `json:"clearable"`
 }
 
 // machinesCard is the reassurance at the foot of the page.
@@ -807,8 +815,17 @@ func (s *Server) homeNotifications(member string) notificationsCard {
 		card.Problem = "Can't reach notifications"
 		return card
 	}
+	// What Clear would touch, asked of the store so the button and the
+	// statement behind it cannot disagree (runtimedb.clearableNotices).
+	// A failure here leaves it at zero, which hides the button: better
+	// a control that is missing than one that does nothing.
+	clearable, err := s.DB.CountClearableNoticesFor(member)
+	if err != nil {
+		s.Log.Error("home notifications clearable", "err", err)
+	}
 	card.Available = true
 	card.Unread = unreadCount
+	card.Clearable = clearable
 	var items []notification
 	for _, n := range notices {
 		unread := n.AcknowledgedAt.IsZero()
