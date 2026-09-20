@@ -92,6 +92,7 @@ func main() {
 	resticImage := flag.String("restic-image", defaultResticImage, "digest-pinned restic image every backup run uses")
 	catalogDir := flag.String("catalog-dir", "", "directory of packages this control plane can install (ADR-W021 A3); empty leaves the package/capability endpoints answering 503")
 	consoleDir := flag.String("console-dir", "", "directory of built Console static files to serve beside /api (ADR-W016 A5); empty serves the API only")
+	wallpaperDir := flag.String("wallpaper-dir", "", "directory of the pictures that ship with the themes, one per theme named <slug>.<ext> (ADR-W036); empty means the shipped themes arrive without pictures and only a household's own uploads are drawn")
 	butlerProvider := flag.String("butler-provider", "off", "legacy single-provider Butler: off|anthropic|openai|ollama (ADR-W017 A4). Used ONLY while this deployment has created no Butlers; once one exists, each Butler answers on the model it was assigned (ADR-W031 A2). API keys come ONLY from ANTHROPIC_API_KEY/OPENAI_API_KEY env vars, never a flag")
 	butlerModel := flag.String("butler-model", "", "model name for the legacy single-provider Butler; empty uses the provider's default. A named Butler's model comes from its assigned route, not from here")
 	butlerEndpoint := flag.String("butler-endpoint", "", "base URL for the legacy single-provider Butler (openai-compatible gateways, ollama host); empty uses the provider's default. A named Butler's endpoint comes from its assigned route")
@@ -123,7 +124,7 @@ func main() {
 		Ingress:            splitNonEmpty(*householdIngress),
 		ConsoleEntryWindow: *consoleEntry, ConsoleStepUpWindow: *consoleStepUp,
 	}
-	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, butlerCfg, householdCfg, log); err != nil {
+	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, *wallpaperDir, butlerCfg, householdCfg, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
 		os.Exit(1)
 	}
@@ -225,7 +226,7 @@ func coordinatorHolder(dataDir string) string {
 	return host + ":" + abs
 }
 
-func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir string, butlerCfg butlerConfig, householdCfg householdConfig, log *slog.Logger) error {
+func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir, wallpaperDir string, butlerCfg butlerConfig, householdCfg householdConfig, log *slog.Logger) error {
 	lis, err := net.Listen("tcp", listen)
 	if err != nil {
 		return err
@@ -234,7 +235,7 @@ func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reco
 	if err != nil {
 		return err
 	}
-	return serve(lis, apiLis, joinTokens, hosts, dataDir, ingestEvery, reconcileEvery, managedPrefix, backupEvery, resticImage, consoleDir, catalogDir, butlerCfg, householdCfg, log, os.Stdout)
+	return serve(lis, apiLis, joinTokens, hosts, dataDir, ingestEvery, reconcileEvery, managedPrefix, backupEvery, resticImage, consoleDir, catalogDir, wallpaperDir, butlerCfg, householdCfg, log, os.Stdout)
 }
 
 // householdConfig carries the household automation flags into serve
@@ -543,7 +544,7 @@ func withConsole(apiHandler http.Handler, dir string, uiReachable func(*http.Req
 // serve wires and runs both planes over already-bound listeners —
 // separated from run so the boot integration test can use :0 listeners.
 // bootstrapOut receives the one-time admin token on first start.
-func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir string, butlerCfg butlerConfig, householdCfg householdConfig, log *slog.Logger, bootstrapOut io.Writer) error {
+func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir, wallpaperDir string, butlerCfg butlerConfig, householdCfg householdConfig, log *slog.Logger, bootstrapOut io.Writer) error {
 	// recordNode is bound once the runtime DB is open, a few lines below.
 	// The indirection is safe without synchronisation: the gateway cannot
 	// deliver a node event before gw.Serve, which is the last statement in
@@ -1028,6 +1029,15 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// so a tool an Owner removed does not come back on a restart.
 	if err := apiSrv.BackfillAgentTools(); err != nil {
 		return fmt.Errorf("backfilling agent tools: %w", err)
+	}
+	// The pictures the themes ship with. Counted and logged rather than
+	// assumed: a wrong or unpopulated -wallpaper-dir is otherwise a
+	// silent "the themes have no pictures", which is exactly the
+	// failure this directory exists to end.
+	apiSrv.WallpaperDir = wallpaperDir
+	if wallpaperDir != "" {
+		log.Info("theme wallpapers loaded", "dir", wallpaperDir,
+			"pictures", apiSrv.ShippedWallpaperCount())
 	}
 	apiSrv.ConsoleEntryWindow, apiSrv.ConsoleStepUpWindow = householdCfg.ConsoleEntryWindow, householdCfg.ConsoleStepUpWindow
 	apiSrv.HouseholdLoc = householdLoc

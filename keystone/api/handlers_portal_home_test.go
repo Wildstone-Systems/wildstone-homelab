@@ -453,10 +453,22 @@ func TestTheDesignFilesServeToMembersOnly(t *testing.T) {
 		if len(body) == 0 {
 			t.Errorf("%s served empty", path)
 		}
-		// Cached hard, which is safe for an asset and is not for a page:
-		// an asset's bytes never change under its name.
-		if cc := res.Header.Get("Cache-Control"); !strings.Contains(cc, "immutable") {
-			t.Errorf("%s Cache-Control = %q, want immutable", path, cc)
+		// Cached, but CHECKED. This asserted `immutable` and the
+		// sentence under it was "an asset's bytes never change under
+		// its name" — which is false for exactly these URLs: they
+		// carry no version, and a new Keystone serves new bytes at the
+		// same address. `immutable` told the browser not to ask, so it
+		// never did, and two deployed stylesheet fixes were invisible
+		// to the only person looking at them. See portal.WriteAsset.
+		cc := res.Header.Get("Cache-Control")
+		if strings.Contains(cc, "immutable") {
+			t.Errorf("%s is immutable over an unversioned URL, so a deploy cannot replace it: %q", path, cc)
+		}
+		if !strings.Contains(cc, "must-revalidate") {
+			t.Errorf("%s Cache-Control = %q, want must-revalidate", path, cc)
+		}
+		if res.Header.Get("ETag") == "" {
+			t.Errorf("%s carries no ETag, so every revalidation resends the whole file", path)
 		}
 	}
 
