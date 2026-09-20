@@ -269,6 +269,88 @@ func TestTaskNeverExceedsTheAuthorityOfItsRequest(t *testing.T) {
 	}
 }
 
+// Offboarding re-homes a shared task, and the administrator who was
+// given it can actually work it (ADR-W030 A4).
+//
+// A4 moves operational ownership to an administrator, "preserves
+// original authorship", and PAUSES the work for grant and connection
+// review before it may resume. The first version of this slice compared
+// the caller against the immutable AUTHOR, which made that path a dead
+// end: a transferred task could be reviewed and moved back to running
+// and would then refuse every tool call for ever, because the author it
+// derives from is exactly the person who was offboarded. Found by a
+// review bot on #287.
+//
+// Mutations, both directions: comparing the author again makes the
+// first case fail. Dropping the comparison entirely — letting anybody
+// named on the query carry it on — makes the last case fail.
+func TestATransferredTaskIsItsNewOwnersToCarryOn(t *testing.T) {
+	f := newDerivedFixture(t)
+	auth := &Authority{DB: f.db}
+	auth.PersonAuthority = auth.PersonIsAdmitted()
+
+	// A4 transfers SHARED work only; personal work just pauses. So this
+	// test needs its own shared task rather than the fixture's private
+	// one, which the other tests here depend on staying private.
+	shared, err := f.db.InsertButlerTask(runtimedb.ButlerTask{
+		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
+		Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember,
+		Audience:  runtimedb.ButlerAudienceShared,
+		SessionID: f.session, OriginConnection: fixtureConnection,
+		Objective: "the shared thing", CompletionCriteria: "done",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	query := func(person string) butler.ToolAuthorityQuery {
+		return butler.ToolAuthorityQuery{
+			Caller: butler.CallerPersonFacing, Person: person, Connection: fixtureConnection,
+			AgentClass: runtimedb.AgentClassMember, Tool: "get_household_events",
+			Structural: true, TaskID: shared,
+		}
+	}
+
+	// Ownership moves the only way anything ever moves it: offboarding.
+	// runtimedb/offboarding.go is the sole writer of owner_person_id,
+	// which is what makes comparing the owner as tight as comparing the
+	// author everywhere else.
+	if _, err := f.db.OffboardMember("mika", "root-admin", "sam"); err != nil {
+		t.Fatalf("OffboardMember: %v", err)
+	}
+	task, err := f.db.GetButlerTask(shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Owner != "sam" || task.Author != "mika" {
+		t.Fatalf("offboarding did not re-home the task: owner=%s author=%s",
+			task.Owner, task.Author)
+	}
+
+	// The new owner may carry it on.
+	if d := mustAuthorize(t, auth, query("sam")); !d.Allowed {
+		t.Fatalf("the administrator a task was transferred to was refused it: %q", d.Reason)
+	}
+
+	// The offboarded author may not — their authority is gone, and the
+	// author column is a record of whose request it was, not a key.
+	if mustAuthorize(t, auth, query("mika")).Allowed {
+		t.Fatal("an offboarded author still carried on their transferred task")
+	}
+
+	// And nobody else, which is what keeps this a re-homing rather than
+	// an open door.
+	if err := f.db.RecordButlerMember("kai", runtimedb.RoleMember, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.AdmitButlerMember("kai", "sam"); err != nil {
+		t.Fatal(err)
+	}
+	if mustAuthorize(t, auth, query("kai")).Allowed {
+		t.Fatal("a third party carried on somebody else's transferred task")
+	}
+}
+
 // Derived authority is not a grant object: nothing is issued when a
 // task is created, and nothing is issued by evaluating it (§10.1 —
 // "there is no separate Task grant object to issue, hold or revoke").

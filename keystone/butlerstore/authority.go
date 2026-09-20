@@ -161,17 +161,37 @@ func (a *Authority) withinOriginatingAuthority(q butler.ToolAuthorityQuery) (but
 	if err != nil {
 		return butler.ToolDecision{}, false, err
 	}
-	// The task's own person. Author rather than Owner: offboarding
-	// moves a shared task's owner to the administrator and "preserves
-	// original authorship" (0017), so the owner is who operates it now
-	// and the author is whose request it derives from. §10.1 is about
-	// the request.
-	if task.Author != q.Person {
+	// The task's own person: its CURRENT OWNER, which for every task
+	// but one is the author who asked for it.
+	//
+	// The one exception is the only thing that ever moves ownership:
+	// offboarding (runtimedb/offboarding.go, the sole writer of
+	// owner_person_id). ADR-W030 A4 designs that path deliberately —
+	// operational ownership moves to an administrator, "preserves
+	// original authorship", and the work PAUSES for grant and
+	// connection review before it may resume.
+	//
+	// Comparing the author instead would have made that path a dead
+	// end: a transferred task could be reviewed and moved back to
+	// running, and then refuse every tool call for ever, because the
+	// author it derives from is exactly the person who was offboarded.
+	// Found by a review bot on #287.
+	//
+	// It does not widen anything. A re-homing that pauses the work,
+	// strips its grants and waits for a human is a NEW bounded
+	// authorization, not a Task reaching past the one it had — and the
+	// grant leg in Ledger.derivedAuthority still refuses a transferred
+	// task whose grants were revoked until somebody issues new ones,
+	// which is the review half of A4 enforced rather than assumed.
+	//
+	// The author stays the immutable record of whose request this was;
+	// the schema enforces that half, and the work trace reads from it.
+	if task.Owner != q.Person {
 		return butler.ToolDecision{
 			Allowed: false,
 			Reason: fmt.Sprintf(
-				"%s belongs to work %s asked for, and %s cannot carry it on, so it was not run",
-				q.Tool, task.Author, q.Person),
+				"%s belongs to work that is %s's to carry on, not %s's, so it was not run",
+				q.Tool, task.Owner, q.Person),
 		}, false, nil
 	}
 	if task.OriginConnection != "" && task.OriginConnection != q.Connection {
