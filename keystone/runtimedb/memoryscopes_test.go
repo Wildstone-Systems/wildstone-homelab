@@ -501,3 +501,70 @@ func TestCorrectionReadsScopeAfterConcurrentTransfer(t *testing.T) {
 		t.Fatalf("correction recreated memory under the previous Agent: %+v, %v", got, err)
 	}
 }
+
+func TestPromotionDedupPreservesScopeFallbacks(t *testing.T) {
+	db := butlerFixture(t)
+	newButler(t, db, "health", "kitchen-box")
+	m := scopedFact(t, MemoryScopePersonal, "health", "sam")
+	m.Content = "jasmine preference"
+	source, err := db.RecordMemory(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promoted, err := db.PromotePersonalMemory(source, "sam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(wantRecord, wantHit int64) {
+		t.Helper()
+		records, err := db.RetrieveMemory(MemoryQuery{Reader: "sam", Butler: "health", Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wantRecord == 0 {
+			if len(records) != 0 {
+				t.Errorf("restricted retrieval: %+v", records)
+			}
+		} else if len(records) != 1 || records[0].Seq != wantRecord {
+			t.Errorf("retrieval want %d: %+v", wantRecord, records)
+		}
+		hits, err := db.SearchIndex(IndexQuery{Reader: "sam", Butler: "health", Text: "jasmine", Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wantHit == 0 {
+			if len(hits) != 0 {
+				t.Errorf("restricted search: %+v", hits)
+			}
+		} else if len(hits) != 1 || hits[0].MemorySeq != wantHit {
+			t.Errorf("search want %d: %+v", wantHit, hits)
+		}
+	}
+	// Promotion is indexed even if the original note was not.
+	check(source, promoted)
+	if _, err := db.IndexDocumentInto(IndexDocument{SourceKind: "memory", SourceID: "source-index", MemorySeq: source, Owner: "sam", Audience: ButlerAudiencePrivate, PermissionLabel: "health", Butler: "health", Content: m.Content}); err != nil {
+		t.Fatal(err)
+	}
+	check(source, source)
+	exported, err := db.ExportMemoryFor("sam")
+	if err != nil || len(exported) != 2 {
+		t.Fatalf("export lost provenance: %+v %v", exported, err)
+	}
+	restrict := func(scope string, denied bool) {
+		t.Helper()
+		if err := db.SetAgentMemoryRestriction("health", scope, denied, "mika"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restrict(MemoryScopePersonal, true)
+	check(promoted, promoted)
+	restrict(MemoryScopeHousehold, true)
+	check(0, 0)
+	restrict(MemoryScopePersonal, false)
+	check(source, source)
+	restrict(MemoryScopeHousehold, false)
+	if err := db.ForgetMemory(promoted, "sam"); err != nil {
+		t.Fatal(err)
+	}
+	check(source, source)
+}

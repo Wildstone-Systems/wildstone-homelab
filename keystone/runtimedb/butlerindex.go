@@ -253,6 +253,11 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
 		return nil, err
 	}
 	memScope, memScopeArgs := memoryScopeClause("r", q.Butler, reader)
+	promotion, promotionArgs, err := db.memoryPromotionClause("r", q.Butler, reader, ftsQuery(q.Text))
+	if err != nil {
+		return nil, err
+	}
+
 	query := `SELECT i.seq, i.source_kind, i.source_id, COALESCE(i.memory, 0),
           COALESCE(io.member, 'household'), i.audience,
           i.permission_label, i.content, i.observed_at, i.indexed_at, i.volatile,
@@ -264,13 +269,14 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
    WHERE butler_index_fts MATCH ? AND (
       (i.memory IS NULL AND ` + audClause + scope + `)
       OR (r.seq IS NOT NULL AND r.forgotten_at = '' AND r.superseded_by IS NULL
-          AND ` + memAudience + ` AND ` + inherited + memScope + `))
+          AND ` + memAudience + ` AND ` + inherited + memScope + promotion + `))
    ORDER BY bm25(butler_index_fts) LIMIT ?`
 	args := append([]any{ftsQuery(q.Text)}, audArgs...)
 	args = append(args, scopeArgs...)
 	args = append(args, memArgs...)
 	args = append(args, inheritedArgs...)
 	args = append(args, memScopeArgs...)
+	args = append(args, promotionArgs...)
 	args = append(args, fetch)
 	rows, err := db.sql.Query(query, args...)
 	if err != nil {

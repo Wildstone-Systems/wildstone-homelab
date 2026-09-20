@@ -84,9 +84,20 @@ func (s *Server) assistantMemory(_ http.ResponseWriter, _ *http.Request, member 
 	// newest-first among themselves, under a heading promising the
 	// newest. Everything learned since was missing, and the one thing a
 	// member most wants to correct is what it learned today.
+	// Export retains both records for provenance. The panel keeps the visible
+	// Personal source (and its Forget control) instead of showing its copy too.
+	promotedCopies := map[int64]bool{}
+	for _, m := range records {
+		if m.Eligible() && m.Scope == runtimedb.MemoryScopePersonal && m.PromotedTo != 0 {
+			promotedCopies[m.PromotedTo] = true
+		}
+	}
 	items := make([]memoryItem, 0, maxMemoryShown)
 	for i := len(records) - 1; i >= 0 && len(items) < maxMemoryShown; i-- {
 		m := records[i]
+		if promotedCopies[m.Seq] {
+			continue
+		}
 		// ExportMemoryFor is an EXPORT, and an export deliberately
 		// hands a person their own forgotten records back — they are
 		// theirs to have a copy of (ADR-W030 A3). This panel is not an

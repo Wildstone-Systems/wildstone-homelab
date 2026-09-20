@@ -257,3 +257,31 @@ func suppressMemoryDescendants(tx *sql.Tx, root int64, actor string) error {
 	}
 	return nil
 }
+
+// Prefer the owning Person's source over its identical Household promotion.
+// Only a source visible through this same read path may suppress the copy:
+// Agent restrictions and a missing/nonmatching source index must still allow
+// the approved Household record to be recalled. Apply this before LIMIT.
+func (db *DB) memoryPromotionClause(alias, agent, person, indexedQuery string) (string, []any, error) {
+	audience, args, err := db.visibleAudienceClause("pm.audience", "pm.owner_person_id", person)
+	if err != nil {
+		return "", nil, err
+	}
+	inherited, inheritedArgs, err := db.memoryConstraintClause("pm", person)
+	if err != nil {
+		return "", nil, err
+	}
+	scope, scopeArgs := memoryScopeClause("pm", agent, person)
+	args = append(args, inheritedArgs...)
+	args = append(args, scopeArgs...)
+	clause := fmt.Sprintf(` AND NOT EXISTS (
+ SELECT 1 FROM memory_scope_events pe JOIN butler_memory pm ON pm.seq=pe.source_memory
+ WHERE pe.memory=%s.seq AND pe.kind='promotion' AND pm.scope='personal'
+ AND pm.forgotten_at='' AND pm.superseded_by IS NULL AND `, alias) + audience + " AND " + inherited + scope
+	if indexedQuery != "" {
+		clause += ` AND EXISTS (SELECT 1 FROM butler_index pi WHERE pi.memory=pm.seq
+   AND pi.seq IN (SELECT rowid FROM butler_index_fts WHERE butler_index_fts MATCH ?))`
+		args = append(args, indexedQuery)
+	}
+	return clause + ")", args, nil
+}

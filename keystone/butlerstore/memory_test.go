@@ -338,3 +338,32 @@ func TestAutonomousAgentLocalNoteStaysWithAgentAndPerson(t *testing.T) {
 		}
 	}
 }
+
+func TestPromotedMemoryAppearsOnceInRecallAndContext(t *testing.T) {
+	db := memoryDB(t)
+	if err := db.AdmitButlerMember("tom", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	remember(t, MemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{Kind: runtimedb.MemoryPreference, Content: "Prefers jasmine tea"})
+	records, err := db.RetrieveMemory(runtimedb.MemoryQuery{Reader: "tom", Butler: "alfred"})
+	if err != nil || len(records) != 1 {
+		t.Fatalf("source: %+v %v", records, err)
+	}
+	if _, err := db.PromotePersonalMemory(records[0].Seq, "tom"); err != nil {
+		t.Fatal(err)
+	}
+	for _, person := range []string{"tom", "sam"} {
+		seams := MemorySeams(db, "nutrition", person, nil)
+		hits, err := seams.Recall(context.Background(), "jasmine", 10)
+		if err != nil || len(hits) != 1 {
+			t.Errorf("%s recall duplicates: %+v %v", person, hits, err)
+		}
+		preamble, err := seams.Preamble(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Count(butler.RenderPreamble(person, preamble), "Prefers jasmine tea"); got != 1 {
+			t.Errorf("%s context contains note %d times", person, got)
+		}
+	}
+}

@@ -732,6 +732,12 @@ func (db *DB) RetrieveMemory(q MemoryQuery) ([]MemoryRecord, error) {
 		where += clause
 		args = append(args, scopeArgs...)
 	}
+	promotion, promotionArgs, err := db.memoryPromotionClause("r", q.Butler, reader, "")
+	if err != nil {
+		return nil, err
+	}
+	where += promotion
+	args = append(args, promotionArgs...)
 	if q.Subject != "" {
 		where += " AND r.subject = ?"
 		args = append(args, q.Subject)

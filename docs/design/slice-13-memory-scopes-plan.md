@@ -35,7 +35,7 @@ Retroactive mapping: Butler-stamped inference/procedure records remain Agent-loc
 
 Remember defaults to Personal and may explicitly narrow to Agent-local. The model cannot choose the owner, audience, holding Agent, or Household scope. No autonomous tool can approve promotion.
 
-Dashboard promotion creates a new Household record, a derivation link and an authenticated Person approval receipt. The original remains Personal. Approval releases only that Person's own private constraint, retaining group restrictions. Replays are refused. Forgetting the source invalidates the approved copy and its search chunks. Eligible household-wide sharing also enters the existing digest.
+Dashboard promotion creates a new Household record, a derivation link and an authenticated Person approval receipt. The original remains Personal. Retrieval and the dashboard prefer the visible Personal source over its identical promoted copy, preserving the owner's Forget control. Recall falls back to the Household copy when the source is restricted or has no matching index entry. SQL deduplication precedes result limits; exports retain both records for provenance. Approval releases only that Person's own private constraint, retaining group restrictions. Replays are refused. Forgetting the source invalidates the approved copy and its search chunks. Eligible household-wide sharing also enters the existing digest.
 
 Correction reads and writes within one transaction so a concurrent transfer cannot recreate memory under the previous holding Agent.
 

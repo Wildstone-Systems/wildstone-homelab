@@ -227,3 +227,31 @@ func TestForgottenAndCorrectedMemoryLeavesThePanel(t *testing.T) {
 		t.Error("the correction that replaced a record is not shown")
 	}
 }
+
+func TestDashboardPromotionAppearsOnceAfterRefresh(t *testing.T) {
+	h := homeHarness(t)
+	h.person("sandy", "maya")
+	source := remember(t, h, "sandy", "Sandy likes jasmine", runtimedb.ButlerAudiencePrivate)
+	promoted, err := h.s.DB.PromotePersonalMemory(source, "sandy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		person string
+		seq    int64
+		mine   bool
+	}{{"sandy", source, true}, {"maya", promoted, false}} {
+		res := h.member(http.MethodGet, "/api/v1/assistant/memory", tc.person, "assistant_users", nil, "")
+		var got struct {
+			Items []memoryItem `json:"items"`
+		}
+		err := json.NewDecoder(res.Body).Decode(&got)
+		res.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Items) != 1 || got.Items[0].Seq != tc.seq || got.Items[0].Mine != tc.mine {
+			t.Errorf("%s refreshed panel: %+v", tc.person, got.Items)
+		}
+	}
+}
