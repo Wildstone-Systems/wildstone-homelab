@@ -399,9 +399,10 @@ func TestTaskNeverExceedsTheAuthorityOfItsRequest(t *testing.T) {
 		t.Fatalf("the refusal does not name whose work it is: %q", d.Reason)
 	}
 
-	// Nor the same person arriving somewhere else. This is the leg
-	// §10.1 names and #212 will give semantics to; what it means TODAY
-	// is that the Connection cannot change underneath the work.
+	// Nor the same person arriving somewhere else. The leg §10.1
+	// names: the Connection cannot change underneath the work, and
+	// since #212 it must also still ADMIT the person whose work it is
+	// — see TestABoundaryRefusesWorkItsConnectionNoLongerAdmits.
 	if mustAuthorize(t, auth, query("mika", "console")).Allowed {
 		t.Fatal("a task was carried on over a connection it never arrived through")
 	}

@@ -93,8 +93,13 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 		sc.SetAuthorizer(WithConnection(authority, t.Connection.Permits))
 		sc.SetSessionTask(task.ID)
 		// A turn is somebody asking. The Connection identifier is
-		// carried and an absent one refuses (§10.1); what a Connection
-		// ADMITS is slice 11's to define.
+		// carried and an absent one refuses (§10.1). What a Connection
+		// ADMITS is slice 11's, and is now decided: migration 0063
+		// records the policy and Connection.Admits evaluates it, on
+		// the way in and again at every boundary. What it may DISCLOSE
+		// — group destinations, memory reaching a room, cross-
+		// Connection fallback — is slice 11's second half and is not
+		// wired here yet.
 		sc.SetCaller(butler.CallerPersonFacing, t.Member, t.Connection.Name)
 	} else {
 		// A surface that cannot be scoped must not be served as a

@@ -179,7 +179,7 @@ func (l *Ledger) derivedAuthority(task runtimedb.ButlerTask) error {
 		// let a re-added bot resurrect the authority of work whose
 		// Connection was withdrawn. Found by a review bot on #287.
 		if err := l.ConnectionActive(OriginConnection{
-			Name: task.OriginConnection, Ref: task.OriginConnectionRef,
+			Name: task.OriginConnection, Ref: task.OriginConnectionRef, Owner: task.Owner,
 		}); err != nil {
 			return fmt.Errorf("%w: %v", ErrAuthorityWithdrawn, err)
 		}
@@ -234,17 +234,41 @@ func (l *Ledger) SessionCheck() func(string) error {
 type OriginConnection struct {
 	Name string
 	Ref  int64
+	// Owner is the Person the task belongs to, because "does this
+	// Connection still admit it" is not a question about the
+	// Connection alone. A bot narrowed to Owners, or a Person demoted
+	// out of the role it admits, both withdraw a task's authority over
+	// a Connection that is otherwise perfectly alive.
+	//
+	// It is the same handle Ledger.OwnerActive is given, and it is
+	// checked here for a different reason: OwnerActive asks whether
+	// this Person is still admitted to the BUTLER, and this asks
+	// whether they are still admitted over this CONNECTION. A Person
+	// can pass one and fail the other, which is the whole of design
+	// §8.3 — the Connection is its own boundary.
+	Owner string
 }
 
 // ConnectionCheck refuses a task whose originating Connection no longer
 // admits it.
 //
-// WHAT IT CHECKS TODAY IS EXISTENCE, AND THAT IS THE WHOLE OF IT. Slice
-// 11 (#212) is what makes a Connection an admission boundary; until it
-// lands there is no rule about what a Connection admits, and inventing
-// one here would be this slice answering a question it was told to
-// leave open (#211: "State this split explicitly in the code, or #212
-// will find a Connection leg that looks finished and is not").
+// IT CHECKS EXISTENCE AND THEN ADMISSION, which is what slice 11
+// (#212) added. Slice 10 left this at existence alone and said so:
+// there was no rule yet about what a Connection admits, so inventing
+// one here would have been answering a question that slice was told to
+// leave open. Migration 0063 is that rule, and Connection.Admits is
+// where it is evaluated — the same function the message path and the
+// claim path call, so a task re-checked at a boundary is held to the
+// policy a new message would be held to.
+//
+// WHY ADMISSION BELONGS AT THE BOUNDARY AND NOT ONLY AT THE DOOR.
+// §10.1: a Task "is re-evaluated at every authorization boundary... If
+// the Person, session, Connection or grant behind it later loses
+// authority, the Task loses it too at its next boundary." A task
+// admitted an hour ago over a bot that has since been narrowed to
+// Owners, by a Person who has since been demoted, is exactly the case
+// a door-only check cannot see: nothing about the task changed, and
+// everything about its admission did.
 //
 // The built-in surfaces are not rows and cannot be withdrawn: the
 // Console and the household dashboard are Connections a deployment HAS
@@ -273,11 +297,35 @@ func (l *Ledger) ConnectionCheck() func(OriginConnection) error {
 		// indistinguishable from a revocation. The test passed anyway
 		// because it asserted on the substring "connection", which both
 		// messages happen to contain.
-		if _, err := l.db.ChatConnectionBySeq(c.Ref); err != nil {
+		conn, err := l.db.ChatConnectionBySeq(c.Ref)
+		if err != nil {
 			if errors.Is(err, runtimedb.ErrNoConnection) {
 				return fmt.Errorf("the %s connection it arrived over is gone", c.Name)
 			}
 			return err
+		}
+		// Whose work this is. Without a Person there is no admission
+		// question to ask, and §10.1 answers a missing leg with no
+		// rather than with "not applicable" — a task recorded with no
+		// owner cannot be shown to be admitted anywhere.
+		if c.Owner == "" {
+			return fmt.Errorf(
+				"nothing records who it belongs to, so %s cannot be shown to admit it", c.Name)
+		}
+		m, err := l.db.GetButlerMember(c.Owner)
+		if err != nil {
+			if errors.Is(err, runtimedb.ErrNotFound) {
+				return fmt.Errorf(
+					"%s is not a person on record, so %s cannot be shown to admit them",
+					c.Owner, c.Name)
+			}
+			return err
+		}
+		// The ROLE AS IT STANDS NOW. Reading it fresh is the point:
+		// the whole value of a boundary check is that it sees a
+		// demotion that happened after the task was admitted.
+		if ok, reason := conn.Admits(m.Role); !ok {
+			return fmt.Errorf("%s no longer admits it: %s", c.Name, reason)
 		}
 		return nil
 	}

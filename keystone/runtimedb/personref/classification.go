@@ -109,7 +109,9 @@
 //     operator token's own preferences are the machine axis leaking
 //     into a person concept, but nothing in W033 says preferences
 //     cannot be held per credential. Left to the Connections slice
-//     (#212), which owns delivery.
+//     (#212), which owns delivery — still open after that slice's
+//     admission half, which settled who may address an Agent and not
+//     where a notice is sent.
 //   - integration_secrets.member — §12.2 keeps the household secret
 //     store separate from the infrastructure one, and this column is in
 //     the second. Left to the secrets slice (#216).
@@ -385,6 +387,14 @@ var Columns = []Column{
 		"the Person invited to a chat Connection (ADR-W033 B7.1)"},
 	{"connection_invites", "invited_by", Actor,
 		"the Owner who made the Connection, as actingMember records them"},
+	{"connection_admission", "set_by", Actor,
+		"who wrote the Connection's admission policy: an Owner as actingMember " +
+			"records them, or 'migration:0063' for the rows the migration derived " +
+			"from the Agent class"},
+	{"connection_admission", "admits", NotAPerson,
+		"which ROLE a Connection admits ('owners' or 'household'), which names a " +
+			"class of people and never one of them"},
+	{"connection_admission", "set_at", NotAPerson, "a timestamp"},
 	{"theme_backgrounds", "name", NotAPerson, "a theme's name, not a person's"},
 	{"theme_backgrounds", "image", NotAPerson, "the wallpaper's bytes"},
 	{"theme_backgrounds", "media_type", NotAPerson, "an image media type, decided from the bytes"},

@@ -182,12 +182,19 @@ type ToolAuthorityQuery struct {
 	Person string
 	// Connection names the Connection the request arrived through.
 	//
-	// THIS SLICE CARRIES THE IDENTIFIER AND FAILS CLOSED WHEN IT IS
-	// ABSENT. It does not decide what a Connection admits — that is
-	// slice 11 (#212), which is what makes a Connection an admission
-	// boundary in the first place. The split is written down here
-	// because a Connection leg that looks finished and is not is
-	// exactly what #212 must not find.
+	// THE IDENTIFIER IS CARRIED HERE AND AN ABSENT ONE FAILS CLOSED.
+	// What a Connection ADMITS is decided elsewhere, and deliberately
+	// so: slice 10 carried the leg and slice 11 (#212) gave it
+	// meaning, in runtimedb.Connection.Admits against the policy
+	// migration 0063 records. This field stays an identifier — the
+	// seam asks "which Connection", never "what does it allow", so a
+	// policy change lands in one place rather than in every query
+	// built here.
+	//
+	// What a Connection may DISCLOSE is still open: group and
+	// multi-recipient destinations, memory reaching a room, and
+	// cross-Connection delivery fallback are #212's second half and
+	// are not evaluated anywhere yet.
 	Connection string
 	// Resource is what the call reaches for, empty when it reaches for
 	// nothing. A named resource requires a rule for its kind; see

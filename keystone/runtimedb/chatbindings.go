@@ -28,10 +28,15 @@ type ChatBinding struct {
 	ID         int64 `json:"id"`
 	Connection int64 `json:"connection"`
 	// Butler is the Agent this Connection belongs to.
-	Butler      string `json:"butler"`
-	Transport   string `json:"transport"`
-	Account     string `json:"account"`
-	Identity    string `json:"identity"`
+	Butler    string `json:"butler"`
+	Transport string `json:"transport"`
+	Account   string `json:"account"`
+	Identity  string `json:"identity"`
+	// Role is the bound Person's role as it stands NOW, not as it
+	// stood when the binding was made. Admission is re-read on every
+	// message from it, so a demotion takes effect at the next message
+	// rather than at the next re-binding.
+	Role        string `json:"role"`
 	DisplayName string `json:"displayName,omitempty"`
 	// Conversation is where to reach this account when nobody asked — a
 	// rule's question rather than a reply. On Telegram it equals the
@@ -125,12 +130,12 @@ func (db *DB) RedeemChatClaimCode(hash string, at Connection, account, displayNa
 	defer tx.Rollback() //nolint:errcheck // rolled back unless committed
 
 	var connection int64
-	var person, identity, redeemedAt, expiresAt, createdBy string
+	var person, identity, role, redeemedAt, expiresAt, createdBy string
 	err = tx.QueryRow(
-		`SELECT c.connection, c.person_id, m.member, c.redeemed_at, c.expires_at, c.created_by
+		`SELECT c.connection, c.person_id, m.member, m.role, c.redeemed_at, c.expires_at, c.created_by
 		 FROM chat_claim_codes c JOIN butler_members m ON m.person_id = c.person_id
 		 WHERE c.hash = ?`, hash).
-		Scan(&connection, &person, &identity, &redeemedAt, &expiresAt, &createdBy)
+		Scan(&connection, &person, &identity, &role, &redeemedAt, &expiresAt, &createdBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ChatBinding{}, ErrClaimCode
 	}
@@ -194,9 +199,15 @@ func (db *DB) RedeemChatClaimCode(hash string, at Connection, account, displayNa
 	if err != nil {
 		return ChatBinding{}, err
 	}
+	// Role comes from the claim's own joined member row, so a freshly
+	// redeemed binding describes itself exactly as a later read of it
+	// will. A review of #289 spotted this returning "" from
+	// POST /chat/bindings/redeem while a list of the same binding
+	// reported the real role -- the kind of disagreement that teaches
+	// whoever is reading the API that one of the two is lying.
 	return ChatBinding{
 		ID: id, Connection: at.Seq, Butler: at.Butler, Transport: at.Transport,
-		Account: account, Identity: identity, DisplayName: displayName,
+		Account: account, Identity: identity, Role: role, DisplayName: displayName,
 		Conversation: conversation, CreatedAt: created, CreatedBy: createdBy,
 	}, nil
 }
@@ -217,16 +228,44 @@ func (db *DB) RedeemChatClaimCode(hash string, at Connection, account, displayNa
 // message path treats "you may no longer speak here" the same way it
 // treats "you never could" and tells a prober nothing about which.
 func (db *DB) LookupChatBinding(at Connection, account string) (ChatBinding, error) {
+	// The SQL asks only whether a LIVE BINDING FOR AN ACTIVE PERSON
+	// exists. It used to carry admission too, as
+	// `(agent.surface <> 'admin' OR m.role = 'owner')`, and that clause
+	// has moved to Connection.Admits for two reasons.
+	//
+	// It failed open. A surface value that was not exactly 'admin'
+	// satisfied `<> 'admin'` and admitted the household, so an
+	// unreadable ceiling and the widest ceiling gave the same answer.
+	//
+	// And it could not see the Connection's own policy (design §8.1,
+	// §8.3; migration 0063). Admission derived from the Agent cannot
+	// express "this bot admits owners only" about a Member Agent,
+	// which is the configuration §8.1 says every Connection carries.
+	//
+	// The two questions are now answered in the order they are asked:
+	// is there a binding, and does this Connection admit that Person.
 	row := db.sql.QueryRow(
 		bindingColumns+` WHERE b.connection = ? AND b.account = ? AND b.revoked_at = ''
-		   AND m.admitted = 1 AND m.disabled_at = '' AND m.offboarded_at = ''
-		   AND (agent.surface <> 'admin' OR m.role = 'owner')`,
+		   AND m.admitted = 1 AND m.disabled_at = '' AND m.offboarded_at = ''`,
 		at.Seq, account)
 	b, err := scanChatBinding(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ChatBinding{}, ErrNotFound
 	}
-	return b, err
+	if err != nil {
+		return ChatBinding{}, err
+	}
+	// ErrNotAdmitted, not ErrNotFound, and the difference is not
+	// cosmetic: a stranger and a household member their Connection
+	// turns away are both refused before inference, but they are not
+	// the same event. One is somebody nobody introduced; the other is
+	// a person on record who has been demoted, or a bot somebody
+	// narrowed, and reporting it as "no such account" sends whoever
+	// investigates looking for a binding that is sitting right there.
+	if ok, reason := at.Admits(b.Role); !ok {
+		return ChatBinding{}, fmt.Errorf("%w: %s", ErrNotAdmitted, reason)
+	}
+	return b, nil
 }
 
 // ListChatBindings returns bindings newest first. Revoked ones are
@@ -294,7 +333,7 @@ func (db *DB) TouchChatBinding(id int64, conversation string) error {
 // The Connection carries the transport and the Agent, so both are read
 // through it rather than stored beside it.
 const bindingColumns = `SELECT b.id, b.connection, agent.name, conn.transport, b.account, m.member,
-	 b.display_name, b.conversation, b.created_at, b.created_by, b.last_used_at, b.revoked_at
+	 m.role, b.display_name, b.conversation, b.created_at, b.created_by, b.last_used_at, b.revoked_at
 	 FROM chat_bindings b
 	 JOIN butler_members m ON m.person_id = b.person_id
 	 JOIN butler_addresses conn ON conn.seq = b.connection
@@ -304,7 +343,7 @@ func scanChatBinding(r rowScanner) (ChatBinding, error) {
 	var b ChatBinding
 	var created, lastUsed, revoked string
 	if err := r.Scan(&b.ID, &b.Connection, &b.Butler, &b.Transport, &b.Account, &b.Identity,
-		&b.DisplayName, &b.Conversation, &created, &b.CreatedBy, &lastUsed, &revoked); err != nil {
+		&b.Role, &b.DisplayName, &b.Conversation, &created, &b.CreatedBy, &lastUsed, &revoked); err != nil {
 		return ChatBinding{}, err
 	}
 	var err error
