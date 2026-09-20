@@ -76,6 +76,12 @@ jobs:
           # registry to install the packages that shipped with the
           # product. A registry source is additive and comes later.
           tar -czf dist/packages.tar.gz -C packages .
+          # The picture each shipped theme arrives with (wallpapers/).
+          # Architecture-independent like the two above, and a separate
+          # artifact on purpose: migration 0061 refused to put nine
+          # megabytes of art inside the binary, and this is how a theme
+          # gets its picture without reopening that.
+          tar -czf dist/wallpapers.tar.gz -C wallpapers .
           cp scripts/install.sh dist/install.sh
           # Bare names, no ./ prefix: the installer greps checksums.txt
           # for " <artifact>$" and verifies in its own workdir.
