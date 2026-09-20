@@ -742,8 +742,23 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/calendar/events", s.portal(surfaceCalendar, s.calendarPageCreate))
 	mux.Handle("POST /api/v1/calendar/events/update", s.portal(surfaceCalendar, s.calendarPageUpdate))
 	mux.Handle("POST /api/v1/calendar/events/delete", s.portal(surfaceCalendar, s.calendarPageDelete))
+	// The device hand-off, on BOTH surfaces, because both surfaces
+	// offer it and they are not the same group of people. The dashboard
+	// card carries it under homepage_users; the calendar page carries
+	// it permanently and is gated on the calendar capability instead. A
+	// household that installed the calendar and not the dashboard, or a
+	// member in calendar_users and not homepage_users, could open the
+	// page, see a hand-off that quietly fetched a 403, and be offered
+	// nothing at all — on the one page that is supposed to be where the
+	// hand-off always lives.
+	//
+	// Same two handlers behind both: what a member may be told about
+	// adding the calendar does not depend on which door they came
+	// through, only on their being through one.
 	mux.Handle("GET /api/v1/home/calendar/profile.mobileconfig", s.portal(surfaceHome, s.calendarProfile))
 	mux.Handle("GET /api/v1/home/calendar/setup", s.portal(surfaceHome, s.calendarSetupDetails))
+	mux.Handle("GET /api/v1/calendar/profile.mobileconfig", s.portal(surfaceCalendar, s.calendarProfile))
+	mux.Handle("GET /api/v1/calendar/setup", s.portal(surfaceCalendar, s.calendarSetupDetails))
 	mux.Handle("GET /api/v1/home/banner", s.portal(surfaceHome, s.homeBannerImage))
 	mux.Handle("POST /api/v1/home/banner", s.portal(surfaceHome, s.homeBannerSet))
 	mux.Handle("POST /api/v1/home/banner/frame", s.portal(surfaceHome, s.homeBannerFrame))

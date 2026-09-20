@@ -5,7 +5,9 @@ package api
 // claims to know what is on when it does not.
 
 import (
+	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -140,5 +142,78 @@ func TestADavisHouseholdIsNotOfferedAProfile(t *testing.T) {
 	}
 	if card.Problem == "" {
 		t.Error("a davis household was given no explanation")
+	}
+}
+
+// The hand-off answers on the calendar page's own surface.
+//
+// The page is gated on the calendar capability and the dashboard's copy
+// of these routes is gated on homepage_users, which are not the same
+// people. A member in calendar_users and not homepage_users could open
+// the calendar page, watch its permanent hand-off fetch a 403, and be
+// shown nothing — on the one page that is meant to always have it.
+// storedRoute is ourRoute with the node the statefile requires. The
+// shared route helper builds one for tests that pass desired state
+// straight in; these two go through the store.
+func storedRoute() resource.Resource {
+	r := ourRoute
+	r.ApiVersion = "wildstone.dev/v1"
+	r.Metadata.Node = "n1"
+	r.Metadata.Package = "calendar-radicale"
+	return r
+}
+
+func TestTheCalendarSurfaceCarriesTheHandoff(t *testing.T) {
+	h, _ := calendarHarness(t)
+	if err := h.s.State.Put(storedRoute()); err != nil {
+		t.Fatal(err)
+	}
+
+	res := h.member(http.MethodGet, "/api/v1/calendar/setup", "mika", "calendar_users", nil, "")
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("setup on the calendar surface: status %d, want 200", res.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out["server"] == "" || out["server"] == nil {
+		t.Error("the hand-off named no server")
+	}
+
+	// And the profile it points at is a door this member is through.
+	// Naming the dashboard's copy would hand a calendar-only member a
+	// link to a route they are refused at.
+	profile, _ := out["profileURL"].(string)
+	if profile != "/api/v1/calendar/profile.mobileconfig" {
+		t.Errorf("profileURL = %q, want the calendar surface's own", profile)
+	}
+	got := h.member(http.MethodGet, profile, "mika", "calendar_users", nil, "")
+	defer got.Body.Close()
+	if got.StatusCode != http.StatusOK {
+		t.Errorf("the profile it named answers %d to the member it named it to", got.StatusCode)
+	}
+}
+
+// The dashboard's copy still answers, and still names its own profile:
+// the two surfaces are independent doors to the same hand-off.
+func TestTheDashboardHandoffStillNamesItsOwnProfile(t *testing.T) {
+	h := homeHarness(t)
+	h.person("sandy")
+	if err := h.s.State.Put(storedRoute()); err != nil {
+		t.Fatal(err)
+	}
+	res := h.member(http.MethodGet, "/api/v1/home/calendar/setup", "sandy", "homepage_users", nil, "")
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("setup on the home surface: status %d", res.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if profile, _ := out["profileURL"].(string); profile != "/api/v1/home/calendar/profile.mobileconfig" {
+		t.Errorf("profileURL = %q, want the home surface's own", profile)
 	}
 }

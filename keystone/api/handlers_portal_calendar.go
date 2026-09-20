@@ -162,7 +162,7 @@ func (s *Server) calendarProfile(w http.ResponseWriter, _ *http.Request, member 
 // It names no password. The member signs in with the household password
 // they already have, and a surface that told them anything else about it
 // would be a surface teaching the household to expect a second one.
-func (s *Server) calendarSetupDetails(_ http.ResponseWriter, _ *http.Request, member string, desired []resource.Resource) (any, int, error) {
+func (s *Server) calendarSetupDetails(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
 	setup, ok := s.calendarSetupFor(member, desired)
 	if !ok {
 		return nil, http.StatusNotFound, fmt.Errorf("this household has no calendar to add")
@@ -171,7 +171,7 @@ func (s *Server) calendarSetupDetails(_ http.ResponseWriter, _ *http.Request, me
 		"server":       setup.Origin,
 		"username":     member,
 		"ownCalendars": setup.Origin + setup.OwnPrincipal,
-		"profileURL":   "/api/v1/home/calendar/profile.mobileconfig",
+		"profileURL":   profileURLFor(r.URL.Path),
 		"password":     "your household password — the one you sign in here with",
 	}
 	if setup.HouseholdCalendar != "" {
@@ -180,6 +180,21 @@ func (s *Server) calendarSetupDetails(_ http.ResponseWriter, _ *http.Request, me
 			"this address is only needed if a client does not show it"
 	}
 	return out, http.StatusOK, nil
+}
+
+// profileURLFor answers with the profile door on the SAME surface the
+// question arrived through.
+//
+// This used to name the dashboard's copy unconditionally, which made
+// the answer wrong for exactly the caller that needed it most: a member
+// on the calendar page who is not in homepage_users would be handed a
+// link to a route they are refused at. An address a surface gives out
+// has to be one the person it is talking to can actually open.
+func profileURLFor(requestPath string) string {
+	if strings.HasPrefix(requestPath, "/api/v1/calendar/") {
+		return "/api/v1/calendar/profile.mobileconfig"
+	}
+	return "/api/v1/home/calendar/profile.mobileconfig"
 }
 
 // CalendarHandoff is where the household's calendar is and how to add
