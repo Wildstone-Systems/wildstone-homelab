@@ -103,7 +103,7 @@
        herself. This form sends the same typed fields that door has
        always taken; it invents no new path to the Statefile. -->
   <section class="wid" id="addform" hidden style="margin-bottom: var(--space-6)">
-    <h2 style="font-size: 15px">Add a routine</h2>
+    <h2 style="font-size: 15px" id="a-title">Add a routine</h2>
     <div class="addbox">
       <div class="addrow">
         <input class="hinput" id="a-what" type="text" maxlength="200" style="flex: 1; min-width: 14rem"
@@ -233,6 +233,34 @@
       });
       r.appendChild(move);
     }
+    // Edit and remove, for the routine that was wrong or is over. Both
+    // are member-facing doors that already existed; until now the only
+    // way to change a routine was the API, and the only way to remove
+    // one was to go and find it on the tracker page.
+    if (item.done && item.name && item.kind === "commitment") {
+      var edit = make("button", "hbtn hbtn-ghost tick", "Edit");
+      edit.type = "button";
+      edit.addEventListener("click", function () { openForm(item); });
+      r.appendChild(edit);
+
+      var drop = make("button", "hbtn hbtn-ghost tick", "Remove");
+      drop.type = "button";
+      drop.addEventListener("click", function () {
+        if (!window.confirm("Remove \"" + item.title + "\" for good? Ticking it off is the other button.")) {
+          return;
+        }
+        drop.disabled = true;
+        fetch("/api/v1/home/commitments/" + encodeURIComponent(item.name), { method: "DELETE" })
+          .then(function (res) {
+            if (!res.ok) { throw new Error("remove: " + res.status); }
+            load(page.who);
+          }).catch(function () {
+            drop.disabled = false;
+            drop.textContent = "Wouldn't remove";
+          });
+      });
+      r.appendChild(drop);
+    }
     // Ticking off goes through the door the upkeep page already uses,
     // and is offered only where the server said this reader may.
     if (item.done && item.name) {
@@ -268,10 +296,29 @@
     });
   }
 
+  // editing is the same form. A second one would drift from the first
+  // the day somebody adds a field to either.
+  var editing = null;      // the commitment name, or null for a new one
+  var editingWas = null;   // its schedule as loaded, so an edit that does
+                           // not touch the schedule does not re-anchor it
+
+  function openForm(item) {
+    editing = item ? item.name : null;
+    editingWas = item ? { every: item.every || "1d", part: item.partOfDay || "" } : null;
+    paintAddWho();
+    el("a-what").value = item ? item.title : "";
+    el("a-every").value = (item && item.every) || "1d";
+    el("a-part").value = (item && item.partOfDay) || "";
+    everyChanged();
+    text("a-problem", "");
+    el("a-title").textContent = item ? "Edit routine" : "Add a routine";
+    el("a-save").textContent = item ? "Save" : "Add it";
+    el("addform").hidden = false;
+    el("a-what").focus();
+  }
+
   el("addopen").addEventListener("click", function () {
-    var f = el("addform");
-    f.hidden = !f.hidden;
-    if (!f.hidden) { paintAddWho(); el("a-what").focus(); }
+    if (el("addform").hidden) { openForm(null); } else { el("addform").hidden = true; }
   });
   el("a-cancel").addEventListener("click", function () { el("addform").hidden = true; });
 
@@ -319,18 +366,28 @@
     // bins to Saturdays forever. It is the right rollover for "ninety
     // days after the filter was last changed" and the wrong one for
     // anything a week has a fixed place for.
-    fetch("/api/v1/home/commitments", {
-      method: "POST",
+    var payload = {
+      description: what,
+      about: el("a-who").value,
+      every: el("a-every").value,
+      partOfDay: el("a-part").value,
+      rollover: "fromSchedule",
+      scope: "personal"
+    };
+    // THE ANCHOR IS SENT ONLY WHEN THE SCHEDULE CHANGED. The edit
+    // endpoint leaves the existing anchor alone when none is given, and
+    // re-anchoring a routine whose text was the only thing edited would
+    // silently restart its cycle — a chore that was due today quietly
+    // becoming due next week because somebody fixed a typo.
+    var scheduleChanged = !editing ||
+      editingWas.every !== el("a-every").value ||
+      (el("a-every").value === "1w" && !el("a-dow").hidden);
+    if (scheduleChanged) { payload.anchor = firstDueAnchor(); }
+
+    fetch("/api/v1/home/commitments" + (editing ? "/" + encodeURIComponent(editing) : ""), {
+      method: editing ? "PUT" : "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({
-        description: what,
-        about: el("a-who").value,
-        every: el("a-every").value,
-        anchor: firstDueAnchor(),
-        partOfDay: el("a-part").value,
-        rollover: "fromSchedule",
-        scope: "personal"
-      })
+      body: JSON.stringify(payload)
     }).then(function (res) {
       return res.json().then(function (j) { return { ok: res.ok, j: j }; });
     }).then(function (out) {
@@ -338,6 +395,7 @@
       if (!out.ok) { text("a-problem", out.j.error || "That didn't save."); return; }
       el("a-what").value = "";
       el("addform").hidden = true;
+      editing = null;
       load(el("a-who").value);
     }).catch(function () {
       el("a-save").disabled = false;

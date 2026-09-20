@@ -107,7 +107,12 @@ type Standing struct {
 	Scope       string `json:"scope,omitempty"`
 	// PartOfDay is when in the day a routine belongs, empty for the
 	// things that belong nowhere in particular.
-	PartOfDay   string   `json:"partOfDay,omitempty"`
+	PartOfDay string `json:"partOfDay,omitempty"`
+	// Every is the interval of the FIRST due rule — the one a page
+	// renders and the one homeEditCommitment replaces. Carried so an
+	// edit form can open on what the routine says rather than on a
+	// guess the household then has to correct.
+	Every       string   `json:"every,omitempty"`
 	MayComplete []string `json:"mayComplete,omitempty"`
 	Notify      []string `json:"notify,omitempty"`
 	Disabled    bool     `json:"disabled,omitempty"`
@@ -199,6 +204,7 @@ func (e *Engine) standing(res resource.Resource, meters map[string]commitment.Me
 	st := Standing{
 		Name: res.Metadata.Name, Description: spec.Description,
 		Owner: res.Metadata.Owner, Scope: spec.Scope, PartOfDay: spec.PartOfDay,
+		Every:       firstDueEvery(spec),
 		MayComplete: spec.MayComplete, Notify: spec.Notify, Disabled: spec.Disabled,
 		Rollover: spec.Rollover, RequiresBooking: spec.RequiresBooking,
 	}
@@ -441,4 +447,13 @@ func evidence(st Standing, given map[string]float64) (positions map[string]float
 		}
 	}
 	return positions, approx, missing
+}
+
+// firstDueEvery is the interval of the rule a page renders: the first,
+// which is the one homeEditCommitment replaces.
+func firstDueEvery(spec *resource.CommitmentSpec) string {
+	if spec == nil || len(spec.Due) == 0 {
+		return ""
+	}
+	return spec.Due[0].Every
 }

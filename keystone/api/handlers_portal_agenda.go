@@ -91,6 +91,10 @@ type agendaItem struct {
 	// PartOfDay is "morning" | "afternoon" | "evening" for a routine
 	// that belongs somewhere in the day, empty otherwise.
 	PartOfDay string `json:"partOfDay,omitempty"`
+	// Every is the routine's interval ("1d", "1w"), carried so an edit
+	// form can open on what the routine actually says rather than on a
+	// guess the household then has to correct.
+	Every string `json:"every,omitempty"`
 	// Done reports whether this reader may tick it off. A day that
 	// offers a tick it will refuse is worse than one that offers none.
 	Done bool `json:"done,omitempty"`
@@ -323,7 +327,7 @@ func (s *Server) agendaCommitments(who string, asker who, today time.Time, loc *
 		item := agendaItem{
 			Kind: "commitment", Title: st.Description, sortAt: at,
 			Detail: st.Occurrence.Reason, Tone: commitmentTone(st),
-			Name: st.Name, PartOfDay: st.PartOfDay,
+			Name: st.Name, PartOfDay: st.PartOfDay, Every: st.Every,
 			// The same predicate the upkeep page answers with, so a tick
 			// offered here is a tick that will be accepted there.
 			Done:  mayComplete(st, asker) || s.isGuardianOf(asker.member, who),

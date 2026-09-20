@@ -593,6 +593,13 @@ func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, memb
 	spec := *existing.Commitment
 	spec.Description = f.Description
 	spec.Rollover = f.Rollover
+	// Set unconditionally, including to empty. A routine's part of day
+	// is one of the things most likely to be wrong first — "before
+	// school" turns out to be "after dinner" — and a field that can be
+	// set once and never changed is a field that will be worked around
+	// by deleting the routine and making a new one. Empty is a real
+	// answer here ("any time"), so it cannot be "leave it alone".
+	spec.PartOfDay = f.PartOfDay
 	spec.RequiresBooking = f.RequiresBooking
 	spec.MayComplete = f.MayComplete
 	spec.Notify = f.Notify

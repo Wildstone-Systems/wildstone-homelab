@@ -443,3 +443,70 @@ func TestMovingAChoreShiftsOneCycleAndNotTheSchedule(t *testing.T) {
 		}
 	}
 }
+
+// A routine can be corrected and removed from the same surface it was
+// entered on, by the Member who entered it.
+func TestAMemberEditsAndRemovesARoutine(t *testing.T) {
+	h := homeHarness(t)
+	h.s.Upkeep = &upkeep.Engine{DB: h.s.DB, State: h.s.State, Loc: time.UTC}
+	h.person("sandy")
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+
+	add := `{"description":"Make bed","about":"sandy","every":"1d","anchor":"` + yesterday + `",` +
+		`"partOfDay":"morning","rollover":"fromSchedule","scope":"personal"}`
+	res := h.member(http.MethodPost, "/api/v1/home/commitments", "sandy", "homepage_users",
+		stringsNewReader(add), "application/json")
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("adding: %d", res.StatusCode)
+	}
+
+	find := func(title string) (agendaItem, bool) {
+		got := h.agenda(t, "sandy", "sandy")
+		for _, d := range got.Days {
+			for _, it := range d.Items {
+				if it.Title == title {
+					return it, true
+				}
+			}
+		}
+		return agendaItem{}, false
+	}
+
+	it, ok := find("Make bed")
+	if !ok {
+		t.Fatal("the routine is not on the day")
+	}
+	if it.Every != "1d" {
+		t.Errorf("every = %q, want 1d — an edit form cannot open on what it does not know", it.Every)
+	}
+
+	// Correct the wording and move it to the evening. The part of day
+	// has to actually change: PUT never applied it, so an edit form
+	// would have offered a control that silently did nothing.
+	edit := `{"description":"Make your bed","about":"sandy","every":"1d",` +
+		`"partOfDay":"evening","rollover":"fromSchedule","scope":"personal"}`
+	res = h.member(http.MethodPut, "/api/v1/home/commitments/make-bed", "sandy", "homepage_users",
+		stringsNewReader(edit), "application/json")
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("editing: %d", res.StatusCode)
+	}
+	edited, ok := find("Make your bed")
+	if !ok {
+		t.Fatal("the edited routine is gone from the day")
+	}
+	if edited.PartOfDay != "evening" {
+		t.Errorf("partOfDay = %q after editing, want evening", edited.PartOfDay)
+	}
+
+	// And it can be taken away.
+	res = h.member(http.MethodDelete, "/api/v1/home/commitments/make-bed", "sandy", "homepage_users", nil, "")
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusNoContent {
+		t.Fatalf("removing: %d", res.StatusCode)
+	}
+	if _, still := find("Make your bed"); still {
+		t.Error("the routine is still on the day after being removed")
+	}
+}
