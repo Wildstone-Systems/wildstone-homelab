@@ -123,6 +123,50 @@ Recovery actions are audited. This is the break-glass path; no hidden web backdo
 
 ---
 
+## A8. A Person can be scheduled without being able to sign in
+
+A household schedules people who do not have accounts. A six-year-old has swimming on Tuesday, a reading book to finish, and a bag to pack; none of that requires them to authenticate, and most of it will be entered by somebody else.
+
+So being a **subject** of household data and being a **principal** who acts are separate, and this ADR separates them:
+
+- A **subject** is named, scheduled, assigned things, and shown on a screen. It needs a Person record and nothing else.
+- A **principal** signs in, holds credentials, reaches an Agent, and accumulates memory of its own. It needs admission.
+
+A Person may be the first without being the second, and for a child that is the normal case rather than a degraded one.
+
+The record already has this shape. `butler_members` carries `profile` (`NULL` or `child`), a `guardian`, and `admitted`; `RecordButlerMember` requires a guardian for a child and refuses any role but Member; `AdmitButlerMember` refuses to admit a child record by any path, including a direct `INSERT`. An un-admitted child row is therefore already a Person who exists and cannot sign in. What was missing was the statement that this is a **supported, complete state** rather than a half-finished admission, and that household features may rely on it.
+
+**THIS IS NOT THE CHILD SURFACE, AND DOES NOT OPEN IT.** ADR-W030 Part C gates a future Child surface on its own bot credentials, principal and role, endpoint, structurally limited gateway, transport eligibility, and boundary tests, and states that no child deployment is authorized there. Every one of those is a requirement on a child **acting** — talking to an Agent, holding a credential, reaching a gateway. A child who is scheduled does none of them. The gate stands exactly as written, `AdmitButlerMember` keeps refusing, and nothing in this section may be read as evidence for that surface.
+
+What a scheduled-but-unadmitted Person explicitly does not get: a login, a chat binding, an Agent, a session, memory of their own, a Connection, or any cloud routing (ADR-W030's Child cloud-routing clause is untouched).
+
+## A9. A guardian is their child's standing on household records
+
+`child` has required a `guardian` since the record existed, and nothing read it. This section says what it means.
+
+For a Person carrying the `child` profile, their recorded guardian is treated as that child for **visibility and completion** of the child's own household records: the guardian sees the child's personal items and may answer them.
+
+The reason it must be said here and not in the code that needs it: the personal-scope rule is "a personal commitment is the owner's business and nobody else's", and a child's items are owned by the child. Under that rule alone a parent cannot see their six-year-old's reading task, which is the wrong answer in every household that has one. `handlers_portal_commitments.go` reached this exact problem and correctly declined to solve it locally, recording that "W033 A1 makes `child` a Member profile rather than a role, so there is no adults-versus-children vocabulary here to lean on, and inventing one in this file would put it in the wrong place." This is that place.
+
+Three properties this has and a general adult/child split would not:
+
+- **It is a recorded relationship, not an inferred one.** ADR-W030 requires that guardian mappings and child classification be explicit admission records, never inferred from an LDAP group. An adult is not a guardian by being an adult; they are a guardian of a named child or of nobody.
+- **It is asymmetric.** Guardian reaches child. Child never reaches guardian, and the child has no session to reach from in the first place (A8).
+- **It is not a third role.** A1 still holds: two fundamental roles, and `child` is a constrained Member profile. A guardian is an ordinary Member or Owner who happens to be named on somebody's record.
+
+A sole guardian still cannot be removed while the child record is active — ADR-W030 already says so for admission, and it is now also true for these records, because removing them would leave a child's items with nobody able to see or answer them.
+
+## A10. An agenda on a shared screen discloses to the room, and says so
+
+The household's own screens are shared: a wall tablet in a kitchen, a phone handed round. A per-person agenda rendered there is not protected by the person it is about — it is protected by the door the household already came through.
+
+So a per-person agenda is a **household surface with a subject selector**, not a per-person authenticated one. "Whose day is this" chooses what to render; it does not establish who is asking. The portal's existing boundary — everyone through the door is the household — is the boundary the agenda inherits, and A9's guardian rule governs what may be assembled for a subject at all.
+
+This is stated as a decision rather than left to the UI because it is a privacy claim. A household must not be able to conclude from "each person has their own agenda" that the agendas are private from each other on a shared device. Where a member does have their own session, their own agenda is theirs and personal-scope rules apply as they already do; the shared-screen case is the one that needs saying out loud.
+
+The consequence worth accepting deliberately: a personal item belonging to an **adult** must not be assembled into an agenda rendered on a shared screen merely because somebody selected that adult. A9 gives a guardian standing over a child's records; it gives nobody standing over an adult's, and the subject selector is not a way to acquire it.
+
+
 # B. Agents, tools, models, and Connections
 
 ## B1. Agents belong to the household
@@ -722,6 +766,8 @@ The major changes are:
 - **Prior single-model Agent definition:** superseded by a per-Agent ordered model/provider chain.
 - **Prior Agent-pause/routine coupling:** superseded. Household routines survive Agent loss; deterministic steps continue and inference steps block.
 - **ADR-W012 infrastructure secret-store properties:** intentionally retained; Household/user secrets remain a separate store/domain.
+- **ADR-W030 Part C / the Child surface:** **not** superseded, and deliberately not reopened. A8 states that a Person can be a scheduled subject without being admitted; Part C continues to gate a child *acting* — credentials, principal, endpoint, gateway, transport eligibility — and no child deployment is authorized by this ADR either. `AdmitButlerMember` still refuses a child record by every path.
+- **ADR-W030 A2.1 / guardian mappings:** retained and given meaning. The guardian a child record has always required now confers standing over that child's household records (A9), still as an explicit recorded relationship rather than anything inferred from a group.
 
 Detailed finding-by-finding coverage remains in the review/audit documents rather than this ADR.
 
