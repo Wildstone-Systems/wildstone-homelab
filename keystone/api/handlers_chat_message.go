@@ -503,39 +503,56 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 // surface, and those are the authority — a thread pointer that has
 // drifted (a binding revoked and reissued to somebody else on the same
 // chat id) must not hand a stranger the previous person's conversation.
-func (s *Server) chatThread(at runtimedb.Connection, conversation, identity string) *turnContext {
+func (s *Server) chatThread(at runtimedb.Connection, conversation, identity string) (*turnContext, bool) {
 	id, ok, err := s.DB.ChatThreadSession(at, conversation, identity)
 	if err != nil {
 		s.Log.Error("reading chat thread failed", "err", err)
-		return nil
+		return nil, false
 	}
 	if !ok {
-		return nil
+		return nil, false
 	}
 	if err := s.DB.ButlerSessionActive(id); err != nil {
-		return nil
+		return nil, false
+	}
+	// A pointer does not grant disclosure authority: recheck every origin
+	// before loading history, including for legacy sessions without keys.
+	provenance, err := s.DB.SessionConnectionProvenance(id)
+	if err != nil {
+		return nil, true
+	}
+	for i := range provenance {
+		// Legacy runners saved only the Connection name. Resolve that
+		// spelling solely to the exact current Connection, never another
+		// origin or an unclassified Connection.
+		if provenance[i].ConnectionRef == 0 && provenance[i].ConnectionName == at.Name() && !trustedBuiltInConnection(at.Name()) {
+			provenance[i].Connection = &at
+		}
+	}
+	if _, visible := candidateOnConnection(runtimedb.SessionCandidate{SessionID: id, Provenance: provenance}, externalContinuationConnection(at)); !visible {
+		return nil, true
 	}
 	sess, err := s.DB.GetButlerSession(id)
 	if err != nil {
 		// Including ErrNotFound: a pointer to a session that is gone is
 		// a new conversation, not a failure.
-		return nil
+		return nil, false
 	}
 	if sess.ActingFor != identity || sess.Surface != at.Surface ||
 		(sess.Butler != "" && sess.Butler != at.Butler) {
 		s.Log.Warn("chat thread pointed at another principal's session; starting fresh",
 			"session", id, "expected_person", identity, "got_person", sess.ActingFor,
 			"expected_agent", at.Butler, "got_agent", sess.Butler)
-		return nil
+		return nil, false
 	}
 	// Age is measured from the conversation's newest turn, on ANY
 	// surface. Measuring it from the pointer would call a thread dead
 	// that was alive two minutes ago in the Console — the same
 	// conversation, carried on somewhere else.
 	if last := sess.LastTurnAt(); last.IsZero() || time.Since(last) > s.sessionRecencyWindow() {
-		return nil
+		return nil, false
 	}
-	return &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}
+	return &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}, false
 }
 
 // chatReplyBody renders a completed session as the message a person

@@ -106,6 +106,43 @@ func (db *DB) RecentSessionCandidates(identity, agent string, since, after time.
 	return out, nil
 }
 
+// SessionConnectionProvenance reads only the disclosure origins of a pointed
+// session. Legacy sessions may have explicit pointers without canonical keys.
+func (db *DB) SessionConnectionProvenance(sessionID string) ([]SessionConnection, error) {
+	var seq int64
+	if _, err := fmt.Sscanf(sessionID, "bs-%d", &seq); err != nil {
+		return nil, ErrNotFound
+	}
+	rows, err := db.sql.Query(`SELECT DISTINCT connection_ref, connection_name FROM butler_session_connections WHERE session=? AND direction='inbound'`, seq)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sources []SessionConnection
+	for rows.Next() {
+		var source SessionConnection
+		if err := rows.Scan(&source.ConnectionRef, &source.ConnectionName); err != nil {
+			return nil, err
+		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range sources {
+		if sources[i].ConnectionRef > 0 {
+			conn, err := db.ChatConnectionBySeq(sources[i].ConnectionRef)
+			if err == nil {
+				sources[i].Connection = &conn
+			}
+		}
+	}
+	return sources, nil
+}
+
 // NoteButlerSessionConnection appends the Connection on which a completed
 // turn entered or left. It never rewrites prior provenance.
 func (db *DB) NoteButlerSessionConnection(sessionID, direction, name string, ref int64) error {

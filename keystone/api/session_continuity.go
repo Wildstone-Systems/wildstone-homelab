@@ -214,8 +214,10 @@ func (s *Server) offerChatSessions(c chatCommandCtx, candidates []safeSessionCan
 // resolveChatContinuation decides without loading any candidate transcript.
 // Context is fetched only after the candidate set has become exactly one.
 func (s *Server) resolveChatContinuation(c chatCommandCtx) (*turnContext, string, error) {
-	if prior := s.chatThread(c.At, c.Conversation, c.Identity); prior != nil {
+	if prior, protected := s.chatThread(c.At, c.Conversation, c.Identity); prior != nil {
 		return prior, "", nil
+	} else if protected {
+		return nil, trustedSurfaceRedirect, nil
 	}
 	candidates, protected, err := s.chatSessionCandidates(c)
 	if err != nil {

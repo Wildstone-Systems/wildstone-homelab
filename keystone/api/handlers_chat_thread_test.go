@@ -270,11 +270,8 @@ func TestChatThreadsAreNotSharedAcrossSurfaces(t *testing.T) {
 	}
 }
 
-// One conversation, two front doors. A thread carried on in the Console
-// must not be called stale because Telegram has been quiet — they are
-// the same conversation, and idleness is a property of it rather than
-// of the transport that last touched it.
-func TestConsoleActivityKeepsAChatThreadAlive(t *testing.T) {
+// Trusted Console turns must not flow back through an existing external pointer.
+func TestConsoleActivityProtectsAnExistingChatThread(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(answerTurns("from telegram", "from the console", "back on telegram"), runtimedb.ButlerModeFull)
 	h.bindAccount(t, "admin", "mika", "telegram", "12345")
@@ -299,7 +296,7 @@ func TestConsoleActivityKeepsAChatThreadAlive(t *testing.T) {
 		t.Fatalf("console follow-up: status = %d", resp.StatusCode)
 	}
 
-	// Back to Telegram: still the same conversation.
+	// Back to Telegram: redirect before loading the protected history.
 	h.send(runtimedb.RoleValet, map[string]any{
 		"transport": "telegram", "account": "12345", "text": "third, on telegram",
 		"messageId": "m-2",
@@ -307,24 +304,15 @@ func TestConsoleActivityKeepsAChatThreadAlive(t *testing.T) {
 
 	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &sessions)
 	if len(sessions) != 1 {
-		t.Fatalf("sessions = %d, want the conversation to have survived the round trip", len(sessions))
+		t.Fatalf("sessions = %d, want the protected session preserved without starting another", len(sessions))
 	}
 	var full runtimedb.ButlerSession
 	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions/"+sessions[0].ID, nil, &full)
-	if len(full.Turns) != 6 {
-		t.Fatalf("turns = %d, want 6 across both surfaces", len(full.Turns))
+	if len(full.Turns) != 4 {
+		t.Fatalf("turns = %d, want 4 with no external continuation", len(full.Turns))
 	}
-	// And the last Telegram turn was told about the Console one.
-	convos := h.scripted(t).convos
-	last := convos[len(convos)-1]
-	var sawConsole bool
-	for _, m := range last {
-		if m.Text == "second, in the console" {
-			sawConsole = true
-		}
-	}
-	if !sawConsole {
-		t.Fatalf("the telegram follow-up did not replay the console turn: %+v", last)
+	if calls := h.providerCalls(t); calls != 2 {
+		t.Fatalf("model calls = %d, want only initial chat and Console turns", calls)
 	}
 }
 

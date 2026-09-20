@@ -176,6 +176,45 @@ func TestZeroSafeCandidatesWithProtectedOnesFailsClosed(t *testing.T) {
 	}
 }
 
+func TestActiveChatPointerRechecksDisclosureBeforeLoadingHistory(t *testing.T) {
+	for _, origin := range []string{butlerlive.ConsoleConnection, portal.Connection} {
+		t.Run(origin, func(t *testing.T) {
+			h := newHarness(t)
+			h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+			at := h.agentAt(t, "family", "telegram")
+			h.person("sam")
+			h.bindAccount(t, "family", "sam", "telegram", "12345")
+			id := insertCandidateSession(t, h, at, "sam", "external subject")
+			if err := h.s.DB.SetChatThreadSession(at, "12345", "sam", id); err != nil {
+				t.Fatal(err)
+			}
+			ctx := chatCommandCtx{At: at, Identity: "sam", Conversation: "12345"}
+			prior, reply, err := h.s.resolveChatContinuation(ctx)
+			if err != nil || prior == nil || prior.SessionID != id || reply != "" {
+				t.Fatalf("safe active pointer: prior=%+v reply=%q err=%v", prior, reply, err)
+			}
+			if err := h.s.DB.AppendButlerTurnsFrom(id, []runtimedb.ButlerTurn{{Role: runtimedb.ButlerRoleUser, Text: "trusted-only secret"}}, origin, 0); err != nil {
+				t.Fatal(err)
+			}
+			prior, reply, err = h.s.resolveChatContinuation(ctx)
+			if err != nil || prior != nil || reply != trustedSurfaceRedirect {
+				t.Fatalf("protected active pointer: prior=%+v reply=%q err=%v", prior, reply, err)
+			}
+			resp, _ := h.send(runtimedb.RoleConcierge, map[string]any{"transport": "telegram", "account": "12345", "text": "continue", "messageId": "return-to-external"})
+			if resp.StatusCode != http.StatusAccepted {
+				t.Fatalf("status=%d", resp.StatusCode)
+			}
+			if calls := h.providerCalls(t); calls != 0 {
+				t.Fatalf("protected history reached model: %d calls", calls)
+			}
+			sess, err := h.s.DB.GetButlerSession(id)
+			if err != nil || len(sess.Turns) != 3 {
+				t.Fatalf("protected session changed: turns=%d err=%v", len(sess.Turns), err)
+			}
+		})
+	}
+}
+
 func TestTrustedConversationExistenceIsHiddenFromExternalMessaging(t *testing.T) {
 	current := runtimedb.Connection{Seq: 7, Disclosure: runtimedb.Disclosure{
 		Reach: runtimedb.ReachExternal, Encryption: runtimedb.EncryptionTransport,
