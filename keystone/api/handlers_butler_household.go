@@ -271,6 +271,19 @@ func (s *Server) runFamilySession(ctx context.Context, message, member, systemEx
 	if prov == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("no Butler provider configured")
 	}
+	// Before a single word reaches the provider. The named path has
+	// checked this since it existed; the legacy single-provider path
+	// never did, and binding the gateway's authority below does not
+	// cover it — that makes the TOOLS refuse, while a model answer
+	// carrying no tool call completes normally and the message has
+	// already left for the provider (see turnHasAPerson).
+	//
+	// After the configuration check, deliberately, for the reason the
+	// operator path gives: a deployment with no Butler at all has
+	// nothing to say about who is asking.
+	if code, err := s.turnHasAPerson(member); err != nil {
+		return nil, code, err
+	}
 	gateway := host.householdGateway(member)
 	if group {
 		gateway = host.householdGroupGateway(member)
