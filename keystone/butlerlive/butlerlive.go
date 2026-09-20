@@ -446,6 +446,11 @@ func (bs *Butlers) Sole(surface runtimedb.ButlerSurface, member string, asOwner 
 type ConnectionScope struct {
 	// Name is what a refusal cites, e.g. "household_portal".
 	Name string
+	// Ref is the Connection ROW this arrived over, for the legs that
+	// must not be fooled by address reuse (design §10.1; migration
+	// 0062). Zero for the built-in surfaces, which are Connections a
+	// deployment has rather than rows somebody added.
+	Ref int64
 	// Permits answers for one tool. A nil Permits is no ceiling.
 	Permits func(tool string) (bool, string)
 }

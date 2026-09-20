@@ -10,6 +10,9 @@ import (
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
+	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -377,5 +380,34 @@ func TestHouseholdButlerBoundsInput(t *testing.T) {
 		map[string]string{"message": strings.Repeat("a", maxAskBytes+1)}, nil)
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413", resp.StatusCode)
+	}
+}
+
+// The Connection names butlerstore copies are the ones the rest of the
+// deployment uses.
+//
+// butlerstore.BuiltInConnection carries "console" and "household_portal"
+// as string literals rather than importing them: butlerlive imports
+// butlerstore, and portal is an HTTP surface the store has no business
+// knowing. The copies are cheap; a SILENT copy is not — renaming either
+// constant would make every in-flight Console or dashboard task fail
+// its Connection leg at the next boundary, with nothing to say why.
+//
+// This package is where the pin can live, because it is the one that
+// can see all three. An earlier version of butlerstore's comment
+// claimed such a test already existed; it did not. Found by review on
+// #287.
+func TestBuiltInConnectionNamesAgree(t *testing.T) {
+	for _, tc := range []struct{ what, name string }{
+		{"the Console", butlerlive.ConsoleConnection},
+		{"the household dashboard", portal.Connection},
+	} {
+		if !butlerstore.BuiltInConnection(tc.name) {
+			t.Errorf("%s is known as %q, which butlerstore does not recognise as built in — "+
+				"its copy has drifted from the constant it copies", tc.what, tc.name)
+		}
+	}
+	if butlerstore.BuiltInConnection("matrix:!room:example.org") {
+		t.Error("a chat connection was treated as a built-in surface")
 	}
 }
