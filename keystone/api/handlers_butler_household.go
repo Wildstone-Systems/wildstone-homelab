@@ -130,7 +130,20 @@ func (s *Server) getHouseholdButlerStatus(_ *http.Request, id principal.Identity
 		}
 		return butlerStatus{Configured: false, Reason: reason}, http.StatusOK, nil
 	}
-	gw := host.householdGateway(id.Name)
+	// Bound before it is asked, like any other session (design §10.1).
+	// The endpoint's whole job is telling THIS person what they can do
+	// here, so it is person-facing and reports their reach rather than
+	// the registry's — a member restricted from a capability should not
+	// be shown a chat box offering it.
+	//
+	// actingMember rather than id.Name: the person the caller acts for,
+	// not the credential's own name. The ask path below has said so
+	// since #240, where passing the principal's name is what filed
+	// household memory under `root-admin`; this read had quietly kept
+	// the old spelling, which mattered the moment the answer became
+	// per-person.
+	gw := host.householdGateway(actingMember(id))
+	s.bindPersonAuthority(gw, actingMember(id), butlerlive.ConsoleConnection)
 	specs := gw.OfferedSpecs(mode == runtimedb.ButlerModeQAOnly)
 	tools := make([]string, 0, len(specs))
 	for _, t := range specs {

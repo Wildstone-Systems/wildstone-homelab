@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -67,6 +68,95 @@ func TestHouseholdButlerUnconfigured503(t *testing.T) {
 	}
 	if st.Configured || !strings.Contains(st.Reason, "household surface") {
 		t.Fatalf("status = %+v, want an unconfigured household surface with a household reason", st)
+	}
+}
+
+// The status endpoint reports the tools this person can actually use,
+// and a configured deployment reports some.
+//
+// The test above only ever exercised the UNCONFIGURED path, which is
+// why it kept passing when the offered list started going through
+// effective authority and this endpoint — which binds no caller —
+// began returning an empty list for everybody. Found by a review bot
+// on #286.
+//
+// Mutation: dropping the bindPersonAuthority call from
+// getHouseholdButlerStatus makes this fail with an empty list, which is
+// exactly the regression it exists to catch.
+func TestHouseholdStatusReportsTheToolsTheCallerMayUse(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+
+	var st butlerStatus
+	if resp := h.do(runtimedb.RoleOperator, "GET", "/api/v1/household/butler", nil, &st); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status endpoint: %d", resp.StatusCode)
+	}
+	if !st.Configured {
+		t.Fatalf("status = %+v, want a configured household surface", st)
+	}
+	if len(st.Tools) == 0 {
+		t.Fatal("a configured household surface offered an admitted caller no tools at all")
+	}
+	// And what it reports is what the surface actually has, not a
+	// hard-coded list: the core read tool is always registered.
+	var found bool
+	for _, name := range st.Tools {
+		if name == "get_household_events" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("tools = %v, want the household read tool among them", st.Tools)
+	}
+}
+
+// The status endpoint answers for the person the caller ACTS FOR, not
+// for the credential's own name.
+//
+// The ask path has resolved the caller that way since #240, where
+// passing the principal's name is what filed household memory under
+// `root-admin`. This read had quietly kept the old spelling, which did
+// not matter while it reported the registry and matters now that it
+// reports one person's reach: a credential acting for grandma would
+// have been shown the credential's tools and then asked with grandma's.
+// That is the describing/dispatching disagreement this slice exists to
+// remove, one level up.
+//
+// The divergence is made observable by admitting ONLY the person acted
+// for: with the right spelling the list is full, with the credential's
+// own name it is empty.
+//
+// Mutation: using id.Name in getHouseholdButlerStatus makes this fail.
+func TestHouseholdStatusAnswersForThePersonTheCallerActsFor(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+
+	// The credential's own name is on record from the fixture; take it
+	// out of the household so the two spellings cannot agree.
+	if err := h.s.DB.DisableButlerMember("op", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	token := h.console(runtimedb.RoleOperator, "grandma")
+
+	req, err := http.NewRequest("GET", h.srv.URL+"/api/v1/household/butler", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status endpoint: %d", resp.StatusCode)
+	}
+	var st butlerStatus
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Tools) == 0 {
+		t.Fatal("the status answered for the credential rather than the person it acts for")
 	}
 }
 
