@@ -24,7 +24,7 @@ func TestTheCalendarIsVisibleWhereTheModelChooses(t *testing.T) {
 			{Tool: "infra.restart_container", Tier: "high", Usage: "must never be offered"},
 		}}, nil
 	}
-	gw := NewHouseholdGateway("mika", seams)
+	gw := newTestHouseholdGateway("mika", seams)
 
 	var do, events string
 	for _, s := range gw.Specs() {
@@ -67,7 +67,7 @@ func TestTheCalendarIsVisibleWhereTheModelChooses(t *testing.T) {
 func TestNoActionsLeavesTheDescriptionAlone(t *testing.T) {
 	seams, _ := householdSeams(t)
 	seams.Vocabulary = func() (HouseholdVocabulary, error) { return HouseholdVocabulary{}, nil }
-	for _, s := range NewHouseholdGateway("mika", seams).Specs() {
+	for _, s := range newTestHouseholdGateway("mika", seams).Specs() {
 		if s.Name == "do_household_action" && s.Description != householdDoSpec.Description {
 			t.Errorf("with no actions the description changed:\n%s", s.Description)
 		}

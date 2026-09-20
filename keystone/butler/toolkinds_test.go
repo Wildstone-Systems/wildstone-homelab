@@ -35,7 +35,7 @@ func TestEveryToolSchemaNamesEveryKnownKind(t *testing.T) {
 
 	checked := 0
 	for _, readOnly := range []bool{false, true} {
-		for _, spec := range NewToolGateway(nil, nil).OfferedSpecs(readOnly) {
+		for _, spec := range newTestToolGateway(nil, nil).OfferedSpecs(readOnly) {
 			desc, ok := kindPropertyDescription(spec)
 			if !ok {
 				continue

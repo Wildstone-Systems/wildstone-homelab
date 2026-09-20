@@ -17,7 +17,7 @@ func TestSession_ReadFlow_GetHealth(t *testing.T) {
 	agent.setHealth(true, "all services nominal")
 
 	store := newTestStore(t)
-	gw := NewToolGateway(store, &AgentReader{Gateway: h.gw})
+	gw := newTestToolGateway(store, &AgentReader{Gateway: h.gw})
 	gw.DefaultNode = "node-a"
 	sess := &Session{Gateway: gw}
 
@@ -81,7 +81,7 @@ func TestSession_ReadFlow_GetHealth(t *testing.T) {
 
 func TestSession_BoundedLoop_TerminatesAtCap(t *testing.T) {
 	store := newTestStore(t)
-	gw := NewToolGateway(store, nil)
+	gw := newTestToolGateway(store, nil)
 	sess := &Session{Gateway: gw, MaxIterations: 3}
 
 	p := &alwaysToolCallProvider{toolName: "get_system_overview"}

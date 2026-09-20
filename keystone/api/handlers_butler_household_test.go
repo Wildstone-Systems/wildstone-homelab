@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -17,6 +18,13 @@ import (
 // records what reached the domestic action seam.
 func (h *harness) wireHouseholdButler(turns []*provider.ChatResponse, mode runtimedb.ButlerSessionMode) *[]butler.HouseholdActionCall {
 	var dispatched []butler.HouseholdActionCall
+	// The operator credential these tests call with acts for the person
+	// "op", and a person-facing tool call is now refused for anyone
+	// with no Butler admission record (design §10.1). Admitting them
+	// here rather than in each test keeps the REFUSAL tests honest:
+	// without it, "no action was dispatched" would pass because the
+	// caller was unknown rather than because the tool was refused.
+	h.person("op")
 	h.s.ButlerHost = &ButlerHost{
 		Provider: &scriptedProvider{turns: turns},
 		Gateway:  butler.NewToolGateway(h.s.State, nil),
@@ -61,6 +69,164 @@ func TestHouseholdButlerUnconfigured503(t *testing.T) {
 	if st.Configured || !strings.Contains(st.Reason, "household surface") {
 		t.Fatalf("status = %+v, want an unconfigured household surface with a household reason", st)
 	}
+}
+
+// The status endpoint reports the tools this person can actually use,
+// and a configured deployment reports some.
+//
+// The test above only ever exercised the UNCONFIGURED path, which is
+// why it kept passing when the offered list started going through
+// effective authority and this endpoint — which binds no caller —
+// began returning an empty list for everybody. Found by a review bot
+// on #286.
+//
+// Mutation: dropping the bindPersonAuthority call from
+// getHouseholdButlerStatus makes this fail with an empty list, which is
+// exactly the regression it exists to catch.
+func TestHouseholdStatusReportsTheToolsTheCallerMayUse(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+
+	var st butlerStatus
+	if resp := h.do(runtimedb.RoleOperator, "GET", "/api/v1/household/butler", nil, &st); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status endpoint: %d", resp.StatusCode)
+	}
+	if !st.Configured {
+		t.Fatalf("status = %+v, want a configured household surface", st)
+	}
+	if len(st.Tools) == 0 {
+		t.Fatal("a configured household surface offered an admitted caller no tools at all")
+	}
+	// And what it reports is what the surface actually has, not a
+	// hard-coded list: the core read tool is always registered.
+	var found bool
+	for _, name := range st.Tools {
+		if name == "get_household_events" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("tools = %v, want the household read tool among them", st.Tools)
+	}
+}
+
+// The status endpoint answers for the person the caller ACTS FOR, not
+// for the credential's own name.
+//
+// The ask path has resolved the caller that way since #240, where
+// passing the principal's name is what filed household memory under
+// `root-admin`. This read had quietly kept the old spelling, which did
+// not matter while it reported the registry and matters now that it
+// reports one person's reach: a credential acting for grandma would
+// have been shown the credential's tools and then asked with grandma's.
+// That is the describing/dispatching disagreement this slice exists to
+// remove, one level up.
+//
+// The divergence is made observable by admitting ONLY the person acted
+// for: with the right spelling the list is full, with the credential's
+// own name it is empty.
+//
+// Mutation: using id.Name in getHouseholdButlerStatus makes this fail.
+func TestHouseholdStatusAnswersForThePersonTheCallerActsFor(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+
+	// The credential's own name is on record from the fixture; take it
+	// out of the household so the two spellings cannot agree.
+	if err := h.s.DB.DisableButlerMember("op", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	token := h.console(runtimedb.RoleOperator, "grandma")
+
+	req, err := http.NewRequest("GET", h.srv.URL+"/api/v1/household/butler", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status endpoint: %d", resp.StatusCode)
+	}
+	var st butlerStatus
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Tools) == 0 {
+		t.Fatal("the status answered for the credential rather than the person it acts for")
+	}
+}
+
+// A person who is no longer admitted cannot have work done for them,
+// and is refused BEFORE their message reaches the provider.
+//
+// turnHasAPerson only ever checked that a row existed, which is true of
+// somebody disabled and of somebody offboarded. Binding the gateway's
+// authority is not enough on its own: that makes the tools refuse,
+// while a model answer carrying no tool call completes perfectly
+// happily — and by then the message has been sent, which on a cloud
+// route means a revoked person's words left the house. Found by a
+// review bot on #286.
+//
+// Mutations: dropping the Active() check from turnHasAPerson makes both
+// halves fail, and so does removing the call from runFamilySession —
+// the legacy path never had one.
+func TestARevokedPersonsMessageNeverReachesTheProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		disable func(h *harness)
+	}{
+		{"disabled", func(h *harness) {
+			if err := h.s.DB.DisableButlerMember("op", "root-admin"); err != nil {
+				h.t.Fatal(err)
+			}
+		}},
+		{"offboarded", func(h *harness) {
+			if _, err := h.s.DB.OffboardMember("op", "root-admin", "root-admin"); err != nil {
+				h.t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			// A provider that fails the test if it is ever called: the
+			// point is that nothing is sent, not that the answer is
+			// discarded afterwards.
+			called := false
+			h.wireHouseholdButler([]*provider.ChatResponse{{Text: "should never run"}},
+				runtimedb.ButlerModeFull)
+			h.s.ButlerHost.Provider = &callRecordingProvider{
+				inner:  h.s.ButlerHost.Provider,
+				called: &called,
+			}
+			tc.disable(h)
+
+			resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/household/butler/ask",
+				map[string]string{"message": "anything at all"}, nil)
+			if resp.StatusCode == http.StatusOK {
+				t.Fatalf("a revoked person's turn was answered: %d", resp.StatusCode)
+			}
+			if called {
+				t.Fatal("a revoked person's message was sent to the provider")
+			}
+		})
+	}
+}
+
+// callRecordingProvider records whether the provider was reached at all.
+type callRecordingProvider struct {
+	inner  provider.Provider
+	called *bool
+}
+
+func (p *callRecordingProvider) Name() string { return p.inner.Name() }
+
+func (p *callRecordingProvider) Chat(ctx context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+	*p.called = true
+	return p.inner.Chat(ctx, req)
 }
 
 // The family surface answers from the household timeline, records a

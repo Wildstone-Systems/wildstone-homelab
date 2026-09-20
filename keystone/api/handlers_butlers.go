@@ -139,13 +139,14 @@ func (s *Server) availableToolDetails(class string, readOnly bool) []butler.Capa
 	var manifest butler.CapabilityManifest
 	switch class {
 	case runtimedb.AgentClassMember:
-		manifest = butler.NewHouseholdGateway("", s.ButlerHost.householdSeams()).Capabilities(readOnly)
+		manifest = butler.NewHouseholdGateway("", s.ButlerHost.householdSeams()).
+			ForAdministration().Capabilities(readOnly)
 	case runtimedb.AgentClassOwner:
 		_, live, _, _, _ := s.ButlerHost.Current()
 		if live == nil {
 			live = butler.NewToolGateway(nil, nil)
 		}
-		manifest = live.Scoped(nil).Capabilities(readOnly)
+		manifest = live.Scoped(nil).ForAdministration().Capabilities(readOnly)
 	default:
 		return nil
 	}
@@ -832,7 +833,7 @@ func (s *Server) butlerTools(r *http.Request, _ principal.Identity) (any, int, e
 	var manifest butler.CapabilityManifest
 	switch b.AgentClass {
 	case runtimedb.AgentClassMember:
-		gw := butler.NewHouseholdGateway("", s.ButlerHost.householdSeams())
+		gw := butler.NewHouseholdGateway("", s.ButlerHost.householdSeams()).ForAdministration()
 		gw.SetAuthorizer(authority)
 		manifest = gw.Capabilities(readOnly)
 	case runtimedb.AgentClassOwner:
@@ -844,7 +845,7 @@ func (s *Server) butlerTools(r *http.Request, _ principal.Identity) (any, int, e
 		if live == nil {
 			live = butler.NewToolGateway(nil, nil)
 		}
-		manifest = live.Scoped(authority).Capabilities(readOnly)
+		manifest = live.Scoped(authority).ForAdministration().Capabilities(readOnly)
 	default:
 		return nil, http.StatusBadRequest, fmt.Errorf(
 			"%s is a %s agent, which has no tool surface", b.Name, b.AgentClass)

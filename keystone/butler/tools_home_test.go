@@ -72,7 +72,7 @@ func homeCall(t *testing.T, gw *HouseholdGateway, name string, input map[string]
 // The four readings answer, and each says the thing the card says
 // rather than a shape a model has to interpret.
 func TestTheHomePageReadingsAnswerInChat(t *testing.T) {
-	gw := NewHouseholdGateway("mika", homeSeams(t))
+	gw := newTestHouseholdGateway("mika", homeSeams(t))
 
 	upkeep := homeCall(t, gw, "get_upkeep", nil)
 	for _, want := range []string{"truck-oil", "overdue", "5,400 miles", "household/mika", "can't tell"} {
@@ -98,7 +98,7 @@ func TestTheHomePageReadingsAnswerInChat(t *testing.T) {
 // inferred, because a household sent looking for a problem that does
 // not exist has been told the wrong thing by a card that was right.
 func TestActivityKeepsRefusalsApartFromFailures(t *testing.T) {
-	gw := NewHouseholdGateway("mika", homeSeams(t))
+	gw := newTestHouseholdGateway("mika", homeSeams(t))
 	out := homeCall(t, gw, "get_activity", nil)
 	if !strings.Contains(out.Content, "[failed]") || !strings.Contains(out.Content, "[refused]") {
 		t.Fatalf("get_activity flattens tone: %s", out.Content)
@@ -115,7 +115,7 @@ func TestAnUnreadableNumberIsNotZero(t *testing.T) {
 	seams.Machines = func(context.Context) ([]MachineReading, error) {
 		return []MachineReading{{Name: "The machine", Connected: true, CPU: 40, CPUKnown: true}}, nil
 	}
-	gw := NewHouseholdGateway("mika", seams)
+	gw := newTestHouseholdGateway("mika", seams)
 	out := homeCall(t, gw, "get_machine_stats", nil)
 	if !strings.Contains(out.Content, "memory can't read") || !strings.Contains(out.Content, "disk can't read") {
 		t.Fatalf("a missing reading was not reported as missing: %s", out.Content)
@@ -137,7 +137,7 @@ func TestNotificationsAreTheSessionsMemberAndNobodyElses(t *testing.T) {
 		return NotificationDigest{Unread: 1, Lines: []NotificationLine{{Title: "Backup finished"}}}, nil
 	}
 
-	gw := NewHouseholdGateway("mika", seams)
+	gw := newTestHouseholdGateway("mika", seams)
 	out := homeCall(t, gw, "get_notifications", map[string]any{"member": "sam", "recipient": "sam"})
 	if len(asked) != 1 || asked[0] != "mika" {
 		t.Fatalf("the lookup was made for %v, not for the session's member", asked)
@@ -146,7 +146,7 @@ func TestNotificationsAreTheSessionsMemberAndNobodyElses(t *testing.T) {
 		t.Errorf("the answer does not say whose it is: %s", out.Content)
 	}
 
-	unbound := NewHouseholdGateway("", seams)
+	unbound := newTestHouseholdGateway("", seams)
 	got := homeCall(t, unbound, "get_notifications", nil)
 	if !got.Rejected {
 		t.Fatalf("an unbound session read notifications: %s", got.Content)
@@ -157,7 +157,7 @@ func TestNotificationsAreTheSessionsMemberAndNobodyElses(t *testing.T) {
 // digest that said "2 unread" because two of the lines it happened to
 // read were unread is wrong in exactly the household with a backlog.
 func TestNotificationCountsAreNotDerivedFromTheLines(t *testing.T) {
-	gw := NewHouseholdGateway("mika", homeSeams(t))
+	gw := newTestHouseholdGateway("mika", homeSeams(t))
 	out := homeCall(t, gw, "get_notifications", nil)
 	if !strings.Contains(out.Content, "9 unread") || !strings.Contains(out.Content, "2 waiting") {
 		t.Fatalf("the counts were not carried through: %s", out.Content)
@@ -168,7 +168,7 @@ func TestNotificationCountsAreNotDerivedFromTheLines(t *testing.T) {
 // advertising a reading the Butler cannot take.
 func TestUnwiredHomeReadingsAreWithheld(t *testing.T) {
 	bare, _ := householdSeams(t)
-	gw := NewHouseholdGateway("mika", bare)
+	gw := newTestHouseholdGateway("mika", bare)
 	offered := map[string]bool{}
 	for _, spec := range gw.Specs() {
 		offered[spec.Name] = true
@@ -179,7 +179,7 @@ func TestUnwiredHomeReadingsAreWithheld(t *testing.T) {
 		}
 	}
 
-	wired := NewHouseholdGateway("mika", homeSeams(t))
+	wired := newTestHouseholdGateway("mika", homeSeams(t))
 	offered = map[string]bool{}
 	for _, spec := range wired.Specs() {
 		offered[spec.Name] = true
@@ -195,7 +195,7 @@ func TestUnwiredHomeReadingsAreWithheld(t *testing.T) {
 // been shown to work — keeps every one of them, and none of them can
 // close a commitment, clear a notification or touch a machine.
 func TestTheHomePageReadingsAreReadsAndSurviveAQAOnlySession(t *testing.T) {
-	gw := NewHouseholdGateway("mika", homeSeams(t))
+	gw := newTestHouseholdGateway("mika", homeSeams(t))
 	for _, name := range []string{"get_upkeep", "get_activity", "get_notifications", "get_machine_stats"} {
 		if gw.tools[name].Mutating {
 			t.Errorf("%s is registered as mutating: nothing here writes", name)
@@ -217,7 +217,7 @@ func TestTheHomePageReadingsAreReadsAndSurviveAQAOnlySession(t *testing.T) {
 // phrased from a call's own parameters; upkeep and machine readings are
 // a human-approved description and a number, and do not.
 func TestOnlyTheAttackerInfluenceableReadingsAreEnveloped(t *testing.T) {
-	gw := NewHouseholdGateway("mika", homeSeams(t))
+	gw := newTestHouseholdGateway("mika", homeSeams(t))
 	for _, name := range []string{"get_activity", "get_notifications"} {
 		if out := homeCall(t, gw, name, nil); !strings.Contains(out.Content, "<untrusted_data") {
 			t.Errorf("%s is not enveloped: %s", name, out.Content)
@@ -241,13 +241,13 @@ func TestActivityAsksForTheNarrowedReadInAGroup(t *testing.T) {
 		asked = append(asked, q)
 		return nil, nil
 	}
-	group := NewHouseholdGroupGateway("mika", seams)
+	group := newTestHouseholdGroupGateway("mika", seams)
 	homeCall(t, group, "get_activity", nil)
 	if len(asked) != 1 || !asked[0].GroupSafe || asked[0].Member != "mika" {
 		t.Fatalf("a group session did not ask for the narrowed read: %+v", asked)
 	}
 
-	direct := NewHouseholdGateway("mika", seams)
+	direct := newTestHouseholdGateway("mika", seams)
 	homeCall(t, direct, "get_activity", nil)
 	if asked[1].GroupSafe {
 		t.Fatalf("a one-to-one session asked for the group narrowing: %+v", asked[1])
@@ -264,7 +264,7 @@ func TestActivityIsBounded(t *testing.T) {
 		asked = append(asked, q.Limit)
 		return nil, nil
 	}
-	gw := NewHouseholdGateway("mika", seams)
+	gw := newTestHouseholdGateway("mika", seams)
 	homeCall(t, gw, "get_activity", map[string]any{"limit": 500})
 	homeCall(t, gw, "get_activity", nil)
 	if asked[0] != MaxActivityLines {

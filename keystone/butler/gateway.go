@@ -60,6 +60,30 @@ type toolEntry struct {
 	// P12's and P13's write paths arrive, rather than being retrofitted
 	// through every call site then.
 	GrantRequired bool
+	// Reaches names the RESOURCE KIND this tool reaches, when it
+	// reaches one — a memory record, a secret, a file (design §10
+	// layer 2). Empty means the tool reaches no resource of its own,
+	// which is what every v1 tool does.
+	//
+	// It is declared here rather than inferred from a handler's inputs
+	// for the reason GrantRequired and OptIn are: the resolver needs
+	// something to READ, and a fact recovered by guessing at tool
+	// arguments is a fact that is wrong the first time somebody names
+	// an argument differently. Declaring it is what carries a tool into
+	// layer 2 — and a tool that declares a kind nothing has a rule for
+	// is refused, never admitted by the general rule (ResourceRules).
+	//
+	// No v1 tool sets it, and that is not an omission: §10's layer 2 is
+	// defined BY the resource — memory in §11, secrets in §12 — and
+	// those slices are what add both the tools that reach them and the
+	// rules that admit them. The path from this field to the refusal is
+	// complete and tested (TestGeneralRuleRequiresResourceGrantsWithout
+	// EnumeratingThem); what does not exist yet is a resource to put in
+	// it. Note that `explain_resource` reaches a STATEFILE resource —
+	// declarative desired state, readable by anyone who may use the
+	// tool at all — which is a different sense of the word and
+	// deliberately not this one.
+	Reaches string
 	// OptIn marks an unusually consequential tool (ADR-W033 design
 	// §6.2). It is a place to put such a tool without inventing a third
 	// Agent class: its authority class stays whatever it is, and what
@@ -120,7 +144,67 @@ type ToolGateway struct {
 	// one-shot question that is not durable work.
 	SessionTask string
 
+	// caller, person and connection are the identity half of the
+	// authority seam (design §10.1), set by SetCaller.
+	//
+	// They are unexported and set through one method rather than being
+	// three public fields, because a gateway half-told who it serves is
+	// the state this slice exists to remove: caller is empty until
+	// somebody states it, and an unstated gateway refuses every tool.
+	caller     CallerKind
+	person     string
+	connection string
+
 	tools map[string]toolEntry
+}
+
+// SetCaller states who this gateway is answering for and on which path.
+//
+// Both surfaces have one, and both DISPATCH and DESCRIBE read it, so a
+// manifest cannot offer a model a tool that dispatch would refuse
+// (ADR-W030 P7).
+//
+// For CallerPersonFacing, person and connection are required and an
+// empty one fails closed. For CallerAdministrative they are ignored:
+// that path is a question about administrative state, not about
+// anybody's reach.
+func (gw *ToolGateway) SetCaller(kind CallerKind, person, connection string) {
+	gw.caller, gw.person, gw.connection = kind, person, connection
+}
+
+// query builds the authority query for one tool on this gateway.
+func (gw *ToolGateway) query(tool string, entry toolEntry) ToolAuthorityQuery {
+	return ToolAuthorityQuery{
+		Person:     gw.person,
+		Connection: gw.connection,
+		AgentClass: string(AgentClassOwner),
+		Tool:       tool,
+		// The structural ceiling is the tool map, and it is passed as a
+		// fact rather than assumed: a control row could not switch on a
+		// tool this gateway does not register (ADR-W030 A7).
+		Structural:    true,
+		GrantRequired: entry.GrantRequired,
+		TaskID:        gw.SessionTask,
+		Resource:      ResourceRef{Kind: entry.Reaches},
+	}
+}
+
+// checkTool runs the seam on the path this gateway was told it is on.
+//
+// The two entry points are named here rather than at each call site so
+// that dispatch and the manifest cannot end up on different paths — the
+// one thing ADR-W030 P7 says they may never disagree about.
+func (gw *ToolGateway) checkTool(tool string, entry toolEntry) ToolDecision {
+	q := gw.query(tool, entry)
+	if gw.caller == CallerAdministrative {
+		return authorizeAdministrative(gw.Authorizer, q)
+	}
+	// Anything not explicitly administrative is treated as a person's
+	// request, INCLUDING the unstated zero value, which runAuthority
+	// then refuses for not having been stated. Defaulting the other way
+	// would make forgetting to wire a gateway the permissive case.
+	q.Caller = gw.caller
+	return runAuthority(gw.Authorizer, q)
 }
 
 // SetAuthorizer binds the effective-authority resolver for one session,
@@ -158,6 +242,25 @@ func (gw *ToolGateway) Scoped(a ToolAuthorizer) *ToolGateway {
 	}
 	out := *gw
 	out.Authorizer = a
+	out.SessionTask = ""
+	return &out
+}
+
+// ForAdministration returns a copy of this gateway on the
+// administrative path: a reader asking which tools exist and what an
+// Owner may configure, not a person asking to use one.
+//
+// A copy rather than a setter because the host's gateway is shared by
+// every request in flight, and the callers that want this are the
+// inventory endpoints. Saying it is an ACT, which is the whole of the
+// scoping: administrative behaviour is something a caller asks for by
+// name and never something it falls into by leaving a field empty.
+func (gw *ToolGateway) ForAdministration() *ToolGateway {
+	if gw == nil {
+		return nil
+	}
+	out := *gw
+	out.SetCaller(CallerAdministrative, "", "")
 	out.SessionTask = ""
 	return &out
 }
@@ -265,11 +368,11 @@ func (gw *ToolGateway) dispatch(ctx context.Context, name string, input map[stri
 		// rather than a database round trip.
 		return ToolOutcome{}, fmt.Errorf("butler: unknown tool %q", name)
 	}
-	// Administrative authority is checked before the handler runs, so a
+	// Effective authority is checked before the handler runs, so a
 	// disabled tool is refused even when a saved task or a cached
-	// manifest still lists it (ADR-W030 A7).
-	if d := authorize(gw.Authorizer, string(AgentClassOwner), name, true,
-		entry.GrantRequired, gw.SessionTask, ""); !d.Allowed {
+	// manifest still lists it (ADR-W030 A7), and so a person who may
+	// not use it is refused even when the Agent could (§18.6).
+	if d := gw.checkTool(name, entry); !d.Allowed {
 		return finishOutcome(refusal(name, d), false, gw.MaxContentBytes), nil
 	}
 	if entry.Describe != nil {
@@ -310,10 +413,40 @@ func finishOutcome(outcome ToolOutcome, untrusted bool, maxBytes int) ToolOutcom
 // OfferedSpecs implements Toolset (ADR-W026 A1): the operator surface's
 // offered tool set, narrowed to reads for a QA-only session.
 func (gw *ToolGateway) OfferedSpecs(readOnly bool) []provider.Tool {
+	all := gw.ToolSpecs()
 	if readOnly {
-		return gw.ReadOnlyToolSpecs()
+		all = gw.ReadOnlyToolSpecs()
 	}
-	return gw.ToolSpecs()
+	return gw.permitted(all)
+}
+
+// permitted drops the tools effective authority would refuse.
+//
+// OfferedSpecs is what actually reaches a provider (Session.specs,
+// Runner.Run), and ToolSpecs/Capabilities are inventories. Before the
+// Person leg existed the three could differ only about administrative
+// state, and offering a disabled tool cost a wasted round. Now they can
+// differ about WHO IS ASKING, and a name is itself a disclosure: a
+// member restricted from a capability should not learn from the tool
+// list that it exists here, and a model should not be handed a tool it
+// will be refused and invited to reason about why.
+//
+// ADR-W030 P7 says describing and dispatching must agree. This is the
+// third place that has to, and it agrees the only way that cannot
+// drift: by asking the same question through the same call.
+func (gw *ToolGateway) permitted(specs []provider.Tool) []provider.Tool {
+	out := make([]provider.Tool, 0, len(specs))
+	for _, spec := range specs {
+		entry, ok := gw.tools[spec.Name]
+		if !ok {
+			continue
+		}
+		if !gw.checkTool(spec.Name, entry).Allowed {
+			continue
+		}
+		out = append(out, spec)
+	}
+	return out
 }
 
 // Execute implements Toolset: dispatch with the session's read-only

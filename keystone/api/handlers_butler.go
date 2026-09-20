@@ -210,7 +210,7 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 	// writes says so: its memory, its work and its notices all name a
 	// Person since 0043. Passing the principal's own name here is how
 	// `root-admin` ended up owning household memory (#240).
-	return s.runAdminButlerSession(r.Context(), message, actingMember(id), nil)
+	return s.runAdminButlerSession(r.Context(), message, actingMember(id), butlerlive.ConsoleConnection, nil)
 }
 
 // askOneButler answers as ONE named Butler, on whichever surface that
@@ -247,9 +247,10 @@ func (s *Server) askOneButler(r *http.Request, id principal.Identity) (any, int,
 		Butler: name,
 		// The person the caller acts for, not the credential's own
 		// name — see the note on askButler above (#240).
-		Member:  actingMember(id),
-		Text:    req.Message,
-		AsOwner: actingAsOwner(id),
+		Member:     actingMember(id),
+		Text:       req.Message,
+		AsOwner:    actingAsOwner(id),
+		Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
 	}, nil)
 }
 
@@ -279,6 +280,7 @@ func (s *Server) askNamedButler(ctx context.Context, message, named, member stri
 		// endpoint that would answer as a family Butler is an endpoint
 		// that merges the two surfaces ADR-W026 A1 separated.
 		RequireSurface: runtimedb.ButlerSurfaceAdmin,
+		Connection:     butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
 	}
 	if prior != nil {
 		turn.SessionID, turn.History = prior.SessionID, prior.History
@@ -369,14 +371,15 @@ func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (
 			named = sess.Butler
 		}
 		if sess.Surface == runtimedb.ButlerSurfaceFamily {
-			return s.askNamedFamilyButler(r.Context(), message, named, sess.ActingFor, "", false, actingAsOwner(id), prior, butlerlive.ConnectionScope{})
+			return s.askNamedFamilyButler(r.Context(), message, named, sess.ActingFor, "", false, actingAsOwner(id), prior,
+				butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection})
 		}
 		return s.askNamedButler(r.Context(), message, named, sess.ActingFor, actingAsOwner(id), prior)
 	}
 	if sess.Surface == runtimedb.ButlerSurfaceFamily {
-		return s.runFamilySession(r.Context(), message, sess.ActingFor, "", false, prior)
+		return s.runFamilySession(r.Context(), message, sess.ActingFor, "", butlerlive.ConsoleConnection, false, prior)
 	}
-	return s.runAdminButlerSession(r.Context(), message, sess.ActingFor, prior)
+	return s.runAdminButlerSession(r.Context(), message, sess.ActingFor, butlerlive.ConsoleConnection, prior)
 }
 
 // runAdminButlerSession runs one operator-surface session on behalf of
@@ -392,7 +395,7 @@ func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (
 // captured mode with a live provider is how a newly selected model that
 // FAILED its probe would run with the previous model's `full` verdict
 // and be handed proposal tools.
-func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor string, prior *turnContext) (any, int, error) {
+func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, connection string, prior *turnContext) (any, int, error) {
 	askProv, askGw, askMode, _, _ := s.ButlerHost.Current()
 	if askProv == nil || askGw == nil {
 		return nil, http.StatusServiceUnavailable,
@@ -408,8 +411,15 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor s
 	if code, err := s.turnHasAPerson(actingFor); err != nil {
 		return nil, code, err
 	}
+	// A COPY, because askGw is the host's gateway and is shared by
+	// every request in flight: binding this person to it would be both
+	// a data race and one caller's identity answering for another's.
+	// Scoped already exists for exactly that reason, and its authorizer
+	// is replaced immediately below.
+	gateway := askGw.Scoped(askGw.Authorizer)
+	s.bindPersonAuthority(gateway, actingFor, connection)
 	session := &butler.Session{
-		Gateway:  askGw,
+		Gateway:  gateway,
 		ReadOnly: askMode == runtimedb.ButlerModeQAOnly,
 	}
 	if prior != nil {

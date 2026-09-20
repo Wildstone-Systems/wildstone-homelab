@@ -274,6 +274,21 @@ func (db *DB) ResolveButlerTool(butler string, q ToolQuery) (ToolAuthority, erro
 	default:
 		return ToolAuthority{}, fmt.Errorf("runtimedb: resolving a butler's tool: %w", err)
 	}
+	// NARROWINGS KEEP THEIR JOB (#211, deciding slice 9's loose end).
+	//
+	// They looked vestigial once the assignment model arrived: for a
+	// governed Agent, assignments already decide reach. But they are
+	// not a second way to say the same thing, for two reasons. They are
+	// the ONLY per-Agent control an UNGOVERNED Agent has, which is
+	// every Agent an existing household already runs; and they SUBTRACT
+	// where an assignment ADDS, so the two compose rather than compete
+	// — a bundle that grows a tool later does not quietly hand it to an
+	// Agent an Owner narrowed away from it.
+	//
+	// Layer 1 (the Person, added in #211) sits above both and is
+	// deliberately not folded into either: an Agent's reach says
+	// nothing about who is asking (§18.6).
+
 	// A GOVERNED Agent reaches exactly what it is assigned (§6.3, §6.4).
 	//
 	// Only when the tool is structurally present: a tool this gateway

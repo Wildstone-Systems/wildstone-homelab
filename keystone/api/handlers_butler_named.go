@@ -365,7 +365,7 @@ func (s *Server) turnHasAPerson(member string) (int, error) {
 	if member == "" {
 		return http.StatusBadRequest, fmt.Errorf("a butler turn is had by somebody; this one names nobody")
 	}
-	_, err := s.DB.GetButlerMember(member)
+	m, err := s.DB.GetButlerMember(member)
 	switch {
 	case errors.Is(err, runtimedb.ErrNotFound):
 		return http.StatusBadRequest, fmt.Errorf(
@@ -373,6 +373,26 @@ func (s *Server) turnHasAPerson(member string) (int, error) {
 				"call with a token that acts for one, or admit %q first (ADR-W030 A2.1)", member, member)
 	case err != nil:
 		return http.StatusInternalServerError, err
+	}
+	// ADMITTED, not merely on record. A row exists for somebody who was
+	// disabled and for somebody who was offboarded, and design §10.1
+	// says a person who has lost authority may not have work done for
+	// them — which starts at the prompt, not at the first tool call.
+	//
+	// Binding the gateway's authority is not enough on its own: it
+	// makes the tools refuse, and a model answer carrying no tool call
+	// completes perfectly happily. The message has already been sent to
+	// the provider by then, which on a cloud route means a revoked
+	// person's words left the house. Found by a review bot on #286.
+	//
+	// The Console door already re-derives standing per request, so this
+	// is not the only guard for a Console caller — but a chat adapter
+	// or any other machine principal acting for a member does not go
+	// through that door, and this is the check on the path they take.
+	if !m.Active() {
+		return http.StatusForbidden, fmt.Errorf(
+			"%q is no longer admitted to the Butler, so no work can be done for them (ADR-W030 A2.1)",
+			member)
 	}
 	return 0, nil
 }

@@ -65,7 +65,7 @@ func TestRedTeam_SecretExfiltrationAcrossReadTools(t *testing.T) {
 	// and in observed health detail must not reach the model through ANY
 	// read tool. containerResourceWithSecret carries planted64HexSecret.
 	store := photosStore(t)
-	gw := NewToolGateway(store, nil)
+	gw := newTestToolGateway(store, nil)
 	gw.Observed = func() ([]ObservedResource, error) {
 		return []ObservedResource{{
 			Kind: "Container", Name: "immich-server", Healthy: false,
@@ -106,7 +106,7 @@ func TestRedTeam_DiagnoseEscalationBlockedInQAOnly(t *testing.T) {
 	// QAOnly session the dispatch layer must refuse, leaving no plan and
 	// an untouched Statefile.
 	store := photosStore(t)
-	gw := NewToolGateway(store, nil)
+	gw := newTestToolGateway(store, nil)
 	gw.Observed = func() ([]ObservedResource, error) {
 		return []ObservedResource{{
 			Kind: "Route", Name: "photos", Healthy: false,

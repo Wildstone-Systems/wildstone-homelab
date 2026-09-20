@@ -81,11 +81,21 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 		// whole guarantee: WithConnection can only turn a yes into a
 		// no, so nothing the store resolves can raise what the surface
 		// forbids.
-		sc.SetAuthorizer(WithConnection(
-			&butlerstore.Authority{DB: bs.DB, Butler: b.Name},
-			t.Connection.Permits,
-		))
+		authority := &butlerstore.Authority{DB: bs.DB, Butler: b.Name}
+		// Layer 1, wired here. Design §10 puts the Person above the
+		// Agent's whole reach, and an unwired check refuses rather than
+		// waves through — so this line is the act that turns the
+		// person leg on, the way Ledger.AdmissionCheck is for
+		// admission. Serving a session without it would be serving one
+		// that refuses every tool, which is the safe direction for the
+		// mistake to fail in.
+		authority.PersonAuthority = authority.PersonIsAdmitted()
+		sc.SetAuthorizer(WithConnection(authority, t.Connection.Permits))
 		sc.SetSessionTask(task.ID)
+		// A turn is somebody asking. The Connection identifier is
+		// carried and an absent one refuses (§10.1); what a Connection
+		// ADMITS is slice 11's to define.
+		sc.SetCaller(butler.CallerPersonFacing, t.Member, t.Connection.Name)
 	} else {
 		// A surface that cannot be scoped must not be served as a
 		// Butler at all. Running it unscoped would silently give this

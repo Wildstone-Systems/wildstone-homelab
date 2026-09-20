@@ -7,7 +7,7 @@ import (
 
 func TestProposeChange_ProducesPlan_NeverApplies(t *testing.T) {
 	store := newTestStore(t)
-	gw := NewToolGateway(store, nil)
+	gw := newTestToolGateway(store, nil)
 
 	out, err := gw.Dispatch(context.Background(), "propose_change", map[string]any{
 		"kind":  "Route",
@@ -50,7 +50,7 @@ func TestProposeChange_ProducesPlan_NeverApplies(t *testing.T) {
 
 func TestProposeChange_InvalidSpec_RejectedNotError(t *testing.T) {
 	store := newTestStore(t)
-	gw := NewToolGateway(store, nil)
+	gw := newTestToolGateway(store, nil)
 
 	// A Route with no classification fails resource.Validate — propose_change
 	// must surface this as a textual rejection the model can read, not a Go

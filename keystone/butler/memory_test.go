@@ -461,11 +461,11 @@ func TestRememberIsOfferedOnlyWhereItIsWiredAndTheSessionMayAct(t *testing.T) {
 		}
 		return false
 	}
-	bare := NewHouseholdGateway("tom", HouseholdSeams{})
+	bare := newTestHouseholdGateway("tom", HouseholdSeams{})
 	if offers(bare, false) {
 		t.Fatal("remember was offered with no store behind it")
 	}
-	wired := NewHouseholdGateway("tom", HouseholdSeams{Memory: (&captured{}).seams()})
+	wired := newTestHouseholdGateway("tom", HouseholdSeams{Memory: (&captured{}).seams()})
 	if !offers(wired, false) {
 		t.Fatal("remember was not offered where it is wired")
 	}
@@ -486,7 +486,7 @@ func TestRememberIsOfferedOnlyWhereItIsWiredAndTheSessionMayAct(t *testing.T) {
 // deletion of the conversation it came from.
 func TestRememberTakesTheConversationFromTheGatewayAtDispatch(t *testing.T) {
 	c := &captured{}
-	gw := NewHouseholdGateway("tom", HouseholdSeams{Memory: c.seams()})
+	gw := newTestHouseholdGateway("tom", HouseholdSeams{Memory: c.seams()})
 	if out, _ := gw.Dispatch(context.Background(), "remember",
 		map[string]any{"content": "before the task was stamped on"}); !out.Rejected {
 		t.Fatal("a note was kept before the session had a conversation")
@@ -511,7 +511,7 @@ func TestRememberTakesTheConversationFromTheGatewayAtDispatch(t *testing.T) {
 // after, and the same dispatch is refused.
 func TestWhatIsRememberedChangesNothingAboutWhatMayBeDone(t *testing.T) {
 	c := &captured{}
-	gw := NewHouseholdGateway("tom", HouseholdSeams{Memory: c.seams()})
+	gw := newTestHouseholdGateway("tom", HouseholdSeams{Memory: c.seams()})
 	gw.SetSessionTask("bt-1")
 
 	before := gw.OfferedSpecs(false)

@@ -14,7 +14,7 @@ func TestGetCapabilityStatus(t *testing.T) {
 	seedResource(t, store, containerResourceWithSecret("immich"))
 	seedResource(t, store, oidcClientResource("immich"))
 
-	gw := NewToolGateway(store, nil)
+	gw := newTestToolGateway(store, nil)
 	outcome, err := gw.Dispatch(context.Background(), "get_capability_status", nil)
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
@@ -31,7 +31,7 @@ func TestExplainResource_RedactsSecretPreservesRef(t *testing.T) {
 	store := newTestStore(t)
 	seedResource(t, store, containerResourceWithSecret("immich"))
 	seedResource(t, store, oidcClientResource("immich"))
-	gw := NewToolGateway(store, nil)
+	gw := newTestToolGateway(store, nil)
 	ctx := context.Background()
 
 	cOut, err := gw.Dispatch(ctx, "explain_resource", map[string]any{"kind": "Container", "name": "immich"})
@@ -61,7 +61,7 @@ func TestGetHealth_RealAgentFakeDocker(t *testing.T) {
 	agent.setHealth(true, "steady state")
 
 	store := newTestStore(t)
-	gw := NewToolGateway(store, &AgentReader{Gateway: h.gw})
+	gw := newTestToolGateway(store, &AgentReader{Gateway: h.gw})
 	gw.DefaultNode = "node-a"
 	ctx := context.Background()
 
@@ -92,7 +92,7 @@ func TestGetHealth_RealAgentFakeDocker(t *testing.T) {
 
 func TestGetPlan_PreviewOnly(t *testing.T) {
 	store := newTestStore(t)
-	gw := NewToolGateway(store, nil)
+	gw := newTestToolGateway(store, nil)
 
 	out, err := gw.Dispatch(context.Background(), "get_plan", map[string]any{
 		"kind":  "Volume",
@@ -122,7 +122,7 @@ func TestGetPlan_PreviewOnly(t *testing.T) {
 }
 
 func TestToolSpecs_IncludesAllToolsSorted(t *testing.T) {
-	gw := NewToolGateway(newTestStore(t), nil)
+	gw := newTestToolGateway(newTestStore(t), nil)
 	specs := gw.ToolSpecs()
 	want := []string{
 		"describe_capabilities", "diagnose", "dry_run_automation", "explain_resource",
@@ -141,7 +141,7 @@ func TestToolSpecs_IncludesAllToolsSorted(t *testing.T) {
 }
 
 func TestReadOnlyToolSpecs_OmitsProposeChange(t *testing.T) {
-	gw := NewToolGateway(newTestStore(t), nil)
+	gw := newTestToolGateway(newTestStore(t), nil)
 	for _, spec := range gw.ReadOnlyToolSpecs() {
 		if spec.Name == "propose_change" {
 			t.Fatalf("ReadOnlyToolSpecs() included propose_change")
@@ -170,7 +170,7 @@ func TestDispatch_TruncatesLargeContent(t *testing.T) {
 	if err := store.Commit("test", "seed", "seed fixture"); err != nil {
 		t.Fatalf("seed Commit: %v", err)
 	}
-	gw := NewToolGateway(store, nil)
+	gw := newTestToolGateway(store, nil)
 	gw.MaxContentBytes = 500
 	out, err := gw.Dispatch(context.Background(), "get_capability_status", nil)
 	if err != nil {

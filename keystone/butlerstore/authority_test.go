@@ -26,7 +26,20 @@ func authorityDB(t *testing.T) (*runtimedb.DB, *Authority) {
 	}
 	t.Cleanup(func() { db.Close() })
 	record(t, db, "mika", "sam")
-	return db, &Authority{DB: db}
+	// ADMITTED, not merely recorded. Recording creates the person;
+	// admission is what layer 1 checks, and these tests are about the
+	// ordering underneath it rather than about the person leg.
+	for _, who := range []string{"mika", "sam"} {
+		if err := db.AdmitButlerMember(who, "root-admin"); err != nil {
+			t.Fatalf("admitting %q: %v", who, err)
+		}
+	}
+	// Layer 1 wired, as a real session wires it (butlerlive.Serve).
+	// Without it every person-facing check refuses before reaching the
+	// ordering these tests are about.
+	a := &Authority{DB: db}
+	a.PersonAuthority = a.PersonIsAdmitted()
+	return db, a
 }
 
 // A grant cannot conjure a tool the surface does not have. This is the
@@ -62,7 +75,8 @@ func TestStructuralCeilingCannotBeWidened(t *testing.T) {
 	// register the tool at all, so the call never reaches the resolver.
 	seams := butler.HouseholdSeams{}
 	gw := butler.NewHouseholdGateway("sam", seams)
-	gw.Authorizer = auth
+	gw.SetAuthorizer(auth)
+	gw.SetCaller(butler.CallerPersonFacing, "sam", "test_connection")
 	if _, err := gw.Dispatch(context.Background(), "propose_change", nil); err == nil {
 		t.Fatal("the family gateway dispatched an operator tool")
 	}
@@ -81,7 +95,8 @@ func TestDisableWinsOverManifestsAndGrants(t *testing.T) {
 		t.Fatalf("statefile.New: %v", err)
 	}
 	gw := butler.NewToolGateway(store, nil)
-	gw.Authorizer = auth
+	gw.SetAuthorizer(auth)
+	gw.SetCaller(butler.CallerPersonFacing, "mika", "test_connection")
 
 	// Offered while enabled.
 	before := gw.Capabilities(false)

@@ -50,7 +50,7 @@ func healthyPhotos() map[string]ObservedResource {
 
 func diagnosePhotos(t *testing.T, observed map[string]ObservedResource) string {
 	t.Helper()
-	gw := NewToolGateway(photosStore(t), nil)
+	gw := newTestToolGateway(photosStore(t), nil)
 	gw.Observed = func() ([]ObservedResource, error) {
 		var out []ObservedResource
 		for _, o := range observed {

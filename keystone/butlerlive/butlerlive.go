@@ -149,6 +149,21 @@ type Turn struct {
 	SystemExtra string
 }
 
+// ConsoleConnection is the name the Console is known by in an authority
+// check.
+//
+// The Console is a CONNECTION, not the absence of one (design §8.2, B8:
+// it is a first-class trusted Connection). Naming it matters because
+// §10.1 fails closed on a missing Connection, and a Console turn that
+// left the field empty would be indistinguishable from a caller that
+// forgot to fill it in — which is exactly the inference this slice
+// removes everywhere else.
+//
+// It carries no ceiling of its own: ConnectionScope.Permits stays nil
+// on this path, because the Console holder already holds both surfaces
+// (ADR-W031 A10) and a ceiling nobody chose is not one.
+const ConsoleConnection = "console"
+
 // Answer is what one turn produced.
 type Answer struct {
 	// Butler and Model name what actually answered. They are returned
@@ -205,6 +220,13 @@ func (f GatewayFunc) For(b runtimedb.Butler, t Turn) (butler.Toolset, error) { r
 type Scoped interface {
 	SetAuthorizer(a butler.ToolAuthorizer)
 	SetSessionTask(id string)
+	// SetCaller states who the session answers for and on which
+	// authority path (design §10.1). It is on this interface for the
+	// same reason SetAuthorizer is: a surface that could be served
+	// WITHOUT being told who is asking is a surface that would
+	// eventually be served without it, and this package is the one
+	// place that knows.
+	SetCaller(kind butler.CallerKind, person, connection string)
 }
 
 // Butlers serves conversations as named Butlers.
