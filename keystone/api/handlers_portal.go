@@ -108,6 +108,6 @@ func (s *Server) portalAssetFile(w http.ResponseWriter, r *http.Request, _ strin
 	if !ok {
 		return nil, http.StatusNotFound, fmt.Errorf("no such file")
 	}
-	portal.WriteAsset(w, body, ctype)
+	portal.WriteAsset(w, r, body, ctype)
 	return nil, http.StatusOK, nil
 }
