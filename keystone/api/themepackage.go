@@ -153,7 +153,19 @@ func readThemePackage(body []byte, want string) (themePackage, error) {
 			if paletteFile == nil || depth(clean) < depth(path.Clean(paletteFile.Name)) {
 				paletteFile = f
 			}
-		case strings.Contains(strings.ToLower(clean)+"/", "/backgrounds/"):
+		default:
+			// ANY IMAGE, not only the ones under backgrounds/.
+			//
+			// An Omarchy theme keeps its wallpapers in backgrounds/, and
+			// requiring that was fitting the parser to the one archive
+			// it was built from. A theme zipped by hand is a colors.toml
+			// and a picture beside it, and that shape imported its
+			// palette and silently dropped its wallpaper — the half of
+			// the feature somebody would notice last.
+			//
+			// Preference, not restriction: pickPackageBackground still
+			// takes a backgrounds/ picture over a loose one, so a full
+			// theme is unaffected.
 			if _, ok := wallpaperTypes[strings.ToLower(path.Ext(base))]; ok {
 				pictures = append(pictures, f)
 			}
@@ -215,18 +227,48 @@ func themeNameFromPath(name string) string {
 	return strings.ToLower(dir)
 }
 
+// notWallpapers are images an Omarchy theme ships that are not the
+// wallpaper. They sit at the theme's root beside colors.toml, so once
+// a loose image can be the background these have to be named or a
+// theme's preview becomes its backdrop.
+var notWallpapers = map[string]bool{
+	"preview.png": true, "preview-unlock.png": true, "unlock.png": true,
+	"preview.webp": true, "unlock.webp": true, "icons.png": true,
+}
+
+// underBackgrounds reports whether an entry is in a backgrounds/ folder.
+func underBackgrounds(name string) bool {
+	return strings.Contains(strings.ToLower(path.Clean(strings.ReplaceAll(name, `\`, "/")))+"/", "/backgrounds/")
+}
+
 // pickPackageBackground chooses one picture out of the set a theme
 // ships, by the rule wallpapers/NOTICE.md records for the vendored
 // ones: the lowest-numbered, skipping the branded logo wall, and
 // preferring one small enough to be a dashboard backdrop.
+//
+// A backgrounds/ picture wins over a loose one when the archive has
+// both, because a theme that bothered to have the folder meant it.
 func pickPackageBackground(files []*zip.File) *zip.File {
 	if len(files) == 0 {
 		return nil
+	}
+	var inFolder []*zip.File
+	for _, f := range files {
+		if underBackgrounds(f.Name) {
+			inFolder = append(inFolder, f)
+		}
+	}
+	if len(inFolder) > 0 {
+		files = inFolder
 	}
 	var named []*zip.File
 	for _, f := range files {
 		base := strings.ToLower(path.Base(f.Name))
 		if base == "omarchy.webp" || strings.HasSuffix(base, "-omarchy.webp") {
+			continue
+		}
+		// A preview is a picture of the theme, not the theme's picture.
+		if !underBackgrounds(f.Name) && notWallpapers[base] {
 			continue
 		}
 		named = append(named, f)

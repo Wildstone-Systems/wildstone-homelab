@@ -232,6 +232,7 @@ function ImportForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => 
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pkg, setPkg] = useState<File | null>(null);
   const packageInput = useRef<HTMLInputElement | null>(null);
 
   const submit = async () => {
@@ -254,6 +255,28 @@ function ImportForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => 
   // people skipped. The name is optional because the archive usually
   // knows it; the field is used when it does not, or when a household
   // wants a different one.
+  // A theme zipped by hand has no folder to take a name from, and that
+  // refused the upload outright — the archive knows what is in it and
+  // not what it is called. The file's own name is the best guess
+  // available, offered in the field rather than used silently, because
+  // a zip is as often named after the wallpaper inside it as after the
+  // theme.
+  const chosePackage = (file: File) => {
+    setPkg(file);
+    setError(null);
+    setNote(null);
+    if (name.trim() === "") {
+      const guess = file.name
+        .replace(/\.zip$/i, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      if (guess !== "") {
+        setName(guess);
+      }
+    }
+  };
+
   const uploadPackage = async (file: File) => {
     setBusy(true);
     setError(null);
@@ -338,13 +361,31 @@ function ImportForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => 
           id="theme-package"
           ref={packageInput}
           type="file"
-          accept=".zip,application/zip"
+          /* Every spelling a browser might report for a zip, plus the
+             extension. An archive the OS calls x-zip-compressed is
+             still the file somebody just downloaded. */
+          accept=".zip,application/zip,application/x-zip-compressed,multipart/x-zip"
           disabled={busy}
           onChange={(e) => {
             const file = e.target.files?.[0];
-            if (file) void uploadPackage(file);
+            if (file) chosePackage(file);
           }}
         />
+        {pkg && (
+          <div className="row">
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy || name.trim() === ""}
+              onClick={() => void uploadPackage(pkg)}
+            >
+              {busy ? "Uploading…" : `Upload ${pkg.name}`}
+            </button>
+            <span className="muted">
+              {name.trim() === "" ? "give it a name above first" : `adds the theme “${name.trim()}”`}
+            </span>
+          </div>
+        )}
         {note && <p className="muted">{note}</p>}
       </div>
     </div>

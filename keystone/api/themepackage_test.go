@@ -6,14 +6,23 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/chickenrat17/wildstone-homelab/keystone/theme"
 )
 
 // nordColors is a real palette in the shape colors.toml has.
+// oneJPEG is a minimal JPEG: the sniffer reads magic bytes, so a PNG
+// renamed .jpg would be served as the PNG it is and prove nothing.
+var oneJPEG = []byte{
+	0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01,
+	0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9,
+}
+
 const nordColors = `mode = "dark"
 background = "#2e3440"
 foreground = "#d8dee9"
@@ -233,5 +242,70 @@ func TestAMemberCannotUploadAThemePackage(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusForbidden {
 		t.Errorf("an operator uploading a theme: status %d, want 403", res.StatusCode)
+	}
+}
+
+// A theme zipped by hand, which is how one actually arrives.
+//
+// The parser was written against a GitHub download — everything nested
+// under <repo>-<branch>/ with the pictures in backgrounds/ — and a real
+// upload was neither. colors.toml and a .jpg at the root imported the
+// palette and silently dropped the wallpaper, which is the half
+// somebody notices last. The palette here is a real Omarchy one, ASCII
+// art banner and all the keys this product has no use for included.
+func TestAHandZippedThemeImportsItsPicture(t *testing.T) {
+	colors, err := os.ReadFile("testdata/omarchy-colors.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := readThemePackage(zipOf(t, map[string][]byte{
+		"colors.toml":       colors,
+		"1-rain-runner.jpg": oneJPEG,
+	}), "rain-runner")
+	if err != nil {
+		t.Fatalf("a flat archive will not import: %v", err)
+	}
+	if pkg.background != "1-rain-runner.jpg" {
+		t.Errorf("picture = %q, want the loose jpg beside the palette", pkg.background)
+	}
+	if pkg.mediaType != "image/jpeg" {
+		t.Errorf("media type %q, want image/jpeg sniffed from the bytes", pkg.mediaType)
+	}
+	// And the real palette parses, which the paste box already proved
+	// but this path had never been shown.
+	if _, err := theme.ParsePalette(pkg.colors); err != nil {
+		t.Errorf("a real Omarchy palette does not parse: %v", err)
+	}
+}
+
+// A backgrounds/ picture still wins over a loose one, so opening the
+// search up did not make a theme's preview its wallpaper.
+func TestBackgroundsFolderStillWinsOverALoosePicture(t *testing.T) {
+	pkg, err := readThemePackage(zipOf(t, map[string][]byte{
+		"nord/colors.toml":              []byte(nordColors),
+		"nord/preview.png":              onePNG,
+		"nord/backgrounds/1-proper.png": onePNG,
+	}), "")
+	if err != nil {
+		t.Fatalf("importing: %v", err)
+	}
+	if pkg.background != "1-proper.png" {
+		t.Errorf("picked %q, want the backgrounds/ picture", pkg.background)
+	}
+}
+
+// And a preview at the root is not mistaken for the wallpaper when
+// there is no backgrounds/ folder at all.
+func TestAPreviewIsNotTheWallpaper(t *testing.T) {
+	pkg, err := readThemePackage(zipOf(t, map[string][]byte{
+		"nord/colors.toml": []byte(nordColors),
+		"nord/preview.png": onePNG,
+		"nord/wall.png":    onePNG,
+	}), "")
+	if err != nil {
+		t.Fatalf("importing: %v", err)
+	}
+	if pkg.background != "wall.png" {
+		t.Errorf("picked %q, want wall.png — preview.png is a picture OF the theme", pkg.background)
 	}
 }
