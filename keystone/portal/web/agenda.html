@@ -1,0 +1,186 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agenda</title>
+<link rel="stylesheet" href="/portal/assets/nocturne.css">
+<!--wildstone:theme-->
+<!--
+  One person's day.
+
+  A HOUSEHOLD SURFACE WITH A SUBJECT SELECTOR, not a per-person
+  authenticated one (ADR-W033 A10). Whoever came through the door sees
+  whichever day they pick, because on a kitchen tablet that is what is
+  actually true, and a page that implied otherwise would be claiming a
+  privacy it cannot enforce. The selector says whose day is on screen;
+  it does not say who is asking.
+
+  WHOSE NAME IS ON THE TAB is the first thing the page answers, because
+  on a shared screen the previous person's day is the thing most likely
+  to still be showing.
+
+  THE THREE KINDS STAY DISTINGUISHABLE. An appointment at four o'clock,
+  a thing to keep up with, and a notice waiting are different kinds of
+  obligation, and flattening them into one list of grey rows is how an
+  agenda stops being read. Each carries its own mark and its own idiom:
+  a time, a standing, a dot.
+-->
+<style>
+  .people { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  .person {
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-2) var(--space-4); border-radius: 999px;
+    border: 1px solid var(--hair); background: none; color: var(--color-text);
+    font: inherit; font-size: 13.5px; cursor: pointer;
+  }
+  .person:hover { background: var(--faint); }
+  .person.on { background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+               border-color: var(--color-accent); color: var(--color-accent-200); }
+  .person .kid { font-size: 11px; color: var(--muted); }
+  .person.on .kid { color: var(--color-accent-300); }
+
+  .day { margin-bottom: var(--space-6); }
+  .dayhead { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-3); }
+  .dayhead .when { font-size: 15px; font-weight: 600; }
+
+  .arow { display: flex; gap: var(--space-4); align-items: flex-start; padding: var(--space-3) 0;
+          border-bottom: 1px solid var(--faint); }
+  .arow:last-child { border-bottom: 0; }
+  /* The time column is fixed so the day reads as a column of times
+     rather than a ragged left edge. An undated row leaves it blank
+     rather than inventing a time it does not have. */
+  .arow .time { flex: none; width: 5.5rem; font-variant-numeric: tabular-nums;
+                font-size: 13px; color: var(--muted); padding-top: 1px; }
+  .arow .what { flex: 1; min-width: 0; }
+  .arow .title { font-size: 14px; }
+  .arow .sub { font-size: 12px; color: var(--muted); }
+  .mark { flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; }
+  /* --mark is a THEME token and nocturne.css does not define it, so a
+     household on the default theme had an invisible dot on every
+     commitment row. Fallback to a token the base sheet guarantees; a
+     theme that brings --mark still wins. */
+  .mark-event { background: var(--color-accent); }
+  .mark-commitment { background: var(--mark, var(--color-accent-300)); }
+  .mark-notice { background: var(--st-warn); }
+  .empty { color: var(--muted); font-size: 13px; padding: var(--space-3) 0; }
+  @media (max-width: 720px) {
+    .arow .time { width: 4.25rem; font-size: 12px; }
+  }
+</style>
+
+<main class="page">
+  <div class="spread" style="margin-bottom: var(--space-6)">
+    <a class="hbtn hbtn-ghost" href="/home/"><i class="ph ph-arrow-left" aria-hidden="true"></i> Home</a>
+    <span class="fade" aria-hidden="true"></span>
+    <span class="muted" id="member"></span>
+  </div>
+
+  <div class="row-between" style="margin-bottom: var(--space-4)">
+    <div>
+      <h1 id="title">Agenda</h1>
+      <div class="muted" id="sub">What today looks like</div>
+    </div>
+  </div>
+
+  <div class="people" id="people" style="margin-bottom: var(--space-6)"></div>
+
+  <div id="note"></div>
+  <section id="body"></section>
+
+  <footer class="muted" style="margin-top: var(--space-8); font-size: 12px">
+    Anyone at this screen can see any of these days. A person's own private things are not here.
+  </footer>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  function el(id) { return document.getElementById(id); }
+  function text(id, v) { var n = el(id); if (n) { n.textContent = v; } }
+  function clear(n) { while (n && n.firstChild) { n.removeChild(n.firstChild); } }
+  function make(tag, cls, content) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (content !== undefined && content !== null) { n.textContent = String(content); }
+    return n;
+  }
+
+  var page = null;
+
+  function paintPeople() {
+    var box = el("people");
+    clear(box);
+    (page.people || []).forEach(function (p) {
+      var b = make("button", "person" + (p.handle === page.who ? " on" : ""));
+      b.type = "button";
+      b.appendChild(make("span", "", p.handle));
+      if (p.child) { b.appendChild(make("span", "kid", "child")); }
+      b.addEventListener("click", function () { load(p.handle); });
+      box.appendChild(b);
+    });
+  }
+
+  function row(item) {
+    var r = make("div", "arow");
+    r.appendChild(make("span", "mark mark-" + (item.kind || "event")));
+    // All-day and undated rows say so in words rather than leaving the
+    // reader to work out why the time column is empty.
+    var when = item.at || (item.allDay ? "All day" : "");
+    r.appendChild(make("span", "time", when));
+    var what = make("div", "what");
+    what.appendChild(make("div", "title", item.title));
+    if (item.detail) { what.appendChild(make("div", "sub", item.detail)); }
+    r.appendChild(what);
+    return r;
+  }
+
+  function paint() {
+    var body = el("body");
+    clear(body);
+    if (!page || !page.available) {
+      clear(el("note"));
+      el("note").appendChild(make("div", "note note-bad",
+        (page && page.problem) || "Can't put together an agenda right now."));
+      return;
+    }
+    clear(el("note"));
+    paintPeople();
+    text("title", page.who);
+    text("sub", "What the house has for " + page.who);
+
+    (page.days || []).forEach(function (d) {
+      var wrap = make("div", "day");
+      var head = make("div", "dayhead");
+      head.appendChild(make("span", "when", d.label));
+      head.appendChild(make("span", "fade"));
+      head.appendChild(make("span", "muted", (d.items || []).length
+        ? ((d.items.length === 1) ? "1 thing" : d.items.length + " things") : ""));
+      wrap.appendChild(head);
+      var card = make("section", "wid");
+      if (!d.items || !d.items.length) {
+        card.appendChild(make("div", "empty", "Nothing on."));
+      } else {
+        d.items.forEach(function (it) { card.appendChild(row(it)); });
+      }
+      wrap.appendChild(card);
+      body.appendChild(wrap);
+    });
+  }
+
+  function load(who) {
+    var q = who ? ("?who=" + encodeURIComponent(who)) : "";
+    fetch("/api/v1/home/agenda" + q, { headers: { accept: "application/json" } })
+      .then(function (r) {
+        if (!r.ok) { throw new Error("agenda: " + r.status); }
+        return r.json();
+      })
+      .then(function (j) { page = j; paint(); })
+      .catch(function () {
+        page = { available: false, problem: "Wildstone isn't answering." };
+        paint();
+      });
+  }
+
+  load("");
+})();
+</script>

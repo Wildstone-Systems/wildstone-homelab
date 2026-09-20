@@ -773,6 +773,13 @@ func (s *Server) Handler() http.Handler {
 	// The tracker page and one commitment's history. Reads, so they sit
 	// with the other portal GETs; the answer paths below are unchanged.
 	mux.Handle("GET /upkeep/{$}", s.portal(surfaceHome, s.portalPage("upkeep")))
+	// One person's day (ADR-W033 A8-A10). On the household surface with
+	// a subject selector, NOT a per-person authenticated one: on a
+	// kitchen tablet the agenda is protected by the door the household
+	// came through, and A10 says so out loud rather than leaving a
+	// household to infer privacy the shared screen does not give.
+	mux.Handle("GET /agenda/{$}", s.portal(surfaceHome, s.portalPage("agenda")))
+	mux.Handle("GET /api/v1/home/agenda", s.portal(surfaceHome, s.homeAgenda))
 	mux.Handle("GET /api/v1/home/upkeep", s.portal(surfaceHome, s.homeUpkeep))
 	mux.Handle("GET /api/v1/home/commitments/{name}", s.portal(surfaceHome, s.homeCommitmentHistory))
 	// The household authors its own tracker (ADR-W035 A20, extended).
