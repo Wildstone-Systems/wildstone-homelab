@@ -1408,6 +1408,18 @@ export const api = {
     call<ThemeSummary>("POST", "/api/v1/appearance/themes", { name, colors }),
   removeTheme: (name: string) =>
     call<{ removed: string }>("DELETE", `/api/v1/appearance/themes/${encodeURIComponent(name)}`),
+  // A whole theme as its authors publish it: the zipped directory, with
+  // the palette and the backgrounds in it. The body IS the archive, for
+  // the same reason the picture upload is the picture — a multipart
+  // request carries the caller's description of what it sent, and the
+  // server reads the archive regardless. An empty name lets the server
+  // take it from the theme's own folder.
+  importThemePackage: (file: Blob, name?: string) =>
+    call<ThemePackageResult>(
+      "POST",
+      `/api/v1/appearance/themes/package${name ? `?name=${encodeURIComponent(name)}` : ""}`,
+      file,
+    ),
   // The wallpaper a theme brings. The body IS the image: a multipart
   // request carries the caller's own description of what it sent, and
   // the server decides the media type from the bytes regardless.
@@ -2020,6 +2032,16 @@ export interface ConnectionCreated {
 // One theme, as the picker draws it. The swatch is the DERIVED
 // palette — what the surfaces will actually render, contrast repair
 // included — not the colours the theme's author typed.
+// What an imported package came to. pictureProblem is a note rather
+// than a failure: the palette is the theme, and a picture that could
+// not be read is worth saying without throwing the import away.
+export interface ThemePackageResult {
+  theme: string;
+  label: string;
+  picture?: string;
+  pictureProblem?: string;
+}
+
 export interface ThemeSummary {
   name: string;
   label: string;

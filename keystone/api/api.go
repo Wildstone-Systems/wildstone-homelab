@@ -547,6 +547,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/appearance", s.handle(principal.VerbRead, s.getAppearance))
 	mux.Handle("PUT /api/v1/appearance", s.handle(principal.VerbRead, s.setAppearance))
 	mux.Handle("POST /api/v1/appearance/themes", s.handle(principal.VerbManage, s.importTheme))
+	// A whole theme at once, as the directory its authors publish: the
+	// palette and its picture in one upload instead of a paste and a
+	// second trip. Same verb as the paste, because it is the same act.
+	mux.Handle("POST /api/v1/appearance/themes/package", s.handle(principal.VerbManage, s.importThemePackage))
 	mux.Handle("DELETE /api/v1/appearance/themes/{name}", s.handle(principal.VerbManage, s.removeTheme))
 	// The picture a theme brings. VerbManage for the same reason the
 	// palette is: it changes what the whole household sees, and it is

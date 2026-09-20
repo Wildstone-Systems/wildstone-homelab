@@ -230,7 +230,9 @@ function ImportForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => 
   const [name, setName] = useState("");
   const [colors, setColors] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const packageInput = useRef<HTMLInputElement | null>(null);
 
   const submit = async () => {
     setBusy(true);
@@ -242,6 +244,36 @@ function ImportForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => 
       setError((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  };
+
+  // THE WHOLE FOLDER, as its authors publish it. A theme's repository
+  // downloads as a zip holding colors.toml and a backgrounds/
+  // directory, which is the palette and the picture in one act instead
+  // of a paste and a second trip — and the second trip was the one
+  // people skipped. The name is optional because the archive usually
+  // knows it; the field is used when it does not, or when a household
+  // wants a different one.
+  const uploadPackage = async (file: File) => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const out = await api.importThemePackage(file, name.trim() || undefined);
+      if (out.pictureProblem) {
+        // Added, with a caveat. Not an error: the palette is the theme.
+        setNote(out.pictureProblem);
+        return;
+      }
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      // So choosing the same file twice still fires a change event.
+      if (packageInput.current) {
+        packageInput.current.value = "";
+      }
     }
   };
 
@@ -291,6 +323,29 @@ function ImportForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => 
         <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>
           Cancel
         </button>
+      </div>
+
+      <div className="field">
+        <label htmlFor="theme-package">
+          …or upload the theme's folder
+          <span className="muted">
+            a .zip of the theme's own directory — colors.toml and its backgrounds/ — which is
+            what Download ZIP gives you on its repository. Brings the palette and a picture in
+            one go.
+          </span>
+        </label>
+        <input
+          id="theme-package"
+          ref={packageInput}
+          type="file"
+          accept=".zip,application/zip"
+          disabled={busy}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) void uploadPackage(file);
+          }}
+        />
+        {note && <p className="muted">{note}</p>}
       </div>
     </div>
   );
