@@ -14,12 +14,14 @@ package butlerstore
 // which mutation it catches.
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -182,8 +184,34 @@ func TestTaskLosesAuthorityAtItsNextBoundaryWhenTheGrantIsRevoked(t *testing.T) 
 	}
 	f.refused(t, "revoked")
 
+	// ONE revocation is enough, even with another grant still live.
+	// Stopping only once every grant had gone was a threshold with no
+	// principle behind it: there is no reason a task should survive the
+	// first revocation and die on the last (#287).
+	two := newDerivedFixture(t)
+	first, err := two.db.GrantTool(runtimedb.ToolGrant{
+		Scope: runtimedb.GrantScopeTask, ScopeID: two.taskID,
+		AgentClass: runtimedb.AgentClassMember, Tool: "tool_one", GrantedBy: "root-admin",
+	}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := two.db.GrantTool(runtimedb.ToolGrant{
+		Scope: runtimedb.GrantScopeTask, ScopeID: two.taskID,
+		AgentClass: runtimedb.AgentClassMember, Tool: "tool_two", GrantedBy: "root-admin",
+	}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := two.ledger.Authorize(two.taskID); err != nil {
+		t.Fatalf("a task with two live grants was refused: %v", err)
+	}
+	if err := two.db.RevokeToolGrant(first, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	two.refused(t, "tool_one")
+
 	// A task that never held a grant is untouched. "No grants exist" is
-	// not "every grant was taken away".
+	// not "a grant was taken away".
 	g := newDerivedFixture(t)
 	if err := g.ledger.Authorize(g.taskID); err != nil {
 		t.Fatalf("a task that holds no grant was refused: %v", err)
@@ -381,5 +409,86 @@ func TestTaskAuthorityIsNotAGrantObject(t *testing.T) {
 	}
 	if len(after) != 0 {
 		t.Fatalf("re-evaluating derived authority issued %d grant(s): %+v", len(after), after)
+	}
+}
+
+// revokingProvider withdraws the task's origin as it answers — the
+// model call is the window this test exists to close.
+type revokingProvider struct {
+	steps  []*provider.ChatResponse
+	at     int
+	revoke func()
+}
+
+func (p *revokingProvider) Name() string { return "revoking" }
+
+func (p *revokingProvider) Chat(context.Context, provider.ChatRequest) (*provider.ChatResponse, error) {
+	if p.at >= len(p.steps) {
+		return &provider.ChatResponse{Text: "done"}, nil
+	}
+	resp := p.steps[p.at]
+	p.at++
+	// The withdrawal lands WHILE the call is in flight. Doing it here
+	// rather than between rounds is the whole point: the runner's
+	// pre-round check has already passed by the time this happens.
+	if p.revoke != nil {
+		p.revoke()
+		p.revoke = nil
+	}
+	return resp, nil
+}
+
+// Authority withdrawn during a model call stops the tool calls that
+// call returned, before any of them runs.
+//
+// The runner authorized before the slice and before each model round,
+// and then dispatched whatever came back — so the gap was exactly as
+// long as the model took to answer, which is the slowest thing it does.
+// ADR-W030 A2.1 says "at every retrieval and dispatch"; dispatch was
+// the boundary that was missing. Found by a review bot on #287.
+//
+// Mutations: removing either stillAuthorized call from the runner makes
+// this fail. Removing only the final-answer one makes the second case
+// fail on its own.
+func TestAuthorityWithdrawnDuringAModelCallStopsTheDispatch(t *testing.T) {
+	f := newDerivedFixture(t)
+	ts := newCountingToolset()
+	r := runner(ts, f.ledger)
+
+	p := &revokingProvider{
+		steps:  []*provider.ChatResponse{readsFor("node-a")},
+		revoke: func() { _ = f.db.RevokeButlerSession(f.session, "root-admin") },
+	}
+	if _, err := r.Run(context.Background(), p, f.taskID, "look at node-a"); err == nil {
+		t.Fatal("the run continued after its session was withdrawn mid-call")
+	}
+	// Every call, whatever it was keyed as. Asserting on a single
+	// expected key is how the first version of this test passed against
+	// an implementation with no dispatch boundary at all: countingToolset
+	// keys by name AND argument, so "get_health" was never a key and the
+	// assertion was vacuous. The run errored on the NEXT round's check,
+	// which is exactly the behaviour this test exists to rule out.
+	if n := len(ts.calls); n != 0 {
+		t.Fatalf("%d tool call(s) were dispatched after authority was withdrawn: %v", n, ts.calls)
+	}
+
+	// The same for a FINAL ANSWER: completing the task writes evidence
+	// and a result summary the household reads, and it must not be
+	// recorded for a person whose authority went away mid-call.
+	g := newDerivedFixture(t)
+	gr := runner(newCountingToolset(), g.ledger)
+	answer := &revokingProvider{
+		steps:  []*provider.ChatResponse{{Text: "all fine"}},
+		revoke: func() { _ = g.db.RevokeButlerSession(g.session, "root-admin") },
+	}
+	if _, err := gr.Run(context.Background(), answer, g.taskID, "anything"); err == nil {
+		t.Fatal("a final answer was accepted after its session was withdrawn mid-call")
+	}
+	task, err := g.db.GetButlerTask(g.taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State == runtimedb.ButlerTaskCompleted {
+		t.Fatal("the task was completed under withdrawn authority")
 	}
 }

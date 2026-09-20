@@ -259,34 +259,41 @@ func builtInConnection(name string) bool {
 	return name == "console" || name == "household_portal"
 }
 
-// GrantCheck refuses a task whose grants have been withdrawn.
+// GrantCheck refuses a task when ANY grant it was admitted under has
+// been revoked.
 //
 // A task that never held a grant is unaffected: most work is done with
-// tools nobody had to grant, and "no grants exist" is not "every grant
-// was taken away". What it catches is the case §10.1 names — work
-// admitted under a grant that an Owner has since revoked — and it
-// catches it at the next boundary rather than by hunting down running
-// tasks, because authority is evaluated at use time.
+// tools nobody had to grant, and "no grants exist" is not "a grant was
+// taken away". Those two cases are what this check distinguishes.
+//
+// ANY, NOT ALL. An earlier version stopped the task only once every
+// grant had been revoked, and that threshold had no principle behind
+// it — there is no reason a task should survive the first revocation
+// and die on the last. §10.1 is singular and unconditional: "if the
+// Person, session, Connection or grant behind it later loses
+// authority, the Task loses it too at its next boundary". Revoking a
+// grant is a deliberate act by an Owner on this specific work, and the
+// per-tool resolver refusing that one tool is not the same as the work
+// stopping. Found by a review bot on #287.
 //
 // EXPIRY IS NOT REVOCATION and is deliberately not treated as one. A
-// grant that ran out means the tool it covered is no longer permitted,
-// which the resolver already answers per tool; killing the whole task
-// for it would stop work that never needed the tool again.
+// grant that ran out is the clock doing what it was set to do, not
+// somebody withdrawing permission; the tool it covered is no longer
+// permitted, which the resolver already answers per tool, and killing
+// the whole task for it would stop work that never needed the tool
+// again.
 func (l *Ledger) GrantCheck() func(string) error {
 	return func(taskID string) error {
 		grants, err := l.db.ListToolGrants(runtimedb.GrantScopeTask, taskID)
 		if err != nil {
 			return err
 		}
-		if len(grants) == 0 {
-			return nil
-		}
 		for _, g := range grants {
-			if g.RevokedAt.IsZero() {
-				return nil
+			if !g.RevokedAt.IsZero() {
+				return fmt.Errorf("the %s grant it was admitted under was revoked", g.Tool)
 			}
 		}
-		return errors.New("every tool grant it was admitted under has been revoked")
+		return nil
 	}
 }
 

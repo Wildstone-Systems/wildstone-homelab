@@ -420,6 +420,13 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 			return tr, err
 		}
 		if len(answer.ToolCalls) == 0 {
+			// Accepting an answer is a boundary too: completing the
+			// task writes evidence and a result summary the household
+			// reads, and doing that for a person whose authority went
+			// away mid-call would record work nobody was entitled to.
+			if err := r.stillAuthorized(taskID, "final answer"); err != nil {
+				return tr, err
+			}
 			tr.FinalText = answer.Text
 			return tr, r.complete(taskID, tr, steps, answer.Text)
 		}
@@ -443,6 +450,13 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 					toolsUsed)
 				return tr, r.Ledger.Wait(taskID, LedgerWaitBudgetExhausted,
 					fmt.Sprintf("%d tool calls used", toolsUsed))
+			}
+			// The dispatch boundary. Checked per call rather than per
+			// round because the model's answer arrived some time ago
+			// and may carry several calls, and because A2.1 names
+			// dispatch specifically.
+			if err := r.stillAuthorized(taskID, "tool dispatch"); err != nil {
+				return tr, err
 			}
 			rec, content, dispatched := r.toolCall(ctx, taskID, tc, verified)
 			// Only a call that actually went out spends budget. A
@@ -476,6 +490,32 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 		Payload: jsonPayload(map[string]any{"reason": LedgerWaitReply, "rounds": r.sliceRounds()}),
 	})
 	return tr, r.Ledger.Wait(taskID, LedgerWaitReply, "turn tool-call limit reached; awaiting continue")
+}
+
+// stillAuthorized re-evaluates the task's authority at one boundary and
+// traces the refusal.
+//
+// ADR-W030 A2.1 is "check current membership and link generation at
+// every retrieval and dispatch", and design §10.1 says derived
+// authority is "re-evaluated at every authorization boundary". A model
+// call is the slowest thing this runner does: a session or Connection
+// withdrawn while one is in flight would otherwise have its tool calls
+// dispatched anyway, because the last check happened before the call
+// went out. The gap is exactly as long as the model takes to answer.
+//
+// So the boundaries are: before the slice, before each model round,
+// before each tool call, and before a final answer is accepted. The
+// first two were already here; the last two were not, and were found by
+// a review bot on #287.
+func (r *Runner) stillAuthorized(taskID, at string) error {
+	if err := r.Ledger.Authorize(taskID); err != nil {
+		r.trace(taskID, LedgerTraceEvent{
+			Type:    TraceDenial,
+			Payload: jsonPayload(map[string]any{"authority": "withdrawn", "at": at}),
+		})
+		return fmt.Errorf("butler runner: %w", err)
+	}
+	return nil
 }
 
 // modelRound checkpoints one model call and retries a stalled or failed
