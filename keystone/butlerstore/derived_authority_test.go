@@ -461,6 +461,40 @@ func TestATransferredTaskIsItsNewOwnersToCarryOn(t *testing.T) {
 		t.Fatal("an offboarded author still carried on their transferred task")
 	}
 
+	// And the whole recovery path works end to end: the administrator
+	// carries it on from the CONSOLE, not from the chat Connection the
+	// offboarded person used. Before this, the owner check passed and
+	// the Connection check then refused the first tool call for ever —
+	// nobody can continue that session, and every other path arrives
+	// somewhere else (#287).
+	if task.OriginConnection != "" || task.OriginConnectionRef != 0 || task.SessionID != "" {
+		t.Fatalf("the transfer kept the offboarded person's origin: conn=%q ref=%d session=%q",
+			task.OriginConnection, task.OriginConnectionRef, task.SessionID)
+	}
+	fromConsole := query("sam")
+	fromConsole.Connection = "console"
+	if d := mustAuthorize(t, auth, fromConsole); !d.Allowed {
+		t.Fatalf("the new owner could not carry the work on from the console: %q", d.Reason)
+	}
+	// The ledger agrees: nothing in derived authority refuses it now
+	// that its grants have been reissued. Offboarding revoked them.
+	if _, err := f.db.GrantTool(runtimedb.ToolGrant{
+		Scope: runtimedb.GrantScopeTask, ScopeID: shared,
+		AgentClass: runtimedb.AgentClassMember, Tool: "restricted_tool", GrantedBy: "sam",
+	}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	// And the administrator resumes it, which is the act A4 makes them
+	// perform: the task waits in paused-offboarded until a human has
+	// looked at it.
+	if err := f.db.TransitionButlerTask(shared, runtimedb.ButlerTaskRunning,
+		"reviewed and resumed", "sam"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.ledger.Authorize(shared); err != nil {
+		t.Fatalf("a reviewed, regranted, resumed transfer was still refused: %v", err)
+	}
+
 	// And nobody else, which is what keeps this a re-homing rather than
 	// an open door.
 	if err := f.db.RecordButlerMember("kai", runtimedb.RoleMember, "", ""); err != nil {

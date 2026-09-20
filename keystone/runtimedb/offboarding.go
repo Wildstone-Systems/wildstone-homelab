@@ -124,8 +124,33 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 		if t.Audience == ButlerAudienceShared {
 			// Operational ownership moves; the author does not. The
 			// schema enforces the second half.
+			// The ORIGIN goes with the person, not with the work.
+			//
+			// A4 re-homes the work; it does not re-home the request
+			// that made it. The session was theirs, and the Connection
+			// was theirs — offboarding fences the Connections they own
+			// a few steps below. Leaving either on the task would bind
+			// the administrator's work to a withdrawn person's
+			// Connection, which is neither safe nor meaningful, and
+			// derived authority (design §10.1) would refuse the first
+			// tool call for ever: nobody can continue that session
+			// (continueButlerSession requires the caller BE its person)
+			// and every other path arrives over a different Connection.
+			// Found by a review bot on #287, as the second half of the
+			// transferred-task recovery path.
+			//
+			// Cleared rather than repointed, because what the new owner
+			// will continue it over is not known here and must not be
+			// guessed. Empty means the leg does not apply — which is
+			// the truth for work whose originating request is gone —
+			// and the legs that DO still apply are the ones that
+			// matter: the new owner must be admitted, and the grants
+			// A4 revokes must be issued again before any tool runs.
 			if _, err := db.sql.Exec(
-				`UPDATE butler_tasks SET owner_person_id = ?, updated_at = ? WHERE seq = ?`,
+				`UPDATE butler_tasks
+				 SET owner_person_id = ?, session = NULL, origin_turn = NULL,
+				     origin_connection = '', origin_connection_ref = 0, updated_at = ?
+				 WHERE seq = ?`,
 				adminPerson, now(), t.Seq); err != nil {
 				return result, fmt.Errorf("runtimedb: transferring shared work: %w", err)
 			}
