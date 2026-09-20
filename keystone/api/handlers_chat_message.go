@@ -131,13 +131,6 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		// Bounded before anything else looks at it (ADR-W026 A6).
 		return nil, http.StatusRequestEntityTooLarge, fmt.Errorf("message exceeds %d bytes", maxAskBytes)
 	}
-	// In a group, only what is addressed to the bot is the bot's to act
-	// on (ADR-W033 B9.1). The adapter drops the rest; this is the
-	// backstop for one that does not, and it answers nothing.
-	if msg.Group && !msg.Addressed {
-		return inboundResponse{Accepted: false, Reason: "a group message not addressed to this bot"},
-			http.StatusAccepted, nil
-	}
 	at, err := s.connectionForCaller(id, msg)
 	if err != nil {
 		return nil, http.StatusForbidden, err
@@ -156,6 +149,50 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// spend another Agent's budget and answer a real request with a 429.
 	if !s.limiter.allowChat(fmt.Sprintf("%d:%s", at.Seq, account)) {
 		return nil, http.StatusTooManyRequests, fmt.Errorf("too many messages; slow down")
+	}
+
+	// THE ROOM GOES ON RECORD BEFORE ANY OTHER ANSWER, and this is the
+	// earliest point it can: it needs the Connection, and the rate
+	// limiter above bounds how often an account can cause the write.
+	//
+	// WHY SO EARLY. This is the ONLY moment anything in Wildstone is
+	// told that a conversation is a room -- the adapter says so, and
+	// nothing downstream can work it out from a target string. Every
+	// return below (unaddressed, unbound, already-claimed, the
+	// redirect) is a way of declining to answer, and a first version of
+	// this recorded the room after three of them. A review of #290
+	// caught it, and the case is not exotic: MOST group traffic is not
+	// addressed to the bot, so the unaddressed return is the branch a
+	// room is overwhelmingly likely to take first. Until something is
+	// addressed to it, chat_rooms would stay empty and a household rule
+	// could deliver into a room nobody had recorded.
+	//
+	// The conversation that was a DIRECT chat yesterday is the case
+	// that matters most: a transport can turn one into a group keeping
+	// the same id, a binding still names it, and ChatRecipientFor would
+	// hand it to a rule as a person's private destination.
+	//
+	// IT FAILS CLOSED. Logging and carrying on would answer the person
+	// while leaving the room unrecorded, which is the state the whole
+	// outbound guard depends on not existing. A 500 asks the adapter to
+	// redeliver, and redelivery is safe here: nothing has been claimed,
+	// no session exists, and noting a room is idempotent.
+	if msg.Group {
+		if rerr := s.DB.NoteChatRoom(at.Seq, conversation); rerr != nil {
+			s.Log.Error("noting a chat room", "err", rerr)
+			return nil, http.StatusInternalServerError,
+				fmt.Errorf("could not record that this conversation is a room, so nothing was answered")
+		}
+	}
+
+	// In a group, only what is addressed to the bot is the bot's to act
+	// on (ADR-W033 B9.1). The adapter drops the rest; this is the
+	// backstop for one that does not, and it answers nothing.
+	//
+	// AFTER the room is recorded, deliberately. See above.
+	if msg.Group && !msg.Addressed {
+		return inboundResponse{Accepted: false, Reason: "a group message not addressed to this bot"},
+			http.StatusAccepted, nil
 	}
 
 	// Claim this message before anything acts on it (ADR-W026 A8). The
@@ -227,13 +264,8 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// call, no context assembled, no memory read -- the refusal is the
 	// whole of the turn.
 	if msg.Group {
-		// The room is noted first, because the OUTBOUND side has no
-		// other way to learn this destination is a room: a household
-		// rule queues to a target string, and a target string does not
-		// say whether it is one person or forty.
-		if rerr := s.DB.NoteChatRoom(at.Seq, conversation); rerr != nil {
-			s.Log.Error("noting a chat room", "err", rerr)
-		}
+		// The room is already on record -- noted above, before every
+		// return that could have skipped it.
 		body, reason := groupRedirectReply, "this agent answers in a one-to-one chat only (design §8.3)"
 		if at.AdmitsOwnersOnly() {
 			// An Owner Agent keeps its own wording. It said this
@@ -795,6 +827,20 @@ func (s *Server) QueueChatPush(_ context.Context, at runtimedb.Connection, targe
 	// where the decision was made: a row that reached the queue and
 	// was dropped at delivery looks, to everything that reads the
 	// queue, exactly like a message that was sent.
+	//
+	// THIS CHECK IS NOT WHAT MAKES THE RULE HOLD. It reads, then
+	// enqueues, and between those two an inbound group message can
+	// commit a NoteChatRoom -- so a concurrent rule could still land a
+	// push in a room that was known to be one before the insert. A
+	// review of #290 found that window. Migration 0065 closes it with
+	// a trigger on chat_outbound, which is atomic with the insert and
+	// holds for every writer rather than for the ones that remember to
+	// ask first.
+	//
+	// This stays because the trigger answers with a constraint
+	// failure, and the person reading the log deserves the sentence
+	// below. Defence in depth where the depth is real: the trigger is
+	// the boundary, this is the explanation.
 	if s.DB.IsChatRoom(at.Seq, target) {
 		s.recordEvent("chat.room_delivery_refused", at.ExternalID,
 			"a message the house initiated was addressed to a room, and was not sent",
@@ -810,6 +856,17 @@ func (s *Server) QueueChatPush(_ context.Context, at runtimedb.Connection, targe
 		Body: redact.String(body), Kind: "push", CorrelationID: correlationID, DedupeKey: dedupe,
 	})
 	if err != nil && seq == 0 {
+		// 0065's trigger, reached when the destination became a room
+		// between the check above and this insert. Same refusal, said
+		// the same way, so a rule's author cannot tell which of the
+		// two stopped it -- and does not need to.
+		if strings.Contains(err.Error(), "is a room") {
+			s.recordEvent("chat.room_delivery_refused", at.ExternalID,
+				"a message the house initiated was addressed to a room, and was not sent",
+				map[string]string{"agent": at.Butler, "correlation": correlationID})
+			return 0, fmt.Errorf(
+				"%s is a room, and the house does not send what it knows into a room (design §8.3)", target)
+		}
 		return 0, err
 	}
 	return seq, nil

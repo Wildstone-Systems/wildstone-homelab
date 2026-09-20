@@ -260,3 +260,135 @@ func (h *harness) secondFamilyAgent(t *testing.T, agent, transport, account stri
 	}
 	return at
 }
+
+// TestAnUnaddressedGroupMessageStillRecordsTheRoom — the gap a review
+// of #290 found, and the one that mattered most.
+//
+// MOST GROUP TRAFFIC IS NOT ADDRESSED TO THE BOT. People talk to each
+// other. So the unaddressed return is the branch a room is
+// overwhelmingly likely to take FIRST, and a first version of this
+// slice recorded the room after it — along with the unbound-sender and
+// already-claimed returns. Until somebody addressed the Agent
+// directly, chat_rooms stayed empty and the outbound guard had nothing
+// to read.
+//
+// The case that makes it concrete is a conversation that WAS a direct
+// chat: a transport can turn one into a group keeping the same id, a
+// binding still names it, and ChatRecipientFor would hand it to a
+// household rule as that person's private destination.
+func TestAnUnaddressedGroupMessageStillRecordsTheRoom(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	binding := h.bindAccount(t, "family", "sam", "telegram", "12345")
+
+	// sam's own conversation, which the house may push to today.
+	if _, err := h.s.QueueChatPush(context.Background(), at, binding.Account, binding.ID,
+		"the heating comes on at six", "corr-before", ""); err != nil {
+		t.Fatalf("a push to a direct chat was refused: %v", err)
+	}
+
+	// That conversation becomes a room, and the first message in it is
+	// somebody talking to somebody else — not to the bot.
+	_, out := h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "12345", "conversation": binding.Account,
+		"group": true, "text": "dinner at six everyone", "messageId": "g-0",
+	})
+	if out.Accepted {
+		t.Fatalf("an unaddressed group message was acted on: %+v", out)
+	}
+	if !h.s.DB.IsChatRoom(at.Seq, binding.Account) {
+		t.Fatal("an unaddressed group message left no record that the conversation is a room")
+	}
+
+	// And the house stops pushing there, on the destination it was
+	// perfectly happy with a moment ago.
+	if _, err := h.s.QueueChatPush(context.Background(), at, binding.Account, binding.ID,
+		"sam, your prescription is ready for collection", "corr-after", ""); err == nil {
+		t.Fatal("the house pushed into a conversation that had become a room (design §8.3)")
+	}
+}
+
+// The same for the other two returns that used to precede the record:
+// a sender nobody introduced, and a redelivered message.
+func TestAGroupIsRecordedEvenWhenTheMessageIsNotAnswered(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+
+	// A stranger, in a room. Refused by admission, and the room is
+	// still a room — what the sender is admitted to says nothing about
+	// how many people are reading.
+	h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "99999", "conversation": "room-stranger",
+		"group": true, "addressed": true, "text": "hello?", "messageId": "s-1",
+	})
+	if !h.s.DB.IsChatRoom(at.Seq, "room-stranger") {
+		t.Error("a group message from an unbound account left no room on record")
+	}
+
+	// A redelivery. The first is claimed and answered with the
+	// redirect; the second returns early as already-handled, and must
+	// not be the message that would have recorded the room.
+	for i, id := range []string{"d-1", "d-1"} {
+		h.send(runtimedb.RoleConcierge, map[string]any{
+			"transport": "telegram", "account": "12345", "conversation": "room-dupe",
+			"group": true, "addressed": true, "text": "same message", "messageId": id,
+		})
+		if !h.s.DB.IsChatRoom(at.Seq, "room-dupe") {
+			t.Fatalf("delivery %d left no room on record", i)
+		}
+	}
+}
+
+// TestAPushIntoARoomIsRefusedByTheDatabase — the second finding from
+// the same review: the Go check reads and then enqueues, and an
+// inbound group message can commit a room observation in between.
+//
+// The window is narrow and the consequence is the one thing this slice
+// exists to prevent, so 0065 makes the check atomic with the insert.
+// This drives the enqueue DIRECTLY, past the Go guard, which is what a
+// caller landing in that window effectively does.
+func TestAPushIntoARoomIsRefusedByTheDatabase(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	at := h.agentAt(t, "family", "telegram")
+	if err := h.s.DB.NoteChatRoom(at.Seq, "room-7"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := h.s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{
+		Connection: at.Seq, Target: "room-7", Kind: "push",
+		Body: "sam, your prescription is ready", DedupeKey: "dk-push-room",
+	})
+	if err == nil {
+		t.Fatal("the database accepted a push into a known room (design §8.3)")
+	}
+	if !strings.Contains(err.Error(), "room") {
+		t.Fatalf("refused for some other reason: %v", err)
+	}
+
+	// THE REDIRECT STILL GETS THROUGH. It is a reply to somebody who
+	// just spoke rather than something the house decided to say, and
+	// blocking it would leave a household member talking to a bot that
+	// has gone silent. A trigger that caught every kind would pass the
+	// assertion above and break the feature.
+	if _, err := h.s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{
+		Connection: at.Seq, Target: "room-7", Kind: "reply",
+		Body: groupRedirectReply, DedupeKey: "dk-reply-room",
+	}); err != nil {
+		t.Fatalf("the redirect into a room was refused: %v", err)
+	}
+
+	// And a push to a conversation that is NOT a room is untouched, or
+	// the trigger is refusing pushes rather than rooms.
+	if _, err := h.s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{
+		Connection: at.Seq, Target: "direct-1", Kind: "push",
+		Body: "the heating comes on at six", DedupeKey: "dk-push-direct",
+	}); err != nil {
+		t.Fatalf("a push to a direct chat was refused: %v", err)
+	}
+}
