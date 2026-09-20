@@ -385,6 +385,14 @@ var Columns = []Column{
 		"the Person invited to a chat Connection (ADR-W033 B7.1)"},
 	{"connection_invites", "invited_by", Actor,
 		"the Owner who made the Connection, as actingMember records them"},
+	{"connection_admission", "set_by", Actor,
+		"who wrote the Connection's admission policy: an Owner as actingMember " +
+			"records them, or 'migration:0063' for the rows the migration derived " +
+			"from the Agent class"},
+	{"connection_admission", "admits", NotAPerson,
+		"which ROLE a Connection admits ('owners' or 'household'), which names a " +
+			"class of people and never one of them"},
+	{"connection_admission", "set_at", NotAPerson, "a timestamp"},
 	{"theme_backgrounds", "name", NotAPerson, "a theme's name, not a person's"},
 	{"theme_backgrounds", "image", NotAPerson, "the wallpaper's bytes"},
 	{"theme_backgrounds", "media_type", NotAPerson, "an image media type, decided from the bytes"},

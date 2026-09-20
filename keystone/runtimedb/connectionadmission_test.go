@@ -104,8 +104,31 @@ func TestDemotingAnOwnerClosesTheirAdminConnection(t *testing.T) {
 	if err := db.SetButlerMemberRole("sam", RoleMember, "root-admin"); err != nil {
 		t.Fatalf("demoting: %v", err)
 	}
-	if _, err := db.LookupChatBinding(at, "12345"); !errors.Is(err, ErrNotFound) {
+	// ErrNotAdmitted, not ErrNotFound. Admission moved out of the
+	// lookup's SQL and into Connection.Admits (slice 11, #212), and
+	// with it the answer got sharper: the binding is still there, and
+	// it is the Connection that now turns sam away. Asserting
+	// ErrNotFound here would pin the vaguer answer and forbid the
+	// improvement.
+	_, err := db.LookupChatBinding(at, "12345")
+	if !errors.Is(err, ErrNotAdmitted) {
 		t.Fatalf("a demoted owner still reaches an owner agent over chat: err = %v", err)
+	}
+	// And the reason names the ceiling, because "not admitted" with no
+	// cause sends an operator looking for a revoked binding that is
+	// sitting right there.
+	if !strings.Contains(err.Error(), "owners only") {
+		t.Fatalf("the refusal does not say why: %v", err)
+	}
+	// The binding itself is untouched: demotion withdraws admission,
+	// it does not revoke what sam claimed. Re-promoting restores the
+	// reach without a new claim code, which is the behaviour A6 wants
+	// and is only visible because the two answers are distinct.
+	if err := db.SetButlerMemberRole("sam", RoleOwner, "root-admin"); err != nil {
+		t.Fatalf("re-promoting: %v", err)
+	}
+	if _, err := db.LookupChatBinding(at, "12345"); err != nil {
+		t.Fatalf("a re-promoted owner should reach it again on the same binding: %v", err)
 	}
 }
 

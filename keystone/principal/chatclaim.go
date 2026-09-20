@@ -74,13 +74,21 @@ func (s *Store) IssueChatClaim(at runtimedb.Connection, identity, issuedBy strin
 		return "", runtimedb.ChatClaimCode{},
 			fmt.Errorf("principal: %q is not an admitted household member (ADR-W030 A2.1)", identity)
 	}
-	// An Owner-Agent Connection admits Owners only (B9), and the
-	// Connection now says which Agent it belongs to, so the class comes
-	// from that Agent rather than from a surface the binding named.
-	if at.AdmitsOwnersOnly() && m.Role != runtimedb.RoleOwner {
+	// What this Connection admits (design §8.1, §8.3; migration 0063),
+	// which is the Agent's class ceiling intersected with the
+	// Connection's own policy — a Member Agent's bot may still be
+	// narrowed to Owners, and a code issued against it should fail
+	// here rather than at redemption.
+	//
+	// The SAME function the message path calls, deliberately. B9 says
+	// "configuration and runtime both enforce this", and two
+	// enforcements of one rule written twice is how they come to
+	// disagree: the first thing an operator should learn about a
+	// narrowed bot is not that the code they issued stopped working.
+	if ok, reason := at.Admits(m.Role); !ok {
 		return "", runtimedb.ChatClaimCode{}, fmt.Errorf(
-			"principal: %q is a member, and %s is an owner agent, whose connections admit owners only (ADR-W033 B9)",
-			identity, at.Butler)
+			"principal: %q cannot be admitted to %s: %s (ADR-W033 B9)",
+			identity, at.Name(), reason)
 	}
 	if ttl <= 0 {
 		ttl = DefaultClaimTTL

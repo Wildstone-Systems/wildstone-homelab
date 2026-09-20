@@ -57,6 +57,24 @@ type Connection struct {
 	// Connection's — slice 9 (#210) renames it to the agent class the
 	// design uses.
 	Surface ButlerSurface `json:"surface"`
+	// AgentClass is the same ceiling under slice 9's vocabulary, read
+	// alongside Surface rather than instead of it so that OwnerAgent
+	// can take the narrower of the two. 0058 makes them agree; this
+	// does not depend on their agreeing.
+	AgentClass string `json:"agentClass"`
+
+	// Admission is the Connection's OWN admission policy (design §8.1,
+	// §8.3; migration 0063) — who may address the Agent here.
+	//
+	// It is not the Agent class restated. The Agent class is a ceiling
+	// this cannot rise above, and within that ceiling a deployment may
+	// narrow a Connection by hand: a Member Agent's public bot can be
+	// set to admit Owners only, and nothing about the Agent changes.
+	// Admits() is where the two meet.
+	Admission Admission `json:"admission"`
+	// AdmissionSubject is which KIND of subject that policy admits.
+	// MVP is Person; Group is a seam that admits nobody (§8.3).
+	AdmissionSubject AdmissionSubject `json:"admissionSubject"`
 }
 
 // Name identifies this Connection in an authority check and in a
@@ -100,13 +118,25 @@ func (db *DB) ChatConnectionBySeq(seq int64) (Connection, error) {
 		` WHERE a.seq = ? AND a.revoked_at = ''`, seq))
 }
 
-const chatConnectionColumns = `SELECT a.seq, b.name, a.transport, a.external_id, a.label, b.surface
-	 FROM butler_addresses a JOIN butlers b ON b.seq = a.butler`
+// LEFT JOIN, not JOIN. A Connection with no admission row still has to
+// RESOLVE, because the refusal it earns is one this package writes --
+// naming the Connection and saying no policy is on record -- and a row
+// that vanishes from the result set instead comes back as
+// ErrNoConnection, which says the address does not exist. Those are
+// different facts and a household chasing the wrong one finds nothing
+// wrong with the address it was told about.
+const chatConnectionColumns = `SELECT a.seq, b.name, a.transport, a.external_id, a.label,
+	        b.surface, b.agent_class,
+	        COALESCE(ca.admits, ''), COALESCE(ca.subject_kind, '')
+	 FROM butler_addresses a
+	 JOIN butlers b ON b.seq = a.butler
+	 LEFT JOIN connection_admission ca ON ca.connection = a.seq`
 
 func scanChatConnection(row rowScanner) (Connection, error) {
 	var c Connection
-	var surface string
-	err := row.Scan(&c.Seq, &c.Butler, &c.Transport, &c.ExternalID, &c.Label, &surface)
+	var surface, agentClass, admits, subject string
+	err := row.Scan(&c.Seq, &c.Butler, &c.Transport, &c.ExternalID, &c.Label,
+		&surface, &agentClass, &admits, &subject)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Connection{}, ErrNoConnection
 	}
@@ -114,12 +144,178 @@ func scanChatConnection(row rowScanner) (Connection, error) {
 		return Connection{}, fmt.Errorf("runtimedb: reading a connection: %w", err)
 	}
 	c.Surface = ButlerSurface(surface)
+	c.AgentClass = agentClass
+	c.Admission = parseAdmission(admits)
+	c.AdmissionSubject = parseAdmissionSubject(subject)
 	return c, nil
 }
 
-// AdmitsOwnersOnly reports whether this Connection belongs to an Owner
-// Agent, which admits Owners and nobody else (ADR-W033 B9).
-func (c Connection) AdmitsOwnersOnly() bool { return c.Surface == ButlerSurfaceAdmin }
+// Admission is what a Connection admits: which Person role may address
+// the Agent over it (design 8.1, 8.3; migration 0063).
+//
+// It is a CLOSED SET WITH A NAMED UNRESOLVED MEMBER, and that is the
+// whole point of the type. The value it replaces was a bool derived
+// from a string comparison, so every value that was not exactly
+// "admin" meant "the household may talk here" -- an unreadable policy
+// and the most permissive policy gave the same answer. Unresolved is a
+// third answer, it is the one an absent or unrecognised value produces,
+// and Admits refuses it.
+type Admission string
+
+const (
+	// AdmissionUnresolved is no policy on record, or one this build
+	// does not recognise. It admits nobody.
+	AdmissionUnresolved Admission = ""
+	// AdmitOwners admits Owners and nobody else (design 8.3).
+	AdmitOwners Admission = "owners"
+	// AdmitHousehold admits any Person on record, Owner or Member.
+	AdmitHousehold Admission = "household"
+)
+
+// AdmissionSubject is the KIND of subject a policy admits (design 8.3:
+// "The admission schema supports subjects of type Person and Group").
+//
+// MVP admits Person subjects. A Group subject is recognised, refused,
+// and refused for a stated reason rather than being absent from the
+// vocabulary -- 8.3 makes group support a seam, and a seam that
+// resolves to "unrecognised value" cannot be told apart from a typo.
+type AdmissionSubject string
+
+const (
+	// AdmissionSubjectUnresolved is no subject kind on record, or one
+	// this build does not recognise. It admits nobody.
+	AdmissionSubjectUnresolved AdmissionSubject = ""
+	// AdmissionSubjectPerson is MVP: the policy admits named People.
+	AdmissionSubjectPerson AdmissionSubject = "person"
+	// AdmissionSubjectGroup is the seam. Nothing is admitted through
+	// it until audience admission exists (design 8.3).
+	AdmissionSubjectGroup AdmissionSubject = "group"
+)
+
+// parseAdmission reads a stored value as one of the closed set.
+//
+// Anything else -- including the empty string a LEFT JOIN produces for
+// a Connection with no policy row -- is Unresolved. No trimming, no
+// case folding: a value that needs cleaning up before it matches is a
+// value somebody wrote by hand into a column with a CHECK on it, and
+// guessing what they meant is how a ceiling gets widened by a stray
+// space.
+func parseAdmission(raw string) Admission {
+	switch Admission(raw) {
+	case AdmitOwners:
+		return AdmitOwners
+	case AdmitHousehold:
+		return AdmitHousehold
+	default:
+		return AdmissionUnresolved
+	}
+}
+
+func parseAdmissionSubject(raw string) AdmissionSubject {
+	switch AdmissionSubject(raw) {
+	case AdmissionSubjectPerson:
+		return AdmissionSubjectPerson
+	case AdmissionSubjectGroup:
+		return AdmissionSubjectGroup
+	default:
+		return AdmissionSubjectUnresolved
+	}
+}
+
+// Admits answers whether a Person of this role may address the Agent
+// over this Connection, and says why not when the answer is no.
+//
+// IT IS THE INTERSECTION OF TWO CEILINGS, NOT THE POLICY ALONE. The
+// Connection's own policy is checked, and so is the Agent class behind
+// it, and the narrower wins. An Owner Agent admits Owners whatever its
+// Connection row says (design 8.3), so a row that has drifted -- or
+// been written around the trigger that guards it -- cannot be the way
+// a Member reaches an Owner Agent. Migration 0063 enforces the same
+// pairing in SQL; this is not that check repeated for tidiness, it is
+// the check that still holds on the day somebody relaxes the trigger.
+//
+// Every unrecognised input on either side is a denial. That is the one
+// property worth mutation-testing: the previous implementation
+// answered this question with `surface == "admin"`, where every
+// unreadable value fell through to the permissive side.
+func (c Connection) Admits(role string) (bool, string) {
+	who := "a " + role
+	if role == "" {
+		who = "somebody whose role is not on record"
+	}
+	switch c.AdmissionSubject {
+	case AdmissionSubjectPerson:
+	case AdmissionSubjectGroup:
+		// Legal to store, never admitted. 8.3: person admission
+		// authenticates the speaker, not the audience.
+		return false, fmt.Sprintf(
+			"%s admits a group, and group admission is not available yet: "+
+				"knowing who is speaking is not knowing who is listening", c.Name())
+	default:
+		return false, fmt.Sprintf(
+			"%s does not record what kind of subject it admits, so it admits nobody", c.Name())
+	}
+
+	// The Agent's own ceiling first, so that the reason a Member is
+	// refused at an Owner Agent names the Agent rather than the policy
+	// row -- the policy row is not what they would have to change.
+	if c.OwnerAgent() {
+		if role != RoleOwner {
+			return false, fmt.Sprintf(
+				"%s answers to owners only, and %s is not one", c.Butler, who)
+		}
+	}
+
+	switch c.Admission {
+	case AdmitOwners:
+		if role != RoleOwner {
+			return false, fmt.Sprintf(
+				"%s admits owners only, and %s is not one", c.Name(), who)
+		}
+		return true, ""
+	case AdmitHousehold:
+		// A KNOWN role, not any non-empty string. "household" is the
+		// widest policy there is, and the widest policy is still not a
+		// reason to admit a role this build cannot name.
+		if role != RoleOwner && role != RoleMember {
+			return false, fmt.Sprintf(
+				"%s admits the household, and %s is not a role on record", c.Name(), who)
+		}
+		return true, ""
+	default:
+		return false, fmt.Sprintf(
+			"nothing on this deployment says who %s admits, so it admits nobody", c.Name())
+	}
+}
+
+// OwnerAgent reports whether the Agent answering on this Connection is
+// an Owner Agent.
+//
+// BOTH COLUMNS, EITHER ONE ENOUGH TO MAKE IT TRUE. Migration 0058's
+// CHECK makes agent_class and surface agree by construction today, and
+// portalMayReach already argues the case for not resting on that: a
+// defence correct only because of an invariant elsewhere stops being a
+// defence when the invariant is relaxed. Here the OR does more than
+// belt and braces -- it means a row where the two disagree resolves to
+// the NARROWER reading, which is the direction a disagreement should
+// fail in.
+func (c Connection) OwnerAgent() bool {
+	return c.Surface == ButlerSurfaceAdmin || c.AgentClass == AgentClassOwner
+}
+
+// AdmitsOwnersOnly reports whether this Connection admits Owners and
+// nobody else (ADR-W033 B9, design 8.3).
+//
+// It is retained for the SURFACE BEHAVIOUR that reads it -- which
+// greeting a bot gives, whether it answers in a group at all, which
+// slash commands it offers -- where the question really is "is this
+// the operator's bot". It is NOT the admission check: use Admits,
+// which is total over roles and answers with a reason. A bool cannot
+// distinguish "admits the household" from "admits nobody, because
+// nothing says", and the difference is the whole of this slice.
+func (c Connection) AdmitsOwnersOnly() bool {
+	return c.OwnerAgent() || c.Admission == AdmitOwners
+}
 
 // ErrAmbiguousConnection is returned when an Agent has more than one
 // Connection on a transport and the caller named neither.
