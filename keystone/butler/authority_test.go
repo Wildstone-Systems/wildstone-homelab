@@ -537,6 +537,52 @@ func (r reasonAuthorizer) AuthorizeTool(ToolAuthorityQuery) (ToolDecision, error
 	return ToolDecision{Allowed: false, Reason: r.reason}, nil
 }
 
+// Permits refuses ANY mutating tool in a read-only session, which is
+// what dispatch refuses — not the one name that happens to be mutating
+// today.
+//
+// Permits is the sole gate on the cached-retrieval path, so a second
+// mutating tool would otherwise have its recorded result served into a
+// read-only session that Execute would refuse. Found by review on #287,
+// where Permits tested `name == "propose_change"` while
+// DispatchReadOnly tested entry.Mutating.
+//
+// Mutation: comparing the name instead of the flag makes this fail.
+func TestPermitsRefusesAnyMutatingToolWhenReadOnly(t *testing.T) {
+	gw := NewToolGateway(nil, nil)
+	gw.SetAuthorizer(permitAll{})
+	gw.SetCaller(CallerPersonFacing, "mika", testConnection)
+	// A second mutating tool, registered for this test. There is only
+	// one today, which is exactly why a name comparison looked correct.
+	gw.tools["change_the_house"] = toolEntry{
+		Spec:     provider.Tool{Name: "change_the_house", Description: "changes something"},
+		Mutating: true,
+		Handler: func(context.Context, *ToolGateway, map[string]any) (ToolOutcome, error) {
+			return ToolOutcome{Content: "done"}, nil
+		},
+	}
+
+	for _, name := range []string{"propose_change", "change_the_house"} {
+		if allowed, _ := gw.Permits(name, true); allowed {
+			t.Errorf("%s was permitted in a read-only session", name)
+		}
+		// And dispatch agrees, which is the property that matters.
+		out, err := gw.DispatchReadOnly(context.Background(), name, nil)
+		if err != nil {
+			t.Fatalf("DispatchReadOnly(%s): %v", name, err)
+		}
+		if !out.Rejected {
+			t.Errorf("%s ran in a read-only session", name)
+		}
+	}
+
+	// A read tool is unaffected, so this is not a test that refuses
+	// everything when readOnly is set.
+	if allowed, why := gw.Permits("get_system_overview", true); !allowed {
+		t.Fatalf("a read tool was refused in a read-only session: %q", why)
+	}
+}
+
 // No shipped tool reaches a §10 layer-2 resource yet, and the day one
 // does, it has to say so.
 //

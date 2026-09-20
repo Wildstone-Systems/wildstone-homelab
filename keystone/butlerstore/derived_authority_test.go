@@ -144,7 +144,7 @@ func TestTaskLosesAuthorityAtItsNextBoundaryWhenTheSessionIsRevoked(t *testing.T
 	// §10.1 answers with no.
 	g := newDerivedFixture(t)
 	g.ledger.SessionActive = nil
-	g.refused(t, "session")
+	g.refused(t, "nothing here can say whether that session still stands")
 }
 
 // The Connection the request arrived over is gone.
@@ -157,11 +157,11 @@ func TestTaskLosesAuthorityAtItsNextBoundaryWhenTheConnectionIsRevoked(t *testin
 	if err := f.db.RevokeButlerAddress("matrix", "!room:example.org", "root-admin"); err != nil {
 		t.Fatal(err)
 	}
-	f.refused(t, "connection")
+	f.refused(t, "connection it arrived over is gone")
 
 	g := newDerivedFixture(t)
 	g.ledger.ConnectionActive = nil
-	g.refused(t, "connection")
+	g.refused(t, "nothing here can say whether that connection still admits it")
 }
 
 // Re-adding a bot at the same address does not resurrect the authority
@@ -180,7 +180,12 @@ func TestReaddingAnAddressDoesNotResurrectAWithdrawnConnection(t *testing.T) {
 	if err := f.db.RevokeButlerAddress("matrix", "!room:example.org", "root-admin"); err != nil {
 		t.Fatal(err)
 	}
-	f.refused(t, "connection")
+	// "is gone", not merely "connection": the wrong error sentinel made
+	// the gone branch unreachable and surfaced a raw internal error,
+	// and this test passed anyway because both messages contain the
+	// word "connection". Asserting the branch that should have run is
+	// what would have caught it.
+	f.refused(t, "connection it arrived over is gone")
 
 	// The same address, added again. Under an address-keyed check this
 	// is indistinguishable from the original Connection; under a
@@ -188,7 +193,7 @@ func TestReaddingAnAddressDoesNotResurrectAWithdrawnConnection(t *testing.T) {
 	if _, err := f.db.AddButlerAddress("alfred", "matrix", "!room:example.org", "back again", "root-admin"); err != nil {
 		t.Fatal(err)
 	}
-	f.refused(t, "connection")
+	f.refused(t, "connection it arrived over is gone")
 
 	// And a task admitted over the NEW row is fine, so this is about
 	// identity rather than about refusing everything after a revocation.

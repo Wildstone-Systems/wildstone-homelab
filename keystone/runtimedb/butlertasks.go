@@ -349,6 +349,42 @@ func (db *DB) SetButlerTaskSession(taskID, sessionID string) error {
 	return nil
 }
 
+// TaskOrigin is the small part of a task an authority check needs: who
+// may carry it on, and what it arrived over.
+type TaskOrigin struct {
+	Owner            string
+	OriginConnection string
+	Ref              int64
+}
+
+// ReadTaskOrigin fetches just those three, for the check that runs on
+// EVERY tool authority question.
+//
+// GetButlerTask reads twenty-odd columns across two joins to answer
+// "who owns this", and Capabilities asks once per registered tool — so
+// describing a surface went from zero task reads to one per tool. This
+// keeps the one join it actually needs (the owner's current handle) and
+// drops the rest.
+func (db *DB) ReadTaskOrigin(id string) (TaskOrigin, error) {
+	seq, err := parseButlerTaskID(id)
+	if err != nil {
+		return TaskOrigin{}, ErrNotFound
+	}
+	var o TaskOrigin
+	err = db.sql.QueryRow(
+		`SELECT w.member, t.origin_connection, t.origin_connection_ref
+		 FROM butler_tasks t
+		 JOIN butler_members w ON w.person_id = t.owner_person_id
+		 WHERE t.seq = ?`, seq).Scan(&o.Owner, &o.OriginConnection, &o.Ref)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TaskOrigin{}, ErrNotFound
+	}
+	if err != nil {
+		return TaskOrigin{}, fmt.Errorf("runtimedb: reading a butler task's origin: %w", err)
+	}
+	return o, nil
+}
+
 // ButlerTaskForSession returns the conversation task a Butler session is
 // being driven by, or ErrNotFound.
 //

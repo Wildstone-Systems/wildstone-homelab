@@ -1516,12 +1516,15 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			// admitted" must not be the same answer, so turning it on
 			// is an act (ADR-W030 A2.1, design §10.1).
 			//
-			// All four legs together — the Person, the session, the
-			// Connection and the grants a task was admitted under.
-			// Three of four is not three quarters of the rule; it is a
-			// rule with a hole, and a task that recorded an origin the
-			// deployment cannot check is refused rather than waved
-			// through.
+			// Every leg a TASK is re-evaluated against: the Person,
+			// the session and the Connection it was admitted under. A
+			// subset is not a fraction of the rule; it is a rule with a
+			// hole, and a task that recorded an origin the deployment
+			// cannot check is refused rather than waved through.
+			//
+			// A revoked GRANT is not among them by design: it refuses
+			// its tool in the resolver, per call. See the note on
+			// Ledger's fields.
 			ledger.DerivedAuthorityChecks()
 			butlers := &butlerlive.Butlers{
 				DB:     db,

@@ -38,8 +38,9 @@ type Ledger struct {
 	// deciding what admission means.
 	OwnerActive func(owner string) error
 
-	// SessionActive, ConnectionActive and GrantActive are the other
-	// three legs of design §10.1's derived Task authority: "If the
+	// SessionActive and ConnectionActive are the other legs of design
+	// §10.1's derived Task authority that a TASK can be re-evaluated
+	// against: "If the
 	// Person, session, Connection or grant behind it later loses
 	// authority, the Task loses it too at its next boundary."
 	//
@@ -81,6 +82,7 @@ type Ledger struct {
 	// newest-after-newest — three review rounds on #287, each fix
 	// creating the next gap. The signature of a rule that should not be
 	// derived from history at all.
+
 	// Now is the ledger clock; nil means time.Now.
 	Now func() time.Time
 }
@@ -208,14 +210,14 @@ func (l *Ledger) AdmissionCheck() func(string) error {
 	}
 }
 
-// SessionCheck, ConnectionCheck and GrantCheck wire the other three
-// legs of §10.1's derived authority to the runtime database.
+// SessionCheck and ConnectionCheck wire the other legs of §10.1's
+// derived authority to the runtime database.
 //
 // They are constructors rather than defaults for AdmissionCheck's
 // reason, restated: wiring is the act. DerivedAuthorityChecks below
-// turns all four on together, which is how a deployment should do it —
-// three of four legs is not three quarters of the rule, it is a rule
-// with a hole whose shape nobody wrote down.
+// turns them on together, which is how a deployment should do it — a
+// subset is not a fraction of the rule, it is a rule with a hole whose
+// shape nobody wrote down.
 
 // SessionCheck refuses a task whose originating session was withdrawn.
 func (l *Ledger) SessionCheck() func(string) error {
@@ -253,7 +255,7 @@ func (l *Ledger) ConnectionCheck() func(OriginConnection) error {
 		if c.Name == "" {
 			return errors.New("it arrived over no connection")
 		}
-		if builtInConnection(c.Name) {
+		if BuiltInConnection(c.Name) {
 			return nil
 		}
 		if c.Ref == 0 {
@@ -264,8 +266,15 @@ func (l *Ledger) ConnectionCheck() func(OriginConnection) error {
 			return fmt.Errorf(
 				"the %s connection it arrived over cannot be identified", c.Name)
 		}
+		// ErrNoConnection, not ErrNotFound: ChatConnectionBySeq answers
+		// with the connection package's own sentinel. Testing the wrong
+		// one made this branch unreachable — a revoked Connection came
+		// back as a raw internal error, and a real database failure was
+		// indistinguishable from a revocation. The test passed anyway
+		// because it asserted on the substring "connection", which both
+		// messages happen to contain.
 		if _, err := l.db.ChatConnectionBySeq(c.Ref); err != nil {
-			if errors.Is(err, runtimedb.ErrNotFound) {
+			if errors.Is(err, runtimedb.ErrNoConnection) {
 				return fmt.Errorf("the %s connection it arrived over is gone", c.Name)
 			}
 			return err
@@ -274,15 +283,24 @@ func (l *Ledger) ConnectionCheck() func(OriginConnection) error {
 	}
 }
 
-// builtInConnection reports whether a name is one of the Connections a
-// deployment has rather than one somebody added.
+// BuiltInConnection reports whether a name is one of the Connections a
+// deployment HAS rather than one somebody added.
+//
+// Exported only so the agreement between these copies and the constants
+// they copy can be pinned from a package that can see both — this one
+// cannot, which is the whole reason the names are copied.
 //
 // The names are duplicated from keystone/butlerlive and keystone/portal
 // rather than imported: butlerlive imports THIS package, and portal is
 // an HTTP surface the store has no business knowing. Two short strings
-// is what keeping that direction costs, and connectionNamesAgree in the
-// butlerlive tests pins them together.
-func builtInConnection(name string) bool {
+// is what keeping that direction costs.
+//
+// TestBuiltInConnectionNamesAgree, in keystone/api, pins them to the
+// constants they copy,
+// so renaming either one fails here rather than silently refusing every
+// in-flight Console or dashboard task at its next boundary. An earlier
+// version of this comment claimed such a test existed when it did not.
+func BuiltInConnection(name string) bool {
 	return name == "console" || name == "household_portal"
 }
 

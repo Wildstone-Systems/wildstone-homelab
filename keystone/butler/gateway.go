@@ -456,8 +456,13 @@ func (gw *ToolGateway) Permits(name string, readOnly bool) (bool, string) {
 	if !ok {
 		return false, fmt.Sprintf("%s is not a tool on this surface", name)
 	}
-	if readOnly && name == "propose_change" {
-		return false, "this session runs read-only"
+	// Any MUTATING tool, which is what DispatchReadOnly refuses —
+	// not the one name that happens to be mutating today. Permits is
+	// the sole gate on the cached-retrieval path, so a second mutating
+	// tool would otherwise have its recorded result served into a
+	// read-only session that Execute would refuse.
+	if readOnly && entry.Mutating {
+		return false, fmt.Sprintf("tool %q is not available in this read-only session", name)
 	}
 	if d := gw.checkTool(name, entry); !d.Allowed {
 		// Through the same pipeline dispatch uses. A refusal can carry

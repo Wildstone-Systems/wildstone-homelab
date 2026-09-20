@@ -139,7 +139,7 @@ func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecis
 // comparison is against the task's value, not against whichever of the
 // two happens to be set.
 func (a *Authority) withinOriginatingAuthority(q butler.ToolAuthorityQuery) (butler.ToolDecision, bool, error) {
-	task, err := a.DB.GetButlerTask(q.TaskID)
+	task, err := a.DB.ReadTaskOrigin(q.TaskID)
 	if errors.Is(err, runtimedb.ErrNotFound) {
 		return butler.ToolDecision{
 			Allowed: false,
@@ -169,9 +169,10 @@ func (a *Authority) withinOriginatingAuthority(q butler.ToolAuthorityQuery) (but
 	// It does not widen anything. A re-homing that pauses the work,
 	// strips its grants and waits for a human is a NEW bounded
 	// authorization, not a Task reaching past the one it had — and the
-	// grant leg in Ledger.derivedAuthority still refuses a transferred
-	// task whose grants were revoked until somebody issues new ones,
-	// which is the review half of A4 enforced rather than assumed.
+	// grants A4 revokes on the way out stay revoked until somebody
+	// issues new ones, which the resolver enforces per tool on every
+	// call. (An earlier version of this comment credited a task-level
+	// grant leg that 552787c removed.)
 	//
 	// The author stays the immutable record of whose request this was;
 	// the schema enforces that half, and the work trace reads from it.
