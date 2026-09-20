@@ -459,13 +459,14 @@ func (gw *ToolGateway) Permits(name string, readOnly bool) (bool, string) {
 	if readOnly && name == "propose_change" {
 		return false, "this session runs read-only"
 	}
-	d := gw.checkTool(name, entry)
-	if !d.Allowed {
-		reason := d.Reason
-		if reason == "" {
-			reason = fmt.Sprintf("%s is not available in this session", name)
-		}
-		return false, reason
+	if d := gw.checkTool(name, entry); !d.Allowed {
+		// Through the same pipeline dispatch uses. A refusal can carry
+		// administrator-supplied text — butler_tool_scope.reason is
+		// appended to it — so it is content like any other, and
+		// ADR-W006 B3 puts redaction and the size bound in one place
+		// precisely "so a new tool cannot forget it". This path is new
+		// and forgot it; a review bot on #287 caught that.
+		return false, finishOutcome(refusal(name, d), false, gw.MaxContentBytes).Content
 	}
 	return true, ""
 }

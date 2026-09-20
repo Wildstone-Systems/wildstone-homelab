@@ -445,6 +445,98 @@ func (r refuseOne) AuthorizeTool(q ToolAuthorityQuery) (ToolDecision, error) {
 	return ToolDecision{Allowed: q.Structural}, nil
 }
 
+// A refusal from Permits goes through the same pipeline a dispatched
+// refusal does: redacted, and bounded.
+//
+// A refusal is CONTENT. It can carry administrator-supplied text —
+// runtimedb appends butler_tool_scope.reason to it — so a credential
+// pasted into a control's reason, or an essay, would otherwise reach
+// the model unredacted and unbounded through the one path that never
+// calls Execute. ADR-W006 B3 centralizes redaction and the size bound
+// precisely "so a new tool cannot forget it"; Permits was new and
+// forgot. Found by a review bot on #287.
+//
+// THE TWO HAZARDS NEED SEPARATE REASONS. The first version of this test
+// put a secret and nine thousand filler bytes in one string, and
+// redaction collapsed the filler along with the secret — so the size
+// assertion never bit, and a mutation that dropped the bound escaped.
+// The long reason below is deliberately free of anything secret-shaped.
+//
+// Mutations: returning d.Reason fails the redaction case; redacting
+// without bounding fails the length case.
+func TestAPermitsRefusalIsRedactedAndBounded(t *testing.T) {
+	const secret = "password: hunter2-the-real-one"
+	// Prose, so redaction has nothing to take and only the bound can
+	// shorten it.
+	long := strings.Repeat("the administrator wrote a very long explanation. ", 300)
+
+	t.Run("redacted", func(t *testing.T) {
+		gw := newPermitsGateway(secret)
+		_, why := gw.Permits("get_system_overview", false)
+		if strings.Contains(why, "hunter2-the-real-one") {
+			t.Fatalf("a secret in an administrator's reason reached the caller: %q", why)
+		}
+	})
+
+	t.Run("bounded", func(t *testing.T) {
+		gw := newPermitsGateway(long)
+		_, why := gw.Permits("get_system_overview", false)
+		if len(why) > 400 {
+			t.Fatalf("the refusal is %d bytes, past the session's 200-byte bound", len(why))
+		}
+	})
+
+	t.Run("identical to dispatch", func(t *testing.T) {
+		// The two paths must not tell a model different stories about
+		// one refusal.
+		for _, reason := range []string{secret, long} {
+			gw := newPermitsGateway(reason)
+			_, why := gw.Permits("get_system_overview", false)
+			out, err := gw.Dispatch(context.Background(), "get_system_overview", nil)
+			if err != nil {
+				t.Fatalf("Dispatch: %v", err)
+			}
+			if out.Content != why {
+				t.Fatalf("retrieval and dispatch refusals differ:\n  permits:  %q\n  dispatch: %q",
+					why, out.Content)
+			}
+		}
+	})
+
+	t.Run("family surface too", func(t *testing.T) {
+		hh := NewHouseholdGateway("sam", HouseholdSeams{MaxContentBytes: 200})
+		hh.SetAuthorizer(reasonAuthorizer{reason: secret + " and " + long})
+		hh.SetCaller(CallerPersonFacing, "sam", testConnection)
+		_, why := hh.Permits("get_household_events", false)
+		if strings.Contains(why, "hunter2-the-real-one") {
+			t.Fatalf("a secret reached the caller on the family surface: %q", why)
+		}
+		if len(why) > 400 {
+			t.Fatalf("the family refusal is %d bytes, past its bound", len(why))
+		}
+	})
+}
+
+func newPermitsGateway(reason string) *ToolGateway {
+	gw := NewToolGateway(nil, nil)
+	gw.MaxContentBytes = 200
+	gw.SetAuthorizer(reasonAuthorizer{reason: reason})
+	gw.SetCaller(CallerPersonFacing, "mika", testConnection)
+	return gw
+}
+
+// reasonAuthorizer refuses everything with one fixed reason, standing
+// in for an administrator's control text.
+type reasonAuthorizer struct{ reason string }
+
+func (reasonAuthorizer) AdmitPerson(ToolAuthorityQuery) (ToolDecision, error) {
+	return ToolDecision{Allowed: true}, nil
+}
+
+func (r reasonAuthorizer) AuthorizeTool(ToolAuthorityQuery) (ToolDecision, error) {
+	return ToolDecision{Allowed: false, Reason: r.reason}, nil
+}
+
 // No shipped tool reaches a §10 layer-2 resource yet, and the day one
 // does, it has to say so.
 //

@@ -618,13 +618,9 @@ func (gw *HouseholdGateway) Permits(name string, readOnly bool) (bool, string) {
 	if readOnly && entry.Mutating {
 		return false, fmt.Sprintf("tool %q is not available in this read-only session", name)
 	}
-	d := gw.checkTool(name, entry)
-	if !d.Allowed {
-		reason := d.Reason
-		if reason == "" {
-			reason = fmt.Sprintf("%s is not available in this session", name)
-		}
-		return false, reason
+	if d := gw.checkTool(name, entry); !d.Allowed {
+		// The same pipeline dispatch uses — see ToolGateway.Permits.
+		return false, finishOutcome(refusal(name, d), false, gw.seams.MaxContentBytes).Content
 	}
 	if entry.Describe == nil && !gw.wired(name) {
 		return false, fmt.Sprintf("tool %q is not available on this deployment", name)
