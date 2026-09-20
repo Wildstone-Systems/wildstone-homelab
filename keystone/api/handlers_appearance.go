@@ -114,13 +114,32 @@ func (s *Server) themeCatalog() []theme.Theme {
 	// mean re-pasting Nord's palette first. One query for the whole
 	// catalogue, and deliberately without the bytes: this list is read
 	// on every load of every surface.
+	//
+	// A picture that SHIPPED is attached the same way, and is looked at
+	// second: theme_backgrounds is the household's own choice and
+	// shadows the default. Clearing an upload therefore falls back to
+	// the shipped picture rather than to nothing, which is what
+	// "remove my picture" should mean for a theme that came with one.
+	shipped := s.shippedWallpapers()
 	if s.DB != nil {
 		if versions, err := s.DB.ThemeBackgroundVersions(); err == nil {
 			for i := range out {
 				if v, ok := versions[out[i].Name]; ok {
 					out[i] = out[i].WithBackground(v)
+					continue
+				}
+				if w, ok := shipped[out[i].Name]; ok {
+					out[i] = out[i].WithBackground(w.version)
 				}
 			}
+			return out
+		}
+	}
+	// No database, or the version query failed: the shipped pictures
+	// are still on disk and a theme should still arrive with one.
+	for i := range out {
+		if w, ok := shipped[out[i].Name]; ok {
+			out[i] = out[i].WithBackground(w.version)
 		}
 	}
 	return out
@@ -434,10 +453,24 @@ func (s *Server) themeBackgroundClear(r *http.Request, id principal.Identity) (a
 		return nil, http.StatusInternalServerError, err
 	}
 	if !removed {
+		// A theme that SHIPPED with a picture has one without anybody
+		// having uploaded one, so "no picture" would be a lie here.
+		// Say which case this is: there is nothing of the household's
+		// to remove, and the default is not something to delete.
+		if _, ok := s.shippedWallpaperFor(name); ok {
+			return nil, http.StatusConflict,
+				fmt.Errorf("%q is showing the picture it shipped with, which nobody uploaded and nothing here removes — upload your own to replace it", name)
+		}
 		return nil, http.StatusNotFound, fmt.Errorf("%q has no picture", name)
 	}
 	s.recordThemeEvent("theme.background", id,
 		fmt.Sprintf("%s removed the picture behind the theme %q", actingMember(id), name))
+	// Cleared back to the SHIPPED picture where there is one, rather
+	// than to a flat ground. "Remove my picture" means the theme looks
+	// the way it did out of the box.
+	if _, ok := s.shippedWallpaperFor(name); ok {
+		return map[string]any{"cleared": name, "revertedToShipped": true}, http.StatusOK, nil
+	}
 	return map[string]any{"cleared": name}, http.StatusOK, nil
 }
 
@@ -462,13 +495,21 @@ func (s *Server) writeThemeBackground(w http.ResponseWriter, r *http.Request) (a
 	if !theme.ValidName(name) {
 		return nil, http.StatusNotFound, fmt.Errorf("no picture")
 	}
-	b, err := s.DB.GetThemeBackground(name)
-	if err != nil {
+	image, mediaType := []byte(nil), ""
+	if b, err := s.DB.GetThemeBackground(name); err == nil {
+		image, mediaType = b.Image, b.MediaType
+	} else if shipped, mt, _, serr := s.readShippedWallpaper(name); serr == nil {
+		// The household uploaded nothing for this theme, but the theme
+		// came with a picture. Second, not first: an upload shadows the
+		// default (handlers_appearance.go says so where the catalogue
+		// is built, and the two must not disagree).
+		image, mediaType = shipped, mt
+	} else {
 		// Absent is a 404 and the page falls back to the flat ground,
 		// which is a theme without a picture rather than an error.
 		return nil, http.StatusNotFound, fmt.Errorf("no picture")
 	}
-	w.Header().Set("Content-Type", b.MediaType)
+	w.Header().Set("Content-Type", mediaType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// Cacheable, unlike the household banner: a theme's wallpaper is
 	// art the whole household can already see in the picker, not a
@@ -477,7 +518,7 @@ func (s *Server) writeThemeBackground(w http.ResponseWriter, r *http.Request) (a
 	// be the most expensive thing on the dashboard.
 	w.Header().Set("Cache-Control", "private, max-age=86400")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(b.Image)
+	_, _ = w.Write(image)
 	return nil, http.StatusOK, nil
 }
 

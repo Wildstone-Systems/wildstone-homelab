@@ -43,6 +43,14 @@ type Server struct {
 	State   *statefile.Store
 	Log     *slog.Logger
 
+	// WallpaperDir holds the pictures that ship with the product, one
+	// per shipped theme, named <slug>.<ext> (see wallpapers.go for why
+	// they are a directory rather than embedded bytes). Empty means the
+	// shipped themes arrive without pictures and only a household's own
+	// uploads are drawn, which is what a deployment that installed no
+	// wallpaper artifact gets.
+	WallpaperDir string
+
 	// trustedIngress is the exact set of remote addresses the identity
 	// proxy speaks from (ADR-W030 A8.1). It gates the household review
 	// route, the household portal and the Console — all of which trust

@@ -94,11 +94,18 @@ func TestEveryShippedThemeIsLegibleOverAnyWallpaper(t *testing.T) {
 			overWhite := mix(white, bg, Veil).quantise()
 			overBlack := mix(black, bg, Veil).quantise()
 
+			// AA here, AAA on the flat ground above. The veil that
+			// buys 7:1 over an arbitrary photograph is thick enough
+			// to hide the photograph (tokens.go says how thick), so
+			// this surface keeps the floor everything else on the
+			// page keeps and spends the difference on the picture
+			// being visible. A theme with no wallpaper is unaffected
+			// and is still checked at 7:1.
 			for _, c := range []struct {
 				token string
 				floor float64
 			}{
-				{"--color-text", 7},
+				{"--color-text", 4.5},
 				{"--muted", 4.5},
 				{"--icon", 4.5},
 				{"--color-accent", 4.5},

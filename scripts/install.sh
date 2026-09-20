@@ -12,6 +12,9 @@
 #     sudo ./install.sh --role node --keystone <host:9440> \
 #          --join-token <tok> [--ca-fingerprint <hex>] \
 #          [--node-id <id>] [--skip-docker] [--version vX.Y.Z]
+#   --wallpaper-dir overrides the pictures the themes ship with, the
+#   same way --console-dir overrides the Console.
+#
 #   Either role also takes [--artifact-dir <dir>] to install from local
 #   release artifacts instead of downloading (private repos, air-gap),
 #   and [--tailscale-authkey <key>] [--tailscale-hostname <name>] to
@@ -57,6 +60,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARTIFACT_DIR=""
 CONSOLE_DIR=""
 CATALOG_DIR=""
+WALLPAPER_DIR=""
 KEYSTONE_ARGS=""
 KEYSTONE_ARGS_SET=0
 TOKEN="${WILDSTONE_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
@@ -139,6 +143,7 @@ while [ $# -gt 0 ]; do
     --artifact-dir)   ARTIFACT_DIR="$2"; shift 2 ;;
     --console-dir)    CONSOLE_DIR="$2"; shift 2 ;;
     --catalog-dir)    CATALOG_DIR="$2"; shift 2 ;;
+    --wallpaper-dir)  WALLPAPER_DIR="$2"; shift 2 ;;
     --keystone-arg)   KEYSTONE_ARGS="$KEYSTONE_ARGS $2"; KEYSTONE_ARGS_SET=1; shift 2 ;;
     --token)          TOKEN="$2"; shift 2 ;;
     --tailscale-authkey)  TAILSCALE_AUTHKEY="$2"; shift 2 ;;
@@ -704,6 +709,29 @@ install_packages() {
   tar --no-same-owner -xzf "$WORK/packages.tar.gz" -C "$dir"
   CATALOG_DIR="$dir"
   log "installed the package catalog to $dir"
+}
+
+install_wallpapers() {
+  # The picture each shipped theme arrives with. A release asset for the
+  # same reason the catalog and the Console are — data, architecture-
+  # independent, and nine megabytes that have no business inside a
+  # binary (keystone/api/wallpapers.go records that reasoning, and
+  # migration 0061 is the decision it answers).
+  #
+  # Skipped, not failed, when the release predates the asset: the themes
+  # then arrive with palettes only, which is exactly how they shipped
+  # before and is a working dashboard, not a fault.
+  local dir=/usr/share/wildstone/wallpapers
+  release_has wallpapers.tar.gz || {
+    log "this release has no wallpapers.tar.gz; the themes will arrive without pictures"
+    return 0
+  }
+  fetch_asset wallpapers.tar.gz
+  install -d -m 0755 "$dir"
+  find "$dir" -mindepth 1 -delete
+  tar --no-same-owner -xzf "$WORK/wallpapers.tar.gz" -C "$dir"
+  WALLPAPER_DIR="$dir"
+  log "installed the theme wallpapers to $dir"
 }
 
 fetch_binary() {
@@ -1324,6 +1352,7 @@ if [ "$ROLE" = keystone ]; then
   # a deliberate choice and this must not overwrite it.
   [ -n "$CONSOLE_DIR" ] || install_console
   [ -n "$CATALOG_DIR" ] || install_packages
+  [ -n "$WALLPAPER_DIR" ] || install_wallpapers
   if [ -n "$CONSOLE_DIR" ]; then
     [ -d "$CONSOLE_DIR" ] || fail "--console-dir $CONSOLE_DIR does not exist (build the Console elsewhere and copy dist/ here)"
     KEYSTONE_ARGS="$KEYSTONE_ARGS -console-dir $CONSOLE_DIR"
@@ -1332,6 +1361,11 @@ if [ "$ROLE" = keystone ]; then
   if [ -n "$CATALOG_DIR" ]; then
     [ -d "$CATALOG_DIR" ] || fail "--catalog-dir $CATALOG_DIR does not exist"
     KEYSTONE_ARGS="$KEYSTONE_ARGS -catalog-dir $CATALOG_DIR"
+    KEYSTONE_ARGS_SET=1
+  fi
+  if [ -n "$WALLPAPER_DIR" ]; then
+    [ -d "$WALLPAPER_DIR" ] || fail "--wallpaper-dir $WALLPAPER_DIR does not exist"
+    KEYSTONE_ARGS="$KEYSTONE_ARGS -wallpaper-dir $WALLPAPER_DIR"
     KEYSTONE_ARGS_SET=1
   fi
   # Reachable by the proxy, on a host that will have one.

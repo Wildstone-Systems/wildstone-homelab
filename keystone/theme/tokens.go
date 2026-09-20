@@ -59,7 +59,22 @@ import (
 // more of the picture and pushes the inks further; higher is a flatter
 // ground that looks more like the theme without its wallpaper. This is
 // the one line to change to trade those off.
-const Veil = 0.86
+//
+// IT WAS 0.86, AND 0.86 HID THE PICTURE. That value was set by holding
+// body text to 7:1 over the worst pixel an unknown photograph can put
+// under it, and the veil thick enough to guarantee that leaves about a
+// seventh of the wallpaper showing — which on a dark palette under a
+// dark photograph reads, correctly, as "the wallpaper is not working".
+// A feature whose whole point is the picture cannot be tuned so that
+// the picture is invisible.
+//
+// So the floor for body text over a wallpaper is AA (4.5:1) rather
+// than AAA (7:1), and 0.70 is the thinnest veil at which EVERY shipped
+// theme still clears it — the worst of the twenty-two lands at 4.88:1,
+// and 0.65 would put four of them under 4.5. Text on a theme with NO
+// picture is untouched and still held to 7:1: this trade is paid only
+// by a household that asked for a photograph behind its dashboard.
+const Veil = 0.70
 
 // veilMargin is how much weaker than Veil the repair pretends the veil
 // is.

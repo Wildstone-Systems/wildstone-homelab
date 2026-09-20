@@ -4,7 +4,9 @@ package portal
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"net/http"
 	"path"
 	"strings"
@@ -176,10 +178,50 @@ func Asset(name string) ([]byte, string, bool) {
 }
 
 // WriteAsset serves one static design file.
-func WriteAsset(w http.ResponseWriter, body []byte, contentType string) {
+//
+// REVALIDATED, NOT IMMUTABLE. This used to answer with
+// `max-age=31536000, immutable` over a URL that carries no version —
+// /portal/assets/nocturne.css and nothing else. Those two together are
+// a promise the bytes at that address will never change, and the
+// browser keeps it: `immutable` suppresses the conditional request
+// even on an ordinary reload. So a stylesheet fix shipped in a new
+// Keystone reached a household that had never opened the dashboard,
+// and NOBODY ELSE, for a year. That is not a cache, it is a freeze,
+// and it silently made every deployed design change a no-op for the
+// people who had already visited.
+//
+// A strong ETag over the bytes restores the conditional request. The
+// cost is one 304 per asset per load — a URL space of one stylesheet,
+// two fonts and forty icons, on a dashboard served over a household's
+// own network — and the benefit is that shipping a fix ships it.
+//
+// The alternative was a content hash in the URL, which buys back the
+// long cache. It is the better answer once these URLs are generated
+// rather than written by hand in the page, and it is not this change:
+// the icons are built at run time by the scripts in home.html, so
+// hashing only the ones spelled out in the markup would leave exactly
+// the sort of half-versioned asset space this comment is about.
+func WriteAsset(w http.ResponseWriter, r *http.Request, body []byte, contentType string) {
+	sum := sha256.Sum256(body)
+	etag := `"` + hex.EncodeToString(sum[:16]) + `"`
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("ETag", etag)
+	// max-age=0 rather than no-store: the copy in the browser is still
+	// used, it is just checked first. must-revalidate says so to the
+	// proxies a household might put in front of this.
+	w.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
+	// A quoted-string match, and the weak-comparison prefix is accepted
+	// because a 304 is a cache decision, not an integrity claim.
+	if match := r.Header.Get("If-None-Match"); match != "" {
+		for _, candidate := range strings.Split(match, ",") {
+			candidate = strings.TrimSpace(candidate)
+			if candidate == etag || candidate == "W/"+etag || candidate == "*" {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+		}
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
 }
