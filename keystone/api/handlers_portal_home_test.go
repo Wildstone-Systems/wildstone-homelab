@@ -860,3 +860,70 @@ func TestTheDashboardLinksOnlyOwnersToTheConsole(t *testing.T) {
 		t.Errorf("an Owner outside %s was given the link: %q", ConsoleGroup, got)
 	}
 }
+
+// Clear empties the card. Not "marks the rows read and leaves them
+// where they were" — that is what it used to do, and from the sofa it
+// is indistinguishable from a button that does nothing: the dots went
+// grey, the rows stayed, and the header went on counting.
+func TestClearingNotificationsEmptiesTheCard(t *testing.T) {
+	h := homeHarness(t)
+	h.person("sandy")
+	for _, k := range []string{"n1", "n2", "n3"} {
+		if _, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
+			Kind: "washing-done", Recipient: "sandy", DedupeKey: k,
+		}, runtimedb.DefaultButlerSettings(), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	before := h.summary(t, "sandy").Notifications
+	if len(before.Items) != 3 || before.Unread != 3 {
+		t.Fatalf("before clearing: %d items, %d unread; want 3 and 3", len(before.Items), before.Unread)
+	}
+
+	res := h.member(http.MethodPost, "/api/v1/home/notices/clear", "sandy", "homepage_users", nil, "")
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("clear: status %d", res.StatusCode)
+	}
+
+	after := h.summary(t, "sandy").Notifications
+	if len(after.Items) != 0 {
+		t.Errorf("after clearing, the card still lists %d notifications", len(after.Items))
+	}
+	if after.Unread != 0 {
+		t.Errorf("after clearing, the header still counts %d unread", after.Unread)
+	}
+	if !after.Available {
+		t.Error("an empty notifications card reports itself unavailable")
+	}
+}
+
+// A question waiting on an answer is not swept away by Clear, and it is
+// still SHOWN afterwards — the card is unread-only, and an unanswered
+// question stays unread precisely so it cannot be lost.
+func TestClearLeavesAnUnansweredQuestionOnTheCard(t *testing.T) {
+	h := homeHarness(t)
+	h.person("sandy")
+	if _, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
+		Kind: "washing-done", Recipient: "sandy", DedupeKey: "plain",
+	}, runtimedb.DefaultButlerSettings(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.DB.RaiseNotice(runtimedb.NoticeRequest{
+		Kind: "lock-up", Recipient: "sandy", DedupeKey: "asks", Asks: true,
+	}, runtimedb.DefaultButlerSettings(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	res := h.member(http.MethodPost, "/api/v1/home/notices/clear", "sandy", "homepage_users", nil, "")
+	res.Body.Close()
+
+	after := h.summary(t, "sandy").Notifications
+	if len(after.Items) != 1 {
+		t.Fatalf("after clearing: %d items, want only the unanswered question", len(after.Items))
+	}
+	if after.Items[0].Source != "lock-up" {
+		t.Errorf("the surviving row is %q, want the unanswered question", after.Items[0].Source)
+	}
+}

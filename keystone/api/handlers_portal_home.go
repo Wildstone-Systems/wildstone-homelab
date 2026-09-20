@@ -764,12 +764,12 @@ func toneRank(t portal.Tone) int {
 const maxNotifications = 6
 
 // maxNotificationsScan is how many rows are read to fill those six.
-// More than six so the unread-first ordering has something to choose
-// from, and bounded so a long-quiet household is not read end to end
-// for a card.
+// More than six so the ordering has something to choose from, and
+// bounded so a long-quiet household is not read end to end for a card.
 const maxNotificationsScan = 40
 
-// homeNotifications is what this member missed — theirs alone.
+// homeNotifications is what this member missed — theirs alone, and
+// unread: a notice they have seen is not something they missed.
 //
 // ListNotices is already scoped to the recipient, which is what makes
 // "per-person topics are never shown to another member" true at the
@@ -788,13 +788,19 @@ func (s *Server) homeNotifications(member string) notificationsCard {
 		card.Problem = "Can't reach notifications"
 		return card
 	}
-	// Unread first IN THE QUERY, so the window the card draws from is
-	// the window the count is about. Sorting a window that was chosen
-	// by recency alone only reorders it: forty read notices in front of
-	// an unread one left the unread one out of the answer, and the card
-	// advertised it anyway.
+	// UNREAD ONLY, which is what makes Clear clear anything.
+	//
+	// This listed read notices too, so pressing Clear marked them all
+	// read and the card went on showing the same rows — the dots went
+	// grey and nothing else moved. A button labelled Clear on a card
+	// whose own job is "what this member missed" has to empty it.
+	//
+	// The same predicate as the count above, so the list and the number
+	// cannot disagree by construction. The count is still asked for
+	// separately because it is not capped and this is: six of nine is
+	// still "9 new".
 	notices, err := s.DB.ListNotices(maxNotificationsScan, runtimedb.NoticeFilter{
-		Recipient: member, Deliverable: true, UnreadFirst: true,
+		Recipient: member, Deliverable: true, Unacknowledged: true,
 	})
 	if err != nil {
 		s.Log.Error("home notifications", "err", err)
@@ -814,15 +820,11 @@ func (s *Server) homeNotifications(member string) notificationsCard {
 			Unread: unread,
 		})
 	}
-	// Unread first, then newest — §7's order, and the reason the unread
-	// count in the header is a summary rather than a scroll.
+	// Newest first. Every row here is unread now, so the unread half of
+	// §7's order is carried by the query; this is the tie-break it
+	// always had.
 	//
 	// SORTED BEFORE IT IS CUT, which is the whole point of sorting it.
-	// The cut used to happen in the loop above, on the newest rows,
-	// and the sort then reordered whatever had survived: six read
-	// notices and a seventh unread one produced a card advertising one
-	// unread item and not one unread row to show for it, however far
-	// the member expanded it.
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Unread != items[j].Unread {
 			return items[i].Unread

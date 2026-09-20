@@ -1229,15 +1229,23 @@
       note(body, "warn", c.problem || "Can't reach notifications");
       return;
     }
-    if (c.unread) {
-      el("notif-count").hidden = false;
-      text("notif-count", c.unread + " new");
-    }
+    // BOTH BRANCHES, EVERY TIME. These two controls live in the card's
+    // header, outside #notif-body, so clear(body) above does not touch
+    // them and whatever the last render left is what stays. Setting
+    // them only when there was something to show meant Clear marked
+    // everything read and left a header still reading "3 new" over an
+    // empty card.
+    el("notif-count").hidden = !c.unread;
+    if (c.unread) { text("notif-count", c.unread + " new"); }
+    el("notif-clear").hidden = !c.items.length;
+    // Re-enabled on the way back in. The click handler disables it to
+    // stop a second press mid-flight; nothing re-enabled it on success,
+    // so the button went grey and stayed grey.
+    el("notif-clear").disabled = false;
     if (!c.items.length) {
       body.appendChild(make("div", "muted", "Nothing new."));
       return;
     }
-    el("notif-clear").hidden = false;
     // Two rows, unless the member has already asked for the rest — a
     // refresh that folded the list back up every twenty seconds would
     // make the disclosure unusable.
@@ -1275,8 +1283,18 @@
   el("notif-clear").addEventListener("click", function () {
     el("notif-clear").disabled = true;
     fetch("/api/v1/home/notices/clear", { method: "POST" })
-      .then(function () { load(); })
-      .catch(function () { el("notif-clear").disabled = false; });
+      .then(function (r) {
+        // fetch rejects on a dead network and NOT on a 4xx or 5xx, so
+        // without this a refused clear reloaded the page, found the
+        // notices still unread, and looked exactly like a button that
+        // does nothing.
+        if (!r.ok) { throw new Error("clear refused: " + r.status); }
+        load();
+      })
+      .catch(function () {
+        el("notif-clear").disabled = false;
+        note(el("notif-body"), "warn", "That didn't go through.");
+      });
   });
 
   // ---- the launcher.
