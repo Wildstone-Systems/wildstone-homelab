@@ -130,6 +130,26 @@ type ResourceAuthorizer interface {
 	AdmitResource(q ToolAuthorityQuery) (ToolDecision, error)
 }
 
+// PersonAuthorizer is the LAYER-1 half of the seam: may this person
+// have work done for them at all, right now.
+//
+// It is asked separately, and first, rather than being left inside
+// AuthorizeTool. The resolver's own answer necessarily arrives after
+// everything it consults — the Agent's narrowings, its assignments, the
+// grants issued to it — and those are layer 2. Without this the general
+// rule ran a RESOURCE rule before anything had admitted the caller,
+// which is §10's ordering inverted: a revoked person would be handed a
+// resource-specific refusal, which says something about the resource,
+// instead of being told they may not do work at all. Found by a review
+// bot on #286.
+//
+// A resolver that does not implement it cannot answer layer 1, and a
+// person-facing check it cannot answer is refused — the same rule
+// ResourceAuthorizer gets, for the same reason.
+type PersonAuthorizer interface {
+	AdmitPerson(q ToolAuthorityQuery) (ToolDecision, error)
+}
+
 // ToolDecision is the resolver's answer for one dispatch.
 type ToolDecision struct {
 	Allowed bool
@@ -283,6 +303,33 @@ func generalAuthority(a ToolAuthorizer, q ToolAuthorityQuery) (ToolDecision, boo
 				q.Person, q.Tool),
 		}, false
 	}
+	// LAYER 1, BEFORE ANYTHING ELSE ASKS ANYTHING. Everything below is
+	// about the resource or the Agent, and none of it may run for a
+	// person nobody has admitted — not even to produce a refusal, which
+	// would describe a resource to somebody with no standing to hear
+	// about it.
+	pa, ok := a.(PersonAuthorizer)
+	if !ok {
+		return ToolDecision{
+			Allowed: false,
+			Reason: fmt.Sprintf(
+				"nothing on this deployment can say whether %s may use %s, so it was not run",
+				q.Person, q.Tool),
+		}, false
+	}
+	d, err := pa.AdmitPerson(q)
+	if err != nil {
+		return ToolDecision{
+			Allowed: false,
+			Reason: fmt.Sprintf(
+				"could not check whether %s may do work right now, so %s was not run",
+				q.Person, q.Tool),
+		}, false
+	}
+	if !d.Allowed {
+		return d, false
+	}
+
 	if q.Resource.Named() {
 		// The general rule REQUIRES the resource's own authority without
 		// knowing what it is. A resolver with no resource rules admits
@@ -297,8 +344,8 @@ func generalAuthority(a ToolAuthorizer, q ToolAuthorityQuery) (ToolDecision, boo
 					q.Tool, q.Resource.Kind),
 			}, false
 		}
-		d, err := ra.AdmitResource(q)
-		if err != nil {
+		rd, rerr := ra.AdmitResource(q)
+		if rerr != nil {
 			return ToolDecision{
 				Allowed: false,
 				Reason: fmt.Sprintf(
@@ -306,8 +353,8 @@ func generalAuthority(a ToolAuthorizer, q ToolAuthorityQuery) (ToolDecision, boo
 					q.Resource.Kind, q.Tool),
 			}, false
 		}
-		if !d.Allowed {
-			return d, false
+		if !rd.Allowed {
+			return rd, false
 		}
 	}
 	return ToolDecision{}, true

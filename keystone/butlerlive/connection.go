@@ -78,6 +78,26 @@ func (c connectionCeiling) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.To
 	return c.inner.AuthorizeTool(q)
 }
 
+// AdmitPerson forwards layer 1 to the resolver underneath.
+//
+// A decorator has to carry it for the reason it carries AdmitResource:
+// once wrapped, this type IS the authorizer the seam sees, and a
+// wrapper that did not implement it would make every person-facing call
+// unanswerable the moment a connection ceiling was bound. Forwarding
+// keeps the ceiling a ceiling — it still cannot turn a no into a yes.
+func (c connectionCeiling) AdmitPerson(q butler.ToolAuthorityQuery) (butler.ToolDecision, error) {
+	pa, ok := c.inner.(butler.PersonAuthorizer)
+	if !ok {
+		return butler.ToolDecision{
+			Allowed: false,
+			Reason: fmt.Sprintf(
+				"nothing on this deployment can say whether %s may use %s, so it was not run",
+				q.Person, q.Tool),
+		}, nil
+	}
+	return pa.AdmitPerson(q)
+}
+
 // AdmitResource forwards layer 2 to the resolver underneath.
 //
 // A decorator has to carry it: the seam asks its authorizer whether it
