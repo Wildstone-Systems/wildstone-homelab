@@ -27,6 +27,7 @@ type fakeAdapter struct {
 }
 
 func newFakeAdapter(t *testing.T, h *harness, name string) *fakeAdapter {
+	ownExecutionFixture(t, h)
 	t.Helper()
 	p := h.s.Principals
 	if err := p.Create(name, runtimedb.RoleIntegrationAdapter, ""); err != nil {

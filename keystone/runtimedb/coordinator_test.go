@@ -95,3 +95,30 @@ func TestCoordinatorLeaseSurvivesRestart(t *testing.T) {
 		t.Fatalf("a different process took the lease after a restart: %v", err)
 	}
 }
+
+func TestTwoLiveProcessesCannotReacquireTheSameHolder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keystone.db")
+	first, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if _, err := first.AcquireCoordinator("same-deployment"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.AcquireCoordinator("same-deployment"); !errors.Is(err, ErrCoordinatorHeld) {
+		t.Fatalf("a second live process acquired the same holder: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := second.AcquireCoordinator("same-deployment")
+	if err != nil || lease.Epoch != 1 {
+		t.Fatalf("restart: %+v, %v", lease, err)
+	}
+}

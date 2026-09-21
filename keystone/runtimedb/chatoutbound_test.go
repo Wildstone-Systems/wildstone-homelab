@@ -14,7 +14,7 @@ import (
 // interesting assertion is that one Agent's bot does not collect
 // another's messages. A surface could not express that: both Owner
 // Agents are `admin`.
-func chatTestDB(t *testing.T) (*DB, Connection, Connection) {
+func uncoordinatedChatTestDB(t *testing.T) (*DB, Connection, Connection) {
 	t.Helper()
 	db, err := Open(t.TempDir() + "/keystone.db")
 	if err != nil {
@@ -290,4 +290,13 @@ func TestChatOutboundTruncatesOnRuneBoundaries(t *testing.T) {
 	if len(msgs[0].Body) > MaxChatBodyBytes {
 		t.Fatalf("body = %d bytes, want it bounded to %d", len(msgs[0].Body), MaxChatBodyBytes)
 	}
+}
+
+func chatTestDB(t *testing.T) (*DB, Connection, Connection) {
+	t.Helper()
+	db, family, admin := uncoordinatedChatTestDB(t)
+	if _, err := db.AcquireCoordinator("effect-fixture"); err != nil {
+		t.Fatal(err)
+	}
+	return db, family, admin
 }

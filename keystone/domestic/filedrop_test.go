@@ -14,7 +14,7 @@ import (
 func filedropAt(t *testing.T, root string) *Filedrop {
 	t.Helper()
 	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
-	return &Filedrop{
+	return &Filedrop{Authority: permittedExecution{},
 		Settings: func() (string, int64, error) { return root, 0, nil },
 		Now:      func() time.Time { return now },
 	}
@@ -271,7 +271,7 @@ func TestAnUninstalledDropBoxIsRefused(t *testing.T) {
 // has to read as one. A household told their files are gone will go
 // looking for them.
 func TestNoStorageReadsAsAConfigurationFault(t *testing.T) {
-	fd := &Filedrop{Settings: func() (string, int64, error) { return "", 0, nil }}
+	fd := &Filedrop{Authority: permittedExecution{}, Settings: func() (string, int64, error) { return "", 0, nil }}
 	_, err := exec(t, fd, FileToolRecent, nil)
 	if err == nil || !strings.Contains(err.Error(), "no storage configured") {
 		t.Fatalf("err = %v, want a configuration fault", err)

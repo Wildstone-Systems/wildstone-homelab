@@ -425,6 +425,13 @@ func sortStrings(s []string) {
 // --- HTTP ---
 
 func (u *Upstream) do(req *http.Request) (*http.Response, error) {
+	if req.Method != http.MethodGet && req.Method != http.MethodHead && req.Method != "REPORT" && req.Method != "PROPFIND" {
+		if u.BeforeWrite != nil {
+			if err := u.BeforeWrite(); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if u.Username != "" {
 		req.SetBasicAuth(u.Username, u.Password)
 	}

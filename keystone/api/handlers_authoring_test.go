@@ -82,8 +82,9 @@ func TestButlerAuthorsARuleTheEngineThenRuns(t *testing.T) {
 		w.Write([]byte(`{"id":"x"}`))    //nolint:errcheck
 	}))
 	defer ntfy.Close()
-	actions := &domestic.Gateway{}
-	actions.Register(&domestic.Notifier{BaseURL: ntfy.URL})
+	ownExecutionFixture(t, h)
+	actions := &domestic.Gateway{Authority: h.s.DB}
+	actions.Register(&domestic.Notifier{Authority: h.s.DB, BaseURL: ntfy.URL})
 	h.s.Automation.Actions = actions
 
 	// The authoring seams, wired as cmd/keystone wires them.

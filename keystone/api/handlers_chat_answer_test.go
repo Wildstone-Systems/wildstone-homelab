@@ -22,7 +22,8 @@ func TestChatQuestionAndAnswerCloseTheLoop(t *testing.T) {
 	binding := h.bindAccount(t, "family", "sam", "telegram", "12345")
 
 	// A rule asks, through the same executor cmd/keystone registers.
-	sender := &domestic.ChatSender{
+	ownExecutionFixture(t, h)
+	sender := &domestic.ChatSender{Authority: h.s.DB,
 		Capability: "chat-telegram-family",
 		Transport:  "telegram",
 		Lookup: func(_ context.Context, member string) (domestic.ChatRecipient, error) {

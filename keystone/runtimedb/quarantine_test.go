@@ -24,6 +24,9 @@ import (
 
 func TestQuarantineHoldsEveryButlerFacingPath(t *testing.T) {
 	db := open(t)
+	if _, err := db.AcquireCoordinator("effect-fixture"); err != nil {
+		t.Fatal(err)
+	}
 	const admin = "mika"
 	if err := db.UpsertModel(Model{
 		Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", ProviderModel: "llama",
@@ -152,7 +155,7 @@ func TestQuarantineHoldsEveryButlerFacingPath(t *testing.T) {
 			}, household(), midday())
 			return err
 		}},
-		{"EnqueueChatOutbound(push)", GateDelivery, func() error {
+		{"EnqueueChatOutbound(push)", GateDispatch, func() error {
 			_, err := db.EnqueueChatOutbound(ChatOutbound{
 				Connection: conn.Seq, Target: "sam",
 				Body: "the bins are due", Kind: "push", DedupeKey: "q-o-1",
@@ -169,16 +172,10 @@ func TestQuarantineHoldsEveryButlerFacingPath(t *testing.T) {
 		}
 	}
 
-	// A reply is not proactive delivery. Somebody asked a question and
-	// is waiting for the answer; cutting them off mid-conversation is a
-	// worse failure than the one quarantine is preventing, and it tells
-	// them nothing about why.
-	if _, err := db.EnqueueChatOutbound(ChatOutbound{
-		Connection: conn.Seq, Target: "sam",
-		Body: "the database was restored and is being reconciled", Kind: "reply",
-		DedupeKey: "q-o-2",
-	}); err != nil {
-		t.Fatalf("a reply to a waiting person was refused under quarantine: %v", err)
+	// A chat reply is also an external send. The dispatch stop holds it;
+	// permitted local reads and recovery actions remain available.
+	if _, err := db.EnqueueChatOutbound(ChatOutbound{Connection: conn.Seq, Target: "sam", Body: "held reply", Kind: "reply", DedupeKey: "q-o-2"}); !errors.Is(err, ErrQuarantined) {
+		t.Fatalf("reply bypassed household stop: %v", err)
 	}
 
 	// ---- undoing still works, or quarantine could never be released.

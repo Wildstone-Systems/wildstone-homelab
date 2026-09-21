@@ -15,8 +15,8 @@ import (
 // caller can say reaches somebody else's.
 func TestThePersonalSpaceIsResolvedFromTheMemberAndNothingElse(t *testing.T) {
 	root := t.TempDir()
-	sandy := &FileStore{Root: root, Member: "sandy"}
-	maya := &FileStore{Root: root, Member: "maya"}
+	sandy := &FileStore{BeforeWrite: func() error { return nil }, Root: root, Member: "sandy"}
+	maya := &FileStore{BeforeWrite: func() error { return nil }, Root: root, Member: "maya"}
 
 	if _, err := sandy.Save("me", "diary.txt", strings.NewReader("sandy's")); err != nil {
 		t.Fatal(err)
@@ -65,12 +65,12 @@ func TestThePersonalSpaceIsResolvedFromTheMemberAndNothingElse(t *testing.T) {
 // would try to put in it.
 func TestNoNamespaceKeyReachesAnotherPersonsSpace(t *testing.T) {
 	root := t.TempDir()
-	maya := &FileStore{Root: root, Member: "maya"}
+	maya := &FileStore{BeforeWrite: func() error { return nil }, Root: root, Member: "maya"}
 	if _, err := maya.Save("me", "notes.txt", strings.NewReader("maya's")); err != nil {
 		t.Fatal(err)
 	}
 
-	sandy := &FileStore{Root: root, Member: "sandy"}
+	sandy := &FileStore{BeforeWrite: func() error { return nil }, Root: root, Member: "sandy"}
 	for _, key := range []string{
 		"me/maya", "Members/maya", "../Members/maya", "me/../maya",
 		"maya", "me ", "ME", "me\x00", "members/maya",
@@ -98,7 +98,7 @@ func TestNoNamespaceKeyReachesAnotherPersonsSpace(t *testing.T) {
 func TestAnUnusableMemberNameGetsNoPersonalSpaceRatherThanTheSharedOne(t *testing.T) {
 	root := t.TempDir()
 	for _, member := range []string{"", "   ", "a/b", "../x", "..", ".", "a b", "a:b", strings.Repeat("x", 65)} {
-		s := &FileStore{Root: root, Member: member}
+		s := &FileStore{BeforeWrite: func() error { return nil }, Root: root, Member: member}
 		if _, err := s.Save("me", "x.txt", strings.NewReader("x")); !errors.Is(err, ErrNamespace) {
 			t.Errorf("Save as %q = %v, want ErrNamespace", member, err)
 		}
@@ -119,10 +119,10 @@ func TestAnUnusableMemberNameGetsNoPersonalSpaceRatherThanTheSharedOne(t *testin
 // household compares member names case-insensitively.
 func TestOneMemberIsOneFolderWhateverTheCase(t *testing.T) {
 	root := t.TempDir()
-	if _, err := (&FileStore{Root: root, Member: "Sandy"}).Save("me", "a.txt", strings.NewReader("x")); err != nil {
+	if _, err := (&FileStore{BeforeWrite: func() error { return nil }, Root: root, Member: "Sandy"}).Save("me", "a.txt", strings.NewReader("x")); err != nil {
 		t.Fatal(err)
 	}
-	items, err := (&FileStore{Root: root, Member: "sandy"}).List("me")
+	items, err := (&FileStore{BeforeWrite: func() error { return nil }, Root: root, Member: "sandy"}).List("me")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestOneMemberIsOneFolderWhateverTheCase(t *testing.T) {
 // and its parent cannot be listed.
 func TestThePersonalSpaceIsNotOpenedUpToEveryContainer(t *testing.T) {
 	root := t.TempDir()
-	s := &FileStore{Root: root, Member: "sandy"}
+	s := &FileStore{BeforeWrite: func() error { return nil }, Root: root, Member: "sandy"}
 	if _, err := s.Save("me", "a.txt", strings.NewReader("x")); err != nil {
 		t.Fatal(err)
 	}
@@ -173,10 +173,10 @@ func TestThePersonalSpaceIsNotOpenedUpToEveryContainer(t *testing.T) {
 // Recent spans the destinations this member can see, and no others.
 func TestRecentDoesNotLeakAnotherPersonsFiles(t *testing.T) {
 	root := t.TempDir()
-	if _, err := (&FileStore{Root: root, Member: "maya"}).Save("me", "maya-secret.txt", strings.NewReader("x")); err != nil {
+	if _, err := (&FileStore{BeforeWrite: func() error { return nil }, Root: root, Member: "maya"}).Save("me", "maya-secret.txt", strings.NewReader("x")); err != nil {
 		t.Fatal(err)
 	}
-	sandy := &FileStore{Root: root, Member: "sandy"}
+	sandy := &FileStore{BeforeWrite: func() error { return nil }, Root: root, Member: "sandy"}
 	if _, err := sandy.Save("shared", "grocery.txt", strings.NewReader("x")); err != nil {
 		t.Fatal(err)
 	}

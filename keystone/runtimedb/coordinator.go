@@ -15,6 +15,7 @@ package runtimedb
 // carries.
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -47,9 +48,25 @@ type CoordinatorLease struct {
 // this call never steals a lease, because a caller that could steal one
 // on startup is an automatic leader election wearing a different name.
 func (db *DB) AcquireCoordinator(holder string) (CoordinatorLease, error) {
+	db.coordinatorMu.Lock()
+	defer db.coordinatorMu.Unlock()
 	if holder == "" {
 		return CoordinatorLease{}, fmt.Errorf("runtimedb: coordinator lease requires a holder id")
 	}
+	lock := db.coordinatorLock
+	if lock == nil || db.coordinatorLockHolder != holder {
+		var err error
+		lock, err = db.acquireCoordinatorProcessLock(holder)
+		if err != nil {
+			return CoordinatorLease{}, err
+		}
+	}
+	committed := false
+	defer func() {
+		if !committed && lock != nil && lock != db.coordinatorLock {
+			_ = lock.Close()
+		}
+	}()
 	tx, err := db.sql.Begin()
 	if err != nil {
 		return CoordinatorLease{}, fmt.Errorf("runtimedb: acquiring coordinator lease: %w", err)
@@ -84,6 +101,12 @@ func (db *DB) AcquireCoordinator(holder string) (CoordinatorLease, error) {
 	if err := tx.Commit(); err != nil {
 		return CoordinatorLease{}, fmt.Errorf("runtimedb: acquiring coordinator lease: %w", err)
 	}
+	if db.coordinatorLock != nil && db.coordinatorLock != lock {
+		_ = db.coordinatorLock.Close()
+	}
+	db.coordinatorLock, db.coordinatorLockHolder = lock, holder
+	committed = true
+	db.executionLease.Store(&lease)
 	return lease, nil
 }
 
@@ -159,12 +182,16 @@ func (db *DB) CheckCoordinator(holder string, epoch int64) error {
 // evidence for a human deciding whether to promote, and nothing reads it
 // to make that decision automatically.
 func (db *DB) HeartbeatCoordinator(holder string, epoch int64) error {
-	if err := db.CheckCoordinator(holder, epoch); err != nil {
-		return err
-	}
-	_, err := db.sql.Exec(`UPDATE coordinator_lease SET heartbeat_at = ? WHERE id = 1`, now())
+	result, err := db.sql.Exec("UPDATE coordinator_lease SET heartbeat_at=? WHERE id=1 AND holder=? AND epoch=?", now(), holder, epoch)
 	if err != nil {
 		return fmt.Errorf("runtimedb: coordinator heartbeat: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrCoordinatorFenced
 	}
 	return nil
 }
@@ -199,4 +226,30 @@ func readCoordinator(q rowQuerier) (CoordinatorLease, error) {
 		return CoordinatorLease{}, fmt.Errorf("runtimedb: bad coordinator heartbeat_at %q: %w", heartbeat, err)
 	}
 	return l, nil
+}
+
+// RunCoordinatorHeartbeat records liveness without refreshing this process's
+// epoch or taking over automatically. Promotion stops the old writer.
+func (db *DB) RunCoordinatorHeartbeat(ctx context.Context, interval time.Duration) error {
+	lease := db.executionLease.Load()
+	if lease == nil {
+		return ErrCoordinatorFenced
+	}
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			// Transient storage failures do not revoke the lease. Retry at the
+			// next tick; dispatch still checks the live database independently.
+			if err := db.HeartbeatCoordinator(lease.Holder, lease.Epoch); errors.Is(err, ErrCoordinatorFenced) {
+				return err
+			}
+		}
+	}
 }

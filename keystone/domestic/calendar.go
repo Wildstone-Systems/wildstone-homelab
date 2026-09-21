@@ -111,6 +111,7 @@ const defaultDurationMinutes = 60
 //
 // One instance backs every tool; Executors returns the registrations.
 type Calendar struct {
+	Authority HouseholdExecutionAuthority
 	// SecretUse is checked for every credential-bearing calendar call. A bound
 	// secret never falls back to the deployment credential on denial.
 	SecretUse func(context.Context, Call, func(string) error) (bool, error)
@@ -219,12 +220,33 @@ var calendarUsage = map[string]string{
 func (t *calendarTool) Usage() string { return calendarUsage[t.tool] }
 
 func (t *calendarTool) Execute(ctx context.Context, c Call) (Result, error) {
+	if CalendarTools[t.tool] != TierRead {
+		if err := checkExecution(t.cal.Authority); err != nil {
+			return Result{}, err
+		}
+	}
 	// how_to_add is about where the calendar IS, so it answers on a
 	// deployment that has a calendar and has not pointed the agent
 	// tools at it — which is a real posture and the one a household is
 	// in between installing the capability and wiring the credential.
 	if t.tool != CalToolSetup && (t.cal.Upstream == nil || t.cal.Upstream.CollectionURL == "") {
 		return Result{}, fmt.Errorf("no calendar is configured on this control plane")
+	}
+	if CalendarTools[t.tool] != TierRead && t.cal.Upstream != nil {
+		local := *t.cal
+		upstream := *t.cal.Upstream
+		previous := upstream.BeforeWrite
+		upstream.BeforeWrite = func() error {
+			if err := checkExecution(local.Authority); err != nil {
+				return err
+			}
+			if previous != nil {
+				return previous()
+			}
+			return nil
+		}
+		local.Upstream = &upstream
+		t = &calendarTool{cal: &local, tool: t.tool}
 	}
 	if t.tool != CalToolSetup && t.cal.SecretUse != nil {
 		var result Result

@@ -12,7 +12,7 @@ import (
 
 func store(t *testing.T) *FileStore {
 	t.Helper()
-	return &FileStore{Root: t.TempDir()}
+	return &FileStore{BeforeWrite: func() error { return nil }, Root: t.TempDir()}
 }
 
 func save(t *testing.T, s *FileStore, ns, name, body string) Stored {
@@ -151,7 +151,7 @@ func TestASecondUploadOfTheSameNameKeepsBoth(t *testing.T) {
 }
 
 func TestAnUploadIsBounded(t *testing.T) {
-	s := &FileStore{Root: t.TempDir(), MaxUpload: 16}
+	s := &FileStore{BeforeWrite: func() error { return nil }, Root: t.TempDir(), MaxUpload: 16}
 
 	if _, err := s.Save("shared", "small.bin", strings.NewReader(strings.Repeat("x", 16))); err != nil {
 		t.Errorf("a file of exactly the limit was refused: %v", err)
@@ -191,7 +191,7 @@ func TestAnUnknownNamespaceIsRefused(t *testing.T) {
 // a relative path beside whatever the process's working directory is.
 func TestAStoreWithNoRootRefusesEverything(t *testing.T) {
 	for _, root := range []string{"", "relative/path"} {
-		s := &FileStore{Root: root}
+		s := &FileStore{BeforeWrite: func() error { return nil }, Root: root}
 		if s.Ready() {
 			t.Errorf("Ready() with root %q", root)
 		}
@@ -346,7 +346,7 @@ func TestAnUploadIsVisibleToTheApplicationsThatShareTheRoot(t *testing.T) {
 // Delete removes a file, and refuses anything that is not one.
 func TestDeleteRemovesAFileAndRefusesTheRest(t *testing.T) {
 	root := t.TempDir()
-	s := &FileStore{Root: root}
+	s := &FileStore{BeforeWrite: func() error { return nil }, Root: root}
 	if _, err := s.Save("shared", "note.txt", strings.NewReader("hello")); err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +375,7 @@ func TestDeleteRemovesAFileAndRefusesTheRest(t *testing.T) {
 // A directory is not a file, and this surface does not remove trees.
 func TestDeleteRefusesADirectory(t *testing.T) {
 	root := t.TempDir()
-	s := &FileStore{Root: root}
+	s := &FileStore{BeforeWrite: func() error { return nil }, Root: root}
 	// Force the namespace into existence, then put a directory in it.
 	if _, err := s.Save("shared", "seed.txt", strings.NewReader("x")); err != nil {
 		t.Fatal(err)
@@ -399,7 +399,7 @@ func TestDeleteWillNotFollowASymlinkOut(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("keep me"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s := &FileStore{Root: root}
+	s := &FileStore{BeforeWrite: func() error { return nil }, Root: root}
 	if _, err := s.Save("shared", "seed.txt", strings.NewReader("x")); err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +418,7 @@ func TestDeleteWillNotFollowASymlinkOut(t *testing.T) {
 // refuses to overwrite.
 func TestRenameNormalisesAndRefusesToOverwrite(t *testing.T) {
 	root := t.TempDir()
-	s := &FileStore{Root: root}
+	s := &FileStore{BeforeWrite: func() error { return nil }, Root: root}
 	for _, n := range []string{"one.txt", "two.txt"} {
 		if _, err := s.Save("shared", n, strings.NewReader("x")); err != nil {
 			t.Fatal(err)
@@ -461,7 +461,7 @@ func TestRenameNormalisesAndRefusesToOverwrite(t *testing.T) {
 // may not have made, and a household that installed files without a
 // media server was the one without it.
 func TestAMissingRootIsCreatedOnFirstUse(t *testing.T) {
-	s := &FileStore{Root: filepath.Join(t.TempDir(), "srv", "wildstone", "media")}
+	s := &FileStore{BeforeWrite: func() error { return nil }, Root: filepath.Join(t.TempDir(), "srv", "wildstone", "media")}
 	got := save(t, s, "shared", "first.txt", "hello")
 	if _, err := os.Stat(filepath.Join(s.Root, "Shared", got.Name)); err != nil {
 		t.Fatalf("the first upload did not land: %v", err)

@@ -449,6 +449,9 @@ func TestACodeForOneAgentIsRefusedAtAnother(t *testing.T) {
 // by surface could not do.
 func TestTheOutboundQueueIsOneAgents(t *testing.T) {
 	db := butlerFixture(t)
+	if _, err := db.AcquireCoordinator("effect-fixture"); err != nil {
+		t.Fatal(err)
+	}
 	alfred := connect(t, db, "alfred", "telegram", ButlerSurfaceAdmin)
 	robert := connect(t, db, "robert", "telegram", ButlerSurfaceAdmin, "chat-telegram-robert")
 

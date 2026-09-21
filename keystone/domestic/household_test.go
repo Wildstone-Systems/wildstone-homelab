@@ -42,7 +42,7 @@ func TestTheCalendarFollowsTheLiveHouseholdZone(t *testing.T) {
 		t.Skip("no tzdata")
 	}
 	zone := householdtz.New(time.UTC)
-	c := &Calendar{Zone: zone}
+	c := &Calendar{Authority: permittedExecution{}, Zone: zone}
 	at, err := c.moment("2026-09-20T15:00", "start")
 	if err != nil || at.UTC().Hour() != 15 {
 		t.Fatalf("in UTC: %v %v", at, err)

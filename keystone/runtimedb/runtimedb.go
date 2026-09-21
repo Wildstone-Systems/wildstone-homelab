@@ -10,8 +10,11 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"os"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -23,7 +26,11 @@ var migrationFS embed.FS
 // DB wraps the SQLite handle. All accessors are safe for concurrent use;
 // SQLite serializes writers and WAL keeps readers unblocked.
 type DB struct {
-	sql *sql.DB
+	coordinatorMu         sync.Mutex
+	coordinatorLock       *os.File
+	coordinatorLockHolder string
+	sql                   *sql.DB
+	executionLease        atomic.Pointer[CoordinatorLease]
 	// path is kept so a table rebuild can reopen the same file on its
 	// own handle with foreign keys off. See applyRebuildMigration.
 	path string
@@ -75,7 +82,20 @@ func openUnmigrated(path string) (*DB, error) {
 	return &DB{sql: sqlDB, path: path}, nil
 }
 
-func (db *DB) Close() error { return db.sql.Close() }
+func (db *DB) Close() error {
+	db.coordinatorMu.Lock()
+	defer db.coordinatorMu.Unlock()
+	err := db.sql.Close()
+	db.executionLease.Store(nil)
+	if db.coordinatorLock != nil {
+		lockErr := db.coordinatorLock.Close()
+		db.coordinatorLock = nil
+		if err == nil {
+			err = lockErr
+		}
+	}
+	return err
+}
 
 // migrate applies embedded migrations in filename order, each inside its
 // own transaction, tracked in schema_migrations. Forward-only (ADR-W007

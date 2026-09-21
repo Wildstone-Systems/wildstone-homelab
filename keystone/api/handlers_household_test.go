@@ -514,8 +514,9 @@ func TestHouseholdQuestionAndAnswerLoop(t *testing.T) {
 	if err := h.s.Principals.Create("publisher-replies", runtimedb.RolePublisher, ""); err != nil {
 		t.Fatal(err)
 	}
-	gw := &domestic.Gateway{}
-	gw.Register(&domestic.Notifier{
+	ownExecutionFixture(t, h)
+	gw := &domestic.Gateway{Authority: h.s.DB}
+	gw.Register(&domestic.Notifier{Authority: h.s.DB,
 		BaseURL:  ntfy.URL,
 		ReplyURL: h.srv.URL + "/api/v1/household/events",
 		MintReply: func(context.Context) (string, error) {
@@ -755,8 +756,9 @@ func TestBreakfastEscalationEndToEnd(t *testing.T) {
 	}))
 	defer ntfy.Close()
 
-	gw := &domestic.Gateway{}
-	gw.Register(&domestic.Notifier{BaseURL: ntfy.URL})
+	ownExecutionFixture(t, h)
+	gw := &domestic.Gateway{Authority: h.s.DB}
+	gw.Register(&domestic.Notifier{Authority: h.s.DB, BaseURL: ntfy.URL})
 	llm := &phrasingProvider{reply: "You usually have porridge about now — did you eat before heading out?"}
 	phraser := &butler.Phraser{Provider: llm}
 

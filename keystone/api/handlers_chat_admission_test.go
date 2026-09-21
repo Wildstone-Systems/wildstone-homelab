@@ -52,6 +52,7 @@ func (h *harness) providerCalls(t *testing.T) int {
 // harness whose provider would record any.
 func TestUnknownExternalSenderIsRefusedBeforeInference(t *testing.T) {
 	h := newHarness(t)
+	ownExecutionFixture(t, h)
 	// A provider with a scripted answer WAITING. An exhausted script
 	// would error on the first call, and the test would then pass for
 	// the wrong reason — "the provider was never usable" reads exactly

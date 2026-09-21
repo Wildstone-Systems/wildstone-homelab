@@ -54,6 +54,9 @@ const (
 
 // Upstream is one CalDAV calendar collection.
 type Upstream struct {
+	// BeforeWrite is the live control plane store fence; standalone adapters
+	// are authorized by their claimed integration work instead.
+	BeforeWrite func() error
 	// CollectionURL is the calendar collection, e.g.
 	// https://dav.example.com/calendars/sam/default/
 	CollectionURL string

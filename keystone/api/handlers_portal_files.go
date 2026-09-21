@@ -60,8 +60,8 @@ type filedropSettings struct {
 // "this is installed and has nowhere to put anything", which is a
 // configuration fault an operator can act on. Answering 404 would send
 // them looking for a missing capability instead.
-func filedropStore(desired []resource.Resource, member string) *portal.FileStore {
-	store := &portal.FileStore{Member: member}
+func (s *Server) filedropStore(desired []resource.Resource, member string) *portal.FileStore {
+	store := &portal.FileStore{Member: member, BeforeWrite: s.DB.CheckHouseholdExecution}
 	for _, r := range desired {
 		if r.Kind != resource.KindConfigFile || r.ConfigFile == nil {
 			continue
@@ -95,7 +95,7 @@ func filedropStore(desired []resource.Resource, member string) *portal.FileStore
 // every endpoint below re-checks the destination and the limit rather
 // than trusting that this response was honoured.
 func (s *Server) filedropCapabilities(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
-	store := filedropStore(desired, member)
+	store := s.filedropStore(desired, member)
 	// Only the destinations this member can actually use. A namespace a
 	// member has no grant for is not rendered (§12.1), and "me" needs a
 	// member name this deployment can turn into a directory — offering a
@@ -141,7 +141,7 @@ func (s *Server) filedropRecent(_ http.ResponseWriter, r *http.Request, member s
 		}
 		limit = n
 	}
-	items, err := filedropStore(desired, member).Recent(limit)
+	items, err := s.filedropStore(desired, member).Recent(limit)
 	if err != nil {
 		return nil, filedropStatus(err), err
 	}
@@ -150,7 +150,7 @@ func (s *Server) filedropRecent(_ http.ResponseWriter, r *http.Request, member s
 
 // filedropList is one destination's contents, for the full surface.
 func (s *Server) filedropList(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
-	items, err := filedropStore(desired, member).List(r.URL.Query().Get("namespace"))
+	items, err := s.filedropStore(desired, member).List(r.URL.Query().Get("namespace"))
 	if err != nil {
 		return nil, filedropStatus(err), err
 	}
@@ -171,7 +171,7 @@ func (s *Server) filedropList(_ http.ResponseWriter, r *http.Request, member str
 // comes back out is served as an attachment whatever it is, which is
 // the only bounded answer to "somebody uploaded a .html".
 func (s *Server) filedropUpload(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
-	store := filedropStore(desired, member)
+	store := s.filedropStore(desired, member)
 	if !store.Ready() {
 		return nil, http.StatusServiceUnavailable,
 			fmt.Errorf("no storage root is configured for this household's files")
@@ -249,7 +249,7 @@ func (s *Server) filedropUpload(_ http.ResponseWriter, r *http.Request, member s
 // can upload a script on the surface that holds everyone's session.
 func (s *Server) filedropFile(w http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
 	name := r.URL.Query().Get("name")
-	f, info, err := filedropStore(desired, member).Open(r.URL.Query().Get("namespace"), name)
+	f, info, err := s.filedropStore(desired, member).Open(r.URL.Query().Get("namespace"), name)
 	if err != nil {
 		return nil, filedropStatus(err), err
 	}
@@ -302,7 +302,7 @@ func filedropStatus(err error) int {
 // the CSP here sets form-action 'none' so the page's own markup cannot
 // post anywhere either.
 func (s *Server) filedropDelete(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
-	store := filedropStore(desired, member)
+	store := s.filedropStore(desired, member)
 	if !store.Ready() {
 		return nil, http.StatusServiceUnavailable,
 			fmt.Errorf("no storage root is configured for this household's files")
@@ -333,7 +333,7 @@ func (s *Server) filedropDelete(_ http.ResponseWriter, r *http.Request, member s
 
 // filedropRename changes one file's name inside its namespace.
 func (s *Server) filedropRename(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
-	store := filedropStore(desired, member)
+	store := s.filedropStore(desired, member)
 	if !store.Ready() {
 		return nil, http.StatusServiceUnavailable,
 			fmt.Errorf("no storage root is configured for this household's files")
@@ -375,6 +375,6 @@ func (s *Server) FiledropSettings() (string, int64, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	store := filedropStore(desired, "")
+	store := s.filedropStore(desired, "")
 	return store.Root, store.MaxUpload, nil
 }

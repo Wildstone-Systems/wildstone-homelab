@@ -29,6 +29,7 @@ import (
 func portalHarness(t *testing.T) (*harness, string) {
 	t.Helper()
 	h := newHarness(t)
+	ownExecutionFixture(t, h)
 	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 	root := t.TempDir()
 

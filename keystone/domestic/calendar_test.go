@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -122,7 +123,7 @@ func vevent(uid, summary, dtstart, dtend string) string {
 }
 
 func calendarUnder(f *fakeCalendar) *Calendar {
-	return &Calendar{
+	return &Calendar{Authority: permittedExecution{},
 		Upstream: &caldav.Upstream{
 			CollectionURL: f.URL + "/cal/",
 			Username:      "wildstone-calendar",
@@ -433,7 +434,7 @@ func TestDeleteRemovesTheOneEventItFound(t *testing.T) {
 // A control plane with no calendar configured refuses rather than
 // panicking on a nil upstream.
 func TestAnUnconfiguredCalendarRefuses(t *testing.T) {
-	c := &Calendar{Location: chicago, Now: func() time.Time { return calNow }}
+	c := &Calendar{Authority: permittedExecution{}, Location: chicago, Now: func() time.Time { return calNow }}
 	for name := range CalendarTools {
 		if _, err := run(t, c, name, map[string]string{}); err == nil {
 			t.Errorf("calendar.%s answered with no calendar configured", name)
@@ -445,7 +446,7 @@ func TestAnUnconfiguredCalendarRefuses(t *testing.T) {
 // carried at the wrong tier is refused before the executor runs.
 func TestTheGatewayStillTierChecksCalendarTools(t *testing.T) {
 	f := newFakeCalendar(t)
-	gw := &Gateway{
+	gw := &Gateway{Authority: permittedExecution{},
 		Declared: DeclaredFromPackages([]AgentToolSource{
 			{Capability: CalendarCapability, Tools: CalendarTools},
 		}),
@@ -552,7 +553,7 @@ func TestHowToAddRefusesWhenItCannotAnswerTruthfully(t *testing.T) {
 // collection: "where is the calendar" is a different question from "what
 // is on it", and it is the one a household asks first.
 func TestHowToAddAnswersBeforeTheAgentToolsAreWired(t *testing.T) {
-	c := &Calendar{
+	c := &Calendar{Authority: permittedExecution{},
 		Location: chicago, Now: func() time.Time { return calNow },
 		Handoff: func(member string) (CalendarHandoff, bool, error) {
 			return CalendarHandoff{Server: "https://cal.example", Username: member}, true, nil
@@ -587,7 +588,7 @@ func (f *fakeConfirm) fn(_ context.Context, req ConfirmRequest) (Confirmation, e
 
 func confirmingGateway(t *testing.T, f *fakeCalendar, c *fakeConfirm) *Gateway {
 	t.Helper()
-	gw := &Gateway{
+	gw := &Gateway{Authority: permittedExecution{},
 		Declared: DeclaredFromPackages([]AgentToolSource{
 			{Capability: CalendarCapability, Tools: CalendarTools},
 		}),
@@ -721,7 +722,7 @@ func TestANoRefusesAndDoesNotRun(t *testing.T) {
 // No way to ask is not permission.
 func TestNoWayToAskIsNotPermission(t *testing.T) {
 	f := newFakeCalendar(t, vevent("a", "Dentist for Sam", "20260918T150000Z", ""))
-	gw := &Gateway{Declared: DeclaredFromPackages([]AgentToolSource{
+	gw := &Gateway{Authority: permittedExecution{}, Declared: DeclaredFromPackages([]AgentToolSource{
 		{Capability: CalendarCapability, Tools: CalendarTools},
 	})}
 	for _, e := range calendarUnder(f).Executors() {
@@ -839,8 +840,8 @@ func TestATimeInItsOwnZoneKeepsItsHour(t *testing.T) {
 // through one generic tool, so this text is the only place a model sees
 // "date (today | tomorrow | YYYY-MM-DD)" before it has to send one.
 func TestEveryCalendarToolDescribesItsInputs(t *testing.T) {
-	g := &Gateway{}
-	for _, e := range (&Calendar{}).Executors() {
+	g := &Gateway{Authority: permittedExecution{}}
+	for _, e := range (&Calendar{Authority: permittedExecution{}}).Executors() {
 		g.Register(e)
 	}
 	for tool := range CalendarTools {
@@ -868,5 +869,38 @@ func TestTheAgendaCarriesTheEndThePlaceAndTheNote(t *testing.T) {
 	}
 	if want := "06:00-19:00 Work Day (at: Office) [notes: Need to take out the trash.]"; !strings.Contains(got.Summary, want) {
 		t.Errorf("want %q in:\n%s", want, got.Summary)
+	}
+}
+
+type changingExecutionAuthority struct{ stopped atomic.Bool }
+
+func (a *changingExecutionAuthority) CheckHouseholdExecution() error {
+	if a.stopped.Load() {
+		return fmt.Errorf("coordinator superseded")
+	}
+	return nil
+}
+func TestCalendarRechecksAuthorityAfterLookupBeforeWrite(t *testing.T) {
+	f := newFakeCalendar(t, vevent("dinner", "Dinner", "20260918T233000Z", "20260919T010000Z"))
+	original := f.Config.Handler
+	f.Close()
+	authority := &changingExecutionAuthority{}
+	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		original.ServeHTTP(w, r)
+		if r.Method == "REPORT" {
+			authority.stopped.Store(true)
+		}
+	}))
+	defer f.Close()
+	calendar := calendarUnder(f)
+	calendar.Authority = authority
+	_, err := run(t, calendar, CalToolUpdate, map[string]string{"title": "dinner", "date": "2026-09-18", "start": "19:00"})
+	if err == nil || !strings.Contains(err.Error(), "coordinator") {
+		t.Fatalf("write did not recheck authority: %v", err)
+	}
+	for _, r := range f.requests {
+		if r.Method == http.MethodPut {
+			t.Fatal("calendar write escaped after promotion")
+		}
 	}
 }

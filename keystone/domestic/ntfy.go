@@ -31,6 +31,7 @@ const maxReplyOptions = 3
 // becomes a fact on the same stream that triggered the question — no
 // chat surface, no polling, no second channel.
 type Notifier struct {
+	Authority HouseholdExecutionAuthority
 	// BaseURL is the ntfy server Keystone publishes to, e.g.
 	// http://127.0.0.1:8080 or the container address on the wildstone
 	// network. Required.
@@ -100,6 +101,9 @@ type ntfyMessage struct {
 // answered something, and can do nothing else. It cannot read state,
 // propose, or approve.
 func (n *Notifier) Execute(ctx context.Context, c Call) (Result, error) {
+	if err := checkExecution(n.Authority); err != nil {
+		return Result{}, err
+	}
 	if n.BaseURL == "" {
 		return Result{}, fmt.Errorf("no ntfy base URL configured")
 	}
@@ -175,6 +179,9 @@ func (n *Notifier) Execute(ctx context.Context, c Call) (Result, error) {
 	req.Header.Set("Content-Type", "application/json")
 	if n.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+n.Token)
+	}
+	if err := checkExecution(n.Authority); err != nil {
+		return Result{}, err
 	}
 	resp, err := n.client().Do(req)
 	if err != nil {

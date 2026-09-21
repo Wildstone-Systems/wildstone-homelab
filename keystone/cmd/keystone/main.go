@@ -613,6 +613,15 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		return fmt.Errorf("taking the coordinator lease: %w", leaseErr)
 	}
 
+	// Heartbeats inform the human takeover decision; they never auto-promote.
+	if coordinating {
+		go func() {
+			if err := db.RunCoordinatorHeartbeat(context.Background(), 30*time.Second); err != nil {
+				log.Warn("coordinator heartbeat stopped", "err", err)
+			}
+		}()
+	}
+
 	// Node inventory (#30): the gateway keeps no database dependency, so
 	// it reports node lifecycle through this hook and Keystone persists
 	// it. A failure here must never break a join or drop a session — the
@@ -797,7 +806,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// acts. Executors are registered here and nowhere else; a rule that
 	// names a tool this deployment has not wired is refused with a
 	// reason on the household stream rather than failing silently.
-	actions := &domestic.Gateway{Log: log}
+	actions := &domestic.Gateway{Authority: db, Log: log}
 	if cat != nil {
 		// Only with a catalog: DeclaredFromPackages over an empty set
 		// would refuse every action, which is not what "no catalog" means.
@@ -921,7 +930,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		if merr != nil {
 			return merr
 		}
-		actions.Register(&domestic.Notifier{
+		actions.Register(&domestic.Notifier{Authority: db,
 			BaseURL:   householdCfg.NtfyURL,
 			Token:     os.Getenv("NTFY_TOKEN"),
 			ReplyURL:  householdCfg.ReplyURL,
@@ -985,8 +994,8 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// different people's decisions on different roads (ADR-W034 A5).
 	var calendarActions *domestic.Calendar
 	if householdCfg.CalendarURL != "" {
-		cal := &domestic.Calendar{
-			Upstream: &caldav.Upstream{
+		cal := &domestic.Calendar{Authority: db,
+			Upstream: &caldav.Upstream{BeforeWrite: db.CheckHouseholdExecution,
 				CollectionURL: householdCfg.CalendarURL,
 				Username:      householdCfg.CalendarUser,
 				Password:      os.Getenv("CALENDAR_PASSWORD"),
@@ -1199,7 +1208,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// anything. Enabled is the install gate (ADR-W026 A8's posture),
 	// and the domestic gateway's declaration check is in front of both.
 	if cat != nil {
-		filedrop := &domestic.Filedrop{
+		filedrop := &domestic.Filedrop{Authority: db,
 			Settings: apiSrv.FiledropSettings,
 			Enabled:  func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.FiledropCapability) },
 		}
@@ -1213,7 +1222,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	for _, capName := range chatCapabilities {
 		transport := chatTransportFor(capName)
 		capName := capName
-		actions.Register(&domestic.ChatSender{
+		actions.Register(&domestic.ChatSender{Authority: db,
 			Capability: capName,
 			Transport:  transport,
 			// Registered from the CATALOG, gated on the STATEFILE. The

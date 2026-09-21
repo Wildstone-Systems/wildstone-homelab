@@ -30,7 +30,7 @@ func TestANamespaceSymlinkedOutOfTheRootIsRefused(t *testing.T) {
 		t.Skipf("this filesystem has no symlinks: %v", err)
 	}
 
-	s := &FileStore{Root: root, Member: "sandy"}
+	s := &FileStore{BeforeWrite: func() error { return nil }, Root: root, Member: "sandy"}
 
 	if _, err := s.List("shared"); err == nil {
 		t.Error("a member can list a directory outside the configured root")
@@ -69,7 +69,7 @@ func TestAPersonalSpaceSymlinkedOutOfTheRootIsRefused(t *testing.T) {
 		t.Skipf("this filesystem has no symlinks: %v", err)
 	}
 
-	s := &FileStore{Root: root, Member: "sandy"}
+	s := &FileStore{BeforeWrite: func() error { return nil }, Root: root, Member: "sandy"}
 	if _, err := s.Save("me", "diary.txt", strings.NewReader("x")); err == nil {
 		t.Error("a member's personal space followed a symlink out of the root")
 	}
@@ -90,7 +90,7 @@ func TestASymlinkInsideTheRootStillWorks(t *testing.T) {
 		t.Skipf("this filesystem has no symlinks: %v", err)
 	}
 
-	s := &FileStore{Root: root, Member: "sandy"}
+	s := &FileStore{BeforeWrite: func() error { return nil }, Root: root, Member: "sandy"}
 	if _, err := s.Save("shared", "grocery.txt", strings.NewReader("milk")); err != nil {
 		t.Fatalf("an operator's own symlink inside the root was refused: %v", err)
 	}

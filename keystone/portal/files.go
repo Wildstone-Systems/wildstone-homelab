@@ -139,8 +139,10 @@ var (
 // declaration (the ConfigFile the package renders), never by a request.
 // MaxUpload bounds one file; zero means DefaultMaxUpload.
 type FileStore struct {
-	Root      string
-	MaxUpload int64
+	// BeforeWrite is the runtime store execution fence, required for mutations.
+	BeforeWrite func() error
+	Root        string
+	MaxUpload   int64
 	// Member is the authenticated person this store is acting for, and
 	// it is the ONLY thing that resolves the "me" namespace. Set by the
 	// caller from the proven identity; empty means the personal space is
@@ -347,6 +349,9 @@ type Stored struct {
 // request whose size is chosen by the person making it, and #197 says
 // so in as many words.
 func (s *FileStore) Save(nsKey, offered string, body io.Reader) (Stored, error) {
+	if err := s.checkWriteAuthority(); err != nil {
+		return Stored{}, err
+	}
 	ns, err := s.namespace(nsKey)
 	if err != nil {
 		return Stored{}, err
@@ -392,6 +397,9 @@ func (s *FileStore) Save(nsKey, offered string, body io.Reader) (Stored, error) 
 		return Stored{}, fmt.Errorf("portal: closing %s: %w", name, err)
 	}
 
+	if err := s.checkWriteAuthority(); err != nil {
+		return Stored{}, err
+	}
 	final, renamed, err := claimName(root, tmpName, name)
 	if err != nil {
 		return Stored{}, err
@@ -733,6 +741,9 @@ func (s *FileStore) Open(nsKey, name string) (*os.File, os.FileInfo, error) {
 // this surface, and RemoveAll on a caller-named path is not a power a
 // household dashboard should hold.
 func (s *FileStore) Delete(nsKey, name string) error {
+	if err := s.checkWriteAuthority(); err != nil {
+		return err
+	}
 	ns, err := s.namespace(nsKey)
 	if err != nil {
 		return err
@@ -777,6 +788,9 @@ func (s *FileStore) Delete(nsKey, name string) error {
 // result is reported, because a person who typed "holiday/2026.jpg" and
 // got "holiday_2026.jpg" should see that rather than wonder.
 func (s *FileStore) Rename(nsKey, from, to string) (string, error) {
+	if err := s.checkWriteAuthority(); err != nil {
+		return "", err
+	}
 	ns, err := s.namespace(nsKey)
 	if err != nil {
 		return "", err
@@ -845,4 +859,11 @@ func hasSubstance(offered string) bool {
 		}
 	}
 	return false
+}
+
+func (s *FileStore) checkWriteAuthority() error {
+	if s.BeforeWrite == nil {
+		return fmt.Errorf("household file write refused: no coordinator authority is wired")
+	}
+	return s.BeforeWrite()
 }

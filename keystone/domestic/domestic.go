@@ -140,6 +140,7 @@ type Executor interface {
 // which is the right posture for a control plane with no capabilities
 // installed.
 type Gateway struct {
+	Authority HouseholdExecutionAuthority
 	// Timeout bounds one call; zero means DefaultTimeout.
 	Timeout time.Duration
 	// Declared, when set, reports the tier a capability's package
@@ -267,6 +268,11 @@ func (g *Gateway) dispatch(ctx context.Context, c Call) (Result, error) {
 		return Result{}, &RefusalError{Tool: c.Tool, Reason: "no executor is registered for this tool on this control plane"}
 	}
 
+	if c.Tier != TierRead {
+		if err := checkExecution(g.Authority); err != nil {
+			return Result{}, err
+		}
+	}
 	if c.Tier == TierConfirm {
 		if err := g.confirmed(ctx, c, e); err != nil {
 			return Result{}, err
@@ -280,6 +286,11 @@ func (g *Gateway) dispatch(ctx context.Context, c Call) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	if c.Tier != TierRead {
+		if err := checkExecution(g.Authority); err != nil {
+			return Result{}, err
+		}
+	}
 	res, err := e.Execute(ctx, c)
 	if err != nil {
 		return res, fmt.Errorf("domestic: %s: %w", c.Tool, err)

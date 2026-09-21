@@ -354,6 +354,7 @@ func TestAGroupIsRecordedEvenWhenTheMessageIsNotAnswered(t *testing.T) {
 // caller landing in that window effectively does.
 func TestAPushIntoARoomIsRefusedByTheDatabase(t *testing.T) {
 	h := newHarness(t)
+	ownExecutionFixture(t, h)
 	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
 	at := h.agentAt(t, "family", "telegram")
 	if err := h.s.DB.NoteChatRoom(at.Seq, "room-7"); err != nil {

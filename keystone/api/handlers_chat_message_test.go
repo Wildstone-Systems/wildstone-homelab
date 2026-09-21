@@ -51,6 +51,7 @@ func (h *harness) poll(t *testing.T, role runtimedb.Role, query string) []runtim
 // somebody tried, by account and bot — never what they said.
 func TestChatUnboundAccountGetsNothing(t *testing.T) {
 	h := newHarness(t)
+	ownExecutionFixture(t, h)
 	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
 	// The Agent's bot exists; this account is simply not admitted to it.
 	h.agentAt(t, "family", "telegram")
@@ -590,6 +591,7 @@ func TestReadingAQueueDoesNotRequireNamingTheTransport(t *testing.T) {
 // tried (ADR-W033 B9.1).
 func TestAStrangerFloodingABotWritesAlmostNothing(t *testing.T) {
 	h := newHarness(t)
+	ownExecutionFixture(t, h)
 	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
 	h.agentAt(t, "family", "telegram")
 	for i := 0; i < 40; i++ {

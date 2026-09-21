@@ -39,6 +39,7 @@ type ChatRecipient struct {
 // `chat-matrix-family.send` are different recipients, not one ambiguous
 // one.
 type ChatSender struct {
+	Authority HouseholdExecutionAuthority
 	// Capability is the capability this executor belongs to, e.g.
 	// chat-telegram-family.
 	Capability string
@@ -70,6 +71,9 @@ func (c *ChatSender) Name() string { return c.Capability + ".send" }
 
 // Execute implements Executor.
 func (c *ChatSender) Execute(ctx context.Context, call Call) (Result, error) {
+	if err := checkExecution(c.Authority); err != nil {
+		return Result{}, err
+	}
 	if c.Lookup == nil || c.Ask == nil {
 		return Result{}, &RefusalError{Tool: call.Tool, Reason: "chat delivery is not wired on this control plane"}
 	}

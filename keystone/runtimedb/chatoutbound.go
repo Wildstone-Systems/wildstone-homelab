@@ -89,6 +89,9 @@ var ErrDuplicateOutbound = errors.New("runtimedb: chat message already queued")
 // dedupe key returns the EXISTING seq with ErrDuplicateOutbound, so a
 // retried producer converges on one message rather than two.
 func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
+	if err := db.CheckHouseholdExecution(); err != nil {
+		return 0, err
+	}
 	if m.Connection == 0 {
 		return 0, fmt.Errorf("runtimedb: a chat message leaves by a connection (ADR-W033 B7)")
 	}
@@ -102,12 +105,8 @@ func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
 	if m.Kind == "" {
 		m.Kind = "reply"
 	}
-	// Only pushes are gated. A push is proactive delivery and waits out
-	// quarantine; a reply is an answer to something a person just asked,
-	// and refusing to finish a conversation somebody is in the middle of
-	// would be a worse failure than the one quarantine is preventing.
-	// In practice a reply cannot say much anyway — retrieval and
-	// dispatch are both held — but it can still say why.
+	// Pushes additionally retain their proactive-delivery policy gate. All
+	// messages already passed the lease and dispatch-stop boundary above.
 	if m.Kind == "push" {
 		if err := db.gate(GateDelivery); err != nil {
 			return 0, err
@@ -139,37 +138,19 @@ func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
 // Connection after the cursor, oldest first — which is what an adapter
 // polls: its own bot's messages, and no other Agent's.
 func (db *DB) ChatOutboundAfter(at Connection, after int64, limit int) ([]ChatOutbound, error) {
+	if err := db.CheckHouseholdExecution(); err != nil {
+		return nil, err
+	}
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
 	// Quarantine is checked on the READ, not only on the write.
 	//
-	// Gating EnqueueChatOutbound stops new pushes. It does nothing about
-	// pushes that were ALREADY QUEUED when the snapshot was taken and
-	// came back with it: those rows are unexpired, unheld and
-	// undelivered, so the adapter's next poll would carry them out
-	// before any deletion or authority reconciliation had run — the
-	// proactive delivery A10 holds, arriving through the restore itself.
-	//
-	// Replies stay deliverable, exactly as they stay enqueueable: a
-	// person waiting on an answer is owed one.
-	quarantined := false
-	if s, err := db.GetRestoreState(); err != nil {
-		// Cannot tell: withhold pushes. Failing open here would mean a
-		// database that cannot describe itself still broadcasting.
-		quarantined = true
-	} else {
-		quarantined = s.Quarantined
-	}
-
 	stamp := now()
 	// A held message stays queued and deduplicated; it is simply not
 	// offered to the adapter until its hold expires (ADR-W030 A10).
 	args := []any{at.Seq, after, stamp, stamp}
 	where := `o.connection = ? AND o.seq > ? AND o.delivered_at = '' AND o.expires_at > ? AND (o.hold_until = '' OR o.hold_until <= ?)`
-	if quarantined {
-		where += ` AND o.kind <> 'push'`
-	}
 	args = append(args, limit)
 	rows, err := db.sql.Query(
 		outboundColumns+` WHERE `+where+` ORDER BY o.seq ASC LIMIT ?`, args...)

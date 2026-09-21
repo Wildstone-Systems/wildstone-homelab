@@ -35,6 +35,7 @@ import (
 func homeHarness(t *testing.T) *harness {
 	t.Helper()
 	h, _ := portalHarness(t)
+	ownExecutionFixture(t, h)
 	for _, r := range []resource.Resource{
 		{
 			ApiVersion: "wildstone.dev/v1", Kind: resource.KindLdapGroup,

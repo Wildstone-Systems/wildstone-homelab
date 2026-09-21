@@ -305,6 +305,9 @@ func TestReconciliationRevokesACredentialARestoredPlacementStillHolds(t *testing
 // authority reconciliation has run.
 func TestQuarantineHoldsPushesThatCameBackWithTheRestore(t *testing.T) {
 	db := open(t)
+	if _, err := db.AcquireCoordinator("effect-fixture"); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.UpsertModel(Model{
 		Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", ProviderModel: "llama",
 		Readiness: ModelReady, Enabled: true,
@@ -338,18 +341,8 @@ func TestQuarantineHoldsPushesThatCameBackWithTheRestore(t *testing.T) {
 	}
 
 	got, err := db.ChatOutboundAfter(conn, 0, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, m := range got {
-		if m.Kind == "push" {
-			t.Fatal("a push restored from the snapshot was delivered during quarantine")
-		}
-	}
-	// The reply still goes: a person waiting on an answer is owed one,
-	// which is the same exception the enqueue side makes.
-	if len(got) != 1 || got[0].Kind != "reply" {
-		t.Fatalf("quarantine withheld the reply too: %+v", got)
+	if !errors.Is(err, ErrQuarantined) || len(got) != 0 {
+		t.Fatalf("stopped dispatch emitted restored messages: %v %v", got, err)
 	}
 
 	// And the push is not lost — it is waiting, and arrives once the

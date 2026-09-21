@@ -39,7 +39,7 @@ func call(tool, tier string) Call {
 
 func gateway(t *testing.T, e *fakeExecutor) *Gateway {
 	t.Helper()
-	g := &Gateway{Declared: DeclaredFromPackages([]AgentToolSource{
+	g := &Gateway{Authority: permittedExecution{}, Declared: DeclaredFromPackages([]AgentToolSource{
 		{Capability: "notifications", Tools: map[string]string{"notify": "domestic"}},
 		{Capability: "pantry", Tools: map[string]string{"inventory": "read"}},
 	})}
@@ -98,7 +98,7 @@ func TestDispatchWithoutCatalogStillChecksTier(t *testing.T) {
 	// nil Declared: a deployment with no catalog can still run what it
 	// registered, but the tier gate does not lift.
 	exec := &fakeExecutor{name: "notifications.notify"}
-	g := &Gateway{}
+	g := &Gateway{Authority: permittedExecution{}}
 	g.Register(exec)
 	if _, err := g.Dispatch(context.Background(), call("notifications.notify", "domestic")); err != nil {
 		t.Fatalf("undeclared but registered: %v", err)
@@ -130,5 +130,22 @@ func TestDispatchBoundsAndAudits(t *testing.T) {
 	}
 	if g.Tools()[0] != "notifications.notify" || len(g.Tools()) != 1 {
 		t.Fatalf("tools = %v", g.Tools())
+	}
+}
+
+// These unit fixtures isolate tool validation from execution authority. The
+// legacy/API and runtime-store tests exercise the real lease and stop policy.
+type permittedExecution struct{}
+
+func (permittedExecution) CheckHouseholdExecution() error { return nil }
+func TestMissingExecutionAuthorityFailsClosed(t *testing.T) {
+	g := &Gateway{}
+	e := &fakeExecutor{name: "notifications.notify"}
+	g.Register(e)
+	if _, err := g.Dispatch(context.Background(), call("notifications.notify", TierDomestic)); err == nil {
+		t.Fatal("missing authority allowed effect")
+	}
+	if len(e.calls) != 0 {
+		t.Fatal("unfenced executor reached")
 	}
 }

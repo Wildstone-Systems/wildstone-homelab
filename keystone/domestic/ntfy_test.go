@@ -42,7 +42,7 @@ func notifyCall(params map[string]string) Call {
 
 func TestNotifyPublishes(t *testing.T) {
 	f := newFakeNtfy(t)
-	n := &Notifier{BaseURL: f.URL, Token: "KNOWN-FAKE-ntfy-token"}
+	n := &Notifier{Authority: permittedExecution{}, BaseURL: f.URL, Token: "KNOWN-FAKE-ntfy-token"}
 
 	res, err := n.Execute(context.Background(), notifyCall(map[string]string{
 		"topic": "household-mika", "message": "Did you get the mail?",
@@ -69,7 +69,7 @@ func TestNotifyPublishes(t *testing.T) {
 func TestNotifyReplyButtonsCloseTheLoop(t *testing.T) {
 	f := newFakeNtfy(t)
 	minted := 0
-	n := &Notifier{
+	n := &Notifier{Authority: permittedExecution{},
 		BaseURL:  f.URL,
 		ReplyURL: "https://wildstone.example/api/v1/household/events",
 		MintReply: func(context.Context) (string, error) {
@@ -134,15 +134,15 @@ func TestNotifyRefusals(t *testing.T) {
 		params map[string]string
 		want   string
 	}{
-		"no base url":   {&Notifier{}, map[string]string{"topic": "t", "message": "m"}, "no ntfy base URL"},
-		"no topic":      {&Notifier{BaseURL: f.URL}, map[string]string{"message": "m"}, `"topic" is required`},
-		"blank message": {&Notifier{BaseURL: f.URL}, map[string]string{"topic": "t", "message": "  "}, `"message" is required`},
-		"bad priority":  {&Notifier{BaseURL: f.URL}, map[string]string{"topic": "t", "message": "m", "priority": "9"}, `"priority" must be 1..5`},
+		"no base url":   {&Notifier{Authority: permittedExecution{}}, map[string]string{"topic": "t", "message": "m"}, "no ntfy base URL"},
+		"no topic":      {&Notifier{Authority: permittedExecution{}, BaseURL: f.URL}, map[string]string{"message": "m"}, `"topic" is required`},
+		"blank message": {&Notifier{Authority: permittedExecution{}, BaseURL: f.URL}, map[string]string{"topic": "t", "message": "  "}, `"message" is required`},
+		"bad priority":  {&Notifier{Authority: permittedExecution{}, BaseURL: f.URL}, map[string]string{"topic": "t", "message": "m", "priority": "9"}, `"priority" must be 1..5`},
 		// A question with nowhere to send its answer is refused, not
 		// quietly downgraded to a statement.
-		"replies with no reply url": {&Notifier{BaseURL: f.URL}, map[string]string{"topic": "t", "message": "m", "replies": "Yes,No"}, "no household reply URL is configured"},
+		"replies with no reply url": {&Notifier{Authority: permittedExecution{}, BaseURL: f.URL}, map[string]string{"topic": "t", "message": "m", "replies": "Yes,No"}, "no household reply URL is configured"},
 		"too many replies": {
-			&Notifier{BaseURL: f.URL, ReplyURL: "https://x/y", MintReply: func(context.Context) (string, error) { return "t", nil }},
+			&Notifier{Authority: permittedExecution{}, BaseURL: f.URL, ReplyURL: "https://x/y", MintReply: func(context.Context) (string, error) { return "t", nil }},
 			map[string]string{"topic": "t", "message": "m", "replies": "a,b,c,d"}, "at most 3",
 		},
 	} {
@@ -155,7 +155,7 @@ func TestNotifyRefusals(t *testing.T) {
 	// A non-2xx from ntfy is the executor's failure, with the server's
 	// own words carried through.
 	f.status = http.StatusInsufficientStorage
-	n := &Notifier{BaseURL: f.URL}
+	n := &Notifier{Authority: permittedExecution{}, BaseURL: f.URL}
 	if _, err := n.Execute(context.Background(), notifyCall(map[string]string{"topic": "t", "message": "m"})); err == nil ||
 		!strings.Contains(err.Error(), "507") {
 		t.Fatalf("ntfy failure = %v", err)

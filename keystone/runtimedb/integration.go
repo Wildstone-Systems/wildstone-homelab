@@ -435,7 +435,7 @@ func (db *DB) ClaimIntegrationWork(principal string) (IntegrationWork, bool, err
 	// waits out quarantine like everything else. An empty answer would
 	// be wrong here: the adapter should learn that the control plane is
 	// holding, not conclude the queue is quiet.
-	if err := db.gate(GateDispatch); err != nil {
+	if err := db.CheckHouseholdExecution(); err != nil {
 		return IntegrationWork{}, false, err
 	}
 	if principal == "" {

@@ -10,7 +10,7 @@ import (
 func testSender(t *testing.T) (*ChatSender, *[]string) {
 	t.Helper()
 	var asked []string
-	return &ChatSender{
+	return &ChatSender{Authority: permittedExecution{},
 		Capability: "chat-telegram-family",
 		Transport:  "telegram",
 		Lookup: func(_ context.Context, member string) (ChatRecipient, error) {
@@ -97,7 +97,7 @@ func TestChatSenderRefusesWithoutARecipient(t *testing.T) {
 // cannot be reached above the domestic tier (ADR-W024 A5).
 func TestChatSenderStillPassesTheGatewayTierCheck(t *testing.T) {
 	s, asked := testSender(t)
-	g := &Gateway{}
+	g := &Gateway{Authority: permittedExecution{}}
 	g.Register(s)
 	if _, err := g.Dispatch(context.Background(), Call{
 		Tool: s.Name(), Tier: "high", Subject: "sam",

@@ -16,6 +16,7 @@ import (
 // Statefile (ADR-W020 A3). A test that skips this is testing a code
 // nobody could ever redeem.
 func (h *harness) ensureChatPrereqs(t *testing.T, surface, identity, transport string) {
+	ownExecutionFixture(t, h)
 	t.Helper()
 	if transport == "" {
 		transport = "telegram"
