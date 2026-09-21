@@ -1233,15 +1233,17 @@ create_first_owner() {
 # started; Docker's later bind failure otherwise looks like a generic plan
 # failure. Existing live Caddy mappings are our own and may be reused.
 check_tailnet_ingress_ports() {
-  local bind_ip="$1" owned line state recvq sendq local_addr peer process port
+  local bind_ip="$1" owned line local_addr process port
   command -v ss >/dev/null || fail "ss (iproute2) is required to check tailnet ingress ports"
   owned="$(docker port caddy-tailnet-ts 2>/dev/null || true)"
   while IFS= read -r line; do
-    read -r state recvq sendq local_addr peer process <<< "$line"
+    read -r _ _ _ local_addr _ process <<< "$line"
     port="${local_addr##*:}"
     [[ "$port" =~ ^[0-9]+$ ]] || continue
     if [ "$port" -ne 443 ]; then
-      [ "$port" -ge 7443 ] && [ "$port" -le 53443 ] || continue
+      if [ "$port" -lt 7443 ] || [ "$port" -gt 53443 ]; then
+        continue
+      fi
       [ $(((port - 7443) % 1000)) -eq 0 ] || continue
     fi
     case "$local_addr" in
@@ -1592,4 +1594,3 @@ UNIT
 
 log "Node '$NODE_ID' joined toward $KEYSTONE_ADDR. Verify:"
 log "  journalctl -u wardstoned -f"
-
