@@ -65,12 +65,16 @@ type containerInspect struct {
 		Image  string            `json:"Image"`
 		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
+	HostConfig struct {
+		PortBindings map[string][]portBinding `json:"PortBindings"`
+	} `json:"HostConfig"`
 	// Networks is keyed by Docker network name; a container attached to
 	// several has an address on each. Parsed because Keystone has to
 	// know which address the identity proxy will appear as — see
 	// InspectContainerResult.ip_addresses for why that cannot be a
 	// subnet, a DNS name, or a value pinned at install time.
 	NetworkSettings struct {
+		Ports    map[string][]portBinding `json:"Ports"`
 		Networks map[string]struct {
 			IPAddress string `json:"IPAddress"`
 		} `json:"Networks"`
