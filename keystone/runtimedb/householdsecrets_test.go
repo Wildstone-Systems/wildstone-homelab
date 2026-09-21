@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func secretFixture(t *testing.T) (*DB, *SecretVault, string) {
@@ -298,5 +299,52 @@ func TestSecretValueCannotBecomeItsMemoryLabel(t *testing.T) {
 	_, v, _ := secretFixture(t)
 	if _, err := v.Create("sam", SecretInput{Scope: "personal", Label: "Example code 1234", Value: "1234"}); err == nil {
 		t.Fatal("raw value admitted into plaintext label")
+	}
+}
+
+func TestSecretUseDoesNotBlockConcurrentRevocation(t *testing.T) {
+	db, v, value := secretFixture(t)
+	s, err := v.Create("sam", SecretInput{Scope: "personal", Label: "Calendar", Value: value})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = v.AgentGrant("sam", s.ID, "shared", "calendar.get_agenda", true); err != nil {
+		t.Fatal(err)
+	}
+	caller := db.BindMemoryRead("sam", "shared", MemoryDestination{BuiltIn: true})
+	started, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- v.Use(s.ID, caller, "calendar.get_agenda", func(raw []byte) error { close(started); <-release; return nil })
+	}()
+	<-started
+	revoked := make(chan error, 1)
+	go func() { revoked <- v.AgentGrant("sam", s.ID, "shared", "calendar.get_agenda", false) }()
+	timedOut := false
+	select {
+	case err = <-revoked:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(2 * time.Second):
+		timedOut = true
+		t.Error("external secret use blocked database revocation")
+	}
+	close(release)
+	if timedOut {
+		if err = <-revoked; err != nil {
+			t.Error(err)
+		}
+	}
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+	var uses int
+	if err = db.sql.QueryRow("SELECT count(*) FROM household_secret_audit WHERE secret_id=? AND action='use'", s.ID).Scan(&uses); err != nil || uses != 1 {
+		t.Fatalf("completion audit: count=%d err=%v", uses, err)
+	}
+	// A use already authorized may finish; revocation fences subsequent uses.
+	if err = v.Use(s.ID, caller, "calendar.get_agenda", func([]byte) error { t.Error("revoked credential consumed"); return nil }); err == nil {
+		t.Error("revoked grant authorized use")
 	}
 }

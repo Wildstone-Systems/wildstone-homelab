@@ -408,7 +408,8 @@ func secretPrincipalGrant(tx *sql.Tx, id, person, verb string) error {
 }
 
 // Use's callback is trusted runtime code, not a model-selected function. The
-// transaction fixes the authorization linearization point before consumption.
+// read snapshot fixes authorization before consumption and closes before network
+// I/O. Concurrent revocation fences subsequent uses; completion is audited separately.
 func (v *SecretVault) Use(id string, c *MemoryReadContext, purpose string, consume func([]byte) error) error {
 	if purpose != "calendar.get_agenda" || consume == nil {
 		return ErrSecretDenied
@@ -416,7 +417,7 @@ func (v *SecretVault) Use(id string, c *MemoryReadContext, purpose string, consu
 	if err := v.db.gate(GateDispatch); err != nil {
 		return err
 	}
-	tx, err := v.db.sql.Begin()
+	tx, err := v.db.sql.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
@@ -433,13 +434,21 @@ func (v *SecretVault) Use(id string, c *MemoryReadContext, purpose string, consu
 		return err
 	}
 	defer clear(raw)
+	if err = tx.Commit(); err != nil {
+		return err
+	}
 	if err = consume(raw); err != nil {
 		return errors.New("secret-backed operation failed")
 	}
-	if err = secretAudit(tx, id, c.person, "use"); err != nil {
+	audit, err := v.db.sql.Begin()
+	if err != nil {
 		return err
 	}
-	return tx.Commit()
+	defer audit.Rollback()
+	if err = secretAudit(audit, id, c.person, "use"); err != nil {
+		return err
+	}
+	return audit.Commit()
 }
 func (v *SecretVault) Reveal(id string, c *MemoryReadContext, surface string) ([]byte, error) {
 	if err := v.db.gate(GateRetrieval); err != nil {
