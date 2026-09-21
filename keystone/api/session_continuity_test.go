@@ -300,3 +300,39 @@ func TestContinuationContentRequiresAllDisclosureClassifications(t *testing.T) {
 		})
 	}
 }
+
+func TestContinuationRejectsAStaleDestination(t *testing.T) {
+	for _, change := range []string{"compatible", "reclassified", "revoked", "unclassified"} {
+		t.Run(change, func(t *testing.T) {
+			h := newHarness(t)
+			h.person("sam")
+			origin := h.agentAt(t, "family", "matrix")
+			destination := h.agentAt(t, "family", "telegram")
+			id := insertCandidateSession(t, h, origin, "sam", "private prior transcript")
+			// The destination is deliberately NOT an origin of this session.
+			// This is the ingress snapshot that must not authorize history.
+			stale, err := h.s.DB.ChatConnectionBySeq(destination.Seq)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch change {
+			case "reclassified":
+				_, err = h.s.DB.ExecForTest(`UPDATE connection_disclosure SET encryption='end_to_end' WHERE connection=?`, destination.Seq)
+			case "revoked":
+				_, err = h.s.DB.ExecForTest(`UPDATE butler_addresses SET revoked_at='revoked' WHERE seq=?`, destination.Seq)
+			case "unclassified":
+				_, err = h.s.DB.ExecForTest(`DELETE FROM connection_disclosure WHERE connection=?`, destination.Seq)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded, allowed, err := h.s.loadChatContinuation(id, stale)
+			if err != nil || allowed != (change == "compatible") {
+				t.Fatalf("allowed=%v err=%v", allowed, err)
+			}
+			if !allowed && (loaded.ID != "" || len(loaded.Turns) != 0) {
+				t.Fatal("denied continuation returned private history")
+			}
+		})
+	}
+}
