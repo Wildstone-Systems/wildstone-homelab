@@ -218,6 +218,7 @@ export interface CommitmentSpec {
   mayComplete?: string[];
   notify?: string[];
   scope?: string;
+  partOfDay?: string;
 }
 
 export type Spec =

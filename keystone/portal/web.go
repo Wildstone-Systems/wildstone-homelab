@@ -29,7 +29,7 @@ var web embed.FS
 // a handler somebody will later point at "../".
 func Page(name string) ([]byte, bool) {
 	switch name {
-	case "files-widget", "files", "assistant-widget", "assistant", "home", "activity", "catalog", "calendar", "upkeep":
+	case "files-widget", "files", "assistant-widget", "assistant", "home", "activity", "catalog", "calendar", "upkeep", "agenda":
 	default:
 		return nil, false
 	}
