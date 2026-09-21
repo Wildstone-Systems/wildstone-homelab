@@ -57,6 +57,18 @@ type who struct {
 	// this surface is not supposed to do. A predicate that every
 	// caller shares cannot be the one somebody forgets.
 	wards []string
+	// admin marks the operator surface. The Console already DISCLOSES
+	// every commitment — listCommitments filters by nothing — so a
+	// Console that could see a record and not remove it would be the
+	// inconsistency, not the fix. It is also the only way these routes
+	// work at all: a Console credential's principal name is not a
+	// household handle, so an Owner would match no owner and no
+	// mayComplete list and be refused their own deployment.
+	//
+	// Unexported, and set in exactly one place: consoleCommitmentCall,
+	// which is already behind VerbManage. Nothing a request carries can
+	// turn it on.
+	admin bool
 }
 
 // guards reports whether this member is the recorded guardian of the
@@ -85,7 +97,14 @@ func memberWho(r *http.Request, member string) who {
 // One query, and a failure is no wards rather than an error: a
 // guardian who cannot be looked up sees what an ordinary member sees,
 // which is wrong in the safe direction.
+// adminWho is the operator surface's standing: it sees and may answer
+// everything, because the Console already shows everything.
+func adminWho(member string) who { return who{member: member, admin: true} }
+
 func (s *Server) who(r *http.Request, member string) who {
+	if isAdminActor(r) {
+		return adminWho(member)
+	}
 	w := memberWho(r, member)
 	if s.DB == nil || member == "" {
 		return w
@@ -235,6 +254,9 @@ func commitmentWants(st upkeep.Standing) bool {
 // same boundary W033's memory scopes draw, using the same words rather
 // than a second vocabulary for the same question.
 func visibleTo(st upkeep.Standing, w who) bool {
+	if w.admin {
+		return true
+	}
 	if st.Scope != resource.CommitmentScopePersonal {
 		return true
 	}
@@ -259,6 +281,9 @@ func visibleTo(st upkeep.Standing, w who) bool {
 // vocabulary here to lean on, and inventing one in this file would put
 // it in the wrong place. A household wanting it narrower names who.
 func mayComplete(st upkeep.Standing, w who) bool {
+	if w.admin {
+		return true
+	}
 	if len(st.MayComplete) == 0 {
 		if st.Scope == resource.CommitmentScopePersonal {
 			owner := strings.TrimPrefix(st.Owner, "household/")

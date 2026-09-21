@@ -540,10 +540,21 @@ func decodeAuthored(r *http.Request, into any) (int, error) {
 // which is ADR-W033's line stated three separate times: administrative
 // authority and disclosure authority are not the same thing.
 func mayAuthor(st upkeep.Standing, w who) bool {
+	// The operator surface authors anything, for the reason it sees
+	// anything: the Console already lists every commitment, and one
+	// that shows a record while refusing to let the administrator
+	// change it is the inconsistency rather than the safeguard.
+	if w.admin {
+		return true
+	}
 	if st.Scope != resource.CommitmentScopePersonal {
 		return true
 	}
-	return strings.TrimPrefix(st.Owner, "household/") == w.member
+	owner := strings.TrimPrefix(st.Owner, "household/")
+	// A guardian authors their child's, or a child's routine could be
+	// created by the person who runs the week and then edited by
+	// nobody — the child cannot sign in to do it themselves (A8/A9).
+	return owner == w.member || w.guards(owner)
 }
 
 // homeEditCommitment changes one that already exists.

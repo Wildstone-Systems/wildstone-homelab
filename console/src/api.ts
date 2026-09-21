@@ -1313,6 +1313,11 @@ export interface CommitmentStanding {
   disabled?: boolean;
   rollover?: string;
   requiresBooking?: boolean;
+  // The two the Go Standing already carries, so an edit form can open
+  // on what the record says rather than on a default the operator then
+  // has to correct.
+  partOfDay?: string;
+  every?: string;
   occurrence: CommitmentOccurrence;
   booking?: CommitmentBooking;
 }
@@ -1628,6 +1633,31 @@ export const api = {
   // routine+spec (a draft held as a parsed spec, which is what the form
   // has).
   commitments: () => call<CommitmentStanding[]>("GET", "/api/v1/household/commitments"),
+  // Managing them, not only reading them. The Console listed every
+  // commitment and could change none: an Owner looking at a duplicate
+  // had to sign in to the family dashboard to remove it. Same handlers
+  // the dashboard calls, on the operator chain.
+  addCommitment: (fields: CommitmentFields) =>
+    call<{ commitment: string }>("POST", "/api/v1/household/commitments", fields),
+  editCommitment: (name: string, fields: CommitmentFields) =>
+    call<{ commitment: string }>(
+      "PUT",
+      `/api/v1/household/commitments/${encodeURIComponent(name)}`,
+      fields,
+    ),
+  removeCommitment: (name: string) =>
+    call<{ removed: string }>(
+      "DELETE",
+      `/api/v1/household/commitments/${encodeURIComponent(name)}`,
+    ),
+  // done and waived close the cycle; booked moves THIS one without
+  // touching the schedule, which is how a holiday week works.
+  answerCommitment: (name: string, answer: "done" | "waived" | "booked", at?: string) =>
+    call<Record<string, unknown>>(
+      "POST",
+      `/api/v1/household/commitments/${encodeURIComponent(name)}/${answer}`,
+      at ? { at } : {},
+    ),
   commitment: (name: string) =>
     call<{ standing: CommitmentStanding; completions: CommitmentCompletion[] }>(
       "GET",
@@ -2038,6 +2068,19 @@ export interface ConnectionCreated {
 // What an imported package came to. pictureProblem is a note rather
 // than a failure: the palette is the theme, and a picture that could
 // not be read is worth saying without throwing the import away.
+// What the Console sends to author a commitment. The same typed fields
+// the dashboard's form sends: this door parses no documents either.
+export interface CommitmentFields {
+  description: string;
+  every?: string;
+  anchor?: string;
+  lead?: string;
+  rollover: string;
+  scope?: string;
+  partOfDay?: string;
+  about?: string;
+}
+
 export interface ThemePackageResult {
   theme: string;
   label: string;
