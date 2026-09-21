@@ -67,6 +67,20 @@ type CommitmentSpec struct {
 	// furnace filter is household; a medication refill is personal.
 	// Empty means household.
 	Scope string `yaml:"scope,omitempty" json:"scope,omitempty"`
+	// PartOfDay is when in the day this belongs, for the things that
+	// belong somewhere in it: "before school", "after dinner".
+	//
+	// A CHORE HAS NO CLOCK TIME AND IS NOT UNORDERED. Nobody makes a bed
+	// at 07:15; they make it in the morning, before the other morning
+	// things. A time would be a lie precise enough to be believed, and
+	// no time at all leaves a child's day as an unsorted list of eight
+	// items. This is the third answer, and it is why a routine can be
+	// rendered as a routine rather than as a tracker row.
+	//
+	// Empty is the honest default and means "some time that day" — the
+	// furnace filter has no part of day and should not be made to
+	// choose one.
+	PartOfDay string `yaml:"partOfDay,omitempty" json:"partOfDay,omitempty"`
 }
 
 // CommitmentDue is one threshold: this meter, this far apart, warning
@@ -124,6 +138,36 @@ var commitmentRollovers = map[string]bool{
 
 var commitmentScopes = map[string]bool{
 	CommitmentScopeHousehold: true, CommitmentScopePersonal: true,
+}
+
+// The parts of a day, in the order a day happens. Deliberately three
+// and not a clock: a household says morning, afternoon, evening, and a
+// fourth bucket is the beginning of re-inventing times.
+const (
+	PartOfDayMorning   = "morning"
+	PartOfDayAfternoon = "afternoon"
+	PartOfDayEvening   = "evening"
+)
+
+var commitmentPartsOfDay = map[string]int{
+	PartOfDayMorning: 1, PartOfDayAfternoon: 2, PartOfDayEvening: 3,
+}
+
+// CommitmentPartsOfDay is the closed set in day order, exported for the
+// same reason the rollovers are: a form that offers a value validation
+// will refuse is offering a rejection.
+func CommitmentPartsOfDay() []string {
+	return []string{PartOfDayMorning, PartOfDayAfternoon, PartOfDayEvening}
+}
+
+// PartOfDayRank orders a day. An unset part sorts last: a thing with no
+// part of day is not a morning thing, and putting it first would push
+// the actual morning routine down the page.
+func PartOfDayRank(part string) int {
+	if r, ok := commitmentPartsOfDay[part]; ok {
+		return r
+	}
+	return 4
 }
 
 // CommitmentRollovers and CommitmentScopes are the closed sets, exported
@@ -213,6 +257,9 @@ func validateCommitment(r *Resource) error {
 	}
 	if c.Scope != "" && !commitmentScopes[c.Scope] {
 		return fail("spec.scope", fmt.Sprintf("must be one of %s", strings.Join(CommitmentScopes(), ", ")))
+	}
+	if c.PartOfDay != "" && commitmentPartsOfDay[c.PartOfDay] == 0 {
+		return fail("spec.partOfDay", fmt.Sprintf("must be one of %s", strings.Join(CommitmentPartsOfDay(), ", ")))
 	}
 	if len(c.Due) == 0 {
 		return fail("spec.due", "needs at least one threshold: nothing can come due")

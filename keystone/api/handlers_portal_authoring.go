@@ -334,6 +334,7 @@ type commitmentFields struct {
 	Anchor          string   `json:"anchor,omitempty"`
 	RequiresBooking bool     `json:"requiresBooking,omitempty"`
 	Scope           string   `json:"scope,omitempty"`
+	PartOfDay       string   `json:"partOfDay,omitempty"`
 	About           string   `json:"about,omitempty"`
 	MayComplete     []string `json:"mayComplete,omitempty"`
 	Notify          []string `json:"notify,omitempty"`
@@ -348,7 +349,7 @@ func (f commitmentFields) spec() resource.CommitmentSpec {
 	}
 	return resource.CommitmentSpec{
 		Description: f.Description, Rollover: f.Rollover, Anchor: f.Anchor,
-		RequiresBooking: f.RequiresBooking, Scope: f.Scope,
+		RequiresBooking: f.RequiresBooking, Scope: f.Scope, PartOfDay: f.PartOfDay,
 		MayComplete: f.MayComplete, Notify: f.Notify,
 		Due: []resource.CommitmentDue{due},
 	}
@@ -562,7 +563,7 @@ func mayAuthor(st upkeep.Standing, w who) bool {
 // a personal commitment would publish it to the household.
 func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
 	name := r.PathValue("name")
-	w := memberWho(r, member)
+	w := s.who(r, member)
 	st, code, err := s.commitmentFor(name, w)
 	if err != nil {
 		return nil, code, err
@@ -592,6 +593,13 @@ func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, memb
 	spec := *existing.Commitment
 	spec.Description = f.Description
 	spec.Rollover = f.Rollover
+	// Set unconditionally, including to empty. A routine's part of day
+	// is one of the things most likely to be wrong first — "before
+	// school" turns out to be "after dinner" — and a field that can be
+	// set once and never changed is a field that will be worked around
+	// by deleting the routine and making a new one. Empty is a real
+	// answer here ("any time"), so it cannot be "leave it alone".
+	spec.PartOfDay = f.PartOfDay
 	spec.RequiresBooking = f.RequiresBooking
 	spec.MayComplete = f.MayComplete
 	spec.Notify = f.Notify
@@ -643,7 +651,7 @@ func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, memb
 // left where they are rather than cascaded away.
 func (s *Server) homeRemoveCommitment(_ http.ResponseWriter, r *http.Request, member string, _ []resource.Resource) (any, int, error) {
 	name := r.PathValue("name")
-	w := memberWho(r, member)
+	w := s.who(r, member)
 	st, code, err := s.commitmentFor(name, w)
 	if err != nil {
 		return nil, code, err
@@ -712,7 +720,7 @@ func (s *Server) homeRemoveMeter(_ http.ResponseWriter, r *http.Request, member 
 	if found == nil {
 		return nil, http.StatusNotFound, fmt.Errorf("no meter named %q", name)
 	}
-	w := memberWho(r, member)
+	w := s.who(r, member)
 	dependants, hidden, err := s.meterDependants(name, w)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err

@@ -48,12 +48,60 @@ import (
 type who struct {
 	member string
 	groups []string
+	// wards are the children this member is the recorded guardian of
+	// (ADR-W033 A9). A guardian has their child's standing over the
+	// child's own records, and it lives HERE rather than at each call
+	// site because it has to reach every one of them: the agenda
+	// offered a guardian a Done button and the answer endpoint then
+	// refused it, which is the exact "offers a tick it will refuse"
+	// this surface is not supposed to do. A predicate that every
+	// caller shares cannot be the one somebody forgets.
+	wards []string
+}
+
+// guards reports whether this member is the recorded guardian of the
+// person a record belongs to.
+func (w who) guards(handle string) bool {
+	for _, ward := range w.wards {
+		if ward == handle {
+			return true
+		}
+	}
+	return false
 }
 
 // memberWho reads the groups the identity proxy forwarded for a request
 // the door has already admitted.
+//
+// It names no wards, and the callers that need them use Server.who.
+// Kept for the paths with no database to ask and for tests, so the
+// zero case is explicit rather than a nil dereference waiting.
 func memberWho(r *http.Request, member string) who {
 	return who{member: member, groups: forwardedGroups(r)}
+}
+
+// who is memberWho with the guardian relationships filled in.
+//
+// One query, and a failure is no wards rather than an error: a
+// guardian who cannot be looked up sees what an ordinary member sees,
+// which is wrong in the safe direction.
+func (s *Server) who(r *http.Request, member string) who {
+	w := memberWho(r, member)
+	if s.DB == nil || member == "" {
+		return w
+	}
+	members, err := s.DB.ListButlerMembers()
+	if err != nil {
+		s.Log.Warn("resolving guardian standing", "err", err)
+		return w
+	}
+	for _, m := range members {
+		if m.Profile == runtimedb.ProfileChild &&
+			strings.TrimPrefix(m.Guardian, "household/") == member {
+			w.wards = append(w.wards, m.Member)
+		}
+	}
+	return w
 }
 
 func forwardedGroups(r *http.Request) []string {
@@ -190,7 +238,11 @@ func visibleTo(st upkeep.Standing, w who) bool {
 	if st.Scope != resource.CommitmentScopePersonal {
 		return true
 	}
-	return strings.TrimPrefix(st.Owner, "household/") == w.member || mayComplete(st, w)
+	owner := strings.TrimPrefix(st.Owner, "household/")
+	// A9: a guardian has their child's standing over the child's own
+	// records. Not "the adults" — a recorded relationship, resolved
+	// once into who.wards.
+	return owner == w.member || w.guards(owner) || mayComplete(st, w)
 }
 
 // mayComplete is the `decidable` question: may THIS member answer it?
@@ -209,12 +261,18 @@ func visibleTo(st upkeep.Standing, w who) bool {
 func mayComplete(st upkeep.Standing, w who) bool {
 	if len(st.MayComplete) == 0 {
 		if st.Scope == resource.CommitmentScopePersonal {
-			return strings.TrimPrefix(st.Owner, "household/") == w.member
+			owner := strings.TrimPrefix(st.Owner, "household/")
+			// AND THE GUARDIAN, or a child's routine has nobody able to
+			// answer it: the child cannot sign in (A8), so an unnarrowed
+			// personal commitment of theirs would be decidable by
+			// nobody at all.
+			return owner == w.member || w.guards(owner)
 		}
 		return true
 	}
 	for _, p := range st.MayComplete {
-		if strings.TrimPrefix(p, "household/") == w.member {
+		handle := strings.TrimPrefix(p, "household/")
+		if handle == w.member || w.guards(handle) {
 			return true
 		}
 		// `household` is everybody who got through the door, and the
@@ -302,7 +360,7 @@ type commitmentAnswer struct {
 func (s *Server) answerCommitment(what string) portalFunc {
 	return func(_ http.ResponseWriter, r *http.Request, member string, _ []resource.Resource) (any, int, error) {
 		name := r.PathValue("name")
-		w := memberWho(r, member)
+		w := s.who(r, member)
 		st, code, err := s.commitmentFor(name, w)
 		if err != nil {
 			return nil, code, err

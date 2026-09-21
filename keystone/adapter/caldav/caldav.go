@@ -131,6 +131,44 @@ type Event struct {
 	// household made therefore starts by reading it, and this is the
 	// field that makes that possible.
 	Href string `json:"href,omitempty"`
+	// Attendees are the people this event is FOR, as the iCalendar
+	// names them: the CN parameter where there is one, otherwise the
+	// local part of the mailto. Read so a household can ask whose
+	// Tuesday afternoon the swimming is, which is the one thing a
+	// shared calendar cannot answer from a title alone.
+	//
+	// A NAME, NOT AN IDENTITY. This is whatever the event says, from
+	// whichever phone wrote it. Matching one to a household Person is
+	// a decision for the caller and deliberately not made here — the
+	// adapter reports what the calendar holds.
+	Attendees []string `json:"attendees,omitempty"`
+}
+
+// attendeeName reads a person's name out of one ATTENDEE line.
+//
+// CN first, because it is what a human typed and what every client
+// shows. Failing that the local part of a mailto, which is a poor name
+// but a better one than the whole URI. An ATTENDEE with neither is
+// skipped rather than reported as an empty person.
+func attendeeName(params, value string) string {
+	for _, p := range strings.Split(params, ";") {
+		k, v, ok := strings.Cut(p, "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(k), "CN") {
+			continue
+		}
+		// A CN may be quoted, and the quotes are syntax, not name.
+		if name := strings.Trim(strings.TrimSpace(v), `"`); name != "" {
+			return unescapeICS(name)
+		}
+	}
+	addr := strings.TrimSpace(value)
+	if i := strings.LastIndex(addr, ":"); i >= 0 {
+		addr = addr[i+1:] // strip the mailto: scheme
+	}
+	if local, _, ok := strings.Cut(addr, "@"); ok && local != "" {
+		return local
+	}
+	return ""
 }
 
 // report issues a CalDAV REPORT for a time range and returns the raw
@@ -250,6 +288,12 @@ func parseICS(data string, loc *time.Location) []Event {
 		case "DESCRIPTION":
 			if cur != nil {
 				cur.Description = unescapeICS(value)
+			}
+		case "ATTENDEE":
+			if cur != nil {
+				if who := attendeeName(params, value); who != "" {
+					cur.Attendees = append(cur.Attendees, who)
+				}
 			}
 		case "DTSTART":
 			if cur != nil {

@@ -53,6 +53,46 @@ A `child` is a constrained Member profile/policy preset, not a third RBAC role. 
 
 Owners administer the deployment. Members consume household services and capabilities.
 
+## 2.3.1 Scheduled subjects (ADR-W033 A8)
+
+A Person may be a **subject** of household records without being a **principal** who acts. A subject is named, scheduled, assigned things and displayed; it needs a Person record and nothing else. A principal signs in, holds credentials, reaches an Agent and accumulates memory; it needs admission.
+
+A Person carrying the `child` profile is a subject. That is a complete supported state and household features may rely on it.
+
+Normative:
+
+- A child record MUST name a guardian and MUST NOT hold any role but Member.
+- A child record MUST NOT be admitted to Butler membership. `AdmitButlerMember` refuses it by every path, including a direct `INSERT`.
+- A scheduled subject MUST carry no authentication binding: no directory account, no API principal, no chat binding, no session. Recording a Person as a child, or converting one, MUST remove any that exist; a deployment that cannot MUST refuse the conversion. **Admission state does not imply this** — `admitted` governs Butler membership only, and directory and principal authentication do not consult the profile.
+- None of the above authorizes the Child surface, which ADR-W030 Part C gates separately on credentials, principal, endpoint, gateway and transport eligibility.
+
+Acceptance: a child record cannot be admitted by any path; a child with an authentication binding is refused or has it removed at the point of recording; a household feature can name, schedule and display a child that has never signed in.
+
+## 2.3.2 Guardian standing (ADR-W033 A9)
+
+For a Person carrying the `child` profile, the recorded guardian has that child's standing over the child's own household records: the guardian may see and answer them.
+
+Normative:
+
+- Standing derives from the **recorded** guardian relationship only. It MUST NOT be inferred from a group, a role, or from being an adult.
+- It is asymmetric: guardian reaches child, never the reverse.
+- It is not a third role. A guardian is an ordinary Owner or Member named on a child's record.
+- A sole guardian MUST NOT be removable while the child record is active.
+
+Acceptance: a guardian sees and may complete their own child's personal-scope items; an unrelated adult sees neither; a child confers nothing over its guardian; an adult acquires nothing over another adult.
+
+## 2.3.3 Per-person agendas on a household surface (ADR-W033 A10)
+
+A per-person agenda is a household surface with a subject selector. Choosing a subject selects what is rendered; it does not establish who is asking, and it MUST NOT widen what the reader may be shown.
+
+Normative, and identical in every session because no request attribute reports whether a screen is shared:
+
+- A reader may see a subject's household-scope records whenever they can open the surface.
+- A reader may see a subject's personal-scope records only when they are the subject, when the record names them as able to complete it, or when 2.3.2 gives them guardian standing over the subject.
+- Selecting a subject grants no standing the reader did not already hold.
+
+Acceptance: an adult selecting another adult is shown no personal-scope item of theirs; a guardian selecting their child is; a reader selecting themselves is.
+
 ## 2.4 First Owner bootstrap
 
 Installation cannot complete without an active Owner.

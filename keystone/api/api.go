@@ -547,6 +547,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/appearance", s.handle(principal.VerbRead, s.getAppearance))
 	mux.Handle("PUT /api/v1/appearance", s.handle(principal.VerbRead, s.setAppearance))
 	mux.Handle("POST /api/v1/appearance/themes", s.handle(principal.VerbManage, s.importTheme))
+	// A whole theme at once, as the directory its authors publish: the
+	// palette and its picture in one upload instead of a paste and a
+	// second trip. Same verb as the paste, because it is the same act.
+	mux.Handle("POST /api/v1/appearance/themes/package", s.handle(principal.VerbManage, s.importThemePackage))
 	mux.Handle("DELETE /api/v1/appearance/themes/{name}", s.handle(principal.VerbManage, s.removeTheme))
 	// The picture a theme brings. VerbManage for the same reason the
 	// palette is: it changes what the whole household sees, and it is
@@ -773,6 +777,13 @@ func (s *Server) Handler() http.Handler {
 	// The tracker page and one commitment's history. Reads, so they sit
 	// with the other portal GETs; the answer paths below are unchanged.
 	mux.Handle("GET /upkeep/{$}", s.portal(surfaceHome, s.portalPage("upkeep")))
+	// One person's day (ADR-W033 A8-A10). On the household surface with
+	// a subject selector, NOT a per-person authenticated one: on a
+	// kitchen tablet the agenda is protected by the door the household
+	// came through, and A10 says so out loud rather than leaving a
+	// household to infer privacy the shared screen does not give.
+	mux.Handle("GET /agenda/{$}", s.portal(surfaceHome, s.portalPage("agenda")))
+	mux.Handle("GET /api/v1/home/agenda", s.portal(surfaceHome, s.homeAgenda))
 	mux.Handle("GET /api/v1/home/upkeep", s.portal(surfaceHome, s.homeUpkeep))
 	mux.Handle("GET /api/v1/home/commitments/{name}", s.portal(surfaceHome, s.homeCommitmentHistory))
 	// The household authors its own tracker (ADR-W035 A20, extended).

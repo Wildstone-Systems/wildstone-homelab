@@ -903,10 +903,18 @@
   function trackerLink() {
     var row = make("div", "spread");
     row.style.marginTop = "var(--space-4)";
+    // Two ways out of this card, and they answer different questions.
+    // "Everything the house tracks" is the whole ledger; "Somebody's
+    // day" is one person's, which is the question a household standing
+    // in a kitchen actually asks first.
+    var day = make("a", "hbtn hbtn-ghost", "Somebody's day");
+    day.href = "/agenda/";
+    day.appendChild(icon("arrow-right"));
     var a = make("a", "hbtn hbtn-ghost", "Everything the house tracks");
     a.href = "/upkeep/";
     a.appendChild(icon("arrow-right"));
     row.appendChild(make("span", "fade"));
+    row.appendChild(day);
     row.appendChild(a);
     return row;
   }

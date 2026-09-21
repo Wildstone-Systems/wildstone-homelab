@@ -28,8 +28,10 @@ import (
 // Every portal page registered in api.go must be under one of these, and
 // TestEveryPortalPageIsOutsideTheConsole holds that: /upkeep/ was added
 // as a route and never here, so the homepage's "Coming up" link opened
-// the Console and asked a family member for a bearer token.
-var PortalPrefixes = []string{"/filedrop/", "/assistant/", "/home/", "/portal/", "/activity/", "/catalog/", "/calendar/", "/upkeep/"}
+// the Console and asked a family member for a bearer token. /agenda/
+// then did exactly the same thing, which is why the test is worth more
+// than the comment.
+var PortalPrefixes = []string{"/filedrop/", "/assistant/", "/home/", "/portal/", "/activity/", "/catalog/", "/calendar/", "/upkeep/", "/agenda/"}
 
 // dashboardCapabilities are the capabilities whose Routes serve a
 // household dashboard — the pages entitled to frame a portal surface.

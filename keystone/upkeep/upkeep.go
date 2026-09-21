@@ -101,10 +101,18 @@ func (e *Engine) log() *slog.Logger {
 // Standing is where one commitment stands, with everything a caller
 // needs to render it without asking a second question.
 type Standing struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Owner       string   `json:"owner,omitempty"`
-	Scope       string   `json:"scope,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Owner       string `json:"owner,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	// PartOfDay is when in the day a routine belongs, empty for the
+	// things that belong nowhere in particular.
+	PartOfDay string `json:"partOfDay,omitempty"`
+	// Every is the interval of the FIRST due rule — the one a page
+	// renders and the one homeEditCommitment replaces. Carried so an
+	// edit form can open on what the routine says rather than on a
+	// guess the household then has to correct.
+	Every       string   `json:"every,omitempty"`
 	MayComplete []string `json:"mayComplete,omitempty"`
 	Notify      []string `json:"notify,omitempty"`
 	Disabled    bool     `json:"disabled,omitempty"`
@@ -195,7 +203,8 @@ func (e *Engine) standing(res resource.Resource, meters map[string]commitment.Me
 	spec := res.Commitment
 	st := Standing{
 		Name: res.Metadata.Name, Description: spec.Description,
-		Owner: res.Metadata.Owner, Scope: spec.Scope,
+		Owner: res.Metadata.Owner, Scope: spec.Scope, PartOfDay: spec.PartOfDay,
+		Every:       firstDueEvery(spec),
 		MayComplete: spec.MayComplete, Notify: spec.Notify, Disabled: spec.Disabled,
 		Rollover: spec.Rollover, RequiresBooking: spec.RequiresBooking,
 	}
@@ -292,25 +301,41 @@ func (e *Engine) input(res resource.Resource, meters map[string]commitment.Meter
 		})
 	}
 
+	// A LIVE BOOKING IS READ FOR EVERY COMMITMENT, and fed to the engine
+	// only for the ones that require one.
+	//
+	// Those are two different questions and this used to answer only
+	// the second. `requiresBooking` means "an appointment is part of
+	// answering this" — the dentist. A booking on a commitment that
+	// does NOT require one means something simpler and just as real:
+	// this cycle is happening on a different day. The bins go out on a
+	// Thursday and this week, for the holiday, on the Friday.
+	//
+	// Reading it for everything is what lets a surface move one cycle
+	// without touching the schedule. Feeding it to the engine only when
+	// it is required is what keeps that from changing anybody's state:
+	// a chore does not become "booked" because somebody shifted it, and
+	// an overdue one does not stop being overdue.
 	var live *runtimedb.CommitmentBooking
-	if spec.RequiresBooking {
-		b, berr := e.DB.LatestCommitmentBooking(res.Metadata.Name)
-		switch {
-		case berr == nil && b.Live():
-			// A booking made for a cycle that has since closed is not
-			// this cycle's appointment. The ledger keeps it; the open
-			// cycle does not inherit it.
-			if len(in.History) == 0 || b.BookedAt.After(in.History[len(in.History)-1].At) {
-				live = &b
+	b, berr := e.DB.LatestCommitmentBooking(res.Metadata.Name)
+	switch {
+	case berr == nil && b.Live():
+		// A booking made for a cycle that has since closed is not
+		// this cycle's appointment. The ledger keeps it; the open
+		// cycle does not inherit it. That is also exactly what makes
+		// a one-week shift a one-week shift.
+		if len(in.History) == 0 || b.BookedAt.After(in.History[len(in.History)-1].At) {
+			live = &b
+			if spec.RequiresBooking {
 				in.Booking = &commitment.Booking{At: b.At, BookedAt: b.BookedAt, By: b.BookedBy}
 			}
-		case berr == nil:
-			// Cancelled. Deliberately not passed on: the household has
-			// no appointment, which is the whole question.
-		case berr == runtimedb.ErrNotFound:
-		default:
-			return commitment.Input{}, nil, fmt.Errorf("upkeep: commitment %q booking: %w", res.Metadata.Name, berr)
 		}
+	case berr == nil:
+		// Cancelled. Deliberately not passed on: the household has
+		// no appointment, which is the whole question.
+	case berr == runtimedb.ErrNotFound:
+	default:
+		return commitment.Input{}, nil, fmt.Errorf("upkeep: commitment %q booking: %w", res.Metadata.Name, berr)
 	}
 	return in, live, nil
 }
@@ -422,4 +447,13 @@ func evidence(st Standing, given map[string]float64) (positions map[string]float
 		}
 	}
 	return positions, approx, missing
+}
+
+// firstDueEvery is the interval of the rule a page renders: the first,
+// which is the one homeEditCommitment replaces.
+func firstDueEvery(spec *resource.CommitmentSpec) string {
+	if spec == nil || len(spec.Due) == 0 {
+		return ""
+	}
+	return spec.Due[0].Every
 }

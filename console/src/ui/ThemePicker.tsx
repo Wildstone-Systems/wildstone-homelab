@@ -145,6 +145,7 @@ function AppearancePanel({ canImport }: { canImport: boolean }) {
                 setAdding(false);
                 void load();
               }}
+              onRefresh={() => void load()}
               onCancel={() => setAdding(false)}
             />
           ) : (
@@ -226,11 +227,27 @@ function ThemeTile({
 // small text file of colours; everything else in one configures
 // programs Wildstone does not run. So the household copies that file
 // in, and nothing is fetched and nothing is executed.
-function ImportForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+function ImportForm({
+  onDone,
+  onRefresh,
+  onCancel,
+}: {
+  onDone: () => void;
+  // Reload the catalogue WITHOUT closing the form. A package whose
+  // palette imported and whose picture did not is a success with a
+  // note, and returning early from onDone left the new theme invisible
+  // until a remount — so the household would retry an upload that had
+  // already worked.
+  onRefresh: () => void;
+  onCancel: () => void;
+}) {
   const [name, setName] = useState("");
   const [colors, setColors] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pkg, setPkg] = useState<File | null>(null);
+  const packageInput = useRef<HTMLInputElement | null>(null);
 
   const submit = async () => {
     setBusy(true);
@@ -242,6 +259,62 @@ function ImportForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => 
       setError((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  };
+
+  // THE WHOLE FOLDER, as its authors publish it. A theme's repository
+  // downloads as a zip holding colors.toml and a backgrounds/
+  // directory, which is the palette and the picture in one act instead
+  // of a paste and a second trip — and the second trip was the one
+  // people skipped. The name is optional because the archive usually
+  // knows it; the field is used when it does not, or when a household
+  // wants a different one.
+  // A theme zipped by hand has no folder to take a name from, and that
+  // refused the upload outright — the archive knows what is in it and
+  // not what it is called. The file's own name is the best guess
+  // available, offered in the field rather than used silently, because
+  // a zip is as often named after the wallpaper inside it as after the
+  // theme.
+  const chosePackage = (file: File) => {
+    setPkg(file);
+    setError(null);
+    setNote(null);
+    if (name.trim() === "") {
+      const guess = file.name
+        .replace(/\.zip$/i, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      if (guess !== "") {
+        setName(guess);
+      }
+    }
+  };
+
+  const uploadPackage = async (file: File) => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const out = await api.importThemePackage(file, name.trim() || undefined);
+      if (out.pictureProblem) {
+        // Added, with a caveat. Not an error: the palette is the theme,
+        // so the catalogue is refreshed and the form stays open to say
+        // what did not come through.
+        setNote(out.pictureProblem);
+        setPkg(null);
+        onRefresh();
+        return;
+      }
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      // So choosing the same file twice still fires a change event.
+      if (packageInput.current) {
+        packageInput.current.value = "";
+      }
     }
   };
 
@@ -291,6 +364,47 @@ function ImportForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => 
         <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>
           Cancel
         </button>
+      </div>
+
+      <div className="field">
+        <label htmlFor="theme-package">
+          …or upload the theme's folder
+          <span className="muted">
+            a .zip of the theme's own directory — colors.toml and its backgrounds/ — which is
+            what Download ZIP gives you on its repository. Brings the palette and a picture in
+            one go.
+          </span>
+        </label>
+        <input
+          id="theme-package"
+          ref={packageInput}
+          type="file"
+          /* Every spelling a browser might report for a zip, plus the
+             extension. An archive the OS calls x-zip-compressed is
+             still the file somebody just downloaded. */
+          accept=".zip,application/zip,application/x-zip-compressed,multipart/x-zip"
+          disabled={busy}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) chosePackage(file);
+          }}
+        />
+        {pkg && (
+          <div className="row">
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy || name.trim() === ""}
+              onClick={() => void uploadPackage(pkg)}
+            >
+              {busy ? "Uploading…" : `Upload ${pkg.name}`}
+            </button>
+            <span className="muted">
+              {name.trim() === "" ? "give it a name above first" : `adds the theme “${name.trim()}”`}
+            </span>
+          </div>
+        )}
+        {note && <p className="muted">{note}</p>}
       </div>
     </div>
   );

@@ -447,7 +447,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 		Groups: householdGroups(),
 	}
 	resp.Search.Engine, resp.Search.Offered = engine, portal.Engines
-	resp.NeedsYou = s.homeNeedsYou(memberWho(r, member), desired, now)
+	resp.NeedsYou = s.homeNeedsYou(s.who(r, member), desired, now)
 	resp.Activity = s.homeActivity(member, now)
 	resp.Notifications = s.homeNotifications(member)
 	resp.Calendar = s.homeCalendar(member, desired, now)
