@@ -68,10 +68,27 @@ type Authority struct {
 	// been given no resource rules: the general rule requires them
 	// without knowing them.
 	Resources butler.ResourceRules
+	// RoutineResources are separate per-kind rules bound to exact Plan IDs.
+	// Interactive resource rules cannot stand in for unattended grants.
+	RoutineResources butler.ResourceRules
 }
 
 // AuthorizeTool resolves one dispatch.
 func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecision, error) {
+	if q.Caller == butler.CallerRoutine {
+		if d, ok := a.routineLayer(q); !ok {
+			return d, nil
+		}
+		if q.Resource.Named() {
+			if q.Resource.ID == "" {
+				return butler.ToolDecision{Allowed: false, Reason: "routine resource needs an exact ID"}, nil
+			}
+			d, err := a.AdmitResource(q)
+			if err != nil || !d.Allowed {
+				return d, err
+			}
+		}
+	}
 	// Layer 1 first, and on its own. Everything below this point is
 	// about the AGENT — its narrowings, its assignments, the grants
 	// issued to it — and none of it says anything about the person who
@@ -126,6 +143,22 @@ func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecis
 		Requestable: res.Requestable,
 		GrantSeq:    res.GrantSeq,
 	}, nil
+}
+
+func (a *Authority) routineLayer(q butler.ToolAuthorityQuery) (butler.ToolDecision, bool) {
+	if a == nil || a.DB == nil || a.Butler == "" || q.RoutinePlanID == "" || q.Person != "" || q.Connection != "" || q.TaskID != "" || q.RoutineName != "" {
+		return butler.ToolDecision{Allowed: false, Reason: "unattended work needs its exact approved routine version"}, false
+	}
+	p, err := a.DB.BindRoutinePrincipal(q.RoutinePlanID)
+	if err != nil || a.DB.CheckRoutineVersion(p, a.Butler) != nil {
+		return butler.ToolDecision{Allowed: false, Reason: "this routine version is not approved and active for this Agent"}, false
+	}
+	return butler.ToolDecision{Allowed: true}, true
+}
+
+func (a *Authority) AdmitRoutine(q butler.ToolAuthorityQuery) (butler.ToolDecision, error) {
+	d, _ := a.routineLayer(q)
+	return d, nil
 }
 
 // withinOriginatingAuthority checks the caller against the task's
@@ -235,6 +268,9 @@ func (a *Authority) personLayer(q butler.ToolAuthorityQuery) (butler.ToolDecisio
 // AdmitResource implements butler.ResourceAuthorizer: layer 2, one rule
 // per resource kind and no general answer for a kind that has none.
 func (a *Authority) AdmitResource(q butler.ToolAuthorityQuery) (butler.ToolDecision, error) {
+	if q.Caller == butler.CallerRoutine {
+		return a.RoutineResources.AdmitResource(q)
+	}
 	return a.Resources.AdmitResource(q)
 }
 
@@ -274,4 +310,5 @@ var (
 	_ butler.ToolAuthorizer     = (*Authority)(nil)
 	_ butler.ResourceAuthorizer = (*Authority)(nil)
 	_ butler.PersonAuthorizer   = (*Authority)(nil)
+	_ butler.RoutineAuthorizer  = (*Authority)(nil)
 )

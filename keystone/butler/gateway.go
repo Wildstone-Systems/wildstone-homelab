@@ -156,9 +156,10 @@ type ToolGateway struct {
 	// three public fields, because a gateway half-told who it serves is
 	// the state this slice exists to remove: caller is empty until
 	// somebody states it, and an unstated gateway refuses every tool.
-	caller     CallerKind
-	person     string
-	connection string
+	caller        CallerKind
+	person        string
+	connection    string
+	routinePlanID string
 
 	tools map[string]toolEntry
 }
@@ -175,6 +176,14 @@ type ToolGateway struct {
 // anybody's reach.
 func (gw *ToolGateway) SetCaller(kind CallerKind, person, connection string) {
 	gw.caller, gw.person, gw.connection = kind, person, connection
+	gw.routinePlanID = ""
+}
+
+// SetRoutinePrincipal binds unattended work to its exact approved Plan.
+// No Person, Connection, Task or routine-name grant survives this switch.
+func (gw *ToolGateway) SetRoutinePrincipal(planID string) {
+	gw.caller, gw.person, gw.connection = CallerRoutine, "", ""
+	gw.SessionTask, gw.routinePlanID = "", planID
 }
 
 // query builds the authority query for one tool on this gateway.
@@ -190,6 +199,7 @@ func (gw *ToolGateway) query(tool string, entry toolEntry) ToolAuthorityQuery {
 		Structural:    true,
 		GrantRequired: entry.GrantRequired,
 		TaskID:        gw.SessionTask,
+		RoutinePlanID: gw.routinePlanID,
 		Resource:      ResourceRef{Kind: entry.Reaches},
 	}
 }

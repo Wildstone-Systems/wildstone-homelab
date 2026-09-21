@@ -75,6 +75,9 @@ const (
 	// authorizer leaves structural presence deciding, which is what
 	// this seam did before design §10.
 	CallerAdministrative CallerKind = "administrative"
+	// CallerRoutine is unattended work authorized by one exact approved Plan.
+	// It has no active Person or Connection identity to borrow.
+	CallerRoutine CallerKind = "routine"
 )
 
 // ResourceRef names the resource a tool call reaches for, when it
@@ -150,6 +153,12 @@ type PersonAuthorizer interface {
 	AdmitPerson(q ToolAuthorityQuery) (ToolDecision, error)
 }
 
+// RoutineAuthorizer decides whether the exact approved routine version may
+// run at this boundary. It is independent of any proposer or approver.
+type RoutineAuthorizer interface {
+	AdmitRoutine(q ToolAuthorityQuery) (ToolDecision, error)
+}
+
 // ToolDecision is the resolver's answer for one dispatch.
 type ToolDecision struct {
 	Allowed bool
@@ -212,6 +221,9 @@ type ToolAuthorityQuery struct {
 	// question that is not durable work.
 	TaskID      string
 	RoutineName string
+	// RoutinePlanID is the immutable approved Plan that acts as principal for
+	// unattended work. It is supplied by the executor, never tool arguments.
+	RoutinePlanID string
 }
 
 // ToolAuthorizer resolves effective authority for one dispatch.
@@ -237,6 +249,11 @@ func authorizeAdministrative(a ToolAuthorizer, q ToolAuthorityQuery) ToolDecisio
 	return runAuthority(a, q)
 }
 
+func authorizeForRoutine(a ToolAuthorizer, q ToolAuthorityQuery) ToolDecision {
+	q.Caller = CallerRoutine
+	return runAuthority(a, q)
+}
+
 // runAuthority is the one evaluation both entry points share.
 //
 // Both go through it so that DESCRIBING and DISPATCHING cannot grow
@@ -256,6 +273,37 @@ func runAuthority(a ToolAuthorizer, q ToolAuthorityQuery) ToolDecision {
 			// still the boundary; a tool the gateway does not register
 			// was already refused before reaching here.
 			return ToolDecision{Allowed: q.Structural}
+		}
+	case CallerRoutine:
+		if q.RoutinePlanID == "" || q.Person != "" || q.Connection != "" || q.TaskID != "" || q.RoutineName != "" || a == nil {
+			return ToolDecision{Allowed: false, Reason: "unattended work needs its exact approved routine version"}
+		}
+		ra, ok := a.(RoutineAuthorizer)
+		if !ok {
+			return ToolDecision{Allowed: false, Reason: "no routine authority is configured"}
+		}
+		d, err := ra.AdmitRoutine(q)
+		if err != nil || !d.Allowed {
+			if err != nil {
+				return ToolDecision{Allowed: false, Reason: "routine authority could not be checked"}
+			}
+			return d
+		}
+		if q.Resource.Named() {
+			if q.Resource.ID == "" {
+				return ToolDecision{Allowed: false, Reason: "routine resource needs an exact ID"}
+			}
+			resources, ok := a.(ResourceAuthorizer)
+			if !ok {
+				return ToolDecision{Allowed: false, Reason: "routine resource authority is not configured"}
+			}
+			d, err = resources.AdmitResource(q)
+			if err != nil || !d.Allowed {
+				if err != nil {
+					return ToolDecision{Allowed: false, Reason: "routine resource authority could not be checked"}
+				}
+				return d
+			}
 		}
 	default:
 		// Nobody said which path this is. Answering either way would

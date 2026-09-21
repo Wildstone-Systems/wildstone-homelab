@@ -1050,22 +1050,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	}
 	apiSrv.SecretVault = secretVault
 	if calendarActions != nil {
-		calendarActions.SecretUse = func(ctx context.Context, c domestic.Call, consume func(string) error) (bool, error) {
-			id, err := secretVault.CalendarBinding(runtimedb.SecretUseContext(ctx))
-			if err != nil {
-				return true, err
-			}
-			if id == "" {
-				return false, nil
-			}
-			// Binding covers the shared calendar account: other tools cannot fall back
-			// to the old environment password, and unattended work has no Person.
-			if c.Tool != "calendar.get_agenda" || !c.Attended {
-				return true, runtimedb.ErrSecretDenied
-			}
-			err = secretVault.Use(id, runtimedb.SecretUseContext(ctx), c.Tool, func(raw []byte) error { return consume(string(raw)) })
-			return true, err
-		}
+		calendarActions.SecretUse = calendarSecretUse(secretVault)
 	}
 
 	// Every Agent is on the assigned-tools model (ADR-W033 design §6.3,

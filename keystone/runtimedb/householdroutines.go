@@ -26,6 +26,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -63,6 +64,8 @@ var ErrReviewToken = errors.New("runtimedb: this review link does not work")
 type HouseholdRoutine struct {
 	OutputAudience   string    `json:"outputAudience"`
 	ApprovedRevision int       `json:"approvedRevision"`
+	RequiredSecrets  []string  `json:"requiredSecrets,omitempty"`
+	RequiredMemory   []int64   `json:"requiredMemory,omitempty"`
 	Seq              int64     `json:"seq"`
 	Name             string    `json:"name"`
 	Ownership        string    `json:"ownership"`
@@ -245,19 +248,26 @@ func (db *DB) GetHouseholdRoutine(name string) (HouseholdRoutine, error) {
 }
 
 const routineColumns = `SELECT seq, name, ownership, external_id, connection, author, revision,
-	 state, document, created_at, updated_at, updated_by, disabled_at, disabled_by, output_audience, approved_revision
+	 state, document, created_at, updated_at, updated_by, disabled_at, disabled_by, output_audience, approved_revision, resource_signature
 	 FROM household_routines`
 
 func scanRoutine(row rowScanner) (HouseholdRoutine, error) {
 	var r HouseholdRoutine
-	var created, updated, disabled string
+	var created, updated, disabled, signature string
 	err := row.Scan(&r.Seq, &r.Name, &r.Ownership, &r.ExternalID, &r.Connection, &r.Author,
-		&r.Revision, &r.State, &r.Document, &created, &updated, &r.UpdatedBy, &disabled, &r.DisabledBy, &r.OutputAudience, &r.ApprovedRevision)
+		&r.Revision, &r.State, &r.Document, &created, &updated, &r.UpdatedBy, &disabled, &r.DisabledBy, &r.OutputAudience, &r.ApprovedRevision, &signature)
 	if errors.Is(err, sql.ErrNoRows) {
 		return HouseholdRoutine{}, ErrNotFound
 	}
 	if err != nil {
 		return HouseholdRoutine{}, fmt.Errorf("runtimedb: scanning routine: %w", err)
+	}
+	if signature != "" {
+		var resources RoutineResources
+		if err := json.Unmarshal([]byte(signature), &resources); err != nil {
+			return HouseholdRoutine{}, err
+		}
+		r.RequiredSecrets, r.RequiredMemory = resources.SecretIDs, resources.MemoryIDs
 	}
 	for _, f := range []struct {
 		text string

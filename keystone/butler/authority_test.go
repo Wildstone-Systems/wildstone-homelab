@@ -24,6 +24,38 @@ type recordingAuthorizer struct {
 	seen []ToolAuthorityQuery
 }
 
+type recordingRoutineAuthorizer struct {
+	seen []ToolAuthorityQuery
+}
+
+func (r *recordingRoutineAuthorizer) AdmitRoutine(q ToolAuthorityQuery) (ToolDecision, error) {
+	r.seen = append(r.seen, q)
+	return ToolDecision{Allowed: q.RoutinePlanID == "p-42" && q.Person == ""}, nil
+}
+func (r *recordingRoutineAuthorizer) AuthorizeTool(q ToolAuthorityQuery) (ToolDecision, error) {
+	r.seen = append(r.seen, q)
+	return ToolDecision{Allowed: true}, nil
+}
+
+func TestRoutineNeverBorrowsProposerOrApproverIdentity(t *testing.T) {
+	a := &recordingRoutineAuthorizer{}
+	gw := NewToolGateway(nil, nil)
+	gw.SetAuthorizer(a)
+	gw.SetRoutinePrincipal("p-42")
+	if d := gw.checkTool("get_system_overview", gw.tools["get_system_overview"]); !d.Allowed {
+		t.Fatalf("exact routine principal refused: %s", d.Reason)
+	}
+	if len(a.seen) != 2 || a.seen[0].Caller != CallerRoutine || a.seen[0].RoutinePlanID != "p-42" || a.seen[0].Person != "" || a.seen[0].Connection != "" || a.seen[0].TaskID != "" || a.seen[0].RoutineName != "" {
+		t.Fatalf("routine evaluated as another principal: %+v", a.seen)
+	}
+	if d := runAuthority(a, ToolAuthorityQuery{Caller: CallerRoutine, RoutinePlanID: "p-42", Person: "approver", Tool: "get_system_overview", Structural: true}); d.Allowed {
+		t.Fatal("routine borrowed approving Owner")
+	}
+	if len(a.seen) != 2 {
+		t.Fatal("invalid principal reached authorizer")
+	}
+}
+
 func (r *recordingAuthorizer) AuthorizeTool(q ToolAuthorityQuery) (ToolDecision, error) {
 	r.seen = append(r.seen, q)
 	return ToolDecision{Allowed: true}, nil

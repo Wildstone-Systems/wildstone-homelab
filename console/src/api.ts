@@ -71,7 +71,7 @@ export interface PlanRecord {
   // A household setting the plan changes instead of desired state: an
   // Agent's proposal an Owner decides on (ADR-W033 E2).
   setting?: { timezone?: string; reason?: string };
-  routine?: {assignedButler?:string;proposingAgent?:string;name:string; revision:number; document:string; outputAudience:string; delivery:string};
+  routine?: {assignedButler?:string;proposingAgent?:string;name:string; revision:number; document:string; outputAudience:string; delivery:string; requiredSecrets?:string[]; secretLabels?:Record<string,string>; requiredMemory?:number[]};
   resolvedBy?: string;
   resolvedAt?: string;
 }
@@ -1195,6 +1195,8 @@ export interface ButlerAddress {
 export interface HouseholdRoutine {
  outputAudience?: string;
  approvedRevision?: number;
+ requiredSecrets?: string[];
+ requiredMemory?: number[];
   name: string;
   ownership: "native" | "wildstone";
   externalId?: string;
@@ -1879,7 +1881,7 @@ export const api = {
   ownerReviewPreference: () => call<{bindingId:number;consoleUrl:string}>("GET", "/api/v1/owner-review/preference"),
   setOwnerReviewPreference: (bindingId:number,consoleUrl:string) => call("PUT", "/api/v1/owner-review/preference", {bindingId,consoleUrl}),
   ownerReviewQueue: () => call<PlanRecord[]>("GET", "/api/v1/owner-review"),
-  submitRoutinePlan: (name:string, outputAudience:string) => call<{planId:string}>("POST", `/api/v1/household/routines/${encodeURIComponent(name)}/submit`, {outputAudience}),
+  submitRoutinePlan: (name:string, outputAudience:string, secretIds:string[] = [], memoryIds:number[] = []) => call<{planId:string}>("POST", `/api/v1/household/routines/${encodeURIComponent(name)}/submit`, {outputAudience,secretIds,memoryIds}),
   plans: () => call<PlanRecord[]>("GET", "/api/v1/plans"),
   // Removing a capability is an ordinary plan proposing the deletion of
   // everything it owns. There is no disable endpoint and there should

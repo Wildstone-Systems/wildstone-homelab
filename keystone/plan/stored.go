@@ -82,11 +82,14 @@ type CapabilityOrigin struct {
 // RoutineChange is the exact routine version an Owner reviews. Output audience
 // governs who may learn the result; Delivery describes where/how it is sent.
 type RoutineChange struct {
-	AssignedButler string `json:"assignedButler"`
-	ProposingAgent string `json:"proposingAgent,omitempty"`
-	Name           string `json:"name"`
-	Revision       int    `json:"revision"`
-	Document       string `json:"document"`
-	OutputAudience string `json:"outputAudience"`
-	Delivery       string `json:"delivery"`
+	AssignedButler  string            `json:"assignedButler"`
+	ProposingAgent  string            `json:"proposingAgent,omitempty"`
+	RequiredSecrets []string          `json:"requiredSecrets,omitempty"`
+	SecretLabels    map[string]string `json:"secretLabels,omitempty"`
+	RequiredMemory  []int64           `json:"requiredMemory,omitempty"`
+	Name            string            `json:"name"`
+	Revision        int               `json:"revision"`
+	Document        string            `json:"document"`
+	OutputAudience  string            `json:"outputAudience"`
+	Delivery        string            `json:"delivery"`
 }

@@ -29,12 +29,19 @@ export function RoutineDetail({
   const detail = useLoad(() => api.householdRoutine(name), [name]);
   const audiences = useLoad(()=>api.routineAudiences());
   const settings = useLoad(() => api.butlerSettings());
+  const secrets = useLoad(() => api.householdSecrets());
+  const memories = useLoad(() => api.butlerMemory());
   const action = useAction();
   const [outputAudience,setOutputAudience] = useState("aud_household");
+  const [secretIds,setSecretIds] = useState<string[]>([]);
+  const [memoryIds,setMemoryIds] = useState<number[]>([]);
 
   const d = detail.data;
   const r = d?.routine;
-  useEffect(()=>{setOutputAudience(r?.outputAudience ?? "aud_household")},[r?.outputAudience]);
+  useEffect(()=>{setOutputAudience(r?.outputAudience ?? "aud_household");setSecretIds(r?.requiredSecrets ?? []);setMemoryIds(r?.requiredMemory ?? [])},[r?.outputAudience,r?.requiredSecrets,r?.requiredMemory]);
+
+  const toggleSecret = (id:string) => setSecretIds(current=>current.includes(id)?current.filter(x=>x!==id):[...current,id]);
+  const toggleMemory = (id:number) => setMemoryIds(current=>current.includes(id)?current.filter(x=>x!==id):[...current,id]);
 
   // The state actions keep the labels and the messages the old screen
   // used. They are the household's vocabulary for this, not ours to
@@ -101,7 +108,7 @@ export function RoutineDetail({
                   </select>
                 </label>
                 <button className="btn btn-secondary" disabled={action.state.phase === "busy"}
-                  onClick={()=>action.run(async()=>{await api.submitRoutinePlan(name,outputAudience);detail.reload();onChanged();},"Sent to the Owner Review Queue. Review it in Plans before it can run.")}>
+                  onClick={()=>action.run(async()=>{await api.submitRoutinePlan(name,outputAudience,secretIds,memoryIds);detail.reload();onChanged();},"Sent to the Owner Review Queue. Review it in Plans before it can run.")}>
                   Submit for Owner review
                 </button>
                 {r.state !== "disabled" && (
@@ -110,6 +117,17 @@ export function RoutineDetail({
                   </button>
                 )}
               </div>
+              <details className="work-section">
+                <summary>Resources this routine may use</summary>
+                <p className="muted">Select only the records and Household secrets this exact version needs. An Owner reviews them with the routine. Changing this selection requires another review.</p>
+                <ErrorLine error={secrets.error ?? memories.error} />
+                <div>Household secrets</div>
+                {(secrets.data?.secrets ?? []).filter(s=>s.scope==="household" && s.state==="active").map(s=><label key={s.id} className="row"><input type="checkbox" checked={secretIds.includes(s.id)} onChange={()=>toggleSecret(s.id)}/>{s.label}</label>)}
+                {secretIds.filter(id=>!(secrets.data?.secrets ?? []).some(s=>s.id===id)).map(id=><label key={id} className="row"><input type="checkbox" checked onChange={()=>toggleSecret(id)}/>{id} (unavailable)</label>)}
+                <div>Memory records</div>
+                {(memories.data?.records ?? []).filter(m=>(m.scope==="household" || m.scope==="agent_local") && !m.forgottenAt && !m.supersededBy).map(m=><label key={m.seq} className="row"><input type="checkbox" checked={memoryIds.includes(m.seq)} onChange={()=>toggleMemory(m.seq)}/>#{m.seq} · {m.content}</label>)}
+                {memoryIds.filter(id=>!(memories.data?.records ?? []).some(m=>m.seq===id)).map(id=><label key={id} className="row"><input type="checkbox" checked onChange={()=>toggleMemory(id)}/>#{id} (not in recent records)</label>)}
+              </details>
               {action.state.phase === "error" && <ErrorLine error={action.state.message} />}
               {action.state.phase === "done" && (
                 <div className="msg-note">{action.state.message}</div>
