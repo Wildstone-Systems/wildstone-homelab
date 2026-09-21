@@ -151,11 +151,12 @@ func (d *dockerClient) inspect(ctx context.Context, name string) (*containerInsp
 }
 
 type createBody struct {
-	Image      string            `json:"Image"`
-	Cmd        []string          `json:"Cmd,omitempty"`
-	Env        []string          `json:"Env,omitempty"`
-	Labels     map[string]string `json:"Labels,omitempty"`
-	HostConfig hostConfig        `json:"HostConfig"`
+	Image        string              `json:"Image"`
+	Cmd          []string            `json:"Cmd,omitempty"`
+	Env          []string            `json:"Env,omitempty"`
+	Labels       map[string]string   `json:"Labels,omitempty"`
+	ExposedPorts map[string]struct{} `json:"ExposedPorts,omitempty"`
+	HostConfig   hostConfig          `json:"HostConfig"`
 	// NetworkingConfig attaches the container at create time. Docker
 	// registers the container's name as a DNS alias on a user-defined
 	// network automatically, which is what makes "<name>:<port>"

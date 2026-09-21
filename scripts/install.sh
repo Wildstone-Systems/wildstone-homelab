@@ -747,7 +747,11 @@ fetch_binary() {
   fetch_asset "$artifact"
   tar -xzf "$WORK/$artifact" -C "$WORK" "$name"
   install -d -m 0755 "$dest"
-  install -m 0755 "$WORK/$name" "$dest/$name"
+  # A running executable cannot be truncated on Linux (ETXTBSY). Stage
+  # the verified replacement beside it and rename it into place, so an
+  # upgrade can replace Keystone and Wardstone while their units run.
+  install -m 0755 "$WORK/$name" "$dest/.$name.new"
+  mv -f "$dest/.$name.new" "$dest/$name"
   log "installed $dest/$name"
 }
 
@@ -1342,6 +1346,14 @@ post_install() {
 }
 
 if [ "$ROLE" = keystone ]; then
+  # On a single-host upgrade, Keystone's new reconciler can act as soon
+  # as it starts. Upgrade the existing agent first so ported containers
+  # are recreated by a Wardstone that publishes those ports correctly.
+  if [ "$INTERACTIVE" = 1 ] && systemctl is-active --quiet wardstoned; then
+    fetch_binary wardstoned
+    systemctl restart wardstoned || fail "could not restart wardstoned after upgrade"
+    log "existing node agent upgraded before Keystone"
+  fi
   fetch_binary keystone
   fetch_binary wild
   install -d -m 0700 /var/lib/wildstone/keystone
