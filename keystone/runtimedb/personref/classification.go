@@ -231,6 +231,11 @@ var LegacyColumns = []Column{
 }
 
 var Columns = []Column{
+	{"memory_constraints", "owner_person_id", PersonID, "source Person constraint retained by a memory derivative"},
+	{"memory_scope_events", "actor_person_id", PersonID, "Person approving a promotion or Agent-local transfer"},
+	{"memory_scope_events", "source_agent", NotAPerson, "Agent name at transfer time"},
+	{"memory_scope_events", "destination_agent", NotAPerson, "Agent name at transfer time"},
+
 	// ---- Human: repointed by slice 2b ----
 	{"butler_access", "person_id", PersonID,
 		"the person admitted to a Butler. Repointed by 0043 from member; by is still the actor"},

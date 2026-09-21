@@ -22,6 +22,7 @@ export function Confirm({
   listTitle,
   lines,
   option,
+  children,
   confirmLabel,
   cancelLabel,
   busy,
@@ -38,6 +39,7 @@ export function Confirm({
   // something the person can do about the damage rather than only
   // accept it.
   option?: { label: string; checked: boolean; onToggle: () => void };
+  children?: ReactNode;
   confirmLabel: string;
   cancelLabel: string;
   busy?: boolean;
@@ -71,6 +73,7 @@ export function Confirm({
               </ul>
             </div>
           )}
+          {children}
           {option && (
             <label className="checkrow">
               <input type="checkbox" checked={option.checked} onChange={option.onToggle} />

@@ -16,6 +16,57 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
+func TestPersonalRecallFollowsPersonAcrossAgents(t *testing.T) {
+	db := memoryDB(t)
+	remember(t, MemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{Kind: runtimedb.MemoryPreference, Content: "Prefers jasmine tea"})
+	hits, err := MemorySeams(db, "nutrition", "tom", nil).Recall(context.Background(), "jasmine", 10)
+	if err != nil || len(hits) != 1 {
+		t.Fatalf("cross-Agent Personal recall: %v, %v", hits, err)
+	}
+}
+
+func TestAgentLocalDerivedFromPersonAIsExcludedForPersonB(t *testing.T) {
+	db := memoryDB(t)
+	remember(t, MemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{Kind: runtimedb.MemoryPreference, Content: "Private jasmine preference"})
+	records, err := db.RetrieveMemory(runtimedb.MemoryQuery{Reader: "tom", Butler: "alfred"})
+	if err != nil || len(records) != 1 {
+		t.Fatalf("source: %v, %v", records, err)
+	}
+	derived := records[0]
+	derived.Scope = runtimedb.MemoryScopeAgentLocal
+	derived.Content = "Derived jasmine preference"
+	seq, err := db.DeriveMemory(derived, []int64{records[0].Seq})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately stale/wider index metadata must not authorize this derivative.
+	_, err = db.IndexDocumentInto(runtimedb.IndexDocument{SourceKind: "memory", SourceID: "derived", MemorySeq: seq, Owner: "household", Audience: runtimedb.ButlerAudienceShared, PermissionLabel: "household", Butler: "alfred", Content: derived.Content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		person string
+		want   bool
+	}{{"tom", true}, {"sam", false}} {
+		seams := MemorySeams(db, "alfred", tc.person, nil)
+		hits, err := seams.Recall(context.Background(), "jasmine", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (len(hits) > 0) != tc.want {
+			t.Fatalf("retrieval for %s: %+v", tc.person, hits)
+		}
+		preamble, err := seams.Preamble(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		assembled := butler.RenderPreamble(tc.person, preamble)
+		if strings.Contains(assembled, "jasmine") != tc.want {
+			t.Fatalf("assembled context for %s: %q", tc.person, assembled)
+		}
+	}
+}
+
 func memoryDB(t *testing.T) *runtimedb.DB {
 	t.Helper()
 	db, err := runtimedb.Open(migrated.Path(t))
@@ -37,13 +88,13 @@ func remember(t *testing.T, seams butler.MemorySeams, n butler.MemoryNote) {
 	}
 }
 
-// A note is the speaker's, held by one Butler, readable by nobody else.
+// A note is the speaker's and follows them across permitted Agents.
 //
 // Four decisions land on the record and none of them came from the
 // note: the owner is the person who spoke, the audience is private, the
-// scope is this Butler rather than the shared pool, and the confidence
+// default scope is Personal, and the confidence
 // is stated because somebody stated it.
-func TestARememberedNoteBelongsToTheSpeakerAndToOneButler(t *testing.T) {
+func TestARememberedNoteBelongsToTheSpeakerAcrossAgents(t *testing.T) {
 	db := memoryDB(t)
 	seams := MemorySeams(db, "alfred", "tom", nil)
 	remember(t, seams, butler.MemoryNote{
@@ -64,7 +115,7 @@ func TestARememberedNoteBelongsToTheSpeakerAndToOneButler(t *testing.T) {
 	case got.Audience != runtimedb.ButlerAudiencePrivate:
 		t.Fatalf("audience = %q — nothing a conversation says makes a record the household's", got.Audience)
 	case got.Butler != "alfred":
-		t.Fatalf("butler scope = %q — the pool is A5's explicit act, never a default", got.Butler)
+		t.Fatalf("creating Agent provenance = %q", got.Butler)
 	case got.PermissionLabel != "alfred":
 		t.Fatalf("permission label = %q", got.PermissionLabel)
 	case got.Confidence != runtimedb.ConfidenceStated:
@@ -88,8 +139,8 @@ func TestARememberedNoteBelongsToTheSpeakerAndToOneButler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RetrieveMemory: %v", err)
 	}
-	if len(elsewhere) != 0 {
-		t.Fatalf("another Butler read alfred's material: %+v", elsewhere)
+	if len(elsewhere) != 1 {
+		t.Fatalf("Personal memory did not follow its Person across Agents: %+v", elsewhere)
 	}
 }
 
@@ -266,5 +317,53 @@ func TestAPreferenceIsInjectedAndAFactIsSearched(t *testing.T) {
 	// record about "tom" to a question from "you".
 	if block := butler.RenderPreamble("tom", hits); !strings.Contains(block, "tom: Prefers tea to coffee.") {
 		t.Fatalf("preamble block = %q", block)
+	}
+}
+
+func TestAutonomousAgentLocalNoteStaysWithAgentAndPerson(t *testing.T) {
+	db := memoryDB(t)
+	remember(t, MemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{Scope: runtimedb.MemoryScopeAgentLocal, Kind: runtimedb.MemoryPreference, Content: "Local jasmine preference"})
+	for _, tc := range []struct {
+		agent, person string
+		want          int
+	}{{"alfred", "tom", 1}, {"nutrition", "tom", 0}, {"alfred", "sam", 0}} {
+		seams := MemorySeams(db, tc.agent, tc.person, nil)
+		hits, err := seams.Recall(context.Background(), "jasmine", 10)
+		if err != nil || len(hits) != tc.want {
+			t.Fatalf("%s/%s recall: %+v, %v", tc.agent, tc.person, hits, err)
+		}
+		preamble, err := seams.Preamble(context.Background())
+		if err != nil || len(preamble) != tc.want {
+			t.Fatalf("%s/%s preamble: %+v, %v", tc.agent, tc.person, preamble, err)
+		}
+	}
+}
+
+func TestPromotedMemoryAppearsOnceInRecallAndContext(t *testing.T) {
+	db := memoryDB(t)
+	if err := db.AdmitButlerMember("tom", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	remember(t, MemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{Kind: runtimedb.MemoryPreference, Content: "Prefers jasmine tea"})
+	records, err := db.RetrieveMemory(runtimedb.MemoryQuery{Reader: "tom", Butler: "alfred"})
+	if err != nil || len(records) != 1 {
+		t.Fatalf("source: %+v %v", records, err)
+	}
+	if _, err := db.PromotePersonalMemory(records[0].Seq, "tom"); err != nil {
+		t.Fatal(err)
+	}
+	for _, person := range []string{"tom", "sam"} {
+		seams := MemorySeams(db, "nutrition", person, nil)
+		hits, err := seams.Recall(context.Background(), "jasmine", 10)
+		if err != nil || len(hits) != 1 {
+			t.Errorf("%s recall duplicates: %+v %v", person, hits, err)
+		}
+		preamble, err := seams.Preamble(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Count(butler.RenderPreamble(person, preamble), "Prefers jasmine tea"); got != 1 {
+			t.Errorf("%s context contains note %d times", person, got)
+		}
 	}
 }

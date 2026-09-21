@@ -94,37 +94,41 @@ a ceiling would erode: it would be easy, and wrong, to let "create a
 Butler" become the way to assemble a capability the surface was built to
 withhold.
 
-### A4. One Butler's material does not reach another Butler's model
+### A4. Memory isolation follows the baseline's four scopes
 
-This is what the design is for.
+**Amended by ADR-W033 baseline section 11, slice 13 (#214).** The baseline
+supersedes A4's blanket rule that every record belongs to its creating Butler.
+Session context stays in the Person + Agent + session tables and is not
+implicitly durable memory. Durable records distinguish Agent-local, Personal,
+and Household scope.
 
-Memory recorded by a Butler is owned by that Butler. Retrieval filters
-on that owner in SQL, before any content loads — the same
-permission-first mechanism ADR-W030 A3 already applies to people, for
-the same reason: material a reader may not see should never exist in the
-process on their behalf.
+Agent-local memory is isolated to its holding Agent. Personal memory follows
+its owning Person across admitted Agents; Household memory is eligible across
+Agents. Both are subject to explicit Agent restrictions. Eligibility never
+widens the active Person's audience. All derivatives retain source audience
+constraints, including group constraints whose membership can change.
 
-There is no implicit sharing between Butlers, at any point, for any
-reason. The health Butler's material does not reach the nutrition
-Butler's cloud model, and the isolation is structural rather than a
-filter that has to be remembered.
+The creating Butler stamp on Personal and Household records is provenance,
+not a retrieval fence. On upgrade, existing stated private/Person records
+become Personal, shared/household records become Household, and Butler-held
+inferences, procedures, and their derivatives remain Agent-local. These defaults apply
+retroactively as explicitly decided for slice 13. Ownership, source metadata,
+and audience constraints remain intact.
 
-### A5. Sharing is explicit, and it names the models that gain access
+### A5. Promotion requires the knowledge owner's consent
 
-Some things are genuinely common. "We are vegetarian" is useful to the
-nutrition Butler and the household Butler both, and a design with no
-shared pool at all would force the household to tell each Butler
-everything separately.
+Personal-to-Household promotion requires the owning Person's authenticated
+approval from the household dashboard. An Owner's administrative role cannot
+approve another Person's memory, and a model tool cannot select Household
+scope. Approval creates a provenance-linked record and audit receipt. It may
+release that Person's private constraint, never another Person's constraints
+or inherited group restrictions. Forgetting the source also removes the copy.
 
-So a shared pool exists. But a shared item is readable by every Butler
-permitted to read it, and some of those Butlers run on cloud models.
-Promoting an item to shared is therefore a disclosure decision, and it
-is presented as one: the act names the Butlers that would gain access
-and the models behind them.
-
-Silent promotion to a shared pool would undo A4 quietly, which is the
-worst way for a guarantee to fail — the property still looks true, and
-the material has already left.
+An Owner may transfer Agent-local records when retiring an Agent. Transfer
+preserves original source, author, owner, and derivation links, and records
+the source and destination Agents. Personal and Household memory survive
+retirement and remain reachable under their own constraints. This does not
+change model fallback rules or grant authority through remembered content.
 
 ### A6. A Butler that cannot reach its model waits
 

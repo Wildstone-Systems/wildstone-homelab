@@ -929,6 +929,7 @@ export interface ButlerIdentityLink {
 // A3). Every record says where it came from, so it can be corrected at
 // its source and invalidated when that source is deleted.
 export interface MemoryRecord {
+  scope: "personal" | "household" | "agent_local";
   seq: number;
   kind: "fact" | "preference" | "inference" | "procedure";
   subject?: string;
@@ -1535,8 +1536,10 @@ export const api = {
       `/api/v1/butlers/${encodeURIComponent(name)}/address`,
       a,
     ),
-  retireButler: (name: string) =>
-    call<{ retired: string }>("DELETE", `/api/v1/butlers/${encodeURIComponent(name)}`),
+  retireButler: (name: string, transferMemoryTo = "") =>
+    call<{ retired: string }>("DELETE", `/api/v1/butlers/${encodeURIComponent(name)}${transferMemoryTo ? `?transferMemoryTo=${encodeURIComponent(transferMemoryTo)}` : ""}`),
+  agentMemoryRestrictions: (name: string) => call<{restricted: string[]}>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/memory-restrictions`),
+  setAgentMemoryRestriction: (name: string, scope: string, restricted: boolean) => call("PUT", `/api/v1/butlers/${encodeURIComponent(name)}/memory-restrictions`, {scope, restricted}),
   restoreButler: (name: string) =>
     call<ButlerRow>("POST", `/api/v1/butlers/${encodeURIComponent(name)}/restore`, {}),
   // One call, not six. Creating then granting each connection then

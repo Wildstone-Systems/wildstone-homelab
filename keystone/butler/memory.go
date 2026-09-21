@@ -76,7 +76,7 @@ type MemorySeams struct {
 	// Butler are NOT arguments: whoever wires this closes over them from
 	// the session, so no tool input can name a different one.
 	Recall func(ctx context.Context, text string, limit int) ([]MemoryHit, error)
-	// Remember stores one thing the person asked to be kept. Who owns
+	// Remember stores one relevant fact or preference. Who owns
 	// it, who may read it, which Butler holds it and what confidence it
 	// carries are NOT arguments, for the same reason Recall's scope is
 	// not: whoever wires this supplies them from the session, so no
@@ -86,13 +86,14 @@ type MemorySeams struct {
 
 // MemoryNote is one thing a session asks to be kept.
 //
-// Everything here is either something a model chose (the first three)
-// or something the SESSION knows and a model cannot reach (the last
-// two). What is absent is the point: there is no owner, no audience, no
+// Scope, kind, subject and content come from the model; source identity
+// comes from the session. What is absent is the point: there is no owner, no audience, no
 // permission label and no Butler on this struct, so there is no field
 // through which a sentence in a conversation could decide who gets to
 // read a record afterwards.
 type MemoryNote struct {
+	// Scope may only narrow a Person's note to this Agent. It never selects an audience.
+	Scope string
 	// Kind is "fact" or "preference" — the two things a person can
 	// state. An inference is neither, and this seam never carries one:
 	// see handleRemember.
@@ -307,15 +308,14 @@ func (gw *HouseholdGateway) MemoryPreamble(ctx context.Context) string {
 
 var rememberSpec = provider.Tool{
 	Name: "remember",
-	Description: "Keep one thing the person has asked you to remember, so it is still known in " +
-		"later conversations. Use it when they say to remember, note or keep something, and " +
-		"only for what they actually said — not for what you worked out, and not to keep a " +
-		"copy of the conversation. What you keep belongs to the person you are speaking with: " +
-		"nobody else's Butler reads it, and they can correct or forget it at any time. Never " +
-		"store a password, a code, a key, or anything somebody would use to log in.",
+	Description: "Keep a relevant fact or preference from this conversation, when asked or autonomously. " +
+		"Personal memory follows this person across their agents; agent_local narrows it to this agent. " +
+		"Both retain this person's privacy. Do not create Household memory, store transcripts, infer facts, " +
+		"or store credentials. The person can correct or forget what you keep.",
 	InputSchema: map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"scope": map[string]any{"type": "string", "enum": []any{"personal", "agent_local"}, "description": "Defaults to personal; agent_local is isolated to this agent and still private to this person."},
 			"content": map[string]any{
 				"type": "string",
 				"description": "What to remember, as one sentence in the person's own terms. " +
@@ -391,6 +391,13 @@ func handleRemember(ctx context.Context, seams MemorySeams, s memorySession, inp
 			Rejected: true,
 		}
 	}
+	scope := stringInput(input, "scope")
+	if scope == "" {
+		scope = "personal"
+	}
+	if scope != "personal" && scope != "agent_local" {
+		return ToolOutcome{Content: "remember supports only personal or agent_local scope; Household sharing needs the person's dashboard approval", Rejected: true}
+	}
 	content := strings.TrimSpace(stringInput(input, "content"))
 	if content == "" {
 		return ToolOutcome{Content: "remember needs something to keep", Rejected: true}
@@ -453,7 +460,7 @@ func handleRemember(ctx context.Context, seams MemorySeams, s memorySession, inp
 		source = MemorySourceRoom
 	}
 	err := seams.Remember(ctx, MemoryNote{
-		Kind: kind, Subject: subject, Content: stored,
+		Scope: scope, Kind: kind, Subject: subject, Content: stored,
 		SourceKind: source, SourceID: s.conversation,
 	})
 	switch {
@@ -476,7 +483,12 @@ func handleRemember(ctx context.Context, seams MemorySeams, s memorySession, inp
 		b.WriteString("\nPart of that looked like a password or a key and was removed before " +
 			"storing. Say so: that part was not kept, and should not be.")
 	}
-	b.WriteString("\nIt is " + s.speaker + "'s, held by you alone, and theirs to correct or forget.")
+	b.WriteString("\nIt is " + s.speaker + "'s and theirs to correct or forget.")
+	if scope == "agent_local" {
+		b.WriteString(" Only this agent may recall it, and only for that person.")
+	} else {
+		b.WriteString(" Their other permitted agents may recall it for them.")
+	}
 	if s.group {
 		// A3.1: the room is recorded as the source, and the statement
 		// stays the speaker's. Worth saying because the model is about

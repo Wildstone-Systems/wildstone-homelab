@@ -69,6 +69,8 @@
   /* A 268px column and capability names with no spaces in them: without
      this they run straight out of the card. */
   .cap, .cap .q, #memory, #receipts { overflow-wrap: anywhere; }
+  #memory .cap { display: block; }
+  #memory .memory-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
   /* On a phone the thread and composer come first; the two panels
      become disclosures rather than two full-length columns pushing the
      conversation off screen. */
@@ -591,6 +593,19 @@
     row.appendChild(make("div", "grow"));
     row.lastChild.appendChild(make("div", null, m.content));
     if (m.from) { row.lastChild.appendChild(make("div", "q", m.from)); }
+    var actions = make("div", "memory-actions");
+    if (m.promotable) {
+      var share = make("button", "hbtn hbtn-ghost", "Share with household");
+      share.type = "button";
+      share.addEventListener("click", function () {
+        if (!window.confirm("Share this memory with your household? Household agents may use it when answering other people, subject to its source restrictions.")) return;
+        share.disabled = true;
+        fetch("/api/v1/assistant/memory/promote?seq=" + encodeURIComponent(m.seq), { method: "POST" })
+          .then(function (r) { if (!r.ok) throw new Error("Could not share this memory."); share.textContent = "Shared"; })
+          .catch(function () { share.disabled = false; text("memory-note", "Could not share this memory. Please try again."); });
+      });
+      actions.appendChild(share);
+    }
     if (m.mine) {
       // Their own to forget. A shared record gets the label instead of
       // a control — never a button that refuses.
@@ -605,10 +620,11 @@
           })
           .catch(function () { f.disabled = false; });
       });
-      row.appendChild(f);
+      actions.appendChild(f);
     } else {
-      row.appendChild(make("span", "pill pill-mute nowrap", "shared"));
+      actions.appendChild(make("span", "pill pill-mute nowrap", "shared"));
     }
+    row.appendChild(actions);
     return row;
   }
 

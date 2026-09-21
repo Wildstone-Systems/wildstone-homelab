@@ -244,23 +244,39 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
 	if err != nil {
 		return nil, err
 	}
+	memAudience, memArgs, err := db.visibleAudienceClause("r.audience", "r.owner_person_id", reader)
+	if err != nil {
+		return nil, err
+	}
+	inherited, inheritedArgs, err := db.memoryConstraintClause("r", reader)
+	if err != nil {
+		return nil, err
+	}
+	memScope, memScopeArgs := memoryScopeClause("r", q.Butler, reader)
+	promotion, promotionArgs, err := db.memoryPromotionClause("r", q.Butler, reader, ftsQuery(q.Text))
+	if err != nil {
+		return nil, err
+	}
+
 	query := `SELECT i.seq, i.source_kind, i.source_id, COALESCE(i.memory, 0),
-		        COALESCE(io.member, 'household'), i.audience,
-		        i.permission_label, i.content, i.observed_at, i.indexed_at, i.volatile,
-		        i.embedding, i.tokens, bm25(butler_index_fts)
-		 FROM butler_index_fts
-		 JOIN butler_index i ON i.seq = butler_index_fts.rowid
-		 LEFT JOIN butler_members io ON io.person_id = i.owner_person_id
-		 WHERE butler_index_fts MATCH ?
-		   AND ` + audClause + `
-		   AND NOT EXISTS (
-		       SELECT 1 FROM butler_memory m WHERE m.seq = i.memory
-		         AND (m.forgotten_at <> '' OR m.superseded_by IS NOT NULL))` +
-		scope + `
-		 ORDER BY bm25(butler_index_fts)
-		 LIMIT ?`
+          COALESCE(io.member, 'household'), i.audience,
+          i.permission_label, i.content, i.observed_at, i.indexed_at, i.volatile,
+          i.embedding, i.tokens, bm25(butler_index_fts)
+   FROM butler_index_fts
+   JOIN butler_index i ON i.seq = butler_index_fts.rowid
+   LEFT JOIN butler_members io ON io.person_id = i.owner_person_id
+   LEFT JOIN butler_memory r ON r.seq = i.memory
+   WHERE butler_index_fts MATCH ? AND (
+      (i.memory IS NULL AND ` + audClause + scope + `)
+      OR (r.seq IS NOT NULL AND r.forgotten_at = '' AND r.superseded_by IS NULL
+          AND ` + memAudience + ` AND ` + inherited + memScope + promotion + `))
+   ORDER BY bm25(butler_index_fts) LIMIT ?`
 	args := append([]any{ftsQuery(q.Text)}, audArgs...)
 	args = append(args, scopeArgs...)
+	args = append(args, memArgs...)
+	args = append(args, inheritedArgs...)
+	args = append(args, memScopeArgs...)
+	args = append(args, promotionArgs...)
 	args = append(args, fetch)
 	rows, err := db.sql.Query(query, args...)
 	if err != nil {
