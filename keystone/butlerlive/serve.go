@@ -12,6 +12,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
+	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -470,4 +471,13 @@ func (bs *Butlers) clockLine() string {
 		"\"Today\", \"tomorrow\" and \"this weekend\" mean the household's days in that zone, "+
 		"and a time with no zone is that clock.",
 		t.Format("Monday 2 January 2006"), t.Format("15:04"), loc.String(), t.Format("-07:00"))
+}
+
+// MemoryDestination carries ingress facts, not model-supplied tool inputs.
+func (t Turn) MemoryDestination() runtimedb.MemoryDestination {
+	return runtimedb.MemoryDestination{
+		BuiltIn:       t.Connection.Ref == 0 && (t.Connection.Name == ConsoleConnection || t.Connection.Name == portal.Connection),
+		ConnectionRef: t.Connection.Ref, Group: t.Group,
+		ConsoleOwner: t.AsOwner && t.Connection.Name == ConsoleConnection,
+	}
 }

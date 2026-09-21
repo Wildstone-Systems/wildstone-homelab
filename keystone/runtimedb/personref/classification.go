@@ -416,6 +416,16 @@ var Columns = []Column{
 		"which ROLE a Connection admits ('owners' or 'household'), which names a " +
 			"class of people and never one of them"},
 	{"connection_admission", "set_at", NotAPerson, "a timestamp"},
+	{"memory_disclosure_origins", "connection_name", NotAPerson,
+		"0068 captures the Connection label from task/session provenance; it identifies a transport endpoint or built-in surface, never the Person using it"},
+	{"memory_disclosure_origins", "reach", NotAPerson,
+		"0068 snapshots connection_disclosure.reach: local/external transport classification, or empty for unresolved provenance"},
+	{"memory_disclosure_origins", "encryption", NotAPerson,
+		"0068 snapshots connection_disclosure.encryption: a transport protection class, or empty for unresolved provenance"},
+	{"memory_disclosure_origins", "retention", NotAPerson,
+		"0068 snapshots connection_disclosure.retention: none/provider/unknown retention classification, not a person"},
+	{"memory_disclosure_origins", "surface", NotAPerson,
+		"0068 snapshots connection_disclosure.surface: trusted_ui/external_messaging client classification, not its user"},
 	{"connection_disclosure", "set_by", Actor,
 		"who classified the Connection: an Owner as actingMember records " +
 			"them, or 'migration:0064' for the conservative defaults"},

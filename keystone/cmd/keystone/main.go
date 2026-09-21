@@ -1576,7 +1576,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 						// what decides who owns anything remember
 						// keeps.
 						mine := household
-						mine.Memory = butlerstore.MemorySeams(db, b.Name, t.Member, log)
+						mine.Memory = butlerstore.MemorySeams(db, b.Name, t.Member, t.MemoryDestination(), log)
 						if t.Group {
 							return butler.NewHouseholdGroupGateway(t.Member, mine), nil
 						}

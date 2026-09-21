@@ -679,6 +679,7 @@ func scanMemory(row rowScanner) (MemoryRecord, error) {
 // and their audience are applied in SQL, before any content is loaded,
 // so nothing a reader may not see is ever in memory on their behalf.
 type MemoryQuery struct {
+	ReadContext *MemoryReadContext
 	// Reader is the member retrieving. Their own private records and
 	// household-shared ones are eligible; nobody else's private ones
 	// are.
@@ -713,31 +714,11 @@ func (db *DB) RetrieveMemory(q MemoryQuery) ([]MemoryRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	clause, audArgs, err := db.visibleAudienceClause("r.audience", "r.owner_person_id", reader)
+	clause, args, err := db.memoryReadClause("r", reader, q.Butler, "", q.ReadContext)
 	if err != nil {
 		return nil, err
 	}
-	inherited, inheritedArgs, err := db.memoryConstraintClause("r", reader)
-	if err != nil {
-		return nil, err
-	}
-	clause += " AND " + inherited
-	audArgs = append(audArgs, inheritedArgs...)
-	where := ` WHERE r.forgotten_at = '' AND r.superseded_by IS NULL AND ` + clause
-	args := append([]any{}, audArgs...)
-	// The Butler's scope is ANDed onto the reader's, in SQL, before any
-	// content loads. Both have to hold: this person may see it AND this
-	// Butler holds it.
-	if clause, scopeArgs := memoryScopeClause("r", q.Butler, reader); clause != "" {
-		where += clause
-		args = append(args, scopeArgs...)
-	}
-	promotion, promotionArgs, err := db.memoryPromotionClause("r", q.Butler, reader, "")
-	if err != nil {
-		return nil, err
-	}
-	where += promotion
-	args = append(args, promotionArgs...)
+	where := " WHERE " + clause
 	if q.Subject != "" {
 		where += " AND r.subject = ?"
 		args = append(args, q.Subject)

@@ -222,8 +222,15 @@ func (s *Server) loadChatContinuation(id string, at runtimedb.Connection) (runti
 				provenance[i].Connection = &at
 			}
 		}
-		_, visible := candidateOnConnection(runtimedb.SessionCandidate{SessionID: id, Provenance: provenance}, externalContinuationConnection(at))
-		return visible
+		if len(provenance) == 0 {
+			return false
+		}
+		for _, source := range provenance {
+			if source.Connection == nil || !runtimedb.DisclosureAllowsContent(source.Connection.Disclosure, at.Disclosure) {
+				return false
+			}
+		}
+		return true
 	})
 }
 

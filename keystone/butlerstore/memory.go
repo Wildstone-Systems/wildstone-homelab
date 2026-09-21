@@ -42,7 +42,8 @@ var preambleKinds = []string{runtimedb.MemoryPreference, runtimedb.MemoryProcedu
 const preambleLimit = 25
 
 // MemorySeams binds memory to one reader, one Butler and one
-// deployment's store.
+// deployment's store and trusted destination. Canonical identities are bound
+// once; their current admission and resource permissions are checked at read.
 //
 // Both names are captured here and neither is a parameter of anything
 // the model can reach. runtimedb ANDs them into the SQL that finds
@@ -59,7 +60,14 @@ const preambleLimit = 25
 // log may be nil. It is used for exactly one thing — a note that was
 // stored but could not be made searchable — and a deployment without a
 // logger is not a reason to refuse the write.
-func MemorySeams(db *runtimedb.DB, butlerName, member string, log *slog.Logger) butler.MemorySeams {
+func MemorySeams(db *runtimedb.DB, butlerName, member string, destination runtimedb.MemoryDestination, log *slog.Logger) butler.MemorySeams {
+	if db == nil {
+		return butler.MemorySeams{}
+	}
+	return memorySeams(db, butlerName, member, db.BindMemoryRead(member, butlerName, destination), log)
+}
+
+func memorySeams(db *runtimedb.DB, butlerName, member string, read *runtimedb.MemoryReadContext, log *slog.Logger) butler.MemorySeams {
 	if db == nil || butlerName == "" || member == "" {
 		return butler.MemorySeams{}
 	}
@@ -68,7 +76,7 @@ func MemorySeams(db *runtimedb.DB, butlerName, member string, log *slog.Logger) 
 			var out []butler.MemoryHit
 			for _, kind := range preambleKinds {
 				records, err := db.RetrieveMemory(runtimedb.MemoryQuery{
-					Reader: member, Butler: butlerName, Kind: kind, Limit: preambleLimit,
+					ReadContext: read, Reader: member, Butler: butlerName, Kind: kind, Limit: preambleLimit,
 				})
 				if err != nil {
 					return nil, err
@@ -84,7 +92,7 @@ func MemorySeams(db *runtimedb.DB, butlerName, member string, log *slog.Logger) 
 		},
 		Recall: func(_ context.Context, text string, limit int) ([]butler.MemoryHit, error) {
 			hits, err := db.SearchIndex(runtimedb.IndexQuery{
-				Reader: member, Butler: butlerName, Text: text, Limit: limit,
+				ReadContext: read, Reader: member, Butler: butlerName, Text: text, Limit: limit,
 			})
 			if err != nil {
 				return nil, err

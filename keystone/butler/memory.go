@@ -296,7 +296,7 @@ func recallEntryFor(seams MemorySeams) (provider.Tool, func(context.Context, map
 // should not stop a Butler answering: it means this turn is answered
 // without memory, which is what every turn did before memory existed.
 func (gw *HouseholdGateway) MemoryPreamble(ctx context.Context) string {
-	if gw.seams.Memory.Preamble == nil {
+	if gw.group || gw.seams.Memory.Preamble == nil {
 		return ""
 	}
 	hits, err := gw.seams.Memory.Preamble(ctx)

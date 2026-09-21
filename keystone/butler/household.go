@@ -300,6 +300,9 @@ func (gw *HouseholdGateway) ForAdministration() *HouseholdGateway {
 // same reason: dispatch and the manifest must not end up on different
 // paths.
 func (gw *HouseholdGateway) checkTool(tool string, entry householdEntry) ToolDecision {
+	if gw.group && (tool == "recall" || tool == "remember") {
+		return ToolDecision{Allowed: false, Reason: "memory is unavailable in group conversations"}
+	}
 	q := ToolAuthorityQuery{
 		Person:     gw.member,
 		Connection: gw.connection,
