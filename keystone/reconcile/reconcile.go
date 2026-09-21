@@ -1930,10 +1930,13 @@ func (r *Reconciler) probeRoute(ctx context.Context, nodeID string, spec *resour
 	if host, port, ok := r.routeFrontDoor(spec); ok {
 		attempts, backoff := r.routeGateParams()
 		for i := 0; i < attempts; i++ {
-			res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ProbeTcp{
-				ProbeTcp: &wsv1.ProbeTcp{Host: host, Port: port},
+			// A TCP connect can succeed against an unrelated host process
+			// holding Caddy's port (rpc.statd did exactly that). Require a
+			// trusted HTTPS response from the routed tailnet name instead.
+			res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ProbeHttp{
+				ProbeHttp: &wsv1.ProbeHttp{Url: fmt.Sprintf("https://%s:%d/", host, port), TimeoutSeconds: 2},
 			}})
-			if err == nil && res.GetError() == nil && res.GetProbeTcp().GetReachable() {
+			if err == nil && res.GetError() == nil && res.GetProbeHttp().GetReachable() {
 				return true
 			}
 			if i < attempts-1 {
