@@ -117,7 +117,8 @@ func (c *ChatSender) Execute(ctx context.Context, call Call) (Result, error) {
 	}
 	summary := fmt.Sprintf("queued a %s message for %s", c.Transport, member)
 	return Result{
-		Summary: summary,
+		Summary:       summary,
+		EffectPending: true,
 		Detail: map[string]string{
 			"transport": c.Transport,
 			"member":    member,

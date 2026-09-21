@@ -496,5 +496,5 @@ func handleRemember(ctx context.Context, seams MemorySeams, s memorySession, inp
 		// household" would be a claim about everyone in it.
 		b.WriteString(" It was said in a room and that is recorded, but it is theirs and not the household's.")
 	}
-	return ToolOutcome{Content: b.String()}
+	return ToolOutcome{Content: b.String(), EffectConfirmed: true}
 }

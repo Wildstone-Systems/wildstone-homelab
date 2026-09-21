@@ -524,6 +524,11 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 // scopes the WORK, and the RBAC row that bounds a Butler proposal —
 // read and propose, never approve — is the same one either way.
 func (s *Server) submitSessionProposals(butlerID principal.Identity, calls []butler.ToolCallRecord) (planIDs, proposalErrs []string) {
+	planIDs, proposalErrs, _ = s.submitSessionProposalsWithCalls(butlerID, calls)
+	return
+}
+func (s *Server) submitSessionProposalsWithCalls(butlerID principal.Identity, calls []butler.ToolCallRecord) (planIDs, proposalErrs []string, persisted []butler.ToolCallRecord) {
+
 	for _, call := range calls {
 		if call.ResourceYAML == "" || call.Rejected {
 			continue
@@ -542,9 +547,10 @@ func (s *Server) submitSessionProposals(butlerID principal.Identity, calls []but
 		}
 		if rec, ok := body.(planView); ok {
 			planIDs = append(planIDs, rec.ID)
+			persisted = append(persisted, call)
 		}
 	}
-	return planIDs, proposalErrs
+	return planIDs, proposalErrs, persisted
 }
 
 // recordTurn opens a new session or appends to the one prior names,

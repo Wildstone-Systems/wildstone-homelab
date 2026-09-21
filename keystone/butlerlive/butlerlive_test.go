@@ -35,7 +35,8 @@ type witness struct {
 	mu   sync.Mutex
 	saw  []string
 	// reply is what it answers with; empty means a plain acknowledgement.
-	reply string
+	reply            string
+	objectiveVerdict string
 	// toolCalls, when set, is returned on the FIRST call instead of
 	// text, so a test can drive one tool dispatch.
 	toolCalls []provider.ToolCall
@@ -78,6 +79,16 @@ func (w *witness) Chat(_ context.Context, req provider.ChatRequest) (*provider.C
 		w.saw = append(w.saw, m.Text)
 	}
 	w.saw = append(w.saw, req.System)
+	if strings.HasPrefix(req.System, "Classify both required and claimed effects.") {
+		if len(req.Tools) != 0 {
+			return nil, errors.New("verification exposed tools")
+		}
+		verdict := w.objectiveVerdict
+		if verdict == "" {
+			verdict = `{"kind":"informational"}`
+		}
+		return &provider.ChatResponse{Text: verdict}, nil
+	}
 	if w.toolCalls != nil && w.rounds == 1 {
 		return &provider.ChatResponse{ToolCalls: w.toolCalls, StopReason: "tool_use"}, nil
 	}
@@ -890,5 +901,43 @@ func TestAResumedTaskIsRefusedOverADifferentConnection(t *testing.T) {
 	anywhere.Connection = ConnectionScope{Name: ConsoleConnection}
 	if _, err := f.butlers.Serve(context.Background(), anywhere); err != nil {
 		t.Fatalf("a task with no recorded connection was refused for not matching one: %v", err)
+	}
+}
+
+func TestEffectfulObjectiveWithNoToolReceiptDoesNotComplete(t *testing.T) {
+	f := newFixture(t)
+	f.local.reply = "I've restarted that service."
+	f.local.objectiveVerdict = `{"kind":"effectful"}`
+	answer, err := f.butlers.Serve(context.Background(), f.turn("alfred", "restart the service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := f.db.GetButlerTask(answer.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != runtimedb.ButlerTaskWaiting {
+		t.Fatalf("self-reported effect completed: %s", task.State)
+	}
+	if strings.Contains(answer.FinalText, "I've restarted") {
+		t.Fatal("unverified effect claim delivered")
+	}
+	if !f.local.sawText("Classify both required and claimed effects") {
+		t.Fatal("actual serving path did not verify objective")
+	}
+}
+func TestOrdinaryAnsweredQuestionCompletesOnTheServingPath(t *testing.T) {
+	f := newFixture(t)
+	f.local.reply = "A byte contains eight bits."
+	answer, err := f.butlers.Serve(context.Background(), f.turn("alfred", "How many bits are in a byte?"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := f.db.GetButlerTask(answer.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != runtimedb.ButlerTaskCompleted || answer.FinalText != f.local.reply {
+		t.Fatalf("ordinary answer blocked: %s %s", task.State, answer.FinalText)
 	}
 }

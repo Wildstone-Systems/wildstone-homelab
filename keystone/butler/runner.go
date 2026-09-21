@@ -33,6 +33,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/operation"
 	"sort"
 	"strings"
 	"time"
@@ -105,6 +106,9 @@ type LedgerAttempt struct {
 // permission label and audience are mandatory at the store, and the
 // runner supplies its task's own rather than inventing one.
 type LedgerEvidence struct {
+	ReceiptID       int64
+	ProposalOnly    bool
+	ReceiptStep     int64
 	Kind            string
 	Description     string
 	SourceID        string
@@ -187,8 +191,10 @@ type StallNotifier interface {
 // and every restart, and reaching it requires review — it does not reset
 // on retry, because a budget that resets is not a budget (A4).
 type Runner struct {
-	Gateway Toolset
-	Ledger  TaskLedger
+	// VerifyObjective uses a separate, tool-free call on the assigned route.
+	VerifyObjective bool
+	Gateway         Toolset
+	Ledger          TaskLedger
 	// ReadOnly is the QA-only verdict, applied at the dispatch boundary
 	// exactly as Session applies it.
 	ReadOnly bool
@@ -337,10 +343,13 @@ func verifiedResults(steps []LedgerStep, now time.Time, ttl time.Duration) map[s
 // recomputed from the step's params, so a change to the fingerprint
 // scheme cannot silently start matching old rows to new questions.
 type toolStepResult struct {
-	Version     int    `json:"v"`
-	Fingerprint string `json:"fp"`
-	Content     string `json:"content"`
-	Rejected    bool   `json:"rejected,omitempty"`
+	EffectPending     bool   `json:"effectPending,omitempty"`
+	EffectConfirmed   bool   `json:"effectConfirmed,omitempty"`
+	ProposalConfirmed bool   `json:"proposalConfirmed,omitempty"`
+	Version           int    `json:"v"`
+	Fingerprint       string `json:"fp"`
+	Content           string `json:"content"`
+	Rejected          bool   `json:"rejected,omitempty"`
 }
 
 func countToolSteps(steps []LedgerStep) int {
@@ -421,8 +430,19 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 			if err := r.stillAuthorized(taskID, "final answer"); err != nil {
 				return tr, err
 			}
+			if r.VerifyObjective {
+				if err := r.verifyObjective(ctx, p, taskID, userMessage, answer.Text, manifest); err != nil {
+					return tr, err
+				}
+			}
 			tr.FinalText = answer.Text
-			return tr, r.complete(taskID, tr, steps, answer.Text)
+			err := r.complete(taskID, tr, steps, answer.Text)
+			var missing interface{ MissingEffectReceipt() bool }
+			if errors.As(err, &missing) && missing.MissingEffectReceipt() {
+				tr.FinalText = "I couldn't verify every requested effect. The task is still open; any confirmed work is preserved for review."
+				return tr, r.Ledger.Wait(taskID, LedgerWaitReply, "one or more required effects lack matching successful receipts; review before continuing")
+			}
+			return tr, err
 		}
 
 		messages = append(messages, provider.Message{
@@ -709,6 +729,7 @@ func (r *Runner) toolCall(ctx context.Context, taskID string, tc provider.ToolCa
 		rec.Error = err.Error()
 		return rec, fmt.Sprintf("error: %v", err), false
 	}
+	rec.StepSeq = step
 	attempt, err := r.Ledger.StartAttempt(step)
 	if err != nil {
 		rec.Error = err.Error()
@@ -719,7 +740,7 @@ func (r *Runner) toolCall(ctx context.Context, taskID string, tc provider.ToolCa
 		SourceIDs: []string{tc.Name},
 	})
 
-	outcome, err := r.Gateway.Execute(ctx, tc.Name, tc.Input, r.ReadOnly)
+	outcome, err := r.Gateway.Execute(operation.With(ctx, operation.Identity{TaskID: taskID, Step: step, PermissionLabel: r.label(), Audience: r.audience()}), tc.Name, tc.Input, r.ReadOnly)
 	if err != nil {
 		rec.Error = err.Error()
 		_ = r.Ledger.FinishAttempt(attempt.Seq, false, "", err.Error())
@@ -740,7 +761,7 @@ func (r *Runner) toolCall(ctx context.Context, taskID string, tc provider.ToolCa
 	// said no — but it is not a verified READ, so it is not served from
 	// the ledger on a resume: the answer could differ once the thing that
 	// caused the rejection is fixed.
-	result := toolStepResult{Version: 1, Fingerprint: fp, Content: outcome.Content, Rejected: outcome.Rejected}
+	result := toolStepResult{EffectPending: outcome.EffectPending && !outcome.Rejected, EffectConfirmed: outcome.EffectConfirmed && !outcome.Rejected, ProposalConfirmed: outcome.ProposalConfirmed && !outcome.Rejected, Version: 1, Fingerprint: fp, Content: outcome.Content, Rejected: outcome.Rejected}
 	body, _ := json.Marshal(result)
 	_ = r.Ledger.FinishAttempt(attempt.Seq, true, string(body), "")
 	if outcome.Rejected {
@@ -779,7 +800,14 @@ func (r *Runner) complete(taskID string, tr *Transcript, steps []LedgerStep, fin
 		if s.Kind != LedgerStepTool || s.State != LedgerStepVerified {
 			continue
 		}
+		var result toolStepResult
+		var receiptStep int64
+		if json.Unmarshal([]byte(s.Result), &result) == nil && (result.EffectConfirmed || result.ProposalConfirmed) && !result.Rejected {
+			receiptStep = s.Seq
+		}
 		evidence = append(evidence, LedgerEvidence{
+			ReceiptStep:     receiptStep,
+			ProposalOnly:    result.ProposalConfirmed,
 			Kind:            "tool-result",
 			Description:     fmt.Sprintf("%s returned a result that was used in the answer", s.Name),
 			SourceID:        s.Name,

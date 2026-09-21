@@ -571,6 +571,7 @@ const (
 // be permission-filtered cannot be shown to anyone, so it is refused
 // rather than written (ADR-W030 A11).
 type ButlerTaskEvidence struct {
+	ReceiptID       int64              `json:"receiptId,omitempty"`
 	Seq             int64              `json:"seq"`
 	RecordedAt      time.Time          `json:"recordedAt"`
 	Kind            ButlerEvidenceKind `json:"kind"`
@@ -584,6 +585,9 @@ type ButlerTaskEvidence struct {
 }
 
 func validateEvidence(e ButlerTaskEvidence) (string, error) {
+	if e.ReceiptID != 0 && e.Kind != ButlerEvidenceToolResult && e.Kind != ButlerEvidenceExternalVerification {
+		return "", fmt.Errorf("a response is not an effect receipt")
+	}
 	switch e.Kind {
 	case ButlerEvidenceObservation, ButlerEvidenceToolResult, ButlerEvidenceApproval,
 		ButlerEvidenceDelivery, ButlerEvidenceExternalVerification:
@@ -612,10 +616,10 @@ func insertEvidenceTx(tx *sql.Tx, task int64, e ButlerTaskEvidence) error {
 	}
 	if _, err := tx.Exec(
 		`INSERT INTO butler_task_evidence (task, recorded_at, kind, description, source_id,
-		     observed_at, permission_label, audience, payload_json, envelope_version)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		     observed_at, permission_label, audience, payload_json, envelope_version, receipt)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?,0))`,
 		task, now(), string(e.Kind), e.Description, e.SourceID, timeText(e.ObservedAt),
-		e.PermissionLabel, string(e.Audience), payload, TaskEnvelopeVersion); err != nil {
+		e.PermissionLabel, string(e.Audience), payload, TaskEnvelopeVersion, e.ReceiptID); err != nil {
 		return fmt.Errorf("runtimedb: inserting butler evidence: %w", err)
 	}
 	return nil
@@ -657,7 +661,7 @@ func (db *DB) ListButlerTaskEvidence(taskID string) ([]ButlerTaskEvidence, error
 	}
 	rows, err := db.sql.Query(
 		`SELECT seq, recorded_at, kind, description, source_id, observed_at,
-		        permission_label, audience, payload_json, envelope_version
+		        permission_label, audience, payload_json, envelope_version, COALESCE(receipt,0)
 		 FROM butler_task_evidence WHERE task = ? ORDER BY seq`, seq)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing butler evidence: %w", err)
@@ -668,7 +672,7 @@ func (db *DB) ListButlerTaskEvidence(taskID string) ([]ButlerTaskEvidence, error
 		var e ButlerTaskEvidence
 		var kind, recorded, observed, audience string
 		if err := rows.Scan(&e.Seq, &recorded, &kind, &e.Description, &e.SourceID, &observed,
-			&e.PermissionLabel, &audience, &e.PayloadJSON, &e.EnvelopeVersion); err != nil {
+			&e.PermissionLabel, &audience, &e.PayloadJSON, &e.EnvelopeVersion, &e.ReceiptID); err != nil {
 			return nil, err
 		}
 		e.Kind = ButlerEvidenceKind(kind)
@@ -718,6 +722,9 @@ func (db *DB) CompleteButlerTask(taskID string, evidence []ButlerTaskEvidence, s
 		if err := insertEvidenceTx(tx, seq, e); err != nil {
 			return err
 		}
+	}
+	if err := checkObjectiveEvidence(tx, seq); err != nil {
+		return err
 	}
 	if err := transitionButlerTaskTx(tx, seq, ButlerTaskCompleted, "completed", actor); err != nil {
 		return err

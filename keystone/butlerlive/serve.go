@@ -115,8 +115,9 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 	}
 
 	runner := &butler.Runner{
-		Gateway: directed{Toolset: gw, system: systemFor(ctx, gw, b, t, bs.clockLine())},
-		Ledger:  bs.Ledger,
+		VerifyObjective: true,
+		Gateway:         directed{Toolset: gw, system: systemFor(ctx, gw, b, t, bs.clockLine())},
+		Ledger:          bs.Ledger,
 		// The probe verdict decides what a session may DO, not which
 		// model it talks to (ADR-W017 A4). A Butler on an unprobed or
 		// QA-only route answers questions and performs no actions.

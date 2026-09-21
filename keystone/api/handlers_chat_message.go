@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/operation"
 	"net/http"
 	"sort"
 	"strconv"
@@ -870,7 +871,7 @@ func (s *Server) AskOverChat(ctx context.Context, at runtimedb.Connection, targe
 // because cmd/keystone wires it into the domestic gateway as an
 // executor; it is the same queue, so a push and a reply are delivered
 // and retried identically.
-func (s *Server) QueueChatPush(_ context.Context, at runtimedb.Connection, target string, bindingID int64, body, correlationID, dedupe string) (int64, error) {
+func (s *Server) QueueChatPush(ctx context.Context, at runtimedb.Connection, target string, bindingID int64, body, correlationID, dedupe string) (int64, error) {
 	// NO HOUSEHOLD OR PERSONAL CONTENT INTO A ROOM (design §8.3, and
 	// the shape of F-156-08, which was live on the deployment).
 	//
@@ -916,7 +917,7 @@ func (s *Server) QueueChatPush(_ context.Context, at runtimedb.Connection, targe
 	if dedupe == "" {
 		dedupe = chatDedupe(at, target, "", "push", body+time.Now().UTC().Format(time.RFC3339Nano))
 	}
-	seq, err := s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{
+	seq, err := s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{Operation: operation.From(ctx),
 		Connection: at.Seq, Target: target, BindingID: bindingID,
 		Body: redact.String(body), Kind: "push", CorrelationID: correlationID, DedupeKey: dedupe,
 	})

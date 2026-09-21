@@ -444,7 +444,7 @@ func (f *Filedrop) rename(c Call) (Result, error) {
 		// looking for "report.pdf" and finding "report-2.pdf".
 		summary += fmt.Sprintf(" (%q was not usable as-is, so it was saved as %q.)", to, settled)
 	}
-	return Result{
+	return Result{EffectConfirmed: true,
 		Summary: summary,
 		Detail:  map[string]string{"destination": nsKey, "from": name, "to": settled},
 	}, nil
@@ -474,7 +474,7 @@ func (f *Filedrop) remove(c Call) (Result, error) {
 	if err := store.Delete(nsKey, item.Name); err != nil {
 		return Result{}, filedropError(err)
 	}
-	return Result{
+	return Result{EffectConfirmed: true,
 		Summary: fmt.Sprintf("Deleted %q from %s.", item.Name, destinationTitle(nsKey)),
 		Detail:  map[string]string{"destination": nsKey, "name": item.Name},
 	}, nil

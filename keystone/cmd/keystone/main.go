@@ -1516,7 +1516,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			RecordReading: apiSrv.MeterReadingSeam(),
 		}
 		if len(actions.Tools()) > 0 {
-			household.Actions = func(ctx context.Context, c butler.HouseholdActionCall) (string, error) {
+			household.ActionResult = func(ctx context.Context, c butler.HouseholdActionCall) (butler.ToolOutcome, error) {
 				res, aerr := actions.Dispatch(ctx, domestic.Call{
 					Tool:   c.Tool,
 					Tier:   c.Tier,
@@ -1537,10 +1537,15 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 					Attended: true,
 				})
 				if aerr != nil {
-					return "", aerr
+					return butler.ToolOutcome{}, aerr
 				}
-				return res.Summary, nil
+				return butler.ToolOutcome{Content: res.Summary, EffectPending: res.EffectPending, EffectConfirmed: res.EffectConfirmed, ProposalConfirmed: res.ProposalConfirmed}, nil
 			}
+			household.Actions = func(ctx context.Context, c butler.HouseholdActionCall) (string, error) {
+				result, err := household.ActionResult(ctx, c)
+				return result.Content, err
+			}
+
 		}
 
 		apiSrv.ButlerHost = &api.ButlerHost{
@@ -1627,6 +1632,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 							mine.Actions = func(ctx context.Context, c butler.HouseholdActionCall) (string, error) {
 								ctx = runtimedb.WithSecretUseContext(ctx, db.BindMemoryRead(t.Member, b.Name, t.MemoryDestination()))
 								return household.Actions(ctx, c)
+							}
+						}
+						if household.ActionResult != nil {
+							mine.ActionResult = func(ctx context.Context, c butler.HouseholdActionCall) (butler.ToolOutcome, error) {
+								ctx = runtimedb.WithSecretUseContext(ctx, db.BindMemoryRead(t.Member, b.Name, t.MemoryDestination()))
+								return household.ActionResult(ctx, c)
 							}
 						}
 

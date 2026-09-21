@@ -15,11 +15,13 @@ const defaultMaxIterations = 8
 // ToolCallRecord is one audited tool call: what the model asked for, and
 // the (already redacted/enveloped/truncated) result it got back.
 type ToolCallRecord struct {
-	Name   string
-	Input  map[string]any
-	Result string
-	Error  string
-	Plan   *plan.Plan
+	// StepSeq is assigned by the durable runner, never by model input.
+	StepSeq int64
+	Name    string
+	Input   map[string]any
+	Result  string
+	Error   string
+	Plan    *plan.Plan
 	// ResourceYAML carries an accepted propose_change's canonical
 	// resource document (ADR-W017 A3) for the host to submit as a real
 	// proposed plan record after the session.

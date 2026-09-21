@@ -148,8 +148,9 @@ func newTask(t *testing.T, db *runtimedb.DB) string {
 	id, err := db.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
 		Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: "operator",
-		Audience:  runtimedb.ButlerAudiencePrivate,
-		Objective: "why is photos unhealthy?", CompletionCriteria: "root cause named",
+		Audience:      runtimedb.ButlerAudiencePrivate,
+		ObjectiveKind: runtimedb.ObjectiveInformational,
+		Objective:     "why is photos unhealthy?", CompletionCriteria: "root cause named",
 	})
 	if err != nil {
 		t.Fatalf("InsertButlerTask: %v", err)

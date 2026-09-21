@@ -117,6 +117,10 @@ func (c Call) ToolName() string   { _, tool, _ := strings.Cut(c.Tool, "."); retu
 // Result is what an executor did, in terms a person reading the
 // household stream can follow.
 type Result struct {
+	EffectPending bool
+	// EffectConfirmed is set only after the executor confirms a completed mutation.
+	EffectConfirmed   bool
+	ProposalConfirmed bool
 	// Summary is one line: "notified topic household-mika".
 	Summary string
 	// Detail is small structured context for the audit record.

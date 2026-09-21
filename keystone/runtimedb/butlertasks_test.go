@@ -17,7 +17,7 @@ func newTask(t *testing.T, db *DB, mutate func(*ButlerTask)) string {
 	task := ButlerTask{
 		Kind: ButlerTaskConversation, Author: "mika", Owner: "mika",
 		Surface: ButlerSurfaceAdmin, AgentClass: "operator", Audience: ButlerAudiencePrivate,
-		Objective: "find out why n2 is offline", CompletionCriteria: "node reachable or cause named",
+		ObjectiveKind: ObjectiveInformational, Objective: "find out why n2 is offline", CompletionCriteria: "node reachable or cause named",
 	}
 	if mutate != nil {
 		mutate(&task)

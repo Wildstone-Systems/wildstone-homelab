@@ -41,6 +41,13 @@ const TaskEnvelopeVersion = 1
 // ButlerTaskKind separates a conversational task from a routine run.
 // They share execution machinery; the routine's DEFINITION lives
 // elsewhere and each occurrence is its own task (ADR-W030 A4).
+type ObjectiveKind string
+
+const (
+	ObjectiveInformational ObjectiveKind = "informational"
+	ObjectiveEffectful     ObjectiveKind = "effectful"
+)
+
 type ButlerTaskKind string
 
 const (
@@ -118,12 +125,13 @@ const (
 // admission: a resume rechecks authority against what the task claimed,
 // which is only meaningful if the claim was written down.
 type ButlerTask struct {
-	Seq       int64           `json:"seq"`
-	ID        string          `json:"id"` // "bt-<seq>"
-	CreatedAt time.Time       `json:"createdAt"`
-	UpdatedAt time.Time       `json:"updatedAt"`
-	Kind      ButlerTaskKind  `json:"kind"`
-	State     ButlerTaskState `json:"state"`
+	ProposalOnly bool            `json:"proposalOnly,omitempty"`
+	Seq          int64           `json:"seq"`
+	ID           string          `json:"id"` // "bt-<seq>"
+	CreatedAt    time.Time       `json:"createdAt"`
+	UpdatedAt    time.Time       `json:"updatedAt"`
+	Kind         ButlerTaskKind  `json:"kind"`
+	State        ButlerTaskState `json:"state"`
 
 	Author string `json:"author"`
 	Owner  string `json:"owner"`
@@ -158,8 +166,9 @@ type ButlerTask struct {
 	// anything mirrored onto the task is a projection (A4).
 	CorrelationID string `json:"correlationId,omitempty"`
 
-	Objective          string `json:"objective"`
-	CompletionCriteria string `json:"completionCriteria"`
+	Objective          string        `json:"objective"`
+	ObjectiveKind      ObjectiveKind `json:"objectiveKind"`
+	CompletionCriteria string        `json:"completionCriteria"`
 
 	GrantsJSON   string    `json:"grantsJson,omitempty"`
 	BudgetJSON   string    `json:"budgetJson,omitempty"`
@@ -197,6 +206,11 @@ func parseButlerTaskID(id string) (int64, error) {
 // State is always pending: a task that begins life finished is the
 // partial-write failure this schema exists to prevent.
 func (db *DB) InsertButlerTask(t ButlerTask) (string, error) {
+	// Only a trusted caller's explicit informational classification lowers the
+	// evidence requirement. Missing or unknown classifications fail safely.
+	if t.ObjectiveKind != ObjectiveInformational {
+		t.ObjectiveKind = ObjectiveEffectful
+	}
 	if t.Kind != ButlerTaskConversation && t.Kind != ButlerTaskRoutine {
 		return "", fmt.Errorf("runtimedb: butler task kind must be conversation or routine, got %q", t.Kind)
 	}
@@ -269,14 +283,14 @@ func (db *DB) InsertButlerTask(t ButlerTask) (string, error) {
 		     surface, agent_class, audience, session, origin_turn, origin_connection,
 		     origin_connection_ref, correlation_id, objective,
 		     completion_criteria, grants_json, budget_json, deadline_at, next_wakeup_at,
-		     lease_epoch, uncertainty, result_summary, retention, envelope_version)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?)`,
+		     lease_epoch, uncertainty, result_summary, retention, envelope_version, objective_kind, proposal_only)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?, ?, ?)`,
 		stamp, stamp, string(t.Kind), string(ButlerTaskPending), author, owner,
 		string(t.Surface), t.AgentClass, string(t.Audience), session, originTurn,
 		t.OriginConnection, t.OriginConnectionRef,
 		t.CorrelationID, t.Objective, t.CompletionCriteria, grants, budget,
 		timeText(t.DeadlineAt), timeText(t.NextWakeupAt),
-		string(t.Retention), TaskEnvelopeVersion)
+		string(t.Retention), TaskEnvelopeVersion, t.ObjectiveKind, t.ProposalOnly)
 	if err != nil {
 		return "", fmt.Errorf("runtimedb: inserting butler task: %w", err)
 	}
@@ -415,7 +429,7 @@ const butlerTaskColumns = `SELECT t.seq, t.created_at, t.updated_at, t.kind, t.s
 	 t.surface, t.agent_class, t.audience, t.session, t.origin_turn, t.origin_connection,
 	 t.origin_connection_ref, t.correlation_id, t.objective,
 	 t.completion_criteria, t.grants_json, t.budget_json, t.deadline_at, t.next_wakeup_at,
-	 t.lease_epoch, t.uncertainty, t.result_summary, t.retention, t.envelope_version
+	 t.lease_epoch, t.uncertainty, t.result_summary, t.retention, t.envelope_version, t.objective_kind, t.proposal_only
 	 FROM butler_tasks t
 	 JOIN butler_members a ON a.person_id = t.author_person_id
 	 JOIN butler_members o ON o.person_id = t.owner_person_id`
@@ -431,7 +445,7 @@ func scanButlerTask(row rowScanner) (ButlerTask, error) {
 		&t.OriginConnectionRef, &t.CorrelationID,
 		&t.Objective, &t.CompletionCriteria, &t.GrantsJSON, &t.BudgetJSON,
 		&deadline, &wakeup, &t.LeaseEpoch, &t.Uncertainty, &t.ResultSummary,
-		&retention, &t.EnvelopeVersion)
+		&retention, &t.EnvelopeVersion, &t.ObjectiveKind, &t.ProposalOnly)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ButlerTask{}, ErrNotFound
 	}

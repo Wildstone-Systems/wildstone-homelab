@@ -170,6 +170,9 @@ type HouseholdSeams struct {
 	// tier, the package's declaration, and the timeout, and audits the
 	// call.
 	Actions func(ctx context.Context, c HouseholdActionCall) (string, error)
+	// ActionResult carries trusted effect metadata from the same domestic dispatcher.
+	// Legacy string-only adapters remain usable but cannot attest an effect.
+	ActionResult func(ctx context.Context, c HouseholdActionCall) (ToolOutcome, error)
 	// Vocabulary reports what this deployment can actually do — the same
 	// seam the operator surface uses to describe rule authoring, reused
 	// here so the family surface and the rule author cannot disagree
@@ -562,7 +565,7 @@ func (gw *HouseholdGateway) wired(name string) bool {
 	case "get_household_events":
 		return gw.seams.Events != nil
 	case "list_household_actions", "do_household_action":
-		return gw.seams.Actions != nil || gw.seams.Vocabulary != nil
+		return gw.seams.Actions != nil || gw.seams.ActionResult != nil || gw.seams.Vocabulary != nil
 	case "recall":
 		return gw.seams.Memory.Recall != nil
 	case "remember":
@@ -787,7 +790,7 @@ func (gw *HouseholdGateway) availableActions() ([]HouseholdAction, error) {
 }
 
 func handleDoHouseholdAction(ctx context.Context, gw *HouseholdGateway, input map[string]any) (ToolOutcome, error) {
-	if gw.seams.Actions == nil {
+	if gw.seams.Actions == nil && gw.seams.ActionResult == nil {
 		return ToolOutcome{Content: "No household actions are wired on this deployment.", Rejected: true}, nil
 	}
 	if gw.member == "" {
@@ -826,12 +829,20 @@ func handleDoHouseholdAction(ctx context.Context, gw *HouseholdGateway, input ma
 	if perr != nil {
 		return ToolOutcome{Content: "error: " + perr.Error(), Rejected: true}, nil
 	}
-	summary, err := gw.seams.Actions(ctx, HouseholdActionCall{
+	call := HouseholdActionCall{
 		Tool:   chosen.Tool,
 		Tier:   chosen.Tier,
 		Params: params,
 		Member: gw.member,
-	})
+	}
+	var summary string
+	var result ToolOutcome
+	if gw.seams.ActionResult != nil {
+		result, err = gw.seams.ActionResult(ctx, call)
+		summary = result.Content
+	} else {
+		summary, err = gw.seams.Actions(ctx, call)
+	}
 	if err != nil {
 		// A refusal from the domestic gateway is reported, not
 		// swallowed: the model should tell the household it could not do
@@ -841,7 +852,7 @@ func handleDoHouseholdAction(ctx context.Context, gw *HouseholdGateway, input ma
 	if summary == "" {
 		summary = "done"
 	}
-	return ToolOutcome{Content: fmt.Sprintf("action %s ran: %s", chosen.Tool, summary)}, nil
+	return ToolOutcome{Content: fmt.Sprintf("action %s ran: %s", chosen.Tool, summary), EffectPending: result.EffectPending && !result.Rejected, EffectConfirmed: result.EffectConfirmed && !result.Rejected, ProposalConfirmed: result.ProposalConfirmed && !result.Rejected, Rejected: result.Rejected}, nil
 }
 
 // householdParams reads and bounds the action's params. Values are

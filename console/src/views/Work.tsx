@@ -135,6 +135,7 @@ function TaskPanel({ id, onGone }: { id: string; onGone: () => void }) {
       {d.task.completionCriteria && (
         <p className="sub">Done when: {d.task.completionCriteria}</p>
       )}
+      {d.task.objectiveKind === "effectful" && d.task.state !== "completed" && <p className="sub">{d.task.proposalOnly ? "This task stays open until the requested proposal is saved for review." : "An action is required. This task stays open until a successful result is confirmed."}</p>}
       {d.task.uncertainty && (
         <div className="msg-note">
           One outcome is unknown, so it will not retry that step on its own: {d.task.uncertainty}
@@ -228,11 +229,12 @@ function Evidence({ detail }: { detail: TaskDetail }) {
   if (detail.evidence.length === 0) return null;
   return (
     <section className="work-section">
-      <h3>Why it counts as done</h3>
+      <h3>{detail.task.state === "completed" ? "Why it counts as done" : "Results recorded so far"}</h3>
       <ul className="work-evidence">
         {detail.evidence.map((e) => (
           <li key={e.seq}>
             {e.description}
+            {e.receiptId && <span className="timeline-src">Confirmation receipt {e.receiptId}</span>}
             {e.sourceId && <span className="timeline-src">{e.sourceId}</span>}
           </li>
         ))}

@@ -367,8 +367,15 @@ func TestExpiredNoticeDoesNotReopenACompletedTask(t *testing.T) {
 	if err := db.TransitionButlerTask(taskID, ButlerTaskRunning, "", ""); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.ClassifyButlerObjectiveEffects(taskID, ObjectiveEffectful, false, []RequiredEffect{{Description: "book the thing", SourceKey: "executor:booking-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := db.RecordButlerEffectReceipt(taskID, EffectReceipt{Kind: "executor", SourceID: "booking-1", Outcome: "succeeded", PermissionLabel: "household", Audience: ButlerAudiencePrivate})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := db.CompleteButlerTask(taskID, []ButlerTaskEvidence{{
-		Kind: ButlerEvidenceDelivery, Description: "booked and confirmed",
+		Kind: ButlerEvidenceExternalVerification, ReceiptID: receipt, Description: "booked and confirmed",
 		PermissionLabel: "household", Audience: ButlerAudiencePrivate,
 	}}, "booked", "butler"); err != nil {
 		t.Fatal(err)

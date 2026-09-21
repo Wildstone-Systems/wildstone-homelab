@@ -20,6 +20,11 @@ const defaultMaxContentBytes = 4000
 // ToolOutcome is what a tool handler produces before the centralized
 // Dispatch pipeline (redact -> envelope -> truncate) runs on it.
 type ToolOutcome struct {
+	EffectPending bool
+	// EffectConfirmed is runtime metadata set only after a real mutation succeeds.
+	EffectConfirmed bool
+	// ProposalConfirmed means a proposal was persisted, never that it was applied.
+	ProposalConfirmed bool
 	// Content is the human/model-readable text result.
 	Content string
 	// Plan is non-nil for get_plan and propose_change: the plan.Plan that

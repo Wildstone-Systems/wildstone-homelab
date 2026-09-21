@@ -104,7 +104,7 @@ func handleRecordReading(ctx context.Context, gw *HouseholdGateway, input map[st
 	if err != nil {
 		return ToolOutcome{}, err
 	}
-	return ToolOutcome{Content: said}, nil
+	return ToolOutcome{Content: said, EffectConfirmed: true}, nil
 }
 
 // numberInput reads a JSON number, which a provider may hand over as a

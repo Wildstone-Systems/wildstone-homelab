@@ -244,7 +244,27 @@ func TestMemoryDisclosureMigrationCapturesLegacyOrigins(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	at, task := disclosureSetup(t, old)
+	// Write the historical task shape, not the current store's newer columns.
+	at := connect(t, old, "memory-agent", "telegram", ButlerSurfaceFamily)
+	if err := old.GrantButlerAccess("memory-agent", "sam", "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.sql.Exec(`UPDATE connection_disclosure SET retention='provider' WHERE connection=?`, at.Seq); err != nil {
+		t.Fatal(err)
+	}
+	person, err := resolvePersonID(old.sql, "sam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := old.sql.Exec(`INSERT INTO butler_tasks(created_at,updated_at,kind,state,author_person_id,owner_person_id,surface,agent_class,audience,objective,completion_criteria,retention,envelope_version,origin_connection,origin_connection_ref) VALUES(?,?,'conversation','pending',?,?,'family','member','aud_owner','remember','','manual',1,?,?)`, now(), now(), person, person, at.Name(), at.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskSeq, err := result.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := butlerTaskID(taskSeq)
 	seq := disclosedMemory(t, old, task)
 	unknown := disclosedMemory(t, old, "legacy-unresolvable")
 	if err = old.migrate(); err != nil {

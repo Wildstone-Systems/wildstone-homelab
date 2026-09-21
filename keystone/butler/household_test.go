@@ -120,7 +120,7 @@ func TestHouseholdGatewayHoldsNoInfrastructure(t *testing.T) {
 	// that closes a commitment, clears a notification, answers a
 	// question for somebody, or touches a machine.
 	want := []string{
-		"Events", "Actions", "Vocabulary", "Memory", "RecordReading",
+		"Events", "Actions", "ActionResult", "Vocabulary", "Memory", "RecordReading",
 		"Upkeep", "Activity", "Notifications", "Machines", "MaxContentBytes",
 	}
 	if !reflect.DeepEqual(seams, want) {

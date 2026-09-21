@@ -722,6 +722,8 @@ export interface DirectoryListing {
 // survives a restart, so the Console can show what is still running,
 // what is waiting and on what, and what was interrupted.
 export interface ButlerTask {
+  objectiveKind?: "informational" | "effectful";
+  proposalOnly?: boolean;
   id: string;
   kind: "conversation" | "routine";
   state:
@@ -786,6 +788,7 @@ export interface TaskWait {
 }
 
 export interface TaskEvidence {
+  receiptId?: number;
   seq: number;
   recordedAt: string;
   kind: string;

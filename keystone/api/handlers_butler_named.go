@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
@@ -172,8 +173,29 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 	// that bounds a Butler proposal is the one that has always bounded
 	// it.
 	butlerID := principal.Identity{Name: butlerPrincipal, Role: runtimedb.RoleButler, ActingFor: turn.Member}
-	planIDs, proposalErrs := s.submitSessionProposals(butlerID, ans.Calls)
+	planIDs, proposalErrs, persistedCalls := s.submitSessionProposalsWithCalls(butlerID, ans.Calls)
+	if finish, ok := s.Butlers.(interface {
+		CompleteProposalTask(string, []string, []butler.ToolCallRecord) (bool, error)
+	}); ok && len(planIDs) > 0 && len(proposalErrs) == 0 {
+		completed, err := finish.CompleteProposalTask(ans.TaskID, planIDs, persistedCalls)
+		if err != nil {
+			proposalErrs = append(proposalErrs, "proposal completion could not be recorded: "+err.Error())
+		} else if completed {
+			completedTask, readErr := s.DB.GetButlerTask(ans.TaskID)
+			if readErr != nil {
+				return nil, http.StatusInternalServerError, readErr
+			}
+			ans.FinalText = completedTask.ResultSummary
+		}
+	}
 
+	if preserve, ok := s.Butlers.(interface {
+		PreserveProposalTask(string, []string, []butler.ToolCallRecord) error
+	}); ok && len(planIDs) > 0 && len(proposalErrs) > 0 {
+		if err := preserve.PreserveProposalTask(ans.TaskID, planIDs, persistedCalls); err != nil {
+			proposalErrs = append(proposalErrs, "proposal evidence could not be recorded: "+err.Error())
+		}
+	}
 	stored := storedTranscript{Provider: ans.Provider, PlanIDs: planIDs}
 	for _, call := range ans.Calls {
 		stored.Calls = append(stored.Calls, transcriptRecord{
@@ -295,7 +317,15 @@ func (s *Server) preserveFailedTurn(turn butlerlive.Turn, prior *turnContext, an
 	// arrives at the next successful one with nothing to submit, and the
 	// plan the person asked for disappears without anybody being told.
 	butlerID := principal.Identity{Name: butlerPrincipal, Role: runtimedb.RoleButler, ActingFor: turn.Member}
-	planIDs, proposalErrs := s.submitSessionProposals(butlerID, ans.Calls)
+	planIDs, proposalErrs, persistedCalls := s.submitSessionProposalsWithCalls(butlerID, ans.Calls)
+	if finish, ok := s.Butlers.(interface {
+		PreserveProposalTask(string, []string, []butler.ToolCallRecord) error
+	}); ok && len(planIDs) > 0 {
+		if err := finish.PreserveProposalTask(ans.TaskID, planIDs, persistedCalls); err != nil {
+			s.Log.Error("preserving failed turn proposal evidence", "task", ans.TaskID, "err", err)
+			proposalErrs = append(proposalErrs, "proposal evidence could not be recorded: "+err.Error())
+		}
+	}
 
 	stored := storedTranscript{Provider: ans.Provider, PlanIDs: planIDs}
 	for _, call := range ans.Calls {

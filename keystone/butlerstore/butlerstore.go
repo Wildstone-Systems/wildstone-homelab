@@ -474,13 +474,37 @@ func (l *Ledger) Wait(taskID, reason, detail string) error {
 func (l *Ledger) Complete(taskID string, evidence []butler.LedgerEvidence, summary string) error {
 	rows := make([]runtimedb.ButlerTaskEvidence, 0, len(evidence))
 	for _, e := range evidence {
+		receipt := e.ReceiptID
+		if e.ReceiptStep != 0 {
+			var err error
+			receipt, err = l.db.RecordButlerEffectReceipt(taskID, runtimedb.EffectReceipt{ProposalOnly: e.ProposalOnly, Kind: "tool", SourceID: fmt.Sprintf("step:%d", e.ReceiptStep), Step: e.ReceiptStep, Outcome: "succeeded", PermissionLabel: e.PermissionLabel, Audience: runtimedb.ButlerTaskAudience(e.Audience)})
+			if err != nil {
+				return err
+			}
+		}
 		rows = append(rows, runtimedb.ButlerTaskEvidence{
+			ReceiptID:       receipt,
 			Kind:            runtimedb.ButlerEvidenceKind(e.Kind),
 			Description:     e.Description,
 			SourceID:        e.SourceID,
 			PermissionLabel: e.PermissionLabel,
 			Audience:        runtimedb.ButlerTaskAudience(e.Audience),
 		})
+	}
+	saved, err := l.db.PersistedEffectEvidence(taskID)
+	if err != nil {
+		return err
+	}
+	seen := map[int64]bool{}
+	for _, e := range rows {
+		if e.ReceiptID != 0 {
+			seen[e.ReceiptID] = true
+		}
+	}
+	for _, e := range saved {
+		if !seen[e.ReceiptID] {
+			rows = append(rows, e)
+		}
 	}
 	return l.db.CompleteButlerTask(taskID, rows, summary, l.holder)
 }
@@ -511,4 +535,32 @@ func (l *Ledger) Running(taskID, reason string) error {
 	default:
 		return fmt.Errorf("butlerstore: task %s is %s and cannot be resumed", taskID, task.State)
 	}
+}
+
+func (l *Ledger) Objective(taskID string) (string, error) {
+	task, err := l.db.GetButlerTask(taskID)
+	return task.Objective, err
+}
+func (l *Ledger) ClassifyObjective(taskID, kind string, proposalOnly bool, effects []butler.ObjectiveEffect) error {
+	if err := l.Fence(); err != nil {
+		return err
+	}
+	if err := l.Authorize(taskID); err != nil {
+		return err
+	}
+	required := make([]runtimedb.RequiredEffect, 0, len(effects))
+	for _, effect := range effects {
+		required = append(required, runtimedb.RequiredEffect{Description: effect.Description, SourceKey: effect.SourceKey, ProposalOnly: effect.ProposalOnly})
+	}
+	return l.db.ClassifyButlerObjectiveEffects(taskID, runtimedb.ObjectiveKind(kind), proposalOnly, required)
+}
+
+func (l *Ledger) ConfirmedObjectiveOperations(taskID string) (map[string]bool, error) {
+	if err := l.Fence(); err != nil {
+		return nil, err
+	}
+	if err := l.Authorize(taskID); err != nil {
+		return nil, err
+	}
+	return l.db.ConfirmedObjectiveOperations(taskID)
 }

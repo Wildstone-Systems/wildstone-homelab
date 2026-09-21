@@ -474,7 +474,7 @@ func (c *Calendar) create(ctx context.Context, params map[string]string) (Result
 		return Result{}, err
 	}
 	when := c.describeWrite(write)
-	return Result{
+	return Result{EffectConfirmed: true,
 		Summary: fmt.Sprintf("Added %q, %s.", title, when),
 		Detail:  map[string]string{"title": title, "start": write.Start, "allDay": strconv.FormatBool(allDay)},
 	}, nil
@@ -529,7 +529,7 @@ func (c *Calendar) update(ctx context.Context, params map[string]string) (Result
 	if _, err := c.Upstream.UpdateEvent(ctx, write); err != nil {
 		return Result{}, err
 	}
-	return Result{
+	return Result{EffectConfirmed: true,
 		Summary: fmt.Sprintf("Changed the %s of %q on %s.", strings.Join(changes, " and "), found.Summary, day.Format("Mon 2 Jan")),
 		Detail:  map[string]string{"title": found.Summary, "changed": strings.Join(changes, ",")},
 	}, nil
@@ -549,7 +549,7 @@ func (c *Calendar) remove(ctx context.Context, params map[string]string) (Result
 	if _, err := c.Upstream.DeleteEvent(ctx, caldav.EventWrite{Href: found.Href, UID: found.UID}); err != nil {
 		return Result{}, err
 	}
-	return Result{
+	return Result{EffectConfirmed: true,
 		Summary: fmt.Sprintf("Deleted %q from %s.", found.Summary, day.Format("Mon 2 Jan")),
 		Detail:  map[string]string{"title": found.Summary, "date": day.Format("2006-01-02")},
 	}, nil

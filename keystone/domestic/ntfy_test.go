@@ -61,6 +61,9 @@ func TestNotifyPublishes(t *testing.T) {
 	if f.auth != "Bearer KNOWN-FAKE-ntfy-token" {
 		t.Fatalf("auth = %q", f.auth)
 	}
+	if !res.EffectConfirmed {
+		t.Fatal("successful HTTP publish lacks runtime receipt")
+	}
 	if res.Summary != "notified household-mika" {
 		t.Fatalf("summary = %q", res.Summary)
 	}

@@ -203,7 +203,7 @@ func (n *Notifier) Execute(ctx context.Context, c Call) (Result, error) {
 		detail["replies"] = strings.Join(labels, ", ")
 		summary = fmt.Sprintf("asked %s (%s)", topic, strings.Join(labels, "/"))
 	}
-	return Result{Summary: summary, Detail: detail}, nil
+	return Result{Summary: summary, Detail: detail, EffectConfirmed: true}, nil
 }
 
 // replyEventID is deterministic per (rule, correlation, answer), so a

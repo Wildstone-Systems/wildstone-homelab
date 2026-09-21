@@ -162,7 +162,7 @@ func newAuthTask(t *testing.T, db *runtimedb.DB) string {
 	id, err := db.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
 		Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: runtimedb.AgentClassOwner,
-		Audience: runtimedb.ButlerAudiencePrivate, Objective: "work", CompletionCriteria: "done",
+		Audience: runtimedb.ButlerAudiencePrivate, ObjectiveKind: runtimedb.ObjectiveInformational, Objective: "explain the diagnostic result", CompletionCriteria: "answer delivered",
 	})
 	if err != nil {
 		t.Fatal(err)

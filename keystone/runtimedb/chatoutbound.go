@@ -16,6 +16,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/operation"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -59,7 +60,8 @@ const MaxChatBodyBytes = 3500
 
 // ChatOutbound is one queued message.
 type ChatOutbound struct {
-	Seq int64 `json:"seq"`
+	Operation operation.Identity `json:"-"`
+	Seq       int64              `json:"seq"`
 	// Connection is the bot this message leaves by, and so the Agent it
 	// is from. The queue used to be keyed by surface, which handed one
 	// bot every Owner Agent's replies (ADR-W033 B7).
@@ -116,12 +118,18 @@ func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
 		m.ExpiresAt = time.Now().Add(DefaultChatOutboundTTL)
 	}
 	db.pruneChatOutbound()
-	res, err := db.sql.Exec(
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(
 		`INSERT INTO chat_outbound (connection, target, body, kind, binding_id, correlation_id, dedupe_key, created_at, expires_at, hold_until)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.Connection, m.Target, m.Body, m.Kind, m.BindingID, m.CorrelationID,
 		m.DedupeKey, now(), m.ExpiresAt.UTC().Format(time.RFC3339Nano), timeText(m.HoldUntil))
 	if err != nil {
+		_ = tx.Rollback()
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			var seq int64
 			if qerr := db.sql.QueryRow(
@@ -131,7 +139,23 @@ func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
 		}
 		return 0, fmt.Errorf("runtimedb: queuing chat message: %w", err)
 	}
-	return res.LastInsertId()
+	seq, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	if m.Operation.TaskID != "" {
+		task, err := parseButlerTaskID(m.Operation.TaskID)
+		if err != nil {
+			return 0, err
+		}
+		if _, err = tx.Exec("INSERT INTO chat_outbound_effects(outbound,task,step,permission_label,audience,expected_body) VALUES(?,?,?,?,?,?)", seq, task, m.Operation.Step, m.Operation.PermissionLabel, m.Operation.Audience, m.Body); err != nil {
+			return 0, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return seq, nil
 }
 
 // ChatOutboundAfter returns undelivered, unexpired messages for one

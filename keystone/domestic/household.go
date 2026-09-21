@@ -53,7 +53,7 @@ func (p *TimezoneProposer) Execute(ctx context.Context, c Call) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{
+	return Result{ProposalConfirmed: true,
 		Summary: fmt.Sprintf("proposed changing the household timezone from %s to %s (plan %s); "+
 			"nothing changes until an Owner approves it in the Console", current, zone, plan),
 		Detail: map[string]string{"zone": zone, "from": current, "plan": plan},
