@@ -19,6 +19,12 @@ type RoutineResources struct {
 }
 
 func normalizeRoutineResources(resources RoutineResources) (RoutineResources, string, error) {
+	if len(resources.SecretIDs) == 0 {
+		resources.SecretIDs = []string{}
+	}
+	if len(resources.MemoryIDs) == 0 {
+		resources.MemoryIDs = []int64{}
+	}
 	sort.Strings(resources.SecretIDs)
 	sort.Slice(resources.MemoryIDs, func(i, j int) bool { return resources.MemoryIDs[i] < resources.MemoryIDs[j] })
 	for i, id := range resources.SecretIDs {

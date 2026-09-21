@@ -2,6 +2,20 @@ package runtimedb
 
 import "testing"
 
+func TestRoutineResourceSignatureTreatsOmittedAndEmptyListsEqually(t *testing.T) {
+	omitted, omittedSignature, err := normalizeRoutineResources(RoutineResources{MemoryIDs: []int64{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, emptySignature, err := normalizeRoutineResources(RoutineResources{SecretIDs: []string{}, MemoryIDs: []int64{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if omittedSignature != emptySignature || len(omitted.SecretIDs) != len(empty.SecretIDs) {
+		t.Fatalf("same resource selection produced different signatures: %q != %q", omittedSignature, emptySignature)
+	}
+}
+
 func approvedResourceRoutine(t *testing.T, db *DB, resources RoutineResources, audience string) (string, *RoutinePrincipal) {
 	t.Helper()
 	if _, err := db.CreateHouseholdRoutine(HouseholdRoutine{Name: "resource-run", Ownership: RoutineWildstone, Author: "sam", Document: "fixture"}); err != nil {
