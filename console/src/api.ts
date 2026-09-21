@@ -903,6 +903,7 @@ export interface CapabilityRequest {
 
 // Butler admission, which is runtime state and not LDAP membership.
 export interface ButlerMemberRecord {
+  personId: string;
   member: string;
   role?: "owner" | "member";
   profile: string;
@@ -1403,7 +1404,28 @@ export interface ReplayResult {
   violations?: { rule?: string; message?: string; resource?: string }[] | null;
 }
 
+export interface HouseholdSecret {
+  id: string;
+  scope: string;
+  ownerPersonId: string;
+  label: string;
+  state: string;
+  version: number;
+}
 export const api = {
+  householdSecrets: () =>
+    call<{ secrets: HouseholdSecret[] }>("GET", "/api/v1/household/secrets"),
+  householdSecret: (
+    id: string,
+    operation: string,
+    body: Record<string, unknown>,
+  ) =>
+    call<{ value?: string }>(
+      "POST",
+      `/api/v1/household/secrets${id ? "/" + encodeURIComponent(id) + "/" + operation : ""}`,
+      body,
+    ),
+
   packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
   // The theme this person reads on, shared with the household portal:
   // one row, one resolver, so the two surfaces cannot disagree.

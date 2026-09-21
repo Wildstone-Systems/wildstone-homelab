@@ -262,6 +262,12 @@ func (s *Server) runFamilyButlerSession(ctx context.Context, message, member, sy
 // gateway (ADR-W026 A7) — the audience decides which CAPABILITIES the
 // session has, not merely what its prompt asks it to do.
 func (s *Server) runFamilySession(ctx context.Context, message, member, systemExtra, connection string, group bool, prior *turnContext) (any, int, error) {
+	if note, handled, e := s.prepareSecretInput(member, message, 0); handled {
+		if e != nil {
+			return nil, http.StatusServiceUnavailable, e
+		}
+		return askResponse{FinalText: note}, http.StatusOK, nil
+	}
 	host := s.ButlerHost
 	// One snapshot for the whole session, as the operator surface takes
 	// (ADR-W017 A9): a model swapped in mid-session would produce a

@@ -396,6 +396,12 @@ func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (
 // FAILED its probe would run with the previous model's `full` verdict
 // and be handed proposal tools.
 func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, connection string, prior *turnContext) (any, int, error) {
+	if note, handled, e := s.prepareSecretInput(actingFor, message, 0); handled {
+		if e != nil {
+			return nil, http.StatusServiceUnavailable, e
+		}
+		return askResponse{FinalText: note}, http.StatusOK, nil
+	}
 	askProv, askGw, askMode, _, _ := s.ButlerHost.Current()
 	if askProv == nil || askGw == nil {
 		return nil, http.StatusServiceUnavailable,

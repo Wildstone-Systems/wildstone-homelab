@@ -307,6 +307,14 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 			// use to the person reading it than the general answer.
 			body, reason = adminGroupReply, "the operator surface answers in direct messages only"
 		}
+		if redact.SecretSubmission(text) || secretCommand.MatchString(text) {
+			body = "If you entered a secret here, it has already been disclosed to this messaging platform. I will not repeat it. " + secretEntryNote
+			if s.SecretVault != nil {
+				if err := s.SecretVault.RecordDisclosure(binding.Identity, at.Seq); err != nil {
+					return nil, http.StatusServiceUnavailable, fmt.Errorf("cannot record secret disclosure safely")
+				}
+			}
+		}
 		seq := s.queueChatReply(at, conversation, body, binding.ID, "",
 			chatDedupe(at, conversation, msg.MessageID, "group-redirect", text))
 		s.settleInbound(claimKey, seq, &settled)
@@ -321,6 +329,15 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// rule opens still closes with the Butler switched off — the
 	// deterministic-backbone principle, applied to the one place chat
 	// could quietly have broken it.
+	if note, handled, e := s.prepareSecretInput(binding.Identity, text, at.Seq); handled {
+		if e != nil {
+			return nil, http.StatusServiceUnavailable, e
+		}
+		seq := s.queueChatReply(at, conversation, note, binding.ID, "", chatDedupe(at, conversation, msg.MessageID, "secret", "secret-intake"))
+		s.settleInbound(claimKey, seq, &settled)
+		return inboundResponse{Accepted: true, Bound: true, Queued: seq, Reason: "protected secret intake"}, http.StatusAccepted, nil
+	}
+
 	if !at.AdmitsOwnersOnly() {
 		if body, answered := s.recordChatAnswer(at, binding, conversation, text); answered {
 			seq := s.queueChatReply(at, conversation, body, binding.ID, "",

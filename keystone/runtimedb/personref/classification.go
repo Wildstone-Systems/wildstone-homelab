@@ -231,6 +231,20 @@ var LegacyColumns = []Column{
 }
 
 var Columns = []Column{
+	{"household_secret_disclosures", "person_id", PersonID, "0069: authenticated Person who submitted a credential on an external Connection; no value recorded"},
+	{"household_secret_bindings", "principal", Scoped, "0069: canonical Person ID for Personal binding, or household sentinel for shared binding"},
+	{"household_secret_origins", "secret_id", NotAPerson, "0069: immutable secret identifier for disclosure provenance"},
+	{"household_secret_audit", "actor_person_id", PersonID, "0069: canonical active Person identity, never a handle or machine principal"},
+	{"household_secret_grants", "person_id", PersonID, "0069: canonical active Person identity, never a handle or machine principal"},
+	{"household_secrets", "owner_person_id", PersonID, "0069: canonical active Person identity, never a handle or machine principal"},
+	{"household_secret_agents", "purpose", NotAPerson, "0069: secret object identifier or closed operation vocabulary, not a Person"},
+	{"household_secret_agents", "secret_id", NotAPerson, "0069: secret object identifier or closed operation vocabulary, not a Person"},
+	{"household_secret_audit", "secret_id", NotAPerson, "0069: secret object identifier or closed operation vocabulary, not a Person"},
+	{"household_secret_bindings", "purpose", NotAPerson, "0069: secret object identifier or closed operation vocabulary, not a Person"},
+	{"household_secret_bindings", "secret_id", NotAPerson, "0069: secret object identifier or closed operation vocabulary, not a Person"},
+	{"household_secret_grants", "secret_id", NotAPerson, "0069: secret object identifier or closed operation vocabulary, not a Person"},
+	{"household_secret_grants", "verb", NotAPerson, "0069: secret object identifier or closed operation vocabulary, not a Person"},
+	{"household_secrets", "id", NotAPerson, "0069: secret object identifier or closed operation vocabulary, not a Person"},
 	{"memory_constraints", "owner_person_id", PersonID, "source Person constraint retained by a memory derivative"},
 	{"memory_scope_events", "actor_person_id", PersonID, "Person approving a promotion or Agent-local transfer"},
 	{"memory_scope_events", "source_agent", NotAPerson, "Agent name at transfer time"},

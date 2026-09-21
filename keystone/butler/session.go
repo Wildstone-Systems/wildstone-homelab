@@ -172,7 +172,7 @@ func (s *Session) Run(ctx context.Context, p provider.Provider, userMessage stri
 	for i := 0; i < s.maxIterations(); i++ {
 		resp, err := p.Chat(ctx, provider.ChatRequest{
 			System:   s.systemPrompt(),
-			Messages: messages,
+			Messages: provider.SafeMessages(messages),
 			Tools:    tools,
 		})
 		if err != nil {
