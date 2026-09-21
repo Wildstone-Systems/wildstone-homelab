@@ -1228,6 +1228,36 @@ create_first_owner() {
   log "first owner '$ADMIN_USER' recorded and admitted"
 }
 
+# The tailnet ingress publishes one fixed TCP port block. Catch a host
+# process such as rpc.statd taking one of those ports before Caddy is
+# started; Docker's later bind failure otherwise looks like a generic plan
+# failure. Existing live Caddy mappings are our own and may be reused.
+check_tailnet_ingress_ports() {
+  local bind_ip="$1" owned line local_addr process port
+  command -v ss >/dev/null || fail "ss (iproute2) is required to check tailnet ingress ports"
+  owned="$(docker port caddy-tailnet-ts 2>/dev/null || true)"
+  while IFS= read -r line; do
+    read -r _ _ _ local_addr _ process <<< "$line"
+    port="${local_addr##*:}"
+    [[ "$port" =~ ^[0-9]+$ ]] || continue
+    if [ "$port" -ne 443 ]; then
+      if [ "$port" -lt 7443 ] || [ "$port" -gt 53443 ]; then
+        continue
+      fi
+      [ $(((port - 7443) % 1000)) -eq 0 ] || continue
+    fi
+    case "$local_addr" in
+      "$bind_ip:$port"|"0.0.0.0:$port"|"*:$port"|"[::]:$port") ;;
+      *) continue ;;
+    esac
+    if printf '%s\n' "$owned" | grep -Fxq "$port/tcp -> $bind_ip:$port"; then
+      continue
+    fi
+    [ -n "${process:-}" ] || process="unknown process"
+    fail "tailnet ingress needs $bind_ip:$port, but $process is listening there (inspect: ss -ltnp 'sport = :$port')"
+  done < <(ss -H -ltnp)
+}
+
 post_install() {
   log "pairing this host as its own node"
   local mint join fp
@@ -1268,6 +1298,7 @@ post_install() {
       *".$tssuffix") ;;
       *) fail "tailnet name '$tsname' is not under this tailnet's suffix '$tssuffix' — refusing to guess" ;;
     esac
+    check_tailnet_ingress_ports "$tsaddr"
     log "installing ingress (tailnet, trusted certificate)"
     enable_capability ingress-tailnet-ts \
       "{\"node\":\"$NODE_ID\",\"tailnet_name\":\"$tsname\",\"listen_addr\":\"$tsaddr\"}"

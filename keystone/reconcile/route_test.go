@@ -58,3 +58,45 @@ func TestRouteDeletePassesItsGateOnTheTombstoneItWrites(t *testing.T) {
 		t.Fatal("the fragment must be left as a comment, not emptied (F30)")
 	}
 }
+
+type routeFrontDoorAgent struct {
+	probeURL string
+	tcpCalls int
+	httpsOK  bool
+}
+
+func (a *routeFrontDoorAgent) Apply(_ context.Context, _ string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+	switch o := op.GetOp().(type) {
+	case *wsv1.Operation_ProbeTcp:
+		a.tcpCalls++
+		return &wsv1.OpResult{Result: &wsv1.OpResult_ProbeTcp{
+			ProbeTcp: &wsv1.ProbeTcpResult{Reachable: true},
+		}}, nil
+	case *wsv1.Operation_ProbeHttp:
+		a.probeURL = o.ProbeHttp.GetUrl()
+		return &wsv1.OpResult{Result: &wsv1.OpResult_ProbeHttp{
+			ProbeHttp: &wsv1.ProbeHttpResult{Reachable: a.httpsOK},
+		}}, nil
+	}
+	return &wsv1.OpResult{}, nil
+}
+
+func TestTailnetRouteGateRequiresHTTPSNotOnlyAnOpenPort(t *testing.T) {
+	agent := &routeFrontDoorAgent{}
+	r := &Reconciler{Applier: agent, HealthGateAttempts: 1}
+	r.posture = ingressPosture{
+		tls: "tailscale", tailnetName: "node.example.ts.net",
+		tailnetPorts: map[string]int{"console.wildstone.internal": 47443},
+	}
+	spec := &resource.RouteSpec{Host: "console.wildstone.internal", Upstream: "100.64.0.1:9441"}
+	if r.probeRoute(context.Background(), "n1", spec) {
+		t.Fatal("an unrelated TCP listener must not pass the route health gate")
+	}
+	if agent.tcpCalls != 0 || agent.probeURL != "https://node.example.ts.net:47443/" {
+		t.Fatalf("gate used tcp=%d url=%q", agent.tcpCalls, agent.probeURL)
+	}
+	agent.httpsOK = true
+	if !r.probeRoute(context.Background(), "n1", spec) {
+		t.Fatal("a reachable HTTPS front door should pass")
+	}
+}

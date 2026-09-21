@@ -539,6 +539,17 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		}
 	}
 
+	// Docker can accept PortBindings yet leave NetworkSettings.Ports empty
+	// after a failed start. Read back the live mappings, not just the
+	// requested HostConfig, before treating a container as converged.
+	ports := map[string][]portBinding{}
+	exposedPorts := map[string]struct{}{}
+	for _, p := range op.GetPorts() {
+		key := fmt.Sprintf("%d/%s", p.GetContainerPort(), portProtocol(p.GetProtocol()))
+		ports[key] = append(ports[key], portBinding{HostIP: p.GetHostIp(), HostPort: fmt.Sprint(p.GetHostPort())})
+		exposedPorts[key] = struct{}{}
+	}
+
 	existing, err := a.docker.inspect(ctx, op.GetName())
 	if derr, ok := err.(*dockerError); err != nil && (!ok || !derr.notFound()) {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "inspect: %v", err)
@@ -567,10 +578,20 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 					return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "start: %v", err)
 				}
 				started = true
+				if len(ports) > 0 {
+					existing, err = a.docker.inspect(ctx, existing.ID)
+					if err != nil {
+						return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "inspect after start: %v", err)
+					}
+				}
 			}
-			return &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
-				ContainerId: existing.ID, Created: false, Started: started,
-			}}, nil
+			if missingPublishedPort(existing, ports) == "" {
+				return &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
+					ContainerId: existing.ID, Created: false, Started: started,
+				}}, nil
+			}
+			// A matching spec hash is not enough: the container from a
+			// failed Docker start may be running with no host bindings.
 		}
 		// Spec changed: replace. (Spike kept this simple; health-gated
 		// replacement is the reconciler's job, per step.)
@@ -603,13 +624,6 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		}
 		binds = append(binds, b)
 	}
-	ports := map[string][]portBinding{}
-	exposedPorts := map[string]struct{}{}
-	for _, p := range op.GetPorts() {
-		key := fmt.Sprintf("%d/%s", p.GetContainerPort(), portProtocol(p.GetProtocol()))
-		ports[key] = append(ports[key], portBinding{HostIP: p.GetHostIp(), HostPort: fmt.Sprint(p.GetHostPort())})
-		exposedPorts[key] = struct{}{}
-	}
 	restart := op.GetRestartPolicy()
 	if restart == "" {
 		restart = "unless-stopped"
@@ -640,11 +654,49 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "create: %v", err)
 	}
 	if err := a.docker.start(ctx, id); err != nil {
+		// Docker leaves a created container behind after a bind failure.
+		// Remove only this new instance so a retry starts from a clean slate.
+		if cleanupErr := a.docker.remove(ctx, id, true); cleanupErr != nil {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "start: %v (cleanup: %v)", err, cleanupErr)
+		}
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "start: %v", err)
+	}
+	if len(ports) > 0 {
+		live, err := a.docker.inspect(ctx, id)
+		if err != nil {
+			_ = a.docker.remove(ctx, id, true)
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "inspect after start: %v", err)
+		}
+		if missing := missingPublishedPort(live, ports); missing != "" {
+			_ = a.docker.remove(ctx, id, true)
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "published port %s is not active", missing)
+		}
 	}
 	return &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
 		ContainerId: id, Created: true, Started: true,
 	}}, nil
+}
+
+// missingPublishedPort compares Docker's effective mappings with the bindings
+// Wardstone requested. HostConfig records intent; NetworkSettings.Ports records
+// whether Docker actually published each host port.
+func missingPublishedPort(ci *containerInspect, expected map[string][]portBinding) string {
+	for containerPort, bindings := range expected {
+		live := ci.NetworkSettings.Ports[containerPort]
+		for _, want := range bindings {
+			found := false
+			for _, got := range live {
+				if got.HostPort == want.HostPort && (want.HostIP == "" || got.HostIP == want.HostIP) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Sprintf("%s:%s -> %s", want.HostIP, want.HostPort, containerPort)
+			}
+		}
+	}
+	return ""
 }
 
 // requireOwned loads a container and enforces the ownership label.
@@ -761,10 +813,21 @@ func (a *Agent) inspectContainer(ctx context.Context, op *wsv1.InspectContainer)
 	if oerr != nil {
 		return nil, oerr
 	}
+	labels := ci.Config.Labels
+	if ci.State.Running && missingPublishedPort(ci, ci.HostConfig.PortBindings) != "" {
+		// Signal drift through the existing spec-hash contract. Returning
+		// Running=false would misreport the process; returning the intact
+		// hash would tell Keystone this broken container has converged.
+		labels = make(map[string]string, len(ci.Config.Labels))
+		for k, v := range ci.Config.Labels {
+			labels[k] = v
+		}
+		delete(labels, SpecHashLabel)
+	}
 	return &wsv1.OpResult_InspectContainer{InspectContainer: &wsv1.InspectContainerResult{
 		Running:  ci.State.Running,
 		Image:    ci.Config.Image,
-		Labels:   ci.Config.Labels,
+		Labels:   labels,
 		Status:   ci.State.Status,
 		ExitCode: ci.State.ExitCode,
 		AppHealth: func() string {
