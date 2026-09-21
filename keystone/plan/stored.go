@@ -13,6 +13,10 @@ package plan
 // makes that particular mistake a compile-time concern instead of a
 // silent one.
 type StoredProposal struct {
+	// AuditOnly records a member's immediate maintenance-tracker edit. It is
+	// history, not a submitted Plan or permission to execute host changes.
+	AuditOnly bool           `json:"auditOnly,omitempty"`
+	Routine   *RoutineChange `json:"routine,omitempty"`
 	// BasedOnHead is the Statefile commit the proposal was computed
 	// against. Approval refuses a proposal whose base has moved, so this
 	// must always be set — including by proposers that change no desired
@@ -73,4 +77,16 @@ type CapabilityOrigin struct {
 	Package string            `json:"package"`
 	Version string            `json:"version"`
 	Params  map[string]string `json:"params,omitempty"`
+}
+
+// RoutineChange is the exact routine version an Owner reviews. Output audience
+// governs who may learn the result; Delivery describes where/how it is sent.
+type RoutineChange struct {
+	AssignedButler string `json:"assignedButler"`
+	ProposingAgent string `json:"proposingAgent,omitempty"`
+	Name           string `json:"name"`
+	Revision       int    `json:"revision"`
+	Document       string `json:"document"`
+	OutputAudience string `json:"outputAudience"`
+	Delivery       string `json:"delivery"`
 }

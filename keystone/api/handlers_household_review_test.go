@@ -90,38 +90,47 @@ func issueToken(t *testing.T, h *harness, planID, member, routine string) (strin
 	return out.Token, res
 }
 
-// An admitted adult approves a pure routine plan through the household
-// page, holding no Console credential at any point.
-func TestHouseholdAdultReviewsARoutinePlan(t *testing.T) {
-	h := reviewHarness(t)
-	planID := storePlan(t, h, resource.KindAutomation, resource.KindAutomation)
-
-	token, res := issueToken(t, h, planID, "sam", "")
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("issuing a review token = %d", res.StatusCode)
+// Model links issued before exact-version snapshots were required. New API
+// issuance rejects these Plans; retained links still cannot bypass authentication.
+func legacyReviewTokenFixture(t *testing.T, h *harness, id, member, routine string) string {
+	t.Helper()
+	var seq int64
+	var revision int
+	if routine != "" {
+		r, err := h.s.DB.GetHouseholdRoutine(routine)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seq, revision = r.Seq, r.Revision
 	}
-	if token == "" {
-		t.Fatal("the review token was redacted out of its own response")
-	}
-
-	// Sam holds no API token. The only things they present are an
-	// Authelia-asserted identity and the link they were sent.
-	approve := h.review(t, "sam@example.com", token, true)
-	if approve.StatusCode != http.StatusOK {
-		t.Fatalf("an admitted adult approving a routine plan = %d", approve.StatusCode)
-	}
-	record, err := h.s.DB.GetPlan(planID)
+	token, err := h.s.DB.IssueHouseholdReviewToken(id, member, "root-admin", seq, revision, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.State != runtimedb.PlanApproved || record.ResolvedBy != "sam" {
-		t.Fatalf("plan after household approval = %+v", record)
-	}
+	return token
+}
 
-	// Single use.
-	again := h.review(t, "sam@example.com", token, true)
-	if again.StatusCode != http.StatusForbidden {
-		t.Fatalf("a used review link worked again: %d", again.StatusCode)
+// An admitted adult approves a pure routine plan through the household
+// page, holding no Console credential at any point.
+func TestMemberCannotReviewARoutinePlan(t *testing.T) {
+	h := reviewHarness(t)
+	id := storePlan(t, h, resource.KindAutomation)
+	token, response := issueToken(t, h, id, "sam", "")
+	if response.StatusCode != http.StatusBadRequest || token != "" {
+		t.Fatal("issued an unusable legacy routine token to a Member")
+	}
+	// Even a link issued before the Owner-only gate cannot authorize a Member.
+	token, err := h.s.DB.IssueHouseholdReviewToken(id, "sam", "root-admin", 0, 0, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = h.review(t, "sam@example.com", token, true)
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("Member approved: %d", response.StatusCode)
+	}
+	record, err := h.s.DB.GetPlan(id)
+	if err != nil || record.State != runtimedb.PlanProposed {
+		t.Fatalf("denial changed Plan: %+v %v", record, err)
 	}
 }
 
@@ -157,10 +166,19 @@ func TestOnlyPureRoutinePlansGetAReviewLink(t *testing.T) {
 // expiry — and none of that is a login.
 func TestReviewTokensAreBoundNotBearer(t *testing.T) {
 	h := reviewHarness(t)
+	if err := h.s.DB.RecordButlerMember("tom", runtimedb.RoleOwner, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.AdmitButlerMember("tom", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.SetButlerMemberRole("sam", runtimedb.RoleOwner, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("bound to the person it was issued to", func(t *testing.T) {
 		planID := storePlan(t, h, resource.KindAutomation)
-		token, _ := issueToken(t, h, planID, "sam", "")
+		token := legacyReviewTokenFixture(t, h, planID, "sam", "")
 		// Another admitted adult holding the same link approves nothing.
 		if err := h.s.DB.RecordButlerMember("mika", runtimedb.RoleMember, "", ""); err != nil {
 			t.Fatal(err)
@@ -179,7 +197,7 @@ func TestReviewTokensAreBoundNotBearer(t *testing.T) {
 
 	t.Run("only through the identity proxy", func(t *testing.T) {
 		planID := storePlan(t, h, resource.KindAutomation)
-		token, _ := issueToken(t, h, planID, "sam", "")
+		token := legacyReviewTokenFixture(t, h, planID, "sam", "")
 		// A header anyone can set is not an authentication. With no
 		// trusted peer configured the route is not there at all.
 		h.s.SetTrustedIngress(nil)
@@ -201,7 +219,7 @@ func TestReviewTokensAreBoundNotBearer(t *testing.T) {
 			t.Fatal(err)
 		}
 		planID := storePlan(t, h, resource.KindAutomation)
-		token, _ := issueToken(t, h, planID, "sam", "morning")
+		token := legacyReviewTokenFixture(t, h, planID, "sam", "morning")
 
 		// The routine is edited after the link went out. Approving now
 		// would approve a version nobody read.
@@ -222,7 +240,7 @@ func TestReviewTokensAreBoundNotBearer(t *testing.T) {
 
 	t.Run("useless once the person is disabled", func(t *testing.T) {
 		planID := storePlan(t, h, resource.KindAutomation)
-		token, _ := issueToken(t, h, planID, "sam", "")
+		token := legacyReviewTokenFixture(t, h, planID, "sam", "")
 		if err := h.s.DB.DisableButlerMember("sam", "root-admin"); err != nil {
 			t.Fatal(err)
 		}
@@ -279,7 +297,7 @@ func TestRoutineOwnershipStaysDistinct(t *testing.T) {
 
 // Trial runs but performs nothing; disable is exact and immediate.
 func TestTrialRunsAndDisableIsExact(t *testing.T) {
-	h := reviewHarness(t)
+	h := freshnessHarness(t)
 	for _, name := range []string{"breakfast", "bedtime"} {
 		if _, err := h.s.DB.CreateHouseholdRoutine(runtimedb.HouseholdRoutine{
 			Name: name, Ownership: runtimedb.RoutineWildstone, Author: "sam", Document: "steps: []",
@@ -291,15 +309,20 @@ func TestTrialRunsAndDisableIsExact(t *testing.T) {
 		Routine         runtimedb.HouseholdRoutine `json:"routine"`
 		PerformsActions bool                       `json:"performsActions"`
 	}
-	h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/routines/breakfast/state",
-		map[string]any{"state": "trial"}, &state)
-	if !state.Routine.Active() || state.PerformsActions {
-		t.Fatalf("a trial routine = %+v; it should run and perform nothing", state)
-	}
-	h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/routines/breakfast/state",
-		map[string]any{"state": "enabled"}, &state)
-	if !state.PerformsActions {
-		t.Fatal("an enabled routine performs nothing")
+	approveRoutineFixture(t, h, "breakfast")
+	session := sessionCookie(h.s.StartConsoleSession("mika", time.Now()))
+	for _, target := range []string{"trial", "enabled"} {
+		code, out := h.sessionRequest(http.MethodPost, "/api/v1/household/routines/breakfast/state", `{"state":"`+target+`"}`, "mika", session)
+		if code != http.StatusOK {
+			t.Fatalf("fresh Owner changing approved mode: %d %v", code, out)
+		}
+		routine, err := h.s.DB.GetHouseholdRoutine("breakfast")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !routine.Active() || routine.PerformsActions() != (target == "enabled") {
+			t.Fatalf("wrong approved mode: %+v", routine)
+		}
 	}
 
 	// Disabling one disables exactly one.
@@ -322,6 +345,9 @@ func TestTrialRunsAndDisableIsExact(t *testing.T) {
 // the review page has.
 func TestChatCannotApproveAPlanByAnyRoute(t *testing.T) {
 	h := reviewHarness(t)
+	if err := h.s.DB.SetButlerMemberRole("sam", runtimedb.RoleOwner, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
 	planID := storePlan(t, h, resource.KindAutomation)
 
 	t.Run("typing approval is refused on both surfaces", func(t *testing.T) {
@@ -363,7 +389,7 @@ func TestChatCannotApproveAPlanByAnyRoute(t *testing.T) {
 	// could relay a token approve without a human ever loading the
 	// page, seeing what they were approving, or authenticating to it.
 	t.Run("there is no chat callback that approves a plan", func(t *testing.T) {
-		token, _ := issueToken(t, h, planID, "sam", "")
+		token := legacyReviewTokenFixture(t, h, planID, "sam", "")
 		for _, path := range []string{
 			"/api/v1/household/review/callback",
 			"/api/v1/household/review/chat",
@@ -383,14 +409,14 @@ func TestChatCannotApproveAPlanByAnyRoute(t *testing.T) {
 		}
 		// The token still works where it is supposed to: through the
 		// identity proxy, as the person it was issued to.
-		if res := h.review(t, "sam@example.com", token, true); res.StatusCode != http.StatusOK {
+		if res := h.review(t, "sam@example.com", token, true); res.StatusCode != http.StatusForbidden {
 			t.Fatalf("the authenticated review page = %d", res.StatusCode)
 		}
 		after, err := h.s.DB.GetPlan(planID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if after.State != runtimedb.PlanApproved {
+		if after.State != runtimedb.PlanProposed {
 			t.Fatalf("plan state after the authenticated review = %q", after.State)
 		}
 	})

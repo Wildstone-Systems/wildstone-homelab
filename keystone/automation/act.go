@@ -133,6 +133,9 @@ func (e *Engine) act(ctx context.Context, d Decision, ev runtimedb.HouseholdEven
 		return nil // decisions recorded, nothing wired to act on them
 	}
 
+	if err := e.checkReviewedRoutine(d.Rule); err != nil {
+		return err
+	}
 	params, rerr := RenderParams(rule.Automation.Action.Params, ev, d.Rule, e.loc())
 	if rerr != nil {
 		return e.recordFollowUp(d, ev, TypeActionFailed, "err", map[string]any{
@@ -167,6 +170,15 @@ func (e *Engine) act(ctx context.Context, d Decision, ev runtimedb.HouseholdEven
 		return nil
 	}
 
+	// A draft/edit may commit while the durable claim is being recorded.
+	// Re-read at the effect boundary, after all claim writes have completed.
+	if err := e.checkReviewedRoutine(d.Rule); err != nil {
+		if recordErr := e.recordFollowUp(d, ev, TypeActionFailed, "err", map[string]any{"tool": d.Action, "tier": d.Tier, "error": err.Error(), "stage": "authorization"}); recordErr != nil {
+			return fmt.Errorf("%v; recording refusal: %w", err, recordErr)
+		}
+		return err
+	}
+	ctx = domestic.WithExecutionCheck(ctx, func() error { return e.checkReviewedRoutine(d.Rule) })
 	_, aerr := e.Actions.Dispatch(ctx, domestic.Call{
 		Tool: d.Action, Tier: d.Tier, Params: params,
 		Rule: d.Rule, Subject: d.Subject,

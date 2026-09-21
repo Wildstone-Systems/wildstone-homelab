@@ -8,7 +8,7 @@ import {
   WarningCircle,
   XCircle,
 } from "@phosphor-icons/react";
-import { api, type EventRow, type Plan, type PlanRecord } from "../api";
+import { api, ApiError, type EventRow, type Plan, type PlanRecord } from "../api";
 import { ago, ErrorLine, useAction, useDismissals, useLoad, when } from "../lib";
 import { useConsoleState } from "../state";
 import { kindOf, KIND_COLOR, StatusPill } from "../ui/status";
@@ -29,19 +29,33 @@ const PAGE = 10;
 // screen fired the request and left the page exactly as it was.
 export function Plans({ onNavigate }: { onNavigate?: (view: "activity") => void }) {
   const { snap } = useConsoleState();
-  const list = useLoad(() => api.plans(), []);
+  const list = useLoad(() => loadReviewPlans(), []);
   if (list.error) return <ErrorLine error={list.error} />;
-  // The shared poll already has the plans; the fetch is what gives us a
-  // reload after an approval without waiting for the next tick.
-  const plans = list.data ?? snap?.plans ?? [];
-  return (
+  // Poll snapshots contain summaries; approvals wait for complete records.
+  const plans = list.data ?? [];
+  return (<>
+    <ReviewNotificationPreference />
     <PlansView
       plans={plans}
       events={snap?.events ?? []}
       onResolved={list.reload}
       onNavigate={onNavigate}
     />
-  );
+  </>);
+}
+
+// Pending approvals always load complete records. Summary snapshots cannot
+// render an approval button while the exact proposal is still loading.
+export async function loadReviewPlans(client: Pick<typeof api, "plans" | "ownerReviewQueue" | "plan"> = api): Promise<PlanRecord[]> {
+  const [history, queue] = await Promise.all([client.plans(), client.ownerReviewQueue().catch(error => {
+    // Bootstrap administrators can inspect infrastructure before an Owner exists.
+    if (error instanceof ApiError && error.status === 403) return [];
+    throw error;
+  })]);
+  const full = new Map(queue.map(plan => [plan.id, plan]));
+  const records = await Promise.all(history.map(plan => plan.state === "proposed" ? (full.get(plan.id) ?? client.plan(plan.id)) : plan));
+  const seen = new Set(records.map(plan => plan.id));
+  return [...records, ...queue.filter(plan => !seen.has(plan.id))];
 }
 
 // whyItFailed finds the reason a plan failed.
@@ -93,7 +107,7 @@ export function PlansView({
   return (
     <>
       <div className="sub">
-        Every intentional change is a plan; medium and high risk wait here for a human.
+        Owner Review Queue. Review the exact version before approving. Editing requires a new approval.
       </div>
 
       {explained.length > 0 && (
@@ -331,7 +345,7 @@ export function PendingPlan({
       () =>
         (verb === "approve" ? api.approvePlan(plan.id) : api.rejectPlan(plan.id)).then(onResolved),
       verb === "approve"
-        ? "approved — handed to the reconciler"
+        ? (plan.routine ? "version approved; automatic execution is not available yet" : "approved — handed to the reconciler")
         : "rejected — the Butler is told why on its next session",
     );
 
@@ -366,7 +380,7 @@ export function PendingPlan({
         )
       }
       body={
-        plan.setting ? (
+        plan.auditOnly ? <>Maintenance tracker update by {plan.principal}. Recorded immediately in household history; no Owner approval was required.</> : plan.setting ? (
           // A setting, not desired state: there is no reconciler step to
           // read, so say exactly what approving changes.
           <>
@@ -386,7 +400,9 @@ export function PendingPlan({
             {plan.basedOnHead ? `, against statefile ${plan.basedOnHead.slice(0, 8)}` : ""}.{" "}
             {done
               ? "Nothing else is waiting on you for this one."
-              : "Approving records who approved it and hands the plan to the reconciler."}
+              : plan.routine
+                ? "Approving records authorization for this exact version. Automatic execution is not available yet."
+                : "Approving records who approved it and hands the plan to the reconciler."}
           </>
         )
       }
@@ -421,6 +437,15 @@ export function PendingPlan({
           )}
         </div>
       )}
+      {plan.routine && <section className="work-section">
+        <h3>{plan.routine.name} · version {plan.routine.revision}</h3>
+        <p>Approval records this version. Automatic execution is not available yet.</p>
+        {plan.routine.proposingAgent && <p>Proposed by {plan.routine.proposingAgent} for {plan.actingFor}</p>}
+        <p>Runs as: {plan.routine.assignedButler || "No Agent assigned"}</p>
+        <p>Who may receive the result: {plan.routine.outputAudience}</p>
+        <p>Where and how it is delivered:</p><pre>{plan.routine.delivery}</pre>
+        <details><summary>Exact routine being approved</summary><pre>{plan.routine.document}</pre></details>
+      </section>}
       <PlanSteps plan={plan.plan} />
     </ProblemCard>
   );
@@ -499,4 +524,25 @@ function target(s: { kind?: string; name?: string }): string {
 // marked wherever a step is shown.
 function restoring(s: { action?: string }): boolean {
   return (s.action ?? "").toLowerCase().includes("restore");
+}
+
+function ReviewNotificationPreference() {
+ const saved=useLoad(()=>api.ownerReviewPreference());
+ const accounts=useLoad(()=>api.chatBindings());
+ const [binding,setBinding]=useState(0);
+ const [url,setUrl]=useState("");
+ const action=useAction();
+ useEffect(()=>{if(saved.data){setBinding(saved.data.bindingId);setUrl(saved.data.consoleUrl)}},[saved.data]);
+ return <details className="work-section"><summary>Review notifications</summary>
+   <p>Choose an Owner's connected account for a short notice and Console link. Plan details stay in Console.</p>
+   <ErrorLine error={saved.error ?? accounts.error}/>
+   <label>Notify <select value={binding} onChange={e=>setBinding(Number(e.target.value))}>
+     <option value={0}>No external notifications</option>
+     {(accounts.data??[]).filter(b=>b.role==="owner").map(b=><option key={b.id} value={b.id}>{b.identity} · {b.transport} · {b.displayName || b.account}</option>)}
+   </select></label>
+   {binding!==0 && <label>Household Console address <input type="url" value={url} onChange={e=>setUrl(e.target.value)} /></label>}
+   <button className="btn btn-secondary" disabled={action.state.phase==="busy"} onClick={()=>action.run(()=>api.setOwnerReviewPreference(binding,url),"Review notification preference saved.")}>Save</button>
+   {action.state.phase==="error" && <ErrorLine error={action.state.message}/>}
+   {action.state.phase==="done" && <p>{action.state.message}</p>}
+ </details>
 }

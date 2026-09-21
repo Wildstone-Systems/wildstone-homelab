@@ -364,9 +364,13 @@ func (e *Engine) Rules() ([]resource.Resource, error) {
 	if err != nil {
 		return nil, fmt.Errorf("automation: loading statefile: %w", err)
 	}
+	managed, err := e.reviewManagedRules()
+	if err != nil {
+		return nil, err
+	}
 	var rules []resource.Resource
 	for _, r := range all {
-		if r.Kind == resource.KindAutomation && r.Automation != nil && !r.Automation.Disabled {
+		if r.Kind == resource.KindAutomation && r.Automation != nil && !r.Automation.Disabled && !managed[r.Metadata.Name] {
 			rules = append(rules, r)
 		}
 	}
@@ -570,3 +574,50 @@ func (e *Engine) Run(ctx context.Context, interval time.Duration) {
 
 // loc is the household zone now.
 func (e *Engine) loc() *time.Location { return e.Zone.Or(e.Location) }
+
+// Versioned Household routine execution is slices 20-21. The legacy Statefile
+// engine cannot enforce the reviewed Agent/audience/version contract, so it
+// must not execute an older resource bearing any of that routine's identities.
+func (e *Engine) reviewManagedRules() (map[string]bool, error) {
+	managed := map[string]bool{}
+	routines, err := e.DB.ListHouseholdRoutines()
+	if err != nil {
+		return nil, err
+	}
+	for _, routine := range routines {
+		if routine.Ownership != runtimedb.RoutineWildstone {
+			continue
+		}
+		reviewed, err := e.DB.RoutineUsesOwnerReview(routine.Name)
+		if err != nil {
+			return nil, err
+		}
+		if !reviewed && routine.Active() && routine.ApprovedRevision == routine.Revision {
+			continue
+		}
+		versions, err := e.DB.HouseholdRoutineRevisionDocuments(routine.Name)
+		if err != nil {
+			return nil, err
+		}
+		documents := []string{routine.Document}
+		for _, v := range versions {
+			documents = append(documents, v)
+		}
+		for _, doc := range documents {
+			if r, err := resource.Unmarshal([]byte(doc)); err == nil && r.Kind == resource.KindAutomation {
+				managed[r.Metadata.Name] = true
+			}
+		}
+	}
+	return managed, nil
+}
+func (e *Engine) checkReviewedRoutine(rule string) error {
+	managed, err := e.reviewManagedRules()
+	if err != nil {
+		return err
+	}
+	if managed[rule] {
+		return fmt.Errorf("routine %s requires the versioned Household executor; legacy execution is withheld", rule)
+	}
+	return nil
+}

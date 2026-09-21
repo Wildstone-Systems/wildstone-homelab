@@ -17,9 +17,16 @@ func newRoutine(t *testing.T, db *DB, name string) {
 	doc, _ := json.Marshal(map[string]any{"name": name})
 	if _, err := db.CreateHouseholdRoutine(HouseholdRoutine{
 		Name: name, Ownership: "wildstone", Author: "mika",
-		State: RoutineEnabled, Document: string(doc), UpdatedBy: "mika",
+		State: RoutineDraft, Document: string(doc), UpdatedBy: "mika",
 	}); err != nil {
 		t.Fatalf("CreateHouseholdRoutine(%s): %v", name, err)
+	}
+	id, err := db.SubmitRoutinePlan(name, "mika", "", "aud_household", "fixture delivery", string(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.ApproveRoutinePlan(id, "mika"); err != nil {
+		t.Fatal(err)
 	}
 }
 

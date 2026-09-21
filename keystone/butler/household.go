@@ -13,7 +13,8 @@ package butler
 // # Structural safety claim
 //
 // A HouseholdGateway holds no *statefile.Store, no AgentReader, no plan
-// package, and no propose path. Not a filtered one — none at all. There
+// package, or infrastructure propose path. Routine proposals use a narrow
+// submission-only seam and can never approve or activate their own Plan. There
 // is no field on this type through which a family session could reach
 // the Statefile, a node agent, or the plan pipeline, so no prompt, no
 // injected household event and no confused model can talk its way to
@@ -187,6 +188,8 @@ type HouseholdSeams struct {
 	// DB; this package holds no storage. nil withholds the tool
 	// entirely, rather than advertising one that cannot write.
 	RecordReading func(ctx context.Context, c ReadingCall) (string, error)
+	// ProposeRoutine only submits an existing draft to Owner review; never activates.
+	ProposeRoutine func(context.Context, RoutineProposalCall) (string, error)
 	// The four Home-page readings (tools_home.go). Each is Keystone's
 	// own — the commitment pass, the household timeline rendered, the
 	// notices table, the node agent — rather than an installed
@@ -374,6 +377,9 @@ func NewHouseholdGateway(member string, seams HouseholdSeams) *HouseholdGateway 
 	// it — and a reading door nobody switched on is a door. An Owner can
 	// still turn it off per agent through the ordinary control, because
 	// disabled beats a tool's default in the resolver's order.
+	if seams.ProposeRoutine != nil {
+		gw.tools["propose_household_plan"] = householdEntry{Spec: routineProposalSpec, Mutating: true, Handler: handleRoutineProposal}
+	}
 	if seams.RecordReading != nil {
 		gw.tools["record_meter_reading"] = householdEntry{
 			Spec: recordReadingSpec, Mutating: true, Handler: handleRecordReading,
@@ -570,6 +576,8 @@ func (gw *HouseholdGateway) wired(name string) bool {
 		return gw.seams.Memory.Recall != nil
 	case "remember":
 		return gw.seams.Memory.Remember != nil
+	case "propose_household_plan":
+		return gw.seams.ProposeRoutine != nil
 	case "record_meter_reading":
 		return gw.seams.RecordReading != nil
 	case "get_upkeep":

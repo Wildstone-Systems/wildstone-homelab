@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"io"
@@ -49,6 +50,7 @@ type (
 // way it reads every other field. planJson is dropped from the response
 // rather than duplicated: it carried nothing this doesn't.
 type planView struct {
+	AuditOnly bool `json:"auditOnly,omitempty"`
 	runtimedb.PlanRecord
 	// PlanJSON must compete for the embedded field's NAME to suppress it.
 	// `json:"-"` does not shadow — it removes this field from
@@ -68,6 +70,7 @@ type planView struct {
 	// Setting is a household setting the plan changes instead of desired
 	// state — an Agent's proposal an Owner decides on (ADR-W033 E2).
 	Setting *plan.SettingChange `json:"setting,omitempty"`
+	Routine *plan.RoutineChange `json:"routine,omitempty"`
 }
 
 // viewPlan projects one record. A blob that will not parse is not fatal:
@@ -87,6 +90,8 @@ func viewPlan(rec runtimedb.PlanRecord) planView {
 	v.BasedOnHead, v.Plan, v.Put, v.Delete = stored.BasedOnHead, stored.Plan, stored.Put, stored.Delete
 	v.Origin = stored.Origin
 	v.Setting = stored.Setting
+	v.Routine = stored.Routine
+	v.AuditOnly = stored.AuditOnly
 	return v
 }
 
@@ -233,6 +238,12 @@ func (s *Server) submitProposalOpts(id principal.Identity, req proposalRequest, 
 			fmt.Errorf("proposal violates standing policy: %s", strings.Join(msgs, "; "))
 	}
 
+	for _, res := range puts {
+		if res.Kind == resource.KindAutomation {
+			return nil, http.StatusBadRequest, fmt.Errorf("Automation changes require an exact-version routine Plan; save a routine draft with its output audience and submit it for Owner review")
+		}
+	}
+
 	p := plan.Diff(desired, current)
 	if len(p.Steps) == 0 {
 		return nil, http.StatusBadRequest, fmt.Errorf("proposal is a no-op against current desired state")
@@ -310,6 +321,39 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 		return nil, http.StatusInternalServerError, fmt.Errorf("stored plan corrupt: %w", err)
 	}
 
+	if stored.Routine != nil {
+		if len(stored.Put) > 0 || len(stored.Delete) > 0 || stored.Setting != nil || stored.Plan != nil {
+			return nil, http.StatusBadRequest, fmt.Errorf("routine Plans cannot include infrastructure or settings changes")
+		}
+		if body, code, err := s.freshOwnerReview(r, id); err != nil {
+			return body, code, err
+		}
+		document, err := automation.ParseDraft(stored.Routine.Document)
+		if err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		if err := s.checkRoutinePlanPolicy(document, id); err != nil {
+			return nil, http.StatusUnprocessableEntity, err
+		}
+		if err := s.DB.ApproveRoutinePlan(planID, actingMember(id)); err != nil {
+			return nil, http.StatusConflict, err
+		}
+		rec, err = s.DB.GetPlan(planID)
+		return viewPlan(rec), http.StatusOK, err
+	}
+
+	// Check the whole proposal before any write, including Plans saved before
+	// routine review became mandatory. A mixed proposal must not partially apply.
+	for i, doc := range stored.Put {
+		res, err := resource.Unmarshal([]byte(doc))
+		if err != nil {
+			return nil, http.StatusInternalServerError, fmt.Errorf("stored put[%d] corrupt: %w", i, err)
+		}
+		if res.Kind == resource.KindAutomation {
+			return nil, http.StatusConflict, fmt.Errorf("Automation changes require an exact-version routine Plan; resubmit the routine with its output audience for Owner review")
+		}
+	}
+
 	// A plan is only approvable against the exact desired state it was
 	// computed from; if the Statefile moved since, the risk grades and
 	// diff are stale — supersede and make the proposer re-propose.
@@ -384,6 +428,15 @@ func (s *Server) rejectPlan(r *http.Request, id principal.Identity) (any, int, e
 	}
 	if rec.State != runtimedb.PlanProposed {
 		return nil, http.StatusConflict, fmt.Errorf("plan is %s, not proposed", rec.State)
+	}
+	var stored storedProposal
+	if err := json.Unmarshal([]byte(rec.PlanJSON), &stored); err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	if stored.Routine != nil {
+		if body, code, err := s.freshOwnerReview(r, id); err != nil {
+			return body, code, err
+		}
 	}
 	if err := s.DB.TransitionPlan(planID, runtimedb.PlanRejected, id.Name); err != nil {
 		return nil, http.StatusInternalServerError, err

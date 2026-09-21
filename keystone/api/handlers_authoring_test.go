@@ -1,13 +1,7 @@
 package api
 
-// Natural-language rule authoring, end to end (ADR-W024 H7).
-//
-// The claim under test is "the AI writes rules the engine already
-// understands; no second execution path". So the test does not stop at a
-// plausible-looking document: it drives a real session through the real
-// ask endpoint, has a human approve the plan that comes out, and then
-// lets the deterministic engine run what the model wrote — unchanged,
-// through the same code path a hand-written rule takes.
+// Legacy natural-language Automation proposals must migrate to exact-version
+// routine review; dry-run authoring remains available without activating a rule.
 
 import (
 	"context"
@@ -24,7 +18,6 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/household"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -64,7 +57,7 @@ func authoringTurns() []*provider.ChatResponse {
 	}
 }
 
-func TestButlerAuthorsARuleTheEngineThenRuns(t *testing.T) {
+func TestButlerLegacyAutomationProposalRequiresRoutineReview(t *testing.T) {
 	h := newHarness(t)
 	// A butler turn is had by a person, so the caller acts for one.
 	asksAsRoleOperator := h.console(runtimedb.RoleOperator, "mika")
@@ -129,69 +122,26 @@ func TestButlerAuthorsARuleTheEngineThenRuns(t *testing.T) {
 		Text    string   `json:"text"`
 		Session string   `json:"sessionId"`
 		Plans   []string `json:"planIds"`
+		Errors  []string `json:"proposalErrors"`
 	}
 	if resp := h.doToken(asksAsRoleOperator, "POST", "/api/v1/butler/ask",
 		map[string]string{"message": "Whenever I get home, ask whether I got the mail."}, &ask); resp.StatusCode != http.StatusOK {
 		t.Fatalf("ask = %d", resp.StatusCode)
 	}
-	if len(ask.Plans) != 1 {
-		t.Fatalf("the session produced %d plan(s), want 1", len(ask.Plans))
+	if len(ask.Plans) != 0 || !strings.Contains(strings.Join(ask.Errors, " "), "exact-version routine Plan") {
+		t.Fatalf("legacy proposal was not refused clearly: %+v", ask)
 	}
-	// It dry-ran before proposing, against the real history.
 	if len(dryRunDocs) != 1 || !strings.Contains(dryRunDocs[0], "person.arrived_home") {
 		t.Fatalf("dry runs = %+v", dryRunDocs)
 	}
-
-	// What landed is a proposal, not a rule: the Butler holds no approve
-	// verb, and authoring did not give it one.
-	rec, err := h.s.DB.GetPlan(ask.Plans[0])
-	if err != nil {
-		t.Fatal(err)
+	plans, err := h.s.DB.ListPlans(10)
+	if err != nil || len(plans) != 0 {
+		t.Fatalf("legacy authoring persisted a Plan: %v %v", plans, err)
 	}
-	if rec.State != runtimedb.PlanProposed || rec.Principal != "butler" || rec.ActingFor != "mika" {
-		t.Fatalf("plan = %+v", rec)
-	}
-	if resp := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("the butler approved its own rule: %d", resp.StatusCode)
-	}
-	// Nothing runs until a human signs it.
 	if _, err := h.s.Automation.Tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if published.Topic != "" {
-		t.Fatalf("an unapproved rule acted: %+v", published)
-	}
-
-	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); resp.StatusCode != http.StatusOK {
-		t.Fatalf("approve = %d", resp.StatusCode)
-	}
-
-	// The rule the model wrote is now an ordinary Statefile resource,
-	// indistinguishable from a hand-written one.
-	var view resourceView
-	if resp := h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/resources/Automation/mail-check", nil, &view); resp.StatusCode != http.StatusOK {
-		t.Fatalf("get rule = %d", resp.StatusCode)
-	}
-	stored, err := resource.Unmarshal([]byte(view.YAML))
-	if err != nil {
-		t.Fatalf("the stored rule does not parse: %v\n%s", err, view.YAML)
-	}
-	if stored.Automation.Trigger.EventType != "person.arrived_home" ||
-		stored.Automation.Action.Params["message"] != "Did you get the mail?" {
-		t.Fatalf("stored rule = %+v", stored.Automation)
-	}
-
-	// And the deterministic engine runs it — the same engine, the same
-	// path, no second execution route for a rule an AI happened to write.
-	emit("arrived-now", now.Add(-time.Minute))
-	out, err := h.s.Automation.Tick(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Fired != 1 {
-		t.Fatalf("tick = %+v", out)
-	}
-	if published.Topic != "household-mika" || published.Message != "Did you get the mail?" {
-		t.Fatalf("published = %+v", published)
+		t.Fatalf("unreviewed rule acted: %+v", published)
 	}
 }

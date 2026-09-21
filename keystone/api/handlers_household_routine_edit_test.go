@@ -23,6 +23,9 @@ func seedRoutine(t *testing.T, h *harness, name, rule, state string) {
 	}); err != nil {
 		t.Fatalf("CreateHouseholdRoutine: %v", err)
 	}
+	if state == runtimedb.RoutineEnabled || state == runtimedb.RoutineTrial {
+		approveRoutineFixture(t, h, name)
+	}
 	if state != runtimedb.RoutineDraft {
 		if err := h.s.DB.SetHouseholdRoutineState(name, state, "sam"); err != nil {
 			t.Fatalf("SetHouseholdRoutineState: %v", err)
@@ -33,7 +36,7 @@ func seedRoutine(t *testing.T, h *harness, name, rule, state string) {
 // An enabled routine that is edited goes back to trial. Nothing else on
 // this path would stop the house doing something new that nobody has
 // watched.
-func TestEditingAnEnabledRoutinePutsItBackUnderWatch(t *testing.T) {
+func TestEditingAnEnabledRoutineRequiresOwnerReapproval(t *testing.T) {
 	h := newHarness(t)
 	seedRoutine(t, h, "evening-mail", "mail-check", runtimedb.RoutineEnabled)
 
@@ -51,7 +54,7 @@ func TestEditingAnEnabledRoutinePutsItBackUnderWatch(t *testing.T) {
 	if got.Revision != 2 {
 		t.Fatalf("revision = %d, want 2", got.Revision)
 	}
-	if got.State != runtimedb.RoutineTrial {
+	if got.State != runtimedb.RoutineDraft {
 		t.Fatalf("an edited routine is still acting: state = %q", got.State)
 	}
 	// And it is actually trial in the database, not just in the reply.
@@ -59,11 +62,11 @@ func TestEditingAnEnabledRoutinePutsItBackUnderWatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.State != runtimedb.RoutineTrial || after.PerformsActions() {
+	if after.State != runtimedb.RoutineDraft || after.PerformsActions() {
 		t.Fatalf("routine still performs actions after an edit: %+v", after)
 	}
 	// The reply says so rather than leaving someone to notice.
-	if !strings.Contains(got.Note, "trial") {
+	if !strings.Contains(got.Note, "Owner approval") {
 		t.Fatalf("the reply does not mention the state change: %q", got.Note)
 	}
 }
@@ -83,7 +86,7 @@ func TestEditingANonActingRoutineLeavesItsState(t *testing.T) {
 			map[string]any{"spec": editedSpec(t, "14:00")}, &got); resp.StatusCode != http.StatusOK {
 			t.Fatalf("edit %s: %s", state, resp.Status)
 		}
-		if got.State != state {
+		if got.State != runtimedb.RoutineDraft {
 			t.Fatalf("editing a %s routine moved it to %q", state, got.State)
 		}
 	}

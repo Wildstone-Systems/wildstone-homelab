@@ -1316,9 +1316,9 @@ check("a node with no secrets says so", noSecrets.includes("No secrets on this n
 // -------------------------------------------------------------- Chat
 const BINDINGS: ChatBinding[] = [
   { id: 1, connection: 1, butler: "hobson", transport: "telegram", account: "@sam", displayName: "Sam",
-    identity: "sam", createdAt: "2026-09-01T00:00:00Z", createdBy: "mika",
+    identity: "sam", role:"member", createdAt: "2026-09-01T00:00:00Z", createdBy: "mika",
     lastUsedAt: "2026-09-06T00:00:00Z" },
-  { id: 2, connection: 2, butler: "alfred", transport: "telegram", account: "@old", identity: "mika",
+  { id: 2, connection: 2, butler: "alfred", transport: "telegram", account: "@old", identity: "mika", role:"owner",
     createdAt: "2026-08-01T00:00:00Z", createdBy: "mika", revokedAt: "2026-09-02T00:00:00Z" },
 ];
 const TRANSPORTS: ChatTransport[] = [

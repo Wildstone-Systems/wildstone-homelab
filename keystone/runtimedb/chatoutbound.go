@@ -276,17 +276,25 @@ func (db *DB) ChatOutboundHeld(at Connection) ([]ChatOutbound, error) {
 // is ErrNotFound, because that means the adapter and the queue disagree
 // about reality.
 func (db *DB) AckChatOutbound(at Connection, seq int64) error {
-	var existing string
-	err := db.sql.QueryRow(
-		`SELECT delivered_at FROM chat_outbound WHERE seq = ? AND connection = ?`, seq, at.Seq).Scan(&existing)
+	tx, err := db.sql.Begin()
 	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var existing string
+	if err = tx.QueryRow("SELECT delivered_at FROM chat_outbound WHERE seq=? AND connection=?", seq, at.Seq).Scan(&existing); err != nil {
 		return ErrNotFound
 	}
-	if existing != "" {
-		return nil
+	if existing == "" {
+		existing = now()
+		if _, err = tx.Exec("UPDATE chat_outbound SET delivered_at=? WHERE seq=?", existing, seq); err != nil {
+			return err
+		}
 	}
-	_, err = db.sql.Exec(`UPDATE chat_outbound SET delivered_at = ? WHERE seq = ?`, now(), seq)
-	return err
+	if _, err = tx.Exec("UPDATE notices SET delivered_at=?,undelivered_at='' WHERE outbound=? AND delivered_at=''", existing, seq); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // pruneChatOutbound drops settled messages older than the retention

@@ -105,8 +105,9 @@ const minFindQuery = 2
 // once at startup would pin the answer to whatever was true before the
 // household installed anything.
 type Filedrop struct {
-	beforeWrite func() error
-	Authority   HouseholdExecutionAuthority
+	executionContext context.Context
+	beforeWrite      func() error
+	Authority        HouseholdExecutionAuthority
 	// Settings reports where the household's drop box is, now.
 	//
 	// Root is the absolute host path the filedrop capability declares;
@@ -163,7 +164,7 @@ func (f *Filedrop) store(c Call) (*portal.FileStore, error) {
 		return nil, errNoFiledropRoot
 	}
 	return &portal.FileStore{BeforeWrite: func() error {
-		if err := checkExecution(f.Authority); err != nil {
+		if err := checkExecution(f.executionContext, f.Authority); err != nil {
 			return err
 		}
 		if f.beforeWrite != nil {
@@ -222,7 +223,7 @@ func (t *filedropTool) Usage() string { return filedropUsage[t.tool] }
 
 func (t *filedropTool) Execute(ctx context.Context, c Call) (Result, error) {
 	if FiledropTools[t.tool] != TierRead {
-		if err := checkExecution(t.fd.Authority); err != nil {
+		if err := checkExecution(ctx, t.fd.Authority); err != nil {
 			return Result{}, err
 		}
 
@@ -230,6 +231,9 @@ func (t *filedropTool) Execute(ctx context.Context, c Call) (Result, error) {
 		local.beforeWrite = func() error { return runtimedb.CheckPrivacyDelivery(ctx, runtimedb.MemoryDestination{}) }
 		t = &filedropTool{fd: &local, tool: t.tool}
 	}
+	local := *t.fd
+	local.executionContext = ctx
+	t = &filedropTool{fd: &local, tool: t.tool}
 	if err := t.fd.installed(); err != nil {
 		return Result{}, err
 	}

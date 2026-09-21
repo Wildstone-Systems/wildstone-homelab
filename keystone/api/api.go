@@ -341,8 +341,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/packages", s.handle(principal.VerbRead, s.listPackages))
 	mux.Handle("POST /api/v1/capabilities", s.handle(principal.VerbPropose, s.enableCapability))
 	mux.Handle("POST /api/v1/capabilities/disable", s.handle(principal.VerbPropose, s.disableCapability))
-	mux.Handle("POST /api/v1/plans/{id}/approve", s.handle(principal.VerbApprove, s.approvePlan))
-	mux.Handle("POST /api/v1/plans/{id}/reject", s.handle(principal.VerbApprove, s.rejectPlan))
+	mux.Handle("POST /api/v1/plans/{id}/approve", s.handle(principal.VerbApprove, s.consequential(s.approvePlan)))
+	mux.Handle("POST /api/v1/plans/{id}/reject", s.handle(principal.VerbApprove, s.consequential(s.rejectPlan)))
 
 	mux.Handle("GET /api/v1/audit", s.handle(principal.VerbManage, s.listAudit))
 	// Admin-only: the pending one-time code is a credential in flight.
@@ -511,6 +511,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/butler/memory/correct", s.handle(principal.VerbRead, s.correctButlerMemory))
 	mux.Handle("POST /api/v1/butler/memory/forget", s.handle(principal.VerbRead, s.forgetButlerMemory))
 	mux.Handle("GET /api/v1/butler/memory/digest", s.handle(principal.VerbRead, s.listMemoryDigest))
+	mux.Handle("POST /api/v1/household/routines/{name}/submit", s.handle(principal.VerbPropose, s.submitRoutinePlan))
+	mux.Handle("GET /api/v1/owner-review/preference", s.handle(principal.VerbRead, s.ownerReviewPreference))
+	mux.Handle("PUT /api/v1/owner-review/preference", s.handle(principal.VerbApprove, s.consequential(s.ownerReviewPreference)))
+	mux.Handle("GET /api/v1/household/routine-audiences", s.handle(principal.VerbRead, s.routineAudiences))
+	mux.Handle("GET /api/v1/owner-review", s.handle(principal.VerbRead, s.ownerReviewQueue))
 	mux.Handle("GET /api/v1/household/routines", s.handle(principal.VerbRead, s.listHouseholdRoutines))
 	mux.Handle("GET /api/v1/household/routines/{name}", s.handle(principal.VerbRead, s.getHouseholdRoutine))
 	mux.Handle("POST /api/v1/household/routines", s.handle(principal.VerbPropose, s.createHouseholdRoutine))

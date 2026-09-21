@@ -152,8 +152,12 @@ func TestAMemberDeclaresTheTruckAndItsFirstJobInOneAct(t *testing.T) {
 	if len(plans) != 1 {
 		t.Fatalf("plans = %d, want one record", len(plans))
 	}
-	if plans[0].State != runtimedb.PlanApproved {
+	if plans[0].State != runtimedb.PlanApplied {
 		t.Errorf("plan state = %q, want it already applied", plans[0].State)
+	}
+	approved, err := h.s.DB.PlansInState(runtimedb.PlanApproved)
+	if err != nil || len(approved) != 0 {
+		t.Fatalf("tracker edit granted host execution authority: %+v %v", approved, err)
 	}
 	if !strings.Contains(plans[0].Principal, "mika") {
 		t.Errorf("proposer = %q, want the member", plans[0].Principal)

@@ -71,7 +71,7 @@ func (c *ChatSender) Name() string { return c.Capability + ".send" }
 
 // Execute implements Executor.
 func (c *ChatSender) Execute(ctx context.Context, call Call) (Result, error) {
-	if err := checkExecution(c.Authority); err != nil {
+	if err := checkExecution(ctx, c.Authority); err != nil {
 		return Result{}, err
 	}
 	if c.Lookup == nil || c.Ask == nil {
@@ -110,6 +110,9 @@ func (c *ChatSender) Execute(ctx context.Context, call Call) (Result, error) {
 		return Result{}, &RefusalError{Tool: call.Tool, Reason: fmt.Sprintf(
 			"%s has no %s account bound: introduce them with `wild chat code -butler <agent> -identity %s`",
 			member, c.Transport, member)}
+	}
+	if err := checkExecution(ctx, c.Authority); err != nil {
+		return Result{}, err
 	}
 	seq, err := c.Ask(ctx, recipient, body, call.CorrelationID, call.Rule, member)
 	if err != nil {

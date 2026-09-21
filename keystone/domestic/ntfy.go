@@ -101,7 +101,7 @@ type ntfyMessage struct {
 // answered something, and can do nothing else. It cannot read state,
 // propose, or approve.
 func (n *Notifier) Execute(ctx context.Context, c Call) (Result, error) {
-	if err := checkExecution(n.Authority); err != nil {
+	if err := checkExecution(ctx, n.Authority); err != nil {
 		return Result{}, err
 	}
 	if n.BaseURL == "" {
@@ -180,10 +180,10 @@ func (n *Notifier) Execute(ctx context.Context, c Call) (Result, error) {
 	if n.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+n.Token)
 	}
-	if err := checkExecution(n.Authority); err != nil {
+	if err := checkExecution(ctx, n.Authority); err != nil {
 		return Result{}, err
 	}
-	resp, err := privacyHTTPClient(n.client()).Do(req)
+	resp, err := privacyHTTPClient(executionHTTPClient(n.client())).Do(req)
 	if err != nil {
 		return Result{}, fmt.Errorf("publishing to ntfy: %w", err)
 	}

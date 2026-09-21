@@ -175,7 +175,7 @@ func (db *DB) PromotePersonalMemory(seq int64, actor string) (int64, error) {
 
 func activeMemoryActor(tx *sql.Tx, actor string, ownerOnly bool) (string, error) {
 	var person, role string
-	err := tx.QueryRow(`SELECT person_id,role FROM butler_members WHERE member=? COLLATE NOCASE AND admitted=1 AND disabled_at='' AND offboarded_at=''`, actor).Scan(&person, &role)
+	err := tx.QueryRow(`SELECT person_id,role FROM butler_members WHERE person_id=COALESCE((SELECT person_id FROM butler_members WHERE member=? COLLATE BINARY),(SELECT CASE WHEN COUNT(*)=1 THEN MIN(person_id) END FROM butler_members WHERE member=? COLLATE NOCASE)) AND admitted=1 AND disabled_at='' AND offboarded_at=''`, actor, actor).Scan(&person, &role)
 	if err != nil {
 		return "", ErrNotAdmitted
 	}

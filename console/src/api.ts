@@ -57,6 +57,7 @@ export interface EventRow {
 }
 
 export interface PlanRecord {
+  auditOnly?: boolean;
   seq: number;
   id: string;
   createdAt: string;
@@ -70,6 +71,7 @@ export interface PlanRecord {
   // A household setting the plan changes instead of desired state: an
   // Agent's proposal an Owner decides on (ADR-W033 E2).
   setting?: { timezone?: string; reason?: string };
+  routine?: {assignedButler?:string;proposingAgent?:string;name:string; revision:number; document:string; outputAudience:string; delivery:string};
   resolvedBy?: string;
   resolvedAt?: string;
 }
@@ -521,6 +523,7 @@ export function audienceLabel(a: AudienceID): string {
 // account reaches a Butler, and it exists only because somebody redeemed
 // a claim code.
 export interface ChatBinding {
+  role: string;
   id: number;
   connection: number;
   // The Agent whose bot this account is admitted to, and the transport
@@ -1190,6 +1193,8 @@ export interface ButlerAddress {
 
 // A routine the household wrote, native to an app or run by Wildstone.
 export interface HouseholdRoutine {
+ outputAudience?: string;
+ approvedRevision?: number;
   name: string;
   ownership: "native" | "wildstone";
   externalId?: string;
@@ -1870,6 +1875,11 @@ export const api = {
   observed: () => call<Observed[]>("GET", "/api/v1/observed"),
   events: (after: number, limit = 100) =>
     call<EventRow[]>("GET", `/api/v1/events?after=${after}&limit=${limit}`),
+  routineAudiences: () => call<{id:string;label?:string;kind:string}[]>("GET", "/api/v1/household/routine-audiences"),
+  ownerReviewPreference: () => call<{bindingId:number;consoleUrl:string}>("GET", "/api/v1/owner-review/preference"),
+  setOwnerReviewPreference: (bindingId:number,consoleUrl:string) => call("PUT", "/api/v1/owner-review/preference", {bindingId,consoleUrl}),
+  ownerReviewQueue: () => call<PlanRecord[]>("GET", "/api/v1/owner-review"),
+  submitRoutinePlan: (name:string, outputAudience:string) => call<{planId:string}>("POST", `/api/v1/household/routines/${encodeURIComponent(name)}/submit`, {outputAudience}),
   plans: () => call<PlanRecord[]>("GET", "/api/v1/plans"),
   // Removing a capability is an ordinary plan proposing the deletion of
   // everything it owns. There is no disable endpoint and there should

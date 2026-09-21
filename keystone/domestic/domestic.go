@@ -280,7 +280,7 @@ func (g *Gateway) dispatch(ctx context.Context, c Call) (Result, error) {
 	}
 
 	if c.Tier != TierRead {
-		if err := checkExecution(g.Authority); err != nil {
+		if err := checkExecution(ctx, g.Authority); err != nil {
 			return Result{}, err
 		}
 	}
@@ -298,9 +298,12 @@ func (g *Gateway) dispatch(ctx context.Context, c Call) (Result, error) {
 	defer cancel()
 
 	if c.Tier != TierRead {
-		if err := checkExecution(g.Authority); err != nil {
+		if err := checkExecution(ctx, g.Authority); err != nil {
 			return Result{}, err
 		}
+	}
+	if err := CheckExecutionContext(ctx); err != nil {
+		return Result{}, err
 	}
 	res, err := e.Execute(ctx, c)
 	if err != nil {

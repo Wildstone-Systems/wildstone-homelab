@@ -1627,6 +1627,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 						// what decides who owns anything remember
 						// keeps.
 						mine := household
+						mine.ProposeRoutine = apiSrv.RoutineProposalSeam(b.Name)
 						mine.Memory = butlerstore.MemorySeams(db, b.Name, t.Member, t.MemoryDestination(), log)
 						if household.Actions != nil {
 							mine.Actions = func(ctx context.Context, c butler.HouseholdActionCall) (string, error) {
@@ -1784,6 +1785,21 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		}
 	}
 	go upkeepEngine.Run(context.Background().Done(), upkeepPoke, nextMorning(time.Now()))
+
+	if coordinating {
+		go func() {
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				if err := db.CheckCoordinator(lease.Holder, lease.Epoch); err != nil {
+					return
+				}
+				if err := db.QueueOwnerReviewNotifications(time.Now()); err != nil {
+					log.Warn("Owner review notification held", "err", err)
+				}
+			}
+		}()
+	}
 
 	// Morning report timer (ADR-W017 A5): once a day at 07:00 local, build
 	// the deterministic report and append its summary to the event stream

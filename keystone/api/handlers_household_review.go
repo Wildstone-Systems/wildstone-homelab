@@ -396,18 +396,11 @@ func (s *Server) editHouseholdRoutine(r *http.Request, id principal.Identity) (a
 // Draft, trial and disabled routines are left where they are: none of
 // them acts, so there is nothing to take away.
 func (s *Server) routineAfterEdit(name string, before runtimedb.HouseholdRoutine, id principal.Identity) (string, string) {
-	const kept = "any review link issued for the previous revision now approves nothing: " +
-		"it was for a version nobody has read"
-	if before.State != runtimedb.RoutineEnabled {
-		return before.State, kept
+	current, err := s.DB.GetHouseholdRoutine(name)
+	if err != nil {
+		return runtimedb.RoutineDraft, "The edited version needs Owner review."
 	}
-	if err := s.DB.SetHouseholdRoutineState(name, runtimedb.RoutineTrial, actingMember(id)); err != nil {
-		// The revision is already recorded. Report the state that is
-		// actually true rather than the one that was intended.
-		return before.State, kept + "; this routine is still acting — putting it back in trial failed: " + err.Error()
-	}
-	return runtimedb.RoutineTrial, "this routine was acting, so the change put it back in trial: it will watch and report " +
-		"until someone lets it act again. " + kept
+	return current.State, "This version needs a new Owner approval before it runs. An earlier review link approves nothing."
 }
 
 // setHouseholdRoutineState moves a routine between draft, trial and
@@ -419,6 +412,11 @@ func (s *Server) setHouseholdRoutineState(r *http.Request, id principal.Identity
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
+	}
+	if req.State == runtimedb.RoutineEnabled || req.State == runtimedb.RoutineTrial {
+		if body, code, err := s.freshOwnerReview(r, id); err != nil {
+			return body, code, err
+		}
 	}
 	var err error
 	if req.State == runtimedb.RoutineDisabled {
@@ -462,16 +460,33 @@ func (s *Server) issueHouseholdReviewToken(r *http.Request, id principal.Identit
 	if err != nil {
 		return nil, http.StatusNotFound, fmt.Errorf("no such plan")
 	}
-	var parsed plan.Plan
-	if err := json.Unmarshal([]byte(record.PlanJSON), &parsed); err != nil {
+	var proposal plan.StoredProposal
+	if err := json.Unmarshal([]byte(record.PlanJSON), &proposal); err != nil {
 		return nil, http.StatusInternalServerError, fmt.Errorf("reading the plan: %w", err)
 	}
+	var parsed plan.Plan
+	_ = json.Unmarshal([]byte(record.PlanJSON), &parsed)
 	class := plan.Classify(&parsed)
-	if class != plan.ClassHouseholdRoutine {
+	if proposal.Routine != nil {
+		if body, code, err := s.freshOwnerReview(r, id); err != nil {
+			return body, code, err
+		}
+		if len(proposal.Put) > 0 || len(proposal.Delete) > 0 || proposal.Setting != nil || proposal.Plan != nil {
+			return nil, http.StatusBadRequest, fmt.Errorf("mixed routine Plan")
+		}
+		if req.Routine != "" && req.Routine != proposal.Routine.Name {
+			return nil, http.StatusBadRequest, fmt.Errorf("routine does not match the submitted Plan")
+		}
+		req.Routine = proposal.Routine.Name
+	}
+	if proposal.Routine == nil && class != plan.ClassHouseholdRoutine {
 		return nil, http.StatusBadRequest, fmt.Errorf(
 			"plan %s is %s, not a pure household-routine change, so it is reviewed in the Console — "+
 				"a plan that also touches infrastructure or identity is an infrastructure change with a "+
 				"routine in it", req.PlanID, class)
+	}
+	if proposal.Routine == nil {
+		return nil, http.StatusBadRequest, fmt.Errorf("resubmit this legacy routine Plan in Console as an exact-version proposal before issuing a review link")
 	}
 	// The member must actually be admitted, now. A link issued to
 	// someone who has since been disabled must not work.
@@ -479,6 +494,10 @@ func (s *Server) issueHouseholdReviewToken(r *http.Request, id principal.Identit
 	if err != nil || !member.Active() {
 		return nil, http.StatusBadRequest,
 			fmt.Errorf("%q is not currently admitted to the Butler", req.Member)
+	}
+
+	if member.Role != runtimedb.RoleOwner {
+		return nil, http.StatusBadRequest, fmt.Errorf("routine review links require an active Owner recipient")
 	}
 
 	var routineSeq int64
@@ -489,6 +508,9 @@ func (s *Server) issueHouseholdReviewToken(r *http.Request, id principal.Identit
 			return nil, http.StatusNotFound, fmt.Errorf("no routine named %q", req.Routine)
 		}
 		routineSeq, revision = routine.Seq, routine.Revision
+		if proposal.Routine != nil && proposal.Routine.Revision != revision {
+			return nil, http.StatusConflict, fmt.Errorf("submit the current routine version before issuing review links")
+		}
 	}
 	secret, err := s.DB.IssueHouseholdReviewToken(req.PlanID, req.Member, actingMember(id),
 		routineSeq, revision, time.Duration(req.TTLMins)*time.Minute)
@@ -514,7 +536,7 @@ type reviewTokenResponse struct {
 	Note   string `json:"note"`
 }
 
-// householdReview is the narrow acting-for service route.
+// householdReview redeems a revision-pinned token only inside a fresh Owner Console session.
 //
 // It sits behind Authelia and holds NO API verb of its own — it is
 // registered unauthenticated because the identity comes from the
@@ -523,9 +545,17 @@ type reviewTokenResponse struct {
 func (s *Server) householdReview(w http.ResponseWriter, r *http.Request) {
 	member, ok := s.trustedIngressUser(r)
 	if !ok {
-		// Not "who are you": a request that did not come through the
-		// identity proxy learns nothing about what lives here.
 		s.writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	identity, ok := s.consoleForwardAuth(r)
+	if !ok {
+		s.writeError(w, http.StatusForbidden, "review this Plan in Console with a fresh Owner sign-in")
+		return
+	}
+	identity.ActingFor = member
+	if _, code, err := s.freshOwnerReview(r, identity); err != nil {
+		s.writeError(w, code, err.Error())
 		return
 	}
 	var req struct {
@@ -536,23 +566,36 @@ func (s *Server) householdReview(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, code, err.Error())
 		return
 	}
-	planID, err := s.DB.RedeemHouseholdReviewToken(req.Token, member)
+	id, err := s.DB.RedeemHouseholdReviewToken(req.Token, member)
 	if err != nil {
-		// Every reason collapses into one: unknown, expired, used,
-		// wrong person, superseded revision. Distinguishing them would
-		// help somebody guessing.
 		s.writeError(w, http.StatusForbidden, "this review link does not work")
 		return
 	}
-	state := runtimedb.PlanRejected
 	if req.Approve {
-		state = runtimedb.PlanApproved
+		record, readErr := s.DB.GetPlan(id)
+		if readErr != nil {
+			s.writeError(w, http.StatusInternalServerError, "reading the reviewed Plan")
+			return
+		}
+		var proposal plan.StoredProposal
+		if decodeErr := json.Unmarshal([]byte(record.PlanJSON), &proposal); decodeErr != nil || proposal.Routine == nil {
+			s.writeError(w, http.StatusConflict, "resubmit this legacy routine Plan in Console as an exact-version proposal")
+			return
+		}
 	}
-	if err := s.DB.TransitionPlan(planID, state, member); err != nil {
-		s.writeError(w, http.StatusConflict, err.Error())
+	r.SetPathValue("id", id)
+	var body any
+	var code int
+	if req.Approve {
+		body, code, err = s.approvePlan(r, identity)
+	} else {
+		body, code, err = s.rejectPlan(r, identity)
+	}
+	if err != nil {
+		s.writeError(w, code, err.Error())
 		return
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"planId": planID, "state": state, "by": member})
+	s.writeJSON(w, code, body)
 }
 
 // trustedIngressUser resolves the identity the proxy asserted, and only

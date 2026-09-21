@@ -231,6 +231,15 @@ var LegacyColumns = []Column{
 }
 
 var Columns = []Column{
+	{"owner_review_queue", "proposer_person_id", PersonID, "0071: canonical Person who submitted a Plan; revoked submissions are superseded"},
+	{"owner_review_queue", "queued_at", NotAPerson, "0071: queue timestamp"},
+	{"routine_plan_versions", "assigned_butler", NotAPerson, "0071: exact Agent name copied from household_routines.butler; not a Person identity"},
+	{"routine_plan_versions", "approved_by", PersonID, "0071: canonical Owner who approved the exact version"},
+	{"routine_plan_versions", "document", NotAPerson, "0071: immutable reviewed routine document"},
+	{"routine_plan_versions", "output_audience", NotAPerson, "0071: audience foreign key, not a Person"},
+	{"routine_plan_versions", "delivery", NotAPerson, "0071: immutable reviewed action delivery description"},
+	{"household_routines", "output_audience", NotAPerson, "0071: audience foreign key, not a Person"},
+	{"owner_review_preference", "console_url", NotAPerson, "0071: Console link for generic review notifications"},
 	{"household_secret_disclosures", "person_id", PersonID, "0069: authenticated Person who submitted a credential on an external Connection; no value recorded"},
 	{"household_secret_bindings", "principal", Scoped, "0069: canonical Person ID for Personal binding, or household sentinel for shared binding"},
 	{"household_secret_origins", "secret_id", NotAPerson, "0069: immutable secret identifier for disclosure provenance"},

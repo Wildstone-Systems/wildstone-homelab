@@ -48,16 +48,27 @@ func (db *DB) AssignRoutineButler(routine, butler, by string) error {
 				ErrButlerUnreachable, butler)
 		}
 	}
-	res, err := db.sql.Exec(
-		`UPDATE household_routines SET butler = ?, updated_at = ?, updated_by = ?
-		 WHERE name = ? AND disabled_at = ''`, butler, now(), by, routine)
+	tx, err := db.sql.Begin()
 	if err != nil {
-		return fmt.Errorf("runtimedb: assigning a routine's butler: %w", err)
+		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	defer tx.Rollback()
+	var seq int64
+	var revision int
+	var previous, document string
+	if err = tx.QueryRow("SELECT seq,revision,butler,document FROM household_routines WHERE name=? AND disabled_at=''", routine).Scan(&seq, &revision, &previous, &document); err != nil {
 		return ErrNotFound
 	}
-	return nil
+	if previous == butler {
+		return nil
+	}
+	if _, err = tx.Exec("UPDATE household_routines SET butler=?,revision=revision+1,updated_at=?,updated_by=? WHERE seq=?", butler, now(), by, seq); err != nil {
+		return fmt.Errorf("runtimedb: assigning a routine's butler: %w", err)
+	}
+	if _, err = tx.Exec("INSERT INTO household_routine_revisions(routine,revision,document,author,created_at,note) VALUES(?,?,?,?,?,?)", seq, revision+1, document, by, now(), "assigned Butler changed; requires review"); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // RoutineButler returns the Butler a routine runs as, and whether it

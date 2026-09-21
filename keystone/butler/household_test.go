@@ -119,8 +119,9 @@ func TestHouseholdGatewayHoldsNoInfrastructure(t *testing.T) {
 	// line ADR-W035 A13 draws for the tracker. There is no tool here
 	// that closes a commitment, clears a notification, answers a
 	// question for somebody, or touches a machine.
+	// Slice 17 adds submission only, with no approval or execution capability.
 	want := []string{
-		"Events", "Actions", "ActionResult", "Vocabulary", "Memory", "RecordReading",
+		"Events", "Actions", "ActionResult", "Vocabulary", "Memory", "RecordReading", "ProposeRoutine",
 		"Upkeep", "Activity", "Notifications", "Machines", "MaxContentBytes",
 	}
 	if !reflect.DeepEqual(seams, want) {

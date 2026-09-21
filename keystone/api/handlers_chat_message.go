@@ -943,6 +943,9 @@ func (s *Server) QueueChatPush(ctx context.Context, at runtimedb.Connection, tar
 	if err != nil {
 		return 0, err
 	}
+	if err := domestic.CheckExecutionContext(ctx); err != nil {
+		return 0, err
+	}
 	seq, err := s.DB.EnqueueChatOutbound(outbound)
 	if err != nil && seq == 0 {
 		// 0065's trigger, reached when the destination became a room

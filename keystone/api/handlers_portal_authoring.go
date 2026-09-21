@@ -174,16 +174,22 @@ func (s *Server) applyAuthored(member string, ch authored) (int, error) {
 			"somebody else changed what the house tracks while you were editing; take another look and try again")
 	}
 	stored, err := json.Marshal(storedProposal{
-		BasedOnHead: head, Summary: ch.Summary,
+		BasedOnHead: head, Summary: ch.Summary, AuditOnly: true,
 		Put: docs, Delete: ch.Delete, Plan: p,
 	})
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}
-	planID, err := s.DB.InsertPlan(who, "", ch.Summary, p.OverallRisk.String(), string(stored))
+	planID, err := s.DB.BeginHouseholdAudit(who, ch.Summary, p.OverallRisk.String(), string(stored))
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}
+	applied := false
+	defer func() {
+		if !applied {
+			_ = s.DB.TransitionPlan(planID, runtimedb.PlanFailed, who)
+		}
+	}()
 	for _, res := range ch.Put {
 		if err := s.State.Put(res); err != nil {
 			return http.StatusInternalServerError, err
@@ -204,13 +210,11 @@ func (s *Server) applyAuthored(member string, ch authored) (int, error) {
 	if err := s.DB.SetStatefileHead(newHead); err != nil {
 		return http.StatusInternalServerError, err
 	}
-	if err := s.DB.TransitionPlan(planID, runtimedb.PlanApproved, who); err != nil {
+	if err := s.DB.TransitionPlan(planID, runtimedb.PlanApplied, who); err != nil {
 		return http.StatusInternalServerError, err
 	}
-	s.event("plan.approved", planID, id, ch.Summary)
-	if s.OnApproved != nil {
-		s.OnApproved()
-	}
+	applied = true
+	s.event("household.tracker.updated", planID, id, ch.Summary)
 	s.pokeUpkeep()
 	return http.StatusCreated, nil
 }

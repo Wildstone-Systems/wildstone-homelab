@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -358,31 +359,12 @@ func TestAutomationTravelsThePlanPipeline(t *testing.T) {
 		t.Fatalf("high-tier rule = %d (%v), want 422", resp.StatusCode, body)
 	}
 
-	// Domestic tier, drafted by the butler: a Medium plan in proposed.
-	var rec runtimedb.PlanRecord
+	// Valid Automation documents still require the exact-version routine path.
 	if resp := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/plans",
-		proposalRequest{Summary: "breakfast check", Put: []string{ruleYAML("domestic")}}, &rec); resp.StatusCode != http.StatusCreated {
-		t.Fatalf("propose = %d", resp.StatusCode)
+		proposalRequest{Summary: "breakfast check", Put: []string{ruleYAML("domestic")}}, &body); resp.StatusCode != http.StatusBadRequest || !strings.Contains(fmt.Sprint(body), "exact-version routine Plan") {
+		t.Fatalf("legacy proposal was not refused clearly: %d %v", resp.StatusCode, body)
 	}
-	if rec.State != runtimedb.PlanProposed || rec.Principal != "butler" || rec.Risk != "Medium" {
-		t.Fatalf("record = %+v", rec)
-	}
-	// The butler cannot approve its own draft; a human can.
-	if resp := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("butler approve = %d, want 403", resp.StatusCode)
-	}
-	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); resp.StatusCode != http.StatusOK {
-		t.Fatalf("operator approve = %d", resp.StatusCode)
-	}
-	// Approval committed the rule to the Statefile, where the engine
-	// will read it; and it reads back through the API intact.
-	var view resourceView
-	if resp := h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/resources/Automation/breakfast-check", nil, &view); resp.StatusCode != http.StatusOK {
-		t.Fatalf("get rule = %d", resp.StatusCode)
-	}
-	if view.Kind != "Automation" || view.Node != "" || !strings.Contains(view.YAML, "person.left_home") || strings.Contains(view.YAML, "REDACTED") {
-		t.Fatalf("rule view = %+v", view)
-	}
+
 }
 
 // Replay runs a rule over history with no side effects (ADR-W024 A7): an
@@ -465,13 +447,7 @@ spec:
 	// Approve the rule (disabled), then replay it by name: a disabled
 	// rule replays as if enabled, and the response says it is off.
 	disabled := strings.Replace(draft, "  trigger:", "  disabled: true\n  trigger:", 1)
-	var rec runtimedb.PlanRecord
-	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans", proposalRequest{Summary: "rule", Put: []string{disabled}}, &rec); resp.StatusCode != http.StatusCreated {
-		t.Fatalf("propose = %d", resp.StatusCode)
-	}
-	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); resp.StatusCode != http.StatusOK {
-		t.Fatalf("approve = %d", resp.StatusCode)
-	}
+	seedLegacyAutomationFixture(t, h, disabled)
 	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/household/automations/replay", replayRequest{Name: "breakfast-check"}, &out); resp.StatusCode != http.StatusOK {
 		t.Fatalf("replay by name = %d", resp.StatusCode)
 	}
@@ -541,14 +517,7 @@ spec:
       message: "Did you get the mail?"
       replies: "Yes,No"
 `
-	var rec runtimedb.PlanRecord
-	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans",
-		proposalRequest{Summary: "mail check", Put: []string{rule}}, &rec); resp.StatusCode != http.StatusCreated {
-		t.Fatalf("propose = %d", resp.StatusCode)
-	}
-	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); resp.StatusCode != http.StatusOK {
-		t.Fatalf("approve = %d", resp.StatusCode)
-	}
+	seedLegacyAutomationFixture(t, h, rule)
 
 	// The engine adopts the stream it starts on, so prime it with a
 	// marker before the trigger the test cares about.
@@ -793,14 +762,7 @@ spec:
       topic: "household-{{ .Subject }}"
       message: "Did you have breakfast?"
 `
-	var rec runtimedb.PlanRecord
-	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans",
-		proposalRequest{Summary: "breakfast check", Put: []string{rule}}, &rec); resp.StatusCode != http.StatusCreated {
-		t.Fatalf("propose = %d", resp.StatusCode)
-	}
-	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); resp.StatusCode != http.StatusOK {
-		t.Fatalf("approve = %d", resp.StatusCode)
-	}
+	seedLegacyAutomationFixture(t, h, rule)
 
 	emit := func(id, typ string, at time.Time) {
 		t.Helper()
@@ -863,5 +825,21 @@ spec:
 		if !thread[want] {
 			t.Fatalf("no %s correlated to the departure; thread = %v", want, thread)
 		}
+	}
+}
+
+// Existing Statefile Automations remain executable after upgrade. These fixtures
+// exercise that compatibility; new authoring is covered by exact-version review tests.
+func seedLegacyAutomationFixture(t *testing.T, h *harness, document string) {
+	t.Helper()
+	res, err := resource.Unmarshal([]byte(document))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.s.State.Put(res); err != nil {
+		t.Fatal(err)
+	}
+	if err = h.s.State.Commit("test", "legacy-fixture", "Existing Automation before routine review"); err != nil {
+		t.Fatal(err)
 	}
 }

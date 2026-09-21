@@ -80,6 +80,20 @@ func (db *DB) InsertPlan(principal, actingFor, summary, risk, planJSON string, p
 	return planID(seq), nil
 }
 
+// BeginHouseholdAudit records an immediate, non-executing tracker edit. It
+// never enters proposed/approved, so it cannot authorize infrastructure repair.
+func (db *DB) BeginHouseholdAudit(principal, summary, risk, planJSON string) (string, error) {
+	if principal == "" || summary == "" || planJSON == "" {
+		return "", fmt.Errorf("household audit needs an actor and document")
+	}
+	res, err := db.sql.Exec(`INSERT INTO plans(created_at,principal,acting_for,summary,risk,state,plan_json,resolved_by,resolved_at) VALUES(?,?,'',?,?,'applying',?,?,?)`, now(), principal, summary, risk, planJSON, principal, now())
+	if err != nil {
+		return "", err
+	}
+	seq, err := res.LastInsertId()
+	return planID(seq), err
+}
+
 func planID(seq int64) string { return fmt.Sprintf("plan-%d", seq) }
 
 // parsePlanID inverts planID; it rejects anything not "plan-<n>".

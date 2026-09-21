@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { ArrowLeft } from "@phosphor-icons/react";
 import { api, type HouseholdEvent, type HouseholdRoutine, type RoutineDetail as Detail } from "../api";
 import type { AutomationSpec } from "../generated/resources";
@@ -26,11 +27,14 @@ export function RoutineDetail({
   onChanged: () => void;
 }) {
   const detail = useLoad(() => api.householdRoutine(name), [name]);
+  const audiences = useLoad(()=>api.routineAudiences());
   const settings = useLoad(() => api.butlerSettings());
   const action = useAction();
+  const [outputAudience,setOutputAudience] = useState("aud_household");
 
   const d = detail.data;
   const r = d?.routine;
+  useEffect(()=>{setOutputAudience(r?.outputAudience ?? "aud_household")},[r?.outputAudience]);
 
   // The state actions keep the labels and the messages the old screen
   // used. They are the household's vocabulary for this, not ours to
@@ -91,19 +95,15 @@ export function RoutineDetail({
                 >
                   Dry-run
                 </button>
-                {r.state !== "trial" && (
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => act("trial", "Watching without acting.")}
-                  >
-                    Watch only
-                  </button>
-                )}
-                {r.state !== "enabled" && (
-                  <button className="btn btn-secondary" onClick={() => act("enabled", "Running.")}>
-                    Let it act
-                  </button>
-                )}
+                <label>Who may receive results
+                  <select value={outputAudience} onChange={(e)=>setOutputAudience(e.target.value)} aria-label="Output audience">
+                    {(audiences.data ?? [{id:"aud_household",label:"Household"}]).map(a=><option key={a.id} value={a.id}>{a.label || "Household"}</option>)}
+                  </select>
+                </label>
+                <button className="btn btn-secondary" disabled={action.state.phase === "busy"}
+                  onClick={()=>action.run(async()=>{await api.submitRoutinePlan(name,outputAudience);detail.reload();onChanged();},"Sent to the Owner Review Queue. Review it in Plans before it can run.")}>
+                  Submit for Owner review
+                </button>
                 {r.state !== "disabled" && (
                   <button className="btn btn-danger" onClick={() => act("disabled", "Stopped.")}>
                     Stop it

@@ -221,7 +221,7 @@ func (t *calendarTool) Usage() string { return calendarUsage[t.tool] }
 
 func (t *calendarTool) Execute(ctx context.Context, c Call) (Result, error) {
 	if CalendarTools[t.tool] != TierRead {
-		if err := checkExecution(t.cal.Authority); err != nil {
+		if err := checkExecution(ctx, t.cal.Authority); err != nil {
 			return Result{}, err
 		}
 	}
@@ -239,10 +239,10 @@ func (t *calendarTool) Execute(ctx context.Context, c Call) (Result, error) {
 		if client == nil {
 			client = &http.Client{Timeout: 15 * time.Second}
 		}
-		upstream.HTTP = privacyHTTPClient(client)
+		upstream.HTTP = privacyHTTPClient(executionHTTPClient(client))
 		previous := upstream.BeforeWrite
 		upstream.BeforeWrite = func() error {
-			if err := checkExecution(local.Authority); err != nil {
+			if err := checkExecution(ctx, local.Authority); err != nil {
 				return err
 			}
 			if previous != nil {

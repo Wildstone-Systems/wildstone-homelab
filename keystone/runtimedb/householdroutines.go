@@ -17,9 +17,8 @@ package runtimedb
 // Authelia, which establishes WHO someone is. A review token establishes
 // WHAT that person may do: approve one named proposal, at one revision,
 // once, before one expiry. It is not a session, it does not
-// authenticate, and it approves nothing else. That is what lets an
-// admitted adult review a routine change without ever holding Console
-// credentials.
+// authenticate, and it approves nothing else. Slice 17 additionally requires
+// fresh Owner Console authentication at the review boundary.
 
 import (
 	"crypto/rand"
@@ -62,20 +61,22 @@ var ErrReviewToken = errors.New("runtimedb: this review link does not work")
 
 // HouseholdRoutine is one routine, native or Wildstone-run.
 type HouseholdRoutine struct {
-	Seq        int64     `json:"seq"`
-	Name       string    `json:"name"`
-	Ownership  string    `json:"ownership"`
-	ExternalID string    `json:"externalId,omitempty"`
-	Connection string    `json:"connection,omitempty"`
-	Author     string    `json:"author"`
-	Revision   int       `json:"revision"`
-	State      string    `json:"state"`
-	Document   string    `json:"document"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
-	UpdatedBy  string    `json:"updatedBy"`
-	DisabledAt time.Time `json:"disabledAt,omitzero"`
-	DisabledBy string    `json:"disabledBy,omitempty"`
+	OutputAudience   string    `json:"outputAudience"`
+	ApprovedRevision int       `json:"approvedRevision"`
+	Seq              int64     `json:"seq"`
+	Name             string    `json:"name"`
+	Ownership        string    `json:"ownership"`
+	ExternalID       string    `json:"externalId,omitempty"`
+	Connection       string    `json:"connection,omitempty"`
+	Author           string    `json:"author"`
+	Revision         int       `json:"revision"`
+	State            string    `json:"state"`
+	Document         string    `json:"document"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+	UpdatedBy        string    `json:"updatedBy"`
+	DisabledAt       time.Time `json:"disabledAt,omitzero"`
+	DisabledBy       string    `json:"disabledBy,omitempty"`
 }
 
 // Active reports whether this routine may run right now. Disabled is
@@ -244,14 +245,14 @@ func (db *DB) GetHouseholdRoutine(name string) (HouseholdRoutine, error) {
 }
 
 const routineColumns = `SELECT seq, name, ownership, external_id, connection, author, revision,
-	 state, document, created_at, updated_at, updated_by, disabled_at, disabled_by
+	 state, document, created_at, updated_at, updated_by, disabled_at, disabled_by, output_audience, approved_revision
 	 FROM household_routines`
 
 func scanRoutine(row rowScanner) (HouseholdRoutine, error) {
 	var r HouseholdRoutine
 	var created, updated, disabled string
 	err := row.Scan(&r.Seq, &r.Name, &r.Ownership, &r.ExternalID, &r.Connection, &r.Author,
-		&r.Revision, &r.State, &r.Document, &created, &updated, &r.UpdatedBy, &disabled, &r.DisabledBy)
+		&r.Revision, &r.State, &r.Document, &created, &updated, &r.UpdatedBy, &disabled, &r.DisabledBy, &r.OutputAudience, &r.ApprovedRevision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return HouseholdRoutine{}, ErrNotFound
 	}
