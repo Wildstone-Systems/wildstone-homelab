@@ -183,7 +183,7 @@ func (n *Notifier) Execute(ctx context.Context, c Call) (Result, error) {
 	if err := checkExecution(n.Authority); err != nil {
 		return Result{}, err
 	}
-	resp, err := n.client().Do(req)
+	resp, err := privacyHTTPClient(n.client()).Do(req)
 	if err != nil {
 		return Result{}, fmt.Errorf("publishing to ntfy: %w", err)
 	}

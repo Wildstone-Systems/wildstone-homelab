@@ -2,6 +2,7 @@ package portal
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -48,5 +49,42 @@ func TestAnUploadStoppedDuringStreamingIsNotPublished(t *testing.T) {
 	files, err := s.List("shared")
 	if err != nil || len(files) != 0 {
 		t.Fatalf("stopped upload published: %v %v", files, err)
+	}
+}
+
+func TestFileMutationsRecheckAuthorityAtCommit(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		denyAt int
+	}{{"delete", 2}, {"rename", 2}, {"rename", 3}, {"save", 3}} {
+		t.Run(fmt.Sprintf("%s-%d", tc.name, tc.denyAt), func(t *testing.T) {
+			s := store(t)
+			save(t, s, "shared", "original.txt", "keep")
+			calls := 0
+			denied := errors.New("privacy changed")
+			s.BeforeWrite = func() error {
+				calls++
+				if calls >= tc.denyAt {
+					return denied
+				}
+				return nil
+			}
+			var err error
+			switch tc.name {
+			case "delete":
+				err = s.Delete("shared", "original.txt")
+			case "rename":
+				_, err = s.Rename("shared", "original.txt", "changed.txt")
+			case "save":
+				_, err = s.Save("shared", "changed.txt", strings.NewReader("private"))
+			}
+			if !errors.Is(err, denied) {
+				t.Fatalf("late denial ignored: %v", err)
+			}
+			files, err := s.List("shared")
+			if err != nil || len(files) != 1 || files[0].Name != "original.txt" {
+				t.Fatalf("files changed: %v %v", files, err)
+			}
+		})
 	}
 }

@@ -354,7 +354,8 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// runs and nothing is proposed. An exact question deserves an exact
 	// answer, and these keep working when the Butler is off or the
 	// startup probe put it in qa-only.
-	commandCtx := chatCommandCtx{
+	var choiceSessions []string
+	commandCtx := chatCommandCtx{ReplySessions: &choiceSessions,
 		At:           at,
 		Conversation: conversation,
 		Identity:     binding.Identity,
@@ -363,7 +364,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	}
 	if body, reason, handled := s.runChatCommand(commandCtx, text); handled {
 		seq := s.queueChatReply(at, conversation, body, binding.ID, "",
-			chatDedupe(at, conversation, msg.MessageID, "command", text))
+			chatDedupe(at, conversation, msg.MessageID, "command", text), choiceSessions...)
 		s.settleInbound(claimKey, seq, &settled)
 		s.touchBinding(binding, conversation, msg.Group)
 		return inboundResponse{Accepted: true, Bound: true, Queued: seq,
@@ -385,7 +386,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	}
 	if continuationReply != "" {
 		seq := s.queueChatReply(at, conversation, continuationReply, binding.ID, "",
-			chatDedupe(at, conversation, msg.MessageID, "session-choice", text))
+			chatDedupe(at, conversation, msg.MessageID, "session-choice", text), choiceSessions...)
 		s.settleInbound(claimKey, seq, &settled)
 		s.touchBinding(binding, conversation, msg.Group)
 		return inboundResponse{Accepted: true, Bound: true, Queued: seq,
@@ -484,7 +485,7 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 					chatProposalNotice(ask.PlanIDs, ask.ProposalErrors), binding.ID, "",
 					chatProposalDedupe(
 						chatDedupe(at, conversation, msg.MessageID, "proposal", text),
-						ask.PlanIDs, ask.ProposalErrors))
+						ask.PlanIDs, ask.ProposalErrors), ask.SessionID)
 			}
 		}
 		return nil, st, err
@@ -506,8 +507,13 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		}
 	}
 	body := chatReplyBody(ask)
+	if ask.SessionID != "" {
+		if err := s.DB.CheckSessionPrivacy(ask.SessionID, runtimedb.ModelLocal, runtimedb.MemoryDestination{ConnectionRef: at.Seq}); err != nil {
+			body = "I can't send that answer here because of its privacy settings. Please continue on your household screen."
+		}
+	}
 	seq := s.queueChatReply(at, conversation, body, binding.ID, "",
-		chatDedupe(at, conversation, msg.MessageID, ask.SessionID, text))
+		chatDedupe(at, conversation, msg.MessageID, ask.SessionID, text), ask.SessionID)
 	s.settleInbound(claimKey, seq, &settled)
 	return inboundResponse{Accepted: true, Bound: true, Queued: seq}, http.StatusAccepted, nil
 }
@@ -657,9 +663,22 @@ func chatProposalDedupe(messageKey string, planIDs, proposalErrs []string) strin
 // is logged rather than returned: the session already happened and is
 // already recorded, and telling the adapter the whole request failed
 // would have it redeliver a message that has been answered.
-func (s *Server) queueChatReply(at runtimedb.Connection, target, body string, bindingID int64, correlationID, dedupe string) int64 {
+func (s *Server) queueChatReply(at runtimedb.Connection, target, body string, bindingID int64, correlationID, dedupe string, sessionIDs ...string) int64 {
+	var privacySessions []int64
+	for _, id := range sessionIDs {
+		if id == "" {
+			continue
+		}
+		session, err := s.DB.GetButlerSession(id)
+		if err != nil {
+			s.Log.Error("queuing reply provenance failed", "err", err)
+			return 0
+		}
+		privacySessions = append(privacySessions, session.Seq)
+	}
 	seq, err := s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{
-		Connection: at.Seq, Target: target,
+		PrivacySessions: privacySessions,
+		Connection:      at.Seq, Target: target,
 		Body: redact.String(body), Kind: "reply", BindingID: bindingID,
 		CorrelationID: correlationID, DedupeKey: dedupe,
 	})
@@ -917,10 +936,14 @@ func (s *Server) QueueChatPush(ctx context.Context, at runtimedb.Connection, tar
 	if dedupe == "" {
 		dedupe = chatDedupe(at, target, "", "push", body+time.Now().UTC().Format(time.RFC3339Nano))
 	}
-	seq, err := s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{Operation: operation.From(ctx),
+	outbound, err := runtimedb.WithChatOutboundPrivacy(ctx, runtimedb.ChatOutbound{Operation: operation.From(ctx),
 		Connection: at.Seq, Target: target, BindingID: bindingID,
 		Body: redact.String(body), Kind: "push", CorrelationID: correlationID, DedupeKey: dedupe,
 	})
+	if err != nil {
+		return 0, err
+	}
+	seq, err := s.DB.EnqueueChatOutbound(outbound)
 	if err != nil && seq == 0 {
 		// 0065's trigger, reached when the destination became a room
 		// between the check above and this insert. Same refusal, said

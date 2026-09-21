@@ -558,18 +558,18 @@
 
   // ---- what it remembers about you.
   function loadMemory() {
-    fetch("/api/v1/assistant/memory", { headers: { accept: "application/json" } })
+    return fetch("/api/v1/assistant/memory", { headers: { accept: "application/json" } })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
         var box = el("memory");
-        clear(box);
         if (!res.ok) {
           // Not an empty list, which would read as "it has learned
           // nothing about you".
           text("memory-digest", "couldn't load");
           text("memory-note", res.j.error || "Can't read what the assistant remembers right now.");
-          return;
+          return false;
         }
+        clear(box);
         var items = res.j.items || [];
         if (!items.length) {
           text("memory-digest", "nothing yet");
@@ -585,7 +585,7 @@
           "What the household shares is the owner's.");
         discloseRows(box, items, memoryRow);
       })
-      .catch(function () { text("memory-note", "Can't read what the assistant remembers right now."); });
+      .catch(function () { text("memory-note", "Can't read what the assistant remembers right now."); return false; });
   }
 
   function memoryRow(m) {
@@ -607,6 +607,25 @@
       actions.appendChild(share);
     }
     if (m.mine) {
+      var privacyChecks = [];
+      var privacyBusy = false;
+      [["localOnly", "Keep processing local"], ["trustedOnly", "Keep on household screens"]].forEach(function (setting) {
+        var label = make("label", "q");
+        var check = document.createElement("input"); check.type = "checkbox"; check.checked = !!(m.privacy || {})[setting[0]];
+        privacyChecks.push(check);
+        label.appendChild(check); label.appendChild(document.createTextNode(setting[1])); actions.appendChild(label);
+        check.addEventListener("change", function () {
+          if (privacyBusy) return;
+          privacyBusy = true;
+          privacyChecks.forEach(function(input){input.disabled=true;});
+          var policy = {seq:m.seq};
+          policy[setting[0]] = check.checked; check.disabled = true;
+          fetch("/api/v1/assistant/memory/privacy", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(policy)})
+            .then(function(r){if(!r.ok)throw new Error("Could not update privacy.");return r.json();})
+            .then(function(effective){m.privacy=effective;return loadMemory().then(function(loaded){if(loaded===false)throw new Error("Could not reload memory.");});})
+            .catch(function(){privacyBusy=false;privacyChecks.forEach(function(input){input.disabled=false;});check.checked=!!(m.privacy || {})[setting[0]];text("memory-note","Could not update privacy. Please try again.");});
+        });
+      });
       // Their own to forget. A shared record gets the label instead of
       // a control — never a button that refuses.
       var f = make("button", "hbtn hbtn-ghost", "Forget");

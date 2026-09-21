@@ -28,6 +28,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
 // DefaultTimeout bounds one action. A household action is a notification
@@ -244,6 +246,11 @@ func (g *Gateway) Dispatch(ctx context.Context, c Call) (Result, error) {
 }
 
 func (g *Gateway) dispatch(ctx context.Context, c Call) (Result, error) {
+	if c.Tier != "read" {
+		if err := runtimedb.CheckPrivacyDelivery(ctx, runtimedb.MemoryDestination{}); err != nil {
+			return Result{}, err
+		}
+	}
 	if !tierAllowed(c.Tier, c.Attended) {
 		if c.Tier == TierConfirm {
 			return Result{}, &RefusalError{Tool: c.Tool, Reason: "this action needs somebody to confirm it, " +

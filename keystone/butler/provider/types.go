@@ -199,6 +199,7 @@ func parseRetryAfter(v string) (time.Duration, bool) {
 // context cancellation (including cancellation observed while backing
 // off).
 func doWithRetry(ctx context.Context, client *http.Client, newReq func() (*http.Request, error)) (status int, body []byte, err error) {
+	client = guardedHTTPClient(client)
 	for attempt := 1; attempt <= maxChatAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return 0, nil, err

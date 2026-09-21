@@ -92,6 +92,12 @@ func (s *Server) listButlerTasks(r *http.Request, id principal.Identity) (any, i
 	out := make([]runtimedb.ButlerTask, 0, len(all))
 	for _, t := range all {
 		if canSeeTask(t, id) {
+			if err := s.checkAPITaskDisclosure(r, id, t.ID); err != nil {
+				if errors.Is(err, runtimedb.ErrPrivacy) {
+					continue
+				}
+				return nil, http.StatusInternalServerError, err
+			}
 			out = append(out, t)
 		}
 	}
@@ -126,6 +132,9 @@ func (s *Server) getButlerTask(r *http.Request, id principal.Identity) (any, int
 	}
 	if !canSeeTask(task, id) {
 		return nil, http.StatusNotFound, fmt.Errorf("no such task")
+	}
+	if err := s.checkAPITaskDisclosure(r, id, taskID); err != nil {
+		return nil, http.StatusForbidden, err
 	}
 	private := canSeePrivateRows(task, id)
 
@@ -253,6 +262,9 @@ func (s *Server) exportButlerEvaluation(r *http.Request, id principal.Identity) 
 	if err != nil || !canSeeTask(task, id) {
 		return nil, http.StatusNotFound, fmt.Errorf("no such task")
 	}
+	if err := s.checkAPITaskDisclosure(r, id, taskID); err != nil {
+		return nil, http.StatusForbidden, err
+	}
 	var req struct {
 		Name             string `json:"name"`
 		Expected         string `json:"expected"`
@@ -350,11 +362,31 @@ func argNames(paramsJSON string) []string {
 }
 
 // listButlerEvaluations returns the stored regression fixtures.
-func (s *Server) listButlerEvaluations(_ *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) listButlerEvaluations(r *http.Request, id principal.Identity) (any, int, error) {
 	evals, err := s.DB.ListButlerEvaluations(100)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	visible := evals[:0]
+	for _, e := range evals {
+		if e.SourceTaskID != "" {
+			if err := s.checkAPITaskDisclosure(r, id, e.SourceTaskID); err != nil {
+				// Evaluations intentionally outlive their task. Missing provenance is
+				// safe for a trusted household screen, but cannot authorize external reads.
+				if errors.Is(err, runtimedb.ErrNotFound) {
+					if !apiMemoryDestination(id).BuiltIn {
+						continue
+					}
+				} else if errors.Is(err, runtimedb.ErrPrivacy) {
+					continue
+				} else {
+					return nil, http.StatusInternalServerError, err
+				}
+			}
+		}
+		visible = append(visible, e)
+	}
+	evals = visible
 	return map[string]any{"evaluations": evals}, http.StatusOK, nil
 }
 
@@ -388,11 +420,22 @@ func (s *Server) enableButlerDebugCapture(r *http.Request, id principal.Identity
 
 // listButlerDebugCaptures is the "visibly enabled" half of A11: extra
 // capture that nobody can see is extra capture nobody turns off.
-func (s *Server) listButlerDebugCaptures(_ *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) listButlerDebugCaptures(r *http.Request, id principal.Identity) (any, int, error) {
 	captures, err := s.DB.ListActiveDebugCaptures()
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	visible := captures[:0]
+	for _, capture := range captures {
+		if err := s.checkAPITaskDisclosure(r, id, capture.TaskID); err != nil {
+			if errors.Is(err, runtimedb.ErrPrivacy) {
+				continue
+			}
+			return nil, http.StatusInternalServerError, err
+		}
+		visible = append(visible, capture)
+	}
+	captures = visible
 	return map[string]any{"captures": captures}, http.StatusOK, nil
 }
 

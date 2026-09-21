@@ -17,6 +17,8 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
 )
 
 // maxAskBytes bounds an ask body (ADR-W017 A6: hostile user messages are
@@ -396,6 +398,18 @@ func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (
 // FAILED its probe would run with the previous model's `full` verdict
 // and be handed proposal tools.
 func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, connection string, prior *turnContext) (any, int, error) {
+	sessionIDForPrivacy := ""
+	if prior != nil {
+		sessionIDForPrivacy = prior.SessionID
+	}
+	// Unknown legacy processing routes cannot receive local-only content.
+	ctx, privacy, privacyErr := s.DB.BeginPrivacyTurn(ctx, "", runtimedb.MemoryDestination{BuiltIn: connection == "console" || connection == portal.Connection, Group: false}, sessionIDForPrivacy)
+	if privacyErr != nil {
+		return nil, http.StatusForbidden, privacyErr
+	}
+	if privacyErr = privacy.Check(); privacyErr != nil {
+		return nil, http.StatusForbidden, privacyErr
+	}
 	if note, handled, e := s.prepareSecretInput(actingFor, message, 0); handled {
 		if e != nil {
 			return nil, http.StatusServiceUnavailable, e
@@ -431,7 +445,7 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 	if prior != nil {
 		session.History = prior.History
 	}
-	tr, err := session.Run(ctx, askProv, message)
+	tr, err := session.Run(ctx, butlerlive.GuardPrivacyProvider(askProv, privacy), message)
 	if err != nil {
 		// The provider failed mid-session; nothing durable happened (no
 		// proposals are submitted until the session completes).
@@ -490,6 +504,13 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	privacyErr = privacy.SetSession(sessionID)
+	if err = s.DB.LinkPlanSessionPrivacy(sessionID, planIDs); err != nil {
+		return askResponse{SessionID: sessionID}, http.StatusInternalServerError, err
+	}
+	if privacyErr != nil {
+		return askResponse{SessionID: sessionID}, http.StatusForbidden, privacyErr
+	}
 	s.noteBuiltInSessionReply(sessionID, connection)
 	s.event("butler.session", "", principal.Identity{Name: butlerPrincipal, ActingFor: actingFor},
 		fmt.Sprintf("session %s: %d tool calls, %d proposals", sessionID, len(tr.Audit.Calls), len(planIDs)))
@@ -537,10 +558,10 @@ func (s *Server) submitSessionProposalsWithCalls(butlerID principal.Identity, ca
 		if call.Plan != nil && call.Plan.Summary != "" {
 			summary = "butler: " + call.Plan.Summary
 		}
-		body, st, err := s.submitProposal(butlerID, proposalRequest{
+		body, st, err := s.submitProposalOpts(butlerID, proposalRequest{
 			Summary: summary,
 			Put:     []string{call.ResourceYAML},
-		})
+		}, proposalOpts{PrivateOrigin: true})
 		if err != nil {
 			proposalErrs = append(proposalErrs, fmt.Sprintf("%d: %v", st, err))
 			continue
@@ -567,7 +588,7 @@ func (s *Server) recordTurn(prior *turnContext, sess runtimedb.ButlerSession) (s
 	return prior.SessionID, nil
 }
 
-func (s *Server) listButlerSessions(r *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) listButlerSessions(r *http.Request, id principal.Identity) (any, int, error) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	surface := runtimedb.ButlerSurface(r.URL.Query().Get("surface"))
 	if surface != "" && !runtimedb.ValidButlerSurface(surface) {
@@ -586,16 +607,30 @@ func (s *Server) listButlerSessions(r *http.Request, _ principal.Identity) (any,
 	if sessions == nil {
 		sessions = []runtimedb.ButlerSession{}
 	}
+	visible := sessions[:0]
+	for _, session := range sessions {
+		if err := s.DB.CheckSessionPrivacy(session.ID, runtimedb.ModelLocal, apiMemoryDestination(id)); err != nil {
+			if errors.Is(err, runtimedb.ErrPrivacy) {
+				continue
+			}
+			return nil, http.StatusInternalServerError, err
+		}
+		visible = append(visible, session)
+	}
+	sessions = visible
 	return sessions, http.StatusOK, nil
 }
 
-func (s *Server) getButlerSession(r *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) getButlerSession(r *http.Request, id principal.Identity) (any, int, error) {
 	sess, err := s.DB.GetButlerSession(r.PathValue("id"))
 	if errors.Is(err, runtimedb.ErrNotFound) {
 		return nil, http.StatusNotFound, fmt.Errorf("butler session not found")
 	}
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
+	}
+	if err := s.DB.CheckSessionPrivacy(sess.ID, runtimedb.ModelLocal, apiMemoryDestination(id)); err != nil {
+		return nil, http.StatusForbidden, err
 	}
 	return sess, http.StatusOK, nil
 }

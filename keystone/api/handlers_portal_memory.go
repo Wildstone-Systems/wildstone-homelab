@@ -45,9 +45,10 @@ import (
 // memoryItem is one thing the assistant has learned, as the panel shows
 // it.
 type memoryItem struct {
-	Seq     int64     `json:"seq"`
-	Content string    `json:"content"`
-	At      time.Time `json:"at,omitzero"`
+	Privacy runtimedb.PrivacyPolicy `json:"privacy"`
+	Seq     int64                   `json:"seq"`
+	Content string                  `json:"content"`
+	At      time.Time               `json:"at,omitzero"`
 	// Mine marks a record about this member, which is the only kind
 	// they may forget. Everything else is the household's and is shown
 	// with no control — marked "shared", never a button that refuses.
@@ -108,7 +109,12 @@ func (s *Server) assistantMemory(_ http.ResponseWriter, _ *http.Request, member 
 		if !m.Eligible() {
 			continue
 		}
+		privacy, err := s.DB.MemoryPrivacy(m.Seq)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
 		items = append(items, memoryItem{
+			Privacy:    privacy,
 			Promotable: m.Scope == runtimedb.MemoryScopePersonal && m.PromotedTo == 0 && strings.EqualFold(m.Owner, member),
 			Seq:        m.Seq,
 			Content:    m.Content,

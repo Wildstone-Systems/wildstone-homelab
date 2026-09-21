@@ -933,6 +933,7 @@ export interface ButlerIdentityLink {
 // A3). Every record says where it came from, so it can be corrected at
 // its source and invalidated when that source is deleted.
 export interface MemoryRecord {
+ privacy?: {localOnly: boolean; trustedOnly: boolean};
   scope: "personal" | "household" | "agent_local";
   seq: number;
   kind: "fact" | "preference" | "inference" | "procedure";
@@ -1747,6 +1748,7 @@ export const api = {
     ),
   // butler narrows to one Butler's material; omitting it is every
   // Butler the reader may see, which is what the endpoint defaults to.
+  setMemoryPrivacy: (seq: number, policy: Partial<{localOnly:boolean;trustedOnly:boolean}>) => call<{localOnly:boolean;trustedOnly:boolean}>("PUT", "/api/v1/butler/memory/privacy", {seq,...policy}),
   butlerMemory: (q?: { subject?: string; butler?: string }) => {
     const params = new URLSearchParams();
     if (q?.subject) params.set("subject", q.subject);

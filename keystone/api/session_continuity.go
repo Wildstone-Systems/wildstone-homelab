@@ -130,6 +130,12 @@ func (s *Server) sessionCandidates(identity, agent string, current continuationC
 	}
 	safe := make([]safeSessionCandidate, 0, len(all))
 	for _, candidate := range all {
+		if err := s.DB.CheckSessionPrivacy(candidate.SessionID, runtimedb.ModelLocal, runtimedb.MemoryDestination{BuiltIn: current.Trusted, ConnectionRef: current.Ref}); err != nil {
+			if errors.Is(err, runtimedb.ErrPrivacy) {
+				continue
+			}
+			return nil, false, err
+		}
 		if shown, ok := candidateOnConnection(candidate, current); ok {
 			safe = append(safe, shown)
 		}
@@ -201,6 +207,9 @@ func (s *Server) offerChatSessions(c chatCommandCtx, candidates []safeSessionCan
 			return "", err
 		}
 		lines = append(lines, renderCandidate(candidate, token))
+		if c.ReplySessions != nil {
+			*c.ReplySessions = append(*c.ReplySessions, candidate.SessionID)
+		}
 	}
 	if page > 1 {
 		lines = append(lines, fmt.Sprintf("Previous page: `/sessions %d`.", page-1))

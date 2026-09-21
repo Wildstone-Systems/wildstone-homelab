@@ -29,6 +29,8 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
 )
 
 // householdConfigured reports whether a family surface is wired at all:
@@ -262,6 +264,18 @@ func (s *Server) runFamilyButlerSession(ctx context.Context, message, member, sy
 // gateway (ADR-W026 A7) — the audience decides which CAPABILITIES the
 // session has, not merely what its prompt asks it to do.
 func (s *Server) runFamilySession(ctx context.Context, message, member, systemExtra, connection string, group bool, prior *turnContext) (any, int, error) {
+	sessionIDForPrivacy := ""
+	if prior != nil {
+		sessionIDForPrivacy = prior.SessionID
+	}
+	// Unknown legacy processing routes cannot receive local-only content.
+	ctx, privacy, privacyErr := s.DB.BeginPrivacyTurn(ctx, "", runtimedb.MemoryDestination{BuiltIn: connection == "console" || connection == portal.Connection, Group: group}, sessionIDForPrivacy)
+	if privacyErr != nil {
+		return nil, http.StatusForbidden, privacyErr
+	}
+	if privacyErr = privacy.Check(); privacyErr != nil {
+		return nil, http.StatusForbidden, privacyErr
+	}
 	if note, handled, e := s.prepareSecretInput(member, message, 0); handled {
 		if e != nil {
 			return nil, http.StatusServiceUnavailable, e
@@ -311,7 +325,7 @@ func (s *Server) runFamilySession(ctx context.Context, message, member, systemEx
 	if prior != nil {
 		session.History = prior.History
 	}
-	tr, err := session.Run(ctx, prov, message)
+	tr, err := session.Run(ctx, butlerlive.GuardPrivacyProvider(prov, privacy), message)
 	if err != nil {
 		return nil, http.StatusBadGateway, fmt.Errorf("household butler session: %w", err)
 	}
@@ -356,6 +370,9 @@ func (s *Server) runFamilySession(ctx context.Context, message, member, systemEx
 	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
+	}
+	if err = privacy.SetSession(sessionID); err != nil {
+		return askResponse{SessionID: sessionID}, http.StatusForbidden, err
 	}
 	s.noteBuiltInSessionReply(sessionID, connection)
 	s.event("butler.session", "", principal.Identity{Name: butlerPrincipal, ActingFor: member},

@@ -66,8 +66,21 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 				runtimedb.ErrButlerUnreachable, b.Name, b.Model, err)
 	}
 
+	ctx, privacy, err := bs.DB.BeginPrivacyTurn(ctx, b.ModelKind, t.MemoryDestination(), t.SessionID)
+	if err != nil {
+		return bs.blank(b), err
+	}
+	if err = privacy.Check(); err != nil {
+		return bs.blank(b), err
+	}
+	p = privacyProvider{Provider: p, privacy: privacy}
+
 	task, resumed, err := bs.task(b, t)
 	if err != nil {
+		return bs.blank(b), err
+	}
+
+	if err = privacy.SetTask(task.ID); err != nil {
 		return bs.blank(b), err
 	}
 

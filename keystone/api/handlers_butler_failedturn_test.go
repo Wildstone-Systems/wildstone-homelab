@@ -9,6 +9,7 @@ package api
 // unlocked twice.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -300,5 +301,53 @@ func TestAFailedTurnStillSubmitsAnAcceptedProposal(t *testing.T) {
 	}
 	if len(sess.Turns) != 1 || len(sess.Turns[0].PlanIDs) != 1 {
 		t.Fatalf("the failed turn does not name its proposal: %+v", sess.Turns)
+	}
+}
+
+func TestAFailedSessionLinkStillReturnsItsRecordedTurn(t *testing.T) {
+	h := newHarness(t)
+	h.person("sam")
+	taskID := failedTurnTask(t, h)
+	if _, err := h.s.DB.ExecForTest(`CREATE TRIGGER fail_task_session BEFORE UPDATE OF session ON butler_tasks BEGIN SELECT RAISE(ABORT,'link unavailable'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	out := h.s.preserveFailedTurn(butlerlive.Turn{Member: "sam", Text: "continue"}, nil, butlerlive.Answer{TaskID: taskID, Butler: "alfred", Surface: runtimedb.ButlerSurfaceFamily, Provider: "scripted", FinalText: "must not be delivered"})
+	ask, ok := out.(askResponse)
+	if !ok || ask.SessionID == "" {
+		t.Fatalf("lost recorded turn: %#v", out)
+	}
+	if ask.FinalText != "" {
+		t.Fatal("unsafe answer was returned")
+	}
+	task, err := h.s.DB.ButlerTaskForSession(ask.SessionID)
+	if err != nil || task.ID != taskID {
+		t.Fatalf("lost task handle: %+v %v", task, err)
+	}
+}
+
+type successfulButlers struct{ failingButlers }
+
+func (f *successfulButlers) Serve(context.Context, butlerlive.Turn) (butlerlive.Answer, error) {
+	return f.answer, nil
+}
+func TestSuccessfulWorkWithFailedSessionLinkWithholdsAnswerButKeepsHandle(t *testing.T) {
+	h := newHarness(t)
+	h.person("sam")
+	taskID := failedTurnTask(t, h)
+	h.s.Butlers = &successfulButlers{failingButlers{answer: butlerlive.Answer{TaskID: taskID, Butler: "alfred", Surface: runtimedb.ButlerSurfaceFamily, Provider: "scripted", FinalText: "must not be delivered"}}}
+	if _, err := h.s.DB.ExecForTest(`CREATE TRIGGER fail_task_session BEFORE UPDATE OF session ON butler_tasks BEGIN SELECT RAISE(ABORT,'link unavailable'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	out, code, err := h.s.runNamedButlerSession(context.Background(), butlerlive.Turn{Member: "sam", Text: "continue"}, nil)
+	if err == nil || code != http.StatusInternalServerError {
+		t.Fatalf("link failure did not fail closed: %d %v", code, err)
+	}
+	ask, ok := out.(askResponse)
+	if !ok || ask.SessionID == "" || ask.FinalText != "" {
+		t.Fatalf("lost handle or leaked answer: %#v", out)
+	}
+	task, err := h.s.DB.ButlerTaskForSession(ask.SessionID)
+	if err != nil || task.ID != taskID {
+		t.Fatalf("orphaned task: %+v %v", task, err)
 	}
 }

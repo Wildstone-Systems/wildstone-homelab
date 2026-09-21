@@ -397,3 +397,28 @@ func TestTheNoticeNamesACommandThatExists(t *testing.T) {
 		}
 	}
 }
+
+func TestFailedTurnProposalNoticeRetainsSessionPrivacy(t *testing.T) {
+	h := newHarness(t)
+	h.person("sam")
+	f := wireFailingButler(t, h)
+	memory, err := h.s.DB.RecordMemory(runtimedb.MemoryRecord{Scope: runtimedb.MemoryScopePersonal, Kind: "fact", Content: "preferred service", Owner: "sam", Author: "sam", Audience: runtimedb.ButlerAudiencePrivate, PermissionLabel: "sandy", SourceKind: "conversation", SourceID: f.answer.TaskID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, _ := h.send(runtimedb.RoleConcierge, map[string]any{"transport": "telegram", "account": "12345", "text": "expose grafana", "messageId": "private-failure"})
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatal(resp.Status)
+	}
+	queued := h.poll(t, runtimedb.RoleConcierge, "")
+	if len(queued) != 1 || !strings.Contains(queued[0].Body, "approve") {
+		t.Fatalf("unprotected notice missing: %v", queued)
+	}
+	if err = h.s.DB.SetMemoryPrivacy("sam", memory, runtimedb.PrivacyPolicy{TrustedOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	queued = h.poll(t, runtimedb.RoleConcierge, "")
+	if len(queued) != 1 || !strings.Contains(queued[0].Body, "privacy settings") {
+		t.Fatalf("protected failed-turn notice leaked: %v", queued)
+	}
+}

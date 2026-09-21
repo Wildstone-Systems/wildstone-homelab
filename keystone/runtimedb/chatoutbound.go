@@ -13,10 +13,12 @@ package runtimedb
 // minutes of conversation, not to yesterday's.
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"github.com/chickenrat17/wildstone-homelab/keystone/operation"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -60,8 +62,12 @@ const MaxChatBodyBytes = 3500
 
 // ChatOutbound is one queued message.
 type ChatOutbound struct {
-	Operation operation.Identity `json:"-"`
-	Seq       int64              `json:"seq"`
+	PrivacySession  int64              `json:"-"`
+	PrivacyMemories []int64            `json:"-"`
+	PrivacySessions []int64            `json:"-"`
+	PrivacyTask     int64              `json:"-"`
+	Operation       operation.Identity `json:"-"`
+	Seq             int64              `json:"seq"`
 	// Connection is the bot this message leaves by, and so the Agent it
 	// is from. The queue used to be keyed by surface, which handed one
 	// bot every Owner Agent's replies (ADR-W033 B7).
@@ -143,6 +149,24 @@ func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if m.PrivacySession != 0 {
+		m.PrivacySessions = append(m.PrivacySessions, m.PrivacySession)
+	}
+	for _, session := range m.PrivacySessions {
+		if _, err = tx.Exec("INSERT OR IGNORE INTO chat_outbound_sessions(outbound,session) VALUES(?,?)", seq, session); err != nil {
+			return 0, err
+		}
+	}
+	for _, memory := range m.PrivacyMemories {
+		if _, err = tx.Exec("INSERT OR IGNORE INTO chat_outbound_memories(outbound,memory) VALUES(?,?)", seq, memory); err != nil {
+			return 0, err
+		}
+	}
+	if m.PrivacyTask != 0 {
+		if _, err = tx.Exec("INSERT INTO chat_outbound_tasks(outbound,task) VALUES(?,?)", seq, m.PrivacyTask); err != nil {
+			return 0, err
+		}
+	}
 	if m.Operation.TaskID != "" {
 		task, err := parseButlerTaskID(m.Operation.TaskID)
 		if err != nil {
@@ -181,8 +205,15 @@ func (db *DB) ChatOutboundAfter(at Connection, after int64, limit int) ([]ChatOu
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: reading chat outbound: %w", err)
 	}
-	defer rows.Close()
-	return scanChatOutbound(rows)
+	out, err := scanChatOutbound(rows)
+	closeErr := rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return db.checkOutboundPrivacy(out, at)
 }
 
 // The transport comes from the Connection, which is the row that owns
@@ -329,4 +360,61 @@ func (db *DB) RecordChatInboundReply(dedupeKey string, seq int64) error {
 func (db *DB) ReleaseChatInbound(dedupeKey string) error {
 	_, err := db.sql.Exec(`DELETE FROM chat_inbound WHERE dedupe_key = ? AND queued_seq = 0`, dedupeKey)
 	return err
+}
+
+// The adapter poll is the last Keystone boundary before external delivery.
+func (db *DB) checkOutboundPrivacy(messages []ChatOutbound, at Connection) ([]ChatOutbound, error) {
+	for i, m := range messages {
+		rows, err := db.sql.Query("SELECT 'bs-'||session FROM chat_outbound_sessions WHERE outbound=? UNION SELECT 'bt-'||task FROM chat_outbound_tasks WHERE outbound=? UNION SELECT 'm:'||memory FROM chat_outbound_memories WHERE outbound=?", m.Seq, m.Seq, m.Seq)
+		if err != nil {
+			return nil, err
+		}
+		var sessions []string
+		for rows.Next() {
+			var seq string
+			if err = rows.Scan(&seq); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			sessions = append(sessions, seq)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		for _, session := range sessions {
+			if strings.HasPrefix(session, "m:") {
+				seq, e := strconv.ParseInt(strings.TrimPrefix(session, "m:"), 10, 64)
+				if e != nil {
+					return nil, e
+				}
+				err = db.CheckMemoryPrivacy(seq, ModelLocal, MemoryDestination{ConnectionRef: at.Seq})
+			} else if strings.HasPrefix(session, "bt-") {
+				_, guard, e := db.BeginPrivacyTurn(context.Background(), ModelLocal, MemoryDestination{ConnectionRef: at.Seq}, "")
+				if e != nil {
+					return nil, e
+				}
+				if e = guard.SetTask(session); e != nil {
+					return nil, e
+				}
+				err = guard.Check()
+			} else {
+				err = db.CheckSessionPrivacy(session, ModelLocal, MemoryDestination{ConnectionRef: at.Seq})
+			}
+			if errors.Is(err, ErrPrivacy) {
+				messages[i].Body = "I can't send that answer here because of its privacy settings. Please continue on your household screen."
+				// Persist the replacement so an acknowledgement cannot certify delivery
+				// of the original content, and a later poll cannot resurrect that content.
+				if _, e := db.sql.Exec("UPDATE chat_outbound SET body=? WHERE seq=? AND delivered_at=''", messages[i].Body, m.Seq); e != nil {
+					return nil, e
+				}
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return messages, nil
 }

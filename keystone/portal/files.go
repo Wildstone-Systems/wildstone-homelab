@@ -400,7 +400,7 @@ func (s *FileStore) Save(nsKey, offered string, body io.Reader) (Stored, error) 
 	if err := s.checkWriteAuthority(); err != nil {
 		return Stored{}, err
 	}
-	final, renamed, err := claimName(root, tmpName, name)
+	final, renamed, err := claimName(root, tmpName, name, s.checkWriteAuthority)
 	if err != nil {
 		return Stored{}, err
 	}
@@ -441,7 +441,7 @@ func (s *FileStore) Save(nsKey, offered string, body io.Reader) (Stored, error) 
 // So the name is TAKEN, in one operation the filesystem will not let
 // two callers win, and the candidate that loses is a collision like any
 // other — it moves on to the next counter rather than failing.
-func claimName(root *os.Root, tmpName, name string) (string, bool, error) {
+func claimName(root *os.Root, tmpName, name string, beforeWrite func() error) (string, bool, error) {
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
 	for i := 0; i <= 999; i++ {
@@ -449,7 +449,7 @@ func claimName(root *os.Root, tmpName, name string) (string, bool, error) {
 		if i > 0 {
 			candidate = fmt.Sprintf("%s-%d%s", stem, i, ext)
 		}
-		taken, err := takeName(root, tmpName, candidate)
+		taken, err := takeName(root, tmpName, candidate, beforeWrite)
 		if err != nil {
 			return "", false, err
 		}
@@ -475,12 +475,18 @@ func claimName(root *os.Root, tmpName, name string) (string, bool, error) {
 // That is atomic in the part that matters — two callers cannot both
 // create the same name with O_EXCL — at the cost of a moment where the
 // name exists with nothing in it.
-func takeName(root *os.Root, tmpName, candidate string) (bool, error) {
+func takeName(root *os.Root, tmpName, candidate string, beforeWrite func() error) (bool, error) {
+	if err := beforeWrite(); err != nil {
+		return false, err
+	}
 	switch err := root.Link(tmpName, candidate); {
 	case err == nil:
 		return true, nil
 	case errors.Is(err, os.ErrExist):
 		return false, nil
+	}
+	if err := beforeWrite(); err != nil {
+		return false, err
 	}
 	f, err := root.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
@@ -490,6 +496,10 @@ func takeName(root *os.Root, tmpName, candidate string) (bool, error) {
 		return false, fmt.Errorf("portal: reserving %s: %w", candidate, err)
 	}
 	f.Close()
+	if err := beforeWrite(); err != nil {
+		_ = root.Remove(candidate)
+		return false, err
+	}
 	if err := root.Rename(tmpName, candidate); err != nil {
 		// The reservation is ours and it is empty. Leaving it would be
 		// a nameless nothing in the household's storage.
@@ -769,6 +779,9 @@ func (s *FileStore) Delete(nsKey, name string) error {
 	if !info.Mode().IsRegular() {
 		return ErrNotFound
 	}
+	if err := s.checkWriteAuthority(); err != nil {
+		return err
+	}
 	if err := root.Remove(name); err != nil {
 		return fmt.Errorf("portal: deleting %s: %w", name, err)
 	}
@@ -830,6 +843,9 @@ func (s *FileStore) Rename(nsKey, from, to string) (string, error) {
 	// with Lstat, for the reason claimName gives: a test and a rename
 	// are two steps, and a concurrent upload or rename fits between
 	// them — after which os.Rename would replace what it found.
+	if err := s.checkWriteAuthority(); err != nil {
+		return "", err
+	}
 	reserved, err := root.OpenFile(safe, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
@@ -838,6 +854,10 @@ func (s *FileStore) Rename(nsKey, from, to string) (string, error) {
 		return "", fmt.Errorf("portal: renaming %s: %w", from, err)
 	}
 	reserved.Close()
+	if err := s.checkWriteAuthority(); err != nil {
+		_ = root.Remove(safe)
+		return "", err
+	}
 	if err := root.Rename(from, safe); err != nil {
 		_ = root.Remove(safe)
 		return "", fmt.Errorf("portal: renaming %s: %w", from, err)

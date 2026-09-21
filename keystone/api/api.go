@@ -505,6 +505,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/integration-work/result", s.handle(principal.VerbReportIntegrationResult, s.reportIntegrationResult))
 	mux.Handle("GET /api/v1/butler/index/measurements", s.handle(principal.VerbRead, s.listIndexMeasurements))
 	mux.Handle("POST /api/v1/butler/index/compact", s.handle(principal.VerbManage, s.compactButlerIndex))
+	mux.Handle("PUT /api/v1/butler/memory/privacy", s.handle(principal.VerbRead, s.consequential(s.setMemoryPrivacy)))
 	mux.Handle("GET /api/v1/butler/memory", s.handle(principal.VerbRead, s.retrieveButlerMemory))
 	mux.Handle("GET /api/v1/butler/memory/export", s.handle(principal.VerbRead, s.exportButlerMemory))
 	mux.Handle("POST /api/v1/butler/memory/correct", s.handle(principal.VerbRead, s.correctButlerMemory))
@@ -725,6 +726,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/assistant/agents", s.portal(surfaceAssistant, s.assistantAgents))
 	mux.Handle("GET /api/v1/assistant/scope", s.portal(surfaceAssistant, s.assistantScope))
 	mux.Handle("GET /api/v1/assistant/conversations", s.portal(surfaceAssistant, s.assistantConversations))
+	mux.Handle("PUT /api/v1/assistant/memory/privacy", s.portal(surfaceAssistant, s.assistantMemoryPrivacy))
 	mux.Handle("GET /api/v1/assistant/memory", s.portal(surfaceAssistant, s.assistantMemory))
 	// Forgetting is gated in the handler, not the store: ForgetMemory
 	// takes a sequence number and trusts it.

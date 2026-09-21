@@ -30,6 +30,7 @@ import (
 // own context, never the caller's ambient state, so a command cannot see
 // past the binding that produced it.
 type chatCommandCtx struct {
+	ReplySessions *[]string
 	// At is the Connection the command arrived on — one Agent, one bot.
 	At           runtimedb.Connection
 	Conversation string
@@ -339,8 +340,8 @@ func (s *Server) statusSummary() (statusSummary, error) {
 	return st, nil
 }
 
-func (s *Server) chatStatus(_ chatCommandCtx) (string, error) {
-	st, err := s.statusSummary()
+func (s *Server) chatStatus(c chatCommandCtx) (string, error) {
+	st, err := s.chatStatusSummary(c)
 	if err != nil {
 		return "", err
 	}
@@ -377,8 +378,8 @@ func (s *Server) chatStatus(_ chatCommandCtx) (string, error) {
 	return b.String(), nil
 }
 
-func (s *Server) chatPlans(_ chatCommandCtx) (string, error) {
-	st, err := s.statusSummary()
+func (s *Server) chatPlans(c chatCommandCtx) (string, error) {
+	st, err := s.chatStatusSummary(c)
 	if err != nil {
 		return "", err
 	}
@@ -405,6 +406,9 @@ func (s *Server) chatPlan(c chatCommandCtx) (string, error) {
 	rec, err := s.DB.GetPlan(c.Arg)
 	if err != nil {
 		return fmt.Sprintf("I don't have a plan called %s. Try /plans.", c.Arg), nil
+	}
+	if err := s.checkChatPlanDisclosure(c, rec.ID); err != nil {
+		return "This Plan is available on your household screen because of its privacy settings.", err
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s · %s · %s risk\n%s", rec.ID, rec.State, rec.Risk, rec.Summary)
@@ -698,4 +702,36 @@ func (s *Server) chatApprove(c chatCommandCtx) (string, error) {
 	}
 	return "I can't approve anything, and neither can you from here. Approve it in the Console, or " +
 		"with `wild plan approve`. Both establish who you are first; a chat message doesn't.", nil
+}
+
+func (s *Server) checkChatPlanDisclosure(c chatCommandCtx, id string) error {
+	if err := s.DB.CheckPlanPrivacy(id, runtimedb.ModelLocal, runtimedb.MemoryDestination{ConnectionRef: c.At.Seq}); err != nil {
+		return err
+	}
+	sessions, _, err := s.DB.PlanPrivacySessions(id)
+	if err != nil {
+		return err
+	}
+	if c.ReplySessions != nil {
+		*c.ReplySessions = append(*c.ReplySessions, sessions...)
+	}
+	return nil
+}
+func (s *Server) chatStatusSummary(c chatCommandCtx) (statusSummary, error) {
+	st, err := s.statusSummary()
+	if err != nil {
+		return st, err
+	}
+	visible := st.PendingPlans[:0]
+	for _, p := range st.PendingPlans {
+		if err := s.checkChatPlanDisclosure(c, p.ID); err != nil {
+			if errors.Is(err, runtimedb.ErrPrivacy) {
+				continue
+			}
+			return st, err
+		}
+		visible = append(visible, p)
+	}
+	st.PendingPlans = visible
+	return st, nil
 }

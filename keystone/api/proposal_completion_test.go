@@ -212,6 +212,17 @@ func TestChatAcknowledgementCertifiesOnlyTheOriginalEffect(t *testing.T) {
 				t.Fatal(err)
 			}
 			ctx := operation.With(context.Background(), operation.Identity{TaskID: id, Step: step, PermissionLabel: "sandy", Audience: string(runtimedb.ButlerAudiencePrivate)})
+			ctx, guard, err := h.s.DB.BeginPrivacyTurn(ctx, runtimedb.ModelLocal, runtimedb.MemoryDestination{BuiltIn: true}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = guard.SetTask(id); err != nil {
+				t.Fatal(err)
+			}
+			memory, err := h.s.DB.RecordMemory(runtimedb.MemoryRecord{Scope: runtimedb.MemoryScopePersonal, Kind: "fact", Content: "jasmine", Owner: "sam", Author: "sam", Audience: runtimedb.ButlerAudiencePrivate, PermissionLabel: "sandy", SourceKind: "conversation", SourceID: id})
+			if err != nil {
+				t.Fatal(err)
+			}
 			outbound, err := h.s.QueueChatPush(ctx, at, "12345", binding.ID, "jasmine", "", "chat-delivery-proof")
 			if err != nil {
 				t.Fatal(err)
@@ -221,8 +232,12 @@ func TestChatAcknowledgementCertifiesOnlyTheOriginalEffect(t *testing.T) {
 				t.Fatal("enqueue certified delivery")
 			}
 			if replaced {
-				if _, err = h.s.DB.ExecForTest("UPDATE chat_outbound SET body='privacy warning' WHERE seq=?", outbound); err != nil {
+				if err = h.s.DB.SetMemoryPrivacy("sam", memory, runtimedb.PrivacyPolicy{TrustedOnly: true}); err != nil {
 					t.Fatal(err)
+				}
+				messages := h.poll(t, runtimedb.RoleConcierge, "")
+				if len(messages) != 1 || strings.Contains(messages[0].Body, "jasmine") {
+					t.Fatalf("privacy replacement missing: %v", messages)
 				}
 			}
 			response := h.do(runtimedb.RoleConcierge, http.MethodPost, fmt.Sprintf("/api/v1/chat/outbound/%d/ack", outbound), nil, nil)

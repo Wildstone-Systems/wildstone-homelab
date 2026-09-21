@@ -81,6 +81,17 @@ func (s *Server) retrieveButlerMemory(r *http.Request, id principal.Identity) (a
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
+	visible := records[:0]
+	for _, record := range records {
+		if err := s.checkAPIMemoryDisclosure(id, record.Seq); err != nil {
+			if errors.Is(err, runtimedb.ErrPrivacy) {
+				continue
+			}
+			return nil, http.StatusInternalServerError, err
+		}
+		visible = append(visible, record)
+	}
+	records = visible
 	return map[string]any{"records": records}, http.StatusOK, nil
 }
 
@@ -92,6 +103,17 @@ func (s *Server) exportButlerMemory(_ *http.Request, id principal.Identity) (any
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
+	visible := records[:0]
+	for _, record := range records {
+		if err := s.checkAPIMemoryDisclosure(id, record.Seq); err != nil {
+			if errors.Is(err, runtimedb.ErrPrivacy) {
+				continue
+			}
+			return nil, http.StatusInternalServerError, err
+		}
+		visible = append(visible, record)
+	}
+	records = visible
 	return map[string]any{"member": actingMember(id), "records": records}, http.StatusOK, nil
 }
 
@@ -153,12 +175,23 @@ func (s *Server) forgetButlerMemory(r *http.Request, id principal.Identity) (any
 // listMemoryDigest is what other admitted adults see about SHARED
 // memory changes. Private corrections never appear: a digest that leaked
 // them would make correcting a private record a disclosure.
-func (s *Server) listMemoryDigest(r *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) listMemoryDigest(r *http.Request, id principal.Identity) (any, int, error) {
 	immediateOnly := r.URL.Query().Get("immediate") == "true"
 	entries, err := s.DB.PendingMemoryDigest(immediateOnly)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	visible := entries[:0]
+	for _, entry := range entries {
+		if err := s.checkAPIMemoryDisclosure(id, entry.Memory); err != nil {
+			if errors.Is(err, runtimedb.ErrPrivacy) {
+				continue
+			}
+			return nil, http.StatusInternalServerError, err
+		}
+		visible = append(visible, entry)
+	}
+	entries = visible
 	return map[string]any{"entries": entries}, http.StatusOK, nil
 }
 
@@ -181,4 +214,25 @@ func (s *Server) setAgentMemoryRestriction(r *http.Request, id principal.Identit
 		return nil, http.StatusBadRequest, err
 	}
 	return map[string]any{"scope": req.Scope, "restricted": req.Restricted}, http.StatusOK, nil
+}
+
+// These are inspection reads, not model recall: they may span Agents, but still
+// need a disclosure destination. A bearer token cannot assert a household screen.
+func (s *Server) checkAPIMemoryDisclosure(id principal.Identity, memory int64) error {
+	destination := apiMemoryDestination(id)
+	return s.DB.CheckMemoryPrivacy(memory, runtimedb.ModelLocal, destination)
+}
+
+func apiMemoryDestination(id principal.Identity) runtimedb.MemoryDestination {
+	return runtimedb.MemoryDestination{BuiltIn: id.AuthTime != nil && !serviceRoles[id.Role]}
+}
+func (s *Server) checkAPITaskDisclosure(r *http.Request, id principal.Identity, task string) error {
+	_, guard, err := s.DB.BeginPrivacyTurn(r.Context(), runtimedb.ModelLocal, apiMemoryDestination(id), "")
+	if err != nil {
+		return err
+	}
+	if err = guard.SetTask(task); err != nil {
+		return err
+	}
+	return guard.Check()
 }

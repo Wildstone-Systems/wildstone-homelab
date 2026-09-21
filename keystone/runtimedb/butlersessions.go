@@ -89,6 +89,9 @@ type ButlerSession struct {
 // per-turn is what lets an audit ask "which reads produced that" of a
 // session that has answered three times.
 type ButlerTurn struct {
+	// TaskID is a trusted write-time handle, committed with this turn so a
+	// later bookkeeping failure cannot orphan already-executed work.
+	TaskID         string    `json:"-"`
 	Ordinal        int       `json:"ordinal"`
 	Role           string    `json:"role"` // "user" | "assistant"
 	Text           string    `json:"text"`
@@ -185,6 +188,15 @@ func (db *DB) InsertButlerSession(s ButlerSession) (string, error) {
 // insertTurns writes turns at ordinals starting from base, inside tx.
 func insertTurns(tx *sql.Tx, session int64, base int, turns []ButlerTurn) error {
 	for i, t := range turns {
+		if t.TaskID != "" {
+			task, err := parseButlerTaskID(t.TaskID)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO session_task_sources(session,task) VALUES(?,?)`, session, task); err != nil {
+				return err
+			}
+		}
 		if t.Role != ButlerRoleUser && t.Role != ButlerRoleAssistant {
 			return fmt.Errorf("runtimedb: butler turn role must be user or assistant, got %q", t.Role)
 		}

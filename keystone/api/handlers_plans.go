@@ -98,22 +98,35 @@ func viewPlans(recs []runtimedb.PlanRecord) []planView {
 	return out
 }
 
-func (s *Server) listPlans(r *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) listPlans(r *http.Request, id principal.Identity) (any, int, error) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	plans, err := s.DB.ListPlans(limit)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return viewPlans(plans), http.StatusOK, nil
+	visible := plans[:0]
+	for _, p := range plans {
+		if err := s.DB.CheckPlanPrivacy(p.ID, runtimedb.ModelLocal, apiMemoryDestination(id)); err != nil {
+			if errors.Is(err, runtimedb.ErrPrivacy) {
+				continue
+			}
+			return nil, http.StatusInternalServerError, err
+		}
+		visible = append(visible, p)
+	}
+	return viewPlans(visible), http.StatusOK, nil
 }
 
-func (s *Server) getPlan(r *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) getPlan(r *http.Request, id principal.Identity) (any, int, error) {
 	rec, err := s.DB.GetPlan(r.PathValue("id"))
 	if errors.Is(err, runtimedb.ErrNotFound) {
 		return nil, http.StatusNotFound, fmt.Errorf("plan not found")
 	}
 	if err != nil {
 		return nil, http.StatusBadRequest, err
+	}
+	if err := s.DB.CheckPlanPrivacy(rec.ID, runtimedb.ModelLocal, apiMemoryDestination(id)); err != nil {
+		return nil, http.StatusForbidden, err
 	}
 	return viewPlan(rec), http.StatusOK, nil
 }
@@ -140,8 +153,9 @@ func (s *Server) proposePlan(r *http.Request, id principal.Identity) (any, int, 
 // install form show its consequences and collect operator-supplied
 // secrets before anything is proposed (A5).
 type proposalOpts struct {
-	Origin *plan.CapabilityOrigin
-	DryRun bool
+	PrivateOrigin bool
+	Origin        *plan.CapabilityOrigin
+	DryRun        bool
 }
 
 // submitProposal is the generic entry: no origin, not a dry run.
@@ -263,7 +277,7 @@ func (s *Server) submitProposalOpts(id principal.Identity, req proposalRequest, 
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	planID, err := s.DB.InsertPlan(id.Name, id.ActingFor, req.Summary, p.OverallRisk.String(), string(stored))
+	planID, err := s.DB.InsertPlan(id.Name, id.ActingFor, req.Summary, p.OverallRisk.String(), string(stored), opts.PrivateOrigin)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}

@@ -232,9 +232,14 @@ func (t *calendarTool) Execute(ctx context.Context, c Call) (Result, error) {
 	if t.tool != CalToolSetup && (t.cal.Upstream == nil || t.cal.Upstream.CollectionURL == "") {
 		return Result{}, fmt.Errorf("no calendar is configured on this control plane")
 	}
-	if CalendarTools[t.tool] != TierRead && t.cal.Upstream != nil {
+	if t.cal.Upstream != nil {
 		local := *t.cal
 		upstream := *t.cal.Upstream
+		client := upstream.HTTP
+		if client == nil {
+			client = &http.Client{Timeout: 15 * time.Second}
+		}
+		upstream.HTTP = privacyHTTPClient(client)
 		previous := upstream.BeforeWrite
 		upstream.BeforeWrite = func() error {
 			if err := checkExecution(local.Authority); err != nil {

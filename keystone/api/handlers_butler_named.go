@@ -229,7 +229,7 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 		Capped:               ans.Capped,
 		TranscriptJSON:       redact.String(string(transcriptJSON)),
 		Turns: []runtimedb.ButlerTurn{
-			{Role: runtimedb.ButlerRoleUser, Text: redact.String(turn.Text)},
+			{Role: runtimedb.ButlerRoleUser, Text: redact.String(turn.Text), TaskID: ans.TaskID},
 			{
 				Role: runtimedb.ButlerRoleAssistant, Text: finalText, Capped: ans.Capped,
 				TranscriptJSON: redact.String(string(transcriptJSON)), PlanIDs: planIDs,
@@ -239,25 +239,28 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	// Inbound provenance was committed with the turn. Built-in synchronous
-	// replies also leave here; external chat records outbound when queued.
-	if turn.Connection.Ref == 0 {
-		s.noteBuiltInSessionReply(sessionID, turn.Connection.Name)
+	if err = s.DB.LinkPlanSessionPrivacy(sessionID, planIDs); err != nil {
+		return askResponse{SessionID: sessionID}, http.StatusInternalServerError, err
 	}
 	// Link the durable task to the conversation it belongs to. The
 	// ordering forces this to happen here rather than at creation: the
 	// session id only exists once the turn is recorded, and the task had
 	// to exist before the work could start.
 	//
-	// A failure is logged rather than returned. The answer has already
-	// been produced and is about to be delivered; losing the link costs
-	// the NEXT turn its resume, and dropping the reply would cost this
-	// one entirely.
+	// The turn already committed its task handle and privacy provenance.
+	// Keep that handle on failure, while withholding the answer until this
+	// secondary task/session bookkeeping succeeds.
 	if ans.TaskID != "" && sessionID != "" {
 		if lerr := s.DB.SetButlerTaskSession(ans.TaskID, sessionID); lerr != nil {
 			s.Log.Error("linking butler task to its conversation", "task", ans.TaskID,
 				"session", sessionID, "err", lerr)
+			return askResponse{SessionID: sessionID, Mode: string(mode), PlanIDs: planIDs, ProposalErrors: proposalErrs}, http.StatusInternalServerError, fmt.Errorf("could not preserve conversation privacy provenance")
 		}
+	}
+	// Inbound provenance was committed with the turn. Built-in synchronous
+	// replies also leave here; external chat records outbound when queued.
+	if turn.Connection.Ref == 0 {
+		s.noteBuiltInSessionReply(sessionID, turn.Connection.Name)
 	}
 	// The activity line names the Butler and the model. "Which model saw
 	// this material" is the question ADR-W031 A2 exists to answer by
@@ -368,7 +371,7 @@ func (s *Server) preserveFailedTurn(turn butlerlive.Turn, prior *turnContext, an
 			// planIDs ride on the turn so the Console can show the
 			// proposal next to the question that caused it, the same
 			// way a successful assistant turn carries its own.
-			{Role: runtimedb.ButlerRoleUser, Text: redact.String(turn.Text),
+			{Role: runtimedb.ButlerRoleUser, Text: redact.String(turn.Text), TaskID: ans.TaskID,
 				TranscriptJSON: failed, PlanIDs: planIDs},
 		},
 	})
@@ -378,10 +381,14 @@ func (s *Server) preserveFailedTurn(turn butlerlive.Turn, prior *turnContext, an
 		}
 		return nil
 	}
+	if lerr := s.DB.LinkPlanSessionPrivacy(sessionID, planIDs); lerr != nil {
+		s.Log.Error("linking Plan privacy", "err", lerr)
+		return askResponse{SessionID: sessionID}
+	}
 	if lerr := s.DB.SetButlerTaskSession(ans.TaskID, sessionID); lerr != nil {
 		s.Log.Error("linking a failed turn's task to its conversation",
 			"task", ans.TaskID, "session", sessionID, "err", lerr)
-		return nil
+		return askResponse{SessionID: sessionID, Mode: string(mode), PlanIDs: planIDs, ProposalErrors: proposalErrs}
 	}
 	s.event("butler.session.failed", "", principal.Identity{Name: butlerPrincipal, ActingFor: turn.Member},
 		fmt.Sprintf("session %s kept task %s after a failure: %d tool calls already ran, %d proposals",

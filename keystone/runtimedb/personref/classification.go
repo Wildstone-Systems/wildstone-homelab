@@ -237,6 +237,7 @@ var Columns = []Column{
 	{"household_secret_audit", "actor_person_id", PersonID, "0069: canonical active Person identity, never a handle or machine principal"},
 	{"household_secret_grants", "person_id", PersonID, "0069: canonical active Person identity, never a handle or machine principal"},
 	{"household_secrets", "owner_person_id", PersonID, "0069: canonical active Person identity, never a handle or machine principal"},
+	{"content_privacy", "object", NotAPerson, "0070 and SetMemoryPrivacy: m:<memory sequence> or s:<session sequence>, an artifact key, never a Person"},
 	{"household_secret_agents", "purpose", NotAPerson, "0069: secret object identifier or closed operation vocabulary, not a Person"},
 	{"household_secret_agents", "secret_id", NotAPerson, "0069: secret object identifier or closed operation vocabulary, not a Person"},
 	{"household_secret_audit", "secret_id", NotAPerson, "0069: secret object identifier or closed operation vocabulary, not a Person"},

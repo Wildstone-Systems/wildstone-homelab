@@ -334,6 +334,14 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
 	if len(hits) > q.Limit {
 		hits = hits[:q.Limit]
 	}
+	rows.Close()
+	for _, h := range hits {
+		if h.MemorySeq != 0 {
+			if err := db.checkReadPrivacy(h.MemorySeq, q.ReadContext); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return hits, nil
 }
 

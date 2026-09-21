@@ -419,7 +419,7 @@ func (db *DB) ButlerTaskForSession(sessionID string) (ButlerTask, error) {
 		return ButlerTask{}, fmt.Errorf("runtimedb: malformed butler session id %q", sessionID)
 	}
 	return scanButlerTask(db.sql.QueryRow(
-		butlerTaskColumns+` WHERE t.session = ? ORDER BY t.seq DESC LIMIT 1`, seq))
+		butlerTaskColumns+` WHERE t.session = ? OR EXISTS (SELECT 1 FROM session_task_sources l WHERE l.session=? AND l.task=t.seq) ORDER BY t.seq DESC LIMIT 1`, seq, seq))
 }
 
 // Author and owner come back as the handles those people carry now, so

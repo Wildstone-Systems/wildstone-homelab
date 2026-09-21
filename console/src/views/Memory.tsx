@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, audienceIsHousehold, audienceLabel, type MemoryRecord } from "../api";
 import { ErrorLine, useAction, useLoad, when } from "../lib";
 import { StatusPill } from "../ui/status";
@@ -98,12 +98,27 @@ function Record({ record, onChanged }: { record: MemoryRecord; onChanged: () => 
   const [text, setText] = useState(record.content);
   const [note, setNote] = useState<string | null>(null);
   const action = useAction();
+  const [privacy, setPrivacy] = useState(record.privacy);
+  const privacyBusy = useRef(false);
+  useEffect(() => { setPrivacy(record.privacy); }, [record.privacy]);
+  function changePrivacy(setting: "localOnly" | "trustedOnly", value: boolean) {
+    if (privacyBusy.current) return;
+    privacyBusy.current = true;
+    void action.run(async () => {
+      const effective = await api.setMemoryPrivacy(record.seq, {[setting]: value});
+      setPrivacy(effective);
+    }, "Privacy updated.").finally(() => { privacyBusy.current = false; });
+  }
   return (
     <li>
       <StatusPill kind={audienceIsHousehold(record.audience) ? "ok" : "mute"}>
         {audienceLabel(record.audience)}
       </StatusPill>
       <span>{record.content}</span>
+      <span className="work-form">
+        <label><input type="checkbox" checked={privacy?.localOnly ?? false} disabled={action.state.phase === "busy"} onChange={(e) => changePrivacy("localOnly", e.target.checked)} /> Keep processing local</label>
+        <label><input type="checkbox" checked={privacy?.trustedOnly ?? false} disabled={action.state.phase === "busy"} onChange={(e) => changePrivacy("trustedOnly", e.target.checked)} /> Keep on household screens</label>
+      </span>
       <span className="timeline-src">{record.kind}</span>
       <span className="timeline-src">
         {CONFIDENCE_NOTE[record.confidence] ?? record.confidence}

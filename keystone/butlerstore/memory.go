@@ -72,16 +72,17 @@ func memorySeams(db *runtimedb.DB, butlerName, member string, read *runtimedb.Me
 		return butler.MemorySeams{}
 	}
 	return butler.MemorySeams{
-		Preamble: func(context.Context) ([]butler.MemoryHit, error) {
+		Preamble: func(ctx context.Context) ([]butler.MemoryHit, error) {
 			var out []butler.MemoryHit
 			for _, kind := range preambleKinds {
 				records, err := db.RetrieveMemory(runtimedb.MemoryQuery{
 					ReadContext: read, Reader: member, Butler: butlerName, Kind: kind, Limit: preambleLimit,
 				})
 				if err != nil {
-					return nil, err
+					return nil, runtimedb.TrackMemoryPrivacy(ctx, 0, err)
 				}
 				for _, r := range records {
+					runtimedb.TrackMemoryPrivacy(ctx, r.Seq, nil)
 					out = append(out, butler.MemoryHit{
 						Content: r.Content, Kind: r.Kind, Subject: r.Subject,
 						Source: r.SourceKind, Age: time.Since(r.ObservedAt),
@@ -90,15 +91,16 @@ func memorySeams(db *runtimedb.DB, butlerName, member string, read *runtimedb.Me
 			}
 			return out, nil
 		},
-		Recall: func(_ context.Context, text string, limit int) ([]butler.MemoryHit, error) {
+		Recall: func(ctx context.Context, text string, limit int) ([]butler.MemoryHit, error) {
 			hits, err := db.SearchIndex(runtimedb.IndexQuery{
 				ReadContext: read, Reader: member, Butler: butlerName, Text: text, Limit: limit,
 			})
 			if err != nil {
-				return nil, err
+				return nil, runtimedb.TrackMemoryPrivacy(ctx, 0, err)
 			}
 			out := make([]butler.MemoryHit, 0, len(hits))
 			for _, h := range hits {
+				runtimedb.TrackMemoryPrivacy(ctx, h.MemorySeq, nil)
 				hit := butler.MemoryHit{
 					Content: h.Content, Source: h.SourceKind, Age: h.Age,
 					MustVerifyLive: h.MustVerifyLive,

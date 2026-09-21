@@ -47,6 +47,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
 // FiledropCapability is the capability these executors belong to. It is
@@ -104,7 +105,8 @@ const minFindQuery = 2
 // once at startup would pin the answer to whatever was true before the
 // household installed anything.
 type Filedrop struct {
-	Authority HouseholdExecutionAuthority
+	beforeWrite func() error
+	Authority   HouseholdExecutionAuthority
 	// Settings reports where the household's drop box is, now.
 	//
 	// Root is the absolute host path the filedrop capability declares;
@@ -160,7 +162,15 @@ func (f *Filedrop) store(c Call) (*portal.FileStore, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errNoFiledropRoot
 	}
-	return &portal.FileStore{BeforeWrite: func() error { return checkExecution(f.Authority) }, Root: root, MaxUpload: maxUpload, Member: strings.TrimSpace(c.Subject)}, nil
+	return &portal.FileStore{BeforeWrite: func() error {
+		if err := checkExecution(f.Authority); err != nil {
+			return err
+		}
+		if f.beforeWrite != nil {
+			return f.beforeWrite()
+		}
+		return nil
+	}, Root: root, MaxUpload: maxUpload, Member: strings.TrimSpace(c.Subject)}, nil
 }
 
 // errNoFiledropRoot is the one sentence every tool gives for "installed,
@@ -215,6 +225,10 @@ func (t *filedropTool) Execute(ctx context.Context, c Call) (Result, error) {
 		if err := checkExecution(t.fd.Authority); err != nil {
 			return Result{}, err
 		}
+
+		local := *t.fd
+		local.beforeWrite = func() error { return runtimedb.CheckPrivacyDelivery(ctx, runtimedb.MemoryDestination{}) }
+		t = &filedropTool{fd: &local, tool: t.tool}
 	}
 	if err := t.fd.installed(); err != nil {
 		return Result{}, err

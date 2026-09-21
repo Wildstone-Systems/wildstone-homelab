@@ -66,6 +66,7 @@ var ErrSourceSuppressed = errors.New("runtimedb: this was forgotten from this so
 
 // MemoryRecord is one thing the Butler remembers.
 type MemoryRecord struct {
+	Privacy         PrivacyPolicy      `json:"privacy"`
 	PromotedTo      int64              `json:"promotedTo,omitempty"`
 	Scope           string             `json:"scope"`
 	Seq             int64              `json:"seq"`
@@ -741,7 +742,21 @@ func (db *DB) RetrieveMemory(q MemoryQuery) ([]MemoryRecord, error) {
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	for i, m := range out {
+		p, err := db.MemoryPrivacy(m.Seq)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Privacy = p
+		if err := db.checkReadPrivacy(m.Seq, q.ReadContext); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // ExportMemoryFor is a person's personal export (A3): everything they
@@ -798,7 +813,18 @@ func (db *DB) ExportMemoryFor(reader string) ([]MemoryRecord, error) {
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	for i := range out {
+		policy, err := db.MemoryPrivacy(out[i].Seq)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Privacy = policy
+	}
+	return out, nil
 }
 
 // MemoryDigestEntry is one change to shared memory other adults should

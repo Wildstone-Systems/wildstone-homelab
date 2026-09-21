@@ -49,11 +49,16 @@ type PlanRecord struct {
 }
 
 // InsertPlan records a newly proposed plan and returns its "plan-<seq>" ID.
-func (db *DB) InsertPlan(principal, actingFor, summary, risk, planJSON string) (string, error) {
+func (db *DB) InsertPlan(principal, actingFor, summary, risk, planJSON string, privateOrigin ...bool) (string, error) {
 	if principal == "" || summary == "" || planJSON == "" {
 		return "", fmt.Errorf("runtimedb: insert plan: principal, summary, and plan JSON required")
 	}
-	res, err := db.sql.Exec(
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(
 		`INSERT INTO plans (created_at, principal, acting_for, summary, risk, state, plan_json)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		now(), principal, actingFor, summary, risk, string(PlanProposed), planJSON)
@@ -62,6 +67,14 @@ func (db *DB) InsertPlan(principal, actingFor, summary, risk, planJSON string) (
 	}
 	seq, err := res.LastInsertId()
 	if err != nil {
+		return "", err
+	}
+	if len(privateOrigin) > 0 && privateOrigin[0] {
+		if _, err = tx.Exec("INSERT INTO plan_private_origins(plan) VALUES(?)", seq); err != nil {
+			return "", err
+		}
+	}
+	if err = tx.Commit(); err != nil {
 		return "", err
 	}
 	return planID(seq), nil
