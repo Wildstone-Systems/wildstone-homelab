@@ -34,6 +34,8 @@ import (
 // Server serves the public plane. All fields are required except Log and
 // OnApproved.
 type Server struct {
+	SecretVault *runtimedb.SecretVault
+
 	Principals *principal.Store
 	DB         *runtimedb.DB
 	// Catalog is what this control plane can install (ADR-W021 A3).
@@ -359,9 +361,14 @@ func (s *Server) Handler() http.Handler {
 	// fingerprint for a node install.
 	mux.Handle("POST /api/v1/join-tokens", s.handle(principal.VerbManage, s.consequential(s.mintJoinToken)))
 
-	// Secrets (ADR-W012 W2): admin-only, name-level only — values transit
-	// the set endpoint once and are never persisted, logged, or readable
-	// back (the protocol has no GetSecret arm).
+	// Household/Personal secrets (ADR-W033 §12) are separate from the
+	// write-only node credential endpoints below (ADR-W012 W2).
+	mux.Handle("GET /api/v1/household/secrets", s.handle(principal.VerbManage, s.householdSecretConsole))
+	mux.Handle("POST /api/v1/household/secrets", s.handle(principal.VerbManage, s.consequential(s.householdSecretConsole)))
+	mux.Handle("POST /api/v1/household/secrets/{id}/{operation}", s.handle(principal.VerbManage, s.consequential(s.householdSecretConsole)))
+	mux.Handle("GET /api/v1/home/secrets", s.portal(surfaceHome, s.householdSecretHome))
+	mux.Handle("POST /api/v1/home/secrets", s.portal(surfaceHome, s.householdSecretHome))
+	mux.Handle("POST /api/v1/home/secrets/{id}/{operation}", s.portal(surfaceHome, s.householdSecretHome))
 	mux.Handle("GET /api/v1/nodes/{node}/secrets", s.handle(principal.VerbManage, s.listNodeSecrets))
 	// The install form's folder picker (ADR-W021 A5). Read-only, confined
 	// to the prefixes a bind mount may name.
@@ -731,6 +738,7 @@ func (s *Server) Handler() http.Handler {
 	// reason handlers_portal_home.go opens with: nine reads of a moving
 	// database is how two cards end up telling different stories about
 	// one event.
+	mux.Handle("GET /home/secrets/{$}", s.portal(surfaceHome, s.portalPage("secrets")))
 	mux.Handle("GET /home/{$}", s.portal(surfaceHome, s.portalPage("home")))
 	mux.Handle("GET /api/v1/home/summary", s.portal(surfaceHome, s.homeSummary))
 	// The one write the page has: a member answering the question they
@@ -1031,9 +1039,9 @@ func (s *Server) actingPersonMayStillHold(id principal.Identity) bool {
 // writeJSON is the ONLY response encoder on the public plane: it redacts
 // the serialized bytes, so no handler can leak a secret-shaped value even
 // by mistake (ADR-W007 A5 — redaction is a serialization property). The
-// one deliberate hole is token minting, which marks its response with
-// mintResponse to skip redaction for the single legitimate
-// secret-bearing reply.
+// typed exceptions are minted tokens and authorized protected Household
+// reveal/submission review. Ordinary chat and tool replies cannot use those
+// response types.
 func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -1042,6 +1050,10 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 		return
 	}
 	switch body.(type) {
+	case secretRevealResponse:
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 	case mintResponse, joinTokenResponse, reviewTokenResponse:
 		// The two deliberate carve-outs (ADR-W007 A3, ADR-W014 A3): a
 		// newly minted API token and a newly minted join token, each in

@@ -1035,6 +1035,30 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Public plane. Plan approval pokes the reconcile service (R2a); a
 	// new household event pokes the automation engine.
 	apiSrv := api.New(principals, db, state, log)
+	secretVault, err := db.OpenSecretVault(filepath.Join(dataDir, "household-secrets.key"))
+	if err != nil {
+		return fmt.Errorf("household secrets: %w", err)
+	}
+	apiSrv.SecretVault = secretVault
+	if calendarActions != nil {
+		calendarActions.SecretUse = func(ctx context.Context, c domestic.Call, consume func(string) error) (bool, error) {
+			id, err := secretVault.CalendarBinding(runtimedb.SecretUseContext(ctx))
+			if err != nil {
+				return true, err
+			}
+			if id == "" {
+				return false, nil
+			}
+			// Binding covers the shared calendar account: other tools cannot fall back
+			// to the old environment password, and unattended work has no Person.
+			if c.Tool != "calendar.get_agenda" || !c.Attended {
+				return true, runtimedb.ErrSecretDenied
+			}
+			err = secretVault.Use(id, runtimedb.SecretUseContext(ctx), c.Tool, func(raw []byte) error { return consume(string(raw)) })
+			return true, err
+		}
+	}
+
 	// Every Agent is on the assigned-tools model (ADR-W033 design §6.3,
 	// §6.4). Agents made before 0059 are brought onto it here, once,
 	// because the default set is read off the gateways and a migration
@@ -1590,6 +1614,13 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 						// keeps.
 						mine := household
 						mine.Memory = butlerstore.MemorySeams(db, b.Name, t.Member, t.MemoryDestination(), log)
+						if household.Actions != nil {
+							mine.Actions = func(ctx context.Context, c butler.HouseholdActionCall) (string, error) {
+								ctx = runtimedb.WithSecretUseContext(ctx, db.BindMemoryRead(t.Member, b.Name, t.MemoryDestination()))
+								return household.Actions(ctx, c)
+							}
+						}
+
 						if t.Group {
 							return butler.NewHouseholdGroupGateway(t.Member, mine), nil
 						}

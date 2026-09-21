@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Key } from "@phosphor-icons/react";
 import { api, PackageView, SecretInfo } from "../api";
 import { ErrorLine, useAction, useLoad, when } from "../lib";
@@ -20,6 +20,7 @@ export function Secrets() {
 
   return (
     <>
+      <HouseholdSecrets />
       <div className="sub">
         Admin-only; values are write-only by construction. A secret is per-node, so pick the node
         it lives on.
@@ -281,5 +282,245 @@ function SecretRow({
         {rotate.state.phase === "error" && <ErrorLine error={rotate.state.message} />}
       </td>
     </tr>
+  );
+}
+
+function HouseholdSecrets() {
+  const list = useLoad(() => api.householdSecrets(), []);
+  const people = useLoad(() => api.butlerMembers(), []);
+  const groups = useLoad(() => api.personGroups(), []);
+  const agents = useLoad(() => api.butlers(), []);
+  const [label, setLabel] = useState("");
+  const [value, setValue] = useState("");
+  const [agent, setAgent] = useState("");
+  const [person, setPerson] = useState("");
+  const [group, setGroup] = useState("");
+  const [visible, setVisible] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const hide = () => setVisible("");
+    window.addEventListener("blur", hide);
+    document.addEventListener("visibilitychange", hide);
+    return () => {
+      window.removeEventListener("blur", hide);
+      document.removeEventListener("visibilitychange", hide);
+    };
+  }, []);
+  useEffect(() => {
+    if (!visible) return;
+    const t = setTimeout(() => setVisible(""), 15000);
+    return () => clearTimeout(t);
+  }, [visible]);
+  async function act(id: string, op: string, body: Record<string, unknown>) {
+    setVisible("");
+    setError("");
+    try {
+      const r = await api.householdSecret(id, op, body);
+      setValue("");
+      if (
+        r.value &&
+        document.visibilityState === "visible" &&
+        document.hasFocus()
+      )
+        setVisible(r.value);
+      list.reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Request failed");
+    }
+  }
+  return (
+    <section className="card">
+      <h3>Household secrets</h3>
+      <p>
+        Values stay out of chat. Personal secrets belong only to their person.
+        Household submissions may be inspected here before approval.
+      </p>
+      <div className="row">
+        <label>
+          Safe label{" "}
+          <input
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            maxLength={64}
+          />
+        </label>
+        <label>
+          Value{" "}
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+          />
+        </label>
+        <button
+          onClick={() => void act("", "", { scope: "household", label, value })}
+        >
+          Create Household secret
+        </button>
+      </div>
+      <div className="row">
+        <label>
+          Agent{" "}
+          <select value={agent} onChange={(e) => setAgent(e.target.value)}>
+            <option value="">Choose Agent</option>
+            {(agents.data?.butlers ?? []).map((b) => (
+              <option key={b.butler.name} value={b.butler.name}>
+                {b.butler.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Person{" "}
+          <select
+            value={person}
+            onChange={(e) => {
+              setPerson(e.target.value);
+              setGroup("");
+            }}
+          >
+            <option value="">Choose Person</option>
+            {(people.data?.members ?? [])
+              .filter((p) => p.active)
+              .map((p) => (
+                <option key={p.member.personId} value={p.member.personId}>
+                  {p.member.member}
+                </option>
+              ))}
+          </select>
+        </label>
+        <label>
+          Group{" "}
+          <select
+            value={group}
+            onChange={(e) => {
+              setGroup(e.target.value);
+              setPerson("");
+            }}
+          >
+            <option value="">Choose Group</option>
+            {(groups.data ?? []).map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <p className="muted">
+        Choose one Person or Group for caller grants. Agent grants are separate.
+        Reveal requires both.
+      </p>
+      {error && <p role="alert">{error}</p>}
+      {list.error && <ErrorLine error={list.error} />}
+      {visible && (
+        <div role="status">
+          <output>{visible}</output>{" "}
+          <button onClick={() => setVisible("")}>Hide now</button>
+          <p>
+            Hidden automatically after 15 seconds or when you leave this window.
+          </p>
+        </div>
+      )}
+      {(list.data?.secrets ?? []).map((s) => (
+        <div className="card" key={s.id}>
+          <strong>{s.label}</strong>{" "}
+          <span>
+            {s.scope} · {s.state} · version {s.version}
+          </span>
+          {s.state === "pending" ? (
+            <div className="row">
+              <button onClick={() => void act(s.id, "review", {})}>
+                Inspect submission
+              </button>
+              <button
+                onClick={() =>
+                  void act(s.id, "lifecycle", { action: "approve" })
+                }
+              >
+                Approve Household copy
+              </button>
+              <button
+                onClick={() =>
+                  void act(s.id, "lifecycle", { action: "reject" })
+                }
+              >
+                Reject and erase
+              </button>
+            </div>
+          ) : s.scope === "household" && s.state === "active" ? (
+            <>
+              <div className="row">
+                <button onClick={() => void act(s.id, "reveal", { agent })}>
+                  Reveal with Owner Agent
+                </button>
+                <button onClick={() => void act(s.id, "rotate", { value })}>
+                  Rotate to entered value
+                </button>
+              </div>
+              {(["use", "reveal"] as const).map((verb) => (
+                <div className="row" key={verb}>
+                  {[true, false].map((allow) => (
+                    <button
+                      key={String(allow)}
+                      onClick={() =>
+                        void act(s.id, "grant", {
+                          grant: { personId: person, groupId: group, verb },
+                          allow,
+                        })
+                      }
+                    >
+                      {allow ? "Grant" : "Revoke"} caller {verb}
+                    </button>
+                  ))}
+                </div>
+              ))}
+              {(["calendar.get_agenda", "reveal"] as const).map((purpose) => (
+                <div className="row" key={purpose}>
+                  {[true, false].map((allow) => (
+                    <button
+                      key={String(allow)}
+                      onClick={() =>
+                        void act(s.id, "agent", { agent, purpose, allow })
+                      }
+                    >
+                      {allow ? "Grant" : "Revoke"} Agent {purpose}
+                    </button>
+                  ))}
+                </div>
+              ))}
+              <button
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Use this credential for calendar agenda reads? Other calendar operations will be blocked while bound.",
+                    )
+                  )
+                    void act(s.id, "calendar", {});
+                }}
+              >
+                Bind to calendar agenda
+              </button>
+            </>
+          ) : null}
+          {s.state !== "deleted" && (
+            <div className="row">
+              {["quarantine", "disable", "delete", "offboard"].map((action) => (
+                <button
+                  key={action}
+                  onClick={() => {
+                    if (window.confirm(`${action} this secret?`))
+                      void act(s.id, "lifecycle", { action });
+                  }}
+                >
+                  {action}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </section>
   );
 }

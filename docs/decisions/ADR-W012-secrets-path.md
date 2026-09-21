@@ -37,6 +37,10 @@ until a current owner supplies or reauthorizes replacement credentials.
 
 ---
 
+## Household-domain clarification (ADR-W033 §12, slice 15)
+
+The write-only node-secret rules below continue to apply to infrastructure and integration provisioning credentials. The separate Household/Personal product domain introduced by slice 15 stores only authenticated ciphertext in Keystone under a dedicated local key. Its authorized Household reveal and explicit Household-submission review use a protected, non-cacheable UI response; ordinary API responses, chat and model tool output retain redaction. No node-secret read operation is added. Personal values have no reveal path.
+
 # Part A — Decisions (binding)
 
 ### A1. Values live on the node, names live in Keystone

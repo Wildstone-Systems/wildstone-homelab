@@ -13,6 +13,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
 	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -34,6 +35,8 @@ const observationTTL = 15 * time.Minute
 
 // Serve runs one turn and returns what the Butler said.
 func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
+	t.Text = redact.SecretText(t.Text)
+	t.History = provider.SafeMessages(t.History)
 	b, err := bs.Resolve(t)
 	if err != nil {
 		return Answer{}, err

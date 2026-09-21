@@ -601,7 +601,7 @@ func (r *Runner) modelAttempt(ctx context.Context, p provider.Provider, taskID s
 		defer cancel()
 	}
 	resp, err := p.Chat(callCtx, provider.ChatRequest{
-		System: r.Gateway.SystemPrompt(), Messages: messages, Tools: specs,
+		System: r.Gateway.SystemPrompt(), Messages: provider.SafeMessages(messages), Tools: specs,
 	})
 	if err != nil {
 		stalled := errors.Is(callCtx.Err(), context.DeadlineExceeded)

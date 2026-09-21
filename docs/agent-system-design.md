@@ -712,6 +712,10 @@ Revoking a Person invalidates their outstanding secret references immediately (1
 
 A **Household** secret is the shared case, and the management and reveal rules below apply to it.
 
+### Slice 15 intake clarification
+
+A Person may securely submit their own Personal secret and explicitly authorize Agent use without household Owner review. This narrow intake flow does not add direct Personal editing, raw reveal, or authority for another Person. An explicit Household submission is a separate copy whose value the submitter authorizes an Owner to inspect through protected Console review before approval; it never transfers or exposes the Personal original. This clarifies the proposal/approval wording in 12.6 for slice 15.
+
 ## 12.3 Model exposure
 
 Models receive opaque secret references rather than raw values by default.

@@ -92,7 +92,13 @@ func newGroupID() (string, error) {
 // Sorted, so a caller that compares two resolutions is comparing sets
 // rather than whatever order SQLite happened to return.
 func (db *DB) ResolveGroupMembers(groupID string) ([]string, error) {
-	rows, err := db.sql.Query(
+	return resolveGroupMembers(db.sql, groupID)
+}
+
+func resolveGroupMembers(q interface {
+	Query(string, ...any) (*sql.Rows, error)
+}, groupID string) ([]string, error) {
+	rows, err := q.Query(
 		`SELECT m.person_id
 		   FROM person_group_members m
 		   JOIN butler_members b ON b.person_id = m.person_id

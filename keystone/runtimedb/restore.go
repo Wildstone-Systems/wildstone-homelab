@@ -29,6 +29,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -301,6 +302,31 @@ func (db *DB) ReconcileRestore() (applied int, err error) {
 				}
 			}
 		case "secret":
+			if strings.HasPrefix(e.id, "household-secret/") {
+				state := "quarantine"
+				if e.action == "deleted" {
+					state = "deleted"
+				}
+				id := strings.TrimPrefix(e.id, "household-secret/")
+				tx, xerr := db.sql.Begin()
+				if xerr != nil {
+					return applied, xerr
+				}
+				_, xerr = tx.Exec(`UPDATE household_secrets SET state=?,ciphertext=CASE WHEN ?='deleted' THEN X'' ELSE ciphertext END WHERE id=?`, state, state, id)
+				if xerr == nil {
+					_, xerr = tx.Exec(`DELETE FROM household_secret_agents WHERE secret_id=?`, id)
+				}
+				if xerr == nil {
+					xerr = tx.Commit()
+				} else {
+					tx.Rollback()
+				}
+				if xerr != nil {
+					return applied, xerr
+				}
+				break
+			}
+
 			// Secrets are revoked per connection; the journal records
 			// the reference, and the sweep below finds it wherever it
 			// still lives.

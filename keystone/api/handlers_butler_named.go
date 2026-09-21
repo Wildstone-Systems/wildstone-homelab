@@ -132,6 +132,12 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 	if code, err := s.turnHasAPerson(turn.Member); err != nil {
 		return nil, code, err
 	}
+	if note, handled, e := s.prepareSecretInput(turn.Member, turn.Text, 0); handled {
+		if e != nil {
+			return nil, http.StatusServiceUnavailable, e
+		}
+		return askResponse{FinalText: note}, http.StatusOK, nil
+	}
 	ans, err := s.Butlers.Serve(ctx, turn)
 	if err != nil {
 		// Serve returns the durable task id ALONGSIDE its error, and

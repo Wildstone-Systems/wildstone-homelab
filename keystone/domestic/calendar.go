@@ -38,6 +38,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -110,6 +111,10 @@ const defaultDurationMinutes = 60
 //
 // One instance backs every tool; Executors returns the registrations.
 type Calendar struct {
+	// SecretUse is checked for every credential-bearing calendar call. A bound
+	// secret never falls back to the deployment credential on denial.
+	SecretUse func(context.Context, Call, func(string) error) (bool, error)
+
 	// Upstream is the collection these tools act on. It must be
 	// Writable, or the three write tools refuse every call — which is a
 	// legitimate posture (a read-only calendar capability) and is
@@ -220,6 +225,28 @@ func (t *calendarTool) Execute(ctx context.Context, c Call) (Result, error) {
 	// in between installing the capability and wiring the credential.
 	if t.tool != CalToolSetup && (t.cal.Upstream == nil || t.cal.Upstream.CollectionURL == "") {
 		return Result{}, fmt.Errorf("no calendar is configured on this control plane")
+	}
+	if t.tool != CalToolSetup && t.cal.SecretUse != nil {
+		var result Result
+		bound, err := t.cal.SecretUse(ctx, c, func(value string) error {
+			local := *t.cal
+			upstream := *t.cal.Upstream
+			upstream.Password = value
+			upstream.HTTP = &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+			local.Upstream = &upstream
+			local.SecretUse = nil
+			var err error
+			result, err = (&calendarTool{cal: &local, tool: t.tool}).Execute(ctx, c)
+			// Even a malicious upstream must not reflect the credential into inference.
+			result.Summary = strings.ReplaceAll(result.Summary, value, "[secret omitted]")
+			for k, v := range result.Detail {
+				result.Detail[k] = strings.ReplaceAll(v, value, "[secret omitted]")
+			}
+			return err
+		})
+		if bound || err != nil {
+			return result, err
+		}
 	}
 	switch t.tool {
 	case CalToolAgenda:

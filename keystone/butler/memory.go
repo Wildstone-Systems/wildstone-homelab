@@ -444,7 +444,7 @@ func handleRemember(ctx context.Context, seams MemorySeams, s memorySession, inp
 	// belongs.
 	if ksredact.NamesACredential(content) {
 		return ToolOutcome{
-			Content: "that names a password, a key or a code, and none of those are kept here — " +
+			Content: "Store the value through the protected Secrets page at /home/secrets/; " +
 				"a memory record is read back by every conversation after this one. " +
 				"Say so plainly, and keep the rest if there is a rest.",
 			Rejected: true,
