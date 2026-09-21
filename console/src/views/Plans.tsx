@@ -443,6 +443,8 @@ export function PendingPlan({
         {plan.routine.proposingAgent && <p>Proposed by {plan.routine.proposingAgent} for {plan.actingFor}</p>}
         <p>Runs as: {plan.routine.assignedButler || "No Agent assigned"}</p>
         <p>Who may receive the result: {plan.routine.outputAudience}</p>
+        <p>Household secrets this version may use: {plan.routine.requiredSecrets?.length ? plan.routine.requiredSecrets.map(id=>`${plan.routine?.secretLabels?.[id] ?? id} (${id})`).join(", ") : "None"}</p>
+        <p>Memory records this version may read: {plan.routine.requiredMemory?.length ? plan.routine.requiredMemory.map(id=>`#${id}`).join(", ") : "None"}</p>
         <p>Where and how it is delivered:</p><pre>{plan.routine.delivery}</pre>
         <details><summary>Exact routine being approved</summary><pre>{plan.routine.document}</pre></details>
       </section>}

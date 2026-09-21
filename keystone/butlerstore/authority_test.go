@@ -42,6 +42,16 @@ func authorityDB(t *testing.T) (*runtimedb.DB, *Authority) {
 	return db, a
 }
 
+func TestInteractiveResourceRuleCannotAuthorizeRoutine(t *testing.T) {
+	a := &Authority{Resources: butler.ResourceRules{"secret": func(butler.ToolAuthorityQuery) (butler.ToolDecision, error) {
+		return butler.ToolDecision{Allowed: true}, nil
+	}}}
+	d, err := a.AdmitResource(butler.ToolAuthorityQuery{Caller: butler.CallerRoutine, RoutinePlanID: "plan-1", Resource: butler.ResourceRef{Kind: "secret", ID: "hs-1"}})
+	if err != nil || d.Allowed {
+		t.Fatalf("interactive grant authorized unattended resource: %+v %v", d, err)
+	}
+}
+
 // A grant cannot conjure a tool the surface does not have. This is the
 // household ceiling: the family gateway's map holds no operator tool, so
 // there is nothing for a control or a grant to switch on.

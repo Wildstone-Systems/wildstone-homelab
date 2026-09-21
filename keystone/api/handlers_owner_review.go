@@ -27,7 +27,9 @@ func (s *Server) freshOwnerReview(r *http.Request, id principal.Identity) (any, 
 }
 func (s *Server) submitRoutinePlan(r *http.Request, id principal.Identity) (any, int, error) {
 	var req struct {
-		OutputAudience string `json:"outputAudience"`
+		OutputAudience string   `json:"outputAudience"`
+		SecretIDs      []string `json:"secretIds"`
+		MemoryIDs      []int64  `json:"memoryIds"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
@@ -47,7 +49,7 @@ func (s *Server) submitRoutinePlan(r *http.Request, id principal.Identity) (any,
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
-	idPlan, err := s.DB.SubmitRoutinePlan(routine.Name, actingMember(id), "", req.OutputAudience, string(delivery), routine.Document)
+	idPlan, err := s.DB.SubmitRoutinePlan(routine.Name, actingMember(id), "", req.OutputAudience, string(delivery), routine.Document, runtimedb.RoutineResources{SecretIDs: req.SecretIDs, MemoryIDs: req.MemoryIDs})
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}

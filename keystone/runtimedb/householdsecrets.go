@@ -369,6 +369,27 @@ func (v *SecretVault) authorize(tx *sql.Tx, s SecretObject, c *MemoryReadContext
 	return secretPrincipalGrant(tx, s.ID, c.person, verb)
 }
 func secretPrincipalGrant(tx *sql.Tx, id, person, verb string) error {
+	return secretGeneralGrant(tx, id, person, 0, verb)
+}
+
+// secretGeneralGrant is the principal/object leg shared by attended Person
+// use and unattended exact-version use. A routine has no Person/Group identity
+// and the schema gives it only the use verb.
+func secretGeneralGrant(tx *sql.Tx, id, person string, routinePlan int64, verb string) error {
+	if routinePlan != 0 {
+		if person != "" || verb != "use" {
+			return ErrSecretDenied
+		}
+		var n int
+		err := tx.QueryRow(`SELECT count(*) FROM household_secret_routine_grants WHERE secret_id=? AND plan=? AND verb='use'`, id, routinePlan).Scan(&n)
+		if err != nil || n != 1 {
+			return ErrSecretDenied
+		}
+		return nil
+	}
+	if person == "" {
+		return ErrSecretDenied
+	}
 	// Group membership uses the shared resolver in the same transaction.
 	rows, err := tx.Query(`SELECT person_id,group_id FROM household_secret_grants WHERE secret_id=? AND verb=?`, id, verb)
 	if err != nil {
@@ -405,6 +426,97 @@ func secretPrincipalGrant(tx *sql.Tx, id, person, verb string) error {
 		}
 	}
 	return ErrSecretDenied
+}
+
+func (v *SecretVault) routineUseAuthorized(tx *sql.Tx, id string, p *RoutinePrincipal, purpose string) (SecretObject, []byte, error) {
+	routine, err := v.db.routineVersion(tx, p)
+	if err != nil || routine.agent == 0 {
+		return SecretObject{}, nil, ErrSecretDenied
+	}
+	s, ciphertext, err := secretRow(tx, id)
+	if err != nil || s.Scope != "household" || s.State != "active" {
+		return SecretObject{}, nil, ErrSecretDenied
+	}
+	var n int
+	if err = tx.QueryRow("SELECT count(*) FROM household_secret_agents WHERE secret_id=? AND agent=? AND purpose=?", id, routine.agent, purpose).Scan(&n); err != nil || n != 1 {
+		return SecretObject{}, nil, ErrSecretDenied
+	}
+	if err = secretGeneralGrant(tx, id, "", p.plan, "use"); err != nil {
+		return SecretObject{}, nil, err
+	}
+	return s, ciphertext, nil
+}
+
+func (v *SecretVault) CheckRoutineUse(id string, p *RoutinePrincipal, purpose string) error {
+	if purpose != "calendar.get_agenda" {
+		return ErrSecretDenied
+	}
+	if err := v.db.gate(GateDispatch); err != nil {
+		return err
+	}
+	tx, err := v.db.sql.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, _, err = v.routineUseAuthorized(tx, id, p, purpose)
+	return err
+}
+
+// UseRoutine resolves a Household credential below inference. The exact Plan
+// principal is rechecked with Agent and resource grants on every call.
+func (v *SecretVault) UseRoutine(id string, p *RoutinePrincipal, purpose string, consume func([]byte) error) error {
+	if purpose != "calendar.get_agenda" || consume == nil {
+		return ErrSecretDenied
+	}
+	if err := v.db.gate(GateDispatch); err != nil {
+		return err
+	}
+	tx, err := v.db.sql.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	s, ciphertext, err := v.routineUseAuthorized(tx, id, p, purpose)
+	if err != nil {
+		return err
+	}
+	raw, err := v.unseal(s, ciphertext)
+	if err != nil {
+		return err
+	}
+	defer clear(raw)
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	if err = consume(raw); err != nil {
+		return errors.New("secret-backed operation failed")
+	}
+	_, err = v.db.sql.Exec("INSERT INTO household_secret_routine_audit(secret_id,plan,action,at) VALUES(?,?,'use',?)", id, p.plan, now())
+	return err
+}
+
+// RevealRoutine deliberately has no raw-value path for unattended work.
+func (v *SecretVault) RevealRoutine(_ string, _ *RoutinePrincipal) ([]byte, error) {
+	return nil, ErrSecretDenied
+}
+
+func (v *SecretVault) CalendarBindingRoutine(p *RoutinePrincipal) (string, error) {
+	tx, err := v.db.sql.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	routine, err := v.db.routineVersion(tx, p)
+	if err != nil || routine.agent == 0 {
+		return "", ErrSecretDenied
+	}
+	var id string
+	err = tx.QueryRow("SELECT secret_id FROM household_secret_bindings WHERE purpose='calendar.get_agenda' AND principal='household'").Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
 }
 
 // Use's callback is trusted runtime code, not a model-selected function. The
@@ -657,6 +769,7 @@ func (v *SecretVault) CalendarBinding(c *MemoryReadContext) (string, error) {
 
 // Context is stamped by the per-turn runtime closure, never by tool arguments.
 type secretUseContextKey struct{}
+type routineSecretUseContextKey struct{}
 
 func WithSecretUseContext(ctx context.Context, c *MemoryReadContext) context.Context {
 	return context.WithValue(ctx, secretUseContextKey{}, c)
@@ -664,6 +777,16 @@ func WithSecretUseContext(ctx context.Context, c *MemoryReadContext) context.Con
 func SecretUseContext(ctx context.Context) *MemoryReadContext {
 	c, _ := ctx.Value(secretUseContextKey{}).(*MemoryReadContext)
 	return c
+}
+
+// WithRoutineSecretUseContext is set only by trusted unattended execution.
+// It replaces an interactive Person context rather than borrowing one.
+func WithRoutineSecretUseContext(ctx context.Context, p *RoutinePrincipal) context.Context {
+	return context.WithValue(ctx, routineSecretUseContextKey{}, p)
+}
+func RoutineSecretUseContext(ctx context.Context) *RoutinePrincipal {
+	p, _ := ctx.Value(routineSecretUseContextKey{}).(*RoutinePrincipal)
+	return p
 }
 
 func secretJournal(tx *sql.Tx, id, actor string, deleted bool) error {

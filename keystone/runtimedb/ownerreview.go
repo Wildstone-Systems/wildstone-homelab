@@ -6,13 +6,52 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
+	"sort"
 )
 
 type RoutinePlan = plan.RoutineChange
 
+// RoutineResources are requests, not grants. They become grants only when an
+// Owner approves the immutable Plan that contains them.
+type RoutineResources struct {
+	SecretIDs []string `json:"secretIds"`
+	MemoryIDs []int64  `json:"memoryIds"`
+}
+
+func normalizeRoutineResources(resources RoutineResources) (RoutineResources, string, error) {
+	sort.Strings(resources.SecretIDs)
+	sort.Slice(resources.MemoryIDs, func(i, j int) bool { return resources.MemoryIDs[i] < resources.MemoryIDs[j] })
+	for i, id := range resources.SecretIDs {
+		if id == "" || (i > 0 && id == resources.SecretIDs[i-1]) {
+			return RoutineResources{}, "", fmt.Errorf("routine secret requests need unique IDs")
+		}
+	}
+	for i, id := range resources.MemoryIDs {
+		if id <= 0 || (i > 0 && id == resources.MemoryIDs[i-1]) {
+			return RoutineResources{}, "", fmt.Errorf("routine memory requests need unique IDs")
+		}
+	}
+	if len(resources.SecretIDs) == 0 && len(resources.MemoryIDs) == 0 {
+		return resources, "", nil
+	}
+	b, err := json.Marshal(resources)
+	return resources, string(b), err
+}
+
 // SubmitRoutinePlan snapshots the exact reviewed behavior. Submission never
 // grants execution, and the queue is inserted by the shared plans trigger.
-func (db *DB) SubmitRoutinePlan(name, actor, agent, audience, delivery, expectedDocument string) (string, error) {
+func (db *DB) SubmitRoutinePlan(name, actor, agent, audience, delivery, expectedDocument string, requested ...RoutineResources) (string, error) {
+	if len(requested) > 1 {
+		return "", fmt.Errorf("one routine resource request is required")
+	}
+	resources := RoutineResources{}
+	if len(requested) == 1 {
+		resources = requested[0]
+	}
+	resources, signature, err := normalizeRoutineResources(resources)
+	if err != nil {
+		return "", err
+	}
 	tx, err := db.sql.Begin()
 	if err != nil {
 		return "", err
@@ -24,8 +63,8 @@ func (db *DB) SubmitRoutinePlan(name, actor, agent, audience, delivery, expected
 	}
 	var r RoutinePlan
 	var seq int64
-	var ownership, previousAudience string
-	if err = tx.QueryRow("SELECT seq,name,revision,document,ownership,output_audience,butler FROM household_routines WHERE name=?", name).Scan(&seq, &r.Name, &r.Revision, &r.Document, &ownership, &previousAudience, &r.AssignedButler); err != nil {
+	var ownership, previousAudience, previousSignature string
+	if err = tx.QueryRow("SELECT seq,name,revision,document,ownership,output_audience,butler,resource_signature FROM household_routines WHERE name=?", name).Scan(&seq, &r.Name, &r.Revision, &r.Document, &ownership, &previousAudience, &r.AssignedButler, &previousSignature); err != nil {
 		return "", err
 	}
 	if r.Document != expectedDocument {
@@ -51,16 +90,35 @@ func (db *DB) SubmitRoutinePlan(name, actor, agent, audience, delivery, expected
 		}
 		agentSeq = id
 	}
-	if previousAudience != audience {
+	if (len(resources.SecretIDs) != 0 || len(resources.MemoryIDs) != 0) && r.AssignedButler == "" {
+		return "", fmt.Errorf("routine resource use needs an assigned Agent")
+	}
+	labels := map[string]string{}
+	for _, id := range resources.SecretIDs {
+		var label string
+		if err = tx.QueryRow("SELECT label FROM household_secrets WHERE id=? AND scope='household' AND state='active'", id).Scan(&label); err != nil {
+			return "", fmt.Errorf("routine request needs an active Household secret")
+		}
+		labels[id] = label
+	}
+	for _, id := range resources.MemoryIDs {
+		var n int
+		if err = tx.QueryRow("SELECT count(*) FROM butler_memory WHERE seq=? AND scope IN ('household','agent_local') AND forgotten_at='' AND superseded_by IS NULL", id).Scan(&n); err != nil || n != 1 {
+			return "", fmt.Errorf("routine request needs active Household or Agent-local memory")
+		}
+	}
+	if previousAudience != audience || previousSignature != signature {
 		r.Revision++
-		if _, err = tx.Exec("UPDATE household_routines SET output_audience=?,revision=?,updated_at=?,updated_by=? WHERE seq=?", audience, r.Revision, now(), actor, seq); err != nil {
+		if _, err = tx.Exec("UPDATE household_routines SET output_audience=?,resource_signature=?,revision=?,updated_at=?,updated_by=? WHERE seq=?", audience, signature, r.Revision, now(), actor, seq); err != nil {
 			return "", err
 		}
-		if _, err = tx.Exec("INSERT INTO household_routine_revisions(routine,revision,document,author,created_at,note) VALUES(?,?,?,?,?,?)", seq, r.Revision, r.Document, actor, now(), "output audience changed; requires review"); err != nil {
+		if _, err = tx.Exec("INSERT INTO household_routine_revisions(routine,revision,document,author,created_at,note) VALUES(?,?,?,?,?,?)", seq, r.Revision, r.Document, actor, now(), "audience or resource requests changed; requires review"); err != nil {
 			return "", err
 		}
 	}
 	r.OutputAudience, r.Delivery = audience, delivery
+	r.RequiredSecrets, r.RequiredMemory = resources.SecretIDs, resources.MemoryIDs
+	r.SecretLabels = labels
 	r.ProposingAgent = agent
 	principal := actor
 	if agent != "" {
@@ -86,7 +144,9 @@ func (db *DB) SubmitRoutinePlan(name, actor, agent, audience, delivery, expected
 			return "", err
 		}
 	}
-	if _, err = tx.Exec(`INSERT INTO routine_plan_versions(plan,routine,revision,document,output_audience,delivery,assigned_butler) VALUES(?,?,?,?,?,?,?)`, id, seq, r.Revision, r.Document, audience, delivery, r.AssignedButler); err != nil {
+	secretJSON, _ := json.Marshal(resources.SecretIDs)
+	memoryJSON, _ := json.Marshal(resources.MemoryIDs)
+	if _, err = tx.Exec(`INSERT INTO routine_plan_versions(plan,routine,revision,document,output_audience,delivery,assigned_butler,secret_ids,memory_ids) VALUES(?,?,?,?,?,?,?,?,?)`, id, seq, r.Revision, r.Document, audience, delivery, r.AssignedButler, string(secretJSON), string(memoryJSON)); err != nil {
 		return "", err
 	}
 	if _, err = tx.Exec("UPDATE owner_review_queue SET proposing_agent=?,proposer_person_id=? WHERE plan=?", agentSeq, person, id); err != nil {
@@ -116,14 +176,25 @@ func (db *DB) ApproveRoutinePlan(id, actor string) error {
 	}
 	var routine int64
 	var version, current int
-	var document, live, audience, state, assigned, liveAssigned string
+	var document, live, audience, state, assigned, liveAssigned, secretJSON, memoryJSON, signature string
 	var proposer sql.NullString
-	if err = tx.QueryRow(`SELECT v.routine,v.revision,r.revision,v.document,r.document,v.output_audience,p.state,q.proposer_person_id,v.assigned_butler,r.butler
- FROM routine_plan_versions v JOIN household_routines r ON r.seq=v.routine JOIN plans p ON p.seq=v.plan JOIN owner_review_queue q ON q.plan=p.seq WHERE v.plan=?`, seq).Scan(&routine, &version, &current, &document, &live, &audience, &state, &proposer, &assigned, &liveAssigned); err != nil {
+	if err = tx.QueryRow(`SELECT v.routine,v.revision,r.revision,v.document,r.document,v.output_audience,p.state,q.proposer_person_id,v.assigned_butler,r.butler,v.secret_ids,v.memory_ids,r.resource_signature
+ FROM routine_plan_versions v JOIN household_routines r ON r.seq=v.routine JOIN plans p ON p.seq=v.plan JOIN owner_review_queue q ON q.plan=p.seq WHERE v.plan=?`, seq).Scan(&routine, &version, &current, &document, &live, &audience, &state, &proposer, &assigned, &liveAssigned, &secretJSON, &memoryJSON, &signature); err != nil {
 		return err
 	}
 	if version != current || document != live || assigned != liveAssigned || state != "proposed" {
 		return fmt.Errorf("this Plan version no longer matches the routine; submit it again")
+	}
+	var resources RoutineResources
+	if err = json.Unmarshal([]byte(secretJSON), &resources.SecretIDs); err != nil {
+		return fmt.Errorf("invalid reviewed secret requests: %w", err)
+	}
+	if err = json.Unmarshal([]byte(memoryJSON), &resources.MemoryIDs); err != nil {
+		return fmt.Errorf("invalid reviewed memory requests: %w", err)
+	}
+	resources, reviewedSignature, err := normalizeRoutineResources(resources)
+	if err != nil || reviewedSignature != signature {
+		return fmt.Errorf("reviewed resource requests no longer match this version")
 	}
 	if proposer.Valid {
 		var active int
@@ -133,6 +204,24 @@ func (db *DB) ApproveRoutinePlan(id, actor string) error {
 	}
 	if _, err = tx.Exec("UPDATE routine_plan_versions SET approved_by=? WHERE plan=?", person, seq); err != nil {
 		return err
+	}
+	for _, id := range resources.SecretIDs {
+		var n int
+		if err = tx.QueryRow("SELECT count(*) FROM household_secrets WHERE id=? AND scope='household' AND state='active'", id).Scan(&n); err != nil || n != 1 {
+			return fmt.Errorf("a requested Household secret is no longer active")
+		}
+		if _, err = tx.Exec("INSERT INTO household_secret_routine_grants(plan,secret_id) VALUES(?,?)", seq, id); err != nil {
+			return err
+		}
+	}
+	for _, id := range resources.MemoryIDs {
+		var n int
+		if err = tx.QueryRow("SELECT count(*) FROM butler_memory WHERE seq=? AND scope IN ('household','agent_local') AND forgotten_at='' AND superseded_by IS NULL", id).Scan(&n); err != nil || n != 1 {
+			return fmt.Errorf("a requested memory record is no longer active")
+		}
+		if _, err = tx.Exec("INSERT INTO routine_memory_grants(plan,memory) VALUES(?,?)", seq, id); err != nil {
+			return err
+		}
 	}
 	if _, err = tx.Exec("UPDATE household_routines SET approved_revision=revision,output_audience=?,state='enabled',disabled_at='',disabled_by='',updated_at=?,updated_by=? WHERE seq=?", audience, now(), actor, routine); err != nil {
 		return err

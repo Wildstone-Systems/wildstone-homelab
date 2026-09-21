@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -83,6 +84,47 @@ func TestRoutineApprovalOnlyThroughFreshOwnerConsole(t *testing.T) {
 	r, _ = h.s.DB.GetHouseholdRoutine("review-me")
 	if !r.Active() {
 		t.Fatal("reviewed version not activated")
+	}
+}
+
+func TestRoutineResourceRequestIsVisibleAndGrantedOnlyAfterReview(t *testing.T) {
+	h := freshnessHarness(t)
+	h.agentAt(t, "family", "telegram")
+	memory := seedMemory(t, h, "family appointment", runtimedb.HouseholdOwner, runtimedb.ButlerAudienceShared)
+	if _, err := h.s.DB.CreateHouseholdRoutine(runtimedb.HouseholdRoutine{Name: "resource-review", Ownership: runtimedb.RoutineWildstone, Author: "mika", Document: routineDoc("resource-review")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.AssignRoutineButler("resource-review", agentFor("family"), "mika"); err != nil {
+		t.Fatal(err)
+	}
+	cookie := sessionCookie(h.s.StartConsoleSession("mika", time.Now()))
+	request := fmt.Sprintf(`{"outputAudience":"aud_household","memoryIds":[%d]}`, memory)
+	code, out := h.sessionRequest(http.MethodPost, "/api/v1/household/routines/resource-review/submit", request, "mika", cookie)
+	if code != http.StatusOK {
+		t.Fatalf("submit: %d %v", code, out)
+	}
+	id := out["planId"].(string)
+	if _, err := h.s.DB.BindRoutinePrincipal(id); err == nil {
+		t.Fatal("submission granted unattended authority before approval")
+	}
+	code, out = h.sessionRequest(http.MethodGet, "/api/v1/plans/"+id, "", "mika", cookie)
+	if code != http.StatusOK {
+		t.Fatalf("review snapshot: %d %v", code, out)
+	}
+	routine, ok := out["routine"].(map[string]any)
+	if !ok || len(routine["requiredMemory"].([]any)) != 1 {
+		t.Fatalf("review omitted requested record: %v", out)
+	}
+	code, out = h.sessionRequest(http.MethodPost, "/api/v1/plans/"+id+"/approve", "", "mika", cookie)
+	if code != http.StatusOK {
+		t.Fatalf("approve: %d %v", code, out)
+	}
+	p, err := h.s.DB.BindRoutinePrincipal(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.s.DB.CheckRoutineMemory(p, memory, runtimedb.MemoryDestination{BuiltIn: true}); err != nil {
+		t.Fatalf("approved grant not usable: %v", err)
 	}
 }
 func TestFreshOwnerRevisionTokenApprovesOnce(t *testing.T) {
