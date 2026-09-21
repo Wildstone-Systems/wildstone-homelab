@@ -414,6 +414,24 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/household/meters/{name}/readings", s.handle(principal.VerbEmit, s.recordMeterReading))
 	mux.Handle("GET /api/v1/household/commitments", s.handle(principal.VerbRead, s.listCommitments))
 	mux.Handle("GET /api/v1/household/commitments/{name}", s.handle(principal.VerbRead, s.commitmentHistory))
+	// And managing them, which the Console could not do at all: every
+	// write lived behind a portal session and homepage_users, so an
+	// Owner could see a duplicate commitment and not remove it. The
+	// same handlers the dashboard calls, through an adapter that
+	// resolves the acting person and the desired state the portal
+	// chain is handed for free (handlers_household_commitments.go).
+	mux.Handle("POST /api/v1/household/commitments",
+		s.handle(principal.VerbManage, s.consoleCommitmentCall(s.homeAddCommitment)))
+	mux.Handle("PUT /api/v1/household/commitments/{name}",
+		s.handle(principal.VerbManage, s.consoleCommitmentCall(s.homeEditCommitment)))
+	mux.Handle("DELETE /api/v1/household/commitments/{name}",
+		s.handle(principal.VerbManage, s.consoleCommitmentCall(s.homeRemoveCommitment)))
+	mux.Handle("POST /api/v1/household/commitments/{name}/done",
+		s.handle(principal.VerbManage, s.consoleCommitmentCall(s.answerCommitment("done"))))
+	mux.Handle("POST /api/v1/household/commitments/{name}/waived",
+		s.handle(principal.VerbManage, s.consoleCommitmentCall(s.answerCommitment("waived"))))
+	mux.Handle("POST /api/v1/household/commitments/{name}/booked",
+		s.handle(principal.VerbManage, s.consoleCommitmentCall(s.answerCommitment("booked"))))
 
 	mux.Handle("POST /api/v1/household/automations/replay", s.handle(principal.VerbRead, s.replayAutomation))
 	mux.Handle("GET /api/v1/household/automations/grammar", s.handle(principal.VerbRead, s.automationGrammar))

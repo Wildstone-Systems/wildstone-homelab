@@ -731,12 +731,25 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		log.Error("seeding managed state; the first tick may re-plan resources that already exist", "err", oerr)
 	} else {
 		byNode := seedRefs(rows)
-		seeded := 0
+		seeded, machines, keystoneOwned := 0, 0, 0
 		for node, refs := range byNode {
 			svc.Rec.SeedManaged(node, refs)
 			seeded += len(refs)
+			// A KEYSTONE-OWNED RESOURCE HAS NO NODE, and counting its
+			// bucket as a machine made this line say nodes=2 on a
+			// household that runs one. Commitments are applied at no
+			// node (ADR-W024's Automation says the same of itself), so
+			// the empty key appeared the moment somebody added the
+			// first routine — and "2" is exactly the sort of number an
+			// operator reads once, believes, and spends an afternoon on.
+			if node == "" {
+				keystoneOwned = len(refs)
+				continue
+			}
+			machines++
 		}
-		log.Info("managed state restored", "nodes", len(byNode), "resources", seeded, "rows", len(rows))
+		log.Info("managed state restored", "nodes", machines,
+			"resources", seeded, "keystoneOwned", keystoneOwned, "rows", len(rows))
 	}
 
 	go svc.Run(context.Background(), reconcileEvery)

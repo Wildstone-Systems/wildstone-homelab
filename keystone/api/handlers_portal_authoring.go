@@ -323,6 +323,26 @@ type meterFields struct {
 // unconstrained: it is the one field with any social teeth, and the
 // household was trusted with it rather than given a rule that would
 // stop a parent putting a child's checkup on their own list.
+// commitmentEdits is an edit body, where every field is optional and
+// ABSENCE MEANS PRESERVE. See homeEditCommitment for why that is not a
+// convenience.
+type commitmentEdits struct {
+	Description     *string   `json:"description,omitempty"`
+	Meter           *string   `json:"meter,omitempty"`
+	Every           *string   `json:"every,omitempty"`
+	Lead            *string   `json:"lead,omitempty"`
+	At              *string   `json:"at,omitempty"`
+	AtValue         *float64  `json:"atValue,omitempty"`
+	Rollover        *string   `json:"rollover,omitempty"`
+	Anchor          *string   `json:"anchor,omitempty"`
+	RequiresBooking *bool     `json:"requiresBooking,omitempty"`
+	Scope           *string   `json:"scope,omitempty"`
+	PartOfDay       *string   `json:"partOfDay,omitempty"`
+	About           *string   `json:"about,omitempty"`
+	MayComplete     *[]string `json:"mayComplete,omitempty"`
+	Notify          *[]string `json:"notify,omitempty"`
+}
+
 type commitmentFields struct {
 	Description     string   `json:"description"`
 	Meter           string   `json:"meter,omitempty"`
@@ -540,10 +560,21 @@ func decodeAuthored(r *http.Request, into any) (int, error) {
 // which is ADR-W033's line stated three separate times: administrative
 // authority and disclosure authority are not the same thing.
 func mayAuthor(st upkeep.Standing, w who) bool {
+	// The operator surface authors anything, for the reason it sees
+	// anything: the Console already lists every commitment, and one
+	// that shows a record while refusing to let the administrator
+	// change it is the inconsistency rather than the safeguard.
+	if w.admin {
+		return true
+	}
 	if st.Scope != resource.CommitmentScopePersonal {
 		return true
 	}
-	return strings.TrimPrefix(st.Owner, "household/") == w.member
+	owner := strings.TrimPrefix(st.Owner, "household/")
+	// A guardian authors their child's, or a child's routine could be
+	// created by the person who runs the week and then edited by
+	// nobody — the child cannot sign in to do it themselves (A8/A9).
+	return owner == w.member || w.guards(owner)
 }
 
 // homeEditCommitment changes one that already exists.
@@ -580,39 +611,81 @@ func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, memb
 	if existing == nil || existing.Commitment == nil {
 		return nil, http.StatusNotFound, fmt.Errorf("no commitment named %q", name)
 	}
-	var f commitmentFields
+	// ABSENT IS PRESERVED, EMPTY IS MEANT. Every field arrives as a
+	// pointer so the two can be told apart, and that distinction is the
+	// whole safety of this handler.
+	//
+	// It used to rebuild the spec from a flat struct, so a field the
+	// caller did not send was written as its zero value: correcting a
+	// description through a form that knows about four fields silently
+	// cleared requiresBooking, mayComplete and notify, and turned a
+	// meter rule into a clock rule. Every surface then had to send
+	// every field or gate its edit button — a rule each new form would
+	// have to rediscover, and the Console's did not.
+	//
+	// So the handler preserves instead. A form owns what it sends and
+	// nothing else, and a field added to CommitmentSpec later cannot be
+	// silently zeroed by a page written before it existed.
+	var f commitmentEdits
 	if code, err := decodeAuthored(r, &f); err != nil {
 		return nil, code, err
 	}
-	if strings.TrimSpace(f.Description) == "" {
+	spec := *existing.Commitment
+	if f.Description != nil {
+		spec.Description = *f.Description
+	}
+	if strings.TrimSpace(spec.Description) == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("what do you want to keep up with?")
 	}
-	if f.Rollover == "" {
+	if f.Rollover != nil {
+		spec.Rollover = *f.Rollover
+	}
+	if spec.Rollover == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("does this come round again?")
 	}
-	spec := *existing.Commitment
-	spec.Description = f.Description
-	spec.Rollover = f.Rollover
-	// Set unconditionally, including to empty. A routine's part of day
-	// is one of the things most likely to be wrong first — "before
-	// school" turns out to be "after dinner" — and a field that can be
-	// set once and never changed is a field that will be worked around
-	// by deleting the routine and making a new one. Empty is a real
-	// answer here ("any time"), so it cannot be "leave it alone".
-	spec.PartOfDay = f.PartOfDay
-	spec.RequiresBooking = f.RequiresBooking
-	spec.MayComplete = f.MayComplete
-	spec.Notify = f.Notify
-	if f.Scope != "" {
-		spec.Scope = f.Scope
+	// Empty is a real answer for these, which is exactly why they need
+	// the pointer: "any time" and "leave it alone" are different, and a
+	// routine's part of day is the thing most likely to be wrong first.
+	if f.PartOfDay != nil {
+		spec.PartOfDay = *f.PartOfDay
 	}
-	if f.Anchor != "" {
-		spec.Anchor = f.Anchor
+	if f.RequiresBooking != nil {
+		spec.RequiresBooking = *f.RequiresBooking
+	}
+	if f.MayComplete != nil {
+		spec.MayComplete = *f.MayComplete
+	}
+	if f.Notify != nil {
+		spec.Notify = *f.Notify
+	}
+	if f.Scope != nil && *f.Scope != "" {
+		spec.Scope = *f.Scope
+	}
+	if f.Anchor != nil && *f.Anchor != "" {
+		spec.Anchor = *f.Anchor
 	}
 	// The first rule is the one the page renders; the rest are not its
-	// to touch.
-	edited := resource.CommitmentDue{
-		Meter: f.Meter, Every: f.Every, Lead: f.Lead, At: f.At, AtValue: f.AtValue,
+	// to touch. Overlaid onto the rule that is there rather than built
+	// fresh, so a meter rule stays a meter rule when a form that only
+	// knows about intervals saves a new description.
+	edited := resource.CommitmentDue{Meter: resource.MeterClock}
+	if len(spec.Due) > 0 {
+		edited = spec.Due[0]
+	}
+	if f.Meter != nil {
+		edited.Meter = *f.Meter
+	}
+	if f.Every != nil {
+		edited.Every = *f.Every
+	}
+	if f.Lead != nil {
+		edited.Lead = *f.Lead
+	}
+	if f.At != nil {
+		edited.At = *f.At
+	}
+	if f.AtValue != nil {
+		edited.AtValue = *f.AtValue
 	}
 	if edited.Meter == "" {
 		edited.Meter = resource.MeterClock
@@ -626,8 +699,8 @@ func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, memb
 		spec.Due = append([]resource.CommitmentDue{edited}, spec.Due[1:]...)
 	}
 	owner := existing.Metadata.Owner
-	if strings.TrimSpace(f.About) != "" {
-		owner = f.owner(member)
+	if f.About != nil && strings.TrimSpace(*f.About) != "" {
+		owner = commitmentFields{About: *f.About}.owner(member)
 	}
 	res := resource.Resource{
 		ApiVersion: resource.ApiVersion, Kind: resource.KindCommitment,
@@ -635,7 +708,7 @@ func (s *Server) homeEditCommitment(_ http.ResponseWriter, r *http.Request, memb
 		Commitment: &spec,
 	}
 	if code, err := s.applyAuthored(member, authored{
-		Put: []resource.Resource{res}, Summary: member + " changed " + f.Description,
+		Put: []resource.Resource{res}, Summary: member + " changed " + spec.Description,
 		BasedOn: basedOnHead(r),
 	}); err != nil {
 		return nil, code, err
