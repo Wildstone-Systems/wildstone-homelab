@@ -604,9 +604,11 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		binds = append(binds, b)
 	}
 	ports := map[string][]portBinding{}
+	exposedPorts := map[string]struct{}{}
 	for _, p := range op.GetPorts() {
 		key := fmt.Sprintf("%d/%s", p.GetContainerPort(), portProtocol(p.GetProtocol()))
 		ports[key] = append(ports[key], portBinding{HostIP: p.GetHostIp(), HostPort: fmt.Sprint(p.GetHostPort())})
+		exposedPorts[key] = struct{}{}
 	}
 	restart := op.GetRestartPolicy()
 	if restart == "" {
@@ -619,10 +621,11 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	}
 
 	id, err := a.docker.create(ctx, op.GetName(), createBody{
-		Image:  op.GetImage(),
-		Cmd:    op.GetCommand(),
-		Env:    env,
-		Labels: labels,
+		Image:        op.GetImage(),
+		Cmd:          op.GetCommand(),
+		Env:          env,
+		Labels:       labels,
+		ExposedPorts: exposedPorts,
 		HostConfig: hostConfig{
 			Binds:         binds,
 			PortBindings:  ports,

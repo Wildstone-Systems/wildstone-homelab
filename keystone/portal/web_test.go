@@ -20,6 +20,19 @@ import (
 // pages are the surfaces Page serves.
 var pages = []string{"home", "files", "assistant", "activity", "upkeep", "calendar", "files-widget", "assistant-widget"}
 
+func TestPersonalBannerIsNotShipped(t *testing.T) {
+	if _, err := web.ReadFile("web/assets/banner-default.webp"); err == nil {
+		t.Fatal("the personal banner photo must not be embedded in Keystone")
+	}
+	if _, _, ok := Asset("assets/banner-default.webp"); ok {
+		t.Fatal("the removed personal photo must not be served")
+	}
+	page, ok := Page("home")
+	if !ok || strings.Contains(string(page), "banner-default.webp") {
+		t.Fatal("the dashboard must load without the personal banner photo")
+	}
+}
+
 // classAttr finds every class="..." in a page.
 var classAttr = regexp.MustCompile(`class="([^"{}]+)"`)
 

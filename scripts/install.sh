@@ -336,7 +336,12 @@ step_admin() {
     printf 'Username: ' >&2
     read -r u </dev/tty || u=""
     [ -z "$u" ] && { echo "a username is required" >&2; continue; }
-    case "$u" in *[!a-zA-Z0-9._-]*) echo "letters, digits, dot, dash and underscore only" >&2; continue ;; esac
+    # Match resource metadata.name before installing anything: this name
+    # becomes the LdapUser resource as well as the directory login.
+    if [ "${#u}" -gt 63 ] || [[ ! "$u" =~ ^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$ ]]; then
+      echo "use 1-63 lowercase letters, digits, dots, dashes or underscores; start and end with a letter or digit (for example: mika)" >&2
+      continue
+    fi
     # `admin` is LLDAP's own service account — the identity Authelia
     # binds with to read and modify the directory. Taking that name
     # would set the operator's password on the service credential and
@@ -742,7 +747,11 @@ fetch_binary() {
   fetch_asset "$artifact"
   tar -xzf "$WORK/$artifact" -C "$WORK" "$name"
   install -d -m 0755 "$dest"
-  install -m 0755 "$WORK/$name" "$dest/$name"
+  # A running executable cannot be truncated on Linux (ETXTBSY). Stage
+  # the verified replacement beside it and rename it into place, so an
+  # upgrade can replace Keystone and Wardstone while their units run.
+  install -m 0755 "$WORK/$name" "$dest/.$name.new"
+  mv -f "$dest/.$name.new" "$dest/$name"
   log "installed $dest/$name"
 }
 
@@ -1337,6 +1346,14 @@ post_install() {
 }
 
 if [ "$ROLE" = keystone ]; then
+  # On a single-host upgrade, Keystone's new reconciler can act as soon
+  # as it starts. Upgrade the existing agent first so ported containers
+  # are recreated by a Wardstone that publishes those ports correctly.
+  if [ "$INTERACTIVE" = 1 ] && systemctl is-active --quiet wardstoned; then
+    fetch_binary wardstoned
+    systemctl restart wardstoned || fail "could not restart wardstoned after upgrade"
+    log "existing node agent upgraded before Keystone"
+  fi
   fetch_binary keystone
   fetch_binary wild
   install -d -m 0700 /var/lib/wildstone/keystone

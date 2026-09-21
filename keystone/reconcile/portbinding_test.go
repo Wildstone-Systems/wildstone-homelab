@@ -2,6 +2,9 @@ package reconcile
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +52,33 @@ func TestSpecHashCoversBindAddress(t *testing.T) {
 	narrow := &resource.ContainerSpec{Image: "x", Ports: []string{"127.0.0.1:8443:80"}}
 	if specHash(wide, ContainerNetwork, "", nil) == specHash(narrow, ContainerNetwork, "", nil) {
 		t.Error("spec hash is blind to the bind address, so narrowing it would never redeploy")
+	}
+}
+
+func TestPortPublishingUpgradeChangesPortedContainerHash(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		spec       *resource.ContainerSpec
+		wantChange bool
+	}{
+		{"published port", &resource.ContainerSpec{Image: "x", Ports: []string{"7443:7443"}}, true},
+		{"no ports", &resource.ContainerSpec{Image: "x"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Match the pre-upgrade hash exactly. A changed label makes the
+			// reconciler replace an already running Docker container.
+			data, err := json.Marshal(tc.spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data = append(data, []byte("\x00net="+ContainerNetwork)...)
+			old := sha256.Sum256(data)
+			legacy := hex.EncodeToString(old[:8])
+			changed := specHash(tc.spec, ContainerNetwork, "", nil) != legacy
+			if changed != tc.wantChange {
+				t.Errorf("hash changed = %v, want %v", changed, tc.wantChange)
+			}
+		})
 	}
 }
 

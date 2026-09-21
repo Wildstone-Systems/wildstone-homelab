@@ -1563,6 +1563,13 @@ func specHash(spec *resource.ContainerSpec, network, cfgDigest string, aliases [
 		return ""
 	}
 	data = append(data, []byte("\x00net="+network)...)
+	// Earlier agents sent PortBindings without Config.ExposedPorts. Docker
+	// accepted those containers but published none of their host ports.
+	// Change the hash only for port-bearing containers so an upgrade
+	// replaces those broken instances with correctly published ones.
+	if len(spec.Ports) > 0 {
+		data = append(data, []byte("\x00port-publishing=exposed-ports-v1")...)
+	}
 	if cfgDigest != "" {
 		data = append(data, []byte("\x00cfg="+cfgDigest)...)
 	}
