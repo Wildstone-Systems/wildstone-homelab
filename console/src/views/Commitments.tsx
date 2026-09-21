@@ -1,5 +1,6 @@
 import { CalendarCheck, Gauge, Question } from "@phosphor-icons/react";
-import { api, CommitmentStanding, MeterView } from "../api";
+import { useState } from "react";
+import { api, CommitmentFields, CommitmentStanding, MeterView } from "../api";
 import { ago, ErrorLine, useAction, useLoad, when } from "../lib";
 import { Kind, StatusPill } from "../ui/status";
 import { ProblemCard } from "../ui/ProblemCard";
@@ -86,6 +87,7 @@ export function CommitmentsView({
   loading?: boolean;
 }) {
   const sorted = byUrgency(standings);
+  const [adding, setAdding] = useState(false);
   return (
     <>
       <div className="sub">
@@ -99,9 +101,22 @@ export function CommitmentsView({
           and approve it, and it appears here with its first cycle open.
         </div>
       )}
+      <div className="row" style={{ marginBottom: "var(--space-4)" }}>
+        <button type="button" className="btn btn-primary" onClick={() => setAdding((v) => !v)}>
+          {adding ? "Cancel" : "Track something new"}
+        </button>
+      </div>
+      {adding && (
+        <CommitmentForm
+          onDone={() => {
+            setAdding(false);
+            onChanged();
+          }}
+        />
+      )}
       <div className="bands">
         {sorted.map((s) => (
-          <CommitmentCard key={s.name} standing={s} />
+          <CommitmentCard key={s.name} standing={s} onChanged={onChanged} />
         ))}
       </div>
       {meters.length > 0 && <Meters meters={meters} onRead={onChanged} />}
@@ -109,7 +124,13 @@ export function CommitmentsView({
   );
 }
 
-export function CommitmentCard({ standing }: { standing: CommitmentStanding }) {
+export function CommitmentCard({
+  standing,
+  onChanged,
+}: {
+  standing: CommitmentStanding;
+  onChanged?: () => void;
+}) {
   const kind = standingKind(standing);
   const occ = standing.occurrence;
   return (
@@ -158,7 +179,229 @@ export function CommitmentCard({ standing }: { standing: CommitmentStanding }) {
       }
     >
       <Thresholds standing={standing} />
+      {onChanged && <CommitmentActions standing={standing} onChanged={onChanged} />}
     </ProblemCard>
+  );
+}
+
+// What an operator can do to one, from the screen that already lists
+// them all. Answering, moving, editing and removing were all on the
+// household surface and nowhere else, so the Console could show a
+// duplicate and not delete it.
+function CommitmentActions({
+  standing,
+  onChanged,
+}: {
+  standing: CommitmentStanding;
+  onChanged: () => void;
+}) {
+  const act = useAction();
+  const [editing, setEditing] = useState(false);
+  const busy = act.state.phase === "busy";
+
+  const run = (fn: () => Promise<unknown>, message: string) => {
+    void act.run(fn, message).then(onChanged);
+  };
+
+  if (editing) {
+    return (
+      <CommitmentForm
+        existing={standing}
+        onDone={() => {
+          setEditing(false);
+          onChanged();
+        }}
+        onCancel={() => setEditing(false)}
+      />
+    );
+  }
+
+  return (
+    <div className="row" style={{ marginTop: "var(--space-3)", flexWrap: "wrap" }}>
+      <button
+        type="button"
+        className="btn btn-secondary"
+        disabled={busy}
+        onClick={() => run(() => api.answerCommitment(standing.name, "done"), "recorded")}
+      >
+        Done
+      </button>
+      <button
+        type="button"
+        className="btn btn-ghost"
+        disabled={busy}
+        onClick={() => run(() => api.answerCommitment(standing.name, "waived"), "waived")}
+      >
+        Waive this cycle
+      </button>
+      <button
+        type="button"
+        className="btn btn-ghost"
+        disabled={busy}
+        onClick={() => {
+          // Moving is a booking, which is per cycle: the schedule is
+          // untouched and next time comes round where it always did.
+          const at = window.prompt(
+            `Move this cycle of “${standing.description || standing.name}” to which date? (YYYY-MM-DD)`,
+            "",
+          );
+          if (!at) return;
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(at)) {
+            window.alert("Use a date like 2026-11-27.");
+            return;
+          }
+          run(() => api.answerCommitment(standing.name, "booked", `${at}T12:00:00Z`), "moved");
+        }}
+      >
+        Move this cycle
+      </button>
+      <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setEditing(true)}>
+        Edit
+      </button>
+      <button
+        type="button"
+        className="btn btn-ghost"
+        disabled={busy}
+        onClick={() => {
+          if (!window.confirm(`Remove “${standing.description || standing.name}” for good?`)) return;
+          run(() => api.removeCommitment(standing.name), "removed");
+        }}
+      >
+        Remove
+      </button>
+      {act.state.phase === "error" && <ErrorLine error={act.state.message ?? null} />}
+      {act.state.phase === "done" && <span className="muted">{act.state.message}</span>}
+    </div>
+  );
+}
+
+// ownerHandle is the person a commitment is about, or "" when it
+// belongs to the household rather than to anybody.
+function ownerHandle(owner?: string): string {
+  if (!owner) return "";
+  const handle = owner.replace(/^household\//, "");
+  return handle === "household" ? "" : handle;
+}
+
+// Authoring one, from typed fields. The same shape the dashboard's form
+// sends, so both doors reach handlers_portal_authoring.go's guarantee
+// that a request body becomes fields and never a Kind.
+function CommitmentForm({
+  existing,
+  onDone,
+  onCancel,
+}: {
+  existing?: CommitmentStanding;
+  onDone: () => void;
+  onCancel?: () => void;
+}) {
+  const [description, setDescription] = useState(existing?.description ?? "");
+  const [every, setEvery] = useState(existing?.every ?? "1w");
+  // A SHARED COMMITMENT'S OWNER IS THE BARE WORD "household", and
+  // stripping only the "household/" prefix left that word sitting in
+  // the For field. Saving then read it as a person, sent
+  // scope: personal, and stored household/household — so an ordinary
+  // edit made a shared commitment vanish from the household's view.
+  const [about, setAbout] = useState(ownerHandle(existing?.owner));
+  const [partOfDay, setPartOfDay] = useState(existing?.partOfDay ?? "");
+  const act = useAction();
+  const busy = act.state.phase === "busy";
+
+  const save = () => {
+    // ONLY WHAT THIS FORM OWNS. The edit endpoint preserves every
+    // field a request leaves out, so a commitment's booking rule,
+    // mayComplete list, notify list and meter survive an edit made
+    // here — this form has four inputs and does not know about them.
+    const fields: CommitmentFields = {
+      description: description.trim(),
+      every: every.trim(),
+      partOfDay,
+    };
+    if (about.trim() !== "") {
+      fields.about = about.trim();
+      fields.scope = "personal";
+    }
+    // Rollover and the anchor belong to a NEW commitment. Sending them
+    // on an edit would re-anchor the cycle and overwrite a
+    // fromCompletion schedule with this form's assumption.
+    if (!existing) {
+      fields.rollover = "fromSchedule";
+      const d = new Date();
+      d.setHours(12, 0, 0, 0);
+      d.setDate(d.getDate() - 1);
+      fields.anchor = d.toISOString().slice(0, 10);
+    }
+    void act
+      .run(
+        () => (existing ? api.editCommitment(existing.name, fields) : api.addCommitment(fields)),
+        existing ? "saved" : "added",
+      )
+      .then((ok) => {
+        // Only on success. This read act.state, which is the value
+        // captured before the state update, so a 409 or a validation
+        // refusal still closed the form and discarded the input.
+        if (ok) onDone();
+      });
+  };
+
+  return (
+    <div className="card" style={{ marginTop: "var(--space-3)" }}>
+      <div className="field">
+        <label htmlFor={`c-desc-${existing?.name ?? "new"}`}>What is it?</label>
+        <input
+          id={`c-desc-${existing?.name ?? "new"}`}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Take out the trash"
+          autoComplete="off"
+        />
+      </div>
+      <div className="row">
+        <label>
+          Every
+          <select value={every} onChange={(e) => setEvery(e.target.value)}>
+            <option value="1d">day</option>
+            <option value="1w">week</option>
+            <option value="1mo">month</option>
+            <option value="1yr">year</option>
+          </select>
+        </label>
+        <label>
+          When
+          <select value={partOfDay} onChange={(e) => setPartOfDay(e.target.value)}>
+            <option value="">any time</option>
+            <option value="morning">morning</option>
+            <option value="afternoon">afternoon</option>
+            <option value="evening">evening</option>
+          </select>
+        </label>
+        <label>
+          For
+          <input
+            value={about}
+            onChange={(e) => setAbout(e.target.value)}
+            placeholder="the whole household"
+            autoComplete="off"
+          />
+        </label>
+      </div>
+      <div className="row">
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy || description.trim() === ""}
+          onClick={save}
+        >
+          {busy ? "Saving…" : existing ? "Save" : "Add"}
+        </button>
+        {onCancel && (
+          <button type="button" className="btn btn-ghost" disabled={busy} onClick={onCancel}>
+            Cancel
+          </button>
+        )}
+        {act.state.phase === "error" && <ErrorLine error={act.state.message ?? null} />}
+      </div>
+    </div>
   );
 }
 

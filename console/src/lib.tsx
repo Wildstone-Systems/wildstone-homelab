@@ -35,13 +35,20 @@ export type ActionState =
 export function useAction() {
   const [state, setState] = useState<ActionState>({ phase: "idle" });
 
+  // Returns whether it worked. A caller cannot read `state` straight
+  // after awaiting this — that is the value captured before React
+  // re-rendered, so it is still `idle` — and a form that decided
+  // whether to close by reading it therefore closed on failure and
+  // threw away what the operator had typed.
   const run = useCallback(async (fn: () => Promise<unknown>, doneMessage: string) => {
     setState({ phase: "busy" });
     try {
       await fn();
       setState({ phase: "done", message: doneMessage });
+      return true;
     } catch (e) {
       setState({ phase: "error", message: (e as Error).message });
+      return false;
     }
   }, []);
 
