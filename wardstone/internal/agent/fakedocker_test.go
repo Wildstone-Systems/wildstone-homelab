@@ -34,6 +34,8 @@ type fakeContainer struct {
 	// devices, capabilities) rather than only that it was created.
 	host         hostConfig
 	exposedPorts map[string]struct{}
+	// Simulate Docker accepting PortBindings but not activating them.
+	suppressPorts bool
 }
 
 type fakeVolume struct {
@@ -53,12 +55,13 @@ type fakeDocker struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	mu           sync.Mutex
-	containers   map[string]*fakeContainer
-	volumes      map[string]*fakeVolume
-	networks     map[string]*fakeNetwork
-	seq          int
-	pruneFilters string // last filters query param /images/prune received
+	mu             sync.Mutex
+	containers     map[string]*fakeContainer
+	volumes        map[string]*fakeVolume
+	networks       map[string]*fakeNetwork
+	seq            int
+	pruneFilters   string // last filters query param /images/prune received
+	startErrorOnce bool   // fail one start after create, as a port collision does
 	// pullAuth is the X-Registry-Auth header the last pull carried, so a
 	// test can assert both that a credential reached Docker and that one
 	// did not reach a registry it was not for.
@@ -272,6 +275,14 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case m[3] == "json":
+		livePorts := map[string][]portBinding{}
+		if c.running && !c.suppressPorts {
+			for port, bindings := range c.host.PortBindings {
+				if _, exposed := c.exposedPorts[port]; exposed {
+					livePorts[port] = bindings
+				}
+			}
+		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"Id":    c.id,
 			"State": map[string]any{"Running": c.running, "Status": c.dockerStatus(), "ExitCode": c.exitCode},
@@ -279,8 +290,15 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 				"Image":  c.image,
 				"Labels": c.labels,
 			},
+			"HostConfig":      map[string]any{"PortBindings": c.host.PortBindings},
+			"NetworkSettings": map[string]any{"Ports": livePorts},
 		})
 	case m[3] == "start" && r.Method == http.MethodPost:
+		if f.startErrorOnce {
+			f.startErrorOnce = false
+			http.Error(w, `{"message":"port is already allocated"}`, http.StatusInternalServerError)
+			return
+		}
 		if c.running {
 			w.WriteHeader(http.StatusNotModified)
 			return
