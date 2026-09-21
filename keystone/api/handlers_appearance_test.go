@@ -467,12 +467,12 @@ func TestAThemesPictureIsTheDashboardsBackground(t *testing.T) {
 	// It is the page's GROUND, not the banner. The picture arrives as
 	// --wallpaper, which nocturne.css draws as a layer of the page
 	// background; the banner keeps pointing at the household's own
-	// picture and its bundled fallback, untouched.
+	// picture, untouched. A household without a picture has a plain banner.
 	if !bytes.Contains(page, []byte(`--wallpaper: url("/api/v1/home/appearance/themes/nord/background?v=`)) {
 		t.Error("the wallpaper does not point at the theme's picture")
 	}
-	if !bytes.Contains(page, []byte("banner-default.webp")) {
-		t.Error("the household banner's own fallback is gone, so the theme took the banner over")
+	if !bytes.Contains(page, []byte("/api/v1/home/banner?v=")) {
+		t.Error("the household banner no longer uses its own uploaded picture")
 	}
 
 	// Somebody on a theme without a picture gets no wallpaper at all.

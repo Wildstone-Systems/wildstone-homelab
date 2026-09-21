@@ -130,7 +130,7 @@
       <button class="hbtn" id="banner-frame" type="button" title="Drag the picture to choose what the band shows" hidden>
         <i class="ph ph-arrows-out-cardinal" aria-hidden="true"></i> Reframe
       </button>
-      <button class="hbtn" id="banner-reset" type="button" title="Put the default picture back" hidden>
+      <button class="hbtn" id="banner-reset" type="button" title="Remove picture" hidden>
         <i class="ph ph-arrow-clockwise" aria-hidden="true"></i>
       </button>
     </div>
@@ -2241,7 +2241,7 @@
     // The version busts the browser's copy: same URL, new bytes.
     photo.style.backgroundImage = banner.custom
       ? "url('/api/v1/home/banner?v=" + encodeURIComponent(b.version || 0) + "')"
-      : "url('/portal/assets/banner-default.webp')";
+      : "none";
     photo.style.backgroundPosition = banner.positionX + "% " + banner.positionY + "%";
     // Reframing and resetting only mean something once the household
     // has a picture of its own.
