@@ -2075,7 +2075,8 @@ export interface CommitmentFields {
   every?: string;
   anchor?: string;
   lead?: string;
-  rollover: string;
+  // Optional: an edit preserves what it does not send.
+  rollover?: string;
   scope?: string;
   partOfDay?: string;
   about?: string;

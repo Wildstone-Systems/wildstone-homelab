@@ -128,3 +128,115 @@ func TestAMemberCannotBecomeTheOperatorSurface(t *testing.T) {
 		t.Error("a household member removed somebody else's personal commitment")
 	}
 }
+
+// An edit preserves every field it does not mention.
+//
+// The handler used to rebuild the spec from a flat struct, so a form
+// that knows about four fields cleared the rest: correcting a
+// description disabled appointment handling, emptied the mayComplete
+// and notify lists, and turned a meter rule into a clock rule. Every
+// surface then had to send every field — a rule each new form had to
+// rediscover, and the Console's did not.
+func TestEditingACommitmentPreservesWhatItDoesNotSend(t *testing.T) {
+	h, _ := consoleHarness(t)
+	h.person("sandy")
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+
+	// A commitment with everything the small forms know nothing about.
+	full := `{"description":"Dentist","every":"6mo","anchor":"` + yesterday + `",` +
+		`"rollover":"fromCompletion","requiresBooking":true,"lead":"14d",` +
+		`"mayComplete":["household/sandy"],"notify":["household/sandy"]}`
+	res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/commitments",
+		json.RawMessage(full), nil)
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("adding: %d", res.StatusCode)
+	}
+
+	// The Console's form sends four fields, as it does.
+	edit := `{"description":"Dentist checkup","every":"6mo","partOfDay":""}`
+	res = h.do(runtimedb.RoleAdmin, http.MethodPut,
+		"/api/v1/household/commitments/dentist", json.RawMessage(edit), nil)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("editing: %d", res.StatusCode)
+	}
+
+	var after []upkeep.Standing
+	h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/household/commitments", nil, &after)
+	var got *upkeep.Standing
+	for i := range after {
+		if after[i].Name == "dentist" {
+			got = &after[i]
+		}
+	}
+	if got == nil {
+		t.Fatal("gone after an edit")
+	}
+	if got.Description != "Dentist checkup" {
+		t.Errorf("description = %q, the edit did not apply", got.Description)
+	}
+	if !got.RequiresBooking {
+		t.Error("requiresBooking was cleared by an edit that never mentioned it")
+	}
+	if len(got.MayComplete) == 0 {
+		t.Error("mayComplete was emptied by an edit that never mentioned it")
+	}
+	if len(got.Notify) == 0 {
+		t.Error("notify was emptied by an edit that never mentioned it")
+	}
+	if got.Rollover != "fromCompletion" {
+		t.Errorf("rollover = %q, want the fromCompletion it was created with", got.Rollover)
+	}
+}
+
+// A shared commitment stays shared through an edit. Its owner is the
+// bare word "household", which a form that stripped only the
+// "household/" prefix read back as a person named household — so
+// saving stored household/household and the commitment vanished from
+// the household's view.
+func TestEditingASharedCommitmentKeepsItShared(t *testing.T) {
+	h, _ := consoleHarness(t)
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+
+	body := `{"description":"Bins out","every":"1w","anchor":"` + yesterday + `",` +
+		`"rollover":"fromSchedule"}`
+	res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/commitments",
+		json.RawMessage(body), nil)
+	res.Body.Close()
+
+	var before []upkeep.Standing
+	h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/household/commitments", nil, &before)
+	var wasScope, wasOwner string
+	for _, st := range before {
+		if st.Name == "bins-out" {
+			wasScope, wasOwner = st.Scope, st.Owner
+		}
+	}
+	if wasScope == "personal" {
+		t.Fatalf("created personal, not shared: owner=%q", wasOwner)
+	}
+
+	// An edit that says nothing about who it is for.
+	edit := `{"description":"Bins out on Thursday","every":"1w"}`
+	res = h.do(runtimedb.RoleAdmin, http.MethodPut,
+		"/api/v1/household/commitments/bins-out", json.RawMessage(edit), nil)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("editing: %d", res.StatusCode)
+	}
+
+	var after []upkeep.Standing
+	h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/household/commitments", nil, &after)
+	for _, st := range after {
+		if st.Name != "bins-out" {
+			continue
+		}
+		if st.Scope == "personal" {
+			t.Errorf("a shared commitment became personal on edit: owner=%q", st.Owner)
+		}
+		if strings.Contains(st.Owner, "household/household") {
+			t.Errorf("owner = %q", st.Owner)
+		}
+	}
+}

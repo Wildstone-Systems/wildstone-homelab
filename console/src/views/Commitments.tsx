@@ -275,6 +275,14 @@ function CommitmentActions({
   );
 }
 
+// ownerHandle is the person a commitment is about, or "" when it
+// belongs to the household rather than to anybody.
+function ownerHandle(owner?: string): string {
+  if (!owner) return "";
+  const handle = owner.replace(/^household\//, "");
+  return handle === "household" ? "" : handle;
+}
+
 // Authoring one, from typed fields. The same shape the dashboard's form
 // sends, so both doors reach handlers_portal_authoring.go's guarantee
 // that a request body becomes fields and never a Kind.
@@ -289,28 +297,35 @@ function CommitmentForm({
 }) {
   const [description, setDescription] = useState(existing?.description ?? "");
   const [every, setEvery] = useState(existing?.every ?? "1w");
-  const [about, setAbout] = useState(
-    existing?.owner ? existing.owner.replace(/^household\//, "") : "",
-  );
+  // A SHARED COMMITMENT'S OWNER IS THE BARE WORD "household", and
+  // stripping only the "household/" prefix left that word sitting in
+  // the For field. Saving then read it as a person, sent
+  // scope: personal, and stored household/household — so an ordinary
+  // edit made a shared commitment vanish from the household's view.
+  const [about, setAbout] = useState(ownerHandle(existing?.owner));
   const [partOfDay, setPartOfDay] = useState(existing?.partOfDay ?? "");
   const act = useAction();
   const busy = act.state.phase === "busy";
 
   const save = () => {
+    // ONLY WHAT THIS FORM OWNS. The edit endpoint preserves every
+    // field a request leaves out, so a commitment's booking rule,
+    // mayComplete list, notify list and meter survive an edit made
+    // here — this form has four inputs and does not know about them.
     const fields: CommitmentFields = {
       description: description.trim(),
       every: every.trim(),
-      rollover: "fromSchedule",
       partOfDay,
     };
     if (about.trim() !== "") {
       fields.about = about.trim();
       fields.scope = "personal";
     }
-    // An anchor only on create. The edit endpoint leaves an existing
-    // one alone when none is sent, and re-anchoring on a wording change
-    // would silently restart the cycle.
+    // Rollover and the anchor belong to a NEW commitment. Sending them
+    // on an edit would re-anchor the cycle and overwrite a
+    // fromCompletion schedule with this form's assumption.
     if (!existing) {
+      fields.rollover = "fromSchedule";
       const d = new Date();
       d.setHours(12, 0, 0, 0);
       d.setDate(d.getDate() - 1);
@@ -321,8 +336,11 @@ function CommitmentForm({
         () => (existing ? api.editCommitment(existing.name, fields) : api.addCommitment(fields)),
         existing ? "saved" : "added",
       )
-      .then(() => {
-        if (act.state.phase !== "error") onDone();
+      .then((ok) => {
+        // Only on success. This read act.state, which is the value
+        // captured before the state update, so a 409 or a validation
+        // refusal still closed the form and discarded the input.
+        if (ok) onDone();
       });
   };
 
