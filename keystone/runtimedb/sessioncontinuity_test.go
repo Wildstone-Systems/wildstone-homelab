@@ -16,7 +16,7 @@ func TestContinuationSnapshotExcludesConcurrentlyCommittedTrustedTurn(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, allowed, err := db.GetButlerSessionForContinuation(id, func(origins []SessionConnection) bool {
+	loaded, allowed, err := db.GetButlerSessionForContinuation(id, at.Seq, func(origins []SessionConnection, _ Connection) bool {
 		if len(origins) != 1 || origins[0].Connection == nil || origins[0].Connection.Seq != at.Seq {
 			t.Fatalf("origins=%+v", origins)
 		}
@@ -37,7 +37,7 @@ func TestContinuationSnapshotExcludesConcurrentlyCommittedTrustedTurn(t *testing
 	if err != nil || len(latest.Turns) != 2 {
 		t.Fatalf("concurrent write did not commit: %+v err=%v", latest.Turns, err)
 	}
-	loaded, allowed, err = db.GetButlerSessionForContinuation(id, func(origins []SessionConnection) bool {
+	loaded, allowed, err = db.GetButlerSessionForContinuation(id, at.Seq, func(origins []SessionConnection, _ Connection) bool {
 		for _, origin := range origins {
 			if origin.ConnectionName == "console" {
 				return false
@@ -220,5 +220,42 @@ func TestTurnAndInboundConnectionAreRecordedTogether(t *testing.T) {
 	}
 	if n != 2 {
 		t.Fatalf("inbound provenance rows = %d, want one per recorded turn", n)
+	}
+}
+
+func TestContinuationDestinationAndHistoryShareASnapshot(t *testing.T) {
+	db := householdWith(t, "alice")
+	origin := connect(t, db, "sandy", "matrix", ButlerSurfaceFamily, "origin-bot")
+	destination := connect(t, db, "sandy", "telegram", ButlerSurfaceFamily, "destination-bot")
+	if _, err := db.sql.Exec(`UPDATE connection_disclosure SET retention='provider'`); err != nil {
+		t.Fatal(err)
+	}
+	id, err := db.InsertButlerSession(ButlerSession{Principal: "butler", ActingFor: "alice", Mode: ButlerModeFull, Surface: ButlerSurfaceFamily, Butler: "sandy", InboundConnection: origin.Name(), InboundConnectionRef: origin.Seq, Turns: []ButlerTurn{{Role: ButlerRoleUser, Text: "authorized snapshot"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, allowed, err := db.GetButlerSessionForContinuation(id, destination.Seq, func(origins []SessionConnection, current Connection) bool {
+		if current.Seq != destination.Seq || len(origins) != 1 || origins[0].Connection == nil || !DisclosureAllowsContent(origins[0].Connection.Disclosure, current.Disclosure) {
+			t.Fatalf("incorrect snapshot destination=%+v origins=%+v", current, origins)
+		}
+		// Both changes commit on another pooled connection while the read
+		// transaction is open. Neither may enter the authorized snapshot.
+		if _, err := db.sql.Exec(`UPDATE butler_addresses SET revoked_at='revoked' WHERE seq=?`, destination.Seq); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.AppendButlerTurnsFrom(id, []ButlerTurn{{Role: ButlerRoleUser, Text: "later trusted secret"}}, "console", 0); err != nil {
+			t.Fatal(err)
+		}
+		return true
+	})
+	if err != nil || !allowed || len(loaded.Turns) != 1 || loaded.Turns[0].Text != "authorized snapshot" {
+		t.Fatalf("snapshot load: %+v allowed=%v err=%v", loaded, allowed, err)
+	}
+	loaded, allowed, err = db.GetButlerSessionForContinuation(id, destination.Seq, func([]SessionConnection, Connection) bool {
+		t.Fatal("revoked destination reached authorization callback")
+		return true
+	})
+	if err != nil || allowed || loaded.ID != "" || len(loaded.Turns) != 0 {
+		t.Fatalf("revoked load: %+v allowed=%v err=%v", loaded, allowed, err)
 	}
 }

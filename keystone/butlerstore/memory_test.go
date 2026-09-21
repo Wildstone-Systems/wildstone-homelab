@@ -9,6 +9,7 @@ package butlerstore
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -18,8 +19,8 @@ import (
 
 func TestPersonalRecallFollowsPersonAcrossAgents(t *testing.T) {
 	db := memoryDB(t)
-	remember(t, MemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{Kind: runtimedb.MemoryPreference, Content: "Prefers jasmine tea"})
-	hits, err := MemorySeams(db, "nutrition", "tom", nil).Recall(context.Background(), "jasmine", 10)
+	remember(t, testMemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{Kind: runtimedb.MemoryPreference, Content: "Prefers jasmine tea"})
+	hits, err := testMemorySeams(db, "nutrition", "tom", nil).Recall(context.Background(), "jasmine", 10)
 	if err != nil || len(hits) != 1 {
 		t.Fatalf("cross-Agent Personal recall: %v, %v", hits, err)
 	}
@@ -27,7 +28,7 @@ func TestPersonalRecallFollowsPersonAcrossAgents(t *testing.T) {
 
 func TestAgentLocalDerivedFromPersonAIsExcludedForPersonB(t *testing.T) {
 	db := memoryDB(t)
-	remember(t, MemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{Kind: runtimedb.MemoryPreference, Content: "Private jasmine preference"})
+	remember(t, testMemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{Kind: runtimedb.MemoryPreference, Content: "Private jasmine preference"})
 	records, err := db.RetrieveMemory(runtimedb.MemoryQuery{Reader: "tom", Butler: "alfred"})
 	if err != nil || len(records) != 1 {
 		t.Fatalf("source: %v, %v", records, err)
@@ -48,7 +49,7 @@ func TestAgentLocalDerivedFromPersonAIsExcludedForPersonB(t *testing.T) {
 		person string
 		want   bool
 	}{{"tom", true}, {"sam", false}} {
-		seams := MemorySeams(db, "alfred", tc.person, nil)
+		seams := testMemorySeams(db, "alfred", tc.person, nil)
 		hits, err := seams.Recall(context.Background(), "jasmine", 10)
 		if err != nil {
 			t.Fatal(err)
@@ -96,7 +97,7 @@ func remember(t *testing.T, seams butler.MemorySeams, n butler.MemoryNote) {
 // is stated because somebody stated it.
 func TestARememberedNoteBelongsToTheSpeakerAcrossAgents(t *testing.T) {
 	db := memoryDB(t)
-	seams := MemorySeams(db, "alfred", "tom", nil)
+	seams := testMemorySeams(db, "alfred", "tom", nil)
 	remember(t, seams, butler.MemoryNote{
 		Kind: runtimedb.MemoryPreference, Subject: "tom", Content: "Prefers tea to coffee.",
 	})
@@ -153,7 +154,7 @@ func TestARememberedNoteBelongsToTheSpeakerAcrossAgents(t *testing.T) {
 // audience, and not a fact about anybody else in it.
 func TestAGroupStatementIsTheSpeakersWithTheRoomAsItsSource(t *testing.T) {
 	db := memoryDB(t)
-	remember(t, MemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{
+	remember(t, testMemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{
 		Kind: runtimedb.MemoryPreference, Subject: "tom", Content: "Dislikes cilantro.",
 		SourceKind: butler.MemorySourceRoom, SourceID: "bt-9",
 	})
@@ -190,17 +191,17 @@ func TestASessionThatCannotNameItsScopeGetsNoMemoryAtAll(t *testing.T) {
 	for _, c := range []struct{ butlerName, member string }{
 		{"", "tom"}, {"alfred", ""}, {"", ""},
 	} {
-		seams := MemorySeams(db, c.butlerName, c.member, nil)
+		seams := testMemorySeams(db, c.butlerName, c.member, nil)
 		if seams.Remember != nil || seams.Recall != nil || seams.Preamble != nil {
 			t.Fatalf("butler=%q member=%q was given memory anyway", c.butlerName, c.member)
 		}
 	}
-	if MemorySeams(nil, "alfred", "tom", nil).Remember != nil {
+	if testMemorySeams(nil, "alfred", "tom", nil).Remember != nil {
 		t.Fatal("memory was wired with no store behind it")
 	}
 	// And provenance is refused at the seam rather than defaulted, so a
 	// caller that forgets the conversation writes nothing.
-	seams := MemorySeams(db, "alfred", "tom", nil)
+	seams := testMemorySeams(db, "alfred", "tom", nil)
 	if err := seams.Remember(context.Background(), butler.MemoryNote{
 		Kind: runtimedb.MemoryFact, Content: "no source",
 	}); err == nil {
@@ -222,7 +223,7 @@ func TestASessionThatCannotNameItsScopeGetsNoMemoryAtAll(t *testing.T) {
 // free-floating sentence answers no question about "my" anything.
 func TestARememberedNoteIsFoundByRecallAndKnowsWhatItIs(t *testing.T) {
 	db := memoryDB(t)
-	seams := MemorySeams(db, "alfred", "tom", nil)
+	seams := testMemorySeams(db, "alfred", "tom", nil)
 	remember(t, seams, butler.MemoryNote{
 		Kind: runtimedb.MemoryFact, Subject: "tom", Content: "The boiler was serviced in March.",
 	})
@@ -238,7 +239,7 @@ func TestARememberedNoteIsFoundByRecallAndKnowsWhatItIs(t *testing.T) {
 		t.Fatalf("a hit came back not knowing whose it is or what it is: %+v", hits[0])
 	}
 	// Somebody else's Butler searching the same words finds nothing.
-	sams, err := MemorySeams(db, "alfred", "sam", nil).Recall(context.Background(), "boiler", 5)
+	sams, err := testMemorySeams(db, "alfred", "sam", nil).Recall(context.Background(), "boiler", 5)
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -256,7 +257,7 @@ func TestARememberedNoteIsFoundByRecallAndKnowsWhatItIs(t *testing.T) {
 // something a session can say out loud.
 func TestForgettingARememberedNoteRemovesItFromBothAndItDoesNotComeBack(t *testing.T) {
 	db := memoryDB(t)
-	seams := MemorySeams(db, "alfred", "tom", nil)
+	seams := testMemorySeams(db, "alfred", "tom", nil)
 	remember(t, seams, butler.MemoryNote{
 		Kind: runtimedb.MemoryFact, Subject: "tom", Content: "The spare key is under the third pot.",
 	})
@@ -298,7 +299,7 @@ func TestForgettingARememberedNoteRemovesItFromBothAndItDoesNotComeBack(t *testi
 // answer to something nobody has asked yet, so it waits to be searched.
 func TestAPreferenceIsInjectedAndAFactIsSearched(t *testing.T) {
 	db := memoryDB(t)
-	seams := MemorySeams(db, "alfred", "tom", nil)
+	seams := testMemorySeams(db, "alfred", "tom", nil)
 	remember(t, seams, butler.MemoryNote{
 		Kind: runtimedb.MemoryPreference, Subject: "tom", Content: "Prefers tea to coffee.",
 	})
@@ -322,12 +323,12 @@ func TestAPreferenceIsInjectedAndAFactIsSearched(t *testing.T) {
 
 func TestAutonomousAgentLocalNoteStaysWithAgentAndPerson(t *testing.T) {
 	db := memoryDB(t)
-	remember(t, MemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{Scope: runtimedb.MemoryScopeAgentLocal, Kind: runtimedb.MemoryPreference, Content: "Local jasmine preference"})
+	remember(t, testMemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{Scope: runtimedb.MemoryScopeAgentLocal, Kind: runtimedb.MemoryPreference, Content: "Local jasmine preference"})
 	for _, tc := range []struct {
 		agent, person string
 		want          int
 	}{{"alfred", "tom", 1}, {"nutrition", "tom", 0}, {"alfred", "sam", 0}} {
-		seams := MemorySeams(db, tc.agent, tc.person, nil)
+		seams := testMemorySeams(db, tc.agent, tc.person, nil)
 		hits, err := seams.Recall(context.Background(), "jasmine", 10)
 		if err != nil || len(hits) != tc.want {
 			t.Fatalf("%s/%s recall: %+v, %v", tc.agent, tc.person, hits, err)
@@ -344,7 +345,7 @@ func TestPromotedMemoryAppearsOnceInRecallAndContext(t *testing.T) {
 	if err := db.AdmitButlerMember("tom", "root-admin"); err != nil {
 		t.Fatal(err)
 	}
-	remember(t, MemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{Kind: runtimedb.MemoryPreference, Content: "Prefers jasmine tea"})
+	remember(t, testMemorySeams(db, "alfred", "tom", nil), butler.MemoryNote{Kind: runtimedb.MemoryPreference, Content: "Prefers jasmine tea"})
 	records, err := db.RetrieveMemory(runtimedb.MemoryQuery{Reader: "tom", Butler: "alfred"})
 	if err != nil || len(records) != 1 {
 		t.Fatalf("source: %+v %v", records, err)
@@ -353,7 +354,7 @@ func TestPromotedMemoryAppearsOnceInRecallAndContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, person := range []string{"tom", "sam"} {
-		seams := MemorySeams(db, "nutrition", person, nil)
+		seams := testMemorySeams(db, "nutrition", person, nil)
 		hits, err := seams.Recall(context.Background(), "jasmine", 10)
 		if err != nil || len(hits) != 1 {
 			t.Errorf("%s recall duplicates: %+v %v", person, hits, err)
@@ -366,4 +367,8 @@ func TestPromotedMemoryAppearsOnceInRecallAndContext(t *testing.T) {
 			t.Errorf("%s context contains note %d times", person, got)
 		}
 	}
+}
+
+func testMemorySeams(db *runtimedb.DB, agent, person string, log *slog.Logger) butler.MemorySeams {
+	return memorySeams(db, agent, person, nil, log)
 }

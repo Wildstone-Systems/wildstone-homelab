@@ -108,10 +108,11 @@ func (db *DB) RecentSessionCandidates(identity, agent string, since, after time.
 }
 
 // GetButlerSessionForContinuation authorizes and loads history from one read
-// snapshot. A concurrent trusted turn cannot enter the returned history without
+// snapshot, including the registered destination identified by destinationRef.
+// A concurrent trusted turn cannot enter the returned history without
 // its provenance participating in the authorization decision. The callback must
 // only decide disclosure; no model work runs while the transaction is open.
-func (db *DB) GetButlerSessionForContinuation(id string, authorize func([]SessionConnection) bool) (ButlerSession, bool, error) {
+func (db *DB) GetButlerSessionForContinuation(id string, destinationRef int64, authorize func([]SessionConnection, Connection) bool) (ButlerSession, bool, error) {
 	tx, err := db.sql.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return ButlerSession{}, false, err
@@ -135,7 +136,17 @@ func (db *DB) GetButlerSessionForContinuation(id string, authorize func([]Sessio
 	if err != nil {
 		return ButlerSession{}, false, err
 	}
-	if !authorize(provenance) {
+	// The destination may not yet appear among the session's origins. Resolve
+	// it independently in this same snapshot; an ingress Connection value can
+	// predate a revocation or a disclosure-policy change.
+	destination, err := scanChatConnection(tx.QueryRow(chatConnectionColumns+` WHERE a.seq = ? AND a.revoked_at = ''`, destinationRef))
+	if errors.Is(err, ErrNoConnection) {
+		return ButlerSession{}, false, nil
+	}
+	if err != nil {
+		return ButlerSession{}, false, err
+	}
+	if !authorize(provenance, destination) {
 		return ButlerSession{}, false, nil
 	}
 	session, err := getButlerSession(tx, id)

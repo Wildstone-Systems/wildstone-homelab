@@ -214,16 +214,23 @@ func (s *Server) offerChatSessions(c chatCommandCtx, candidates []safeSessionCan
 // loadChatContinuation checks disclosure and loads history in the same database
 // snapshot, for both explicit pointers and newly selected sole candidates.
 func (s *Server) loadChatContinuation(id string, at runtimedb.Connection) (runtimedb.ButlerSession, bool, error) {
-	return s.DB.GetButlerSessionForContinuation(id, func(provenance []runtimedb.SessionConnection) bool {
+	return s.DB.GetButlerSessionForContinuation(id, at.Seq, func(provenance []runtimedb.SessionConnection, destination runtimedb.Connection) bool {
 		for i := range provenance {
 			// Legacy runners saved only a name. Only the exact current
 			// Connection can resolve that spelling, never another origin.
-			if provenance[i].ConnectionRef == 0 && provenance[i].ConnectionName == at.Name() && !trustedBuiltInConnection(at.Name()) {
-				provenance[i].Connection = &at
+			if provenance[i].ConnectionRef == 0 && provenance[i].ConnectionName == destination.Name() && !trustedBuiltInConnection(destination.Name()) {
+				provenance[i].Connection = &destination
 			}
 		}
-		_, visible := candidateOnConnection(runtimedb.SessionCandidate{SessionID: id, Provenance: provenance}, externalContinuationConnection(at))
-		return visible
+		if len(provenance) == 0 {
+			return false
+		}
+		for _, source := range provenance {
+			if source.Connection == nil || !runtimedb.DisclosureAllowsContent(source.Connection.Disclosure, destination.Disclosure) {
+				return false
+			}
+		}
+		return true
 	})
 }
 

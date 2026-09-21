@@ -664,7 +664,10 @@ func (r *Runner) toolCall(ctx context.Context, taskID string, tc provider.ToolCa
 	rec = ToolCallRecord{Name: tc.Name, Input: tc.Input}
 	fp := callFingerprint(tc.Name, tc.Input)
 
-	if content, ok := verified[fp]; ok && fp != "" {
+	// Recall is an authorization-sensitive resource query. Its tool-level
+	// permission cannot validate cached records after an audience, scope or
+	// Connection change, so always dispatch it through the current filter.
+	if content, ok := verified[fp]; ok && fp != "" && tc.Name != "recall" {
 		// A RETRIEVAL IS A BOUNDARY. ADR-W030 A2.1 is "at every
 		// retrieval and dispatch", and this is the only path that
 		// returns a tool's result without dispatching it — so it is the

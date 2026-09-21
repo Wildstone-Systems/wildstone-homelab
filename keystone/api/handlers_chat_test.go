@@ -149,6 +149,13 @@ func (h *harness) agentAt(t *testing.T, surface, transport string) runtimedb.Con
 		if _, err := h.s.DB.AddButlerAddress(butler, transport, capability, "", "root-admin"); err != nil {
 			t.Fatalf("addressing %s at %s: %v", butler, capability, err)
 		}
+		// Continuation tests use an explicitly classified destination. Real
+		// newly created Connections still default to unknown retention, which
+		// now denies loading prior content until the operator classifies it.
+		if _, err := h.s.DB.ExecForTest(`UPDATE connection_disclosure SET retention='provider'
+            WHERE connection=(SELECT seq FROM butler_addresses WHERE transport=? AND external_id=?)`, transport, capability); err != nil {
+			t.Fatal(err)
+		}
 	}
 	at, err := h.s.DB.ChatConnectionAt(transport, capability)
 	if err != nil {

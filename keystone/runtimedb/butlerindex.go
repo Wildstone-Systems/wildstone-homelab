@@ -174,8 +174,9 @@ func cosine(a, b []float32) float64 {
 // there is no way to ask this index a question that is not on someone's
 // behalf.
 type IndexQuery struct {
-	Reader string
-	Text   string
+	ReadContext *MemoryReadContext
+	Reader      string
+	Text        string
 	// Embedding turns a keyword search into a hybrid one. Nil is fine.
 	Embedding []float32
 	Limit     int
@@ -244,18 +245,16 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
 	if err != nil {
 		return nil, err
 	}
-	memAudience, memArgs, err := db.visibleAudienceClause("r.audience", "r.owner_person_id", reader)
+	memClause, memArgs, err := db.memoryReadClause("r", reader, q.Butler, ftsQuery(q.Text), q.ReadContext)
 	if err != nil {
 		return nil, err
 	}
-	inherited, inheritedArgs, err := db.memoryConstraintClause("r", reader)
-	if err != nil {
-		return nil, err
-	}
-	memScope, memScopeArgs := memoryScopeClause("r", q.Butler, reader)
-	promotion, promotionArgs, err := db.memoryPromotionClause("r", q.Butler, reader, ftsQuery(q.Text))
-	if err != nil {
-		return nil, err
+	boundary, boundaryArgs := memoryBoundaryClause(reader, q.Butler, q.ReadContext)
+	// Documents have no captured memory provenance. They are eligible only
+	// on a trusted built-in destination until their own provenance is bound.
+	documentDisclosure := ""
+	if q.ReadContext != nil && (!q.ReadContext.destination.BuiltIn || q.ReadContext.destination.ConnectionRef != 0) {
+		documentDisclosure = " AND 0"
 	}
 
 	query := `SELECT i.seq, i.source_kind, i.source_id, COALESCE(i.memory, 0),
@@ -267,16 +266,13 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
    LEFT JOIN butler_members io ON io.person_id = i.owner_person_id
    LEFT JOIN butler_memory r ON r.seq = i.memory
    WHERE butler_index_fts MATCH ? AND (
-      (i.memory IS NULL AND ` + audClause + scope + `)
-      OR (r.seq IS NOT NULL AND r.forgotten_at = '' AND r.superseded_by IS NULL
-          AND ` + memAudience + ` AND ` + inherited + memScope + promotion + `))
+      (i.memory IS NULL AND ` + audClause + scope + boundary + documentDisclosure + `)
+      OR (r.seq IS NOT NULL AND ` + memClause + `))
    ORDER BY bm25(butler_index_fts) LIMIT ?`
 	args := append([]any{ftsQuery(q.Text)}, audArgs...)
 	args = append(args, scopeArgs...)
+	args = append(args, boundaryArgs...)
 	args = append(args, memArgs...)
-	args = append(args, inheritedArgs...)
-	args = append(args, memScopeArgs...)
-	args = append(args, promotionArgs...)
 	args = append(args, fetch)
 	rows, err := db.sql.Query(query, args...)
 	if err != nil {
