@@ -14,8 +14,9 @@
 # they are separate capabilities on separate addresses — and a household
 # that has neither should install this one.
 #
-# INSTALLING. ONE account, TWO places its password goes, and that is the
-# whole of the manual work:
+# MANUAL INSTALLS. The interactive installer provisions this account,
+# its groups and both copies of its generated password. Enabling this
+# package outside that installer still requires these steps:
 #
 #  1. Create the service account. In LLDAP's own UI (the Directory card
 #     on the dashboard) add a user — `radicale` is the name this package
@@ -57,14 +58,14 @@
 #     Butler does not offer the household a calendar this deployment has
 #     not got. WITH them, they work the moment the capability is enabled.
 #
-# WHAT WILDSTONE CANNOT DO FOR YOU HERE, and why step 1 is by hand: a
-# package can declare that a person must EXIST in the directory
+# WHAT THE PACKAGE ALONE CANNOT DO: a package can declare that a person
+# must EXIST in the directory
 # (kind: LdapUser) but deliberately carries no credential — a password
 # cannot live in a spec, because specs are replicated, restored and read
 # (ADR-W020 A4). There is no mechanism for a package to create a service
-# account with a password it knows. That is a real gap, it is the same
-# gap `wild household publisher home-automation` works around, and it is
-# worth closing once rather than per package.
+# account with a password it knows. The interactive installer bridges
+# that gap for this default capability; a manual capability install must
+# still provision the service account separately.
 #
 # THE SHARED HOUSEHOLD CALENDAR, AND HOW IT REACHES A PHONE.
 #
@@ -194,7 +195,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: calendar-radicale
-  version: 2.0.3
+  version: 2.0.4
   capability: calendar
   profile: radicale
 requires:
@@ -210,7 +211,7 @@ params:
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
   - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
   - { name: ldap_base_dn, default: "dc=wildstone,dc=internal", description: "The directory’s root name. Must match the value the login service was installed with." }
-  - { name: service_account, default: radicale, description: "The directory account this service searches people with. Create it in the Directory app and put it in the lldap_strict_readonly group, then set its password with `wild secret set calendar-service-password`." }
+  - { name: service_account, default: radicale, description: "The directory account this service searches people with. The interactive installer provisions it; manual installs must create it with calendar_users and lldap_strict_readonly and set the matching calendar-service-password secret." }
   # Bumping this re-runs the credential Job. A Job re-runs when its spec
   # hash changes, and a rotated secret does not change the spec — the
   # env carries the REFERENCE, not the value — so without a knob here a
@@ -235,10 +236,9 @@ policies:
 templates:
   # ---- Secrets.
   #
-  # provided: true because only the person who created the directory
-  # account knows its password. A generated value here would be a
-  # Radicale that starts, binds with the wrong password, and answers 401
-  # to every phone in the house.
+  # provided: true because the password must match the directory account.
+  # The interactive installer generates and sets both; a package-only
+  # install requires its operator to provide the matching value.
   - |
     apiVersion: wildstone.dev/v1
     kind: Secret

@@ -355,8 +355,8 @@ step_admin() {
     # name gets through. A guard against a name has to be a guard
     # against the name, not against three of its spellings.
     case "$(printf '%s' "$u" | tr '[:upper:]' '[:lower:]')" in
-      admin)
-        echo "'admin' is the directory's own service account; please choose another name" >&2
+      admin|radicale)
+        echo "'$u' is a service account; please choose another name" >&2
         continue ;;
     esac
     break
@@ -460,7 +460,7 @@ step_summary() {
   # The household homepage needs the proxy, so it is only promised when
   # there will be one.
   local home=""
-  [ "${WANT_TAILSCALE:-no}" = yes ] && home=", household homepage (with files and the assistant)"
+  [ "${WANT_TAILSCALE:-no}" = yes ] && home=", household homepage (with files, the assistant and calendar)"
   echo "  - install: identity${home}${SERVICES:+, $(echo "$SERVICES" | sed 's/media-jellyfin/jellyfin/g;s/photos-immich/photos/g;s/documents-paperless/documents/g;s/ /, /g')}"
   echo
   echo "Approving here approves the plans this creates; they are recorded"
@@ -1085,6 +1085,111 @@ set_owner_password() {
   log "password set for '$ADMIN_USER'"
 }
 
+# Calendar's LDAP reader is a machine account. The directory creates
+# people without passwords, so the installer gives this account a random
+# one, stores the same value in the Calendar Secret and Keystone's private
+# environment, and proves that the account can log in. Re-running rotates
+# all three together.
+CALENDAR_PASS=""
+CALENDAR_USER="radicale"
+CALENDAR_COLLECTION="GROUPS/Y2FsZW5kYXJfdXNlcnM="
+
+lldap_graphql() { # admin-token json-body
+  docker run --rm --network "container:lldap" \
+    -e "LLDAP_AUTH_TOKEN=$1" -e "LLDAP_BODY=$2" "$ALPINE_IMAGE" \
+    /bin/sh -c 'wget -qO- --header "Authorization: Bearer $LLDAP_AUTH_TOKEN" \
+      --header "Content-Type: application/json" --post-data "$LLDAP_BODY" \
+      http://127.0.0.1:17170/api/graphql' 2>/dev/null
+}
+
+seed_calendar_account() {
+  local members account_row existing_groups r id st i token groups membership gid response
+  members="$(api GET /api/v1/household/members)"
+  account_row="$(printf '%s' "$members" | tr '{' '\n' |
+    grep "\"username\":\"$CALENDAR_USER\"" | head -1 || true)"
+  if [ -z "$account_row" ]; then
+    r="$(api POST /api/v1/household/members \
+      "{\"username\":\"$CALENDAR_USER\",\"email\":\"$CALENDAR_USER@wildstone.internal\",\"node\":\"$NODE_ID\",\"groups\":[\"calendar_users\"]}")"
+    id="$(echo "$r" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+    [ -n "$id" ] || fail "could not propose the Calendar service account: $(echo "$r" | head -c 200)"
+    api POST "/api/v1/plans/$id/approve" >/dev/null || fail "could not approve the Calendar service account"
+    for i in $(seq 1 60); do
+      sleep 2
+      st="$(api GET "/api/v1/plans/$id" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+      [ "$st" = applied ] && break
+      [ "$st" = failed ] && fail "the Calendar service account plan failed"
+    done
+    [ "$st" = applied ] || fail "the Calendar service account did not apply in time"
+  elif [[ "$account_row" != *'"calendar_users"'* ]]; then
+    # Preserve any existing memberships on an earlier manual account.
+    # The member API refuses removals, and it is right to do so.
+    existing_groups="$(printf '%s' "$account_row" |
+      sed -n 's/.*"groups":\(\[[^]]*\]\).*/\1/p')"
+    [ -n "$existing_groups" ] || fail "could not read Calendar account groups"
+    if [ "$existing_groups" = '[]' ]; then
+      existing_groups='["calendar_users"]'
+    else
+      existing_groups="${existing_groups%]},\"calendar_users\"]"
+    fi
+    r="$(api PUT "/api/v1/household/members/$CALENDAR_USER" \
+      "{\"groups\":$existing_groups}" || true)"
+    case "$r" in
+      *"no-op against current desired state"*) ;;
+      *)
+        id="$(echo "$r" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+        [ -n "$id" ] || fail "could not grant calendar_users to the Calendar service account"
+        api POST "/api/v1/plans/$id/approve" >/dev/null || fail "could not approve the Calendar group plan"
+        for i in $(seq 1 60); do
+          sleep 2
+          st="$(api GET "/api/v1/plans/$id" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+          [ "$st" = applied ] && break
+          [ "$st" = failed ] && fail "the Calendar group plan failed"
+        done
+        [ "$st" = applied ] || fail "the Calendar group plan did not apply in time" ;;
+    esac
+  fi
+
+  token=""
+  for i in $(seq 1 30); do
+    token="$(lldap_login admin "$LLDAP_ADMIN_PASS" || true)"
+    [ -n "$token" ] && break
+    sleep 2
+  done
+  [ -n "$token" ] || fail "could not log in to the directory for Calendar setup"
+
+  # A LdapUser plan declares the account first; the identity provisioning
+  # job creates it and grants its app group on a later reconcile tick.
+  for i in $(seq 1 60); do
+    membership="$(lldap_graphql "$token" \
+      '{"query":"{user(userId: \"radicale\") {groups {displayName}}}"}' || true)"
+    [[ "$membership" == *'"displayName":"calendar_users"'* ]] && break
+    sleep 2
+  done
+  [[ "$membership" == *'"displayName":"calendar_users"'* ]] \
+    || fail "the Calendar account was not provisioned in calendar_users"
+
+  # LLDAP already owns this built-in read-only group. Give it only to the
+  # service account; ordinary family accounts need calendar_users alone.
+  groups="$(lldap_graphql "$token" '{"query":"{groups {id displayName}}"}' || true)"
+  gid="$(printf '%s' "$groups" | tr '{' '\n' |
+    grep '"displayName":"lldap_strict_readonly"' |
+    sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)"
+  [ -n "$gid" ] || fail "LLDAP has no lldap_strict_readonly group"
+  if [[ "$membership" != *'"displayName":"lldap_strict_readonly"'* ]]; then
+    response="$(lldap_graphql "$token" \
+      "{\"query\":\"mutation {addUserToGroup(userId: \\\"radicale\\\", groupId: $gid) {ok}}\"}" || true)"
+    [[ "$response" == *'"ok":true'* ]] || fail "could not grant the Calendar account read-only directory access"
+  fi
+
+  docker exec -e "LLDAP_USER_PASSWORD=$CALENDAR_PASS" lldap \
+    /app/lldap_set_password --base-url http://127.0.0.1:17170 \
+    --token "$token" --username "$CALENDAR_USER" >/dev/null 2>&1 \
+    || fail "could not set the Calendar service account password"
+  [ -n "$(lldap_login "$CALENDAR_USER" "$CALENDAR_PASS" || true)" ] \
+    || fail "the Calendar service account cannot sign in with its new password"
+  log "Calendar service account ready"
+}
+
 # The first Owner (design §2.4). Installation does not complete without
 # one, and that is a failure rather than a warning.
 #
@@ -1107,7 +1212,7 @@ set_owner_password() {
 # keeps them irreplaceable until a second one exists (§2.4, §2.5).
 # The groups the first Owner is given behind the proxy: the Console's,
 # and the family homepage's.
-OWNER_GROUPS='"console_users","homepage_users","filedrop_users","assistant_users"'
+OWNER_GROUPS='"console_users","homepage_users","filedrop_users","assistant_users","calendar_users"'
 
 # grant_owner_groups puts an ALREADY-declared first Owner in those
 # groups. A resumed install finds the account an earlier run created —
@@ -1116,8 +1221,28 @@ OWNER_GROUPS='"console_users","homepage_users","filedrop_users","assistant_users
 # fine, and the Household screen can add the group; saying so beats
 # stopping an install that is otherwise done.
 grant_owner_groups() {
-  local r id st i
-  r="$(api PUT "/api/v1/household/members/$ADMIN_USER" "{\"groups\":[$OWNER_GROUPS]}" || true)"
+  local r id st i members account_row groups group
+  members="$(api GET /api/v1/household/members)"
+  account_row="$(printf '%s' "$members" | tr '{' '\n' |
+    grep "\"username\":\"$ADMIN_USER\"" | head -1 || true)"
+  groups="$(printf '%s' "$account_row" |
+    sed -n 's/.*"groups":\(\[[^]]*\]\).*/\1/p')"
+  [ -n "$groups" ] || fail "could not read groups for '$ADMIN_USER'"
+  for group in console_users homepage_users filedrop_users assistant_users calendar_users; do
+    if [[ "$groups" != *"\"$group\""* ]]; then
+      if [ "$groups" = '[]' ]; then
+        groups="[\"$group\"]"
+      else
+        groups="${groups%]},\"$group\"]"
+      fi
+    fi
+  done
+  if [ "$groups" = "$(printf '%s' "$account_row" |
+    sed -n 's/.*"groups":\(\[[^]]*\]\).*/\1/p')" ]; then
+    log "'$ADMIN_USER' already has the homepage groups"
+    return 0
+  fi
+  r="$(api PUT "/api/v1/household/members/$ADMIN_USER" "{\"groups\":$groups}" || true)"
   case "$r" in
     *"no-op against current desired state"*) return 0 ;;
   esac
@@ -1368,6 +1493,48 @@ post_install() {
       "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_API_ADDR\"}"
     enable_capability assistant-wildstone \
       "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_API_ADDR\"}"
+    # Calendar is part of the homepage. Keep the generated credential on
+    # reruns: changing the Secret without rerunning its credential-file
+    # Job would leave Radicale using the old password. The generation
+    # parameter makes the Job run when this installer first adopts an
+    # existing Calendar installation or a credential is replaced.
+    if [ -f /etc/wildstone/calendar.env ]; then
+      CALENDAR_PASS="$(sed -n 's/^CALENDAR_PASSWORD=//p' /etc/wildstone/calendar.env)"
+    else
+      CALENDAR_PASS="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    fi
+    [[ "$CALENDAR_PASS" =~ ^[0-9a-f]{48}$ ]] || fail "invalid Calendar credential in /etc/wildstone/calendar.env"
+    local secret_response calendar_generation
+    calendar_generation="$(printf '%s' "$CALENDAR_PASS" | sha256sum | cut -c1-16)"
+    secret_response="$(api POST "/api/v1/nodes/$NODE_ID/secrets/calendar-service-password" \
+      "{\"value\":\"$CALENDAR_PASS\"}")"
+    [[ "$secret_response" != *'"error"'* ]] || fail "could not store the Calendar credential"
+    log "installing the household calendar"
+    enable_capability calendar-radicale \
+      "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"service_account_generation\":\"$calendar_generation\"}"
+    seed_calendar_account
+
+    # Keystone's portal and agent use the same shared collection. Keep
+    # its password in a root-only EnvironmentFile, never a process flag.
+    local calendar_url="https://$tsname:51443/$CALENDAR_COLLECTION/"
+    install -m 0600 /dev/null /etc/wildstone/calendar.env
+    printf 'CALENDAR_PASSWORD=%s\n' "$CALENDAR_PASS" > /etc/wildstone/calendar.env
+    KEYSTONE_ARGS="$(merge_keystone_args "$(read_keystone_args)" \
+      " -calendar-url $calendar_url -calendar-user $CALENDAR_USER")"
+    printf 'KEYSTONE_ARGS=-data-dir /var/lib/wildstone/keystone%s\n' "$KEYSTONE_ARGS" > "$KEYSTONE_ENV"
+    systemctl restart keystone || fail "could not enable Calendar in Keystone"
+    local i calendar_ready=0
+    for i in $(seq 1 30); do
+      if printf 'user = "%s:%s"\n' "$CALENDAR_USER" "$CALENDAR_PASS" |
+          curl -fsS --config - --connect-timeout 3 --max-time 5 -o /dev/null \
+            -X PROPFIND -H 'Depth: 0' "$calendar_url" 2>/dev/null; then
+        log "household calendar reachable with the service account"
+        calendar_ready=1
+        break
+      fi
+      sleep 2
+    done
+    [ "$calendar_ready" = 1 ] || fail "Calendar could not authenticate; see: docker logs radicale"
   fi
   create_first_owner
   for svc in $SERVICES; do
@@ -1479,6 +1646,7 @@ Wants=network-online.target
 
 [Service]
 EnvironmentFile=/etc/wildstone/keystone.env
+EnvironmentFile=-/etc/wildstone/calendar.env
 ExecStart=/usr/local/bin/keystone $KEYSTONE_ARGS
 Restart=on-failure
 RestartSec=3
