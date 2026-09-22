@@ -1402,7 +1402,7 @@ post_install() {
   [ -n "$fp" ] && args+=(--ca-fingerprint "$fp")
   [ -n "$ARTIFACT_DIR" ] && args+=(--artifact-dir "$ARTIFACT_DIR")
   [ -n "$TOKEN" ] && args+=(--token "$TOKEN")
-  "$0" "${args[@]}" >/dev/null || fail "pairing this host as a node failed"
+  bash "$0" "${args[@]}" >/dev/null || fail "pairing this host as a node failed"
   wait_agent
   log "node agent connected"
 
