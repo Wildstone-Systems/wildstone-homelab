@@ -55,6 +55,31 @@ The completed audit contains:
 
 These numbers describe repository conformance at the time of the audit. They are evidence, not the architecture itself.
 
+## Current disposition after slices 1–23
+
+Slice 24 (#225) re-evaluated the same 121 stable finding IDs against the
+merged implementation. Each findings file now places **Current status** and
+**Current evidence** beside its original **Audit status** and **Audit evidence**.
+The old requirement and acceptance tables above the findings remain the
+September 10 audit snapshot, not a current pass/fail report.
+
+| Current state | Count | Meaning |
+|---|---:|---|
+| implemented | 58 | A cited shipped path and named regression test address the finding. |
+| open | 56 | The row names a current owner and follow-up issue; partial work is not counted as complete. |
+| superseded | 7 | The accepted design changed the contract; the row points to its governing section. |
+| **total** | **121** | Every original ID has exactly one current disposition. |
+
+Open work is grouped in [chat delivery #314](https://github.com/chickenrat17/wildstone-homelab/issues/314),
+[routine execution #315](https://github.com/chickenrat17/wildstone-homelab/issues/315),
+[identity #316](https://github.com/chickenrat17/wildstone-homelab/issues/316),
+[memory and privacy #317](https://github.com/chickenrat17/wildstone-homelab/issues/317),
+and [durable work #318](https://github.com/chickenrat17/wildstone-homelab/issues/318).
+[Semantic recall #311](https://github.com/chickenrat17/wildstone-homelab/issues/311),
+[Agent delegation #312](https://github.com/chickenrat17/wildstone-homelab/issues/312),
+and [clone credentials #313](https://github.com/chickenrat17/wildstone-homelab/issues/313)
+have focused issues. Child identity remains tracked by [#284](https://github.com/chickenrat17/wildstone-homelab/issues/284).
+
 ## Design resolution after the audit
 
 The audit exposed several repeated architectural questions. Those questions were subsequently reviewed with the Owner and re-baselined in:

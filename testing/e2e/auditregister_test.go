@@ -61,11 +61,11 @@ var (
 	statusLineRe = regexp.MustCompile(`(?m)^- \*\*Status:\*\* (.+?)\s*$`)
 	findingRe    = regexp.MustCompile(`(?m)^### ~?~?(F-(\d+)-(\d+))~?~? — (.+?)\s*$`)
 	// Within a finding, its own status and evidence lines.
-	inlineStatusRe = regexp.MustCompile(`(?m)^- \*\*Status:\*\* (.+?)\s*$`)
+	inlineStatusRe = regexp.MustCompile(`(?m)^- \*\*Audit status:\*\* (.+?)\s*$`)
 	// Evidence values wrap. Capturing only the first line truncated one
 	// mid-citation — "…; `GET" — and reported a well-evidenced finding
 	// as unsupported, so continuation lines are part of the value.
-	inlineEvidenceRe = regexp.MustCompile(`(?m)^- \*\*Evidence:\*\* (.*(?:\n[ \t]+\S.*)*)`)
+	inlineEvidenceRe = regexp.MustCompile(`(?m)^- \*\*Audit evidence:\*\* (.*(?:\n[ \t]+\S.*)*)`)
 )
 
 func TestAuditRegister(t *testing.T) {
@@ -219,12 +219,12 @@ func findingProblems(body, fileIssue string) []string {
 		}
 
 		if sm := inlineStatusRe.FindStringSubmatch(section); sm == nil {
-			bad = append(bad, fmt.Sprintf("%s: no \"- **Status:** ...\" line", id))
+			bad = append(bad, fmt.Sprintf("%s: no \"- **Audit status:** ...\" line", id))
 		} else if !findingStatuses[sm[1]] {
 			bad = append(bad, fmt.Sprintf("%s: status %q is not one of implemented|partial|missing|unverified", id, sm[1]))
 		}
 		if em := inlineEvidenceRe.FindStringSubmatch(section); em == nil {
-			bad = append(bad, fmt.Sprintf("%s: no \"- **Evidence:** ...\" line — a claim without evidence is an opinion", id))
+			bad = append(bad, fmt.Sprintf("%s: no \"- **Audit evidence:** ...\" line — a claim without evidence is an opinion", id))
 		} else if e := strings.TrimSpace(em[1]); e == "" {
 			bad = append(bad, fmt.Sprintf("%s: empty evidence line", id))
 		} else if !evidential(e) {
@@ -260,7 +260,7 @@ func findingProblems(body, fileIssue string) []string {
 // each one gets an example it must catch.
 func TestAuditRegisterLintCatchesMistakes(t *testing.T) {
 	const header = "# X\n\n- **Issue:** #153\n- **Status:** in progress\n\n## Findings\n\n"
-	good := "### F-153-01 — a real one\n- **Status:** missing\n- **Evidence:** `a/b.go:10`\n\n"
+	good := "### F-153-01 — a real one\n- **Audit status:** missing\n- **Audit evidence:** `a/b.go:10`\n\n"
 
 	for _, c := range []struct {
 		name, file, body, want string
@@ -268,30 +268,30 @@ func TestAuditRegisterLintCatchesMistakes(t *testing.T) {
 		{
 			// The one that silently repoints a remediation issue's citation.
 			name: "a duplicate id",
-			file: "153-x.md", body: header + good + "### F-153-01 — same id again\n- **Status:** partial\n- **Evidence:** `c/d.go:1`\n",
+			file: "153-x.md", body: header + good + "### F-153-01 — same id again\n- **Audit status:** partial\n- **Audit evidence:** `c/d.go:1`\n",
 			want: "duplicate id",
 		},
 		{
 			// A renumber looks like tidying and changes what a citation means.
 			name: "numbers going backwards",
-			file: "153-x.md", body: header + "### F-153-04 — later\n- **Status:** missing\n- **Evidence:** `a:1`\n\n### F-153-02 — earlier\n- **Status:** missing\n- **Evidence:** `b:2`\n",
+			file: "153-x.md", body: header + "### F-153-04 — later\n- **Audit status:** missing\n- **Audit evidence:** `a:1`\n\n### F-153-02 — earlier\n- **Audit status:** missing\n- **Audit evidence:** `b:2`\n",
 			want: "must only increase",
 		},
 		{
 			// A finding filed under the wrong slice's namespace.
 			name: "an id from another slice",
-			file: "153-x.md", body: header + "### F-156-01 — wrong file\n- **Status:** missing\n- **Evidence:** `a:1`\n",
+			file: "153-x.md", body: header + "### F-156-01 — wrong file\n- **Audit status:** missing\n- **Audit evidence:** `a:1`\n",
 			want: "lives in the file for",
 		},
 		{
 			name: "a claim with no evidence",
-			file: "153-x.md", body: header + "### F-153-01 — unsupported\n- **Status:** missing\n",
+			file: "153-x.md", body: header + "### F-153-01 — unsupported\n- **Audit status:** missing\n",
 			want: "a claim without evidence is an opinion",
 		},
 		{
 			// "probably fine" is the status that makes a report useless.
 			name: "a status outside the four states",
-			file: "153-x.md", body: header + "### F-153-01 — vague\n- **Status:** probably fine\n- **Evidence:** `a:1`\n",
+			file: "153-x.md", body: header + "### F-153-01 — vague\n- **Audit status:** probably fine\n- **Audit evidence:** `a:1`\n",
 			want: "not one of implemented|partial|missing|unverified",
 		},
 		{

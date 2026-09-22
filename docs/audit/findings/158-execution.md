@@ -93,8 +93,12 @@ clean up.
 ## Findings
 
 ### F-158-01 — the state machine has no "partially complete", and "blocked" is a wait reason rather than a state
-- **Status:** partial
-- **Evidence:** `keystone/runtimedb/butlertasks.go:54-65` defines seven states — `pending`, `running`, `waiting`, `completed`, `failed`, `cancelled`, `paused-offboarded`. `console/src/views/Work.tsx:33-54` renders exactly those. §7's six map as: working→`running`, waiting for you→`waiting`, finished→`completed`, cancelled→`cancelled`.
+
+- **Current status:** superseded
+- **Current evidence:** Current design treats partial success as completed step/effect evidence plus remaining work, not a separate terminal task state.
+- **Superseded by:** docs/agent-system-design.md §16 durable work and E10 completion evidence
+- **Audit status:** partial
+- **Audit evidence:** `keystone/runtimedb/butlertasks.go:54-65` defines seven states — `pending`, `running`, `waiting`, `completed`, `failed`, `cancelled`, `paused-offboarded`. `console/src/views/Work.tsx:33-54` renders exactly those. §7's six map as: working→`running`, waiting for you→`waiting`, finished→`completed`, cancelled→`cancelled`.
 
 Two do not map.
 
@@ -117,8 +121,11 @@ nothing. §16's "Distinguish partial success from full completion" has no
 carrier.
 
 ### F-158-02 — the uncertain result is readable in three places and written in none
-- **Status:** missing
-- **Evidence:** `butler_tasks.uncertainty` is declared in migration `0017_butler_tasks.sql:92-94`, scanned in `keystone/runtimedb/butlertasks.go:352`, queried by the restore replay at `keystone/runtimedb/restore.go:363`, typed in `console/src/api.ts:502` and rendered in `console/src/views/Work.tsx:138-142`. `grep -rn uncertainty` over the whole tree returns no writer: there is no `SetButlerTaskUncertainty`, no `UPDATE ... SET uncertainty`, and no caller that would use one.
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/conversationwork.go`; 0baaa8d; `TestConversationParentPreservesUncertainOutcome`.
+- **Audit status:** missing
+- **Audit evidence:** `butler_tasks.uncertainty` is declared in migration `0017_butler_tasks.sql:92-94`, scanned in `keystone/runtimedb/butlertasks.go:352`, queried by the restore replay at `keystone/runtimedb/restore.go:363`, typed in `console/src/api.ts:502` and rendered in `console/src/views/Work.tsx:138-142`. `grep -rn uncertainty` over the whole tree returns no writer: there is no `SetButlerTaskUncertainty`, no `UPDATE ... SET uncertainty`, and no caller that would use one.
 
 The wait reason `uncertain-outcome`
 (`keystone/runtimedb/butlersteps.go:419`) is the same shape: defined,
@@ -137,8 +144,13 @@ uncertain result" has a column, a wait reason, a UI string and no
 mechanism.
 
 ### F-158-03 — nothing inspects an external outcome after a timeout, and a resume re-dispatches an unverified action
-- **Status:** missing
-- **Evidence:** `keystone/butler/runner.go:589-670` (`toolCall`). A tool call is checkpointed before dispatch (`StartAttempt`, `keystone/runtimedb/butlersteps.go:214-270`) and again after its result. Between those two points the process can die, leaving the attempt `dispatched` — an outcome the store's own comment calls "unknown, which the resume path must treat as uncertain rather than retry".
+
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/conversationwork.go` holds an uncertain outcome, but no adapter-specific destination verification after timeout is implemented.
+- **Current owner:** chickenrat17
+- **Tracking:** #318
+- **Audit status:** missing
+- **Audit evidence:** `keystone/butler/runner.go:589-670` (`toolCall`). A tool call is checkpointed before dispatch (`StartAttempt`, `keystone/runtimedb/butlersteps.go:214-270`) and again after its result. Between those two points the process can die, leaving the attempt `dispatched` — an outcome the store's own comment calls "unknown, which the resume path must treat as uncertain rather than retry".
 
 No resume path does that. `verifiedResults`
 (`keystone/butler/runner.go:299-320`) builds its skip-set from steps in
@@ -170,8 +182,13 @@ restore-from-backup and on no other restart, which is the narrower half
 of the case AC05 describes.
 
 ### F-158-04 — nothing resumes a task on its own; the resume queue and the wakeup index have no readers
-- **Status:** missing
-- **Evidence:** `ButlerTasksInState` (`keystone/runtimedb/butlertasks.go:399-407`), documented as "the resume queue after a restart", has **zero callers outside its own package**. Its only exercise is `TestButlerTasksInStateIsTheResumeQueue` (`keystone/runtimedb/butlertasks_test.go:528`).
+
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/butlertasks.go:ButlerTasksInState` stores a resume queue; no autonomous wakeup reader is proven.
+- **Current owner:** chickenrat17
+- **Tracking:** #318
+- **Audit status:** missing
+- **Audit evidence:** `ButlerTasksInState` (`keystone/runtimedb/butlertasks.go:399-407`), documented as "the resume queue after a restart", has **zero callers outside its own package**. Its only exercise is `TestButlerTasksInStateIsTheResumeQueue` (`keystone/runtimedb/butlertasks_test.go:528`).
 
 `butler_tasks.next_wakeup_at`, documented as "the scheduler's index"
 (`keystone/runtimedb/butlersteps.go:463-467`), is written by
@@ -194,8 +211,11 @@ and unfinished work across restarts" holds for the storage and not for
 the resumption.
 
 ### F-158-05 — a first turn that fails leaves a task nothing can ever reach
-- **Status:** partial
-- **Evidence:** `keystone/butlerlive/serve.go:243-262` resumes a task by looking it up from the **session** id. The session is created after the answer, in `keystone/api/handlers_butler_named.go:176-215`, and the task is pointed at it there (`SetButlerTaskSession`, line 213).
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_butler_named.go`; 0baaa8d; `TestAFailedTurnKeepsItsDurableTask`.
+- **Audit status:** partial
+- **Audit evidence:** `keystone/butlerlive/serve.go:243-262` resumes a task by looking it up from the **session** id. The session is created after the answer, in `keystone/api/handlers_butler_named.go:176-215`, and the task is pointed at it there (`SetButlerTaskSession`, line 213).
 
 `runNamedButlerSession`
 (`keystone/api/handlers_butler_named.go:131-152`) returns on **every**
@@ -219,8 +239,11 @@ every time ([`../runtime-access.md`](../runtime-access.md)), so on the
 CLI every turn is a first turn.
 
 ### F-158-06 — the aggregate tool budget resets every turn, which is not what it says it does
-- **Status:** partial
-- **Evidence:** `keystone/butlerlive/serve.go:24-31`: *"conversationToolCalls bounds a conversation's tool calls across every turn and every restart. Unlike the slice budget it does not reset, because a budget that resets on retry is not a budget."* The same claim is in `keystone/butler/runner.go:184-190`.
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/conversationwork.go`; 0baaa8d; `TestConversationParentCarriesBudgetAcrossTurnLedgers`.
+- **Audit status:** partial
+- **Audit evidence:** `keystone/butlerlive/serve.go:24-31`: *"conversationToolCalls bounds a conversation's tool calls across every turn and every restart. Unlike the slice budget it does not reset, because a budget that resets on retry is not a budget."* The same claim is in `keystone/butler/runner.go:184-190`.
 
 It resets every turn. `Runner.Run` seeds the counter from
 `countToolSteps(steps)` (`keystone/butler/runner.go:322-329`), and
@@ -244,9 +267,14 @@ The defect is that "the task" and "the conversation" are the same word
 in the comment and different objects in the code.
 
 ### F-158-07 — no runtime, deadline or cost budget exists; the two columns for them are written by nothing
-- **Status:** missing
+
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/butlersettings.go` bounds model rounds and tool calls, but runtime/deadline/cost budgets are not enforced together.
+- **Current owner:** chickenrat17
+- **Tracking:** #318
+- **Audit status:** missing
 - **Requires:** §16 requires "finite retry, duration, step, and spending limits; exact values must be explicit configuration rather than unlimited defaults", and §7 lists "execution budgets" as per-Butler configuration.
-- **Evidence:** code as cited below — `keystone/butlerlive/serve.go:96-107`, `keystone/butlerstore/butlerstore.go:88-92`, `keystone/butlerstore/retry_test.go:138`; test `TestWithdrawnAuthorityBlocksContinuation`.
+- **Audit evidence:** code as cited below — `keystone/butlerlive/serve.go:96-107`, `keystone/butlerstore/butlerstore.go:88-92`, `keystone/butlerstore/retry_test.go:138`; test `TestWithdrawnAuthorityBlocksContinuation`.
 
 What exists: rounds per turn (8), tool calls per task (64), one model
 call bounded at 2 minutes, one retry
@@ -273,8 +301,11 @@ What does not exist:
 Another enforced-but-unset field, same shape as F-158-02.
 
 ### F-158-08 — the stalled-task notice is wired with no way to reach anyone
-- **Status:** missing
-- **Evidence:** `keystone/butlerstore/notify.go:44-56`: `Notifier` needs a `Binding func(taskID string) (runtimedb.ChatOutbound, bool, error)` to resolve the surface a notice goes to, and `NotifyStalled` returns `nil` immediately when `n.Binding == nil` (lines 60-62).
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/butlerstore/notify.go`; 0baaa8d; `TestStallNoticeDeduplicatesAndWaitsForQuietHours`.
+- **Audit status:** missing
+- **Audit evidence:** `keystone/butlerstore/notify.go:44-56`: `Notifier` needs a `Binding func(taskID string) (runtimedb.ChatOutbound, bool, error)` to resolve the surface a notice goes to, and `NotifyStalled` returns `nil` immediately when `n.Binding == nil` (lines 60-62).
 
 `keystone/cmd/keystone/main.go:1143` is the only construction in the
 tree:
@@ -299,8 +330,13 @@ Combined with F-158-04 and F-158-05: a task stalls, nobody is told, and
 nothing resumes it.
 
 ### F-158-09 — delegation between Butlers does not exist
-- **Status:** missing
-- **Evidence:** `grep -rin "delegat" keystone/` returns four hits, all unrelated: `gateway.go:519`, `butler/policy.go:23`, `butler/redact.go:5` and `reconcile/origin.go:3` all use the word for "this function calls that package".
+
+- **Current status:** open
+- **Current evidence:** `keystone/butler/runner.go` does not expose a bounded Agent-to-Agent delegation contract.
+- **Current owner:** chickenrat17
+- **Tracking:** #312
+- **Audit status:** missing
+- **Audit evidence:** `grep -rin "delegat" keystone/` returns four hits, all unrelated: `gateway.go:519`, `butler/policy.go:23`, `butler/redact.go:5` and `reconcile/origin.go:3` all use the word for "this function calls that package".
 
 There is no delegate concept, no sub-task, no initiating-identity
 propagation across agents, and no depth counter. The only cross-Butler
@@ -329,9 +365,14 @@ everywhere, and delegation is the feature that has to breach it under
 control. See **Design gaps**.
 
 ### F-158-10 — retiring a Butler does not pause the routines that call it; it breaks them
-- **Status:** missing
+
+- **Current status:** open
+- **Current evidence:** `keystone/automation/routine_execution.go` needs a retirement-to-routine pause/owner-review regression test.
+- **Current owner:** chickenrat17
+- **Tracking:** #318
+- **Audit status:** missing
 - **Requires:** §16: "Deleting an agent preserves person- and household-owned memory and pauses its routines pending reassignment."
-- **Evidence:** code as cited below — `keystone/runtimedb/butlers.go:312-326`, `keystone/runtimedb/butlerassign.go:52`, `keystone/runtimedb/butlers.go:632`.
+- **Audit evidence:** code as cited below — `keystone/runtimedb/butlers.go:312-326`, `keystone/runtimedb/butlerassign.go:52`, `keystone/runtimedb/butlers.go:632`.
 
 `RetireButler` (`keystone/runtimedb/butlers.go:312-326`) executes one
 statement, against the `butlers` row. It does not touch
@@ -351,9 +392,14 @@ correctly described in the same dialog.
 routine while it waits for one.
 
 ### F-158-11 — there is no pause; retire is the only agent-level lever, and it does not stop active work either
-- **Status:** partial
+
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/butlers.go` exposes retirement, but no independent pause/resume control for an active Agent is evidenced.
+- **Current owner:** chickenrat17
+- **Tracking:** #318
+- **Audit status:** partial
 - **Requires:** §16 asks for two separate controls: "Pause stops new runs and notifications; expose separate cancellation for active work."
-- **Evidence:** code as cited below — `keystone/api/api.go:434`, `keystone/runtimedb/butlers.go:463-512`, `keystone/butlerstore/butlerstore.go:64-96`; test `TestWithdrawnAuthorityBlocksContinuation`.
+- **Audit evidence:** code as cited below — `keystone/api/api.go:434`, `keystone/runtimedb/butlers.go:463-512`, `keystone/butlerstore/butlerstore.go:64-96`; test `TestWithdrawnAuthorityBlocksContinuation`.
 
 The Butler has one control, `DELETE /api/v1/butlers/{name}` →
 `RetireButler` (`keystone/api/api.go:434`). It does stop new
@@ -386,8 +432,13 @@ API-only capability. *(A live box would have shown what an operator can
 actually reach; the client code settles it either way.)*
 
 ### F-158-12 — clone is close to right, but it copies integration connection grants
-- **Status:** partial
-- **Evidence:** `DuplicateButler` (`keystone/runtimedb/butlers.go:556-620`) copies directive, surface, profile, model route, connection grants and tool narrowings, in one transaction. It deliberately copies neither the access list, nor memory, nor sessions (lines 542-554), and it touches `household_routines` and `butler_addresses` not at all — so a clone has no bot identity, no transcripts and no running routines. That is §16's clone requirement, and the API says so honestly (`keystone/api/handlers_butlers.go:610-613`: "Nobody can talk to it, it remembers nothing").
+
+- **Current status:** open
+- **Current evidence:** Current clone behavior needs a negative credential/grant-inheritance test against the post-Connection schema.
+- **Current owner:** chickenrat17
+- **Tracking:** #313
+- **Audit status:** partial
+- **Audit evidence:** `DuplicateButler` (`keystone/runtimedb/butlers.go:556-620`) copies directive, surface, profile, model route, connection grants and tool narrowings, in one transaction. It deliberately copies neither the access list, nor memory, nor sessions (lines 542-554), and it touches `household_routines` and `butler_addresses` not at all — so a clone has no bot identity, no transcripts and no running routines. That is §16's clone requirement, and the API says so honestly (`keystone/api/handlers_butlers.go:610-613`: "Nobody can talk to it, it remembers nothing").
 
 The one thing to weigh is the connection grants
 (`keystone/runtimedb/butlers.go:590-597`). Those are scoped credential
@@ -403,9 +454,12 @@ Both readings are defensible, which makes it a decision rather than a
 defect. See **Design gaps**.
 
 ### F-158-13 — the household-wide stop control exists as restore quarantine, and its release path belongs to a different incident
-- **Status:** partial
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/routineexecution.go`; 0baaa8d; `TestHouseholdStopHaltsAllRoutineExecution`.
+- **Audit status:** partial
 - **Requires:** §16: "Provide a household-wide stop control and targeted connection revocation." The revocation half is implemented (requirement 23 above).
-- **Evidence:** code as cited below — `keystone/api/api.go:402`, `keystone/runtimedb/restore.go:124-162`, `keystone/runtimedb/butlersteps.go:220-225`.
+- **Audit evidence:** code as cited below — `keystone/api/api.go:402`, `keystone/runtimedb/restore.go:124-162`, `keystone/runtimedb/butlersteps.go:220-225`.
 
 The stop half exists in substance. `POST /api/v1/restore/quarantine`
 (`keystone/api/api.go:402`) sets a flag that `db.gate` checks at the
@@ -442,8 +496,13 @@ What makes it partial:
 mid-incident; the release precondition is settled from code.)*
 
 ### F-158-14 — nothing schedules anything: no routine becomes a task, and routine documents carry no trigger, timezone or catch-up policy
-- **Status:** missing
-- **Evidence:** `ButlerTaskRoutine` (`keystone/runtimedb/butlertasks.go:48`) is the task kind for "one occurrence of a Wildstone-owned routine". `grep -rn ButlerTaskRoutine keystone/` outside the file that defines it and its own validation returns nothing: **no producer**. Every task created on the live path is a `conversation` (`keystone/butlerlive/serve.go:284`).
+
+- **Current status:** open
+- **Current evidence:** `keystone/automation/routine_execution.go` makes event-triggered reviewed runs; no clock schedule creates an occurrence.
+- **Current owner:** chickenrat17
+- **Tracking:** #318
+- **Audit status:** missing
+- **Audit evidence:** `ButlerTaskRoutine` (`keystone/runtimedb/butlertasks.go:48`) is the task kind for "one occurrence of a Wildstone-owned routine". `grep -rn ButlerTaskRoutine keystone/` outside the file that defines it and its own validation returns nothing: **no producer**. Every task created on the live path is a `conversation` (`keystone/butlerlive/serve.go:284`).
 
 `household_routines.document` is opaque `TEXT`. `CreateHouseholdRoutine`
 (`keystone/runtimedb/householdroutines.go:97-155`) validates ownership,
@@ -466,9 +525,14 @@ belongs here is that the durable-execution machinery has a routine
 shape built into it with nothing on the other end.
 
 ### F-158-15 — no conflict detection between agents, handlers and application rules
-- **Status:** missing
+
+- **Current status:** open
+- **Current evidence:** `keystone/automation/routine_execution.go` fences one reviewed effect, but no cross-Agent/handler conflict detector arbitrates shared changes.
+- **Current owner:** chickenrat17
+- **Tracking:** #318
+- **Audit status:** missing
 - **Requires:** §16: "Coordinate writes to the same resource and detect recurring conflicts between agents, handlers, and application rules. Pause and surface conflicting routines rather than allowing repeated opposing commands."
-- **Evidence:** code as cited below — `keystone/api/handlers_plans.go:307`, `keystone/automation/automation.go:93-110`.
+- **Audit evidence:** code as cited below — `keystone/api/handlers_plans.go:307`, `keystone/automation/automation.go:93-110`.
 
 `grep -rni conflict keystone/ | grep -v "ON CONFLICT"` returns HTTP 409
 responses and one desired-state check. The one real mechanism is plan
@@ -485,9 +549,14 @@ exists (`automation.Matches`,
 engine's own event — one hop, and only within the handler engine.
 
 ### F-158-16 — there is no context compaction, and history is replayed whole every turn
-- **Status:** missing
+
+- **Current status:** open
+- **Current evidence:** `keystone/butler/runner.go` assembles turn history without a durable context-compaction step for long conversations.
+- **Current owner:** chickenrat17
+- **Tracking:** #318
+- **Audit status:** missing
 - **Requires:** §7: "Context compaction must retain task state without widening memory visibility or restoring secrets into prompts."
-- **Evidence:** code as cited below — `keystone/api/handlers_butler.go:290-299`, `keystone/butler/runner.go:331-334`, `keystone/api/handlers_butler.go:301-312`.
+- **Audit evidence:** code as cited below — `keystone/api/handlers_butler.go:290-299`, `keystone/butler/runner.go:331-334`, `keystone/api/handlers_butler.go:301-312`.
 
 No compaction exists. `historyFrom`
 (`keystone/api/handlers_butler.go:290-299`) turns every stored turn of a
@@ -510,8 +579,11 @@ not restored into a later prompt. Whatever compaction gets built has to
 keep both.
 
 ### F-158-17 — the coordinator lease is the gate on durable work, and it holds
-- **Status:** implemented
-- **Evidence:** `keystone/cmd/keystone/main.go:506-518` acquires the lease at startup and sets `coordinating`; `main.go:1079-1150` wires the ledger, `butlerlive.Butlers` and `apiSrv.Butlers` **only** inside `if coordinating`. `AcquireCoordinator` (`keystone/runtimedb/coordinator.go:49-88`) never steals: a different holder returns `ErrCoordinatorHeld` and changes nothing; re-acquiring your own lease keeps the epoch, which is what lets a restart resume its own tasks. Takeover is the explicit `PromoteCoordinator`, which bumps the epoch (lines 90-135).
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/coordinator.go`; 569a284; `TestCoordinatorLeaseIsSingleAndFenced`.
+- **Audit status:** implemented
+- **Audit evidence:** `keystone/cmd/keystone/main.go:506-518` acquires the lease at startup and sets `coordinating`; `main.go:1079-1150` wires the ledger, `butlerlive.Butlers` and `apiSrv.Butlers` **only** inside `if coordinating`. `AcquireCoordinator` (`keystone/runtimedb/coordinator.go:49-88`) never steals: a different holder returns `ErrCoordinatorHeld` and changes nothing; re-acquiring your own lease keeps the epoch, which is what lets a restart resume its own tasks. Takeover is the explicit `PromoteCoordinator`, which bumps the epoch (lines 90-135).
 
 Fencing is enforced at every checkpoint that matters:
 `Runner.Run` fences at entry and each round
@@ -542,8 +614,11 @@ dispatch external effects, unfenced. That is **F-158-21**, and it is why
 requirement 26 is `partial` while this finding is `implemented`.
 
 ### F-158-18 — the coordinator heartbeat is never written, so the evidence for promoting is stale by design
-- **Status:** missing
-- **Evidence:** `HeartbeatCoordinator` (`keystone/runtimedb/coordinator.go:157-168`) exists so that `heartbeat_at` is "evidence for a human deciding whether to promote". `grep -rn HeartbeatCoordinator keystone/` returns only its definition and `coordinator_test.go`. Nothing in `cmd/keystone` starts a heartbeat loop.
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/coordinator.go` and `keystone/cmd/keystone/main.go`; 569a284; `TestCoordinatorHeartbeatRecordsLivenessAndStopsOnPromotion`.
+- **Audit status:** missing
+- **Audit evidence:** `HeartbeatCoordinator` (`keystone/runtimedb/coordinator.go:157-168`) exists so that `heartbeat_at` is "evidence for a human deciding whether to promote". `grep -rn HeartbeatCoordinator keystone/` returns only its definition and `coordinator_test.go`. Nothing in `cmd/keystone` starts a heartbeat loop.
 
 `heartbeat_at` is therefore only ever set by `AcquireCoordinator`
 (`coordinator.go:60-80`) — at process start. `GET
@@ -557,9 +632,12 @@ Small, and it sits directly under the one manual decision
 made correctly.
 
 ### F-158-19 — evidence is mandatory, but the runner writes its own receipt
-- **Status:** partial
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/butlersteps.go`; 5dd3ac8; `TestRunnerAuthoredDeliveryRowDoesNotSatisfyAnEffectfulObjective`.
+- **Audit status:** partial
 - **Requires:** §7: "The agent must not claim completion without a successful tool or scheduler receipt."
-- **Evidence:** code as cited below — `keystone/runtimedb/butlertasks.go:432-437`, `keystone/runtimedb/butlersteps.go:680-731`, `keystone/runtimedb/butlertasks_test.go:209`; tests `TestButlerTaskCompletionIsRefusedBySchemaWithoutEvidence`, `TestButlerTaskInterruptedBetweenEvidenceAndCompletion`.
+- **Audit evidence:** code as cited below — `keystone/runtimedb/butlertasks.go:432-437`, `keystone/runtimedb/butlersteps.go:680-731`, `keystone/runtimedb/butlertasks_test.go:209`; tests `TestButlerTaskCompletionIsRefusedBySchemaWithoutEvidence`, `TestButlerTaskInterruptedBetweenEvidenceAndCompletion`.
 
 Three independent layers. `TransitionButlerTask` refuses to reach
 `completed` at all (`keystone/runtimedb/butlertasks.go:432-437`).
@@ -615,8 +693,11 @@ Corrected after review on the PR (Codex, P1). It was first written as
 receipt when they prove only that a row exists.
 
 ### F-158-20 — a restart does not repeat an established read
-- **Status:** implemented
-- **Evidence:** `Runner.Run` reads the step ledger before doing anything (`keystone/butler/runner.go:322-329`) and serves any tool call whose fingerprint is already verified from it rather than dispatching again (`keystone/butler/runner.go:596-612`). Fingerprints are JSON-normalized so argument order does not change the answer (lines 277-296), and travel *with* the stored result so a change to the scheme cannot match old rows to new questions (lines 322-329).
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/butlerstore/butlerstore.go`; 0baaa8d; `TestInterruptedRunResumesWithoutRepeatingReads`.
+- **Audit status:** implemented
+- **Audit evidence:** `Runner.Run` reads the step ledger before doing anything (`keystone/butler/runner.go:322-329`) and serves any tool call whose fingerprint is already verified from it rather than dispatching again (`keystone/butler/runner.go:596-612`). Fingerprints are JSON-normalized so argument order does not change the answer (lines 277-296), and travel *with* the stored result so a change to the scheme cannot match old rows to new questions (lines 322-329).
 
 Freshness is bounded rather than assumed: `verifiedResults`
 (`keystone/butler/runner.go:299-320`) drops a result older than
@@ -637,8 +718,11 @@ a resume without a person typing (F-158-04, F-158-05), and any handling
 of the dispatched-but-unknown case (F-158-03).
 
 ### F-158-21 — a process that does not hold the lease can still dispatch household actions
-- **Status:** missing
-- **Evidence:** `keystone/cmd/keystone/main.go` wires `household.Actions` at line 1036 and `apiSrv.ButlerHost` at line 1058 — both **before** and **outside** the `if coordinating` block that starts at line 1079.
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/executionfence.go`; 569a284; `TestFenceIsOnTheStoreNotTheRoute`.
+- **Audit status:** missing
+- **Audit evidence:** `keystone/cmd/keystone/main.go` wires `household.Actions` at line 1036 and `apiSrv.ButlerHost` at line 1058 — both **before** and **outside** the `if coordinating` block that starts at line 1079.
 
 The consequence follows from three facts that are individually
 deliberate:

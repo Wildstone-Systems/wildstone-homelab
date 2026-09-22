@@ -189,6 +189,10 @@ func survived(table, col string, after []string) bool {
 // PURPOSE, with the reason. Anything not listed here that disappears is
 // a defect.
 var deliberatelyDropped = map[string]bool{
+	// Retired by forward migration 0079. Migration 0038 remains applied
+	// history, but no production reader or writer ever used these values.
+	"butler_runtime_settings.index_conversations":       true,
+	"butler_runtime_settings.transcript_retention_days": true,
 	// Replaced by person_id / <role>_person_id (0043). The handle is a
 	// label; the identity is the key.
 	"butler_access.member":           true,

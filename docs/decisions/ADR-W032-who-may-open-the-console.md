@@ -66,6 +66,17 @@ renders the configuration for.
 
 ### A3. Authentication is the small half. Scope is the large one
 
+**Implementation reconciliation (slice 24, #225).** The description below
+records the Console at the time of this ADR. Later slices added Person and
+audience checks to memory, tasks, and Plan inspection, but A3 is not fully
+resolved: `listButlers` still returns every Agent, and `butlerScope` still
+accepts any Agent name for a Console caller. These endpoints need explicit
+Person-scoped review before broadening Console access. `RoleOperator` remains a
+legacy machine/API principal role (`TestLegacyRoleOperatorIsUntouched`),
+separate from the Person's Owner or Member role and Agent class. Its name
+does not grant a human Owner status. New human authorization must use the
+Person role and scoped checks, never infer it from `RoleOperator`.
+
 This is the part that decides how much work the change is.
 
 ADR-W031 A10 gives the Console holder **every** Butler, and the API is

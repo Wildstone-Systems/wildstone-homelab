@@ -132,8 +132,11 @@ the presence of one.
 
 ### F-156-01 — Memory is siloed per Butler, and per person; switching agents loses access
 
-- **Status:** missing
-- **Evidence:** executed (above) + `keystone/runtimedb/butlermemory.go:600-609` (`RetrieveMemory` ANDs `scopeClause("butler", …)` into the candidate SQL), `keystone/runtimedb/butlerscope.go:56-65`, `keystone/butlerstore/memory.go:140-151`; test `TestARememberedNoteBelongsToTheSpeakerAndToOneButler` (`keystone/butlerstore`, run, PASS).
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/memoryscopes.go`; 11d82f0; `TestPersonalMemoryFollowsItsPersonAcrossAgents`.
+
+- **Audit status:** missing
+- **Audit evidence:** executed (above) + `keystone/runtimedb/butlermemory.go:600-609` (`RetrieveMemory` ANDs `scopeClause("butler", …)` into the candidate SQL), `keystone/runtimedb/butlerscope.go:56-65`, `keystone/butlerstore/memory.go:140-151`; test `TestARememberedNoteBelongsToTheSpeakerAndToOneButler` (`keystone/butlerstore`, run, PASS).
 
 Confirms established finding 1 in #151, and it is worse than reported
 there. #151 says Butler B cannot read Butler A's material. It is also
@@ -155,8 +158,12 @@ supersedes that as the **default** for ordinary durable facts. See
 
 ### F-156-02 — The audience vocabulary is two values where the baseline needs four
 
-- **Status:** missing
-- **Evidence:** executed — `RecordMemory` with each candidate audience; `keystone/runtimedb/migrations/0023_butler_memory.sql:42` `CHECK (audience IN ('private','shared'))`; `keystone/runtimedb/butlermemory.go:130-132`.
+- **Current status:** superseded
+- **Current evidence:** The old four-audience vocabulary was replaced by Agent-local, Personal, Household and session context, each intersected with dynamic audience rows.
+- **Superseded by:** docs/agent-system-design.md §11 memory scopes
+
+- **Audit status:** missing
+- **Audit evidence:** executed — `RecordMemory` with each candidate audience; `keystone/runtimedb/migrations/0023_butler_memory.sql:42` `CHECK (audience IN ('private','shared'))`; `keystone/runtimedb/butlermemory.go:130-132`.
 
 ```
   audience="private"   accepted=true
@@ -179,8 +186,11 @@ because it is unreachable to everyone.
 
 ### F-156-03 — Nothing in production can write a shared or pooled record; the sharing mechanism is unwired
 
-- **Status:** missing
-- **Evidence:** `keystone/butlerstore/memory.go:140-151` (audience and Butler are constants in the only production writer); `grep` for callers outside `runtimedb` — `PromoteMemoryToSharedPool` and `RecordButlerMemory` have **no non-test callers** (`keystone/runtimedb/butlerscope.go:283,305`); no route for either in `keystone/api/api.go:352-358`.
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/memoryscopes.go`; 11d82f0; `TestPersonalMemoryFollowsItsPersonAcrossAgents`.
+
+- **Audit status:** missing
+- **Audit evidence:** `keystone/butlerstore/memory.go:140-151` (audience and Butler are constants in the only production writer); `grep` for callers outside `runtimedb` — `PromoteMemoryToSharedPool` and `RecordButlerMemory` have **no non-test callers** (`keystone/runtimedb/butlerscope.go:283,305`); no route for either in `keystone/api/api.go:352-358`.
 
 This is the audit-README trap, and it caught the sharing half of the
 subsystem. `PromoteMemoryToSharedPool` is complete, transactional, and
@@ -205,8 +215,13 @@ it is the only outcome.
 
 ### F-156-04 — Semantic recall cannot retrieve: candidates come only from the FTS match
 
-- **Status:** missing
-- **Evidence:** executed; `keystone/runtimedb/butlerindex.go:225-241` — the candidate query is `FROM butler_index_fts … WHERE butler_index_fts MATCH ?`, and the cosine term at line 283 only adjusts `h.Score` on rows FTS already returned.
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/butlermemory.go` selects lexical candidates; no semantic candidate union can retrieve a vocabulary-mismatched fact.
+- **Current owner:** chickenrat17
+- **Tracking:** #311
+
+- **Audit status:** missing
+- **Audit evidence:** executed; `keystone/runtimedb/butlerindex.go:225-241` — the candidate query is `FROM butler_index_fts … WHERE butler_index_fts MATCH ?`, and the cosine term at line 283 only adjusts `h.Score` on rows FTS already returned.
 
 Confirms established finding 3 in #151, by execution rather than by
 reading. A document was indexed with an embedding, then queried with an
@@ -232,8 +247,13 @@ the vector half never becomes a path that ranks before it filters
 
 ### F-156-05 — There is no embedding client; the index job queue has neither producer nor consumer
 
-- **Status:** missing
-- **Evidence:** `grep -rn 'QueueIndexJob\|ClaimIndexJob\|FinishIndexJob\|RecordIndexMeasurement' --include=*.go` returns **no callers outside `keystone/runtimedb`**, tests included for the first three; `IndexDocument.Embedding` is set at exactly one non-test site — `keystone/butlerstore/memory.go:185-189` — where it is left nil.
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/butlermemory.go` has no embedding client producer or index-job consumer; the semantic path is absent.
+- **Current owner:** chickenrat17
+- **Tracking:** #311
+
+- **Audit status:** missing
+- **Audit evidence:** `grep -rn 'QueueIndexJob\|ClaimIndexJob\|FinishIndexJob\|RecordIndexMeasurement' --include=*.go` returns **no callers outside `keystone/runtimedb`**, tests included for the first three; `IndexDocument.Embedding` is set at exactly one non-test site — `keystone/butlerstore/memory.go:185-189` — where it is left nil.
 
 Confirms established finding 4 in #151. `butler_index_jobs`, its
 priority scheme and its claim/finish protocol are complete and dead.
@@ -244,8 +264,13 @@ run against real data.
 
 ### F-156-06 — The record shape is missing household, version, and sensitivity/retention; two statuses do not exist
 
-- **Status:** partial
-- **Evidence:** `keystone/runtimedb/migrations/0023_butler_memory.sql:28-80`; `keystone/runtimedb/butlermemory.go:67-97`; `grep -rni 'disputed' keystone/runtimedb/` returns nothing.
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/butlermemory.go` records scope and provenance but does not yet expose a complete sensitivity/retention and disputed-status contract.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** partial
+- **Audit evidence:** `keystone/runtimedb/migrations/0023_butler_memory.sql:28-80`; `keystone/runtimedb/butlermemory.go:67-97`; `grep -rni 'disputed' keystone/runtimedb/` returns nothing.
 
 Against §6's field list:
 
@@ -268,8 +293,13 @@ metadata: see F-156-07.
 
 ### F-156-07 — Corrections have no version check, and a conflicting claim is discarded rather than kept as disputed
 
-- **Status:** partial
-- **Evidence:** executed (AC11 transcript above, plus five concurrent trials); `keystone/runtimedb/butlermemory.go:336-341` reads `GetMemory` and tests `Eligible()` **outside** the transaction opened at line 381; the write at line 391 is `UPDATE butler_memory SET superseded_by = ? WHERE seq = ?` with no `AND superseded_by IS NULL`.
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/butlermemory.go:CorrectMemory` supersedes an eligible row but has no caller-supplied version precondition or disputed-claim state.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** partial
+- **Audit evidence:** executed (AC11 transcript above, plus five concurrent trials); `keystone/runtimedb/butlermemory.go:336-341` reads `GetMemory` and tests `Eligible()` **outside** the transaction opened at line 381; the write at line 391 is `UPDATE butler_memory SET superseded_by = ? WHERE seq = ?` with no `AND superseded_by IS NULL`.
 
 Two halves, and they need separating.
 
@@ -300,8 +330,11 @@ present:
 
 ### F-156-08 — `recall` reads private memory into a group conversation; response audience is not part of retrieval authorization
 
-- **Status:** missing
-- **Evidence:** executed, through the real gateways; `keystone/butler/household.go:223-227` (`NewHouseholdGroupGateway` sets `group = true` and registers the same tool map), `household.go:248-259` (`recall` registered unconditionally on the seam), `keystone/butlerstore/memory.go:85-88` (the seam closes over `member` alone); `runtimedb.IndexQuery` has no audience or destination field (`butlerindex.go:164-181`).
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/memorydisclosure.go`; 0562893; `TestDisclosurePolicyAppliesOnTopOfAudience`.
+
+- **Audit status:** missing
+- **Audit evidence:** executed, through the real gateways; `keystone/butler/household.go:223-227` (`NewHouseholdGroupGateway` sets `group = true` and registers the same tool map), `household.go:248-259` (`recall` registered unconditionally on the seam), `keystone/butlerstore/memory.go:85-88` (the seam closes over `member` alone); `runtimedb.IndexQuery` has no audience or destination field (`butlerindex.go:164-181`).
 
 Giulia states something private in a direct conversation with Alfred,
 then a room asks Alfred about it:
@@ -332,8 +365,11 @@ here because the missing filter is §6's and lives on the memory query.
 
 ### F-156-09 — The memory activity log records only shared changes, and no production path creates a shared record
 
-- **Status:** missing
-- **Evidence:** executed — `PendingMemoryDigest` returned `0` after a private write and `1` after a shared one; `keystone/runtimedb/butlermemory.go:180-186, 431-437, 474-480` (every `digestTx` call is inside `if audience == shared`); `MarkMemoryDigestDelivered` has **no callers outside `runtimedb`**; F-156-03 establishes that nothing in production writes a shared record.
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/memoryscopes.go`; 11d82f0; `TestPersonalMemoryFollowsItsPersonAcrossAgents`.
+
+- **Audit status:** missing
+- **Audit evidence:** executed — `PendingMemoryDigest` returned `0` after a private write and `1` after a shared one; `keystone/runtimedb/butlermemory.go:180-186, 431-437, 474-480` (every `digestTx` call is inside `if audience == shared`); `MarkMemoryDigestDelivered` has **no callers outside `runtimedb`**; F-156-03 establishes that nothing in production writes a shared record.
 
 Composing those: `butler_memory_digest` can never receive a row on this
 deployment. `GET /api/v1/butler/memory/digest` and the Console Memory
@@ -354,8 +390,13 @@ F-156-03:
 
 ### F-156-10 — Retention and source-scope controls do not exist; migration 0038's columns have no reader
 
-- **Status:** missing
-- **Evidence:** `grep -rn 'index_conversations\|transcript_retention_days' --include=*.go .` returns **nothing**; `keystone/runtimedb/butlersettings.go:44-56` has neither field and `Validate` (line 64) checks neither; nothing schedules `CompactIndex` — its only caller is the manual `POST /api/v1/butler/index/compact` handler (`keystone/api/api.go:353`).
+- **Current status:** open
+- **Current evidence:** Migration 0079 removes unused 0038 transcript settings; `keystone/runtimedb/butlermemory.go` still lacks a full source-scope/retention control contract.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** missing
+- **Audit evidence:** `grep -rn 'index_conversations\|transcript_retention_days' --include=*.go .` returns **nothing**; `keystone/runtimedb/butlersettings.go:44-56` has neither field and `Validate` (line 64) checks neither; nothing schedules `CompactIndex` — its only caller is the manual `POST /api/v1/butler/index/compact` handler (`keystone/api/api.go:353`).
 
 §6 asks for controls over source scope, retention and sharing. None of
 the three is reachable:
@@ -378,8 +419,13 @@ administrator posts to the compact endpoint".
 
 ### F-156-11 — The retrieval-quality fixture cannot detect the defect it is meant to measure
 
-- **Status:** partial
-- **Evidence:** `keystone/runtimedb/butlerindex_test.go:257-345` — all six fixture queries share a content word with their target document (`"when is bin day"` → `"bin day is Wednesday morning"`), so FTS returns candidates for every one; the recorded `hybrid` strategy row is produced from the same keyword-derived candidate set as `keyword`.
+- **Current status:** open
+- **Current evidence:** The memory quality fixture under `keystone/butler/memory_test.go` does not assert a vocabulary-mismatched semantic hit.
+- **Current owner:** chickenrat17
+- **Tracking:** #311
+
+- **Audit status:** partial
+- **Audit evidence:** `keystone/runtimedb/butlerindex_test.go:257-345` — all six fixture queries share a content word with their target document (`"when is bin day"` → `"bin day is Wednesday morning"`), so FTS returns candidates for every one; the recorded `hybrid` strategy row is produced from the same keyword-derived candidate set as `keyword`.
 
 The measurement table exists and is populated, and the Console reads
 it — that part works. What it measures is reranking quality over a
@@ -392,8 +438,11 @@ to conclude the opposite.
 
 ### F-156-12 — Forgetting, index invalidation and re-ingestion suppression work
 
-- **Status:** implemented
-- **Evidence:** executed (AC11b transcript above); `keystone/runtimedb/butlermemory.go:441-487`; test `TestForgottenMemoryLeavesTheIndex` (`keystone/runtimedb/butlerindex_test.go:151`).
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/memoryscopes.go`; 11d82f0; `TestForgetSurvivesBackupRestore`.
+
+- **Audit status:** implemented
+- **Audit evidence:** executed (AC11b transcript above); `keystone/runtimedb/butlermemory.go:441-487`; test `TestForgottenMemoryLeavesTheIndex` (`keystone/runtimedb/butlerindex_test.go:151`).
 
 Recorded because AC11 asks for it and because most of this report is
 about what is absent. Forgetting a record removes it from retrieval and
@@ -421,13 +470,21 @@ three mechanisms it names.
 
 ### F-156-13 — Personal export honours current permissions
 
-- **Status:** implemented
-- **Evidence:** `keystone/runtimedb/butlermemory.go:625-660` — the query returns the reader's own records plus live shared ones, and other people's forgotten or superseded records are excluded; `keystone/api/handlers_butler_memory.go:88-95` passes the acting member rather than a requested one.
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_portal_memory.go`; 11d82f0; `TestMemoryShowsYoursAndTheHouseholdsOnly`.
+
+- **Audit status:** implemented
+- **Audit evidence:** `keystone/runtimedb/butlermemory.go:625-660` — the query returns the reader's own records plus live shared ones, and other people's forgotten or superseded records are excluded; `keystone/api/handlers_butler_memory.go:88-95` passes the acting member rather than a requested one.
 
 ### F-156-14 — Backup retention behaviour for forgotten memory is unverified
 
-- **Status:** unverified
-- **Evidence:** not established. `keystone/runtimedb/restore.go:216-266` replays `deletion_journal` entries over restored state, which is the mechanism AC11 asks about — but whether this deployment takes backups containing memory rows, what they retain, and whether the household is told, needs the live host.
+- **Current status:** open
+- **Current evidence:** `TestForgetSurvivesBackupRestore` proves journal replay for an explicit forget, but backup retention of all historical derived material remains unverified.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** unverified
+- **Audit evidence:** not established. `keystone/runtimedb/restore.go:216-266` replays `deletion_journal` entries over restored state, which is the mechanism AC11 asks about — but whether this deployment takes backups containing memory rows, what they retain, and whether the household is told, needs the live host.
 
 Narrowed after review. This finding is now **only** the host-dependent
 half: what the backups contain and whether their retention is
@@ -443,8 +500,13 @@ is reachable from this container — see *How this slice was evidenced*.
 
 ### F-156-15 — "No useful semantic match" is answered correctly, for the wrong reason
 
-- **Status:** partial
-- **Evidence:** `keystone/butler/memory.go:257-262` — an empty result returns `"nothing remembered about that"` with an explicit comment against hedging; `keystone/butler/memory.go:220-224` — the `recall` tool description tells the model to search *"ALWAYS after a household lookup comes back empty"*.
+- **Current status:** open
+- **Current evidence:** `keystone/butler/memory.go:handleRecall` can report no useful result, but it cannot prove semantic miss quality while retrieval is lexical-only.
+- **Current owner:** chickenrat17
+- **Tracking:** #311
+
+- **Audit status:** partial
+- **Audit evidence:** `keystone/butler/memory.go:257-262` — an empty result returns `"nothing remembered about that"` with an explicit comment against hedging; `keystone/butler/memory.go:220-224` — the `recall` tool description tells the model to search *"ALWAYS after a household lookup comes back empty"*.
 
 The behaviour §6 asks for is present at the prompt boundary: no match
 produces a plain "nothing remembered", not an invented recollection,
@@ -457,8 +519,13 @@ to find.
 
 ### F-156-16 — Automatic memory does not exist; capture is model-initiated only
 
-- **Status:** missing
-- **Evidence:** `keystone/butler/memory.go:355-378` (`handleRemember` is a tool the model must call), `keystone/butler/household.go:261-277` (the only registration); no extraction pass over sessions exists — `QueueIndexJob` has no producer (F-156-05) and nothing reads `index_conversations` (F-156-10).
+- **Current status:** open
+- **Current evidence:** `keystone/butler/memory.go` offers model-initiated remember; automatic capture and retention policy for ordinary conversation history is still undefined.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** missing
+- **Audit evidence:** `keystone/butler/memory.go:355-378` (`handleRemember` is a tool the model must call), `keystone/butler/household.go:261-277` (the only registration); no extraction pass over sessions exists — `QueueIndexJob` has no producer (F-156-05) and nothing reads `index_conversations` (F-156-10).
 
 §6: *"Remember useful stated preferences, decisions, and ongoing
 commitments."* Today a preference is kept only when the model decides,
@@ -473,8 +540,13 @@ straightforward fix.
 
 ### F-156-17 — Whether the live deployment matches this report is unverified
 
-- **Status:** unverified
-- **Evidence:** not established. `systemctl status keystone` → *"System has not been booted with systemd as init system"*; `/var/lib/wildstone/` does not exist; `curl http://127.0.0.1:9441/api/v1/butlers` → HTTP `000`; no `wild` binary on `PATH`.
+- **Current status:** open
+- **Current evidence:** The household host is unreachable from this worktree, so `docs/audit/slice-24-rollout.md` records no live memory inspection.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** unverified
+- **Audit evidence:** not established. `systemctl status keystone` → *"System has not been booted with systemd as init system"*; `/var/lib/wildstone/` does not exist; `curl http://127.0.0.1:9441/api/v1/butlers` → HTTP `000`; no `wild` binary on `PATH`.
 
 Everything above is established against commit `787ad6d`, which #151
 records as the code deployed to the live keystone. This finding exists
@@ -504,8 +576,13 @@ behavioural one.
 
 ### F-156-18 — A corrected or forgotten fact survives in the conversation it came from
 
-- **Status:** partial
-- **Evidence:** `keystone/butlerlive/serve.go:89-91,198-202` — `systemFor` runs per turn and calls `MemoryPreamble`, which reads live SQL (`keystone/butlerstore/memory.go:68-83`), so the injected block is never stale; but `serve.go:106` replays `t.History` into the same turn, and nothing filters it against corrections.
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/butlermemory.go:ForgetMemory` invalidates memory, but the source conversation text needs a separate retention/redaction decision and test.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** partial
+- **Audit evidence:** `keystone/butlerlive/serve.go:89-91,198-202` — `systemFor` runs per turn and calls `MemoryPreamble`, which reads live SQL (`keystone/butlerstore/memory.go:68-83`), so the injected block is never stale; but `serve.go:106` replays `t.History` into the same turn, and nothing filters it against corrections.
 
 §6: *"Invalidate cached context after corrections or permission
 changes."* The durable half is right — the preamble and every `recall`
@@ -532,8 +609,11 @@ it back on the next turn.
 
 ### F-156-19 — An ordinary forget writes no deletion-journal row, so a restore brings it back
 
-- **Status:** missing
-- **Evidence:** `keystone/runtimedb/butlermemory.go:441-487` — `ForgetMemory` marks the record, suppresses the source and deletes the index chunks, and never calls `journal`. The only memory journal write in the tree is `keystone/runtimedb/offboarding.go:194-196`, inside `OffboardMember` and gated at line 186 on `Audience == private && Owner == member`. The exported `Journal` (`offboarding.go:255`) has **no callers anywhere**. `ReconcileRestore` (`keystone/runtimedb/restore.go:216-266`) replays `deletion_journal` rows and re-applies `ForgetMemory` for `subject_kind = "memory"` at line 261 — over a journal that ordinary forgets never wrote to.
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/memoryscopes.go`; 11d82f0; `TestForgetSurvivesBackupRestore`.
+
+- **Audit status:** missing
+- **Audit evidence:** `keystone/runtimedb/butlermemory.go:441-487` — `ForgetMemory` marks the record, suppresses the source and deletes the index chunks, and never calls `journal`. The only memory journal write in the tree is `keystone/runtimedb/offboarding.go:194-196`, inside `OffboardMember` and gated at line 186 on `Audience == private && Owner == member`. The exported `Journal` (`offboarding.go:255`) has **no callers anywhere**. `ReconcileRestore` (`keystone/runtimedb/restore.go:216-266`) replays `deletion_journal` rows and re-applies `ForgetMemory` for `subject_kind = "memory"` at line 261 — over a journal that ordinary forgets never wrote to.
 
 Raised by the Codex review on this PR, verified against the code, and
 it is right — including about the audit mistake. I had folded this

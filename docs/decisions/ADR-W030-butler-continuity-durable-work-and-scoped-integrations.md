@@ -74,6 +74,21 @@ Test poisoned inferences, malicious learned procedures, and attempted private-to
 
 ## A4. Tasks and routine runs share durable execution machinery
 
+**Implementation reconciliation (slice 24, #225).** The conversational Task is
+the durable `conversation_work` parent introduced in slice 21 (#222); each
+turn retains its own `butler_tasks` ledger and evidence. The parent carries
+the aggregate tool-call budget and unresolved external outcome into later
+turns. `TestConversationParentCarriesBudgetAcrossTurnLedgers` and
+`TestConversationParentPreservesUncertainOutcome` exercise those boundaries.
+The stored per-turn state machine has no separate `partially-completed`
+state: completed steps and receipts remain in the ledger, while an unmet
+objective remains waiting or fails. Reporting must name completed effects
+and remaining work from that evidence, never mark the whole objective
+complete because one effect succeeded. `TestEveryRequiredEffectNeedsMatchingEvidence`
+enforces that completion boundary. The broader runtime/deadline/cost budgets
+described below remain design requirements; this reconciliation does not
+claim they are all implemented.
+
 Use one execution foundation in Keystone for conversational tasks and Wildstone-owned routine runs. Retain routine definitions separately from each occurrence. Model-free steps remain model-free; agent steps receive bounded context and grants.
 
 Recommended starting point: runtime-DB task/run rows, step/attempt rows, and transition history. Record owner, conversation, profile, objective, completion criteria, grants, deadline, next wakeup, results, and uncertainty. Exact schemas, claim/lease design, and migration are deferred to an implementation specification.

@@ -25,7 +25,7 @@ Read these in this order:
 2. [**ADR-W033: The Wildstone agent system**](decisions/ADR-W033-the-agent-design.md) — the current architectural decision record: rationale, tradeoffs, explicit supersessions of older decisions, and the short dependency-oriented implementation order.
 3. [**ADR-W033 review**](decisions/ADR-W033-review.md) — historical repository/schema review of the first W033 draft. Its repository findings remain useful evidence, but design conclusions that conflict with the final W033 are superseded.
 4. [**Agent architecture baseline**](agent-architecture-baseline.md) — the 10 September 2026 baseline that triggered the repository audit. It is retained as historical input, not as the current source of truth where it differs from the final W033/design contract.
-5. [`audit/`](audit/) — repository audit evidence and the [gap register](audit/gap-report.md). Individual finding files remain the detailed evidence base for implementation planning.
+5. [`audit/`](audit/) — repository audit evidence and the [gap register](audit/gap-report.md). Each of the 121 findings now has a separate current disposition beside its historical audit status; use that and its follow-up issue for implementation planning.
 
 `Agent` and `Butler` mean the same architectural object. Product language may say Butler; technical language may say Agent.
 

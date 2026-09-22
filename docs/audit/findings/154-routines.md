@@ -109,8 +109,13 @@ issue cites.
 
 ### F-154-01 — A routine cannot be scheduled; the house has no clock
 
-- **Status:** missing
-- **Evidence:** `resource.AutomationTrigger` is `eventType` + `subject` only (`keystone/resource/automation.go:54-61`, `787ad6d`). Runtime, local instance: proposing an Automation carrying `spec.schedule: "0 7 * * *"` is refused — `put[0]: resource: decoding spec for kind "Automation": yaml: unmarshal errors: line 2: field schedule not found in type resource.AutomationSpec`. The three producers of household events are the intake endpoint `POST /api/v1/household/events` and the engine's own decision records (`grep -rn AppendHouseholdEvent`), so no time-based event exists for a rule to subscribe to either.
+- **Current status:** open
+- **Current evidence:** `keystone/automation/automation.go` evaluates published events and local-time conditions, but creates no clock event for an unattended schedule.
+- **Current owner:** chickenrat17
+- **Tracking:** #315
+
+- **Audit status:** missing
+- **Audit evidence:** `resource.AutomationTrigger` is `eventType` + `subject` only (`keystone/resource/automation.go:54-61`, `787ad6d`). Runtime, local instance: proposing an Automation carrying `spec.schedule: "0 7 * * *"` is refused — `put[0]: resource: decoding spec for kind "Automation": yaml: unmarshal errors: line 2: field schedule not found in type resource.AutomationSpec`. The three producers of household events are the intake endpoint `POST /api/v1/household/events` and the engine's own decision records (`grep -rn AppendHouseholdEvent`), so no time-based event exists for a rule to subscribe to either.
 
 The only recurring thing in the control plane is a hardcoded 07:00
 goroutine that appends one `report.morning` event
@@ -123,8 +128,13 @@ gap in the slice and blocks AC02 on its own.
 
 ### F-154-02 — Nothing on this deployment can read a mailbox or send email
 
-- **Status:** missing
-- **Evidence:** `grep -rn agentTools packages/*/package.yaml` declares exactly three: `notifications.notify`, `chat-telegram-family.send`, `chat-matrix-family.send`. `packages/mail-roundcube/package.yaml` declares none — it is a webmail UI. No IMAP, SMTP or mailbox code exists in `keystone/` (`grep -rni "imap|mailbox|smtp"` matches only LDAP user email addresses and a git commit identity).
+- **Current status:** open
+- **Current evidence:** `keystone/adapter/` has Home Assistant, CalDAV and Pantry adapters; no mailbox read or email-send adapter is shipped.
+- **Current owner:** chickenrat17
+- **Tracking:** #315
+
+- **Audit status:** missing
+- **Audit evidence:** `grep -rn agentTools packages/*/package.yaml` declares exactly three: `notifications.notify`, `chat-telegram-family.send`, `chat-matrix-family.send`. `packages/mail-roundcube/package.yaml` declares none — it is a webmail UI. No IMAP, SMTP or mailbox code exists in `keystone/` (`grep -rni "imap|mailbox|smtp"` matches only LDAP user email addresses and a git commit identity).
 
 Impact: AC02's email briefing has no read source and no delivery
 channel. AC02's "verify neither acquires ungranted send or delete
@@ -132,8 +142,11 @@ privileges" is vacuously satisfied.
 
 ### F-154-03 — The household Butler cannot author a routine
 
-- **Status:** missing
-- **Evidence:** `NewHouseholdGateway` registers `get_household_events`, `list_household_actions`, `do_household_action`, `describe_capabilities`, plus `recall`/`remember` when wired (`keystone/butler/household.go:234-266`). `get_automation_schema`, `dry_run_automation` and `propose_change` are registered only on the operator gateway (`keystone/butler/gateway.go:158-170`), and `HouseholdGateway.wired` has no case for any of them, so they cannot be added by configuration.
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/ownerreview.go`; 89fccf6; `TestApprovalActivatesOnlyTheExactReviewedVersion`.
+
+- **Audit status:** missing
+- **Audit evidence:** `NewHouseholdGateway` registers `get_household_events`, `list_household_actions`, `do_household_action`, `describe_capabilities`, plus `recall`/`remember` when wired (`keystone/butler/household.go:234-266`). `get_automation_schema`, `dry_run_automation` and `propose_change` are registered only on the operator gateway (`keystone/butler/gateway.go:158-170`), and `HouseholdGateway.wired` has no case for any of them, so they cannot be added by configuration.
 
 Impact: §8's "both household and operator Butlers can help users create
 and run routines" fails for the family surface by construction. On the
@@ -143,8 +156,11 @@ tool is absent from the map, which settles the structural question.
 
 ### F-154-04 — Three unrelated routine records exist, and only one is executed
 
-- **Status:** partial
-- **Evidence:** (a) `resource.Automation` in the Statefile, executed by `keystone/automation`. (b) `household_routines` (`migrations/0028`), a free-text `document` with native/Wildstone ownership, revisions and review tokens. (c) `butler_tasks` with `kind='routine'` (`migrations/0017`), a full durable-work ledger. Only (a) has an executor; `grep -rn ButlerTaskRoutine --include=*.go` matches only its own definition and one validation line, and no caller outside `runtimedb` reads `household_routines.document`.
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_household_routine_detail_test.go` and detail handler; 0baaa8d; `TestRoutineDetailServesSpecRevisionsAndRuns`.
+
+- **Audit status:** partial
+- **Audit evidence:** (a) `resource.Automation` in the Statefile, executed by `keystone/automation`. (b) `household_routines` (`migrations/0028`), a free-text `document` with native/Wildstone ownership, revisions and review tokens. (c) `butler_tasks` with `kind='routine'` (`migrations/0017`), a full durable-work ledger. Only (a) has an executor; `grep -rn ButlerTaskRoutine --include=*.go` matches only its own definition and one validation line, and no caller outside `runtimedb` reads `household_routines.document`.
 
 Impact: "which record is the routine" has three answers. The Console's
 Routines page lists (b) (`console/src/views/Routines.tsx:51`,
@@ -155,8 +171,11 @@ proximate cause of "routines haven't turned out like I wanted".
 
 ### F-154-05 — A `household_routines` document is never parsed, never run, and reported as acting
 
-- **Status:** missing
-- **Evidence:** `CreateHouseholdRoutine` checks only that the document is non-empty (`keystone/runtimedb/householdroutines.go:110`); nothing parses it. Runtime, local instance:
+- **Current status:** implemented
+- **Current evidence:** `keystone/automation/routine_execution.go`; 0baaa8d; `TestDeterministicStepsContinueWithoutTheAgent`.
+
+- **Audit status:** missing
+- **Audit evidence:** `CreateHouseholdRoutine` checks only that the document is non-empty (`keystone/runtimedb/householdroutines.go:110`); nothing parses it. Runtime, local instance:
 
   ```
   POST /api/v1/household/routines
@@ -179,8 +198,13 @@ does something it does not do.
 
 ### F-154-06 — A routine has no participants and no delivery record of its own
 
-- **Status:** missing
-- **Evidence:** `AutomationSpec` (`keystone/resource/automation.go:30-52`) has no participants field; recipients exist only as rendered action params, so who a routine is for is knowable only by reading a template string. `household_routines` has `author`/`updated_by` and nothing else.
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/routineexecution.go:RoutineRun` records a reviewed run, but no participant set or per-recipient delivery ledger is present.
+- **Current owner:** chickenrat17
+- **Tracking:** #315
+
+- **Audit status:** missing
+- **Audit evidence:** `AutomationSpec` (`keystone/resource/automation.go:30-52`) has no participants field; recipients exist only as rendered action params, so who a routine is for is knowable only by reading a template string. `household_routines` has `author`/`updated_by` and nothing else.
 
 Impact: §8 Ownership's "any participants" and §8 Delivery's audience
 have no place to live. It also means a routine cannot be listed by
@@ -188,8 +212,11 @@ have no place to live. It also means a routine cannot be listed by
 
 ### F-154-07 — Routine-scoped authorization grants are resolvable and never populated
 
-- **Status:** missing
-- **Evidence:** The resolver builds a routine-scoped grant candidate when a routine name is supplied (`keystone/runtimedb/butlertools.go:380-381`, `GrantScopeRoutine` at `:38`), and the seam carries the field the whole way (`keystone/butler/authority.go:44-55`, `keystone/butlerstore/authority.go:44`). Every call site passes the empty string: `keystone/butler/gateway.go:253`, `keystone/butler/household.go:444`, `keystone/butler/manifest.go:232` and `:306` — all `…, gw.SessionTask, "")`. `grep -rn RoutineName --include=*.go` outside tests returns only the plumbing.
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/routineprincipal.go`; 573fe1c; `TestRoutineCannotUseASecretGrantedOnlyToItsProposer`.
+
+- **Audit status:** missing
+- **Audit evidence:** The resolver builds a routine-scoped grant candidate when a routine name is supplied (`keystone/runtimedb/butlertools.go:380-381`, `GrantScopeRoutine` at `:38`), and the seam carries the field the whole way (`keystone/butler/authority.go:44-55`, `keystone/butlerstore/authority.go:44`). Every call site passes the empty string: `keystone/butler/gateway.go:253`, `keystone/butler/household.go:444`, `keystone/butler/manifest.go:232` and `:306` — all `…, gw.SessionTask, "")`. `grep -rn RoutineName --include=*.go` outside tests returns only the plumbing.
 
 This is the trap `../README.md` names: the mechanism is complete and
 unwired. Marked `missing` for that reason.
@@ -199,8 +226,11 @@ exercised even though the storage and resolution for it exist.
 
 ### F-154-08 — A routine's owner is recorded once and never checked again
 
-- **Status:** missing
-- **Evidence:** `metadata.owner` is validated at authoring (`keystone/resource/automation.go:221-236`) and never read by the engine — `grep -n "Metadata.Owner" keystone/automation/*.go` (excluding tests) matches nothing. `domestic.Call` carries tool, tier, params, rule, subject, correlation id and trigger type, and no person, grant or authority (`keystone/domestic/domestic.go:43-60`); `Gateway.dispatch` checks tier, package declaration and executor registration only (`:154-177`).
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/ownerreview.go`; 89fccf6; `TestApprovalActivatesOnlyTheExactReviewedVersion`.
+
+- **Audit status:** missing
+- **Audit evidence:** `metadata.owner` is validated at authoring (`keystone/resource/automation.go:221-236`) and never read by the engine — `grep -n "Metadata.Owner" keystone/automation/*.go` (excluding tests) matches nothing. `domestic.Call` carries tool, tier, params, rule, subject, correlation id and trigger type, and no person, grant or authority (`keystone/domestic/domestic.go:43-60`); `Gateway.dispatch` checks tier, package declaration and executor registration only (`:154-177`).
 
 Impact: §10's "a routine runs under its owner grant" and §16's "recheck
 current permissions before queued and scheduled actions" are both
@@ -210,8 +240,11 @@ rule as the actor rather than a person.
 
 ### F-154-09 — The routine-to-Butler binding is written, complete, and attached to the registry that does not run
 
-- **Status:** missing
-- **Evidence:** The mechanism exists. `migrations/0034_butler_assignment.sql` adds `household_routines.butler` under the stated principle that "a routine names its Butler … checked when the routine is written rather than when it fires", and `keystone/runtimedb/butlerassign.go:37-104` implements `AssignRoutineButler` (refusing a retired or disabled Butler), `RoutineButler`, and `ResolveRoutineButler` — which makes a routine **wait** rather than substitute another model when its Butler is unreachable, and refuses to pick one when none is assigned. `grep -rn "AssignRoutineButler\|ResolveRoutineButler" --include=*.go .` finds callers only in `keystone/runtimedb/butlerassign_test.go`; no API route exposes assignment and no runner calls resolution.
+- **Current status:** implemented
+- **Current evidence:** `keystone/automation/routine_execution.go`; 0baaa8d; `TestDeterministicStepsContinueWithoutTheAgent`.
+
+- **Audit status:** missing
+- **Audit evidence:** The mechanism exists. `migrations/0034_butler_assignment.sql` adds `household_routines.butler` under the stated principle that "a routine names its Butler … checked when the routine is written rather than when it fires", and `keystone/runtimedb/butlerassign.go:37-104` implements `AssignRoutineButler` (refusing a retired or disabled Butler), `RoutineButler`, and `ResolveRoutineButler` — which makes a routine **wait** rather than substitute another model when its Butler is unreachable, and refuses to pick one when none is assigned. `grep -rn "AssignRoutineButler\|ResolveRoutineButler" --include=*.go .` finds callers only in `keystone/runtimedb/butlerassign_test.go`; no API route exposes assignment and no runner calls resolution.
 - The registry that **is** executed has no such field: `AutomationSpec` names no Butler, and the escalator is built once at startup from `apiSrv.ButlerHost` and `butlerCfg.Model` — the ADR-W017 legacy single-provider Butler (`keystone/cmd/keystone/main.go:1207-1233`) — while named Butlers answer conversations through `butlerlive.Butlers` (`:1086-1145`). The `Phraser` gets no tools and records its session as `ActingFor: automation.Source`.
 
 Marked `missing` under the unwired-code rule, and the distinction
@@ -236,8 +269,11 @@ provider chosen outside the per-Butler cloud/local split — belongs to
 
 ### F-154-10 — The durable routine-run ledger has no producer
 
-- **Status:** missing
-- **Evidence:** `migrations/0017` gives routine runs steps, attempts, transitions, waits (including `schedule` and `approval`), evidence, budgets, grants, `deadline_at` and `next_wakeup_at`, with triggers enforcing evidence-before-completion. The only caller of `InsertButlerTask` outside `runtimedb` and tests is `keystone/butlerlive/serve.go:296`, and it hardcodes `Kind: runtimedb.ButlerTaskConversation`. `grep -rn ButlerTaskRoutine --include=*.go` finds no producer at all.
+- **Current status:** implemented
+- **Current evidence:** `keystone/automation/routine_execution.go`; 0baaa8d; `TestDeterministicStepsContinueWithoutTheAgent`.
+
+- **Audit status:** missing
+- **Audit evidence:** `migrations/0017` gives routine runs steps, attempts, transitions, waits (including `schedule` and `approval`), evidence, budgets, grants, `deadline_at` and `next_wakeup_at`, with triggers enforcing evidence-before-completion. The only caller of `InsertButlerTask` outside `runtimedb` and tests is `keystone/butlerlive/serve.go:296`, and it hardcodes `Kind: runtimedb.ButlerTaskConversation`. `grep -rn ButlerTaskRoutine --include=*.go` finds no producer at all.
 
 Impact: every §8 Reliability field the schema already supports —
 partial completion, retries, budgets, waiting for an approval or a
@@ -249,8 +285,11 @@ here only because it is the routine execution path.
 
 ### F-154-11 — A routine cannot be activated without a human, ever
 
-- **Status:** missing
-- **Evidence:** An Automation reaches the engine only by being committed to the Statefile, which happens in `approvePlan` (`keystone/api/handlers_plans.go:310-340`) behind `principal.VerbApprove`. `RoleButler` holds `{read, propose}` (`keystone/principal/rbac.go:59-61`). Runtime, local instance: a butler-role token proposing is accepted, and `POST /api/v1/plans/plan-1/approve` returns `403`.
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/ownerreview.go`; 89fccf6; `TestApprovalActivatesOnlyTheExactReviewedVersion`.
+
+- **Audit status:** missing
+- **Audit evidence:** An Automation reaches the engine only by being committed to the Statefile, which happens in `approvePlan` (`keystone/api/handlers_plans.go:310-340`) behind `principal.VerbApprove`. `RoleButler` holds `{read, propose}` (`keystone/principal/rbac.go:59-61`). Runtime, local instance: a butler-role token proposing is accepted, and `POST /api/v1/plans/plan-1/approve` returns `403`.
 
 Impact: §8's "when a request is sufficiently specified and within
 existing permissions, persist and activate it without redundant
@@ -262,8 +301,13 @@ it needs a decision, not a fix.
 
 ### F-154-12 — Timezone is deployment-wide, and traveler-time does not exist
 
-- **Status:** partial
-- **Evidence:** One `-household-timezone` flag loaded once into `Engine.Location` (`keystone/cmd/keystone/main.go:77,757-767`), used for `timeOfDay` and `weekday` and for `{{ .Time }}`/`{{ .Date }}` rendering (`keystone/automation/automation.go:164-186`, `act.go:88-100`). No per-routine zone; no notion of where the person is.
+- **Current status:** open
+- **Current evidence:** `keystone/automation/automation.go:Engine` has a household-wide location; no routine-specific timezone or traveler-time rule is recorded.
+- **Current owner:** chickenrat17
+- **Tracking:** #315
+
+- **Audit status:** partial
+- **Audit evidence:** One `-household-timezone` flag loaded once into `Engine.Location` (`keystone/cmd/keystone/main.go:77,757-767`), used for `timeOfDay` and `weekday` and for `{{ .Time }}`/`{{ .Date }}` rendering (`keystone/automation/automation.go:164-186`, `act.go:88-100`). No per-routine zone; no notion of where the person is.
 - Daylight saving is handled correctly *for what exists*: conditions convert the trigger's `occurred_at` with `In(loc)`, so a wall-clock window follows the offset change. The §16 hazard it warns about — duplicate or skipped execution across a DST boundary — cannot arise today because nothing is scheduled (F-154-01), so that specific check is `unverified` and will stay so until a scheduler exists.
 
 Impact: §8 requires an explicit timezone per routine and a stated
@@ -272,8 +316,13 @@ reasonable default and is not the contract.
 
 ### F-154-13 — Catch-up is one global staleness bound, not a per-routine policy
 
-- **Status:** partial
-- **Evidence:** `DefaultMaxTriggerAge` is 1h for the whole engine (`keystone/automation/automation.go:52-57`), and a first tick over an existing stream adopts the cursor instead of evaluating history (`TickOutcome.Adopted`). Both are sensible; neither is per routine, and neither is configurable per rule — `AutomationSpec` has no catch-up field.
+- **Current status:** open
+- **Current evidence:** `keystone/automation/automation.go:MaxTriggerAge` is an engine-wide bound; no per-routine catch-up policy is evaluated.
+- **Current owner:** chickenrat17
+- **Tracking:** #315
+
+- **Audit status:** partial
+- **Audit evidence:** `DefaultMaxTriggerAge` is 1h for the whole engine (`keystone/automation/automation.go:52-57`), and a first tick over an existing stream adopts the cursor instead of evaluating history (`TickOutcome.Adopted`). Both are sensible; neither is per routine, and neither is configurable per rule — `AutomationSpec` has no catch-up field.
 
 Impact: §16's "collapse missed briefings into one current briefing;
 skip stale physical actions by default" cannot be expressed. The
@@ -281,8 +330,13 @@ current behaviour is the second half applied to everything.
 
 ### F-154-14 — Delivery names a connection but no audience and no follow-up
 
-- **Status:** partial
-- **Evidence:** `ChatSender` is registered one per installed chat capability and resolves the member's own bound conversation, refusing when the member has no binding (`keystone/domestic/chat.go:24-90`) — so the destination is specific and per transport. What is absent: any audience field, and any per-routine no-response behaviour. Unanswered chat questions expire on a fixed 4h window (`keystone/runtimedb/chatquestions.go:22-25`) and ntfy reply tokens on a fixed 12h TTL (`-household-reply-ttl`); neither escalates, re-asks, or records a "nobody answered" outcome the routine can act on.
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/ownerreview.go` stores delivery and output audience separately, but no follow-up or per-recipient delivery state is proven.
+- **Current owner:** chickenrat17
+- **Tracking:** #315
+
+- **Audit status:** partial
+- **Audit evidence:** `ChatSender` is registered one per installed chat capability and resolves the member's own bound conversation, refusing when the member has no binding (`keystone/domestic/chat.go:24-90`) — so the destination is specific and per transport. What is absent: any audience field, and any per-routine no-response behaviour. Unanswered chat questions expire on a fixed 4h window (`keystone/runtimedb/chatquestions.go:22-25`) and ntfy reply tokens on a fixed 12h TTL (`-household-reply-ttl`); neither escalates, re-asks, or records a "nobody answered" outcome the routine can act on.
 
 Impact: §8 Delivery is half met. A routine cannot say "ask again in an
 hour" or "if nobody answers, tell the other adult".
@@ -292,8 +346,11 @@ slice; noted under Cross-slice.
 
 ### F-154-15 — Cancellation stops the next evaluation, not the current run
 
-- **Status:** partial
-- **Evidence:** Disabling a rule removes it at load and at evaluation (`keystone/automation/automation.go:99,365`), and `HouseholdRoutine.Active()` is checked per state change. Once `act` has written its claim and called `Dispatch`, nothing can stop it; the gateway has a timeout and no cancellation seam (`keystone/domestic/domestic.go:146-152`).
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/routineexecution.go`; 0baaa8d; `TestHouseholdStopHaltsAllRoutineExecution`.
+
+- **Audit status:** partial
+- **Audit evidence:** Disabling a rule removes it at load and at evaluation (`keystone/automation/automation.go:99,365`), and `HouseholdRoutine.Active()` is checked per state change. Once `act` has written its claim and called `Dispatch`, nothing can stop it; the gateway has a timeout and no cancellation seam (`keystone/domestic/domestic.go:146-152`).
 
 Impact: acceptable for one-shot notifications, and short of §16's
 "cancellation stops further actions where possible" for anything
@@ -302,8 +359,13 @@ are prioritized together.
 
 ### F-154-16 — A routine is one tool call; there are no steps and no agent objective
 
-- **Status:** missing
-- **Evidence:** `AutomationAction` is a single `tool`, `tier` and `params` map (`keystone/resource/automation.go:121-136`), dispatched once (`keystone/automation/act.go:126-155`). Escalation replaces the text of one named param and explicitly never decides whether or what (`keystone/automation/escalate.go:1-16`, `keystone/resource/automation.go:99-119`).
+- **Current status:** open
+- **Current evidence:** `keystone/automation/routine_execution.go:executeReviewed` handles one action with optional inference; it has no durable multi-step Agent objective.
+- **Current owner:** chickenrat17
+- **Tracking:** #315
+
+- **Audit status:** missing
+- **Audit evidence:** `AutomationAction` is a single `tool`, `tier` and `params` map (`keystone/resource/automation.go:121-136`), dispatched once (`keystone/automation/act.go:126-155`). Escalation replaces the text of one named param and explicitly never decides whether or what (`keystone/automation/escalate.go:1-16`, `keystone/resource/automation.go:99-119`).
 
 Impact: §8's "deterministic actions, an agent task, or a combination"
 is one third implemented. A daily briefing — read several sources,
@@ -314,8 +376,11 @@ from this.
 
 ### F-154-17 — A Butler-initiated household action has no approval binding
 
-- **Status:** missing
-- **Evidence:** `do_household_action` "runs immediately" by its own description and dispatches straight through the gateway (`keystone/butler/household.go:321-342`, `:454-460`). The only checks are the read-only session flag, the tool-authority resolver, and the gateway's tier/declaration/registration checks. No approval record is written, nothing is pinned, and `butler_task_waits` reason `approval` has no producer (F-154-10).
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/ownerreview.go`; 89fccf6; `TestApprovalActivatesOnlyTheExactReviewedVersion`.
+
+- **Audit status:** missing
+- **Audit evidence:** `do_household_action` "runs immediately" by its own description and dispatches straight through the gateway (`keystone/butler/household.go:321-342`, `:454-460`). The only checks are the read-only session flag, the tool-authority resolver, and the gateway's tier/declaration/registration checks. No approval record is written, nothing is pinned, and `butler_task_waits` reason `approval` has no producer (F-154-10).
 
 Impact: this is the core of AC10. "Approve a concrete consequential
 action, then change its target" has no mechanism to test on the
@@ -326,8 +391,13 @@ approval.
 
 ### F-154-18 — Plan approval binds target and parameters, with no validity period
 
-- **Status:** partial
-- **Evidence:** A plan stores the exact documents it would commit and is superseded on approval if the Statefile head moved since it was computed (`keystone/api/handlers_plans.go:297-308`) — so a material change to the world invalidates it. The plan record carries `resolved_by`/`resolved_at` (`keystone/runtimedb/plans.go:221-258`) and the closed transition table prevents re-approval. What is absent is any expiry: a plan proposed today can be approved indefinitely later, provided nothing else moved.
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/ownerreview.go` binds approval to an exact routine version; no explicit expiry for a generic Plan approval is evidenced.
+- **Current owner:** chickenrat17
+- **Tracking:** #315
+
+- **Audit status:** partial
+- **Audit evidence:** A plan stores the exact documents it would commit and is superseded on approval if the Statefile head moved since it was computed (`keystone/api/handlers_plans.go:297-308`) — so a material change to the world invalidates it. The plan record carries `resolved_by`/`resolved_at` (`keystone/runtimedb/plans.go:221-258`) and the closed transition table prevents re-approval. What is absent is any expiry: a plan proposed today can be approved indefinitely later, provided nothing else moved.
 
 Impact: §10's "validity period" and "unanswered or expired approvals do
 not authorize execution" are unmet for the Console path. The risk is
@@ -336,8 +406,11 @@ ago against unchanged state approves without anyone re-reading it.
 
 ### F-154-19 — The household review token is the one place approval binding is fully right
 
-- **Status:** partial
-- **Evidence:** `IssueHouseholdReviewToken`/`RedeemHouseholdReviewToken` (`keystone/runtimedb/householdroutines.go:303-390`) store only a hash, bind one plan id, one member, one routine revision and one expiry, and are single-use — enforced by the schema trigger `household_review_tokens_single_use` as well as by the redeem path. Issuance refuses a member who is not currently admitted, and refuses any plan that is not purely Automations (`keystone/api/handlers_household_review.go:160-186`, `plan.ClassHouseholdRoutine`). Redemption requires the trusted ingress header from an exact configured peer and resolves the asserted name through the identity-link table (`:230-280`).
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/ownerreview.go`; 89fccf6; `TestApprovalActivatesOnlyTheExactReviewedVersion`.
+
+- **Audit status:** partial
+- **Audit evidence:** `IssueHouseholdReviewToken`/`RedeemHouseholdReviewToken` (`keystone/runtimedb/householdroutines.go:303-390`) store only a hash, bind one plan id, one member, one routine revision and one expiry, and are single-use — enforced by the schema trigger `household_review_tokens_single_use` as well as by the redeem path. Issuance refuses a member who is not currently admitted, and refuses any plan that is not purely Automations (`keystone/api/handlers_household_review.go:160-186`, `plan.ClassHouseholdRoutine`). Redemption requires the trusted ingress header from an exact configured peer and resolves the asserted name through the identity-link table (`:230-280`).
 - **Redemption exercised end to end**, on a local instance started with `-household-ingress 127.0.0.1`, an admitted member `mika`, and a `trusted-ingress` identity link to `mika@household`:
 
   | Request | Result |
@@ -371,8 +444,13 @@ open.
 
 ### F-154-20 — There are no narrow standing grants
 
-- **Status:** missing
-- **Evidence:** The only grant machinery is `butler_tool_grants` scoped to a task or a routine (`keystone/runtimedb/butlertools.go:36-42`), and the routine scope is never populated (F-154-07). Nothing expresses "this recipient, this action, until this date" as a standing permission.
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/ownerreview.go` supports exact-version approval, but the historical recipient/action/expiry standing-grant contract is not implemented.
+- **Current owner:** chickenrat17
+- **Tracking:** #315
+
+- **Audit status:** missing
+- **Audit evidence:** The only grant machinery is `butler_tool_grants` scoped to a task or a routine (`keystone/runtimedb/butlertools.go:36-42`), and the routine scope is never populated (F-154-07). Nothing expresses "this recipient, this action, until this date" as a standing permission.
 
 Impact: §10's escape hatch from redundant confirmation is absent, which
 matters more given F-154-11: the system has neither activation without
@@ -381,8 +459,12 @@ unnecessary.
 
 ### F-154-21 — A learned procedure is a remembered sentence
 
-- **Status:** partial
-- **Evidence:** `MemoryProcedure` is one of four memory kinds (`keystone/runtimedb/butlermemory.go:44,114`), injected into the session preamble alongside preferences (`keystone/butlerstore/memory.go:34-37`). It names no tools, has no parameters, is not versioned as a procedure, and cannot be executed or tested. The versioned-and-tested half of §16 *is* real for Automations: `dry_run_automation` replays a draft against recorded history and writes nothing (`keystone/butler/tools_automation.go:57-72`), and every edit is a new Statefile revision.
+- **Current status:** superseded
+- **Current evidence:** A learned procedure is no longer an executable remembered sentence; it must become a reviewed, versioned Routine.
+- **Superseded by:** docs/agent-system-design.md §14 Plans and reviewed Routines
+
+- **Audit status:** partial
+- **Audit evidence:** `MemoryProcedure` is one of four memory kinds (`keystone/runtimedb/butlermemory.go:44,114`), injected into the session preamble alongside preferences (`keystone/butlerstore/memory.go:34-37`). It names no tools, has no parameters, is not versioned as a procedure, and cannot be executed or tested. The versioned-and-tested half of §16 *is* real for Automations: `dry_run_automation` replays a draft against recorded history and writes nothing (`keystone/butler/tools_automation.go:57-72`), and every edit is a new Statefile revision.
 
 Impact: §16's "agents may save reusable procedures composed of already
 authorized tools" is met only in the weak sense that the model may be
@@ -392,14 +474,20 @@ finding 1 on #151 and belongs to #156.
 
 ### F-154-22 — Package and plugin changes do route to administrative review
 
-- **Status:** implemented
-- **Evidence:** Every structural change is a plan validated against `resource.KnownKind` and the standing policy engine before it becomes a record (`keystone/api/handlers_plans.go:149-225`), and approval needs `VerbApprove`, which `RoleButler` does not hold — runtime `403` from a butler-role token on `POST /api/v1/plans/plan-1/approve`. The household review path additionally refuses any plan that is not purely Automations, with the refusal reasoned explicitly as anti-escalation (`keystone/api/handlers_household_review.go:160-172`). The domestic gateway independently caps rule actions at read/domestic tiers (`keystone/domestic/domestic.go:155-158`).
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_plans.go` and `handlers_household_review.go`; 89fccf6; `TestChatCannotApproveAPlanByAnyRoute`.
+
+- **Audit status:** implemented
+- **Audit evidence:** Every structural change is a plan validated against `resource.KnownKind` and the standing policy engine before it becomes a record (`keystone/api/handlers_plans.go:149-225`), and approval needs `VerbApprove`, which `RoleButler` does not hold — runtime `403` from a butler-role token on `POST /api/v1/plans/plan-1/approve`. The household review path additionally refuses any plan that is not purely Automations, with the refusal reasoned explicitly as anti-escalation (`keystone/api/handlers_household_review.go:160-172`). The domestic gateway independently caps rule actions at read/domestic tiers (`keystone/domestic/domestic.go:155-158`).
 - Not verified: that a real package rewrite proposed by the live operator Butler ends in the Console queue rather than anywhere else. That is a deployment check and stays **unverified**; driving `propose_change` on the live Alfred against a Container or ConfigFile would settle it.
 
 ### F-154-23 — A butler-role principal can create *and enable* a household routine
 
-- **Status:** partial
-- **Evidence:** `createHouseholdRoutine` refuses a non-draft state and says why: the route needs only propose, "so accepting a state verbatim let a compromised Butler credential create an action-capable routine and skip the review its activation is supposed to require" (`keystone/api/handlers_household_review.go:66-82`). But `POST /api/v1/household/routines/{name}/state` is registered under the same `principal.VerbPropose` (`keystone/api/api.go:360-362`). Runtime, local instance, with a freshly minted `role: butler` token:
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/ownerreview.go`; 89fccf6; `TestAnAgentCannotActivateItsOwnPlan`.
+
+- **Audit status:** partial
+- **Audit evidence:** `createHouseholdRoutine` refuses a non-draft state and says why: the route needs only propose, "so accepting a state verbatim let a compromised Butler credential create an action-capable routine and skip the review its activation is supposed to require" (`keystone/api/handlers_household_review.go:66-82`). But `POST /api/v1/household/routines/{name}/state` is registered under the same `principal.VerbPropose` (`keystone/api/api.go:360-362`). Runtime, local instance, with a freshly minted `role: butler` token:
 
   ```
   POST /api/v1/household/routines            → {"seq":2}            (draft)
@@ -419,8 +507,12 @@ left for #155 under Cross-slice.
 
 ### F-154-24 — The household review path cannot issue a token for any real plan
 
-- **Status:** missing
-- **Evidence:** `issueHouseholdReviewToken` decodes `plans.plan_json` straight into a `plan.Plan` and classifies its `Steps` (`keystone/api/handlers_household_review.go:171-186`). The proposal path stores a `plan.StoredProposal` in that column — `basedOnHead`, `summary`, `put`, `delete`, and the real plan nested under `"plan"` (`keystone/plan/stored.go:15-29`, written at `keystone/api/handlers_plans.go:251-258`), which `approvePlan` reads back correctly at `:290`. A `plan.Plan` decoded from that JSON has no steps, so `plan.Classify` returns `ClassEmpty` for every plan that exists.
+- **Current status:** superseded
+- **Current evidence:** The old household review-link token route is replaced by fresh Owner Console review of exact Plan versions.
+- **Superseded by:** docs/agent-system-design.md §14 Owner Review Queue
+
+- **Audit status:** missing
+- **Audit evidence:** `issueHouseholdReviewToken` decodes `plans.plan_json` straight into a `plan.Plan` and classifies its `Steps` (`keystone/api/handlers_household_review.go:171-186`). The proposal path stores a `plan.StoredProposal` in that column — `basedOnHead`, `summary`, `put`, `delete`, and the real plan nested under `"plan"` (`keystone/plan/stored.go:15-29`, written at `keystone/api/handlers_plans.go:251-258`), which `approvePlan` reads back correctly at `:290`. A `plan.Plan` decoded from that JSON has no steps, so `plan.Classify` returns `ClassEmpty` for every plan that exists.
 - Runtime, local instance: proposing a plan whose only step is `Create Automation/mail-check`, then asking for a review token, returns
 
   ```

@@ -197,8 +197,11 @@ each case **before** the model produced its refusal — which is F-157-20.
 
 ### F-157-01 — There is no secrets service that can hold a value a person intends to keep
 
-- **Status:** missing
-- **Evidence:** `wardstone/internal/agent/secrets.go:1-17` and `:53-57` (commit `787ad6d`); `ADR-W012 A1/A2/A3`; `keystone/api/handlers_secrets.go:1-26`; `cli/cmd/wild/secret.go:21-46`; `console/src/views/Secrets.tsx:9,24`. **Runtime (#166, scratch instance):** `wild secret set wifi-home -value <synthetic>` → `wild secret: -node is required`; `wild secret set wifi-home -node household …` → `502 … node "household" is not connected`; `wild secret list -node household` → the same. `GET /api/v1/nodes` → `{"nodes":[]}`.
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/householdsecrets.go`; f1d393e; `TestNoSurfaceRevealsAPersonalSecretStore`.
+
+- **Audit status:** missing
+- **Audit evidence:** `wardstone/internal/agent/secrets.go:1-17` and `:53-57` (commit `787ad6d`); `ADR-W012 A1/A2/A3`; `keystone/api/handlers_secrets.go:1-26`; `cli/cmd/wild/secret.go:21-46`; `console/src/views/Secrets.tsx:9,24`. **Runtime (#166, scratch instance):** `wild secret set wifi-home -value <synthetic>` → `wild secret: -node is required`; `wild secret set wifi-home -node household …` → `502 … node "household" is not connected`; `wild secret list -node household` → the same. `GET /api/v1/nodes` → `{"nodes":[]}`.
 
 The store that exists is genuinely an encrypted local secrets service —
 AES-256-GCM per value under a 0600 file key, one file per secret, with
@@ -230,8 +233,13 @@ it is now observed rather than derived.
 
 ### F-157-02 — Opaque, request-bound references do not exist
 
-- **Status:** missing
-- **Evidence:** `ADR-W012 A1` (`secret/<name>` is the only reference form); `keystone/redact/redact.go:18-22` shelters `secret/[A-Za-z0-9._-]+` verbatim; grep for `expires_at|revoked|nonce` across `keystone/` returns nothing in the secret path (only `keystone/gateway/persist.go:189` join tokens, an unrelated mechanism).
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/householdsecrets.go` has stable secret IDs and grants; an opaque request-bound reference lifecycle is not established.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** missing
+- **Audit evidence:** `ADR-W012 A1` (`secret/<name>` is the only reference form); `keystone/redact/redact.go:18-22` shelters `secret/[A-Za-z0-9._-]+` verbatim; grep for `expires_at|revoked|nonce` across `keystone/` returns nothing in the secret path (only `keystone/gateway/persist.go:189` join tokens, an unrelated mechanism).
 
 §15 asks for a random opaque reference, bound to the request, checked on
 every resolve against identity, audience, target and validity. What
@@ -248,8 +256,11 @@ reference implementation of §15 and nothing connects it to secrets.
 
 ### F-157-03 — There is no protected-display path, and the ADR forbids the operation one would need
 
-- **Status:** missing
-- **Evidence:** `ADR-W012 A3` — "There is deliberately NO GetSecret: the surface cannot read a value back, so neither a compromised Keystone nor the Butler can exfiltrate one through the protocol"; `wardstone/internal/agent/secrets.go:12-17`; `console/src/views/Secrets.tsx:153`.
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/householdsecrets.go`; f1d393e; `TestNoSurfaceRevealsAPersonalSecretStore`.
+
+- **Audit status:** missing
+- **Audit evidence:** `ADR-W012 A3` — "There is deliberately NO GetSecret: the surface cannot read a value back, so neither a compromised Keystone nor the Butler can exfiltrate one through the protocol"; `wardstone/internal/agent/secrets.go:12-17`; `console/src/views/Secrets.tsx:153`.
 
 §15 wants a model to be able to *request* a structured secret-display
 component, with trusted local code authorizing the destination and
@@ -268,8 +279,11 @@ under **ADR amendments required** as a decision, not a fix.
 
 ### F-157-04 — Use-without-reveal holds for infrastructure credentials and does not exist for anything a model touches
 
-- **Status:** partial
-- **Evidence:** `wardstone/internal/agent/ops.go:495` (`materializeEnv` at container create), `wardstone/internal/agent/materialize.go:61-104` (`materializeFileContent`, reached from `ops.go:371-381` when `WriteManagedFile.materialize_secrets` is set) and `wardstone/internal/agent/registryauth.go:121-141` (`registryAuthFor`); `keystone/policy/policy.go:260-284` (`RuleSecretValuesForbidden`); tool registries at `keystone/butler/gateway.go:158-180` and `keystone/butler/household.go:236-243`. **Corrected after review** — the first draft cited `ADR-W012 A4`'s "env only" and named one destination.
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/householdsecrets.go`; f1d393e; `TestUseDoesNotImplyReveal`.
+
+- **Audit status:** partial
+- **Audit evidence:** `wardstone/internal/agent/ops.go:495` (`materializeEnv` at container create), `wardstone/internal/agent/materialize.go:61-104` (`materializeFileContent`, reached from `ops.go:371-381` when `WriteManagedFile.materialize_secrets` is set) and `wardstone/internal/agent/registryauth.go:121-141` (`registryAuthFor`); `keystone/policy/policy.go:260-284` (`RuleSecretValuesForbidden`); tool registries at `keystone/butler/gateway.go:158-180` and `keystone/butler/household.go:236-243`. **Corrected after review** — the first draft cited `ADR-W012 A4`'s "env only" and named one destination.
 
 The implemented half is real and better than the baseline strictly
 requires. A container env value of the form `secret/<name>` is resolved
@@ -314,8 +328,13 @@ this is scheduled.
 
 ### F-157-05 — There is no privacy gateway; a shape redactor at four egress points is standing in for one
 
-- **Status:** missing
-- **Evidence:** the complete set of `redact.String` call sites at `787ad6d` — `keystone/api/api.go:611` (API response encoder), `keystone/butler/gateway.go:275-291` via `keystone/butler/redact.go:10` (tool result → model), `keystone/api/handlers_chat_message.go:416,571` (chat outbound queue), and the transcript-persistence sites in `handlers_butler.go:425-445`, `handlers_butler_named.go:173-196`, `handlers_butler_household.go:252-266`, `cmd/keystone/main.go:1220-1221`.
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/privacy.go` enforces declared policy, but no central content-inspection gateway classifies arbitrary payloads before all egress.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** missing
+- **Audit evidence:** the complete set of `redact.String` call sites at `787ad6d` — `keystone/api/api.go:611` (API response encoder), `keystone/butler/gateway.go:275-291` via `keystone/butler/redact.go:10` (tool result → model), `keystone/api/handlers_chat_message.go:416,571` (chat outbound queue), and the transcript-persistence sites in `handlers_butler.go:425-445`, `handlers_butler_named.go:173-196`, `handlers_butler_household.go:252-266`, `cmd/keystone/main.go:1220-1221`.
 
 A gateway in §15's sense is a single boundary that inspects, transforms,
 can *refuse*, and knows the source policy of what is passing through.
@@ -373,8 +392,13 @@ before the prompt is assembled. That is F-157-12, corrected.
 
 ### F-157-06 — Every model call sends its payload uninspected, at all five call sites
 
-- **Status:** missing
-- **Evidence:** `keystone/butler/runner.go:542`, `keystone/butler/session.go:158`, `keystone/butler/phrase.go:120`, `keystone/butler/provider/probe.go:77`, `keystone/cmd/keystone/main.go:321` — grep for `\.Chat(` across the repository excluding tests returns exactly these five, and none applies any transform to `System`, `Messages` or `Tools`.
+- **Current status:** open
+- **Current evidence:** `keystone/butler/provider/` applies secret-command redaction, but no negative test covers inspection of every model request body.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** missing
+- **Audit evidence:** `keystone/butler/runner.go:542`, `keystone/butler/session.go:158`, `keystone/butler/phrase.go:120`, `keystone/butler/provider/probe.go:77`, `keystone/cmd/keystone/main.go:321` — grep for `\.Chat(` across the repository excluding tests returns exactly these five, and none applies any transform to `System`, `Messages` or `Tools`.
 
 `p.Chat(ctx, provider.ChatRequest{System: ..., Messages: messages, Tools: specs})`
 is the whole of it. The system prompt (which carries the Butler
@@ -414,8 +438,13 @@ path is not the uninspected one this finding described. See F-157-12.
 
 ### F-157-07 — Shape redaction lets the baseline's own Wi-Fi example through, into durable memory and out to a cloud model
 
-- **Status:** partial
-- **Evidence:** probe program run 2026-09-10 against `keystone/redact` at `787ad6d` (source under the session scratchpad; it imports the shipped package and calls nothing else). Full output below. Existing tests `TestNamesACredential` (`keystone/redact/redact_test.go:124`) and `TestRememberRefusesACredentialItCannotRedact` (`keystone/butler/memory_test.go:276`) both pass — they pin the behaviour described here rather than contradicting it. `go test ./redact/...` and `go test ./butler/...`: ok.
+- **Current status:** open
+- **Current evidence:** `keystone/butler/memory.go` redacts recognized credential shapes, but a natural-language Wi-Fi password example needs a pre-provider and pre-memory test.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** partial
+- **Audit evidence:** probe program run 2026-09-10 against `keystone/redact` at `787ad6d` (source under the session scratchpad; it imports the shipped package and calls nothing else). Full output below. Existing tests `TestNamesACredential` (`keystone/redact/redact_test.go:124`) and `TestRememberRefusesACredentialItCannotRedact` (`keystone/butler/memory_test.go:276`) both pass — they pin the behaviour described here rather than contradicting it. `go test ./redact/...` and `go test ./butler/...`: ok.
 
 ```
 in   : the router password is hunter2
@@ -506,8 +535,13 @@ a person using an API client directly all reach it.
 
 ### F-157-08 — The `remember` credential refusal is over-broad and under-inclusive at the same time
 
-- **Status:** partial
-- **Evidence:** `keystone/butler/memory.go:427-448`; `keystone/redact/redact.go:560-616`; probe output in F-157-07; `TestRememberRefusesACredentialItCannotRedact` (`keystone/butler/memory_test.go:276`), run and passing. **Runtime (#166):** the handler probe in F-157-07 shows both halves — "the boiler has a reset code taped to the side of it" refused, the baseline's Wi-Fi phrasing accepted and stored verbatim.
+- **Current status:** open
+- **Current evidence:** `keystone/butler/memory.go:handleRemember` still uses credential-shape refusal; its false-positive and natural-language false-negative bounds need tests.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** partial
+- **Audit evidence:** `keystone/butler/memory.go:427-448`; `keystone/redact/redact.go:560-616`; probe output in F-157-07; `TestRememberRefusesACredentialItCannotRedact` (`keystone/butler/memory_test.go:276`), run and passing. **Runtime (#166):** the handler probe in F-157-07 shows both halves — "the boiler has a reset code taped to the side of it" refused, the baseline's Wi-Fi phrasing accepted and stored verbatim.
 
 This is #151's established finding 5, and this slice confirms it and adds
 the second half.
@@ -536,8 +570,13 @@ not decide:
 
 ### F-157-09 — Inspection cannot fail, so "the request stops" has nothing to attach to
 
-- **Status:** missing
-- **Evidence:** `func String(s string) string` — `keystone/redact/redact.go:445`. No error return, no refusal path, no caller that branches on an inspection result.
+- **Current status:** open
+- **Current evidence:** No content-inspection failure result is surfaced by `keystone/runtimedb/privacy.go`; a scanner failure therefore has no fail-closed dispatch path.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** missing
+- **Audit evidence:** `func String(s string) string` — `keystone/redact/redact.go:445`. No error return, no refusal path, no caller that branches on an inspection result.
 
 §15: "If inspection fails, the request stops. Unsupported or
 uninspectable content remains local or requires an explicit user
@@ -552,8 +591,11 @@ testable for this reason, and marking it *missing* rather than
 
 ### F-157-10 — Nothing classifies material by where it may go
 
-- **Status:** missing
-- **Evidence:** `keystone/runtimedb/migrations/0023_butler_memory.sql` — the record columns are kind, subject, content, audience (`private|shared`), permission_label, owner, source_kind, source_id, observed_at, confidence, safety_relevant; none of them is a locality. `integration_secrets` (migration 0027) has no source restriction. `runtimedb.Model.Kind` (`models.go:34-35`) classifies the *route*, never the material.
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/privacy.go`; 87ce5e9; `TestLocalOnlyNeverFallsBackToCloud` and `TestDisclosurePolicyIsEvaluatedPerDestination`.
+
+- **Audit status:** missing
+- **Audit evidence:** `keystone/runtimedb/migrations/0023_butler_memory.sql` — the record columns are kind, subject, content, audience (`private|shared`), permission_label, owner, source_kind, source_id, observed_at, confidence, safety_relevant; none of them is a locality. `integration_secrets` (migration 0027) has no source restriction. `runtimedb.Model.Kind` (`models.go:34-35`) classifies the *route*, never the material.
 
 AC12 asks for local-only content to be attempted against cloud fallback,
 embedding, transcription, attachment processing and an external tool
@@ -569,8 +611,11 @@ classification to read, and there is one place to put it.
 
 ### F-157-11 — The live Butler path cannot fall back to another model, and that is deliberate policy with a test — corrected
 
-- **Status:** partial
-- **Evidence:** `keystone/butlerlive/serve.go:44-54` and `:56-63`; and the two guards the first pass missed — `keystone/runtimedb/butlers.go:487-496` and `keystone/butlerlive/butlerlive.go:299-306`, which check `Reachable()` and refuse by name, citing ADR-W031 A6. Pinned by `TestAnUnreachableButlerWaitsAndCallsNoOtherModel` (`keystone/butlerlive/butlerlive_test.go:314`) and by the owner-path case at `:575-585`, both run and passing. `runtimedb.CrossesToCloud` (`butlers.go:302`) is called once, at `keystone/api/handlers_butlers.go:240`, to warn on a route change. **Runtime (#166):** with `kitchen-box` disabled and the cloud route enabled, `wild butler ask -surface family` → `503 … Sandy runs on kitchen-box, which is turned off — this waits rather than moving to another model (ADR-W031 A6)`, and no cloud call appears in the captured payloads.
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/privacy.go`; 87ce5e9; `TestLocalOnlyNeverFallsBackToCloud` and `TestDisclosurePolicyIsEvaluatedPerDestination`.
+
+- **Audit status:** partial
+- **Audit evidence:** `keystone/butlerlive/serve.go:44-54` and `:56-63`; and the two guards the first pass missed — `keystone/runtimedb/butlers.go:487-496` and `keystone/butlerlive/butlerlive.go:299-306`, which check `Reachable()` and refuse by name, citing ADR-W031 A6. Pinned by `TestAnUnreachableButlerWaitsAndCallsNoOtherModel` (`keystone/butlerlive/butlerlive_test.go:314`) and by the owner-path case at `:575-585`, both run and passing. `runtimedb.CrossesToCloud` (`butlers.go:302`) is called once, at `keystone/api/handlers_butlers.go:240`, to warn on a route change. **Runtime (#166):** with `kitchen-box` disabled and the cloud route enabled, `wild butler ask -surface family` → `503 … Sandy runs on kitchen-box, which is turned off — this waits rather than moving to another model (ADR-W031 A6)`, and no cloud call appears in the captured payloads.
 
 **Corrected by the #166 rerun. The subtitle of the first draft — "that
 is structure rather than policy" — was wrong, and it understated the
@@ -622,8 +667,13 @@ remediation should extend it rather than discover it.
 
 ### F-157-12 — Household escalation redacts the facts and sends the instruction, the fallback and the fact labels uninspected — corrected
 
-- **Status:** partial
-- **Evidence:** `keystone/butler/phrase.go:154-175` (`buildPhrasePrompt`: `content := redact(f.Content)` at `:169`, then bounded, then enveloped) — the step the first pass missed; `:110-135` (`Phraser.Phrase` → `p.Provider.Chat`); `keystone/cmd/keystone/main.go:1200-1235` wires it to the live `ButlerHost`; `redact.String` at `main.go:1220-1221` covers the *record* of the exchange. Pinned by `TestPhraseAsksWithNoToolsAndCleansTheAnswer` (`keystone/butler/phrase_test.go:59-63`) and `TestPhraseRedTeam`, both run and passing. **In-process probe (#166, deleted after the run):** output below.
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/privacy.go` applies declared policy, but escalation-generated fact labels and fallback text still need a content-inspection regression.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** partial
+- **Audit evidence:** `keystone/butler/phrase.go:154-175` (`buildPhrasePrompt`: `content := redact(f.Content)` at `:169`, then bounded, then enveloped) — the step the first pass missed; `:110-135` (`Phraser.Phrase` → `p.Provider.Chat`); `keystone/cmd/keystone/main.go:1200-1235` wires it to the live `ButlerHost`; `redact.String` at `main.go:1220-1221` covers the *record* of the exchange. Pinned by `TestPhraseAsksWithNoToolsAndCleansTheAnswer` (`keystone/butler/phrase_test.go:59-63`) and `TestPhraseRedTeam`, both run and passing. **In-process probe (#166, deleted after the run):** output below.
 
 When a household rule escalates for wording, the facts it carries —
 subjects, payload fields, whatever a sensor or a person's phone wrote —
@@ -677,8 +727,13 @@ way.
 
 ### F-157-13 — The memory preamble re-sends preferences and procedures to a cloud model every turn, uninspected
 
-- **Status:** missing
-- **Evidence:** `keystone/butlerstore/memory.go:32-42` — `preambleKinds = []string{runtimedb.MemoryPreference, runtimedb.MemoryProcedure}` — and `:67-72`, where the seam queries only those kinds, reader- and Butler-scoped, capped at `preambleLimit = 25` each; `keystone/butlerlive/serve.go:177-209` (`systemFor` appends it); `keystone/butler/memory.go:296-305` and `:171` (`RenderPreamble`); the assembled string reaches `p.Chat` at `runner.go:542` with no transform (F-157-06).
+- **Current status:** open
+- **Current evidence:** `keystone/butler/memory.go:RenderPreamble` still assembles memory into model context; declared processing policy is enforced, but arbitrary sensitive preamble content is not classified.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** missing
+- **Audit evidence:** `keystone/butlerstore/memory.go:32-42` — `preambleKinds = []string{runtimedb.MemoryPreference, runtimedb.MemoryProcedure}` — and `:67-72`, where the seam queries only those kinds, reader- and Butler-scoped, capped at `preambleLimit = 25` each; `keystone/butlerlive/serve.go:177-209` (`systemFor` appends it); `keystone/butler/memory.go:296-305` and `:171` (`RenderPreamble`); the assembled string reaches `p.Chat` at `runner.go:542` with no transform (F-157-06).
 
 **Corrected after review.** The first draft said "everything a Butler
 has ever been told about the person it is answering is re-sent on every
@@ -733,8 +788,11 @@ lines travels with it and is a prompt, not a control (F-157-16).
 
 ### F-157-14 — The "leaves the house" disclosure is complete and nothing calls it
 
-- **Status:** missing
-- **Evidence:** `keystone/runtimedb/butlerassign.go:316-343` (`PreviewPoolPromotion`, which computes `LeavesHouse` and names the cloud Butlers) and `:345` (`RecordPoolDisclosure`), plus `keystone/runtimedb/butlerscope.go:297` (`PromoteMemoryToSharedPool`). Grep for all three across the repository excluding `keystone/runtimedb/` returns **zero matches** — no API handler, no CLI command, no Console call, not even a test outside the package.
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/privacy.go`; 87ce5e9; `TestLocalOnlyNeverFallsBackToCloud` and `TestDisclosurePolicyIsEvaluatedPerDestination`.
+
+- **Audit status:** missing
+- **Audit evidence:** `keystone/runtimedb/butlerassign.go:316-343` (`PreviewPoolPromotion`, which computes `LeavesHouse` and names the cloud Butlers) and `:345` (`RecordPoolDisclosure`), plus `keystone/runtimedb/butlerscope.go:297` (`PromoteMemoryToSharedPool`). Grep for all three across the repository excluding `keystone/runtimedb/` returns **zero matches** — no API handler, no CLI command, no Console call, not even a test outside the package.
 
 This is the trap `docs/audit/README.md` warns about, in this slice's own
 territory. The code computes exactly the disclosure §15 implies — before
@@ -758,8 +816,13 @@ classification. Noted and not chased.
 
 ### F-157-15 — The routing order that would enforce AC12 is a comment over a file that implements no selection
 
-- **Status:** missing
-- **Evidence:** `keystone/runtimedb/models.go:1-25` states the three-question order, with "Where may this material go? Local-only material reaches a local route and no other. Checked first, so no fallback, escalation or busy local model can route around it." The file's seven functions (`models.go:75-241`) are `CarriesActionAuthority`, `UpsertModel`, `RecordModelReadiness`, `SetModelEnabled`, `ListModels`, `GetModel`, `DeleteModel`. There is no selection function, and grep for `ModelLocal`/`ModelCloud` across the repository returns nine non-test hits, all of which are display (`leavesTheHouse` booleans at `handlers_butlers.go:47`, `handlers_models.go:38`), the constants themselves, a route-change warning, or the unwired disclosure of F-157-14.
+- **Current status:** open
+- **Current evidence:** `keystone/butlerlive/serve.go` routes to the assigned model; no policy-driven local/cloud selection order for a task is evidenced.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** missing
+- **Audit evidence:** `keystone/runtimedb/models.go:1-25` states the three-question order, with "Where may this material go? Local-only material reaches a local route and no other. Checked first, so no fallback, escalation or busy local model can route around it." The file's seven functions (`models.go:75-241`) are `CarriesActionAuthority`, `UpsertModel`, `RecordModelReadiness`, `SetModelEnabled`, `ListModels`, `GetModel`, `DeleteModel`. There is no selection function, and grep for `ModelLocal`/`ModelCloud` across the repository returns nine non-test hits, all of which are display (`leavesTheHouse` booleans at `handlers_butlers.go:47`, `handlers_models.go:38`), the constants themselves, a route-change warning, or the unwired disclosure of F-157-14.
 
 The same trap as F-157-14 and worth separating from it because a reader
 would take this comment as a specification that has been met. It is a
@@ -779,8 +842,11 @@ boundary, because nothing reads for it.
 
 ### F-157-16 — Memory cannot confer authority, and that is enforced by what does not read the table
 
-- **Status:** implemented
-- **Evidence:** every reader of `butler_memory` at `787ad6d` is in `keystone/runtimedb/butlermemory.go` (lines 163, 199, 215, 309, 391, 397-407, 447) plus one `COUNT(*)` at `keystone/runtimedb/butlers.go:652`. The effective-authority path — `keystone/butlerstore/authority.go`, consulted at `keystone/butler/gateway.go:255-258` before any handler runs — does not read it. Migration `0023` states the intent ("There is no column here through which a memory record could grant anything") and the schema's `kind` CHECK has no `permission`, `grant` or `rule` member.
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/memorydisclosure.go`; 0562893; `TestMemoryDisclosureCannotBeLaunderedThroughLineage`.
+
+- **Audit status:** implemented
+- **Audit evidence:** every reader of `butler_memory` at `787ad6d` is in `keystone/runtimedb/butlermemory.go` (lines 163, 199, 215, 309, 391, 397-407, 447) plus one `COUNT(*)` at `keystone/runtimedb/butlers.go:652`. The effective-authority path — `keystone/butlerstore/authority.go`, consulted at `keystone/butler/gateway.go:255-258` before any handler runs — does not read it. Migration `0023` states the intent ("There is no column here through which a memory record could grant anything") and the schema's `kind` CHECK has no `permission`, `grant` or `rule` member.
 
 AC07's hardest half. A poisoned note can make a Butler believe something
 false; it cannot make a Butler *allowed* to do something, because no
@@ -810,8 +876,13 @@ obeyed, and produced no external call.
 
 ### F-157-17 — There is no general-purpose network tool, but a household action reaches an HTTP endpoint with a model-authored body
 
-- **Status:** partial
-- **Evidence:** the complete registries — `keystone/butler/gateway.go:158-180` (eleven operator tools) and `keystone/butler/household.go:236-243` plus `:247-281`. The egress: `handleDoHouseholdAction` (`household.go:564-619`) passes `householdParams(input)` to `seams.Actions`; `keystone/domestic/ntfy.go:102-179` reads `c.Params["message"]` and POSTs it to `n.BaseURL` (`http.NewRequestWithContext` at `:168`) with no inspection; `keystone/domestic/chat.go:69-120` takes the same param and hands it to `AskOverChat` → `QueueChatPush` (`handlers_chat_message.go:571`), which *does* apply `redact.String`.
+- **Current status:** open
+- **Current evidence:** `keystone/domestic/` constrains tool tiers, but a negative test for a model-authored body reaching an HTTP action endpoint is still needed.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** partial
+- **Audit evidence:** the complete registries — `keystone/butler/gateway.go:158-180` (eleven operator tools) and `keystone/butler/household.go:236-243` plus `:247-281`. The egress: `handleDoHouseholdAction` (`household.go:564-619`) passes `householdParams(input)` to `seams.Actions`; `keystone/domestic/ntfy.go:102-179` reads `c.Params["message"]` and POSTs it to `n.BaseURL` (`http.NewRequestWithContext` at `:168`) with no inspection; `keystone/domestic/chat.go:69-120` takes the same param and hands it to `AskOverChat` → `QueueChatPush` (`handlers_chat_message.go:571`), which *does* apply `redact.String`.
 
 **Corrected after review — the first draft marked this `implemented`
 and said "there is nothing to restrict". That was wrong.**
@@ -871,8 +942,13 @@ run produced from the same database.
 
 ### F-157-18 — Runtime verification: largely resolved by the #166 rerun, narrowed to what a read-only session cannot reach
 
-- **Status:** unverified
-- **Evidence:** original container symptoms, 2026-09-10 — `systemctl status keystone` → "System has not been booted with systemd as init system (PID 1)"; `curl http://127.0.0.1:9441/api/v1/butlers` → `000`; `/usr/local/bin/keystone` and `/etc/wildstone/` absent. **Resolved by the #166 rerun on the homelab host**, 2026-09-10: 50 model calls captured through a recording proxy against the real Ollama, AC04/AC07/AC12 exercised on a scratch instance of the audited commit. What remains unverified is listed below.
+- **Current status:** open
+- **Current evidence:** The earlier #166 runtime rerun is historical; the current household model path is unreachable from this workspace (`docs/audit/slice-24-rollout.md`).
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** unverified
+- **Audit evidence:** original container symptoms, 2026-09-10 — `systemctl status keystone` → "System has not been booted with systemd as init system (PID 1)"; `curl http://127.0.0.1:9441/api/v1/butlers` → `000`; `/usr/local/bin/keystone` and `/etc/wildstone/` absent. **Resolved by the #166 rerun on the homelab host**, 2026-09-10: 50 model calls captured through a recording proxy against the real Ollama, AC04/AC07/AC12 exercised on a scratch instance of the audited commit. What remains unverified is listed below.
 
 **Most of this finding is discharged.** The first pass ran in an
 isolated container and could reach nothing; #166 reran it on the host.
@@ -918,8 +994,13 @@ instance and was destroyed with it — see *Cleanup*.
 
 ### F-157-19 — Two durable write paths bypass redaction entirely
 
-- **Status:** missing
-- **Evidence:** `keystone/butlerlive/serve.go:296-308` writes `Objective: conversationObjective(b.Name, t.Text)` into `butler_tasks.objective`, and `conversationObjective` (`serve.go:331-337`) only truncates to 240 bytes and quotes — no `redact.String`. `keystone/butler/runner.go:623` appends every dispatched tool call as `AppendStep(taskID, LedgerStepTool, tc.Name, jsonPayload(tc.Input))`, the model's arguments verbatim. Both are on the named-Butler path every live conversation takes.
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/privacy.go` enforces declared processing/disclosure policy, but the historical durable-write content inspection claims need direct negative tests.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** missing
+- **Audit evidence:** `keystone/butlerlive/serve.go:296-308` writes `Objective: conversationObjective(b.Name, t.Text)` into `butler_tasks.objective`, and `conversationObjective` (`serve.go:331-337`) only truncates to 240 bytes and quotes — no `redact.String`. `keystone/butler/runner.go:623` appends every dispatched tool call as `AppendStep(taskID, LedgerStepTool, tc.Name, jsonPayload(tc.Input))`, the model's arguments verbatim. Both are on the named-Butler path every live conversation takes.
 
 Raised by the Codex review on PR #162 and verified here. The audit's
 storage inventory (F-157-05) had counted the boundary covered on the
@@ -985,8 +1066,13 @@ hypothetical — it is the ordinary shape of every live conversation.
 
 ### F-157-20 — What actually refuses a credential today is the system prompt, and it refuses after the value has already left
 
-- **Status:** partial
-- **Evidence:** the household directive at `keystone/butlerlive/serve.go` as rendered into the live system prompt — "remember keeps one thing somebody asks you to remember… Keep what a person actually said, not what you concluded, and never a password or a key" — captured verbatim in the model-bound payloads of the #166 rerun. Six live attempts across three phrasings on `qwen3.5:4b`, 2026-09-10: all six refused at the model, none reached `handleRemember`. The captured payloads show the synthetic value present in the `user` message of all six requests *before* each refusal.
+- **Current status:** open
+- **Current evidence:** `keystone/api/handlers_household_secrets.go` protects explicit intake; arbitrary credential text sent in a model-bound request still needs inspection before provider dispatch.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** partial
+- **Audit evidence:** the household directive at `keystone/butlerlive/serve.go` as rendered into the live system prompt — "remember keeps one thing somebody asks you to remember… Keep what a person actually said, not what you concluded, and never a password or a key" — captured verbatim in the model-bound payloads of the #166 rerun. Six live attempts across three phrasings on `qwen3.5:4b`, 2026-09-10: all six refused at the model, none reached `handleRemember`. The captured payloads show the synthetic value present in the `user` message of all six requests *before* each refusal.
 
 New in the #166 rerun, and it reorders the report's own account of what
 protects a household.
@@ -1042,8 +1128,13 @@ from runtime rather than from the source.
 
 ### F-157-21 — The operator surface has no memory tools, so AC04's cross-Butler retrieval fails before the silo does
 
-- **Status:** missing
-- **Evidence:** `GET /api/v1/butlers/Alfred/tools` on the #166 scratch instance returns exactly `describe_capabilities, diagnose, dry_run_automation, explain_resource, get_automation_schema, get_capability_status, get_container_logs, get_health, get_plan, get_system_overview, propose_change` — eleven tools, no `recall`, no `remember`. The household's Alfred reports the same count (`toolsAllowed: 11`). The family surface's six include both. Registries: `keystone/butler/gateway.go:158-180` against `keystone/butler/household.go:236-243`.
+- **Current status:** open
+- **Current evidence:** The Owner Agent's operator gateway still registers neither `recall` nor `remember`; explicit secret intake does not prove cross-Agent Personal memory retrieval.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** missing
+- **Audit evidence:** `GET /api/v1/butlers/Alfred/tools` on the #166 scratch instance returns exactly `describe_capabilities, diagnose, dry_run_automation, explain_resource, get_automation_schema, get_capability_status, get_container_logs, get_health, get_plan, get_system_overview, propose_change` — eleven tools, no `recall`, no `remember`. The household's Alfred reports the same count (`toolsAllowed: 11`). The family surface's six include both. Registries: `keystone/butler/gateway.go:158-180` against `keystone/butler/household.go:236-243`.
 
 AC04 asks for a secret stored through one Butler to be retrieved through
 another authorized Butler. The report predicted this would fail on the
@@ -1073,8 +1164,13 @@ one.
 
 ### F-157-22 — The household runs a binary built from a modified tree, so no commit describes what is deployed
 
-- **Status:** partial
-- **Evidence:** `go version -m /usr/local/bin/keystone` → `vcs.revision=fd5a663c35375977b4cff0e7764a961264dffe6d`, `vcs.time=2026-09-10T14:46:46Z`, **`vcs.modified=true`**. `fd5a663` is an ancestor of the audited `787ad6d` (`git merge-base --is-ancestor` → yes). `systemctl show keystone -p ActiveEnterTimestamp` → `2026-09-10 15:22:45 UTC`, matching the binary's mtime. All three commands run read-only on the household host during the #166 rerun; nothing was written.
+- **Current status:** open
+- **Current evidence:** `docs/audit/runtime-access.md` recorded a dirty deployed binary; no current `go version -m` output from the household host is available.
+- **Current owner:** chickenrat17
+- **Tracking:** #317
+
+- **Audit status:** partial
+- **Audit evidence:** `go version -m /usr/local/bin/keystone` → `vcs.revision=fd5a663c35375977b4cff0e7764a961264dffe6d`, `vcs.time=2026-09-10T14:46:46Z`, **`vcs.modified=true`**. `fd5a663` is an ancestor of the audited `787ad6d` (`git merge-base --is-ancestor` → yes). `systemctl show keystone -p ActiveEnterTimestamp` → `2026-09-10 15:22:45 UTC`, matching the binary's mtime. All three commands run read-only on the household host during the #166 rerun; nothing was written.
 
 Raised by the rerun because it bounds what any runtime evidence about
 the household can mean.

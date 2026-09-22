@@ -1,5 +1,11 @@
 # Auditing the repository against the architecture baseline
 
+The six findings files retain their September 10 observations under **Audit
+status** and **Audit evidence**. Slice 24 added **Current status** and
+**Current evidence** for each stable finding ID. Use the current fields for
+implementation planning; the original prose, tables and runtime notes remain
+historical evidence. The [gap report](gap-report.md) counts both sets.
+
 How to run one audit slice of
 [#151](https://github.com/chickenrat17/wildstone-homelab/issues/151).
 
@@ -14,9 +20,11 @@ down, which is what this directory is.
 
 ## Before you start
 
-**Work from `butlers-on-the-live-path`, not `main`.** It is well ahead
-of `main`, and an audit of `main` reports findings about a repository
-nobody is running.
+**For current remediation, work from `main`.** The original six audit sessions
+used `butlers-on-the-live-path` on September 10, when it was ahead of `main`.
+That branch instruction is historical; slices 1–23 have since landed on
+`main`. Keep the original audit commit in each findings file when interpreting
+its old evidence.
 
 **Read, in this order:**
 

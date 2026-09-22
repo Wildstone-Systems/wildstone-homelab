@@ -76,6 +76,9 @@ session could not reach in the first place.
 
 ### F-153-01 — A second bot on a surface is unsupported, so a household gets one Telegram-addressable Butler per surface
 
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_connections.go` + `keystone/api/handlers_chat_message.go`; bdd481a; `TestOneTokenMakesOneBot` and `TestChatOutboundIsScopedToOneAgent`.
+
 Baseline §7 wants a bot per Butler. The deployment's chat identity is a
 *capability*: `chat-<transport>-<surface>`, one fixed string per package
 (`packages/chat-telegram-family/package.yaml:70`,
@@ -101,8 +104,8 @@ for remediation.** See F-153-02: the message path itself does not stop a
 second adapter, and that is what makes F-153-03 urgent rather than
 theoretical.
 
-- **Status:** missing
-- **Evidence:** code as cited on `787ad6d`; runtime on the scratch
+- **Audit status:** missing
+- **Audit evidence:** code as cited on `787ad6d`; runtime on the scratch
   instance — `GET /api/v1/chat/transports` returned exactly four rows
   (`chat-matrix-admin`, `chat-matrix-family`, `chat-telegram-admin`,
   `chat-telegram-family`) from a catalog of 55 packages, and
@@ -110,6 +113,9 @@ theoretical.
   `transport "telegram2" has no known handle format`.
 
 ### F-153-02 — A hand-provisioned second bot does reach the second Butler, and only its supporting furniture is missing
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_connections.go` + `keystone/api/handlers_chat_message.go`; bdd481a; `TestOneTokenMakesOneBot` and `TestChatOutboundIsScopedToOneAgent`.
 
 *Revised after review on this PR: the first version of this finding said
 the second address was one no bot could ever arrive at. That is wrong,
@@ -139,8 +145,8 @@ tap-to-connect invite link. So a second bot is buildable by hand and
 supported nowhere — and F-153-03 means its replies would come out of the
 first bot.
 
-- **Status:** missing
-- **Evidence:** runtime on the scratch instance —
+- **Audit status:** missing
+- **Audit evidence:** runtime on the scratch instance —
   `PUT /api/v1/butlers/alfie/address {"transport":"telegram","externalId":"chat-telegram-family","allow":true}`
   succeeded; the same call for `sandy` returned
   `telegram/chat-telegram-family already answers for another butler`;
@@ -150,6 +156,9 @@ first bot.
   `sandy` (session `bs-2`, `butler: sandy`).
 
 ### F-153-03 — The outbound queue has no Butler, so one Butler's reply leaves through another Butler's bot
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_connections.go` + `keystone/api/handlers_chat_message.go`; bdd481a; `TestOneTokenMakesOneBot` and `TestChatOutboundIsScopedToOneAgent`.
 
 `chat_outbound` carries surface, transport, target and binding, and no
 Butler (`keystone/runtimedb/migrations/0009_chat_outbound.sql:13`).
@@ -170,8 +179,8 @@ makes reconnect wrong for the same reason — the adapter always polls
 from cursor 0 (`cli/cmd/chat-adapter/keystone.go:101`), so a bot coming
 back up takes whatever is queued for its surface.
 
-- **Status:** missing
-- **Evidence:** runtime on the scratch instance — a message relayed by
+- **Audit status:** missing
+- **Audit evidence:** runtime on the scratch instance — a message relayed by
   the `chat-telegram2-family` credential resolved to `sandy` (session
   `bs-2`, `butler: sandy`), and its reply, seq 4, was returned to and
   acked by the `chat-telegram-family` credential:
@@ -180,6 +189,11 @@ back up takes whatever is queued for its surface.
   `POST /api/v1/chat/outbound/4/ack` → `{"acked":4}`.
 
 ### F-153-04 — Routine notifications carry no Butler at all
+
+- **Current status:** open
+- **Current evidence:** `keystone/automation/routine_execution.go:executeReviewed` resolves delivery, but no regression ties every routine notification to its originating bot identity.
+- **Current owner:** chickenrat17
+- **Tracking:** #314
 
 A routine's chat delivery goes through `ChatSender`, wired per *chat
 capability* (`keystone/cmd/keystone/main.go:844`). The recipient is
@@ -190,12 +204,15 @@ that path names the Butler that owns the routine, even though
 `household_routines` records one
 (`keystone/runtimedb/migrations/0034_butler_assignment.sql:29`).
 
-- **Status:** missing
-- **Evidence:** code as cited on `787ad6d`; `grep -rn
+- **Audit status:** missing
+- **Audit evidence:** code as cited on `787ad6d`; `grep -rn
   "QueueChatPush\|AskOverChat\|ChatRecipientFor"` finds no caller that
   supplies a Butler, and no `butler` column exists in `chat_outbound`.
 
 ### F-153-05 — A chat account is bound to a surface, not to a Butler
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_connections.go` + `keystone/api/handlers_chat_message.go`; bdd481a; `TestOneTokenMakesOneBot` and `TestChatOutboundIsScopedToOneAgent`.
 
 `chat_bindings` has transport, account, surface and identity
 (`keystone/runtimedb/chatbindings.go:20`), and a claim code names a
@@ -210,13 +227,16 @@ per-surface binding plus per-bot addressing, which is a different thing:
 an administrator cannot say "Sam reaches Sandy on Telegram, Ana reaches
 Alfie".
 
-- **Status:** missing
-- **Evidence:** runtime on the scratch instance — `sam` was granted both
+- **Audit status:** missing
+- **Audit evidence:** runtime on the scratch instance — `sam` was granted both
   `alfie` and `sandy`, and a message on the household bot was answered
   by `alfie` (session `bs-1`, `butler: alfie`) with no way to express
   the other choice.
 
 ### F-153-06 — The chat thread pointer is not keyed by Butler, so a second Butler cannot answer the same person on the same transport
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/sessioncontinuity.go`; 11d82f0; `TestChatContinuesTheSolePersonAgentSession`.
 
 `chat_threads` is keyed by (transport, conversation, surface, identity)
 (`keystone/runtimedb/chatthreads.go:41`), and a turn that resumes a
@@ -229,14 +249,17 @@ key by construction.
 Histories do stay separate, which §7 asks for. What happens instead of
 merging is a hard refusal for up to the 30-minute idle window.
 
-- **Status:** partial
-- **Evidence:** runtime on the scratch instance — the second bot's
+- **Audit status:** partial
+- **Audit evidence:** runtime on the scratch instance — the second bot's
   message on conversation `1001` returned
   `butlerlive: conversation bs-1 belongs to alfie and cannot be
   continued by sandy (ADR-W031 A4)`; the same message on conversation
   `9002` was answered normally by `sandy`.
 
 ### F-153-07 — A queued message is still delivered after its binding is revoked
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_chat_message.go`; 71df923; `TestStoppedDeliveryReportsFailureWithoutDisclosingThePayload`.
 
 `EnqueueChatOutbound` records `binding_id` and `ChatOutboundAfter` never
 joins back to it (`keystone/runtimedb/chatoutbound.go:139`), so
@@ -248,14 +271,19 @@ quarantine is re-checked on the read, not only on the write
 (`chatoutbound.go:143`), precisely so that already-queued pushes cannot
 escape through a restore.
 
-- **Status:** missing
-- **Evidence:** runtime on the scratch instance — after
+- **Audit status:** missing
+- **Audit evidence:** runtime on the scratch instance — after
   `POST /api/v1/chat/bindings/1/revoke` → `{"revoked":1}`, the queue
   still offered the pending reply for that binding:
   `GET /api/v1/chat/outbound?after=2&transport=telegram` →
   `[(3, bindingId 1, '1001', 'ok')]`.
 
 ### F-153-08 — An undelivered message stops being deliverable after six hours, and nothing ever says so
+
+- **Current status:** open
+- **Current evidence:** `keystone/runtimedb/chatoutbound.go` prunes settled/expired queue entries; no recipient-facing terminal notice for an expired undelivered message is proven.
+- **Current owner:** chickenrat17
+- **Tracking:** #314
 
 *Revised after review on this PR: the first version said the row was
 swept at six hours. It is not, and the distinction changes the fix.*
@@ -280,8 +308,8 @@ by opening the database.
 That makes the remediation smaller than "keep the state": the state is
 already there for a week, and what it needs is a read.
 
-- **Status:** missing
-- **Evidence:** code as cited on `787ad6d` — `pruneChatOutbound` deletes
+- **Audit status:** missing
+- **Audit evidence:** code as cited on `787ad6d` — `pruneChatOutbound` deletes
   on `created_at < now-7d AND (delivered_at != '' OR expires_at < now)`,
   so expiry alone deletes nothing. `grep -rn "expired\|undelivered"`
   across `keystone/` and `cli/` finds no endpoint, CLI command or
@@ -290,6 +318,9 @@ already there for a week, and what it needs is a read.
   (`cli/cmd/wild/chat.go:156`).
 
 ### F-153-09 — Butler addresses cannot be set from the Console or the CLI
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_connections.go`; bdd481a; `TestConnectingAPersonTakesThreeAnswers`.
 
 `PUT /api/v1/butlers/{name}/address` exists and works
 (`keystone/api/api.go:433`, `keystone/api/handlers_butlers.go:768`), and
@@ -304,13 +335,18 @@ reachable by a hand-written HTTP call with a manage token, and by no
 shipped surface — so in practice which Butler answers on chat cannot be
 configured by the person who owns the deployment.
 
-- **Status:** missing
-- **Evidence:** `grep -rn "setButlerAddress" console/src/` →
+- **Audit status:** missing
+- **Audit evidence:** `grep -rn "setButlerAddress" console/src/` →
   `console/src/api.ts:1024` only; `grep -rn "externalId" console/src/views/`
   → one read-only render, `TabReach.tsx:114`. Runtime: the endpoint
   itself answered correctly when called directly (F-153-02).
 
 ### F-153-10 — The Reach tab matches an address label against a person's name, so every row reads "no address linked"
+
+- **Current status:** open
+- **Current evidence:** `console/src/views/butlers/TabReach.tsx` still needs a current multi-bot Person-to-Connection display regression.
+- **Current owner:** chickenrat17
+- **Tracking:** #314
 
 `TabReach.tsx:92` looks up a person's address with
 `addresses.find((a) => a.label === m)`, where `m` is a household member
@@ -319,12 +355,15 @@ schema says the label is never matched on
 (`0034_butler_assignment.sql:57`). The lookup can only succeed if
 somebody happens to have labelled an address with a member's name.
 
-- **Status:** missing
-- **Evidence:** `console/src/views/butlers/TabReach.tsx:92` and `:114` on
+- **Audit status:** missing
+- **Audit evidence:** `console/src/views/butlers/TabReach.tsx:92` and `:114` on
   `787ad6d`; the address created in the runtime check carried label
   `the household bot`, which no member name can match.
 
 ### F-153-11 — The address comes from the credential and cannot come from the request body
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_chat_message.go`; bdd481a; `TestChatConnectionComesFromTheCredential`.
 
 `inboundMessage.Butler` is refused outright for an adapter rather than
 ignored (`keystone/api/handlers_chat_message.go:296` →
@@ -333,8 +372,8 @@ ignored (`keystone/api/handlers_chat_message.go:296` →
 recovered from the principal name (`handlers_butler_named.go:44`).
 ADR-W031 A7 holds in the code.
 
-- **Status:** implemented
-- **Evidence:** runtime on the scratch instance — a bound message naming
+- **Audit status:** implemented
+- **Audit evidence:** runtime on the scratch instance — a bound message naming
   `sandy` from a concierge credential returned `a chat adapter cannot
   name a butler; the bot a message arrives at is the address (ADR-W031
   A7)`, and one naming surface `admin` returned `this credential serves
@@ -343,6 +382,9 @@ ADR-W031 A7 holds in the code.
 
 ### F-153-12 — One Butler may hold many addresses
 
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_connections.go` + `keystone/api/handlers_chat_message.go`; bdd481a; `TestOneTokenMakesOneBot` and `TestChatOutboundIsScopedToOneAgent`.
+
 The unique index is on the address, not on the Butler
 (`0034_butler_assignment.sql:73`), so a Butler can answer on Telegram
 and Matrix at once, which is §7's "the same Butler may be reachable
@@ -350,12 +392,15 @@ through web, Telegram and Slack". Web is a different mechanism — the
 Console holder names a Butler rather than arriving at an address
 (`handlers_butler_named.go:74`) — and no Slack transport exists.
 
-- **Status:** partial
-- **Evidence:** schema and code as cited on `787ad6d`; `GET
+- **Audit status:** partial
+- **Audit evidence:** schema and code as cited on `787ad6d`; `GET
   /api/v1/chat/transports` on the scratch instance listed telegram and
   matrix only.
 
 ### F-153-13 — Pairing is required, and a display name establishes nothing
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_connections.go` + `keystone/api/handlers_chat_message.go`; bdd481a; `TestOneTokenMakesOneBot` and `TestChatOutboundIsScopedToOneAgent`.
 
 A binding is only ever written by redeeming a single-use, expiring code
 issued by a manage-holder (`keystone/runtimedb/chatbindings.go:86`), an
@@ -365,14 +410,17 @@ indistinguishable from each other (`handlers_chat.go:252`), and the
 display name is bounded and used for display only
 (`handlers_chat.go:270`). §16's unknown-sender rule holds.
 
-- **Status:** implemented
-- **Evidence:** runtime on the scratch instance — an unbound account
+- **Audit status:** implemented
+- **Audit evidence:** runtime on the scratch instance — an unbound account
   received exactly the fixed guidance reply and produced no session row.
   Tests `TestChatUnboundAccountGetsOneReply`,
   `TestChatClaimRefusalsAreIndistinguishable` and
   `TestClaimOnTheWrongBotIsRefusedNotBurned` pass.
 
 ### F-153-14 — A permanent routing failure is reported to the person as a transient outage
+
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_chat_message.go`; 71df923; `TestStoppedDeliveryReportsFailureWithoutDisclosingThePayload`.
 
 When no Butler answers at an address — never configured, or revoked —
 the API returns 404 `no butler answers there for you`
@@ -381,13 +429,17 @@ inbound failure into `I could not reach the house just now. Try again in
 a moment.` (`cli/cmd/chat-adapter/adapter.go:281`). Retrying will never
 help, and the household has no way to see why the bot went quiet.
 
-- **Status:** missing
-- **Evidence:** runtime on the scratch instance — after revoking
+- **Audit status:** missing
+- **Audit evidence:** runtime on the scratch instance — after revoking
   `alfie`'s address, a bound account's message returned `{"error":"no
   butler answers there for you"}`, which is the case the adapter renders
   as a temporary failure.
 
 ### F-153-15 — The Console has no per-Butler Connections or Chat surface
+
+- **Current status:** superseded
+- **Current evidence:** The legacy per-Butler Chat-panel distinction is replaced by the Connection-centered Agent Chat workflow.
+- **Superseded by:** docs/agent-system-design.md §7 Connections and §8 conversation surfaces
 
 The Butler drawer's tabs are Identity, Model, Reach, Tools, Memory,
 Sessions (`console/src/views/butlers/ButlerDrawer.tsx:15`). `Chat` and
@@ -401,8 +453,8 @@ The `Chat` bindings table has a column headed `butler` that renders the
 *surface* as "Household" or "Operator" (`Chat.tsx:182`, `:268`), which
 reads as a per-Butler binding and is not one.
 
-- **Status:** missing
-- **Evidence:** files and lines as cited on `787ad6d`; `grep -in butler
+- **Audit status:** missing
+- **Audit evidence:** files and lines as cited on `787ad6d`; `grep -in butler
   console/src/views/ConnectChat.tsx` finds only the surface type and
   prose.
 
