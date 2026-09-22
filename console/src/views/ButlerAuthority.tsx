@@ -174,6 +174,7 @@ function Members() {
               {row.active ? "admitted" : row.member.offboardedAt ? "offboarded" : "not admitted"}
             </StatusPill>
             <strong>{row.member.member}</strong>
+            <span className="timeline-src">{row.member.role ?? "member"}</span>
             <span className="timeline-src">{row.member.profile}</span>
             {row.member.guardian && (
               <span className="timeline-src">guardian: {row.member.guardian}</span>
@@ -199,6 +200,20 @@ function Members() {
                 )}
                 {row.active && (
                   <>
+                    {row.member.role === "owner" && (
+                      <button
+                        className="btn btn-ghost"
+                        onClick={() => {
+                          if (!window.confirm(`Demote ${row.member.member} to Member? Their Console access ends, while Homepage and personal resources remain.`)) return;
+                          action.run(async () => {
+                            await api.demoteButlerMember(row.member.member);
+                            members.reload();
+                          }, "Demoted to Member. Console access ended; Member access remains.");
+                        }}
+                      >
+                        Demote to Member
+                      </button>
+                    )}
                     <button
                       className="btn btn-ghost"
                       onClick={() =>

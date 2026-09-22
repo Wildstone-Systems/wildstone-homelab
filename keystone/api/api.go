@@ -547,6 +547,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/butler/members", s.handle(principal.VerbRead, s.listButlerMembers))
 	mux.Handle("POST /api/v1/butler/members", s.handle(principal.VerbManage, s.recordButlerMember))
 	mux.Handle("POST /api/v1/butler/members/{member}/admit", s.handle(principal.VerbManage, s.admitButlerMember))
+	mux.Handle("POST /api/v1/butler/members/{member}/demote", s.handle(principal.VerbManage, s.consequential(s.demoteButlerMember)))
 	mux.Handle("POST /api/v1/butler/members/{member}/disable", s.handle(principal.VerbManage, s.consequential(s.disableButlerMember)))
 	mux.Handle("POST /api/v1/butler/members/{member}/offboard", s.handle(principal.VerbManage, s.consequential(s.offboardButlerMember)))
 	mux.Handle("POST /api/v1/butler/members/{member}/links", s.handle(principal.VerbManage, s.linkButlerIdentity))

@@ -1824,6 +1824,8 @@ export const api = {
     }),
   admitButlerMember: (member: string) =>
     call<unknown>("POST", `/api/v1/butler/members/${encodeURIComponent(member)}/admit`, {}),
+  demoteButlerMember: (member: string) =>
+    call<unknown>("POST", `/api/v1/butler/members/${encodeURIComponent(member)}/demote`, {}),
   disableButlerMember: (member: string) =>
     call<unknown>("POST", `/api/v1/butler/members/${encodeURIComponent(member)}/disable`, {}),
   offboardButlerMember: (member: string) =>

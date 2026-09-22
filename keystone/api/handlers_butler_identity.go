@@ -91,6 +91,41 @@ func (s *Server) disableButlerMember(r *http.Request, id principal.Identity) (an
 	return s.memberState(member)
 }
 
+// demoteButlerMember withdraws Owner authority while leaving the Person's
+// Member identity and resources intact. The route requires a fresh Console
+// session; a machine admin token is not a substitute for a human Owner.
+func (s *Server) demoteButlerMember(r *http.Request, id principal.Identity) (any, int, error) {
+	if id.Role != runtimedb.RoleAdmin || id.AuthTime == nil {
+		return nil, http.StatusForbidden, fmt.Errorf("demotion requires a fresh Owner Console session")
+	}
+	actor := actingMember(id)
+	// Console admission accepts forwarded handle casing, but ActingFor
+	// retains that spelling. Resolve it to exactly one stored Person before
+	// writing an audit actor; a case collision cannot identify which one
+	// performed this consequential action.
+	owners, err := s.DB.ButlerMembersByHandleFold(actor)
+	if err != nil || len(owners) != 1 || !owners[0].Active() || owners[0].Role != runtimedb.RoleOwner {
+		return nil, http.StatusForbidden, fmt.Errorf("only an active Owner may demote another Owner")
+	}
+	actor = owners[0].Member
+	member := r.PathValue("member")
+	target, err := s.DB.GetButlerMember(member)
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, http.StatusNotFound, err
+	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if target.Role != runtimedb.RoleOwner {
+		return nil, http.StatusBadRequest, fmt.Errorf("%s is already a Member", member)
+	}
+	if err := s.DB.SetButlerMemberRole(member, runtimedb.RoleMember, actor); err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	s.EndConsoleSessions(member)
+	return s.memberState(member)
+}
+
 // offboardButlerMember is the runtime denial half of offboarding: one
 // audited action that stops retrieval, dispatch, ingestion and proactive
 // delivery now. Desired-state cleanup follows through Plans, and failed

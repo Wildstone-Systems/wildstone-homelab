@@ -208,9 +208,9 @@ func (db *DB) RecordButlerMember(member, role, profile, guardian string) error {
 //
 // Demotion is not offboarding (§17.1): this changes the role and writes
 // the audit row, and deliberately does not touch admission, links or
-// the generation. Recomputing the authority that hangs off the Owner
-// boundary — Console access, elevated sessions, pending Owner-bound
-// approvals — is the caller's job and a later slice's code.
+// the generation. Owner-only access is rechecked from the live role; a
+// trigger consumes unused Owner review tokens in the same transaction.
+// The Console handler also ends the Person's elevated sessions.
 func (db *DB) SetButlerMemberRole(member, role, actor string) error {
 	switch role {
 	case RoleOwner, RoleMember:
