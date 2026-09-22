@@ -763,6 +763,13 @@ fetch_binary() {
 # registry credential. /srv/wildstone because Wardstone mounts nothing
 # from outside /etc/wildstone and /srv/wildstone. A release from before
 # the adapter shipped simply has no chat.
+install_uninstall() {
+  release_has uninstall.sh || return 0
+  fetch_asset uninstall.sh
+  install -m 0755 "$WORK/uninstall.sh" "$BIN_DIR/wildstone-uninstall"
+  log "installed $BIN_DIR/wildstone-uninstall"
+}
+
 install_chat_adapter() {
   release_has "chat-adapter_linux_${ARCH}.tar.gz" || {
     log "this release has no chat-adapter; chat connections will not run on this node"
@@ -1554,6 +1561,7 @@ if [ "$ROLE" = keystone ]; then
   fi
   fetch_binary keystone
   fetch_binary wild
+  install_uninstall
   install -d -m 0700 /var/lib/wildstone/keystone
   install -d -m 0755 /etc/wildstone
 
@@ -1709,6 +1717,7 @@ fi
 command -v docker >/dev/null || fail "docker is required for --role node (or pass --skip-docker to manage it yourself, then re-run)"
 
 fetch_binary wardstoned
+install_uninstall
 install -d -m 0755 /etc/wildstone
 install -d -m 0700 /var/lib/wildstone/wardstone
 install -d -m 0755 /srv/wildstone
