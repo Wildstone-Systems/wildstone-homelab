@@ -309,9 +309,12 @@ const (
 
 // calendarEvent is one entry, narrowed to what a card shows.
 type calendarEvent struct {
-	Title  string    `json:"title"`
-	At     time.Time `json:"at"`
-	AllDay bool      `json:"allDay,omitempty"`
+	Calendar     string    `json:"calendar,omitempty"`
+	CalendarName string    `json:"calendarName,omitempty"`
+	Color        string    `json:"color,omitempty"`
+	Title        string    `json:"title"`
+	At           time.Time `json:"at"`
+	AllDay       bool      `json:"allDay,omitempty"`
 }
 
 type notificationsCard struct {
@@ -450,7 +453,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 	resp.NeedsYou = s.homeNeedsYou(s.who(r, member), desired, now)
 	resp.Activity = s.homeActivity(member, now)
 	resp.Notifications = s.homeNotifications(member)
-	resp.Calendar = s.homeCalendar(member, desired, now)
+	resp.Calendar = s.homeCalendar(member, desired, now, forwardedGroups(r)...)
 	resp.Apps, resp.AppStatus, resp.StatusKnown = s.homeApps(member, desired)
 	resp.Machines = s.homeMachines(r.Context(), now)
 	// Last, because it reads the launcher's own answers rather than
@@ -881,7 +884,7 @@ func (s *Server) homeNotifications(member string) notificationsCard {
 // card that shows invented events on a family's wall tablet is worse
 // than one that says it cannot read the calendar: somebody will believe
 // it.
-func (s *Server) homeCalendar(member string, desired []resource.Resource, now time.Time) calendarCard {
+func (s *Server) homeCalendar(member string, desired []resource.Resource, now time.Time, groups ...string) calendarCard {
 	route, found := calendarServer(desired)
 	if !found {
 		return calendarCard{homeCard: homeCard{Problem: "No calendar is set up yet."}}
@@ -913,6 +916,23 @@ func (s *Server) homeCalendar(member string, desired []resource.Resource, now ti
 		}
 		if s.CalendarBook != nil {
 			card.Page = "/calendar/"
+		}
+		if s.CalendarBookFor != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			events, err := s.visibleCalendarEvents(ctx, member, groups, desired, now, now.AddDate(0, 0, calendarCardDays), "")
+			if err != nil {
+				card.Available = false
+				card.Problem = "Can't reach the calendars right now."
+				return card
+			}
+			for _, e := range events {
+				if len(card.Events) >= maxCalendarEvents {
+					break
+				}
+				card.Events = append(card.Events, calendarEvent{Title: e.Summary, At: e.Start, AllDay: e.AllDay, Calendar: e.Calendar.ID, CalendarName: e.Calendar.Name, Color: e.Calendar.Color})
+			}
+			return card
 		}
 		events, err := s.CalendarEvents(now, now.AddDate(0, 0, calendarCardDays))
 		if err != nil {

@@ -70,8 +70,8 @@
 # THE SHARED HOUSEHOLD CALENDAR, AND HOW IT REACHES A PHONE.
 #
 # Everybody's own calendars are their own and nobody else can read them.
-# Alongside them is ONE household calendar that everyone in
-# `calendar_users` can read and write, and that the agent tools act on.
+# Alongside them are the Owner-declared shared calendars (ADR-W038).
+# The default registry retains Household for everyone in calendar_users.
 #
 # It is stored as a GROUP collection — under
 # `collection-root/GROUPS/<base64 of the group name>` — because that is
@@ -195,13 +195,14 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: calendar-radicale
-  version: 2.0.4
+  version: 2.1.0
   capability: calendar
   profile: radicale
 requires:
   - { trait: identity, mode: ldap }
   - { trait: ingress, mode: private }
 params:
+  - { name: calendars, default: '{"calendars":[{"id":"household","name":"Household","color":"#3b82f6","default":true,"readGroups":["calendar_users"],"writeGroups":["calendar_users"]}]}', description: 'Shared calendar registry as JSON: calendars with id, name, color, default, readGroups/writeGroups and optional readMembers/writeMembers; bookingCalendar defaults to household. Empty retains Household.' }
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
   # NOT "calendar": mail-roundcube's Davis already defaults to that
   # label, and two Routes wanting one host is a collision under the
@@ -326,6 +327,7 @@ templates:
         file = /etc/wildstone/calendar/rights
 
         [storage]
+        type = wildstone_calendars
         filesystem_folder = /var/lib/radicale/collections
         # A PERSON'S FIRST CALENDAR, made for them.
         #
@@ -360,58 +362,87 @@ templates:
   # `mika` is Mika's, and a household that reorganises around whoever
   # created the shopping list has not got a shared calendar.
   #
-  # WHAT THIS COSTS, said plainly because a household will meet it: a
-  # phone discovers the calendars under the principal it signed in as,
-  # so the household calendar does not appear on an iPhone by itself.
-  # It is added once, by its address, as a subscribed calendar. Desktop
-  # clients and DAVx5 take it as a full read-write collection. This is
-  # a limit of CalDAV principals rather than of this package — see
-  # ADR-W034.
+  # Principal discovery is extended by the registry-backed storage module below.
+  # Rights remain the final check for every collection and request.
   - |
     apiVersion: wildstone.dev/v1
     kind: ConfigFile
     metadata: { name: radicale-rights, node: "{{ .Params.node }}" }
     spec:
       filename: rights
+      content: {{ printf "%q" ((sharedCalendars .Params.calendars).Rights .Params.service_account) }}
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: calendar-registry, node: "{{ .Params.node }}" }
+    spec:
+      filename: calendars.json
+      content: {{ printf "%q" (sharedCalendars .Params.calendars).JSON }}
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: calendar-storage-plugin, node: "{{ .Params.node }}" }
+    spec:
+      filename: wildstone_calendars.py
       content: |
-        # Managed by Wildstone — do not edit.
+        """Discover declared shared calendars through Radicale 3.8 group collections.
 
-        # The root listing, so a client can discover anything at all.
-        [root]
-        user: .+
-        collection:
-        permissions: R
+        Only discovery is extended. Radicale's rights backend checks every returned
+        collection and every subsequent request against the authenticated identity.
+        """
+        import base64
+        import json
+        import os
+        import re
+        from radicale.storage.multifilesystem import Storage as BaseStorage
 
-        # The shared household calendar, which is a GROUP collection.
-        #
-        # Radicale's discovery yields collections under
-        # <group_collections_folder>/<base64 of a group name> as children
-        # of the principal of anybody in that group. That is what makes
-        # this calendar APPEAR on a member's phone beside their own,
-        # rather than being a second account they have to add: they sign
-        # in as themselves and the household calendar is simply there.
-        #
-        # Membership is the whole grant and it is checked on every
-        # request, so somebody removed from calendar_users stops syncing
-        # at their next one rather than at their next sign-in.
-        [household-calendar]
-        user: .+
-        groups: calendar_users
-        collection: GROUPS/Y2FsZW5kYXJfdXNlcnM=
-        permissions: rw
 
-        # Everybody's own space. Nothing here lets one person read
-        # another's: the collection pattern is anchored on the name they
-        # signed in with.
-        [own-principal]
-        user: .+
-        collection: {user}
-        permissions: RW
+        class Storage(BaseStorage):
+            def __init__(self, configuration):
+                super().__init__(configuration)
+                with open(os.path.join(os.path.dirname(__file__), "calendars.json"), encoding="utf-8") as stream:
+                    self._calendars = json.load(stream)["calendars"]
+                self._service = configuration.get("auth", "ldap_reader_dn").split(",", 1)[0].removeprefix("uid=")
+                # Provision declared collections under the normal storage write lock.
+                # Preserve existing events and unrelated collection properties.
+                with self.acquire_lock("w"):
+                    for calendar in self._calendars:
+                        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,47}", calendar["id"]):
+                            raise ValueError("invalid declared calendar identifier")
+                        group = self._group(calendar)
+                        name = base64.b64encode(group.encode()).decode("ascii")
+                        folder = os.path.join(self._get_collection_root_folder(), "GROUPS", name)
+                        os.makedirs(folder, exist_ok=True)
+                        props_path = os.path.join(folder, ".Radicale.props")
+                        props = {}
+                        if os.path.exists(props_path):
+                            with open(props_path, encoding="utf-8") as stream:
+                                props = json.load(stream)
+                        props.update({"tag": "VCALENDAR", "D:displayname": calendar["name"],
+                                      "ICAL:calendar-color": calendar["color"] + "ff"})
+                        temporary = props_path + ".wildstone-tmp"
+                        with open(temporary, "w", encoding="utf-8") as stream:
+                            json.dump(props, stream)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                        os.replace(temporary, props_path)
 
-        [own-calendars]
-        user: .+
-        collection: {user}/[^/]+
-        permissions: rw
+            @staticmethod
+            def _group(calendar):
+                return "calendar_users" if calendar["id"] == "household" else "wildstone_calendar_" + calendar["id"]
+
+            def discover(self, path, depth="0", child_context_manager=None, user_groups=None):
+                groups = set(user_groups or ())
+                principal = path.strip("/")
+                # Only enrich a principal listing. Existing group discovery and the
+                # rights filter remain in charge of which collections are returned.
+                if principal and "/" not in principal:
+                    for calendar in self._calendars:
+                        readers = set((calendar.get("readMembers") or []) + (calendar.get("writeMembers") or []))
+                        allowed = set((calendar.get("readGroups") or []) + (calendar.get("writeGroups") or []))
+                        if principal == self._service or principal in readers or groups.intersection(allowed):
+                            groups.add(self._group(calendar))
+                yield from super().discover(path, depth, child_context_manager, groups)
   # ---- The credential file.
   #
   # A Job rather than a ConfigFile, for the reason the ConfigFile above
@@ -498,6 +529,8 @@ templates:
     spec:
       image: "ghcr.io/kozea/radicale@sha256:0d60d544710bda0fa83bfdea685db731b6cbf74e12d7f22b4997e9cff3a50468"
       env:
+        PYTHONPATH: /etc/wildstone/calendar
+        WILDSTONE_CALENDAR_REGISTRY: {{ printf "%q" (sharedCalendars .Params.calendars).JSON }}
         TZ: "{{ .Params.timezone }}"
       command: ["--config", "/etc/wildstone/calendar/config"]
       mounts:

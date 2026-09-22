@@ -332,6 +332,15 @@ func (g *Gateway) dispatch(ctx context.Context, c Call) (Result, error) {
 			return Result{}, err
 		}
 	}
+	// Resolve defaults before binding consent, so changing a default cannot
+	// redirect an already-approved call to another resource.
+	if preparer, ok := e.(interface{ Prepare(Call) (Call, error) }); ok {
+		var err error
+		c, err = preparer.Prepare(c)
+		if err != nil {
+			return Result{}, err
+		}
+	}
 	if c.Tier == TierConfirm {
 		if err := g.confirmed(ctx, c, e); err != nil {
 			return Result{}, err

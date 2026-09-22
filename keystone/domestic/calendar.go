@@ -111,6 +111,8 @@ const defaultDurationMinutes = 60
 //
 // One instance backs every tool; Executors returns the registrations.
 type Calendar struct {
+	// Resolve checks the acting person’s current access and returns one declared collection.
+	Resolve   func(member, id string, write bool) (*caldav.Upstream, string, error)
 	Authority HouseholdExecutionAuthority
 	// SecretUse is checked for every credential-bearing calendar call. A bound
 	// secret never falls back to the deployment credential on denial.
@@ -217,9 +219,43 @@ var calendarUsage = map[string]string{
 }
 
 // Usage implements UsageDescriber.
-func (t *calendarTool) Usage() string { return calendarUsage[t.tool] }
+func (t *calendarTool) Usage() string {
+	return calendarUsage[t.tool] + " Optional calendar: declared calendar identifier; omitted uses the default shared calendar."
+}
 
-func (t *calendarTool) Execute(ctx context.Context, c Call) (Result, error) {
+func (t *calendarTool) Execute(ctx context.Context, c Call) (result Result, err error) {
+	if t.tool != CalToolSetup && t.cal.Resolve != nil {
+		write := CalendarTools[t.tool] != TierRead
+		resolver := t.cal.Resolve
+		upstream, id, err := resolver(c.Subject, c.Params["calendar"], write)
+		if err != nil {
+			return Result{}, err
+		}
+		local := *t.cal
+		copy := *upstream
+		prior := copy.BeforeWrite
+		copy.BeforeWrite = func() error {
+			if _, _, err := resolver(c.Subject, id, true); err != nil {
+				return err
+			}
+			if prior != nil {
+				return prior()
+			}
+			return nil
+		}
+		local.Upstream, local.Resolve = &copy, nil
+		t = &calendarTool{cal: &local, tool: t.tool}
+		defer func() {
+			if result.Detail == nil {
+				result.Detail = map[string]string{}
+			}
+			result.Detail["calendar"] = id
+			if result.Summary != "" {
+				result.Summary = "[" + id + "] " + result.Summary
+			}
+		}()
+	}
+
 	if CalendarTools[t.tool] != TierRead {
 		if err := checkExecution(ctx, t.cal.Authority); err != nil {
 			return Result{}, err
@@ -907,6 +943,41 @@ func (c *Calendar) howToAdd(call Call) (Result, error) {
 // request costs one message rather than a question, an answer, and then
 // a refusal.
 func (t *calendarTool) Describe(ctx context.Context, c Call) (string, error) {
+	if t.cal.Resolve != nil && t.tool == CalToolDelete {
+		upstream, id, err := t.cal.Resolve(c.Subject, c.Params["calendar"], true)
+		if err != nil {
+			return "", err
+		}
+		local := *t.cal
+		copy := *upstream
+		local.Upstream = &copy
+		local.Resolve = nil
+		t = &calendarTool{cal: &local, tool: t.tool}
+		params := map[string]string{}
+		for k, v := range c.Params {
+			params[k] = v
+		}
+		params["calendar"] = id
+		c.Params = params
+	}
+	if t.tool == CalToolDelete && t.cal.SecretUse != nil {
+		description := ""
+		bound, err := t.cal.SecretUse(ctx, c, func(value string) error {
+			local := *t.cal
+			copy := *local.Upstream
+			copy.Password = value
+			copy.HTTP = privacyHTTPClient(executionHTTPClient(&http.Client{Timeout: 15 * time.Second}))
+			local.Upstream = &copy
+			local.SecretUse = nil
+			var err error
+			description, err = (&calendarTool{cal: &local, tool: t.tool}).Describe(ctx, c)
+			description = strings.ReplaceAll(description, value, "[secret omitted]")
+			return err
+		})
+		if bound || err != nil {
+			return description, err
+		}
+	}
 	if t.tool != CalToolDelete {
 		return "", nil
 	}
@@ -922,7 +993,27 @@ func (t *calendarTool) Describe(ctx context.Context, c Call) (string, error) {
 		when = found.Start.In(t.cal.location()).Format("Mon 2 Jan") + " at " +
 			found.Start.In(t.cal.location()).Format("15:04")
 	}
+	if id := c.Params["calendar"]; id != "" {
+		return fmt.Sprintf("Delete %q from %s in calendar %q?", found.Summary, when, id), nil
+	}
 	return fmt.Sprintf("Delete %q from %s?", found.Summary, when), nil
 }
 
 var _ Describer = (*calendarTool)(nil)
+
+func (t *calendarTool) Prepare(c Call) (Call, error) {
+	if t.tool == CalToolSetup || t.cal.Resolve == nil {
+		return c, nil
+	}
+	_, id, err := t.cal.Resolve(c.Subject, c.Params["calendar"], CalendarTools[t.tool] != TierRead)
+	if err != nil {
+		return c, err
+	}
+	params := make(map[string]string, len(c.Params)+1)
+	for k, v := range c.Params {
+		params[k] = v
+	}
+	params["calendar"] = id
+	c.Params = params
+	return c, nil
+}

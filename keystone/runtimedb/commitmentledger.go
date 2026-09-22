@@ -157,6 +157,7 @@ type CommitmentBooking struct {
 	// made, empty when it made none. It is how the appointment is
 	// followed after it leaves this page: see SyncCalendarBookings.
 	CalendarEvent string `json:"calendarEvent,omitempty"`
+	CalendarID    string `json:"calendarID,omitempty"`
 }
 
 // Live reports whether this booking still stands.
@@ -190,9 +191,9 @@ func (db *DB) RecordCommitmentBooking(b CommitmentBooking) (int64, error) {
 		bookedAt = b.BookedAt.UTC().Format(time.RFC3339Nano)
 	}
 	res, err := db.sql.Exec(
-		`INSERT INTO commitment_bookings (commitment, at, booked_at, booked_by, note, calendar_event)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		b.Commitment, b.At.UTC().Format(time.RFC3339Nano), bookedAt, b.BookedBy, b.Note, b.CalendarEvent)
+		`INSERT INTO commitment_bookings (commitment, at, booked_at, booked_by, note, calendar_event, calendar_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		b.Commitment, b.At.UTC().Format(time.RFC3339Nano), bookedAt, b.BookedBy, b.Note, b.CalendarEvent, bookingCalendarID(b.CalendarID))
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: recording booking: %w", err)
 	}
@@ -236,7 +237,7 @@ func (db *DB) LatestCommitmentBooking(commitment string) (CommitmentBooking, err
 	return b, err
 }
 
-const bookingColumns = `seq, commitment, at, booked_at, booked_by, note, cancelled_at, cancelled_by, calendar_event`
+const bookingColumns = `seq, commitment, at, booked_at, booked_by, note, cancelled_at, cancelled_by, calendar_event, calendar_id`
 
 // LiveLinkedCommitmentBookings is every booking the calendar should be
 // checked against: the most recently made booking of each commitment,
@@ -266,7 +267,7 @@ func (db *DB) LiveLinkedCommitmentBookings() ([]CommitmentBooking, error) {
 func scanBooking(row interface{ Scan(...any) error }) (CommitmentBooking, error) {
 	var b CommitmentBooking
 	var at, bookedAt, cancelledAt string
-	err := row.Scan(&b.Seq, &b.Commitment, &at, &bookedAt, &b.BookedBy, &b.Note, &cancelledAt, &b.CancelledBy, &b.CalendarEvent)
+	err := row.Scan(&b.Seq, &b.Commitment, &at, &bookedAt, &b.BookedBy, &b.Note, &cancelledAt, &b.CancelledBy, &b.CalendarEvent, &b.CalendarID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CommitmentBooking{}, err
 	}
@@ -376,4 +377,11 @@ func (db *DB) CommitmentCycleCounts() (map[string]int, error) {
 		out[name] = n
 	}
 	return out, rows.Err()
+}
+
+func bookingCalendarID(id string) string {
+	if id == "" {
+		return "household"
+	}
+	return id
 }

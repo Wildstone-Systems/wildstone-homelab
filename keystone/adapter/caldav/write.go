@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
+	"github.com/chickenrat17/wildstone-homelab/keystone/sharedcalendar"
 )
 
 const (
@@ -265,18 +266,7 @@ func (u *Upstream) DeleteEvent(ctx context.Context, req EventWrite) (adapter.Ans
 func (u *Upstream) resolveHref(req EventWrite) (string, error) {
 	base := strings.TrimRight(u.CollectionURL, "/")
 	if h := strings.TrimSpace(req.Href); h != "" {
-		if strings.HasPrefix(h, "http://") || strings.HasPrefix(h, "https://") {
-			return h, nil
-		}
-		root, err := url.Parse(base)
-		if err != nil {
-			return "", fmt.Errorf("caldav: the collection URL is not a URL: %w", err)
-		}
-		rel, err := url.Parse(h)
-		if err != nil {
-			return "", fmt.Errorf("caldav: %q is not a usable event address: %w", h, err)
-		}
-		return root.ResolveReference(rel).String(), nil
+		return sharedcalendar.EventURL(u.CollectionURL, h)
 	}
 	if !safeUIDSegment(req.UID) {
 		return "", fmt.Errorf("caldav: this write names no event: give the href a read reported, or the uid of an " +

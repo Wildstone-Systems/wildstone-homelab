@@ -904,3 +904,48 @@ func TestCalendarRechecksAuthorityAfterLookupBeforeWrite(t *testing.T) {
 		}
 	}
 }
+
+func TestCalendarSelectionIsAuthorizedAndBoundBeforeConfirmation(t *testing.T) {
+	f := newFakeCalendar(t, vevent("a", "Dentist for Sam", "20260918T150000Z", ""))
+	cal := calendarUnder(f)
+	upstream := cal.Upstream
+	defaultID := "household"
+	allowed := true
+	cal.Resolve = func(member, id string, write bool) (*caldav.Upstream, string, error) {
+		if member != "mika" || !allowed || id == "private" {
+			return nil, "", fmt.Errorf("calendar access denied")
+		}
+		if id == "" {
+			id = defaultID
+		}
+		return upstream, id, nil
+	}
+	executor := &calendarTool{cal: cal, tool: CalToolDelete}
+	call := deleteCall()
+	bound, err := executor.Prepare(call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound.Params["calendar"] != "household" || call.Params["calendar"] != "" {
+		t.Fatal("default not bound independently", bound)
+	}
+	question, err := executor.Describe(context.Background(), bound)
+	if err != nil || !strings.Contains(question, `calendar "household"`) {
+		t.Fatal(question, err)
+	}
+	defaultID = "school"
+	other, err := executor.Prepare(call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmKey(bound) == confirmKey(other) {
+		t.Fatal("changing default reused approval")
+	}
+	allowed = false
+	if _, err := executor.Execute(context.Background(), bound); err == nil {
+		t.Fatal("revoked calendar access still executed")
+	}
+	if f.sent(http.MethodDelete) {
+		t.Fatal("unauthorized delete reached CalDAV")
+	}
+}

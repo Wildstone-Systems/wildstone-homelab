@@ -288,6 +288,7 @@
     }
     var what = make("div", "what");
     what.appendChild(make("div", "title", item.title));
+    if (item.calendarName) { var calendarLabel = make("div", "muted", item.calendarName); calendarLabel.style.borderLeft = "3px solid " + item.color; what.appendChild(calendarLabel); }
     if (item.detail) { what.appendChild(make("div", "sub", item.detail)); }
     r.appendChild(what);
     // One group for every control on the row, so they wrap together.

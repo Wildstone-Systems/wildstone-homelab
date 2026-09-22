@@ -102,10 +102,13 @@ func (u *Upstream) location() *time.Location {
 }
 
 func (u *Upstream) client() *http.Client {
+	client := &http.Client{Timeout: 15 * time.Second}
 	if u.HTTP != nil {
-		return u.HTTP
+		copy := *u.HTTP
+		client = &copy
 	}
-	return &http.Client{Timeout: 15 * time.Second}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return client
 }
 
 // Event is one calendar entry, narrowed to what a household question

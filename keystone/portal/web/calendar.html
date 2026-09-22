@@ -97,6 +97,7 @@
     <button type="button" class="hbtn hbtn-secondary" id="today">Today</button>
   </div>
 
+  <div id="calendars" role="group" aria-label="Visible calendars" hidden></div>
   <div id="note"></div>
   <div class="cal" id="grid" role="grid" aria-labelledby="month"></div>
 
@@ -111,6 +112,7 @@
     <h2 id="ed-title">Add event</h2>
     <form id="form">
       <div class="fields">
+        <div class="fld wide" id="calendar-field" hidden><label for="ev-calendar">Calendar</label><select id="ev-calendar"></select></div>
         <div class="fld wide">
           <label for="ev-title">What</label>
           <input class="hinput" id="ev-title" type="text" maxlength="200" required autocomplete="off">
@@ -184,7 +186,7 @@
   </section>
 
   <footer class="muted" style="margin-top: var(--space-8); font-size: 12px">
-    Everyone in the household's calendar group sees and can change these events. Your own calendars are on your phone.
+    Shared calendars follow the access your household has given you. Visibility changes only your view. Your personal calendars stay on your phone.
   </footer>
 </main>
 
@@ -232,7 +234,7 @@
   }
 
   var today = key(new Date()), month = today.slice(0, 7), selected = today;
-  var byDay = {}, editing = null;
+  var byDay = {}, editing = null, calendars = [];
 
   function whenOf(e) {
     if (e.allDay) {
@@ -305,6 +307,24 @@
     el("setup-caret").className = "ph ph-caret-" + (open ? "up" : "down");
   });
 
+  function paintCalendars() {
+    var box = el("calendars"); clear(box); box.hidden = calendars.length < 2;
+    calendars.forEach(function (c) {
+      var label = make("label", "hbtn hbtn-ghost");
+      var check = document.createElement("input"); check.type = "checkbox"; check.checked = c.visible;
+      label.appendChild(check); label.appendChild(document.createTextNode(" " + c.name));
+      label.style.borderLeft = "4px solid " + c.color;
+      check.addEventListener("change", function () {
+        check.disabled = true;
+        fetch("/api/v1/calendar/visibility", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({calendar:c.id,visible:check.checked})})
+          .then(function (r) { if (!r.ok) { throw new Error("Could not save calendar visibility"); } load(); })
+          .catch(function (e) { check.checked = c.visible; check.disabled = false; showNote(el("note"), "note-bad", e.message); });
+      });
+      box.appendChild(label);
+    });
+    el("add").disabled = calendars.length > 0 && !calendars.some(function (c) { return c.writable; });
+  }
+
   function load() {
     var from = gridStart(), to = addDays(from, 41);
     text("month", parse(month + "-01").toLocaleDateString([], { month: "long", year: "numeric" }));
@@ -314,6 +334,8 @@
         if (!res.ok) { throw new Error(res.j.error || "Can't read the calendar right now."); }
         showNote(el("note"), "", "");
         today = res.j.today || today;
+        calendars = res.j.calendars || [];
+        paintCalendars();
         byDay = {};
         (res.j.events || []).forEach(function (e) {
           // A multi-day event is on every day it spans.
@@ -362,12 +384,13 @@
     b.appendChild(make("span", "num", parseInt(k.slice(8), 10)));
     evs.slice(0, 3).forEach(function (e) {
       var c = make("span", e.allDay ? "chip" : "chip timed", (e.allDay ? "" : clock(e.startTime) + " ") + e.title);
+      if (e.color) { c.style.borderLeft = "3px solid " + e.color; }
       b.appendChild(c);
     });
     if (evs.length > 3) { b.appendChild(make("span", "more", "+" + (evs.length - 3) + " more")); }
     if (evs.length) {
       var dots = make("span", "dots");
-      evs.slice(0, 4).forEach(function () { dots.appendChild(make("i")); });
+      evs.slice(0, 4).forEach(function (e) { var dot = make("i"); if (e.color) { dot.style.backgroundColor = e.color; } dots.appendChild(dot); });
       b.appendChild(dots);
     }
     b.addEventListener("click", function () {
@@ -394,6 +417,8 @@
       row.appendChild(make("span", "when", whenOf(e)));
       var what = make("span", "grow");
       what.appendChild(make("span", null, e.title));
+      if (e.calendarName && calendars.length > 1) { what.appendChild(make("span", "evmeta", e.calendarName)); }
+      if (e.color) { row.style.borderLeft = "4px solid " + e.color; }
       // The place and the note under the title, so what somebody wrote
       // down is on the page rather than only in the form.
       if (e.location) { what.appendChild(make("span", "evmeta", e.location)); }
@@ -415,7 +440,16 @@
 
   function openEditor(e) {
     editing = e || null;
-    text("ed-title", e ? "Change event" : "Add event");
+    var select = el("ev-calendar"); clear(select);
+    var writable = calendars.filter(function (c) { return c.writable || (e && c.id === e.calendar); });
+    writable.forEach(function (c) { var opt = make("option", null, c.name); opt.value = c.id; select.appendChild(opt); });
+    var preferred = writable.filter(function (c) { return c.default; })[0] || writable[0];
+    select.value = e ? e.calendar : (preferred ? preferred.id : "household");
+    el("calendar-field").hidden = calendars.length < 2;
+    el("save").disabled = !!e && e.writable === false;
+    select.disabled = !!e && e.writable === false;
+    text("ed-title", e ? (e.writable === false ? "View event" : "Change event") : "Add event");
+    el("form").querySelectorAll("input, textarea, select").forEach(function (input) { input.disabled = !!e && e.writable === false; });
     el("ev-title").value = e ? e.title : "";
     el("ev-date").value = e ? e.day : selected;
     el("ev-allday").checked = e ? !!e.allDay : false;
@@ -424,7 +458,7 @@
     el("ev-enddate").value = e && e.allDay && e.lastDay !== e.day ? e.lastDay : "";
     el("ev-where").value = e && e.location ? e.location : "";
     el("ev-notes").value = e && e.notes ? e.notes : "";
-    el("delete").hidden = !e;
+    el("delete").hidden = !e || e.writable === false;
     showNote(el("ed-note"), "", "");
     syncAllDay();
     el("editor").hidden = false;
@@ -460,8 +494,11 @@
 
   el("form").addEventListener("submit", function (ev) {
     ev.preventDefault();
+    if (editing && editing.writable === false) { return; }
     var all = el("ev-allday").checked;
     var body = {
+      calendar: editing ? editing.calendar : el("ev-calendar").value,
+      targetCalendar: el("ev-calendar").value,
       title: el("ev-title").value,
       date: el("ev-date").value,
       allDay: all,
@@ -485,9 +522,9 @@
   });
 
   el("delete").addEventListener("click", function () {
-    if (!editing) { return; }
-    if (!confirm("Remove “" + editing.title + "” from the household calendar?")) { return; }
-    send("/api/v1/calendar/events/delete", { href: editing.calendarEvent, title: editing.title });
+    if (!editing || editing.writable === false) { return; }
+    if (!confirm("Remove “" + editing.title + "” from " + (editing.calendarName || "Household") + "?")) { return; }
+    send("/api/v1/calendar/events/delete", { calendar: editing.calendar, href: editing.calendarEvent, title: editing.title });
   });
 
   el("ev-allday").addEventListener("change", syncAllDay);
