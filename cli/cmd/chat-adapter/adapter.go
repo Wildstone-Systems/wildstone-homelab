@@ -342,7 +342,14 @@ func (a *adapter) deliverLoop(ctx context.Context) {
 		}
 		backoff = time.Second
 		for _, m := range msgs {
-			if err := a.transport.Send(ctx, m.Target, m.Body); err != nil {
+			ready, err := a.keystone.ready(ctx, a.transport.Name(), m.Seq)
+			if err != nil {
+				// A revocation reports only the queue sequence and a generic
+				// failure. Neither the withheld body nor its subject is logged.
+				a.log.Warn("delivery stopped before send", "seq", m.Seq, "err", err)
+				continue
+			}
+			if err := a.transport.Send(ctx, ready.Target, ready.Body); err != nil {
 				a.log.Error("delivering", "seq", m.Seq, "err", err)
 				// Not acked: it comes back on the next poll.
 				continue

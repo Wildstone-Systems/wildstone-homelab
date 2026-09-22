@@ -135,6 +135,35 @@ func TestChatRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStoppedDeliveryReportsFailureWithoutDisclosingThePayload(t *testing.T) {
+	h := newHarness(t)
+	ownExecutionFixture(t, h)
+	h.wireHouseholdButler([]*provider.ChatResponse{{Text: "private subject: school appointment"}}, runtimedb.ButlerModeFull)
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+	resp, out := h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "12345", "conversation": "12345",
+		"text": "what is the appointment?", "messageId": "withheld-1",
+	})
+	if resp.StatusCode != http.StatusAccepted || out.Queued == 0 {
+		t.Fatalf("precondition: queued reply = %d, %+v", resp.StatusCode, out)
+	}
+	if err := h.s.DB.OffboardButlerMember("sam", "mika"); err != nil {
+		t.Fatal(err)
+	}
+	var refusal map[string]any
+	resp = h.do(runtimedb.RoleConcierge, http.MethodGet,
+		"/api/v1/chat/outbound/"+itoa(out.Queued)+"/ready?transport=telegram", nil, &refusal)
+	if resp.StatusCode != http.StatusGone {
+		t.Fatalf("revoked delivery readiness = %d, want 410", resp.StatusCode)
+	}
+	message := fmt.Sprint(refusal)
+	for _, secret := range []string{"private subject", "school appointment", "what is the appointment?", "12345"} {
+		if strings.Contains(message, secret) {
+			t.Fatalf("stopped delivery disclosed %q: %s", secret, message)
+		}
+	}
+}
+
 // The surface comes from the credential, not the request (ADR-W026 A3).
 // This is what makes a stolen family-adapter token useless against the
 // operator surface.

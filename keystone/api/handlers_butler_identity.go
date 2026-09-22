@@ -95,19 +95,10 @@ func (s *Server) disableButlerMember(r *http.Request, id principal.Identity) (an
 // Member identity and resources intact. The route requires a fresh Console
 // session; a machine admin token is not a substitute for a human Owner.
 func (s *Server) demoteButlerMember(r *http.Request, id principal.Identity) (any, int, error) {
-	if id.Role != runtimedb.RoleAdmin || id.AuthTime == nil {
-		return nil, http.StatusForbidden, fmt.Errorf("demotion requires a fresh Owner Console session")
+	actor, err := s.activeOwnerConsoleActor(id)
+	if err != nil {
+		return nil, http.StatusForbidden, err
 	}
-	actor := actingMember(id)
-	// Console admission accepts forwarded handle casing, but ActingFor
-	// retains that spelling. Resolve it to exactly one stored Person before
-	// writing an audit actor; a case collision cannot identify which one
-	// performed this consequential action.
-	owners, err := s.DB.ButlerMembersByHandleFold(actor)
-	if err != nil || len(owners) != 1 || !owners[0].Active() || owners[0].Role != runtimedb.RoleOwner {
-		return nil, http.StatusForbidden, fmt.Errorf("only an active Owner may demote another Owner")
-	}
-	actor = owners[0].Member
 	member := r.PathValue("member")
 	target, err := s.DB.GetButlerMember(member)
 	if errors.Is(err, runtimedb.ErrNotFound) {
@@ -126,58 +117,25 @@ func (s *Server) demoteButlerMember(r *http.Request, id principal.Identity) (any
 	return s.memberState(member)
 }
 
-// offboardButlerMember is the runtime denial half of offboarding: one
-// audited action that stops retrieval, dispatch, ingestion and proactive
-// delivery now. Desired-state cleanup follows through Plans, and failed
-// cleanup never restores access — which is why this endpoint does not
-// wait for or depend on it.
-func (s *Server) offboardButlerMember(r *http.Request, id principal.Identity) (any, int, error) {
-	member := r.PathValue("member")
-	if err := s.DB.OffboardButlerMember(member, actingMember(id)); err != nil {
-		if errors.Is(err, runtimedb.ErrNotFound) {
-			return nil, http.StatusNotFound, fmt.Errorf("no butler record for %q", member)
-		}
-		return nil, http.StatusBadRequest, err
+// activeOwnerConsoleActor maps the signed-in forwarded handle to the
+// unique stored Owner. Console admission itself accepts forwarded casing;
+// consequential writes must record one unambiguous canonical Person.
+func (s *Server) activeOwnerConsoleActor(id principal.Identity) (string, error) {
+	if id.Role != runtimedb.RoleAdmin || id.AuthTime == nil {
+		return "", fmt.Errorf("this action requires a fresh Owner Console session")
 	}
-	s.EndConsoleSessions(member)
-	// Unfinished personal work is paused in the same breath, so an
-	// offboarding does not leave tasks retrying on behalf of someone who
-	// no longer has access (ADR-W030 A4).
-	paused, err := s.pausePersonalWork(member)
-	if err != nil {
-		return nil, http.StatusInternalServerError, err
+	owners, err := s.DB.ButlerMembersByHandleFold(actingMember(id))
+	if err != nil || len(owners) != 1 || !owners[0].Active() || owners[0].Role != runtimedb.RoleOwner {
+		return "", fmt.Errorf("only an active Owner may perform this action")
 	}
-	state, code, err := s.memberState(member)
-	if err != nil {
-		return nil, code, err
-	}
-	m, _ := state.(map[string]any)
-	m["pausedTasks"] = paused
-	return m, code, nil
+	return owners[0].Member, nil
 }
 
-// pausePersonalWork moves the member's unfinished tasks to
-// paused-offboarded: no retries, no notices, no model calls, and nothing
-// deleted (ADR-W030 A4).
-func (s *Server) pausePersonalWork(member string) (int, error) {
-	tasks, err := s.DB.ListButlerTasks(500, member)
-	if err != nil {
-		return 0, err
-	}
-	paused := 0
-	for _, t := range tasks {
-		switch t.State {
-		case runtimedb.ButlerTaskPending, runtimedb.ButlerTaskRunning, runtimedb.ButlerTaskWaiting:
-		default:
-			continue
-		}
-		if err := s.DB.TransitionButlerTask(t.ID, runtimedb.ButlerTaskPausedOffboarded,
-			"owner offboarded", "offboarding"); err != nil {
-			return paused, err
-		}
-		paused++
-	}
-	return paused, nil
+// offboardButlerMember keeps the older route as an alias to the complete
+// offboarding action, so no caller can accidentally perform only its
+// admission-denial half and leave the remaining resources unresolved.
+func (s *Server) offboardButlerMember(r *http.Request, id principal.Identity) (any, int, error) {
+	return s.offboardMember(r, id)
 }
 
 func (s *Server) memberState(member string) (any, int, error) {

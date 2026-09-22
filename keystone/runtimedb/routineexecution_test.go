@@ -273,3 +273,68 @@ func TestSoftDeletedRoutineDoesNotExecuteWhileRecoverable(t *testing.T) {
 		t.Fatalf("restored exact version did not recover: %+v %v", versions, err)
 	}
 }
+
+func TestSoftDeletedResourceSurvivesUntilExplicitPurge(t *testing.T) {
+	db, _, _ := secretFixture(t)
+	plan, _ := approvedResourceRoutine(t, db, RoutineResources{}, AudienceHousehold)
+	if _, err := db.AcquireCoordinator("purge-test"); err != nil {
+		t.Fatal(err)
+	}
+	event, _, err := db.AppendHouseholdEvent(HouseholdEvent{EventID: "purge-trigger", Source: "test-publisher", Type: "person.left_home", OccurredAt: time.Now().UTC(), Subject: "sam"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, _, err := db.ClaimRoutineRun(plan, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec("INSERT INTO routine_effect_receipts(run,recorded_at,outcome,summary) VALUES(?,?,?,?)", run.ID, now(), "confirmed", "an action was completed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PurgeDeletedRoutine("resource-run", "mika"); err == nil {
+		t.Fatal("active routine purged without soft deletion")
+	}
+	if err := db.ChangeReviewedRoutine("resource-run", "mika", "delete"); err != nil {
+		t.Fatal(err)
+	}
+	var before, reviewed string
+	if err := db.sql.QueryRow("SELECT document FROM household_routines WHERE name='resource-run'").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.sql.QueryRow("SELECT document FROM routine_plan_versions WHERE routine=(SELECT seq FROM household_routines WHERE name='resource-run') LIMIT 1").Scan(&reviewed); err != nil {
+		t.Fatal(err)
+	}
+	if before == "[purged]" || reviewed != before {
+		t.Fatalf("archiving erased recoverable payload: live=%q reviewed=%q", before, reviewed)
+	}
+	if err := db.PurgeDeletedRoutine("resource-run", "mika"); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{
+		"SELECT document FROM household_routines WHERE name='resource-run'",
+		"SELECT document FROM household_routine_revisions WHERE routine=(SELECT seq FROM household_routines WHERE name='resource-run') LIMIT 1",
+		"SELECT document FROM routine_plan_versions WHERE routine=(SELECT seq FROM household_routines WHERE name='resource-run') LIMIT 1",
+	} {
+		var payload string
+		if err := db.sql.QueryRow(query).Scan(&payload); err != nil || payload != "[purged]" {
+			t.Fatalf("payload not erased (%s): %q %v", query, payload, err)
+		}
+	}
+	var planJSON string
+	if err := db.sql.QueryRow("SELECT plan_json FROM plans WHERE seq IN (SELECT plan FROM routine_plan_versions WHERE routine=(SELECT seq FROM household_routines WHERE name='resource-run')) LIMIT 1").Scan(&planJSON); err != nil || planJSON != "{}" {
+		t.Fatalf("reviewed Plan retained payload: %q %v", planJSON, err)
+	}
+	if err := db.ChangeReviewedRoutine("resource-run", "mika", "restore"); err == nil {
+		t.Fatal("purged routine restored")
+	}
+	if _, err := db.EditHouseholdRoutine("resource-run", "revived payload", "mika", "revive"); err == nil {
+		t.Fatal("purged routine accepted a new payload")
+	}
+	var count int
+	if err := db.sql.QueryRow("SELECT count(*) FROM deletion_journal WHERE subject_kind='routine' AND subject_id='resource-run' AND action='deleted'").Scan(&count); err != nil || count == 0 {
+		t.Fatalf("no purge audit tombstone: count=%d err=%v", count, err)
+	}
+	if err := db.sql.QueryRow("SELECT count(*) FROM routine_effect_receipts WHERE run=? AND summary='an action was completed'", run.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("purge removed effect receipt: count=%d err=%v", count, err)
+	}
+}

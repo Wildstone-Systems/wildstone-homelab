@@ -95,9 +95,30 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 			return result, err
 		}
 	}
+	// A queued answer may have been composed before revocation. Expire it
+	// without logging its target or content; the poll boundary also checks
+	// current binding and Person admission if this sweep misses a row.
+	stopped, err := db.sql.Exec(`UPDATE chat_outbound SET expires_at = ?
+	 WHERE delivered_at = '' AND expires_at > ? AND binding_id IN (
+	   SELECT b.id FROM chat_bindings b JOIN butler_members p ON p.person_id = b.person_id
+	   WHERE p.member = ?)`, now(), now(), member)
+	if err != nil {
+		return result, fmt.Errorf("runtimedb: stopping queued deliveries: %w", err)
+	}
+	n, _ := stopped.RowsAffected()
+	result.Stores["queued-deliveries-stopped"] = int(n)
 
 	// 3. Work. Personal pauses, shared transfers with authorship intact.
-	tasks, err := db.ListButlerTasks(1000, member)
+	memberPerson, err := resolvePersonID(db.sql, member)
+	if err != nil {
+		return result, err
+	}
+	taskRows, err := db.sql.Query(butlerTaskColumns+` WHERE t.owner_person_id=? ORDER BY t.seq`, memberPerson)
+	if err != nil {
+		return result, err
+	}
+	tasks, err := collectButlerTasks(taskRows)
+	_ = taskRows.Close()
 	if err != nil {
 		return result, err
 	}
@@ -113,6 +134,10 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 		var err error
 		if adminPerson, err = resolvePersonID(db.sql, administrator); err != nil {
 			return result, fmt.Errorf("runtimedb: transferring shared work: the administrator %w", err)
+		}
+		admin, err := db.GetButlerMember(administrator)
+		if err != nil || !admin.Active() || admin.Member == member {
+			return result, fmt.Errorf("runtimedb: transferring shared work needs another active Person")
 		}
 	}
 	for _, t := range tasks {
@@ -232,7 +257,7 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 		return result, err
 	}
 	for _, m := range records {
-		if m.Audience != ButlerAudiencePrivate || m.Owner != member || !m.ForgottenAt.IsZero() {
+		if m.Scope != MemoryScopePersonal || m.Owner != member || !m.ForgottenAt.IsZero() {
 			continue
 		}
 		if err := db.ForgetMemory(m.Seq, actor); err != nil {
@@ -279,12 +304,124 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 		}
 	}
 
+	// 9. The durable inventory is an explicit policy decision for every
+	// associated object, not an implication inferred later from a count.
+	// Shared material stays with the household; personal material remains
+	// quarantined or paused until an Owner deliberately purges it.
+	decisions, err := db.recordOffboardingDispositions(member, actor, tasks)
+	if err != nil {
+		return result, err
+	}
+	result.Stores["resource-dispositions"] = decisions
+
 	for store, n := range result.Stores {
 		if err := db.recordOffboarding(member, actor, store, n, ""); err != nil {
 			return result, err
 		}
 	}
 	return result, nil
+}
+
+// OffboardingResourceDisposition is the recorded fate of one durable
+// resource. It contains identifiers and policy only, never memory or
+// secret content.
+type OffboardingResourceDisposition struct {
+	Kind        string `json:"kind"`
+	Ref         string `json:"ref"`
+	Disposition string `json:"disposition"`
+	DecidedAt   string `json:"decidedAt"`
+	DecidedBy   string `json:"decidedBy"`
+}
+
+func (db *DB) recordOffboardingDispositions(member, actor string, ownedTasks []ButlerTask) (int, error) {
+	person, err := resolvePersonID(db.sql, member)
+	if err != nil {
+		return 0, err
+	}
+	// Capture ownership from before the transfer. A shared task may have
+	// been authored by another Person, so querying only its new owner or
+	// its author after the transfer would omit the departed owner's work.
+	for _, task := range ownedTasks {
+		decision := "retained"
+		switch task.State {
+		case ButlerTaskPending, ButlerTaskRunning, ButlerTaskWaiting:
+			if task.Audience == ButlerAudienceShared {
+				decision = "transferred"
+			} else {
+				decision = "retained-paused"
+			}
+		}
+		if _, err := db.sql.Exec(`INSERT OR IGNORE INTO offboarding_resource_dispositions
+		 (person_id,resource_kind,resource_ref,disposition,decided_at,decided_by)
+		 VALUES(?,'task',?,?,?,?)`, person, task.ID, decision, now(), actor); err != nil {
+			return 0, err
+		}
+	}
+	type source struct {
+		kind, query string
+	}
+	// Each SELECT returns ref and the action that already happened during
+	// offboarding. The member handle is used only for legacy rows whose
+	// author/owner has not been moved to person_id.
+	sources := []source{
+		{"task", `SELECT 'bt-'||seq, CASE WHEN state='paused-offboarded' AND owner_person_id<>? THEN 'transferred' WHEN state='paused-offboarded' THEN 'retained-paused' ELSE 'retained' END FROM butler_tasks WHERE author_person_id=?`},
+		{"memory", `SELECT CAST(seq AS TEXT), CASE WHEN scope='personal' AND owner_person_id=? THEN 'retained-quarantined' ELSE 'retained' END FROM butler_memory WHERE owner_person_id=? OR author_person_id=?`},
+		{"secret", `SELECT id, CASE WHEN scope='personal' THEN 'retained-quarantined' ELSE 'retained' END FROM household_secrets WHERE owner_person_id=?`},
+		{"connection", `SELECT name, 'blocked' FROM integration_connections WHERE owner=? AND ownership='personal'`},
+		{"routine", `SELECT name, CASE WHEN deleted_at<>'' THEN 'deleted' WHEN paused_reason<>'' THEN 'retained-paused' ELSE 'retained' END FROM household_routines WHERE author=?`},
+		{"agent", `SELECT name, CASE WHEN retired_at<>'' THEN 'retired' ELSE 'retained' END FROM butlers WHERE created_by=?`},
+	}
+	args := [][]any{{person, person}, {person, person, person}, {person}, {member}, {member}, {member}}
+	for i, src := range sources {
+		rows, err := db.sql.Query(src.query, args[i]...)
+		if err != nil {
+			return 0, fmt.Errorf("runtimedb: inventorying %s on offboarding: %w", src.kind, err)
+		}
+		for rows.Next() {
+			var ref, decision string
+			if err = rows.Scan(&ref, &decision); err != nil {
+				break
+			}
+			_, err = db.sql.Exec(`INSERT OR IGNORE INTO offboarding_resource_dispositions
+			 (person_id,resource_kind,resource_ref,disposition,decided_at,decided_by)
+			 VALUES(?,?,?,?,?,?)`, person, src.kind, ref, decision, now(), actor)
+			if err != nil {
+				break
+			}
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		rows.Close()
+		if err != nil {
+			return 0, fmt.Errorf("runtimedb: recording %s disposition: %w", src.kind, err)
+		}
+	}
+	var count int
+	err = db.sql.QueryRow(`SELECT count(*) FROM offboarding_resource_dispositions WHERE person_id=?`, person).Scan(&count)
+	return count, err
+}
+
+func (db *DB) ListOffboardingResourceDispositions(member string) ([]OffboardingResourceDisposition, error) {
+	person, err := resolvePersonID(db.sql, member)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.sql.Query(`SELECT resource_kind,resource_ref,disposition,decided_at,decided_by
+	 FROM offboarding_resource_dispositions WHERE person_id=? ORDER BY resource_kind,resource_ref`, person)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []OffboardingResourceDisposition
+	for rows.Next() {
+		var d OffboardingResourceDisposition
+		if err := rows.Scan(&d.Kind, &d.Ref, &d.Disposition, &d.DecidedAt, &d.DecidedBy); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 // journal records a deletion or revocation separately from the data it

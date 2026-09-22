@@ -25,17 +25,27 @@ import (
 // claim about nine stores and a claim about nine stores needs nine
 // answers.
 func (s *Server) offboardMember(r *http.Request, id principal.Identity) (any, int, error) {
+	actor, err := s.activeOwnerConsoleActor(id)
+	if err != nil {
+		return nil, http.StatusForbidden, err
+	}
 	member := r.PathValue("member")
 	var req struct {
 		Administrator string `json:"administrator"`
 	}
-	if code, err := decodeStrict(r, &req); err != nil {
-		return nil, code, err
+	if r.ContentLength != 0 {
+		if code, err := decodeStrict(r, &req); err != nil {
+			return nil, code, err
+		}
 	}
 	if req.Administrator == "" {
-		req.Administrator = actingMember(id)
+		req.Administrator = actor
 	}
-	result, err := s.DB.OffboardMember(member, actingMember(id), req.Administrator)
+	admin, err := s.DB.GetButlerMember(req.Administrator)
+	if err != nil || !admin.Active() || admin.Member == member {
+		return nil, http.StatusBadRequest, fmt.Errorf("shared work needs another active Person")
+	}
+	result, err := s.DB.OffboardMember(member, actor, req.Administrator)
 	if err != nil {
 		if errors.Is(err, runtimedb.ErrNotFound) {
 			return nil, http.StatusNotFound, fmt.Errorf("no butler record for %q", member)
@@ -47,13 +57,41 @@ func (s *Server) offboardMember(r *http.Request, id principal.Identity) (any, in
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	resources, err := s.DB.ListOffboardingResourceDispositions(member)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	return map[string]any{
-		"result":  result,
-		"records": records,
+		"result":    result,
+		"records":   records,
+		"resources": resources,
 		"note": "access is denied now. Personal work is paused and nothing was deleted; shared work " +
 			"moved to the administrator and kept its original author; desired-state cleanup follows " +
 			"as plans, and a failure there never restores access",
 	}, http.StatusOK, nil
+}
+
+func (s *Server) getOffboarding(r *http.Request, id principal.Identity) (any, int, error) {
+	if _, err := s.activeOwnerConsoleActor(id); err != nil {
+		return nil, http.StatusForbidden, err
+	}
+	member := r.PathValue("member")
+	person, err := s.DB.GetButlerMember(member)
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, http.StatusNotFound, err
+	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	records, err := s.DB.ListOffboardingRecords(member)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	resources, err := s.DB.ListOffboardingResourceDispositions(member)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return map[string]any{"member": person, "records": records, "resources": resources}, http.StatusOK, nil
 }
 
 // getRestoreState reports whether this database is quarantined and how

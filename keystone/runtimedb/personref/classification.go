@@ -231,6 +231,12 @@ var LegacyColumns = []Column{
 }
 
 var Columns = []Column{
+	{"offboarding_resource_dispositions", "person_id", PersonID, "0077: canonical Person whose offboarding recorded this resource decision"},
+	{"offboarding_resource_dispositions", "resource_kind", NotAPerson, "0077: closed resource type label, not an identity"},
+	{"offboarding_resource_dispositions", "resource_ref", NotAPerson, "0077: resource key (task ID, memory seq, secret ID, Connection, routine or Agent name), not a Person reference"},
+	{"offboarding_resource_dispositions", "disposition", NotAPerson, "0077: closed retained/transferred/blocked decision vocabulary"},
+	{"offboarding_resource_dispositions", "decided_by", Actor, "0077: offboarding actor, supplied by a human Console Owner today but retained as actor text like offboarding_records.actor"},
+	{"household_routines", "purged_at", NotAPerson, "0078: explicit Owner purge timestamp"},
 	{"conversation_work", "owner_person_id", PersonID, "0077: resolved canonical Person ID of the conversation owner at parent creation"},
 	{"conversation_work_reviews", "actor_person_id", PersonID, "0077: active Owner's canonical Person ID when reviewing aggregate budget or uncertain outcome"},
 	{"household_execution_stop", "entered_by", PersonID, "0075: active Owner resolved to canonical Person ID before emergency stop"},

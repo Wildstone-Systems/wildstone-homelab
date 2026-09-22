@@ -267,7 +267,7 @@ func TestChangingAButlersModelIsDirectAndReportsTheCrossing(t *testing.T) {
 }
 
 // Retiring stops a Butler without deleting what it did.
-func TestRetiringAButlerKeepsItsRecord(t *testing.T) {
+func TestRetiredAgentIsInspectableButCannotExecute(t *testing.T) {
 	db := butlerFixture(t)
 	newButler(t, db, "health", "kitchen-box")
 	if err := db.GrantButlerAccess("health", "sam", "mika"); err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -80,12 +81,14 @@ func (f *fakeTransport) sentMessages() []sentMessage {
 // the adapter sent, so a test can assert on the WIRE rather than on the
 // adapter's internals.
 type fakeKeystone struct {
-	mu       sync.Mutex
-	inbound  []keystoneInbound
-	redeems  []map[string]string
-	acked    []int64
-	pending  []outboundMessage
-	rejectID string
+	mu        sync.Mutex
+	inbound   []keystoneInbound
+	redeems   []map[string]string
+	acked     []int64
+	pending   []outboundMessage
+	issued    []outboundMessage
+	denyReady bool
+	rejectID  string
 	// registered is every self-registration the adapter posted.
 	registered []map[string]string
 	// commands is what registration answers with — the surface's menu.
@@ -133,8 +136,25 @@ func (f *fakeKeystone) handler() http.Handler {
 		f.mu.Lock()
 		msgs := f.pending
 		f.pending = nil
+		f.issued = append(f.issued, msgs...)
 		f.mu.Unlock()
 		json.NewEncoder(w).Encode(msgs) //nolint:errcheck // test fake
+	})
+	mux.HandleFunc("GET /api/v1/chat/outbound/{seq}/ready", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.denyReady {
+			w.WriteHeader(http.StatusGone)
+			w.Write([]byte(`{"error":"delivery stopped after authority changed"}`)) //nolint:errcheck // test fake
+			return
+		}
+		for _, m := range f.issued {
+			if r.PathValue("seq") == fmt.Sprint(m.Seq) {
+				json.NewEncoder(w).Encode(m) //nolint:errcheck // test fake
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNotFound)
 	})
 	mux.HandleFunc("POST /api/v1/chat/outbound/{seq}/ack", func(w http.ResponseWriter, r *http.Request) {
 		var seq int64
@@ -199,6 +219,22 @@ func TestAdapterRelaysAndDelivers(t *testing.T) {
 	}
 	if len(ks.acked) != 1 || ks.acked[0] != 7 {
 		t.Fatalf("acked = %v, want the delivered seq", ks.acked)
+	}
+}
+
+func TestAdapterRechecksQueuedDeliveryBeforeSend(t *testing.T) {
+	ks := &fakeKeystone{
+		pending:   []outboundMessage{{Seq: 9, Target: "chat-1", Body: "private payload"}},
+		denyReady: true,
+	}
+	tr := &fakeTransport{}
+	a, done := newTestAdapter(t, ks, tr)
+	defer done()
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	a.deliverLoop(ctx)
+	if sent := tr.sentMessages(); len(sent) != 0 {
+		t.Fatalf("adapter delivered a message revoked after polling: %+v", sent)
 	}
 }
 

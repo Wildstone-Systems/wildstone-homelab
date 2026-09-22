@@ -1193,6 +1193,14 @@ export interface ButlerAddress {
 }
 
 // A routine the household wrote, native to an app or run by Wildstone.
+export interface OffboardingResourceDisposition {
+  kind: string;
+  ref: string;
+  disposition: string;
+  decidedAt: string;
+  decidedBy: string;
+}
+
 export interface HouseholdRoutine {
  outputAudience?: string;
  approvedRevision?: number;
@@ -1213,6 +1221,7 @@ export interface HouseholdRoutine {
   disabledBy?: string;
   revokedAt?: string;
   deletedAt?: string;
+  purgedAt?: string;
   pausedReason?: string;
 }
 
@@ -1734,6 +1743,7 @@ export const api = {
       { state },
     ),
   controlRoutine: (name:string,action:string) => call<HouseholdRoutine>("POST",`/api/v1/household/routines/${encodeURIComponent(name)}/control`,{action}),
+  purgeRoutine: (name:string) => call<{purged:boolean}>("POST",`/api/v1/household/routines/${encodeURIComponent(name)}/purge`,{}),
   householdExecutionStop: () => call<{active:boolean;reason?:string;enteredBy?:string}>("GET","/api/v1/household/execution-stop"),
   setHouseholdExecutionStop: (action:"stop"|"resume",reason="") => call<{active:boolean}>("POST","/api/v1/household/execution-stop",{action,reason}),
   integrations: () =>
@@ -1829,11 +1839,12 @@ export const api = {
   disableButlerMember: (member: string) =>
     call<unknown>("POST", `/api/v1/butler/members/${encodeURIComponent(member)}/disable`, {}),
   offboardButlerMember: (member: string) =>
-    call<{ pausedTasks: number }>(
+    call<{ result: { stores: Record<string, number> }; records: unknown[]; resources: OffboardingResourceDisposition[] }>(
       "POST",
-      `/api/v1/butler/members/${encodeURIComponent(member)}/offboard`,
+      `/api/v1/butler/members/${encodeURIComponent(member)}/offboarding`,
       {},
     ),
+  offboardingResources: (member: string) => call<{resources: OffboardingResourceDisposition[]}>("GET",`/api/v1/butler/members/${encodeURIComponent(member)}/offboarding`),
   butlerConfig: () => call<{ stored: boolean; config: ButlerConfig }>("GET", "/api/v1/butler/config"),
   butlerSettings: () =>
     call<{ stored: boolean; settings: ButlerSettingsView }>("GET", "/api/v1/butler/settings"),

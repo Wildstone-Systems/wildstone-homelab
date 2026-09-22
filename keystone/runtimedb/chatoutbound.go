@@ -182,6 +182,16 @@ func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
 	return seq, nil
 }
 
+// An outbound tied to a chat binding is deliverable only while that exact
+// binding and its Person still stand. This predicate is used at both poll
+// and pre-send boundaries; neither a revoked binding nor a reused address
+// can revive a message composed under withdrawn authority.
+const outboundAdmissionPredicate = `(o.binding_id = 0 OR EXISTS (
+	SELECT 1 FROM chat_bindings b JOIN butler_members p ON p.person_id = b.person_id
+	WHERE b.id = o.binding_id AND b.connection = o.connection
+	  AND b.revoked_at = '' AND p.admitted = 1 AND p.disabled_at = '' AND p.offboarded_at = ''
+))`
+
 // ChatOutboundAfter returns undelivered, unexpired messages for one
 // Connection after the cursor, oldest first — which is what an adapter
 // polls: its own bot's messages, and no other Agent's.
@@ -198,7 +208,7 @@ func (db *DB) ChatOutboundAfter(at Connection, after int64, limit int) ([]ChatOu
 	// A held message stays queued and deduplicated; it is simply not
 	// offered to the adapter until its hold expires (ADR-W030 A10).
 	args := []any{at.Seq, after, stamp, stamp}
-	where := `o.connection = ? AND o.seq > ? AND o.delivered_at = '' AND o.expires_at > ? AND (o.hold_until = '' OR o.hold_until <= ?)`
+	where := `o.connection = ? AND o.seq > ? AND o.delivered_at = '' AND o.expires_at > ? AND (o.hold_until = '' OR o.hold_until <= ?) AND ` + outboundAdmissionPredicate
 	args = append(args, limit)
 	rows, err := db.sql.Query(
 		outboundColumns+` WHERE `+where+` ORDER BY o.seq ASC LIMIT ?`, args...)
@@ -214,6 +224,40 @@ func (db *DB) ChatOutboundAfter(at Connection, after int64, limit int) ([]ChatOu
 		return nil, closeErr
 	}
 	return db.checkOutboundPrivacy(out, at)
+}
+
+// ChatOutboundReady is the adapter's last Keystone check immediately
+// before an external send. Polling alone cannot cover revocation that
+// lands after the poll returned a batch. The adapter sends this freshly
+// checked payload, never the earlier copy from the batch.
+func (db *DB) ChatOutboundReady(at Connection, seq int64) (ChatOutbound, error) {
+	if err := db.CheckHouseholdExecution(); err != nil {
+		return ChatOutbound{}, err
+	}
+	stamp := now()
+	rows, err := db.sql.Query(outboundColumns+` WHERE o.connection = ? AND o.seq = ?
+	 AND o.delivered_at = '' AND o.expires_at > ?
+	 AND (o.hold_until = '' OR o.hold_until <= ?) AND `+outboundAdmissionPredicate,
+		at.Seq, seq, stamp, stamp)
+	if err != nil {
+		return ChatOutbound{}, fmt.Errorf("runtimedb: checking chat delivery: %w", err)
+	}
+	out, err := scanChatOutbound(rows)
+	closeErr := rows.Close()
+	if err != nil {
+		return ChatOutbound{}, err
+	}
+	if closeErr != nil {
+		return ChatOutbound{}, closeErr
+	}
+	if len(out) == 0 {
+		return ChatOutbound{}, ErrNotFound
+	}
+	out, err = db.checkOutboundPrivacy(out, at)
+	if err != nil {
+		return ChatOutbound{}, err
+	}
+	return out[0], nil
 }
 
 // The transport comes from the Connection, which is the row that owns

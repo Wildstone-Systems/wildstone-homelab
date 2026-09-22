@@ -130,6 +130,25 @@ func (k *keystoneClient) poll(ctx context.Context, transport string, wait time.D
 	return msgs, nil
 }
 
+// ready fetches a fresh, authority-checked copy just before sending.
+// The earlier poll only identified work to try; its payload may have
+// become undeliverable while the adapter processed the batch.
+func (k *keystoneClient) ready(ctx context.Context, transport string, seq int64) (outboundMessage, error) {
+	path := fmt.Sprintf("/api/v1/chat/outbound/%d/ready?transport=%s", seq, url.QueryEscape(transport))
+	body, err := k.call(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return outboundMessage{}, err
+	}
+	var message outboundMessage
+	if err := json.Unmarshal(body, &message); err != nil {
+		return outboundMessage{}, fmt.Errorf("decoding prepared outbound: %w", err)
+	}
+	if message.Seq != seq {
+		return outboundMessage{}, fmt.Errorf("prepared outbound sequence mismatch")
+	}
+	return message, nil
+}
+
 func (k *keystoneClient) ack(ctx context.Context, seq int64) error {
 	_, err := k.call(ctx, http.MethodPost, fmt.Sprintf("/api/v1/chat/outbound/%d/ack", seq), nil)
 	return err

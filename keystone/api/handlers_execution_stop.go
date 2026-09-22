@@ -61,6 +61,19 @@ func (s *Server) controlReviewedRoutine(r *http.Request, id principal.Identity) 
 	return routine, http.StatusOK, nil
 }
 
+func (s *Server) purgeDeletedRoutine(r *http.Request, id principal.Identity) (any, int, error) {
+	actor, err := s.activeOwnerConsoleActor(id)
+	if err != nil {
+		return nil, http.StatusForbidden, err
+	}
+	name := r.PathValue("name")
+	if err := s.DB.PurgeDeletedRoutine(name, actor); err != nil {
+		return nil, http.StatusConflict, err
+	}
+	return map[string]any{"purged": true, "name": name,
+		"note": "Routine content erased; audit tombstone and effect receipts retained."}, http.StatusOK, nil
+}
+
 func (s *Server) reviewConversationWork(r *http.Request, id principal.Identity) (any, int, error) {
 	if body, code, err := s.freshOwnerReview(r, id); err != nil {
 		return body, code, err

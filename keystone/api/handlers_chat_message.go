@@ -744,6 +744,27 @@ func (s *Server) pollChatOutbound(r *http.Request, id principal.Identity) (any, 
 	return messages, http.StatusOK, nil
 }
 
+// readyChatOutbound rechecks one message immediately before the adapter
+// calls its transport. A stopped delivery returns no target or payload.
+func (s *Server) readyChatOutbound(r *http.Request, id principal.Identity) (any, int, error) {
+	at, err := s.pollingConnection(r, id)
+	if err != nil {
+		return nil, http.StatusForbidden, err
+	}
+	seq, err := strconv.ParseInt(r.PathValue("seq"), 10, 64)
+	if err != nil {
+		return nil, http.StatusBadRequest, fmt.Errorf("seq must be a number")
+	}
+	message, err := s.DB.ChatOutboundReady(at, seq)
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, http.StatusGone, fmt.Errorf("delivery stopped after authority changed")
+	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return message, http.StatusOK, nil
+}
+
 // ackChatOutbound marks one message delivered. Acking twice is fine;
 // acking something that was never queued is a 404, because that means
 // the adapter and the queue disagree.

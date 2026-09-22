@@ -522,6 +522,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/household/routines/{name}/edit", s.handle(principal.VerbPropose, s.editHouseholdRoutine))
 	mux.Handle("POST /api/v1/household/routines/{name}/state", s.handle(principal.VerbPropose, s.setHouseholdRoutineState))
 	mux.Handle("POST /api/v1/household/routines/{name}/control", s.handle(principal.VerbApprove, s.controlReviewedRoutine))
+	mux.Handle("POST /api/v1/household/routines/{name}/purge", s.handle(principal.VerbManage, s.consequential(s.purgeDeletedRoutine)))
 	mux.Handle("GET /api/v1/household/execution-stop", s.handle(principal.VerbRead, s.getHouseholdExecutionStop))
 	mux.Handle("POST /api/v1/household/execution-stop", s.handle(principal.VerbApprove, s.changeHouseholdExecutionStop))
 	mux.Handle("POST /api/v1/household/review/token", s.handle(principal.VerbApprove, s.issueHouseholdReviewToken))
@@ -564,6 +565,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/butler/evaluations", s.handle(principal.VerbRead, s.listButlerEvaluations))
 	mux.Handle("GET /api/v1/butler/debug", s.handle(principal.VerbRead, s.listButlerDebugCaptures))
 	mux.Handle("POST /api/v1/butler/members/{member}/offboarding", s.handle(principal.VerbManage, s.consequential(s.offboardMember)))
+	mux.Handle("GET /api/v1/butler/members/{member}/offboarding", s.handle(principal.VerbRead, s.getOffboarding))
 	mux.Handle("GET /api/v1/restore", s.handle(principal.VerbRead, s.getRestoreState))
 	mux.Handle("POST /api/v1/restore/quarantine", s.handle(principal.VerbManage, s.consequential(s.enterRestoreQuarantine)))
 	mux.Handle("POST /api/v1/restore/reconcile", s.handle(principal.VerbManage, s.consequential(s.reconcileRestore)))
@@ -705,6 +707,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/chat/adapters/{capability}", s.handle(principal.VerbManage, s.consequential(s.mintChatAdapter)))
 	mux.Handle("POST /api/v1/chat/messages", s.handle(principal.VerbConverse, s.receiveChatMessage))
 	mux.Handle("GET /api/v1/chat/outbound", s.handle(principal.VerbConverse, s.pollChatOutbound))
+	mux.Handle("GET /api/v1/chat/outbound/{seq}/ready", s.handle(principal.VerbConverse, s.readyChatOutbound))
 	mux.Handle("POST /api/v1/chat/outbound/{seq}/ack", s.handle(principal.VerbConverse, s.ackChatOutbound))
 	mux.Handle("POST /api/v1/chat/bindings/{id}/revoke", s.handle(principal.VerbManage, s.revokeChatBinding))
 

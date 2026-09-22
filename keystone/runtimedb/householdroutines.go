@@ -82,6 +82,7 @@ type HouseholdRoutine struct {
 	DisabledBy       string    `json:"disabledBy,omitempty"`
 	RevokedAt        string    `json:"revokedAt,omitempty"`
 	DeletedAt        string    `json:"deletedAt,omitempty"`
+	PurgedAt         string    `json:"purgedAt,omitempty"`
 	PausedReason     string    `json:"pausedReason,omitempty"`
 }
 
@@ -251,14 +252,14 @@ func (db *DB) GetHouseholdRoutine(name string) (HouseholdRoutine, error) {
 }
 
 const routineColumns = `SELECT seq, name, ownership, external_id, connection, author, revision,
-	 state, document, created_at, updated_at, updated_by, disabled_at, disabled_by, output_audience, approved_revision, resource_signature,revoked_at,deleted_at,paused_reason
+	 state, document, created_at, updated_at, updated_by, disabled_at, disabled_by, output_audience, approved_revision, resource_signature,revoked_at,deleted_at,paused_reason,purged_at
 	 FROM household_routines`
 
 func scanRoutine(row rowScanner) (HouseholdRoutine, error) {
 	var r HouseholdRoutine
 	var created, updated, disabled, signature string
 	err := row.Scan(&r.Seq, &r.Name, &r.Ownership, &r.ExternalID, &r.Connection, &r.Author,
-		&r.Revision, &r.State, &r.Document, &created, &updated, &r.UpdatedBy, &disabled, &r.DisabledBy, &r.OutputAudience, &r.ApprovedRevision, &signature, &r.RevokedAt, &r.DeletedAt, &r.PausedReason)
+		&r.Revision, &r.State, &r.Document, &created, &updated, &r.UpdatedBy, &disabled, &r.DisabledBy, &r.OutputAudience, &r.ApprovedRevision, &signature, &r.RevokedAt, &r.DeletedAt, &r.PausedReason, &r.PurgedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return HouseholdRoutine{}, ErrNotFound
 	}

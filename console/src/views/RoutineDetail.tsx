@@ -74,7 +74,7 @@ export function RoutineDetail({
             {ROUTINE_MEANING[r.state]}
           </div>
           {(r.revokedAt || r.deletedAt || r.pausedReason) && <div className="callout">
-            {r.deletedAt ? "Archived. Restore it before it can run." : r.revokedAt ? "Approval revoked. Edit and submit a new version for Owner review." : r.pausedReason}
+            {r.purgedAt ? "Purged. The routine document is erased; its audit record remains." : r.deletedAt ? "Archived. Restore it before it can run." : r.revokedAt ? "Approval revoked. Edit and submit a new version for Owner review." : r.pausedReason}
           </div>}
 
           {/* A native routine is read-only everywhere. There is nothing
@@ -87,7 +87,7 @@ export function RoutineDetail({
             </div>
           ) : (
             <>
-              <div className="row">
+              {!r.purgedAt && <div className="row">
                 <button className="btn btn-primary" onClick={() => onMode({ kind: "edit", name })}>
                   Edit
                 </button>
@@ -116,9 +116,15 @@ export function RoutineDetail({
                 {r.state === "disabled" && !r.revokedAt && !r.deletedAt && !r.pausedReason && <button className="btn btn-secondary" onClick={()=>control("enable","Routine re-enabled.")}>Turn back on</button>}
                 {!r.revokedAt && !r.deletedAt && <button className="btn btn-secondary" onClick={()=>control("revoke","Approval revoked. A new version needs review.")}>Revoke approval</button>}
                 {r.pausedReason && !r.deletedAt && <button className="btn btn-secondary" onClick={()=>control("resolve-recipient","Recipient hold cleared.")}>Resolve recipient hold</button>}
-                {r.deletedAt ? <button className="btn btn-secondary" onClick={()=>control("restore","Routine restored, still stopped.")}>Restore archived routine</button> : <button className="btn btn-ghost" onClick={()=>control("delete","Routine archived.")}>Archive</button>}
-              </div>
-              <details className="work-section">
+                {r.deletedAt ? <>
+                  <button className="btn btn-secondary" onClick={()=>control("restore","Routine restored, still stopped.")}>Restore archived routine</button>
+                  <button className="btn btn-danger" onClick={()=>{
+                    if (!window.confirm(`Permanently purge ${name}? Its documents and reviewed Plan content will be erased. Audit records remain.`)) return;
+                    action.run(async()=>{await api.purgeRoutine(name);detail.reload();onChanged()},"Routine content purged; audit record retained.");
+                  }}>Purge content</button>
+                </> : <button className="btn btn-ghost" onClick={()=>control("delete","Routine archived.")}>Archive</button>}
+              </div>}
+              {!r.purgedAt && <details className="work-section">
                 <summary>Resources this routine may use</summary>
                 <p className="muted">Select only the records and Household secrets this exact version needs. An Owner reviews them with the routine. Changing this selection requires another review.</p>
                 <ErrorLine error={secrets.error ?? memories.error} />
@@ -128,13 +134,13 @@ export function RoutineDetail({
                 <div>Memory records</div>
                 {(memories.data?.records ?? []).filter(m=>(m.scope==="household" || m.scope==="agent_local") && !m.forgottenAt && !m.supersededBy).map(m=><label key={m.seq} className="row"><input type="checkbox" checked={memoryIds.includes(m.seq)} onChange={()=>toggleMemory(m.seq)}/>#{m.seq} · {m.content}</label>)}
                 {memoryIds.filter(id=>!(memories.data?.records ?? []).some(m=>m.seq===id)).map(id=><label key={id} className="row"><input type="checkbox" checked onChange={()=>toggleMemory(id)}/>#{id} (not in recent records)</label>)}
-              </details>
+              </details>}
               {action.state.phase === "error" && <ErrorLine error={action.state.message} />}
               {action.state.phase === "done" && (
                 <div className="msg-note">{action.state.message}</div>
               )}
 
-              <div className="routine-detail">
+              {!r.purgedAt && <div className="routine-detail">
                 <div>
                   <WhatItDoes spec={d.spec} specError={d.specError} document={r.document} />
                   <ReviewedRuns runs={d.reviewedRuns ?? []} />
@@ -145,7 +151,7 @@ export function RoutineDetail({
                   <WhoMayChangeIt />
                   <QuietHours settings={settings.data?.settings} />
                 </div>
-              </div>
+              </div>}
             </>
           )}
         </>

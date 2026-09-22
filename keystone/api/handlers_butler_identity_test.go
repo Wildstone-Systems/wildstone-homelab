@@ -7,6 +7,7 @@ package api
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
@@ -84,15 +85,15 @@ func TestButlerAdmissionAndHandoffThroughTheAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var off struct {
-		Active      bool `json:"active"`
-		PausedTasks int  `json:"pausedTasks"`
-	}
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/members/root-admin/offboard", nil, &off); res.StatusCode != http.StatusOK {
+	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
+	session := h.s.StartConsoleSession("dana", time.Now())
+	res := h.consoleRequest(http.MethodPost, "/api/v1/butler/members/root-admin/offboard", "dana", sessionCookie(session))
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
 		t.Fatalf("offboard = %d", res.StatusCode)
 	}
-	if off.Active || off.PausedTasks != 1 {
-		t.Fatalf("offboarding = %+v", off)
+	if member, _ := h.s.DB.GetButlerMember("root-admin"); member.Active() {
+		t.Fatal("offboarding kept the Person active")
 	}
 	task, _ := h.s.DB.GetButlerTask(taskID)
 	if task.State != runtimedb.ButlerTaskPausedOffboarded {

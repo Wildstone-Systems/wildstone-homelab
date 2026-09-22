@@ -227,13 +227,14 @@ function Members() {
                     </button>
                     <button
                       className="btn btn-ghost"
-                      onClick={() =>
+                      onClick={() => {
+                        if (!window.confirm(`Offboard ${row.member.member}? Access ends now. Their work and shared resources are retained for review.`)) return;
                         action.run(async () => {
                           const res = await api.offboardButlerMember(row.member.member);
                           members.reload();
                           return res;
-                        }, "Offboarded. Access is denied now; cleanup follows as plans.")
-                      }
+                        }, "Offboarded. Access ended; retained work and resources await review.");
+                      }}
                     >
                       Offboard
                     </button>
@@ -246,6 +247,7 @@ function Members() {
                 the child surface is not enabled, so this record cannot be admitted
               </span>
             )}
+            {row.member.offboardedAt && <OffboardingInventory member={row.member.member} />}
           </li>
         ))}
       </ul>
@@ -253,6 +255,18 @@ function Members() {
       {action.state.phase === "done" && <div className="msg-note">{action.state.message}</div>}
     </section>
   );
+}
+
+function OffboardingInventory({member}:{member:string}) {
+  const inventory = useLoad(() => api.offboardingResources(member), [member]);
+  return <details className="work-section">
+    <summary>Retained resources and decisions</summary>
+    <ErrorLine error={inventory.error} />
+    {(inventory.data?.resources ?? []).length === 0 ? <p className="muted">No linked resources recorded.</p> :
+      <ul>{inventory.data?.resources.map(r => <li key={`${r.kind}:${r.ref}`}>
+        {r.kind} {r.ref}: {r.disposition.replaceAll("-", " ")}
+      </li>)}</ul>}
+  </details>;
 }
 
 // The two agent classes (ADR-W033 design §5.2), in the design's own
