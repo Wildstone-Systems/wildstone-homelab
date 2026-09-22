@@ -155,7 +155,17 @@ CREATE TABLE plan_session_sources (
  PRIMARY KEY(plan,session)
 );
 INSERT OR IGNORE INTO plan_private_origins(plan) SELECT seq FROM plans WHERE principal='butler';
+-- plan_ids is comma-separated, not JSON. Split each historical turn once,
+-- then look up each canonical plan ID by the plans primary key.
 INSERT OR IGNORE INTO plan_session_sources(plan,session)
- SELECT p.seq,t.session FROM butler_session_turns t JOIN json_each(t.plan_ids) j
- JOIN plans p ON j.value='plan-'||p.seq;
+ WITH RECURSIVE ids(session,token,remaining) AS (
+  SELECT session,'',plan_ids||',' FROM butler_session_turns WHERE plan_ids<>''
+  UNION ALL
+  SELECT session,substr(remaining,1,instr(remaining,',')-1),
+         substr(remaining,instr(remaining,',')+1)
+  FROM ids WHERE remaining<>''
+ )
+ SELECT p.seq,ids.session FROM ids JOIN plans p
+ ON p.seq=CAST(substr(ids.token,6) AS INTEGER)
+ WHERE ids.token='plan-'||p.seq;
 INSERT OR IGNORE INTO plan_private_origins(plan) SELECT plan FROM plan_session_sources;

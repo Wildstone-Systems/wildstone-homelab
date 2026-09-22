@@ -435,6 +435,63 @@ func TestPrivacyMigrationProtectsUntrackedHistoricalRecall(t *testing.T) {
 	}
 }
 
+// TestPrivacyMigrationLinksPlanSessionSourcesFromExistingTurns covers
+// migration 0070's plan_session_sources backfill against a pre-existing
+// butler_session_turns.plan_ids value. That column is a comma-joined list
+// of "plan-<seq>" strings (see insertTurns / scanButlerTurn), never JSON,
+// so a deployment with real history exercises this in a way a fixture
+// built only through the current schema does not.
+func TestPrivacyMigrationLinksPlanSessionSourcesFromExistingTurns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := openUnmigrated(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = db.migrateThrough("migrations/0069_household_secrets.sql"); err != nil {
+		t.Fatal(err)
+	}
+	planID, err := db.InsertPlan("butler", "mika", "pre-migration proposal", "low", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPlanID, err := db.InsertPlan("butler", "mika", "another proposal", "low", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID, err := db.InsertButlerSession(ButlerSession{
+		Principal: "butler", ActingFor: "mika", Surface: ButlerSurfaceFamily, Mode: ButlerModeFull,
+		FinalText: "proposed something",
+		Turns: []ButlerTurn{
+			{Role: ButlerRoleUser, Text: "do something"},
+			{Role: ButlerRoleAssistant, Text: "done", PlanIDs: []string{planID, secondPlanID, "plan-999999", "plan-01"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.migrate(); err != nil {
+		t.Fatal(err)
+	}
+	var linked int
+	planSeq := strings.TrimPrefix(planID, "plan-")
+	sessionSeq := strings.TrimPrefix(sessionID, "bs-")
+	if err = db.sql.QueryRow(
+		`SELECT count(*) FROM plan_session_sources WHERE plan=? AND session=?`, planSeq, sessionSeq,
+	).Scan(&linked); err != nil {
+		t.Fatal(err)
+	}
+	if linked != 1 {
+		t.Fatalf("migration 0070 did not link plan %s to session %s (plan_ids is comma-separated, not JSON)", planID, sessionID)
+	}
+	if err = db.sql.QueryRow(`SELECT count(*) FROM plan_session_sources WHERE session=?`, sessionSeq).Scan(&linked); err != nil {
+		t.Fatal(err)
+	}
+	if linked != 2 {
+		t.Fatalf("migration linked %d plans, want only the two canonical existing IDs", linked)
+	}
+}
+
 func TestQueuedReplyRechecksPrivacyAtAdapterPoll(t *testing.T) {
 	db, at, _ := chatTestDB(t)
 	if err := db.RecordButlerMember("mika", RoleOwner, "", ""); err != nil {
