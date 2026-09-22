@@ -55,6 +55,8 @@ type Notifier struct {
 // Name implements Executor.
 func (n *Notifier) Name() string { return "notifications.notify" }
 
+func (n *Notifier) Available() bool { return n != nil && n.BaseURL != "" }
+
 func (n *Notifier) client() *http.Client {
 	if n.HTTPClient != nil {
 		return n.HTTPClient

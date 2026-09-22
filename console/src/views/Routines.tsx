@@ -2,7 +2,7 @@ import { useState } from "react";
 import { LockSimple, Plus } from "@phosphor-icons/react";
 import { api, type HouseholdRoutine } from "../api";
 import type { AutomationSpec } from "../generated/resources";
-import { ago, ErrorLine, useLoad } from "../lib";
+import { ago, ErrorLine, useAction, useLoad } from "../lib";
 import { useConsoleState } from "../state";
 import { Kind, StatusPill } from "../ui/status";
 import { RoutineDetail } from "./RoutineDetail";
@@ -88,6 +88,9 @@ export function RoutineList({
   const [state, setState] = useState<StateFilter>("all");
   const [audience, setAudience] = useState<Audience>("admin");
   const [writing, setWriting] = useState(false);
+  const [stopReason,setStopReason] = useState("");
+  const executionStop=useLoad(()=>api.householdExecutionStop());
+  const stopAction=useAction();
 
   const rows = load.data?.routines ?? [];
   const specs = load.data?.specs ?? {};
@@ -109,6 +112,19 @@ export function RoutineList({
         What the house does on its own. A routine in trial does everything except act, so you can
         watch it for a week before letting it loose.
       </div>
+
+      {isAdmin && <div className="callout">
+        <strong>Household execution {executionStop.data?.active ? "stopped" : "running"}</strong>
+        {executionStop.data?.active ? <div>{executionStop.data.reason || "An Owner stopped household actions."}</div> : <div>Stop all household actions immediately during an incident.</div>}
+        <div className="row">
+          {!executionStop.data?.active && <input aria-label="Reason for household stop" value={stopReason} onChange={e=>setStopReason(e.target.value)} placeholder="Why stop household actions?" />}
+          <button className={executionStop.data?.active ? "btn btn-secondary" : "btn btn-danger"} disabled={stopAction.state.phase==="busy" || (!executionStop.data?.active && !stopReason.trim())}
+            onClick={()=>stopAction.run(async()=>{await api.setHouseholdExecutionStop(executionStop.data?.active ? "resume" : "stop",stopReason);executionStop.reload();},executionStop.data?.active ? "Household execution resumed." : "Household execution stopped.")}>
+            {executionStop.data?.active ? "Resume household actions" : "Stop household actions"}
+          </button>
+        </div>
+        <ErrorLine error={executionStop.error ?? (stopAction.state.phase==="error" ? stopAction.state.message : null)} />
+      </div>}
 
       <div className="row">
         <div className="seg" role="tablist" aria-label="Who this is for">

@@ -7,6 +7,26 @@ import (
 	"testing"
 )
 
+func TestReviewedRoutineDestinationUsesLiveDirectConnection(t *testing.T) {
+	g := &Gateway{}
+	g.Register(&ChatSender{Capability: "chat-test", Lookup: func(_ context.Context, member string) (ChatRecipient, error) {
+		if member != "sam" {
+			return ChatRecipient{}, errors.New("no direct binding")
+		}
+		return ChatRecipient{Connection: 42, Target: "direct"}, nil
+	}})
+	dest, err := g.RoutineDestination(context.Background(), "chat-test.send", "sam")
+	if err != nil || dest.ConnectionRef != 42 || dest.BuiltIn {
+		t.Fatalf("routine disclosure destination: %+v %v", dest, err)
+	}
+	if _, err := g.RoutineDestination(context.Background(), "chat-test.send", "unknown"); err == nil {
+		t.Fatal("unknown recipient acquired a destination")
+	}
+	if _, err := g.RoutineDestination(context.Background(), "calendar.create", "sam"); err == nil {
+		t.Fatal("unknown output path acquired a destination")
+	}
+}
+
 func testSender(t *testing.T) (*ChatSender, *[]string) {
 	t.Helper()
 	var asked []string

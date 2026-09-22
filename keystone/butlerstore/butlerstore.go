@@ -15,6 +15,7 @@
 package butlerstore
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -421,6 +422,27 @@ func (l *Ledger) AppendStep(taskID, kind, name, paramsJSON string) (int64, error
 	return l.db.AppendButlerTaskStep(taskID, runtimedb.ButlerTaskStep{
 		Kind: runtimedb.ButlerStepKind(kind), Name: name, ParamsJSON: paramsJSON,
 	})
+}
+
+func (l *Ledger) AggregateToolCalls(taskID string) (int, int, bool, error) {
+	work, err := l.db.ConversationWorkForTask(taskID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return 0, 0, false, err
+		}
+		steps, stepErr := l.db.ListButlerTaskSteps(taskID)
+		if stepErr != nil {
+			return 0, 0, false, stepErr
+		}
+		used := 0
+		for _, step := range steps {
+			if step.Kind == runtimedb.ButlerStepTool {
+				used++
+			}
+		}
+		return used, 0, false, nil
+	}
+	return work.ToolCalls, work.ToolLimit, work.UncertainOutcome, nil
 }
 
 func (l *Ledger) StartAttempt(stepSeq int64) (butler.LedgerAttempt, error) {

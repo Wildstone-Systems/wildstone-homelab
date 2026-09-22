@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLocalOnlyNeverFallsBackToCloud(t *testing.T) {
@@ -389,7 +390,14 @@ func TestPrivacyMigrationProtectsUntrackedHistoricalRecall(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldAt := connect(t, db, "legacy-push", "telegram", ButlerSurfaceFamily)
-	oldPush, err := db.EnqueueChatOutbound(ChatOutbound{Connection: oldAt.Seq, Target: "room", Kind: "push", Body: "old recalled fact", DedupeKey: "old-push"})
+	// Seed the pre-stop queue directly. A current dispatcher correctly fails
+	// closed while this fixture still has the historical schema.
+	oldResult, err := db.sql.Exec(`INSERT INTO chat_outbound(connection,target,body,kind,binding_id,correlation_id,dedupe_key,created_at,expires_at,hold_until)
+	 VALUES(?, 'room', 'old recalled fact', 'push', 0, '', 'old-push', ?, ?, '')`, oldAt.Seq, now(), time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPush, err := oldResult.LastInsertId()
 	if err != nil {
 		t.Fatal(err)
 	}

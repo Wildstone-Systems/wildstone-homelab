@@ -231,6 +231,15 @@ var LegacyColumns = []Column{
 }
 
 var Columns = []Column{
+	{"conversation_work", "owner_person_id", PersonID, "0077: resolved canonical Person ID of the conversation owner at parent creation"},
+	{"conversation_work_reviews", "actor_person_id", PersonID, "0077: active Owner's canonical Person ID when reviewing aggregate budget or uncertain outcome"},
+	{"household_execution_stop", "entered_by", PersonID, "0075: active Owner resolved to canonical Person ID before emergency stop"},
+	{"household_execution_stop", "released_by", PersonID, "0075: active Owner resolved to canonical Person ID before release"},
+	{"household_execution_stop_events", "actor", PersonID, "0075: immutable stop history records the active Owner's canonical Person ID"},
+	{"household_routines", "deleted_at", NotAPerson, "0076: soft deletion timestamp"},
+	{"household_routines", "paused_reason", NotAPerson, "0076: fixed recipient hold reason, not a Person handle"},
+	{"routine_runs", "effect_state", NotAPerson, "0074: closed effect outcome vocabulary"},
+	{"routine_runs", "effect_summary", NotAPerson, "0074: executor result summary, not an identity"},
 	{"owner_review_queue", "proposer_person_id", PersonID, "0071: canonical Person who submitted a Plan; revoked submissions are superseded"},
 	{"owner_review_queue", "queued_at", NotAPerson, "0071: queue timestamp"},
 	{"routine_plan_versions", "assigned_butler", NotAPerson, "0071: exact Agent name copied from household_routines.butler; not a Person identity"},

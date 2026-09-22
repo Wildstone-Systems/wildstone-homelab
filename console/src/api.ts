@@ -832,6 +832,7 @@ export interface TaskFeedback {
 
 export interface TaskDetail {
   task: ButlerTask;
+  conversationWork?: {id:number;toolCalls:number;toolLimit:number;uncertainOutcome:boolean;uncertainTask?:string};
   timeline: TimelineEntry[];
   steps: TaskStep[];
   waits: TaskWait[];
@@ -1210,6 +1211,9 @@ export interface HouseholdRoutine {
   updatedBy: string;
   disabledAt?: string;
   disabledBy?: string;
+  revokedAt?: string;
+  deletedAt?: string;
+  pausedReason?: string;
 }
 
 // One recorded edit to a routine. The document is not carried: a
@@ -1257,6 +1261,7 @@ export interface RoutineDetail {
   // automation.fired / suppressed / acted / action_failed. Not butler
   // tasks — nothing produces a task of kind "routine".
   runs: HouseholdEvent[];
+  reviewedRuns?: {id:number;planId:string;triggerEvent:number;state:string;reason?:string;effectState:string;effectSummary?:string;occurredAt:string;subject?:string}[];
 }
 
 // The closed grammar a routine may be written in (ADR-W024 A5), served
@@ -1728,6 +1733,9 @@ export const api = {
       `/api/v1/household/routines/${encodeURIComponent(name)}/state`,
       { state },
     ),
+  controlRoutine: (name:string,action:string) => call<HouseholdRoutine>("POST",`/api/v1/household/routines/${encodeURIComponent(name)}/control`,{action}),
+  householdExecutionStop: () => call<{active:boolean;reason?:string;enteredBy?:string}>("GET","/api/v1/household/execution-stop"),
+  setHouseholdExecutionStop: (action:"stop"|"resume",reason="") => call<{active:boolean}>("POST","/api/v1/household/execution-stop",{action,reason}),
   integrations: () =>
     call<{
       connections: { connection: IntegrationConnection; capabilities: IntegrationCapability[] | null }[] | null;
@@ -1832,6 +1840,7 @@ export const api = {
   butlerTasks: () => call<{ tasks: ButlerTask[] | null }>("GET", "/api/v1/butler/tasks"),
   butlerTask: (id: string) =>
     call<TaskDetail>("GET", `/api/v1/butler/tasks/${encodeURIComponent(id)}`),
+  reviewConversationWork:(id:string,action:"resolve-outcome"|"extend-budget",note:string)=>call("POST",`/api/v1/butler/tasks/${encodeURIComponent(id)}/work-review`,{action,note}),
   labelButlerTask: (id: string, label: FeedbackLabel, note: string, traceSeq?: number) =>
     call<{ recorded: boolean }>("POST", `/api/v1/butler/tasks/${encodeURIComponent(id)}/feedback`, {
       label,

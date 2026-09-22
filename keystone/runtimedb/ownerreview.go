@@ -229,8 +229,12 @@ func (db *DB) ApproveRoutinePlan(id, actor string) error {
 			return err
 		}
 	}
-	if _, err = tx.Exec("UPDATE household_routines SET approved_revision=revision,output_audience=?,state='enabled',disabled_at='',disabled_by='',updated_at=?,updated_by=? WHERE seq=?", audience, now(), actor, routine); err != nil {
+	activation, err := tx.Exec("UPDATE household_routines SET approved_revision=revision,output_audience=?,state='enabled',disabled_at='',disabled_by='',revoked_at='',paused_reason='',updated_at=?,updated_by=? WHERE seq=? AND deleted_at='' AND (revoked_at='' OR revision>revoked_revision)", audience, now(), actor, routine)
+	if err != nil {
 		return err
+	}
+	if n, _ := activation.RowsAffected(); n != 1 {
+		return ErrRoutineDenied
 	}
 	if _, err = tx.Exec("UPDATE plans SET state='approved',resolved_by=?,resolved_at=? WHERE seq=?", actor, now(), seq); err != nil {
 		return err

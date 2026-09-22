@@ -287,3 +287,98 @@ func TestRoutineCannotReachPersonalMemoryBecauseAnOwnerApprovedIt(t *testing.T) 
 		t.Fatal("Owner review could grant a Person's Personal memory")
 	}
 }
+
+func TestRoutineMemoryAdmitsOnlyALiveCompatibleDirectDestination(t *testing.T) {
+	db, _, _ := secretFixture(t)
+	at := connect(t, db, "shared", "telegram", ButlerSurfaceFamily)
+	bind(t, db, at, "sam", "sam-chat")
+	if err := db.GrantButlerAccess("shared", "sam", "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec(`UPDATE connection_disclosure SET retention='provider' WHERE connection=?`, at.Seq); err != nil {
+		t.Fatal(err)
+	}
+	sam, err := db.GetButlerMember("sam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, principal := approvedResourceRoutine(t, db, RoutineResources{}, AudienceHousehold)
+	destination := MemoryDestination{ConnectionRef: at.Seq, RecipientPerson: sam.PersonID}
+	if hits, err := db.RetrieveRoutineMemory(principal, destination, 10); err != nil || len(hits) != 0 {
+		t.Fatalf("valid direct destination blocked before retrieval: %v %v", hits, err)
+	}
+	other := connect(t, db, "other", "telegram", ButlerSurfaceFamily, "other-chat")
+	bind(t, db, other, "sam", "sam-other-chat")
+	if err := db.GrantButlerAccess("other", "sam", "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec(`UPDATE connection_disclosure SET retention='provider' WHERE connection=?`, other.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if hits, err := db.RetrieveRoutineMemory(principal, MemoryDestination{ConnectionRef: other.Seq, RecipientPerson: sam.PersonID}, 10); err != nil || len(hits) != 0 {
+		t.Fatalf("valid delivery Agent without memory grants blocked inference: %v %v", hits, err)
+	}
+	for name, bad := range map[string]MemoryDestination{
+		"unknown":           {},
+		"missing recipient": {ConnectionRef: at.Seq},
+		"wrong recipient":   {ConnectionRef: at.Seq, RecipientPerson: "mika"},
+		"group":             {ConnectionRef: at.Seq, RecipientPerson: sam.PersonID, Group: true},
+	} {
+		if _, err := db.RetrieveRoutineMemory(principal, bad, 10); err == nil {
+			t.Fatalf("%s destination admitted", name)
+		}
+	}
+	if _, err := db.sql.Exec(`UPDATE connection_disclosure SET retention='unknown' WHERE connection=?`, at.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RetrieveRoutineMemory(principal, destination, 10); err == nil {
+		t.Fatal("unknown disclosure admitted")
+	}
+	if _, err := db.sql.Exec(`UPDATE connection_disclosure SET retention='provider' WHERE connection=?`, at.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec(`UPDATE chat_bindings SET revoked_at='revoked' WHERE connection=?`, at.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RetrieveRoutineMemory(principal, destination, 10); err == nil {
+		t.Fatal("revoked direct binding admitted")
+	}
+}
+
+func TestRoutineMemoryDisclosesOnlyCompatibleGrantedChatOrigins(t *testing.T) {
+	db, _, _ := secretFixture(t)
+	at := connect(t, db, "shared", "telegram", ButlerSurfaceFamily)
+	bind(t, db, at, "sam", "sam-chat")
+	if err := db.GrantButlerAccess("shared", "sam", "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec(`UPDATE connection_disclosure SET retention='provider' WHERE connection=?`, at.Seq); err != nil {
+		t.Fatal(err)
+	}
+	task, err := db.InsertButlerTask(ButlerTask{Kind: ButlerTaskConversation, Author: "sam", Owner: "sam", Surface: ButlerSurfaceFamily,
+		AgentClass: AgentClassMember, Audience: ButlerAudiencePrivate, Objective: "remember", OriginConnection: at.Name(), OriginConnectionRef: at.Seq})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory := scopedFact(t, MemoryScopeHousehold, "shared", HouseholdOwner)
+	memory.Content, memory.SourceKind, memory.SourceID = "shared grocery reminder", "conversation", task
+	id, err := db.RecordMemory(memory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, principal := approvedResourceRoutine(t, db, RoutineResources{MemoryIDs: []int64{id}}, AudienceHousehold)
+	sam, err := db.GetButlerMember("sam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := MemoryDestination{ConnectionRef: at.Seq, RecipientPerson: sam.PersonID}
+	if hits, err := db.RetrieveRoutineMemory(principal, destination, 10); err != nil || len(hits) != 1 || hits[0].Seq != id {
+		t.Fatalf("compatible granted memory unavailable: %v %v", hits, err)
+	}
+	if _, err := db.sql.Exec(`UPDATE connection_disclosure SET encryption='end_to_end' WHERE connection=?`, at.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if hits, err := db.RetrieveRoutineMemory(principal, destination, 10); err != nil || len(hits) != 0 {
+		t.Fatalf("changed disclosure leaked memory: %v %v", hits, err)
+	}
+}

@@ -69,6 +69,20 @@ type ChatSender struct {
 // Name implements Executor.
 func (c *ChatSender) Name() string { return c.Capability + ".send" }
 
+// Available is re-evaluated for routine capability recovery. An installed
+// adapter that has since been disabled must not look compatible merely
+// because its executor remains registered.
+func (c *ChatSender) Available() bool {
+	if c == nil || c.Lookup == nil || c.Ask == nil {
+		return false
+	}
+	if c.Enabled == nil {
+		return true
+	}
+	on, err := c.Enabled()
+	return err == nil && on
+}
+
 // Execute implements Executor.
 func (c *ChatSender) Execute(ctx context.Context, call Call) (Result, error) {
 	if err := checkExecution(ctx, c.Authority); err != nil {

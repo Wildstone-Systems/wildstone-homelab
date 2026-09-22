@@ -125,6 +125,22 @@ func (db *DB) AppendButlerTaskStep(taskID string, s ButlerTaskStep) (int64, erro
 	if exists == 0 {
 		return 0, ErrNotFound
 	}
+	if s.Kind == ButlerStepTool {
+		var parent sql.NullInt64
+		if err := tx.QueryRow("SELECT conversation_work FROM butler_tasks WHERE seq=?", seq).Scan(&parent); err != nil {
+			return 0, err
+		}
+		if parent.Valid {
+			budget, err := tx.Exec(`UPDATE conversation_work SET tool_calls=tool_calls+1,updated_at=?
+			 WHERE seq=? AND tool_calls<tool_limit AND uncertain_outcome=0`, now(), parent.Int64)
+			if err != nil {
+				return 0, err
+			}
+			if n, _ := budget.RowsAffected(); n != 1 {
+				return 0, ErrConversationWorkHeld
+			}
+		}
+	}
 	var ordinal int
 	if err := tx.QueryRow(
 		`SELECT COALESCE(MAX(ordinal) + 1, 0) FROM butler_task_steps WHERE task = ?`, seq,
@@ -465,6 +481,12 @@ func (db *DB) OpenButlerTaskWait(taskID string, w ButlerTaskWait) error {
 	if _, err := tx.Exec(`UPDATE butler_tasks SET next_wakeup_at = ? WHERE seq = ?`,
 		timeText(w.ResumeAt), seq); err != nil {
 		return fmt.Errorf("runtimedb: opening butler task wait: %w", err)
+	}
+	if w.Reason == ButlerWaitUncertainOutcome {
+		if _, err := tx.Exec(`UPDATE conversation_work SET uncertain_outcome=1,uncertain_task=?,updated_at=?
+		 WHERE seq=(SELECT conversation_work FROM butler_tasks WHERE seq=?) AND uncertain_outcome=0`, seq, now(), seq); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("runtimedb: opening butler task wait: %w", err)

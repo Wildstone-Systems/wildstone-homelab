@@ -112,6 +112,8 @@ export function Work() {
 
 function TaskPanel({ id, onGone }: { id: string; onGone: () => void }) {
   const detail = useLoad(() => api.butlerTask(id), [id]);
+  const review=useAction();
+  const [reviewNote,setReviewNote]=useState("");
   if (detail.error) {
     return (
       <div className="work-detail">
@@ -141,6 +143,16 @@ function TaskPanel({ id, onGone }: { id: string; onGone: () => void }) {
           One outcome is unknown, so it will not retry that step on its own: {d.task.uncertainty}
         </div>
       )}
+      {d.conversationWork && <div className="callout">
+        <strong>Conversation work</strong> · {d.conversationWork.toolCalls} of {d.conversationWork.toolLimit} tool calls used across turns.
+        {d.conversationWork.uncertainOutcome && <p>An earlier turn has an unresolved effect outcome. New work is held until an Owner reviews it.</p>}
+        {(d.conversationWork.uncertainOutcome || d.conversationWork.toolCalls>=d.conversationWork.toolLimit) && <div className="row">
+          <input aria-label="Work review note" placeholder="What did you verify?" value={reviewNote} onChange={e=>setReviewNote(e.target.value)} />
+          {d.conversationWork.uncertainOutcome && <button className="btn btn-secondary" disabled={!reviewNote.trim() || review.state.phase==="busy"} onClick={()=>review.run(async()=>{await api.reviewConversationWork(id,"resolve-outcome",reviewNote);detail.reload()},"Outcome recorded; the ambiguous turn will not replay.")}>Resolve outcome</button>}
+          {d.conversationWork.toolCalls>=d.conversationWork.toolLimit && <button className="btn btn-secondary" disabled={!reviewNote.trim() || review.state.phase==="busy"} onClick={()=>review.run(async()=>{await api.reviewConversationWork(id,"extend-budget",reviewNote);detail.reload()},"Conversation budget extended.")}>Allow 64 more calls</button>}
+        </div>}
+        {review.state.phase==="error" && <ErrorLine error={review.state.message} />}
+      </div>}
       {d.debugActive && (
         <div className="msg-note">
           Extra debug capture is on for this task. It expires by itself; nothing has to remember to

@@ -49,7 +49,7 @@ func (db *DB) routineVersion(tx *sql.Tx, p *RoutinePrincipal) (routineVersion, e
  LEFT JOIN models m ON m.seq=b.model AND m.enabled=1
  WHERE v.plan=? AND r.revision=v.revision AND r.approved_revision=v.revision
  AND r.document=v.document AND r.output_audience=v.output_audience
- AND r.disabled_at=''`, p.plan).Scan(&v.routine, &v.revision, &assigned, &currentAssigned, &ownership, &state, &planState, &approved, &v.audience, &v.agent, &v.model, &signature, &secretJSON, &memoryJSON)
+ AND r.disabled_at='' AND r.revoked_at='' AND r.deleted_at='' AND r.paused_reason=''`, p.plan).Scan(&v.routine, &v.revision, &assigned, &currentAssigned, &ownership, &state, &planState, &approved, &v.audience, &v.agent, &v.model, &signature, &secretJSON, &memoryJSON)
 	if err != nil || assigned != currentAssigned || ownership != RoutineWildstone || state != RoutineEnabled || planState != string(PlanApplied) || !approved.Valid || approved.String == "" {
 		return routineVersion{}, ErrRoutineDenied
 	}
@@ -111,9 +111,8 @@ func (db *DB) routineMemoryIDs(p *RoutinePrincipal, destination MemoryDestinatio
 	if err := db.gate(GateRetrieval); err != nil {
 		return nil, empty, err
 	}
-	// A routine has no active Person to admit an external Connection. Slice 21
-	// will bind actual delivery; an unknown destination cannot receive content.
-	if !destination.BuiltIn || destination.ConnectionRef != 0 || destination.Group {
+	if destination.Group || (destination.BuiltIn && destination.ConnectionRef != 0) ||
+		(!destination.BuiltIn && destination.ConnectionRef <= 0) {
 		return nil, empty, ErrRoutineDenied
 	}
 	tx, err := db.sql.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
@@ -134,6 +133,40 @@ func (db *DB) routineMemoryIDs(p *RoutinePrincipal, destination MemoryDestinatio
 	}
 	if len(outputPeople) == 0 {
 		return nil, empty, ErrRoutineDenied
+	}
+	if !destination.BuiltIn {
+		// The trusted executor supplies the resolved recipient. Recheck the
+		// live binding, Agent, admission and disclosure, even for zero grants.
+		allowed := false
+		for _, person := range outputPeople {
+			if person == destination.RecipientPerson {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return nil, empty, ErrRoutineDenied
+		}
+		var live int
+		err = tx.QueryRow(`SELECT 1 FROM butler_addresses a
+ JOIN chat_bindings binding ON binding.connection=a.seq AND binding.revoked_at=''
+ JOIN butler_members recipient ON recipient.person_id=binding.person_id
+ JOIN connection_admission admission ON admission.connection=a.seq
+ JOIN connection_disclosure disclosure ON disclosure.connection=a.seq
+ WHERE a.seq=? AND a.revoked_at='' AND binding.person_id=?
+ AND recipient.admitted=1 AND recipient.disabled_at='' AND recipient.offboarded_at=''
+ AND EXISTS(SELECT 1 FROM butler_access access WHERE access.person_id=recipient.person_id
+            AND access.butler=a.butler AND access.revoked_at='')
+ AND admission.subject_kind='person'
+ AND (admission.admits='household' OR (admission.admits='owners' AND recipient.role='owner'))
+ AND disclosure.reach IN ('local','external')
+ AND disclosure.encryption IN ('none','transport','end_to_end')
+ AND disclosure.retention IN ('none','provider')
+ AND disclosure.surface IN ('trusted_ui','external_messaging') LIMIT 1`,
+			destination.ConnectionRef, destination.RecipientPerson).Scan(&live)
+		if err != nil {
+			return nil, empty, ErrRoutineDenied
+		}
 	}
 	// Query IDs only. Audience and inherited restrictions are checked for
 	// every output recipient before any content enters the process.
@@ -163,6 +196,13 @@ func (db *DB) routineMemoryIDs(p *RoutinePrincipal, destination MemoryDestinatio
 		query += " AND " + visible + " AND " + inherited
 		args = append(args, visibleArgs...)
 		args = append(args, inheritedArgs...)
+	}
+	if !destination.BuiltIn {
+		disclosure, disclosureArgs := memoryDisclosureClause("m", &MemoryReadContext{
+			person: destination.RecipientPerson, agent: v.agent, destination: destination,
+		})
+		query += disclosure
+		args = append(args, disclosureArgs...)
 	}
 	if limit <= 0 || limit > 200 {
 		limit = 50

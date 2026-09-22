@@ -80,6 +80,9 @@ type HouseholdRoutine struct {
 	UpdatedBy        string    `json:"updatedBy"`
 	DisabledAt       time.Time `json:"disabledAt,omitzero"`
 	DisabledBy       string    `json:"disabledBy,omitempty"`
+	RevokedAt        string    `json:"revokedAt,omitempty"`
+	DeletedAt        string    `json:"deletedAt,omitempty"`
+	PausedReason     string    `json:"pausedReason,omitempty"`
 }
 
 // Active reports whether this routine may run right now. Disabled is
@@ -87,14 +90,14 @@ type HouseholdRoutine struct {
 // checks it before every step and "exact and immediate" has to mean the
 // same thing in both places.
 func (r HouseholdRoutine) Active() bool {
-	return r.DisabledAt.IsZero() && (r.State == RoutineEnabled || r.State == RoutineTrial)
+	return r.DisabledAt.IsZero() && r.RevokedAt == "" && r.DeletedAt == "" && r.PausedReason == "" && (r.State == RoutineEnabled || r.State == RoutineTrial)
 }
 
 // PerformsActions reports whether this routine may actually do things.
 // A trial routine runs its reads and its reasoning and performs
 // nothing — which is what makes a preview a preview.
 func (r HouseholdRoutine) PerformsActions() bool {
-	return r.DisabledAt.IsZero() && r.State == RoutineEnabled
+	return r.DisabledAt.IsZero() && r.RevokedAt == "" && r.DeletedAt == "" && r.PausedReason == "" && r.State == RoutineEnabled
 }
 
 // CreateHouseholdRoutine records a routine.
@@ -248,14 +251,14 @@ func (db *DB) GetHouseholdRoutine(name string) (HouseholdRoutine, error) {
 }
 
 const routineColumns = `SELECT seq, name, ownership, external_id, connection, author, revision,
-	 state, document, created_at, updated_at, updated_by, disabled_at, disabled_by, output_audience, approved_revision, resource_signature
+	 state, document, created_at, updated_at, updated_by, disabled_at, disabled_by, output_audience, approved_revision, resource_signature,revoked_at,deleted_at,paused_reason
 	 FROM household_routines`
 
 func scanRoutine(row rowScanner) (HouseholdRoutine, error) {
 	var r HouseholdRoutine
 	var created, updated, disabled, signature string
 	err := row.Scan(&r.Seq, &r.Name, &r.Ownership, &r.ExternalID, &r.Connection, &r.Author,
-		&r.Revision, &r.State, &r.Document, &created, &updated, &r.UpdatedBy, &disabled, &r.DisabledBy, &r.OutputAudience, &r.ApprovedRevision, &signature)
+		&r.Revision, &r.State, &r.Document, &created, &updated, &r.UpdatedBy, &disabled, &r.DisabledBy, &r.OutputAudience, &r.ApprovedRevision, &signature, &r.RevokedAt, &r.DeletedAt, &r.PausedReason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return HouseholdRoutine{}, ErrNotFound
 	}

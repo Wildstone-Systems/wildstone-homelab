@@ -9,6 +9,9 @@ type MemoryDestination struct {
 	BuiltIn       bool
 	ConnectionRef int64
 	Group         bool
+	// RecipientPerson is the canonical direct-chat recipient for an
+	// unattended routine. It never grants Person authority to the routine.
+	RecipientPerson string
 	// ConsoleOwner carries the existing trusted Console access-list exemption.
 	// It never bypasses active Person, audience, scope or Agent restrictions.
 	ConsoleOwner bool

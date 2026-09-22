@@ -72,6 +72,7 @@ const (
 	LedgerWaitReply            = "reply"
 	LedgerWaitBudgetExhausted  = "budget-exhausted"
 	LedgerWaitModelUnavailable = "model-unavailable"
+	LedgerWaitUncertainOutcome = "uncertain-outcome"
 )
 
 // LedgerStep is one entry of a task's validated step ledger as the
@@ -204,6 +205,9 @@ type Runner struct {
 	// MaxToolCalls bounds the task's total tool calls across all slices
 	// and restarts. <= 0 means only the slice budget applies.
 	MaxToolCalls int
+	// UseParentBudget selects the durable conversation aggregate for live
+	// multi-turn work. Standalone task runners keep their explicit budget.
+	UseParentBudget bool
 	// PermissionLabel and Audience are stamped on every trace and
 	// evidence row this runner writes. They come from the task's own
 	// admission, never from the model.
@@ -396,6 +400,23 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 	}
 	verified := verifiedResults(steps, r.now(), r.ObservationTTL)
 	toolsUsed := countToolSteps(steps)
+	toolLimit := r.MaxToolCalls
+	if aggregate, ok := r.Ledger.(interface {
+		AggregateToolCalls(string) (int, int, bool, error)
+	}); ok && r.UseParentBudget {
+		var uncertain bool
+		var parentLimit int
+		toolsUsed, parentLimit, uncertain, err = aggregate.AggregateToolCalls(taskID)
+		if err != nil {
+			return tr, fmt.Errorf("butler runner: reading conversation budget: %w", err)
+		}
+		if parentLimit > 0 {
+			toolLimit = parentLimit
+		}
+		if uncertain {
+			return tr, r.Ledger.Wait(taskID, LedgerWaitUncertainOutcome, "an earlier turn has an unresolved effect outcome")
+		}
+	}
 	resumed := len(steps) > 0
 
 	manifest := r.Gateway.Capabilities(r.ReadOnly)
@@ -440,7 +461,7 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 			var missing interface{ MissingEffectReceipt() bool }
 			if errors.As(err, &missing) && missing.MissingEffectReceipt() {
 				tr.FinalText = "I couldn't verify every requested effect. The task is still open; any confirmed work is preserved for review."
-				return tr, r.Ledger.Wait(taskID, LedgerWaitReply, "one or more required effects lack matching successful receipts; review before continuing")
+				return tr, r.Ledger.Wait(taskID, LedgerWaitUncertainOutcome, "one or more required effects lack matching successful receipts; review before continuing")
 			}
 			return tr, err
 		}
@@ -450,7 +471,7 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 		})
 		results := make([]provider.ToolResult, 0, len(answer.ToolCalls))
 		for _, tc := range answer.ToolCalls {
-			if r.MaxToolCalls > 0 && toolsUsed >= r.MaxToolCalls {
+			if toolLimit > 0 && toolsUsed >= toolLimit {
 				// The aggregate budget is exhausted. This is not a
 				// failure and not a retry: the work stands, and a person
 				// decides whether it gets more (A4).

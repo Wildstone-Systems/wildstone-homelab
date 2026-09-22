@@ -521,6 +521,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/household/routines", s.handle(principal.VerbPropose, s.createHouseholdRoutine))
 	mux.Handle("POST /api/v1/household/routines/{name}/edit", s.handle(principal.VerbPropose, s.editHouseholdRoutine))
 	mux.Handle("POST /api/v1/household/routines/{name}/state", s.handle(principal.VerbPropose, s.setHouseholdRoutineState))
+	mux.Handle("POST /api/v1/household/routines/{name}/control", s.handle(principal.VerbApprove, s.controlReviewedRoutine))
+	mux.Handle("GET /api/v1/household/execution-stop", s.handle(principal.VerbRead, s.getHouseholdExecutionStop))
+	mux.Handle("POST /api/v1/household/execution-stop", s.handle(principal.VerbApprove, s.changeHouseholdExecutionStop))
 	mux.Handle("POST /api/v1/household/review/token", s.handle(principal.VerbApprove, s.issueHouseholdReviewToken))
 	// The narrow acting-for service route (ADR-W030 A8.1). It carries no
 	// API verb: identity comes from the trusted ingress in front of it,
@@ -556,6 +559,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/butler/tasks/{id}/evaluation", s.handle(principal.VerbManage, s.exportButlerEvaluation))
 	mux.Handle("POST /api/v1/butler/tasks/{id}/debug", s.handle(principal.VerbManage, s.enableButlerDebugCapture))
 	mux.Handle("POST /api/v1/butler/tasks/{id}/cancel", s.handle(principal.VerbManage, s.cancelButlerTask))
+	mux.Handle("POST /api/v1/butler/tasks/{id}/work-review", s.handle(principal.VerbApprove, s.reviewConversationWork))
 	mux.Handle("GET /api/v1/butler/evaluations", s.handle(principal.VerbRead, s.listButlerEvaluations))
 	mux.Handle("GET /api/v1/butler/debug", s.handle(principal.VerbRead, s.listButlerDebugCaptures))
 	mux.Handle("POST /api/v1/butler/members/{member}/offboarding", s.handle(principal.VerbManage, s.consequential(s.offboardMember)))

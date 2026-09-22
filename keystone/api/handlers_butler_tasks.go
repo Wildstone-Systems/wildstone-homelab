@@ -27,6 +27,7 @@ package api
 //     promising it.
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -203,17 +204,28 @@ func (s *Server) getButlerTask(r *http.Request, id principal.Identity) (any, int
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	var conversationWork *runtimedb.ConversationWork
+	if task.Kind == runtimedb.ButlerTaskConversation {
+		work, workErr := s.DB.ConversationWorkForTask(taskID)
+		if workErr != nil && !errors.Is(workErr, sql.ErrNoRows) {
+			return nil, http.StatusInternalServerError, workErr
+		}
+		if workErr == nil {
+			conversationWork = &work
+		}
+	}
 
 	return map[string]any{
-		"task":        task,
-		"timeline":    entries,
-		"steps":       steps,
-		"waits":       waits,
-		"evidence":    evidence,
-		"transitions": transitions,
-		"feedback":    feedback,
-		"withheld":    withheld,
-		"debugActive": debugOn,
+		"task":             task,
+		"timeline":         entries,
+		"steps":            steps,
+		"waits":            waits,
+		"evidence":         evidence,
+		"transitions":      transitions,
+		"feedback":         feedback,
+		"withheld":         withheld,
+		"debugActive":      debugOn,
+		"conversationWork": conversationWork,
 	}, http.StatusOK, nil
 }
 

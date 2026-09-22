@@ -94,19 +94,17 @@ type routineDetail struct {
 	// SpecError says why a document did not parse. A routine whose spec
 	// is unreadable is exactly the one someone needs to look at, so this
 	// is a 200 with an explanation rather than a 500.
-	SpecError string                      `json:"specError,omitempty"`
-	Revisions []runtimedb.RoutineRevision `json:"revisions"`
-	Runs      []runtimedb.HouseholdEvent  `json:"runs"`
+	SpecError    string                         `json:"specError,omitempty"`
+	Revisions    []runtimedb.RoutineRevision    `json:"revisions"`
+	Runs         []runtimedb.HouseholdEvent     `json:"runs"`
+	ReviewedRuns []runtimedb.ReviewedRoutineRun `json:"reviewedRuns"`
 }
 
 // getHouseholdRoutine serves one routine: its spec, its edit history and
 // what it has done in the last week.
 //
-// Runs come off the household stream, not from butler tasks. The task
-// kind "routine" is declared and nothing constructs one, so reading it
-// would serve an empty list forever; what the engine actually records is
-// automation.fired / suppressed / acted / action_failed against the
-// rule, which is the same evidence a replay reasons over.
+// Reviewed runs come from the exact Plan-version occurrence ledger; older
+// Statefile engine events remain visible separately for historical context.
 func (s *Server) getHouseholdRoutine(r *http.Request, _ principal.Identity) (any, int, error) {
 	name := r.PathValue("name")
 	routine, err := s.DB.GetHouseholdRoutine(name)
@@ -118,9 +116,10 @@ func (s *Server) getHouseholdRoutine(r *http.Request, _ principal.Identity) (any
 	}
 
 	out := routineDetail{
-		Routine:   routine,
-		Revisions: []runtimedb.RoutineRevision{},
-		Runs:      []runtimedb.HouseholdEvent{},
+		Routine:      routine,
+		Revisions:    []runtimedb.RoutineRevision{},
+		Runs:         []runtimedb.HouseholdEvent{},
+		ReviewedRuns: []runtimedb.ReviewedRoutineRun{},
 	}
 
 	// The rule the engine knows is the document's metadata.name, which
@@ -152,6 +151,11 @@ func (s *Server) getHouseholdRoutine(r *http.Request, _ principal.Identity) (any
 	// records only that it exists, so there is nothing on our stream to
 	// find. Asking anyway would be a query that always returns nothing.
 	if routine.Ownership == runtimedb.RoutineWildstone {
+		reviewed, err := s.DB.ListReviewedRoutineRuns(name, maxRoutineRuns)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		out.ReviewedRuns = reviewed
 		runs, err := s.routineRuns(name, rule)
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
@@ -413,14 +417,14 @@ func (s *Server) setHouseholdRoutineState(r *http.Request, id principal.Identity
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
 	}
-	if req.State == runtimedb.RoutineEnabled || req.State == runtimedb.RoutineTrial {
+	if req.State == runtimedb.RoutineEnabled || req.State == runtimedb.RoutineTrial || req.State == runtimedb.RoutineDisabled {
 		if body, code, err := s.freshOwnerReview(r, id); err != nil {
 			return body, code, err
 		}
 	}
 	var err error
 	if req.State == runtimedb.RoutineDisabled {
-		err = s.DB.DisableHouseholdRoutine(name, actingMember(id))
+		err = s.DB.ChangeReviewedRoutine(name, actingMember(id), "disable")
 	} else {
 		err = s.DB.SetHouseholdRoutineState(name, req.State, actingMember(id))
 	}

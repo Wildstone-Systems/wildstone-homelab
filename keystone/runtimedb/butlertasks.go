@@ -298,6 +298,35 @@ func (db *DB) InsertButlerTask(t ButlerTask) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if t.Kind == ButlerTaskConversation {
+		var parent int64
+		if session != nil {
+			err = tx.QueryRow(`SELECT seq FROM conversation_work WHERE session=? AND owner_person_id=?`, session, owner).Scan(&parent)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return "", err
+			}
+		}
+		if parent == 0 {
+			used := 0
+			if session != nil {
+				if err := tx.QueryRow(`SELECT count(*) FROM butler_task_steps s JOIN butler_tasks t ON t.seq=s.task
+				 WHERE s.kind='tool' AND (t.session=? OR EXISTS (SELECT 1 FROM session_task_sources l WHERE l.session=? AND l.task=t.seq))`, session, session).Scan(&used); err != nil {
+					return "", err
+				}
+			}
+			created, err := tx.Exec(`INSERT INTO conversation_work(session,owner_person_id,tool_calls,created_at,updated_at) VALUES(?,?,?,?,?)`, session, owner, used, stamp, stamp)
+			if err != nil {
+				return "", err
+			}
+			parent, err = created.LastInsertId()
+			if err != nil {
+				return "", err
+			}
+		}
+		if _, err := tx.Exec("UPDATE butler_tasks SET conversation_work=? WHERE seq=?", parent, seq); err != nil {
+			return "", err
+		}
+	}
 	// The opening transition is written with the row so the history is
 	// complete from the first state, not from the first change.
 	if _, err := tx.Exec(
@@ -341,7 +370,12 @@ func (db *DB) SetButlerTaskSession(taskID, sessionID string) error {
 	if _, err := fmt.Sscanf(sessionID, "bs-%d", &sessionSeq); err != nil {
 		return fmt.Errorf("runtimedb: malformed butler session id %q", sessionID)
 	}
-	res, err := db.sql.Exec(
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(
 		`UPDATE butler_tasks SET session = ?, updated_at = ?
 		 WHERE seq = ? AND session IS NULL`, sessionSeq, now(), seq)
 	if err != nil {
@@ -351,16 +385,49 @@ func (db *DB) SetButlerTaskSession(taskID, sessionID string) error {
 		// Either the task is gone, or it is already linked. Both are
 		// answered by reading it back: an idempotent re-link of the same
 		// session is not an error, and a DIFFERENT one must be.
-		t, gerr := db.GetButlerTask(taskID)
-		if gerr != nil {
-			return gerr
+		var existing sql.NullInt64
+		if err := tx.QueryRow("SELECT session FROM butler_tasks WHERE seq=?", seq).Scan(&existing); err != nil {
+			return err
 		}
-		if t.SessionID != sessionID {
-			return fmt.Errorf("runtimedb: task %s already belongs to conversation %s (ADR-W031 A4)",
-				taskID, t.SessionID)
+		if !existing.Valid || existing.Int64 != sessionSeq {
+			return fmt.Errorf("runtimedb: task %s already belongs to conversation %v (ADR-W031 A4)",
+				taskID, existing)
 		}
 	}
-	return nil
+	var current sql.NullInt64
+	if err := tx.QueryRow("SELECT conversation_work FROM butler_tasks WHERE seq=?", seq).Scan(&current); err != nil {
+		return err
+	}
+	if current.Valid {
+		var existing int64
+		err := tx.QueryRow(`SELECT seq FROM conversation_work WHERE session=? AND owner_person_id=(SELECT owner_person_id FROM butler_tasks WHERE seq=?)`, sessionSeq, seq).Scan(&existing)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if existing != 0 && existing != current.Int64 {
+			merge, err := tx.Exec(`UPDATE conversation_work SET tool_calls=tool_calls+(SELECT tool_calls FROM conversation_work WHERE seq=?),
+			 uncertain_outcome=MAX(uncertain_outcome,(SELECT uncertain_outcome FROM conversation_work WHERE seq=?)),
+			 uncertain_task=COALESCE(uncertain_task,(SELECT uncertain_task FROM conversation_work WHERE seq=?)),updated_at=?
+			 WHERE seq=? AND NOT (uncertain_outcome=1 AND (SELECT uncertain_outcome FROM conversation_work WHERE seq=?)=1)`, current.Int64, current.Int64, current.Int64, now(), existing, current.Int64)
+			if err != nil {
+				return err
+			}
+			if n, _ := merge.RowsAffected(); n != 1 {
+				return ErrConversationWorkHeld
+			}
+			if _, err := tx.Exec("UPDATE butler_tasks SET conversation_work=? WHERE seq=?", existing, seq); err != nil {
+				return err
+			}
+			if _, err := tx.Exec("DELETE FROM conversation_work WHERE seq=?", current.Int64); err != nil {
+				return err
+			}
+		} else {
+			if _, err := tx.Exec(`UPDATE conversation_work SET session=?,updated_at=? WHERE seq=? AND (session IS NULL OR session=?)`, sessionSeq, now(), current.Int64, sessionSeq); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
 }
 
 // TaskOrigin is the small part of a task an authority check needs: who

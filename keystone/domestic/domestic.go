@@ -223,6 +223,54 @@ func (g *Gateway) Tools() []string {
 	return out
 }
 
+// Compatible reports whether this control plane currently has the exact
+// reviewed tool at its declared tier. Routine execution uses this before
+// claiming an effect so a missing capability blocks without consuming the
+// occurrence's at-most-once dispatch claim.
+func (g *Gateway) Compatible(tool, tier string) bool {
+	if g == nil {
+		return false
+	}
+	executor, ok := g.executors[tool]
+	if !ok {
+		return false
+	}
+	if g.Declared != nil {
+		capability, name, found := strings.Cut(tool, ".")
+		if !found {
+			return false
+		}
+		declared, found := g.Declared(capability, name)
+		if !found || declared != tier {
+			return false
+		}
+	}
+	if probe, ok := executor.(interface{ Available() bool }); ok {
+		return probe.Available()
+	}
+	return true
+}
+
+// RoutineDestination resolves the live direct Connection for a reviewed
+// delivery. A missing or ambiguous destination cannot receive model context.
+func (g *Gateway) RoutineDestination(ctx context.Context, tool, member string) (runtimedb.MemoryDestination, error) {
+	if g == nil {
+		return runtimedb.MemoryDestination{}, fmt.Errorf("routine delivery gateway is unavailable")
+	}
+	sender, ok := g.executors[tool].(*ChatSender)
+	if !ok || sender.Lookup == nil || member == "" {
+		return runtimedb.MemoryDestination{}, fmt.Errorf("reviewed routine delivery has no resolvable direct recipient")
+	}
+	recipient, err := sender.Lookup(ctx, member)
+	if err != nil {
+		return runtimedb.MemoryDestination{}, err
+	}
+	if recipient.Connection <= 0 {
+		return runtimedb.MemoryDestination{}, fmt.Errorf("reviewed routine recipient has no live Connection")
+	}
+	return runtimedb.MemoryDestination{ConnectionRef: recipient.Connection}, nil
+}
+
 // RefusalError is a call the gateway would not make. It is separated
 // from an executor's own failure because the two mean different things
 // to whoever reads the household stream: a refusal is a rule asking for

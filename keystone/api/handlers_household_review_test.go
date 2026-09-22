@@ -326,8 +326,11 @@ func TestTrialRunsAndDisableIsExact(t *testing.T) {
 	}
 
 	// Disabling one disables exactly one.
-	h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/routines/breakfast/state",
-		map[string]any{"state": "disabled"}, &state)
+	code, out := h.sessionRequest(http.MethodPost, "/api/v1/household/routines/breakfast/state", `{"state":"disabled"}`, "mika", session)
+	if code != http.StatusOK {
+		t.Fatalf("Owner disable: %d %v", code, out)
+	}
+	state.Routine, _ = h.s.DB.GetHouseholdRoutine("breakfast")
 	if state.Routine.Active() || state.Routine.DisabledBy == "" {
 		t.Fatalf("disabled routine = %+v", state.Routine)
 	}

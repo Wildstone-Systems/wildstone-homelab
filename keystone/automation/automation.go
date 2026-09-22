@@ -316,6 +316,12 @@ type Engine struct {
 	// unacted — which is what a control plane with no capabilities
 	// installed should do, and what the engine did before H4.
 	Actions Actions
+	// ReviewedActions dispatches an exact approved routine after a live
+	// capability check. It is wired only on the coordinating process.
+	ReviewedActions RoutineActions
+	// ReviewedEscalator is bound to the exact assigned Agent by the
+	// coordinator. A missing or failed Agent blocks its inference step.
+	ReviewedEscalator func(context.Context, string, EscalationRequest) (string, error)
 	// Escalator, when set, phrases the one action param a rule's
 	// escalation names (ADR-W024 A6). nil means an escalating rule acts
 	// with the wording its author wrote, which is the deterministic

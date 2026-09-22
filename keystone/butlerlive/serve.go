@@ -137,6 +137,7 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 		ReadOnly:        !b.CarriesActionAuthority(),
 		MaxSliceRounds:  conversationSliceRounds,
 		MaxToolCalls:    conversationToolCalls,
+		UseParentBudget: true,
 		PermissionLabel: b.Name,
 		Audience:        string(task.Audience),
 		Actor:           t.Member,

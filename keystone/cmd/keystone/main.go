@@ -1747,6 +1747,42 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 
 	// Everything the engine needs is wired; start its loop.
 	go auto.Run(context.Background(), automationEvery)
+	if coordinating {
+		// Reviewed Household routines have their own version-aware cursor and
+		// effect ledger. Only the process holding the execution lease scans
+		// and dispatches them; the domestic gateway rechecks that lease at
+		// every external-effect boundary.
+		auto.ReviewedActions = actions
+		auto.ReviewedEscalator = func(ctx context.Context, agent string, req automation.EscalationRequest) (string, error) {
+			b, err := db.GetButler(agent)
+			if err != nil || !b.Reachable() {
+				return "", fmt.Errorf("assigned Agent %s is unavailable", agent)
+			}
+			p, err := butlerProviderFor(b)
+			if err != nil || p == nil {
+				return "", fmt.Errorf("assigned Agent %s has no available provider: %v", agent, err)
+			}
+			facts := make([]butler.Fact, 0, len(req.Facts))
+			for _, f := range req.Facts {
+				facts = append(facts, butler.Fact{Label: f.Label, Content: f.Content})
+			}
+			phraser := &butler.Phraser{Provider: p, Model: b.ProviderModel,
+				Record: func(_ context.Context, providerName, prompt, reply string) error {
+					_, err := db.InsertButlerSession(runtimedb.ButlerSession{
+						Principal: butlerSessionPrincipal, ActingFor: automation.Source,
+						Butler: b.Name, AgentID: b.Seq, Provider: providerName,
+						Mode: runtimedb.ButlerModeFull, Surface: b.Surface,
+						FinalText:      redact.String(reply),
+						TranscriptJSON: redact.String(`{"kind":"reviewed-routine-escalation","prompt":` + strconv.Quote(prompt) + `}`),
+					})
+					return err
+				}}
+			return phraser.Phrase(ctx, butler.PhraseRequest{
+				Rule: req.Rule, Instruction: req.Instruction, Fallback: req.Fallback, Facts: facts,
+			})
+		}
+		go auto.RunReviewed(context.Background(), automationEvery)
+	}
 
 	// The household's commitments (ADR-W035 A15): once a day, work out
 	// what has come due and record the changes on the household

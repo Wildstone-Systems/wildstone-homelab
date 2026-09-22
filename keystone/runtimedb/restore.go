@@ -156,6 +156,9 @@ func (db *DB) gate(what string) error {
 		return fmt.Errorf("%w: could not check restore state before %s: %v", ErrQuarantined, what, err)
 	}
 	if !s.Quarantined {
+		if what == GateDispatch || what == GateDelivery {
+			return db.checkHouseholdStop(what)
+		}
 		return nil
 	}
 	return fmt.Errorf("%w: %s is held until the restore is reconciled (restored %s: %s)",

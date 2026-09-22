@@ -43,15 +43,9 @@ export function RoutineDetail({
   const toggleSecret = (id:string) => setSecretIds(current=>current.includes(id)?current.filter(x=>x!==id):[...current,id]);
   const toggleMemory = (id:number) => setMemoryIds(current=>current.includes(id)?current.filter(x=>x!==id):[...current,id]);
 
-  // The state actions keep the labels and the messages the old screen
-  // used. They are the household's vocabulary for this, not ours to
-  // re-pick.
-  const act = (state: string, message: string) =>
-    action.run(async () => {
-      await api.setRoutineState(name, state);
-      detail.reload();
-      onChanged();
-    }, message);
+  const control=(operation:string,message:string)=>action.run(async()=>{
+    await api.controlRoutine(name,operation);detail.reload();onChanged();
+  },message);
 
   return (
     <>
@@ -79,6 +73,9 @@ export function RoutineDetail({
           <div className="muted" style={{ marginBottom: "var(--space-4)" }}>
             {ROUTINE_MEANING[r.state]}
           </div>
+          {(r.revokedAt || r.deletedAt || r.pausedReason) && <div className="callout">
+            {r.deletedAt ? "Archived. Restore it before it can run." : r.revokedAt ? "Approval revoked. Edit and submit a new version for Owner review." : r.pausedReason}
+          </div>}
 
           {/* A native routine is read-only everywhere. There is nothing
               to show and nothing to press: Wildstone does not hold the
@@ -111,11 +108,15 @@ export function RoutineDetail({
                   onClick={()=>action.run(async()=>{await api.submitRoutinePlan(name,outputAudience,secretIds,memoryIds);detail.reload();onChanged();},"Sent to the Owner Review Queue. Review it in Plans before it can run.")}>
                   Submit for Owner review
                 </button>
-                {r.state !== "disabled" && (
-                  <button className="btn btn-danger" onClick={() => act("disabled", "Stopped.")}>
+                {r.state !== "disabled" && !r.deletedAt && (
+                  <button className="btn btn-danger" onClick={() => control("disable", "Stopped.")}>
                     Stop it
                   </button>
                 )}
+                {r.state === "disabled" && !r.revokedAt && !r.deletedAt && !r.pausedReason && <button className="btn btn-secondary" onClick={()=>control("enable","Routine re-enabled.")}>Turn back on</button>}
+                {!r.revokedAt && !r.deletedAt && <button className="btn btn-secondary" onClick={()=>control("revoke","Approval revoked. A new version needs review.")}>Revoke approval</button>}
+                {r.pausedReason && !r.deletedAt && <button className="btn btn-secondary" onClick={()=>control("resolve-recipient","Recipient hold cleared.")}>Resolve recipient hold</button>}
+                {r.deletedAt ? <button className="btn btn-secondary" onClick={()=>control("restore","Routine restored, still stopped.")}>Restore archived routine</button> : <button className="btn btn-ghost" onClick={()=>control("delete","Routine archived.")}>Archive</button>}
               </div>
               <details className="work-section">
                 <summary>Resources this routine may use</summary>
@@ -136,7 +137,8 @@ export function RoutineDetail({
               <div className="routine-detail">
                 <div>
                   <WhatItDoes spec={d.spec} specError={d.specError} document={r.document} />
-                  <Runs runs={d.runs} routine={r} />
+                  <ReviewedRuns runs={d.reviewedRuns ?? []} />
+                  {d.runs.length>0 && <Runs runs={d.runs} routine={r} />}
                 </div>
                 <div>
                   <Revisions revisions={d.revisions} />
@@ -150,6 +152,21 @@ export function RoutineDetail({
       )}
     </>
   );
+}
+
+function ReviewedRuns({runs}:{runs:NonNullable<Detail["reviewedRuns"]>}) {
+  return <section className="card">
+    <h3>Reviewed runs</h3>
+    {runs.length===0 ? <div className="muted">No approved routine has matched a trigger yet.</div> : <div className="table-scroll"><table>
+      <thead><tr><th scope="col">when</th><th scope="col">subject</th><th scope="col">state</th><th scope="col">effect</th><th scope="col">detail</th></tr></thead>
+      <tbody>{runs.map(run=><tr key={run.id}>
+        <td className="tnum" title={when(run.occurredAt)}>{ago(run.occurredAt)}</td>
+        <td>{run.subject || "unmapped"}</td>
+        <td><StatusPill kind={run.state==="completed" ? "ok" : run.state==="blocked" || run.state==="uncertain" ? "warn" : "bad"}>{run.state}</StatusPill></td>
+        <td>{run.effectState}</td><td>{run.reason || run.effectSummary || "—"}</td>
+      </tr>)}</tbody>
+    </table></div>}
+  </section>;
 }
 
 // The spec, in the schema's own field names. Inventing friendlier labels
