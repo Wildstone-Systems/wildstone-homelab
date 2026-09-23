@@ -142,7 +142,10 @@ type FileStore struct {
 	// BeforeWrite is the runtime store execution fence, required for mutations.
 	BeforeWrite func() error
 	Root        string
-	MaxUpload   int64
+	// RequiredMount is an optional owner-configured mountpoint containing Root.
+	// When set, no access may create or use a local replacement if it is absent.
+	RequiredMount string
+	MaxUpload     int64
 	// Member is the authenticated person this store is acting for, and
 	// it is the ONLY thing that resolves the "me" namespace. Set by the
 	// caller from the proven identity; empty means the personal space is
@@ -155,6 +158,8 @@ type FileStore struct {
 // big it is, when it landed, and which destination holds it.
 type Item struct {
 	Name      string    `json:"name"`
+	Path      string    `json:"path,omitempty"`
+	Type      string    `json:"type,omitempty"`
 	Namespace string    `json:"namespace"`
 	Size      int64     `json:"size"`
 	ModTime   time.Time `json:"modTime"`
@@ -258,6 +263,9 @@ func (s *FileStore) open(ns Namespace) (*os.Root, error) {
 	if !s.Ready() {
 		return nil, ErrNoRoot
 	}
+	if err := s.checkMount(); err != nil {
+		return nil, err
+	}
 	// Opened before anything is created, so every step below — the
 	// existence test, the mkdir, the chmod — is a step the kernel has
 	// already confined.
@@ -267,14 +275,9 @@ func (s *FileStore) open(ns Namespace) (*os.Root, error) {
 	// installed the files widget without a media server got an error on
 	// every upload. Only the root itself is made here — everything below
 	// it still goes through os.Root.
-	if _, err := os.Stat(s.Root); errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(s.Root, 0o755); err != nil {
-			return nil, fmt.Errorf("portal: creating the storage root: %w", err)
-		}
-	}
-	base, err := os.OpenRoot(s.Root)
+	base, err := s.openStorageRoot()
 	if err != nil {
-		return nil, fmt.Errorf("portal: opening the storage root: %w", err)
+		return nil, err
 	}
 	defer base.Close()
 	// 0o755: the household's other applications — the media server, a
@@ -388,6 +391,16 @@ func (s *FileStore) Save(nsKey, offered string, body io.Reader) (Stored, error) 
 	if written > max {
 		return Stored{}, fmt.Errorf("%w (%d bytes, limit %d)", ErrTooLarge, written, max)
 	}
+	if err := s.checkWriteAuthority(); err != nil {
+		return Stored{}, err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		return Stored{}, err
+	}
+	info, err := tmp.Stat()
+	if err != nil {
+		return Stored{}, err
+	}
 	// Flushed before the rename, so what the rename publishes is the
 	// whole file rather than whatever the page cache has got to.
 	if err := tmp.Sync(); err != nil {
@@ -404,15 +417,7 @@ func (s *FileStore) Save(nsKey, offered string, body io.Reader) (Stored, error) 
 	if err != nil {
 		return Stored{}, err
 	}
-	// 0o644 for the reason the directory is 0o755, and it is a chmod
-	// rather than a create mode for the same one: the umask would
-	// otherwise make every uploaded file root-only.
-	_ = root.Chmod(final, 0o644)
 
-	info, err := root.Stat(final)
-	if err != nil {
-		return Stored{}, fmt.Errorf("portal: reading back %s: %w", final, err)
-	}
 	return Stored{
 		Item: Item{
 			Name: final, Namespace: ns.Key,
@@ -469,12 +474,9 @@ func claimName(root *os.Root, tmpName, name string, beforeWrite func() error) (s
 // file already behind it. The scratch file's own link goes in Save's
 // cleanup.
 //
-// Not every filesystem a household might mount its storage on has hard
-// links, so a failure that is not "it exists" falls back to reserving
-// the name with an exclusive create and renaming over the reservation.
-// That is atomic in the part that matters — two callers cannot both
-// create the same name with O_EXCL — at the cost of a moment where the
-// name exists with nothing in it.
+// Filesystems without hard links may use atomic no-replace rename. There is
+// no reservation-and-replace fallback: a concurrent delete/upload could take
+// that reservation away and the final rename would destroy its replacement.
 func takeName(root *os.Root, tmpName, candidate string, beforeWrite func() error) (bool, error) {
 	if err := beforeWrite(); err != nil {
 		return false, err
@@ -488,23 +490,11 @@ func takeName(root *os.Root, tmpName, candidate string, beforeWrite func() error
 	if err := beforeWrite(); err != nil {
 		return false, err
 	}
-	f, err := root.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
+	if err := renameNoReplace(root, tmpName, root, candidate, beforeWrite); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return false, nil
 		}
-		return false, fmt.Errorf("portal: reserving %s: %w", candidate, err)
-	}
-	f.Close()
-	if err := beforeWrite(); err != nil {
-		_ = root.Remove(candidate)
 		return false, err
-	}
-	if err := root.Rename(tmpName, candidate); err != nil {
-		// The reservation is ours and it is empty. Leaving it would be
-		// a nameless nothing in the household's storage.
-		_ = root.Remove(candidate)
-		return false, fmt.Errorf("portal: storing %s: %w", candidate, err)
 	}
 	return true, nil
 }
@@ -839,28 +829,13 @@ func (s *FileStore) Rename(nsKey, from, to string) (string, error) {
 	// is somebody about to lose a file they did not name in this
 	// request.
 	//
-	// The name is taken with an exclusive create rather than tested
-	// with Lstat, for the reason claimName gives: a test and a rename
-	// are two steps, and a concurrent upload or rename fits between
-	// them — after which os.Rename would replace what it found.
+	// The legacy flat API shares the same atomic no-replace primitive as
+	// tree moves. Reservations can be deleted and replaced by another request.
 	if err := s.checkWriteAuthority(); err != nil {
 		return "", err
 	}
-	reserved, err := root.OpenFile(safe, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return "", fmt.Errorf("portal: %s is already there", safe)
-		}
-		return "", fmt.Errorf("portal: renaming %s: %w", from, err)
-	}
-	reserved.Close()
-	if err := s.checkWriteAuthority(); err != nil {
-		_ = root.Remove(safe)
+	if err := renameNoReplace(root, from, root, safe, s.checkWriteAuthority); err != nil {
 		return "", err
-	}
-	if err := root.Rename(from, safe); err != nil {
-		_ = root.Remove(safe)
-		return "", fmt.Errorf("portal: renaming %s: %w", from, err)
 	}
 	return safe, nil
 }
@@ -883,7 +858,13 @@ func hasSubstance(offered string) bool {
 
 func (s *FileStore) checkWriteAuthority() error {
 	if s.BeforeWrite == nil {
-		return fmt.Errorf("household file write refused: no coordinator authority is wired")
+		return fmt.Errorf("%w: no coordinator authority is wired", ErrWriteAuthority)
 	}
-	return s.BeforeWrite()
+	if err := s.checkMount(); err != nil {
+		return err
+	}
+	if err := s.BeforeWrite(); err != nil {
+		return fmt.Errorf("%w: %w", ErrWriteAuthority, err)
+	}
+	return nil
 }

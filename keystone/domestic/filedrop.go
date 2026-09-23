@@ -118,7 +118,8 @@ type Filedrop struct {
 	//
 	// nil makes every tool answer "no storage configured", which is the
 	// honest thing for a control plane that cannot look.
-	Settings func() (root string, maxUpload int64, err error)
+	Settings      func() (root string, maxUpload int64, err error)
+	RequiredMount func() (string, error)
 	// Enabled reports whether this deployment has the filedrop
 	// capability INSTALLED, asked per call.
 	//
@@ -163,7 +164,14 @@ func (f *Filedrop) store(c Call) (*portal.FileStore, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errNoFiledropRoot
 	}
-	return &portal.FileStore{BeforeWrite: func() error {
+	mount := ""
+	if f.RequiredMount != nil {
+		mount, err = f.RequiredMount()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &portal.FileStore{RequiredMount: mount, BeforeWrite: func() error {
 		if err := checkExecution(f.executionContext, f.Authority); err != nil {
 			return err
 		}
