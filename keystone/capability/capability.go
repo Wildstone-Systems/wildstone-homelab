@@ -8,6 +8,7 @@ package capability
 import (
 	"bytes"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/sharedcalendar"
 	"sort"
 	"strings"
 	"text/template"
@@ -616,7 +617,7 @@ func sortedKeys(m map[string]string) []string {
 // to hold WEBUI_URL=https://chat.wildstone.internal on a deployment
 // where nothing resolves that name.
 func renderTemplate(pkgName string, index int, tmplStr string, ctx templateContext, funcs template.FuncMap) ([]byte, error) {
-	t, err := template.New(fmt.Sprintf("%s[%d]", pkgName, index)).Funcs(funcs).Option("missingkey=error").Parse(tmplStr)
+	t, err := template.New(fmt.Sprintf("%s[%d]", pkgName, index)).Funcs(template.FuncMap{"sharedCalendars": sharedcalendar.Parse}).Funcs(funcs).Option("missingkey=error").Parse(tmplStr)
 	if err != nil {
 		return nil, &TemplateError{Package: pkgName, Index: index, Err: fmt.Errorf("parsing template: %w", err)}
 	}

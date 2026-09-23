@@ -28,6 +28,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
 	"net/http"
 	"sort"
 	"strings"
@@ -83,6 +84,9 @@ type agendaDay struct {
 }
 
 type agendaItem struct {
+	Calendar     string `json:"calendar,omitempty"`
+	CalendarName string `json:"calendarName,omitempty"`
+	Color        string `json:"color,omitempty"`
 	// Kind is event | commitment | notice, so the page can draw each in
 	// its own idiom rather than flattening three things into one list
 	// of strings.
@@ -166,7 +170,7 @@ func (s *Server) homeAgenda(_ http.ResponseWriter, r *http.Request, member strin
 	page := agendaPage{homeCard: homeCard{Available: true}, People: people, Who: who}
 	byDay := map[string][]agendaItem{}
 
-	s.agendaEvents(r.Context(), who, today, loc, byDay)
+	s.agendaEvents(r.Context(), who, member, forwardedGroups(r), desired, today, loc, byDay)
 	s.agendaCommitments(who, s.who(r, member), today, loc, byDay)
 	s.agendaNotices(who, s.who(r, member), today, loc, byDay)
 
@@ -251,13 +255,23 @@ func knownPerson(people []agendaPerson, who string) bool {
 // an event written on somebody's phone names "Maya", not a person id.
 // A tighter binding is a job for the attribution work, not for a
 // prototype that would otherwise show an empty day.
-func (s *Server) agendaEvents(ctx context.Context, who string, today time.Time, loc *time.Location, byDay map[string][]agendaItem) {
+func (s *Server) agendaEvents(ctx context.Context, who, reader string, groups []string, desired []resource.Resource, today time.Time, loc *time.Location, byDay map[string][]agendaItem) {
 	if s.CalendarBook == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	events, err := s.CalendarBook.Events(ctx, today, today.AddDate(0, 0, agendaDays+1))
+	events := []calendarReadEvent{}
+	var err error
+	if s.CalendarBookFor != nil {
+		events, err = s.visibleCalendarEvents(ctx, reader, groups, desired, today, today.AddDate(0, 0, agendaDays+1), "")
+	} else {
+		var legacy []caldav.Event
+		legacy, err = s.CalendarBook.Events(ctx, today, today.AddDate(0, 0, agendaDays+1))
+		for _, e := range legacy {
+			events = append(events, calendarReadEvent{Event: e})
+		}
+	}
 	if err != nil {
 		s.Log.Info("agenda events unavailable", "err", err)
 		return
@@ -270,6 +284,7 @@ func (s *Server) agendaEvents(ctx context.Context, who string, today time.Time, 
 		key := start.Format("2006-01-02")
 		item := agendaItem{
 			Kind: "event", Title: e.Summary, AllDay: e.AllDay,
+			Calendar: e.Calendar.ID, CalendarName: e.Calendar.Name, Color: e.Calendar.Color,
 			Detail: e.Location, sortAt: start, rank: rankOfClock(start, e.AllDay),
 		}
 		if !e.AllDay {

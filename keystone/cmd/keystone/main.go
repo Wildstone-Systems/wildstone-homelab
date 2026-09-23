@@ -1274,6 +1274,20 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		}
 		// The calendar page writes through the very same upstream.
 		apiSrv.CalendarBook = calendarActions.Upstream
+		apiSrv.CalendarBookFor = func(collection string) api.CalendarBook {
+			copy := *calendarActions.Upstream
+			copy.CollectionURL = collection
+			return &copy
+		}
+		calendarActions.Resolve = func(member, id string, write bool) (*caldav.Upstream, string, error) {
+			calendar, collection, err := apiSrv.CalendarForActor(member, id, write)
+			if err != nil {
+				return nil, "", err
+			}
+			copy := *calendarActions.Upstream
+			copy.CollectionURL = collection
+			return &copy, calendar.ID, nil
+		}
 		// Bookings follow the calendar events they made: an appointment
 		// moved or deleted on a phone moves or cancels the booking here.
 		// Every two minutes, because a household that moves the dentist

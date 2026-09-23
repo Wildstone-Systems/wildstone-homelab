@@ -40,12 +40,23 @@ const defaultAppointmentMinutes = 60
 // calendar server was reachable. The answer says so, so the page can
 // tell them it is not on the calendar.
 func (s *Server) bookCommitment(ctx context.Context, st upkeep.Standing, member string, at time.Time, req commitmentAnswer) (any, int, error) {
+	s.calendarBookingsMu.Lock()
+	defer s.calendarBookingsMu.Unlock()
 	prev, prevErr := s.DB.LatestCommitmentBooking(st.Name)
 
 	out := map[string]any{}
 	href := ""
+	calendarID := "household"
 	if s.CalendarBook != nil && s.CalendarCollectionURL != "" {
-		ans, err := s.CalendarBook.CreateEvent(ctx, bookingEvent(st, at, req, s.calendarLoc()))
+		calendar, book, _, err := s.bookingCalendar("")
+		if err == nil && s.CalendarBookFor != nil {
+			_, _, err = s.CalendarForActor(member, calendar.ID, true)
+		}
+		if err != nil {
+			return nil, http.StatusForbidden, err
+		}
+		calendarID = calendar.ID
+		ans, err := book.CreateEvent(ctx, bookingEvent(st, at, req, s.calendarLoc()))
 		if err != nil {
 			out["calendarProblem"] = "Booked — but it couldn't be added to the household calendar: " + err.Error()
 		} else if data, ok := ans.Data.(map[string]any); ok {
@@ -53,7 +64,7 @@ func (s *Server) bookCommitment(ctx context.Context, st upkeep.Standing, member 
 		}
 	}
 	seq, err := s.DB.RecordCommitmentBooking(runtimedb.CommitmentBooking{
-		Commitment: st.Name, At: at, BookedBy: member, Note: req.Note, CalendarEvent: href,
+		Commitment: st.Name, At: at, BookedBy: member, Note: req.Note, CalendarEvent: href, CalendarID: calendarID,
 	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -61,6 +72,7 @@ func (s *Server) bookCommitment(ctx context.Context, st upkeep.Standing, member 
 	out["seq"] = seq
 	if href != "" {
 		out["calendarEvent"] = href
+		out["calendar"] = calendarID
 	}
 
 	// Booking again replaces the appointment rather than adding a second
@@ -71,7 +83,14 @@ func (s *Server) bookCommitment(ctx context.Context, st upkeep.Standing, member 
 			s.Log.Warn("rebooking: cancelling the previous booking", "commitment", st.Name, "err", err)
 		}
 		if prev.CalendarEvent != "" && s.CalendarBook != nil {
-			if _, err := s.CalendarBook.DeleteEvent(ctx, caldav.EventWrite{Href: prev.CalendarEvent}); err != nil {
+			calendar, book, _, err := s.bookingCalendar(prev.CalendarID)
+			if err == nil && s.CalendarBookFor != nil {
+				_, _, err = s.CalendarForActor(member, calendar.ID, true)
+			}
+			if err == nil {
+				_, err = book.DeleteEvent(ctx, caldav.EventWrite{Href: prev.CalendarEvent})
+			}
+			if err != nil {
 				s.Log.Warn("rebooking: removing the previous calendar event", "commitment", st.Name, "err", err)
 			}
 		}
@@ -119,6 +138,8 @@ func bookingEvent(st upkeep.Standing, at time.Time, req commitmentAnswer, loc *t
 // the ledger keeps both stories. A calendar that cannot be read changes
 // nothing: an outage is not a cancellation.
 func (s *Server) SyncCalendarBookings(ctx context.Context) (int, error) {
+	s.calendarBookingsMu.Lock()
+	defer s.calendarBookingsMu.Unlock()
 	if s.CalendarBook == nil || s.DB == nil {
 		return 0, nil
 	}
@@ -129,7 +150,11 @@ func (s *Server) SyncCalendarBookings(ctx context.Context) (int, error) {
 	loc := s.calendarLoc()
 	changed := 0
 	for _, b := range bookings {
-		ev, err := s.CalendarBook.EventAt(ctx, b.CalendarEvent)
+		_, book, _, err := s.bookingCalendar(b.CalendarID)
+		if err != nil {
+			continue
+		}
+		ev, err := book.EventAt(ctx, b.CalendarEvent)
 		if err != nil {
 			s.Log.Warn("calendar bookings: reading an event", "commitment", b.Commitment, "err", err)
 			continue
@@ -151,7 +176,7 @@ func (s *Server) SyncCalendarBookings(ctx context.Context) (int, error) {
 		}
 		if _, err := s.DB.RecordCommitmentBooking(runtimedb.CommitmentBooking{
 			Commitment: b.Commitment, At: when, BookedBy: calendarActor,
-			Note: "moved on the calendar", CalendarEvent: b.CalendarEvent,
+			Note: "moved on the calendar", CalendarEvent: b.CalendarEvent, CalendarID: b.CalendarID,
 		}); err != nil {
 			return changed, fmt.Errorf("moving %s's booking: %w", b.Commitment, err)
 		}

@@ -41,3 +41,31 @@ func TestOnlyTheStandingLinkedBookingIsFollowed(t *testing.T) {
 		t.Errorf("latest booking = %+v, %v", latest, err)
 	}
 }
+
+func TestLegacyBookingDefaultsToHouseholdAndMoveRetainsOtherLinks(t *testing.T) {
+	db := open(t)
+	at := time.Now().UTC().Truncate(time.Second)
+	// An old writer/migrated row supplies no calendar column.
+	_, err := db.sql.Exec(`INSERT INTO commitment_bookings(commitment,at,booked_at,booked_by,note,calendar_event) VALUES(?,?,?,?,?,?)`, "legacy", at.Format(time.RFC3339Nano), at.Format(time.RFC3339Nano), "sam", "", "/household/event.ics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := db.LatestCommitmentBooking("legacy")
+	if err != nil || legacy.CalendarID != "household" || legacy.CalendarEvent != "/household/event.ics" {
+		t.Fatal(legacy, err)
+	}
+	if _, err := db.RecordCommitmentBooking(CommitmentBooking{Commitment: "other", At: at, BookedBy: "sam", CalendarID: "school", CalendarEvent: "/household/event.ics"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MoveBookingCalendar("household", "/household/event.ics", "school", "/school/event.ics"); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err = db.LatestCommitmentBooking("legacy")
+	if err != nil || legacy.CalendarID != "school" || legacy.CalendarEvent != "/school/event.ics" {
+		t.Fatal(legacy, err)
+	}
+	other, err := db.LatestCommitmentBooking("other")
+	if err != nil || other.CalendarEvent != "/household/event.ics" {
+		t.Fatal(other, err)
+	}
+}

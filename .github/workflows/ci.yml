@@ -193,6 +193,18 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           for m in proto wardstone keystone cli testing/e2e; do (cd "$m" && go test -race -timeout 30m ./...); done
+      - uses: actions/setup-python@v5
+        if: matrix.goarch == 'amd64'
+        with:
+          python-version: "3.12"
+      - name: shared calendar CalDAV conformance
+        if: matrix.goarch == 'amd64'
+        run: |
+          calendar_venv="$(mktemp -d "$RUNNER_TEMP/calendar-test.XXXXXX")"
+          trap 'rm -rf "$calendar_venv"' EXIT
+          python -m venv "$calendar_venv"
+          "$calendar_venv/bin/python" -m pip install 'radicale==3.8.0'
+          RADICALE_TEST_PYTHON="$calendar_venv/bin/python" go test -v ./keystone/pkgtool -run '^TestSharedCalendarRadicaleDiscovery$'
       - name: ts codegen drift (ADR-W007 A7)
         if: matrix.goarch == 'amd64'
         # The committed console/src/generated/resources.ts must match what

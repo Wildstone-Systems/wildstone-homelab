@@ -1150,6 +1150,7 @@
         evs.forEach(function (e) {
           var row = make("div", "frow");
           row.appendChild(make("span", "nm", e.title));
+          if (e.calendarName) { row.appendChild(make("span", "muted", e.calendarName)); row.style.borderLeft = "3px solid " + e.color; }
           row.appendChild(make("span", "muted tnum", e.allDay ? dayName(e.at) + " all day"
                                                               : dayName(e.at) + " " + when(e.at)));
           body.appendChild(row);

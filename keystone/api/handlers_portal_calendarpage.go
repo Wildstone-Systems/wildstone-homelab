@@ -9,7 +9,7 @@ package api
 // way to put something on the family calendar from a browser was to ask
 // the assistant.
 //
-// IT IS THE SHARED CALENDAR ONLY. Keystone reaches Radicale as the
+// THESE ARE DECLARED SHARED CALENDARS ONLY. Keystone reaches Radicale as the
 // calendar's service account, which holds the household collection and
 // nobody's personal ones — and a portal member arrives by forwarded
 // identity, with no CalDAV password Keystone could use on their behalf.
@@ -20,12 +20,9 @@ package api
 // LdapGroup that package declares and the group Radicale's own filter
 // admits. One grant, two doors, the same people through both.
 //
-// AN EVENT IS ADDRESSED ONLY INSIDE THE COLLECTION. The CalDAV adapter
-// will follow any absolute href it is given, with the calendar's
-// credential attached, because its other caller — the assistant — only
-// ever passes hrefs Radicale itself reported. A browser can send
-// anything. So every href from this page is resolved here and refused
-// unless it is a path under the household collection.
+// An event is addressed only inside the selected, authorized collection.
+// The shared path validator also confines upstream-reported hrefs used by
+// bookings and Butler tools. Calendar credentials never follow redirects.
 
 import (
 	"context"
@@ -33,8 +30,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
-	"path"
 	"sort"
 	"strings"
 	"time"
@@ -43,6 +38,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/chickenrat17/wildstone-homelab/keystone/sharedcalendar"
 )
 
 var surfaceCalendar = portalSurface{capability: calendarCapabilityName, title: "Calendar"}
@@ -79,11 +75,15 @@ type calendarPageEvent struct {
 	// Href is the event's address in the collection, under a key the
 	// redactor shelters (redact.calendarEventRefScanRegexp): its file
 	// name is a UID, which is token-shaped.
-	Href   string    `json:"calendarEvent"`
-	Title  string    `json:"title"`
-	Start  time.Time `json:"start"`
-	End    time.Time `json:"end,omitzero"`
-	AllDay bool      `json:"allDay,omitempty"`
+	Calendar     string    `json:"calendar"`
+	CalendarName string    `json:"calendarName"`
+	Color        string    `json:"color"`
+	Writable     bool      `json:"writable"`
+	Href         string    `json:"calendarEvent"`
+	Title        string    `json:"title"`
+	Start        time.Time `json:"start"`
+	End          time.Time `json:"end,omitzero"`
+	AllDay       bool      `json:"allDay,omitempty"`
 	// Day is the first day the event is on; LastDay the last, inclusive.
 	Day     string `json:"day"`
 	LastDay string `json:"lastDay"`
@@ -115,7 +115,7 @@ func (s *Server) calendarReady() (int, error) {
 
 // calendarPageEvents answers GET /api/v1/calendar/events?from=&to=,
 // both YYYY-MM-DD in the household's zone, to inclusive.
-func (s *Server) calendarPageEvents(_ http.ResponseWriter, r *http.Request, _ string, _ []resource.Resource) (any, int, error) {
+func (s *Server) calendarPageEvents(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
 	if status, err := s.calendarReady(); err != nil {
 		return nil, status, err
 	}
@@ -133,13 +133,19 @@ func (s *Server) calendarPageEvents(_ http.ResponseWriter, r *http.Request, _ st
 		return nil, http.StatusBadRequest, fmt.Errorf("ask for between 1 and %d days", maxCalendarPageDays)
 	}
 
-	events, err := s.CalendarBook.Events(r.Context(), from, to)
+	events, err := s.visibleCalendarEvents(r.Context(), member, forwardedGroups(r), desired, from, to, r.URL.Query().Get("calendar"))
 	if err != nil {
+		if errors.Is(err, errCalendarAccess) {
+			return nil, http.StatusForbidden, err
+		}
 		return nil, http.StatusBadGateway, fmt.Errorf("the calendar didn't answer: %w", err)
 	}
 	out := make([]calendarPageEvent, 0, len(events))
 	for _, e := range events {
-		out = append(out, pageEvent(e, loc))
+		p := pageEvent(e.Event, loc)
+		p.Calendar, p.CalendarName, p.Color = e.Calendar.ID, e.Calendar.Name, e.Calendar.Color
+		p.Writable = e.Calendar.Allows(member, forwardedGroups(r), true)
+		out = append(out, p)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Day != out[j].Day {
@@ -151,11 +157,16 @@ func (s *Server) calendarPageEvents(_ http.ResponseWriter, r *http.Request, _ st
 		}
 		return out[i].Start.Before(out[j].Start)
 	})
+	choices, err := s.calendarChoices(member, forwardedGroups(r), desired)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	now := time.Now().In(loc)
 	return map[string]any{
-		"events":   out,
-		"today":    now.Format("2006-01-02"),
-		"timezone": loc.String(),
+		"events":    out,
+		"calendars": choices,
+		"today":     now.Format("2006-01-02"),
+		"timezone":  loc.String(),
 	}, http.StatusOK, nil
 }
 
@@ -194,15 +205,17 @@ func pageEvent(e caldav.Event, loc *time.Location) calendarPageEvent {
 // dates and wall-clock times in the household's zone, which the browser
 // can produce without knowing that zone's offset on the day in question.
 type calendarPageWrite struct {
-	Href      string `json:"href,omitempty"`
-	Title     string `json:"title"`
-	Date      string `json:"date"`
-	EndDate   string `json:"endDate,omitempty"`
-	AllDay    bool   `json:"allDay,omitempty"`
-	StartTime string `json:"startTime,omitempty"`
-	EndTime   string `json:"endTime,omitempty"`
-	Location  string `json:"location,omitempty"`
-	Notes     string `json:"notes,omitempty"`
+	Calendar       string `json:"calendar,omitempty"`
+	TargetCalendar string `json:"targetCalendar,omitempty"`
+	Href           string `json:"href,omitempty"`
+	Title          string `json:"title"`
+	Date           string `json:"date"`
+	EndDate        string `json:"endDate,omitempty"`
+	AllDay         bool   `json:"allDay,omitempty"`
+	StartTime      string `json:"startTime,omitempty"`
+	EndTime        string `json:"endTime,omitempty"`
+	Location       string `json:"location,omitempty"`
+	Notes          string `json:"notes,omitempty"`
 }
 
 // toEventWrite turns the page's dates and times into the adapter's
@@ -266,29 +279,6 @@ func wallClock(day time.Time, hhmm string, loc *time.Location) (time.Time, error
 	return time.Date(day.Year(), day.Month(), day.Day(), t.Hour(), t.Minute(), 0, 0, loc), nil
 }
 
-// calendarHref resolves an href from the page and refuses anything that
-// is not an event inside the household collection. See the file header.
-func (s *Server) calendarHref(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", fmt.Errorf("which event? (no href)")
-	}
-	base, err := url.Parse(strings.TrimRight(s.CalendarCollectionURL, "/") + "/")
-	if err != nil {
-		return "", fmt.Errorf("the calendar's address is not a URL")
-	}
-	ref, err := url.Parse(raw)
-	if err != nil || ref.IsAbs() || ref.Host != "" || !strings.HasPrefix(ref.Path, "/") {
-		return "", fmt.Errorf("that is not an event in the household calendar")
-	}
-	clean := path.Clean(ref.Path)
-	if !strings.HasPrefix(clean, base.Path) || clean == strings.TrimRight(base.Path, "/") ||
-		strings.Contains(strings.TrimPrefix(clean, base.Path), "/") {
-		return "", fmt.Errorf("that is not an event in the household calendar")
-	}
-	return (&url.URL{Scheme: base.Scheme, Host: base.Host, Path: clean}).String(), nil
-}
-
 func decodeCalendarWrite(r *http.Request) (calendarPageWrite, error) {
 	var req calendarPageWrite
 	if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxCalendarWriteBytes)).Decode(&req); err != nil {
@@ -306,7 +296,7 @@ func calendarWriteStatus(err error) int {
 	return http.StatusBadGateway
 }
 
-func (s *Server) calendarPageCreate(_ http.ResponseWriter, r *http.Request, member string, _ []resource.Resource) (any, int, error) {
+func (s *Server) calendarPageCreate(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
 	if status, err := s.calendarReady(); err != nil {
 		return nil, status, err
 	}
@@ -314,11 +304,15 @@ func (s *Server) calendarPageCreate(_ http.ResponseWriter, r *http.Request, memb
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
+	_, book, _, err := s.selectCalendar(desired, member, forwardedGroups(r), req.Calendar, true)
+	if err != nil {
+		return nil, http.StatusForbidden, err
+	}
 	w, err := req.toEventWrite(s.calendarLoc(), false)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
-	ans, err := s.CalendarBook.CreateEvent(r.Context(), w)
+	ans, err := book.CreateEvent(r.Context(), w)
 	if err != nil {
 		return nil, calendarWriteStatus(err), err
 	}
@@ -327,7 +321,9 @@ func (s *Server) calendarPageCreate(_ http.ResponseWriter, r *http.Request, memb
 	return ans.Data, http.StatusOK, nil
 }
 
-func (s *Server) calendarPageUpdate(_ http.ResponseWriter, r *http.Request, member string, _ []resource.Resource) (any, int, error) {
+func (s *Server) calendarPageUpdate(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
+	s.calendarBookingsMu.Lock()
+	defer s.calendarBookingsMu.Unlock()
 	if status, err := s.calendarReady(); err != nil {
 		return nil, status, err
 	}
@@ -335,7 +331,14 @@ func (s *Server) calendarPageUpdate(_ http.ResponseWriter, r *http.Request, memb
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
-	href, err := s.calendarHref(req.Href)
+	calendar, book, collection, err := s.selectCalendar(desired, member, forwardedGroups(r), req.Calendar, true)
+	if err != nil {
+		return nil, http.StatusForbidden, err
+	}
+	if !strings.HasPrefix(req.Href, "/") {
+		return nil, http.StatusBadRequest, fmt.Errorf("event address must be a collection path")
+	}
+	href, err := sharedcalendar.EventURL(collection, req.Href)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
@@ -343,17 +346,45 @@ func (s *Server) calendarPageUpdate(_ http.ResponseWriter, r *http.Request, memb
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
+	target := calendar
+	targetURL := collection
+	if req.TargetCalendar != "" && req.TargetCalendar != calendar.ID {
+		var e error
+		target, _, targetURL, e = s.selectCalendar(desired, member, forwardedGroups(r), req.TargetCalendar, true)
+		if e != nil {
+			return nil, http.StatusForbidden, e
+		}
+		if _, ok := book.(interface {
+			MoveEvent(context.Context, string, string) (string, error)
+		}); !ok {
+			return nil, http.StatusNotImplemented, fmt.Errorf("this calendar cannot move events")
+		}
+	}
 	w.Href = href
-	ans, err := s.CalendarBook.UpdateEvent(r.Context(), w)
+	ans, err := book.UpdateEvent(r.Context(), w)
 	if err != nil {
 		return nil, calendarWriteStatus(err), err
+	}
+	if target.ID != calendar.ID {
+		moved, moveErr := book.(interface {
+			MoveEvent(context.Context, string, string) (string, error)
+		}).MoveEvent(r.Context(), href, targetURL)
+		if moveErr != nil {
+			return nil, calendarWriteStatus(moveErr), fmt.Errorf("event changes were saved, but the move failed: %w", moveErr)
+		}
+		if s.DB != nil {
+			if err := s.DB.MoveBookingCalendar(calendar.ID, href, target.ID, moved); err != nil {
+				return nil, 500, fmt.Errorf("event moved, but booking link could not be updated: %w", err)
+			}
+		}
+		ans.Data = map[string]any{"href": moved, "calendar": target.ID}
 	}
 	s.event("calendar.update", "", principal.Identity{Name: portalPrincipal, ActingFor: member},
 		fmt.Sprintf("%s changed %q", member, strings.TrimSpace(req.Title)))
 	return ans.Data, http.StatusOK, nil
 }
 
-func (s *Server) calendarPageDelete(_ http.ResponseWriter, r *http.Request, member string, _ []resource.Resource) (any, int, error) {
+func (s *Server) calendarPageDelete(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
 	if status, err := s.calendarReady(); err != nil {
 		return nil, status, err
 	}
@@ -361,11 +392,18 @@ func (s *Server) calendarPageDelete(_ http.ResponseWriter, r *http.Request, memb
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
-	href, err := s.calendarHref(req.Href)
+	_, book, collection, err := s.selectCalendar(desired, member, forwardedGroups(r), req.Calendar, true)
+	if err != nil {
+		return nil, http.StatusForbidden, err
+	}
+	if !strings.HasPrefix(req.Href, "/") {
+		return nil, http.StatusBadRequest, fmt.Errorf("event address must be a collection path")
+	}
+	href, err := sharedcalendar.EventURL(collection, req.Href)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
-	ans, err := s.CalendarBook.DeleteEvent(r.Context(), caldav.EventWrite{Href: href})
+	ans, err := book.DeleteEvent(r.Context(), caldav.EventWrite{Href: href})
 	if err != nil {
 		return nil, calendarWriteStatus(err), err
 	}

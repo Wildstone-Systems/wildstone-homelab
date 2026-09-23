@@ -960,6 +960,7 @@ wait_agent() {
 }
 
 enable_capability() { # package params-json
+  wait_agent
   local r id st i
   r="$(api POST /api/v1/capabilities "{\"package\":\"$1\",\"params\":$2}")"
   # A resumed install proposes what an earlier run already put in
@@ -1065,6 +1066,7 @@ lldap_login() { # username password
 }
 
 set_owner_password() {
+  [ -n "$LLDAP_ADMIN_PASS" ] || set_admin_password
   local token
   # Retried, because the service password was set moments ago and the
   # directory adopts it when the reconciler re-creates the container
@@ -1095,9 +1097,10 @@ set_owner_password() {
 # Calendar's LDAP reader is a machine account. The directory creates
 # people without passwords, so the installer gives this account a random
 # one, stores the same value in the Calendar Secret and Keystone's private
-# environment, and proves that the account can log in. Re-running rotates
-# all three together.
+# environment, and proves that the account can log in. Resumed installs
+# preserve a declared account with an existing credential file.
 CALENDAR_PASS=""
+CALENDAR_PROVISIONED=0
 CALENDAR_USER="radicale"
 CALENDAR_COLLECTION="GROUPS/Y2FsZW5kYXJfdXNlcnM="
 
@@ -1114,6 +1117,12 @@ seed_calendar_account() {
   members="$(api GET /api/v1/household/members)"
   account_row="$(printf '%s' "$members" | tr '{' '\n' |
     grep "\"username\":\"$CALENDAR_USER\"" | head -1 || true)"
+  if [ -n "$account_row" ] && [ "$CALENDAR_PROVISIONED" = 1 ]; then
+    log "Calendar service account already provisioned; preserving its credential"
+    return 0
+  fi
+  [ -n "$LLDAP_ADMIN_PASS" ] || set_admin_password
+  wait_agent
   if [ -z "$account_row" ]; then
     r="$(api POST /api/v1/household/members \
       "{\"username\":\"$CALENDAR_USER\",\"email\":\"$CALENDAR_USER@wildstone.internal\",\"node\":\"$NODE_ID\",\"groups\":[\"calendar_users\"]}")"
@@ -1228,6 +1237,7 @@ OWNER_GROUPS='"console_users","homepage_users","filedrop_users","assistant_users
 # fine, and the Household screen can add the group; saying so beats
 # stopping an install that is otherwise done.
 grant_owner_groups() {
+  wait_agent
   local r id st i members account_row groups group
   members="$(api GET /api/v1/household/members)"
   account_row="$(printf '%s' "$members" | tr '{' '\n' |
@@ -1278,7 +1288,7 @@ create_first_owner() {
   # the account step is skipped when they are already declared, and the
   # rest still runs: the Person half below is idempotent, and a run that
   # got half way through is exactly when it needs to.
-  local declared
+  local declared created_account=0
   declared="$(api GET /api/v1/household/members || true)"
   case "$declared" in
     *"\"username\":\"$ADMIN_USER\""*)
@@ -1304,6 +1314,8 @@ create_first_owner() {
       if [ "$CONSOLE_BEHIND_PROXY" = 1 ]; then
         groups=",\"groups\":[$OWNER_GROUPS]"
       fi
+      [ -n "$LLDAP_ADMIN_PASS" ] || set_admin_password
+      wait_agent
       r="$(api POST /api/v1/household/members \
         "{\"username\":\"$ADMIN_USER\",\"email\":\"$ADMIN_EMAIL\",\"node\":\"$NODE_ID\"$groups}" || true)"
       id="$(echo "$r" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
@@ -1316,11 +1328,15 @@ create_first_owner() {
         [ "$st" = applied ] && break
         [ "$st" = failed ] && fail "the account plan failed; see journalctl -u keystone"
       done
-      [ "$st" = applied ] || fail "the account for '$ADMIN_USER' did not apply in time" ;;
+      [ "$st" = applied ] || fail "the account for '$ADMIN_USER' did not apply in time"
+      created_account=1 ;;
   esac
 
-  # Their password, set on the account just created.
-  set_owner_password
+  # Existing accounts may have changed their password since setup.
+  # Resuming must never replace it with an old installer answer.
+  if [ "$created_account" = 1 ]; then
+    set_owner_password
+  fi
 
   # The Person, as an Owner, admitted. Role is stated rather than left to
   # default: recordButlerMember defaults to member on purpose, so an
@@ -1455,7 +1471,8 @@ post_install() {
   local dom="wildstone.internal" svc
   log "installing identity"
   enable_capability identity "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\"}"
-  set_admin_password
+  # Directory admin credentials are needed only when provisioning a new account.
+  # An already-provisioned resume must not rotate them.
   # The Console's own package: the console_users group, and the route
   # that puts Authelia in front of it. Nothing else declares either, so
   # without this the Console has no group to grant it and no address
@@ -1505,7 +1522,9 @@ post_install() {
     # Job would leave Radicale using the old password. The generation
     # parameter makes the Job run when this installer first adopts an
     # existing Calendar installation or a credential is replaced.
+    CALENDAR_PROVISIONED=0
     if [ -f /etc/wildstone/calendar.env ]; then
+      CALENDAR_PROVISIONED=1
       CALENDAR_PASS="$(sed -n 's/^CALENDAR_PASSWORD=//p' /etc/wildstone/calendar.env)"
     else
       CALENDAR_PASS="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
@@ -1524,12 +1543,18 @@ post_install() {
     # Keystone's portal and agent use the same shared collection. Keep
     # its password in a root-only EnvironmentFile, never a process flag.
     local calendar_url="https://$tsname:51443/$CALENDAR_COLLECTION/"
-    install -m 0600 /dev/null /etc/wildstone/calendar.env
-    printf 'CALENDAR_PASSWORD=%s\n' "$CALENDAR_PASS" > /etc/wildstone/calendar.env
+    if [ ! -f /etc/wildstone/calendar.env ]; then
+      local calendar_env_tmp
+      calendar_env_tmp="$(mktemp /etc/wildstone/calendar.env.XXXXXX)"
+      printf 'CALENDAR_PASSWORD=%s\n' "$CALENDAR_PASS" > "$calendar_env_tmp"
+      chmod 0600 "$calendar_env_tmp"
+      mv "$calendar_env_tmp" /etc/wildstone/calendar.env
+    fi
     KEYSTONE_ARGS="$(merge_keystone_args "$(read_keystone_args)" \
       " -calendar-url $calendar_url -calendar-user $CALENDAR_USER")"
     printf 'KEYSTONE_ARGS=-data-dir /var/lib/wildstone/keystone%s\n' "$KEYSTONE_ARGS" > "$KEYSTONE_ENV"
     systemctl restart keystone || fail "could not enable Calendar in Keystone"
+    wait_agent
     local i calendar_ready=0
     for i in $(seq 1 30); do
       if printf 'user = "%s:%s"\n' "$CALENDAR_USER" "$CALENDAR_PASS" |

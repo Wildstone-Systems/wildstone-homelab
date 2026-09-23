@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -142,12 +143,10 @@ type Server struct {
 	// clock once instead of on every install form.
 	HouseholdTimezone string
 
-	// CalendarCollectionURL is the shared household calendar the
-	// calendar.* actions act on, wired from -calendar-url. This surface
-	// uses it for ONE thing: the principal it lives under, which is what
-	// a phone's configuration profile has to be pointed at. Empty means
-	// this deployment has no shared calendar, and the profile then
-	// carries the member's own calendars alone.
+	// CalendarCollectionURL retains the original Household collection and seeds
+	// the trusted CalDAV origin for declared shared calendars. Existing events
+	// and mobile profiles keep their addresses; declarations carry no URLs.
+
 	CalendarCollectionURL string
 
 	// CalendarEvents reads the SHARED household calendar for the home
@@ -164,7 +163,9 @@ type Server struct {
 	// CalendarBook backs the household's own calendar page (/calendar/):
 	// the same shared collection, read AND written. nil leaves the page
 	// saying the calendar has no sign-in yet, the card's state too.
-	CalendarBook CalendarBook
+	CalendarBook       CalendarBook
+	CalendarBookFor    func(collectionURL string) CalendarBook
+	calendarBookingsMu sync.Mutex
 
 	// Butlers serves conversations as named specialists (ADR-W031) —
 	// cmd/keystone wires it over butlerlive, butlerstore and the
@@ -788,6 +789,7 @@ func (s *Server) Handler() http.Handler {
 	// removing events on the SHARED calendar. Gated on calendar_users,
 	// the calendar package's own group — see handlers_portal_calendarpage.go.
 	mux.Handle("GET /calendar/{$}", s.portal(surfaceCalendar, s.portalPage("calendar")))
+	mux.Handle("POST /api/v1/calendar/visibility", s.portal(surfaceCalendar, s.calendarPreference))
 	mux.Handle("GET /api/v1/calendar/events", s.portal(surfaceCalendar, s.calendarPageEvents))
 	mux.Handle("POST /api/v1/calendar/events", s.portal(surfaceCalendar, s.calendarPageCreate))
 	mux.Handle("POST /api/v1/calendar/events/update", s.portal(surfaceCalendar, s.calendarPageUpdate))
