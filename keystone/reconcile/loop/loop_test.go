@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -285,7 +286,9 @@ func TestOfflineNode(t *testing.T) {
 		t.Fatalf("events = %v", types)
 	}
 
-	// Plan tick: an approved change that cannot land is a loud failure.
+	// Plan tick: an approved change that cannot land remains queued. An
+	// offline node is transport state, not evidence that desired state is
+	// invalid, so reconnecting must retry without another approval (#323).
 	id, err := db.InsertPlan("op", "", "deploy app", "low", `{"x":1}`)
 	if err != nil {
 		t.Fatal(err)
@@ -297,12 +300,128 @@ func TestOfflineNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.Failed, "not connected") {
-		t.Fatalf("offline plan tick = %+v", out)
+	if out.Failed != "" {
+		t.Fatalf("offline plan tick = %+v, want a deferred retry", out)
 	}
 	rec, _ := db.GetPlan(id)
-	if rec.State != runtimedb.PlanFailed {
-		t.Fatalf("plan = %+v, want failed", rec)
+	if rec.State != runtimedb.PlanApplying {
+		t.Fatalf("plan = %+v, want applying", rec)
+	}
+	if types := strings.Join(eventTypes(t, db), ","); !strings.Contains(types, "reconcile.deferred-offline") {
+		t.Fatalf("events = %v", types)
+	}
+
+	// Reconnect: the same applying plan is picked up and converges.
+	l.Connected = func(string) bool { return true }
+	out, err = l.Tick(t.Context())
+	if err != nil || out.Failed != "" {
+		t.Fatalf("reconnected plan tick = %+v, %v", out, err)
+	}
+	rec, _ = db.GetPlan(id)
+	if rec.State != runtimedb.PlanApplied {
+		t.Fatalf("plan after reconnect = %+v, want applied", rec)
+	}
+}
+
+type retryGateApplier struct {
+	okApplier
+	stats   int
+	stops   int
+	removes int
+}
+
+func (a *retryGateApplier) Apply(ctx context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+	switch op.GetOp().(type) {
+	case *wsv1.Operation_InspectContainer:
+		return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: &wsv1.OpError{
+			Code: wsv1.ErrorCode_ERROR_CODE_NOT_FOUND,
+		}}}, nil
+	case *wsv1.Operation_EnsureContainer:
+		return &wsv1.OpResult{Result: &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
+			ContainerId: "app", Created: true, Started: true,
+		}}}, nil
+	case *wsv1.Operation_ContainerStats:
+		a.stats++
+		if a.stats == 1 {
+			return nil, errors.New("session disappeared")
+		}
+		return &wsv1.OpResult{Result: &wsv1.OpResult_ContainerStats{ContainerStats: &wsv1.ContainerStatsResult{}}}, nil
+	case *wsv1.Operation_StopContainer:
+		a.stops++
+	case *wsv1.Operation_RemoveContainer:
+		a.removes++
+	}
+	return a.okApplier.Apply(ctx, node, op)
+}
+
+func TestPlanInterruptedAtContainerGateRemainsApplyingAndRetries(t *testing.T) {
+	l, state, db, _ := harness(t)
+	app := &retryGateApplier{}
+	l.Rec.Applier = app
+	l.Rec.MaxApplyRetries = 1
+	l.Rec.HealthGateAttempts = 1
+
+	container := resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindContainer,
+		Metadata:   resource.Metadata{Name: "app", Owner: "capability/test", Node: "n1"},
+		Container: &resource.ContainerSpec{
+			Image: "reg.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+	}
+	if err := state.Put(container); err != nil {
+		t.Fatal(err)
+	}
+	id, err := db.InsertPlan("op", "", "deploy app", "low", `{"x":1}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TransitionPlan(id, runtimedb.PlanApproved, "op"); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := l.Tick(t.Context())
+	if err != nil || first.Failed != "" {
+		t.Fatalf("interrupted tick = %+v, %v", first, err)
+	}
+	rec, err := db.GetPlan(id)
+	if err != nil || rec.State != runtimedb.PlanApplying {
+		t.Fatalf("interrupted plan = %+v, %v; want applying", rec, err)
+	}
+	if app.stops != 0 || app.removes != 0 {
+		t.Fatalf("interrupted gate rolled back destructively: stops=%d removes=%d", app.stops, app.removes)
+	}
+
+	second, err := l.Tick(t.Context())
+	if err != nil || second.Failed != "" {
+		t.Fatalf("retry tick = %+v, %v", second, err)
+	}
+	rec, err = db.GetPlan(id)
+	if err != nil || rec.State != runtimedb.PlanApplied {
+		t.Fatalf("retried plan = %+v, %v; want applied", rec, err)
+	}
+	if app.stops != 0 || app.removes != 0 {
+		t.Fatalf("retry path dispatched destructive ops: stops=%d removes=%d", app.stops, app.removes)
+	}
+}
+
+func TestApplyingHouseholdAuditIsNotResumedAsInfrastructureWork(t *testing.T) {
+	l, _, db, app := harness(t)
+	id, err := db.BeginHouseholdAudit("mika", "edit a household tracker", "Low", `{"auditOnly":true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := l.Tick(t.Context())
+	if err != nil || out.Failed != "" || len(out.PlanIDs) != 0 {
+		t.Fatalf("tick = %+v, %v; audit-only record must not be loop work", out, err)
+	}
+	rec, err := db.GetPlan(id)
+	if err != nil || rec.State != runtimedb.PlanApplying {
+		t.Fatalf("audit record = %+v, %v; loop must leave it for its owner", rec, err)
+	}
+	if app.ops != 0 {
+		t.Fatalf("audit-only tick dispatched %d infrastructure operations", app.ops)
 	}
 }
 

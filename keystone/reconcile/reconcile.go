@@ -99,8 +99,17 @@ type StepResult struct {
 	// Reversed is true if a health-gate failure triggered this step's
 	// reverse action.
 	Reversed bool
-	// Error is the human-readable failure reason when Applied is false.
+	// Error is the human-readable failure reason when the apply itself
+	// failed, or when a post-apply gate could not be verified safely. In
+	// the latter case Applied remains true: the operation succeeded, but
+	// the node disconnected (or returned another transient error) before
+	// Keystone could prove its post-condition.
 	Error string
+	// Retryable marks an inconclusive, transient result that must not count
+	// toward the repeated-identical-failure quarantine. A disconnected node
+	// becoming "blocked" after three ticks would defeat level-triggered
+	// recovery and require another unrelated desired-state change (#323).
+	Retryable bool
 }
 
 // Outcome is what one Reconcile call produced.
@@ -142,6 +151,10 @@ type Outcome struct {
 	// failure — see Rolledback for that) after exhausting retries, or hit
 	// the Volume-Delete apply-time refusal. Later steps were not attempted.
 	Incident string
+	// Retryable says Incident came from an inconclusive post-apply check,
+	// not evidence that desired state is invalid. The service loop keeps an
+	// approved plan applying and retries it after reconnect.
+	Retryable bool
 	// ForeignDrift lists Container names observe found occupied by a
 	// non-wildstone-owned object. Never planned as a delete (ADR-W004 A4).
 	ForeignDrift []string
@@ -651,17 +664,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 		}
 		outcome.Steps = append(outcome.Steps, sr)
 
-		if !sr.Applied {
+		if sr.Error != "" {
 			// Counted so that a step failing the same way every tick is
 			// eventually set aside instead of halting this plan forever
 			// (F60). The plan still halts here — it applies in full or
 			// not at all — but the NEXT one will not contain this step.
-			if r.noteStepFailure(nodeID, step, specFingerprint(desiredByKey, step), sr.Error) {
+			if !sr.Retryable && r.noteStepFailure(nodeID, step, specFingerprint(desiredByKey, step), sr.Error) {
 				outcome.Blocked = append(outcome.Blocked, BlockedResource{
 					Kind: step.Kind, Name: step.Name, Action: step.Action, Reason: sr.Error,
 				})
 			}
 			outcome.Incident = fmt.Sprintf("%s %s/%s: %s", step.Action, step.Kind, step.Name, sr.Error)
+			outcome.Retryable = sr.Retryable
 			return outcome, nil
 		}
 		if !sr.HealthOK {
@@ -1414,13 +1428,30 @@ func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step
 		}
 		sr.Applied = true
 
-		if r.waitContainerRunning(ctx, nodeID, step.Name) {
+		healthy, retryable, gateErr := r.waitContainerRunning(ctx, nodeID, step.Name)
+		if healthy {
 			sr.HealthOK = true
 			r.markManaged(nodeID, key, true)
 			return sr
 		}
-		r.reverseContainer(ctx, nodeID, step)
-		sr.Reversed = true
+		if gateErr != nil {
+			// A transport/runtime failure says nothing about the container.
+			// Treating that uncertainty as a negative used to enter the
+			// destructive reverse path and remove a service that had existed
+			// before the plan whenever observation raced a node reconnect
+			// (#323). Desired state is still committed, so surface the
+			// inconclusive gate and let the next level-triggered pass observe
+			// and converge it.
+			sr.Error = "health gate inconclusive: " + gateErr.Error()
+			sr.Retryable = retryable
+			return sr
+		}
+		// ContainerStats definitively reported the container absent. There
+		// is nothing safe to reverse: a Create classification came from an
+		// earlier observation and may be stale, while an Update has no saved
+		// prior spec to restore. Stop+Remove can only deepen the outage (and
+		// cannot help an already-absent container), so leave desired state in
+		// place for the next pass instead of dispatching destructive ops.
 		return sr
 
 	case plan.ActionDelete:
@@ -1453,51 +1484,52 @@ func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step
 	}
 }
 
-// reverseContainer implements the Container reverse rules from ADR-W004
-// A4 step 5. Create's reverse is unambiguous (Stop+Remove what was just
-// made). Update's documented reverse is "re-Ensure prior image if known
-// else Stop" — this Reconciler's Container observe is presence-only (see
-// the package doc), so the prior image is never known here, and Update
-// always takes the "else Stop" branch. Flagged as a limitation in the S2b
-// report: true image-aware rollback needs an inspect-style op the current
-// Wardstone surface doesn't expose.
-func (r *Reconciler) reverseContainer(ctx context.Context, nodeID string, step plan.PlanStep) {
-	if step.Action == plan.ActionCreate {
-		r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_StopContainer{ //nolint:errcheck
-			StopContainer: &wsv1.StopContainer{Name: step.Name},
+// waitContainerRunning distinguishes a definitive NOT_FOUND from an
+// inability to ask the node. The old bool collapsed transport loss and
+// Docker RUNTIME errors into "not running", which made a disconnect during
+// an approved plan trigger destructive rollback (#323).
+func (r *Reconciler) waitContainerRunning(ctx context.Context, nodeID, name string) (healthy, retryable bool, gateErr error) {
+	attempts, backoff := r.healthGateParams()
+	var lastErr error
+	lastRetryable := false
+	for i := 0; i < attempts; i++ {
+		res, err := r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ContainerStats{
+			ContainerStats: &wsv1.ContainerStats{Name: name},
 		}})
-		r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_RemoveContainer{ //nolint:errcheck
-			RemoveContainer: &wsv1.RemoveContainer{Name: step.Name, Force: true},
-		}})
-		return
+		if err != nil {
+			lastErr = err
+			lastRetryable = true
+		} else if oe := res.GetError(); oe == nil {
+			return true, false, nil
+		} else if oe.GetCode() == wsv1.ErrorCode_ERROR_CODE_NOT_FOUND {
+			// Definitive, but keep polling for a container that is still
+			// crossing Docker's create/start visibility boundary.
+			lastErr = nil
+			lastRetryable = false
+		} else {
+			lastErr = fmt.Errorf("%s: %s", oe.GetCode(), oe.GetMessage())
+			lastRetryable = false
+		}
+		if i < attempts-1 {
+			select {
+			case <-ctx.Done():
+				return false, true, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
 	}
-	r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_StopContainer{ //nolint:errcheck
-		StopContainer: &wsv1.StopContainer{Name: step.Name},
-	}})
+	return false, lastRetryable, lastErr
 }
 
+// containerRunning is used only by the explicit Delete post-condition.
+// Delete already dispatched Stop+Remove intentionally, so its historical
+// best-effort boolean gate is separate from the fail-safe create/update
+// gate above.
 func (r *Reconciler) containerRunning(ctx context.Context, nodeID, name string) bool {
 	res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ContainerStats{
 		ContainerStats: &wsv1.ContainerStats{Name: name},
 	}})
 	return err == nil && res.GetError() == nil
-}
-
-func (r *Reconciler) waitContainerRunning(ctx context.Context, nodeID, name string) bool {
-	attempts, backoff := r.healthGateParams()
-	for i := 0; i < attempts; i++ {
-		if r.containerRunning(ctx, nodeID, name) {
-			return true
-		}
-		if i < attempts-1 {
-			select {
-			case <-ctx.Done():
-				return false
-			case <-time.After(backoff):
-			}
-		}
-	}
-	return false
 }
 
 // specHashLabel mirrors the agent's SpecHashLabel constant (a small
