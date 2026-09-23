@@ -218,6 +218,17 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	// Statefile now, with Medium/High steps authorized by that approval.
 	l.allowMediumHigh.Store(planTick)
 	defer l.allowMediumHigh.Store(false)
+	// A failed Delete is recorded unhealthy because the resource is still
+	// present but not in desired state. Startup deliberately does not seed
+	// unhealthy observations into the Reconciler, so an applying plan that
+	// survives a Keystone restart would otherwise lose both the resource
+	// and its node: desired has no declaration, ManagedNodes is empty, and
+	// the retry would incorrectly resolve the plan as applied (#323).
+	// Reconstruct only the delete targets authorized by the queued plans,
+	// joined to their durable observed rows for node placement.
+	if err := l.seedPendingDeletes(queuedPlans); err != nil {
+		return out, err
+	}
 
 	groups := groupByNode(desired)
 	// A node whose desired set became empty still needs a pass, or its
@@ -372,6 +383,51 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 		l.failStreak.Store(0)
 	}
 	return out, nil
+}
+
+// seedPendingDeletes restores Reconciler ownership for delete targets after a
+// process restart. Stored proposals name the resource but deletion refs do not
+// carry node placement, while observed rows carry the node but unhealthy rows
+// are intentionally excluded from the ordinary startup seed. Joining the two
+// retains exactly the pending, plan-authorized deletion work.
+func (l *Loop) seedPendingDeletes(records []runtimedb.PlanRecord) error {
+	targets := map[string]bool{}
+	for _, record := range records {
+		var stored plan.StoredProposal
+		if err := json.Unmarshal([]byte(record.PlanJSON), &stored); err != nil {
+			return fmt.Errorf("loop: decoding applying plan %s: %w", record.ID, err)
+		}
+		for _, ref := range stored.Delete {
+			targets[ref.Kind+"/"+ref.Name] = true
+		}
+		if stored.Plan != nil {
+			for _, step := range stored.Plan.Steps {
+				if step.Action == plan.ActionDelete {
+					targets[string(step.Kind)+"/"+step.Name] = true
+				}
+			}
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	observed, err := l.DB.ListObserved()
+	if err != nil {
+		return fmt.Errorf("loop: loading pending delete observations: %w", err)
+	}
+	byNode := map[string][]reconcile.ManagedRef{}
+	for _, row := range observed {
+		if row.Node == "" || !targets[row.Kind+"/"+row.Name] {
+			continue
+		}
+		byNode[row.Node] = append(byNode[row.Node], reconcile.ManagedRef{
+			Kind: resource.Kind(row.Kind), Name: row.Name,
+		})
+	}
+	for node, refs := range byNode {
+		l.Rec.SeedManaged(node, refs)
+	}
+	return nil
 }
 
 // proposeDrift records Medium/High drift as a proposed system/drift plan

@@ -330,6 +330,44 @@ type retryGateApplier struct {
 	removes int
 }
 
+type pendingDeleteApplier struct {
+	okApplier
+	exists  bool
+	removes int
+}
+
+func (a *pendingDeleteApplier) Apply(ctx context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+	switch op.GetOp().(type) {
+	case *wsv1.Operation_InspectContainer:
+		if !a.exists {
+			return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: &wsv1.OpError{
+				Code: wsv1.ErrorCode_ERROR_CODE_NOT_FOUND,
+			}}}, nil
+		}
+		return &wsv1.OpResult{Result: &wsv1.OpResult_InspectContainer{InspectContainer: &wsv1.InspectContainerResult{
+			Running: true,
+		}}}, nil
+	case *wsv1.Operation_StopContainer:
+		return &wsv1.OpResult{Result: &wsv1.OpResult_StopContainer{StopContainer: &wsv1.StopContainerResult{
+			WasRunning: a.exists,
+		}}}, nil
+	case *wsv1.Operation_RemoveContainer:
+		a.removes++
+		wasThere := a.exists
+		a.exists = false
+		return &wsv1.OpResult{Result: &wsv1.OpResult_RemoveContainer{RemoveContainer: &wsv1.RemoveContainerResult{
+			Existed: wasThere,
+		}}}, nil
+	case *wsv1.Operation_ContainerStats:
+		if !a.exists {
+			return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: &wsv1.OpError{
+				Code: wsv1.ErrorCode_ERROR_CODE_NOT_FOUND,
+			}}}, nil
+		}
+	}
+	return a.okApplier.Apply(ctx, node, op)
+}
+
 func (a *retryGateApplier) Apply(ctx context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
 	switch op.GetOp().(type) {
 	case *wsv1.Operation_InspectContainer:
@@ -422,6 +460,45 @@ func TestApplyingHouseholdAuditIsNotResumedAsInfrastructureWork(t *testing.T) {
 	}
 	if app.ops != 0 {
 		t.Fatalf("audit-only tick dispatched %d infrastructure operations", app.ops)
+	}
+}
+
+func TestApplyingDeleteRecoversUnhealthyTargetAfterRestart(t *testing.T) {
+	l, _, db, _ := harness(t)
+	app := &pendingDeleteApplier{exists: true}
+	l.Rec.Applier = app // fresh Reconciler: no in-memory managed refs
+
+	planJSON := `{"basedOnHead":"head","summary":"remove stale service","delete":[{"kind":"Container","name":"stuck"}],"plan":{"steps":[],"overallRisk":"Low"}}`
+	id, err := db.InsertPlan("op", "", "remove stale service", "High", planJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TransitionPlan(id, runtimedb.PlanApproved, "op"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TransitionPlan(id, runtimedb.PlanApplying, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertObserved(runtimedb.Observed{
+		Kind: "Container", Name: "stuck", Node: "n1", Healthy: false, Detail: "remove interrupted",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := l.Tick(t.Context())
+	if err != nil || out.Failed != "" {
+		t.Fatalf("restart retry tick = %+v, %v", out, err)
+	}
+	if app.removes != 1 || app.exists {
+		t.Fatalf("pending delete was not resumed: removes=%d exists=%v", app.removes, app.exists)
+	}
+	rec, err := db.GetPlan(id)
+	if err != nil || rec.State != runtimedb.PlanApplied {
+		t.Fatalf("resumed delete plan = %+v, %v; want applied", rec, err)
+	}
+	observed, err := db.ListObserved()
+	if err != nil || len(observed) != 0 {
+		t.Fatalf("observed after resumed delete = %+v, %v; want empty", observed, err)
 	}
 }
 
