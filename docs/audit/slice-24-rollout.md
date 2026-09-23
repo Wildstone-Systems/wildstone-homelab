@@ -42,10 +42,14 @@ source for unresolved product behavior.
 
 ## Household rollout gate
 
-The documented `192.168.1.99` endpoint refused a read-only SSH connection
-from this workspace. No production snapshot, live binary version or household
-§18 result is claimed. The next operator needs a reachable host or established
-deployment workflow, then should:
+The first rollout attempt treated `192.168.1.99` as the household host, but
+[`runtime-access.md`](runtime-access.md) documents that address as the Ollama
+endpoint. A later readiness pass found the Linux production and scratch hosts
+as `hall-fam-homelab-1` and `wildstone-test-homelab` over Tailscale. Both
+accepted TCP connections on port 22, but neither accepted this workspace's
+non-interactive SSH credential. No production snapshot, live binary version or
+household §18 result is claimed. The next operator needs SSH authorization or
+the established deployment workflow, then should:
 
 1. Read the current service status and `go version -m` metadata of the
    installed Keystone binary. Capture a verified encrypted backup or
