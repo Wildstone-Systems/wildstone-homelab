@@ -3,21 +3,20 @@ package api
 // The Files surface (#197): a household member drops a photo on the
 // dashboard and it lands on the household's own storage.
 //
-// WHAT IS NOT HERE is the shape of this file. There is no path in any
-// request, no storage credential, no reference to whatever file manager
-// the household happens to run, and no way for a caller to say anything
-// about the filesystem except a destination from a list and a name that
-// is normalised before it is used. The dashboard is a presentation
-// adapter; this is the capability boundary it talks to.
+// Shared and Mine accept bounded relative paths beneath their resolved namespace.
+// The host root remains exclusively owner-configured.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -48,7 +47,8 @@ const filedropSettingsFile = "settings.yaml"
 type filedropSettings struct {
 	// Root is the administrator-configured storage root: the same host
 	// path a file manager would be given, chosen at install time.
-	Root string `yaml:"root"`
+	Root          string `yaml:"root"`
+	RequiredMount string `yaml:"requiredMount"`
 	// MaxUploadMB bounds one upload. Zero takes the package default.
 	MaxUploadMB int64 `yaml:"maxUploadMB"`
 }
@@ -81,6 +81,7 @@ func (s *Server) filedropStore(desired []resource.Resource, member string) *port
 			return store
 		}
 		store.Root = strings.TrimSpace(settings.Root)
+		store.RequiredMount = strings.TrimSpace(settings.RequiredMount)
 		store.MaxUpload = settings.MaxUploadMB << 20
 		return store
 	}
@@ -112,6 +113,10 @@ func (s *Server) filedropCapabilities(_ http.ResponseWriter, r *http.Request, me
 		// a file goes before they drop it. The personal one says who
 		// can see it, because "Mine" on its own would be read as a
 		// promise this cannot keep against whoever runs the machine.
+		if ns.Key == "shared" {
+			row["note"] = "Everyone with access can add, rename, move and delete shared content."
+			row["hierarchical"] = "true"
+		}
 		if ns.Key == "me" {
 			row["note"] = "Only you can see this from the dashboard. Whoever looks after the machine can still read it."
 		}
@@ -122,10 +127,12 @@ func (s *Server) filedropCapabilities(_ http.ResponseWriter, r *http.Request, me
 		"namespaces":     namespaces,
 		"maxUploadBytes": store.MaxUploadFor(),
 		"browse":         "/filedrop/",
-		"ready":          store.Ready(),
+		"ready":          store.Available(),
 	}
 	if !store.Ready() {
 		body["reason"] = "no storage root is configured for this household's files"
+	} else if !store.Available() {
+		body["reason"] = "the required storage mount is unavailable"
 	}
 	return body, http.StatusOK, nil
 }
@@ -143,16 +150,16 @@ func (s *Server) filedropRecent(_ http.ResponseWriter, r *http.Request, member s
 	}
 	items, err := s.filedropStore(desired, member).Recent(limit)
 	if err != nil {
-		return nil, filedropStatus(err), err
+		return filedropFailure(err)
 	}
 	return map[string]any{"items": items}, http.StatusOK, nil
 }
 
 // filedropList is one destination's contents, for the full surface.
 func (s *Server) filedropList(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
-	items, err := s.filedropStore(desired, member).List(r.URL.Query().Get("namespace"))
+	items, err := s.filedropStore(desired, member).ListAt(r.URL.Query().Get("namespace"), r.URL.Query().Get("path"))
 	if err != nil {
-		return nil, filedropStatus(err), err
+		return filedropFailure(err)
 	}
 	return map[string]any{"items": items}, http.StatusOK, nil
 }
@@ -186,9 +193,15 @@ func (s *Server) filedropUpload(_ http.ResponseWriter, r *http.Request, member s
 	}
 	defer r.Body.Close()
 
-	stored, err := store.Save(r.URL.Query().Get("namespace"), r.URL.Query().Get("name"), r.Body)
+	var stored portal.Stored
+	var err error
+	if r.URL.Query().Has("path") {
+		stored, err = store.SaveAt(r.URL.Query().Get("namespace"), r.URL.Query().Get("path"), r.URL.Query().Get("name"), r.Body)
+	} else {
+		stored, err = store.Save(r.URL.Query().Get("namespace"), r.URL.Query().Get("name"), r.Body)
+	}
 	if err != nil {
-		return nil, filedropStatus(err), err
+		return filedropFailure(err)
 	}
 	// TWO STREAMS, because they answer different questions, and the
 	// upload belongs in both.
@@ -198,7 +211,7 @@ func (s *Server) filedropUpload(_ http.ResponseWriter, r *http.Request, member s
 	// Wildstone did. It names the file and the namespace because an
 	// operator investigating storage needs exactly that.
 	s.event("filedrop.upload", "", principal.Identity{Name: portalPrincipal, ActingFor: member},
-		fmt.Sprintf("%s uploaded %s to %s (%d bytes)", member, stored.Name, stored.Namespace, stored.Size))
+		fmt.Sprintf("%s uploaded %s to %s (%d bytes)", member, path.Join(r.URL.Query().Get("path"), stored.Name), stored.Namespace, stored.Size))
 	// The HOUSEHOLD stream is what the family reads, and it is what
 	// makes "Today at home" show an upload at all — #197's audit record
 	// "is also what feeds Today at home", and until this append existed
@@ -222,8 +235,8 @@ func (s *Server) filedropUpload(_ http.ResponseWriter, r *http.Request, member s
 		// another under the same name later, which is a real second
 		// upload, and the household stream dropped it as a duplicate.
 		// Today at home simply did not mention it.
-		EventID: fmt.Sprintf("filedrop:%s:%s:%s:%d",
-			member, stored.Namespace, stored.Name, time.Now().UnixNano()),
+		EventID: fmt.Sprintf("filedrop:%s:%s:%d",
+			member, stored.Namespace, time.Now().UnixNano()),
 		Source:        "filedrop",
 		Type:          "filedrop.uploaded",
 		Subject:       member,
@@ -249,9 +262,12 @@ func (s *Server) filedropUpload(_ http.ResponseWriter, r *http.Request, member s
 // can upload a script on the surface that holds everyone's session.
 func (s *Server) filedropFile(w http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
 	name := r.URL.Query().Get("name")
-	f, info, err := s.filedropStore(desired, member).Open(r.URL.Query().Get("namespace"), name)
+	if r.URL.Query().Has("path") {
+		name = r.URL.Query().Get("path")
+	}
+	f, info, err := s.filedropStore(desired, member).OpenAt(r.URL.Query().Get("namespace"), name)
 	if err != nil {
-		return nil, filedropStatus(err), err
+		return filedropFailure(err)
 	}
 	defer f.Close()
 
@@ -273,19 +289,25 @@ func (s *Server) filedropFile(w http.ResponseWriter, r *http.Request, member str
 
 // filedropStatus maps the store's errors onto HTTP.
 //
-// Every one of them is the caller's fault except the missing root, and
-// each says which: a destination that does not exist is a 400 and not a
-// 404, because the destination is a field in a request rather than a
-// thing at a URL.
+// Validation, authorization, collision and storage availability are separate
+// outcomes. filedropFailure gives members useful text without host paths.
 func filedropStatus(err error) int {
 	switch {
-	case errors.Is(err, portal.ErrNoRoot):
+	case errors.Is(err, portal.ErrAtomicMove):
+		return http.StatusNotImplemented
+	case errors.Is(err, portal.ErrNoRoot), errors.Is(err, portal.ErrUnavailable), errors.Is(err, syscall.ESTALE), errors.Is(err, syscall.ETIMEDOUT), errors.Is(err, syscall.EIO), errors.Is(err, syscall.EHOSTUNREACH):
 		return http.StatusServiceUnavailable
-	case errors.Is(err, portal.ErrNamespace):
+	case errors.Is(err, portal.ErrNamespace), errors.Is(err, portal.ErrPath), errors.Is(err, syscall.EXDEV), errors.Is(err, syscall.EINVAL):
 		return http.StatusBadRequest
 	case errors.Is(err, portal.ErrTooLarge):
 		return http.StatusRequestEntityTooLarge
-	case errors.Is(err, portal.ErrNotFound):
+	case errors.Is(err, os.ErrExist), errors.Is(err, syscall.ENOTEMPTY):
+		return http.StatusConflict
+	case errors.Is(err, os.ErrPermission), errors.Is(err, syscall.EROFS), errors.Is(err, portal.ErrWriteAuthority):
+		return http.StatusForbidden
+	case errors.Is(err, syscall.ENOSPC), errors.Is(err, syscall.EDQUOT):
+		return http.StatusInsufficientStorage
+	case errors.Is(err, portal.ErrNotFound), errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ELOOP), errors.Is(err, syscall.ENOTDIR):
 		return http.StatusNotFound
 	default:
 		return http.StatusInternalServerError
@@ -309,8 +331,19 @@ func (s *Server) filedropDelete(_ http.ResponseWriter, r *http.Request, member s
 	}
 	ns := r.URL.Query().Get("namespace")
 	name := r.URL.Query().Get("name")
-	if err := store.Delete(ns, name); err != nil {
-		return nil, filedropStatus(err), err
+	var err error
+	if r.ContentLength != 0 {
+		var body filedropMutation
+		if status, e := decodeFiledrop(r, &body); e != nil {
+			return nil, status, e
+		}
+		ns, name = body.Namespace, body.Path
+		err = store.DeleteAt(ns, name)
+	} else {
+		err = store.Delete(ns, name)
+	}
+	if err != nil {
+		return filedropFailure(err)
 	}
 	// The operator's record names the file; the household's does not.
 	s.event("filedrop.delete", "", principal.Identity{Name: portalPrincipal, ActingFor: member},
@@ -341,9 +374,21 @@ func (s *Server) filedropRename(_ http.ResponseWriter, r *http.Request, member s
 	ns := r.URL.Query().Get("namespace")
 	from := r.URL.Query().Get("name")
 	to := r.URL.Query().Get("to")
-	final, err := store.Rename(ns, from, to)
+	var final string
+	var err error
+	if r.ContentLength != 0 {
+		var body filedropMutation
+		if status, e := decodeFiledrop(r, &body); e != nil {
+			return nil, status, e
+		}
+		ns, from, to = body.Namespace, body.Path, body.Name
+		err = store.RenameAt(ns, from, to)
+		final = to
+	} else {
+		final, err = store.Rename(ns, from, to)
+	}
 	if err != nil {
-		return nil, filedropStatus(err), err
+		return filedropFailure(err)
 	}
 	s.event("filedrop.rename", "", principal.Identity{Name: portalPrincipal, ActingFor: member},
 		fmt.Sprintf("%s renamed %s to %s in %s", member, from, final, ns))
@@ -377,4 +422,90 @@ func (s *Server) FiledropSettings() (string, int64, error) {
 	}
 	store := s.filedropStore(desired, "")
 	return store.Root, store.MaxUpload, nil
+}
+
+// Structured operands keep a directory, a leaf and a destination unambiguous.
+type filedropMutation struct {
+	Namespace string `json:"namespace"`
+	Path      string `json:"path"`
+	Name      string `json:"name,omitempty"`
+	To        string `json:"to,omitempty"`
+}
+
+func (s *Server) filedropMkdir(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
+	var body filedropMutation
+	if status, err := decodeFiledrop(r, &body); err != nil {
+		return nil, status, err
+	}
+	if err := s.filedropStore(desired, member).Mkdir(body.Namespace, body.Path); err != nil {
+		return filedropFailure(err)
+	}
+	s.event("filedrop.mkdir", "", principal.Identity{Name: portalPrincipal, ActingFor: member}, fmt.Sprintf("%s created folder %s in %s", member, body.Path, body.Namespace))
+	return map[string]any{"path": body.Path}, http.StatusCreated, nil
+}
+
+func (s *Server) filedropMove(_ http.ResponseWriter, r *http.Request, member string, desired []resource.Resource) (any, int, error) {
+	var body filedropMutation
+	if status, err := decodeFiledrop(r, &body); err != nil {
+		return nil, status, err
+	}
+	if err := s.filedropStore(desired, member).Move(body.Namespace, body.Path, body.To); err != nil {
+		return filedropFailure(err)
+	}
+	s.event("filedrop.move", "", principal.Identity{Name: portalPrincipal, ActingFor: member}, fmt.Sprintf("%s moved %s to %s in %s", member, body.Path, body.To, body.Namespace))
+	return map[string]any{"path": body.To}, http.StatusOK, nil
+}
+
+// FiledropRequiredMount also wires the guard into the agent's existing flat
+// tools; configuring a mount must not protect only the browser endpoints.
+func (s *Server) FiledropRequiredMount() (string, error) {
+	desired, err := s.State.Load()
+	if err != nil {
+		return "", err
+	}
+	return s.filedropStore(desired, "").RequiredMount, nil
+}
+
+func decodeFiledrop(r *http.Request, into any) (int, error) {
+	// A mutation is a few bounded paths, never an unbounded JSON document.
+	data, err := io.ReadAll(io.LimitReader(r.Body, 16*1024+1))
+	if err != nil || len(data) > 16*1024 {
+		return http.StatusBadRequest, fmt.Errorf("file operation body is too large or unreadable")
+	}
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(into); err != nil {
+		return http.StatusBadRequest, fmt.Errorf("invalid file operation")
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return http.StatusBadRequest, fmt.Errorf("expected one file operation")
+	}
+	return http.StatusOK, nil
+}
+
+func filedropFailure(err error) (any, int, error) {
+	status := filedropStatus(err)
+	message := "The file operation failed. Try again or ask whoever looks after the storage."
+	switch status {
+	case http.StatusBadRequest:
+		message = "Use a relative path inside Shared with no empty, hidden, dot or parent components. Photos and Mine stay flat."
+	case http.StatusNotFound:
+		message = "That file or folder is unavailable. Refresh the folder and try again."
+	case http.StatusConflict:
+		message = "That name already exists, or the folder is not empty. Nothing was replaced."
+	case http.StatusForbidden:
+		message = "Changes are paused or the storage does not permit this operation."
+	case http.StatusServiceUnavailable:
+		message = "Cannot reach the files storage right now. Check that its mount is present and the server is reachable."
+	case http.StatusInsufficientStorage:
+		message = "The storage is full or its quota has been reached."
+	case http.StatusRequestEntityTooLarge:
+		message = "That file is larger than this household allows."
+	case http.StatusNotImplemented:
+		message = "This storage does not support safe atomic rename or move (including NFS). The original is unchanged."
+	}
+	if errors.Is(err, syscall.EXDEV) {
+		message = "Moving between different filesystems is not supported. The original is unchanged."
+	}
+	return nil, status, errors.New(message)
 }

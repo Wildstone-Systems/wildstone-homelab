@@ -733,6 +733,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/filedrop/file", s.portal(surfaceFiles, s.filedropFile))
 	mux.Handle("POST /api/v1/filedrop/upload", s.portal(surfaceFiles, s.filedropUpload))
 	mux.Handle("POST /api/v1/filedrop/delete", s.portal(surfaceFiles, s.filedropDelete))
+	mux.Handle("POST /api/v1/filedrop/mkdir", s.portal(surfaceFiles, s.filedropMkdir))
+	mux.Handle("POST /api/v1/filedrop/move", s.portal(surfaceFiles, s.filedropMove))
 	mux.Handle("POST /api/v1/filedrop/rename", s.portal(surfaceFiles, s.filedropRename))
 
 	mux.Handle("GET /assistant/{$}", s.portal(surfaceAssistant, s.portalPage("assistant")))

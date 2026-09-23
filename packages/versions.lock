@@ -31,7 +31,7 @@ dns-pihole 1.0.1 580d2adc5d34c138
 documents-paperless 1.0.3 597f5924c2330085
 downloads-qbittorrent 1.0.2 663381e9d95edce0
 feeds-freshrss 1.0.1 8a75bb28ea9c6465
-filedrop-wildstone 1.1.0 83c09bc33158f791
+filedrop-wildstone 1.2.0 8e69efa33ff62a5b
 files-filebrowser 1.0.1 39f776ac3cd55073
 home-assistant 1.1.1 61f41ec056cd74c0
 home-automation 1.0.3 08e9b3aa603b35a1

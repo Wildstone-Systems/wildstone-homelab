@@ -1194,8 +1194,9 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// and the domestic gateway's declaration check is in front of both.
 	if cat != nil {
 		filedrop := &domestic.Filedrop{Authority: db,
-			Settings: apiSrv.FiledropSettings,
-			Enabled:  func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.FiledropCapability) },
+			Settings:      apiSrv.FiledropSettings,
+			RequiredMount: apiSrv.FiledropRequiredMount,
+			Enabled:       func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.FiledropCapability) },
 		}
 		for _, e := range filedrop.Executors() {
 			actions.Register(e)

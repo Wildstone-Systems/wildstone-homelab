@@ -26,7 +26,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: filedrop-wildstone
-  version: 1.1.0
+  version: 1.2.0
   capability: filedrop
   profile: wildstone
   # One drop box per household. A second profile would want the same
@@ -49,11 +49,11 @@ params:
   # Jellyfin or a file browser can see — which is the whole point of the
   # feature and the acceptance criterion #197 states.
   #
-  # This is the ONLY place a filesystem path is named. Nothing a
-  # household member sends can contribute to it: an upload names a
-  # destination ("shared", "photos") and Keystone maps that onto a
-  # folder under this root.
+  # Only the Owner names the host root. A member may select a bounded
+  # relative path within Shared or Mine, resolved through its os.Root (#275).
+  # Mine is scoped to the authenticated member; Photos remains flat.
   - { name: files_path, default: /srv/wildstone/media, description: "Folder on this machine to keep uploads in.", source: directory }
+  - { name: files_mount, default: "", description: "For mounted storage, the existing mountpoint containing the uploads folder. Access stops if this mount is absent. Leave empty for local storage.", source: directory }
   - { name: max_upload_mb, default: "512", description: "The largest single file the household may upload, in megabytes." }
   # Node running the identity provider, whose managed config the
   # LdapGroup is rendered into. Defaults to this package's own node,
@@ -115,6 +115,7 @@ templates:
       content: |
         # managed by wildstone-keystone — do not edit
         root: {{ .Params.files_path }}
+        requiredMount: {{ printf "%q" .Params.files_mount }}
         maxUploadMB: {{ .Params.max_upload_mb }}
   # The route.
   #
