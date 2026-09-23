@@ -144,16 +144,38 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	if err != nil {
 		return TickOutcome{}, err
 	}
+	applying, err := l.DB.PlansInState(runtimedb.PlanApplying)
+	if err != nil {
+		return TickOutcome{}, err
+	}
 	// Self-driven records pass through 'approved' microseconds before
 	// their owning component moves them to 'applying'; grabbing one here
 	// would double-drive its state machine (ADR-W011 A4, ADR-W012 A5).
-	filtered := approved[:0]
-	for _, p := range approved {
-		if !selfDrivenPrincipals[p.Principal] {
+	filterSelfDriven := func(records []runtimedb.PlanRecord, applyingState bool) []runtimedb.PlanRecord {
+		filtered := records[:0]
+		for _, p := range records {
+			if selfDrivenPrincipals[p.Principal] {
+				continue
+			}
+			// Household tracker edits are deliberately inserted directly as
+			// applying audit records while their request commits the Statefile.
+			// They never authorize infrastructure work. Resuming arbitrary
+			// applying plans without recognizing this envelope would let the
+			// loop steal that short-lived record from its owner.
+			if applyingState {
+				var envelope struct {
+					AuditOnly bool `json:"auditOnly"`
+				}
+				if json.Unmarshal([]byte(p.PlanJSON), &envelope) == nil && envelope.AuditOnly {
+					continue
+				}
+			}
 			filtered = append(filtered, p)
 		}
+		return filtered
 	}
-	approved = filtered
+	approved = filterSelfDriven(approved, false)
+	applying = filterSelfDriven(applying, true)
 	desired, err := l.State.Load()
 	if err != nil {
 		return TickOutcome{}, fmt.Errorf("loop: loading statefile: %w", err)
@@ -181,9 +203,12 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	}
 
 	out := TickOutcome{}
-	planTick := len(approved) > 0
-	for _, p := range approved {
+	queuedPlans := append(append([]runtimedb.PlanRecord{}, applying...), approved...)
+	planTick := len(queuedPlans) > 0
+	for _, p := range queuedPlans {
 		out.PlanIDs = append(out.PlanIDs, p.ID)
+	}
+	for _, p := range approved {
 		if err := l.DB.TransitionPlan(p.ID, runtimedb.PlanApplying, ""); err != nil {
 			return out, err
 		}
@@ -193,6 +218,17 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	// Statefile now, with Medium/High steps authorized by that approval.
 	l.allowMediumHigh.Store(planTick)
 	defer l.allowMediumHigh.Store(false)
+	// A failed Delete is recorded unhealthy because the resource is still
+	// present but not in desired state. Startup deliberately does not seed
+	// unhealthy observations into the Reconciler, so an applying plan that
+	// survives a Keystone restart would otherwise lose both the resource
+	// and its node: desired has no declaration, ManagedNodes is empty, and
+	// the retry would incorrectly resolve the plan as applied (#323).
+	// Reconstruct only the delete targets authorized by the queued plans,
+	// joined to their durable observed rows for node placement.
+	if err := l.seedPendingDeletes(queuedPlans); err != nil {
+		return out, err
+	}
 
 	groups := groupByNode(desired)
 	// A node whose desired set became empty still needs a pass, or its
@@ -211,6 +247,7 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	}
 
 	var failures []string
+	deferred := false
 	acting := map[string]bool{}
 	// Nodes this tick did not actually get to. Their status rows are the
 	// only durable record of what the reconciler manages there — the
@@ -221,9 +258,12 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	for _, g := range groups {
 		if g.node != "" && l.Connected != nil && !l.Connected(g.node) && hasAgentKinds(g.resources) {
 			if planTick {
-				// The operator approved a change that cannot land: loud
-				// failure (ADR-W008 A3).
-				failures = append(failures, fmt.Sprintf("node %s not connected", g.node))
+				// Approval committed desired state, but an offline node says
+				// nothing about whether that state can converge. Keep the plan
+				// applying so a reconnect retries it without another approval
+				// or an unrelated Statefile commit (#323).
+				deferred = true
+				l.event("reconcile.deferred-offline", g.node, "plan remains retryable", nil)
 			} else {
 				l.event("reconcile.skipped-offline", g.node, "", nil)
 			}
@@ -232,6 +272,12 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 		}
 		outcome, err := l.Rec.Reconcile(ctx, g.node, g.resources)
 		if err != nil {
+			if planTick && g.node != "" && l.Connected != nil && !l.Connected(g.node) {
+				deferred = true
+				unvisited[g.node] = true
+				l.event("reconcile.deferred-offline", g.node, "plan interrupted; retry pending", nil)
+				continue
+			}
 			failures = append(failures, fmt.Sprintf("node %s: %v", g.node, err))
 			unvisited[g.node] = true
 			continue
@@ -253,6 +299,16 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 				map[string]string{"kind": string(b.Kind), "name": b.Name})
 		}
 		switch {
+		case planTick && g.node != "" && l.Connected != nil && !l.Connected(g.node):
+			// The operation may have landed before the session disappeared.
+			// Preserve the applying plan and let a fresh observation decide;
+			// never turn transport uncertainty into rollback or a terminal
+			// plan verdict.
+			deferred = true
+			l.event("reconcile.deferred-offline", g.node, "plan interrupted; retry pending", nil)
+		case planTick && outcome.Retryable:
+			deferred = true
+			l.event("reconcile.deferred", g.node, outcome.Incident, nil)
 		case outcome.Incident != "":
 			failures = append(failures, fmt.Sprintf("node %s: %s", g.node, outcome.Incident))
 		case outcome.Rolledback:
@@ -285,7 +341,12 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	l.pruneObserved(desired, acting, unvisited)
 
 	out.Failed = strings.Join(failures, "; ")
-	if planTick {
+	if planTick && deferred {
+		// At least one target disappeared before convergence could be
+		// established. Every queued plan remains applying and will be loaded
+		// again on the next tick. Do not publish a partial terminal verdict.
+		out.Failed = ""
+	} else if planTick {
 		// One target tree, one uniform verdict for every plan that
 		// described it (ADR-W008 A2). The Statefile is not reverted on
 		// failure: desired stays desired and the next tick retries.
@@ -294,8 +355,8 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 			to = runtimedb.PlanFailed
 			l.event("reconcile.failed", "", out.Failed, map[string]string{"plans": strings.Join(out.PlanIDs, ",")})
 		}
-		for _, id := range out.PlanIDs {
-			if err := l.DB.TransitionPlan(id, to, ""); err != nil {
+		for _, p := range queuedPlans {
+			if err := l.DB.TransitionPlan(p.ID, to, ""); err != nil {
 				return out, err
 			}
 		}
@@ -310,7 +371,11 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 		}
 		out.DriftProposed = id
 	}
-	if out.Failed != "" {
+	if deferred {
+		l.failStreak.Add(1)
+		log.Warn("reconcile tick deferred", "plans", out.PlanIDs,
+			"backoff_streak", l.failStreak.Load())
+	} else if out.Failed != "" {
 		l.failStreak.Add(1)
 		log.Warn("reconcile tick failed", "detail", out.Failed, "plans", out.PlanIDs,
 			"backoff_streak", l.failStreak.Load())
@@ -318,6 +383,51 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 		l.failStreak.Store(0)
 	}
 	return out, nil
+}
+
+// seedPendingDeletes restores Reconciler ownership for delete targets after a
+// process restart. Stored proposals name the resource but deletion refs do not
+// carry node placement, while observed rows carry the node but unhealthy rows
+// are intentionally excluded from the ordinary startup seed. Joining the two
+// retains exactly the pending, plan-authorized deletion work.
+func (l *Loop) seedPendingDeletes(records []runtimedb.PlanRecord) error {
+	targets := map[string]bool{}
+	for _, record := range records {
+		var stored plan.StoredProposal
+		if err := json.Unmarshal([]byte(record.PlanJSON), &stored); err != nil {
+			return fmt.Errorf("loop: decoding applying plan %s: %w", record.ID, err)
+		}
+		for _, ref := range stored.Delete {
+			targets[ref.Kind+"/"+ref.Name] = true
+		}
+		if stored.Plan != nil {
+			for _, step := range stored.Plan.Steps {
+				if step.Action == plan.ActionDelete {
+					targets[string(step.Kind)+"/"+step.Name] = true
+				}
+			}
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	observed, err := l.DB.ListObserved()
+	if err != nil {
+		return fmt.Errorf("loop: loading pending delete observations: %w", err)
+	}
+	byNode := map[string][]reconcile.ManagedRef{}
+	for _, row := range observed {
+		if row.Node == "" || !targets[row.Kind+"/"+row.Name] {
+			continue
+		}
+		byNode[row.Node] = append(byNode[row.Node], reconcile.ManagedRef{
+			Kind: resource.Kind(row.Kind), Name: row.Name,
+		})
+	}
+	for node, refs := range byNode {
+		l.Rec.SeedManaged(node, refs)
+	}
+	return nil
 }
 
 // proposeDrift records Medium/High drift as a proposed system/drift plan

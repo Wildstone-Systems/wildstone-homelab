@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -14,9 +15,10 @@ import (
 // documentation, enforced by test, of what the engine does when a step's
 // health gate fails, per kind × action. The current matrix:
 //
-//	Container Create  → reverse: StopContainer + RemoveContainer
-//	Container Update  → reverse: StopContainer (old spec is gone; stop is
-//	                    the only safe move without a spec archive)
+//	Container Create  → NO destructive reverse: an earlier absent
+//	                    observation can be stale after a reconnect
+//	Container Update  → NO destructive reverse: the old spec is gone and
+//	                    stopping the desired replacement deepens the outage
 //	Container Delete  → no gate (delete has no post-condition to probe)
 //	Volume    Create  → NO reverse: no volume-delete op exists on the
 //	                    surface, and deleting data is exactly what the
@@ -125,7 +127,8 @@ func fastReconciler(a Applier) *Reconciler {
 
 // TestReverseAudit_ContainerCreateGateFailure: EnsureContainer succeeds,
 // the ContainerStats gate never passes (scripted NOT_FOUND) → the engine
-// must reverse with StopContainer + RemoveContainer and report Rolledback.
+// reports the failed gate but must not make the outage worse with a
+// StopContainer or RemoveContainer. Desired state remains for the next pass.
 func TestReverseAudit_ContainerCreateGateFailure(t *testing.T) {
 	s := &scriptedApplier{}
 	r := fastReconciler(s)
@@ -137,12 +140,99 @@ func TestReverseAudit_ContainerCreateGateFailure(t *testing.T) {
 	if !outcome.Rolledback || outcome.Applied {
 		t.Fatalf("outcome = %+v, want Rolledback", outcome)
 	}
-	if len(outcome.Steps) != 1 || !outcome.Steps[0].Applied || outcome.Steps[0].HealthOK || !outcome.Steps[0].Reversed {
-		t.Fatalf("step = %+v, want applied+gate-failed+reversed", outcome.Steps)
+	if len(outcome.Steps) != 1 || !outcome.Steps[0].Applied || outcome.Steps[0].HealthOK || outcome.Steps[0].Reversed {
+		t.Fatalf("step = %+v, want applied+gate-failed without a destructive reverse", outcome.Steps)
 	}
-	if s.count("StopContainer") != 1 || s.count("RemoveContainer") != 1 {
-		t.Fatalf("reverse ops: stop=%d remove=%d, want 1/1 (calls: %v)",
+	if s.count("StopContainer") != 0 || s.count("RemoveContainer") != 0 {
+		t.Fatalf("reverse ops: stop=%d remove=%d, want 0/0 (calls: %v)",
 			s.count("StopContainer"), s.count("RemoveContainer"), s.calls)
+	}
+}
+
+// reconnectApplier reproduces #323's dangerous timing: observation says a
+// managed container is absent, but by apply time the reconnected node has the
+// already-existing, desired container. Ensure therefore reports Created=false,
+// then the connection drops again while the health gate is in flight.
+type reconnectApplier struct {
+	files       map[string][]byte
+	labels      map[string]string
+	inspectCall int
+	statsCall   int
+	ensures     int
+	stops       int
+	removes     int
+}
+
+func (a *reconnectApplier) Apply(_ context.Context, _ string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+	if a.files == nil {
+		a.files = map[string][]byte{}
+	}
+	switch o := op.GetOp().(type) {
+	case *wsv1.Operation_ReadManagedFile:
+		content, ok := a.files[o.ReadManagedFile.GetPath()]
+		if !ok {
+			return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: &wsv1.OpError{
+				Code: wsv1.ErrorCode_ERROR_CODE_NOT_FOUND,
+			}}}, nil
+		}
+		return &wsv1.OpResult{Result: &wsv1.OpResult_ReadManagedFile{ReadManagedFile: &wsv1.ReadManagedFileResult{Content: content}}}, nil
+	case *wsv1.Operation_WriteManagedFile:
+		a.files[o.WriteManagedFile.GetPath()] = o.WriteManagedFile.GetContent()
+	case *wsv1.Operation_InspectContainer:
+		a.inspectCall++
+		if a.inspectCall == 1 {
+			return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: &wsv1.OpError{
+				Code: wsv1.ErrorCode_ERROR_CODE_NOT_FOUND,
+			}}}, nil
+		}
+		return &wsv1.OpResult{Result: &wsv1.OpResult_InspectContainer{InspectContainer: &wsv1.InspectContainerResult{
+			Running: true, Labels: a.labels,
+		}}}, nil
+	case *wsv1.Operation_EnsureContainer:
+		a.ensures++
+		a.labels = o.EnsureContainer.GetLabels()
+		return &wsv1.OpResult{Result: &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
+			ContainerId: "existing", Created: false, Started: false,
+		}}}, nil
+	case *wsv1.Operation_ContainerStats:
+		a.statsCall++
+		if a.statsCall == 1 {
+			return nil, errors.New("node disconnected")
+		}
+		return &wsv1.OpResult{Result: &wsv1.OpResult_ContainerStats{ContainerStats: &wsv1.ContainerStatsResult{}}}, nil
+	case *wsv1.Operation_StopContainer:
+		a.stops++
+	case *wsv1.Operation_RemoveContainer:
+		a.removes++
+	}
+	return &wsv1.OpResult{}, nil
+}
+
+func TestContainerReconnectRacePreservesExistingServiceAndNextPassConverges(t *testing.T) {
+	a := &reconnectApplier{}
+	r := fastReconciler(a)
+	desired := []resource.Resource{containerResource("identity", testDigestImage)}
+
+	first, err := r.Reconcile(context.Background(), "node-a", desired)
+	if err != nil {
+		t.Fatalf("first Reconcile: %v", err)
+	}
+	if first.Rolledback || first.Incident == "" || !first.Retryable || len(first.Steps) != 1 || !first.Steps[0].Applied {
+		t.Fatalf("first outcome = %+v, want an applied operation with an inconclusive gate incident", first)
+	}
+	if a.stops != 0 || a.removes != 0 {
+		t.Fatalf("reconnect race dispatched destructive rollback: stops=%d removes=%d", a.stops, a.removes)
+	}
+
+	second, err := r.Reconcile(context.Background(), "node-a", desired)
+	if err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+	if !second.Applied || second.Incident != "" || second.Rolledback || len(second.Plan.Steps) != 0 {
+		t.Fatalf("second outcome = %+v, want quiet convergence without a Statefile change", second)
+	}
+	if a.ensures != 1 || a.stops != 0 || a.removes != 0 {
+		t.Fatalf("operations after convergence: ensures=%d stops=%d removes=%d", a.ensures, a.stops, a.removes)
 	}
 }
 

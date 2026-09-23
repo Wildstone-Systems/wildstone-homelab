@@ -70,19 +70,23 @@ func TestFailureBackoff(t *testing.T) {
 	if got := l.delay(base); got != base {
 		t.Fatalf("fresh delay = %v, want %v", got, base)
 	}
-	// Each failed plan tick doubles the delay (a fresh approved plan per
-	// tick, since a failed one goes terminal).
+	// One offline plan remains applying and each deferred retry doubles the
+	// delay. The plan is not made terminal merely because transport is down.
+	id, err := db.InsertPlan("op", "", "deploy", "low", `{"x":1}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TransitionPlan(id, runtimedb.PlanApproved, "op"); err != nil {
+		t.Fatal(err)
+	}
 	for i, want := range []time.Duration{2 * base, 4 * base, 8 * base} {
-		id, err := db.InsertPlan("op", "", "deploy", "low", `{"x":1}`)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := db.TransitionPlan(id, runtimedb.PlanApproved, "op"); err != nil {
-			t.Fatal(err)
-		}
 		out, err := l.Tick(t.Context())
-		if err != nil || out.Failed == "" {
-			t.Fatalf("tick %d = %+v, %v; want failure", i, out, err)
+		if err != nil || out.Failed != "" {
+			t.Fatalf("tick %d = %+v, %v; want deferred retry", i, out, err)
+		}
+		rec, getErr := db.GetPlan(id)
+		if getErr != nil || rec.State != runtimedb.PlanApplying {
+			t.Fatalf("tick %d plan = %+v, %v; want applying", i, rec, getErr)
 		}
 		if got := l.delay(base); got != want {
 			t.Fatalf("delay after %d failures = %v, want %v", i+1, got, want)
