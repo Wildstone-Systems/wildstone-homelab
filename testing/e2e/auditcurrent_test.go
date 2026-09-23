@@ -12,7 +12,7 @@ import (
 var (
 	currentStatusRe   = regexp.MustCompile(`(?m)^- \*\*Current status:\*\* (implemented|open|superseded)\s*$`)
 	currentEvidenceRe = regexp.MustCompile(`(?m)^- \*\*Current evidence:\*\* (.+)$`)
-	currentOwnerRe    = regexp.MustCompile(`(?m)^- \*\*Current owner:\*\* ([^\r\n]+)$`)
+	currentOwnerRe    = regexp.MustCompile(`(?m)^- \*\*Current owner:\*\* ([^\r\n]+)\r?$`)
 	currentTrackingRe = regexp.MustCompile(`(?m)^- \*\*Tracking:\*\* (#[0-9]+)\s*$`)
 	currentDesignRe   = regexp.MustCompile(`(?m)^- \*\*Superseded by:\*\* (.+)$`)
 )
@@ -94,5 +94,16 @@ func TestCurrentStatusGateRejectsStaleFinding(t *testing.T) {
 	stale := "### F-153-01 — old claim\n- **Audit status:** missing\n- **Audit evidence:** `old.go`\n"
 	if currentStatusRe.MatchString(stale) {
 		t.Fatal("historical status was mistaken for a current disposition")
+	}
+}
+
+func TestCurrentStatusGateAcceptsCRLFOpenFinding(t *testing.T) {
+	section := "### F-153-01 — open claim\r\n" +
+		"- **Current status:** open\r\n" +
+		"- **Current evidence:** still needs implementation\r\n" +
+		"- **Current owner:** chickenrat17\r\n" +
+		"- **Tracking:** #314\r\n"
+	if !currentOwnerRe.MatchString(section) || !currentTrackingRe.MatchString(section) {
+		t.Fatal("open finding metadata must be recognized in a CRLF checkout")
 	}
 }
