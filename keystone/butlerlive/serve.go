@@ -5,6 +5,7 @@ package butlerlive
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -84,6 +85,26 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 
 	if err = privacy.SetTask(task.ID); err != nil {
 		return bs.blank(b), err
+	}
+
+	// Health-driven waiting (ADR-W039 §3.7, Phase 4, #340): a Butler
+	// whose runtime is not native answers only through that runtime,
+	// and there is nothing to hand this turn to while it is offline,
+	// revoked, or has never registered. The task waits rather than
+	// failing or silently falling back to the in-process model — there
+	// is no fallback branch here for the same reason Reachable()'s own
+	// comment gives above. Native runtimes are never affected: this
+	// whole branch is a no-op for the deployment's default.
+	if offline, detail, err := bs.runtimeOffline(b); err != nil {
+		return bs.blank(b), err
+	} else if offline {
+		if err := bs.queueForOfflineRuntime(task.ID); err != nil {
+			return bs.blank(b), err
+		}
+		answer := bs.blank(b)
+		answer.TaskID, answer.Resumed = task.ID, resumed
+		answer.FinalText = detail
+		return answer, nil
 	}
 
 	gw, err := bs.Gateways.For(b, t)
@@ -316,6 +337,45 @@ func (bs *Butlers) blank(b runtimedb.Butler) Answer {
 		Surface:   b.Surface,
 		ReadOnly:  !b.CarriesActionAuthority(),
 	}
+}
+
+// runtimeOffline reports whether b's own runtime cannot be handed a
+// turn right now (ADR-W039 §3.7, Phase 4, #340): anything other than
+// native that is offline, revoked, or has never registered. A native
+// runtime is never offline in this sense — it runs in this process —
+// and a Butler with no runtime record at all (should not happen after
+// the 0081 backfill) is treated the same way: nothing to wait on.
+func (bs *Butlers) runtimeOffline(b runtimedb.Butler) (bool, string, error) {
+	rt, err := bs.DB.GetButlerRuntime(b.Seq)
+	if err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return false, "", nil
+		}
+		return false, "", err
+	}
+	if rt.Type == agentapi.RuntimeNative {
+		return false, "", nil
+	}
+	switch rt.Health {
+	case agentapi.HealthOffline, agentapi.HealthRevoked, agentapi.HealthUnregistered:
+		return true, fmt.Sprintf(
+			"%s's %s runtime is not connected right now; this will resume once it reconnects.",
+			b.Name, rt.Type), nil
+	}
+	return false, "", nil
+}
+
+// queueForOfflineRuntime moves task to waiting(runtime-offline). It
+// first moves a pending task to running (mirroring the runtime's own
+// first Work call, Client.Start) so the transition to waiting is legal
+// from wherever the task already was — pending, or already waiting from
+// an earlier offline check, which Running resolves before Wait reopens
+// it with a fresh timestamp.
+func (bs *Butlers) queueForOfflineRuntime(taskID string) error {
+	if err := bs.Ledger.Running(taskID, "runtime check"); err != nil {
+		return err
+	}
+	return bs.Ledger.Wait(taskID, string(agentapi.WorkWaitRuntimeOffline), "the assigned agent's runtime is not connected")
 }
 
 // task finds the durable task this turn belongs to, or opens one.

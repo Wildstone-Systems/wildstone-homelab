@@ -9,6 +9,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
 )
@@ -295,5 +296,106 @@ func TestARuntimePrincipalIsBoundToOneAgentForLife(t *testing.T) {
 	}
 	if none, _ := db.ListRuntimePrincipals(hobson.Seq); len(none) != 0 {
 		t.Errorf("hobson lists %v", none)
+	}
+}
+
+// TestSweepStaleRuntimeHeartbeatsFlipsOnlyStaleNonNative (ADR-W039 §3.7,
+// Phase 4, #340): the sweeper flips a stale, connected, non-native
+// runtime to offline, and never touches a native one, a fresh one, or
+// one that is already something other than connected.
+func TestSweepStaleRuntimeHeartbeatsFlipsOnlyStaleNonNative(t *testing.T) {
+	db, native := runtimeFixture(t)
+	if err := db.UpsertModel(Model{
+		Name: "cloud-box", Kind: ModelCloud, Provider: "openai", ProviderModel: "gpt",
+		Readiness: ModelReady, Enabled: true,
+	}, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	newButler(t, db, "hermes-stale", "cloud-box")
+	stale, err := db.GetButler("hermes-stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newButler(t, db, "hermes-fresh", "cloud-box")
+	fresh, err := db.GetButler("hermes-fresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newButler(t, db, "hermes-unreg", "cloud-box")
+	unreg, err := db.GetButler("hermes-unreg")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.SetButlerRuntime(native.Seq, ButlerRuntime{Type: agentapi.RuntimeNative}, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetRuntimeHealth(native.Seq, agentapi.HealthConnected); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range []Butler{stale, fresh, unreg} {
+		if err := db.SetButlerRuntime(b.Seq, ButlerRuntime{Type: agentapi.RuntimeHermes}, "mika"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// stale and fresh both authenticate (unregistered -> connected +
+	// heartbeat); unreg never does, so it stays unregistered.
+	if err := db.SetRuntimeHealth(stale.Seq, agentapi.HealthConnected); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TouchRuntimeHeartbeat(stale.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetRuntimeHealth(fresh.Seq, agentapi.HealthConnected); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TouchRuntimeHeartbeat(fresh.Seq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Push stale's own heartbeat and native's into the past. Native's
+	// backfilled heartbeat is empty (never touched), so give it a real
+	// stale one to prove type alone is what protects it.
+	past := time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := db.sql.Exec(`UPDATE butler_runtimes SET last_heartbeat = ? WHERE butler IN (?, ?)`,
+		past, stale.Seq, native.Seq); err != nil {
+		t.Fatal(err)
+	}
+
+	cutoff := time.Now().Add(-time.Hour)
+	flipped, err := db.SweepStaleRuntimeHeartbeats(cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(flipped) != 1 || flipped[0] != stale.Seq {
+		t.Fatalf("flipped = %v, want only %d (hermes-stale)", flipped, stale.Seq)
+	}
+
+	rt, err := db.GetButlerRuntime(stale.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Health != agentapi.HealthOffline {
+		t.Errorf("hermes-stale health = %q, want offline", rt.Health)
+	}
+
+	if rt, _ := db.GetButlerRuntime(native.Seq); rt.Health != agentapi.HealthConnected {
+		t.Errorf("the native runtime's health changed to %q; the sweeper must never touch native", rt.Health)
+	}
+	if rt, _ := db.GetButlerRuntime(fresh.Seq); rt.Health != agentapi.HealthConnected {
+		t.Errorf("hermes-fresh health = %q, want still connected (its heartbeat is recent)", rt.Health)
+	}
+	if rt, _ := db.GetButlerRuntime(unreg.Seq); rt.Health != agentapi.HealthUnregistered {
+		t.Errorf("hermes-unreg health = %q, want still unregistered (never connected)", rt.Health)
+	}
+
+	// Sweeping again is a no-op: an already-offline runtime is not
+	// re-flipped or re-recorded.
+	flipped, err = db.SweepStaleRuntimeHeartbeats(cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(flipped) != 0 {
+		t.Errorf("a second sweep flipped %v; an already-offline runtime must be left alone", flipped)
 	}
 }

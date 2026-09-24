@@ -634,6 +634,24 @@ func (db *DB) ListOpenButlerTasksByButler(butler string) ([]ButlerTask, error) {
 	return collectButlerTasks(rows)
 }
 
+// ButlerTasksWaitingOnRuntime returns a Butler's own tasks currently
+// waiting with the given open (unresolved) reason, oldest first
+// (ADR-W039 §3.7, Phase 4, #340) — the resume queue a reconnected
+// runtime's arrival re-offers as deliveries.
+func (db *DB) ButlerTasksWaitingOnRuntime(butlerName string, reason ButlerWaitReason) ([]ButlerTask, error) {
+	rows, err := db.sql.Query(
+		butlerTaskColumns+`
+		 JOIN butler_task_waits w ON w.task = t.seq
+		 WHERE t.butler = ? AND t.state = ? AND w.resolved_at = '' AND w.reason = ?
+		 ORDER BY t.seq`,
+		butlerName, string(ButlerTaskWaiting), string(reason))
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing tasks waiting on the runtime for %q: %w", butlerName, err)
+	}
+	defer rows.Close()
+	return collectButlerTasks(rows)
+}
+
 // ButlerTasksInState returns every task in state, oldest first — the
 // resume queue after a restart.
 func (db *DB) ButlerTasksInState(state ButlerTaskState) ([]ButlerTask, error) {

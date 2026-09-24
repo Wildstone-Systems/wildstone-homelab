@@ -438,6 +438,13 @@ const (
 	WorkWaitClarification     WorkWaitReason = "clarification"
 	WorkWaitSourceUnavailable WorkWaitReason = "source-unavailable"
 	WorkWaitUncertainOutcome  WorkWaitReason = "uncertain-outcome"
+	// WorkWaitRuntimeOffline: the Agent's own runtime is not connected
+	// (§3.7, Phase 4, #340) — offline, revoked, or never registered —
+	// so there is nothing to hand this task's next turn to. It is not
+	// a failure of the task: the task resumes, unaltered, the moment
+	// the runtime's health returns to connected (agentContext's own
+	// arrival check re-offers it as a delivery).
+	WorkWaitRuntimeOffline WorkWaitReason = "runtime-offline"
 )
 
 // Valid reports whether r is a known task wait reason.
@@ -445,7 +452,7 @@ func (r WorkWaitReason) Valid() bool {
 	switch r {
 	case WorkWaitReply, WorkWaitApproval, WorkWaitSchedule, WorkWaitModelUnavailable,
 		WorkWaitBudgetExhausted, WorkWaitClarification, WorkWaitSourceUnavailable,
-		WorkWaitUncertainOutcome:
+		WorkWaitUncertainOutcome, WorkWaitRuntimeOffline:
 		return true
 	}
 	return false

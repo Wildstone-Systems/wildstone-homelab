@@ -225,6 +225,45 @@ func (db *DB) TouchRuntimeHeartbeat(butler int64) error {
 	return nil
 }
 
+// SweepStaleRuntimeHeartbeats flips connected → offline for every
+// non-native runtime whose last heartbeat is older than cutoff
+// (ADR-W039 §3.7, Phase 4, #340). Native runtimes are never touched —
+// nothing runs out of process to lose a heartbeat over — and a runtime
+// that is anything other than connected (unregistered, degraded,
+// offline, revoked already) is left exactly where it is: this is a
+// one-way, health-driven demotion, not a general health-setter. It
+// returns the Butler seqs it flipped, oldest first, so the caller can
+// decide whether anything of theirs needs re-offering later.
+func (db *DB) SweepStaleRuntimeHeartbeats(cutoff time.Time) ([]int64, error) {
+	rows, err := db.sql.Query(
+		`SELECT butler FROM butler_runtimes
+		  WHERE type <> ? AND health = ? AND last_heartbeat <> '' AND last_heartbeat < ?
+		  ORDER BY butler`,
+		string(agentapi.RuntimeNative), string(agentapi.HealthConnected), cutoff.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: finding stale runtimes: %w", err)
+	}
+	var seqs []int64
+	for rows.Next() {
+		var seq int64
+		if err := rows.Scan(&seq); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		seqs = append(seqs, seq)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	for _, seq := range seqs {
+		if err := db.SetRuntimeHealth(seq, agentapi.HealthOffline); err != nil && !errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
+	}
+	return seqs, nil
+}
+
 // BindRuntimePrincipal binds a principal to an Agent as its runtime
 // credential and makes it the Agent's current one.
 //

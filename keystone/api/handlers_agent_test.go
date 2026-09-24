@@ -700,3 +700,91 @@ func TestRevokingFencesOpenTasksAndWithdrawsTheHandle(t *testing.T) {
 		t.Errorf("invoke on the withdrawn handle under a fresh credential = %d %+v, want 200 denied", res.StatusCode, afterInvoke)
 	}
 }
+
+// TestReconnectingRuntimeReOffersItsWaitingTasks is health-driven
+// waiting's other half (ADR-W039 §3.7, Phase 4, #340): a task already
+// parked in waiting(runtime-offline) gets a fresh handle and a `turn`
+// delivery the moment its runtime's health returns to connected — the
+// same arrival that already flips unregistered/offline to connected.
+func TestReconnectingRuntimeReOffersItsWaitingTasks(t *testing.T) {
+	h, ledger := agentEnvHarness(t)
+	createAgent(t, h, "alfred")
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/alfred/runtime", map[string]any{
+		"type": "hermes", "endpoint": "https://hermes-alfred.internal/",
+	}, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("PUT runtime = %d", res.StatusCode)
+	}
+	cred := rotate(t, h, "alfred", nil)
+	b, err := h.s.DB.GetButler("alfred")
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID, _ := openAgentTask(t, h.s.DB, ledger, b)
+	if err := ledger.Running(taskID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Wait(taskID, string(agentapi.WorkWaitRuntimeOffline), "the runtime is offline"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.SetRuntimeHealth(b.Seq, agentapi.HealthOffline); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := h.s.DB.ListAgentDeliveries(b.Seq, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("deliveries before reconnect = %+v, want none", before)
+	}
+
+	// The reconnect: any authenticated call touches arrival.
+	if res := h.doToken(cred.Secret, http.MethodPost, "/api/v1/agent/heartbeat",
+		map[string]any{"at": time.Now().UTC().Format(time.RFC3339)}, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("heartbeat = %d", res.StatusCode)
+	}
+
+	after := readRuntime(t, h, "alfred")
+	if after.Health != agentapi.HealthConnected {
+		t.Fatalf("health after reconnect = %q, want connected", after.Health)
+	}
+
+	deliveries, err := h.s.DB.ListAgentDeliveries(b.Seq, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != 1 || deliveries[0].Kind != agentapi.DeliveryTurn {
+		t.Fatalf("deliveries after reconnect = %+v, want exactly one turn delivery", deliveries)
+	}
+	var payload struct {
+		Handle string `json:"handle"`
+	}
+	if err := json.Unmarshal([]byte(deliveries[0].Payload), &payload); err != nil {
+		t.Fatalf("delivery payload did not decode: %v", err)
+	}
+	if payload.Handle == "" {
+		t.Error("the re-offered delivery carries no handle")
+	}
+
+	// The fresh handle actually works — the runtime that follows it up
+	// can resume the task rather than being handed a dead reference.
+	var manifest agentapi.Manifest
+	if res := h.doToken(cred.Secret, http.MethodPost, "/api/v1/agent/manifest",
+		map[string]any{"handle": payload.Handle}, &manifest); res.StatusCode != http.StatusOK {
+		t.Fatalf("manifest on the re-offered handle = %d", res.StatusCode)
+	}
+
+	// A second reconnect (already connected) must not re-offer again:
+	// only the arrival that actually flips health does.
+	if res := h.doToken(cred.Secret, http.MethodPost, "/api/v1/agent/heartbeat",
+		map[string]any{"at": time.Now().UTC().Format(time.RFC3339)}, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("second heartbeat = %d", res.StatusCode)
+	}
+	deliveries, err = h.s.DB.ListAgentDeliveries(b.Seq, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != 1 {
+		t.Fatalf("deliveries after a second, already-connected heartbeat = %+v, want still exactly one", deliveries)
+	}
+}

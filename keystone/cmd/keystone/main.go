@@ -99,6 +99,7 @@ func main() {
 	butlerModel := flag.String("butler-model", "", "model name for the legacy single-provider Butler; empty uses the provider's default. A named Butler's model comes from its assigned route, not from here")
 	butlerEndpoint := flag.String("butler-endpoint", "", "base URL for the legacy single-provider Butler (openai-compatible gateways, ollama host); empty uses the provider's default. A named Butler's endpoint comes from its assigned route")
 	automationEvery := flag.Duration("automation-interval", 15*time.Second, "how often the household automation engine ticks between event pokes (ADR-W024 H3)")
+	agentHeartbeatTTL := flag.Duration("agent-heartbeat-ttl", 90*time.Second, "how long a non-native Agent runtime may go without a heartbeat before it is marked offline (ADR-W039 §3.7, Phase 4, #340)")
 	householdTZ := flag.String("household-timezone", "Local", "IANA time zone the household's rules keep (timeOfDay/weekday conditions), e.g. Europe/London")
 	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W024 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
 	replyURL := flag.String("household-reply-url", "", "household event intake URL a notification's reply buttons post to, as a PHONE can reach it (not Keystone's loopback address); empty means notifications carry no reply buttons and a rule that asks for them fails loudly")
@@ -126,7 +127,8 @@ func main() {
 		CalendarURL: *calendarURL, CalendarUser: *calendarUser,
 		Ingress:            splitNonEmpty(*householdIngress),
 		ConsoleEntryWindow: *consoleEntry, ConsoleStepUpWindow: *consoleStepUp,
-		HostOpsEnabled: *hostOpsEnabled,
+		HostOpsEnabled:    *hostOpsEnabled,
+		AgentHeartbeatTTL: *agentHeartbeatTTL,
 	}
 	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, *wallpaperDir, butlerCfg, householdCfg, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
@@ -284,6 +286,10 @@ type householdConfig struct {
 	// makes Tier 3 POSSIBLE, an Owner's own grant and confirmation make
 	// it happen.
 	HostOpsEnabled bool
+	// AgentHeartbeatTTL bounds how long a non-native Agent runtime may
+	// go without a heartbeat before the sweeper marks it offline
+	// (ADR-W039 §3.7, Phase 4, #340).
+	AgentHeartbeatTTL time.Duration
 }
 
 // confirmWindow is how long a confirm-tier question stays open, and
@@ -1788,6 +1794,31 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			// coordinator's ledger, for fenceRuntimeTasks (§3.7).
 			apiSrv.AgentGateway = butlers.AgentClient
 			apiSrv.Ledger = ledger
+
+			// The heartbeat sweeper (ADR-W039 §3.7, Phase 4, #340): the
+			// only thing that ever marks a runtime offline on its own,
+			// rather than in answer to a call it made. It never touches
+			// native runtimes (nothing runs out of process to lose a
+			// heartbeat over) or a runtime that is already anything
+			// other than connected. Ticking at a third of the TTL keeps
+			// the worst-case detection lag well under it without
+			// hammering the database.
+			go func(ttl time.Duration) {
+				if ttl <= 0 {
+					ttl = 90 * time.Second
+				}
+				interval := ttl / 3
+				if interval < time.Second {
+					interval = time.Second
+				}
+				ticker := time.NewTicker(interval)
+				defer ticker.Stop()
+				for range ticker.C {
+					if _, err := db.SweepStaleRuntimeHeartbeats(time.Now().Add(-ttl)); err != nil {
+						log.Error("agent heartbeat sweep failed", "err", err)
+					}
+				}
+			}(householdCfg.AgentHeartbeatTTL)
 
 			named, lerr := db.ListButlers()
 			switch {

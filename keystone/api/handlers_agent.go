@@ -99,13 +99,74 @@ func (s *Server) touchRuntimeArrival(butlerSeq int64) error {
 	if err != nil {
 		return err
 	}
-	if rt.Health == agentapi.HealthUnregistered {
+	// unregistered → connected is the runtime's first ever call;
+	// offline → connected is a reconnect after the heartbeat sweeper
+	// (or an outage) flipped it (ADR-W039 §3.7, Phase 4, #340). Both
+	// are an arrival, and both re-offer whatever this Agent's tasks
+	// were left waiting on it.
+	reconnected := rt.Health == agentapi.HealthUnregistered || rt.Health == agentapi.HealthOffline
+	if reconnected {
 		if err := s.DB.SetRuntimeHealth(butlerSeq, agentapi.HealthConnected); err != nil {
 			return err
 		}
 	}
 	if err := s.DB.TouchRuntimeHeartbeat(butlerSeq); err != nil && !errors.Is(err, runtimedb.ErrNotFound) {
 		return err
+	}
+	if reconnected {
+		if err := s.reofferWaitingTasks(butlerSeq); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// reofferWaitingTasks is the other half of health-driven waiting
+// (ADR-W039 §3.7, Phase 4, #340): a runtime that just reconnected gets
+// a fresh handle and an agent_deliveries row (kind turn) for every one
+// of its own tasks parked in waiting(runtime-offline), so its next
+// long-poll (#341) discovers them without Wildstone pushing anything.
+// The wait itself is left exactly as it is — it resolves the ordinary
+// way, when the runtime reports back in with a Work Start (reason
+// "delivery"), which butlerstore.Ledger.Running already treats as
+// resolving any open wait.
+//
+// A failure here is not surfaced as this call's own error: the
+// reconnect itself already succeeded (health is already connected),
+// and a runtime that misses a re-offer here still has an open wait its
+// own next Manifest/Invoke call will find failing for an entirely
+// different reason if it tries to act without one — losing the notice
+// is not losing the work.
+func (s *Server) reofferWaitingTasks(butlerSeq int64) error {
+	if s.Ledger == nil {
+		return nil
+	}
+	b, err := s.DB.GetButlerBySeq(butlerSeq)
+	if err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	tasks, err := s.DB.ButlerTasksWaitingOnRuntime(b.Name, runtimedb.ButlerWaitRuntimeOffline)
+	if err != nil {
+		s.Log.Error("finding tasks waiting on a reconnected runtime", "butler", b.Name, "err", err)
+		return nil
+	}
+	for _, task := range tasks {
+		handle, err := s.Ledger.IssueHandle(task.ID)
+		if err != nil {
+			s.Log.Error("issuing a handle to re-offer a waiting task", "task", task.ID, "err", err)
+			continue
+		}
+		payload, err := json.Marshal(map[string]any{"handle": string(handle)})
+		if err != nil {
+			s.Log.Error("encoding a turn delivery", "task", task.ID, "err", err)
+			continue
+		}
+		if _, err := s.DB.RecordAgentDelivery(butlerSeq, agentapi.DeliveryTurn, string(payload)); err != nil {
+			s.Log.Error("recording a turn delivery", "task", task.ID, "err", err)
+		}
 	}
 	return nil
 }
