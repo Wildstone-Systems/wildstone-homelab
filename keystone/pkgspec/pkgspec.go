@@ -546,10 +546,23 @@ func (p *Package) Validate() error {
 		// The shape name itself, not the values — a package written
 		// against a vocabulary this binary does not have must still
 		// LOAD, so what a shape ACCEPTS is checked by lint and Expand.
-		if param.Validate != "" && ParamShapes[param.Validate] == nil {
-			return &ValidationError{Field: fmt.Sprintf("params[%d].validate", i),
-				Msg: fmt.Sprintf("%q is not a value shape (one of: %s)",
-					param.Validate, strings.Join(ParamShapeNames(), ", "))}
+		//
+		// `enum:` is the one shape whose values are the package's own to
+		// invent rather than a fixed ParamShapes entry (see
+		// enumShapeValues), so it is checked structurally here instead of
+		// by map lookup: a package author who writes `validate: enum:`
+		// with nothing after the colon, or repeats a value, learns it at
+		// `wild pkg lint` rather than shipping a picker with no options.
+		if param.Validate != "" {
+			if values, isEnum := enumShapeValues(param.Validate); isEnum {
+				if err := validateEnumShapeDecl(values); err != nil {
+					return &ValidationError{Field: fmt.Sprintf("params[%d].validate", i), Msg: err.Error()}
+				}
+			} else if ParamShapes[param.Validate] == nil {
+				return &ValidationError{Field: fmt.Sprintf("params[%d].validate", i),
+					Msg: fmt.Sprintf("%q is not a value shape (one of: %s, or enum:a|b|c for a closed choice)",
+						param.Validate, strings.Join(ParamShapeNames(), ", "))}
+			}
 		}
 	}
 
