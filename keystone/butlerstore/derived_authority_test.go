@@ -303,13 +303,13 @@ func TestARevokedGrantRefusesItsToolAndNotTheWork(t *testing.T) {
 func TestACachedResultIsRefusedWhenItsAuthorityWentAway(t *testing.T) {
 	f := newDerivedFixture(t)
 	ts := newCountingToolset()
-	r := runner(ts, f.ledger)
+	r := newRunner(t, ts, f.ledger, f.taskID)
 
 	// First slice: the read happens and is recorded as verified, then
 	// the provider dies so the task WAITS rather than completing — a
 	// completed task cannot be resumed, and resuming is the whole point.
-	first := &scriptedProvider{dieAt: 1, steps: []*provider.ChatResponse{readsFor("node-a")}}
-	if _, err := r.Run(context.Background(), first, f.taskID, "look at node-a"); err == nil {
+	r.Provider = &scriptedProvider{dieAt: 1, steps: []*provider.ChatResponse{readsFor("node-a")}}
+	if _, err := r.Run(context.Background(), "look at node-a"); err == nil {
 		t.Fatal("the first slice was expected to end on a provider failure")
 	}
 	if n := ts.calls["get_health/node-a"]; n != 1 {
@@ -323,8 +323,8 @@ func TestACachedResultIsRefusedWhenItsAuthorityWentAway(t *testing.T) {
 	// the ledger, and it must not be dispatched either.
 	// dieAt again so this slice waits too, leaving the task resumable
 	// for the third one below.
-	second := &scriptedProvider{dieAt: 1, steps: []*provider.ChatResponse{readsFor("node-a")}}
-	tr, _ := r.Run(context.Background(), second, f.taskID, "look again")
+	r.Provider = &scriptedProvider{dieAt: 1, steps: []*provider.ChatResponse{readsFor("node-a")}}
+	tr, _ := r.Run(context.Background(), "look again")
 	if n := ts.calls["get_health/node-a"]; n != 1 {
 		t.Fatalf("the read was dispatched again (%d total) despite being refused", n)
 	}
@@ -343,8 +343,8 @@ func TestACachedResultIsRefusedWhenItsAuthorityWentAway(t *testing.T) {
 	// pass against an implementation that refuses EVERY cached
 	// retrieval, which breaks the resume the ledger exists for.
 	delete(ts.refused, "get_health")
-	third := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{readsFor("node-a")}}
-	tr, terr := r.Run(context.Background(), third, f.taskID, "and again")
+	r.Provider = &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{readsFor("node-a")}}
+	tr, terr := r.Run(context.Background(), "and again")
 	if terr != nil {
 		t.Fatalf("third slice: %v", terr)
 	}
@@ -654,13 +654,14 @@ func (p *failingThenRevokingProvider) Chat(context.Context, provider.ChatRequest
 // fail — the second attempt goes out and the provider sees two calls.
 func TestARetryReChecksAuthorityBeforeItGoesOut(t *testing.T) {
 	f := newDerivedFixture(t)
-	r := runner(newCountingToolset(), f.ledger)
+	r := newRunner(t, newCountingToolset(), f.ledger, f.taskID)
 	r.RetryLimit = 1
 
 	p := &failingThenRevokingProvider{
 		revoke: func() { _ = f.db.RevokeButlerSession(f.session, "root-admin") },
 	}
-	if _, err := r.Run(context.Background(), p, f.taskID, "look at something"); err == nil {
+	r.Provider = p
+	if _, err := r.Run(context.Background(), "look at something"); err == nil {
 		t.Fatal("the run retried after its session was withdrawn")
 	}
 	if p.attempts != 1 {
@@ -683,13 +684,13 @@ func TestARetryReChecksAuthorityBeforeItGoesOut(t *testing.T) {
 func TestAuthorityWithdrawnDuringAModelCallStopsTheDispatch(t *testing.T) {
 	f := newDerivedFixture(t)
 	ts := newCountingToolset()
-	r := runner(ts, f.ledger)
+	r := newRunner(t, ts, f.ledger, f.taskID)
 
-	p := &revokingProvider{
+	r.Provider = &revokingProvider{
 		steps:  []*provider.ChatResponse{readsFor("node-a")},
 		revoke: func() { _ = f.db.RevokeButlerSession(f.session, "root-admin") },
 	}
-	if _, err := r.Run(context.Background(), p, f.taskID, "look at node-a"); err == nil {
+	if _, err := r.Run(context.Background(), "look at node-a"); err == nil {
 		t.Fatal("the run continued after its session was withdrawn mid-call")
 	}
 	// Every call, whatever it was keyed as. Asserting on a single
@@ -706,12 +707,12 @@ func TestAuthorityWithdrawnDuringAModelCallStopsTheDispatch(t *testing.T) {
 	// and a result summary the household reads, and it must not be
 	// recorded for a person whose authority went away mid-call.
 	g := newDerivedFixture(t)
-	gr := runner(newCountingToolset(), g.ledger)
-	answer := &revokingProvider{
+	gr := newRunner(t, newCountingToolset(), g.ledger, g.taskID)
+	gr.Provider = &revokingProvider{
 		steps:  []*provider.ChatResponse{{Text: "all fine"}},
 		revoke: func() { _ = g.db.RevokeButlerSession(g.session, "root-admin") },
 	}
-	if _, err := gr.Run(context.Background(), answer, g.taskID, "anything"); err == nil {
+	if _, err := gr.Run(context.Background(), "anything"); err == nil {
 		t.Fatal("a final answer was accepted after its session was withdrawn mid-call")
 	}
 	task, err := g.db.GetButlerTask(g.taskID)

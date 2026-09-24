@@ -75,6 +75,13 @@ type HandleContext struct {
 	// separately: they are what the task was admitted under.
 	Surface    runtimedb.ButlerSurface
 	AgentClass string
+	// AsOwner and SystemExtra are the request-time facts migration 0083
+	// recorded on the task at open (ADR-W039 Phase 2b, #337): what the
+	// caller was when the turn that opened it was admitted, mirroring
+	// butlerlive.Turn.AsOwner/SystemExtra. Not derivable from anything
+	// else on the handle or the Butler.
+	AsOwner     bool
+	SystemExtra string
 }
 
 // IssueHandle mints the task's live handle, replacing any earlier one.
@@ -205,6 +212,8 @@ func (l *Ledger) ResolveHandle(h agentapi.Handle) (HandleContext, error) {
 		Audience:            task.Audience,
 		Surface:             task.Surface,
 		AgentClass:          task.AgentClass,
+		AsOwner:             task.AsOwner,
+		SystemExtra:         task.SystemExtra,
 	}, nil
 }
 

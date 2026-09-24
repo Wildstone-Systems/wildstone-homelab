@@ -185,6 +185,16 @@ type ButlerTask struct {
 
 	Retention       ButlerTaskRetention `json:"retention"`
 	EnvelopeVersion int                 `json:"envelopeVersion"`
+
+	// AsOwner and SystemExtra are the request-time facts a task handle
+	// alone cannot recover (migration 0083, ADR-W039 Phase 2b, #337):
+	// what the CALLER was when the turn that opened this task was
+	// admitted, not a decision the runtime makes or a fact about the
+	// Butler. They mirror butlerlive.Turn.AsOwner/SystemExtra exactly,
+	// and keystone/agentgateway reads them back to rebuild that Turn
+	// for a handle-resolved call.
+	AsOwner     bool   `json:"asOwner,omitempty"`
+	SystemExtra string `json:"systemExtra,omitempty"`
 }
 
 func butlerTaskID(seq int64) string { return fmt.Sprintf("bt-%d", seq) }
@@ -283,14 +293,16 @@ func (db *DB) InsertButlerTask(t ButlerTask) (string, error) {
 		     surface, agent_class, audience, session, origin_turn, origin_connection,
 		     origin_connection_ref, correlation_id, objective,
 		     completion_criteria, grants_json, budget_json, deadline_at, next_wakeup_at,
-		     lease_epoch, uncertainty, result_summary, retention, envelope_version, objective_kind, proposal_only)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?, ?, ?)`,
+		     lease_epoch, uncertainty, result_summary, retention, envelope_version, objective_kind, proposal_only,
+		     as_owner, system_extra)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?, ?, ?, ?, ?)`,
 		stamp, stamp, string(t.Kind), string(ButlerTaskPending), author, owner,
 		string(t.Surface), t.AgentClass, string(t.Audience), session, originTurn,
 		t.OriginConnection, t.OriginConnectionRef,
 		t.CorrelationID, t.Objective, t.CompletionCriteria, grants, budget,
 		timeText(t.DeadlineAt), timeText(t.NextWakeupAt),
-		string(t.Retention), TaskEnvelopeVersion, t.ObjectiveKind, t.ProposalOnly)
+		string(t.Retention), TaskEnvelopeVersion, t.ObjectiveKind, t.ProposalOnly,
+		t.AsOwner, t.SystemExtra)
 	if err != nil {
 		return "", fmt.Errorf("runtimedb: inserting butler task: %w", err)
 	}
@@ -496,7 +508,8 @@ const butlerTaskColumns = `SELECT t.seq, t.created_at, t.updated_at, t.kind, t.s
 	 t.surface, t.agent_class, t.audience, t.session, t.origin_turn, t.origin_connection,
 	 t.origin_connection_ref, t.correlation_id, t.objective,
 	 t.completion_criteria, t.grants_json, t.budget_json, t.deadline_at, t.next_wakeup_at,
-	 t.lease_epoch, t.uncertainty, t.result_summary, t.retention, t.envelope_version, t.objective_kind, t.proposal_only
+	 t.lease_epoch, t.uncertainty, t.result_summary, t.retention, t.envelope_version, t.objective_kind, t.proposal_only,
+	 t.as_owner, t.system_extra
 	 FROM butler_tasks t
 	 JOIN butler_members a ON a.person_id = t.author_person_id
 	 JOIN butler_members o ON o.person_id = t.owner_person_id`
@@ -512,7 +525,8 @@ func scanButlerTask(row rowScanner) (ButlerTask, error) {
 		&t.OriginConnectionRef, &t.CorrelationID,
 		&t.Objective, &t.CompletionCriteria, &t.GrantsJSON, &t.BudgetJSON,
 		&deadline, &wakeup, &t.LeaseEpoch, &t.Uncertainty, &t.ResultSummary,
-		&retention, &t.EnvelopeVersion, &t.ObjectiveKind, &t.ProposalOnly)
+		&retention, &t.EnvelopeVersion, &t.ObjectiveKind, &t.ProposalOnly,
+		&t.AsOwner, &t.SystemExtra)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ButlerTask{}, ErrNotFound
 	}

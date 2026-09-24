@@ -28,7 +28,7 @@ func TestRunnerVerifiesObjectiveWithoutAcceptingSelfReportedEffects(t *testing.T
 			db, l := testLedger(t, filepath.Join(t.TempDir(), "runtime.db"))
 			defer db.Close()
 			id := newTask(t, db)
-			r := runner(newCountingToolset(), l)
+			r := newRunner(t, newCountingToolset(), l, id)
 			r.VerifyObjective = true
 			answer := "I did it."
 			request := "restart the service"
@@ -37,7 +37,8 @@ func TestRunnerVerifiesObjectiveWithoutAcceptingSelfReportedEffects(t *testing.T
 				request = "Is the service healthy?"
 			}
 			p := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{{Text: answer}, {Text: tc.verdict}}}
-			tr, err := r.Run(context.Background(), p, id, request)
+			r.Provider = p
+			tr, err := r.Run(context.Background(), request)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -73,11 +74,10 @@ func TestRuntimeToolReceiptControlsEffectfulCompletion(t *testing.T) {
 			db, l := testLedger(t, filepath.Join(t.TempDir(), "runtime.db"))
 			defer db.Close()
 			id := newTask(t, db)
-			r := runner(newCountingToolset(), l)
-			r.Gateway = receiptToolset{newCountingToolset(), confirmed}
+			r := newRunner(t, receiptToolset{newCountingToolset(), confirmed}, l, id)
 			r.VerifyObjective = true
-			p := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{readsFor("n1"), {Text: "done"}, {Text: `{"kind":"effectful","effects":[{"description":"perform the action","sourceKey":"step:2"}]}`}}}
-			if _, err := r.Run(context.Background(), p, id, "perform the action"); err != nil {
+			r.Provider = &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{readsFor("n1"), {Text: "done"}, {Text: `{"kind":"effectful","effects":[{"description":"perform the action","sourceKey":"step:2"}]}`}}}
+			if _, err := r.Run(context.Background(), "perform the action"); err != nil {
 				t.Fatal(err)
 			}
 			task, err := db.GetButlerTask(id)
@@ -125,11 +125,10 @@ func TestObjectiveCoverageRejectsUnrelatedAndPartialEffects(t *testing.T) {
 			db, l := testLedger(t, filepath.Join(t.TempDir(), "runtime.db"))
 			defer db.Close()
 			id := newTask(t, db)
-			r := runner(newCountingToolset(), l)
-			r.Gateway = receiptToolset{newCountingToolset(), true}
+			r := newRunner(t, receiptToolset{newCountingToolset(), true}, l, id)
 			r.VerifyObjective = true
 			inspected := false
-			p := objectiveInspectingProvider{scriptedProvider: &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{readsFor("n1"), {Text: "restarted"}, {Text: tc.verdict}}}, inspect: func(req provider.ChatRequest) {
+			r.Provider = objectiveInspectingProvider{scriptedProvider: &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{readsFor("n1"), {Text: "restarted"}, {Text: tc.verdict}}}, inspect: func(req provider.ChatRequest) {
 				inspected = true
 				var input struct {
 					OriginalObjective string                                            `json:"originalObjective"`
@@ -140,7 +139,7 @@ func TestObjectiveCoverageRejectsUnrelatedAndPartialEffects(t *testing.T) {
 					t.Fatalf("verifier lacks operation binding: %+v", input)
 				}
 			}}
-			if _, err := r.Run(context.Background(), p, id, "restart service and notify"); err != nil {
+			if _, err := r.Run(context.Background(), "restart service and notify"); err != nil {
 				t.Fatal(err)
 			}
 			task, err := db.GetButlerTask(id)
@@ -165,13 +164,12 @@ func TestRunnerBindsDeliveryToItsOwnOperation(t *testing.T) {
 	defer db.Close()
 	id := newTask(t, db)
 	ts := &operationCapturingToolset{countingToolset: newCountingToolset()}
-	r := runner(ts.countingToolset, l)
-	r.Gateway = ts
+	r := newRunner(t, ts, l, id)
 	call := readsFor("n1")
 	call.ToolCalls[0].Input["taskID"] = "bt-999"
 	call.ToolCalls[0].Input["step"] = 999
-	p := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{call, {Text: "queued"}}}
-	if _, err := r.Run(context.Background(), p, id, "send"); err != nil {
+	r.Provider = &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{call, {Text: "queued"}}}
+	if _, err := r.Run(context.Background(), "send"); err != nil {
 		t.Fatal(err)
 	}
 	if ts.got.TaskID != id || ts.got.Step != 2 || ts.got.PermissionLabel == "" || ts.got.Audience == "" {
@@ -184,11 +182,10 @@ func TestResumedVerifierSeesAcknowledgedDelivery(t *testing.T) {
 	defer db.Close()
 	id := newTask(t, db)
 	ts := &operationCapturingToolset{countingToolset: newCountingToolset()}
-	r := runner(ts.countingToolset, l)
-	r.Gateway = ts
+	r := newRunner(t, ts, l, id)
 	r.VerifyObjective = true
-	p := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{readsFor("n1"), {Text: "queued"}, {Text: `{"kind":"effectful","effects":[{"description":"send","sourceKey":""}]}`}}}
-	if _, err := r.Run(context.Background(), p, id, "send the message"); err != nil {
+	r.Provider = &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{readsFor("n1"), {Text: "queued"}, {Text: `{"kind":"effectful","effects":[{"description":"send","sourceKey":""}]}`}}}
+	if _, err := r.Run(context.Background(), "send the message"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.RecordButlerEffectReceipt(id, runtimedb.EffectReceipt{Kind: "executor", SourceID: "chat-outbound:1", Step: ts.got.Step, Outcome: "succeeded", PermissionLabel: ts.got.PermissionLabel, Audience: runtimedb.ButlerTaskAudience(ts.got.Audience)}); err != nil {
@@ -210,7 +207,8 @@ func TestResumedVerifierSeesAcknowledgedDelivery(t *testing.T) {
 			t.Fatalf("receipt hidden from verifier: %+v", input)
 		}
 	}}
-	if _, err := r.Run(context.Background(), resumed, id, "check delivery"); err != nil {
+	r.Provider = resumed
+	if _, err := r.Run(context.Background(), "check delivery"); err != nil {
 		t.Fatal(err)
 	}
 	task, err := db.GetButlerTask(id)

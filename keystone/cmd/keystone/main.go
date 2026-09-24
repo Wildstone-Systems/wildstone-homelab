@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentgateway"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/native"
 	"github.com/chickenrat17/wildstone-homelab/keystone/api"
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/backup"
@@ -1598,6 +1600,17 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				DB:     db,
 				Ledger: ledger,
 				Log:    log,
+				// The native reasoning loop reaches Wildstone only
+				// through the in-process Agent Gateway now (ADR-W039
+				// Phase 2b, #337): a Handle issued at task admission,
+				// resolved fresh on every Manifest/Invoke call, with
+				// the runtime-principal binding checked exactly as an
+				// out-of-process runtime would be. Default true on
+				// this feature branch — it is validated as a whole
+				// before merge — with false kept selectable so the
+				// pre-2b closure wiring stays reachable for one
+				// release if something regresses.
+				UseAgentGateway: true,
 				// Every Butler is told the date and time in the
 				// household's zone; see butlerlive.clockLine.
 				Location: householdLoc,
@@ -1670,6 +1683,24 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			// The stalled-task notice goes to the direct surface the
 			// task's owner was already talking on (ADR-W030 A4/P4).
 			butlers.Notifier = &butlerstore.Notifier{Ledger: ledger}
+
+			// The in-process Agent Gateway (ADR-W039 Phase 2b, #337).
+			// It is built here, not inside keystone/butlerlive, because
+			// it imports butlerlive (for Gateways, Turn, Scoped,
+			// SystemPromptFor) and a reverse import would cycle; wiring
+			// it here is the seam keystone/butlerlive.Butlers.
+			// AgentClient/WithPrincipal exist for.
+			agentGw := &agentgateway.Gateway{
+				DB: db, Ledger: ledger, Gateways: butlers.Gateways, Log: log, Clock: butlers.ClockLine,
+			}
+			butlers.AgentClient = agentgateway.InProcess(agentGw)
+			butlers.WithPrincipal = func(ctx context.Context, name string) context.Context {
+				rt, err := db.GetButlerRuntimeByName(name)
+				if err != nil || rt.Principal == "" {
+					return ctx
+				}
+				return agentgateway.WithPrincipal(ctx, rt.Principal)
+			}
 			apiSrv.Butlers = butlers
 
 			named, lerr := db.ListButlers()
@@ -1733,7 +1764,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		// sent household escalation facts to the old hosted provider,
 		// which is contrary to the saved configuration and to the
 		// privacy intent behind choosing local in the first place.
-		phraser := &butler.Phraser{
+		phraser := &native.Phraser{
 			Provider: butlerProviderRef{host: apiSrv.ButlerHost},
 			Model:    butlerCfg.Model,
 			Record: func(_ context.Context, providerName, prompt, reply string) error {
@@ -1753,11 +1784,11 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			},
 		}
 		auto.Escalator = automation.EscalatorFunc(func(ctx context.Context, req automation.EscalationRequest) (string, error) {
-			facts := make([]butler.Fact, 0, len(req.Facts))
+			facts := make([]native.Fact, 0, len(req.Facts))
 			for _, f := range req.Facts {
-				facts = append(facts, butler.Fact{Label: f.Label, Content: f.Content})
+				facts = append(facts, native.Fact{Label: f.Label, Content: f.Content})
 			}
-			return phraser.Phrase(ctx, butler.PhraseRequest{
+			return phraser.Phrase(ctx, native.PhraseRequest{
 				Rule: req.Rule, Instruction: req.Instruction, Fallback: req.Fallback, Facts: facts,
 			})
 		})
@@ -1784,11 +1815,11 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			if err != nil || p == nil {
 				return "", fmt.Errorf("assigned Agent %s has no available provider: %v", agent, err)
 			}
-			facts := make([]butler.Fact, 0, len(req.Facts))
+			facts := make([]native.Fact, 0, len(req.Facts))
 			for _, f := range req.Facts {
-				facts = append(facts, butler.Fact{Label: f.Label, Content: f.Content})
+				facts = append(facts, native.Fact{Label: f.Label, Content: f.Content})
 			}
-			phraser := &butler.Phraser{Provider: p, Model: b.ProviderModel,
+			phraser := &native.Phraser{Provider: p, Model: b.ProviderModel,
 				Record: func(_ context.Context, providerName, prompt, reply string) error {
 					_, err := db.InsertButlerSession(runtimedb.ButlerSession{
 						Principal: butlerSessionPrincipal, ActingFor: automation.Source,
@@ -1799,7 +1830,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 					})
 					return err
 				}}
-			return phraser.Phrase(ctx, butler.PhraseRequest{
+			return phraser.Phrase(ctx, native.PhraseRequest{
 				Rule: req.Rule, Instruction: req.Instruction, Fallback: req.Fallback, Facts: facts,
 			})
 		}

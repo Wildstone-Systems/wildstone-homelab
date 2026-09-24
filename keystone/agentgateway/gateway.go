@@ -223,6 +223,14 @@ func turnFor(hc butlerstore.HandleContext) butlerlive.Turn {
 			Ref:     hc.OriginConnectionRef,
 			Permits: permitsFor(hc.OriginConnection),
 		},
+		// AsOwner and SystemExtra are recorded on the task at open
+		// (migration 0083, ADR-W039 Phase 2b, #337) precisely because
+		// neither is derivable from the handle otherwise: AsOwner
+		// shapes MemoryDestination.ConsoleOwner and SystemExtra reaches
+		// the prompt through systemFor, and a gateway-served turn must
+		// see both exactly as the closure path did.
+		AsOwner:     hc.AsOwner,
+		SystemExtra: hc.SystemExtra,
 	}
 }
 

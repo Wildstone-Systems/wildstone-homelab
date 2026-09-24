@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/native"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
@@ -119,19 +120,20 @@ func TestInvokeWritesTheRunnersLedgerRows(t *testing.T) {
 	ctx := context.Background()
 	const tool = "get_system_overview"
 
-	// The runner today, on task A, through the same scoped surface.
+	// The native runner today, on task A, through the same in-process
+	// client (ADR-W039 Phase 2b, #337: the runner no longer holds a
+	// Toolset or a Ledger of its own, so this is now the SAME client as
+	// the gateway's direct Invoke below, and the comparison mostly
+	// proves the two calls agree with themselves — which is still worth
+	// pinning, since it is what a real deployment does too).
 	taskA, hA := f.openTask(t, "alfred", "mika")
-	sA, err := f.g.open(ctx, hA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := &butler.Runner{
-		Gateway: sA.toolset, Ledger: f.ledger, ReadOnly: sA.readOnly,
-		MaxSliceRounds: 4, MaxToolCalls: ConversationToolCalls, UseParentBudget: true,
+	r := &native.Runner{
+		Client: InProcess(f.g), Handle: hA,
+		MaxSliceRounds:  4,
 		PermissionLabel: "alfred", Audience: string(runtimedb.ButlerAudiencePrivate), Actor: "mika",
-		ObservationTTL: ObservationTTL,
+		Provider: &scripted{toolCalls: []provider.ToolCall{{ID: "c1", Name: tool, Input: map[string]any{}}}},
 	}
-	if _, err := r.Run(ctx, &scripted{toolCalls: []provider.ToolCall{{ID: "c1", Name: tool, Input: map[string]any{}}}}, taskA, "what is running?"); err != nil {
+	if _, err := r.Run(ctx, "what is running?"); err != nil {
 		t.Fatalf("Runner.Run: %v", err)
 	}
 

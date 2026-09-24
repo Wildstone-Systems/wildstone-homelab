@@ -4,53 +4,26 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
-	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 )
 
 // defaultMaxIterations bounds the agent loop's tool-call round trips
 // (ADR-W006 A5.3/B3: "no infinite tool loops").
 const defaultMaxIterations = 8
 
-// ToolCallRecord is one audited tool call: what the model asked for, and
-// the (already redacted/enveloped/truncated) result it got back.
-type ToolCallRecord struct {
-	// StepSeq is assigned by the durable runner, never by model input.
-	StepSeq int64
-	Name    string
-	Input   map[string]any
-	Result  string
-	Error   string
-	Plan    *plan.Plan
-	// ResourceYAML carries an accepted propose_change's canonical
-	// resource document (ADR-W017 A3) for the host to submit as a real
-	// proposed plan record after the session.
-	ResourceYAML string
-	Rejected     bool
-}
-
-// Audit is the session audit record ADR-W006 A5.4 requires: provider/
-// model, every tool call + result, every plan produced. No apply/approval
-// outcome is recorded here because this package never applies anything —
-// approval and apply happen outside the session, over the returned plans.
-type Audit struct {
-	Provider string
-	Calls    []ToolCallRecord
-	// Plans collects every plan.Plan produced during the session (from
-	// get_plan and propose_change calls), in call order.
-	Plans []*plan.Plan
-}
-
-// Transcript is what Session.Run returns: the model's final assistant
-// text plus the full session audit.
-type Transcript struct {
-	FinalText string
-	Audit     Audit
-	// CappedIterations is true if the loop stopped because
-	// MaxIterations was reached with the model still requesting tool
-	// calls, rather than because the model produced a final answer.
-	CappedIterations bool
-}
+// ToolCallRecord, Audit and Transcript moved to keystone/agentruntime in
+// ADR-W039 Phase 2b (#337), the small leaf package shared with
+// keystone/agentruntime/native's Runner, so the two sides of the split
+// agree on one shape for a turn's audit record without native importing
+// this package. These aliases keep every existing reference — in this
+// package, keystone/agentgateway, keystone/butlerlive and
+// keystone/api — compiling unchanged.
+type (
+	ToolCallRecord = agentruntime.ToolCallRecord
+	Audit          = agentruntime.Audit
+	Transcript     = agentruntime.Transcript
+)
 
 // Toolset is the surface a Session drives (ADR-W026 A1). Two implement
 // it, and which one a Session holds is the whole difference between the

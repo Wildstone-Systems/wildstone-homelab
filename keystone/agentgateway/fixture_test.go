@@ -194,6 +194,14 @@ func (f *fixture) surface(name string) *counting {
 // and issues its handle.
 func (f *fixture) openTask(t *testing.T, butlerName, owner string) (string, agentapi.Handle) {
 	t.Helper()
+	return f.openTaskAs(t, butlerName, owner, false, "")
+}
+
+// openTaskAs is openTask with the request-time turn context migration
+// 0083 records (ADR-W039 Phase 2b, #337): AsOwner and SystemExtra,
+// neither derivable from anything else on the handle.
+func (f *fixture) openTaskAs(t *testing.T, butlerName, owner string, asOwner bool, systemExtra string) (string, agentapi.Handle) {
+	t.Helper()
 	b, err := f.db.GetButler(butlerName)
 	if err != nil {
 		t.Fatalf("GetButler(%s): %v", butlerName, err)
@@ -207,6 +215,8 @@ func (f *fixture) openTask(t *testing.T, butlerName, owner string) (string, agen
 		// a question; Serve leaves it for that call to decide.
 		ObjectiveKind: runtimedb.ObjectiveInformational,
 		Retention:     runtimedb.ButlerRetentionConversation,
+		AsOwner:       asOwner,
+		SystemExtra:   systemExtra,
 	})
 	if err != nil {
 		t.Fatalf("InsertButlerTask: %v", err)

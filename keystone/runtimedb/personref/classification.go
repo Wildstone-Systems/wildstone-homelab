@@ -276,6 +276,13 @@ var Columns = []Column{
 	// it names nobody and cannot be turned back into the handle.
 	{"butler_tasks", "handle_hash", NotAPerson,
 		"0082: sha256 hex digest of the opaque task handle's secret (ADR-W039 §3.1 principle 4); a digest, never an identity"},
+	// 0083 (ADR-W039 Phase 2b): request-time turn context a handle
+	// alone cannot recover. system_extra is surface guidance the
+	// caller added (butlerlive.Turn.SystemExtra) — an instruction
+	// fragment, never a Person reference. as_owner is INTEGER and is
+	// not a TEXT candidate at all.
+	{"butler_tasks", "system_extra", NotAPerson,
+		"0083: surface guidance the caller added for this turn (butlerlive.Turn.SystemExtra); instructs nothing about identity and names no Person"},
 	{"household_routines", "output_audience", NotAPerson, "0071: audience foreign key, not a Person"},
 	{"household_routines", "resource_signature", NotAPerson, "0073: canonical JSON of secret IDs and numeric memory IDs, never a Person reference"},
 	{"owner_review_preference", "console_url", NotAPerson, "0071: Console link for generic review notifications"},

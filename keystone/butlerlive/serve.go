@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/native"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
@@ -92,33 +94,8 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 	// A4 is structural here rather than checked: the authorizer this
 	// session holds knows one Butler's name and there is no call that
 	// changes it.
-	if sc, ok := gw.(Scoped); ok {
-		// The per-Butler authority, and above it the ceiling of the
-		// connection this request arrived through. The order is the
-		// whole guarantee: WithConnection can only turn a yes into a
-		// no, so nothing the store resolves can raise what the surface
-		// forbids.
-		authority := &butlerstore.Authority{DB: bs.DB, Butler: b.Name}
-		// Layer 1, wired here. Design §10 puts the Person above the
-		// Agent's whole reach, and an unwired check refuses rather than
-		// waves through — so this line is the act that turns the
-		// person leg on, the way Ledger.AdmissionCheck is for
-		// admission. Serving a session without it would be serving one
-		// that refuses every tool, which is the safe direction for the
-		// mistake to fail in.
-		authority.PersonAuthority = authority.PersonIsAdmitted()
-		sc.SetAuthorizer(WithConnection(authority, t.Connection.Permits))
-		sc.SetSessionTask(task.ID)
-		// A turn is somebody asking. The Connection identifier is
-		// carried and an absent one refuses (§10.1). What a Connection
-		// ADMITS is slice 11's, and is now decided: migration 0063
-		// records the policy and Connection.Admits evaluates it, on
-		// the way in and again at every boundary. What it may DISCLOSE
-		// — group destinations, memory reaching a room, cross-
-		// Connection fallback — is slice 11's second half and is not
-		// wired here yet.
-		sc.SetCaller(butler.CallerPersonFacing, t.Member, t.Connection.Name)
-	} else {
+	sc, ok := gw.(Scoped)
+	if !ok {
 		// A surface that cannot be scoped must not be served as a
 		// Butler at all. Running it unscoped would silently give this
 		// Butler the profile's whole ceiling.
@@ -126,29 +103,89 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 			fmt.Errorf("butlerlive: the %s surface cannot be scoped to a butler; refusing to run %s unscoped",
 				b.Surface, b.Name)
 	}
+	// The per-Butler authority, and above it the ceiling of the
+	// connection this request arrived through. The order is the
+	// whole guarantee: WithConnection can only turn a yes into a
+	// no, so nothing the store resolves can raise what the surface
+	// forbids.
+	authority := &butlerstore.Authority{DB: bs.DB, Butler: b.Name}
+	// Layer 1, wired here. Design §10 puts the Person above the
+	// Agent's whole reach, and an unwired check refuses rather than
+	// waves through — so this line is the act that turns the
+	// person leg on, the way Ledger.AdmissionCheck is for
+	// admission. Serving a session without it would be serving one
+	// that refuses every tool, which is the safe direction for the
+	// mistake to fail in.
+	authority.PersonAuthority = authority.PersonIsAdmitted()
+	sc.SetAuthorizer(WithConnection(authority, t.Connection.Permits))
+	sc.SetSessionTask(task.ID)
+	// A turn is somebody asking. The Connection identifier is
+	// carried and an absent one refuses (§10.1). What a Connection
+	// ADMITS is slice 11's, and is now decided: migration 0063
+	// records the policy and Connection.Admits evaluates it, on
+	// the way in and again at every boundary. What it may DISCLOSE
+	// — group destinations, memory reaching a room, cross-
+	// Connection fallback — is slice 11's second half and is not
+	// wired here yet.
+	sc.SetCaller(butler.CallerPersonFacing, t.Member, t.Connection.Name)
 
-	runner := &butler.Runner{
-		VerifyObjective: true,
-		Gateway:         directed{Toolset: gw, system: systemFor(ctx, gw, b, t, bs.clockLine())},
-		Ledger:          bs.Ledger,
+	// The native reasoning loop reaches this Butler's tools and ledger
+	// only through an agentapi.Client bound to a task Handle (ADR-W039
+	// Phase 2b, #337). Both branches issue one: the gateway path
+	// resolves it fresh on every call and checks the runtime-principal
+	// binding; the closure path (UseAgentGateway=false, or no
+	// AgentClient wired) keeps the pre-Phase-2 wiring, expressed as the
+	// same interface over the Toolset already scoped above.
+	handle, err := bs.Ledger.IssueHandle(task.ID)
+	if err != nil {
+		return bs.blank(b), err
+	}
+	var client agentapi.Client
+	var records func(string) []butler.ToolCallRecord
+	var forget func(string)
+	if bs.UseAgentGateway && bs.AgentClient != nil {
+		client = bs.AgentClient
+		if bs.WithPrincipal != nil {
+			ctx = bs.WithPrincipal(ctx, b.Name)
+		}
+		if rk, ok := client.(recordsKeeper); ok {
+			records, forget = rk.Records, rk.Forget
+		}
+	} else {
+		cc := &closureClient{
+			Toolset: gw, Ledger: bs.Ledger, TaskID: task.ID,
+			Label: b.Name, Audience: string(task.Audience),
+			System:   systemFor(ctx, gw, b, t, bs.clockLine()),
+			ReadOnly: !b.CarriesActionAuthority(),
+			Now:      bs.Now,
+		}
+		client, records, forget = cc, cc.Records, cc.Forget
+	}
+
+	runner := &native.Runner{
+		Client: client,
+		Handle: handle,
+		Ledger: bs.Ledger,
 		// The probe verdict decides what a session may DO, not which
 		// model it talks to (ADR-W017 A4). A Butler on an unprobed or
-		// QA-only route answers questions and performs no actions.
-		ReadOnly:        !b.CarriesActionAuthority(),
+		// QA-only route answers questions and performs no actions —
+		// enforced now inside the client, from the Butler on the
+		// handle (gateway path) or from ReadOnly above (closure path).
+		VerifyObjective: true,
 		MaxSliceRounds:  conversationSliceRounds,
-		MaxToolCalls:    conversationToolCalls,
-		UseParentBudget: true,
 		PermissionLabel: b.Name,
 		Audience:        string(task.Audience),
 		Actor:           t.Member,
 		StallTimeout:    2 * time.Minute,
 		RetryLimit:      1,
-		ObservationTTL:  observationTTL,
 		Notifier:        bs.Notifier,
 		History:         t.History,
+		Now:             bs.Now,
+		Log:             bs.Log,
+		Provider:        p,
 	}
 
-	tr, err := runner.Run(ctx, p, task.ID, t.Text)
+	tr, err := runner.Run(ctx, t.Text)
 	answer := bs.blank(b)
 	answer.TaskID = task.ID
 	answer.Resumed = resumed
@@ -156,6 +193,26 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 		answer.FinalText = tr.FinalText
 		answer.Capped = tr.CappedIterations
 		answer.Calls = tr.Audit.Calls
+		// The gateway (or the closure client) kept the audit record of
+		// every call it served — Plan and ResourceYAML included, which
+		// InvokeResult cannot carry on the wire — so the handler that
+		// files proposals after this turn reads the real thing rather
+		// than what the runner could reconstruct from outcomes alone
+		// (ADR-W039 Phase 2a/2b; Phase 3 replaces this with delivered
+		// events).
+		if records != nil {
+			if recs := records(task.ID); len(recs) > 0 {
+				answer.Calls = recs
+				for _, rec := range recs {
+					if rec.Plan != nil {
+						tr.Audit.Plans = append(tr.Audit.Plans, rec.Plan)
+					}
+				}
+			}
+		}
+		if forget != nil {
+			forget(task.ID)
+		}
 	}
 	if err != nil {
 		return answer, err
@@ -170,34 +227,24 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 	return answer, nil
 }
 
-// directed is a Toolset carrying a Butler's directive, and nothing
-// else.
-//
-// It overrides the system prompt and passes every other call straight
-// through to the surface it wraps. That asymmetry is ADR-W031 A9 made
-// structural: a directive says what a Butler is for and shapes how it
-// talks, and it GRANTS NOTHING. Tools, connections and memory scope are
-// separate, explicit and administered elsewhere.
-//
-// The alternative — letting a directive influence the tool map — is how
-// "you are the accounting Butler and may read whatever you need"
-// becomes an authority grant written in prose: one no classifier
-// reviewed, no Plan approved, and nobody can audit. A wrapper that
-// physically cannot reach OfferedSpecs or Execute cannot become that,
-// however the directive is worded.
-//
-// It deliberately does not implement Scoped. The per-Butler authorizer
-// is bound on the real gateway BEFORE this wraps it, so there is no
-// order of operations in which a session runs with the directive
-// applied and the scope not.
-type directed struct {
-	butler.Toolset
-	system string
+// recordsKeeper is the audit-record seam an agentapi.Client MAY offer
+// beyond the interface itself: keystone/agentgateway.Gateway and this
+// package's own closureClient both implement it. InvokeResult cannot
+// carry a Plan or a resource document (the wire has no such field, by
+// design — ADR-W039 §3.2), and until Phase 3 files proposals inside the
+// gateway, the handler that files them after a turn still needs to read
+// them from somewhere; this is that somewhere.
+type recordsKeeper interface {
+	Records(taskID string) []butler.ToolCallRecord
+	Forget(taskID string)
 }
 
-// SystemPrompt returns the surface's instruction hierarchy with the
-// Butler's own directive beneath it.
-func (d directed) SystemPrompt() string { return d.system }
+// ClockLine is the household clock line a Butler's system prompt
+// carries, exported for cmd/keystone to hand to the Agent Gateway it
+// builds (ADR-W039 Phase 2b, #337): keystone/agentgateway cannot be
+// built inside this package (it imports butlerlive), so whoever wires
+// it needs this seam from the outside.
+func (bs *Butlers) ClockLine() string { return bs.clockLine() }
 
 // systemFor assembles the prompt: the SURFACE's hierarchy first, then
 // the Butler's directive, then any guidance the caller added for this
@@ -381,6 +428,12 @@ func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool,
 		OriginConnection:    t.Connection.Name,
 		OriginConnectionRef: t.Connection.Ref,
 		Objective:           conversationObjective(b.Name, t.Text),
+		// Recorded so a Handle-resolved call (the Agent Gateway) can
+		// rebuild this turn's AsOwner/SystemExtra later — neither is a
+		// fact the handle or the Butler record carries on its own
+		// (migration 0083, ADR-W039 Phase 2b, #337).
+		AsOwner:     t.AsOwner,
+		SystemExtra: t.SystemExtra,
 		// A conversation's retention follows the conversation, so
 		// reaping a thread reaps the work that belonged to it rather
 		// than leaving orphaned tasks nobody will ever resume.

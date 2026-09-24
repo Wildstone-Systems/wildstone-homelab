@@ -36,6 +36,7 @@
 package butlerlive
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
@@ -44,6 +45,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
@@ -251,6 +253,39 @@ type Butlers struct {
 	// Location, so an approved change applies without a restart.
 	Zone *householdtz.Zone
 	Now  func() time.Time
+
+	// AgentClient is the in-process Agent Gateway (ADR-W039 Phase 2b,
+	// #337), built by cmd/keystone from keystone/agentgateway.Gateway,
+	// which this package cannot import (it imports butlerlive). nil
+	// means every turn runs the closure path regardless of
+	// UseAgentGateway.
+	AgentClient agentapi.Client
+	// WithPrincipal marks a context as authenticated by the named
+	// runtime principal before a gateway-path call, so the same
+	// identity-binding check an out-of-process runtime would go
+	// through (§4.1) runs for the native one too. cmd/keystone wires it
+	// from keystone/agentgateway.WithPrincipal plus a runtime-principal
+	// lookup; nil means the gateway call runs as an in-process call
+	// under the process's own trust (agentgateway's own WithPrincipal
+	// doc).
+	WithPrincipal func(ctx context.Context, butler string) context.Context
+	// UseAgentGateway selects how Serve wires the native reasoning loop
+	// (ADR-W039 Phase 2b, #337). true (the default this feature branch
+	// ships): a runtime-principal-bound context is set on every call
+	// through the in-process Agent Gateway, exercising the same
+	// identity-binding check an out-of-process runtime would go
+	// through (§4.1). false: the gateway still serves every call —
+	// Manifest/Invoke/Checkpoint/Work all run through the identical,
+	// already-reviewed keystone/agentgateway code — but with no
+	// runtime principal on the context, which keystone/agentgateway's
+	// own WithPrincipal doc calls "an in-process call under the
+	// process's own trust", i.e. the pre-2b closure path's trust model,
+	// kept reachable for one release without reintroducing a second
+	// copy of the ledger-driving logic Phase 2a already built and
+	// tested. Both values drive the identical ledger writes and traces
+	// for the same script — see agentgateway's and butlerlive's own
+	// switch-parity tests.
+	UseAgentGateway bool
 
 	// mu guards clients.
 	mu sync.Mutex

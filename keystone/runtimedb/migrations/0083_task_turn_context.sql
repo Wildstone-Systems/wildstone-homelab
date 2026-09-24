@@ -1,0 +1,23 @@
+-- 0083: turn context a task's admission needs but its handle alone
+-- cannot recover (ADR-W039 Phase 2b, #337).
+--
+-- Two facts about the REQUEST that opened a task are not derivable from
+-- the task row a Handle resolves to, because they are not decisions the
+-- runtime makes or a fact about the Butler — they are what the CALLER
+-- was, at the moment admission happened, exactly like origin_connection
+-- (migration 0062) already is:
+--
+--   - as_owner: the Console holder was acting on a Butler they own
+--     (ADR-W031 A10, butlerlive.Turn.AsOwner). It removes the access
+--     and admission checks and nothing else (Turn.AsOwner's own doc).
+--   - system_extra: surface guidance the caller added for this turn
+--     (butlerlive.Turn.SystemExtra), e.g. a group-chat note. It
+--     instructs and authorises nothing (A9).
+--
+-- Recorded at task open (butlerlive.Butlers.task) and read back by
+-- keystone/agentgateway.turnFor when the Agent Gateway rebuilds the
+-- Turn a resolved handle stands for, so a gateway-served turn gets the
+-- same MemoryDestination.ConsoleOwner and the same audience note the
+-- closure path always did.
+ALTER TABLE butler_tasks ADD COLUMN as_owner INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE butler_tasks ADD COLUMN system_extra TEXT NOT NULL DEFAULT '';
