@@ -29,7 +29,27 @@ const maxAskBytes = 16 << 10
 // proposal is recorded under (ADR-W017 A1/A3): principal "butler"
 // acting-for the authenticated caller. The RoleButler row in the RBAC
 // table (read+propose, never approve) is what bounds it.
+//
+// This is the NAMED-Butler path's identity (runNamedButlerSession,
+// preserveFailedTurn's fallback for a call the Agent Gateway did not
+// already file): every named Agent now has its OWN runtime principal
+// (ADR-W039 Phase 1), so a Plan the gateway files at invoke time is
+// attributed to that instead (see agentgateway.Gateway.runtimeIdentity).
+// butlerPrincipal stays the identity for a call that reaches this
+// fallback because the gateway itself could not file it, which keeps
+// its audit shape unchanged from before Phase 3.
 const butlerPrincipal = "butler"
+
+// legacyRuntimePrincipal is runAdminButlerSession's own acting identity
+// (ADR-W039 Phase 3, decision 12): the pre-ADR-W031 single-provider ask
+// path (-butler-provider) has no Agent record and so no runtime
+// principal minted for it the way a named Butler's is — but a proposal
+// it files is still, in the ADR's own terms, filed by A runtime, and
+// "butler" no longer names one. This is a deliberate rename of that one
+// path's identity, not a minted or rotatable credential: there is
+// exactly one legacy provider per deployment, so one fixed name is
+// honest about what it is.
+const legacyRuntimePrincipal = "runtime-butler-1"
 
 // ButlerHost is everything the ask endpoint needs to run a session
 // (ADR-W017 A2/A4) — cmd/keystone wires it from -butler-provider et al.
@@ -453,10 +473,11 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 	}
 
 	// Submit every accepted proposal through the ONE proposal pipeline
-	// (ADR-W017 A3), as principal "butler" acting-for the caller. Policy
-	// runs again here with the real engine — the session's own gate is a
-	// pre-check, not the authority.
-	butlerID := principal.Identity{Name: butlerPrincipal, Role: runtimedb.RoleButler, ActingFor: actingFor}
+	// (ADR-W017 A3), as this path's own runtime identity acting-for the
+	// caller (ADR-W039 Phase 3, decision 12 — see legacyRuntimePrincipal).
+	// Policy runs again here with the real engine — the session's own
+	// gate is a pre-check, not the authority.
+	butlerID := principal.Identity{Name: legacyRuntimePrincipal, Role: runtimedb.RoleButler, ActingFor: actingFor}
 	planIDs, proposalErrs := s.submitSessionProposals(butlerID, tr.Audit.Calls)
 
 	// Persist the session (ADR-W017 A1): principal-bound, transcript
@@ -490,7 +511,7 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 		},
 	}
 	sessionID, err := s.recordTurn(prior, runtimedb.ButlerSession{
-		Principal:         butlerPrincipal,
+		Principal:         legacyRuntimePrincipal,
 		ActingFor:         actingFor,
 		Provider:          tr.Audit.Provider,
 		Mode:              askMode,
@@ -512,7 +533,7 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 		return askResponse{SessionID: sessionID}, http.StatusForbidden, privacyErr
 	}
 	s.noteBuiltInSessionReply(sessionID, connection)
-	s.event("butler.session", "", principal.Identity{Name: butlerPrincipal, ActingFor: actingFor},
+	s.event("butler.session", "", principal.Identity{Name: legacyRuntimePrincipal, ActingFor: actingFor},
 		fmt.Sprintf("session %s: %d tool calls, %d proposals", sessionID, len(tr.Audit.Calls), len(planIDs)))
 
 	return askResponse{
@@ -551,24 +572,43 @@ func (s *Server) submitSessionProposals(butlerID principal.Identity, calls []but
 func (s *Server) submitSessionProposalsWithCalls(butlerID principal.Identity, calls []butler.ToolCallRecord) (planIDs, proposalErrs []string, persisted []butler.ToolCallRecord) {
 
 	for _, call := range calls {
-		if call.ResourceYAML == "" || call.Rejected {
+		if call.Rejected {
 			continue
 		}
-		summary := "butler proposal"
-		if call.Plan != nil && call.Plan.Summary != "" {
-			summary = "butler: " + call.Plan.Summary
-		}
-		body, st, err := s.submitProposalOpts(butlerID, proposalRequest{
-			Summary: summary,
-			Put:     []string{call.ResourceYAML},
-		}, proposalOpts{PrivateOrigin: true})
-		if err != nil {
-			proposalErrs = append(proposalErrs, fmt.Sprintf("%d: %v", st, err))
-			continue
-		}
-		if rec, ok := body.(planView); ok {
-			planIDs = append(planIDs, rec.ID)
+		switch {
+		// The Agent Gateway files an accepted propose_change itself, at
+		// invoke time, under the runtime principal (ADR-W039 §3.2, §7.2,
+		// Phase 3, #339) — this call already carries the filed Plan's
+		// id, and filing it again here would both duplicate the Plan
+		// and attribute the duplicate to "butler" instead. This branch
+		// only reads what the gateway already decided.
+		case call.ProposalID != "":
+			planIDs = append(planIDs, call.ProposalID)
 			persisted = append(persisted, call)
+		case call.ProposalError != "":
+			proposalErrs = append(proposalErrs, call.ProposalError)
+		// The legacy single-provider path (ButlerHost/butler.Session
+		// over a ToolGateway, ADR-W039 §7.3) never reaches the Agent
+		// Gateway at all, so its propose_change calls still arrive here
+		// with ResourceYAML unset-until-now and are filed here, exactly
+		// as every call was before Phase 3.
+		case call.ResourceYAML != "":
+			summary := "butler proposal"
+			if call.Plan != nil && call.Plan.Summary != "" {
+				summary = "butler: " + call.Plan.Summary
+			}
+			body, st, err := s.submitProposalOpts(butlerID, proposalRequest{
+				Summary: summary,
+				Put:     []string{call.ResourceYAML},
+			}, proposalOpts{PrivateOrigin: true})
+			if err != nil {
+				proposalErrs = append(proposalErrs, fmt.Sprintf("%d: %v", st, err))
+				continue
+			}
+			if rec, ok := body.(planView); ok {
+				planIDs = append(planIDs, rec.ID)
+				persisted = append(persisted, call)
+			}
 		}
 	}
 	return planIDs, proposalErrs, persisted

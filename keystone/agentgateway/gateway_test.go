@@ -673,16 +673,15 @@ func TestRememberGoesThroughTheHouseholdTool(t *testing.T) {
 	}
 }
 
+// TestLaterPhasesAreNamedNotFaked now pins only Notify: Recall and
+// Propose were the Phase 3 families (#338, #339) and are implemented —
+// see memory_test.go and propose_test.go for their own evidence. Notify
+// is Phase 4's Events family (outbound delivery through the task's
+// Connection) and is still named rather than faked.
 func TestLaterPhasesAreNamedNotFaked(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	_, h := f.openTask(t, "joan", "sam")
-	if _, err := f.g.Recall(ctx, agentapi.RecallRequest{Handle: h, Text: "tea"}); !errors.Is(err, agentapi.ErrNotImplemented) {
-		t.Fatalf("Recall: %v", err)
-	}
-	if _, err := f.g.Propose(ctx, agentapi.ProposeRequest{Handle: h, Kind: "Route"}); !errors.Is(err, agentapi.ErrNotImplemented) {
-		t.Fatalf("Propose: %v", err)
-	}
 	if err := f.g.Notify(ctx, agentapi.NotifyRequest{Handle: h, Text: "hi"}); !errors.Is(err, agentapi.ErrNotImplemented) {
 		t.Fatalf("Notify: %v", err)
 	}

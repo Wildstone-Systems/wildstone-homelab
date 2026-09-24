@@ -24,10 +24,31 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
+	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/proposals"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 )
+
+// conformanceProposalYAML is the one resource document the conformance
+// script's propose_change files (ADR-W039 Phase 3, #339): real,
+// policy-valid YAML, built through resource.Marshal so its wire shape is
+// exactly what a real propose_change would produce, never a hand-rolled
+// approximation of it.
+var conformanceProposalYAML = func() string {
+	data, err := resource.Marshal(resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindContainer,
+		Metadata:   resource.Metadata{Name: "conformance", Owner: "capability/test", Node: "n1"},
+		Container:  &resource.ContainerSpec{Image: "ghcr.io/example/conformance@" + testDigest},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
+}()
 
 // conformanceToolset is a minimal, wholly deterministic Toolset used by
 // every test in this file: one read-only tool ("peek") and one mutating
@@ -58,7 +79,7 @@ func (conformanceToolset) Execute(_ context.Context, name string, _ map[string]a
 	case "peek":
 		return butler.ToolOutcome{Content: "peek: all clear"}, nil
 	case "propose_change":
-		return butler.ToolOutcome{Content: "proposed", Plan: &plan.Plan{}}, nil
+		return butler.ToolOutcome{Content: "proposed", Plan: &plan.Plan{Summary: "conformance proposal"}, ResourceYAML: conformanceProposalYAML}, nil
 	default:
 		return butler.ToolOutcome{}, errors.New("conformanceToolset: unknown tool " + name)
 	}
@@ -124,6 +145,18 @@ func newAgentEnv(t *testing.T) (*runtimedb.DB, *butlerstore.Ledger, runtimedb.Bu
 	if err := db.SetButlerRuntime(seq, runtimedb.ButlerRuntime{Type: agentapi.RuntimeNative}, "mika"); err != nil {
 		t.Fatalf("SetButlerRuntime: %v", err)
 	}
+	// A minted, bound native runtime principal, as Phase 1 gives every
+	// Butler (createButler's own ensureNativeRuntime) — needed so an
+	// in-process propose_change call, with no principal in ctx, has the
+	// Agent's own runtime principal to file under rather than the Console
+	// caller's (ADR-W039 §3.2 Proposals, Phase 3, #339). Named to match
+	// what TestInProcessAndHTTPAreByteIdentical binds for Arm B.
+	if err := db.CreatePrincipal("runtime-alfred-1", runtimedb.RoleButler, ""); err != nil {
+		t.Fatalf("CreatePrincipal: %v", err)
+	}
+	if err := db.BindRuntimePrincipal("runtime-alfred-1", seq); err != nil {
+		t.Fatalf("BindRuntimePrincipal: %v", err)
+	}
 	if err := db.GrantButlerAccess("alfred", "mika", "mika"); err != nil {
 		t.Fatal(err)
 	}
@@ -171,6 +204,7 @@ type agentScriptResult struct {
 	manifest      agentapi.Manifest
 	readInvoke    agentapi.InvokeResult
 	proposeInvoke agentapi.InvokeResult
+	recall        []agentapi.MemoryHit
 	checkpoint    agentapi.CheckpointReceipt
 }
 
@@ -210,6 +244,10 @@ func runAgentScript(t *testing.T, client agentapi.Client, handle agentapi.Handle
 	})
 	if err != nil {
 		t.Fatalf("Checkpoint: %v", err)
+	}
+	out.recall, err = client.Recall(ctx, agentapi.RecallRequest{Handle: handle, Text: "n1"})
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
 	}
 	if err := client.Complete(ctx, agentapi.WorkComplete{
 		Handle: handle, Summary: "the conformance script finished",
@@ -288,7 +326,17 @@ func ledgerTraceOf(t *testing.T, db *runtimedb.DB, taskID string) []ledgerTraceK
 func TestInProcessAndHTTPAreByteIdentical(t *testing.T) {
 	// Arm A: in-process, no transport at all.
 	dbA, ledgerA, butlerA := newAgentEnv(t)
-	gwA := &agentgateway.Gateway{DB: dbA, Ledger: ledgerA, Gateways: conformanceGateways(), Clock: conformanceClock}
+	stateA, err := statefile.New(filepath.Join(t.TempDir(), "statefile"))
+	if err != nil {
+		t.Fatalf("statefile.New: %v", err)
+	}
+	gwA := &agentgateway.Gateway{
+		DB: dbA, Ledger: ledgerA, Gateways: conformanceGateways(), Clock: conformanceClock,
+		// Wired identically to Arm B below, so propose_change files a
+		// real Plan on both arms rather than only returning the
+		// pre-Phase-3 placeholder (ADR-W039 Phase 3, #339).
+		Proposals: proposals.Deps{DB: dbA, State: stateA, Policy: policy.NewEngine(nil)},
+	}
 	clientA := agentgateway.InProcess(gwA)
 	taskA, handleA := openAgentTask(t, dbA, ledgerA, butlerA)
 	resultA := runAgentScript(t, clientA, handleA)
@@ -303,18 +351,19 @@ func TestInProcessAndHTTPAreByteIdentical(t *testing.T) {
 		t.Fatalf("statefile.New: %v", err)
 	}
 	s := New(p, dbB, state, nil)
-	gwB := &agentgateway.Gateway{DB: dbB, Ledger: ledgerB, Gateways: conformanceGateways(), Clock: conformanceClock}
+	gwB := &agentgateway.Gateway{
+		DB: dbB, Ledger: ledgerB, Gateways: conformanceGateways(), Clock: conformanceClock,
+		Proposals: proposals.Deps{DB: dbB, State: state, Policy: policy.NewEngine(nil)},
+	}
 	s.AgentGateway = agentgateway.InProcess(gwB)
 	s.Ledger = ledgerB
 	srv := newTestHTTPServer(t, s)
 
+	// newAgentEnv already creates and binds "runtime-alfred-1" (the
+	// native runtime principal every Butler is minted, Phase 1) so Arm
+	// A's in-process, no-ctx-principal propose_change call has one to
+	// file under too; here it only needs a bearer minted for it.
 	const principalName = "runtime-alfred-1"
-	if err := p.Create(principalName, runtimedb.RoleButler, ""); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if err := dbB.BindRuntimePrincipal(principalName, butlerB.Seq); err != nil {
-		t.Fatalf("BindRuntimePrincipal: %v", err)
-	}
 	token, err := p.Mint(principalName, "", 0)
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
@@ -327,6 +376,7 @@ func TestInProcessAndHTTPAreByteIdentical(t *testing.T) {
 	assertSameJSON(t, "invoke(peek)", resultA.readInvoke, resultB.readInvoke)
 	assertSameJSON(t, "invoke(propose_change)", resultA.proposeInvoke, resultB.proposeInvoke)
 	assertSameJSON(t, "checkpoint", resultA.checkpoint, resultB.checkpoint)
+	assertSameJSON(t, "recall", resultA.recall, resultB.recall)
 
 	if taskA != taskB {
 		t.Fatalf("the two arms opened different task ids (%s vs %s); the fixtures have drifted apart", taskA, taskB)
@@ -444,12 +494,15 @@ func TestAgentInvokeDeniedIsAnOrdinary200(t *testing.T) {
 	}
 }
 
-// TestAgentRecallAndProposeAndNotifyReturn501WithThePhase pins
-// deliverable 1's error mapping for the three families ADR-W039 has not
-// reached yet: NotImplementedError becomes a 501 whose body names the
-// method and the phase that serves it, not a bare 404 or 500 that gives
-// an operator nothing to act on.
-func TestAgentRecallAndProposeAndNotifyReturn501WithThePhase(t *testing.T) {
+// TestAgentNotifyReturns501WithThePhase pins deliverable 1's error
+// mapping for the one family ADR-W039 has not reached yet as of Phase 3:
+// NotImplementedError becomes a 501 whose body names the method and the
+// phase that serves it, not a bare 404 or 500 that gives an operator
+// nothing to act on. Recall and Propose were the same shape through
+// Phase 2c; Phase 3 implements them (see TestInProcessAndHTTPAreByte
+// Identical's recall comparison and handlers_agent_test.go's own
+// propose coverage below).
+func TestAgentNotifyReturns501WithThePhase(t *testing.T) {
 	h, ledger := agentEnvHarness(t)
 	createAgent(t, h, "alfred")
 	cred := rotate(t, h, "alfred", nil)
@@ -459,24 +512,14 @@ func TestAgentRecallAndProposeAndNotifyReturn501WithThePhase(t *testing.T) {
 	}
 	_, handle := openAgentTask(t, h.s.DB, ledger, b)
 
-	for _, c := range []struct {
-		route      string
-		body       map[string]any
-		wantMethod string
-		wantPhase  string
-	}{
-		{"/api/v1/agent/recall", map[string]any{"handle": string(handle), "text": "n1"}, "Recall", "Phase 3"},
-		{"/api/v1/agent/propose", map[string]any{"handle": string(handle), "kind": "container", "document": map[string]any{}}, "Propose", "Phase 3"},
-		{"/api/v1/agent/notify", map[string]any{"handle": string(handle), "text": "hello"}, "Notify", "Phase 4"},
-	} {
-		var body map[string]any
-		res := h.doToken(cred.Secret, http.MethodPost, c.route, c.body, &body)
-		if res.StatusCode != http.StatusNotImplemented {
-			t.Fatalf("%s = %d, want 501", c.route, res.StatusCode)
-		}
-		if body["method"] != c.wantMethod || body["phase"] != c.wantPhase {
-			t.Errorf("%s body = %+v, want method %q phase %q", c.route, body, c.wantMethod, c.wantPhase)
-		}
+	var body map[string]any
+	res := h.doToken(cred.Secret, http.MethodPost, "/api/v1/agent/notify",
+		map[string]any{"handle": string(handle), "text": "hello"}, &body)
+	if res.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("notify = %d, want 501", res.StatusCode)
+	}
+	if body["method"] != "Notify" || body["phase"] != "Phase 4" {
+		t.Errorf("notify body = %+v, want method \"Notify\" phase \"Phase 4\"", body)
 	}
 }
 

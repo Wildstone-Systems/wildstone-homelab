@@ -1692,6 +1692,13 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			// AgentClient/WithPrincipal exist for.
 			agentGw := &agentgateway.Gateway{
 				DB: db, Ledger: ledger, Gateways: butlers.Gateways, Log: log, Clock: butlers.ClockLine,
+				// The ONE proposal pipeline (ADR-W039 Phase 3, #339):
+				// the same Statefile, policy engine and database every
+				// HTTP-reachable proposal-filing call site uses, so a
+				// Plan an Agent's own propose_change or Propose files
+				// gets the identical validation, standing policy and
+				// audit event a human's POST /plans does.
+				Proposals: apiSrv.ProposalDeps(),
 			}
 			butlers.AgentClient = agentgateway.InProcess(agentGw)
 			butlers.WithPrincipal = func(ctx context.Context, name string) context.Context {

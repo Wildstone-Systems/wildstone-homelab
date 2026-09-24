@@ -642,4 +642,14 @@ var Columns = []Column{
 		"whoever made the appointment; the same principal text as the rest of this family until the Person/principal split"},
 	{"commitment_bookings", "cancelled_by", Actor,
 		"whoever cancelled it, empty while the booking stands"},
+
+	// 0084 (ADR-W039 Phase 3, #339): agent_deliveries, the Events
+	// family's outbound record. "kind", "payload", "created_at" and
+	// "expires_at" are dismissed by name (an enum, a serialized blob, a
+	// timestamp); cursor and acked_at are not generic enough for that
+	// list, so they are classified here.
+	{"agent_deliveries", "cursor", NotAPerson,
+		"0084: an opaque per-subscription resume position (ADR-W039 §3.6), never a Person reference"},
+	{"agent_deliveries", "acked_at", NotAPerson,
+		"0084: an RFC3339 timestamp of acknowledgement, or empty while pending"},
 }

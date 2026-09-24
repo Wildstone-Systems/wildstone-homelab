@@ -306,8 +306,10 @@ func (s *Server) agentFail(r *http.Request, id principal.Identity) (any, int, er
 	return nil, http.StatusOK, nil
 }
 
-// agentPropose is POST /api/v1/agent/propose. Not implemented until
-// ADR-W039 Phase 3 (agentgateway.Gateway.Propose).
+// agentPropose is POST /api/v1/agent/propose (ADR-W039 Phase 3,
+// agentgateway.Gateway.Propose, #339): files a Plan for Owner approval,
+// attributed to the runtime principal acting for the Person on the
+// handle. Never applied here.
 func (s *Server) agentPropose(r *http.Request, id principal.Identity) (any, int, error) {
 	ctx, code, err := s.agentContext(r, id)
 	if err != nil {

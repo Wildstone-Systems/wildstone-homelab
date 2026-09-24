@@ -14,6 +14,8 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
 	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/proposals"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -60,6 +62,14 @@ type Gateway struct {
 	// household's timezone, and whoever serves a conversation supplies
 	// it (butlerlive.Butlers.clockLine, 2b).
 	Clock func() string
+	// Proposals is the ONE proposal pipeline (ADR-W039 Phase 3, #339):
+	// what Propose and a successful propose_change file a Plan
+	// through. A zero value (Proposals.DB == nil) is a working,
+	// pre-Phase-3 configuration: propose_change still returns a Plan
+	// for the caller to file after the turn, exactly as it did before
+	// this field existed — a gateway wired without it is not broken,
+	// it simply has not been given anywhere to file immediately.
+	Proposals proposals.Deps
 	// Now is the gateway clock for observation freshness; nil means
 	// time.Now.
 	Now func() time.Time
@@ -323,6 +333,55 @@ func (g *Gateway) record(taskID string, rec butler.ToolCallRecord) {
 		g.records = map[string][]butler.ToolCallRecord{}
 	}
 	g.records[taskID] = append(g.records[taskID], rec)
+}
+
+// runtimeIdentity is the principal a Plan this gateway files is
+// attributed to (ADR-W039 §3.2 Proposals, Phase 3, #339): the runtime
+// principal the caller authenticated as, from ctx — WithPrincipal's own
+// value, which the HTTP transport sets from the bearer — or, for an
+// in-process call with no principal in ctx (the native runner talking
+// to its own in-process Gateway), the Agent's own current runtime
+// principal, exactly as agentContext's touchRuntimeArrival already
+// resolves it. Role is always butler — a runtime credential carries at
+// most that role's verbs (§3.1 principle 3) — and ActingFor is the
+// Person on the handle, never anything the request could name.
+func (g *Gateway) runtimeIdentity(ctx context.Context, s *session) (principal.Identity, error) {
+	name, ok := principalFrom(ctx)
+	if !ok {
+		if g.DB == nil {
+			return principal.Identity{}, fmt.Errorf("%w: the gateway is not wired", ErrRefused)
+		}
+		rt, err := g.DB.GetButlerRuntime(s.hc.Butler.Seq)
+		if err != nil {
+			return principal.Identity{}, err
+		}
+		name = rt.Principal
+	}
+	if name == "" {
+		return principal.Identity{}, fmt.Errorf("%w: %s has no runtime principal to file a proposal under", ErrRefused, s.hc.Butler.Name)
+	}
+	return principal.Identity{Name: name, Role: runtimedb.RoleButler, ActingFor: s.hc.Person}, nil
+}
+
+// fileProposal runs req through the ONE proposal pipeline under id, and
+// returns the filed Plan. A validation or policy refusal (400/409/422 —
+// the pipeline's own "no" answers) comes back wrapped in ErrRefused, the
+// same convention every other gateway refusal uses; a genuine failure to
+// file (a database or Statefile error, the pipeline's 5xx) comes back as
+// a plain error, because the call did not happen at all.
+func (g *Gateway) fileProposal(id principal.Identity, req proposals.Request) (proposals.PlanView, error) {
+	body, status, err := proposals.File(g.Proposals, id, req, proposals.Options{PrivateOrigin: true})
+	if err != nil {
+		if status >= 500 || status == 0 {
+			return proposals.PlanView{}, fmt.Errorf("agentgateway: filing a proposal: %w", err)
+		}
+		return proposals.PlanView{}, fmt.Errorf("%w: %v", ErrRefused, err)
+	}
+	view, ok := body.(proposals.PlanView)
+	if !ok {
+		return proposals.PlanView{}, fmt.Errorf("agentgateway: filing a proposal returned no plan (status %d)", status)
+	}
+	return view, nil
 }
 
 // refusalOutcome turns a gateway or handle refusal into the denied

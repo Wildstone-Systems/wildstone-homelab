@@ -19,9 +19,25 @@ type ToolCallRecord struct {
 	Plan    *plan.Plan
 	// ResourceYAML carries an accepted propose_change's canonical
 	// resource document (ADR-W017 A3) for the host to submit as a real
-	// proposed plan record after the session.
+	// proposed plan record after the session. Left unset by the Agent
+	// Gateway once it files the Plan itself at invoke time (ADR-W039
+	// Phase 3, #339); still set by the legacy single-provider path
+	// (keystone/butler.Session over a ToolGateway directly, ADR §7.3),
+	// which files it after the session the way this always worked.
 	ResourceYAML string
 	Rejected     bool
+	// ProposalID is the id of the Plan record a propose_change call
+	// already filed, when it filed one — set by keystone/agentgateway
+	// immediately after a successful call, under the runtime principal
+	// (ADR-W039 §3.2 Proposals, Phase 3, #339). A caller that sees this
+	// set must not file the call again; ResourceYAML/Plan are still
+	// carried for audit even though filing already happened.
+	ProposalID string
+	// ProposalError is set instead of ProposalID when the Agent Gateway
+	// tried to file the Plan and could not (no runtime principal to
+	// file under, or the pipeline itself refused it) — reported to the
+	// caller as a proposal error rather than retried as a fresh filing.
+	ProposalError string
 }
 
 // Audit is the session audit record ADR-W006 A5.4 requires: provider/

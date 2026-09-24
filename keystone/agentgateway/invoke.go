@@ -9,6 +9,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/operation"
+	"github.com/chickenrat17/wildstone-homelab/keystone/proposals"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -151,6 +152,34 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 	}
 
 	rec.Result, rec.Plan, rec.ResourceYAML, rec.Rejected = outcome.Content, outcome.Plan, outcome.ResourceYAML, outcome.Rejected
+
+	// File an accepted propose_change's Plan right here, under the
+	// runtime principal, rather than leaving it for the caller to read
+	// ResourceYAML back off the ToolCallRecord after the whole turn
+	// (ADR-W039 §3.2 Proposals, §7.2, Phase 3, #339 — replacing C9).
+	// Gated on g.Proposals being wired at all: an unwired gateway (most
+	// existing fixtures and the conformance harness) keeps exactly the
+	// pre-Phase-3 behaviour of returning the Plan for a caller to file
+	// itself. Once wired, ResourceYAML is cleared either way — filed or
+	// refused — so a caller reading ToolCallRecord afterwards (the
+	// legacy single-provider path's own fallback) never re-files this
+	// call under a different identity.
+	if req.Tool == "propose_change" && !outcome.Rejected && outcome.Plan != nil && g.Proposals.DB != nil {
+		rec.ResourceYAML = ""
+		summary := "butler proposal"
+		if outcome.Plan.Summary != "" {
+			summary = fmt.Sprintf("%s: %s", s.hc.Butler.Name, outcome.Plan.Summary)
+		}
+		if pid, err := g.runtimeIdentity(ctx, s); err != nil {
+			rec.ProposalError = err.Error()
+		} else if view, err := g.fileProposal(pid, proposals.Request{
+			Summary: summary, Put: []string{outcome.ResourceYAML},
+		}); err != nil {
+			rec.ProposalError = err.Error()
+		} else {
+			rec.ProposalID = view.ID
+		}
+	}
 	g.record(taskID, rec)
 
 	// 7. The result checkpoint, in the runner's envelope. A rejected
@@ -190,7 +219,19 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 		SourceIDs: []string{req.Tool},
 		Payload:   jsonPayload(map[string]any{"rejected": outcome.Rejected, "bytes": len(outcome.Content)}),
 	})
-	return resultFor(taskID, step, req.Tool, outcome), nil
+	res := resultFor(taskID, step, req.Tool, outcome)
+	// The real filed Plan id, when this call filed one above — replacing
+	// resultFor's ledger-step placeholder, which is what an unwired
+	// gateway (g.Proposals.DB == nil) still returns.
+	if req.Tool == "propose_change" && !outcome.Rejected && outcome.Plan != nil && g.Proposals.DB != nil {
+		switch {
+		case rec.ProposalID != "":
+			res.Proposal = &agentapi.ProposalRef{ID: rec.ProposalID}
+		case rec.ProposalError != "":
+			res.Outcome, res.Reason, res.Proposal = agentapi.OutcomeError, rec.ProposalError, nil
+		}
+	}
+	return res, nil
 }
 
 // resultFor maps a Toolset outcome onto the closed outcome set.

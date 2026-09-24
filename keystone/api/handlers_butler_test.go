@@ -117,8 +117,14 @@ func TestButlerAskFullFlow(t *testing.T) {
 	// itself on behalf of whoever asked, and since the identity slice
 	// that is the person the caller acts for rather than the shared
 	// operator token they authenticated with (#240).
-	if rec.Principal != "butler" || rec.ActingFor != "mika" {
-		t.Fatalf("plan principal = %s acting for %q, want butler acting for mika", rec.Principal, rec.ActingFor)
+	//
+	// The principal itself is "runtime-butler-1", not the literal
+	// "butler" it was before ADR-W039 Phase 3 (decision 12): every
+	// proposal-filing path now names the runtime that filed it, and this
+	// path's own runtime — the pre-Agent, single-provider ask endpoint —
+	// is legacyRuntimePrincipal.
+	if rec.Principal != "runtime-butler-1" || rec.ActingFor != "mika" {
+		t.Fatalf("plan principal = %s acting for %q, want runtime-butler-1 acting for mika", rec.Principal, rec.ActingFor)
 	}
 
 	// The statefile itself is untouched until a human approves.
