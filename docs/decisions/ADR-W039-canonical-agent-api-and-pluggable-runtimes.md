@@ -1,6 +1,7 @@
 # ADR-W039: Canonical Agent API and pluggable agent runtimes
 
 - **Status:** proposed — exploration output for #333; no implementation is authorised by this ADR
+- **Implementation:** in progress on branch `claude/issues-333-334-orchestration-dix2u1`; see §10 for decisions taken during implementation and the as-built map.
 - **Scope:** the contract between Wildstone and whatever performs an Agent's reasoning: the resource boundaries of an Agent API, the minimum behaviour of a compatible runtime, how the native Butler runner and an external runtime (Hermes first, OpenClaw as a check) both sit behind it, and the order in which the current code could move there
 - **Depends on / relates to:** #333 (this exploration), #334 (Hermes capability package and execution profiles, the first consumer of this contract), [`ADR-W033`](ADR-W033-the-agent-design.md) and [`docs/agent-system-design.md`](../agent-system-design.md) (the design of record this ADR extends rather than reopens), ADR-W024 A5, ADR-W026 A10, ADR-W030 B3, ADR-W017 A2, ADR-W006 A1/A3, CONTRIBUTING ground rules 3 and 5
 - **Implementation:** none. Section 8 splits the work into candidate follow-up issues; each of them, not this ADR, authorises code.
@@ -255,6 +256,8 @@ Leading candidate: **an MCP server for Capabilities and Memory, plus a signed we
 
 Open questions for the transport issue: how MCP carries the task handle (a header, as Hermes `identity_header`, or a per-task server URL); whether `tools/list_changed` suffices for mid-session grant changes given Hermes freezes a session's tool set; how a `confirm`-tier wait is shown to a runtime expecting a synchronous tool result; whether Work checkpoints are MCP tools or a REST family; and how the in-process native client shares handler code without re-implementing MCP framing.
 
+This section is closed by [`ADR-W040`](ADR-W040-agent-api-transport.md): REST + long-poll first (Phases 2–4), MCP as a second transport in Phase 5.
+
 ---
 
 ## 4. Runtime contract
@@ -427,6 +430,8 @@ Each phase adds the gateway path beside the closure path and switches the native
 
 ### 7.4 The pinned tests are preserved
 
+> **Amendment (2026-09-24, §10.a decision 1).** The owner decided the reasoning loop (`Runner`, `Phraser`) moves OUT to a new package, `keystone/agentruntime/native`, rather than the two tool gateways moving out of `keystone/butler`. The strict "forbids `statefile`/`domestic` imports" guarantee below is therefore pinned on `keystone/agentruntime/native/structural_test.go`, not on `keystone/butler`; `ToolGateway`/`HouseholdGateway` (and `butler.Session`, the legacy path per §7.3) stay in `keystone/butler` and keep those imports. See §10 for the as-built map.
+
 - `keystone/butler/structural_test.go:19` (no `reconcile` import) and `keystone/butler/propose_test.go:8` (`propose_change` never applies): the `butler` package loses imports, gains none; `propose_change` still returns a Plan and `ResourceYAML`.
 - `keystone/automation/structural_test.go:15` (no apply, no model): the subscription evaluator is pure code; escalation still goes through the `Escalator` seam, now to a run request instead of a provider object.
 - `keystone/butlerstore/authority_test.go:58,385`, `derived_authority_test.go:240,373`, `connection_boundary_test.go:32,88,131`: resolver, derived authority and Connection ceiling do not move; they are the gateway's steps 2–3. Their `ToolAuthorityQuery` inputs come from the handle instead of closures — a wiring change, not a rule change.
@@ -445,7 +450,7 @@ Dependency-ordered. Each phase names what stays unchanged, what is new, and the 
 
 **Phase 1 — Runtime record and runtime principal.** *Unchanged:* Butler record semantics, RBAC verbs, all flows. *New:* `runtime` fields and `health` on the Agent; a Console flow minting a runtime principal bound to one Agent under the consequential-freshness rule, with rotate and revoke; the native runtime gets a minted principal at Butler creation. *Evidence:* a principal for Agent A cannot act for Agent B; `disabled` refuses the next request; the audit row carries the runtime principal, not a synthesised name. Removes C8.
 
-**Phase 2 — Capabilities family, in-process native client.** *Unchanged:* `ToolGateway`, `HouseholdGateway`, `ToolAuthorizer`, `WithConnection`, redaction. *New:* gateway handlers for manifest and invoke that build the `Toolset` and `operation.Identity` from a task handle; the native `Runner` calls them through the in-process client. *Evidence:* every existing `butler`, `butlerstore`, `butlerlive` test passes; the same handler driven over HTTP with a runtime token returns a byte-identical manifest and outcome; the `keystone/butler` structural test also forbids `runtimedb`/`statefile`/`domestic` imports. Removes C1–C4.
+**Phase 2 — Capabilities family, in-process native client.** *Unchanged:* `ToolGateway`, `HouseholdGateway`, `ToolAuthorizer`, `WithConnection`, redaction. *New:* gateway handlers for manifest and invoke that build the `Toolset` and `operation.Identity` from a task handle; the native `Runner` calls them through the in-process client. *Evidence:* every existing `butler`, `butlerstore`, `butlerlive` test passes; the same handler driven over HTTP with a runtime token returns a byte-identical manifest and outcome; the `keystone/butler` structural test also forbids `runtimedb`/`statefile`/`domestic` imports. Removes C1–C4. **Amendment (2026-09-24):** as built, `Runner`/`Phraser` moved to `keystone/agentruntime/native` and carry the strict import ban there; `keystone/butler` keeps `ToolGateway`/`HouseholdGateway` and their `statefile`/`domestic` imports, per §7.4 and §10.
 
 **Phase 3 — Memory and proposals families.** *Unchanged:* memory store, audience rules, `submitProposalOpts`, owner review. *New:* agent-facing `recall`/`remember` binding `MemoryReadContext` from the handle; `propose_change` files the Plan inside the gateway; outcome delivered as an event. *Evidence:* `memory_disclosure_test.go` cases pass via the API path; `remember` cannot widen an audience; the handler no longer reads `ResourceYAML`. Removes C9, C12.
 
@@ -485,6 +490,56 @@ Following the ADR-W033 Part G convention, older ADRs remain historical records; 
 - **ADR-W033 A0, A4, E2 and the memory scopes; DSN §10, §11, §14–§16 (kept unchanged).** The runtime contract is expressed in those terms and adds none.
 - **ADR-W012, ADR-W029 A10–A11, DSN §12 (kept).** Node secrets on nodes; provider keys in the root-only key file or as a package secret for a packaged runtime; household and personal secrets resolved by trusted executor code below inference, by reference.
 - **ADR-W030 A5.1 (kept, extended in spirit).** A runtime is a second package-managed-container shape with a second narrow credential; "adapters on non-node machines need a later credential/identity design" is answered for runtimes by the runtime principal.
+
+---
+
+## 10. Implementation decisions and as-built map (2026-09-24)
+
+### 10.a Decisions taken during implementation
+
+1. Split direction: the reasoning loop (`Runner`, `Phraser`) moved out to a new package, `keystone/agentruntime/native`, rather than the two tool gateways moving out of `keystone/butler` (amends §7.1, §7.4 and §8 Phase 2 above).
+2. Invoke authorization: reused the existing `read`/`propose` RBAC verbs; no new closed verb was added (closes candidate follow-up issue 12).
+3. Runtime storage: a side table, `butler_runtimes` (migration `0081_agent_runtimes.sql`), keyed by `butlers.seq`, plus an immutable `runtime_principals` binding table — not columns on `butlers`.
+4. First external target: an externally-hosted Hermes (Phases 0–3 plus the transport ADR) precedes the Wildstone-packaged Hermes container, which needs H1/H2/H3 first.
+5. Transport: REST + long-poll first, decided in [`ADR-W040`](ADR-W040-agent-api-transport.md); MCP is reserved as a second transport for Phase 5.
+6. Scope: the plan (§8 follow-up 10) was to stop and re-scope after Phases 0–2; in practice work continued through Phases 2b, 2c and 3 and cherry-picked Phase 6 items H1, H2 and H7, all on one feature branch, `claude/issues-333-334-orchestration-dix2u1`.
+7. GitHub issues #335–#356 were created across all phases and the H1–H10 sub-issues, beyond the first batch (1–3, 12, H1, H2) §8 originally proposed.
+8. Session/audit principal: the literal `"butler"` principal name was deliberately replaced by the runtime principal (`runtime-<butler>-<n>`) in Phase 3, updating `handlers_butler_test.go`'s pinned expectation as §7.4 and §9's ADR-W017 A2 amendment anticipated.
+
+### 10.b As-built map
+
+| Package / file | Phase | What it owns |
+|---|---|---|
+| `keystone/agentapi` | 0 | Manifest/Invoke/Memory/Work/Proposal/Delivery/Heartbeat types, `Client` interface, opaque `Handle`; structural test forbidding `runtimedb`/`statefile`/`domestic`/`butler` imports |
+| `keystone/agentapi/httpclient` | 2c | HTTP implementation of `agentapi.Client`; own structural test |
+| `keystone/agentgateway` | 2a–3 | `Gateway{DB,Ledger,Gateways,Log}`; `Manifest`/`Invoke` (`invoke.go`), `memory.go`, `propose.go`, `work.go`; `InProcess(*Gateway) agentapi.Client`; `WithPrincipal` |
+| `keystone/agentruntime` | 2b | Shared leaf vocabulary: `ToolCallRecord`, `Audit`, `Transcript`, ledger step/attempt/evidence types |
+| `keystone/agentruntime/native` | 2b | `Runner`, `Phraser`, objective; the strict import-ban structural test (§7.4 amendment) |
+| `keystone/proposals` | 3 | Plan-filing pipeline moved out of `keystone/api`; `Deps{DB,State,Policy,Log,Event}` |
+| `runtimedb/migrations/0081_agent_runtimes.sql` | 1a | `butler_runtimes` + `runtime_principals` tables, native backfill |
+| `runtimedb/migrations/0082_task_handles.sql` | 2a | `butler_tasks.handle_hash` |
+| `runtimedb/migrations/0083_task_turn_context.sql` | 2b | `butler_tasks.as_owner`, `butler_tasks.system_extra` |
+| `runtimedb/migrations/0084_agent_deliveries.sql` | 3 | `agent_deliveries` table |
+| `api/handlers_butler_runtime.go` | 1a/1b | `GET`/`PUT .../runtime`, `POST .../runtime/credential`, `POST .../runtime/revoke` |
+| `api/handlers_agent.go` | 2c/3 | `POST /api/v1/agent/{manifest,invoke,recall,remember,checkpoint,start,wait,complete,fail,propose,notify,heartbeat}` |
+| `butlerlive.Butlers.UseAgentGateway` + `butlerlive/closure_client.go` | 2b | Wiring switch (`main.go` sets it true); the closure path kept as an `agentapi.Client` mirroring `agentgateway/invoke.go` (avoids an `agentgateway`→`butlerlive` import cycle) |
+| `domestic/hostops.go` + `butler/tools_hostops.go` | 6/H7 | Seven `host.*` executors behind `-hostops-enabled` (default off) and Owner-class opt-in |
+| `resource.go` `ContainerSpec` hardening fields + `resource/hostaccess.go` `HardeningProtocolMinor = 18` | 6/H1 | `ReadOnlyRootfs`, `CapDrop`, `NoNewPrivileges`, `Resources{Memory,Cpus,PidsLimit}`, `ShmSize`, all `omitempty` |
+| `pkgspec.go` `enum:` shape | 6/H2 | Closed-choice param validation (`validate: enum:a\|b\|c`) |
+
+### 10.c Couplings closed vs. remaining (§2.1)
+
+Removed as of Phase 3: **C8** (Phase 1, minted runtime principal), **C1–C4** (Phase 2, `agentgateway` builds `Toolset`/`operation.Identity` from a handle), **C9** and **C12** (Phase 3, in-gateway Plan filing and handle-bound `recall`/`remember`).
+
+Not yet removed: **C5** (secrets from context), **C6** (direct-SQL ledger checkpoints) and **C11** (escalation holding a provider object and the DB) — all Phase 4, unstarted. **C7** (in-process provider keys) and **C10** (privacy wraps the provider object) — Phase 5, unstarted.
+
+### 10.d Known deviations from the ADR text
+
+- `Client.Checkpoint` returns a `CheckpointReceipt{Seq,Attempt,Epoch}`, not a bare acknowledgement.
+- Two closed wait-reason sets exist rather than one: `WaitReason` (invoke-level: `approval_pending|confirm_pending|runtime_offline|budget_exhausted`) and `WorkWaitReason` (task-level, the ledger's own kebab-case values).
+- `RuntimeHealth` values are `unregistered|connected|degraded|offline|revoked` — there is no `healthy` state.
+- `Invoke` folds an authorization refusal into `Outcome: denied` with HTTP 200 (an ordinary outcome the runtime should handle); every other Agent API method (manifest, remember, checkpoint, start/wait/complete/fail) returns HTTP 403 on an auth failure, since those are transport-level refusals rather than tool-level ones.
+- H7's `host.*` family left out `host.upgrade_package` and `host.snapshot_dir`: producing a Plan for either needs a Person→principal identity and a resource kind that do not exist today, and adding either was judged out of that issue's scope.
 
 ---
 

@@ -2,6 +2,20 @@
 
 Status: exploration output for #334; no implementation is authorised by this document. Depends on ADR-W039 (#333), whose resource families, runtime record, runtime contract and phase numbering are consumed here, not re-derived. Base: `main` at `09e3b05`. Hermes facts are from the research brief of 2026-09-24 (upstream `main` @ `82c5afb`, release `v2026.9.21`); where the brief says "not documented" this document says so too rather than guessing.
 
+## Status (2026-09-24)
+
+Landed: **H1** — container hardening fields with protocol minor (`feat(resource): container hardening fields with protocol minor`, ADR-W039 Phase 6/H1, #347). **H2** — closed-choice parameter shape (`feat(pkgspec): closed-choice parameter shape`, ADR-W039 Phase 6/H2, #348). **H7** — host operations executor family behind Owner opt-in and approval (`feat(domestic): host operations executor family behind Owner opt-in and approval`, ADR-W039 Phase 6/H7, #353).
+
+In progress: **H4** (runtime registration Console flow for a packaged runtime).
+
+Pending: **H3** (`agent-bridge` binary — no `cli/cmd/agent-bridge` exists yet in the worktree), **H5** (`packages/agent-hermes` package), **H6** (execution profile on the Agent record and re-render on change), **H8**–**H10** (split sandbox, runtime inventory, Hermes conformance run).
+
+The `# NEW` pkgspec/resource keys the §2.2 draft called out are now real: `validate: enum:...` (H2), `readOnlyRootfs`, `capDrop`, `noNewPrivileges`, `resources{memory,cpus,pidsLimit}` and `shmSize` (H1) all exist on `ContainerSpec` with `omitempty` json tags, gated behind Wardstone protocol minor `HardeningProtocolMinor = 18` (`keystone/resource/hostaccess.go`); the draft's yaml comments below are updated to say so. One key the draft wanted was **not** added: there is still no `network`/egress-allowlist field on `ContainerSpec` — that comment stays marked NEW.
+
+The runtime credential secret placed in a packaged runtime's container follows the naming convention set in Phase 1b: `<stem>-token` (`runtimeSecretName`, `keystone/api/handlers_butler_runtime.go`), e.g. `agent-hermes-mika-runtime` becomes `agent-hermes-mika-runtime-token`.
+
+Execution profile values: `agentapi.RuntimeRecord.ExecutionProfileRef` and `runtimedb.ButlerRuntime.ExecutionProfile` exist as a plain string (default `platform-only`), carried end to end, but H4 has not yet defined the closed set as typed constants in the worktree — H4 defines the closed set `platform-only | sandboxed | host-admin`.
+
 `Agent` and `Butler` mean the same architectural object. A Hermes runtime bound to an Agent is at most a `butler`-role principal: it reads and proposes, never approves (`keystone/principal/rbac.go:63-65`).
 
 ---
@@ -96,8 +110,8 @@ params:
   - name: execution_profile
     default: platform-only
     description: "platform-only | sandboxed | host-admin. Mirrors the Agent's execution profile; the Console sets it, and Wildstone's own gate is the ceiling regardless of this value."
-    # NEW: needs pkgspec change (see §2.4) — a `validate: enum:...` shape
-    # for a closed choice; ParamShapes has no enum form today.
+    # landed (H2): `validate: enum:platform-only|sandboxed|host-admin` is
+    # now a real ParamShapes form (keystone/pkgspec/pkgspec.go).
   - name: model_provider
     default: custom
     description: "Hermes provider id: custom (any OpenAI-compatible server, e.g. the household's Ollama), openai, anthropic, openrouter, ..."
@@ -206,13 +220,16 @@ templates:
         - { source: "{{ .Capability }}-data", target: /opt/data }
         - { source: "/etc/wildstone/{{ .Capability }}", target: /etc/hermes, readOnly: true }
       restart: unless-stopped
-      # NEW: needs resource.go change (see §2.4 and §5.3) — none of the
-      # following can be said in ContainerSpec today:
+      # landed (H1): ContainerSpec now has these, all omitempty, gated
+      # behind HardeningProtocolMinor = 18 (keystone/resource/hostaccess.go):
       # readOnlyRootfs: true
       # capDrop: [ALL]
-      # securityOpt: [no-new-privileges]
+      # noNewPrivileges: true               # a bool field, not `securityOpt: [...]`
       # resources: { memory: 4g, cpus: "2", pidsLimit: 512 }
-      # network: { egress: [keystone, model_provider] }
+      # shmSize: 1g
+      # NEW, still missing: no `network`/egress-allowlist field exists on
+      # ContainerSpec — this package still cannot restrict egress to
+      # keystone + model_provider.
   - |
     apiVersion: wildstone.dev/v1
     kind: Container
@@ -423,7 +440,7 @@ The path is the issue's: Hermes → Agent API → policy → executors. A prompt
 
 | Aspect | Setting |
 |---|---|
-| Hermes toolsets | Tier 1 plus `terminal`, `file`, `code_execution`; `browser` opt-in (needs `--shm-size=1g`, a NEW container key) |
+| Hermes toolsets | Tier 1 plus `terminal`, `file`, `code_execution`; `browser` opt-in (needs `--shm-size=1g`, now `shmSize` on `ContainerSpec`, landed H1) |
 | Terminal backend | `local`, `cwd: /opt/data/workspace`. **The container is the sandbox.** |
 | Container | As Tier 1; the hardening keys of §2.4 matter more here: read-only rootfs and no-new-privileges make the shell's reach `/opt/data` and tmpfs; pids limit stops a fork bomb taking the node |
 | Agent API grants | Identical to Tier 1. **A shell adds no household authority.** |
