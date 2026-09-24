@@ -343,16 +343,15 @@ returns no `plan` field at all — there is nothing for it to restart.
 Expected: withheld in case 1, returned in case 2 — same refusal
 wording either way memory is normally withheld by privacy rules.
 
-**Known gap, in progress:** this filter (`keystone/agentgateway/disclosure.go`)
-covers Manifest, Invoke and Recall — the boundaries the gateway itself
-controls — but not deliveries. `GET /api/v1/agent/deliveries` has two
-readers, the in-process client (`deliveriesFromRows`,
-`keystone/agentgateway/work.go`) and the HTTP route
-(`keystone/api/handlers_agent.go`'s `agentDeliveries`), and neither
-filters a delivery's payload by the Agent's declared processing class
-yet. There is no QA step for this until it lands: don't expect a
-`cloud`-class runtime's deliveries to withhold `local_only` content
-today, and see "Known limitations" below.
+**Deliveries are filtered too:** the same filter (`keystone/agentgateway/disclosure.go`,
+`FilterDeliveries`) is applied by both readers of `GET /api/v1/agent/deliveries`,
+the in-process client (`keystone/agentgateway/work.go`) and the HTTP route
+(`keystone/api/handlers_agent.go`). Extra step: with the Agent set to `cloud`,
+long-poll deliveries after a proposal outcome or a subscription match that
+carries `local_only` content. Expected: the delivery still arrives with its id
+and can be acked, but its payload is `{"withheld": true, "reason": ...}`.
+Switch the Agent to `local_only` and the payload comes through in full.
+
 
 ### i. Hermes package (best effort — needs Docker, and network access to pull `nousresearch/hermes-agent`)
 
@@ -444,14 +443,10 @@ shape.
   out of the H7 host tool family (#353) — mapping either to a
   human-approved Plan needs a Person→principal identity and a resource
   kind that don't exist yet.
-- **In progress:** deliveries are not yet filtered by processing class
-  the way manifests, invokes and recalls are
-  (`keystone/agentgateway/disclosure.go`'s own doc comment explains the
-  gap, and neither delivery reader — `work.go`'s `deliveriesFromRows`
-  nor `handlers_agent.go`'s `agentDeliveries` — applies it) — a real
-  risk once an Agent has a subscription that could carry local-only
-  content. See scenario (h)'s note above; re-check this scenario once
-  that fix lands.
+- **Delivery filtering** is covered by `TestFilterDeliveryRedactsRestrictedPayloads`
+  (`keystone/agentgateway/deliveryfilter_test.go`) and the byte-identical
+  in-process versus HTTP delivery test in `keystone/api/handlers_agent_test.go`.
+  Run those first if scenario (h)'s delivery step misbehaves.
 - The broader phase tracking issues are #335–#345 (Phases 0–5) and
   #346–#356 (Phase 6, H1–H10); anything not explicitly called out above
   as landed should be assumed not done.
