@@ -30,7 +30,11 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
+	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
+	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -325,6 +329,129 @@ func (s *Server) butlerRuntime(r *http.Request, _ principal.Identity) (any, int,
 	return rt.Record(), http.StatusOK, nil
 }
 
+// packagedRuntimePackage is the one Wildstone-packaged Agent runtime
+// today (H5, #351). A second one (H8's split sandbox, or a future
+// packaged OpenClaw) would add its own entry to a lookup here rather
+// than replace this — what reRenderPackagedRuntime asks is "does
+// agent-hermes name this Butler", not "does some package".
+const packagedRuntimePackage = "agent-hermes"
+
+// reRenderPackagedRuntime is H6 (#352, design doc §5.5): Hermes freezes
+// a session's tool set at start, so a changed execution profile or
+// processing class takes effect only by re-rendering the bound
+// package's managed config.yaml and restarting the container — never
+// in place, and never applied here. It re-expands the installed
+// agent-hermes-<instance> capability bound to this Agent's runtime
+// with the updated param values and files the result through the ONE
+// proposal pipeline (ADR-W017 A3), exactly as enableCapability does
+// for a Console-driven install or reconfigure, under the acting
+// Owner's own identity. Nothing is applied: the Owner still approves
+// the Plan, and the reconciler recreates the container from there.
+//
+// planID is "" with a nil error for an Agent with no packaged runtime
+// bound — a native Agent, or one on an externally-managed runtime
+// (OpenClaw, or a Hermes somebody runs themselves), is unaffected by
+// design: there is no Wildstone-owned container for a Plan to recreate.
+//
+// The bound install is found the way packages/agent-hermes/
+// package.yaml documents it must be found: its "instance" param is
+// this Butler's runtime-principal stem (runtimePrincipalStem, minus
+// the "runtime-" prefix), which the Console flow that installs it (H4)
+// guarantees by naming the install after the credential it just
+// minted — the same convention chat-telegram's own instance uses, read
+// back with installedFromPlans exactly as disableCapability's sibling
+// check reads it.
+func (s *Server) reRenderPackagedRuntime(b runtimedb.Butler, principalName string, next runtimedb.ButlerRuntime, id principal.Identity) (string, error) {
+	if s.Catalog == nil || principalName == "" {
+		return "", nil
+	}
+	instance := strings.TrimPrefix(runtimePrincipalStem(principalName), runtimePrincipalPrefix)
+	if instance == "" {
+		return "", nil
+	}
+	_, installedParams := s.installedFromPlans()
+	installed, ok := installedParams[packagedRuntimePackage+"#"+instance]
+	if !ok {
+		// No packaged capability names this Butler: native, or a
+		// runtime this deployment does not manage the container for.
+		return "", nil
+	}
+
+	pkg, err := s.Catalog.Get(packagedRuntimePackage, "")
+	if err != nil {
+		return "", fmt.Errorf("%s is installed for %s but is no longer in the catalog: %w", packagedRuntimePackage, b.Name, err)
+	}
+	// The install's own recorded params, with only the two fields this
+	// change touches overridden — everything else about the runtime
+	// (node, model, instance) is untouched, the same "replaces one
+	// field" discipline setButlerRuntime itself follows.
+	params := make(map[string]string, len(installed)+2)
+	for k, v := range installed {
+		params[k] = v
+	}
+	if next.ExecutionProfile != "" {
+		params["execution_profile"] = next.ExecutionProfile
+	}
+	if next.ProcessingClass != "" {
+		params["processing_class"] = string(next.ProcessingClass)
+	}
+
+	enabled, err := s.enabledCapabilities()
+	if err != nil {
+		return "", err
+	}
+	providers := append([]*pkgspec.Package{pkg}, s.Catalog.ProvidersFor(enabled)...)
+	current, err := s.State.Load()
+	if err != nil {
+		return "", fmt.Errorf("loading statefile: %w", err)
+	}
+	rendered, err := capability.NewEngine().Expand(pkg, params, capability.NewCatalog(providers...).WithCurrent(current))
+	if err != nil {
+		return "", fmt.Errorf("re-rendering %s: %w", pkg.Metadata.Name, err)
+	}
+	if err := claimedByAnotherCapability(pkg, current, rendered); err != nil {
+		return "", err
+	}
+	docs := make([]string, 0, len(rendered))
+	for _, res := range rendered {
+		data, err := resource.Marshal(res)
+		if err != nil {
+			return "", err
+		}
+		docs = append(docs, string(data))
+	}
+	capName, _ := pkg.CapabilityFor(params) // Expand already refused a bad instance
+
+	out, code, err := s.submitProposalOpts(id, proposalRequest{
+		Summary: fmt.Sprintf("restart %s's runtime (%s): execution profile %s, processing class %s",
+			b.Name, capName, params["execution_profile"], params["processing_class"]),
+		Put:    docs,
+		Delete: droppedByUpgrade(pkg, current, rendered),
+	}, proposalOpts{
+		Origin: &plan.CapabilityOrigin{Package: pkg.Metadata.Name, Version: pkg.Metadata.Version, Params: params},
+	})
+	if err != nil {
+		return "", fmt.Errorf("filing the restart plan (status %d): %w", code, err)
+	}
+	view, ok := out.(planView)
+	if !ok {
+		return "", fmt.Errorf("filing the restart plan: unexpected response type %T", out)
+	}
+	return view.ID, nil
+}
+
+// setButlerRuntimeResponse is what PUT .../runtime answers with: the
+// Agent's runtime record, plus — only when this change re-rendered a
+// bound packaged runtime (H6, #352) — the Plan that re-render filed.
+// The record above already carries the new profile, but Hermes will
+// not run under it until the Plan is approved and the reconciler
+// restarts the container (design doc §5.5); the Console shows that
+// with the Plan ref rather than the profile looking live early.
+type setButlerRuntimeResponse struct {
+	agentapi.RuntimeRecord
+	Plan string `json:"plan,omitempty"`
+}
+
 // setButlerRuntime is PUT /api/v1/butlers/{name}/runtime: the Owner
 // decides which runtime backs the Agent and how it is reached (§3.3).
 //
@@ -399,6 +526,7 @@ func (s *Server) setButlerRuntime(r *http.Request, id principal.Identity) (any, 
 			"host administration needs a non-native runtime or an Owner-class Agent: a native Agent's Tier 3 comes from its own opt-in tools (H7), not from the execution profile")
 	}
 
+	var restartPlan string
 	switch {
 	case next.Type != current.Type:
 		if err := s.revokeAgentRuntime(b); err != nil {
@@ -421,12 +549,28 @@ func (s *Server) setButlerRuntime(r *http.Request, id principal.Identity) (any, 
 			return nil, http.StatusBadRequest, err
 		}
 		s.event("butler.runtime", "", id, fmt.Sprintf("runtime of %s reconfigured (%s)", b.Name, next.Type))
+		// H6 (#352, design doc §5.5): the runtime record above already
+		// says the new profile, but a bound packaged runtime does not
+		// actually run under it until its managed config is
+		// re-rendered and its container restarted — Hermes freezes a
+		// session's tool set at start, so this is "re-template +
+		// restart", never a live change. Only a profile or class
+		// change needs it: an endpoint or delivery edit does not touch
+		// what the container renders.
+		if next.ExecutionProfile != current.ExecutionProfile || next.ProcessingClass != current.ProcessingClass {
+			planID, err := s.reRenderPackagedRuntime(b, current.Principal, next, id)
+			if err != nil {
+				return nil, http.StatusBadGateway, fmt.Errorf(
+					"the runtime record was updated, but re-rendering its packaged runtime for the restart failed: %w", err)
+			}
+			restartPlan = planID
+		}
 	}
 	rt, err := s.DB.GetButlerRuntime(b.Seq)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return rt.Record(), http.StatusOK, nil
+	return setButlerRuntimeResponse{RuntimeRecord: rt.Record(), Plan: restartPlan}, http.StatusOK, nil
 }
 
 // runtimeCredentialResponse is what rotating a runtime credential
