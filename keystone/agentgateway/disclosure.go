@@ -9,15 +9,17 @@ package agentgateway
 // itself controls: what it hands the runtime as a Manifest, an Invoke
 // result or a Recall hit (gateway.go, invoke.go, memory.go).
 //
-// Deliveries (work.go's Gateway.Deliveries) are deliberately NOT
-// filtered here: api/handlers_agent.go's HTTP route re-reads
-// agent_deliveries directly rather than calling this Gateway (its own
-// doc comment on deliveriesFromRows explains why — agentgateway cannot
-// import keystone/api), so a filter added on only one of the two
-// readers would make them disagree, which is exactly what
-// TestDeliveryClientIsByteIdenticalInProcessAndOverHTTP exists to catch.
-// Closing that gap needs the identical check added to both readers,
-// which is a keystone/api change outside this package's scope.
+// Deliveries (work.go's Gateway.Deliveries and api/handlers_agent.go's
+// agentDeliveries route) are filtered too, by the SAME per-record rule
+// and the SAME agentapi.Delivery a runtime pulls either way: FilterDelivery
+// below is the one function both readers call (ADR-W039 §7.2 Phase 5,
+// #345) — agentgateway cannot import keystone/api, but keystone/api may
+// import keystone/agentgateway, so this is the shared side. A withheld
+// delivery is still delivered, so it can still be acked: only its
+// Payload is replaced with a refusal marker, never its id, kind, cursor
+// or expiry, which is what keeps ack idempotent and what keeps
+// TestDeliveryClientIsByteIdenticalInProcessAndOverHTTP passing — both
+// readers run the identical filter over the identical row.
 //
 // The rule is keyed on the Owner-declared processing class on
 // butler_runtimes (never a runtime's own claim — Manifest, Invoke and
@@ -27,10 +29,16 @@ package agentgateway
 // runtimedb.ErrPrivacy, so the wording an Owner sees never depends on
 // where the refusal happened. Undeclared (empty) fails closed exactly
 // like "cloud": a runtime the Owner never declared local_only is not
-// entitled to local_only content.
+// entitled to local_only content. Reading GetButlerRuntime itself fails
+// (a row this deployment predates, or a real database error) fails
+// closed the identical way, since a delivery reader that cannot ask the
+// question must answer it exactly like the row said "cloud".
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -47,7 +55,15 @@ import (
 // like cloud, the safer of the two answers (§3.5's "undeclared fails
 // closed").
 func (g *Gateway) disclosureClass(butlerSeq int64) (agentapi.ProcessingClass, error) {
-	rt, err := g.DB.GetButlerRuntime(butlerSeq)
+	return disclosureClassFor(g.DB, butlerSeq)
+}
+
+// disclosureClassFor is disclosureClass's own DB-only shape, so
+// FilterDelivery below can resolve it without a *Gateway — the same
+// read api/handlers_agent.go's HTTP route needs and has only a
+// *runtimedb.DB (s.DB) to make it with.
+func disclosureClassFor(db *runtimedb.DB, butlerSeq int64) (agentapi.ProcessingClass, error) {
+	rt, err := db.GetButlerRuntime(butlerSeq)
 	if err != nil {
 		return "", err
 	}
@@ -101,4 +117,141 @@ func (g *Gateway) beginDisclosureTurn(ctx context.Context, class agentapi.Proces
 // assertion shape — holds identically at the gateway boundary.
 func disclosureRefusalError(surface string, err error) error {
 	return fmt.Errorf("agentgateway: %s: %w", surface, err)
+}
+
+// FilterDeliveries applies FilterDelivery to a batch, in order — the
+// one call both work.go's Gateway.Deliveries and
+// api/handlers_agent.go's agentDeliveries route make on the rows
+// ListUnackedAgentDeliveries hands back, so the two readers can never
+// disagree about which of them are withheld.
+func FilterDeliveries(db *runtimedb.DB, rows []runtimedb.AgentDelivery) []runtimedb.AgentDelivery {
+	out := make([]runtimedb.AgentDelivery, len(rows))
+	for i, row := range rows {
+		out[i] = FilterDelivery(db, row)
+	}
+	return out
+}
+
+// FilterDelivery is the delivery-boundary half of this file's
+// processing-class disclosure filter (see the file doc comment): one
+// agent_deliveries row, read back exactly as ListUnackedAgentDeliveries
+// left it, with its Payload replaced by a refusal marker when the
+// content it carries is not for this Agent's declared processing class.
+//
+// The class is read fresh from butler_runtimes on every call — never
+// cached from when the row was recorded — so an Owner who tightens a
+// runtime's declaration after a delivery was queued sees it enforced on
+// the very next read, exactly like every other boundary this file
+// guards. A row is never dropped and never refused outright: a withheld
+// delivery keeps its id, kind, cursor and expiry, so a runtime that
+// cannot see its payload can still ack it and move its cursor past it.
+func FilterDelivery(db *runtimedb.DB, row runtimedb.AgentDelivery) runtimedb.AgentDelivery {
+	class, err := disclosureClassFor(db, row.Butler)
+	if err != nil {
+		class = agentapi.ProcessingCloud
+	}
+	if perr := deliveryPrivacyCheck(db, row, disclosureModel(class)); perr != nil {
+		row.Payload = deliveryRefusalPayload(perr)
+	}
+	return row
+}
+
+// deliveryPayloadFields is the ONE best-effort read of a delivery's
+// opaque payload this filter needs — the same "handle" field
+// deliveriesFromRows/deliveriesFor already read (never a claim the
+// table itself makes about what the payload holds), plus
+// proposal_outcome's own "plan" field (recordProposalOutcomeDelivery,
+// api/handlers_plans.go).
+type deliveryPayloadFields struct {
+	Handle string `json:"handle"`
+	Plan   string `json:"plan"`
+}
+
+func parseDeliveryPayload(payload string) deliveryPayloadFields {
+	var f deliveryPayloadFields
+	_ = json.Unmarshal([]byte(payload), &f)
+	return f
+}
+
+// deliveryPrivacyCheck runs the existing per-record rule this delivery's
+// content is already governed by, exactly as Manifest, Invoke and
+// Recall run it at their own boundaries:
+//
+//   - proposal_outcome carries a plan id; runtimedb.CheckPlanPrivacy is
+//     the SAME check GET /api/v1/plans/{id} runs before showing an
+//     Owner a plan (api/handlers_plans.go), applied here before handing
+//     its outcome to the runtime that filed it.
+//   - turn, subscription and escalation carry a task handle (escalation
+//     deliveries — cmd/keystone/reviewed_escalator.go — do not today,
+//     so this is a no-op for them; the case is here so a future one
+//     that does start gets the identical check for free); the task id
+//     ahead of the handle's own "." is enough to resolve its session
+//     without validating the handle's secret — this filter only ever
+//     narrows disclosure, it grants nothing — and runtimedb.
+//     CheckSessionPrivacy is the SAME check a resumed conversation's
+//     own history is checked with (butlerlive.privacyProvider, C10).
+//
+// A row this filter cannot resolve at all — a malformed or unknown
+// plan id, a task or session the delivery outlived — is left alone
+// rather than withheld: there is no restriction to enforce once the
+// content it would have been checked against no longer exists, the
+// same "best effort" recordProposalOutcomeDelivery and
+// reofferWaitingTasks already give a failure that does not block the
+// delivery itself.
+func deliveryPrivacyCheck(db *runtimedb.DB, row runtimedb.AgentDelivery, model string) error {
+	fields := parseDeliveryPayload(row.Payload)
+	destination := runtimedb.MemoryDestination{}
+	switch row.Kind {
+	case agentapi.DeliveryProposalOutcome:
+		if fields.Plan == "" {
+			return nil
+		}
+		return privacyRestriction(db.CheckPlanPrivacy(fields.Plan, model, destination))
+	case agentapi.DeliveryTurn, agentapi.DeliverySubscription, agentapi.DeliveryEscalation:
+		if fields.Handle == "" {
+			return nil
+		}
+		taskID, _, _ := strings.Cut(fields.Handle, ".")
+		if taskID == "" {
+			return nil
+		}
+		task, err := db.GetButlerTask(taskID)
+		if err != nil || task.SessionID == "" {
+			return nil
+		}
+		return privacyRestriction(db.CheckSessionPrivacy(task.SessionID, model, destination))
+	default:
+		return nil
+	}
+}
+
+// privacyRestriction narrows an underlying check's error to the one
+// this filter withholds a delivery for. A malformed id or a "no such
+// plan/session" is not runtimedb.ErrPrivacy and is treated as nothing
+// to enforce (deliveryPrivacyCheck's own doc comment); any real
+// database error underneath surfaces the exact same way, since a
+// delivery reader that cannot evaluate the rule has nothing else to do
+// but leave the row alone.
+func privacyRestriction(err error) error {
+	if errors.Is(err, runtimedb.ErrPrivacy) {
+		return err
+	}
+	return nil
+}
+
+// deliveryRefusalRow is what a withheld delivery's Payload becomes: no
+// trace of the content itself, only that it was withheld and why, in
+// the SAME runtimedb.ErrPrivacy wording every other gateway boundary
+// refuses with (disclosureRefusalError, "delivery" naming this one).
+type deliveryRefusalRow struct {
+	Withheld bool   `json:"withheld"`
+	Reason   string `json:"reason"`
+}
+
+func deliveryRefusalPayload(err error) string {
+	body, merr := json.Marshal(deliveryRefusalRow{Withheld: true, Reason: disclosureRefusalError("delivery", err).Error()})
+	if merr != nil {
+		return `{"withheld":true}`
+	}
+	return string(body)
 }

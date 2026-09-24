@@ -504,7 +504,7 @@ func (s *Server) agentDeliveries(r *http.Request, id principal.Identity) (any, i
 			return nil, http.StatusInternalServerError, err
 		}
 		if len(rows) > 0 {
-			return deliveriesResponse{Deliveries: deliveriesFor(rows)}, http.StatusOK, nil
+			return deliveriesResponse{Deliveries: deliveriesFor(agentgateway.FilterDeliveries(s.DB, rows))}, http.StatusOK, nil
 		}
 		if time.Now().After(deadline) || r.Context().Err() != nil {
 			return deliveriesResponse{Deliveries: []agentapi.Delivery{}}, http.StatusOK, nil

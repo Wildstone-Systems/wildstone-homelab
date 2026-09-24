@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -444,13 +445,82 @@ type comparableDeliveryScript struct {
 	AfterSkippingItsID []agentapi.Delivery
 }
 
+// seedRestrictedDeliveries records a proposal_outcome and a turn
+// delivery for b, both over a task, session, memory and plan wired so
+// runtimedb.CheckSessionPrivacy and runtimedb.CheckPlanPrivacy see them
+// as local_only-restricted — the same provenance chain
+// migration 0070_privacy_policy.sql's privacy_edges view already walks
+// for a resumed conversation (butlerlive.privacyProvider, C10), built
+// here at the delivery boundary instead: a memory sourced from the
+// task's own conversation makes the task's session local_only, and
+// LinkPlanSessionPrivacy makes a plan filed from that session inherit
+// it (its own doc comment: "Plans generated from a conversation remain
+// subject to that conversation's live disclosure policy").
+func seedRestrictedDeliveries(t *testing.T, db *runtimedb.DB, ledger *butlerstore.Ledger, b runtimedb.Butler) {
+	t.Helper()
+	taskID, handle := openAgentTask(t, db, ledger, b)
+	sessionID, err := db.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "test", ActingFor: "mika", Butler: b.Name, Surface: b.Surface,
+	})
+	if err != nil {
+		t.Fatalf("InsertButlerSession: %v", err)
+	}
+	if err := db.SetButlerTaskSession(taskID, sessionID); err != nil {
+		t.Fatalf("SetButlerTaskSession: %v", err)
+	}
+	seq, err := db.RecordMemory(runtimedb.MemoryRecord{
+		Scope: runtimedb.MemoryScopePersonal, Kind: runtimedb.MemoryFact,
+		Content: "the safe combination is nine four one seven",
+		Owner:   "mika", Author: "mika", Butler: b.Name,
+		Audience: runtimedb.ButlerAudiencePrivate, PermissionLabel: "household",
+		SourceKind: "conversation", SourceID: taskID,
+	})
+	if err != nil {
+		t.Fatalf("RecordMemory: %v", err)
+	}
+	if err := db.SetMemoryPrivacy("mika", seq, runtimedb.PrivacyPolicy{LocalOnly: true}); err != nil {
+		t.Fatalf("SetMemoryPrivacy: %v", err)
+	}
+	planID, err := db.InsertPlan("runtime-alfred-1", "mika", "a restricted plan", "low", `{}`)
+	if err != nil {
+		t.Fatalf("InsertPlan: %v", err)
+	}
+	if err := db.LinkPlanSessionPrivacy(sessionID, []string{planID}); err != nil {
+		t.Fatalf("LinkPlanSessionPrivacy: %v", err)
+	}
+	if err := db.CheckPlanPrivacy(planID, runtimedb.ModelCloud, runtimedb.MemoryDestination{}); !errors.Is(err, runtimedb.ErrPrivacy) {
+		t.Fatalf("fixture is broken: plan %s is not local_only-restricted (err=%v)", planID, err)
+	}
+
+	outcomePayload, err := json.Marshal(map[string]any{"plan": planID, "outcome": "approved"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RecordAgentDelivery(b.Seq, agentapi.DeliveryProposalOutcome, string(outcomePayload)); err != nil {
+		t.Fatalf("recording the restricted proposal_outcome: %v", err)
+	}
+	turnPayload, err := json.Marshal(map[string]any{"handle": string(handle)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RecordAgentDelivery(b.Seq, agentapi.DeliveryTurn, string(turnPayload)); err != nil {
+		t.Fatalf("recording the restricted turn: %v", err)
+	}
+}
+
 // runDeliveryScript is the ONE script both arms of
 // TestDeliveryClientIsByteIdenticalInProcessAndOverHTTP run: read the
-// two seeded deliveries, ack the first (twice, to prove idempotency),
-// read what is left, then prove after= the remaining one's own id
-// excludes it. ExpiresAt is zeroed before comparison — each arm is its
-// own database and calls time.Now() independently — but everything a
-// runtime actually reads to act (id, kind, subscription, handle,
+// four seeded deliveries — two the disclosure filter has nothing to
+// resolve (an unfamiliar plan id, an unknown task handle) and two that
+// carry a local_only-restricted plan and turn (seedRestrictedDeliveries)
+// which this Agent's undeclared, fail-closed-to-cloud runtime must never
+// see — check that only the latter two came back withheld, ack the
+// first (twice, to prove idempotency) AND one of the withheld ones (to
+// prove a redacted delivery can still be acked, ADR-W039 §7.2 Phase 5,
+// #345), read what is left, then prove after= the remaining one's own
+// id excludes it. ExpiresAt is zeroed before comparison — each arm is
+// its own database and calls time.Now() independently — but everything
+// a runtime actually reads to act (id, kind, subscription, handle,
 // payload) travels into the comparison untouched.
 func runDeliveryScript(t *testing.T, target conformance.Target) comparableDeliveryScript {
 	t.Helper()
@@ -463,16 +533,62 @@ func runDeliveryScript(t *testing.T, target conformance.Target) comparableDelive
 		}
 		return out
 	}
+	withheld := func(t *testing.T, d agentapi.Delivery) {
+		t.Helper()
+		payload := string(d.Payload)
+		if !strings.Contains(payload, `"withheld":true`) {
+			t.Fatalf("%s delivery %s was not withheld: %+v", d.Kind, d.ID, d)
+		}
+		if !strings.Contains(payload, runtimedb.ErrPrivacy.Error()) {
+			t.Fatalf("%s delivery %s's refusal is missing runtimedb.ErrPrivacy's wording: %+v", d.Kind, d.ID, d)
+		}
+		if d.Handle != "" {
+			t.Fatalf("%s delivery %s still carries a handle after being withheld: %+v", d.Kind, d.ID, d)
+		}
+		// None of the original payload's own fields — the plan id, the
+		// task handle, the outcome or the subscription — may survive
+		// into the refusal: it is a marker, not a redaction of the
+		// content in place.
+		for _, field := range []string{`"plan"`, `"handle"`, `"outcome"`, `"subscription"`} {
+			if strings.Contains(payload, field) {
+				t.Fatalf("%s delivery %s's withheld payload still carries %s: %s", d.Kind, d.ID, field, payload)
+			}
+		}
+	}
 
 	var out comparableDeliveryScript
 	got, err := target.Deliveries.Deliveries(ctx, "", 0)
 	if err != nil {
 		t.Fatalf("Deliveries: %v", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("Deliveries = %+v, want 2", got)
+	if len(got) != 4 {
+		t.Fatalf("Deliveries = %+v, want 4", got)
 	}
 	out.First = shapeAll(got)
+
+	// got[0] and got[1] are the pre-existing fixture rows: a
+	// proposal_outcome naming a plan id that does not exist, and a
+	// subscription delivery naming a task handle that does not either.
+	// The filter has nothing to check either against, so both travel
+	// unchanged (deliveryPrivacyCheck's own "leave it alone" rule).
+	if got[0].Kind != agentapi.DeliveryProposalOutcome || string(got[0].Payload) != `{"plan":"p-1","outcome":"approved"}` {
+		t.Fatalf("got[0] should be the unresolvable proposal_outcome, unchanged: %+v", got[0])
+	}
+	if got[1].Kind != agentapi.DeliverySubscription || string(got[1].Payload) != `{"handle":"bt-999999.secret","subscription":1}` {
+		t.Fatalf("got[1] should be the unresolvable subscription, unchanged: %+v", got[1])
+	}
+	// got[2] and got[3] are seedRestrictedDeliveries' own proposal_outcome
+	// and turn, over a plan and a task/session this Agent's runtime (no
+	// declared processing class, failing closed exactly like "cloud")
+	// may never see the local_only content of.
+	if got[2].Kind != agentapi.DeliveryProposalOutcome {
+		t.Fatalf("got[2] should be the restricted proposal_outcome: %+v", got[2])
+	}
+	withheld(t, got[2])
+	if got[3].Kind != agentapi.DeliveryTurn {
+		t.Fatalf("got[3] should be the restricted turn: %+v", got[3])
+	}
+	withheld(t, got[3])
 
 	// Ack the first, then a repeat ack is a no-op.
 	if err := target.Deliveries.Ack(ctx, got[0].ID); err != nil {
@@ -481,22 +597,29 @@ func runDeliveryScript(t *testing.T, target conformance.Target) comparableDelive
 	if err := target.Deliveries.Ack(ctx, got[0].ID); err != nil {
 		t.Fatalf("repeat Ack: %v", err)
 	}
+	// A withheld delivery is still delivered, so it must still be
+	// ackable: the runtime that cannot see its payload can still move
+	// its own cursor past it.
+	if err := target.Deliveries.Ack(ctx, got[2].ID); err != nil {
+		t.Fatalf("Ack on a withheld delivery: %v", err)
+	}
 
 	after, err := target.Deliveries.Deliveries(ctx, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(after) != 1 {
-		t.Fatalf("after acking the first = %+v, want exactly one left", after)
+	if len(after) != 2 {
+		t.Fatalf("after acking two = %+v, want exactly two left", after)
 	}
 	out.AfterFirstAck = shapeAll(after)
 
-	skip, err := target.Deliveries.Deliveries(ctx, after[0].ID, 0)
+	last := after[len(after)-1]
+	skip, err := target.Deliveries.Deliveries(ctx, last.ID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(skip) != 0 {
-		t.Fatalf("after= its own id = %+v, want none", skip)
+		t.Fatalf("after= the last remaining id = %+v, want none", skip)
 	}
 	out.AfterSkippingItsID = shapeAll(skip)
 	return out
@@ -537,19 +660,22 @@ func TestDeliveryClientIsByteIdenticalInProcessAndOverHTTP(t *testing.T) {
 	}
 	clientB := &httpclient.Client{BaseURL: srv, Bearer: token}
 
-	for _, db := range []*runtimedb.DB{dbA, dbB} {
-		var b runtimedb.Butler
-		if db == dbA {
-			b = butlerA
-		} else {
-			b = butlerB
-		}
-		if _, err := db.RecordAgentDelivery(b.Seq, agentapi.DeliveryProposalOutcome, `{"plan":"p-1","outcome":"approved"}`); err != nil {
+	for _, env := range []struct {
+		db     *runtimedb.DB
+		ledger *butlerstore.Ledger
+		b      runtimedb.Butler
+	}{{dbA, ledgerA, butlerA}, {dbB, ledgerB, butlerB}} {
+		if _, err := env.db.RecordAgentDelivery(env.b.Seq, agentapi.DeliveryProposalOutcome, `{"plan":"p-1","outcome":"approved"}`); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.RecordSubscriptionDelivery(b.Seq, "7", `{"handle":"bt-1.secret","subscription":1}`); err != nil {
+		if _, err := env.db.RecordSubscriptionDelivery(env.b.Seq, "7", `{"handle":"bt-999999.secret","subscription":1}`); err != nil {
 			t.Fatal(err)
 		}
+		// Neither of newAgentEnv's Agents declares a processing class
+		// (undeclared fails closed, exactly like "cloud"), so a
+		// local_only-restricted plan and turn recorded for it must come
+		// back withheld from BOTH readers, identically.
+		seedRestrictedDeliveries(t, env.db, env.ledger, env.b)
 	}
 
 	targetA := conformance.Target{

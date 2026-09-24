@@ -234,7 +234,7 @@ func (g *Gateway) Deliveries(ctx context.Context, after string, wait time.Durati
 			return nil, err
 		}
 		if len(rows) > 0 {
-			return deliveriesFromRows(rows), nil
+			return deliveriesFromRows(FilterDeliveries(g.DB, rows)), nil
 		}
 		if g.now().After(deadline) || ctx.Err() != nil {
 			return []agentapi.Delivery{}, nil
