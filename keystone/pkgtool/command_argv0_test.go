@@ -7,11 +7,14 @@ import (
 
 // imageArgv0 records, per image repository, what a ContainerSpec.Command
 // must start with — because Wildstone maps command to Docker's Cmd, and
-// Cmd is the WHOLE argv when the image declares no entrypoint.
+// Cmd is the WHOLE argv when the image declares no entrypoint. The value
+// is a SET of acceptable command[0]s, because one repository can be run
+// as more than one Wildstone-supplied binary (distroless below):
 //
-//	""      the image has an ENTRYPOINT that supplies the binary, so the
-//	        command carries arguments only
-//	"name"  the image has none, so the command must name the binary itself
+//	{""}           the image has an ENTRYPOINT that supplies the binary,
+//	               so the command carries arguments only
+//	{"name", ...}  the image has none, so the command must name one of
+//	               these binaries itself
 //
 // This mattered: both ingress profiles shipped ["run", "--config", ...]
 // for caddy, an image with no entrypoint, and every Caddy container died
@@ -30,13 +33,27 @@ import (
 // entrypoints come from their published Dockerfiles. Image config blobs
 // are not reachable from CI's network, so a docker inspect on a node is
 // the stronger check when one is available.
-var imageArgv0 = map[string]string{
-	"caddy":                  "caddy", // no ENTRYPOINT — command is the whole argv
-	"cloudflare/cloudflared": "",      // ENTRYPOINT ["cloudflared","--no-autoupdate"]
-	"binwiederhier/ntfy":     "",      // ENTRYPOINT ["ntfy"]
-	// No ENTRYPOINT: the chat packages run the adapter program the
-	// installer puts on the host, mounted at /opt/wildstone/bin.
-	"gcr.io/distroless/static-debian12": "/opt/wildstone/bin/chat-adapter",
+var imageArgv0 = map[string][]string{
+	"caddy":                  {"caddy"}, // no ENTRYPOINT — command is the whole argv
+	"cloudflare/cloudflared": {""},      // ENTRYPOINT ["cloudflared","--no-autoupdate"]
+	"binwiederhier/ntfy":     {""},      // ENTRYPOINT ["ntfy"]
+	// No ENTRYPOINT: the chat packages, and now agent-hermes's
+	// agent-bridge sidecar (ADR-W039 Phase 6/H5, #351), each run their
+	// own program the installer puts on the host, mounted at
+	// /opt/wildstone/bin under the same distroless base — one image
+	// repository, more than one binary depending on which package rendered
+	// the container.
+	"gcr.io/distroless/static-debian12": {
+		"/opt/wildstone/bin/chat-adapter",
+		"/opt/wildstone/bin/agent-bridge",
+	},
+
+	// nousresearch/hermes-agent (agent-hermes's own "hermes" container,
+	// ADR-W039 Phase 6/H5, #351) has a real ENTRYPOINT that supplies the
+	// binary, so its command carries the "gateway run" subcommand and
+	// flags only — the cloudflared/authelia shape. Evidence: the
+	// published Dockerfile at NousResearch/Hermes@main.
+	"nousresearch/hermes-agent": {""},
 
 	// Caddy with the caddy-dns/cloudflare module compiled in, for the
 	// DNS-01 profile (ADR-W019 A9). Same shape as stock caddy, and
@@ -46,14 +63,14 @@ var imageArgv0 = map[string]string{
 	// read from the GHCR registry API on 2026-09-05. Unlike the entries
 	// above, this one did not need a node to check — the registry answers
 	// the question directly when its network is reachable.
-	"ghcr.io/caddybuilds/caddy-cloudflare": "caddy",
+	"ghcr.io/caddybuilds/caddy-cloudflare": {"caddy"},
 
 	// The subtle third case, and the reason this table asks "what must
 	// argv[0] be" rather than "does the image have an entrypoint":
 	// gotenberg's ENTRYPOINT is ["/usr/bin/tini","--"], a supervisor that
 	// execs its arguments. It exists, but supplies no binary, so the
 	// command must still name one (its own CMD is ["gotenberg"]).
-	"gotenberg/gotenberg": "gotenberg",
+	"gotenberg/gotenberg": {"gotenberg"},
 
 	// Authelia's ENTRYPOINT is ["/app/entrypoint.sh"], a wrapper that
 	// applies UMASK, chowns /config, drops to PUID:PGID and then execs
@@ -62,7 +79,7 @@ var imageArgv0 = map[string]string{
 	// arguments directly UNLESS the first one is --config, in which case
 	// it hands them to authelia. Evidence: the image's published
 	// Dockerfile and entrypoint.sh at authelia/authelia@master.
-	"authelia/authelia": "",
+	"authelia/authelia": {""},
 
 	// alpine declares no ENTRYPOINT at all, so the command is the whole
 	// argv and must name a real binary — the caddy case exactly. It is
@@ -71,7 +88,7 @@ var imageArgv0 = map[string]string{
 	// unconditionally execs /app/lldap and so cannot run a script under a
 	// Cmd-only EnsureContainer. Evidence: alpine's published Dockerfile
 	// is FROM scratch with only CMD ["/bin/sh"].
-	"alpine": "/bin/sh",
+	"alpine": {"/bin/sh"},
 
 	// Prometheus's image declares ENTRYPOINT ["/bin/prometheus"] with
 	// CMD ["--config.file=/etc/prometheus/prometheus.yml",
@@ -79,7 +96,7 @@ var imageArgv0 = map[string]string{
 	// only — the authelia shape. Evidence: the published Dockerfile at
 	// prometheus/prometheus@main, and the image config blob read from
 	// Docker Hub on 2026-09-07 while resolving the package's digest.
-	"prom/prometheus": "",
+	"prom/prometheus": {""},
 
 	// Davis's standalone image declares no ENTRYPOINT — its CMD is
 	// ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"], which
@@ -90,7 +107,7 @@ var imageArgv0 = map[string]string{
 	// image is alpine-based, so sh is there. Evidence: the published
 	// docker/Dockerfile-standalone at tchapi/davis@main, whose final
 	// stage sets no ENTRYPOINT and no USER.
-	"ghcr.io/tchapi/davis-standalone": "/bin/sh",
+	"ghcr.io/tchapi/davis-standalone": {"/bin/sh"},
 
 	// Radicale's image declares
 	// ENTRYPOINT ["/app/bin/python", "/app/bin/radicale"] with
@@ -102,7 +119,7 @@ var imageArgv0 = map[string]string{
 	// blobs to pkg-containers.githubusercontent.com, which CI's network
 	// does not reach — so the Dockerfile is the check, and a docker
 	// inspect on a node is the stronger one when one is available.
-	"ghcr.io/kozea/radicale": "",
+	"ghcr.io/kozea/radicale": {""},
 }
 
 // TestPackageCommandsNameTheirBinary walks every shipped package's
@@ -131,11 +148,11 @@ func TestPackageCommandsNameTheirBinary(t *testing.T) {
 				}
 				got := r.spec.Command[0]
 				switch {
-				case want == "" && got == repoBinary(repo):
+				case hasEntrypoint(want) && got == repoBinary(repo):
 					t.Errorf("%s %q: image %q has an ENTRYPOINT, so command[0] must not repeat %q",
 						r.kind, r.name, repo, got)
-				case want != "" && got != want:
-					t.Errorf("%s %q: image %q has no ENTRYPOINT, so command[0] must be %q, got %q "+
+				case !hasEntrypoint(want) && !containsArgv0(want, got):
+					t.Errorf("%s %q: image %q has no ENTRYPOINT, so command[0] must be one of %q, got %q "+
 						"— the container will die with `exec: %q: executable file not found in $PATH`",
 						r.kind, r.name, repo, want, got, got)
 				}
@@ -145,6 +162,24 @@ func TestPackageCommandsNameTheirBinary(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no shipped container carried a command — the walk is broken, not the packages")
 	}
+}
+
+// hasEntrypoint reports whether an imageArgv0 entry means "this image's
+// ENTRYPOINT already supplies the binary", recorded as the single-element
+// set {""} rather than a named binary.
+func hasEntrypoint(names []string) bool {
+	return len(names) == 1 && names[0] == ""
+}
+
+// containsArgv0 reports whether got is one of the acceptable command[0]
+// values for an image with no ENTRYPOINT.
+func containsArgv0(names []string, got string) bool {
+	for _, n := range names {
+		if n == got {
+			return true
+		}
+	}
+	return false
 }
 
 // imageRepo strips the digest pin: "caddy@sha256:..." -> "caddy".
