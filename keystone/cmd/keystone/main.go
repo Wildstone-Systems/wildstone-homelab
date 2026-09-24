@@ -1107,7 +1107,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	}
 	apiSrv.SecretVault = secretVault
 	if calendarActions != nil {
-		calendarActions.SecretUse = calendarSecretUse(secretVault)
+		calendarActions.SecretUse = calendarSecretUse(db, secretVault)
 	}
 
 	// Every Agent is on the assigned-tools model (ADR-W033 design §6.3,
@@ -1725,18 +1725,17 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 						mine := household
 						mine.ProposeRoutine = apiSrv.RoutineProposalSeam(b.Name)
 						mine.Memory = butlerstore.MemorySeams(db, b.Name, t.Member, t.MemoryDestination(), log)
-						if household.Actions != nil {
-							mine.Actions = func(ctx context.Context, c butler.HouseholdActionCall) (string, error) {
-								ctx = runtimedb.WithSecretUseContext(ctx, db.BindMemoryRead(t.Member, b.Name, t.MemoryDestination()))
-								return household.Actions(ctx, c)
-							}
-						}
-						if household.ActionResult != nil {
-							mine.ActionResult = func(ctx context.Context, c butler.HouseholdActionCall) (butler.ToolOutcome, error) {
-								ctx = runtimedb.WithSecretUseContext(ctx, db.BindMemoryRead(t.Member, b.Name, t.MemoryDestination()))
-								return household.ActionResult(ctx, c)
-							}
-						}
+						// Actions and ActionResult are handed through
+						// unwrapped: an executor that needs a secret-use
+						// context (calendar_secret.go) resolves it itself,
+						// gateway-side, from operation.Identity's TaskID
+						// (agentgateway.MemoryReadContextForTask) — ADR-W039
+						// Phase 4, C11. Pre-computing one here and stuffing
+						// it into ctx meant a runtime's own call reached an
+						// executor carrying authority nobody derived from
+						// its handle; the executor deriving it from the
+						// task it is actually running under is the same
+						// fix §3.1 principle 4 makes everywhere else.
 
 						if t.Group {
 							return butler.NewHouseholdGroupGateway(t.Member, mine), nil
@@ -1923,34 +1922,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		// and dispatches them; the domestic gateway rechecks that lease at
 		// every external-effect boundary.
 		auto.ReviewedActions = actions
-		auto.ReviewedEscalator = func(ctx context.Context, agent string, req automation.EscalationRequest) (string, error) {
-			b, err := db.GetButler(agent)
-			if err != nil || !b.Reachable() {
-				return "", fmt.Errorf("assigned Agent %s is unavailable", agent)
-			}
-			p, err := butlerProviderFor(b)
-			if err != nil || p == nil {
-				return "", fmt.Errorf("assigned Agent %s has no available provider: %v", agent, err)
-			}
-			facts := make([]native.Fact, 0, len(req.Facts))
-			for _, f := range req.Facts {
-				facts = append(facts, native.Fact{Label: f.Label, Content: f.Content})
-			}
-			phraser := &native.Phraser{Provider: p, Model: b.ProviderModel,
-				Record: func(_ context.Context, providerName, prompt, reply string) error {
-					_, err := db.InsertButlerSession(runtimedb.ButlerSession{
-						Principal: butlerSessionPrincipal, ActingFor: automation.Source,
-						Butler: b.Name, AgentID: b.Seq, Provider: providerName,
-						Mode: runtimedb.ButlerModeFull, Surface: b.Surface,
-						FinalText:      redact.String(reply),
-						TranscriptJSON: redact.String(`{"kind":"reviewed-routine-escalation","prompt":` + strconv.Quote(prompt) + `}`),
-					})
-					return err
-				}}
-			return phraser.Phrase(ctx, native.PhraseRequest{
-				Rule: req.Rule, Instruction: req.Instruction, Fallback: req.Fallback, Facts: facts,
-			})
-		}
+		auto.ReviewedEscalator = newReviewedEscalator(db, log, butlerProviderFor)
 		go auto.RunReviewed(context.Background(), automationEvery)
 	}
 
