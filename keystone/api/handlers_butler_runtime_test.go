@@ -460,9 +460,14 @@ func TestReplacingTheRuntimeRevokesTheOldCredentialAndKeepsTheAgent(t *testing.T
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("PUT hermes→native = %d", res.StatusCode)
 	}
+	// ADR-W039 §7.2 Phase 5, #345: moving back to native re-derives the
+	// processing class from the Agent's own assigned model (kitchen-box
+	// is local) rather than leaving hermes's declared "local_only"
+	// sitting there by coincidence or resetting to undeclared — a native
+	// runtime is never asked to declare itself (ensureNativeRuntime).
 	if back.Type != agentapi.RuntimeNative || back.Health != agentapi.HealthConnected || back.Endpoint != "" ||
-		back.Negotiated.ProcessingClass != "" || back.CredentialRef != "runtime-health-3" {
-		t.Errorf("native record = %+v, want connected under runtime-health-3 with no endpoint", back)
+		back.Negotiated.ProcessingClass != agentapi.ProcessingLocalOnly || back.CredentialRef != "runtime-health-3" {
+		t.Errorf("native record = %+v, want connected under runtime-health-3 with no endpoint and processing class local_only", back)
 	}
 	if p, _ := h.s.DB.GetPrincipal("runtime-health-3"); p.Disabled {
 		t.Error("moving back to native left the credential disabled")

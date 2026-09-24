@@ -29,7 +29,8 @@ import (
 // Processing-class filtering (§3.5 rule 3: withholding local_only
 // records from a runtime not declared local_only) is Phase 5's
 // gateway-side filter (ADR-W039 §8 Phase 5, "gateway-side local_only
-// filtering by declared processing class"); it is not implemented here.
+// filtering by declared processing class", #345): Recall applies it
+// below, per hit; disclosure.go documents the rest.
 
 // Recall implements agentapi.Client: a structured search of Wildstone
 // memory for the reader on the handle, disclosed exactly as the
@@ -85,9 +86,23 @@ func (g *Gateway) Recall(ctx context.Context, req agentapi.RecallRequest) ([]age
 	if err != nil {
 		return nil, fmt.Errorf("agentgateway: searching memory: %w", err)
 	}
+	class, err := g.disclosureClass(s.hc.Butler.Seq)
+	if err != nil {
+		return nil, fmt.Errorf("agentgateway: resolving the runtime's processing class: %w", err)
+	}
+	destination := s.turn.MemoryDestination()
 	out := make([]agentapi.MemoryHit, 0, len(hits))
 	for _, h := range hits {
 		if h.MemorySeq == 0 {
+			continue
+		}
+		// §3.5 rule 3: a record this Owner marked local-only is
+		// withheld from a runtime not declared local_only, per hit —
+		// the rest of a search's results still reach it. This is the
+		// SAME rule and the SAME runtimedb.ErrPrivacy the provider
+		// wrapper enforced (disclosure.go), applied here instead of at
+		// the inference boundary.
+		if err := g.disclosureAllowed(h.MemorySeq, class, destination); err != nil {
 			continue
 		}
 		// GetMemory does not filter by permission and does not need

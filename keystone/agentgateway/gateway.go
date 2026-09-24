@@ -307,9 +307,31 @@ func (g *Gateway) Manifest(ctx context.Context, h agentapi.Handle) (agentapi.Man
 	if g.Clock != nil {
 		clock = g.Clock()
 	}
+	// §3.5 rule 3 (ADR §7.2 Phase 5, #345): the system prompt can carry
+	// a memory preamble (butlerlive.systemFor's preambler branch), and a
+	// preamble is disclosure exactly like a recall hit. It is checked
+	// under the same call-scoped turn Invoke opens for a dispatch —
+	// here scoped to assembling the prompt — and the SAME refusal
+	// (runtimedb.ErrPrivacy, wrapped) is returned for the whole Manifest
+	// rather than silently handing back a prompt with the restricted
+	// part missing: a runtime with no valid manifest at all is the
+	// gateway's version of the provider wrapper failing the whole turn
+	// (privacy_test.go:32).
+	class, err := g.disclosureClass(s.hc.Butler.Seq)
+	if err != nil {
+		return agentapi.Manifest{}, fmt.Errorf("agentgateway: resolving the runtime's processing class: %w", err)
+	}
+	dctx, disclosure, err := g.beginDisclosureTurn(ctx, class, s.turn.MemoryDestination())
+	if err != nil {
+		return agentapi.Manifest{}, fmt.Errorf("agentgateway: opening the disclosure turn: %w", err)
+	}
+	prompt := butlerlive.SystemPromptFor(dctx, s.toolset, s.hc.Butler, s.turn, clock)
+	if derr := disclosure.Check(); derr != nil {
+		return agentapi.Manifest{}, disclosureRefusalError("manifest", derr)
+	}
 	return agentapi.Manifest{
 		AgentClass:      agentapi.AgentClass(caps.AgentClass),
-		SystemPrompt:    butlerlive.SystemPromptFor(ctx, s.toolset, s.hc.Butler, s.turn, clock),
+		SystemPrompt:    prompt,
 		Tools:           tools,
 		ReadOnly:        s.readOnly,
 		ProposableKinds: proposableKinds,

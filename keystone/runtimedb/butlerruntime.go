@@ -109,6 +109,47 @@ func scanButlerRuntime(s interface{ Scan(...any) error }) (ButlerRuntime, error)
 	return rt, nil
 }
 
+// DeriveNativeProcessingClass maps a native runtime's assigned model
+// kind onto the Owner-declared processing class the gateway-side
+// disclosure filter keys on (ADR-W039 §3.3, §7.2 Phase 5, #345). The
+// native runtime is never asked to declare itself the way an external
+// one is (§3.5 rule 3): Wildstone already knows which model it calls
+// (A2), so the class is derived, not registered — ModelLocal maps to
+// local_only and everything else (ModelCloud, and any future hosted
+// kind) maps to cloud.
+func DeriveNativeProcessingClass(modelKind string) agentapi.ProcessingClass {
+	if modelKind == ModelLocal {
+		return agentapi.ProcessingLocalOnly
+	}
+	return agentapi.ProcessingCloud
+}
+
+// SetNativeRuntimeProcessingClass backfills butler_runtimes.processing_class
+// for one Agent's NATIVE runtime row from its currently assigned model
+// kind, without disturbing type, endpoint, delivery mode or execution
+// profile, and without touching health or the principal (SetButlerRuntime
+// never does either). It is a no-op for a non-native runtime — an
+// external runtime's class is the Owner's own declaration at
+// registration, never inferred from anything Wildstone can see (§3.5) —
+// and for a native row whose class already matches, so callers may run
+// it on every convergence (Butler creation, restore, and the startup
+// backfill) without spurious writes.
+func (db *DB) SetNativeRuntimeProcessingClass(butlerSeq int64, modelKind, by string) error {
+	rt, err := db.GetButlerRuntime(butlerSeq)
+	if err != nil {
+		return err
+	}
+	if rt.Type != agentapi.RuntimeNative {
+		return nil
+	}
+	class := DeriveNativeProcessingClass(modelKind)
+	if rt.ProcessingClass == class {
+		return nil
+	}
+	rt.ProcessingClass = class
+	return db.SetButlerRuntime(butlerSeq, rt, by)
+}
+
 // GetButlerRuntime reads one Agent's runtime record by Butler seq.
 // ErrNotFound when the Agent has none, which after 0081 means the Agent
 // itself does not exist.

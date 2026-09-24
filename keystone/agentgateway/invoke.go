@@ -148,8 +148,24 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 	// 6. The dispatch, under an identity the runtime never sees. Every
 	// field comes from the handle: the task, this step, the Butler's
 	// name as the permission label, the task's admitted audience.
+	//
+	// The dispatch runs under a call-scoped disclosure turn (§3.5 rule
+	// 3, ADR §7.2 Phase 5, #345): whatever the Toolset reads through it
+	// — today, the "recall" tool's memory seams — is tracked exactly as
+	// butlerlive.Serve tracked a whole conversation for the provider
+	// wrapper, but scoped to this one call rather than the task's
+	// history, because it is this call's RESULT that is about to be
+	// handed to the runtime.
+	class, err := g.disclosureClass(s.hc.Butler.Seq)
+	if err != nil {
+		return agentapi.InvokeResult{}, fmt.Errorf("agentgateway: resolving the runtime's processing class: %w", err)
+	}
+	dctx, disclosure, err := g.beginDisclosureTurn(ctx, class, s.turn.MemoryDestination())
+	if err != nil {
+		return agentapi.InvokeResult{}, fmt.Errorf("agentgateway: opening the disclosure turn: %w", err)
+	}
 	id := operation.Identity{TaskID: taskID, Step: step, PermissionLabel: label, Audience: audience}
-	outcome, err := s.toolset.Execute(operation.With(ctx, id), req.Tool, input, s.readOnly)
+	outcome, err := s.toolset.Execute(operation.With(dctx, id), req.Tool, input, s.readOnly)
 	if err != nil {
 		rec.Error = err.Error()
 		g.record(taskID, rec)
@@ -164,6 +180,26 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 			Content: fmt.Sprintf("error: %v", err),
 			Reason:  err.Error(),
 		}, nil
+	}
+
+	// The result of a real, successful call is refused here rather than
+	// handed back — the SAME refusal runtimedb.ErrPrivacy carries and
+	// privacy_test.go:32 pins, now enforced at the gateway boundary
+	// instead of by wrapping the provider (butlerlive/privacy.go). The
+	// step is failed, not verified, so a later resume never serves this
+	// content from the ledger cache either.
+	if derr := disclosure.Check(); derr != nil {
+		refusal := disclosureRefusalError("invoke", derr)
+		rec.Rejected, rec.Result = true, refusal.Error()
+		g.record(taskID, rec)
+		_ = g.Ledger.FinishAttempt(attempt.Seq, false, "", refusal.Error())
+		_ = g.Ledger.SetStepState(step, butler.LedgerStepFailed)
+		g.trace(s, butler.LedgerTraceEvent{
+			Type: butler.TraceToolResult, Step: step, Attempt: attempt.Seq,
+			SourceIDs: []string{req.Tool},
+			Payload:   jsonPayload(map[string]any{"disclosureRefused": true}),
+		})
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeDenied, Reason: refusal.Error()}, nil
 	}
 
 	rec.Result, rec.Plan, rec.ResourceYAML, rec.Rejected = outcome.Content, outcome.Plan, outcome.ResourceYAML, outcome.Rejected
