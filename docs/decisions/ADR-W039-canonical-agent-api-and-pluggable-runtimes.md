@@ -21,7 +21,7 @@ All claims here come from the working tree; `path:line` refers to it.
 
 ### 1.1 What an Agent is today
 
-The record is `runtimedb.Butler` (`keystone/runtimedb/butlers.go:99-140`): name, directive ("instructs and authorises nothing", `butlers.go:104-105`), surface `admin|family` (`keystone/runtimedb/butlersessions.go:25-34`), agent class `owner|member` (`butlers.go:44-47`), exactly one assigned model with provider, endpoint and probe readiness (`butlers.go:110-125`), enabled/retired state. `CarriesActionAuthority()` requires readiness `ready` (`butlers.go:157-159`). Around the record hang the things the issue calls the Agent's Wildstone-owned properties:
+The record is `runtimedb.Butler` (`keystone/runtimedb/butlers.go:99-140`): name, directive ("instructs and authorises nothing", `butlers.go:102-104`), surface `admin|family` (`keystone/runtimedb/butlersessions.go:25-34`), agent class `owner|member` (`butlers.go:44-47`), exactly one assigned model with provider, endpoint and probe readiness (`butlers.go:109-126`), enabled/retired state. `CarriesActionAuthority()` requires readiness `ready` (`butlers.go:157-159`). Around the record hang the things the issue calls the Agent's Wildstone-owned properties:
 
 | Property | Where it lives |
 |---|---|
@@ -47,16 +47,17 @@ Console POST /api/v1/butlers/{name}/ask        chat adapter POST /api/v1/chat/me
                  butlerlive.Butlers.Serve (serve.go:97-153)
                    authority := &butlerstore.Authority{DB: bs.DB, Butler: b.Name}   ← DB handle
                    sc.SetAuthorizer(WithConnection(authority, t.Connection.Permits))
-                   runner := butler.Runner{Gateway: <Toolset>, Ledger, Provider: privacyProvider{...}}
+                   runner := butler.Runner{Gateway: <Toolset>, Ledger, ...}   (serve.go:130-149)
+                   runner.Run(ctx, privacyProvider{p, privacy}, task.ID, text)  (serve.go:76,151)
                                     │
                  butler.Runner.Run (runner.go:375-543)
                    Fence → Authorize(task) → Running
-                   manifest := Gateway.Capabilities(readOnly)      (runner.go:426-432)
-                   specs    := Gateway.OfferedSpecs(readOnly)      (runner.go:438)
+                   manifest := Gateway.Capabilities(readOnly)      (runner.go:422)
+                   specs    := Gateway.OfferedSpecs(readOnly)      (runner.go:434)
                    rounds: Provider.Chat → tool calls → toolCall (runner.go:702-806)
-                     ledger AppendStep/StartAttempt (runner.go:750-756)
-                     Gateway.Execute(operation.With(ctx, Identity{TaskID, Step, PermissionLabel, Audience}), ...)  (runner.go:766)
-                     FinishAttempt/SetStepState (runner.go:788-797)
+                     ledger AppendStep/StartAttempt (runner.go:748-754)
+                     Gateway.Execute(operation.With(ctx, Identity{TaskID, Step, PermissionLabel, Audience}), ...)  (runner.go:764)
+                     FinishAttempt/SetStepState (runner.go:787-791)
                                     │
                  Toolset = ToolGateway (admin) or HouseholdGateway (family)
                    ToolGateway.Store *statefile.Store, Reader *AgentReader       (gateway.go:110-117)
@@ -69,7 +70,7 @@ Console POST /api/v1/butlers/{name}/ask        chat adapter POST /api/v1/chat/me
 
 The loop owns very little state: `Runner.History []provider.Message` holds user/assistant text only, never tool traffic (`runner.go:233`; `keystone/butler/session.go:118-131`). Steps, attempts, traces, waits and evidence live in the ledger (`TaskLedger` `runner.go:138-180`, direct SQL under the coordinator lease at `keystone/butlerstore/butlerstore.go:92-96,374`). Pending approvals are not loop state: `propose_change` returns a `Plan` and `ResourceYAML` and never writes (`keystone/butler/tools_write.go:151`); the handler files the Plan after the turn. Limits are package constants, not the `ButlerSettings` row: 8 rounds per slice, 64 tool calls, 15 minute observation TTL (`keystone/butlerlive/serve.go:23,28,34`). Authority is re-checked before each slice, model round, tool call and final answer (`runner.go:545-566`).
 
-Everything runs in one binary under systemd (`deploy/systemd/keystone.service:12`); live Butlers are wired only on the coordinator (`keystone/cmd/keystone/main.go:1572-1667`). `packages/assistant-wildstone/package.yaml` installs no process (`:4-8`). Chat transports are the only separate containers: the `chat-adapter` binary dials out with a token that "holds the converse verb and nothing else" (`packages/chat-telegram/package.yaml:19-22,64-80`; `cli/cmd/chat-adapter/keystone.go:61-170`).
+Everything runs in one binary under systemd (`deploy/systemd/keystone.service:11`); live Butlers are wired only on the coordinator (`keystone/cmd/keystone/main.go:1572-1667`). `packages/assistant-wildstone/package.yaml` installs no process (`:4-8`). Chat transports are the only separate containers: the `chat-adapter` binary dials out with a token that "holds the converse verb and nothing else" (`packages/chat-telegram/package.yaml:19-22,64-81`; `cli/cmd/chat-adapter/keystone.go:61-170`).
 
 ### 1.3 Events, automation, routines
 
@@ -104,7 +105,7 @@ Each item names a place where the native loop reaches something an external runt
 | C1 | Runner constructed inline with a DB-bound `Authority`; no token, no principal on the wire | `serve.go:97-153` |
 | C2 | Gateway factory closes over `*runtimedb.DB`, `*statefile.Store`, `domestic.Gateway` | `main.go:1610-1660` |
 | C3 | Operator tools read the Statefile and node gateway directly | `gateway.go:110-117`; `keystone/butler/doc.go:21-30` |
-| C4 | Trust and identity travel in Go context (`operation.Identity`, secret-use context), not in a credential or a Wildstone-issued handle | `runner.go:766`; `operation/context.go:6-17`; `main.go:1633-1641` |
+| C4 | Trust and identity travel in Go context (`operation.Identity`, secret-use context), not in a credential or a Wildstone-issued handle | `runner.go:764`; `operation/context.go:6-17`; `main.go:1633-1641` |
 | C5 | Executors resolve household secrets from context-bound vault calls | `keystone/cmd/keystone/calendar_secret.go:10-38` |
 | C6 | Ledger checkpoints are direct SQL under the process's coordinator lease | `butlerstore.go:92-96,374` |
 | C7 | Provider clients and API keys are built in-process from the key file | `main.go:422-427`; `keystone/butler/provider/keystore.go:26-30` |
@@ -211,7 +212,7 @@ runtime ──(runtime credential + task handle + capability name + args)──�
    ◀──(result | waiting(reason) | denied(reason))────────────────────────────────┘
 ```
 
-Steps 3–7 are today's `ToolGateway`/`HouseholdGateway` dispatch (`gateway.go:378-409`; `household.go:238-268`) and today's ledger checkpoints (`runner.go:750-797`), moved from "called by the runner" to "called by the gateway on the runner's behalf". The only genuinely new step is 1–2: a credential and a handle instead of a closure and a context.
+Steps 3–7 are today's `ToolGateway`/`HouseholdGateway` dispatch (`gateway.go:378-403`; `household.go:648-694`) and today's ledger checkpoints (`runner.go:748-797`), moved from "called by the runner" to "called by the gateway on the runner's behalf". The only genuinely new step is 1–2: a credential and a handle instead of a closure and a context.
 
 ### 3.5 Memory boundary — decided
 
@@ -221,7 +222,7 @@ Steps 3–7 are today's `ToolGateway`/`HouseholdGateway` dispatch (`gateway.go:3
 
 Three rules:
 
-1. **Promotion goes through `remember`.** A runtime-local fact becomes household knowledge only by calling the `remember` capability, which records it with provenance, kind and confidence in the scope the caller may write (personal for the Person on the handle; `agent_local` for the Agent; household only where the Agent has household write eligibility), with the audience rules of `butlermemory.go:266` applied. Agents do not autonomously promote Personal into Household (DSN §11.4); a runtime is an Agent.
+1. **Promotion goes through `remember`.** A runtime-local fact becomes Wildstone-held knowledge only by calling the `remember` capability, which records it with provenance, kind and confidence in the scope the caller may write (personal for the Person on the handle; `agent_local` for the Agent; never household — as today, `remember` cannot create Household memory (`butlerstore/memory.go:140-141`), and promotion to Household stays a Person-approved product control, W033 C4), with the audience rules of `butlermemory.go:266` applied. Agents do not autonomously promote Personal into Household (DSN §11.4); a runtime is an Agent.
 2. **Runtime-local memory never confers authority.** The authority resolver does not read Wildstone's memory table (`butlermemory.go:8-13`); it cannot read a runtime's files at all. A runtime that "remembers" it was allowed something is exactly as authorised as one that does not.
 3. **Disclosure is filtered at the gateway, by destination and processing class.** `recall` binds `MemoryReadContext` from the task handle's Person, Agent and destination, as `BindMemoryRead` does today, and additionally withholds `cloud_processing: local_only` records from a runtime whose declared processing class is not `local_only`. Wildstone cannot verify which model an external runtime calls; it can refuse to hand protected content to a runtime the Owner did not declare local-only. This is the gateway-side replacement for wrapping the provider object (C10). Undeclared fails closed.
 
@@ -284,14 +285,15 @@ Owner at Console: create Agent (unchanged) ──▶ select runtime type
         ▼
 register runtime: Wildstone mints a runtime principal bound to this Agent,
                   shows the credential once (Console "consequential" freshness,
-                  W033 A4: minting any bearer credential)
+                  W033 A4.1: minting any bearer credential)
         │
         ▼
 authenticate: runtime presents the credential; Wildstone records health: connected
         │
         ▼
 negotiate: Wildstone offers the manifest narrowed by the Agent's effective authority;
-           runtime declares delivery mode and (Owner-attested) processing class
+           runtime declares delivery mode; the processing class is the one the
+           Owner declared at registration, never a claim the runtime makes
         │
         ▼
 assign permissions: unchanged Console flows — tools, members, Connections, routines,
@@ -303,7 +305,7 @@ connect: deliveries begin from the subscription cursor; heartbeat starts
 
 - **Who calls whom:** both directions, over two channels. The runtime calls Wildstone for everything with authority (capabilities, memory, work, proposals, notifications, heartbeat). Wildstone calls the runtime only to deliver (a Connection turn, a subscription match, an escalation, a proposal outcome) and to probe health. Nothing delivered grants anything; everything asked for is checked.
 - **Pull fallback:** a runtime that cannot accept inbound connections long-polls deliveries against its cursor, as integration adapters long-poll work today (`adapter.go:165,177`).
-- **Credential issue and rotation:** a runtime principal is a normal Keystone principal (`name, role, disabled, actingFor`), minted by an Owner at the Console under the consequential-freshness rule, rotated by minting a successor and disabling the predecessor. For a Wildstone-packaged runtime it is a `provided: true` package Secret reaching the container as env, like the chat-adapter token (`packages/chat-telegram/package.yaml:80`); for a user-managed runtime elsewhere it is pasted into that runtime's config. Same credential, same API — #334's "not a separate integration protocol".
+- **Credential issue and rotation:** a runtime principal is a normal Keystone principal (`name, role, disabled, actingFor`), minted by an Owner at the Console under the consequential-freshness rule, rotated by minting a successor and disabling the predecessor. For a Wildstone-packaged runtime it is a `provided: true` package Secret reaching the container as env, like the chat-adapter token (`packages/chat-telegram/package.yaml:81`); for a user-managed runtime elsewhere it is pasted into that runtime's config. Same credential, same API — #334's "not a separate integration protocol".
 - **Identity binding:** principal → Agent, stored by Wildstone, immutable for the principal's life. The Person on a call comes from the task handle Wildstone issued when it accepted the turn or matched the subscription; there is no runtime-side claim.
 - **Offline, queuing, revocation:** section 3.7.
 
@@ -472,7 +474,7 @@ Dependency-ordered. Each phase names what stays unchanged, what is new, and the 
 
 Following the ADR-W033 Part G convention, older ADRs remain historical records; this ADR amends where it conflicts and keeps everything else.
 
-- **ADR-W024 A5, "External agents" (amended).** Retained for an external agent that merely holds a `butler` token: read and propose, no domestic gateway. Amended for an external *runtime bound to a Wildstone Agent*: it acts as that Agent, whose sessions are principal-bound, redacted and bounded by the gateway rather than by the runtime, so the Agent sits behind the domestic gateway on exactly the native runtime's terms. A5's reason ("only its sessions are principal-bound, redacted, and bounded") is preserved by moving that property into the gateway.
+- **ADR-W024 A5, "Actions run through the `domestic` tier gateway", its "External agents" bullet (amended).** Retained for an external agent that merely holds a `butler` token: read and propose, no domestic gateway. Amended for an external *runtime bound to a Wildstone Agent*: it acts as that Agent, whose sessions are principal-bound, redacted and bounded by the gateway rather than by the runtime, so the Agent sits behind the domestic gateway on exactly the native runtime's terms. A5's reason ("only its sessions are principal-bound, redacted, and bounded") is preserved by moving that property into the gateway.
 - **ADR-W026 A10, "External agents are not surfaces" (amended).** Retained: a runtime never gets a surface, a chat binding or a chat credential, and "somebody else's agent, calling Wildstone" stays distinct from "Wildstone's Butler, reachable from Telegram". Added: a third thing, "Wildstone's Butler whose cognition runs in Hermes", which has the Butler's surface, bindings and Connections because the *Agent* has them, while the runtime holds only the runtime principal. The reasoning at ADR-W026 lines 158-166 for keeping `converse` off the `butler` row stands.
 - **ADR-W030 B3 (kept).** "Replace Wildstone with an external agent runtime" remains not selected. This ADR is the "separate compatibility decision" B3 anticipated, and it selects one contract with both native and external clients, not replacement.
 - **ADR-W017 A2, ADR-W006 A1, CONTRIBUTING ground rule 3 (strengthened).** "There is no private Butler channel" becomes a transport-level property for every runtime, native included, checked by a structural import test. The in-process closure path of section 1.6 is recorded as the deviation to close, not as compliant.
@@ -487,7 +489,7 @@ Following the ADR-W033 Part G convention, older ADRs remain historical records; 
 ## Answers to the exploration questions
 
 1. **What constitutes a Wildstone Agent today?** A `runtimedb.Butler` row (`butlers.go:99-140`): name, directive, surface, class, one assigned model, enabled state — plus members with revocation generation, tool controls and grants, Connections, routines, memory restrictions and settings hanging off it. Every Butler is owned by the Console holder and cannot create another (`butlers.go:17-22`). There is no `Agent` or `Runtime` type.
-2. **Where does the reasoning loop live?** In `butler.Runner.Run` (`runner.go:375-543`), constructed inline by `butlerlive.Butlers.Serve` (`serve.go:134-153`) inside the single Keystone process on the coordinator, driven by `provider.Provider.Chat` and a `Toolset`.
+2. **Where does the reasoning loop live?** In `butler.Runner.Run` (`runner.go:375-543`), constructed inline by `butlerlive.Butlers.Serve` (`serve.go:130-151`) inside the single Keystone process on the coordinator, driven by `provider.Provider.Chat` and a `Toolset`.
 3. **What state does it own?** Only `Runner.History` (user/assistant text, `runner.go:233`). Steps, attempts, traces, waits, evidence and budgets are in the ledger; proposals become Plans after the turn.
 4. **Which responsibilities are Wildstone-specific?** Identity and Person binding, the three-layer resolver and Connection ceiling, Plans and human approval, the domestic gateway and executors, secrets by reference, the event log and deterministic engine, routines as principals, the durable memory scopes with audiences, Connections and outbound delivery, audit.
 5. **Which are generic runtime functionality?** Model rounds and provider clients, prompt assembly, tool-call orchestration, conversation history, runtime-local memory and skills, retries and stall handling, sandboxing of the runtime's own workspace.
