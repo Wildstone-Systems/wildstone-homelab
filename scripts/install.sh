@@ -809,6 +809,49 @@ install_console() {
   log "installed the Console to $dir"
 }
 
+install_native_agent() {
+  # The native agent runtime (ADR-W039): the OpenAI Agents SDK sidecar,
+  # bundled into one file, beside the Node runtime it runs on. Shipped
+  # whole, per architecture, so a control-plane host still never needs
+  # Node, npm or a node_modules tree of its own (#34).
+  #
+  # Skipped, not failed, when the release predates the asset: the
+  # Butler's own loop does not need it.
+  local dir=/usr/lib/wildstone/native-agent
+  local stage=/usr/lib/wildstone/.native-agent.new
+  local old=/usr/lib/wildstone/.native-agent.old
+  local artifact="native-agent_linux_${ARCH}.tar.gz"
+  release_has "$artifact" || {
+    log "this release has no $artifact; the native agent runtime is not installed"
+    return 0
+  }
+  fetch_asset "$artifact"
+  install -d -m 0755 /usr/lib/wildstone
+  # Fixed paths, never a variable that could be empty, for the one rm -rf.
+  rm -rf /usr/lib/wildstone/.native-agent.new /usr/lib/wildstone/.native-agent.old
+  install -d -m 0755 "$stage"
+  # --no-same-owner for the reason install_console gives (F42).
+  tar --no-same-owner -xzf "$WORK/$artifact" -C "$stage"
+  if [ ! -x "$stage/bin/node" ] || [ ! -f "$stage/main.mjs" ]; then
+    fail "$artifact is missing bin/node or main.mjs"
+  fi
+  # Staged and swapped by rename, like fetch_binary: a sidecar that is
+  # mid-job keeps running from the old files it already has open.
+  if [ -d "$dir" ]; then
+    mv "$dir" "$old"
+  fi
+  mv "$stage" "$dir"
+  rm -rf /usr/lib/wildstone/.native-agent.old
+  # A self-check that loads the SDK and calls no model. A host whose C
+  # library is too old for this Node fails here, and it is reported
+  # rather than fatal: nothing depends on the runtime yet.
+  if "$dir/bin/node" "$dir/main.mjs" --health 2>/dev/null | grep -q '"type":"ready"'; then
+    log "installed the native agent runtime to $dir ($(tr '\n' ' ' < "$dir/VERSION"))"
+  else
+    log "WARNING: installed the native agent runtime to $dir, but its self-check failed: run '$dir/bin/node $dir/main.mjs --health' to see why"
+  fi
+}
+
 install_unit() {
   # install_unit <name>: write the unit from stdin, reload, enable+restart,
   # then gate on the service actually staying up. Restart=on-failure means
@@ -1601,6 +1644,7 @@ if [ "$ROLE" = keystone ]; then
   [ -n "$CONSOLE_DIR" ] || install_console
   [ -n "$CATALOG_DIR" ] || install_packages
   [ -n "$WALLPAPER_DIR" ] || install_wallpapers
+  install_native_agent
   if [ -n "$CONSOLE_DIR" ]; then
     [ -d "$CONSOLE_DIR" ] || fail "--console-dir $CONSOLE_DIR does not exist (build the Console elsewhere and copy dist/ here)"
     KEYSTONE_ARGS="$KEYSTONE_ARGS -console-dir $CONSOLE_DIR"

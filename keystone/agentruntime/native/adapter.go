@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -60,6 +61,17 @@ const maxLine = 8 << 20
 
 // maxText bounds the output, question and reason kept in a Status.
 const maxText = 64 << 10
+
+// DefaultInstallDir is where install.sh puts the release's
+// native-agent_linux_<arch>.tar.gz: a Node runtime at bin/node and the
+// bundled sidecar at main.mjs (scripts/build-native-agent.sh).
+const DefaultInstallDir = "/usr/lib/wildstone/native-agent"
+
+// InstalledCommand is the Config.Command for a runtime installed from a
+// release package into dir.
+func InstalledCommand(dir string) []string {
+	return []string{filepath.Join(dir, "bin", "node"), filepath.Join(dir, "main.mjs")}
+}
 
 // Model configures which model the sidecar talks to. It stays behind
 // this adapter: nothing in the AgentRuntime contract names a provider.

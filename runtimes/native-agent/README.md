@@ -25,6 +25,18 @@ WILDSTONE_NATIVE_AGENT_SIDECAR=$PWD/dist/src/main.js \
   go -C ../../keystone test -run '^TestE2E' ./agentruntime/native
 ```
 
+## Release package
+
+```sh
+npm ci && npm run bundle                       # → dist/bundle/main.mjs
+../../scripts/build-native-agent.sh amd64 out  # → out/native-agent_linux_amd64.tar.gz
+```
+
+The archive holds a pinned, checksum-verified Node (`bin/node`), the bundle
+(`main.mjs`) and the licenses. `install.sh` puts it in
+`/usr/lib/wildstone/native-agent`. To bump Node, change the version and both
+hashes at the top of `scripts/build-native-agent.sh`.
+
 ## Run
 
 ```sh

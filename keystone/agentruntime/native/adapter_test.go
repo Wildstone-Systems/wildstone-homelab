@@ -590,3 +590,11 @@ func TestJobValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestInstalledCommand(t *testing.T) {
+	got := InstalledCommand(DefaultInstallDir)
+	want := []string{"/usr/lib/wildstone/native-agent/bin/node", "/usr/lib/wildstone/native-agent/main.mjs"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("InstalledCommand = %v, want %v (install.sh and build-native-agent.sh use this layout)", got, want)
+	}
+}

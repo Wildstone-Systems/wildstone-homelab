@@ -21,7 +21,12 @@ for (const level of ['log', 'info', 'warn', 'debug'] as const) {
 
 const API_KEY_ENV = 'WILDSTONE_AGENT_API_KEY';
 
+// Stamped in by scripts/bundle.mjs: a bundled sidecar has no
+// node_modules to read the SDK's version from.
+declare const __AGENTS_SDK_VERSION__: string | undefined;
+
 function engineVersion(): string {
+  if (typeof __AGENTS_SDK_VERSION__ === 'string') return __AGENTS_SDK_VERSION__;
   try {
     const require = createRequire(import.meta.url);
     const pkgPath = require.resolve('@openai/agents-core').replace(/dist[\\/].*$/, 'package.json');

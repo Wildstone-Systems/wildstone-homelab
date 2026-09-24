@@ -23,7 +23,14 @@ import (
 //	(cd runtimes/native-agent && npm ci && npm run build)
 //	WILDSTONE_NATIVE_AGENT_SIDECAR=$PWD/runtimes/native-agent/dist/src/main.js \
 //	  go test ./keystone/agentruntime/native -run E2E
-const sidecarPathEnv = "WILDSTONE_NATIVE_AGENT_SIDECAR"
+//
+// WILDSTONE_NATIVE_AGENT_NODE picks the Node to run it with (default:
+// node on PATH). CI sets it to the Node inside the release package, so
+// the package itself is what gets tested.
+const (
+	sidecarPathEnv = "WILDSTONE_NATIVE_AGENT_SIDECAR"
+	sidecarNodeEnv = "WILDSTONE_NATIVE_AGENT_NODE"
+)
 
 func realAdapter(t *testing.T, script string) *Adapter {
 	t.Helper()
@@ -31,9 +38,12 @@ func realAdapter(t *testing.T, script string) *Adapter {
 	if path == "" {
 		t.Skip(sidecarPathEnv + " not set; see the comment above")
 	}
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node not installed")
+	node := os.Getenv(sidecarNodeEnv)
+	if node == "" {
+		var err error
+		if node, err = exec.LookPath("node"); err != nil {
+			t.Skip("node not installed")
+		}
 	}
 	a, err := New(Config{
 		Command: []string{node, path},

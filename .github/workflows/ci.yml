@@ -103,6 +103,12 @@ jobs:
             || { echo "release.yml no longer produces wallpapers.tar.gz"; exit 1; }
           grep -q 'wallpapers\.tar\.gz' scripts/install.sh \
             || { echo "install.sh no longer fetches wallpapers.tar.gz"; exit 1; }
+          grep -q 'build-native-agent\.sh' .github/workflows/release.yml \
+            || { echo "release.yml no longer builds native-agent_linux_<arch>.tar.gz"; exit 1; }
+          grep -q 'native-agent_linux_' scripts/build-native-agent.sh \
+            || { echo "build-native-agent.sh no longer produces native-agent_linux_<arch>.tar.gz"; exit 1; }
+          grep -q 'native-agent_linux_' scripts/install.sh \
+            || { echo "install.sh no longer fetches native-agent_linux_<arch>.tar.gz"; exit 1; }
           # And the pictures themselves are still there to be packed: an
           # empty wallpapers/ would produce a valid tarball of nothing
           # and every theme would quietly lose its picture again.
@@ -155,12 +161,31 @@ jobs:
         run: cd runtimes/native-agent && npm ci
       - name: typecheck + sidecar tests
         run: cd runtimes/native-agent && npm test
-      # The adapter's own tests (in the go job) use a fake sidecar. These
-      # run the real one — the real SDK loop, with a scripted model — so
-      # protocol.go and protocol.ts cannot drift apart unnoticed.
-      - name: keystone ↔ sidecar end-to-end
+      # Build the release package exactly as release.yml does, then run
+      # the end-to-end tests against what is INSIDE it: its own Node and
+      # its bundled sidecar. The adapter's own tests (in the go job) use
+      # a fake sidecar; these use the real SDK loop with a scripted model,
+      # so protocol.go and protocol.ts cannot drift apart unnoticed, and a
+      # package that would not run on an installed host fails here rather
+      # than after a release.
+      - name: build release package (amd64)
+        # Downloads are verified against the hashes pinned in the script
+        # every time, so reusing the runner's cache cannot change what
+        # gets packaged.
+        env:
+          NODE_CACHE: ${{ runner.tool_cache }}/wildstone-node
         run: |
-          WILDSTONE_NATIVE_AGENT_SIDECAR="$PWD/runtimes/native-agent/dist/src/main.js" \
+          set -euo pipefail
+          (cd runtimes/native-agent && npm run bundle)
+          scripts/build-native-agent.sh amd64 "$RUNNER_TEMP/native-agent-dist"
+          rm -rf "$RUNNER_TEMP/native-agent"
+          mkdir -p "$RUNNER_TEMP/native-agent"
+          tar -xzf "$RUNNER_TEMP/native-agent-dist/native-agent_linux_amd64.tar.gz" -C "$RUNNER_TEMP/native-agent"
+          "$RUNNER_TEMP/native-agent/bin/node" "$RUNNER_TEMP/native-agent/main.mjs" --health
+      - name: keystone ↔ packaged sidecar end-to-end
+        run: |
+          WILDSTONE_NATIVE_AGENT_NODE="$RUNNER_TEMP/native-agent/bin/node" \
+          WILDSTONE_NATIVE_AGENT_SIDECAR="$RUNNER_TEMP/native-agent/main.mjs" \
             go -C keystone test -race -count=1 -run '^TestE2E' -v ./agentruntime/native
         env:
           CGO_ENABLED: "1"

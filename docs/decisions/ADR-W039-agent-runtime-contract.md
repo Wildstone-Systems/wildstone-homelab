@@ -112,6 +112,29 @@ It talks to Keystone over newline-delimited JSON on stdin and stdout
 - One process per run keeps the watchdog simple: cancelling or timing out a
   run kills that process, with no shared state to clean up.
 
+## Packaging
+
+- A release carries `native-agent_linux_<arch>.tar.gz` for amd64 and arm64,
+  built by `scripts/build-native-agent.sh`. Each archive holds:
+  - `bin/node`: the official Node LTS build. The version and the SHA-256 of
+    each architecture are pinned in the script, and a download that doesn't
+    match is refused.
+  - `main.mjs`: the sidecar bundled into a single file with esbuild, so no
+    `node_modules` is needed.
+  - `THIRD_PARTY_LICENSES.txt`, `LICENSE.node` and a `VERSION` file.
+- `install.sh` verifies the archive against `checksums.txt` and unpacks it to
+  `/usr/lib/wildstone/native-agent` (`native.DefaultInstallDir`;
+  `native.InstalledCommand` is the matching `Config.Command`).
+  - It installs into a staging directory and renames it into place, so a
+    sidecar that is mid-job keeps running.
+  - It then runs the self-check (`--health`). A failure is reported but does
+    not fail the install, because nothing depends on the runtime yet.
+  - It is skipped for releases that predate the asset.
+- `uninstall.sh` removes it.
+- A control-plane host still needs no Node of its own (#34).
+- CI builds the amd64 package the same way the release does, and runs the
+  end-to-end tests with the package's own Node and bundle.
+
 ## Testing
 
 - `native/adapter_test.go` covers every guardrail against a scripted fake
@@ -128,7 +151,7 @@ It talks to Keystone over newline-delimited JSON on stdin and stdout
 
 1. Switch `butlerlive` to the native runtime behind a per-deployment
    setting. This needs a `Recorder` over the Butler task ledger, so native
-   runs keep ADR-W030's durable evidence and fencing, and packaging for the
-   sidecar (the Node runtime and `dist/`) in the release.
+   runs keep ADR-W030's durable evidence and fencing. The sidecar is already
+   installed at `native.DefaultInstallDir` (see Packaging).
 2. Hermes and OpenClaw adapters implement `AgentRuntime`, reusing
    `agentruntime.Guard` so every runtime stops for the same reasons.
