@@ -186,10 +186,10 @@ func (s *Server) agentInvoke(r *http.Request, id principal.Identity) (any, int, 
 	return res, http.StatusOK, nil
 }
 
-// agentRecall is POST /api/v1/agent/recall. Not implemented until
-// ADR-W039 Phase 3 (agentgateway.Gateway.Recall); the route exists now
-// so a runtime gets a clear 501 rather than a 404 for a family ADR-W040
-// names.
+// agentRecall is POST /api/v1/agent/recall (ADR-W039 Phase 3,
+// agentgateway.Gateway.Recall, #338): a structured search of Wildstone
+// memory for the reader on the handle, disclosed exactly as the
+// "recall" tool discloses it over Invoke.
 func (s *Server) agentRecall(r *http.Request, id principal.Identity) (any, int, error) {
 	ctx, code, err := s.agentContext(r, id)
 	if err != nil {
