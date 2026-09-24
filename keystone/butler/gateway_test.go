@@ -128,7 +128,10 @@ func TestToolSpecs_IncludesAllToolsSorted(t *testing.T) {
 		"describe_capabilities", "diagnose", "dry_run_automation", "explain_resource",
 		"get_automation_schema", "get_capability_status", "get_commitment_schema",
 		"get_commitments", "get_container_logs",
-		"get_health", "get_plan", "get_system_overview", "propose_change",
+		"get_health", "get_plan", "get_system_overview",
+		"host.container_logs", "host.container_restart", "host.container_stats",
+		"host.disk_usage", "host.prune_images", "host.reconcile_poke", "host.unit_status",
+		"propose_change",
 	}
 	if len(specs) != len(want) {
 		t.Fatalf("ToolSpecs() = %d tools, want %d: %+v", len(specs), len(want), specs)

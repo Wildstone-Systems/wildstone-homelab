@@ -110,6 +110,7 @@ func main() {
 	calendarURL := flag.String("calendar-url", "", "CalDAV collection the calendar.* household actions read and write, e.g. http://radicale:5232/wildstone-calendar/household/ (ADR-W034). Empty leaves them all unregistered, so a Butler does not offer the household a calendar this deployment has not got. The password comes ONLY from CALENDAR_PASSWORD, never a flag")
 	calendarUser := flag.String("calendar-user", "", "directory account the calendar actions sign in to the CalDAV collection as; its password comes from CALENDAR_PASSWORD")
 	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia). Empty fails closed. This names ONE trust boundary and it now gates TWO things: the household review page (ADR-W030 A8.1), and Console sign-in by forwarded identity (ADR-W032) — a request from one of these addresses carrying Remote-User and a Remote-Groups list containing console_users is authenticated as that person, with admin authority. Setting this does not by itself grant anyone the Console: they must also be in the console_users directory group, which packages/wildstone-console declares")
+	hostOpsEnabled := flag.Bool("hostops-enabled", false, "enable the host.* executor family (ADR-W039 Phase 6/H7, #353): Tier 3 host administration (container logs/stats/restart, disk usage, systemd unit status, image pruning, a reconcile poke) through existing Wardstone ops, never a privileged container or a shell. Off by default; an Owner still has to grant the family to a specific Agent (opt-in) and confirm every mutating call before anything runs")
 	flag.Parse()
 
 	if *showVersion {
@@ -125,6 +126,7 @@ func main() {
 		CalendarURL: *calendarURL, CalendarUser: *calendarUser,
 		Ingress:            splitNonEmpty(*householdIngress),
 		ConsoleEntryWindow: *consoleEntry, ConsoleStepUpWindow: *consoleStepUp,
+		HostOpsEnabled: *hostOpsEnabled,
 	}
 	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, *wallpaperDir, butlerCfg, householdCfg, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
@@ -270,6 +272,18 @@ type householdConfig struct {
 	// Its password arrives in CALENDAR_PASSWORD, never in a flag — the
 	// same division -ntfy-url and NTFY_TOKEN already make.
 	CalendarUser string
+	// HostOpsEnabled turns on the host.* executor family (ADR-W039 H7,
+	// #353): Tier 3 "host administration" through Wildstone executors —
+	// never a privileged container, never a shell. Off by default, like
+	// every other optional executor here (NtfyURL, CalendarURL): a
+	// household that never sets -hostops-enabled never has host.*
+	// declared, registered, or offered to any Agent. Even turned on, the
+	// family is reachable only by an Owner-class Agent holding an
+	// explicit opt-in grant (keystone/butler/tools_hostops.go) and its
+	// mutating calls still need a Person to confirm each one — this flag
+	// makes Tier 3 POSSIBLE, an Owner's own grant and confirmation make
+	// it happen.
+	HostOpsEnabled bool
 }
 
 // confirmWindow is how long a confirm-tier question stays open, and
@@ -809,10 +823,26 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// names a tool this deployment has not wired is refused with a
 	// reason on the household stream rather than failing silently.
 	actions := &domestic.Gateway{Authority: db, Log: log}
-	if cat != nil {
-		// Only with a catalog: DeclaredFromPackages over an empty set
-		// would refuse every action, which is not what "no catalog" means.
-		actions.Declared = domestic.DeclaredFromPackages(agentToolSources(cat))
+	if cat != nil || householdCfg.HostOpsEnabled {
+		// Only with a catalog OR Tier 3 host ops: DeclaredFromPackages
+		// over an empty set would refuse every action, which is not what
+		// "no catalog" means.
+		sources := agentToolSources(cat)
+		if sources == nil {
+			// agentToolSources(nil) is nil rather than BuiltinAgentTools,
+			// so that "no catalog" and "no Declared at all" stayed the
+			// same case. Host ops needs Declared regardless, so this is
+			// the one place that still needs Keystone's own builtins.
+			sources = append([]domestic.AgentToolSource(nil), domestic.BuiltinAgentTools...)
+		}
+		if householdCfg.HostOpsEnabled {
+			// Tier 3 host administration (ADR-W039 H7, #353): Keystone's
+			// own capability, declared exactly like BuiltinAgentTools'
+			// propose_timezone — no package installs "host", Wildstone's
+			// own executors do.
+			sources = append(sources, domestic.HostOpsAgentTools)
+		}
+		actions.Declared = domestic.DeclaredFromPackages(sources)
 	}
 	// Asking a household member to confirm one action (ADR-W024 A5.1).
 	//
@@ -924,6 +954,25 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			if declaresSend {
 				chatCapabilities = append(chatCapabilities, capName)
 			}
+		}
+	}
+
+	// The host.* executor family (ADR-W039 §3.4, §5.4; H7, #353): Tier 3
+	// host administration through the SAME Wardstone gateway and
+	// reconcile loop every other Keystone surface uses — never a
+	// privileged container, never a shell (ADR-W003 A1). Off by default
+	// (householdCfg.HostOpsEnabled); an Owner enabling Tier 3 is a
+	// deliberate, deployment-wide flag flip, and reaching any one of its
+	// tools additionally needs the opt-in grant keystone/butler/
+	// tools_hostops.go requires per Agent.
+	if householdCfg.HostOpsEnabled {
+		hostOps := &domestic.HostOps{
+			Authority:     db,
+			Node:          &domestic.GatewayHostNode{Gateway: gw},
+			ReconcilePoke: svc.Poke,
+		}
+		for _, e := range hostOps.Executors() {
+			actions.Register(e)
 		}
 	}
 
@@ -1369,6 +1418,15 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			mode, _ = probeButler(context.Background(), bp, log)
 		}
 		bgw := butler.NewToolGateway(state, &butler.AgentReader{Gateway: gw})
+		// The host.* tools dispatch through the SAME domestic Gateway a
+		// household rule's action does (ADR-W039 H7, #353) — one tier
+		// check, one confirm flow, one audit line, whichever surface
+		// called. Only wired when Tier 3 is on: gw.HostActions == nil is
+		// what makes every host.* tool report itself unavailable in the
+		// manifest when it is not (butler/manifest.go's operatorWired).
+		if householdCfg.HostOpsEnabled {
+			bgw.HostActions = actions
+		}
 		// Where the household's commitments stand, for the agent's read
 		// tool. The adapter is in this package because neither the pass
 		// nor the model should import the other (commitmentstandings.go).
@@ -1419,6 +1477,18 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			// deployment has not installed will promise the household
 			// something that cannot happen (ADR-W026 A8).
 			for _, tool := range actions.Tools() {
+				// host.* is registered on the SAME domestic Gateway
+				// (ADR-W039 H7, #353) but must never enter a household
+				// rule's or a family session's vocabulary: it is an
+				// Owner-class, opt-in-only surface, reached from
+				// keystone/butler's ToolGateway, never from an
+				// Automation or the HouseholdGateway a household member
+				// talks to. Excluded unconditionally, not gated on
+				// CapabilityEnabled like chat/filedrop below, because
+				// there is no household-visible "on" state for it at all.
+				if capName, _, ok := strings.Cut(tool, "."); ok && capName == domestic.HostOpsCapability {
+					continue
+				}
 				// filedrop is registered from the catalog too, and is
 				// gated on the install for the same reason: a Butler
 				// that lists "find_file" to a household with no drop
