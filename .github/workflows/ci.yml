@@ -138,6 +138,33 @@ jobs:
       - name: contrast check
         run: cd console && npm run contrast-check
 
+  native-agent:
+    name: native agent runtime (OpenAI Agents SDK sidecar, #357)
+    runs-on: [self-hosted, dev-services]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: runtimes/native-agent/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: install
+        run: cd runtimes/native-agent && npm ci
+      - name: typecheck + sidecar tests
+        run: cd runtimes/native-agent && npm test
+      # The adapter's own tests (in the go job) use a fake sidecar. These
+      # run the real one — the real SDK loop, with a scripted model — so
+      # protocol.go and protocol.ts cannot drift apart unnoticed.
+      - name: keystone ↔ sidecar end-to-end
+        run: |
+          WILDSTONE_NATIVE_AGENT_SIDECAR="$PWD/runtimes/native-agent/dist/src/main.js" \
+            go -C keystone test -race -count=1 -run '^TestE2E' -v ./agentruntime/native
+        env:
+          CGO_ENABLED: "1"
+
   go:
     name: go (${{ matrix.goarch }})
     runs-on: [self-hosted, dev-services]

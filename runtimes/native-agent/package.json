@@ -1,0 +1,26 @@
+{
+  "name": "wildstone-native-agent",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Wildstone native agent runtime sidecar: the OpenAI Agents SDK reasoning loop behind Keystone's AgentRuntime contract (issue #357).",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "dist/src/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@openai/agents-core": "0.18.0",
+    "@openai/agents-openai": "0.18.0",
+    "openai": "7.23.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.2",
+    "typescript": "5.9.3"
+  }
+}
