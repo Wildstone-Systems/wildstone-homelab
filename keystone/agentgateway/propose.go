@@ -2,6 +2,7 @@ package agentgateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -30,6 +31,9 @@ func (g *Gateway) Propose(ctx context.Context, req agentapi.ProposeRequest) (age
 	}
 	if g.Proposals.DB == nil {
 		return agentapi.ProposalRef{}, fmt.Errorf("%w: proposal filing is not wired on this gateway", ErrRefused)
+	}
+	if req.Kind == agentapi.ProposableAgentSubscription {
+		return g.proposeSubscription(ctx, s, req)
 	}
 	if len(req.Document) == 0 {
 		return agentapi.ProposalRef{}, fmt.Errorf("%w: propose needs a document", ErrRefused)
@@ -63,15 +67,58 @@ func (g *Gateway) Propose(ctx context.Context, req agentapi.ProposeRequest) (age
 	return agentapi.ProposalRef{ID: view.ID}, nil
 }
 
-// Notify is not implemented in this phase. Outbound text through the
-// task's Connection — admission, disclosure by destination, quiet
-// hours, dedupe, the adapter's credential — is the Events family, and
-// Phase 4 supplies it (ADR-W039 §4 item 8). The one outbound notice
-// the native runner sends today, the stalled-task notice, stays on
-// its StallNotifier until then.
-func (g *Gateway) Notify(context.Context, agentapi.NotifyRequest) error {
-	return &agentapi.NotImplementedError{
-		Method: "Notify", Phase: "Phase 4",
-		Reason: "outbound delivery through the task's Connection is the Events family",
+// proposeSubscription is Propose's branch for
+// agentapi.ProposableAgentSubscription (ADR-W039 §3.6, Phase 4, #341):
+// an Owner-approved standing watch, filed the same way any other
+// proposal is — same principal, same audit trail — but through
+// proposals.FileSubscription rather than the resource-document path,
+// because a subscription is neither desired state nor a Statefile
+// document.
+//
+// The ONE thing this gateway enforces that FileSubscription cannot: the
+// capability set may only narrow. A tool this Agent's session is not
+// currently offered — read-only or not, held or not — is refused right
+// here, however the proposal names it, before a Plan is even filed for
+// an Owner to look at. Re-checked again, live, at every use a matched
+// Task makes of it (agentgateway.checkSubscriptionScope) — this is the
+// proposal-time half of that same guarantee.
+func (g *Gateway) proposeSubscription(ctx context.Context, s *session, req agentapi.ProposeRequest) (agentapi.ProposalRef, error) {
+	var sub agentapi.SubscriptionProposal
+	if err := json.Unmarshal(req.Document, &sub); err != nil {
+		return agentapi.ProposalRef{}, fmt.Errorf("%w: %v", ErrRefused, err)
 	}
+	if sub.MatchKind == "" {
+		return agentapi.ProposalRef{}, fmt.Errorf("%w: a subscription needs a match kind", ErrRefused)
+	}
+	if len(sub.Capabilities) == 0 {
+		return agentapi.ProposalRef{}, fmt.Errorf("%w: a subscription needs at least one capability", ErrRefused)
+	}
+	offered := map[string]bool{}
+	for _, spec := range s.toolset.OfferedSpecs(s.readOnly) {
+		offered[spec.Name] = true
+	}
+	for _, c := range sub.Capabilities {
+		if !offered[c] {
+			return agentapi.ProposalRef{}, fmt.Errorf(
+				"%w: %q is not a tool %s currently holds; a subscription can only narrow, never widen, what its Agent already has",
+				ErrRefused, c, s.hc.Butler.Name)
+		}
+	}
+	id, err := g.runtimeIdentity(ctx, s)
+	if err != nil {
+		return agentapi.ProposalRef{}, err
+	}
+	summary := strings.TrimSpace(req.Rationale)
+	if summary == "" {
+		summary = fmt.Sprintf("%s subscribes to %s events", s.hc.Butler.Name, sub.MatchKind)
+	}
+	view, err := proposals.FileSubscription(g.Proposals, id, proposals.SubscriptionRequest{
+		Butler: s.hc.Butler.Name, MatchKind: sub.MatchKind, MatchJSON: string(sub.Match),
+		Audience: sub.Audience, CapabilitySet: sub.Capabilities, BudgetJSON: string(sub.Budget),
+		Summary: summary,
+	})
+	if err != nil {
+		return agentapi.ProposalRef{}, fmt.Errorf("%w: %v", ErrRefused, err)
+	}
+	return agentapi.ProposalRef{ID: view.ID}, nil
 }

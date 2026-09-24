@@ -310,6 +310,82 @@ func File(deps Deps, id principal.Identity, req Request, opts Options) (any, int
 	return ViewPlan(rec), http.StatusCreated, nil
 }
 
+// SubscriptionRequest is what FileSubscription needs beyond a plain
+// Request: which Agent the subscription is for and the matcher/
+// capability/budget document a runtime's ProposeRequest carries
+// (ADR-W039 §3.6, Phase 4, #341). It is proposals' own shape — not
+// agentapi.SubscriptionProposal — so this package never imports
+// agentapi, which agentgateway already forbids by import direction.
+type SubscriptionRequest struct {
+	Butler        string
+	MatchKind     string
+	MatchJSON     string
+	Audience      string
+	CapabilitySet []string
+	BudgetJSON    string
+	Summary       string
+}
+
+// FileSubscription proposes an Owner-approved event subscription
+// (ADR-W039 §3.6, Phase 4, #341): a Plan record like any other, but
+// carrying a plan.SubscriptionChange instead of Put/Delete — the same
+// shape a household-setting proposal takes, because a subscription is
+// neither desired state nor a Statefile document, and approving it
+// enables a row in agent_subscriptions rather than committing anything
+// to the Statefile. Nothing here is enabled: enabling happens only
+// where the approve path (keystone/api's approvePlan Subscription
+// branch) calls runtimedb.ApproveAgentSubscription.
+func FileSubscription(deps Deps, id principal.Identity, req SubscriptionRequest) (PlanView, error) {
+	if req.Butler == "" {
+		return PlanView{}, fmt.Errorf("a subscription needs the agent it is for")
+	}
+	if req.MatchKind == "" {
+		return PlanView{}, fmt.Errorf("a subscription needs a match kind")
+	}
+	if len(req.CapabilitySet) == 0 {
+		return PlanView{}, fmt.Errorf("a subscription needs at least one capability")
+	}
+	if req.Summary == "" {
+		req.Summary = fmt.Sprintf("%s subscribes to %s events", req.Butler, req.MatchKind)
+	}
+	matchJSON := req.MatchJSON
+	if matchJSON == "" {
+		matchJSON = "{}"
+	}
+	budgetJSON := req.BudgetJSON
+	if budgetJSON == "" {
+		budgetJSON = "{}"
+	}
+	capsJSON, err := json.Marshal(req.CapabilitySet)
+	if err != nil {
+		return PlanView{}, err
+	}
+	stored := StoredProposal{
+		Summary: req.Summary,
+		Subscription: &plan.SubscriptionChange{
+			Butler: req.Butler, MatchKind: req.MatchKind, MatchJSON: matchJSON,
+			Audience: req.Audience, CapabilitySet: string(capsJSON), BudgetJSON: budgetJSON,
+		},
+	}
+	if head, err := deps.State.Head(); err == nil {
+		stored.BasedOnHead = head
+	}
+	raw, err := json.Marshal(stored)
+	if err != nil {
+		return PlanView{}, err
+	}
+	planID, err := deps.DB.InsertPlan(id.Name, id.ActingFor, req.Summary, "low", string(raw), true)
+	if err != nil {
+		return PlanView{}, fmt.Errorf("filing a subscription proposal: %w", err)
+	}
+	deps.event("plan.proposed", planID, id, req.Summary)
+	rec, err := deps.DB.GetPlan(planID)
+	if err != nil {
+		return PlanView{}, err
+	}
+	return ViewPlan(rec), nil
+}
+
 // previewOf is what a dry run returns: the plan, and the secrets only
 // the operator can supply (ADR-W021 A5).
 func previewOf(p *plan.Plan, puts []resource.Resource) map[string]any {

@@ -154,7 +154,7 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 	}
 
 	if stored.Routine != nil {
-		if len(stored.Put) > 0 || len(stored.Delete) > 0 || stored.Setting != nil || stored.Plan != nil {
+		if len(stored.Put) > 0 || len(stored.Delete) > 0 || stored.Setting != nil || stored.Subscription != nil || stored.Plan != nil {
 			return nil, http.StatusBadRequest, fmt.Errorf("routine Plans cannot include infrastructure or settings changes")
 		}
 		if body, code, err := s.freshOwnerReview(r, id); err != nil {
@@ -193,6 +193,13 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 	// does not wait on the Statefile head (ADR-W033 E2).
 	if stored.Setting != nil && len(stored.Put) == 0 && len(stored.Delete) == 0 {
 		return s.applySettingPlan(planID, stored, id)
+	}
+
+	// A subscription is not desired state either (ADR-W039 §3.6, Phase
+	// 4, #341): approving it enables a row in agent_subscriptions, and
+	// does not wait on the Statefile head.
+	if stored.Subscription != nil && len(stored.Put) == 0 && len(stored.Delete) == 0 {
+		return s.applySubscriptionPlan(planID, stored, id)
 	}
 
 	head, err := s.State.Head()

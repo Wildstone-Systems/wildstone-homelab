@@ -652,4 +652,19 @@ var Columns = []Column{
 		"0084: an opaque per-subscription resume position (ADR-W039 §3.6), never a Person reference"},
 	{"agent_deliveries", "acked_at", NotAPerson,
 		"0084: an RFC3339 timestamp of acknowledgement, or empty while pending"},
+	{"agent_deliveries", "expired_at", NotAPerson,
+		"0087: an RFC3339 timestamp of when the long-poll consumer marked this delivery expired, or empty"},
+
+	// 0086 (ADR-W039 Phase 4, #341): agent_subscriptions, the Events
+	// family's Owner-approved standing watch.
+	{"agent_subscriptions", "match_kind", NotAPerson,
+		"0086: names the matcher keystone/automation/subscriptions.go runs, not a party"},
+	{"agent_subscriptions", "match_json", NotAPerson,
+		"0086: the matcher's own parameters, a serialized blob"},
+	{"agent_subscriptions", "capability_set", NotAPerson,
+		"0086: a JSON array of tool names a matched Task may use, never a Person reference"},
+	{"agent_subscriptions", "approved_by", Actor,
+		"0086: the Owner who approved this subscription's Plan, id.Name from the same approve path as every other Plan"},
+	{"agent_subscriptions", "approved_at", NotAPerson,
+		"0086: an RFC3339 timestamp of approval, or empty while unapproved"},
 }

@@ -50,6 +50,12 @@ type StoredProposal struct {
 	// and approval applies it. A setting-only proposal carries no Put or
 	// Delete and does not depend on the Statefile head.
 	Setting *SettingChange `json:"setting,omitempty"`
+	// Subscription is an Owner-approved event subscription this proposal
+	// creates (ADR-W039 §3.6, Phase 4, #341): an Agent proposes, an
+	// Owner approves, and approval is what enables it — never before.
+	// Like Setting, it carries no Put or Delete and does not depend on
+	// the Statefile head; it is not desired state at all.
+	Subscription *SubscriptionChange `json:"subscription,omitempty"`
 }
 
 // SettingChange is one household setting a proposal changes.
@@ -77,6 +83,30 @@ type CapabilityOrigin struct {
 	Package string            `json:"package"`
 	Version string            `json:"version"`
 	Params  map[string]string `json:"params,omitempty"`
+}
+
+// SubscriptionChange is one Owner-approved event subscription a proposal
+// creates (ADR-W039 §3.6, Phase 4, #341). Approval is what turns this
+// into an enabled row in agent_subscriptions (migration 0086) — nothing
+// here is enabled by proposing it.
+type SubscriptionChange struct {
+	// Butler is the Agent this subscription is for.
+	Butler string `json:"butler"`
+	// MatchKind names the matcher the automation evaluator runs
+	// (keystone/automation/subscriptions.go); MatchJSON is its params,
+	// opaque here.
+	MatchKind string `json:"matchKind"`
+	MatchJSON string `json:"matchJson"`
+	// Audience is who a matched Task's output may be disclosed to.
+	Audience string `json:"audience,omitempty"`
+	// CapabilitySet is a JSON array of tool names a matched Task may
+	// use. It can only ever narrow what the Agent already holds, never
+	// widen it, however it is named — enforced live, at every use, from
+	// the Agent's CURRENT capability set, not from what was true when
+	// this was approved.
+	CapabilitySet string `json:"capabilitySet"`
+	// BudgetJSON bounds what a matched Task may spend.
+	BudgetJSON string `json:"budgetJson,omitempty"`
 }
 
 // RoutineChange is the exact routine version an Owner reviews. Output audience

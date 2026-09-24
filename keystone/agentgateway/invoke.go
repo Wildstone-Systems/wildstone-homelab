@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/operation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/proposals"
@@ -66,6 +67,20 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 		g.trace(s, butler.LedgerTraceEvent{
 			Type:    butler.TraceDenial,
 			Payload: jsonPayload(map[string]any{"authority": "withdrawn", "at": "tool dispatch"}),
+		})
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeDenied, Reason: err.Error()}, nil
+	}
+
+	// 1b. A Task a subscription spawned may only use ITS capability set,
+	// re-read live from the subscription row (ADR-W039 §3.6): narrowing
+	// or disabling a subscription after it already matched still binds
+	// the Task it spawned, and a tool absent from that set is refused
+	// here however the Toolset itself would answer.
+	if err := g.checkSubscriptionScope(s, req.Tool); err != nil {
+		g.trace(s, butler.LedgerTraceEvent{
+			Type:      butler.TraceDenial,
+			SourceIDs: []string{req.Tool},
+			Payload:   jsonPayload(map[string]any{"authority": "withdrawn", "at": "subscription scope"}),
 		})
 		return agentapi.InvokeResult{Outcome: agentapi.OutcomeDenied, Reason: err.Error()}, nil
 	}
@@ -304,6 +319,36 @@ func decodeArgs(raw json.RawMessage) (map[string]any, error) {
 		return nil, fmt.Errorf("the arguments are not a JSON object: %v", err)
 	}
 	return input, nil
+}
+
+// checkSubscriptionScope is the ONE thing an Owner-approved
+// subscription's capability set can do to a bounded Task it spawned
+// (ADR-W039 §3.6): narrow. A Task the handle's own Task.GrantsJSON does
+// not mark as a subscription's is untouched by this check — every other
+// Task's authority is exactly what the rest of Invoke already computes.
+// For one that IS marked, the subscription row is re-read fresh on
+// every call, never cached on the Task: disabling or narrowing it after
+// it already matched takes effect on the Task it spawned immediately,
+// and a tool absent from its CURRENT capability set is refused however
+// the subscription's stored document once named it.
+func (g *Gateway) checkSubscriptionScope(s *session, tool string) error {
+	subID, ok := automation.SubscriptionOrigin(s.hc.Task.GrantsJSON)
+	if !ok {
+		return nil
+	}
+	caps, enabled, err := g.DB.SubscriptionCapabilities(subID)
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		return fmt.Errorf("%w: the subscription behind this task is no longer enabled", ErrRefused)
+	}
+	for _, c := range caps {
+		if c == tool {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %q is not in this subscription's capability set", ErrRefused, tool)
 }
 
 // jsonPayload renders a small structural payload, as the runner does.

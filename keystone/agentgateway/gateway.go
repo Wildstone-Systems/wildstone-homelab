@@ -293,6 +293,16 @@ func (g *Gateway) Manifest(ctx context.Context, h agentapi.Handle) (agentapi.Man
 	for _, a := range caps.Actions {
 		actions = append(actions, agentapi.ActionSpec{Tool: a.Tool, Tier: a.Tier})
 	}
+	// ProposableAgentSubscription names no Statefile document — it is a
+	// platform-level proposable (ADR-W039 §3.6, Phase 4, #341), not one
+	// of the Toolset's resource kinds — so every Manifest lists it,
+	// whether or not this Agent holds any resource-proposing capability
+	// at all. Wired only when g.Proposals is (an unwired gateway has
+	// nowhere to file it either way, exactly like a resource kind).
+	proposableKinds := caps.ProposableKinds
+	if g.Proposals.DB != nil {
+		proposableKinds = append(append([]string{}, proposableKinds...), agentapi.ProposableAgentSubscription)
+	}
 	clock := ""
 	if g.Clock != nil {
 		clock = g.Clock()
@@ -302,7 +312,7 @@ func (g *Gateway) Manifest(ctx context.Context, h agentapi.Handle) (agentapi.Man
 		SystemPrompt:    butlerlive.SystemPromptFor(ctx, s.toolset, s.hc.Butler, s.turn, clock),
 		Tools:           tools,
 		ReadOnly:        s.readOnly,
-		ProposableKinds: caps.ProposableKinds,
+		ProposableKinds: proposableKinds,
 		Actions:         actions,
 		Unavailable:     caps.Unavailable,
 		Fingerprint:     caps.Fingerprint(),

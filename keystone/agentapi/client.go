@@ -1,6 +1,9 @@
 package agentapi
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Client is what a runtime calls Wildstone through: every call with
 // authority goes this way, and Wildstone calls back only to deliver and
@@ -127,4 +130,36 @@ type Client interface {
 	// times — a runtime cannot declare itself connected — and a revoked
 	// principal's heartbeat is refused like any other call.
 	Heartbeat(ctx context.Context, hb Heartbeat) error
+}
+
+// DeliveryClient is the pull side of the Events family (§3.6, §4.1
+// "pull fallback"; Phase 4, #341): long-poll for unacked deliveries,
+// and acknowledge one. It is deliberately its OWN interface rather than
+// two more methods on Client: ADR-W040's documented surface has no Ack
+// (TestClientSurfaceIsTheDocumentedOne pins Client to exactly the
+// twelve methods above), and a runtime that only ever receives PUSHED
+// deliveries need never implement this at all. Both of Wildstone's own
+// transports — agentgateway.Gateway in-process, agentapi/httpclient.Client
+// over HTTP — implement it as an addition to Client, never a
+// replacement, so a conformance script can drive the identical sequence
+// against either one through this interface alone.
+type DeliveryClient interface {
+	// Deliveries long-polls for this Agent's own unacked deliveries,
+	// oldest first, with id greater than after ("" means from the
+	// start). wait bounds how long to block for a new one when there is
+	// none yet; Wildstone caps it (§4.1). An empty result after the
+	// wait is a normal quiet period, not an error.
+	//
+	// Wildstone enforces: which Agent — from the runtime principal, not
+	// a parameter; expired-but-unacked rows are marked expired and
+	// skipped rather than redelivered forever; redelivery of the same
+	// id is otherwise the runtime's own idempotent contract (§4 item
+	// 6), which this call does nothing to prevent.
+	Deliveries(ctx context.Context, after string, wait time.Duration) ([]Delivery, error)
+
+	// Ack acknowledges one delivery by id. Idempotent: acking an
+	// already-acked id a second time succeeds without effect.
+	//
+	// Wildstone enforces: the delivery belongs to this Agent.
+	Ack(ctx context.Context, id string) error
 }

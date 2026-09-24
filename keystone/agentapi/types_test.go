@@ -66,6 +66,8 @@ func fixtures() []any {
 			ExecutionProfileRef: "platform-only"},
 		ProposeRequest{Handle: "task-1.s3cret", Kind: "Route",
 			Document: json.RawMessage(`{"kind":"Route"}`), Rationale: "asked for"},
+		SubscriptionProposal{MatchKind: "event_type", Match: json.RawMessage(`{"eventType":"person.arrived_home"}`),
+			Audience: "aud_owner", Capabilities: []string{"recall"}, Budget: json.RawMessage(`{"toolCalls":5}`)},
 		NotifyRequest{Handle: "task-1.s3cret", Text: "the bins are out", DedupeKey: "bins"},
 	}
 }

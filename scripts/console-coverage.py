@@ -49,6 +49,8 @@ MACHINE_FACING = {
     "/api/v1/agent/propose",
     "/api/v1/agent/notify",
     "/api/v1/agent/heartbeat",
+    "/api/v1/agent/deliveries",
+    "/api/v1/agent/deliveries/{}/ack",
 }
 
 

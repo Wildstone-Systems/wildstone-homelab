@@ -2,10 +2,14 @@ package agentgateway
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
 // The Work family over butlerstore.Ledger (ADR-W039 §7.2: C6 moves in
@@ -192,6 +196,110 @@ func (g *Gateway) Fail(ctx context.Context, w agentapi.WorkFail) error {
 	_, err = g.Ledger.FenceAttempts(s.hc.Task.ID)
 	return err
 }
+
+// Deliveries implements agentapi.DeliveryClient in-process: no HTTP, no
+// polling loop needed at all — the caller already holds the answer as
+// soon as it exists. after and wait are honoured exactly as the HTTP
+// route interprets them (api/handlers_agent.go's agentDeliveries), so a
+// runtime built against this interface behaves identically switched
+// between the two transports.
+func (g *Gateway) Deliveries(ctx context.Context, after string, wait time.Duration) ([]agentapi.Delivery, error) {
+	principal, ok := principalFrom(ctx)
+	if !ok {
+		return nil, fmt.Errorf("%w: deliveries needs the runtime principal it is from", ErrRefused)
+	}
+	seq, bound, err := g.DB.RuntimePrincipalButler(principal)
+	if err != nil {
+		return nil, err
+	}
+	if !bound {
+		return nil, fmt.Errorf("%w: %s is not a runtime principal", ErrRefused, principal)
+	}
+	var afterID int64
+	if after != "" {
+		if _, err := fmt.Sscanf(after, "%d", &afterID); err != nil {
+			return nil, fmt.Errorf("%w: after must be a delivery id", ErrRefused)
+		}
+	}
+	if wait < 0 {
+		wait = 0
+	}
+	deadline := g.now().Add(wait)
+	for {
+		if _, err := g.DB.MarkExpiredAgentDeliveries(seq, g.now()); err != nil {
+			return nil, err
+		}
+		rows, err := g.DB.ListUnackedAgentDeliveries(seq, afterID, 50)
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) > 0 {
+			return deliveriesFromRows(rows), nil
+		}
+		if g.now().After(deadline) || ctx.Err() != nil {
+			return []agentapi.Delivery{}, nil
+		}
+		select {
+		case <-ctx.Done():
+			return []agentapi.Delivery{}, nil
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+// deliveriesFromRows is the in-process client's own version of
+// api/handlers_agent.go's deliveriesFor — the identical mapping, kept
+// as a second copy rather than a shared export because agentgateway
+// cannot import keystone/api (the structural boundary Phase 2 pins) and
+// this is the side that owns runtimedb.AgentDelivery.
+func deliveriesFromRows(rows []runtimedb.AgentDelivery) []agentapi.Delivery {
+	out := make([]agentapi.Delivery, 0, len(rows))
+	for _, row := range rows {
+		var carried struct {
+			Handle       string `json:"handle"`
+			Subscription int64  `json:"subscription"`
+		}
+		_ = json.Unmarshal([]byte(row.Payload), &carried)
+		subscription := ""
+		if carried.Subscription != 0 {
+			subscription = fmt.Sprintf("%d", carried.Subscription)
+		}
+		out = append(out, agentapi.Delivery{
+			ID: fmt.Sprintf("%d", row.ID), Kind: row.Kind, Subscription: subscription,
+			Cursor: row.Cursor, Handle: agentapi.Handle(carried.Handle),
+			Payload: json.RawMessage(row.Payload), Attempt: 1, ExpiresAt: row.ExpiresAt,
+		})
+	}
+	return out
+}
+
+// Ack implements agentapi.DeliveryClient in-process.
+func (g *Gateway) Ack(ctx context.Context, id string) error {
+	principal, ok := principalFrom(ctx)
+	if !ok {
+		return fmt.Errorf("%w: ack needs the runtime principal it is from", ErrRefused)
+	}
+	seq, bound, err := g.DB.RuntimePrincipalButler(principal)
+	if err != nil {
+		return err
+	}
+	if !bound {
+		return fmt.Errorf("%w: %s is not a runtime principal", ErrRefused, principal)
+	}
+	var deliveryID int64
+	if _, err := fmt.Sscanf(id, "%d", &deliveryID); err != nil {
+		return fmt.Errorf("%w: delivery id must be a number", ErrRefused)
+	}
+	if err := g.DB.AckAgentDelivery(seq, deliveryID); err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return fmt.Errorf("%w: no such delivery for this agent", ErrRefused)
+		}
+		return err
+	}
+	return nil
+}
+
+var _ agentapi.DeliveryClient = (*Gateway)(nil)
 
 // Heartbeat implements agentapi.Client. Liveness is a fact about a
 // runtime, not a task, so the call carries no handle: the runtime is

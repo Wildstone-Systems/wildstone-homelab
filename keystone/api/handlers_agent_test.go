@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -414,6 +415,113 @@ func TestInProcessAndHTTPAreByteIdentical(t *testing.T) {
 	}
 }
 
+// TestDeliveryClientIsByteIdenticalInProcessAndOverHTTP is
+// agentapi.DeliveryClient's own conformance evidence (ADR-W039 §3.6,
+// §4.1 "pull fallback"; Phase 4, #341), the same in-process/HTTP shape
+// TestInProcessAndHTTPAreByteIdentical proves for agentapi.Client,
+// covering the ONE method pair that interface deliberately leaves out
+// (see agentapi.DeliveryClient's own doc comment for why). Timestamps
+// (ExpiresAt) are excluded from the byte-identical comparison — each
+// arm is its own database and calls time.Now() independently — but
+// everything a runtime actually reads to act (id, kind, subscription,
+// handle, payload) is compared byte for byte, and both arms' ack
+// behaviour (idempotent, after= excludes) is proven identically.
+func TestDeliveryClientIsByteIdenticalInProcessAndOverHTTP(t *testing.T) {
+	dbA, ledgerA, butlerA := newAgentEnv(t)
+	gwA := &agentgateway.Gateway{DB: dbA, Ledger: ledgerA, Gateways: conformanceGateways(), Clock: conformanceClock}
+	clientA := agentgateway.InProcess(gwA).(agentapi.DeliveryClient)
+	ctxA := agentgateway.WithPrincipal(context.Background(), "runtime-alfred-1")
+
+	dbB, ledgerB, butlerB := newAgentEnv(t)
+	p := &principal.Store{DB: dbB}
+	stateB, err := statefile.New(filepath.Join(t.TempDir(), "statefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(p, dbB, stateB, nil)
+	gwB := &agentgateway.Gateway{DB: dbB, Ledger: ledgerB, Gateways: conformanceGateways(), Clock: conformanceClock}
+	s.AgentGateway = agentgateway.InProcess(gwB)
+	s.Ledger = ledgerB
+	srv := newTestHTTPServer(t, s)
+	token, err := p.Mint("runtime-alfred-1", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientB := &httpclient.Client{BaseURL: srv, Bearer: token}
+	ctxB := context.Background()
+
+	for _, db := range []*runtimedb.DB{dbA, dbB} {
+		var b runtimedb.Butler
+		if db == dbA {
+			b = butlerA
+		} else {
+			b = butlerB
+		}
+		if _, err := db.RecordAgentDelivery(b.Seq, agentapi.DeliveryProposalOutcome, `{"plan":"p-1","outcome":"approved"}`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.RecordSubscriptionDelivery(b.Seq, "7", `{"handle":"bt-1.secret","subscription":1}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sameShape := func(d agentapi.Delivery) agentapi.Delivery { d.ExpiresAt = time.Time{}; return d }
+	gotA, err := clientA.Deliveries(ctxA, "", 0)
+	if err != nil {
+		t.Fatalf("in-process Deliveries: %v", err)
+	}
+	gotB, err := clientB.Deliveries(ctxB, "", 0)
+	if err != nil {
+		t.Fatalf("http Deliveries: %v", err)
+	}
+	if len(gotA) != 2 || len(gotB) != 2 {
+		t.Fatalf("deliveries: in-process %+v, http %+v, want 2 each", gotA, gotB)
+	}
+	for i := range gotA {
+		assertSameJSON(t, fmt.Sprintf("delivery[%d]", i), sameShape(gotA[i]), sameShape(gotB[i]))
+	}
+
+	// Ack the first on both arms, identically, then a repeat ack is a
+	// no-op on both, and after= the first excludes it on both.
+	if err := clientA.Ack(ctxA, gotA[0].ID); err != nil {
+		t.Fatalf("in-process Ack: %v", err)
+	}
+	if err := clientB.Ack(ctxB, gotB[0].ID); err != nil {
+		t.Fatalf("http Ack: %v", err)
+	}
+	if err := clientA.Ack(ctxA, gotA[0].ID); err != nil {
+		t.Fatalf("in-process repeat Ack: %v", err)
+	}
+	if err := clientB.Ack(ctxB, gotB[0].ID); err != nil {
+		t.Fatalf("http repeat Ack: %v", err)
+	}
+
+	afterA, err := clientA.Deliveries(ctxA, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterB, err := clientB.Deliveries(ctxB, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterA) != 1 || len(afterB) != 1 {
+		t.Fatalf("after acking the first: in-process %+v, http %+v, want exactly one left on each", afterA, afterB)
+	}
+	assertSameJSON(t, "remaining delivery", sameShape(afterA[0]), sameShape(afterB[0]))
+
+	skipA, err := clientA.Deliveries(ctxA, afterA[0].ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipB, err := clientB.Deliveries(ctxB, afterB[0].ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skipA) != 0 || len(skipB) != 0 {
+		t.Fatalf("after= its own id: in-process %+v, http %+v, want none", skipA, skipB)
+	}
+}
+
 // newTestHTTPServer starts s.Handler() and returns its base URL,
 // closing it when the test ends.
 func newTestHTTPServer(t *testing.T, s *Server) string {
@@ -443,7 +551,15 @@ func agentEnvHarness(t *testing.T) (*harness, *butlerstore.Ledger) {
 	}
 	ledger := butlerstore.New(h.s.DB, lease)
 	ledger.DerivedAuthorityChecks()
-	gw := &agentgateway.Gateway{DB: h.s.DB, Ledger: ledger, Gateways: conformanceGateways(), Clock: conformanceClock}
+	gw := &agentgateway.Gateway{
+		DB: h.s.DB, Ledger: ledger, Gateways: conformanceGateways(), Clock: conformanceClock,
+		// Wired so Propose (a resource document, or
+		// ProposableAgentSubscription) files for real rather than
+		// returning the pre-Phase-3 "not wired" refusal — no test in
+		// this file relied on that refusal, and the Events family's own
+		// tests need a real Plan.
+		Proposals: h.s.ProposalDeps(),
+	}
 	h.s.AgentGateway = agentgateway.InProcess(gw)
 	h.s.Ledger = ledger
 	return h, ledger
@@ -494,15 +610,45 @@ func TestAgentInvokeDeniedIsAnOrdinary200(t *testing.T) {
 	}
 }
 
-// TestAgentNotifyReturns501WithThePhase pins deliverable 1's error
-// mapping for the one family ADR-W039 has not reached yet as of Phase 3:
-// NotImplementedError becomes a 501 whose body names the method and the
-// phase that serves it, not a bare 404 or 500 that gives an operator
-// nothing to act on. Recall and Propose were the same shape through
-// Phase 2c; Phase 3 implements them (see TestInProcessAndHTTPAreByte
-// Identical's recall comparison and handlers_agent_test.go's own
-// propose coverage below).
-func TestAgentNotifyReturns501WithThePhase(t *testing.T) {
+// openAgentTaskOnConnection is openAgentTask with a real Connection
+// (butler_addresses row) as its origin, the one thing Notify needs and
+// openAgentTask deliberately leaves unset (its own tasks are
+// Console-origin, ref 0, on purpose — every other test in this file
+// wants that).
+func openAgentTaskOnConnection(t *testing.T, db *runtimedb.DB, ledger *butlerstore.Ledger, b runtimedb.Butler, transport, externalID string) (string, agentapi.Handle, int64) {
+	t.Helper()
+	connSeq, err := db.AddButlerAddress(b.Name, transport, externalID, "", "mika")
+	if err != nil {
+		t.Fatalf("AddButlerAddress: %v", err)
+	}
+	id, err := db.InsertButlerTask(runtimedb.ButlerTask{
+		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
+		Surface: b.Surface, AgentClass: b.AgentClass, Audience: runtimedb.ButlerAudiencePrivate,
+		OriginConnection: transport + ":" + externalID, OriginConnectionRef: connSeq,
+		Objective: "conformance script", ObjectiveKind: runtimedb.ObjectiveInformational,
+		Retention: runtimedb.ButlerRetentionConversation,
+	})
+	if err != nil {
+		t.Fatalf("InsertButlerTask: %v", err)
+	}
+	if err := db.SetTaskButler(id, b.Name); err != nil {
+		t.Fatalf("SetTaskButler: %v", err)
+	}
+	h, err := ledger.IssueHandle(id)
+	if err != nil {
+		t.Fatalf("IssueHandle: %v", err)
+	}
+	return id, h, connSeq
+}
+
+// TestAgentNotifyReachesTheTasksOwnConnection (ADR-W039 §3.2
+// Notifications, §4 item 8; Phase 4, #341): Notify queues onto the
+// task's own Connection, never a room, and a task with no Connection at
+// all has nowhere Notify can reach. Recall and Propose were the same
+// "not implemented yet" shape through Phase 2c; Phase 3 implemented
+// them, and Notify is the last of the three, so no route in this family
+// answers 501 any more.
+func TestAgentNotifyReachesTheTasksOwnConnection(t *testing.T) {
 	h, ledger := agentEnvHarness(t)
 	createAgent(t, h, "alfred")
 	cred := rotate(t, h, "alfred", nil)
@@ -510,16 +656,40 @@ func TestAgentNotifyReturns501WithThePhase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, handle := openAgentTask(t, h.s.DB, ledger, b)
 
-	var body map[string]any
-	res := h.doToken(cred.Secret, http.MethodPost, "/api/v1/agent/notify",
-		map[string]any{"handle": string(handle), "text": "hello"}, &body)
-	if res.StatusCode != http.StatusNotImplemented {
-		t.Fatalf("notify = %d, want 501", res.StatusCode)
+	_, handle, connSeq := openAgentTaskOnConnection(t, h.s.DB, ledger, b, "telegram", "chat-alfred")
+	if res := h.doToken(cred.Secret, http.MethodPost, "/api/v1/agent/notify",
+		map[string]any{"handle": string(handle), "text": "the bins go out tomorrow"}, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("notify = %d", res.StatusCode)
 	}
-	if body["method"] != "Notify" || body["phase"] != "Phase 4" {
-		t.Errorf("notify body = %+v, want method \"Notify\" phase \"Phase 4\"", body)
+	queued, err := h.s.DB.ChatOutboundAfter(runtimedb.Connection{Seq: connSeq}, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 1 || queued[0].Body != "the bins go out tomorrow" || queued[0].Target != "chat-alfred" {
+		t.Fatalf("queued outbound = %+v, want exactly one message to chat-alfred", queued)
+	}
+
+	// A room never receives one, whatever the runtime asks for. The
+	// room is marked on ITS OWN connection — chat_rooms is keyed by
+	// (connection, conversation), and this test's helper gives every
+	// external id its own connection row.
+	_, roomHandle, roomConnSeq := openAgentTaskOnConnection(t, h.s.DB, ledger, b, "telegram", "chat-room")
+	if err := h.s.DB.NoteChatRoom(roomConnSeq, "chat-room"); err != nil {
+		t.Fatal(err)
+	}
+	res := h.doToken(cred.Secret, http.MethodPost, "/api/v1/agent/notify",
+		map[string]any{"handle": string(roomHandle), "text": "should never arrive"}, nil)
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("notify to a room = %d, want 403", res.StatusCode)
+	}
+
+	// A task with no Connection at all (openAgentTask's own shape) has
+	// nowhere Notify can reach — refused, not silently dropped.
+	_, noConnHandle := openAgentTask(t, h.s.DB, ledger, b)
+	if res := h.doToken(cred.Secret, http.MethodPost, "/api/v1/agent/notify",
+		map[string]any{"handle": string(noConnHandle), "text": "nowhere to go"}, nil); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("notify with no connection = %d, want 403", res.StatusCode)
 	}
 }
 

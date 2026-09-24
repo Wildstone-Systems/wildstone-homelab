@@ -928,6 +928,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/agent/propose", s.handle(principal.VerbPropose, s.agentPropose))
 	mux.Handle("POST /api/v1/agent/notify", s.handle(principal.VerbPropose, s.agentNotify))
 	mux.Handle("POST /api/v1/agent/heartbeat", s.handle(principal.VerbRead, s.agentHeartbeat))
+	mux.Handle("GET /api/v1/agent/deliveries", s.handle(principal.VerbRead, s.agentDeliveries))
+	mux.Handle("POST /api/v1/agent/deliveries/{id}/ack", s.handle(principal.VerbRead, s.agentAckDelivery))
 
 	return mux
 }

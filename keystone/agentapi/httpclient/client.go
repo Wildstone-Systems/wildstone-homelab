@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -251,4 +252,82 @@ func (c *Client) Notify(ctx context.Context, req agentapi.NotifyRequest) error {
 // not for a task).
 func (c *Client) Heartbeat(ctx context.Context, hb agentapi.Heartbeat) error {
 	return c.do(ctx, "/api/v1/agent/heartbeat", hb, nil)
+}
+
+var _ agentapi.DeliveryClient = (*Client)(nil)
+
+// deliveriesBody is GET /api/v1/agent/deliveries' own response shape.
+type deliveriesBody struct {
+	Deliveries []agentapi.Delivery `json:"deliveries"`
+}
+
+// Deliveries implements agentapi.DeliveryClient: GET
+// /api/v1/agent/deliveries?wait=<duration>&after=<id> (ADR-W039 §3.6,
+// §4.1 "pull fallback"; Phase 4, #341). wait travels as a Go duration
+// string, which the server parses the same way; Keystone caps it
+// server-side, so a Client here need not know the cap to behave
+// correctly.
+func (c *Client) Deliveries(ctx context.Context, after string, wait time.Duration) ([]agentapi.Delivery, error) {
+	q := url.Values{}
+	if after != "" {
+		q.Set("after", after)
+	}
+	if wait > 0 {
+		q.Set("wait", wait.String())
+	}
+	path := "/api/v1/agent/deliveries"
+	if enc := q.Encode(); enc != "" {
+		path += "?" + enc
+	}
+	var res deliveriesBody
+	if err := c.getJSON(ctx, path, &res); err != nil {
+		return nil, err
+	}
+	if res.Deliveries == nil {
+		res.Deliveries = []agentapi.Delivery{}
+	}
+	return res.Deliveries, nil
+}
+
+// Ack implements agentapi.DeliveryClient: POST
+// /api/v1/agent/deliveries/{id}/ack.
+func (c *Client) Ack(ctx context.Context, id string) error {
+	return c.do(ctx, "/api/v1/agent/deliveries/"+url.PathEscape(id)+"/ack", nil, nil)
+}
+
+// getJSON is do's GET sibling — every other Agent API route is a POST
+// with the handle inside the body (ADR-W040 §7's "no handle in a URL,
+// a log line or an audit row"), but the deliveries long-poll names no
+// handle at all, and GET is what a long-poll with query parameters
+// (wait, after) actually is.
+func (c *Client) getJSON(ctx context.Context, path string, respBody any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.BaseURL, "/")+path, nil)
+	if err != nil {
+		return fmt.Errorf("httpclient: building the request for %s: %w", path, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Bearer)
+
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return fmt.Errorf("httpclient: %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("httpclient: reading the response from %s: %w", path, err)
+	}
+	switch resp.StatusCode {
+	case http.StatusOK:
+		if respBody == nil || len(raw) == 0 {
+			return nil
+		}
+		if err := json.Unmarshal(raw, respBody); err != nil {
+			return fmt.Errorf("httpclient: decoding the response from %s: %w", path, err)
+		}
+		return nil
+	case http.StatusForbidden:
+		return &RefusedError{Message: errorMessage(raw)}
+	default:
+		return &StatusError{Status: resp.StatusCode, Message: errorMessage(raw)}
+	}
 }

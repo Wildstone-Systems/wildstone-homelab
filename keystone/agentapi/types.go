@@ -695,12 +695,48 @@ type RuntimeRecord struct {
 // reports the outcome later as a Delivery. Nothing here is applied.
 type ProposeRequest struct {
 	Handle Handle `json:"handle"`
-	// Kind is the resource kind, from the manifest's ProposableKinds.
+	// Kind is the resource kind, from the manifest's ProposableKinds —
+	// or ProposableAgentSubscription, which every Manifest lists
+	// because it names no Statefile document.
 	Kind string `json:"kind"`
-	// Document is the proposed resource, validated by Wildstone.
+	// Document is the proposed resource, validated by Wildstone. For
+	// ProposableAgentSubscription it is a SubscriptionProposal instead
+	// of a resource document.
 	Document json.RawMessage `json:"document"`
 	// Rationale is what the runtime tells the reviewer.
 	Rationale string `json:"rationale,omitempty"`
+}
+
+// ProposableAgentSubscription is the ProposeRequest.Kind for an
+// Owner-approved event subscription (§3.6, Phase 4, #341). Unlike a
+// resource kind it is a platform-level proposable, not the Toolset's,
+// so every Manifest lists it whether or not the Agent holds any
+// resource-proposing capability at all.
+const ProposableAgentSubscription = "agent-subscription"
+
+// SubscriptionProposal is the Document body of a ProposeRequest whose
+// Kind is ProposableAgentSubscription: what household event to watch
+// for, and what a match may do. Wildstone validates it, runs the same
+// Owner-approval Plan every other proposal does, and never enables it
+// before that approval (§3.6 "Owner-approved lifecycle").
+type SubscriptionProposal struct {
+	// MatchKind names the matcher the automation evaluator runs
+	// (a deployment-defined, closed vocabulary; "event_type" is the
+	// first one Wildstone ships).
+	MatchKind string `json:"matchKind"`
+	// Match is the matcher's own parameters, opaque here.
+	Match json.RawMessage `json:"match,omitempty"`
+	// Audience is who a matched Task's output may be disclosed to.
+	Audience string `json:"audience,omitempty"`
+	// Capabilities is the tool-name allow-list a matched Task may use.
+	// It can only ever narrow what this Agent already holds — never
+	// widen it, however it is named: Wildstone refuses a name outside
+	// the Agent's own offered set at proposal time, and re-checks the
+	// live set again at every use a matched Task makes of it.
+	Capabilities []string `json:"capabilities"`
+	// Budget bounds what a matched Task may spend, in the ledger's own
+	// budget shape.
+	Budget json.RawMessage `json:"budget,omitempty"`
 }
 
 // NotifyRequest sends text outward through a Wildstone Connection

@@ -39,6 +39,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentgateway"
@@ -46,6 +47,11 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
+
+// maxDeliveryPoll bounds the deliveries long-poll (ADR-W039 §3.6, Phase
+// 4, #341), the same "cap it" §4.1 asks for and the same shape
+// maxAdapterPoll gives the integration adapter's own long poll.
+const maxDeliveryPoll = 30 * time.Second
 
 // maxAgentBodyBytes bounds one Agent API request (ADR-W040 §7: bodies
 // pass through a bounded reader so an oversized one cannot exhaust
@@ -387,8 +393,14 @@ func (s *Server) agentPropose(r *http.Request, id principal.Identity) (any, int,
 	return res, http.StatusOK, nil
 }
 
-// agentNotify is POST /api/v1/agent/notify. Not implemented until
-// ADR-W039 Phase 4 (agentgateway.Gateway.Notify).
+// agentNotify is POST /api/v1/agent/notify (ADR-W039 §3.2 Notifications,
+// §4 item 8; Phase 4, #341): outbound text through the task's own
+// Connection, via agentgateway.Gateway.Notify — the same outbound chat
+// queue and the same "never a room, never a direct address, quiet
+// hours" rules the stall notifier and QueueChatPush's own domestic
+// executor already enforce for a household rule's push (see notify.go's
+// own doc comment for why this reaches that queue directly rather than
+// through api.QueueChatPush, which agentgateway cannot import).
 func (s *Server) agentNotify(r *http.Request, id principal.Identity) (any, int, error) {
 	ctx, code, err := s.agentContext(r, id)
 	if err != nil {
@@ -421,6 +433,141 @@ func (s *Server) agentHeartbeat(r *http.Request, id principal.Identity) (any, in
 	}
 	if err := s.AgentGateway.Heartbeat(ctx, req); err != nil {
 		return agentErrorResponse(err)
+	}
+	return nil, http.StatusOK, nil
+}
+
+// deliveriesResponse is what both GET /api/v1/agent/deliveries and the
+// in-process Deliveries call return: unacked deliveries, oldest first,
+// exactly as agentapi.Delivery carries one over the wire.
+type deliveriesResponse struct {
+	Deliveries []agentapi.Delivery `json:"deliveries"`
+}
+
+// runtimeButlerSeq resolves id to the Agent it is bound to, the same
+// check agentContext already ran to build ctx — repeated here because
+// the deliveries and ack routes need the seq itself, not only a marked
+// context, and agentContext deliberately returns nothing else (every
+// other route only ever needs the marked ctx).
+func (s *Server) runtimeButlerSeq(id principal.Identity) (int64, error) {
+	seq, ok, err := s.DB.RuntimePrincipalButler(id.Name)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return 0, errNotRuntimePrincipal
+	}
+	return seq, nil
+}
+
+// agentDeliveries is GET /api/v1/agent/deliveries?wait=<duration>&after=<id>
+// (ADR-W039 §3.6, §4.1 "pull fallback"; Phase 4, #341): the long-poll
+// pull path every runtime can use whether or not push ever reaches it.
+// Modelled on claimIntegrationWork's own long poll (api/handlers_integrations.go):
+// wait is a parameter, capped at maxDeliveryPoll, and an empty answer
+// after the window is a normal quiet period, not an error.
+func (s *Server) agentDeliveries(r *http.Request, id principal.Identity) (any, int, error) {
+	if _, code, err := s.agentContext(r, id); err != nil {
+		return nil, code, err
+	}
+	seq, err := s.runtimeButlerSeq(id)
+	if err != nil {
+		return nil, http.StatusForbidden, err
+	}
+	var after int64
+	if v := r.URL.Query().Get("after"); v != "" {
+		if _, err := fmt.Sscanf(v, "%d", &after); err != nil {
+			return nil, http.StatusBadRequest, fmt.Errorf("after must be a delivery id")
+		}
+	}
+	wait := time.Duration(0)
+	if v := r.URL.Query().Get("wait"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, http.StatusBadRequest, fmt.Errorf("wait must be a duration: %w", err)
+		}
+		wait = d
+	}
+	if wait > maxDeliveryPoll {
+		wait = maxDeliveryPoll
+	}
+	if wait < 0 {
+		wait = 0
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		if _, err := s.DB.MarkExpiredAgentDeliveries(seq, time.Now()); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		rows, err := s.DB.ListUnackedAgentDeliveries(seq, after, 50)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		if len(rows) > 0 {
+			return deliveriesResponse{Deliveries: deliveriesFor(rows)}, http.StatusOK, nil
+		}
+		if time.Now().After(deadline) || r.Context().Err() != nil {
+			return deliveriesResponse{Deliveries: []agentapi.Delivery{}}, http.StatusOK, nil
+		}
+		select {
+		case <-r.Context().Done():
+			return deliveriesResponse{Deliveries: []agentapi.Delivery{}}, http.StatusOK, nil
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+// deliveriesFor maps stored rows onto the wire shape. Handle is a
+// best-effort read of the payload's own "handle" field — every kind
+// this deployment writes puts one there except proposal_outcome, which
+// has no task to point at — never a claim this table itself makes about
+// what the opaque payload holds.
+func deliveriesFor(rows []runtimedb.AgentDelivery) []agentapi.Delivery {
+	out := make([]agentapi.Delivery, 0, len(rows))
+	for _, row := range rows {
+		var carried struct {
+			Handle       string `json:"handle"`
+			Subscription int64  `json:"subscription"`
+		}
+		_ = json.Unmarshal([]byte(row.Payload), &carried)
+		subscription := ""
+		if carried.Subscription != 0 {
+			subscription = fmt.Sprintf("%d", carried.Subscription)
+		}
+		out = append(out, agentapi.Delivery{
+			ID:           fmt.Sprintf("%d", row.ID),
+			Kind:         row.Kind,
+			Subscription: subscription,
+			Cursor:       row.Cursor,
+			Handle:       agentapi.Handle(carried.Handle),
+			Payload:      json.RawMessage(row.Payload),
+			Attempt:      1,
+			ExpiresAt:    row.ExpiresAt,
+		})
+	}
+	return out
+}
+
+// agentAckDelivery is POST /api/v1/agent/deliveries/{id}/ack (ADR-W039
+// §3.6, §4 item 6; Phase 4, #341): idempotent, and refuses an id that
+// belongs to another Agent or does not exist.
+func (s *Server) agentAckDelivery(r *http.Request, id principal.Identity) (any, int, error) {
+	if _, code, err := s.agentContext(r, id); err != nil {
+		return nil, code, err
+	}
+	seq, err := s.runtimeButlerSeq(id)
+	if err != nil {
+		return nil, http.StatusForbidden, err
+	}
+	var deliveryID int64
+	if _, err := fmt.Sscanf(r.PathValue("id"), "%d", &deliveryID); err != nil {
+		return nil, http.StatusBadRequest, fmt.Errorf("delivery id must be a number")
+	}
+	if err := s.DB.AckAgentDelivery(seq, deliveryID); err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return nil, http.StatusNotFound, fmt.Errorf("no such delivery for this agent")
+		}
+		return nil, http.StatusInternalServerError, err
 	}
 	return nil, http.StatusOK, nil
 }

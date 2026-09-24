@@ -673,21 +673,23 @@ func TestRememberGoesThroughTheHouseholdTool(t *testing.T) {
 	}
 }
 
-// TestLaterPhasesAreNamedNotFaked now pins only Notify: Recall and
-// Propose were the Phase 3 families (#338, #339) and are implemented —
-// see memory_test.go and propose_test.go for their own evidence. Notify
-// is Phase 4's Events family (outbound delivery through the task's
-// Connection) and is still named rather than faked.
-func TestLaterPhasesAreNamedNotFaked(t *testing.T) {
+// TestNotifyRefusesATaskWithNoConnection is Notify's own family evidence
+// here (see notify_test.go for the rest): Recall and Propose were the
+// Phase 3 families (#338, #339) and Notify is Phase 4's (#341) — all
+// three are implemented now, none of them a NotImplementedError stub. A
+// task with no Connection at all (this fixture's own openTask shape,
+// Console-origin) has nowhere Notify can reach, and that is an ordinary
+// ErrRefused, never agentapi.ErrNotImplemented.
+func TestNotifyRefusesATaskWithNoConnection(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	_, h := f.openTask(t, "joan", "sam")
-	if err := f.g.Notify(ctx, agentapi.NotifyRequest{Handle: h, Text: "hi"}); !errors.Is(err, agentapi.ErrNotImplemented) {
-		t.Fatalf("Notify: %v", err)
+	err := f.g.Notify(ctx, agentapi.NotifyRequest{Handle: h, Text: "hi"})
+	if errors.Is(err, agentapi.ErrNotImplemented) {
+		t.Fatalf("Notify is still faked: %v", err)
 	}
-	var nie *agentapi.NotImplementedError
-	if err := f.g.Notify(ctx, agentapi.NotifyRequest{Handle: h}); !errors.As(err, &nie) || nie.Phase == "" {
-		t.Fatalf("Notify's error does not name its phase: %v", err)
+	if !errors.Is(err, ErrRefused) {
+		t.Fatalf("Notify with no connection = %v, want ErrRefused", err)
 	}
 }
 
