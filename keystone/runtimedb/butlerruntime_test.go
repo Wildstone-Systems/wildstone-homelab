@@ -399,3 +399,71 @@ func TestSweepStaleRuntimeHeartbeatsFlipsOnlyStaleNonNative(t *testing.T) {
 		t.Errorf("a second sweep flipped %v; an already-offline runtime must be left alone", flipped)
 	}
 }
+
+// The runtime inventory (design doc §9 H9, #355): every live Agent's
+// runtime in one query, a retired Agent excluded, and each row carrying
+// the Agent's class alongside its record.
+func TestListButlerRuntimesReturnsEveryLiveAgentsRuntime(t *testing.T) {
+	db, native := runtimeFixture(t)
+	if err := db.SetButlerRuntime(native.Seq, ButlerRuntime{Type: agentapi.RuntimeNative}, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetRuntimeHealth(native.Seq, agentapi.HealthConnected); err != nil {
+		t.Fatal(err)
+	}
+
+	newButler(t, db, "hobson", "kitchen-box")
+	offline, err := db.GetButler("hobson")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetButlerRuntime(offline.Seq, ButlerRuntime{
+		Type: agentapi.RuntimeHermes, Endpoint: "https://hermes-hobson.internal/",
+	}, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetRuntimeHealth(offline.Seq, agentapi.HealthOffline); err != nil {
+		t.Fatal(err)
+	}
+
+	newButler(t, db, "retired-one", "kitchen-box")
+	retired, err := db.GetButler("retired-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetButlerRuntime(retired.Seq, ButlerRuntime{Type: agentapi.RuntimeNative}, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RetireButler("retired-one", "mika"); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := db.ListButlerRuntimes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("got %d row(s), want 2 (retired-one excluded): %+v", len(rows), rows)
+	}
+	byName := map[string]ButlerRuntimeInventory{}
+	for _, r := range rows {
+		byName[r.Butler] = r
+	}
+	if _, ok := byName["retired-one"]; ok {
+		t.Fatalf("a retired agent appeared in the inventory: %+v", rows)
+	}
+	nativeRow, ok := byName["alfred"]
+	if !ok || nativeRow.Runtime.Type != agentapi.RuntimeNative || nativeRow.Runtime.Health != agentapi.HealthConnected {
+		t.Errorf("alfred = %+v, want native/connected", byName["alfred"])
+	}
+	if nativeRow.AgentClass != AgentClassMember {
+		t.Errorf("alfred's agentClass = %q, want %q", nativeRow.AgentClass, AgentClassMember)
+	}
+	hobsonRow, ok := byName["hobson"]
+	if !ok || hobsonRow.Runtime.Type != agentapi.RuntimeHermes || hobsonRow.Runtime.Health != agentapi.HealthOffline {
+		t.Errorf("hobson = %+v, want hermes/offline", byName["hobson"])
+	}
+	if hobsonRow.Runtime.Endpoint != "https://hermes-hobson.internal/" {
+		t.Errorf("hobson endpoint = %q", hobsonRow.Runtime.Endpoint)
+	}
+}

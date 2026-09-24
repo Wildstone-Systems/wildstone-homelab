@@ -653,6 +653,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/butlers/{name}/runtime", s.handle(principal.VerbManage, s.consequential(s.setButlerRuntime)))
 	mux.Handle("POST /api/v1/butlers/{name}/runtime/credential", s.handle(principal.VerbManage, s.consequential(s.rotateRuntimeCredential)))
 	mux.Handle("POST /api/v1/butlers/{name}/runtime/revoke", s.handle(principal.VerbManage, s.consequential(s.revokeButlerRuntime)))
+	// The runtime inventory across every live Agent (design doc §9 H9,
+	// #355): one read, same verb as the roster it augments.
+	mux.Handle("GET /api/v1/runtimes", s.handle(principal.VerbRead, s.listAgentRuntimes))
 	mux.Handle("GET /api/v1/butlers/{name}/memory-restrictions", s.handle(principal.VerbRead, s.agentMemoryRestrictions))
 	mux.Handle("PUT /api/v1/butlers/{name}/memory-restrictions", s.handle(principal.VerbManage, s.consequential(s.setAgentMemoryRestriction)))
 	mux.Handle("DELETE /api/v1/butlers/{name}", s.handle(principal.VerbManage, s.consequential(s.retireButler)))

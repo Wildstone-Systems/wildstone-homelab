@@ -1,12 +1,21 @@
 import { useMemo, useState } from "react";
 import { CaretRight, Plus } from "@phosphor-icons/react";
-import { api, modelLabel, type ButlerRow, type ButlerSurface, type Model } from "../api";
-import { ErrorLine, useLoad, when } from "../lib";
-import { Dot, healthOf, StatusPill } from "../ui/status";
+import {
+  api,
+  modelLabel,
+  type ButlerRow,
+  type ButlerSurface,
+  type Model,
+  type RuntimeHealth,
+  type RuntimeInventoryRow,
+} from "../api";
+import { ago, ErrorLine, useLoad, when } from "../lib";
+import { Dot, healthOf, Kind, StatusPill } from "../ui/status";
 import { Toast, useToast } from "../ui/Toast";
 import { ButlerDrawer } from "./butlers/ButlerDrawer";
 import { ProvidersDrawer } from "./butlers/ProvidersDrawer";
 import { NewButlerDialog } from "./butlers/NewButlerDialog";
+import { RUNTIME_HEALTH } from "./Butler";
 
 // The household's Butlers (ADR-W031, work package B6).
 //
@@ -100,6 +109,13 @@ export function Butlers() {
   // execution profile (ADR-W033 A4.1), the same gate RuntimeCard reads
   // on the Butler screen's popover.
   const me = useLoad(() => api.whoami());
+  const canManage = me.data?.role === "admin";
+  // The Runtimes strip's own data (#355, H9): every live Agent's
+  // runtime, one call rather than one per row. Loaded unconditionally,
+  // like everything else on this screen, so a session that becomes the
+  // Owner mid-visit does not need a reload to see it — the strip itself
+  // decides whether to render.
+  const runtimes = useLoad(() => api.runtimes());
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>("active");
@@ -157,6 +173,16 @@ export function Butlers() {
       {attention.length > 0 && filter !== "attention" && (
         <AttentionBanner rows={attention} routes={modelRows} onShow={() => setFilter("attention")} />
       )}
+
+      <RuntimesStrip
+        rows={runtimes.data ?? []}
+        error={runtimes.error}
+        canManage={canManage}
+        onOpen={(name) => {
+          setOpen(name);
+          setOpenTab("runtime");
+        }}
+      />
 
       <RosterFilters
         rows={rows}
@@ -222,7 +248,7 @@ export function Butlers() {
           rows={rows}
           routes={modelRows}
           initialTab={openTab}
-          canManage={me.data?.role === "admin"}
+          canManage={canManage}
           say={say}
           onClose={() => setOpen(null)}
           onChanged={butlers.reload}
@@ -259,6 +285,94 @@ export function Butlers() {
 
       <Toast toast={toast} />
     </>
+  );
+}
+
+// Runtime health, worst first. The pill's own colour vocabulary
+// (ui/status.tsx's Kind) already orders bad and warn ahead of an
+// unremarkable state; this just turns that into a sort key so the strip
+// reads as a triage list rather than a roster the Owner has to scan for
+// the one row on fire.
+const HEALTH_RANK: Record<Kind, number> = { bad: 0, warn: 1, mute: 2, ok: 3 };
+
+function runtimeRank(h: RuntimeHealth): number {
+  return HEALTH_RANK[(RUNTIME_HEALTH[h] ?? { kind: "mute" as Kind }).kind];
+}
+
+// The runtime inventory (#355, design doc §9 H9): every live Agent's
+// runtime at a glance, Owner-only like the Runtime tab it links to
+// (ADR-W033 A4.1) and not duplicated as a per-Agent fetch — the roster
+// already answers "what can each Agent do"; this answers "what is
+// reasoning for it right now", which is the question a runtime gone
+// offline or a credential nobody rotated needs answered without opening
+// every drawer in turn.
+export function RuntimesStrip({
+  rows,
+  error,
+  canManage,
+  onOpen,
+}: {
+  rows: RuntimeInventoryRow[];
+  error: string | null;
+  // Owner-only (ADR-W033 A4.1), the same gate the Runtime tab it links
+  // to reads: an Agent's runtime and credential are the Console
+  // holder's to see across the whole roster, not a member's.
+  canManage: boolean;
+  onOpen: (name: string) => void;
+}) {
+  if (!canManage) return null;
+  if (rows.length === 0 && !error) return null;
+  const sorted = rows
+    .slice()
+    .sort((a, b) => runtimeRank(a.runtime.health) - runtimeRank(b.runtime.health) || a.butler.localeCompare(b.butler));
+  return (
+    <section className="card" style={{ marginBottom: "var(--space-4)" }}>
+      <h4 style={{ marginTop: 0 }}>Runtimes</h4>
+      <ErrorLine error={error} />
+      {sorted.length > 0 && (
+        <table>
+          <thead>
+            <tr>
+              <th>agent</th>
+              <th>runtime</th>
+              <th>health</th>
+              <th>heartbeat</th>
+              <th>profile</th>
+              <th>class</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((r) => (
+              <RuntimeInventoryRowLine key={r.butler} row={r} onOpen={() => onOpen(r.butler)} />
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+function RuntimeInventoryRowLine({ row, onOpen }: { row: RuntimeInventoryRow; onOpen: () => void }) {
+  const rt = row.runtime;
+  const health = RUNTIME_HEALTH[rt.health] ?? { kind: "mute" as Kind, label: rt.health };
+  const heartbeat = rt.lastHeartbeat ? ago(rt.lastHeartbeat) : rt.type === "native" ? "in-process" : "never";
+  return (
+    <tr>
+      <td>
+        <button type="button" className="btn btn-ghost btn-small" onClick={onOpen}>
+          {row.butler}
+        </button>
+      </td>
+      <td>{rt.type}</td>
+      <td>
+        <StatusPill kind={health.kind} icon={<Dot kind={health.kind} />}>
+          {health.label}
+        </StatusPill>
+      </td>
+      <td className="muted tnum">{heartbeat}</td>
+      <td className="muted">{rt.executionProfileRef || "platform-only"}</td>
+      <td className="muted">{rt.negotiated?.processingClass || "—"}</td>
+    </tr>
   );
 }
 

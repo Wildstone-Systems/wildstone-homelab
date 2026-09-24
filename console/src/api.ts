@@ -436,6 +436,15 @@ export interface RuntimeRecord {
   executionProfileRef?: string;
 }
 
+// One row of the runtime inventory across every live Agent (#355,
+// design doc §9 H9): what GET /api/v1/runtimes answers with, an Owner
+// scan of every Agent's runtime without opening each one's drawer.
+export interface RuntimeInventoryRow {
+  butler: string;
+  agentClass: AgentClass;
+  runtime: RuntimeRecord;
+}
+
 // What rotating a runtime credential answers with. `secret` is present
 // exactly once, when it was returned rather than placed on a node; when
 // a node was named, `node` and `secretName` say where it went instead.
@@ -1856,6 +1865,9 @@ export const api = {
   // step-up on a stale sign-in like every other.
   butlerRuntime: (name: string) =>
     call<RuntimeRecord>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/runtime`),
+  // Every live Agent's runtime, one call (#355, H9) — the Butlers
+  // screen's Runtimes strip, not a fetch per row.
+  runtimes: () => call<RuntimeInventoryRow[]>("GET", "/api/v1/runtimes"),
   // Replaces the runtime and nothing else. A type change revokes the
   // old credential; a config change on the same type does not.
   setButlerRuntime: (

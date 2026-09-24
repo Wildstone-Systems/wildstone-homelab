@@ -150,6 +150,67 @@ func (db *DB) SetNativeRuntimeProcessingClass(butlerSeq int64, modelKind, by str
 	return db.SetButlerRuntime(butlerSeq, rt, by)
 }
 
+// ButlerRuntimeInventory is one row of the runtime inventory across
+// every live Agent (issue #355, H9): the Agent's name and class beside
+// its runtime record, the shape an Owner needs to see every Agent's
+// runtime at a glance without a fetch per Agent.
+type ButlerRuntimeInventory struct {
+	Butler     string        `json:"butler"`
+	AgentClass string        `json:"agentClass"`
+	Runtime    ButlerRuntime `json:"runtime"`
+}
+
+// ListButlerRuntimes returns the runtime record of every LIVE (never
+// retired) Agent, one query, ordered by name.
+//
+// Retired is excluded rather than merely marked, the way ListButlers
+// marks it instead: a retired Agent's runtime was already revoked at
+// retirement (§3.7) and cannot act again until restored, so an
+// inventory of "what is answering" has nothing to say about it — the
+// Butlers roster is where "what used to run here" lives.
+func (db *DB) ListButlerRuntimes() ([]ButlerRuntimeInventory, error) {
+	rows, err := db.sql.Query(`
+		SELECT b.name, b.agent_class, bt.butler, bt.type, bt.endpoint, bt.principal,
+		       bt.health, bt.last_heartbeat, bt.delivery, bt.processing_class,
+		       bt.execution_profile, bt.updated_at, bt.updated_by
+		  FROM butlers b JOIN butler_runtimes bt ON bt.butler = b.seq
+		 WHERE b.retired_at = ''
+		 ORDER BY b.name`)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing agent runtimes: %w", err)
+	}
+	defer rows.Close()
+	var out []ButlerRuntimeInventory
+	for rows.Next() {
+		var name, class string
+		var rt ButlerRuntime
+		var typ, health, delivery, procClass, heartbeat, updated string
+		if err := rows.Scan(&name, &class, &rt.Butler, &typ, &rt.Endpoint, &rt.Principal,
+			&health, &heartbeat, &delivery, &procClass, &rt.ExecutionProfile, &updated, &rt.UpdatedBy); err != nil {
+			return nil, fmt.Errorf("runtimedb: scanning agent runtime: %w", err)
+		}
+		rt.Type = agentapi.RuntimeType(typ)
+		rt.Health = agentapi.RuntimeHealth(health)
+		rt.Delivery = agentapi.DeliveryMode(delivery)
+		rt.ProcessingClass = agentapi.ProcessingClass(procClass)
+		for _, f := range []struct {
+			text string
+			into *time.Time
+		}{{heartbeat, &rt.LastHeartbeat}, {updated, &rt.UpdatedAt}} {
+			if f.text == "" {
+				continue
+			}
+			parsed, err := time.Parse(time.RFC3339Nano, f.text)
+			if err != nil {
+				return nil, fmt.Errorf("runtimedb: bad runtime timestamp %q: %w", f.text, err)
+			}
+			*f.into = parsed
+		}
+		out = append(out, ButlerRuntimeInventory{Butler: name, AgentClass: class, Runtime: rt})
+	}
+	return out, rows.Err()
+}
+
 // GetButlerRuntime reads one Agent's runtime record by Butler seq.
 // ErrNotFound when the Agent has none, which after 0081 means the Agent
 // itself does not exist.

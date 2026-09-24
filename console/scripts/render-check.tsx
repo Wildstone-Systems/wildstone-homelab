@@ -68,7 +68,7 @@ const store = new Map<string, string>();
   length: 0,
 } as Storage;
 import { Household, AddMember, EditMember } from "../src/views/Household";
-import { AttentionBanner, Butlers, NoButlers, NoMatches, RosterRow, needsAttention, reachLine, select, toolLine } from "../src/views/Butlers";
+import { AttentionBanner, Butlers, NoButlers, NoMatches, RosterRow, RuntimesStrip, needsAttention, reachLine, select, toolLine } from "../src/views/Butlers";
 import { HouseholdActions, Tool } from "../src/views/butlers/TabTools";
 import { ButlerPicker, matches, openingFor, preferred } from "../src/views/butler/picker";
 import { BlockedStrip } from "../src/views/Butler";
@@ -79,7 +79,7 @@ import { NewButlerDialog } from "../src/views/butlers/NewButlerDialog";
 import { RouteList } from "../src/views/butlers/TabModel";
 import { Confirm } from "../src/ui/Confirm";
 import { Tabs } from "../src/ui/Tabs";
-import type { ButlerRow as ButlerRosterRow, Model } from "../src/api";
+import type { ButlerRow as ButlerRosterRow, Model, RuntimeInventoryRow } from "../src/api";
 
 // Exactly what GET /api/v1/packages serves, copied from the live VM.
 const pkg = {
@@ -1625,6 +1625,40 @@ const trBlocked = renderToString(h(TabRuntime, {
 }));
 check("host-admin on a native, member-class Agent is flagged before Save",
   text(trBlocked).includes("needs a non-native runtime or an Owner-class Agent"), trBlocked);
+
+// RuntimesStrip (#355, H9): every live Agent's runtime at a glance,
+// unhealthy first, Owner-only like the Runtime tab it links to.
+const runtimeRows: RuntimeInventoryRow[] = [
+  {
+    butler: "health", agentClass: "member",
+    runtime: { type: "native", credentialRef: "runtime-health-1", health: "connected",
+      negotiated: { delivery: "push" }, executionProfileRef: "platform-only" },
+  },
+  {
+    butler: "nutrition", agentClass: "member",
+    runtime: { type: "hermes", endpoint: "https://hermes-nutrition.internal/", credentialRef: "runtime-nutrition-2",
+      health: "offline", lastHeartbeat: "2026-09-20T09:00:00Z",
+      negotiated: { delivery: "push", processingClass: "local_only" }, executionProfileRef: "sandboxed" },
+  },
+];
+const stripOwner = renderToString(h(RuntimesStrip, { rows: runtimeRows, error: null, canManage: true, onOpen: () => {} }));
+check("the strip lists every Agent it was given", stripOwner.includes("health") && stripOwner.includes("nutrition"), stripOwner);
+check("an offline runtime says so", stripOwner.includes(">offline<"), stripOwner);
+check("a connected native runtime says so", stripOwner.includes(">connected<"), stripOwner);
+check("the strip shows the runtime type, profile and declared class",
+  stripOwner.includes(">hermes<") && stripOwner.includes("sandboxed") && stripOwner.includes("local_only"), stripOwner);
+// Unhealthy first: nutrition (offline) sorts ahead of health (connected)
+// even though "health" is alphabetically first. Matched by the name
+// button's own markup, not the bare word — "health" is also a column
+// header, which renders earlier than either row.
+check("the strip sorts unhealthy runtimes first",
+  stripOwner.indexOf(">nutrition</button>") < stripOwner.indexOf(">health</button>"), stripOwner);
+
+const stripMember = renderToString(h(RuntimesStrip, { rows: runtimeRows, error: null, canManage: false, onOpen: () => {} }));
+check("without manage the strip renders nothing", stripMember === "", stripMember);
+
+const stripEmpty = renderToString(h(RuntimesStrip, { rows: [], error: null, canManage: true, onOpen: () => {} }));
+check("an Owner with no Agents sees no empty strip", stripEmpty === "", stripEmpty);
 
 // Tool rows: three states, and only two of them are ours to undo.
 const onTool = renderToString(h(Tool, {
