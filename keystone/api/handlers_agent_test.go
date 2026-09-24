@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi/conformance"
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi/httpclient"
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentgateway"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
@@ -68,7 +68,15 @@ func (conformanceToolset) Permits(string, bool) (bool, string)         { return 
 func (conformanceToolset) SystemPrompt() string                        { return "conformance surface" }
 
 func (conformanceToolset) OfferedSpecs(readOnly bool) []provider.Tool {
-	specs := []provider.Tool{{Name: "peek", Description: "read something. It changes nothing."}}
+	specs := []provider.Tool{
+		{Name: "peek", Description: "read something. It changes nothing."},
+		// "remember" is not gated on readOnly: the gateway's own Remember
+		// (agentgateway/memory.go) refuses household scope before it ever
+		// dispatches here, and every other refusal this fixture cares
+		// about (an unknown tool, a foreign handle) is exercised through
+		// "peek" and "propose_change" instead.
+		{Name: "remember", Description: "remember a fact. (conformance fixture: never actually persisted; see agentgateway's own memory tests for the real round trip.)"},
+	}
 	if !readOnly {
 		specs = append(specs, provider.Tool{Name: "propose_change", Description: "propose a change for approval."})
 	}
@@ -79,6 +87,12 @@ func (conformanceToolset) Execute(_ context.Context, name string, _ map[string]a
 	switch name {
 	case "peek":
 		return butler.ToolOutcome{Content: "peek: all clear"}, nil
+	case "remember":
+		// A minimal, deterministic success: this fixture writes nothing
+		// durable, so conformance.Target.RequireRecallHit is left false
+		// when this toolset backs a conformance.Run (Recall still runs
+		// against the real memory store and is scope-checked either way).
+		return butler.ToolOutcome{Content: "remembered"}, nil
 	case "propose_change":
 		return butler.ToolOutcome{Content: "proposed", Plan: &plan.Plan{Summary: "conformance proposal"}, ResourceYAML: conformanceProposalYAML}, nil
 	default:
@@ -89,6 +103,7 @@ func (conformanceToolset) Execute(_ context.Context, name string, _ map[string]a
 func (conformanceToolset) Capabilities(readOnly bool) butler.CapabilityManifest {
 	m := butler.CapabilityManifest{AgentClass: butler.AgentClassOwner, ModelVerdict: butler.VerdictFull}
 	m.Tools = append(m.Tools, butler.CapabilityTool{Name: "peek", Available: true})
+	m.Tools = append(m.Tools, butler.CapabilityTool{Name: "remember", Available: true})
 	pc := butler.CapabilityTool{Name: "propose_change", Mutating: true, Available: !readOnly}
 	if readOnly {
 		pc.Reason = "this session runs read-only, so tools that change anything are withheld"
@@ -199,54 +214,58 @@ func openAgentTask(t *testing.T, db *runtimedb.DB, ledger *butlerstore.Ledger, b
 	return id, h
 }
 
-// agentScriptResult is every response the shared script produces that
-// carries a body worth comparing byte for byte.
-type agentScriptResult struct {
-	manifest      agentapi.Manifest
-	readInvoke    agentapi.InvokeResult
-	proposeInvoke agentapi.InvokeResult
-	recall        []agentapi.MemoryHit
-	checkpoint    agentapi.CheckpointReceipt
+// comparableAgentScript is every response runAgentScript produces that
+// is worth comparing byte for byte — exported fields, unlike a private
+// bookkeeping struct, because conformance.Compare marshals it through
+// plain encoding/json with no field access of its own into this
+// package.
+type comparableAgentScript struct {
+	Manifest      agentapi.Manifest
+	ReadInvoke    agentapi.InvokeResult
+	ProposeInvoke agentapi.InvokeResult
+	Checkpoint    agentapi.CheckpointReceipt
+	Recall        []agentapi.MemoryHit
 }
 
-// runAgentScript is the ONE script both arms of the conformance test
-// run: manifest, then start (Complete needs a running task), invoke a
+// runAgentScript is the ONE script both arms of
+// TestInProcessAndHTTPAreByteIdentical run, now driven by whichever
+// context and handle the conformance.Target it is called for supplies:
+// manifest, then start (Complete needs a running task), invoke a
 // read-only tool, invoke a mutating one that becomes a proposal,
-// checkpoint a model step, and complete with evidence. Fatal on any
-// unexpected error so a divergence in ERROR behaviour — not just in a
-// successful response — fails the test immediately rather than being
+// checkpoint a model step, recall, and complete with evidence. Fatal on
+// any unexpected error so a divergence in ERROR behaviour — not just in
+// a successful response — fails the test immediately rather than being
 // silently skipped.
-func runAgentScript(t *testing.T, client agentapi.Client, handle agentapi.Handle) agentScriptResult {
+func runAgentScript(t *testing.T, ctx context.Context, client agentapi.Client, handle agentapi.Handle) comparableAgentScript {
 	t.Helper()
-	ctx := context.Background()
-	var out agentScriptResult
+	var out comparableAgentScript
 	var err error
 
-	out.manifest, err = client.Manifest(ctx, handle)
+	out.Manifest, err = client.Manifest(ctx, handle)
 	if err != nil {
 		t.Fatalf("Manifest: %v", err)
 	}
 	if err := client.Start(ctx, agentapi.WorkStart{Handle: handle, Reason: "conformance"}); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	out.readInvoke, err = client.Invoke(ctx, agentapi.InvokeRequest{Handle: handle, Tool: "peek"})
+	out.ReadInvoke, err = client.Invoke(ctx, agentapi.InvokeRequest{Handle: handle, Tool: "peek"})
 	if err != nil {
 		t.Fatalf("Invoke(peek): %v", err)
 	}
-	out.proposeInvoke, err = client.Invoke(ctx, agentapi.InvokeRequest{
+	out.ProposeInvoke, err = client.Invoke(ctx, agentapi.InvokeRequest{
 		Handle: handle, Tool: "propose_change", Args: json.RawMessage(`{"target":"n1"}`),
 	})
 	if err != nil {
 		t.Fatalf("Invoke(propose_change): %v", err)
 	}
-	out.checkpoint, err = client.Checkpoint(ctx, agentapi.Checkpoint{
+	out.Checkpoint, err = client.Checkpoint(ctx, agentapi.Checkpoint{
 		Handle: handle, State: agentapi.StepProposed, Kind: agentapi.StepModel,
 		Name: "round-1", Params: json.RawMessage(`{}`),
 	})
 	if err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	out.recall, err = client.Recall(ctx, agentapi.RecallRequest{Handle: handle, Text: "n1"})
+	out.Recall, err = client.Recall(ctx, agentapi.RecallRequest{Handle: handle, Text: "n1"})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -257,23 +276,6 @@ func runAgentScript(t *testing.T, client agentapi.Client, handle agentapi.Handle
 		t.Fatalf("Complete: %v", err)
 	}
 	return out
-}
-
-// assertSameJSON is the byte-identical assertion itself: both values
-// marshal, through encoding/json, to the exact same bytes.
-func assertSameJSON(t *testing.T, label string, inProcess, overHTTP any) {
-	t.Helper()
-	a, err := json.Marshal(inProcess)
-	if err != nil {
-		t.Fatalf("marshaling the in-process %s: %v", label, err)
-	}
-	b, err := json.Marshal(overHTTP)
-	if err != nil {
-		t.Fatalf("marshaling the HTTP %s: %v", label, err)
-	}
-	if string(a) != string(b) {
-		t.Errorf("%s is not byte-identical:\n in-process %s\n over HTTP  %s", label, a, b)
-	}
 }
 
 // ledgerRowKey and ledgerTraceKey are what the two arms' ledgers must
@@ -339,8 +341,6 @@ func TestInProcessAndHTTPAreByteIdentical(t *testing.T) {
 		Proposals: proposals.Deps{DB: dbA, State: stateA, Policy: policy.NewEngine(nil)},
 	}
 	clientA := agentgateway.InProcess(gwA)
-	taskA, handleA := openAgentTask(t, dbA, ledgerA, butlerA)
-	resultA := runAgentScript(t, clientA, handleA)
 
 	// Arm B: the real api.Server, over HTTP, authenticated as a real
 	// runtime principal's bearer — everything a Hermes bridge would
@@ -370,14 +370,34 @@ func TestInProcessAndHTTPAreByteIdentical(t *testing.T) {
 		t.Fatalf("Mint: %v", err)
 	}
 	clientB := &httpclient.Client{BaseURL: srv, Bearer: token}
-	taskB, handleB := openAgentTask(t, dbB, ledgerB, butlerB)
-	resultB := runAgentScript(t, clientB, handleB)
 
-	assertSameJSON(t, "manifest", resultA.manifest, resultB.manifest)
-	assertSameJSON(t, "invoke(peek)", resultA.readInvoke, resultB.readInvoke)
-	assertSameJSON(t, "invoke(propose_change)", resultA.proposeInvoke, resultB.proposeInvoke)
-	assertSameJSON(t, "checkpoint", resultA.checkpoint, resultB.checkpoint)
-	assertSameJSON(t, "recall", resultA.recall, resultB.recall)
+	// The two conformance.Targets share exactly the fields runAgentScript
+	// needs: a Client, a context (Arm A's own carries the in-process
+	// runtime principal; Arm B's authority travels in its Bearer, so a
+	// plain context.Background is enough), and a Handle closure that
+	// opens the one task each arm's own script runs against, capturing
+	// its id for the ledger comparisons below.
+	var taskA, taskB string
+	targetA := conformance.Target{
+		Client:  clientA,
+		Context: func() context.Context { return agentgateway.WithPrincipal(context.Background(), principalName) },
+		Handle: func(t *testing.T) agentapi.Handle {
+			id, h := openAgentTask(t, dbA, ledgerA, butlerA)
+			taskA = id
+			return h
+		},
+	}
+	targetB := conformance.Target{
+		Client: clientB,
+		Handle: func(t *testing.T) agentapi.Handle {
+			id, h := openAgentTask(t, dbB, ledgerB, butlerB)
+			taskB = id
+			return h
+		},
+	}
+	conformance.Compare(t, targetA, targetB, func(t *testing.T, target conformance.Target) any {
+		return runAgentScript(t, target.Ctx(), target.Client, target.Handle(t))
+	})
 
 	if taskA != taskB {
 		t.Fatalf("the two arms opened different task ids (%s vs %s); the fixtures have drifted apart", taskA, taskB)
@@ -415,6 +435,73 @@ func TestInProcessAndHTTPAreByteIdentical(t *testing.T) {
 	}
 }
 
+// comparableDeliveryScript is runDeliveryScript's own return value:
+// exported fields, so conformance.Compare's plain encoding/json marshal
+// sees them.
+type comparableDeliveryScript struct {
+	First              []agentapi.Delivery
+	AfterFirstAck      []agentapi.Delivery
+	AfterSkippingItsID []agentapi.Delivery
+}
+
+// runDeliveryScript is the ONE script both arms of
+// TestDeliveryClientIsByteIdenticalInProcessAndOverHTTP run: read the
+// two seeded deliveries, ack the first (twice, to prove idempotency),
+// read what is left, then prove after= the remaining one's own id
+// excludes it. ExpiresAt is zeroed before comparison — each arm is its
+// own database and calls time.Now() independently — but everything a
+// runtime actually reads to act (id, kind, subscription, handle,
+// payload) travels into the comparison untouched.
+func runDeliveryScript(t *testing.T, target conformance.Target) comparableDeliveryScript {
+	t.Helper()
+	ctx := target.Ctx()
+	sameShape := func(d agentapi.Delivery) agentapi.Delivery { d.ExpiresAt = time.Time{}; return d }
+	shapeAll := func(ds []agentapi.Delivery) []agentapi.Delivery {
+		out := make([]agentapi.Delivery, len(ds))
+		for i, d := range ds {
+			out[i] = sameShape(d)
+		}
+		return out
+	}
+
+	var out comparableDeliveryScript
+	got, err := target.Deliveries.Deliveries(ctx, "", 0)
+	if err != nil {
+		t.Fatalf("Deliveries: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("Deliveries = %+v, want 2", got)
+	}
+	out.First = shapeAll(got)
+
+	// Ack the first, then a repeat ack is a no-op.
+	if err := target.Deliveries.Ack(ctx, got[0].ID); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+	if err := target.Deliveries.Ack(ctx, got[0].ID); err != nil {
+		t.Fatalf("repeat Ack: %v", err)
+	}
+
+	after, err := target.Deliveries.Deliveries(ctx, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("after acking the first = %+v, want exactly one left", after)
+	}
+	out.AfterFirstAck = shapeAll(after)
+
+	skip, err := target.Deliveries.Deliveries(ctx, after[0].ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skip) != 0 {
+		t.Fatalf("after= its own id = %+v, want none", skip)
+	}
+	out.AfterSkippingItsID = shapeAll(skip)
+	return out
+}
+
 // TestDeliveryClientIsByteIdenticalInProcessAndOverHTTP is
 // agentapi.DeliveryClient's own conformance evidence (ADR-W039 §3.6,
 // §4.1 "pull fallback"; Phase 4, #341), the same in-process/HTTP shape
@@ -425,12 +512,13 @@ func TestInProcessAndHTTPAreByteIdentical(t *testing.T) {
 // arm is its own database and calls time.Now() independently — but
 // everything a runtime actually reads to act (id, kind, subscription,
 // handle, payload) is compared byte for byte, and both arms' ack
-// behaviour (idempotent, after= excludes) is proven identically.
+// behaviour (idempotent, after= excludes) is proven identically, via
+// runDeliveryScript and conformance.Compare above.
 func TestDeliveryClientIsByteIdenticalInProcessAndOverHTTP(t *testing.T) {
 	dbA, ledgerA, butlerA := newAgentEnv(t)
 	gwA := &agentgateway.Gateway{DB: dbA, Ledger: ledgerA, Gateways: conformanceGateways(), Clock: conformanceClock}
-	clientA := agentgateway.InProcess(gwA).(agentapi.DeliveryClient)
-	ctxA := agentgateway.WithPrincipal(context.Background(), "runtime-alfred-1")
+	clientA := agentgateway.InProcess(gwA)
+	deliveriesA := clientA.(agentapi.DeliveryClient)
 
 	dbB, ledgerB, butlerB := newAgentEnv(t)
 	p := &principal.Store{DB: dbB}
@@ -448,7 +536,6 @@ func TestDeliveryClientIsByteIdenticalInProcessAndOverHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	clientB := &httpclient.Client{BaseURL: srv, Bearer: token}
-	ctxB := context.Background()
 
 	for _, db := range []*runtimedb.DB{dbA, dbB} {
 		var b runtimedb.Butler
@@ -465,61 +552,14 @@ func TestDeliveryClientIsByteIdenticalInProcessAndOverHTTP(t *testing.T) {
 		}
 	}
 
-	sameShape := func(d agentapi.Delivery) agentapi.Delivery { d.ExpiresAt = time.Time{}; return d }
-	gotA, err := clientA.Deliveries(ctxA, "", 0)
-	if err != nil {
-		t.Fatalf("in-process Deliveries: %v", err)
+	targetA := conformance.Target{
+		Client: clientA, Deliveries: deliveriesA,
+		Context: func() context.Context { return agentgateway.WithPrincipal(context.Background(), "runtime-alfred-1") },
 	}
-	gotB, err := clientB.Deliveries(ctxB, "", 0)
-	if err != nil {
-		t.Fatalf("http Deliveries: %v", err)
-	}
-	if len(gotA) != 2 || len(gotB) != 2 {
-		t.Fatalf("deliveries: in-process %+v, http %+v, want 2 each", gotA, gotB)
-	}
-	for i := range gotA {
-		assertSameJSON(t, fmt.Sprintf("delivery[%d]", i), sameShape(gotA[i]), sameShape(gotB[i]))
-	}
-
-	// Ack the first on both arms, identically, then a repeat ack is a
-	// no-op on both, and after= the first excludes it on both.
-	if err := clientA.Ack(ctxA, gotA[0].ID); err != nil {
-		t.Fatalf("in-process Ack: %v", err)
-	}
-	if err := clientB.Ack(ctxB, gotB[0].ID); err != nil {
-		t.Fatalf("http Ack: %v", err)
-	}
-	if err := clientA.Ack(ctxA, gotA[0].ID); err != nil {
-		t.Fatalf("in-process repeat Ack: %v", err)
-	}
-	if err := clientB.Ack(ctxB, gotB[0].ID); err != nil {
-		t.Fatalf("http repeat Ack: %v", err)
-	}
-
-	afterA, err := clientA.Deliveries(ctxA, "", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	afterB, err := clientB.Deliveries(ctxB, "", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(afterA) != 1 || len(afterB) != 1 {
-		t.Fatalf("after acking the first: in-process %+v, http %+v, want exactly one left on each", afterA, afterB)
-	}
-	assertSameJSON(t, "remaining delivery", sameShape(afterA[0]), sameShape(afterB[0]))
-
-	skipA, err := clientA.Deliveries(ctxA, afterA[0].ID, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	skipB, err := clientB.Deliveries(ctxB, afterB[0].ID, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(skipA) != 0 || len(skipB) != 0 {
-		t.Fatalf("after= its own id: in-process %+v, http %+v, want none", skipA, skipB)
-	}
+	targetB := conformance.Target{Client: clientB, Deliveries: clientB}
+	conformance.Compare(t, targetA, targetB, func(t *testing.T, target conformance.Target) any {
+		return runDeliveryScript(t, target)
+	})
 }
 
 // newTestHTTPServer starts s.Handler() and returns its base URL,
@@ -957,4 +997,84 @@ func TestReconnectingRuntimeReOffersItsWaitingTasks(t *testing.T) {
 	if len(deliveries) != 1 {
 		t.Fatalf("deliveries after a second, already-connected heartbeat = %+v, want still exactly one", deliveries)
 	}
+}
+
+// conformanceRunHarness builds one Agent, wired exactly as
+// agentEnvHarness wires it, and returns everything a conformance.Target
+// needs: the harness (for direct DB access — SeedDelivery — and for
+// building an HTTP server), the ledger (for Handle), and a rotated
+// runtime credential (for the HTTP target's Bearer).
+func conformanceRunHarness(t *testing.T) (h *harness, ledger *butlerstore.Ledger, b runtimedb.Butler, cred runtimeCredentialResponse) {
+	t.Helper()
+	h, ledger = agentEnvHarness(t)
+	createAgent(t, h, "alfred")
+	cred = rotate(t, h, "alfred", nil)
+	b, err := h.s.DB.GetButler("alfred")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, ledger, b, cred
+}
+
+// conformanceRunTarget is the Target both TestInProcessGatewayIsConformant
+// and TestHTTPClientIsConformant fill in around their own Client and
+// Deliveries: the fixture's own "peek" (read-only), "conformance-unknown-
+// tool" (deliberately absent from the manifest) and "propose_change"
+// (never applied — the conformanceToolset fixture has no real effect to
+// apply in the first place, which is what NeverApplied reports), plus a
+// SeedDelivery that writes directly to the database so
+// DeliveryAckIsIdempotent has something to ack.
+//
+// RequireRecallHit is left at its zero value (false): conformanceToolset's
+// own "remember" tool (see its own doc comment) answers success without
+// persisting anything durable, so Recall legitimately finds nothing here
+// — the real remember/recall round trip is agentgateway/memory_test.go's
+// own proof, over a Toolset that actually wires memory.
+func conformanceRunTarget(h *harness, ledger *butlerstore.Ledger, b runtimedb.Butler) conformance.Target {
+	return conformance.Target{
+		ReadOnlyTool: "peek",
+		UnknownTool:  "conformance-unknown-tool",
+		ProposeTool:  "propose_change",
+		ProposeArgs:  json.RawMessage(`{"target":"n1"}`),
+		NeverApplied: func(t *testing.T) bool { return true },
+		Handle: func(t *testing.T) agentapi.Handle {
+			_, handle := openAgentTask(t, h.s.DB, ledger, b)
+			return handle
+		},
+		SeedDelivery: func(t *testing.T) {
+			if _, err := h.s.DB.RecordAgentDelivery(b.Seq, agentapi.DeliveryProposalOutcome, `{"plan":"p-1","outcome":"approved"}`); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+}
+
+// TestInProcessGatewayIsConformant runs the full ADR-W039 §4 conformance
+// table (deliverable 1, #343) against keystone/agentgateway's own
+// in-process agentapi.Client — proof that the suite itself, not only
+// the hand-picked byte-identical script above, holds for it.
+func TestInProcessGatewayIsConformant(t *testing.T) {
+	h, ledger, b, _ := conformanceRunHarness(t)
+	target := conformanceRunTarget(h, ledger, b)
+	target.Client = h.s.AgentGateway
+	target.Deliveries = h.s.AgentGateway.(agentapi.DeliveryClient)
+	target.Context = func() context.Context {
+		return agentgateway.WithPrincipal(context.Background(), "runtime-alfred-1")
+	}
+	conformance.Run(t, target)
+}
+
+// TestHTTPClientIsConformant runs the identical table against
+// keystone/agentapi/httpclient.Client speaking to a real httptest.Server
+// running api.Server — proof that the suite holds for the OTHER
+// transport ADR-W040 names, exercised exactly as an external runtime
+// would reach it: a bearer and net/http, nothing else.
+func TestHTTPClientIsConformant(t *testing.T) {
+	h, ledger, b, cred := conformanceRunHarness(t)
+	srv := newTestHTTPServer(t, h.s)
+	client := &httpclient.Client{BaseURL: srv, Bearer: cred.Secret}
+	target := conformanceRunTarget(h, ledger, b)
+	target.Client = client
+	target.Deliveries = client
+	conformance.Run(t, target)
 }
