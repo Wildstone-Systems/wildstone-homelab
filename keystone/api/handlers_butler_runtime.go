@@ -11,17 +11,23 @@ package api
 // next year are credentialed the same way: `runtime-<agent>-<n>`, role
 // butler, acting for nobody, bound once.
 //
-// This slice writes the record and mints the principal. It issues no
-// bearer token for it: nothing calls in as the native runtime yet, and
-// a token nobody presents is only a secret waiting to leak. Rotation
-// and revocation are the next slice; the gateway that serves calls
-// made under the principal is Phase 2.
+// Creating an Agent mints the principal and issues no bearer for it:
+// nothing calls in as the native runtime yet, and a token nobody
+// presents is only a secret waiting to leak. A bearer exists from the
+// moment an Owner asks for one — rotation, below — and that is the one
+// moment the secret is ever shown. Rotation, revocation and replacing
+// the runtime are consequential (ADR-W033 A4.1: minting any bearer
+// credential, and withdrawing authority). The gateway that serves
+// calls made under the principal is Phase 2.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
@@ -62,6 +68,25 @@ func runtimePrincipalName(b runtimedb.Butler, serial int, disambiguate bool) str
 		s = fmt.Sprintf("%s.%d", s, b.Seq)
 	}
 	return fmt.Sprintf("%s%s-%d", runtimePrincipalPrefix, s, serial)
+}
+
+// runtimePrincipalStem is a runtime principal's name without its
+// serial: `runtime-health-3` → `runtime-health`. It is what every
+// credential the same Agent holds has in common, and what the secret a
+// packaged runtime reads its token from is named after, so that name
+// survives rotation.
+func runtimePrincipalStem(name string) string {
+	if i := strings.LastIndexByte(name, '-'); i > 0 && strings.Trim(name[i+1:], "0123456789") == "" {
+		return name[:i]
+	}
+	return name
+}
+
+// runtimeSecretName is the node secret a packaged runtime's container
+// reads its bearer from: `runtime-<agent>-token`, per Agent and stable
+// across rotations, as a chat adapter's is per capability.
+func runtimeSecretName(principalName string) string {
+	return runtimePrincipalStem(principalName) + "-token"
 }
 
 // ensureNativeRuntime gives an Agent the native runtime record and a
@@ -120,16 +145,26 @@ func (s *Server) ensureNativeRuntime(b runtimedb.Butler, id principal.Identity) 
 // call the runtime makes comes from the task handle Wildstone issued
 // (§4.1), never from the credential, so the credential carries none.
 //
-// No token is issued. That is deliberate for this slice (see the file
-// comment), and it is what keeps the mint out of the consequential
-// freshness rule: nothing a bearer could present has been created.
+// An Agent that already holds credentials keeps their stem: the
+// successor to `runtime-health.7-1` is `runtime-health.7-2`, not
+// whatever the plain form happens to be free for this serial, so one
+// Agent's credentials never read as two Agents' and the secret named
+// after the stem stays put across rotations.
+//
+// No token is issued here. Creating an Agent needs none, and the one
+// caller that does (rotation) issues it under the consequential gate.
 func (s *Server) mintRuntimePrincipal(b runtimedb.Butler, serial int, id principal.Identity) (string, error) {
 	name := runtimePrincipalName(b, serial, false)
+	if bound, err := s.DB.ListRuntimePrincipals(b.Seq); err != nil {
+		return "", err
+	} else if len(bound) > 0 {
+		name = fmt.Sprintf("%s-%d", runtimePrincipalStem(bound[len(bound)-1]), serial)
+	}
 	if existing, err := s.DB.GetPrincipal(name); err == nil {
-		// The plain name is taken. It is ours only if it is bound to
-		// this Agent — which ensureNativeRuntime would have found — so
-		// this is a slug collision with another Agent, or a name an
-		// operator made by hand. Either way, fold the seq in.
+		// The name is taken. It is ours only if it is bound to this
+		// Agent — which ensureNativeRuntime would have found — so this
+		// is a slug collision with another Agent, or a name an operator
+		// made by hand. Either way, fold the seq in.
 		if owner, ok, err := s.DB.RuntimePrincipalButler(existing.Name); err != nil {
 			return "", err
 		} else if !ok || owner != b.Seq {
@@ -149,11 +184,16 @@ func (s *Server) mintRuntimePrincipal(b runtimedb.Butler, serial int, id princip
 	return name, nil
 }
 
-// revokeAgentRuntime is §3.7's immediate revocation as far as this
-// slice reaches: every credential the Agent ever held is disabled, so
-// each fails closed on its next request, and the runtime is marked
-// revoked. Subscriptions and in-flight attempts do not exist for a
-// runtime principal yet; the later slices fence those here too.
+// revokeAgentRuntime is §3.7's immediate revocation: every credential
+// the Agent ever held is disabled and every bearer issued for it is
+// revoked, so each fails closed on its next request (Authenticate
+// checks both per request); in-flight attempts are fenced; and the
+// runtime is marked revoked. No runtime cooperation is needed.
+//
+// Tokens are revoked as well as the principal disabled because
+// re-enabling is a thing that happens — restoring a retired Agent,
+// moving one back to native — and a principal that came back with its
+// old bearers still live would hand yesterday's runtime today's Agent.
 func (s *Server) revokeAgentRuntime(b runtimedb.Butler) error {
 	bound, err := s.DB.ListRuntimePrincipals(b.Seq)
 	if err != nil {
@@ -163,6 +203,12 @@ func (s *Server) revokeAgentRuntime(b runtimedb.Butler) error {
 		if err := s.DB.SetPrincipalDisabled(name, true); err != nil {
 			return fmt.Errorf("disabling %s: %w", name, err)
 		}
+		if _, err := s.DB.RevokeTokensFor(name); err != nil {
+			return err
+		}
+	}
+	if err := s.fenceRuntimeTasks(b); err != nil {
+		return err
 	}
 	err = s.DB.SetRuntimeHealth(b.Seq, agentapi.HealthRevoked)
 	if errors.Is(err, runtimedb.ErrNotFound) {
@@ -171,6 +217,17 @@ func (s *Server) revokeAgentRuntime(b runtimedb.Butler) error {
 		return nil
 	}
 	return err
+}
+
+// fenceRuntimeTasks is where revocation fences the Agent's in-flight
+// attempts (§3.7): bump each open task's lease epoch so a result the
+// old runtime sends after the fact is refused, the way
+// butler.TaskLedger.FenceAttempts already does for a superseded
+// attempt. It is a hook for Phase 2, which is where a task first comes
+// to be served under a runtime principal; until then no attempt runs
+// as one, there is nothing to fence, and this is deliberately empty.
+func (s *Server) fenceRuntimeTasks(b runtimedb.Butler) error {
+	return nil
 }
 
 // BackfillRuntimePrincipals mints a runtime principal for every live
@@ -208,6 +265,25 @@ func (s *Server) BackfillRuntimePrincipals() error {
 	return nil
 }
 
+// liveAgentRuntime resolves the Agent a runtime route names and its
+// record, refusing a retired one: its runtime was revoked when it
+// retired, and restoring is the one way back.
+func (s *Server) liveAgentRuntime(name string) (runtimedb.Butler, runtimedb.ButlerRuntime, int, error) {
+	b, err := s.DB.GetButler(name)
+	if errors.Is(err, runtimedb.ErrNotFound) || (err == nil && !b.RetiredAt.IsZero()) {
+		return runtimedb.Butler{}, runtimedb.ButlerRuntime{}, http.StatusNotFound,
+			fmt.Errorf("no butler named %q, or it is retired", name)
+	}
+	if err != nil {
+		return runtimedb.Butler{}, runtimedb.ButlerRuntime{}, http.StatusInternalServerError, err
+	}
+	rt, err := s.DB.GetButlerRuntime(b.Seq)
+	if err != nil {
+		return runtimedb.Butler{}, runtimedb.ButlerRuntime{}, http.StatusInternalServerError, err
+	}
+	return b, rt, http.StatusOK, nil
+}
+
 // butlerRuntime is GET /api/v1/butlers/{name}/runtime: the Agent's
 // runtime record in the Agent API's shape (§3.3). A read, like the rest
 // of what the Console shows about an Agent; the credential is a
@@ -218,6 +294,273 @@ func (s *Server) butlerRuntime(r *http.Request, _ principal.Identity) (any, int,
 	if errors.Is(err, runtimedb.ErrNotFound) {
 		return nil, http.StatusNotFound, fmt.Errorf("no butler named %q", name)
 	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return rt.Record(), http.StatusOK, nil
+}
+
+// setButlerRuntime is PUT /api/v1/butlers/{name}/runtime: the Owner
+// decides which runtime backs the Agent and how it is reached (§3.3).
+//
+// A runtime change replaces the `runtime` field and nothing else
+// (§3.7): the old credential is revoked, the new runtime registered,
+// and identity, members, tools, Connections, routines and memory are
+// untouched — none of them is read here, let alone written. Moving to
+// native is complete in itself, because the native runner is loaded
+// with the process: its credential is re-enabled and it is connected.
+// Moving to anything else leaves the Agent `unregistered` with a
+// disabled credential until the Owner rotates one for the new runtime
+// and it authenticates.
+//
+// Changing the configuration of the runtime the Agent is already on —
+// its endpoint, delivery, class, profile — revokes nothing. That is a
+// different act with a different guard, and folding the two together
+// would make every endpoint edit a credential reset.
+//
+// CONSEQUENTIAL (A4.1): a type change withdraws a credential, and the
+// declared processing class decides what the gateway will let reach a
+// model outside the house.
+func (s *Server) setButlerRuntime(r *http.Request, id principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	var req struct {
+		Type       string `json:"type"`
+		Endpoint   string `json:"endpoint"`
+		Negotiated struct {
+			Delivery        string `json:"delivery"`
+			ProcessingClass string `json:"processingClass"`
+		} `json:"negotiated"`
+		ExecutionProfileRef string `json:"executionProfileRef"`
+	}
+	if code, err := decodeStrict(r, &req); err != nil {
+		return nil, code, err
+	}
+	next := runtimedb.ButlerRuntime{
+		Type:             agentapi.RuntimeType(req.Type),
+		Endpoint:         strings.TrimSpace(req.Endpoint),
+		Delivery:         agentapi.DeliveryMode(req.Negotiated.Delivery),
+		ProcessingClass:  agentapi.ProcessingClass(req.Negotiated.ProcessingClass),
+		ExecutionProfile: strings.TrimSpace(req.ExecutionProfileRef),
+	}
+	// Everything the request can get wrong is refused before anything
+	// is revoked: a bad body must not cost the Agent its credential.
+	if !next.Type.Valid() {
+		return nil, http.StatusBadRequest, fmt.Errorf("runtime type must be one of native, hermes, openclaw")
+	}
+	if next.Type == agentapi.RuntimeNative && next.Endpoint != "" {
+		return nil, http.StatusBadRequest, fmt.Errorf("the native runtime is in-process and has no endpoint")
+	}
+	if next.Delivery != "" && !next.Delivery.Valid() {
+		return nil, http.StatusBadRequest, fmt.Errorf("delivery must be push or pull")
+	}
+	if next.ProcessingClass != "" && !next.ProcessingClass.Valid() {
+		return nil, http.StatusBadRequest, fmt.Errorf("processingClass must be local_only or cloud")
+	}
+	b, current, code, err := s.liveAgentRuntime(name)
+	if err != nil {
+		return nil, code, err
+	}
+
+	switch {
+	case next.Type != current.Type:
+		if err := s.revokeAgentRuntime(b); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		if err := s.DB.SetButlerRuntime(b.Seq, next, actingMember(id)); err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		if next.Type == agentapi.RuntimeNative {
+			if err := s.ensureNativeRuntime(b, id); err != nil {
+				return nil, http.StatusInternalServerError, err
+			}
+		} else if err := s.DB.SetRuntimeHealth(b.Seq, agentapi.HealthUnregistered); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		s.event("butler.runtime", "", id, fmt.Sprintf("runtime of %s changed from %s to %s; previous credentials revoked",
+			b.Name, current.Type, next.Type))
+	default:
+		if err := s.DB.SetButlerRuntime(b.Seq, next, actingMember(id)); err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		s.event("butler.runtime", "", id, fmt.Sprintf("runtime of %s reconfigured (%s)", b.Name, next.Type))
+	}
+	rt, err := s.DB.GetButlerRuntime(b.Seq)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return rt.Record(), http.StatusOK, nil
+}
+
+// runtimeCredentialResponse is what rotating a runtime credential
+// answers with. It is the one body on the runtime routes that may
+// carry a secret, in the only moment it ever exists in a response
+// (ADR-W007 A3/B3; §4.1 "shows the credential once"), and writeJSON
+// exempts it from redaction by type. When the secret was placed on a
+// node instead, Secret is empty and Node says where it went.
+type runtimeCredentialResponse struct {
+	CredentialRef string    `json:"credentialRef"`
+	Secret        string    `json:"secret,omitempty"`
+	Node          string    `json:"node,omitempty"`
+	SecretName    string    `json:"secretName,omitempty"`
+	ExpiresAt     time.Time `json:"expiresAt,omitzero"`
+	Plan          string    `json:"plan,omitempty"`
+}
+
+// rotateRuntimeCredential is POST /api/v1/butlers/{name}/runtime/credential:
+// issue the Agent's runtime credential (§4.1 "credential issue and
+// rotation"). A successor principal `runtime-<agent>-<n+1>` is minted
+// and bound, a bearer is issued for it, and every predecessor is
+// disabled with its tokens revoked — rotation is minting a successor
+// and disabling the predecessor, nothing subtler.
+//
+// The secret is returned exactly once and never stored or logged. With
+// `node` in the body it is placed on that node as the provided secret
+// `runtime-<agent>-token` instead, the way a chat adapter's token is
+// (mintChatAdapter; ADR-W024 A10's executor), and the response names
+// the secret rather than carrying it. That is the path for a
+// Wildstone-packaged runtime; a runtime somebody runs elsewhere takes
+// the secret from the response and pastes it into its own config.
+//
+// Bearers have no expiry, as a chat adapter's and a publisher's do
+// not: a runtime is a standing thing, and the way to end its
+// credential is here, not a clock.
+//
+// CONSEQUENTIAL (A4.1): minting any bearer credential.
+func (s *Server) rotateRuntimeCredential(r *http.Request, id principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	var req struct {
+		Node string `json:"node"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 4096))
+	dec.DisallowUnknownFields()
+	// An empty body is a valid "show me the secret" (io.EOF).
+	if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		return nil, http.StatusBadRequest, fmt.Errorf("parsing body: %w", err)
+	}
+	b, rt, code, err := s.liveAgentRuntime(name)
+	if err != nil {
+		return nil, code, err
+	}
+	if req.Node != "" && s.Agents == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("agent plane not wired")
+	}
+	previous, err := s.DB.ListRuntimePrincipals(b.Seq)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	next, err := s.mintRuntimePrincipal(b, len(previous)+1, id)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if err := s.DB.BindRuntimePrincipal(next, b.Seq); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+
+	out := runtimeCredentialResponse{CredentialRef: next}
+	if req.Node == "" {
+		secret, err := s.Principals.Mint(next, "", 0)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		out.Secret = secret
+		s.event("token.minted", "", id, "for "+next)
+	} else {
+		secretName := runtimeSecretName(next)
+		dependents, err := s.secretDependents(req.Node, secretName)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		summary := fmt.Sprintf("mint a runtime token for %s → secret/%s on %s (%d dependent container(s) re-created)",
+			b.Name, secretName, req.Node, len(dependents))
+		stored, _ := json.Marshal(map[string]any{"summary": summary, "secret": secretName, "node": req.Node,
+			"principal": next, "role": string(runtimedb.RoleButler), "butler": b.Name, "dependents": dependents})
+		planID, err := s.DB.InsertPlan(secretsPrincipal, id.Name, summary, "medium", string(stored))
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		for _, st := range []runtimedb.PlanState{runtimedb.PlanApproved, runtimedb.PlanApplying} {
+			if err := s.DB.TransitionPlan(planID, st, id.Name); err != nil {
+				return nil, http.StatusInternalServerError, err
+			}
+		}
+		if _, failure := s.executePublisherMint(r, next, req.Node, secretName, dependents); failure != nil {
+			if terr := s.DB.TransitionPlan(planID, runtimedb.PlanFailed, id.Name); terr != nil {
+				s.Log.Error("runtime credential plan transition", "plan", planID, "err", terr)
+			}
+			s.appendEvent("runtime.mint-failed", req.Node, secretName, id.Name)
+			// The token never reached the node and was revoked; the
+			// predecessor is still the working credential, so it stays
+			// current and the successor is closed off. Nothing was
+			// rotated, and the record says so.
+			if err := s.DB.SetPrincipalDisabled(next, true); err != nil {
+				return nil, http.StatusInternalServerError, err
+			}
+			if len(previous) > 0 {
+				if err := s.DB.BindRuntimePrincipal(previous[len(previous)-1], b.Seq); err != nil {
+					return nil, http.StatusInternalServerError, err
+				}
+			}
+			return nil, http.StatusBadGateway, fmt.Errorf("%s (plan %s)", failure, planID)
+		}
+		if terr := s.DB.TransitionPlan(planID, runtimedb.PlanApplied, id.Name); terr != nil {
+			s.Log.Error("runtime credential plan transition", "plan", planID, "err", terr)
+		}
+		s.appendEvent("runtime.minted", req.Node, secretName, id.Name)
+		if len(dependents) > 0 && s.OnApproved != nil {
+			s.OnApproved()
+		}
+		out.Node, out.SecretName, out.Plan = req.Node, "secret/"+secretName, planID
+	}
+
+	// The successor holds; now the predecessors do not. In this order
+	// so a mint that failed above left the Agent with the credential it
+	// had rather than none.
+	for _, old := range previous {
+		if err := s.DB.SetPrincipalDisabled(old, true); err != nil {
+			return nil, http.StatusInternalServerError, fmt.Errorf("disabling %s: %w", old, err)
+		}
+		if _, err := s.DB.RevokeTokensFor(old); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+	}
+	// Health: the native runner is in-process and a fresh credential
+	// brings a revoked one back, since re-registering is what a new
+	// credential is for it. Any other runtime has to present the
+	// credential before it is anything but unregistered.
+	switch {
+	case rt.Type == agentapi.RuntimeNative && rt.Health == agentapi.HealthRevoked:
+		err = s.DB.SetRuntimeHealth(b.Seq, agentapi.HealthConnected)
+	case rt.Type != agentapi.RuntimeNative:
+		err = s.DB.SetRuntimeHealth(b.Seq, agentapi.HealthUnregistered)
+	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	s.event("butler.runtime", "", id, fmt.Sprintf("runtime credential of %s rotated to %s; %d predecessor(s) disabled",
+		b.Name, next, len(previous)))
+	return out, http.StatusOK, nil
+}
+
+// revokeButlerRuntime is POST /api/v1/butlers/{name}/runtime/revoke:
+// §3.7's immediate revocation, from the Console. Every credential the
+// Agent's runtime ever held stops working from the next request and the
+// runtime is marked revoked; the Agent itself — people, tools,
+// Connections, routines, memory — is untouched, and a rotation issues
+// it a new credential when the Owner is ready.
+//
+// CONSEQUENTIAL (A4.1): it withdraws authority, and nothing that ran as
+// the runtime can act again until somebody decides it may.
+func (s *Server) revokeButlerRuntime(r *http.Request, id principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	b, _, code, err := s.liveAgentRuntime(name)
+	if err != nil {
+		return nil, code, err
+	}
+	if err := s.revokeAgentRuntime(b); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	s.event("butler.runtime", "", id, fmt.Sprintf("runtime of %s revoked; every runtime credential disabled", b.Name))
+	rt, err := s.DB.GetButlerRuntime(b.Seq)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}

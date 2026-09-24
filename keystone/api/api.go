@@ -623,10 +623,16 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/butlers/{name}/address", s.handle(principal.VerbManage, s.setButlerAddress))
 	mux.Handle("PUT /api/v1/butlers/{name}/class", s.handle(principal.VerbManage, s.consequential(s.setButlerAgentClass)))
 	// The Agent's runtime record (ADR-W039 §3.3): which runtime, as
-	// whom, how it is doing. A read: the credential is a reference,
-	// never a secret. Registering, rotating and revoking are the next
-	// slice, and are manage + consequential when they land.
+	// whom, how it is doing. Reading it is a read: the credential is a
+	// reference, never a secret. Replacing the runtime, rotating its
+	// credential and revoking it are manage — standing configuration
+	// the Console holder owns — and consequential (ADR-W033 A4.1):
+	// rotation mints a bearer credential, and the other two withdraw
+	// one.
 	mux.Handle("GET /api/v1/butlers/{name}/runtime", s.handle(principal.VerbRead, s.butlerRuntime))
+	mux.Handle("PUT /api/v1/butlers/{name}/runtime", s.handle(principal.VerbManage, s.consequential(s.setButlerRuntime)))
+	mux.Handle("POST /api/v1/butlers/{name}/runtime/credential", s.handle(principal.VerbManage, s.consequential(s.rotateRuntimeCredential)))
+	mux.Handle("POST /api/v1/butlers/{name}/runtime/revoke", s.handle(principal.VerbManage, s.consequential(s.revokeButlerRuntime)))
 	mux.Handle("GET /api/v1/butlers/{name}/memory-restrictions", s.handle(principal.VerbRead, s.agentMemoryRestrictions))
 	mux.Handle("PUT /api/v1/butlers/{name}/memory-restrictions", s.handle(principal.VerbManage, s.consequential(s.setAgentMemoryRestriction)))
 	mux.Handle("DELETE /api/v1/butlers/{name}", s.handle(principal.VerbManage, s.consequential(s.retireButler)))
@@ -1078,10 +1084,11 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Pragma", "no-cache")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-	case mintResponse, joinTokenResponse, reviewTokenResponse:
-		// The two deliberate carve-outs (ADR-W007 A3, ADR-W014 A3): a
-		// newly minted API token and a newly minted join token, each in
-		// the only moment it ever exists in a response.
+	case mintResponse, joinTokenResponse, reviewTokenResponse, runtimeCredentialResponse:
+		// The deliberate carve-outs (ADR-W007 A3, ADR-W014 A3, ADR-W039
+		// §4.1): a newly minted API token, join token or runtime
+		// credential, each in the only moment it ever exists in a
+		// response.
 	default:
 		raw = []byte(redact.String(string(raw)))
 	}

@@ -36,6 +36,11 @@ var consequentialRoutes = []struct{ method, path, body string }{
 	{http.MethodPut, "/api/v1/butlers/joan/memory-restrictions", `{"scope":"household","restricted":true}`},
 	{http.MethodPut, "/api/v1/butlers/joan/memory-restrictions", `{"scope":"household","restricted":false}`},
 	{http.MethodPost, "/api/v1/chat/adapters/chat-telegram-family", `{"node":"n1","butler":"joan"}`},
+	// An Agent's runtime (ADR-W039 §3.7, §4.1): replacing it revokes a
+	// credential, rotating mints one, revoking withdraws every one.
+	{http.MethodPut, "/api/v1/butlers/joan/runtime", `{"type":"hermes"}`},
+	{http.MethodPost, "/api/v1/butlers/joan/runtime/credential", `{}`},
+	{http.MethodPost, "/api/v1/butlers/joan/runtime/revoke", ``},
 	// Who a Connection admits (design §8.1; slice 11). Consequential in
 	// both directions — narrowing withdraws a way the household reaches
 	// an Agent, widening hands out access nobody had.

@@ -4,11 +4,16 @@ package api
 // Agent is on the native runtime with a minted, bound credential and no
 // token; the record reads back in the contract's shape; retiring
 // revokes and restoring brings a native runtime back; an Agent that
-// predates the record is credentialed at startup.
+// predates the record is credentialed at startup. Then the Owner's
+// three acts on it: rotating the credential mints a successor and the
+// predecessor stops working; revoking stops every credential; replacing
+// the runtime revokes the old credential and touches nothing else about
+// the Agent.
 
 import (
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
@@ -242,5 +247,383 @@ func TestRuntimePrincipalNamesFollowTheNameDiscipline(t *testing.T) {
 	}
 	if got := runtimePrincipalName(runtimedb.Butler{Seq: 7, Name: "health"}, 2, true); got != "runtime-health.7-2" {
 		t.Errorf("disambiguated = %q", got)
+	}
+}
+
+// rotate asks for a fresh runtime credential and returns the response,
+// failing the test on anything but 200.
+func rotate(t *testing.T, h *harness, name string, body any) runtimeCredentialResponse {
+	t.Helper()
+	var out runtimeCredentialResponse
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers/"+url.PathEscape(name)+"/runtime/credential", body, &out); res.StatusCode != http.StatusOK {
+		t.Fatalf("rotating %s's runtime credential = %d", name, res.StatusCode)
+	}
+	return out
+}
+
+// authenticates reports whether a bearer secret is accepted at all: a
+// read the butler role holds, which is what a runtime principal is.
+func authenticates(h *harness, secret string) bool {
+	res := h.doToken(secret, http.MethodGet, "/api/v1/whoami", nil, nil)
+	return res.StatusCode == http.StatusOK
+}
+
+// Rotation is minting a successor and disabling the predecessor (§4.1):
+// the new credential is `runtime-<agent>-<n+1>`, is current, and its
+// secret authenticates; the old one is disabled, its tokens revoked, and
+// a bearer it issued is refused from the next request.
+func TestRotatingTheRuntimeCredentialMintsASuccessorAndDisablesThePredecessor(t *testing.T) {
+	h := butlerConsole(t)
+	createAgent(t, h, "health")
+
+	first := rotate(t, h, "health", map[string]any{})
+	if first.CredentialRef != "runtime-health-2" {
+		t.Fatalf("credentialRef = %q, want runtime-health-2", first.CredentialRef)
+	}
+	if !strings.HasPrefix(first.Secret, "wst_") {
+		t.Fatalf("secret %q not returned intact (redaction must not eat the one legitimate secret reply)", first.Secret)
+	}
+	if first.Node != "" || first.Plan != "" {
+		t.Errorf("a secret returned in the response also claims a node placement: %+v", first)
+	}
+	if !authenticates(h, first.Secret) {
+		t.Error("the freshly minted runtime secret does not authenticate")
+	}
+	if p, _ := h.s.DB.GetPrincipal("runtime-health-1"); !p.Disabled {
+		t.Error("rotating left the predecessor enabled")
+	}
+	if p, err := h.s.DB.GetPrincipal("runtime-health-2"); err != nil || p.Disabled || p.Role != runtimedb.RoleButler || p.ActingFor != "" {
+		t.Errorf("successor = %+v %v, want an enabled butler-role principal acting for nobody", p, err)
+	}
+	rec := readRuntime(t, h, "health")
+	if rec.CredentialRef != "runtime-health-2" || rec.Health != agentapi.HealthConnected || rec.Type != agentapi.RuntimeNative {
+		t.Errorf("after rotating: %+v, want runtime-health-2 current and native still connected", rec)
+	}
+	b, _ := h.s.DB.GetButler("health")
+	if owner, ok, _ := h.s.DB.RuntimePrincipalButler("runtime-health-2"); !ok || owner != b.Seq {
+		t.Errorf("runtime-health-2 resolves to %d (ok=%v), want health (%d)", owner, ok, b.Seq)
+	}
+
+	// Rotating again: the bearer from the last rotation is refused from
+	// the next request, with no cooperation from whoever holds it.
+	second := rotate(t, h, "health", nil)
+	if second.CredentialRef != "runtime-health-3" {
+		t.Errorf("second rotation = %q, want runtime-health-3", second.CredentialRef)
+	}
+	if authenticates(h, first.Secret) {
+		t.Error("a rotated-out runtime secret still authenticates")
+	}
+	if n, _ := h.s.DB.LiveTokensFor("runtime-health-2"); n != 0 {
+		t.Errorf("%d live token(s) left on the rotated-out credential", n)
+	}
+	if !authenticates(h, second.Secret) {
+		t.Error("the newest runtime secret does not authenticate")
+	}
+	if all, _ := h.s.DB.ListRuntimePrincipals(b.Seq); len(all) != 3 {
+		t.Errorf("credentials held = %v, want the three ever minted, oldest first", all)
+	}
+}
+
+// Revocation (§3.7) is immediate and total: every credential the runtime
+// ever held is disabled and its bearers revoked, nothing can be minted
+// for them, the runtime reads revoked — and the Agent is otherwise as it
+// was. A rotation afterwards is how it comes back.
+func TestRevokingTheRuntimeDisablesEveryCredentialAndRefusesToMint(t *testing.T) {
+	h := butlerConsole(t)
+	createAgent(t, h, "health")
+	if err := h.s.DB.GrantButlerAccess("health", "sam", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	issued := rotate(t, h, "health", nil)
+
+	var rec agentapi.RuntimeRecord
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers/health/runtime/revoke", nil, &rec); res.StatusCode != http.StatusOK {
+		t.Fatalf("revoke = %d", res.StatusCode)
+	}
+	if rec.Health != agentapi.HealthRevoked || rec.CredentialRef != "runtime-health-2" {
+		t.Errorf("after revoking: %+v, want revoked with the credential still named", rec)
+	}
+	if authenticates(h, issued.Secret) {
+		t.Error("a revoked runtime's secret still authenticates")
+	}
+	for _, name := range []string{"runtime-health-1", "runtime-health-2"} {
+		if p, _ := h.s.DB.GetPrincipal(name); !p.Disabled {
+			t.Errorf("%s is still enabled after revocation", name)
+		}
+		if n, _ := h.s.DB.LiveTokensFor(name); n != 0 {
+			t.Errorf("%s still has %d live token(s)", name, n)
+		}
+		if _, err := h.s.Principals.Mint(name, "", 0); err == nil {
+			t.Errorf("a token was minted for revoked %s", name)
+		}
+	}
+	// The Agent is untouched: still live, still shared with sam.
+	b, err := h.s.DB.GetButler("health")
+	if err != nil || !b.Live() {
+		t.Errorf("revoking the runtime changed the Agent: %+v %v", b, err)
+	}
+	if people, _ := h.s.DB.ListButlerAccess("health"); len(people) != 1 || people[0] != "sam" {
+		t.Errorf("revoking the runtime changed who may talk to health: %v", people)
+	}
+
+	// Coming back is a rotation: the native runner is in-process, so a
+	// fresh credential is all the re-registration it needs.
+	again := rotate(t, h, "health", nil)
+	if again.CredentialRef != "runtime-health-3" || !authenticates(h, again.Secret) {
+		t.Errorf("rotation after revocation = %+v, want a working runtime-health-3", again)
+	}
+	if rec := readRuntime(t, h, "health"); rec.Health != agentapi.HealthConnected {
+		t.Errorf("native after re-credentialing = %q, want connected", rec.Health)
+	}
+}
+
+// A runtime change replaces the runtime field and nothing else (§3.7):
+// moving off native revokes the old credential, stores the new
+// endpoint and negotiated pair, and leaves the Agent unregistered until
+// a credential is rotated for the new runtime and it authenticates.
+// Moving back to native reconnects at once under the credential it
+// holds. Reconfiguring the runtime it is already on revokes nothing.
+func TestReplacingTheRuntimeRevokesTheOldCredentialAndKeepsTheAgent(t *testing.T) {
+	h := butlerConsole(t)
+	createAgent(t, h, "health")
+	if err := h.s.DB.GrantButlerAccess("health", "sam", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := h.s.DB.GetButler("health")
+	native := rotate(t, h, "health", nil)
+
+	var rec agentapi.RuntimeRecord
+	res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/runtime", map[string]any{
+		"type": "hermes", "endpoint": "https://hermes-health.internal/",
+		"negotiated":          map[string]any{"delivery": "pull", "processingClass": "local_only"},
+		"executionProfileRef": "sandboxed",
+	}, &rec)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("PUT native→hermes = %d", res.StatusCode)
+	}
+	if rec.Type != agentapi.RuntimeHermes || rec.Endpoint != "https://hermes-health.internal/" ||
+		rec.Negotiated.Delivery != agentapi.DeliveryPull || rec.Negotiated.ProcessingClass != agentapi.ProcessingLocalOnly ||
+		rec.ExecutionProfileRef != "sandboxed" {
+		t.Errorf("hermes record = %+v", rec)
+	}
+	if rec.Health != agentapi.HealthUnregistered {
+		t.Errorf("health after moving to hermes = %q, want unregistered until it authenticates", rec.Health)
+	}
+	if authenticates(h, native.Secret) {
+		t.Error("the native runtime's secret still authenticates after the runtime was replaced")
+	}
+	for _, name := range []string{"runtime-health-1", "runtime-health-2"} {
+		if p, _ := h.s.DB.GetPrincipal(name); !p.Disabled {
+			t.Errorf("%s is still enabled after the runtime was replaced", name)
+		}
+	}
+	after, _ := h.s.DB.GetButler("health")
+	if after.Name != before.Name || after.Model != before.Model || after.AgentClass != before.AgentClass ||
+		after.Surface != before.Surface || after.Directive != before.Directive || !after.Live() {
+		t.Errorf("replacing the runtime changed the Agent:\n before %+v\n after  %+v", before, after)
+	}
+	if people, _ := h.s.DB.ListButlerAccess("health"); len(people) != 1 || people[0] != "sam" {
+		t.Errorf("replacing the runtime changed who may talk to health: %v", people)
+	}
+
+	// The credential for the new runtime: a rotation, which leaves
+	// health alone — hermes has not presented it yet.
+	hermes := rotate(t, h, "health", nil)
+	if hermes.CredentialRef != "runtime-health-3" || !authenticates(h, hermes.Secret) {
+		t.Fatalf("hermes credential = %+v", hermes)
+	}
+	if rec := readRuntime(t, h, "health"); rec.Health != agentapi.HealthUnregistered {
+		t.Errorf("rotating for hermes set health %q, want unregistered until it connects", rec.Health)
+	}
+
+	// Reconfiguring the runtime it is on: a new endpoint, same
+	// credential, nothing revoked.
+	res = h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/runtime", map[string]any{
+		"type": "hermes", "endpoint": "https://hermes-2.internal/",
+		"negotiated":          map[string]any{"delivery": "pull", "processingClass": "local_only"},
+		"executionProfileRef": "sandboxed",
+	}, &rec)
+	if res.StatusCode != http.StatusOK || rec.Endpoint != "https://hermes-2.internal/" {
+		t.Fatalf("PUT hermes→hermes = %d %+v", res.StatusCode, rec)
+	}
+	if rec.CredentialRef != "runtime-health-3" || !authenticates(h, hermes.Secret) {
+		t.Error("reconfiguring the same runtime revoked its credential")
+	}
+
+	// Back to native: the credential it holds is re-enabled — the
+	// binding is for life — and the in-process runner is connected at
+	// once. The hermes bearer does not come back with it.
+	// Decoded into a fresh record: the JSON omits an empty endpoint,
+	// and decoding into the hermes record would keep hermes's.
+	var back agentapi.RuntimeRecord
+	res = h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/runtime", map[string]any{"type": "native"}, &back)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("PUT hermes→native = %d", res.StatusCode)
+	}
+	if back.Type != agentapi.RuntimeNative || back.Health != agentapi.HealthConnected || back.Endpoint != "" ||
+		back.Negotiated.ProcessingClass != "" || back.CredentialRef != "runtime-health-3" {
+		t.Errorf("native record = %+v, want connected under runtime-health-3 with no endpoint", back)
+	}
+	if p, _ := h.s.DB.GetPrincipal("runtime-health-3"); p.Disabled {
+		t.Error("moving back to native left the credential disabled")
+	}
+	if authenticates(h, hermes.Secret) {
+		t.Error("the bearer issued to hermes still authenticates after the move back to native")
+	}
+	b, _ := h.s.DB.GetButler("health")
+	if all, _ := h.s.DB.ListRuntimePrincipals(b.Seq); len(all) != 3 {
+		t.Errorf("moving back to native minted again: %v", all)
+	}
+}
+
+// What is refused, and that a refusal costs nothing: a native runtime
+// with an endpoint, an unknown type, a caller without manage, an Agent
+// that does not exist or is retired. None of them revokes anything.
+func TestRuntimeChangesAreRefusedBeforeAnythingIsRevoked(t *testing.T) {
+	h := butlerConsole(t)
+	createAgent(t, h, "health")
+	issued := rotate(t, h, "health", nil)
+
+	for _, c := range []struct {
+		name string
+		body map[string]any
+	}{
+		{"native with an endpoint", map[string]any{"type": "native", "endpoint": "https://x.internal/"}},
+		{"an unknown type", map[string]any{"type": "skynet"}},
+		{"an unknown delivery", map[string]any{"type": "hermes", "negotiated": map[string]any{"delivery": "carrier-pigeon"}}},
+		{"an unknown class", map[string]any{"type": "hermes", "negotiated": map[string]any{"processingClass": "somewhere"}}},
+		{"an unknown field", map[string]any{"type": "hermes", "credentialRef": "runtime-health-9"}},
+	} {
+		if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/runtime", c.body, nil); res.StatusCode != http.StatusBadRequest {
+			t.Errorf("PUT %s = %d, want 400", c.name, res.StatusCode)
+		}
+	}
+	if !authenticates(h, issued.Secret) {
+		t.Fatal("a refused runtime change revoked the credential")
+	}
+	if rec := readRuntime(t, h, "health"); rec.Type != agentapi.RuntimeNative || rec.Health != agentapi.HealthConnected {
+		t.Errorf("a refused runtime change altered the record: %+v", rec)
+	}
+
+	// Manage is the verb, and only the Console holder has it.
+	for _, role := range []runtimedb.Role{runtimedb.RoleOperator, runtimedb.RoleButler, runtimedb.RoleConcierge} {
+		for _, rt := range []struct{ method, path string }{
+			{http.MethodPut, "/api/v1/butlers/health/runtime"},
+			{http.MethodPost, "/api/v1/butlers/health/runtime/credential"},
+			{http.MethodPost, "/api/v1/butlers/health/runtime/revoke"},
+		} {
+			if res := h.do(role, rt.method, rt.path, map[string]any{"type": "hermes"}, nil); res.StatusCode != http.StatusForbidden {
+				t.Errorf("%s %s %s = %d, want 403", role, rt.method, rt.path, res.StatusCode)
+			}
+		}
+	}
+	if !authenticates(h, issued.Secret) {
+		t.Error("a refused caller rotated the credential")
+	}
+
+	for _, rt := range []struct {
+		method, path string
+		body         any
+	}{
+		{http.MethodPut, "/api/v1/butlers/nobody/runtime", map[string]any{"type": "hermes"}},
+		{http.MethodPost, "/api/v1/butlers/nobody/runtime/credential", nil},
+		{http.MethodPost, "/api/v1/butlers/nobody/runtime/revoke", nil},
+	} {
+		if res := h.do(runtimedb.RoleAdmin, rt.method, rt.path, rt.body, nil); res.StatusCode != http.StatusNotFound {
+			t.Errorf("%s %s = %d, want 404", rt.method, rt.path, res.StatusCode)
+		}
+	}
+	// A retired Agent's runtime is revoked with it; it is restored, not
+	// re-credentialed in place.
+	if res := h.do(runtimedb.RoleAdmin, http.MethodDelete, "/api/v1/butlers/health", nil, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("retire = %d", res.StatusCode)
+	}
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers/health/runtime/credential", nil, nil); res.StatusCode != http.StatusNotFound {
+		t.Errorf("rotating a retired Agent's credential = %d, want 404", res.StatusCode)
+	}
+	if authenticates(h, issued.Secret) {
+		t.Error("retiring left the runtime's bearer working")
+	}
+}
+
+// With a node named, the secret is placed there as a provided secret and
+// never appears in the response (§4.1: a packaged runtime reads it from
+// its container's environment, as a chat adapter does). Its name is the
+// Agent's, stable across rotations. A placement that fails leaves the
+// Agent with the credential it had.
+func TestRotatingOntoANodePlacesTheSecretInsteadOfReturningIt(t *testing.T) {
+	h := butlerConsole(t)
+	createAgent(t, h, "health")
+	b, _ := h.s.DB.GetButler("health")
+
+	// Unwired agent plane: 503 before anything is minted.
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers/health/runtime/credential", map[string]any{"node": "n1"}, nil); res.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("unwired = %d, want 503", res.StatusCode)
+	}
+	if all, _ := h.s.DB.ListRuntimePrincipals(b.Seq); len(all) != 1 {
+		t.Fatalf("a refused placement minted a credential: %v", all)
+	}
+	fake := &publisherFakeAgent{}
+	h.s.Agents = fake
+
+	placed := rotate(t, h, "health", map[string]any{"node": "n1"})
+	if placed.Secret != "" {
+		t.Fatal("a secret placed on a node was also returned")
+	}
+	if placed.CredentialRef != "runtime-health-2" || placed.Node != "n1" || placed.SecretName != "secret/runtime-health-token" || placed.Plan == "" {
+		t.Errorf("placement = %+v", placed)
+	}
+	secret := fake.values["runtime-health-token"]
+	if !strings.HasPrefix(secret, "wst_") || !authenticates(h, secret) {
+		t.Errorf("the node did not receive a working bearer: %q", secret)
+	}
+	if p, _ := h.s.DB.GetPrincipal("runtime-health-1"); !p.Disabled {
+		t.Error("placing a successor left the predecessor enabled")
+	}
+	if plan, err := h.s.DB.GetPlan(placed.Plan); err != nil || plan.State != runtimedb.PlanApplied {
+		t.Errorf("the placement's plan = %+v %v, want applied", plan, err)
+	}
+
+	// The node refuses the write: the token never lands, the successor
+	// is closed off, and the predecessor stays the working credential.
+	fake.failPut = true
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers/health/runtime/credential", map[string]any{"node": "n1"}, nil); res.StatusCode != http.StatusBadGateway {
+		t.Fatalf("failed placement = %d, want 502", res.StatusCode)
+	}
+	if !authenticates(h, secret) {
+		t.Error("a failed placement revoked the credential the Agent had")
+	}
+	if rec := readRuntime(t, h, "health"); rec.CredentialRef != "runtime-health-2" {
+		t.Errorf("after a failed placement the current credential is %q, want runtime-health-2", rec.CredentialRef)
+	}
+	if p, _ := h.s.DB.GetPrincipal("runtime-health-3"); !p.Disabled {
+		t.Error("the successor whose token never landed is still enabled")
+	}
+	if n, _ := h.s.DB.LiveTokensFor("runtime-health-3"); n != 0 {
+		t.Errorf("%d live token(s) on a credential nothing holds", n)
+	}
+}
+
+// One Agent's credentials keep one stem: an Agent that was
+// disambiguated at creation stays so at rotation, and the secret a
+// packaged runtime reads is named after that stem.
+func TestRotationKeepsAnAgentsCredentialStem(t *testing.T) {
+	h := butlerConsole(t)
+	createAgent(t, h, "health")
+	createAgent(t, h, "Health")
+	second := readRuntime(t, h, "Health")
+	stem := runtimePrincipalStem(second.CredentialRef)
+	if stem == "runtime-health" {
+		t.Fatalf("the second Agent was not disambiguated: %q", second.CredentialRef)
+	}
+	rotated := rotate(t, h, "Health", nil)
+	if rotated.CredentialRef != stem+"-2" {
+		t.Errorf("rotated = %q, want %s-2", rotated.CredentialRef, stem)
+	}
+	if got := runtimeSecretName(rotated.CredentialRef); got != stem+"-token" {
+		t.Errorf("secret name = %q, want %s-token", got, stem)
+	}
+	if got := runtimeSecretName("runtime-health-12"); got != "runtime-health-token" {
+		t.Errorf("runtimeSecretName(runtime-health-12) = %q", got)
 	}
 }

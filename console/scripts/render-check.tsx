@@ -16,7 +16,8 @@ import { join } from "path";
 import { renderToString } from "react-dom/server";
 import { createElement as h } from "react";
 import { Services, InstallForm } from "../src/views/Services";
-import { Butler, bucket, ConversationRail, EmptyState, StatusCard, SURFACES, Thread, ThreadBar, ToolTrace, Turn } from "../src/views/Butler";
+import { Butler, bucket, ConversationRail, EmptyState, IssuedCredential, RuntimeCard, StatusCard, SURFACES, Thread, ThreadBar, ToolTrace, Turn } from "../src/views/Butler";
+import type { RuntimeRecord } from "../src/api";
 import { BotList, Chat, ConnectForm } from "../src/views/Chat";
 import { Freshness, Shell, TokenGate } from "../src/App";
 import { HomeView, buildProblems } from "../src/views/Home";
@@ -205,6 +206,53 @@ const on = renderToString(
 );
 check("configured card shows the resolved backend", on.includes("llama3.1") && on.includes("11434"));
 check("qa-only card explains the withheld tool", on.includes("propose_change"));
+
+// The runtime card (ADR-W039 §3.3). The type is read-only here; the
+// two acts are the Console holder's, and the secret a rotation returns
+// is shown once with the warning that it will not be shown again.
+const nativeRuntime: RuntimeRecord = {
+  type: "native", credentialRef: "runtime-health-1", health: "connected",
+  negotiated: { delivery: "push" }, executionProfileRef: "platform-only",
+};
+const rtOwner = renderToString(h(RuntimeCard, {
+  name: "health", runtime: nativeRuntime, loading: false, error: null, canManage: true, onChanged: () => {},
+}));
+check("the runtime card names the runtime type and its credential",
+  text(rtOwner).includes("type: native") && rtOwner.includes("runtime-health-1"), text(rtOwner));
+check("the runtime card shows health, delivery and profile",
+  rtOwner.includes("connected") && text(rtOwner).includes("delivery: push") && text(rtOwner).includes("profile: platform-only"));
+check("an Owner can rotate the credential and revoke the runtime",
+  rtOwner.includes("Rotate credential") && rtOwner.includes("Revoke runtime"));
+check("the runtime type is not editable here", !rtOwner.includes("<select") && !rtOwner.includes('type="text"'));
+check("the runtime card never carries a secret", !rtOwner.includes("wst_"));
+const rtMember = renderToString(h(RuntimeCard, {
+  name: "health", runtime: nativeRuntime, loading: false, error: null, canManage: false, onChanged: () => {},
+}));
+check("without manage the runtime card offers no actions",
+  !rtMember.includes("Rotate credential") && !rtMember.includes("Revoke runtime") && rtMember.includes("runtime-health-1"));
+const rtRevoked = renderToString(h(RuntimeCard, {
+  name: "health", runtime: { ...nativeRuntime, health: "revoked" }, loading: false, error: null, canManage: true, onChanged: () => {},
+}));
+check("a revoked runtime says so and says how it comes back",
+  rtRevoked.includes("revoked") && rtRevoked.includes("new credential"), text(rtRevoked));
+const rtHermes = renderToString(h(RuntimeCard, {
+  name: "health", loading: false, error: null, canManage: true, onChanged: () => {},
+  runtime: { type: "hermes", endpoint: "https://hermes-health.internal/", credentialRef: "runtime-health-2",
+    health: "unregistered", negotiated: { delivery: "pull", processingClass: "local_only" }, executionProfileRef: "sandboxed" },
+}));
+check("an external runtime shows its endpoint and declared class",
+  rtHermes.includes("hermes-health.internal") && text(rtHermes).includes("class: local_only") && rtHermes.includes("unregistered"));
+const issued = renderToString(h(IssuedCredential, {
+  credential: { credentialRef: "runtime-health-2", secret: "wst_0123abcd" }, onDismiss: () => {},
+}));
+check("a rotated secret is shown once with a copy button",
+  issued.includes("wst_0123abcd") && issued.includes("Copy") && issued.includes("runtime-health-2"));
+check("and with the warning that it will not be shown again", issued.includes("only time it will be shown"));
+const placed = renderToString(h(IssuedCredential, {
+  credential: { credentialRef: "runtime-health-2", node: "n1", secretName: "secret/runtime-health-token" }, onDismiss: () => {},
+}));
+check("a secret placed on a node is named, not shown",
+  placed.includes("n1") && placed.includes("secret/runtime-health-token") && !placed.includes("wst_"));
 
 // The thread (ADR-W027). A proposal renders as the SAME card Plans
 // shows, with the same handlers — one component, two placements, which
