@@ -971,14 +971,17 @@ export function StatusCard({ status, loading }: { status: ButlerStatus | null; l
 }
 
 // The Agent's runtime (ADR-W039 §3.3): what reasons for it, as whom,
-// and how it is doing. Every Agent is on the native runtime today, so
-// the type is shown and set nowhere on this screen; the two acts an
-// Owner has here are on the credential. Rotating mints a successor and
-// shows its secret ONCE — Wildstone keeps a hash and cannot show it
-// again — and revoking stops every credential the runtime ever held
-// from the next request (§3.7), leaving the Agent itself as it was.
-// Both are consequential (ADR-W033 A4.1): a stale sign-in goes round
-// the step-up and comes back to this card with its confirmation open.
+// and how it is doing. This popover is read/rotate/revoke ONLY — the
+// type, endpoint, delivery, processing class and execution profile are
+// set on the Butlers screen's Runtime tab (#350/H4), the same place
+// every other Butler property is edited, and are not duplicated here.
+// The two acts an Owner has on this card are on the credential.
+// Rotating mints a successor and shows its secret ONCE — Wildstone
+// keeps a hash and cannot show it again — and revoking stops every
+// credential the runtime ever held from the next request (§3.7),
+// leaving the Agent itself as it was. Both are consequential (ADR-W033
+// A4.1): a stale sign-in goes round the step-up and comes back to this
+// card with its confirmation open.
 export const RUNTIME_HEALTH: Record<RuntimeHealth, { kind: Kind; label: string }> = {
   connected: { kind: "ok", label: "connected" },
   degraded: { kind: "warn", label: "degraded" },

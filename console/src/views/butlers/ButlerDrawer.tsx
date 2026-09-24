@@ -9,10 +9,11 @@ import { TabIdentity } from "./TabIdentity";
 import { TabMemory } from "./TabMemory";
 import { TabModel } from "./TabModel";
 import { TabReach } from "./TabReach";
+import { TabRuntime } from "./TabRuntime";
 import { TabSessions } from "./TabSessions";
 import { TabTools } from "./TabTools";
 
-export type Tab = "identity" | "model" | "reach" | "tools" | "memory" | "sessions";
+export type Tab = "identity" | "model" | "reach" | "runtime" | "tools" | "memory" | "sessions";
 export type Say = (text: string, kind?: Kind) => void;
 
 // Everything about one Butler, without leaving the roster.
@@ -29,6 +30,7 @@ export function ButlerDrawer({
   rows,
   routes,
   initialTab,
+  canManage,
   say,
   onClose,
   onChanged,
@@ -38,6 +40,10 @@ export function ButlerDrawer({
   rows: ButlerRow[];
   routes: Model[];
   initialTab?: string;
+  // Attaching a runtime and setting its execution profile are
+  // Owner-only (ADR-W033 A4.1); the Runtime tab reads this the way
+  // RuntimeCard reads it on the Butler screen's popover.
+  canManage: boolean;
   say: Say;
   onClose: () => void;
   onChanged: () => void;
@@ -54,6 +60,11 @@ export function ButlerDrawer({
   const scope = useLoad(() => api.butlerScope(name), [name]);
   const tools = useLoad(() => api.butlerTools(name), [name]);
   const impact = useLoad(() => api.butlerImpact(name), [name]);
+  // The Runtime tab's record and the node list its credential-placement
+  // select offers (ADR-W039 §3.3; #350/H4). Loaded here, like scope and
+  // tools, so the tab is a plain function of its props.
+  const runtime = useLoad(() => api.butlerRuntime(name), [name]);
+  const nodes = useLoad(() => api.nodes(), []);
 
   if (!row) return null;
   const b = row.butler;
@@ -65,6 +76,7 @@ export function ButlerDrawer({
     scope.reload();
     tools.reload();
     impact.reload();
+    runtime.reload();
     onChanged();
   }
 
@@ -126,6 +138,7 @@ export function ButlerDrawer({
               { id: "identity", label: "Identity" },
               { id: "model", label: "Model" },
               { id: "reach", label: "Reach" },
+              { id: "runtime", label: "Runtime" },
               { id: "tools", label: "Tools", count: `${row.toolsAllowed}/${row.toolsAvailable}` },
               { id: "memory", label: "Memory", count: memoryCount },
               { id: "sessions", label: "Sessions" },
@@ -141,6 +154,18 @@ export function ButlerDrawer({
             )}
             {tab === "reach" && (
               <TabReach row={row} scope={scope.data} say={say} onChanged={reloadAll} />
+            )}
+            {tab === "runtime" && (
+              <TabRuntime
+                row={row}
+                runtime={runtime.data}
+                loading={runtime.loading}
+                error={runtime.error}
+                nodes={nodes.data?.nodes ?? []}
+                canManage={canManage}
+                say={say}
+                onChanged={reloadAll}
+              />
             )}
             {tab === "tools" && (
               <TabTools row={row} tools={tools.data} error={tools.error} say={say} onChanged={reloadAll} />

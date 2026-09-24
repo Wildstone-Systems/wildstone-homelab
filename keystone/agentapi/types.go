@@ -658,6 +658,38 @@ func (c ProcessingClass) Valid() bool {
 	return false
 }
 
+// ExecutionProfileRef names #334's execution profile: what an Agent's
+// runtime is trusted to do in its own workspace, a setting independent
+// of RuntimeType (design doc §5 — choosing Hermes never changes the
+// profile, and choosing a profile never changes what the runtime is).
+//
+// RuntimeRecord.ExecutionProfileRef stays a plain string (that
+// vocabulary belonged to #334, not this ADR, per the comment there);
+// this type exists only to name the closed set §334-H4 gives it and to
+// validate a request against it. A Wildstone handler refuses an unknown
+// value rather than mapping it to a default.
+type ExecutionProfileRef string
+
+// The closed set of execution profiles (design doc §5). Each tier is
+// strictly wider than the last: sandboxed adds a shell and files inside
+// the runtime's own container, and host-admin adds nothing to the
+// container — it adds the `host` capability family to the Agent's
+// Wildstone manifest instead (§5.3, §5.4).
+const (
+	ExecutionProfilePlatformOnly ExecutionProfileRef = "platform-only"
+	ExecutionProfileSandboxed    ExecutionProfileRef = "sandboxed"
+	ExecutionProfileHostAdmin    ExecutionProfileRef = "host-admin"
+)
+
+// Valid reports whether p is a known execution profile.
+func (p ExecutionProfileRef) Valid() bool {
+	switch p {
+	case ExecutionProfilePlatformOnly, ExecutionProfileSandboxed, ExecutionProfileHostAdmin:
+		return true
+	}
+	return false
+}
+
 // Negotiated is what registration settled (§4.1 "negotiate"). The
 // capability list is the manifest as narrowed at that moment and is
 // informational: every invoke still runs the full resolver.

@@ -414,6 +414,10 @@ export interface ButlerStatus {
 // shown once, at rotation, and never stored.
 export type RuntimeType = "native" | "hermes" | "openclaw";
 export type RuntimeHealth = "unregistered" | "connected" | "degraded" | "offline" | "revoked";
+// The execution profile (#334, design doc §5): a setting independent of
+// RuntimeType. Choosing Hermes never changes the profile, and choosing
+// a profile never changes what the runtime is.
+export type ExecutionProfileRef = "platform-only" | "sandboxed" | "host-admin";
 export interface RuntimeRecord {
   type: RuntimeType;
   // Absent for native; a Route host or container/<name>:<port> for a

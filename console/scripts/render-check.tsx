@@ -74,6 +74,7 @@ import { ButlerPicker, matches, openingFor, preferred } from "../src/views/butle
 import { BlockedStrip } from "../src/views/Butler";
 import { withheldFrom } from "../src/views/butlers/TabReach";
 import { retireLines } from "../src/views/butlers/ButlerDrawer";
+import { TabRuntime } from "../src/views/butlers/TabRuntime";
 import { NewButlerDialog } from "../src/views/butlers/NewButlerDialog";
 import { RouteList } from "../src/views/butlers/TabModel";
 import { Confirm } from "../src/ui/Confirm";
@@ -1563,6 +1564,67 @@ const banner = renderToString(h(AttentionBanner, {
   rows: [roster[1], roster[2]], routes: [localModel(), CLOUD, QA], onShow: () => {},
 }));
 check("the banner names each Butler and its fault", banner.includes("nutrition can&#x27;t reach its model") && banner.includes("ops answers questions only"), banner);
+
+// TabRuntime (#350/H4): attaching a runtime and setting its execution
+// profile, on the Butlers screen — the form RuntimeCard's popover on
+// the Butler screen deliberately does not duplicate. Owner-only, like
+// rotating or revoking a credential.
+const runtimeNative: RuntimeRecord = {
+  type: "native", credentialRef: "runtime-health-1", health: "connected",
+  negotiated: { delivery: "push" }, executionProfileRef: "platform-only",
+};
+const trOwner = renderToString(h(TabRuntime, {
+  row: bRow(), runtime: runtimeNative, loading: false, error: null, nodes: [],
+  canManage: true, say: () => {}, onChanged: () => {},
+}));
+check("an Owner sees the runtime type and execution profile controls",
+  trOwner.includes("Wildstone Native") && trOwner.includes("Host administration") && trOwner.includes("Save runtime"),
+  trOwner);
+check("endpoint is hidden for the native runtime", !text(trOwner).includes("Endpoint"), trOwner);
+
+const trMember = renderToString(h(TabRuntime, {
+  row: bRow(), runtime: runtimeNative, loading: false, error: null, nodes: [],
+  canManage: false, say: () => {}, onChanged: () => {},
+}));
+check("without manage the runtime tab offers no save button and no confirm prompt",
+  !trMember.includes("Save runtime") && !trMember.includes("Issue a credential"), trMember);
+check("without manage the runtime record is still shown",
+  text(trMember).includes("Wildstone Native"), trMember);
+check("without manage every control is disabled", trMember.includes("disabled"), trMember);
+
+const runtimeHermes: RuntimeRecord = {
+  type: "hermes", endpoint: "https://hermes-health.internal/", credentialRef: "runtime-health-2",
+  health: "unregistered", negotiated: { delivery: "pull", processingClass: "local_only" },
+  executionProfileRef: "sandboxed",
+};
+const trHermes = renderToString(h(TabRuntime, {
+  row: bRow(), runtime: runtimeHermes, loading: false, error: null,
+  nodes: [{ id: "n1", connected: true, firstJoinedAt: "2026-01-01T00:00:00Z", lastSeenAt: "2026-09-01T00:00:00Z" }],
+  canManage: true, say: () => {}, onChanged: () => {},
+}));
+check("the endpoint field appears for a non-native runtime",
+  trHermes.includes('id="runtime-endpoint"') && trHermes.includes("hermes-health.internal"), trHermes);
+check("a blank endpoint is explained as fine for pull delivery",
+  text(trHermes).toLowerCase().includes("leave it blank if the runtime only pulls"),
+  trHermes);
+
+const trHostAdmin = renderToString(h(TabRuntime, {
+  row: bRow(), runtime: { ...runtimeHermes, executionProfileRef: "host-admin" }, loading: false, error: null, nodes: [],
+  canManage: true, say: () => {}, onChanged: () => {},
+}));
+check("host administration shows its warning",
+  trHostAdmin.includes("Host administration") &&
+    text(trHostAdmin).includes("Owner-class Agent") &&
+    text(trHostAdmin).includes("opt-in tools"),
+  trHostAdmin);
+
+const trBlocked = renderToString(h(TabRuntime, {
+  row: bRow({ agentClass: "member" }),
+  runtime: { ...runtimeNative, executionProfileRef: "host-admin" },
+  loading: false, error: null, nodes: [], canManage: true, say: () => {}, onChanged: () => {},
+}));
+check("host-admin on a native, member-class Agent is flagged before Save",
+  text(trBlocked).includes("needs a non-native runtime or an Owner-class Agent"), trBlocked);
 
 // Tool rows: three states, and only two of them are ours to undo.
 const onTool = renderToString(h(Tool, {

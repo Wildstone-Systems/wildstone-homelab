@@ -373,9 +373,22 @@ func (s *Server) setButlerRuntime(r *http.Request, id principal.Identity) (any, 
 	if next.ProcessingClass != "" && !next.ProcessingClass.Valid() {
 		return nil, http.StatusBadRequest, fmt.Errorf("processingClass must be local_only or cloud")
 	}
+	if next.ExecutionProfile != "" && !agentapi.ExecutionProfileRef(next.ExecutionProfile).Valid() {
+		return nil, http.StatusBadRequest, fmt.Errorf("executionProfileRef must be one of platform-only, sandboxed, host-admin")
+	}
 	b, current, code, err := s.liveAgentRuntime(name)
 	if err != nil {
 		return nil, code, err
+	}
+	// Host administration is Owner-class authority (design doc §5.3,
+	// §5.4; DSN §6: a Member-class Agent cannot hold the `host` family at
+	// all). A native Agent's Tier 3 comes from its own opt-in tools
+	// (H7), never from this profile, so setting it here on a native,
+	// Member-class Agent would promise a ceiling nothing raises.
+	if agentapi.ExecutionProfileRef(next.ExecutionProfile) == agentapi.ExecutionProfileHostAdmin &&
+		next.Type == agentapi.RuntimeNative && b.AgentClass != runtimedb.AgentClassOwner {
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"host administration needs a non-native runtime or an Owner-class Agent: a native Agent's Tier 3 comes from its own opt-in tools (H7), not from the execution profile")
 	}
 
 	switch {

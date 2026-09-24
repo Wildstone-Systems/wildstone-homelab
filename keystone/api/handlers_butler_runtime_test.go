@@ -604,6 +604,75 @@ func TestRotatingOntoANodePlacesTheSecretInsteadOfReturningIt(t *testing.T) {
 	}
 }
 
+// The execution profile (#334, design doc §5) is a closed set the PUT
+// validates like every other field on the runtime, and host
+// administration carries its own gate: a native Agent's Tier 3 comes
+// from the H7 opt-in tools, never from this profile, so it is refused
+// there unless the Agent is Owner-class. Neither refusal revokes
+// anything.
+func TestExecutionProfileIsValidatedAndHostAdminIsGated(t *testing.T) {
+	h := butlerConsole(t)
+	createAgent(t, h, "health") // member-class, native
+
+	// An unknown profile is refused like an unknown type or delivery.
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/runtime",
+		map[string]any{"type": "native", "executionProfileRef": "root-shell"}, nil); res.StatusCode != http.StatusBadRequest {
+		t.Errorf("an unknown execution profile = %d, want 400", res.StatusCode)
+	}
+	if rec := readRuntime(t, h, "health"); rec.ExecutionProfileRef != "platform-only" {
+		t.Errorf("a refused profile changed the record: %q", rec.ExecutionProfileRef)
+	}
+
+	// The closed set the migration's default and #334 both name.
+	for _, p := range []string{"platform-only", "sandboxed"} {
+		var rec agentapi.RuntimeRecord
+		if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/runtime",
+			map[string]any{"type": "native", "executionProfileRef": p}, &rec); res.StatusCode != http.StatusOK {
+			t.Errorf("PUT executionProfileRef=%s = %d, want 200", p, res.StatusCode)
+		} else if rec.ExecutionProfileRef != p {
+			t.Errorf("executionProfileRef = %q, want %s", rec.ExecutionProfileRef, p)
+		}
+	}
+
+	// host-admin on a native, member-class Agent: refused, and nothing
+	// about the Agent or its credential moves.
+	issued := rotate(t, h, "health", nil)
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/runtime",
+		map[string]any{"type": "native", "executionProfileRef": "host-admin"}, nil); res.StatusCode != http.StatusBadRequest {
+		t.Errorf("host-admin on native+member = %d, want 400", res.StatusCode)
+	}
+	if rec := readRuntime(t, h, "health"); rec.ExecutionProfileRef == "host-admin" {
+		t.Error("a refused host-admin change was applied anyway")
+	}
+	if !authenticates(h, issued.Secret) {
+		t.Error("a refused execution-profile change revoked the credential")
+	}
+
+	// host-admin on native: allowed once the Agent is Owner-class.
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/class",
+		map[string]any{"agentClass": "owner"}, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("setting health owner-class = %d", res.StatusCode)
+	}
+	var rec agentapi.RuntimeRecord
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/runtime",
+		map[string]any{"type": "native", "executionProfileRef": "host-admin"}, &rec); res.StatusCode != http.StatusOK {
+		t.Errorf("host-admin on native+owner = %d, want 200", res.StatusCode)
+	} else if rec.ExecutionProfileRef != "host-admin" {
+		t.Errorf("executionProfileRef = %q, want host-admin", rec.ExecutionProfileRef)
+	}
+
+	// host-admin on a non-native runtime needs no Owner-class Agent at
+	// all: the container is the same at every tier (§5.3), so the gate
+	// is about who can claim Tier 3, not about the runtime type here.
+	createAgent(t, h, "kitchen") // member-class, native
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/kitchen/runtime",
+		map[string]any{"type": "hermes", "executionProfileRef": "host-admin"}, &rec); res.StatusCode != http.StatusOK {
+		t.Errorf("host-admin on hermes+member = %d, want 200", res.StatusCode)
+	} else if rec.ExecutionProfileRef != "host-admin" || rec.Type != agentapi.RuntimeHermes {
+		t.Errorf("kitchen's record = %+v", rec)
+	}
+}
+
 // One Agent's credentials keep one stem: an Agent that was
 // disambiguated at creation stays so at rotation, and the secret a
 // packaged runtime reads is named after that stem.

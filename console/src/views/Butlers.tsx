@@ -96,6 +96,10 @@ export function toolLine(row: ButlerRow): string {
 export function Butlers() {
   const butlers = useLoad(() => api.butlers());
   const models = useLoad(() => api.models());
+  // Whether this Console session may attach a runtime or set an
+  // execution profile (ADR-W033 A4.1), the same gate RuntimeCard reads
+  // on the Butler screen's popover.
+  const me = useLoad(() => api.whoami());
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>("active");
@@ -218,6 +222,7 @@ export function Butlers() {
           rows={rows}
           routes={modelRows}
           initialTab={openTab}
+          canManage={me.data?.role === "admin"}
           say={say}
           onClose={() => setOpen(null)}
           onChanged={butlers.reload}
