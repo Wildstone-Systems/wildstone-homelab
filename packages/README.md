@@ -120,6 +120,7 @@ one mechanism, which is worth deciding before any of them individually.
 | `pdf-stirling` | pdf-tools | Stirling PDF | proxy |
 | `tools-it-tools` | utilities | IT-Tools | proxy |
 | `chat-telegram-*`, `chat-matrix-*` | chat | the Butler over Telegram / Matrix (ADR-W026) | — |
+| `agent-hermes-*` | agent-hermes | an Agent runtime (Hermes): the cognition behind one Agent, reaching Wildstone only as a bearer-authenticated MCP client (ADR-W039 Phase 6, #351) | — |
 
 ### Host access: devices, capabilities, UDP
 
