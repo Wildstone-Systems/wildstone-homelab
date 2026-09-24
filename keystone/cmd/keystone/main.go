@@ -1702,6 +1702,15 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				return agentgateway.WithPrincipal(ctx, rt.Principal)
 			}
 			apiSrv.Butlers = butlers
+			// The Agent API over HTTP (ADR-W039 Phase 2c, #337; ADR-W040):
+			// the identical agentapi.Client instance the native runner
+			// holds in-process, so an external runtime calling
+			// /api/v1/agent/... reaches the same Gateway methods under
+			// the same Ledger — the byte-identical behaviour Phase 2c's
+			// conformance test rests on. apiSrv.Ledger is also this
+			// coordinator's ledger, for fenceRuntimeTasks (§3.7).
+			apiSrv.AgentGateway = butlers.AgentClient
+			apiSrv.Ledger = ledger
 
 			named, lerr := db.ListButlers()
 			switch {

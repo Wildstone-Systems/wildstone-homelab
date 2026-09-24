@@ -220,13 +220,30 @@ func (s *Server) revokeAgentRuntime(b runtimedb.Butler) error {
 }
 
 // fenceRuntimeTasks is where revocation fences the Agent's in-flight
-// attempts (§3.7): bump each open task's lease epoch so a result the
-// old runtime sends after the fact is refused, the way
-// butler.TaskLedger.FenceAttempts already does for a superseded
-// attempt. It is a hook for Phase 2, which is where a task first comes
-// to be served under a runtime principal; until then no attempt runs
-// as one, there is nothing to fence, and this is deliberately empty.
+// attempts (§3.7): every task of this Butler that has not yet finished
+// has its in-flight attempts fenced (a late result from the old runtime
+// is refused, the way butler.TaskLedger.FenceAttempts already does for
+// a superseded attempt) and its live task handle withdrawn — the two
+// things Ledger.FenceTask does together — so a revoked runtime cannot
+// reach the gateway again with material it was already holding, over
+// HTTP or in-process alike.
+//
+// nil when this deployment has no Ledger wired: a control plane that
+// has never built one has no gateway-served task to fence either, and
+// this must not fail retiring or revoking an Agent that predates it.
 func (s *Server) fenceRuntimeTasks(b runtimedb.Butler) error {
+	if s.Ledger == nil {
+		return nil
+	}
+	open, err := s.DB.ListOpenButlerTasksByButler(b.Name)
+	if err != nil {
+		return err
+	}
+	for _, t := range open {
+		if _, err := s.Ledger.FenceTask(t.ID); err != nil {
+			return fmt.Errorf("fencing %s of %s: %w", t.ID, b.Name, err)
+		}
+	}
 	return nil
 }
 

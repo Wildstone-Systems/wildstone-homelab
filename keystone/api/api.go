@@ -19,9 +19,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
 	"github.com/chickenrat17/wildstone-homelab/keystone/catalog"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
@@ -173,6 +175,24 @@ type Server struct {
 	// -butler-provider path, which is what a deployment that has
 	// created no Butlers keeps running.
 	Butlers ButlerConversations
+
+	// AgentGateway is the Agent API's Wildstone side (ADR-W039 §3.4;
+	// ADR-W040): the same agentapi.Client a native runner holds
+	// in-process (keystone/agentgateway.InProcess), reached here so an
+	// external runtime gets the identical behaviour over HTTP —
+	// cmd/keystone wires the same instance it hands butlerlive.Butlers,
+	// which is what Phase 2c's byte-identical evidence rests on. nil
+	// leaves every /api/v1/agent/... route answering 503.
+	AgentGateway agentapi.Client
+
+	// Ledger is the durable task ledger (ADR-W030 A4) — cmd/keystone
+	// wires the same *butlerstore.Ledger the Agent Gateway and the
+	// native runner share. It is used here for exactly one thing:
+	// fenceRuntimeTasks withdraws a revoked runtime's live task handles
+	// and fences their in-flight attempts (§3.7). nil leaves revocation
+	// disabling the credential without a gateway-served task to fence,
+	// which is every deployment before Phase 2c's routes are reachable.
+	Ledger *butlerstore.Ledger
 
 	// CoordinatorHolder is THIS process's identity for the runtime
 	// database's single-coordinator lease (ADR-W030 A11) — cmd/keystone
@@ -878,6 +898,36 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /api/v1/household/butler", s.handle(principal.VerbRead, s.getHouseholdButlerStatus))
 	mux.Handle("POST /api/v1/household/butler/ask", s.handle(principal.VerbRead, s.askHouseholdButler))
+
+	// The Agent API over HTTP (ADR-W039 Phase 2c, #337; ADR-W040 §2–§3):
+	// the identical keystone/agentgateway.Gateway methods a native
+	// runner calls in-process, reached here by an external runtime with
+	// its own bearer. Every route authenticates and RBAC-checks like
+	// any other (s.handle), and additionally requires the caller to be
+	// a runtime principal (agentContext) — a wider credential that
+	// happens to hold read or propose, such as an admin token, is
+	// refused here exactly as a non-runtime one is. The handle inside
+	// each body, never the URL, carries the task; ADR-W040 §7's "no
+	// secret in URLs" is why none of these routes name one.
+	//
+	// Verbs follow the endpoint map in ADR-W040 §3: `read` where the
+	// call only observes or reports (manifest, recall, checkpoint, the
+	// four work calls, heartbeat), `propose` where it can change
+	// something outside the runtime (invoke, remember, propose,
+	// notify) — the decision that this family adds no new RBAC verb,
+	// since RoleButler already holds both.
+	mux.Handle("POST /api/v1/agent/manifest", s.handle(principal.VerbRead, s.agentManifest))
+	mux.Handle("POST /api/v1/agent/invoke", s.handle(principal.VerbPropose, s.agentInvoke))
+	mux.Handle("POST /api/v1/agent/recall", s.handle(principal.VerbRead, s.agentRecall))
+	mux.Handle("POST /api/v1/agent/remember", s.handle(principal.VerbPropose, s.agentRemember))
+	mux.Handle("POST /api/v1/agent/checkpoint", s.handle(principal.VerbRead, s.agentCheckpoint))
+	mux.Handle("POST /api/v1/agent/start", s.handle(principal.VerbRead, s.agentStart))
+	mux.Handle("POST /api/v1/agent/wait", s.handle(principal.VerbRead, s.agentWait))
+	mux.Handle("POST /api/v1/agent/complete", s.handle(principal.VerbRead, s.agentComplete))
+	mux.Handle("POST /api/v1/agent/fail", s.handle(principal.VerbRead, s.agentFail))
+	mux.Handle("POST /api/v1/agent/propose", s.handle(principal.VerbPropose, s.agentPropose))
+	mux.Handle("POST /api/v1/agent/notify", s.handle(principal.VerbPropose, s.agentNotify))
+	mux.Handle("POST /api/v1/agent/heartbeat", s.handle(principal.VerbRead, s.agentHeartbeat))
 
 	return mux
 }

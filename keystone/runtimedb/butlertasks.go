@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -589,6 +590,45 @@ func (db *DB) ListButlerTasks(limit int, owner string) ([]ButlerTask, error) {
 	rows, err := db.sql.Query(butlerTaskColumns+where+` ORDER BY t.seq DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing butler tasks: %w", err)
+	}
+	defer rows.Close()
+	return collectButlerTasks(rows)
+}
+
+// openButlerTaskStates is every state a task can still do work in — the
+// set ListOpenButlerTasksByButler fences on revocation (ADR-W039 §3.7)
+// and ButlerTasksInState's resume queue draws from one at a time.
+// Deliberately not ButlerTaskWaiting alone: a pending task has not
+// dispatched yet and a paused-offboarded one is waiting on a human
+// review, but a runtime revoked mid-review must still lose its handle,
+// or the review's resume would hand the withdrawn runtime a live one.
+var openButlerTaskStates = []ButlerTaskState{
+	ButlerTaskPending, ButlerTaskRunning, ButlerTaskWaiting, ButlerTaskPausedOffboarded,
+}
+
+// ListOpenButlerTasksByButler returns every task not yet finished that
+// the named Agent currently runs, oldest first: the fencing sweep a
+// runtime revocation needs (ADR-W039 §3.7; api.fenceRuntimeTasks) to
+// withdraw every live handle and fence every in-flight attempt before a
+// revoked runtime's next call could reach one.
+//
+// Keyed by the Butler's NAME, like TaskButler/SetTaskButler and the
+// butler_tasks_butler index it reuses: butler_tasks.butler is the
+// snapshot taken when the task was assigned (ADR-W030 A4), the same
+// column ButlerTasksInState's sibling queries filter without a join.
+func (db *DB) ListOpenButlerTasksByButler(butler string) ([]ButlerTask, error) {
+	args := make([]any, 0, len(openButlerTaskStates)+1)
+	args = append(args, butler)
+	placeholders := make([]string, len(openButlerTaskStates))
+	for i, s := range openButlerTaskStates {
+		placeholders[i] = "?"
+		args = append(args, string(s))
+	}
+	query := butlerTaskColumns + ` WHERE t.butler = ? AND t.state IN (` +
+		strings.Join(placeholders, ",") + `) ORDER BY t.seq`
+	rows, err := db.sql.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing open tasks for butler %q: %w", butler, err)
 	}
 	defer rows.Close()
 	return collectButlerTasks(rows)
