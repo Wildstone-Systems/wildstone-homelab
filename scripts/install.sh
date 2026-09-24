@@ -778,6 +778,20 @@ install_chat_adapter() {
   fetch_binary chat-adapter /srv/wildstone/bin
 }
 
+# install_agent_bridge puts the agent runtime bridge (ADR-W039 Phase
+# 6/H3, #349) where the agent-hermes package mounts it from, the same
+# way install_chat_adapter does: every node gets it, because a packaged
+# runtime can run on whichever node the Owner chose, in a public
+# distroless image with this directory bind-mounted read-only. A release
+# from before the bridge shipped simply has no packaged runtime.
+install_agent_bridge() {
+  release_has "agent-bridge_linux_${ARCH}.tar.gz" || {
+    log "this release has no agent-bridge; packaged agent runtimes will not run on this node"
+    return 0
+  }
+  fetch_binary agent-bridge /srv/wildstone/bin
+}
+
 install_console() {
   # The Console ships as its own release asset so a control-plane host
   # never needs Node (#34): building it pulled 568 apt packages to
@@ -1747,6 +1761,7 @@ install -d -m 0755 /etc/wildstone
 install -d -m 0700 /var/lib/wildstone/wardstone
 install -d -m 0755 /srv/wildstone
 install_chat_adapter
+install_agent_bridge
 
 # The node identity and secret store used to live at
 # /etc/wildstone/wardstone — inside the managed prefix the ingress

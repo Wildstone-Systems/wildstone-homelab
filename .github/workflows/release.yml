@@ -63,6 +63,12 @@ jobs:
           # distroless image with that directory mounted. No image of
           # ours is published, so a private repository stays private.
           build chat-adapter cli ./cmd/chat-adapter
+          # The agent runtime bridge (ADR-W039 Phase 6/H3, #349): ships
+          # the same way chat-adapter does — a binary the installer puts
+          # on every node at /srv/wildstone/bin, run by a package in a
+          # public distroless image with that directory mounted. No
+          # image of ours is published for this either.
+          build agent-bridge cli ./cmd/agent-bridge
           # The Console's built output. Architecture-independent — it is
           # static files a browser runs — so it has no _linux_<arch>
           # suffix, and install.sh fetches it by that plain name.
