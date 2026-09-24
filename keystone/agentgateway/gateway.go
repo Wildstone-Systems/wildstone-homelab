@@ -1,0 +1,328 @@
+package agentgateway
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
+	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+)
+
+// The conversation limits, owned here from Phase 2a. They are the
+// values butlerlive/serve.go declares as conversationSliceRounds,
+// conversationToolCalls and observationTTL, duplicated-until-2b: when
+// Serve builds its runner through this package, its constants go and
+// these stay.
+
+// ConversationSliceRounds bounds one TURN's model rounds. It is the
+// slice budget, not the task's: reaching it checkpoints and waits, and
+// the person can say continue.
+const ConversationSliceRounds = 8
+
+// ConversationToolCalls bounds a conversation's tool calls across every
+// turn and every restart. Unlike the slice budget it does not reset,
+// because a budget that resets on retry is not a budget (ADR-W030 A4).
+const ConversationToolCalls = 64
+
+// ObservationTTL is how long a verified read may be reused on a resume
+// before it is taken again. A conversation resumed a minute after a
+// restart should not re-read the whole house; one resumed tomorrow
+// should not answer today's question from yesterday's readings.
+const ObservationTTL = 15 * time.Minute
+
+// ErrRefused wraps every refusal this gateway makes of its own — a
+// runtime principal bound to another Agent, a surface that cannot be
+// scoped. A handle refusal is butlerstore.ErrHandleRefused and is
+// passed through unchanged.
+var ErrRefused = errors.New("agentgateway: refused")
+
+// Gateway is the in-process Agent Gateway. Its fields are what
+// butlerlive.Butlers holds for the same job, minus the provider: the
+// gateway never talks to a model, which is the whole line §7.1 draws.
+type Gateway struct {
+	DB     *runtimedb.DB
+	Ledger *butlerstore.Ledger
+	// Gateways builds the tool surface for one session, exactly the
+	// seam Serve uses; cmd/keystone wires one closure for both.
+	Gateways butlerlive.Gateways
+	Log      *slog.Logger
+	// Clock renders the household clock line for the system prompt.
+	// nil means no clock line — the gateway does not own the
+	// household's timezone, and whoever serves a conversation supplies
+	// it (butlerlive.Butlers.clockLine, 2b).
+	Clock func() string
+	// Now is the gateway clock for observation freshness; nil means
+	// time.Now.
+	Now func() time.Time
+
+	// SliceRounds, ToolCalls and ObservationTTL override the package
+	// constants when > 0. Tests set them; production leaves them.
+	SliceRounds    int
+	ToolCalls      int
+	ObservationTTL time.Duration
+
+	mu sync.Mutex
+	// records keeps, per task, the audit record of every call this
+	// gateway served — what the runner's Transcript.Audit carried when
+	// it ran the calls itself. InvokeResult cannot carry a Plan or a
+	// resource document (the wire has no such field, by design), and
+	// until Phase 3 files proposals inside the gateway, the handler
+	// that files them after a turn still needs to read them from
+	// somewhere. Records is that somewhere; Forget releases a task's.
+	records map[string][]butler.ToolCallRecord
+}
+
+// InProcess returns g as an agentapi.Client. The native runner will
+// hold this (2b); an HTTP transport (2c) calls the same methods with
+// the runtime principal in the context.
+func InProcess(g *Gateway) agentapi.Client { return g }
+
+var _ agentapi.Client = (*Gateway)(nil)
+
+func (g *Gateway) now() time.Time {
+	if g.Now != nil {
+		return g.Now()
+	}
+	return time.Now()
+}
+
+func (g *Gateway) sliceRounds() int {
+	if g.SliceRounds > 0 {
+		return g.SliceRounds
+	}
+	return ConversationSliceRounds
+}
+
+func (g *Gateway) toolCalls() int {
+	if g.ToolCalls > 0 {
+		return g.ToolCalls
+	}
+	return ConversationToolCalls
+}
+
+func (g *Gateway) observationTTL() time.Duration {
+	if g.ObservationTTL > 0 {
+		return g.ObservationTTL
+	}
+	return ObservationTTL
+}
+
+// principalKey carries the runtime principal a call authenticated as.
+type principalKey struct{}
+
+// WithPrincipal marks ctx as a call authenticated as the named runtime
+// principal. The HTTP transport sets it from the bearer; the native
+// path sets it to the Butler's own credential. A ctx without one is an
+// in-process call under the process's own trust, and the binding check
+// is skipped — there is no principal to bind.
+func WithPrincipal(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, principalKey{}, name)
+}
+
+func principalFrom(ctx context.Context) (string, bool) {
+	name, ok := ctx.Value(principalKey{}).(string)
+	return name, ok && name != ""
+}
+
+// session is one resolved handle with the Toolset built for it: what
+// Serve assembles between resolving the Butler and constructing the
+// Runner (serve.go:87-128), rebuilt per call so every Console change
+// is visible on the next one (§4.1 "assign permissions").
+type session struct {
+	hc       butlerstore.HandleContext
+	turn     butlerlive.Turn
+	toolset  butler.Toolset
+	readOnly bool
+}
+
+// open resolves the handle, checks the runtime principal's binding and
+// builds the scoped Toolset.
+//
+// Duplicated-until-2b: the scoping block is serve.go:95-128 verbatim in
+// intent — the per-Butler Authority with the person leg wired, the
+// Connection ceiling over it, the task and the caller bound — so that
+// when Serve hands its runner a handle instead of a Toolset, this is
+// the one copy left.
+func (g *Gateway) open(ctx context.Context, h agentapi.Handle) (*session, error) {
+	if g.Ledger == nil || g.DB == nil || g.Gateways == nil {
+		return nil, fmt.Errorf("%w: the gateway is not wired", ErrRefused)
+	}
+	hc, err := g.Ledger.ResolveHandle(h)
+	if err != nil {
+		return nil, err
+	}
+	if principal, ok := principalFrom(ctx); ok {
+		// §4.1 identity binding: the credential names one Agent for
+		// its life, and a handle for another Agent's task is refused
+		// however valid the handle is. Phase 1b's issue rule, applied
+		// at every use rather than only at issue.
+		seq, bound, err := g.DB.RuntimePrincipalButler(principal)
+		if err != nil {
+			return nil, err
+		}
+		if !bound {
+			return nil, fmt.Errorf("%w: %s is not a runtime principal", ErrRefused, principal)
+		}
+		if seq != hc.Butler.Seq {
+			return nil, fmt.Errorf("%w: %s is bound to another agent and cannot act for %s (ADR-W039 §4.1)",
+				ErrRefused, principal, hc.Butler.Name)
+		}
+	}
+	turn := turnFor(hc)
+	gw, err := g.Gateways.For(hc.Butler, turn)
+	if err != nil {
+		return nil, err
+	}
+	sc, ok := gw.(butlerlive.Scoped)
+	if !ok {
+		// A surface that cannot be scoped must not be served as a
+		// Butler at all (serve.go:121-128).
+		return nil, fmt.Errorf("%w: the %s surface cannot be scoped to a butler; refusing to serve %s unscoped",
+			ErrRefused, hc.Butler.Surface, hc.Butler.Name)
+	}
+	// The per-Butler authority, and above it the ceiling of the
+	// Connection the task was admitted over. The order is the whole
+	// guarantee: WithConnection can only turn a yes into a no.
+	authority := &butlerstore.Authority{DB: g.DB, Butler: hc.Butler.Name}
+	authority.PersonAuthority = authority.PersonIsAdmitted()
+	sc.SetAuthorizer(butlerlive.WithConnection(authority, turn.Connection.Permits))
+	sc.SetSessionTask(hc.Task.ID)
+	sc.SetCaller(butler.CallerPersonFacing, hc.Person, hc.OriginConnection)
+	return &session{
+		hc:      hc,
+		turn:    turn,
+		toolset: gw,
+		// The probe verdict decides what a session may DO, not which
+		// model it talks to (ADR-W017 A4).
+		readOnly: !hc.Butler.CarriesActionAuthority(),
+	}, nil
+}
+
+// turnFor is the Turn a resolved handle stands for: every field the
+// gateway factory and the prompt read, from the task's admission and
+// nothing else. Text and History are the runtime's business and stay
+// empty; AsOwner is a fact about the request that opened the task and
+// is not recorded on it, so it is false here (see the 2b notes).
+func turnFor(hc butlerstore.HandleContext) butlerlive.Turn {
+	return butlerlive.Turn{
+		Butler:    hc.Butler.Name,
+		Member:    hc.Person,
+		SessionID: hc.Task.SessionID,
+		Group:     hc.Audience == runtimedb.ButlerAudienceShared,
+		Connection: butlerlive.ConnectionScope{
+			Name:    hc.OriginConnection,
+			Ref:     hc.OriginConnectionRef,
+			Permits: permitsFor(hc.OriginConnection),
+		},
+	}
+}
+
+// permitsFor is the Connection ceiling a named Connection carries. The
+// portal is the one Connection with a ceiling of its own; the Console
+// and the chat adapters carry none (butlerlive.ConsoleConnection).
+// Derived from the handle's Connection, never supplied by the caller:
+// a ceiling the runtime could omit is not a ceiling.
+func permitsFor(connection string) func(string) (bool, string) {
+	if connection == portal.Connection {
+		return portal.Permits
+	}
+	return nil
+}
+
+// Manifest implements agentapi.Client: the surface for the task on the
+// handle, narrowed by the Butler's effective authority right now.
+func (g *Gateway) Manifest(ctx context.Context, h agentapi.Handle) (agentapi.Manifest, error) {
+	s, err := g.open(ctx, h)
+	if err != nil {
+		return agentapi.Manifest{}, err
+	}
+	caps := s.toolset.Capabilities(s.readOnly)
+	mutating := make(map[string]bool, len(caps.Tools))
+	for _, t := range caps.Tools {
+		mutating[t.Name] = t.Mutating
+	}
+	// The offered specs are what the model is handed today
+	// (Runner.Run's specs); the manifest's tool list narrows to the
+	// same set for the same reason — a name is itself a disclosure.
+	offered := s.toolset.OfferedSpecs(s.readOnly)
+	tools := make([]agentapi.ToolSpec, 0, len(offered))
+	for _, spec := range offered {
+		var schema json.RawMessage
+		if spec.InputSchema != nil {
+			body, err := json.Marshal(spec.InputSchema)
+			if err != nil {
+				return agentapi.Manifest{}, fmt.Errorf("agentgateway: encoding the input schema of %s: %w", spec.Name, err)
+			}
+			schema = body
+		}
+		tools = append(tools, agentapi.ToolSpec{
+			Name:         spec.Name,
+			Description:  spec.Description,
+			InputSchema:  schema,
+			ReadOnlyHint: !mutating[spec.Name],
+		})
+	}
+	actions := make([]agentapi.ActionSpec, 0, len(caps.Actions))
+	for _, a := range caps.Actions {
+		actions = append(actions, agentapi.ActionSpec{Tool: a.Tool, Tier: a.Tier})
+	}
+	clock := ""
+	if g.Clock != nil {
+		clock = g.Clock()
+	}
+	return agentapi.Manifest{
+		AgentClass:      agentapi.AgentClass(caps.AgentClass),
+		SystemPrompt:    butlerlive.SystemPromptFor(ctx, s.toolset, s.hc.Butler, s.turn, clock),
+		Tools:           tools,
+		ReadOnly:        s.readOnly,
+		ProposableKinds: caps.ProposableKinds,
+		Actions:         actions,
+		Unavailable:     caps.Unavailable,
+		Fingerprint:     caps.Fingerprint(),
+	}, nil
+}
+
+// Records returns the audit records of every call this gateway served
+// for a task, in call order, and Forget releases them. See the field.
+func (g *Gateway) Records(taskID string) []butler.ToolCallRecord {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	out := make([]butler.ToolCallRecord, len(g.records[taskID]))
+	copy(out, g.records[taskID])
+	return out
+}
+
+// Forget drops a task's records.
+func (g *Gateway) Forget(taskID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.records, taskID)
+}
+
+func (g *Gateway) record(taskID string, rec butler.ToolCallRecord) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.records == nil {
+		g.records = map[string][]butler.ToolCallRecord{}
+	}
+	g.records[taskID] = append(g.records[taskID], rec)
+}
+
+// refusalOutcome turns a gateway or handle refusal into the denied
+// outcome an invoke answers with. A refusal is an answer, not a
+// transport failure (§4 item 5); anything else is the error it was.
+func refusalOutcome(err error) (agentapi.InvokeResult, error) {
+	if errors.Is(err, butlerstore.ErrHandleRefused) || errors.Is(err, ErrRefused) {
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeDenied, Reason: err.Error()}, nil
+	}
+	return agentapi.InvokeResult{}, err
+}
