@@ -1061,6 +1061,13 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	if err := apiSrv.BackfillAgentTools(); err != nil {
 		return fmt.Errorf("backfilling agent tools: %w", err)
 	}
+	// Every Agent authenticates as a runtime principal bound to it
+	// (ADR-W039 §3.3). 0081 gave Agents made before it their native
+	// runtime record; the credential is minted here, once, because a
+	// principal name goes through a discipline SQL cannot apply.
+	if err := apiSrv.BackfillRuntimePrincipals(); err != nil {
+		return fmt.Errorf("backfilling agent runtime principals: %w", err)
+	}
 	// The pictures the themes ship with. Counted and logged rather than
 	// assumed: a wrong or unpopulated -wallpaper-dir is otherwise a
 	// silent "the themes have no pictures", which is exactly the

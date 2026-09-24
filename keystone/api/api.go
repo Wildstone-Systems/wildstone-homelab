@@ -622,6 +622,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/butlers/{name}/tool", s.handle(principal.VerbManage, s.setButlerTool))
 	mux.Handle("PUT /api/v1/butlers/{name}/address", s.handle(principal.VerbManage, s.setButlerAddress))
 	mux.Handle("PUT /api/v1/butlers/{name}/class", s.handle(principal.VerbManage, s.consequential(s.setButlerAgentClass)))
+	// The Agent's runtime record (ADR-W039 §3.3): which runtime, as
+	// whom, how it is doing. A read: the credential is a reference,
+	// never a secret. Registering, rotating and revoking are the next
+	// slice, and are manage + consequential when they land.
+	mux.Handle("GET /api/v1/butlers/{name}/runtime", s.handle(principal.VerbRead, s.butlerRuntime))
 	mux.Handle("GET /api/v1/butlers/{name}/memory-restrictions", s.handle(principal.VerbRead, s.agentMemoryRestrictions))
 	mux.Handle("PUT /api/v1/butlers/{name}/memory-restrictions", s.handle(principal.VerbManage, s.consequential(s.setAgentMemoryRestriction)))
 	mux.Handle("DELETE /api/v1/butlers/{name}", s.handle(principal.VerbManage, s.consequential(s.retireButler)))

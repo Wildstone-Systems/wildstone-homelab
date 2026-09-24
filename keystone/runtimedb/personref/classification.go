@@ -255,6 +255,22 @@ var Columns = []Column{
 	{"routine_plan_versions", "delivery", NotAPerson, "0071: immutable reviewed action delivery description"},
 	{"routine_plan_versions", "secret_ids", NotAPerson, "0073: JSON array of household_secrets.id values submitted as exact resource requests, not Person identities"},
 	{"routine_plan_versions", "memory_ids", NotAPerson, "0073: JSON array of numeric butler_memory.seq values submitted as exact resource requests"},
+	// 0081 (ADR-W039 Phase 1): the Agent's runtime record and its runtime
+	// principal. A runtime principal is a machine credential — the
+	// legacy machine axis — minted by the platform as runtime-<agent>-<n>
+	// with the butler role and no acting identity; it never names a
+	// Person.
+	{"butler_runtimes", "principal", Actor,
+		"0081: the Agent's current runtime credential, a machine principal from the principals table (ADR-W039 §3.3 credentialRef); minted by api.mintRuntimePrincipal, never a person"},
+	{"butler_runtimes", "health", NotAPerson, "0081: closed runtime health vocabulary (unregistered|connected|degraded|offline|revoked)"},
+	{"butler_runtimes", "last_heartbeat", NotAPerson, "0081: RFC3339 timestamp of the runtime's last heartbeat"},
+	{"butler_runtimes", "delivery", NotAPerson, "0081: closed delivery-mode vocabulary (push|pull)"},
+	{"butler_runtimes", "processing_class", NotAPerson, "0081: closed processing-class vocabulary declared by the Owner (local_only|cloud), not an identity"},
+	{"butler_runtimes", "execution_profile", NotAPerson, "0081: execution profile reference (#334), not an identity"},
+	{"butler_runtimes", "updated_by", Actor,
+		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise; 'migration' for the 0081 backfill"},
+	{"runtime_principals", "principal", Actor,
+		"0081: a machine principal from the principals table bound to one Agent for life (ADR-W039 §4.1) — the legacy machine axis, never a person"},
 	{"household_routines", "output_audience", NotAPerson, "0071: audience foreign key, not a Person"},
 	{"household_routines", "resource_signature", NotAPerson, "0073: canonical JSON of secret IDs and numeric memory IDs, never a Person reference"},
 	{"owner_review_preference", "console_url", NotAPerson, "0071: Console link for generic review notifications"},

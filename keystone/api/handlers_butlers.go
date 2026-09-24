@@ -285,6 +285,12 @@ func (s *Server) createButler(r *http.Request, id principal.Identity) (any, int,
 	if err := s.seedAgentTools(created, actingMember(id)); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	// Every Agent runs on a runtime and authenticates as a principal
+	// bound to it (ADR-W039 §3.3). A new one is native, with its
+	// credential minted here rather than synthesised later.
+	if err := s.ensureNativeRuntime(created, id); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	b, err := s.DB.GetButler(name)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -500,6 +506,15 @@ func (s *Server) retireButler(r *http.Request, id principal.Identity) (any, int,
 		}
 		return nil, http.StatusBadRequest, err
 	}
+	// Nothing may act for a retired Agent: its runtime credential is
+	// disabled and its runtime marked revoked (ADR-W039 §3.7).
+	retired, err := s.DB.GetButler(name)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if err := s.revokeAgentRuntime(retired); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	return map[string]any{"retired": name}, http.StatusOK, nil
 }
 
@@ -672,6 +687,11 @@ func (s *Server) restoreButler(r *http.Request, id principal.Identity) (any, int
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	// Retiring revoked its runtime credential; a native runtime comes
+	// back with it. An external one stays revoked until re-registered.
+	if err := s.ensureNativeRuntime(b, id); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	s.event("butler.restored", "", id, fmt.Sprintf("butler %s brought back", name))
 	return butlerView(b), http.StatusOK, nil
 }
@@ -715,6 +735,11 @@ func (s *Server) duplicateButler(r *http.Request, id principal.Identity) (any, i
 	}
 	b, err := s.DB.GetButler(copyName)
 	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	// The copy is its own Agent with its own runtime credential; the
+	// original's is bound to the original for life (ADR-W039 §4.1).
+	if err := s.ensureNativeRuntime(b, id); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	s.event("butler.duplicated", "", id, fmt.Sprintf("butler %s copied from %s", copyName, name))
