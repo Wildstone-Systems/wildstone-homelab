@@ -131,6 +131,108 @@ func TestContainerEnsureOpCarriesHostAccess(t *testing.T) {
 	}
 }
 
+// TestContainerEnsureOpCarriesHardening is H1's wire-payload coverage,
+// the same shape TestContainerEnsureOpCarriesHostAccess pins for
+// devices/capAdd: every hardening field reaches the EnsureContainer op,
+// and the spec hash moves for each one so a fleet already running
+// without it is replaced once the field is added.
+func TestContainerEnsureOpCarriesHardening(t *testing.T) {
+	spec := &resource.ContainerSpec{
+		Image:           testDigestImage,
+		ReadOnlyRootfs:  true,
+		CapDrop:         []string{"ALL"},
+		NoNewPrivileges: true,
+		Resources:       &resource.ContainerResources{Memory: "4g", Cpus: "2", PidsLimit: 512},
+		ShmSize:         "1g",
+	}
+	ec := containerEnsureOp("hermes", spec, ContainerNetwork, "", nil).GetEnsureContainer()
+	if !ec.GetReadOnlyRootfs() {
+		t.Error("read_only_rootfs did not reach the op")
+	}
+	if caps := ec.GetCapDrop(); len(caps) != 1 || caps[0] != "ALL" {
+		t.Errorf("cap_drop = %+v", caps)
+	}
+	if !ec.GetNoNewPrivileges() {
+		t.Error("no_new_privileges did not reach the op")
+	}
+	res := ec.GetResources()
+	if res.GetMemory() != "4g" || res.GetCpus() != "2" || res.GetPidsLimit() != 512 {
+		t.Errorf("resources = %+v", res)
+	}
+	if ec.GetShmSize() != "1g" {
+		t.Errorf("shm_size = %q, want 1g", ec.GetShmSize())
+	}
+
+	base := &resource.ContainerSpec{Image: "x"}
+	for name, changed := range map[string]*resource.ContainerSpec{
+		"readOnlyRootfs":  {Image: "x", ReadOnlyRootfs: true},
+		"capDrop":         {Image: "x", CapDrop: []string{"ALL"}},
+		"noNewPrivileges": {Image: "x", NoNewPrivileges: true},
+		"resources":       {Image: "x", Resources: &resource.ContainerResources{Memory: "4g"}},
+		"shmSize":         {Image: "x", ShmSize: "1g"},
+	} {
+		if specHash(base, ContainerNetwork, "", nil) == specHash(changed, ContainerNetwork, "", nil) {
+			t.Errorf("spec hash is blind to %s, so adding one would never redeploy", name)
+		}
+	}
+}
+
+// TestHardeningSpecIsRefusedOnAnOlderAgent is H1's cross-module refusal
+// test, the sibling of TestMinor12SpecIsRefusedOnAnOlderAgent: a plan
+// using a hardening field must be refused — not silently under-applied —
+// against an agent below protocol minor 18, and must apply cleanly at or
+// above it.
+func TestHardeningSpecIsRefusedOnAnOlderAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		minor uint32
+		known bool
+		want  bool // applied
+	}{
+		{"minor 17 refuses", 17, true, false},
+		{"minor 18 applies", 18, true, true},
+		{"unknown minor applies", 0, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := startGateway(t, []string{"tok"})
+			agent := newTestAgent(t, h, "node-a", "tok")
+			if !h.gw.WaitConnected("node-a", 10*time.Second) {
+				t.Fatal("agent never connected")
+			}
+			hermes := containerResource("hermes", testDigestImage)
+			hermes.Container.ReadOnlyRootfs = true
+			hermes.Container.NoNewPrivileges = true
+			r := newReconciler(&GatewayApplier{Gateway: h.gw})
+			r.AgentProtocolMinor = func(string) (uint32, bool) { return tc.minor, tc.known }
+			outcome, err := r.Reconcile(context.Background(), "node-a", []resource.Resource{hermes})
+			if err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			_, exists := agent.containerExists("hermes")
+			if exists != tc.want {
+				t.Fatalf("container exists = %v, want %v (outcome %+v)", exists, tc.want, outcome)
+			}
+			if tc.want {
+				return
+			}
+			var msg string
+			for _, sr := range outcome.Steps {
+				if sr.Step.Name == "hermes" {
+					msg = sr.Error
+				}
+			}
+			for _, want := range []string{"protocol minor 18", "node-a", "minor 17", "upgrade wardstoned", "readOnlyRootfs"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("step error %q does not say %q", msg, want)
+				}
+			}
+			if agent.opCount("EnsureContainer") != 0 || agent.opCount("PullImage") != 0 {
+				t.Error("the node was touched before the refusal")
+			}
+		})
+	}
+}
+
 // TestMinor12SpecIsRefusedOnAnOlderAgent: the one-minor-skew guarantee
 // makes a minor-11 agent a legitimate peer, and it IGNORES the minor-12
 // fields rather than refusing them — so "53:53/udp" reaches it as a

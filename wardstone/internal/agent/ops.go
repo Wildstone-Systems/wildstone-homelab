@@ -519,6 +519,36 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		}
 		capAdd = append(capAdd, c)
 	}
+	// H1 hardening fields (protocol minor 18): checked up front for the
+	// same reason devices and capAdd are — a malformed value must fail the
+	// op with the OLD container still running, not after it has already
+	// been replaced.
+	var capDrop []string
+	for _, c := range op.GetCapDrop() {
+		if oe := checkCapDrop(c); oe != nil {
+			return nil, oe
+		}
+		capDrop = append(capDrop, c)
+	}
+	var securityOpt []string
+	if op.GetNoNewPrivileges() {
+		securityOpt = append(securityOpt, "no-new-privileges:true")
+	}
+	var memBytes, nanoCPUs, pidsLimit int64
+	if res := op.GetResources(); res != nil {
+		var oe *wsv1.OpError
+		if memBytes, oe = dockerSizeToBytes(res.GetMemory()); oe != nil {
+			return nil, oe
+		}
+		if nanoCPUs, oe = cpusToNanoCPUs(res.GetCpus()); oe != nil {
+			return nil, oe
+		}
+		pidsLimit = res.GetPidsLimit()
+	}
+	shmBytes, oe := dockerSizeToBytes(op.GetShmSize())
+	if oe != nil {
+		return nil, oe
+	}
 	// A network must exist and be wildstone-owned before anything is
 	// attached to it (protocol minor 8). Attaching to a foreign network
 	// would join the container to whatever else lives there, so the same
@@ -641,12 +671,19 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		Labels:       labels,
 		ExposedPorts: exposedPorts,
 		HostConfig: hostConfig{
-			Binds:         binds,
-			PortBindings:  ports,
-			RestartPolicy: restartPolicy{Name: restart},
-			Devices:       devices,
-			CapAdd:        capAdd,
-			ExtraHosts:    resolveHostAliases(ctx, op.GetHostAliases(), a.log),
+			Binds:          binds,
+			PortBindings:   ports,
+			RestartPolicy:  restartPolicy{Name: restart},
+			Devices:        devices,
+			CapAdd:         capAdd,
+			ExtraHosts:     resolveHostAliases(ctx, op.GetHostAliases(), a.log),
+			ReadonlyRootfs: op.GetReadOnlyRootfs(),
+			CapDrop:        capDrop,
+			SecurityOpt:    securityOpt,
+			Memory:         memBytes,
+			NanoCpus:       nanoCPUs,
+			PidsLimit:      pidsLimit,
+			ShmSize:        shmBytes,
 		},
 		NetworkingConfig: netCfg,
 	})
