@@ -14,7 +14,7 @@ Each question from the issue, answered against the brief. The one-line verdict f
 
 **Volumes and persistent state.** One directory, `/opt/data` (`HERMES_HOME`): `.env`, `config.yaml`, `SOUL.md`, `auth.json`, `state.db` (SQLite, WAL), `sessions/`, `memories/`, `skills/`, `home/`, `cron/`, `hooks/`, `logs/`, `plugins/`, `mcp-tokens/`, `pairing/`, `cache/`, `profiles/` ([docker → persistent volumes](https://hermes-agent.nousresearch.com/docs/user-guide/docker#persistent-volumes)). `state.db` on virtiofs/9p mounts needs `database.journal_mode: delete` or a named volume ([docker](https://hermes-agent.nousresearch.com/docs/user-guide/docker#filesystem-requirements-for-statedb-in-containers)); a Wildstone `Volume` is a named Docker volume, which is the documented safe case. Never run two gateway containers on one data dir ([docker](https://hermes-agent.nousresearch.com/docs/user-guide/docker)).
 
-**Config and secrets.** `config.yaml` plus `.env` in `/opt/data`, both overridable by process env (`-e`), and an org-pinned "managed scope" read from `/etc/hermes/{config.yaml,.env}` or `HERMES_MANAGED_DIR` ([managed scope](https://hermes-agent.nousresearch.com/docs/user-guide/managed-scope); [secrets](https://hermes-agent.nousresearch.com/docs/user-guide/secrets/)). `${ENV}` placeholders in `mcp_servers.*.headers/url` resolve at connect time from the environment ([mcp-config-reference](https://hermes-agent.nousresearch.com/docs/reference/mcp-config-reference)). The precise precedence between the managed scope and the profile's own `config.yaml` is described only as "pinned" in the brief; the spike must confirm it (§8, S2). Config-schema migrations run at boot with timestamped backups ([docker](https://hermes-agent.nousresearch.com/docs/user-guide/docker)).
+**Config and secrets.** `config.yaml` plus `.env` in `/opt/data`, both overridable by process env (`-e`), and an org-pinned "managed scope" read from `/etc/hermes/{config.yaml,.env}` or `HERMES_MANAGED_DIR` ([managed scope](https://hermes-agent.nousresearch.com/docs/user-guide/managed-scope); [secrets](https://hermes-agent.nousresearch.com/docs/user-guide/secrets/)). `${ENV}` placeholders in `mcp_servers.*.headers/url` resolve at connect time from the environment ([mcp-config-reference](https://hermes-agent.nousresearch.com/docs/reference/mcp-config-reference)). The brief describes the precedence between the managed scope and the profile's own `config.yaml` only as "pinned"; upstream's managed-scope page says managed keys win per leaf (`/etc/hermes/config.yaml` over `~/.hermes/config.yaml` over defaults) and a non-root user cannot set them, and the spike confirms that holds in the image (§8, S2). Config-schema migrations run at boot with timestamped backups ([docker](https://hermes-agent.nousresearch.com/docs/user-guide/docker)).
 
 **Network.** Outbound to the model provider and tool APIs; inbound is optional: `8642` API server (`API_SERVER_HOST=0.0.0.0` + `API_SERVER_KEY` required), `8644` webhooks (`WEBHOOK_SECRET`), `9119` dashboard (non-loopback bind requires an auth provider), `9900` A2A ([docker](https://hermes-agent.nousresearch.com/docs/user-guide/docker); [api-server](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server); [webhooks](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks)). Upstream's compose uses `network_mode: host`, which Wildstone does not offer (`packages/README.md:149-184`); the network-isolation guide documents a bridge layout with an egress proxy instead ([network isolation](https://hermes-agent.nousresearch.com/docs/user-guide/egress/network-isolation)). Nothing Hermes needs requires host networking.
 
@@ -166,7 +166,8 @@ templates:
         # /opt/data/config.yaml cannot override these keys. Re-rendered
         # when the Agent's execution profile or model changes, which
         # re-creates the container (ADR-W029 A11).
-        {{ template "hermes-config" . }}     # body in §3.3
+        {{ template "hermes-config" . }}     # placeholder for the §3.3 body: pkgspec renders each
+                                             # template string standalone, so the real file inlines it
   - |
     apiVersion: wildstone.dev/v1
     kind: SeedFile
@@ -198,7 +199,9 @@ templates:
         HERMES_PROVIDER_KEY: "secret/{{ .Capability }}-provider-key"
         HERMES_DASHBOARD: "0"
         HERMES_DISABLE_LAZY_INSTALLS: "1"
-        REQUESTS_CA_BUNDLE: /etc/wildstone/ca/root.pem   # ADR-W019 A3; only when keystone_url is https
+        REQUESTS_CA_BUNDLE: /etc/wildstone/ca/root.pem   # NEW: illustrative path; ADR-W019 A7 renders it from
+                                                          # `.Resolved.InternalCaBundlePath`, not yet in code, and the
+                                                          # real file adds the matching read-only mount; https only
       mounts:
         - { source: "{{ .Capability }}-data", target: /opt/data }
         - { source: "/etc/wildstone/{{ .Capability }}", target: /etc/hermes, readOnly: true }
@@ -261,7 +264,7 @@ Rotation mints `runtime-mika-2`, sets the provided secret's new version and re-c
 
 | Want | Exists? | Note |
 |---|---|---|
-| `instanced`, `params.source: keystone_url`, `Secret.provided`, `ConfigFile`, `SeedFile`, `BackupPlan`, `Volume`, two `Container`s per package | Yes | `pkgspec.go:66,195-244`; `resource.go:428-465,550-567,771-782` |
+| `instanced`, `params.source: keystone_url`, `Secret.provided`, `ConfigFile`, `SeedFile`, `BackupPlan`, `Volume`, two `Container`s per package | Yes | `pkgspec.go:66,195-244`; `resource.go:427-465,548-568,770-783` |
 | A closed-choice param (`execution_profile`, `processing_class`) | No | `validate` is a closed shape vocabulary (`pkgspec.go:177-191`); an `enum:` form is a small pkgspec change |
 | `readOnlyRootfs`, `capDrop`, `no-new-privileges`, memory/cpu/pids limits, egress allowlist | No | `ContainerSpec` has `image, env, ports, mounts, command, restart, devices, capAdd` only (`resource.go:137-169`); adding fields moves the spec hash of every container unless `omitempty` (`resource.go:159-165`) and needs a Wardstone protocol minor |
 | A package that is a *runtime* rather than a *service* (no Route, no agentTools, bound to an Agent) | Partly | Nothing in pkgspec says "this install belongs to Agent X"; today the binding is convention (instance name) plus the Console flow, as for chat bots. A `runtimeFor: agent` declaration is optional polish, not a blocker |
@@ -301,9 +304,11 @@ mcp_servers:
     url: "{{ .Params.keystone_url }}/api/v1/agent/mcp"   # path is the transport ADR's (ADR-W039 §3.8)
     headers: { Authorization: "Bearer ${WILDSTONE_RUNTIME_TOKEN}" }
     identity_header: { name: X-Wildstone-Agent, value_from: profile }
-    trust: untrusted          # write-capable tools go through Hermes's approval surface;
-                              # on unattended runs that is deny (below), so Wildstone's
-                              # own `waiting`/`denied` results are the only gate that matters
+    trust: full               # NOT untrusted: `untrusted` would route every non-readOnlyHint
+                              # Wildstone tool through Hermes's own approval and, unattended,
+                              # deny it before Wildstone saw the call (ADR-W039 §5.1 resolves
+                              # this the same way). Wildstone's `waiting`/`denied` results are
+                              # the only gate; `full` is the documented trusted value.
     tools: { prompts: false, resources: false }
     lazy: false
     timeout: 120
@@ -321,8 +326,11 @@ platform_toolsets:
     - file
     - code_execution{{ end }}
 agent:
-  disabled_toolsets: [browser, homeassistant, image_gen, computer_use, kanban, cronjob-write, a2a, manage_connections]
-  # `cronjob` stays readable; host-admin adds nothing here — see §5.4
+  disabled_toolsets: [browser, homeassistant, image_gen, computer_use, kanban, cronjob, a2a, connections]
+  # `cronjob` has no read/write split: the toolset is `cronjob_manage` (toolsets
+  # reference), so it is off and cron stays operator-edited config in
+  # `cron/jobs.json`; `connections` is the toolset behind `manage_connections`.
+  # host-admin adds nothing here — see §5.4
 
 terminal:                     # sandboxed and host-admin only
   backend: local              # the container IS the sandbox (§5.3); docker backend needs the socket
@@ -402,12 +410,12 @@ Runtime choice and execution profile are two independent settings on the Agent r
 
 | Aspect | Setting |
 |---|---|
-| Hermes toolsets | `memory`, `session_search`, `skills`, `todo`, `delegation`, `mcp-wildstone`; `web` only with `outbound_web=true`. Off: `terminal`, `file`, `code_execution`, `browser`, `homeassistant`, `image_gen`, `computer_use`, `cronjob` writes, `a2a`, all platform adapters |
+| Hermes toolsets | `memory`, `session_search`, `skills`, `todo`, `delegation`, `mcp-wildstone`; `web` only with `outbound_web=true`. Off: `terminal`, `file`, `code_execution`, `browser`, `homeassistant`, `image_gen`, `computer_use`, `cronjob` (`cronjob_manage`; jobs stay operator-edited config), `a2a`, `connections`, all platform adapters |
 | Terminal backend | Not configured; the toolsets that use it are absent |
 | Container | Official image, one volume, no ports, no Route, no socket, no `capAdd`, no devices. Wanted but not expressible today: read-only rootfs, `cap-drop ALL`, no-new-privileges, memory/pids limits, egress limited to Keystone and the model endpoint (§2.4) |
 | Agent API grants | The Agent's ordinary manifest: read tools, `do_household_action` at `domestic` tier, `propose_change`/`propose_household_plan`, `recall`/`remember`, `notify` (ADR-W039 §3.2) |
 | Needs approval | `confirm`-tier actions (a Person answers a Wildstone notice, `keystone/domestic/domestic.go:46-58`; ADR-W024 A5.1); every infrastructure change (Plan, Owner approves) |
-| Hermes approval prompt | Never used for household actions (`unattended_mode: deny`); Wildstone returns `waiting`/`denied` as tool results |
+| Hermes approval prompt | Never used for household actions: the Wildstone MCP server is `trust: full` (ADR-W039 §5.1), and `unattended_mode: deny` governs only Hermes's own sandbox commands; Wildstone returns `waiting`/`denied` as tool results |
 
 The path is the issue's: Hermes → Agent API → policy → executors. A prompt-injected Tier 1 runtime can call exactly what the Agent may call, and nothing in its container helps it do more.
 
@@ -422,7 +430,7 @@ The path is the issue's: Hermes → Agent API → policy → executors. A prompt
 | Needs approval | As Tier 1. Hermes's own `approvals` govern only the sandbox (`deny` globs, `command_allowlist`), on unattended runs as `deny` |
 | Dependencies | Agent-managed inside the container (`pip`/`npm` into `/opt/data`, lazy installs redirected); nothing on the node |
 
-**Why `local` inside the container, and what it costs.** Hermes's preferred sandbox is `terminal.backend: docker`, one hardened sibling container per profile driven over the Docker socket ([configuration → docker backend](https://hermes-agent.nousresearch.com/docs/user-guide/configuration#docker-backend)). Wildstone never mounts the socket (`packages/README.md:174-177`; ADR-W003 A1 `:37`), and the socket is precisely the path that would let a container do what Wardstone mediates. So the Docker backend is not the default and not offered. Running `local` inside the Hermes container costs three things:
+**Why `local` inside the container, and what it costs.** Hermes's preferred sandbox is `terminal.backend: docker`, one hardened sibling container per profile driven over the Docker socket ([configuration → docker backend](https://hermes-agent.nousresearch.com/docs/user-guide/configuration#docker-backend)), and ADR-W039 §5.3's parenthetical names that backend for the sandboxed profile; this document departs from it, for the reason that follows, and the departure is recorded here rather than in the ADR. Wildstone never mounts the socket (`packages/README.md:174-177`; ADR-W003 A1 `:37`), and the socket is precisely the path that would let a container do what Wardstone mediates. So the Docker backend is not the default and not offered. Running `local` inside the Hermes container costs three things:
 
 1. **No process separation between cognition and shell.** The shell runs as UID 10000 in the same container as the gateway; `/proc/<pid>/environ` of the gateway is readable by the same UID, so a coerced shell can read the runtime token and provider key. Those grant nothing beyond the Agent's ceiling and are revocable in one step, but they are replayable until revoked (§7). Mitigations: rotation on any suspicion, short heartbeat intervals, and the `approvals.deny` glob on `environ`, which is a heuristic and is listed as such.
 2. **Dangerous-command heuristics behave as "local"** rather than being skipped, so `approvals.deny` and the `UNRECOVERABLE_BLOCKLIST` apply ([security](https://hermes-agent.nousresearch.com/docs/user-guide/security)); on unattended runs a flagged command is denied, not asked. This is a usability cost: a legitimate but suspicious-looking command fails until a Person adds it to `command_allowlist` via a config change.
@@ -506,7 +514,7 @@ Assumptions from `docs/threat-model.md`: Docker on the node is trusted and conta
 | Threat | Tier 1 | Tier 2 | Tier 3 | Mitigation (all tiers unless noted) | Residual |
 |---|---|---|---|---|---|
 | **Prompt injection via household content → tool misuse** (a calendar entry, a sensor name, a delivered event tells the agent to act) | Calls what the Agent may call; `domestic` tier acts, `confirm` asks | Same, plus the sandbox shell obeys the injection | Same, plus `host.*` calls, each `confirm` or a Plan | Every call runs the three-layer resolver; results and deliveries are enveloped untrusted (ADR-W039 §3.4, §4 rule 4); `domestic` actions are declared with a risk grade; Hermes's memory-entry and context-file injection scanners are defence in depth | A `domestic`-tier action the Agent legitimately holds can be triggered by injected content. Identical to the native runtime; the answer is the tier, not the runtime |
-| **MCP untrusted-tool approval** (Hermes's `trust: untrusted` asks its own prompt for write tools) | n/a on unattended runs (`deny`) | same | same | Wildstone never relies on Hermes's approval; `waiting` is a tool result; a Person answers in a Wildstone surface | None beyond usability |
+| **MCP untrusted-tool approval** (with `trust: untrusted` Hermes would ask its own prompt for write tools, and unattended runs would deny them before Wildstone saw the call) | n/a: the Wildstone server is `trust: full` (§3.3; ADR-W039 §5.1) | same | same | Wildstone never relies on Hermes's approval; `waiting` is a tool result; a Person answers in a Wildstone surface | None beyond usability |
 | **Skills and plugins as supply chain** (Skills Hub/taps, ClawHub-like registries, `/learn` from a URL, agent-created skills; "skills execute arbitrary Python at import time") | In-process code with the runtime token and provider key, no shell | Same, plus shell | Same | Skills Guard and supply-chain advisory checks are heuristics; the real mitigation is that the token is a `butler` ceiling and the container has nothing else. Skill installs from registries need `outbound_web` or a shell (Tier 2+); Tier 1 with `outbound_web=false` can only learn from delivered content. Recommendation: Owner-visible list of installed skills in the Console via the bridge (H9) | A malicious skill runs as the Agent. Explicitly unacceptable: mounting `/srv/wildstone/bin` or any managed prefix into the Hermes container, which would let a skill reach Wildstone binaries |
 | **Exfiltration via outbound network** (the container can reach the internet; a coerced run posts household data to a URL) | Only through `web` tools if `outbound_web=true`, or the model provider itself | Any shell command | Same | Container egress allowlist (NEW key, §2.4) restricted to Keystone and the model endpoint is the real fix; until then `outbound_web=false` and a local model make the provider the only egress. `local_only` disclosure filtering (§3.5) keeps protected records away from a cloud runtime | With a cloud provider, the provider sees what the Agent reads — as with the native runtime and any cloud model. Recorded by the `processing_class` attestation |
 | **Container escape** | Out of scope (threat model) | Out of scope, but the shell raises the attack surface; read-only rootfs, cap-drop, no-new-privileges, pids limit are the wanted keys | Same | §2.4 keys; UID 10000; no devices, no `capAdd`, no socket | Docker is trusted; a kernel bug is a node compromise regardless of tier |
