@@ -131,6 +131,12 @@ const GROUP_OF: Record<string, Group> = {
   // It configures no model and installs nothing; what it is, to a person
   // looking for it, is the assistant.
   assistant: "AI",
+  // The cognition behind one Agent (ADR-W039 Phase 6/H5, #351). It is
+  // instanced exactly like chat-telegram, but what it groups with is the
+  // Butler it thinks for, not the chat adapters: a person looking for
+  // "what runs this Agent" is looking among the other AI capabilities,
+  // beside assistant and language-models, not among the messaging doors.
+  "agent-hermes": "AI",
 };
 
 export function groupOf(pkg: { capability: string }): Group {

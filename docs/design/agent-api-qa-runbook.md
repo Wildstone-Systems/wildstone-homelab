@@ -28,6 +28,8 @@ ceiling on what it may do.
 | Memory, proposals, work and events (Phases 3–4) | An external runtime can recall household memory, file a Plan for a human to approve, receive notice of household events it subscribed to, and report progress on long jobs — even while offline. | Plans screen, `agent_deliveries`, `-agent-heartbeat-ttl` |
 | Execution profile & processing class (Phase 5) | Per Agent, choose whether its runtime gets a sandboxed workspace or host-administration tools, and whether it may see phone/local-only memories. | Console → Agent → **Runtime** tab |
 | Hermes package (Phase 6: H1, H2, H4, H5, H7) | Install Hermes, a real third-party agent framework, as an Agent's runtime — a Console package, one container pair per Agent. Host-administration tools exist as an opt-in, Owner-approved tool family. | `packages/agent-hermes`, `cli/cmd/agent-bridge`, `keystone/domestic/hostops.go` |
+| Re-render on profile change (Phase 6: H6) | Changing a packaged runtime's execution profile or processing class no longer applies in place: it re-renders the bound `agent-hermes#<instance>` capability and files exactly one reviewed Plan, applying nothing until an Owner approves it. | `keystone/api/handlers_butler_runtime.go`'s `reRenderPackagedRuntime` |
+| Runtime inventory (Phase 6: H9) | An Owner can see every Agent's runtime — type, health, heartbeat, execution profile, processing class — in one place on the Butlers screen, unhealthy first, each row opening that Agent's Runtime tab. | `GET /api/v1/runtimes`, Console → Butlers → **Runtimes** |
 
 ## 2. Before you start
 
@@ -39,7 +41,7 @@ git checkout claude/issues-333-334-orchestration-dix2u1
 git log --oneline -1
 ```
 Expected: the last line names a commit whose message starts with
-`feat(packages): agent-hermes capability package`.
+`feat(api): re-render a packaged runtime as a reviewed Plan`.
 
 **Tool versions.** CI builds this branch with Go 1.25 and Node 22.
 Check yours match closely enough:
@@ -310,6 +312,28 @@ administration needs a non-native runtime or an Owner-class Agent...");
 mutating one (restart) waits for your confirmation in Console before
 anything happens.
 
+5. **A profile change on a packaged (non-native) runtime files a Plan
+   instead of applying (H6, #352):** on an Agent already backed by an
+   installed `agent-hermes` package (set this up as in scenario (i)
+   steps 1–3, or install it directly per hermesParams-style params),
+   change its execution profile or processing class on the Runtime tab
+   and save. Watch the raw response of the `PUT
+   /api/v1/butlers/<name>/runtime` call (browser devtools, or repeat it
+   with `curl`).
+
+Expected: the response's runtime record already shows the new
+`executionProfileRef`/processing class, but it also carries a `plan`
+field naming a freshly filed Plan (`{"...":"...","plan":"<id>"}`) —
+`reRenderPackagedRuntime` re-expands the bound
+`agent-hermes#<instance>` capability (the `<instance>` is this Agent's
+runtime-principal stem, e.g. `runtime-health-1` → `health`) and files
+it through the ordinary proposal pipeline, exactly one Plan per change.
+Nothing is applied yet: the Hermes/agent-bridge containers keep running
+under the OLD profile until you approve that Plan on the Plans screen,
+at which point the reconciler recreates them under the new one. A
+profile change on a **native** Agent (no packaged runtime installed)
+returns no `plan` field at all — there is nothing for it to restart.
+
 ### h. Processing class
 
 1. Set an Agent's runtime `processingClass` to `cloud`, ask it to
@@ -318,6 +342,17 @@ anything happens.
 
 Expected: withheld in case 1, returned in case 2 — same refusal
 wording either way memory is normally withheld by privacy rules.
+
+**Known gap, in progress:** this filter (`keystone/agentgateway/disclosure.go`)
+covers Manifest, Invoke and Recall — the boundaries the gateway itself
+controls — but not deliveries. `GET /api/v1/agent/deliveries` has two
+readers, the in-process client (`deliveriesFromRows`,
+`keystone/agentgateway/work.go`) and the HTTP route
+(`keystone/api/handlers_agent.go`'s `agentDeliveries`), and neither
+filters a delivery's payload by the Agent's declared processing class
+yet. There is no QA step for this until it lands: don't expect a
+`cloud`-class runtime's deliveries to withhold `local_only` content
+today, and see "Known limitations" below.
 
 ### i. Hermes package (best effort — needs Docker, and network access to pull `nousresearch/hermes-agent`)
 
@@ -328,8 +363,19 @@ wording either way memory is normally withheld by privacy rules.
    turn.
 4. Watch the bridge's logs for the MCP calls Hermes makes back through
    it, and confirm `disabled_toolsets` appears in its rendered config.
-5. Change the profile to `sandboxed` and check whether a re-render
-   Plan for the package appears.
+5. Change the profile to `sandboxed` (H6, #352): from the Agent's
+   Runtime tab, change execution profile (or processing class) and
+   save. Check the Plans screen before touching anything else.
+
+Expected for step 5: a new Plan appears, titled something like
+`restart <agent>'s runtime (agent-hermes#<instance>): execution
+profile sandboxed, processing class <class>` — filed under your own
+identity, exactly like a Console-driven install or reconfigure. The
+running `hermes`/`agent-bridge` containers are untouched until you
+approve it: Hermes freezes a session's tool set at start, so this is
+"re-render the package's config, then restart", never a live change.
+Approve the Plan, confirm the containers are recreated, and re-check
+the bridge's logged config for the new profile's `disabled_toolsets`.
 
 Known open points, honestly: the pinned Hermes image digest is still a
 placeholder pending real digest-pinning tooling; the `/v1/runs` body
@@ -338,8 +384,30 @@ Hermes (design-doc spike S3 was never run); the bridge's
 `identity_header` is static, leaning on `max_concurrent_runs: 1`
 instead of per-call identity; there is no egress allowlist yet; and an
 external runtime's escalation deliveries are acknowledged as a no-op
-rather than answered. Step 5 will likely show **nothing** re-renders —
-that's H6 (issue #352), not yet built, not a regression.
+rather than answered.
+
+### j. Runtime inventory (H9, #355)
+
+1. As Owner, open the Console's **Butlers** screen with at least two
+   Agents that have runtimes: one healthy, one you can make unhealthy
+   (e.g. revoke its credential as in scenario (b), or stop its Hermes
+   container from scenario (i)).
+2. Sign in as a Member instead and open the same screen.
+3. Call the endpoint directly:
+   ```sh
+   curl -sS http://127.0.0.1:9451/api/v1/runtimes \
+     -H "Authorization: Bearer <your admin token>"
+   ```
+
+Expected: (1) a **Runtimes** card appears above the roster filters,
+one row per Agent with a runtime, showing type, health, heartbeat,
+execution profile and processing class; the unhealthy Agent's row
+sorts first; clicking any row opens that Agent's drawer on its
+**Runtime** tab. (2) as a Member, the Runtimes card does not render at
+all — it is Owner-only, the same gate as the Runtime tab it links to.
+(3) the raw JSON is a list of `{"butler","agentClass","runtime":{...}}`
+objects, one per live Agent, in the Agent API's own runtime-record
+shape.
 
 ## 5. If something fails
 
@@ -367,10 +435,7 @@ that's H6 (issue #352), not yet built, not a regression.
 
 ## 6. Known limitations and follow-ups
 
-- H6 — execution profile change does not yet re-render the bound
-  Hermes package automatically (#352).
 - H8 — a split SSH-backed sandbox tier is not built (#354).
-- H9 — the Console has no Hermes runtime inventory view yet (#355).
 - H10 — the conformance suite has never been run against a real,
   packaged Hermes (#356).
 - No egress allowlist on a Hermes container yet — it can reach any
@@ -379,10 +444,14 @@ that's H6 (issue #352), not yet built, not a regression.
   out of the H7 host tool family (#353) — mapping either to a
   human-approved Plan needs a Person→principal identity and a resource
   kind that don't exist yet.
-- Deliveries are not filtered by processing class the way manifests,
-  invokes and recalls are (`keystone/agentgateway/disclosure.go`'s own
-  doc comment explains the gap) — worth a follow-up issue if an Agent
-  ever gets a subscription that could carry local-only content.
+- **In progress:** deliveries are not yet filtered by processing class
+  the way manifests, invokes and recalls are
+  (`keystone/agentgateway/disclosure.go`'s own doc comment explains the
+  gap, and neither delivery reader — `work.go`'s `deliveriesFromRows`
+  nor `handlers_agent.go`'s `agentDeliveries` — applies it) — a real
+  risk once an Agent has a subscription that could carry local-only
+  content. See scenario (h)'s note above; re-check this scenario once
+  that fix lands.
 - The broader phase tracking issues are #335–#345 (Phases 0–5) and
   #346–#356 (Phase 6, H1–H10); anything not explicitly called out above
   as landed should be assumed not done.
